@@ -1192,6 +1192,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbstorefork.h"
 #include "fixture/idbscopefork.h"
 #include "fixture/idbindexfork.h"
+#include "fixture/idbscopejson.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1714,6 +1715,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbstorefork", HTML_IDBSTOREFORK },
     { "idbscopefork", HTML_IDBSCOPEFORK },
     { "idbindexfork", HTML_IDBINDEXFORK },
+    { "idbscopejson", HTML_IDBSCOPEJSON },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16610,6 +16612,36 @@ TF_UNIT void probes_idbindexfork(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbscopejson` document (fixture/idbscopejson.h): transaction() over a JSON reply's field runs
+   §3.2.25's sequence arm (both stores, and the empty sequence) beside its string arm; over location.hash's string
+   it runs the string arm alone. */
+TF_UNIT void probes_idbscopejson(const char *js, Probe *tab, int *n) {
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, param_value_is(js, "/api/idbsj-json", "got", "alpha_beta"),
+             "no /api/idbsj-json?got=alpha_beta record: no arm took the reply's field as a sequence naming both "
+             "stores");
+    const char *e_why = NULL; int e_tt = 1;
+    fold_row(&e_tt, &e_why, param_value_is(js, "/api/idbsj-json", "got", "InvalidAccessError"),
+             "no /api/idbsj-json?got=InvalidAccessError record: no arm took the reply's field as an empty sequence");
+    const char *s_why = NULL; int s_tt = 1;
+    fold_row(&s_tt, &s_why, param_value_is(js, "/api/idbsj-json", "got", "alpha"),
+             "no /api/idbsj-json?got=alpha record: no arm took the reply's field as the one name 'alpha'");
+    const char *h_why = NULL; int h_tt = 1;
+    fold_row(&h_tt, &h_why, param_value_is(js, "/api/idbsj-hash", "got", "alpha"),
+             "no /api/idbsj-hash?got=alpha record: no arm took the hash as the one name 'alpha'");
+    fold_row(&h_tt, &h_why, !param_value_is(js, "/api/idbsj-hash", "got", "alpha_beta") &&
+                            !param_value_is(js, "/api/idbsj-hash", "got", "InvalidAccessError"),
+             "a /api/idbsj-hash record took the hash as a sequence: location.hash.slice(1) is a String, which "
+             "§3.2.25 sends to the string arm without asking for @@iterator");
+    const Probe rows[] = {
+        { "idbsj-pair", p_tt, "/api/idbsj-json", SESS_EXPLORE, p_why },
+        { "idbsj-empty", e_tt, "/api/idbsj-json", SESS_EXPLORE, e_why },
+        { "idbsj-name", s_tt, "/api/idbsj-json", SESS_EXPLORE, s_why },
+        { "idbsj-hash", h_tt, "/api/idbsj-hash", SESS_EXPLORE, h_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20960,6 +20992,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbstorefork(js, probes, &np);
     probes_idbscopefork(js, probes, &np);
     probes_idbindexfork(js, probes, &np);
+    probes_idbscopejson(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
