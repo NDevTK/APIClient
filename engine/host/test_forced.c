@@ -6438,6 +6438,10 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        census in fact names this source in tens of thousands of keys. Two literals 3,400 lines apart in one
        file is what made that possible, so there is now one and the disagreement cannot recur. */
 #define FIXTURE_STATE_SRC "{state}"
+    /* It stands for state a server injects, so a finding rooted there is labelled with that precondition; the
+       claim is given back before platform_agent_free at this fixture's teardowns. */
+    if (!concolic_source_precondition_declared_by("test_forced", FIXTURE_STATE_SRC))
+        concolic_declare_source_precondition("test_forced", FIXTURE_STATE_SRC, SRC_PRE_APPLICATION_STATE);
     JS_SetPropertyStr(ctx, g, "state",
                       concolic_new(ctx, FIXTURE_STATE_SRC, FIXTURE_STATE_SRC, CONCOLIC_WHOSE_WORLD,
                                    JS_UNDEFINED));   /* injected/unknown app state */
@@ -33576,6 +33580,7 @@ TF_UNIT void second_agent_selftest(const char *origin)
     JS_FreeValue(ctx2, proto);
     printf("@A2REALM\n");
 
+    concolic_undeclare_sources("test_forced");   /* the `{state}` precondition tf_realm_install declared */
     platform_agent_free();
     /* AND THE THREE AGENT-LEVEL RELEASES THAT ARE NOT ON core/platform.h's COLUMN, in main's own order.
        THESE WERE OMITTED AND THE OMISSION LEAKED A REALM, which is the boundary the comment on this teardown
@@ -34332,6 +34337,7 @@ int main(int argc, char **argv) {
        stopped inside, and tearing one down runs that component's own `fini` against that component's agent
        state, which the platform release below has by then given back. */
     solver_frontier_free(ctx);
+    concolic_undeclare_sources("test_forced");   /* the `{state}` precondition tf_realm_install declared */
     /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
     platform_agent_free();
 
