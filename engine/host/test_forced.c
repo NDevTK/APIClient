@@ -1115,6 +1115,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/replyrole.h"
 #include "fixture/storedxss.h"
 #include "fixture/windowname.h"
+#include "fixture/clobber.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1576,6 +1577,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "replyrole", HTML_REPLYROLE },
     { "storedxss", HTML_STOREDXSS },
     { "windowname", HTML_WINDOWNAME },
+    { "clobber", HTML_CLOBBER },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14640,6 +14642,43 @@ TF_UNIT void probes_windowname(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `clobber` document (fixture/clobber.h). */
+TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
+    char hs[192] = "", us[192] = "";
+    int has_h = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, hs, sizeof hs);
+    int has_u = s_rooted_source(js, "location", LOCATION_SEARCH_SRC, us, sizeof us);
+    size_t span = 0;
+    const char *rec = has_u ? s_record(js, "location", us, &span) : NULL;
+    const char *poc = rec ? memmem(rec, span, "\"poc\":\"", 7) : NULL;
+    const char *mw_why = NULL; int mw_tt = 1;
+    fold_row(&mw_tt, &mw_why, has_h,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in location.search, so the filtered "
+             "banner write was never reached tainted");
+    const char *cp_why = NULL; int cp_tt = 1;
+    fold_row(&cp_tt, &cp_why, !!strstr(js, "\"/api/cl-plain\""),
+             "NOT REACHED: there is no /api/cl-plain record, so the world with no clobbering element never ran");
+    const char *cc_why = NULL; int cc_tt = 1;
+    fold_row(&cc_tt, &cc_why, !!strstr(js, "\"/api/cl-clobbered\""),
+             "NOT REACHED: there is no /api/cl-clobbered record, so no world's `window.clCfg` named an element "
+             "the banner markup inserted: clobbering is not modelled over an unknown markup write");
+    const char *cl_why = NULL; int cl_tt = 1;
+    fold_row(&cl_tt, &cl_why, has_u,
+             "NOT REACHED: no location @S record carries a source rooted in location.search, so `clCfg.url` "
+             "never reached the navigation tainted by the banner");
+    fold_row(&cl_tt, &cl_why, has_u && s_stage(js, "location", us) == S_FIRED,
+             "the location <- location.search search did not fire a PoC");
+    fold_row(&cl_tt, &cl_why, poc && memmem(poc, span - (size_t)(poc - rec), "clCfg", 5) &&
+                              memmem(poc, span - (size_t)(poc - rec), "<", 1),
+             "the PoC is not markup naming `clCfg`, so the navigation was not reached through clobbering");
+    const Probe rows[] = {
+        { "cl-markup-sink", mw_tt, "'clBanner'", SESS_EXPLORE, mw_why },
+        { "cl-plain", cp_tt, "/api/cl-plain", SESS_EXPLORE, cp_why },
+        { "cl-clobbered", cc_tt, "/api/cl-clobbered", SESS_EXPLORE, cc_why },
+        { "cl-poc-markup", cl_tt, "clCfg.url", SESS_EXPLORE, cl_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18457,6 +18496,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_replyrole(js, probes, &np);
     probes_storedxss(js, probes, &np);
     probes_windowname(js, probes, &np);
+    probes_clobber(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
