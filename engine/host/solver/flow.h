@@ -359,6 +359,9 @@ typedef struct Flow {
        continuation on a written flow is replayed next session; one on an unwritten flow is dropped), and
        cold_park_flow sets it and refuses a flow that already carries it. */
     int paged;
+    /* Has flow_release_bulk run? Set once, by the pager's sale before it writes the recipe; flow_release then
+       releases only the remainder. */
+    int bulk_released;
     /* Is this flow a timeline that does not exist: one waiting at a cross-instance read no peer timeline will
        answer (engine.c's FLOW_STEP_RETIRED arm sets it)? Its work items belong to no timeline, so flow_release
        frees them as it frees a paged flow's. */
@@ -1794,6 +1797,10 @@ void  flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch);
  * assert it. It is the only teardown, so a field added to `Flow` has one place to learn about it, and
  * flow_remove asserts it did. */
 void  flow_release(JSContext *ctx, Flow *f);
+/* The first half of flow_release, run alone by the pager before cold_park_flow: everything the park write does not
+   read (cold.c's ColdParkReads names what it does), so a sale gives its memory back before the record it writes
+   needs any. flow_release then frees the remainder. Asserts the flow is not switched in and not released twice. */
+void  flow_release_bulk(JSContext *ctx, Flow *f);
 
 /* Remove + free a flow whose state has already been released. Asserts what flow_release owes it. */
 void  flow_remove(JSContext *ctx, Flow *f);

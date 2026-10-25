@@ -347,19 +347,20 @@ void cold_census_release(ColdCensus *out)
  * escaping" is finally asserted rather than distributed across four writers. A host with a FILE (the fixture)
  * stores cold_park_write's bytes directly and hands them straight back, which is the same document with one
  * fewer translation in it. */
-/* THE DOCUMENT IS HELD AS A CHAIN OF FIXED-SIZE BLOCKS, because it grows during a sale at the RAM floor
- * (engine_reclaim_tail writes a flow down before it frees it), exactly when no memory is left. A contiguous
- * buffer grows by a doubling realloc, which needs about twice the document transiently; a block never copies,
- * and one spare block, held at all times and re-acquired after a sale frees memory (cold_park_spare_refill),
- * funds the block a sale opens at the floor. A record may span blocks: every reader takes the bytes in block
- * order (cold_park_write), so the document is the same byte string the contiguous form wrote. */
-#define PARK_BLOCK_BYTES 16384
+/* The document is held as a chain of fixed-size blocks, because it grows during a sale at the RAM floor, when no
+ * memory is left beyond what the sale itself gave back. A contiguous buffer grows by a doubling realloc, which
+ * needs about twice the document transiently; a block never copies. The pager releases a flow's bulk
+ * (flow_release_bulk) before it writes the record, so the record's blocks are funded by that memory. A block is
+ * sized near a record rather than a page because the freed bulk comes back as many separate chunks. A record may span
+ * blocks: every reader takes the bytes in block order (cold_park_write), so the document is the same byte string
+ * the contiguous form wrote. */
+#define PARK_BLOCK_BYTES 1024
 typedef struct ParkBlock {
     struct ParkBlock *next;
     size_t len;
     char bytes[PARK_BLOCK_BYTES];
 } ParkBlock;
-static ParkBlock *g_park_head, *g_park_tail, *g_park_spare;
+static ParkBlock *g_park_head, *g_park_tail;
 static size_t g_park_len;
 static long  g_park_recs;
 #if APICLIENT_DEV
@@ -376,24 +377,16 @@ static uint64_t park_fnv(uint64_t h, const char *s, size_t n) {
    once to fill it) — so this is idempotent by construction: the same records render the same bytes. */
 static char *g_park_json;
 
-void cold_park_spare_refill(void)
-{
-    /* Plain malloc, never the reclaim edge: this is the sale's own reserve, and a refusal leaves it for a later
-       refill rather than selling a flow to fund it. */
-    if (!g_park_spare) g_park_spare = malloc(sizeof *g_park_spare);
-}
-
-/* The next block, from the allocator or else from the spare. Plain malloc for the reason above. */
+/* The next block. Plain malloc, never the reclaim edge: this runs inside a sale, whose own bulk release funds it.
+   Named residual. Not covered: a record whose blocks need more memory than its own flow's bulk gave back (a
+   never-run arm with a small delta and a long unwritten chain segment). Next diff: the sale releases further tails'
+   bulk into a list of owed records before it writes, so the floor is a frontier with no bulk left. Absence shows as
+   this CHECK firing while the census's `members` is above one. */
 static ParkBlock *park_block_new(void)
 {
     ParkBlock *b = malloc(sizeof *b);
-    if (!b) { b = g_park_spare; g_park_spare = NULL; }
-    /* A CHECK RATHER THAN A DCHECK, and in the one place where that reads backwards: this runs BECAUSE the host
-       is out of RAM. A park that cannot extend its own document has lost the residue it was called to save, and
-       there is no version of proceeding past it; the spare is what makes this the floor and not the first
-       sale. */
-    CHECK(b, "the cold tier could not extend its own park document, spare block included — the entire suspended "
-             "frontier would be dropped at the moment it was being saved");
+    CHECK(b, "the cold tier could not extend its own park document after the sale released the flow's bulk — the "
+             "record being written would be lost with the flow it describes");
     b->next = NULL; b->len = 0;
     return b;
 }
@@ -1333,14 +1326,48 @@ void cold_park_preview(ColdPreview *out)
             g_preview_census.asks_with_commits, g_preview_census.asks_after_commit, rows_now);
 }
 
+ColdParkReads cold_park_reads(const Flow *f)
+{
+    ColdParkReads r;
+
+    memset(&r, 0, sizeof r);
+    r.dec_blob = f->dec_blob;
+    r.perform_q = JS_VALUE_GET_PTR(f->perform_q);
+    r.deliver_q = JS_VALUE_GET_PTR(f->deliver_q);
+    r.deliver_world_q = JS_VALUE_GET_PTR(f->deliver_world_q);
+    r.fn = JS_VALUE_GET_PTR(f->fn);
+    r.agents = f->agents;
+    r.n_agents = f->n_agents;
+    r.dyn_token = f->dyn_token;
+    r.dyn_n = f->dyn_n;
+    r.cand_src = f->cand_src;
+    r.cand_payload = f->cand_payload;
+    r.cand_dsrc = f->cand_dsrc;
+    r.cand_dval = f->cand_dval;
+    r.cand_dn = f->cand_dn;
+    r.orphan_chain = f->orphan_chain;
+    r.orphan_chain_n = f->orphan_chain_n;
+    r.family = f->family;
+    r.acct = f->acct;
+    return r;
+}
+
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */
-void cold_park_flow(Flow *f)
+void cold_park_flow(Flow *f, const ColdParkReads *taken)
 {
     const void *seg;
     long id;
     char rec[64];
 
-    DCHECK(f != NULL, "the cold tier was asked to write the recipe of no flow at all");
+    DCHECK(f != NULL && taken != NULL, "the cold tier was asked to write the recipe of no flow at all");
+    /* What the write reads is what it was before the caller's release of the bulk: a field moved into
+       flow_release_bulk would read here as freed (NULL, undefined) and the record would describe a different flow. */
+    {
+        ColdParkReads now = cold_park_reads(f);
+        DCHECK(memcmp(&now, taken, sizeof now) == 0,
+               "a field the park write reads changed between the caller's snapshot and the write — flow_release_bulk "
+               "freed something cold_park_flow reads, so move that release after the write");
+    }
     /* THE NAMESPACE THE RESIDUE RESUMES INTO IS THE FIRST THING IN IT. Before any segment ordinal and before
        any flow, because both are read back in one forward pass and a flow rebuilt before the generation is
        installed mints under the ended session's names. */
@@ -1616,8 +1643,9 @@ void cold_park(void)
         }
     }
     for (i = 0; (f = flow_at(i)) != NULL; i++) {
+        ColdParkReads taken = cold_park_reads(f);
         if (park_flow_deep(f)) deep_written++;
-        cold_park_flow(f);
+        cold_park_flow(f, &taken);
     }
 #if APICLIENT_DEV
     park_twins_check();
@@ -2691,7 +2719,6 @@ void cold_free(void)
 {
     while (g_park_head) { ParkBlock *n = g_park_head->next; free(g_park_head); g_park_head = n; }
     g_park_tail = NULL; g_park_len = 0; g_park_recs = 0;
-    free(g_park_spare); g_park_spare = NULL;   /* the sale's reserve is the session's; the next one refills it */
 #if APICLIENT_DEV
     g_park_stream_digest = 0xcbf29ce484222325ull;
 #endif

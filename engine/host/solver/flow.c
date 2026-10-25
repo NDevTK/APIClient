@@ -2177,38 +2177,24 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            "is the one thing the WFQ may never let it do");
 }
 
-/* Release one flow (flow.h): the one place every field a Flow owns is given back. */
-void flow_release(JSContext *ctx, Flow *f) {
-    /* The flow is not switched in. Everything below is released as parked state: the heap delta's head is freed
-       rather than unapplied, the DOM head's created nodes are destroyed as detached, and the decision and pin state
-       is read out of blobs rather than decide.c's live globals. All three are false for the running flow. */
+/* The part of a release the park write does not read (flow.h): the compile, the continuations and frames, the
+   other agents' realms, the owed replies, the heap delta and the DOM head and base, and the pin blob. The pager
+   runs it before cold_park_flow so the memory a sale gives back funds the record it writes. */
+void flow_release_bulk(JSContext *ctx, Flow *f) {
     DCHECK(f != g_running,
            "the running flow was released — its heap delta, document writes and decision state are live rather than "
            "parked");
-    /* A paged flow is not a dropped one. Five things a released flow can still carry are work items on the one
-       frontier: a parked continuation, the suspended frame (its whole heap-frame chain), replies the host still owes
-       it, queued jobs and a peer's routed deliveries. Dropping a work item is forbidden
-       unless the flow was written to the cold tier, whose recipe replays the code that created each of them (the
-       reactions are re-enqueued, the requests re-issued, and deliveries are in the recipe as 'm' records). So a flow
-       not written out may hold none of them, and they are one assert, not one assert plus silent frees. It asks the
-       flow, not the engine: `engine_frontier_paged` answers for the whole session, and a partial self-park writes a
-       tail while flows above it run on unwritten, so only the per-flow answer is exact.
-       A driver that stops stepping without the park fires this, naming the flows it threw away. */
-    DCHECK(f->paged || f->retired || (!flow_holds_parks(f) && !flow_holds_frame(f) && flow_jobs_held(f) == 0 &&
-                        pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
-           "a flow was released holding work (a parked continuation, a suspended frame, queued reactions, replies "
-           "owed to it, or a routed message) without being written to the cold tier — nothing replays it, so the "
-           "frontier just dropped those work items");
+    DCHECK(!f->bulk_released, "a flow's bulk was released twice — the second walk would free its delta again");
     /* And the parked continuations are released here, because the flow owns them: every park takes a reference that
-       only the resume gives back. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn), so this calls
-       one function over the set. `paged` does not excuse it: the assert above is about a dropped work item, while
+       only the resume gives back. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn), so this calls one
+       function over the set. `paged` does not excuse it: flow_release's work-item assert is about a dropped item, while
        the memory the continuations hold is freed by no recipe and is invisible to the gc_obj_list walk (neither the
-       activations nor their TrampFrames are GC objects). That every member carries a resume, a disposer and a realm
-       is asserted over the whole ring in JS_PutParkedFlows and JS_FreeParkedFlows.
-       A program this flow was still parsing is not behind `paged`: a suspended compile is re-derivable from the
-       row's bytes, so the memory is this flow's to give back either way. It is released through the engine's entry
-       because it holds the descent's state (every frame's atoms, the chunk array, the token and the JSFunctionDef
-       chain). A no-op on a NULL slot. */
+       activations nor their TrampFrames are GC objects). That every member carries a resume, a disposer and a realm is
+       asserted over the whole ring in JS_PutParkedFlows and JS_FreeParkedFlows.
+       A program this flow was still parsing is not behind `paged`: a suspended compile is re-derivable from the row's
+       bytes, so the memory is this flow's to give back either way. It is released through the engine's entry because it
+       holds the descent's state (every frame's atoms, the chunk array, the token and the JSFunctionDef chain). A no-op
+       on a NULL slot. */
     JS_FlowCompileDrop(ctx, &f->compile);
     JS_FreeParkedFlows(f->parked);
     f->parked = NULL;
@@ -2228,6 +2214,45 @@ void flow_release(JSContext *ctx, Flow *f) {
     /* The replies it was still owed: the register is one JS value, so its resolve capabilities, reply values and
        strings go with one release. */
     pending_free(ctx, &f->pending);
+    cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
+    /* The head before the chain below it: a head node inserted under a segment's node is that node's child, and a
+       child is freed before its parent is freed deep. */
+    if (f->dom) dom_buf_free(f->dom, f->dom_n);
+    f->dom = NULL; f->dom_n = f->dom_cap = 0;
+    dom_base_release(f->dom_base); f->dom_base = NULL;
+    concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
+    f->bulk_released = 1;
+}
+
+/* Release one flow (flow.h): the one place every field a Flow owns is given back. */
+void flow_release(JSContext *ctx, Flow *f) {
+    /* The flow is not switched in. Everything below is released as parked state: the heap delta's head is freed
+       rather than unapplied, the DOM head's created nodes are destroyed as detached, and the decision and pin state
+       is read out of blobs rather than decide.c's live globals. All three are false for the running flow. */
+    DCHECK(f != g_running,
+           "the running flow was released — its heap delta, document writes and decision state are live rather than "
+           "parked");
+    /* A flow whose bulk went first is one the pager sold, which writes it down between the two halves. */
+    DCHECK(!f->bulk_released || f->paged,
+           "a flow's bulk was released and the flow was never written to the park document — its work items "
+           "went with the bulk and nothing replays them");
+    if (!f->bulk_released) {
+        /* A paged flow is not a dropped one. Five things a released flow can still carry are work items on the one
+           frontier: a parked continuation, the suspended frame (its whole heap-frame chain), replies the host still
+           owes it, queued jobs and a peer's routed deliveries. Dropping a work item is forbidden unless the flow was
+           written to the cold tier, whose recipe replays the code that created each of them (the reactions are re-
+           enqueued, the requests re-issued, and deliveries are in the recipe as 'm' records). So a flow not written out
+           may hold none of them, and they are one assert, not one assert plus silent frees. It asks the flow, not the
+           engine: `engine_frontier_paged` answers for the whole session, and a partial self-park writes a tail while
+           flows above it run on unwritten, so only the per-flow answer is exact. A driver that stops stepping without
+           the park fires this, naming the flows it threw away. */
+        DCHECK(f->paged || f->retired || (!flow_holds_parks(f) && !flow_holds_frame(f) && flow_jobs_held(f) == 0 &&
+                            pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
+               "a flow was released holding work (a parked continuation, a suspended frame, queued reactions, replies "
+               "owed to it, or a routed message) without being written to the cold tier — nothing replays it, so the "
+               "frontier just dropped those work items");
+        flow_release_bulk(ctx, f);
+    }
     /* The unstarted operations: one release for the array and every [record, token] pair. That they are gone is
        asserted by the caller (flow_finish, the pager), since a dropped record is a peer suspended for ever; this is
        the release, not the check. */
@@ -2239,14 +2264,7 @@ void flow_release(JSContext *ctx, Flow *f) {
        the work-item list above: a commitment is not work owed to anybody but what this timeline was, and a flow
        that has ended has no timeline left to be wrong about. */
     JS_FreeValue(ctx, f->deliver_world_q); f->deliver_world_q = JS_UNDEFINED;
-    cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
-    /* The head before the chain below it: a head node inserted under a segment's node is that node's child, and a
-       child is freed before its parent is freed deep. */
-    if (f->dom) dom_buf_free(f->dom, f->dom_n);
-    f->dom = NULL; f->dom_n = f->dom_cap = 0;
-    dom_base_release(f->dom_base); f->dom_base = NULL;
     decide_blob_free(f->dec_blob); f->dec_blob = NULL;
-    concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
     /* The body column gives a reference back rather than freeing: a program's text is shared by every timeline
        holding it (solver/dyn_body.h), and the last flow to leave frees it. The other two columns are this flow's
        own strings. */

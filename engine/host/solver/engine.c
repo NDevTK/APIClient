@@ -11235,12 +11235,13 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     DCHECK(flow_is_member(tail),
            "the pager chose a flow that is not in the frontier — flow_worst walks the registry, so this is a "
            "stale pointer, and both the park below it and the release after it would act on freed memory");
-    /* Write it down, then give its RAM back, in that order, because the release makes the recipe the only copy.
-       cold_park_flow appends one record to the session's park document (stored under this bundle's key and merged
-       back by the next session); flow_release frees the flow's suspended frame chain, heap delta, DOM head and the
-       nodes it created, and walks the shared heap and document chains down only as far as the segments this flow
-       held the last reference on. A tail flow's dying prefix cannot be a segment the running flow stands on (a
-       shared segment has a second reference), so the release moves nothing in the live heap or document. */
+    /* Give back the bulk, write it down, then give back the rest: the record is written before the remainder it reads
+       is freed, because the release makes the recipe the only copy, and after the bulk, so the bulk's memory funds the
+       record at the floor. cold_park_flow appends one record to the session's park document (stored under this bundle's
+       key and merged back by the next session); flow_release_bulk frees the suspended frame chain, heap delta, DOM
+       head and the nodes it created, and walks the shared heap and document chains down only as far as the segments
+       this flow held the last reference on. A tail flow's dying prefix cannot be a segment the running flow stands on
+       (a shared segment has a second reference), so the release moves nothing in the live heap or document. */
     /* The debt leaves with the flow, as two debts counted by kind (see g_paged_owed): a synchronous request is
        answered by id at a call site and a fetch reply is paired by (method, url), so a register counted whole
        would hand the fetch side a credit belonging to the request side and excuse the next reply the host
@@ -11264,9 +11265,11 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
       engine_retract_flow(g_sess_ctx, tail);
       flow_job_retract_external(g_sess_ctx, tail);
       flow_withdraw_async_sends(g_sess_ctx, tail);
-      cold_park_flow(tail);
+      /* Free before write: the bulk the record does not read goes first, so the memory it held funds the record. */
+      ColdParkReads taken = cold_park_reads(tail);
+      flow_release_bulk(g_sess_ctx, tail);
+      cold_park_flow(tail, &taken);
       flow_release(g_sess_ctx, tail);
-      cold_park_spare_refill();   /* the sale freed memory: re-hold the block the next sale opens at the floor */
       g_flows_sold++;
       if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++; }
     return 1;
@@ -11587,8 +11590,6 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     DCHECK(flow_count() == 0,
            "a session began over a frontier that already has members — the boot flow and a parked residue are "
            "alternative seedings");
-    /* The park document's spare block, held before the frontier can reach the RAM floor. */
-    cold_park_spare_refill();
     /* A residue refused whole for an older name spelling seeds the boot flow, as no residue does. */
     if (!(recipes && *recipes && cold_resume(ctx, recipes)))
         flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
