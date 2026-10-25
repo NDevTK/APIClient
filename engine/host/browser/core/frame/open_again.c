@@ -74,8 +74,14 @@ static int open_again_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     return JS_STEP_DONE;
 }
 
+static void open_again_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;   /* the machine holds nothing past its header; the address is re-read */
+}
+
 static const JSTrampStepDef open_again_def = {
     sizeof(OpenAgainFlow), open_again_step, NULL, 0,
+    .visit = open_again_visit,
     .algorithm = "the attacker opening this page's address again, as HTML §7.2.2.1's window open steps",
     .steps = OAG_STEPS
 };

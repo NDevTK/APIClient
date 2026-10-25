@@ -15969,11 +15969,11 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
         { "sx-theme-shown", tw_tt, "/api/sx-theme-shown", SESS_EXPLORE, tw_why },
         { "sx-theme-poc", tp_tt, "'sxThemeView'", SESS_EXPLORE, tp_why },
         { "rd-read", sr_tt, "rdNote", SESS_EXPLORE, sr_why },
-        { "rd-precondition", srp_tt, "rdNote", SESS_EXPLORE, srp_why, .reach = "rd-read" },
+        { "rd-precondition", srp_tt, "rdNote", SESS_EXPLORE, srp_why },
         { "rd-no-open", sro_tt, "rdNote", SESS_EXPLORE, sro_why, .reach = "rd-read" },
         { "si-memo-saved", is_tt, "/api/si-memo-saved", SESS_EXPLORE, is_why },
-        { "si-memo-shown", iw_tt, "/api/si-memo-shown", SESS_EXPLORE, iw_why, .reach = "si-memo-saved" },
-        { "si-memo-poc", ip_tt, "'siView'", SESS_EXPLORE, ip_why, .reach = "si-memo-shown" },
+        { "si-memo-shown", iw_tt, "/api/si-memo-shown", SESS_EXPLORE, iw_why },
+        { "si-memo-poc", ip_tt, "'siView'", SESS_EXPLORE, ip_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
