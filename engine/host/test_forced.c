@@ -1173,6 +1173,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/ttsink.h"
 #include "fixture/fileparsefetch.h"
 #include "fixture/fileparseslice.h"
+#include "fixture/fileparsesub.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1675,6 +1676,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "ttsink", HTML_TTSINK },
     { "fileparse-fetch", HTML_FILEPARSE_FETCH },
     { "fileparse-slice", HTML_FILEPARSE_SLICE },
+    { "fileparse-sub", HTML_FILEPARSE_SUB },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16108,6 +16110,31 @@ TF_UNIT void probes_fileparse_slice(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fileparse-sub` document (fixture/fileparsesub.h): the decoded subarray reaches new Function
+   rooted in the seed's reply and, on the query's arm, in location.search. */
+TF_UNIT void probes_fileparse_sub(const char *js, Probe *tab, int *n) {
+    char seed[192] = "", query[192] = "";
+    int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
+    int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
+    const char *sp_why = NULL; int sp_tt = 1;
+    fold_row(&sp_tt, &sp_why, !!strstr(js, "\"/api/fpu-parsed\""),
+             "NOT REACHED: there is no /api/fpu-parsed record, so no arm decoded the subarray");
+    const char *sf_why = NULL; int sf_tt = 1;
+    fold_row(&sf_tt, &sf_why, has_seed,
+             "no eval @S record carries a source rooted in the seed file's reply, so the subarray lost the bytes' "
+             "provenance");
+    const char *sq_why = NULL; int sq_tt = 1;
+    fold_row(&sq_tt, &sq_why, has_query,
+             "no eval @S record carries a source rooted in location.search, so the subarray of the reply to the "
+             "address the attacker names stopped at that reply's example extent");
+    const Probe rows[] = {
+        { "fpu-parsed", sp_tt, "/api/fpu-parsed", SESS_EXPLORE, sp_why },
+        { "fpu-sink-file", sf_tt, "function fpuParse", SESS_EXPLORE, sf_why, .gate = "fpu-parsed" },
+        { "fpu-sink-query", sq_tt, ".subarray(6, 6 + len)", SESS_EXPLORE, sq_why, .gate = "fpu-parsed" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fileparse-drop` document (fixture/fileparsedrop.h). Reach and taint, and the PoC's act; a
    dropped file's source is core/file/file_system.c's `file:NAME`, whose delivery is `user-file`. */
 TF_UNIT void probes_fileparse_drop(const char *js, Probe *tab, int *n) {
@@ -20357,6 +20384,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_ttsink(js, probes, &np);
     probes_fileparse_fetch(js, probes, &np);
     probes_fileparse_slice(js, probes, &np);
+    probes_fileparse_sub(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);

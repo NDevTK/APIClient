@@ -32477,6 +32477,7 @@ typedef struct JSTASubarray {
     JSValue buffer;       /* the source's [[ViewedArrayBuffer]] (owned) */
     JSValue ctor;         /* `constructor`, then its @@species (owned) */
     JSValue cargs[4];     /* [ctor, buffer, offset, count] — the CONSTRUCT request (owned) */
+    JSValue pred;         /* steps 4-8's `begin <= srcLength` over an unknown srcLength, held across its fork (owned) */
     int len, i, nargs, class_id;
 } JSTASubarray;
 static JSValue js_typed_array_get_buffer(JSContext *ctx, JSValueConst this_val);
@@ -90417,11 +90418,96 @@ static JSValue js_ab_slice_fini(JSContext *ctx, void *st, bool take_result)
 #define TASUB_STAGES(X) \
     X(TASUB_VALIDATE, "23.2.3.30 steps 1-3 (O has [[TypedArrayName]]; buffer is O.[[ViewedArrayBuffer]]; srcLength)") \
     X(TASUB_BOUNDS,   "23.2.3.30 steps 4-16 (start and end are ToIntegerOrInfinity; the argumentsList)") \
+    X(TASUB_RANGE,    "23.2.3.30 steps 6-8 over an unknown srcLength (startIndex is begin where begin <= srcLength)") \
     X(TASUB_CTOR,     "23.2.3.30 step 17 via 7.3.22 step 1 (C is Get(O, \"constructor\"))") \
     X(TASUB_SPECIES,  "23.2.3.30 step 17 via 7.3.22 step 4 (S is Get(C, @@species))") \
     X(TASUB_NEW,      "23.2.3.30 step 17 (TypedArraySpeciesCreate's Construct(ctor, argumentsList))")
 enum { TASUB_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_ta_subarray_steps[] = { TASUB_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* §23.2.3.30 steps 4-16 where srcLength or a bound is unknown. srcLength is the view's unknown length; a known
+   begin is startIndex on the arm where begin <= srcLength, which the fork asks, and newLength is derived from the
+   end bound (or srcLength) and startIndex with the real clamp over the examples as its example. The routed
+   %TypedArray% constructor then builds the view over that unknown count. 0, a request code, or -1. */
+static int js_ta_subarray_bounds_unknown(JSContext *ctx, JSTASubarray *s, JSValue cb_result)
+{
+    JSObject *p = get_typed_array(ctx, s->hdr.this_val);
+    JSTypedArray *ta;
+    JSValue src_len, final_v, ops[2], ex;
+    int64_t rel = 0, len_ex = 0, final_ex = 0;
+    int shift, arm, r;
+    bool have;
+
+    JS_FreeValue(ctx, cb_result);
+    if (!p) return -1;
+    ta = p->u.typed_array;
+    shift = typed_array_size_log2(p->class_id);
+    if (js_value_is_concolic(s->prim[0])) {
+        DFAIL("23.2.3.30 step 8 over an unknown begin: its byteOffset is unknown, so build the %TypedArray% "
+              "constructor's view at an unknown byteOffset first");
+        return -1;
+    }
+    src_len = JS_IsUninitialized(ta->length_unknown) ? js_int64(s->len) : js_dup(ta->length_unknown);
+    ex = js_value_is_concolic(src_len) ? js_concolic_operand(ctx, src_len) : js_dup(src_len);
+    have = JS_IsNumber(ex) && JS_ToInt64Sat(ctx, &len_ex, ex) == 0;
+    JS_FreeValue(ctx, ex);
+    if (JS_ToInt64Sat(ctx, &rel, s->prim[0])) { JS_FreeValue(ctx, src_len); return -1; }
+    if (js_value_is_concolic(src_len)) {
+        if (rel < 0) {
+            JS_FreeValue(ctx, src_len);
+            DFAIL("23.2.3.30 step 6 with a negative begin over an unknown srcLength: startIndex is srcLength + "
+                  "begin, an unknown byteOffset — build the %TypedArray% constructor's view at one first");
+            return -1;
+        }
+        if (JS_IsUninitialized(s->pred)) {
+            JSValue sp[2];
+
+            sp[0] = JS_NewInt64(ctx, rel);
+            sp[1] = js_dup(src_len);
+            CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a view's unknown length");
+            s->pred = sp[0];
+        }
+        r = step_tobool_run(ctx, &s->hdr, s->pred, "23.2.3.30 steps 6-8 begin within srcLength", &arm);
+        if (r) { JS_FreeValue(ctx, src_len); return r; }
+        if (!arm) {
+            JS_FreeValue(ctx, src_len);
+            DFAIL("23.2.3.30 step 8 with begin past an unknown srcLength: startIndex is that unknown, so build the "
+                  "%TypedArray% constructor's view at an unknown byteOffset first");
+            return -1;
+        }
+    } else {
+        rel = rel < 0 ? max_int64(s->len + rel, 0) : min_int64(rel, s->len);
+    }
+    if (JS_IsUndefined(step_arg(&s->hdr, 1))) {
+        final_v = js_dup(src_len);
+        final_ex = len_ex;
+    } else {
+        ex = js_value_is_concolic(s->prim[1]) ? js_concolic_operand(ctx, s->prim[1]) : js_dup(s->prim[1]);
+        have = have && (!js_value_is_concolic(s->prim[1]) || JS_IsNumber(ex)) &&
+               JS_ToInt64Clamp(ctx, &final_ex, ex, 0, len_ex, len_ex) == 0;
+        JS_FreeValue(ctx, ex);
+        ops[0] = s->prim[1];
+        ops[1] = src_len;
+        final_v = g_concolic.derived(ctx, "23.2.3.30 step 11 (endIndex is the clamped relative end)", ops, 2,
+                                     have ? js_int64(final_ex) : JS_UNDEFINED);
+        if (JS_IsUninitialized(final_v))
+            final_v = js_int64(final_ex);
+    }
+    ops[0] = final_v;
+    ops[1] = JS_NewInt64(ctx, rel);
+    s->cargs[3] = g_concolic.derived(ctx, "23.2.3.30 step 15 (newLength is max(endIndex - startIndex, 0))", ops, 2,
+                                     have ? js_int64(max_int64(final_ex - rel, 0)) : JS_UNDEFINED);
+    if (JS_IsUninitialized(s->cargs[3]))
+        s->cargs[3] = js_int64(max_int64(final_ex - rel, 0));
+    JS_FreeValue(ctx, final_v);
+    JS_FreeValue(ctx, src_len);
+    s->buffer = js_typed_array_get_buffer(ctx, s->hdr.this_val);
+    if (JS_IsException(s->buffer)) { s->buffer = JS_UNDEFINED; return -1; }
+    s->cargs[1] = js_dup(s->buffer);
+    s->cargs[2] = JS_NewInt64(ctx, (int64_t)ta->offset + (rel << shift));
+    s->nargs = 3;
+    return 0;
+}
 
 static int js_ta_subarray_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -90435,6 +90521,7 @@ static int js_ta_subarray_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         s->result = JS_UNDEFINED; s->buffer = JS_UNDEFINED; s->ctor = JS_UNDEFINED;
         s->prim[0] = JS_UNDEFINED; s->prim[1] = JS_UNDEFINED;
         for (k = 0; k < 4; k++) s->cargs[k] = JS_UNDEFINED;
+        s->pred = JS_UNINITIALIZED;
         s->len = 0; s->i = 0; s->nargs = 0; s->class_id = 0;
         p = get_typed_array(ctx, s->hdr.this_val);
         if (!p) return -1;
@@ -90451,6 +90538,22 @@ static int js_ta_subarray_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         cb_result = JS_UNDEFINED;
         if (r) return r < 0 ? -1 : r;
         s->i++;
+    }
+    if (s->hdr.stage == TASUB_BOUNDS) {
+        JSObject *p = get_typed_array(ctx, s->hdr.this_val);
+        bool unknown_end = !JS_IsUndefined(step_arg(&s->hdr, 1)) && js_value_is_concolic(s->prim[1]);
+
+        if (p && (!JS_IsUninitialized(p->u.typed_array->length_unknown) || js_value_is_concolic(s->prim[0]) ||
+                  unknown_end)) {
+            JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+            s->hdr.stage = TASUB_RANGE;
+        }
+    }
+    if (s->hdr.stage == TASUB_RANGE) {
+        r = js_ta_subarray_bounds_unknown(ctx, s, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (r) return r < 0 ? -1 : r;
+        s->hdr.stage = TASUB_CTOR;
     }
     if (s->hdr.stage == TASUB_BOUNDS) {
         JSObject *p = get_typed_array(ctx, s->hdr.this_val);
@@ -90506,6 +90609,9 @@ static int js_ta_subarray_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         /* issued from the tail of whichever stage decided the constructor, for the reason slice's is: a stage
            between them is entered and left inside one step() call, so it rests at no step. */
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+        if (JS_IsUndefined(s->ctor) && js_value_is_concolic(s->cargs[3]))
+            DFAIL("23.2.3.30 step 17 with no species constructor over an unknown newLength: build the class "
+                  "constructor's unknown length, as the routed %TypedArray% constructor's TAC_RANGE does");
         if (JS_IsUndefined(s->ctor)) {
             /* no species: create by CLASS, which constructs nothing of the page's */
             s->result = js_typed_array_constructor(ctx, JS_UNDEFINED, s->nargs,
@@ -90541,6 +90647,7 @@ static void js_ta_subarray_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->cargs[1]);
     v->val(ctx, &s->cargs[2]);
     v->val(ctx, &s->cargs[3]);
+    v->val(ctx, &s->pred);
 }
 
 static JSValue js_ta_subarray_fini(JSContext *ctx, void *st, bool take_result)
