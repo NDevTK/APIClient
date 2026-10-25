@@ -1539,15 +1539,15 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
 
     forced_arm = decide_note_forced_arm(cond, real, arm);
 
-    /* The source equals tok on the arm that makes the equality true (EQ and true, or NE and false). The root
+    /* The source equals tok on the arm that makes the equality true (arm 1; `!==` arrives as `===`). The root
        travels with the pin, read off the comparison result (pred_new gives it the tested operand's root): whose
        bytes this arm demanded, which §Attacker-sources' origin rule needs and no later reader can recover. Which
        equality held travels too: §7.2.13 IsLooselyEqual ( x, y )'s holding arm leaves the operand as either of
        two values (steps 2 and 3), so concolic_pin splits its writes on the algorithm. `eq_holds`/`eq_fails` are
        spelled once for the pin, the exclusion and the loose-equality domain, so the three cannot disagree about
        which arm proved what. */
-    eq_holds = (op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0);
-    eq_fails = (op == OPCMP_EQ && arm == 0) || (op == OPCMP_NE && arm == 1);
+    eq_holds = op == OPCMP_EQ && arm == 1;
+    eq_fails = op == OPCMP_EQ && arm == 0;
     DCHECK(op == OPCMP_NONE ? (!eq_holds && !eq_fails) : (eq_holds != eq_fails),
            "an equality's two arms are neither exclusive nor exhaustive over one branch — a comparison result "
            "that is not an equality must stand on NEITHER (an ordering and a call predicate determine no "

@@ -744,8 +744,9 @@ const char *concolic_source_delivery_key(const char *root);
 const char *concolic_source_encodes(const char *root);
 
 /* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
-   the taken arm pins/negates. */
-enum { OPCMP_NONE = 0, OPCMP_EQ = 1, OPCMP_NE = 2 };
+   the taken arm pins/negates. An inequality is the negation of its equality (concolic_cmp_hook), so no
+   predicate carries a negated operator. */
+enum { OPCMP_NONE = 0, OPCMP_EQ = 1 };
 /* WHAT KIND OF PRIMITIVE A COMPARISON'S CONCRETE SIDE IS — carried BESIDE its spelling everywhere the spelling
    goes, because a spelling alone is not a value and the pin store's whole job is to hand a later read the
    VALUE back.
@@ -848,7 +849,7 @@ int         concolic_cmp(JSValueConst v, const char **psrc, ConcolicLit *pkind, 
 /* …AND WHICH EQUALITY THE PAGE WROTE FOR IT, WHICH IS A FIFTH FACT ABOUT THE SAME OBSERVATION AND NOT A
    SPELLING OF THE OPERATOR. The four above say an arm determines something, what it determines, what that
    spells and which hole it is about; this says under WHICH ALGORITHM, and the answer changes what an arm is
-   entitled to conclude. Asked only of a value `concolic_cmp` has just answered OPCMP_EQ or OPCMP_NE for — a
+   entitled to conclude. Asked only of a value `concolic_cmp` has just answered OPCMP_EQ for — a
    predicate that is not an equality has no algorithm and this aborts rather than inventing one, so "not an
    equality" is unrepresentable in the return type instead of being encoded as a member of it.
    IT IS NOT READ OFF THE IDENTITY. `cmp_op_ident` composes `==`/`===` into the predicate's key, so the

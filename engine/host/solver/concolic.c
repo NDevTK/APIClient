@@ -99,7 +99,7 @@ typedef struct {
        mint one answer. What the page then writes through it is an ordinary property write the COW delta
        carries. */
     JSValue proto;
-    int cmp_op;         /* for an equality result: OPCMP_EQ/NE, `src <op> cmp_tok` (else OPCMP_NONE) */
+    int cmp_op;         /* for an equality result: OPCMP_EQ, `src === cmp_tok` (else OPCMP_NONE) */
     char *cmp_tok;      /* the concrete side of the equality, spelled (§7.1.19 ToString of the operand) */
     signed char cmp_kind;  /* what `cmp_tok` spells (ConcolicLit). Never separable from it: without the kind
                               decide.c pins nine characters where the page wrote `undefined`. Written with
@@ -3818,17 +3818,18 @@ static void concolic_type_state_at(JSValueConst r, unsigned ty, const char *file
     c->ty = (uint8_t)ty;
 }
 
-/* The equality operators, spelled once: the identity's operator field. concolic_new_cmp composes the same
+/* The equality algorithms, spelled once: the identity's operator field. concolic_new_cmp composes the same
    field for a component whose IDL member is a comparison, and the two must agree exactly or a page writing
-   the comparison the component declares would fork again over the same predicate. */
-static const char *cmp_op_ident(int is_neq, JSConcolicEqOp op) {
-    if (op == JS_CONCOLIC_EQ_STRICT) return is_neq ? "!==" : "===";
+   the comparison the component declares would fork again over the same predicate. There is no inequality
+   spelling: concolic_cmp_hook mints `!=` and `!==` as negations of these. */
+static const char *cmp_op_ident(JSConcolicEqOp op) {
+    if (op == JS_CONCOLIC_EQ_STRICT) return "===";
     /* Not `===`'s spelling: the two answer NaN differently, so one key would let either decide the other. */
-    if (op == JS_CONCOLIC_EQ_SAME_VALUE_ZERO) return is_neq ? "!SameValueZero" : "SameValueZero";
+    if (op == JS_CONCOLIC_EQ_SAME_VALUE_ZERO) return "SameValueZero";
     DCHECK(op == JS_CONCOLIC_EQ_LOOSE,
            "an equality was spelled for an algorithm quickjs.h does not declare — the identity would name a "
            "predicate no operator produces, and two real ones would compose under it");
-    return is_neq ? "!=" : "==";
+    return "==";
 }
 
 /* Mint a comparison result: the boolean `if (x === 'admin')` and `if (x < 700)` branch on. Its identity is
@@ -4037,9 +4038,9 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
     JSValue r;
     char *shape, *ts;
 
-    DCHECK(op == OPCMP_EQ || op == OPCMP_NE,
-           "a comparison result was declared with an operator that is neither an equality nor an inequality — "
-           "an ordering is minted by the relational hook, which composes the engine's own operator id");
+    DCHECK(op == OPCMP_EQ,
+           "a comparison result was declared with an operator that is not an equality — an inequality is the "
+           "negation of one (the caller negates this result), and an ordering is minted by the relational hook");
     /* The component states the kind: only the caller knows it. A member comparing against a number must
        compose the key the page's `x === 5` composes, not the key of a comparison against the string of its
        digits. */
@@ -4050,7 +4051,7 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
     sf[0] = src;
     kf[0] = lit_tag(kind); kf[1] = tok;
     ts = lit_shape(kind, tok);
-    shape = shapef("{%s}%s%s", src ? src : "", cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), ts);
+    shape = shapef("{%s}%s%s", src ? src : "", cmp_op_ident(JS_CONCOLIC_EQ_STRICT), ts);
     free(ts);
     /* The strict spelling, which makes this one entry with the page's own test: these members are defined as
        strict string equalities (HTML §6.2 Page visibility: "The `hidden` getter steps are to return true if
@@ -4061,7 +4062,7 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
        Whose unknown it is is stated here rather than asked of callers, because this entry's contract fixes it:
        a browser component's own declared member, which a person, a server or the environment drives. A door
        whose callers are not all one kind takes the word as a parameter; this one does not. */
-    r = pred_new(ctx, cmp_op_ident(op == OPCMP_NE, JS_CONCOLIC_EQ_STRICT), src, src,
+    r = pred_new(ctx, cmp_op_ident(JS_CONCOLIC_EQ_STRICT), src, src,
                  src ? (1u << CONCOLIC_WHOSE_WORLD) : 0u,
                  concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
                  op, JS_CONCOLIC_EQ_STRICT, kind, tok, src, shape);
@@ -4477,22 +4478,21 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     /* The hole the report prints for this operand, taken from the shape rather than `src`, which for a derived
        value is the braced shape the emission never spells. Minted only with a token: they are one observation. */
     subj = tok ? concolic_hole_key(concolic_shape_c(opq)) : NULL;
-    /* The operator in the identity is the one the page wrote, all four: `x == '1'` and `x === '1'` are
-       different predicates that §7.2.13 and §7.2.14 answer differently, and one key would let a flow that
-       decided either decide the other. The algorithm also travels with the arm, because `cmp_op` only says
-       which arm makes the equality hold; whether that arm determined the operand is §7.2.13 IsLooselyEqual
-       ( x, y ) versus §7.2.14 IsStrictlyEqual ( x, y ) (a held `x == undefined` leaves undefined or null). See
-       concolic.h's concolic_pin. */
+    /* The algorithm in the identity is the one the page wrote: `x == '1'` and `x === '1'` are different
+       predicates that §7.2.13 and §7.2.14 answer differently, and one key would let a flow that decided either
+       decide the other. The algorithm also travels with the arm, because `cmp_op` only says which arm makes the
+       equality hold; whether that arm determined the operand is §7.2.13 IsLooselyEqual ( x, y ) versus §7.2.14
+       IsStrictlyEqual ( x, y ) (a held `x == undefined` leaves undefined or null). See concolic.h's
+       concolic_pin. The equality is minted here and an inequality is its negation, below. */
     {
         char *sa = derived_operand_shape(ctx, a), *sb = derived_operand_shape(ctx, b);
         /* An operator is written between its operands; SameValueZero is an abstract operation, so a call. */
-        shape = op == JS_CONCOLIC_EQ_SAME_VALUE_ZERO
-                    ? shapef("%sSameValueZero(%s, %s)", is_neq ? "!" : "", sa, sb)
-                    : shapef("%s%s%s", sa, cmp_op_ident(is_neq, op), sb);
+        shape = op == JS_CONCOLIC_EQ_SAME_VALUE_ZERO ? shapef("SameValueZero(%s, %s)", sa, sb)
+                                                     : shapef("%s%s%s", sa, cmp_op_ident(op), sb);
         free(sa); free(sb);
     }
-    res = pred_new(ctx, cmp_op_ident(is_neq, op), src, root, root_whose_of(opq), iu, io,
-                   tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE,
+    res = pred_new(ctx, cmp_op_ident(op), src, root, root_whose_of(opq), iu, io,
+                   tok ? OPCMP_EQ : OPCMP_NONE,
                    tok ? (int)op : CMP_ALGO_NONE, kind, tok, subj, shape);
     /* Which value the predicate is about, by its own identity: read off `opq` (not `iu`, which is swapped when
        both operands are unknown), under the same condition as the hole. An operand this engine cannot spell
@@ -4517,10 +4517,21 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     /* …and the result's own example, run rather than derived, attached after the mint (as page_visibility.c
        does) because pred_new's parameters are the predicate and the example is what this run computed it to
        be. */
-    concolic_set_example(ctx, res, cmp_example(ctx, a, b, ca, cb, is_neq, op));
+    concolic_set_example(ctx, res, cmp_example(ctx, a, b, ca, cb, 0, op));
     free(subj);
     free(tok);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+    /* ECMAScript §13.11.1 Runtime Semantics: Evaluation answers `!=` and `!==` by running the equality and
+       returning its complement, so an inequality is the negation of the equality's value: the same predicate
+       with the polarity on the arm (concolic_tobool_hook), and one constraint entry for `a !== b` and
+       `a === b`. */
+    if (is_neq) {
+        JSValue neg = concolic_tobool_hook(ctx, res, 1);
+
+        DCHECK(concolic_is(neg), "an equality's own predicate was refused by the negation mint");
+        JS_FreeValue(ctx, res);
+        res = neg;
+    }
     sp[-2] = res;
     return 1;
 }
