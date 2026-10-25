@@ -32487,39 +32487,43 @@ TF_UNIT void looseeq_selftest(void)
  * write aborts in the CREATOR's instance naming the discarded browsing context, where a browser navigates the
  * peer; and any read of that peer's opener policy aborts one line earlier for the same missing route. */
 
-/* ONE RECORD OFF STDIN. `getdelim` rather than a `char line[N]` with an abort past it: a real bundle's document
-   is megabytes and its base64 is more, so a fixed line buffer is a document this host would refuse to be
-   handed — and the established primitive already grows, so hand-rolling the realloc loop `wpt_child_read_line`
-   already contains would be a second copy of it in a second program. Returns malloc'd text with the delimiter
-   removed, or NULL where the stream produced no record — WHICH IS TWO FACTS AND NOT ONE, and the caller is the
-   party that has to tell them apart. `getdelim` answers -1 at END OF INPUT and -1 on a READ ERROR, so a NULL
-   here is either a writer that has gone away or an fd that broke, and those take opposite work: the first is a
-   process that ended and the second is this process's own IO failing. THIS SENTENCE USED TO READ "or NULL at
-   end of input", which is an UNDER-CLAIM about this function's own return, and it is rewritten rather than
-   deleted because a reader re-derives it from the delimiter: the error arm is the one `n < 0` reaches without
-   anybody having closed anything, and §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT is exactly why it survived —
-   nobody discovers it by obeying it, because obeying it means reporting a broken fd as a departed writer.
-   `ferror(stdin)` is what separates them and `abi_pay` asks it. Only the '\n' is stripped: a stray CR is not
-   silently absorbed, because
-   every field of this record is either an address, a name or base64, and none of the three contains one — so a
-   CR is a writer this driver does not share a grammar with and the decode below says so. */
+/* Grow the record buffer through the reclaim edge: a refusal sells the frontier's tail at rest
+   (engine_reclaim_at_rest) and asks again, so a record arriving at the RAM floor is a sale and not a broken
+   channel. NULL `buf` allocates. The old buffer survives a refusal, so the retry hands back a live pointer. */
+static char *abi_line_grow(char *buf, size_t cap)
+{
+    for (;;) {
+        char *grown = realloc(buf, cap);
+        if (grown) return grown;
+        CHECK(engine_reclaim_at_rest(), "this host could not grow the buffer for a record on its channel, with "
+                                        "nothing left to sell — the record is a reply the frontier is waiting on");
+    }
+}
+
+/* One record off stdin: malloc'd text with the '\n' removed, or NULL where the stream produced no record. NULL is
+   two facts, end of input (a writer that went away) or a read error (this process's own IO failing), and
+   `abi_pay` separates them with `ferror(stdin)`, so errno is kept across the release. A record is megabytes of
+   base64 for a real bundle, so the buffer grows with it; it grows here rather than inside getdelim so the growth
+   can sell at the floor. Only the '\n' is stripped: every field is an address, a name or base64, so a stray CR
+   is a writer of another grammar and the decode says so. A final record with no '\n' is returned as read. */
 static char *abi_line(void)
 {
-    char *buf = NULL;
-    size_t cap = 0;
-    ssize_t n = getdelim(&buf, &cap, '\n', stdin);
+    size_t cap = 4096, n = 0;
+    char *buf = abi_line_grow(NULL, cap);
+    int c;
 
-    if (n < 0) {
-        /* THE STREAM'S OWN ERROR NUMBER, KEPT ACROSS THE RELEASE BELOW, because the reader of this NULL PRINTS
-           it: `free` is permitted to set `errno`, so a value read after the release would be a fact about the
-           allocator presented as a fact about the channel. */
+    while ((c = getc_unlocked(stdin)) != EOF && c != '\n') {
+        if (n + 1 == cap) buf = abi_line_grow(buf, cap *= 2);
+        buf[n++] = (char)c;
+    }
+    if (c == EOF && (n == 0 || ferror(stdin))) {
         int e = errno;
 
         free(buf);
         errno = e;
         return NULL;
     }
-    if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = 0;
+    buf[n] = 0;
     return buf;
 }
 
