@@ -176,6 +176,14 @@ typedef struct {
        than a walk over an index. A `maplike<>` interface therefore calls idl_pair_iter_install AND installs
        those six itself. */
     bool maplike;
+    /* THE UNKNOWN EXTERNAL INPUT `target`'s VALUE PAIRS ARE A FUNCTION OF, or JS_UNDEFINED while they are known
+       values (borrowed). NULL for an interface whose pairs are never unknown. While it is set the pairs' length
+       is unknown too, so next and forEach ask IDL_PAIR_ITER_PREDICATE over it at every index instead of
+       comparing with `count`. `*example_n` is how many pairs the unknown's example holds, or -1 without one. */
+    JSValueConst (*unknown)(JSContext *ctx, JSValueConst target, int *example_n);
+    /* The i-th pair of a target whose `unknown` is set, as derivations over it (owned by the caller); asked only
+       on the arm where that pair exists, at any index the arm reached. */
+    void (*unknown_pair)(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value);
 } IdlPairIterOps;
 
 /* DECLARE the iterator class, its prototype and the forEach machine for one interface. Returns a handle.

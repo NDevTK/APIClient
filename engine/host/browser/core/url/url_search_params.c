@@ -188,11 +188,33 @@ static JSValue usp_derive(JSContext *ctx, UspObj *u, const char *op, JSValue r, 
     return d;
 }
 
-#define USP_UNKNOWN_WHY(what)                                                                        \
-    "a URLSearchParams parsed from unknown input was " what " — its list is the parse of the input's " \
-    "example, so this operation would answer about the example as if it were the input. Build the "  \
-    "list's mutations and walks over the unknown (each read already derives from it); the release "  \
-    "arm operates on the example's parse"
+/* §6.2's mutations over a list parsed from an unknown string: the real operation has run on the example's parse,
+   and the list becomes the unknown that operation derives — named by the operation, the previous list and the
+   arguments — with the updated example list's serialization as its example. Every later read derives from it,
+   so a read after a mutation is about the mutated list. The list has no associated URL (only the constructor's
+   string arm sets `unknown`, and that arm makes none), so §6.2's update steps have nothing to write. */
+static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JSValueConst *argv)
+{
+    JSValueConst ops[3];
+    JSValue ex = JS_UNDEFINED, d;
+    int n = 1, i;
+
+    DCHECK(JS_IsUndefined(u->owner),
+           "a URLSearchParams list derived from unknown input has an associated URL — only the constructor's "
+           "string arm sets `unknown`, and it creates no URL object, so §6.2's update steps would write the "
+           "example's serialization onto a URL as if it were the input");
+    ops[0] = u->unknown;
+    for (i = 0; i < argc && n < 3; i++) if (!JS_IsUndefined(argv[i])) ops[n++] = argv[i];
+    if (u->unknown_example) {
+        char *q = usp_serialize(&u->list, NULL);
+        ex = JS_NewString(ctx, q);
+        free(q);
+    }
+    d = concolic_new_derived(ctx, op, ops, n, ex);
+    DCHECK(!JS_IsUninitialized(d), "a URLSearchParams list parsed from an unknown derived no unknown list");
+    JS_FreeValue(ctx, u->unknown);
+    u->unknown = d;
+}
 
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -204,9 +226,6 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     int i, w;
 
     if (!u) return JS_EXCEPTION;
-    if (!JS_IsUndefined(u->unknown))
-        DCHECK(magic == USP_GET || magic == USP_GETALL || magic == USP_HAS || magic == USP_TOSTRING,
-               USP_UNKNOWN_WHY("modified"));
     if (magic == USP_SORT) {
         /* §6.2 sort(): by the NAMES' code units, and STABLE — the relative order of equal names is preserved,
            which is why this is an insertion sort and not qsort. */
@@ -221,6 +240,7 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
             u->list.e[j + 1] = tmp;
         }
         usp_update(ctx, u);
+        if (!JS_IsUndefined(u->unknown)) usp_rederive(ctx, u, "URLSearchParams.sort", 0, NULL);
         return JS_UNDEFINED;
     }
     if (magic == USP_TOSTRING) {
@@ -348,9 +368,14 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     }
     JS_FreeCString(ctx, name);
     if (value) JS_FreeCString(ctx, value);
-    if (!JS_IsUndefined(u->unknown) && !JS_IsException(r))
-        r = usp_derive(ctx, u, magic == USP_GET ? "URLSearchParams.get" : magic == USP_GETALL
-                                   ? "URLSearchParams.getAll" : "URLSearchParams.has", r, argc, argv);
+    if (!JS_IsUndefined(u->unknown) && !JS_IsException(r)) {
+        if (magic == USP_GET || magic == USP_GETALL || magic == USP_HAS)
+            r = usp_derive(ctx, u, magic == USP_GET ? "URLSearchParams.get" : magic == USP_GETALL
+                                       ? "URLSearchParams.getAll" : "URLSearchParams.has", r, argc, argv);
+        else
+            usp_rederive(ctx, u, magic == USP_APPEND ? "URLSearchParams.append" : magic == USP_DELETE
+                                     ? "URLSearchParams.delete" : "URLSearchParams.set", argc, argv);
+    }
     return r;
 #undef USP_NAME_IS
 #undef USP_VALUE_IS
@@ -372,8 +397,47 @@ static int usp_pair_count(JSContext *ctx, JSValueConst target)
 {
     UspObj *u = JS_GetOpaque(target, g_usp_class);
     (void)ctx;
-    DCHECK(!u || JS_IsUndefined(u->unknown), USP_UNKNOWN_WHY("iterated"));
     return u ? u->list.n : -1;
+}
+
+/* The unknown the list derives from, and how many pairs its example's parse holds (-1 without an example). */
+static JSValueConst usp_pair_unknown(JSContext *ctx, JSValueConst target, int *example_n)
+{
+    UspObj *u = JS_GetOpaque(target, g_usp_class);
+    (void)ctx;
+    DCHECK(u != NULL, "a URLSearchParams pair iterator asked its target's unknown of something that is not one");
+    *example_n = u->unknown_example ? u->list.n : -1;
+    return u->unknown;
+}
+
+/* One half of the i-th pair of a list derived from unknown input: a derivation over that unknown and the
+   index, whose example is the example parse's half where that pair exists and is not itself a hole. */
+static JSValue usp_unknown_half(JSContext *ctx, UspObj *u, const char *op, int i, int name_half)
+{
+    JSValueConst ops[2];
+    JSValue idx = JS_NewInt32(ctx, i), ex = JS_UNDEFINED, d;
+
+    if (u->unknown_example && i < u->list.n) {
+        const UspPair *e = &u->list.e[i];
+        if (name_half ? !e->nhole : !e->vhole)
+            ex = name_half ? JS_NewStringLen(ctx, e->name, e->nlen) : JS_NewStringLen(ctx, e->value, e->vlen);
+    }
+    ops[0] = u->unknown;
+    ops[1] = idx;
+    d = concolic_new_derived(ctx, op, ops, 2, ex);
+    DCHECK(!JS_IsUninitialized(d), "a URLSearchParams list parsed from an unknown derived no unknown pair");
+    return d;
+}
+
+/* §6.2's value pairs to iterate over for a list derived from unknown input: the i-th tuple's name and value. */
+static void usp_pair_of_unknown(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
+{
+    UspObj *u = JS_GetOpaque(target, g_usp_class);
+
+    DCHECK(u != NULL && !JS_IsUndefined(u->unknown) && i >= 0,
+           "a URLSearchParams pair over unknown input was asked of a list that is not derived from one");
+    *key = usp_unknown_half(ctx, u, "URLSearchParams.pairName", i, 1);
+    *value = usp_unknown_half(ctx, u, "URLSearchParams.pairValue", i, 0);
 }
 
 static void usp_pair_at(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
@@ -389,7 +453,8 @@ static void usp_pair_at(JSContext *ctx, JSValueConst target, int i, JSValue *key
     *value = JS_NewStringLen(ctx, u->list.e[i].value, u->list.e[i].vlen);
 }
 
-static const IdlPairIterOps USP_PAIR_OPS = { usp_pair_count, usp_pair_at, "URLSearchParams" };
+static const IdlPairIterOps USP_PAIR_OPS = { usp_pair_count, usp_pair_at, "URLSearchParams", false, false,
+                                             usp_pair_unknown, usp_pair_of_unknown };
 
 /* ---- §6.2's constructor ------------------------------------------------------------------------------------
  *

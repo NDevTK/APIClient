@@ -1151,6 +1151,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparsefetch.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
+#include "fixture/uspiter.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1626,6 +1627,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-fetch", HTML_FILEPARSE_FETCH },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
+    { "uspiter", HTML_USPITER },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -15081,6 +15083,50 @@ TF_UNIT void probes_fileparse_worker(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `uspiter` document (fixture/uspiter.h): walks and mutations over a URLSearchParams whose
+   pairs derive from the query. */
+TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
+    char src[192] = "";
+    int has = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, src, sizeof src);
+    const char *ik_why = NULL; int ik_tt = 1;
+    fold_row(&ik_tt, &ik_why, !!strstr(js, "\"/api/uspi-key\""),
+             "NOT REACHED: there is no /api/uspi-key record, so no for-of world yielded a pair whose name could be "
+             "`next`: the iterated names do not derive from the query");
+    const char *ic_why = NULL; int ic_tt = 1;
+    fold_row(&ic_tt, &ic_why, !!strstr(js, "\"/api/uspi-done\""),
+             "NOT REACHED: there is no /api/uspi-done record, so no for-of walk over the parsed query ended");
+    fold_row(&ic_tt, &ic_why, param_value_is(js, "/api/uspi-done", "n", "0"),
+             "no world ended the for-of walk with no pair: the world where the query holds no tuple is missing");
+    fold_row(&ic_tt, &ic_why, param_value_is(js, "/api/uspi-done", "n", "1"),
+             "no world ended the for-of walk after one pair: the walk did not fork per index");
+    const char *fe_why = NULL; int fe_tt = 1;
+    fold_row(&fe_tt, &fe_why, !!strstr(js, "\"/api/uspf-val\""),
+             "NOT REACHED: there is no /api/uspf-val record, so no forEach world handed the callback a value that "
+             "could be `on`");
+    const char *ky_why = NULL; int ky_tt = 1;
+    fold_row(&ky_tt, &ky_why, param_value_is(js, "/api/uspk-first", "done", "yes"),
+             "no world's keys().next() answered done: the empty query's world is missing");
+    fold_row(&ky_tt, &ky_why, param_value_is(js, "/api/uspk-first", "done", "no"),
+             "no world's keys().next() answered a key: the walk did not fork at index 0");
+    const char *mg_why = NULL; int mg_tt = 1;
+    fold_row(&mg_tt, &mg_why, !!strstr(js, "\"/api/uspm-get\""),
+             "NOT REACHED: there is no /api/uspm-get record, so a read after append/delete/set did not derive "
+             "from the query");
+    const char *ms_why = NULL; int ms_tt = 1;
+    fold_row(&ms_tt, &ms_why, has,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in location.search, so the read after "
+             "the mutations lost the query's provenance");
+    const Probe rows[] = {
+        { "usp-iter-key", ik_tt, "/api/uspi-key", SESS_EXPLORE, ik_why },
+        { "usp-iter-counts", ic_tt, "/api/uspi-done", SESS_EXPLORE, ic_why },
+        { "usp-foreach-value", fe_tt, "/api/uspf-val", SESS_EXPLORE, fe_why },
+        { "usp-keys-fork", ky_tt, "/api/uspk-first", SESS_EXPLORE, ky_why },
+        { "usp-mutate-read", mg_tt, "/api/uspm-get", SESS_EXPLORE, mg_why },
+        { "usp-mutate-sink", ms_tt, "'uspOut'", SESS_EXPLORE, ms_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18946,6 +18992,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_fetch(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
+    probes_uspiter(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);

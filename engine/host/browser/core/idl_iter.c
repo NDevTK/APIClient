@@ -280,6 +280,7 @@ int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCons
 /* ---- §3.7.9.1's default iterator object ------------------------------------------------------------------- */
 
 #include "core/idl_args.h"
+#include "core/idl_name_chain.h"
 #include "core/realm.h"
 #include "solver/cow.h"
 
@@ -305,6 +306,7 @@ typedef struct {
        is an AGENT registration and the pool is SEALED once the agent's realms start building: minting here per
        realm aborted the second realm with the member's name ("keys"), which is the seal doing its job. */
     int       id_keys, id_values, id_entries;
+    int       id_next;   /* §3.7.9.2's `next`, a step member over the same pool */
 } IdlPairIface;
 
 static IdlPairIface g_pair[IDL_PAIR_ITER_MAX];
@@ -431,40 +433,104 @@ static IdlPairIter *idl_pair_iter_of(JSValueConst v)
     return NULL;
 }
 
-static JSValue js_idl_pair_next(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    IdlPairIter *it = idl_pair_iter_of(this_val);
-    const IdlPairIface *f;
-    JSValue res, val, key, value;
-    int n;
+/* THE QUESTION next AND forEach BOTH ASK OF A TARGET WHOSE PAIRS ARE UNKNOWN: §3.7.9.2's nextSteps step 10 and
+   §3.7.9 forEach's loop compare an index with the length of the value pairs to iterate over, and that length is
+   a fact about the unknown. One predicate for both, so an answer recorded in one replays in the other. Outcome
+   0 is "no pair there", so a walk with no forking policy ends the iteration rather than asserting a pair. */
+#define IDL_PAIR_ITER_PREDICATE "Web IDL §2.5.9 Iterable declarations (value pairs to iterate over longer than"
+IDL_NAME_CHAIN_SPELLS(IDL_PAIR_ITER_PREDICATE, IDL_NAME_CHAIN_U32_BYTES);
 
-    (void)argc; (void)argv;
-    if (!it)
-        return JS_ThrowTypeError(ctx, "not an iterator of this interface");
+/* Whether the unknown pairs `unk` extend past `index`, its example (`example_n` pairs, -1 for none) marking the
+   arm a run with real values takes. 0 with *pyes set, or JS_STEP_FORK to return from the machine. */
+static int pair_iter_ask(JSContext *ctx, JSStepHdr *hdr, IdlNameChainKey *key, JSValueConst unk, int example_n,
+                         int index, const char *algorithm, bool *pyes)
+{
+    char name[IDL_NAME_CHAIN_U32_BYTES + 1];
+    int real = example_n < 0 ? JS_OUTCOME_REAL_UNSTATED : index < example_n;
+
+    DCHECK(index >= 0, "a pair iterator asked about a negative index");
+    snprintf(name, sizeof name, "%d", index);
+    return idl_name_chain_ask(ctx, hdr, key, unk, IDL_PAIR_ITER_PREDICATE, name, real, algorithm, pyes);
+}
+
+/* §3.7.9.2's nextSteps: a step machine because over unknown pairs step 10 is a fork. Its state is the ask's
+   constraint key, which step_fork_run borrows and so must outlive the body. */
+#define PAIR_NEXT_ALGORITHM "Web IDL §3.7.9.2 Iterator prototype object nextSteps"
+#define PAIR_NEXT_STAGES(X) \
+    X(PAIR_NEXT_READ, PAIR_NEXT_ALGORITHM " steps 1-13 (the pair at this iterator's index, or done; step 10's " \
+                      "comparison with len is the one ask)")
+enum { IDL_STEP_STAGE_BASE(PAIR_NEXT_STAGES) PAIR_NEXT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const PAIR_NEXT_STEPS[] = { PAIR_NEXT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { IdlNameChainKey key; } IdlPairNextState;
+
+static void js_idl_pair_next_visit(JSContext *ctx, void *state, JSStepVisit *v)
+{
+    (void)ctx; (void)state; (void)v;   /* the state owns no value: the key is an inline array */
+}
+
+static int js_idl_pair_next(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlPairNextState *s = state;
+    IdlPairIter *it;
+    const IdlPairIface *f;
+    JSValueConst unk = JS_UNDEFINED;
+    JSValue res, val, key, value;
+    int n, example_n = -1;
+    bool more;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == PAIR_NEXT_READ, "§3.7.9.2's nextSteps resumed at a stage it does not have");
+    it = idl_pair_iter_of(hdr->this_val);
+    if (!it) {
+        JS_ThrowTypeError(ctx, "not an iterator of this interface");
+        return JS_STEP_ABRUPT;
+    }
     f = &g_pair[it->iface];
     n = f->ops->count(ctx, it->target);
     DCHECK(n >= 0, "an iterator outlived the object it holds a reference to");
+    if (f->ops->unknown) unk = f->ops->unknown(ctx, it->target, &example_n);
+    if (!JS_IsUndefined(unk)) {
+        int rc = pair_iter_ask(ctx, hdr, &s->key, unk, example_n, it->index, PAIR_NEXT_ALGORITHM, &more);
+        if (rc) return rc;   /* parked at the fork */
+    } else {
+        more = it->index < n;
+    }
     res = JS_NewObject(ctx);
-    if (JS_IsException(res)) return res;
-    if (it->index >= n) {
+    if (JS_IsException(res)) return JS_STEP_ABRUPT;
+    if (!more) {
         JS_SetPropertyStr(ctx, res, "value", JS_UNDEFINED);
         JS_SetPropertyStr(ctx, res, "done", JS_NewBool(ctx, true));
-        return res;
+        *presult = res;
+        return JS_STEP_DONE;
     }
-    f->ops->pair(ctx, it->target, it->index, &key, &value);
+    if (!JS_IsUndefined(unk)) f->ops->unknown_pair(ctx, it->target, it->index, &key, &value);
+    else                      f->ops->pair(ctx, it->target, it->index, &key, &value);
     if (it->kind == PAIR_KEYS)        { val = key;   JS_FreeValue(ctx, value); }
     else if (it->kind == PAIR_VALUES) { val = value; JS_FreeValue(ctx, key); }
     else {
         val = JS_NewArray(ctx);
-        if (JS_IsException(val)) { JS_FreeValue(ctx, key); JS_FreeValue(ctx, value); JS_FreeValue(ctx, res); return val; }
+        if (JS_IsException(val)) {
+            JS_FreeValue(ctx, key); JS_FreeValue(ctx, value); JS_FreeValue(ctx, res);
+            return JS_STEP_ABRUPT;
+        }
         JS_SetPropertyUint32(ctx, val, 0, key);
         JS_SetPropertyUint32(ctx, val, 1, value);
     }
     it->index++;
     JS_SetPropertyStr(ctx, res, "value", val);
     JS_SetPropertyStr(ctx, res, "done", JS_NewBool(ctx, false));
-    return res;
+    *presult = res;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl PAIR_NEXT_DECL = {
+    js_idl_pair_next, sizeof(IdlPairNextState), js_idl_pair_next_visit, NULL,
+    PAIR_NEXT_ALGORITHM, PAIR_NEXT_STEPS, 0, NULL
+};
 
 /* magic packs the interface handle and the kind, because one C function serves every declared interface. */
 static JSValue js_idl_pair_make(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -508,6 +574,7 @@ typedef struct {
     /* 2 + argc, which the call request states and which is NOT the argument count: [this, callback] and then
        the three the spec passes (value, key, target). */
     JSValue   cb[5];
+    IdlNameChainKey key;   /* the ask's constraint key over unknown pairs (an inline array; no value to visit) */
 } IdlPairForEachState;
 
 #define PAIR_FOREACH_CB_SLOTS 5
@@ -564,11 +631,24 @@ static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result,
     for (;;) {
         JSValueConst args[3];
         JSValue key, value;
+        JSValueConst unk = JS_UNDEFINED;
+        int example_n = -1;
         n = f->ops->count(ctx, s->hdr.this_val);
-        if (s->i >= n) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
+        if (f->ops->unknown) unk = f->ops->unknown(ctx, s->hdr.this_val, &example_n);
+        /* Over unknown pairs the loop test is the ask, put once per index before the callback is issued; a
+           resume mid-callback (cphase != 0) is on an index whose pair this flow already answered exists. */
+        if (JS_IsUndefined(unk) && s->i >= n) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
+        if (s->cphase == 0 && !JS_IsUndefined(unk)) {
+            bool more = false;
+            r = pair_iter_ask(ctx, &s->hdr, &s->key, unk, example_n, s->i,
+                              "Web IDL §3.7.9 forEach(callback, thisArg)", &more);
+            if (r) { JS_FreeValue(ctx, cb_result); return r; }
+            if (!more) { JS_FreeValue(ctx, cb_result); return JS_STEP_DONE; }
+        }
         if (s->cphase == 0) {
             /* the operands are built fresh each entry; step_call_run dups them into its own buffer */
-            f->ops->pair(ctx, s->hdr.this_val, s->i, &key, &value);
+            if (!JS_IsUndefined(unk)) f->ops->unknown_pair(ctx, s->hdr.this_val, s->i, &key, &value);
+            else                      f->ops->pair(ctx, s->hdr.this_val, s->i, &key, &value);
             args[0] = value; args[1] = key; args[2] = s->hdr.this_val;
             r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, this_arg, 3, args, cb_result, &ignored,
                               out_cb, out_argc);
@@ -673,6 +753,7 @@ int idl_pair_iter_declare(JSContext *ctx, const char *component, const IdlPairIt
         f->id_keys    = idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_KEYS);
         f->id_values  = idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_VALUES);
         f->id_entries = idl_method_id(ctx, NONE, 0, js_idl_pair_make, (handle << 2) | PAIR_ENTRIES);
+        f->id_next    = idl_method_id_step(ctx, NONE, 0, NULL, 0, &PAIR_NEXT_DECL, handle);
     }
     g_pair_n++;
     /* ONE ENTRY IN core/realm.h's LIST FOR EVERY iterable<>, declared with the first of them — the list is run
@@ -756,9 +837,7 @@ void idl_pair_iter_install_protos(JSContext *ctx)
         CHECK(!JS_IsException(proto), "an iterator prototype object could not be allocated");
         snprintf(name, sizeof name, "%s Iterator", f->ops->iface);
         /* §3.7.9.2 gives `next` all three attributes — ENUMERABLE included, unlike an interface prototype's. */
-        JS_DefinePropertyValueStr(ctx, proto, "next",
-                                  JS_NewCFunction(ctx, js_idl_pair_next, "next", 0),
-                                  JS_PROP_WRITABLE | JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
+        idl_install_method(ctx, proto, "next", f->id_next);
         /* §3.7.11.2 DECLARES NO TAG OF ITS OWN, because %MapIteratorPrototype% already carries `Map Iterator`
            and the iterator INHERITS it. Defining the interface's name here would shadow the intrinsic's and
            make `String(m.entries())` read a string no browser produces. */
