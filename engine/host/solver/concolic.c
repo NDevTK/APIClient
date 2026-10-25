@@ -172,13 +172,12 @@ typedef struct {
        negation of one, because `!(p ∧ q)` is not a conjunction. */
     char **conj;
     int    conj_n;
-    /* The atom this value was spent on as a property key, where its shape alone could not name it. Written
-       once by keyname_atom; NULL on every value whose identity this engine can spell. The shape is 1:N exactly
-       where the identity is absent (an Object or Symbol operand), so two different derivations would otherwise
-       buy one atom and land in one slot.
-       Memoised because the atom is composed from where the page stood at the first purchase: recomputing would
-       buy a value written under one key on two lines two atoms. A field makes the atom a pure function of the
-       value, which the keyname table's declaration relies on.
+    /* The atom this value was spent on as a property key, written once by keyname_atom: its shape named by its
+       identity, or, where the identity is absent (an Object or Symbol operand), by the site of the first
+       purchase. NULL until the value is first spent as a key.
+       Memoised because a site atom is composed from where the page stood at the first purchase: recomputing
+       would buy a value written under one key on two lines two atoms. A field makes the atom a pure function of
+       the value, which the keyname table's declaration relies on.
        Owned and freed at concolic_finalizer. The record has one mint (concolic_alloc, through reclaim_calloc,
        so the never-purchased state is the zero) and no field-by-field clone. */
     char *key_atom;
@@ -5604,9 +5603,8 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v) {
    two flows minting one unknown record one entry. The slot the name goes on is an ordinary property write the
    COW delta carries. Agent state, released at concolic_free. */
 /* The atom and the shape answer two questions: the atom is the bytes the page holds (what an enumeration hands
-   back and the inverse looks up), the shape is the @H provenance a report renders. They are the same string
-   for every value this engine can spell; keyname_atom makes them differ exactly where the shape cannot name
-   the value. `root_whose` is a column because the re-mint cannot recover it: an empty mask beside a real root
+   back and the inverse looks up), the shape is the @H provenance a report renders. keyname_atom names the
+   atom by the value's identity, since a shape may render two identities alike. `root_whose` is a column because the re-mint cannot recover it: an empty mask beside a real root
    fails concolic_alloc's pair assert, and UNSTATED would deny a provenance this row holds. */
 typedef struct { char *atom, *shape, *src, *root, *ident; unsigned root_whose; } KeyName;
 static KeyName *g_keynames; static int g_keynames_n, g_keynames_cap;
@@ -5720,44 +5718,40 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
    ever meet under one string, keyname_record's assert reports it, because `src`, `root` or `ident` differ. */
 #define KEYNAME_SITE_SEP '\x1f'
 
-/* The atom an unspellable key is spent on: its shape plus where the page's code stood when this value first
- * bought one. Borrowed from the record (or the caller's `sh`), never owned here.
- * Where the identity is absent the shape is 1:N (`o[h.slice({})] = "a"; o[h.slice({z:1})] = "b";` would buy
- * one atom for two values). An atom is not a constraint key (keyname_record keeps the value's `ident` and
- * concolic_key_value_hook re-mints with it), so a site can split slots without a namer; two atoms are equal
- * only where both shapes and first-purchase sites are, so this is strictly finer and loses no slot.
- * The site is a program fact (JS_RunningSiteHash folds a body locator with the frame's byte offset), so a
- * replay composes the same bytes. Memoised at the first purchase, so `o[k]` on two lines stays one slot. With
- * no page frame standing the purchase keeps its shape rather than sharing a reserved token.
- * Named residual. Not covered: two values first purchased at one site (`o[f(a[i])]` over unnameable `a[i]`).
- * Next diff: the creating flow's count of prior purchases at this site beside the site, riding the PinBlob
- * like the mint counter but keyed by site. How its absence shows: a document writing an unknown key in a loop
- * reports fewer own property names than it wrote, with one keyname entry. */
-static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh)
+/* The atom an unknown key is spent on: its shape, the separator, and a 64-bit FNV-1a digest of the identity the
+ * key is named by (`ident`: the value's, or for a string form the value it is the string form of). A shape is a
+ * display and may render two identities alike (every `Math.random()` call is its own root, `Math.random()#<n>`,
+ * under one shape), so the name is the identity's: equal identities share one slot, different ones never do.
+ * Where the identity is absent, the shape plus where the page's code stood when the value first bought one
+ * (JS_RunningSiteHash, a program fact, so a replay composes the same bytes); with no page frame standing that
+ * purchase keeps its shape. Memoised on the value; borrowed from it (or the caller's `sh`), never owned here.
+ * Named residual. Not covered: two identity-less values first purchased at one site (`o[f(a[i])]` over
+ * unnameable `a[i]`). Next diff: the creating flow's count of prior purchases at this site beside the site,
+ * riding the PinBlob like the mint counter but keyed by site. How its absence shows: a document writing an
+ * unknown key in a loop reports fewer own property names than it wrote, with one keyname entry. */
+static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh, const char *ident)
 {
     Concolic *c = g_concolic_class ? JS_GetOpaque(key, g_concolic_class) : NULL;
-    uint64_t site;
+    uint64_t site, h = 0xcbf29ce484222325ull;
+    const unsigned char *p;
 
-    /* A spellable identity needs nothing here: its shape already separates every pair the identity does, and
-       a site would split a slot the rule keeps whole. */
-    if (!c || c->ident) return sh;
+    if (!c) return sh;
     if (c->key_atom) return c->key_atom;
     if (strchr(sh, KEYNAME_SITE_SEP)) return sh;      /* the page's own bytes — see the separator */
-    if (!JS_RunningSiteHash(ctx, &site)) return sh;   /* no page frame: there is no site to name it by */
-    c->key_atom = shapef("%s%c%016llx", sh, KEYNAME_SITE_SEP, (unsigned long long)site);
-    /* `key_atom` is written here and nowhere else, so "bought a discriminated atom" and "has no spellable
-       identity" are one fact, asserted where both are in hand. */
-    DCHECK(c->key_atom != NULL && c->ident == NULL,
-           "a value bought a site-discriminated atom while carrying a spellable identity — the two are one "
-           "fact written at one line, so a record holding both is one whose shape already separates what "
-           "the site is being spent to separate, and the atom has split a slot the identity keeps whole");
+    if (ident) {
+        for (p = (const unsigned char *)ident; *p; p++) { h ^= *p; h *= 0x100000001b3ull; }
+        c->key_atom = shapef("%s%c%016llx", sh, KEYNAME_SITE_SEP, (unsigned long long)h);
+    } else {
+        if (!JS_RunningSiteHash(ctx, &site)) return sh;   /* no page frame: there is no site to name it by */
+        c->key_atom = shapef("%s%c%016llx", sh, KEYNAME_SITE_SEP, (unsigned long long)site);
+    }
     return c->key_atom;
 }
 
 /* The name an unknown key denotes: its shape (or the shape of the value it is the string form of) as a real
    string, stable per source, so every key-taking operation agrees (see the contract at JS_ToPropertyKeyInternal). */
 JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
-    const char *sh, *atom;
+    const char *sh, *atom, *ident;
     Concolic *kc;
 
     if (!concolic_is(key)) return JS_UNINITIALIZED;
@@ -5765,12 +5759,12 @@ JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
     /* The KEY's identity and slot, §7.1.21 ToPropertyKey ( arg ): a string form of `x` (str_of_record) is the
        key `x` is, so `o[x]`, `o[String(x)]` and `o[x + ""]` name one slot under `x`'s identity. */
     sh = kc && kc->str_of ? kc->str_of_shape : concolic_shape_c(key);
-    /* …and the atom differs from the shape only where the shape cannot name the value (keyname_atom). */
-    atom = keyname_atom(ctx, key, sh ? sh : "{}");
+    ident = kc && kc->str_of ? kc->str_of : concolic_ident_c(key);
+    /* …and the atom is named by that identity (keyname_atom). */
+    atom = keyname_atom(ctx, key, sh ? sh : "{}", ident);
     /* What this trade costs is recorded as it is spent, the one place it can be undone. The atom is recorded,
        not the shape, because concolic_key_value_hook inverts by the bytes the page hands back. */
-    keyname_record(atom, sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), root_whose_of(key),
-                   kc && kc->str_of ? kc->str_of : concolic_ident_c(key));
+    keyname_record(atom, sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), root_whose_of(key), ident);
     return JS_NewString(ctx, atom);
 }
 
