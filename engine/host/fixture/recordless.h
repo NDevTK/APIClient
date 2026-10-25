@@ -1,5 +1,5 @@
-/* THE RECORDLESS-FRAME DOCUMENT: a branch on an unknown (`window.name`, which the navigating document writes)
-   inside each callee the engine runs on its chain with no continuation record — a setter body, an iterator's
+/* THE RECORDLESS-FRAME DOCUMENT: a branch on an unknown (an injected global the document does not spell, which
+   solver/absent.c mints) inside each callee the engine runs on its chain with no continuation record — a setter body, an iterator's
    `next` driven by for-of, the same `next` driven by a generator's `yield*`, and an iterator's `return` on a
    for-of `break`. Each branch forks the flow with that callee's frame on the chain, so each arm's address is
    reached only if the fork could copy the frame.
@@ -14,7 +14,7 @@
 static const char HTML_RECORDLESS[] =
     "<!doctype html><html><body>"
     "<script>"
-    "var rlU = window.name;"
+    "var rlU = window.__tfRlRole;"
     "var rlO = { set v(x) { if (rlU === 'adm') fetch('/api/rl/setter-a'); else fetch('/api/rl/setter-b'); } };"
     "rlO.v = 1;"
     "function rlIter(a, b) {"
