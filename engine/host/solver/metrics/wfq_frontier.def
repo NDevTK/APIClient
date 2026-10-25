@@ -136,6 +136,10 @@ METRIC(br_fan_depth, "brFanDepth", GAUGE, "level", AGENT, "solver/flow.c", INT)
 METRIC(vis_min, "visMin", GAUGE, "visit", AGENT, "solver/flow.c", INT)
 METRIC(vis_max, "visMax", GAUGE, "visit", AGENT, "solver/flow.c", INT)
 METRIC(vis_zero, "visZero", GAUGE, "member", AGENT, "solver/flow.c", INT)
+/* The optimism denominator's extremes over the members in work, `Q*(1 + orphan_seen) + site_served` with
+   Q = ENGINE_QUANTUM_WORK (solver/flow.c's FlowSite): the UCB term's range is `Q/optDenMin - Q/optDenMax`. */
+METRIC(opt_den_min, "optDenMin", GAUGE, "work", AGENT, "solver/flow.c", INT)
+METRIC(opt_den_max, "optDenMax", GAUGE, "work", AGENT, "solver/flow.c", INT)
 METRIC(cands, "cands", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(cand_unrun, "candUnrun", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(cand_svc_max, "candSvcMax", GAUGE, "notch", AGENT, "solver/flow.c", INT)

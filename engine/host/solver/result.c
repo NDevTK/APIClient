@@ -509,11 +509,12 @@ static char *errs_json_array(ErrsArray which) {
 /* One end of a weight gap as its operands (solver/flow.h's FlowWeightOperands): doubles in %.17g, so a reader
    recomposes the weight to the bit. Freed by the caller. */
 static char *weight_operands_json(const FlowWeightOperands *o) {
-    return composef("{\"w\":%.17g,\"reward\":%.17g,\"coordNotch\":%lld,\"ownNotch\":%lld,\"visits\":%lld,"
-                    "\"orphanSeen\":%lld,\"born\":%ld,\"replay\":%.17g,\"surv\":%.17g,\"rung\":%d,"
-                    "\"assumed\":%lld,\"picks\":%lld,\"hostOwed\":%d,\"running\":%d}",
-                    o->w, o->reward, (long long)o->coord_notch, (long long)o->own_notch, (long long)o->visits,
-                    (long long)o->orphan_seen, o->born, o->replay, o->surv, o->rung, (long long)o->assumed,
+    return composef("{\"w\":%.17g,\"reward\":%.17g,\"coordNotch\":%lld,\"ownNotch\":%lld,\"siteServed\":%lld,"
+                    "\"pullWork\":%lld,\"visits\":%lld,\"orphanSeen\":%lld,\"born\":%ld,\"replay\":%.17g,"
+                    "\"surv\":%.17g,\"rung\":%d,\"assumed\":%lld,\"picks\":%lld,\"hostOwed\":%d,\"running\":%d}",
+                    o->w, o->reward, (long long)o->coord_notch, (long long)o->own_notch, (long long)o->site_served,
+                    (long long)o->pull_work, (long long)o->visits, (long long)o->orphan_seen, o->born, o->replay,
+                    o->surv, o->rung, (long long)o->assumed,
                     (long long)o->picks, o->host_owed, o->running);
 }
 
@@ -687,6 +688,8 @@ char *result_wfq_json(void) {
     METRIC_SET(vis_min, w.vis_min);
     METRIC_SET(vis_max, w.vis_max);
     METRIC_SET(vis_zero, w.vis_zero);
+    METRIC_SET(opt_den_min, w.opt_den_min);
+    METRIC_SET(opt_den_max, w.opt_den_max);
     METRIC_SET(cands, w.cand_members);
     METRIC_SET(cand_unrun, w.cand_unrun);
     METRIC_SET(cand_svc_max, w.cand_svc_max);

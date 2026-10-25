@@ -5147,6 +5147,14 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
      * holds cannot change under it (world_ancestry asserts it). The cost is one minted row per fork; the vector
      * does not grow, because world_ancestry names only ancestors that have crossed the seam. */
     WorldId fork_point = parent->world;
+    /* The decision this fork is taken at is where both arms stand (solver/flow.c's FlowSite): the page frame
+       standing at the branch names it, so the parent is moved there before the arm copies its site. A fork asked
+       with no page frame standing (between tasks, at a park) or for a flow not holding the thread leaves the
+       parent where it stood. */
+    {
+        uint64_t site;
+        if (parent == flow_running() && JS_RunningSiteHash(ctx, &site)) flow_stand_at(parent, FLOW_SITE_CODE, site);
+    }
     /* Unseeded: an arm inherits its parent's sequence (copied below), so seeding would allocate the root
        document's rows onto it and leak them under the copy. */
     Flow *sib = flow_add_unseeded(ctx, parent->fn, fork_point);
@@ -6612,6 +6620,7 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
         char loc[17];
         const char *fields[1] = { loc };
         snprintf(loc, sizeof loc, "%016llx", (unsigned long long)hash);
+        flow_stand_at(sib, FLOW_SITE_DRIVE, hash);
         flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 1), sib->visits));
     }
     return ORPHAN_STEP_SEEDED;
@@ -6750,16 +6759,16 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
         char loc[17];
         const char *fields[1] = { loc };
         snprintf(loc, sizeof loc, "%016llx", (unsigned long long)hash);
+        flow_stand_at(sib, FLOW_SITE_DRIVE, hash);
         flow_set_orphan_seen(sib, (int64_t)novelty_drive_note(novelty_id(NOVELTY_DRIVE, fields, 1), sib->visits));
     }
     /* Where it enters the queue, asserted at the one entry that manufactures its own work: a drive entering at
        virtual time zero would carry the full optimism bonus ahead of the backlog, and a bundle has thousands of
        uncalled functions. It is assembled as a sibling, so flow_fork_inherit hands it the discovering flow's
-       account, which equals SFQ's v(t) because this flow is the one in service. Every coordinate is checked: the
-       completed-unit count (the optimism term), its service with the window mark, and its family (the aging
-       term's halves). */
-    DCHECK(sib->work == f->work && sib->work_gen == f->work_gen &&
-           sib->visits == f->visits && sib->family == f->family,
+       account, which equals SFQ's v(t) because this flow is the one in service. Every coordinate is checked: its
+       service with the window mark and its family (the aging term's halves). Its site is the driven body's, set
+       above, which is what makes it an arrival rather than a branch of this flow's decision. */
+    DCHECK(sib->work == f->work && sib->work_gen == f->work_gen && sib->family == f->family,
            "a driven orphan entered the frontier at a virtual time that is not the running flow's — the orphan's arm "
            "inherits the discovering flow's account");
 
@@ -8054,7 +8063,7 @@ static uint64_t g_rival_miss_gen = 0, g_rival_miss_cur = 0, g_rival_miss_both = 
    member the hook holds anyway, and also checks the pointer's safety argument for more than membership. Written
    in every build and read only in dev, like `g_ranked_*`: four stores after an O(members) walk, and guarding them
    would put the assertion's operands behind a second condition. */
-static int64_t g_rival_own_notch = 0, g_rival_visits = 0;
+static int64_t g_rival_own_notch = 0, g_rival_opt_den = 0;
 static double g_rival_val = 0.0, g_rival_dist = 0.0;
 /* The integer the rival's family coordinate prices (solver/flow.c's acct_family_coord): its family's notch plus its
    carry bit, which is its total notch less its own. flow_age_running charges the family without a rank change, so
@@ -8087,10 +8096,10 @@ static unsigned g_ranked_gen = 0; static double g_ranked_val = 0.0;
    weight reads one quantity, the sum. The unit is the quantum the thread is handed out in, so the rank can move on
    aging between two picks (see the charge's resolution assertion in engine_sched_slice). */
 static int64_t g_ranked_silence = 0;
-/* The completed-unit count, the optimism term's quantity (flow.h's `visits`). It moves when the scheduler credits a
-   step that left the flow between units, and a flow can be re-picked without a switch-in, so it can change while
-   the silence notch stands still: a flow finished a program, its bonus halved, and a sibling passed it. */
-static int64_t g_ranked_visits = 0;
+/* The optimism denominator, the UCB term's operand (solver/flow.c's FlowSite): it moves when the flow's site is
+   served across a quantum or the flow stands at another site, and a flow can be re-picked without a switch-in, so it
+   can change while the silence notch stands still. */
+static int64_t g_ranked_opt_den = 0;
 /* The fitness distance, a term of the weight (`reward + dist + ucb - silence`) and so a coordinate of it. */
 static double g_ranked_dist = 0.0;
 /* Suspend points reached: every call to this hook is one, which the seam assertion needs and quickjs's counters do
@@ -8198,7 +8207,7 @@ static int preempt_hook(int kind) {
            The own service notch, not the silence notch: the silence adds the family's half, which advances on
            every step of whoever holds the thread, the one movement this interval permits. */
         if (g_rival) {
-            g_rival_own_notch = flow_service_notch(g_rival); g_rival_visits = g_rival->visits;
+            g_rival_own_notch = flow_service_notch(g_rival); g_rival_opt_den = flow_optimism_den(g_rival);
             g_rival_val = flow_reward(g_rival); g_rival_dist = flow_distance(g_rival);
             g_rival_fam_coord_notch = flow_family_notch(g_rival) + flow_silence_carry(g_rival);
             g_rival_w = flow_weight(g_rival);
@@ -8221,15 +8230,15 @@ static int preempt_hook(int kind) {
        call, except flow_credit_visit's completed-unit count, whose sole caller credits `cur`, which forces the
        rescan by its second half. */
     DCHECKF(!g_rival ||
-            (flow_service_notch(g_rival) == g_rival_own_notch && g_rival->visits == g_rival_visits &&
+            (flow_service_notch(g_rival) == g_rival_own_notch && flow_optimism_den(g_rival) == g_rival_opt_den &&
              flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
              flow_family_notch(g_rival) + flow_silence_carry(g_rival) >= g_rival_fam_coord_notch),
             "a term of the cached rival's weight moved while the frontier generation stood still (own notch %lld -> "
-            "%lld, completed units %lld -> %lld, reward %g -> %g, distance %g -> %g, "
+            "%lld, optimism denominator %lld -> %lld, reward %g -> %g, distance %g -> %g, "
             "family notch plus carry %lld -> %lld, still a member: %d; -1 and 0 mean it departed) — raise "
             "frontier_rank_changed() at the writer that moved it",
             (long long)g_rival_own_notch, (long long)flow_service_notch(g_rival),
-            (long long)g_rival_visits, (long long)g_rival->visits,
+            (long long)g_rival_opt_den, (long long)(flow_is_member(g_rival) ? flow_optimism_den(g_rival) : -1),
             g_rival_val, flow_reward(g_rival),
             g_rival_dist, flow_distance(g_rival),
             (long long)g_rival_fam_coord_notch, (long long)(flow_family_notch(g_rival) + flow_silence_carry(g_rival)),
@@ -8262,10 +8271,10 @@ static int preempt_hook(int kind) {
            ledger, which a sibling's emission does not move. */
         DCHECK(flow_frontier_gen() != g_ranked_gen ||
                flow_silence_notch(cur) != g_ranked_silence ||
-               cur->visits != g_ranked_visits || flow_reward(cur) != g_ranked_val ||
+               flow_optimism_den(cur) != g_ranked_opt_den || flow_reward(cur) != g_ranked_val ||
                flow_distance(cur) != g_ranked_dist,
                "the value yield fired on a flow whose rank nothing changed since it was switched in — generation, "
-               "silence notch, completed units, reward and distance are unchanged, so the pick and the hook are "
+               "silence notch, optimism denominator, reward and distance are unchanged, so the pick and the hook are "
                "answering one state two ways");
         return 1;
     }
@@ -10825,7 +10834,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
        assertion reads them; nothing decides from them. */
     g_ranked_gen = flow_frontier_gen(); g_ranked_val = flow_reward(f);   /* the reward term, the family's */
     g_ranked_silence = flow_silence_notch(f);  /* the aging term — see the assertion in preempt_hook */
-    g_ranked_visits = f->visits;               /* …and the optimism term's, which is a count and not a clock */
+    g_ranked_opt_den = flow_optimism_den(f);   /* …and the optimism term's, which is a count and not a clock */
     g_ranked_dist = flow_distance(f);          /* …and the fitness term's, which is a reading and not a payment */
 }
 
@@ -12213,33 +12222,24 @@ static int engine_sched_slice(void) {
             g_step_work += step_work;
             flow_age_running(step_work);
 #if APICLIENT_DEV
-            /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, "a UCB optimism bonus
-               ∝ 1/(visits+1) so a never-run flow is never starved", is a floor on the weight flow_pick returns;
-               flow_pick_walk's bound on the aging half is derived from flow_weight and catches only an edit to the
-               formula. This is observability: whether retiring a whole quantum moves the flow's rank at the
-               granularity the thread is handed out in, since the next statement of this loop is the pick. Under
-               today's unit it is an identity: `flow_silence_notch` divides by the cooperative quantum and the
-               charge adds the same units to both of its summands, so a full quantum moves it at least two
-               notches. A unit coarser than a quantum would leave the optimism bonus as the only finer term, whose
-               sole mover is completing a unit of the ladder, the precondition for reaching a queued job
-               (`frame == NULL`), so the one flow able to run a promise reaction would be the only one paying. A
-               charge under one quantum is exempt: it is below anything this scheduler decides. */
+            /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, the UCB bonus that
+               keeps a never-served site from starving, is a floor on the weight flow_pick returns; flow_pick_walk's
+               bound on the aging half is derived from flow_weight and catches only an edit to the formula. This is
+               observability: whether retiring a whole quantum moves the flow's rank at the granularity the thread
+               is handed out in, since the next statement of this loop is the pick. Under today's unit it is an
+               identity: `flow_silence_notch` divides by the cooperative quantum and the charge adds the same units
+               to both of its summands, so a full quantum moves it at least two notches. A charge under one quantum
+               is exempt: it is below anything this scheduler decides. */
             DCHECK(step_work < ENGINE_QUANTUM_WORK || flow_silence_notch(cur) > age_notch0,
                    "a flow consumed a whole cooperative quantum and its rank did not move — the aging term is "
                    "quantised coarser than the thread is handed over");
 #endif
-            /* And the other term's charge, a count and not a clock: the optimism bonus is "∝ 1/(visits+1)", and a
-             * visit is a completed unit of work (a program that ended, a job, a delivery, a lifecycle stage), never
-             * a slice of thread time. The predicate is HTML §8.1.4.4 "Calling scripts"'s, step 3 of clean up after
-             * running script, "if the JavaScript execution context stack is now empty", read from the one
-             * `unit_ended` the checkpoint and the notify read. A flow preempted mid-program is not credited: it is
-             * the same trial, still running, and crediting per quantum would leave a flow strictly outranked by
-             * every arm it forked, never reaching the end of a program or its queued jobs. The unit ends when the
-             * microtask queue does, since the checkpoint the emptying triggers runs "While the event loop's
-             * microtask queue is not empty"; crediting at the return would demote the flow (the bonus is
-             * 1/(1+visits)) the moment its queued reactions became eligible, and flow_credit_visit asserts this at
-             * the origin. A finished flow is credited too: `r == FLOW_STEP_DONE` is the largest completed unit,
-             * read only by the census.
+            /* And the completed unit, an observation the census publishes (`visMin`/`visMax`): a visit is a
+             * program that ended, a job, a delivery or a lifecycle stage, never a slice of thread time. The
+             * predicate is HTML §8.1.4.4 "Calling scripts"'s, step 3 of clean up after running script, "if the
+             * JavaScript execution context stack is now empty", read from the one `unit_ended` the checkpoint and
+             * the notify read; the unit ends when the microtask queue does, and flow_credit_visit asserts this at
+             * the origin. A finished flow is credited too: `r == FLOW_STEP_DONE` is the largest completed unit.
              *
              * `g_units_done` is the instance-wide count of the same event, taken here so it cannot drift from the
              * credit: `_unitsDone` beside `_jobsRun` tells "flows reach the boundary and have no jobs" from "no

@@ -6,7 +6,8 @@
  * frame-agnostic by construction.
  *
  * The WFQ orders flows by an anytime-bandit priority: accumulated emitted value, plus a UCB optimism bonus
- * proportional to 1/(1 + visits) so a never-run flow is never starved, minus work aging so a flow that spends work
+ * 1/(1 + pulls) over the service the flow's code site has received, so a never-served site is never starved, minus
+ * work aging so a flow that spends work
  * without emitting sinks below productive and unrun flows. It orders only and never drops a work item. A
  * monopolizer is a fork chain rather than one flow, so the reward and the family half of the aging live on the
  * fork family's account (`family` below, flow.c's FlowAcct). */
@@ -27,6 +28,7 @@
    must reach the flow that forked it, because the aging term prices a fork chain as one monopolizer. Opaque so
    that flow.c's flow_weight is its only rank reader. Refcounting and the charge are in flow.c. */
 typedef struct FlowAcct FlowAcct;
+typedef struct FlowSite FlowSite;
 
 /* The @S fitness ladder; flow_distance composes the comparator from it, so the rung count is arithmetic.
    Rung 0 is the runway: the fraction of its recorded path a candidate has replayed, observed at dec_replay,
@@ -54,14 +56,17 @@ typedef struct FlowAcct FlowAcct;
 #define FLOW_STEP_RETIRED 3
 
 /* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
-   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/born + (((-own_notch*Q + 1/(1+visits+orphan_seen))
-   + (replay + surv + rung)/FLOW_RUNGS_N) - assumed*A))`, with Q = FLOW_AGE_QUANTUM and A = FLOW_ASSUMPTION_COST.
-   `coord_notch` is the family notch plus the carry bit. `host_owed`, `running` and `picks` say whether the
+   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/(1 + site_served/pull_work + orphan_seen)
+   + ((-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N) - assumed*A))`, with Q = FLOW_AGE_QUANTUM and
+   A = FLOW_ASSUMPTION_COST. `coord_notch` is the family notch plus the carry bit; `site_served` is the work
+   the member's code site has received in its family and `pull_work` the quantum it is counted in
+   (ENGINE_QUANTUM_WORK).
+   `visits`, `born` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
    member could take the thread. */
 typedef struct {
     int present;
     double reward;
-    int64_t coord_notch, own_notch, visits, orphan_seen, picks;
+    int64_t coord_notch, own_notch, site_served, pull_work, visits, orphan_seen, picks;
     long born;
     double replay, surv;
     int rung;
@@ -74,11 +79,11 @@ typedef struct {
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
    the index allocates nothing. It carries a copy of the order's key (flow.c's FlowOrderKey: `key` the weight, then
-   the member half `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is the
+   the partial sums `x` and `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is the
    null-path length; `off`, the family's coordinate with no carry, and `kind` are used only by a query's queue. */
 typedef struct FlowIxNode {
     struct FlowIxNode *l, *r, *up;
-    double key, ikey, off;
+    double key, x, ikey, off;
     uint64_t seq;
     int s;
     unsigned char kind;
@@ -96,7 +101,7 @@ typedef struct FlowIxTreap {
     struct FlowIxTreap *l, *r, *up;
     double key, max, min, nmax;
     int64_t phase, lo, hi;
-    int64_t notch, visits;
+    int64_t notch;
     double replay, surv;
     int rung;
     int64_t assumed;
@@ -182,17 +187,10 @@ typedef struct Flow {
        rank-neutrality equality fails if only one is copied. flow.c's flow_age_running normalises a stale value
        where the flow is charged. */
     uint64_t work_gen;
-    /* The optimism term's quantity: units of work completed, not a clock. flow_credit_visit, its only raiser,
-       credits one when a step leaves the flow between units, holding neither a program nor a parked
-       continuation: the "JavaScript execution context stack is now empty" point of HTML §8.1.4.4 "Calling
-       scripts", where the microtask checkpoint also sits. Keyed on units rather than work, a flow keeps
-       the thread until its program ends, so the jobs it queued (reachable only with `frame == NULL`) run.
-       Inherited at a fork, since an arm has completed every unit its parent did. Not copied at an arrival
-       (flow_add_unseeded): an arrival stands on nobody's decisions and starts at zero, the value the never-starved
-       guarantee is about; flow.c's flow_optimism keeps this term outside the arrival's coordinate.
-       Never reset, including by an emission: a zero written on an emitter would be copied by its later forks and
-       split two arms of one parent by an event neither performed. A park does not carry it; a cold-resumed
-       member re-enters at zero and re-earns it by replaying. */
+    /* Units of work completed on this flow's prefix: an observation the census publishes (`visMin`/`visMax`,
+       how deep a lineage has run), read by no weight term. flow_credit_visit, its only raiser, credits one when a
+       step leaves the flow between units, holding neither a program nor a parked continuation (HTML §8.1.4.4
+       "Calling scripts", clean up after running script). Inherited at a fork, zero at an arrival, never reset. */
     int64_t visits;
     /* How many times the scheduler has handed this member the thread. A census quantity, never a rank: not read
        by flow_weight, not inherited at a fork (flow_fork_inherit asserts it is zero, which also keeps it out of
@@ -210,6 +208,10 @@ typedef struct Flow {
     /* This flow's node in the fork tree: minted with the flow, attached under its parent's by flow_fork_inherit,
        and refcounted so `family` stays addressable while any descendant can read it. See flow.c. */
     FlowAcct *acct;
+    /* The code site this member stands at in its family's ledger (flow.c's FlowSite): the optimism term reads the
+       service that site has received. Moved by flow_stand_at and flow_set_orphan_seen, copied at a fork, NULL only
+       outside the frontier. Owned by the family root. */
+    FlowSite *at;
 
     /* Interleaving state, kept while this flow is paused so the scheduler can run another flow and come back. A
        flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW delta,
@@ -313,10 +315,10 @@ typedef struct Flow {
     /* How many drives of this body's identity (solver/novelty.h's NOVELTY_DRIVE: quickjs's content locator)
        were known when this drive was seeded: the product's, from every other document and session of this
        cluster, and this instance's own earlier drives of it, a second compile of the same bytes included. A
-       term of the optimism denominator, `1/(1 + visits + orphan_seen)`: explored code is lowered and never
-       removed. Written once, at the seed (flow_set_orphan_seen), before the drive is dispatched, and copied by a
-       fork, so every arm of one drive reads one number at every instant; 0 for every flow that is not a seeded
-       drive, a resumed one included (its own recorded drive is the drive it resumes). */
+       term of the optimism denominator, `1/(1 + pulls + orphan_seen)`, and part of the site's identity, so
+       members of one site read one denominator: explored code is lowered and never removed. Written once, at the
+       seed (flow_set_orphan_seen), before the drive is dispatched, and copied by a fork; 0 for every flow that is
+       not a seeded drive, a resumed one included (its own recorded drive is the drive it resumes). */
     int64_t orphan_seen;
     /* Does this resumed drive still have a chain member whose call it has not built? Set by the cold tier's
        rebuild and cleared when the last member's call is built. A resumed session's heap holds the closure only
@@ -920,10 +922,9 @@ double flow_reward(const Flow *f);
  * virtual time. Anyone else wanting to raise a reward wants flow_credit_emit, a ledger entry. */
 void flow_restore_reward(Flow *f, double val);
 
-/* This flow completed a unit of work: the optimism term's visit. Credited by the scheduler after flow_step
+/* This flow completed a unit of work (`visits`, an observation). Credited by the scheduler after flow_step
  * returns, the one point that sees whole steps, when the flow is left between units (the same boundary as
- * HTML §8.1.7.3 "Processing model"'s end-of-checkpoint steps). Asserts the flow is not inside a program, since
- * work inside a program is what the term must not measure. */
+ * HTML §8.1.7.3 "Processing model"'s end-of-checkpoint steps). Asserts the flow is not inside a program. */
 void flow_credit_visit(Flow *f);
 
 /* The scheduler handed this member the thread: the one writer of `picks`, credited at the context switch every
@@ -991,9 +992,9 @@ typedef struct {
        `unrun`, `vis_zero` or `svc_min`, nothing the member did can move it.
        A gap of zero is not starvation: flow_pick's comparison is strict and the incumbent is the seed, so on a
        tied cohort (ordinary on a one-family page) the pick returns one of N tied maxima and the rest stand at the
-       front with `picks == 0`. The tie is ended by strict demotion, not by a dispatch rule: flow_credit_visit
-       lowers the optimism term at each completed unit, and flow_age_running charges the running flow's own
-       silence by FLOW_AGE_QUANTUM steps. Relaxing the pick to `>=` would switch at every opcode.
+       front with `picks == 0`. The tie is ended by strict demotion, not by a dispatch rule: flow_age_running
+       lowers the optimism term of every member at a site each quantum that site is served, and charges the running
+       flow's own silence by FLOW_AGE_QUANTUM steps. Relaxing the pick to `>=` would switch at every opcode.
        The finding is in the series: `never_picked` climbing across censuses while `members` grows is the tail
        not being reached (build.mjs reads the series). */
     long never_picked;
@@ -1002,9 +1003,9 @@ typedef struct {
     /* How many never-picked members stand exactly at the front (weight == `w_top`): the N of the tie above. A
        small N is a sweep in progress; a large N is an order whose within-family terms no longer separate
        anything, so `g_flows` position decides the pick. On a one-family frontier the reward and the family
-       aging cancel, leaving the optimism bonus (raised only by flow_credit_visit, which asserts `frame == NULL`,
-       and copied by a fork) and the own silence (forgiven for the whole account at an emission); read beside
-       `vis_zero` and `jobs_framed` to see which left them tied.
+       aging cancel, leaving the optimism bonus (the site's service, shared by every member standing there) and the
+       own silence (forgiven for the whole account at an emission); read beside `jobs_framed` to see which left
+       them tied.
        A gauge, never differenced. flow_wfq_census asserts `never_picked_at_top <= never_picked`, and that it is
        non-zero exactly when `never_picked_gap` is 0.0. */
     long never_picked_at_top;
@@ -1063,13 +1064,13 @@ typedef struct {
        enters at the floor. The weight extrema cannot answer this: a uniform rise in service moves `w_top`,
        `w_min` and `cand_w_max` by the same amount. */
     int64_t svc_min;
-    /* The optimism term's coordinate (completed units, `visits`), which no thread-time row can stand in for.
+    /* Completed units (`visits`), an observation no thread-time row can stand in for: how deep a lineage has run.
        `vis_max == 0` on a large frontier means no member has finished a program, so no queued job can have run
        (engine.c's job arms are all under `frame == NULL`); the pair's spread says whether turns rotate. */
     int64_t vis_min;
     int64_t vis_max;
-    /* The extremes of the optimism denominator, `1 + visits + orphan_seen`, which the census's own spread bound
-       is taken over; not published, since `visMin`/`visMax` are the visit count's own rows. */
+    /* The extremes of the optimism denominator in work (flow_optimism_den), which the census's own spread bound
+       is taken over; published as `optDenMin`/`optDenMax`. */
     int64_t opt_den_min, opt_den_max;
     /* The family half of the aging in the same notches (flow.c's FlowAcct `fam_work`), which flow_weight reads.
        The reward lives on the same node, so a family presents it once however many arms it has. The ratio to
@@ -1307,8 +1308,7 @@ typedef struct {
      * that diagnosis for those jobs (other arms above the checkpoint, or the pick, may still hold them).
      * Gauges. flow_wfq_census asserts `jobs_ready_task + jobs_ready_micro == jobs_ready` (the total sums queue
      * lengths, the halves walk records), and engine/build.mjs re-asserts it for release.
-     * `vis_zero` counts members that completed no unit of work, the member-side twin of `jobs_framed`; their
-     * optimism bonus cannot decay (flow_queue_weight keys it on completed units). */
+     * `vis_zero` counts members that completed no unit of work, the member-side twin of `jobs_framed`. */
     /* Named residual. Not covered: the pair is inferred from two gauges, not read off the decision. Next diff
      * builds: a census row stating which arm of flow_step declined a ready job when it declined it. Absence
      * shows as: a ready backlog attributed to the wrong arm of the ladder. */
@@ -1369,20 +1369,17 @@ typedef struct {
      * `canDeliver - delivReady` is the members the arm could serve and the pick will not offer the thread to
      * (`canDeliver` is `flow_stack_empty && pending_ready`, without the host-owed mark). */
     /* `deliv_w_gap` is `w_top` minus the best weight a ready holder offers, in the order's own points; 0 means the
-     * front of the queue itself holds an undelivered reply. One completed unit drops the optimism bonus from
-     * 1/(1+v) to 1/(2+v), half a point at v=0, while aging moves FLOW_AGE_QUANTUM per quantum, so a gap near 0.5
-     * is one completed unit behind the front. Read it beside `deliv_ready` (both 0 with no ready holder). `>= 0`
-     * by construction, as for `job_w_gap`, and asserted beside it. */
+     * front of the queue itself holds an undelivered reply. One quantum of service at a site drops its optimism
+     * from 1/(1+v) to 1/(2+v), half a point at v=0, while aging moves FLOW_AGE_QUANTUM per quantum. Read it beside
+     * `deliv_ready` (both 0 with no ready holder). `>= 0` by construction, as for `job_w_gap`, and asserted beside
+     * it. */
     long deliv_ready;
     long deliv_framed;
     long deliv_owed;
     double deliv_w_gap;
-    /* The `visits` of the two members `deliv_w_gap` is between. Every other weight term has a row to price a gap
-     * against (`val_top`, `top_svc`/`top_svc_fam`, `dist_max`), but the optimism step shrinks with the count, so
-     * one gap is a different number of turns depending on where on 1/(1+v) the two stand. `visits` is the only
-     * term a member raises only by finishing a turn, and a fork inherits its parent's count, so these say
-     * whether the gap was earned. Gauges, read as a pair only where `deliv_ready` is non-zero (else both 0).
-     * int64_t to match `Flow::visits`, since `long` is 32 bits in wasm. */
+    /* The `visits` of the two members `deliv_w_gap` is between: how many units each lineage has completed, which
+     * says whether the gap separates a deep holder from a shallow front. Gauges, read as a pair only where
+     * `deliv_ready` is non-zero (else both 0). int64_t to match `Flow::visits`, since `long` is 32 bits in wasm. */
     int64_t deliv_w_gap_vis;  /* gauge: `visits` of the best ready holder — the member `deliv_w_gap` is from */
     int64_t w_top_vis;        /* gauge: `visits` of the member at `w_top` — the member `deliv_w_gap` is to */
 
@@ -1673,6 +1670,15 @@ void  flow_running_cascade_written(void);
 const Flow *flow_running_cascade_writes(uint64_t *gen);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
+/* The member stands at a code site (FlowSite's identity): a decision point named by quickjs's
+   JS_RunningSiteHash, or a driven body named by its orphan hash. Moves it to that site's ledger in its family and
+   raises a rank change. */
+#define FLOW_SITE_CODE  1
+#define FLOW_SITE_DRIVE 2
+void  flow_stand_at(Flow *f, int kind, uint64_t key);
+/* The member's optimism denominator in work, `Q*(1 + orphan_seen) + site_served` with Q = ENGINE_QUANTUM_WORK:
+   engine.c's rank assertions snapshot it. */
+int64_t flow_optimism_den(const Flow *f);
 /* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */
 /* Takes `act` (may be NULL). `repeat` admits a body the chain already holds: a listener driven again is the next
    event, where a take hands a body over once per timeline. */

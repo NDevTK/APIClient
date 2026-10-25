@@ -1210,6 +1210,10 @@ const forkSiteLightestKey = sourceFact(() =>
   forkCensusName("SITE_LIGHTEST_KEY",
                  "the @FORKAT reader tells the unnamed-fork-site table's BOUND from the rows by that exact " +
                  "name, and without it that bound is summed into the forks as mass no fork produced"));
+/* The quantum a site's service is counted in (solver/flow.c's FlowSite), read rather than copied. */
+const pullWork = sourceFact(() =>
+  hostDefine("solver/engine.h", "ENGINE_QUANTUM_WORK",
+             "the @WFQ reader prices the optimism term's range from the work a pull is counted in"));
 /* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. */
 const ageQuantum = sourceFact(() =>
   hostDefine("solver/engine.h", "ENGINE_QUANTUM_WORK",
@@ -1599,7 +1603,7 @@ function wfqReading(out) {
      with a plausible value (§Architecture). */
   const AGE_QUANTUM = ageQuantum();
   const rangeVal  = w.valMax - w.valMin;
-  const rangeUcb  = 1 / (1 + w.visMin) - 1 / (1 + w.visMax);
+  const rangeUcb  = pullWork() / w.optDenMin - pullWork() / w.optDenMax;
   const rangeOwn  = (w.svcMax - w.svcMin) * AGE_QUANTUM;
   const rangeFam  = (w.svcFamMax - w.svcFamMin) * AGE_QUANTUM;
   const agingPts  = (w.svcMax + w.svcFamMax) * AGE_QUANTUM;
@@ -1800,17 +1804,14 @@ function wfqReading(out) {
                     `flow_rival_of has no other caller, so one of the two has acquired a writer that is not ` +
                     `that hook. The cache miss rate below would be a share above 1, which is what a quotient ` +
                     `says when its denominator counts a different event than its numerator.`);
-  /* AND WHO CARRIES THE OPTIMISM TERM AT ITS MAXIMUM. `visMin`/`visMax` give the term's RANGE and cannot say
-     how much of the frontier sits at the top of it; `visZero` is that population, and where it is the WHOLE
-     frontier the bonus is one flat maximum and orders nothing — which is the same arithmetic as `rangeUcb: 0`
-     and the reading a range alone leaves the reader to guess at. It is not `unrun`: flow.h says that row is
-     ZERO OWN SILENCE and an emission by any arm of a member's fork family RESETS it for the whole family, so a
-     member that has run and whose account emitted is counted there with
-     visits to its name, and taking the two for one population reads a busy frontier as an idle one. */
-  const ucb = w.visZero === w.members
-    ? `every member has completed no unit of work, so all carry the same undecayed maximum bonus and the ` +
-      `optimism term orders nothing here`
-    : `${w.visZero} of ${w.members} members have completed no unit of work and carry the bonus undecayed`;
+  /* The optimism term is read off each member's code site (solver/flow.c's FlowSite): `optDenMin`/`optDenMax`
+     are its denominator's extremes, so equal ends mean every member stands at sites served alike and the term
+     orders nothing here. `visZero` is a separate observation: members whose lineage has completed no unit. */
+  const ucb = (w.optDenMin === w.optDenMax
+    ? `every member's site has been served alike (optimism denominator ${w.optDenMin} work), so the optimism ` +
+      `term orders nothing here`
+    : `optimism denominators span ${w.optDenMin}..${w.optDenMax} work across the members' sites`) +
+    `; ${w.visZero} of ${w.members} members' lineages have completed no unit of work`;
   /* AND WHETHER ANY MEMBER IS BEING STARVED — §scheduler's razor names five ways a schedule may be a cap and
      this reader could speak four of them. The distinction the pair makes is the one that decides what to fix:
      OUTRANKED is the ordering working (the aging term is what reaches those members, and the gap says how much
