@@ -49669,7 +49669,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        slot, so `o[x] = 1; o[x]` must read back 1 rather than "unknown" — the read is the only
                        operator that could disagree with the others, and it does not. */
                     JSValue kv = JS_UNINITIALIZED;
-                    if (g_concolic.key_name) {
+                    /* Only an Object stores: a write through a primitive base reaches its ToObject wrapper,
+                       which nothing keeps, so a primitive leaves no slot to read back. */
+                    if (g_concolic.key_name && JS_VALUE_GET_TAG(sp[-2]) == JS_TAG_OBJECT) {
                         JSValue nm = g_concolic.key_name(ctx, sp[-1]);
                         if (!JS_IsUninitialized(nm)) {
                             JSAtom na = JS_ValueToAtom(ctx, nm);
