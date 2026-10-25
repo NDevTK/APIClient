@@ -114,7 +114,7 @@ function endpointRazorCell(m, where) {
 
 /* What each sighting's flow assumed (lib/endpoint-record.js's `methodWitnesses`), one line per sighting and
    never merged. A sighting with assumptions reads "found by assuming" and its entries, after its verification:
-   "verified" where a run firing the value reached the request, "unverified" otherwise, with why in the title
+   "engine-verified" where an engine run firing the value reached the request (never a live run), "unverified" otherwise, with why in the title
    (never "infeasible": an unverified witness is a parked search); a forced sighting with
    none is solver/endpoint.h's named residual (a forced act that files no decision) and says so rather than
    reading as nothing assumed; an unforced sighting with none assumed nothing and adds no line; a sighting no
@@ -139,10 +139,11 @@ function endpointWitnessCell(m, where) {
       const verified = verification === "verified";
       const parts = [grade, " ", domElement("span", {
         class: "ep-verify ep-verify-" + (verified ? "verified" : "unverified"),
-        title: verified ? "a run with this value delivered reached the request assuming nothing else"
+        title: verified ? "an engine run with this value delivered reached the request assuming nothing else; no "
+            + "live run reproduced it"
           : verification === "candidate" ? "a verification run was minted and has not reached the request"
           : "firing cannot check this witness yet (solver/endpoint.c's witness_payload residual)" },
-        [verified ? "verified" : "unverified"]), " found by assuming "];
+        [verified ? "engine-verified" : "unverified"]), " found by assuming "];
       assumed.forEach((x, i) => {
         if (i) parts.push("; ");
         parts.push(domElement("code", { class: "ep-assumption" }, [endpointAssumptionText(x, where)]));

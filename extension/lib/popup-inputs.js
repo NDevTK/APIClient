@@ -181,7 +181,7 @@ function inputSection(name, entry) {
       lines.push(domElement("li", {}, [
         ...[...c.grades].sort().map((g) => domElement("span", { class: "ep-grade ep-grade-" + g }, [g])), " ",
         domElement("span", { class: "ep-verify ep-verify-" + (c.verified ? "verified" : "unverified") },
-                   [c.verified ? "verified" : "unverified"]),
+                   [c.verified ? "engine-verified" : "unverified"]),
         " reached assuming ", domElement("code", { class: "ep-assumption" }, [text])]));
     }
     for (const label of parts) {
