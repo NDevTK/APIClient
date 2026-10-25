@@ -1181,6 +1181,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/mruid.h"
 #include "fixture/mrconsole.h"
 #include "fixture/idbname.h"
+#include "fixture/lockgrant.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1691,6 +1692,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "mruid", HTML_MRUID },
     { "mrconsole", HTML_MRCONSOLE },
     { "idbname", HTML_IDBNAME },
+    { "lockgrant", HTML_LOCKGRANT },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16330,6 +16332,22 @@ TF_UNIT void probes_idbname(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `lockgrant` document (fixture/lockgrant.h): the one request is granted in its default
+   exclusive mode, and query() inside the callback reports it held. */
+TF_UNIT void probes_lockgrant(const char *js, Probe *tab, int *n) {
+    const char *g_why = NULL; int g_tt = 1;
+    fold_row(&g_tt, &g_why, param_value_is(js, "/api/lock-granted", "name", "res"),
+             "no /api/lock-granted?name=res record: the Web Locks request was not granted");
+    fold_row(&g_tt, &g_why, param_value_is(js, "/api/lock-granted", "mode", "exclusive"),
+             "the granted lock's mode is not exclusive, request()'s default");
+    fold_row(&g_tt, &g_why, param_value_is(js, "/api/lock-granted", "held", "1"),
+             "query() inside the callback does not report the granted lock as held");
+    const Probe rows[] = {
+        { "lock-granted", g_tt, "/api/lock-granted", SESS_EXPLORE, g_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20601,6 +20619,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_set(js, probes, &np);
     probes_mathrandom(js, probes, &np);
     probes_idbname(js, probes, &np);
+    probes_lockgrant(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
