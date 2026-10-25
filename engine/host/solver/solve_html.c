@@ -316,12 +316,13 @@ static int quote_ends_value(const char *witness, size_t at, char q) {
 /* Does a name spliced in behind `cont` become a real attribute of the hole's element? It answers the third
    state's exit, which is not a quote: §13.2.5.38 leaves an UNQUOTED value on whitespace for the before attribute
    name state, while in either quoted state the space and the name are simply more value (`cont` " "). And it
-   answers whether a continuation another context requires after a quote is a separator here. */
-static int continuation_starts_attribute(const char *witness, size_t at, const char *cont) {
+   answers whether a continuation another context requires after a quote is a separator here, with `close`
+   giving the filler the page's closing quote as its value. */
+static int continuation_starts_attribute(const char *witness, size_t at, const char *cont, const char *close) {
     size_t wl = 0;
     char ins[96];
     char *w;
-    int k = snprintf(ins, sizeof ins, "%s%s", cont, SOLVE_HTML_PAD);
+    int k = snprintf(ins, sizeof ins, "%s%s%s", cont, SOLVE_HTML_PAD, close);
 
     CHECK(k > 0 && (size_t)k < sizeof ins, "solve_html: a continuation probe did not fit its buffer");
     w = splice(witness, at, ins, &wl);
@@ -383,7 +384,7 @@ static int tag_open_is_live(const char *witness, size_t at) {
 static HoleState attr_state_of(const char *witness, size_t at) {
     int dq = quote_ends_value(witness, at, '"');
     int sq = quote_ends_value(witness, at, '\'');
-    int uq = continuation_starts_attribute(witness, at, " ");
+    int uq = continuation_starts_attribute(witness, at, " ", "");
 
     DCHECK(dq + sq + uq == 1,
            "the real parser did not agree with itself about which attribute-value state holds the attacker "
@@ -547,7 +548,9 @@ static int construct(HoleState st, const Locate *lo, const SolveDelivered *d, co
         int k = snprintf(cont, sizeof cont, "%s%s", q, need);
 
         CHECK(k > 0 && (size_t)k < sizeof cont, "solve_html: a joint continuation did not fit its buffer");
-        if (solve_delivered_ok(d, cont) && continuation_starts_attribute(witness, at, cont)) seps[1] = need;
+        /* The filler takes the page's closing quote as its value, as the escape's own tail does. */
+        if (solve_delivered_ok(d, cont) && continuation_starts_attribute(witness, at, cont, *q == '"' ? "=\"" : "='"))
+            seps[1] = need;
     }
     for (int s_i = 0; s_i < 2; s_i++) {
         if (!(sep = seps[s_i])) continue;
