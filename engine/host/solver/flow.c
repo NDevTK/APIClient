@@ -1271,8 +1271,20 @@ int flow_credit_emit(double v) {
    and it is written before the drive is ever dispatched. Two drives seeded at two instants may read two counts:
    the count is a fact about the product at the drive's arrival, as the clock it is placed at is, and not about any
    executed prefix, so nothing on either drive's path could make them agree. */
+/* The chain position the running document's drives begin at: the members called before the last fresh open of
+   the page on this path (an attacker act's `at`), or 0 when the page was not opened again. */
+static int chain_document_start(const Flow *f)
+{
+    int at = 0;
+
+    for (int i = 0; i < f->user_acts_n; i++)
+        if (f->user_act_attacker[i]) at = f->user_act_at[i];
+    return at;
+}
+
 /* Append `hash` to `f`'s chain of drives (flow.h's `orphan_chain`). A member names a body, and one body is not
-   driven twice in one chain: a take hands a body over once per timeline. */
+   driven twice in one document's part of the chain: a take hands a body over once per timeline, and a fresh
+   open of the page builds the same bodies again in a new document. */
 void flow_orphan_chain_push(Flow *f, uint64_t hash, char *act, int repeat)
 {
     uint64_t *grown;
@@ -1280,10 +1292,11 @@ void flow_orphan_chain_push(Flow *f, uint64_t hash, char *act, int repeat)
     int i;
 
     DCHECK(hash != 0, "a drive was added to a chain with the locator that means 'not a drive'");
-    for (i = 0; i < f->orphan_chain_n && !repeat; i++)
+    for (i = repeat ? f->orphan_chain_n : chain_document_start(f); i < f->orphan_chain_n; i++)
         DCHECK(f->orphan_chain[i] != hash,
-               "a body was added to a chain of drives that already holds it — a take hands a body over once per "
-               "timeline, so the second member names a drive this flow cannot have been seeded with");
+               "a body was added to a chain of drives that already holds it in this document — a take hands a "
+               "body over once per timeline, so the second member names a drive this flow cannot have been "
+               "seeded with");
     grown = realloc(f->orphan_chain, (size_t)(f->orphan_chain_n + 1) * sizeof *grown);
     CHECK(grown, "engine: OOM extending a flow's chain of drives");
     f->orphan_chain = grown;
