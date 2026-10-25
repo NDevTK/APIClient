@@ -66,7 +66,7 @@ typedef enum { FRAG_SCRIPTING_INERT = 0, FRAG_SCRIPTING_FRAGMENT = 1 } FragScrip
 #define FRAG_STAGES(X) \
     X(FRAG_TRUSTED, "HTML §8.5.4 / §8.5.5 / §8.5.6 step 1 / §8.5.2 setHTMLUnsafe step 1 / §8.5.7 " \
                     "createContextualFragment step 1 (get trusted type compliant string with TrustedHTML and " \
-                    "this sink), which is where Trusted Types §4.2's default-policy callback runs") \
+                    "this sink), which is where Trusted Types §3.7's default-policy callback runs") \
     X(FRAG_START, "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 / §8.5.6 " \
                   "insertAdjacentHTML steps 2-4 / §8.5.7 createContextualFragment steps 2-6 / §8.5.2 " \
                   "setHTMLUnsafe step 2 and §8.6.4 \"Sanitization algorithms\"' set and filter HTML " \
@@ -113,8 +113,8 @@ typedef struct {
        the finished fragment at the FRAG_FEED boundary, and the member that chose it is stages behind. */
     uint8_t scripting;
     /* STEP 1's ANSWER, held across the stage boundary (owned). It is the compliant string and not the
-       argument: once Trusted Types §3 exists, step 1 runs the default policy's callback and what the fragment
-       is parsed from is what that callback RETURNED, which is a different value from the one passed in. */
+       argument: step 1 unwraps a TrustedHTML, and Trusted Types §3.7's default policy returns a value different
+       from the one passed in. */
     JSValue compliant;
     FragParseCache *pc;           /* THIS parse's parser and position, NULL until FRAG_FEED builds it */
     char   *html;                 /* the markup, owned: the parser is handed slices of it across suspensions */

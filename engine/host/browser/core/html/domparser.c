@@ -59,6 +59,7 @@
 #include "core/html/media_element.h"
 #include "core/html/event_handler_attribute.h"
 #include "core/html/html_image.h"
+#include "core/html/trusted_type.h"
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -355,10 +356,8 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
     (void)magic; (void)argc;
     if (!p) return JS_EXCEPTION;                 /* §3.7.7 Operations' brand check threw */
 
-    /* STEP 1. §2's TrustedHTML does not exist in this engine, so the "is an instance of the expected type" step
-       is DECIDED rather than skipped and a document under `require-trusted-types-for 'script'` gets the
-       TypeError §3.4 step 6 specifies — which is what a real browser gives a page whose default policy was
-       never created. core/html/trusted_types.h states both halves. */
+    /* STEP 1: the declaration's union hands a TrustedHTML through as itself, and §3.5 unwraps it or
+       requires the string to pass this document's policy. */
     compliant = trusted_types_compliant_string(ctx, TRUSTED_TYPE_HTML, argv[0], "DOMParser parseFromString");
     if (JS_IsException(compliant)) return compliant;
 
@@ -423,17 +422,16 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
 void domparser_init(JSContext *ctx)
 {
     JSClassDef d = { "DOMParser", domparser_finalizer, domparser_gc_mark };
-    static const IdlArgType PARSE_ARGS[2] = { IDL_DOMSTRING, IDL_ENUM };
+    static const IdlArgType PARSE_ARGS[2] = { IDL_STRING_UNLESS_IFACE, IDL_ENUM };
 
     DCHECK(!g_ready, "domparser_init ran twice — the interface is declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_class);
     JS_NewClass(JS_GetRuntime(ctx), g_class, &d);
     g_id_ctor = idl_method_id(ctx, NULL, 0, js_domparser_ctor, 0);
     /* §8.5.1: `[NewObject] Document parseFromString((TrustedHTML or DOMString) string,
-       DOMParserSupportedType type)`. The union's first arm is §2's TrustedHTML, which does not exist in this
-       engine — so the union IS its DOMString arm, which is the same collapse core/dom/element.c's innerHTML
-       setter declares, and step 1 is still run because that is where the throw comes from. */
+       DOMParserSupportedType type)`. */
     g_id_parse = idl_method_id(ctx, PARSE_ARGS, 2, js_domparser_parse_from_string, 0);
+    idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     idl_arg_enum(1, DOM_PARSER_SUPPORTED_TYPE);   /* §3.2.18's values for the `type` position */
     g_ready = 1;
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. This row was on

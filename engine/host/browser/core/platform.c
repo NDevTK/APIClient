@@ -77,6 +77,9 @@
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
 #include "core/html/simple_dialogs.h"
+#include "core/html/trusted_type.h"
+#include "core/html/trusted_type_policy.h"
+#include "core/html/trusted_type_policy_factory.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/html/xml_serializer.h"
 #include "core/idl_args.h"
@@ -204,6 +207,13 @@ static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; s
 static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_system_access_init(c); }
 static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
 static void d_crypto(JSContext *c, const PlatformAgent *a) { (void)a; crypto_init(c); }
+static void d_trusted_types(JSContext *c, const PlatformAgent *a)
+{
+    (void)a;
+    trusted_type_init(c);
+    trusted_type_policy_init(c);
+    trusted_type_policy_factory_init(c);
+}
 static void d_storage_shed(JSContext *c, const PlatformAgent *a) { (void)a; storage_shed_init(c); }
 static void d_storage(JSContext *c, const PlatformAgent *a) { (void)a; storage_init(c); }
 static void d_window_storage(JSContext *c, const PlatformAgent *a) { (void)a; window_storage_init(c); }
@@ -348,6 +358,12 @@ static void r_file_picker(JSRuntime *rt) { (void)rt; file_picker_free(); }
    Algorithm dictionary's `name`), all the agent's. An atom is a JSAtomStruct, not a GC object, so an unreleased one
    shows only in JS_FreeRuntime's atom walk. §14's release is reached through §10's, because §10 declares it. */
 static void r_crypto(JSRuntime *rt) { (void)rt; crypto_free(); }
+static void r_trusted_types(JSRuntime *rt)
+{
+    trusted_type_policy_factory_free(rt);
+    trusted_type_policy_free(rt);
+    trusted_type_free(rt);
+}
 /* Storage §4.3's two sheds are the agent's: storage is keyed by origin and an instance is an origin-keyed agent
    cluster, so a same-origin child navigable reaches this shed. §12.2.1's slot Symbol and §12.2.2's per-Document
    holder Symbol are runtime-lifetime values of the same kind. */
@@ -949,6 +965,10 @@ static const PlatformComponent PLATFORM[] = {
        member on HTMLCanvasElement, declared with the element interfaces, so this row installs only a realm
        intrinsic; the interface is `[Exposed=Window]`, and its name is placed from the realm as Path2D's is. */
     { "canvas_ctx2d",        d_canvas_ctx2d,        NULL,        r_canvas_ctx2d },
+    /* Trusted Types §2.2's three types, §2.3.3's policy and §2.3.2's factory with §4.1.1's `trustedTypes`, all
+       `[Exposed=(Window,Worker)]` realm intrinsics, ahead of `element` and `document`: the markup sinks they
+       declare brand their `(TrustedHTML or DOMString)` positions against trusted_type_class(). */
+    { "trusted_types",       d_trusted_types,       NULL,        r_trusted_types },
     { "element",             d_element,             NULL,        r_element },
     /* CSSOM §8.1 "The CSS.escape() Method"'s `CSS` namespace and CSS Conditional Rules 3 §7.5 "The CSS namespace"'s
        partial namespace on it (`css_namespace`, below), after `element`, whose cssom_init creates the agent's one
@@ -1203,6 +1223,12 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "Observable",            "observable" },
     { "Subscriber",            "observable" },
     { "DOMParser",             "domparser" },
+    { "TrustedHTML",           "trusted_types" },
+    { "TrustedScript",         "trusted_types" },
+    { "TrustedScriptURL",      "trusted_types" },
+    { "TrustedTypePolicy",     "trusted_types" },
+    { "TrustedTypePolicyFactory", "trusted_types" },
+    { "trustedTypes",          "trusted_types" },
     /* HTML §8.5.8 "The XMLSerializer interface", `[Exposed=Window]`, unconditional. A missing install decides
        `if (window.XMLSerializer)` with no fork, and `new XMLSerializer()` is a ReferenceError. */
     { "XMLSerializer",         "xml_serializer" },

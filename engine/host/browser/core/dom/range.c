@@ -37,6 +37,7 @@
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
 #include "core/html/fragment_parser.h"   /* HTML §13.4's parse — HTML §8.5.7 is a sixth declaration over it */
+#include "core/html/trusted_type.h"
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -1869,7 +1870,7 @@ void range_init(JSContext *ctx)
     static const IdlArgType ONE_NODE[1] = { IDL_INTERFACE };
     static const IdlArgType ONE_BOOL[1] = { IDL_BOOLEAN };
     static const IdlArgType HOW_RANGE[2] = { IDL_UNSIGNED_SHORT, IDL_INTERFACE };
-    static const IdlArgType ONE_HTML[1] = { IDL_DOMSTRING };
+    static const IdlArgType ONE_HTML[1] = { IDL_STRING_UNLESS_IFACE };
     int k;
 
     if (g_range_class) return;   /* one AGENT, one class and one set of pool entries */
@@ -1948,15 +1949,15 @@ void range_init(JSContext *ctx)
        idl_optional_from: Web IDL §3.6 throws a TypeError before any conversion when a call passes fewer
        arguments than a member has required ones, which is what makes `range.createContextualFragment()` a
        TypeError rather than a parse of nothing.
-       IDL_DOMSTRING FOR THE UNION, because TrustedHTML is Trusted Types §2's interface and this platform has
-       none — so every value takes the DOMString arm, and there is NO [LegacyNullToEmptyString] on it (unlike
-       §8.5.4 innerHTML's), which is why `createContextualFragment(null)` parses the four characters `null`
-       and `(undefined)` the nine characters `undefined`.
+       The union's DOMString arm carries no [LegacyNullToEmptyString] (unlike §8.5.4 innerHTML's), so
+       `createContextualFragment(null)` parses the four characters `null` and `(undefined)` the nine characters
+       `undefined`.
        `[CEReactions]` needs no statement here: core/idl_args.c wraps EVERY member in HTML §4.13.6's element
        queue, so a custom element the placement upgrades runs its reactions at this member's epilogue like
        any other. */
     g_id_contextual_fragment = idl_method_id_step(ctx, ONE_HTML, 1, NULL, 0, &RANGE_CONTEXTUAL_FRAGMENT, 0);
     idl_this_iface(range_is, "Range");
+    idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     /* CSSOM VIEW §9's `partial interface Range` — neither member takes an argument. */
     g_id_client_rects = idl_method_id(ctx, NULL, 0, js_range_rects, R_CLIENT_RECTS);
     idl_this_iface(range_is, "Range");

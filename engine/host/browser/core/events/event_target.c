@@ -1543,7 +1543,7 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        attribute. Event handlers on HTML elements and some of the event handlers on Window objects are exposed in\
        this way." Pointer Events itself says nothing about content attributes (the phrase does not occur in it), \
        which is exactly why the answer has to come from HTML: the set is the names of the event handler IDL      \
-       attributes, so these ten reach Trusted Types §3.8's TrustedScript test and HTML §8.6.2's remove-unsafe    \
+       attributes, so these ten reach Trusted Types §3.10's TrustedScript test and HTML §8.6.2's remove-unsafe    \
        deny-list through the one list below, and `<img onpointerover=…>` stops being an attribute the Sanitizer  \
        keeps.                                                                                                    \
        NOT COVERED: §6's eleventh row, `[SecureContext] attribute EventHandler onpointerrawupdate`. Every other  \
@@ -1586,7 +1586,7 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        while its 2011 alias was a real handler over the same event — and because                                 \
        event_target_handler_attribute_on_element decides content-attribute membership from this same             \
        EH_GLOBAL bit, `<div ontransitionend="…">` was an attribute HTML §8.6.2's remove-unsafe left in place     \
-       and Trusted Types §3.8 never tested, on markup a transition-driven UI writes constantly.                  \
+       and Trusted Types §3.10 never tested, on markup a transition-driven UI writes constantly.                  \
        THE OTHER FOUR ROWS EACH STATE THEIR OWN EVENT TYPE, which is the column that cannot be derived.          \
        SELECTION API's `Extensions to GlobalEventHandlers interface` — cited by TITLE with no number            \
        because that draft prints a section number on nothing — says of each of its two that "The attribute       \
@@ -2850,7 +2850,7 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
 /* HTML §8.1.8.1: an EVENT HANDLER CONTENT ATTRIBUTE is "a content attribute for a specific event handler", and
    which handlers have one is decided by the standard that EXPOSES them that way — never by this list's mere
    membership. That sentence used to read "that name set is exactly the list above", which is the claim the
-   fourteen rows below refute. Trusted Types §3.8 Get Trusted Type data for attribute step 2 asks the question
+   fourteen rows below refute. Trusted Types §3.10 Get Trusted Type data for attribute step 2 asks the question
    of every setAttribute: a handler content attribute demands a TrustedScript, so `el.setAttribute("onclick",
    s)` throws under `require-trusted-types-for 'script'` while `el.setAttribute("title", s)` does not. */
 /* THE HANDLER LIST'S ROWS, ENUMERATED — every event handler IDL attribute, content attribute or not, off the
@@ -2904,7 +2904,7 @@ int event_target_handler_attribute_index(const char *name, size_t name_len)
 }
 
 /* THE PREDICATE IS THE LOOKUP AND THEN THE MEMBERSHIP, not a second walk of the same list. §8.1.8.1's
-   attribute change steps need the ROW, because everything after step 1 is keyed on it; Trusted Types §3.8 has
+   attribute change steps need the ROW, because everything after step 1 is keyed on it; Trusted Types §3.10 has
    no element and needs the NAME-LEVEL question, which is the membership asked with `body_or_frameset` true —
    the union of §8.1.8.2's first and third tables is exactly the set of names that are content attributes on
    SOME element.

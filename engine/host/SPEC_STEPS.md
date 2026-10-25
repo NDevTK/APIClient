@@ -139,13 +139,13 @@ just at the next microtask checkpoint rather than at the API's return.
 ### 0.4 Trusted Types — the step nobody expects in `setAttribute`
 
 `setAttribute` step 3 and `innerHTML`'s setter step 1 call **get trusted type compliant string**
-(Trusted Types §3.4), whose step 4 calls **process value with a default policy** (§3.5), whose step 2
+(Trusted Types §3.5), whose step 4 calls **process value with a default policy** (§3.7), whose step 2
 calls **get trusted type policy value** — which **invokes the page's own
 `createHTML`/`createScript`/`createScriptURL` policy callback**. That is author code, running
 synchronously, in the middle of `setAttribute`. It is not optional and not a Chrome-ism: it is what
 the algorithm says.
 
-`get trusted type compliant string` (Trusted Types §3.4):
+`get trusted type compliant string` (Trusted Types §3.5):
 1. If input is already an instance of expectedType, return its stringification. —
 2. requireTrustedTypes = "Does sink type require trusted types?" —
 3. If false, return the stringified input. —
@@ -413,7 +413,7 @@ conversion (Web IDL §3.2.25 — a platform-object arm for a real `TrustedHTML`/
 2. If this is in the HTML namespace and its node document is an HTML document, lowercase
    `qualifiedName`. —
 3. **`[S]`** `verifiedValue` ← **get trusted type compliant attribute value** with qualifiedName,
-   null, this, and value — **Trusted Types §3.4/§3.5: the page's default-policy callback runs
+   null, this, and value — **Trusted Types §3.5/§3.7: the page's default-policy callback runs
    here.** (See §0.4. `get trusted type compliant attribute value` first maps
    (element, attribute) → an expected type via **get Trusted Type data for attribute**; when there
    is no mapping it returns the string unchanged and no callback runs.)
@@ -1374,7 +1374,7 @@ as the four distinct shapes they delegate to, already listed.)
 | # | Algorithm group | Spec section(s) | Suspension points | The ones that will surprise an implementer |
 | --- | --- | --- | --- | --- |
 | 1 | Document: `createElement`, `createElementNS`, `getElementById`, ParentNode lookups | DOM §4.5, §4.2.4, §4.2.6, §4.9 (`create an element`), HTML §4.13.5/§4.13.6 | **18** | `createElement` passes `synchronousCustomElements = true`, so the author's constructor runs **inside** it; `getElementById` is §4.2.4, not §4.5; HTML §8.1.4.6 "Runtime script errors"' "report an exception" fires an `error` event |
-| 2 | Element attributes: `setAttribute`, `setAttributeNS`, `getAttribute`, `removeAttribute`, attribute change steps | DOM §4.9, HTML §4.13.6, Trusted Types §3.4/§3.5 | **13** | `setAttribute` **step 3** runs the page's Trusted Types default policy; `handle attribute changes` runs **zero** author code — `attributeChangedCallback` is enqueued there and invoked by the `[CEReactions]` wrapper; `setAttribute` and `setAttributeNS` put the Trusted Types call at **different step positions** |
+| 2 | Element attributes: `setAttribute`, `setAttributeNS`, `getAttribute`, `removeAttribute`, attribute change steps | DOM §4.9, HTML §4.13.6, Trusted Types §3.5/§3.7 | **13** | `setAttribute` **step 3** runs the page's Trusted Types default policy; `handle attribute changes` runs **zero** author code — `attributeChangedCallback` is enqueued there and invoked by the `[CEReactions]` wrapper; `setAttribute` and `setAttributeNS` put the Trusted Types call at **different step positions** |
 | 3 | Mutation algorithms: pre-insert, insert, append, replace, remove, move | DOM §4.2.3, §4.3.2, §4.5 (adopt), HTML §4.12.1.1 | **8** | `insert` **step 9** (children changed steps) and **step 12** (post-connection steps) both execute scripts; the **insertion steps, moving steps and removing steps may not**; every custom-element callback in this algorithm is enqueued, never called |
 | 4 | Reflection + `innerHTML`/`outerHTML` + fragment parsing | HTML §2.6.1, §8.5.4, §8.5.5, §13.4 | **11** | reflection is §2.6.1 not §3.2.2; `innerHTML` is HTML §8.5.4 (DOM Parsing was merged into HTML); the setter's **step 1** is Trusted Types; the fragment parse defaults to **`Inert`**, so no `<script>` runs — but custom element constructors still can; `outerHTML` parses with **`parent`** as context, not `this` |
 | 5 | Event loop: microtask checkpoint + task processing model | HTML §8.1.7.1–§8.1.7.3, §8.1.4.4 | **7** | a task queue is a **set** and the model takes the first **runnable** task; the microtask queue is not a task queue; there are **two** checkpoints (processing-model step 2.8, and `clean up after running script` step 3 when the JS stack empties); step 4 of the checkpoint only **queues** `unhandledrejection` |
@@ -1903,10 +1903,10 @@ Step 4 duplicates `get an attribute by name` step 2 inline rather than calling t
 because the primitive would lowercase a second time under a different condition. Step 6 passes
 **null namespace and null prefix**: see §9.11 Q3.
 
-#### 9.5.4 The Trusted Types mapping for attributes — Trusted Types §3.7 / §3.8
+#### 9.5.4 The Trusted Types mapping for attributes — Trusted Types §3.9 / §3.10
 
 **`get trusted type compliant attribute value(attributeName, attributeNs, element, newValue)`**
-(TT §3.7):
+(TT §3.9):
 
 1. If `attributeNs` is the empty string, set `attributeNs` to null. —
 2. Set `attributeData` to the result of **get Trusted Type data for attribute** with `element`,
@@ -1920,7 +1920,7 @@ because the primitive would lowercase a second time under a different condition.
    global, `sink`, and `'script'` as sinkGroup; rethrow if it threw. — *(§0.4 has the eight steps of
    `get trusted type compliant string`; its step 4 runs the page's default policy callback)*
 
-**`get Trusted Type data for attribute(element, attribute, attributeNs)`** (TT §3.8):
+**`get Trusted Type data for attribute(element, attribute, attributeNs)`** (TT §3.10):
 
 1. Let `data` be null. —
 2. **If `attributeNs` is null, « HTML namespace, SVG namespace, MathML namespace » contains

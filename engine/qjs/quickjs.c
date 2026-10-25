@@ -85891,6 +85891,25 @@ static void js_func_bind_length(JSContext *ctx, JSFuncBind *s, JSValue len_val)
     JS_DefinePropertyValue(ctx, s->func_obj, JS_ATOM_length, len_val, JS_PROP_CONFIGURABLE);
 }
 
+JSValue JS_NewBoundCall(JSContext *ctx, JSValueConst func, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    JSBoundFunction *bf;
+    JSValue obj;
+    int i;
+
+    DCHECK(JS_IsFunction(ctx, func) && argc >= 0, "a bound call was made over something that cannot be called");
+    obj = JS_NewObjectProtoClass(ctx, ctx->function_proto, JS_CLASS_BOUND_FUNCTION);
+    if (JS_IsException(obj)) return obj;
+    bf = js_malloc(ctx, sizeof(*bf) + (size_t)argc * sizeof(JSValue));
+    if (!bf) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    bf->func_obj = js_dup(func);
+    bf->this_val = js_dup(this_val);
+    bf->argc = argc;
+    for (i = 0; i < argc; i++) bf->argv[i] = js_dup(argv[i]);
+    JS_VALUE_GET_OBJ(obj)->u.bound_function = bf;
+    return obj;
+}
+
 static int js_func_bind_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSFuncBind *s = st;

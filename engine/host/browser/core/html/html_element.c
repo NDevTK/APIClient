@@ -274,12 +274,9 @@ static const ElReflect R_IMG[] = {
    compliantString be the result of invoking the get trusted type compliant string algorithm with TrustedHTML,
    this's relevant global object, the given value, "HTMLIFrameElement srcdoc", and "script". Set an attribute
    value given this, srcdoc's local name, and compliantString" — which is what js_el_reflect_set already does
-   for every row, through core/html/trusted_types.c's §3.8 table, whose (html, iframe, srcdoc) entry carries
-   that same sink name. WHAT THE UNION WOULD BUY IS AN ARGUMENT TYPE, AND IT HAS NOTHING TO DISTINGUISH: §2's
-   TrustedHTML object is honestly absent from this agent, so every value the member can be handed crosses
-   `DOMString`, which is exactly what the row declares. The day TrustedHTML exists this row becomes a component
-   — its setter must brand-check before stringifying, and IDL_DOMSTRING would run the page's `toString` on a
-   TrustedHTML and hand §3.4 a plain string it then refuses. */
+   for every row, through core/html/trusted_types.c's §3.10 table, whose (html, iframe, srcdoc) entry carries
+   that same sink name. The union's TrustedHTML arm is not declared here: core/html/trusted_types.c's
+   attribute-sink residual names it. */
 static const ElReflect R_IFRAME[] = {
     { "src", "src", REFLECT_URL }, { "srcdoc", "srcdoc", REFLECT_STRING },
     { "name", "name", REFLECT_STRING }, { "allow", "allow", REFLECT_STRING },

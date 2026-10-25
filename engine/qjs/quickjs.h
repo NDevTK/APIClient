@@ -1757,6 +1757,12 @@ typedef enum JSPromiseStateEnum {
 } JSPromiseStateEnum;
 
 JS_EXTERN JSValue JS_NewPromiseCapability(JSContext *ctx, JSValue *resolving_funcs);
+/* A callable that, called with no arguments, calls `func` with `this_val` and `argv` (10.4.1.1 [[Call]] of a
+   bound function exotic object). For a host that must invoke a Web IDL callback with a variadic argument list
+   through a fixed request buffer: the object is never handed to the page, so 10.4.1.3's observable steps (the
+   prototype read, `length`, `name`) are not performed. OWNED. */
+JS_EXTERN JSValue JS_NewBoundCall(JSContext *ctx, JSValueConst func, JSValueConst this_val, int argc,
+                                  JSValueConst *argv);
 
 /* SET [[PromiseIsHandled]] WITHOUT ATTACHING A REACTION — a spec step several web specs perform verbatim.
    Streams §5.3's EnsureReadyPromiseRejected replaces an already-settled `ready` with a promise REJECTED at

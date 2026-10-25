@@ -1,59 +1,52 @@
-/* TRUSTED TYPES — the SINK half of the standard. See trusted_types.c.
+/* Trusted Types' sink half and its two CSP questions. See trusted_types.c.
  *
- * Every HTML and script sink in the platform is DEFINED to start by calling "get trusted type compliant
- * string": HTML §8.5.4's innerHTML setter step 1, §8.5.5's outerHTML setter step 1, §8.5.6's
- * insertAdjacentHTML step 1. Not a Chrome-ism and not optional — it is step 1 of the algorithm, and a sink
- * that skips it answers differently from a browser for every document that carries a
- * `require-trusted-types-for` policy.
+ * Every HTML and script sink starts by calling "get trusted type compliant string": HTML §8.5.4's innerHTML
+ * setter step 1, §8.5.5's outerHTML setter step 1, §8.5.6's insertAdjacentHTML step 1. A sink that skips it
+ * answers differently from a browser for every document carrying a `require-trusted-types-for` policy.
  *
- * WHAT IS HERE IS §3.4, §3.7, §3.8 AND §4.2.3 — the algorithm a markup sink calls, the algorithm an ATTRIBUTE
- * sink calls, the table that decides which attributes are sinks at all, and the CSP question all of them turn
- * on. (The section numbers were §4.2 and §4.4 in this file's first draft; the standard numbers "get trusted
- * type compliant string" §3.4 and "Does sink type require trusted types?" §4.2.3, and §4.4 does not exist. A
- * citation that names the wrong section is the same defect as a stage resting at the wrong step.)
- *
- * §2's three TrustedHTML/TrustedScript/TrustedScriptURL objects and §3's TrustedTypePolicyFactory
- * (`window.trustedTypes`) are honestly ABSENT: a page that calls `trustedTypes.createPolicy` gets a
- * ReferenceError, which is the forcing function for building them. Their absence does not make this algorithm
- * approximate. It makes two of its steps DECIDED: nothing can be an instance of the expected type, and there
- * is no default policy — so a document under `require-trusted-types-for 'script'` gets the TypeError §3.4
- * step 6 specifies, which is exactly what a real browser does for a page whose policy creation did not
- * happen. */
+ * Here: §3.5 Get Trusted Type compliant string (what a markup sink calls), §3.9 Get Trusted Type compliant
+ * attribute value (what an attribute sink calls), §3.10 Get Trusted Type data for attribute (which attributes
+ * are sinks), §4.2.3 Does sink type require trusted types? and §4.2.5 Should Trusted Type policy creation be
+ * blocked by Content Security Policy?. The types themselves are core/html/trusted_type.h, the policies
+ * core/html/trusted_type_policy.h and the factory core/html/trusted_type_policy_factory.h. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_TRUSTED_TYPES_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_TRUSTED_TYPES_H
 #include <stdbool.h>
+#include <stddef.h>
 #include "quickjs.h"
 
-/* §2's three types. The KIND is what a sink names, and it decides both the brand step 1 tests and the sink
-   GROUP §4.4 asks the CSP about — which is "script" for all three, because that is the only sink group the
-   standard defines. */
+/* §2.2's three types. The kind is what a sink names; it decides the brand §3.5 step 1 tests and the sink group
+   §4.2.3 asks the CSP about, which is "script" for all three (the only group the standard defines). */
 typedef enum {
     TRUSTED_TYPE_HTML = 0,     /* TrustedHTML — the HTML sinks */
     TRUSTED_TYPE_SCRIPT,       /* TrustedScript */
     TRUSTED_TYPE_SCRIPT_URL,   /* TrustedScriptURL */
 } TrustedTypeKind;
 
-/* §3.4 "get trusted type compliant string" for THIS document, over the value the IDL union already converted.
-   `sink` is the standard's own sink name ("Element innerHTML"), which is what a violation report names and
-   what makes two sinks distinguishable in one report.
-   Returns the compliant string OWNED, or JS_EXCEPTION having thrown the TypeError step 6 specifies. A CONCOLIC
-   input is returned unchanged: it is the value, and stringifying one is what the sink's own solver hooks are
-   for. NO PAGE CODE runs in any step this can currently reach — §3's default policy is the one step that does,
-   and it does not exist yet — which is why a caller needs no request here and why the stage that calls it must
-   exist anyway: that stage is where the machine will rest once the policy callback can run. */
+/* §3.5 "get trusted type compliant string" for this realm's global, over the value the sink's
+   `(TrustedHTML or DOMString)` union converted: an instance of `expected` answers its data, anything else is a
+   String or unknown external input. `sink` is the standard's sink name ("Element innerHTML"), which a violation
+   report names. Returns the compliant string OWNED, or JS_EXCEPTION having thrown step 6.3's TypeError. Unknown
+   input is returned unchanged: it is the value. Step 4 runs no page code until a default policy carries a
+   callback for the type, which is asserted (trusted_types.c says what to build). */
 JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected, JSValueConst input,
                                        const char *sink);
 
-/* §4.2.3 "Does sink type require trusted types?" over this document's §7.2.6 policy container. Exposed because
+/* §4.2.3 "Does sink type require trusted types?" over this global's CSP list. Exposed because
    it is a question about the DOCUMENT rather than about one sink, and because a report that says "sink REAL,
    CSP blocks" has to be able to ask it.
    `include_report_only` is §4.2.3's includeReportOnlyPolicies: true counts a report-only policy that requires
-   the type, which §3.4 step 2 asks; false counts enforce policies only, which is the question of whether the
+   the type, which §3.5 step 2 asks; false counts enforce policies only, which is the question of whether the
    sink throws. */
 bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected, bool include_report_only);
 
-/* §3.8 "Get Trusted Type data for attribute" — WHICH attributes are Trusted Type sinks at all. Answers false
-   for the overwhelming majority (§3.7 step 3 then returns the value unchanged); answers true having set
+/* §4.2.5 "Should Trusted Type policy creation be blocked by Content Security Policy?" for this global, true for
+   "Blocked". `name` is policyName's bytes (`name_len` of them) and `created` is whether the factory's created
+   policy names already holds it. */
+bool trusted_types_policy_creation_blocked(JSContext *ctx, const char *name, size_t name_len, bool created);
+
+/* §3.10 "Get Trusted Type data for attribute" — WHICH attributes are Trusted Type sinks at all. Answers false
+   for the overwhelming majority (§3.9 step 3 then returns the value unchanged); answers true having set
    `*kind` and written the standard's own sink name into `sink` for the four table rows and for every event
    handler content attribute.
    THE ELEMENT IS NAMED BY ITS (namespace, local name), not by an interface pointer: the table's first column
@@ -64,9 +57,9 @@ bool trusted_types_attribute_data(const char *element_ns, const char *element_lo
                                   const char *attr_ns, const char *attr_local,
                                   TrustedTypeKind *kind, char *sink, size_t sink_cap);
 
-/* §3.7 "Get Trusted Type compliant attribute value" — DOM §4.9 setAttribute step 3 and setAttributeNS step 2.
-   Returns the compliant value OWNED (a dup of `value` when §3.8 maps nothing), or JS_EXCEPTION having thrown.
-   The empty string for `attr_ns` is the null namespace, which is §3.7 step 1 and not a caller's convention. */
+/* §3.9 "Get Trusted Type compliant attribute value" — DOM §4.9 setAttribute step 3 and setAttributeNS step 2.
+   Returns the compliant value OWNED (a dup of `value` when §3.10 maps nothing), or JS_EXCEPTION having thrown.
+   The empty string for `attr_ns` is the null namespace, which is §3.9 step 1 and not a caller's convention. */
 JSValue trusted_types_compliant_attribute_value(JSContext *ctx, const char *element_ns, const char *element_local,
                                                 const char *attr_ns, const char *attr_local, JSValueConst value);
 

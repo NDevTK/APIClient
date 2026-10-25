@@ -47,6 +47,7 @@
 #include "core/html/custom_elements.h"
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"    /* the ONE place an HTML parser is made — that header owns the token bytes */
+#include "core/html/trusted_type.h"
 #include "core/html/trusted_types.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/html_script.h"
@@ -88,6 +89,7 @@ static JSAtom g_attrs_key = JS_ATOM_NULL;   /* the [SameObject] NamedNodeMap cac
 
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
+static const IdlArgType ADJ_HTML[2] = { IDL_DOMSTRING, IDL_STRING_UNLESS_IFACE };
 #include "core/dom/attr_list.h"
 #include "core/dom/mutation_observer.h"
 #include "core/dom/mutation_record.h"
@@ -333,7 +335,7 @@ lxb_dom_element_t *element_create_ns(lxb_dom_document_t *doc, const char *ns, si
     return el;
 }
 
-/* §4.9 setAttribute, AS A MACHINE, because its step 3 is Trusted Types §3.7 → §3.4 → §3.5, and §3.5 calls the
+/* §4.9 setAttribute, AS A MACHINE, because its step 3 is Trusted Types §3.9 → §3.5 → §3.7, and §3.7 calls the
    page's own default-policy `createHTML`/`createScript`/`createScriptURL`. That is author code running in the
    MIDDLE of setAttribute, between the lowercase and the write, so the algorithm cannot be one C body — a stage
    boundary has to exist exactly there or the flow has nowhere to park.
@@ -433,7 +435,7 @@ static const IdlStepDecl EL_SET_ATTR_STEP = {
     "DOM §4.9 Element.setAttribute", EL_SET_ATTR_STEPS
 };
 
-/* §4.9 setAttributeNS, AS ITS OWN MACHINE — three steps, with Trusted Types §3.7 at step 2 of them.
+/* §4.9 setAttributeNS, AS ITS OWN MACHINE — three steps, with Trusted Types §3.9 at step 2 of them.
    NOT A MAGIC ON setAttribute'S TABLE. The two algorithms differ in every step: this one VALIDATES AND EXTRACTS
    (§1.4's twelve steps, throwing NamespaceError for a pairing setAttribute cannot even express) where that one
    validates a local name and lowercases; this one runs Trusted Types with the LOCAL name and the REAL attribute
@@ -596,7 +598,7 @@ static JSValue js_el_get_tag(JSContext *ctx, JSValueConst this_val)
    The magic is element.h's ELEMENT_SET_* / SHADOW_ROOT_SET_*: five members over one parse, differing in the
    TARGET the fragment replaces, the CONTEXT it is parsed in, and whether §13.4's allowDeclarativeShadowRoots
    is true. */
-/* THE SINK NAME each member passes to §3.4, which is what a Trusted Types violation report names — so two
+/* THE SINK NAME each member passes to §3.5, which is what a Trusted Types violation report names — so two
    sinks are distinguishable in one report. Indexed by the magic, beside the magic's own declaration. */
 /* The two SAFE members are here for the same reason every other magic is — the array is indexed by it — and
    they name no sink because §8.5.2's `setHTML` invokes no trusted-type algorithm at all: its argument is a
@@ -827,12 +829,11 @@ const IdlStepDecl *element_set_html_decl(void)
    ShadowRoot's IDL for this member is the same line, so the argument list and the dictionary are stated once:
    two copies are two chances for one of them to lose a member, and a member the declaration does not list is
    one the body silently never sees.
-   The union's TrustedHTML arm is §2's type, which does not exist here, so every value takes the DOMString arm
-   — and there is NO [LegacyNullToEmptyString] on it, unlike innerHTML's, so `setHTMLUnsafe(null)` parses the
-   four characters `null`. */
+   The union's DOMString arm carries no [LegacyNullToEmptyString], unlike innerHTML's, so `setHTMLUnsafe(null)`
+   parses the four characters `null`. */
 int element_declare_set_html_unsafe(JSContext *ctx, int magic)
 {
-    static const IdlArgType SET_HTML_UNSAFE_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
+    static const IdlArgType SET_HTML_UNSAFE_ARGS[2] = { IDL_STRING_UNLESS_IFACE, IDL_DICT };
     /* Web IDL §3.2.17 reads a dictionary's members LEXICOGRAPHICALLY, which for these two is also declaration
        order. `sanitizer` is `(Sanitizer or SanitizerConfig or SanitizerPresets)` and is IDL_ANY because none of
        the three types exists yet — the body refuses a stated one by name rather than converting it to
@@ -849,6 +850,7 @@ int element_declare_set_html_unsafe(JSContext *ctx, int magic)
                             (int)(sizeof(SET_HTML_UNSAFE_OPTIONS) / sizeof(SET_HTML_UNSAFE_OPTIONS[0])),
                             &EL_SET_HTML_STEP, magic);
     idl_optional_from(1);
+    idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     return id;
 }
 
@@ -3157,17 +3159,24 @@ void element_init(JSContext *ctx)
        selector machine document.c owns, which is what stops four members disagreeing about a selector. */
     g_id_matches = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, document_qs_decl(), 2);
     g_id_closest = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, document_qs_decl(), 3);
-    /* `[CEReactions] attribute [LegacyNullToEmptyString] DOMString innerHTML` — the extended attribute is part
-       of the TYPE, so `el.innerHTML = null` empties the element instead of parsing the markup `null`. */
+    /* `[CEReactions] attribute (TrustedHTML or [LegacyNullToEmptyString] DOMString) innerHTML` — the extended
+       attribute is part of the DOMString arm's type, so `el.innerHTML = null` empties the element instead of
+       parsing the markup `null`. outerHTML's is the same line. */
     g_id_inner_get = idl_getter_id_step(ctx, fragment_serializer_decl(), FRAGMENT_SERIALIZE_CHILDREN);
-    g_id_inner_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, ELEMENT_SET_INNER_HTML);
+    g_id_inner_set = idl_setter_id_step(ctx, IDL_STRING_UNLESS_IFACE, true, &EL_SET_HTML_STEP,
+                                        ELEMENT_SET_INNER_HTML);
+    idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     g_id_outer_get = idl_getter_id_step(ctx, fragment_serializer_decl(), FRAGMENT_SERIALIZE_SELF);
-    g_id_outer_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &EL_SET_HTML_STEP, ELEMENT_SET_OUTER_HTML);
+    g_id_outer_set = idl_setter_id_step(ctx, IDL_STRING_UNLESS_IFACE, true, &EL_SET_HTML_STEP,
+                                        ELEMENT_SET_OUTER_HTML);
+    idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     g_id_set_html_unsafe = element_declare_set_html_unsafe(ctx, ELEMENT_SET_HTML_UNSAFE);
     g_id_set_html = element_declare_set_html(ctx, ELEMENT_SET_HTML);
-    /* §4.9's three adjacent members. The HTML one takes two DOMStrings; the other two take a position and a
-       value the IDL leaves alone (a DOMString this stringifies into a Text node). */
-    g_id_adj_html = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0);
+    /* §4.9's three adjacent members. The HTML one takes a DOMString position and a `(TrustedHTML or
+       DOMString)`; the other two take a position and a value the IDL leaves alone (a DOMString this stringifies
+       into a Text node). */
+    g_id_adj_html = idl_method_id_step(ctx, ADJ_HTML, 2, NULL, 0, &EL_ADJACENT_HTML_STEP, 0);
+    idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     g_id_adj_el = idl_method_id(ctx, ADJ_ELEMENT, 2, js_el_insert_adjacent, 1);
     idl_iface_brand(node_class_id());
     idl_iface_narrow(element_is);

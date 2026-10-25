@@ -13,6 +13,7 @@
                                                    — and §8.4.2's close(), steps 3-6 */
 #include "core/html/document_write.h"
 #include "core/html/html_parse.h"
+#include "core/html/trusted_type.h"
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "solver/concolic.h"
@@ -139,10 +140,9 @@ static JSValue dw_append(JSContext *ctx, JSValue acc, JSValueConst v)
 
 /* ---- the machine --------------------------------------------------------------------------------------- */
 
-/* TWO STAGES, AND THE SPLIT IS THE ONE core/html/trusted_types.h ASKS FOR: §3's default policy is the step in
-   "get trusted type compliant string" that will run the PAGE's code, and the stage that calls it is where the
-   machine has to be able to rest once it can. The second stage is everything the write steps decide about the
-   DOCUMENT rather than about the value. */
+/* Two stages: Trusted Types §3.7's default policy is the step in "get trusted type compliant string" that
+   runs the page's code, and the stage that calls it is where the machine rests once it does. The second stage
+   is everything the write steps decide about the document rather than about the value. */
 #define DW_STAGES(X) \
     X(DW_ST_TRUSTED, "HTML §8.4.3 document write steps 1-5 (assemble `string`, the Trusted Types compliant " \
                      "string, and the line feed) — one O(1) engine action per argument") \
@@ -183,15 +183,23 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         s->string = JS_UNDEFINED;
         s->string = JS_NewString(ctx, "");                                        /* STEP 1 */
         if (JS_IsException(s->string)) { s->string = JS_UNDEFINED; return JS_STEP_ABRUPT; }
-        /* STEP 2: "let isTrusted be false if text contains a string; otherwise true". §2's TrustedHTML does
-           not exist in this engine (core/html/trusted_types.h says so and says why that makes the algorithm
-           DECIDED rather than approximate), so every value the declaration produced is a string — which makes
-           `isTrusted` false exactly when the page passed at least one argument. THE EMPTY CALL IS NOT A
-           FORMALITY: `document.write()` under `require-trusted-types-for 'script'` must NOT throw, and it is
-           this step that says so. */
-        is_trusted = argc == 0;
-        for (i = 0; i < argc; i++)                                                /* STEP 3 */
-            s->string = dw_append(ctx, s->string, argv[i]);
+        /* STEP 2: "Let isTrusted be false if text contains a string; otherwise true." The union leaves each
+           value a TrustedHTML or a string (unknown input is a string), so the empty call is trusted:
+           `document.write()` under `require-trusted-types-for 'script'` does not throw. */
+        is_trusted = true;
+        for (i = 0; i < argc; i++)
+            if (!trusted_type_is(argv[i], TRUSTED_TYPE_HTML)) is_trusted = false;
+        for (i = 0; i < argc; i++) {                                              /* STEP 3 */
+            if (trusted_type_is(argv[i], TRUSTED_TYPE_HTML)) {
+                /* "If value is a TrustedHTML object, then append value's associated data to string." */
+                JSValue data = trusted_type_data(ctx, argv[i], TRUSTED_TYPE_HTML);
+
+                s->string = dw_append(ctx, s->string, data);
+                JS_FreeValue(ctx, data);
+            } else {
+                s->string = dw_append(ctx, s->string, argv[i]);
+            }
+        }
         if (!is_trusted) {                                                        /* STEP 4 */
             JSValue compliant = trusted_types_compliant_string(ctx, TRUSTED_TYPE_HTML, s->string,
                                                                DW_SINK[line_feed]);
@@ -389,10 +397,8 @@ static JSValue js_doc_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 
 void document_write_init(JSContext *ctx)
 {
-    /* `(TrustedHTML or DOMString)... text` — one declared position, applied to every argument from there on.
-       §2's TrustedHTML does not exist, so the union has one live arm and the position is a DOMString; the day
-       the type exists this becomes a union row and nothing else about the member moves. */
-    static const IdlArgType TEXT_TAIL[] = { IDL_DOMSTRING };
+    /* `(TrustedHTML or DOMString)... text` — one declared position, applied to every argument from there on. */
+    static const IdlArgType TEXT_TAIL[] = { IDL_STRING_UNLESS_IFACE };
 
     /* §8.4.1's first overload is `optional DOMString unused1, optional DOMString unused2` and its second is
        three REQUIRED strings; declared as three optional DOMStrings, the arity the page called with reaches
@@ -406,9 +412,11 @@ void document_write_init(JSContext *ctx)
     g_id_write = idl_method_id_step(ctx, TEXT_TAIL, 1, NULL, 0, &DW_DECL, DW_WRITE);
     idl_variadic();
     idl_optional_from(0);
+    idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     g_id_writeln = idl_method_id_step(ctx, TEXT_TAIL, 1, NULL, 0, &DW_DECL, DW_WRITELN);
     idl_variadic();
     idl_optional_from(0);
+    idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     g_id_close = idl_method_id(ctx, NULL, 0, js_doc_close, 0);
     g_id_open = idl_method_id(ctx, OPEN_ARGS, 3, js_doc_open, 0);
     idl_optional_from(0);

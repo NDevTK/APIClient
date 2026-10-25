@@ -301,7 +301,7 @@ void event_target_install_handlers_at(JSContext *ctx, JSValueConst target, int m
                                       const char *at_file, int at_line);
 #define event_target_install_handlers(ctx, target, mask) \
     event_target_install_handlers_at((ctx), (target), (mask), IDL_SITE)
-/* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? Trusted Types §3.8 Get Trusted Type data for
+/* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? Trusted Types §3.10 Get Trusted Type data for
    attribute step 2 is the caller: a name in this set maps to TrustedScript whatever the element is.
    IT IS NOT "IS THIS ONE OF THE HANDLER LIST'S NAMES", AND THE TWO ARE NOT THE SAME QUESTION — this used to
    answer with the second, which is the one-bit-two-questions defect: the X-list is every event handler IDL
@@ -370,7 +370,7 @@ int event_target_handler_attribute_index(const char *name, size_t name_len);
    members, so the first table already contains them and what that table decides is only their TARGET.
    `body_or_frameset` TRUE ALSO ANSWERS THE NAME-LEVEL QUESTION, and that is arithmetic rather than a second
    meaning: the union of the two tables IS the set of names that are content attributes on SOME element, so a
-   caller with no element in hand — Trusted Types §3.8, HTML §8.6.2's remove-unsafe — asks with true and gets
+   caller with no element in hand — Trusted Types §3.10, HTML §8.6.2's remove-unsafe — asks with true and gets
    exactly that union. Two questions over ONE set of bits, which is what keeps them from ever disagreeing. */
 bool event_target_handler_attribute_on_element(int index, bool body_or_frameset);
 /* §8.1.8.1's DETERMINE THE TARGET OF AN EVENT HANDLER, by row rather than by name — the same four steps the IDL
