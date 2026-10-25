@@ -8636,8 +8636,8 @@ static JSValue JS_ConcatString2(JSContext *ctx, JSValue op1, JSValue op2)
    whenever EITHER side is one, so the concatenation below runs only after both were ruled out. (An ordinary
    object whose ToPrimitive ANSWERS with unknown input arrives the same way: js_toprim_operand excludes a
    concolic, so the coerced result re-enters js_add_slow and meets the same hook.) String.prototype.concat
-   folds an unknown piece through that same hook at js_str_concat_join, and CreateDynamicFunction at
-   js_dynfunc_cat; every other caller holds engine strings. Asserted here rather than at the ToString below because THIS is the operand's origin — the
+   folds an unknown piece through that same hook at js_str_concat_join, and CreateDynamicFunction and
+   Array.prototype.join at js_string_cat_piece; every other caller holds engine strings. Asserted here rather than at the ToString below because THIS is the operand's origin — the
    conversion boundary can only say that something unknown arrived, not which operator let it. */
 static JSValue JS_ConcatString(JSContext *ctx, JSValue op1, JSValue op2)
 {
@@ -33717,9 +33717,9 @@ typedef struct JSArrayJoin {
     JSValue el;           /* the element, held across its coercion (owned) */
     JSValue result;       /* DONE (owned) */
     JSValue cb[2];        /* [element, its toLocaleString] */
-    JSValue unknown;      /* the first element this engine was never given (owned), or UNDEFINED */
-    bool example_lost;    /* an unknown element had no example the join could be run on */
-    StringBuffer b;
+    JSValue acc;          /* R up to the last unknown element, an unknown (owned); UNDEFINED while every element
+                             was known, when R is all in `b` */
+    StringBuffer b;       /* R since `acc`, or all of it */
     int64_t len, i;
     int64_t oldlen;       /* TypedArray only: the count before a separator coercion could resize the buffer */
     /* The nearest join ENCLOSING this one on the same flow, found once when this machine starts (the search is
@@ -39901,7 +39901,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            a citation one level up. The sub-number is written rather than the list being named
                            in the spec's own words because 1.b holds exactly one list — checked, not assumed;
                            where a step holds several, the list gets named instead. */
-                        if (JS_VALUE_GET_TAG(ret_val) == JS_TAG_OBJECT) {
+                        if (js_toprim_operand(ret_val)) {
                             JS_FreeValue(ctx, ret_val);
                             js_toprim_abandon(ctx, tp);
                             JS_ThrowTypeError(ctx, "toPrimitive");
@@ -39909,8 +39909,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         }
                         goto toprim_deliver;
                     }
-                    if (JS_VALUE_GET_TAG(ret_val) != JS_TAG_OBJECT)
-                        goto toprim_deliver;   /* OrdinaryToPrimitive: a primitive result wins */
+                    /* OrdinaryToPrimitive step 3.b.ii, "If result is not an Object, return result": unknown input
+                       is not an ordinary Object (js_toprim_operand), so a method answering one, such as
+                       Array.prototype.toString's join over an unknown element, has answered the primitive. */
+                    if (!js_toprim_operand(ret_val))
+                        goto toprim_deliver;
                     JS_FreeValue(ctx, ret_val);   /* an object result: fall through to the next method */
                     ret_val = JS_UNINITIALIZED;
                 }
@@ -85077,10 +85080,10 @@ static JSValue js_function_proto(JSContext *ctx, JSValueConst this_val,
    has nowhere to put what follows. */
 enum { DYNSRC_ALL, DYNSRC_PARAMS, DYNSRC_BODY };
 
-/* `*acc` and `piece` (consumed) joined as §6.1.4's string-concatenation. An unknown piece makes the whole
-   unknown through the + hook's concatenation arm, as String.prototype.concat's join does: the shape is joined,
-   the source kept and the example concatenated. */
-static int js_dynfunc_cat(JSContext *ctx, JSValue *acc, JSValue piece)
+/* `*acc` and `piece` (consumed), both Strings or unknowns, joined as §6.1.4's string-concatenation. An unknown
+   piece makes the whole unknown through the + hook's concatenation arm, as String.prototype.concat's join does:
+   the shape is joined, the source kept and the example concatenated. */
+static int js_string_cat_piece(JSContext *ctx, JSValue *acc, JSValue piece)
 {
     JSValue pair[2];
 
@@ -85091,7 +85094,7 @@ static int js_dynfunc_cat(JSContext *ctx, JSValue *acc, JSValue piece)
     pair[0] = *acc;
     pair[1] = piece;
     if (!g_concolic.add(ctx, pair + 2, JS_CONCOLIC_ADD_CONCAT))
-        DFAIL("the concolic + hook declined an unknown piece of a CreateDynamicFunction source");
+        DFAIL("the concolic + hook declined an unknown piece of a string-concatenation");
     *acc = pair[0];
     return 0;
 }
@@ -85112,15 +85115,15 @@ static JSValue js_dynfunc_source_unknown(JSContext *ctx, JSFunctionKindEnum func
     if (JS_IsException(acc))
         return acc;
     for (i = 0; mode != DYNSRC_BODY && i < n - 1; i++) {
-        if ((i != 0 && js_dynfunc_cat(ctx, &acc, JS_NewString(ctx, ","))) ||
-            js_dynfunc_cat(ctx, &acc, js_dup(strs[i])))
+        if ((i != 0 && js_string_cat_piece(ctx, &acc, JS_NewString(ctx, ","))) ||
+            js_string_cat_piece(ctx, &acc, js_dup(strs[i])))
             return JS_EXCEPTION;
     }
-    if (js_dynfunc_cat(ctx, &acc, JS_NewString(ctx, "\n) {\n")))
+    if (js_string_cat_piece(ctx, &acc, JS_NewString(ctx, "\n) {\n")))
         return JS_EXCEPTION;
-    if (mode != DYNSRC_PARAMS && n > 0 && js_dynfunc_cat(ctx, &acc, js_dup(strs[n - 1])))
+    if (mode != DYNSRC_PARAMS && n > 0 && js_string_cat_piece(ctx, &acc, js_dup(strs[n - 1])))
         return JS_EXCEPTION;
-    if (js_dynfunc_cat(ctx, &acc, JS_NewString(ctx, "\n})")))
+    if (js_string_cat_piece(ctx, &acc, JS_NewString(ctx, "\n})")))
         return JS_EXCEPTION;
     return acc;
 }
@@ -96625,7 +96628,7 @@ static int js_array_join_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
         string_buffer_init(ctx, &s->b, 0);
         s->sep = JS_UNDEFINED; s->el = JS_UNDEFINED; s->result = JS_UNDEFINED;
-        s->unknown = JS_UNDEFINED; s->example_lost = false;
+        s->acc = JS_UNDEFINED;
         if (is_ta) {
             JSObject *p = get_typed_array(ctx, s->hdr.this_val);
             if (!p) { s->obj = JS_UNDEFINED; return -1; }
@@ -96732,28 +96735,34 @@ static int js_array_join_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
             s->hdr.stage = JOIN_STR;
         }
         DCHECK(s->hdr.stage == JOIN_STR, "Array.prototype.join: unknown stage");
-        /* AN UNKNOWN ELEMENT MAKES THE WHOLE JOIN UNKNOWN, derived from the first such element after the loop.
-           The coercion below owes C a real string, which over a concolic is a crash, so the element's EXAMPLE
-           is what the join appends: the engine runs the real join over the examples, and the result carries
-           that string as its own example. An element with no example, or one whose example is not a primitive
-           (ToString would run page code with no flow), leaves the result with none. A null example is step
-           7.c's nullish element, which contributes nothing. */
+        /* AN UNKNOWN ELEMENT IS ONE PIECE OF R. Steps 7.c-d append "the empty String if element is undefined or
+           null, otherwise ToString(element)"; R so far and that piece are concatenated through the + hook's
+           concatenation arm, so every known piece around it keeps its bytes, exactly as `+` composes them. Only
+           where the element's example is nullish do the two operators differ, and there the piece is derived
+           with the empty String, step 7.c's answer, as its example. */
         {
             JSValue ex = js_concolic_operand(ctx, s->el);
             if (!JS_IsUninitialized(ex)) {
-                if (JS_IsUndefined(s->unknown)) s->unknown = js_dup(s->el);
-                if (JS_IsUndefined(ex) || JS_IsObject(ex) || JS_IsSymbol(ex)) {
-                    s->example_lost = true;
-                } else if (JS_IsNull(ex)) {
-                    /* step 7.c: R gains nothing for a nullish element */
-                } else {
-                    str = JS_ToString(ctx, ex);
-                    if (JS_IsException(str) || string_buffer_concat_value_free(&s->b, str)) {
-                        JS_FreeValue(ctx, ex);
-                        return -1;
-                    }
-                }
+                JSValue prefix, piece;
+
+                if (js_concolic_held(s->el) && (JS_IsNull(ex) || JS_IsUndefined(ex)))
+                    piece = js_concolic_derive(ctx, s->el, "23.1.3.18 Array.prototype.join step 7.c",
+                                               JS_AtomToString(ctx, JS_ATOM_empty_string));
+                else
+                    piece = js_dup(s->el);
                 JS_FreeValue(ctx, ex);
+                DCHECK(!JS_IsUninitialized(piece), "a join element that was unknown is not one now");
+                prefix = string_buffer_end(&s->b);
+                string_buffer_init(ctx, &s->b, 0);
+                if (JS_IsException(prefix)) { JS_FreeValue(ctx, piece); return -1; }
+                if (JS_IsUndefined(s->acc)) {
+                    s->acc = prefix;
+                } else if (js_string_cat_piece(ctx, &s->acc, prefix)) {
+                    JS_FreeValue(ctx, piece);
+                    return -1;
+                }
+                if (js_string_cat_piece(ctx, &s->acc, piece))
+                    return -1;
                 JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
                 JS_FreeValue(ctx, s->el); s->el = JS_UNDEFINED;
                 s->i++;
@@ -96787,13 +96796,12 @@ static int js_array_join_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
        path, so the teardown's string_buffer_free is right either way. */
     s->result = string_buffer_end(&s->b);
     if (JS_IsException(s->result)) return -1;
-    if (!JS_IsUndefined(s->unknown)) {
-        JSValue real = s->result;
+    if (!JS_IsUndefined(s->acc)) {
+        JSValue tail = s->result;
 
-        if (s->example_lost) { JS_FreeValue(ctx, real); real = JS_UNDEFINED; }
-        s->result = js_concolic_derive(ctx, s->unknown, "Array.join", real);
-        DCHECK(!JS_IsUninitialized(s->result), "a join element that was unknown when appended is not one now");
-        JS_FreeValue(ctx, s->unknown); s->unknown = JS_UNDEFINED;
+        s->result = s->acc;
+        s->acc = JS_UNDEFINED;
+        if (js_string_cat_piece(ctx, &s->result, tail)) { s->result = JS_UNDEFINED; return -1; }
     }
     return 0;
 }
@@ -96815,7 +96823,7 @@ static void js_array_join_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->obj);
     v->val(ctx, &s->sep);
     v->val(ctx, &s->el);
-    v->val(ctx, &s->unknown);
+    v->val(ctx, &s->acc);
     for (i = 0; i < 2; i++) v->val(ctx, &s->cb[i]);
 }
 

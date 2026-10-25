@@ -1168,6 +1168,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/boundpark.h"
 #include "fixture/bytesimage.h"
 #include "fixture/dynfuncsink.h"
+#include "fixture/joincompose.h"
 #include "fixture/recordless.h"
 #include "fixture/agenfork.h"
 #include "fixture/msgchain.h"
@@ -1659,6 +1660,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "boundpark", HTML_BOUNDPARK },
     { "bytesimage", HTML_BYTESIMAGE },
     { "dynfuncsink", HTML_DYNFUNCSINK },
+    { "joincompose", HTML_JOINCOMPOSE },
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
@@ -15834,6 +15836,27 @@ TF_UNIT void probes_uspiso(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `joincompose` document (fixture/joincompose.h). */
+TF_UNIT void probes_joincompose(const char *js, Probe *tab, int *n) {
+    int plus = !!strstr(js, "\"/api/jc/plus/{aa&__tfJoinU&bb}\"");
+    int join = !!strstr(js, "\"/api/jc/join/{aa&__tfJoinU&bb}\"");
+    int tostr = !!strstr(js, "\"/api/jc/tostr/{aa,__tfJoinU,bb}\"");
+    int tpl = !!strstr(js, "\"/api/jc/tpl/{aa,__tfJoinU,bb}\"");
+    int cst = !!strstr(js, "\"/api/jc/const/aa&cc&bb\"");
+    const char *jw = NULL; int jt = 1;
+    fold_row(&jt, &jw, plus, "NOT REACHED: the `+` control did not compose to {aa&__tfJoinU&bb}");
+    fold_row(&jt, &jw, join, "join over the same pieces did not compose as `+` does");
+    const char *tw = NULL; int tt = 1;
+    fold_row(&tt, &tw, tostr && tpl, "String(array) or a template literal over it did not compose through join");
+    const Probe rows[] = {
+        { "join-compose", jt, "/api/jc/join/", SESS_EXPLORE, jw },
+        { "join-tostring-compose", tt, "/api/jc/tostr/", SESS_EXPLORE, tw },
+        { "join-const-concrete", cst, "/api/jc/const/", SESS_EXPLORE,
+          cst ? NULL : "the all-constant join is not the concrete address aa&cc&bb" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `dynfuncsink` document (fixture/dynfuncsink.h). */
 TF_UNIT void probes_dynfuncsink(const char *js, Probe *tab, int *n) {
     char hsrc[192] = "", qsrc[192] = "";
@@ -19774,6 +19797,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_boundpark(js, probes, &np);
     probes_bytesimage(js, probes, &np);
     probes_dynfuncsink(js, probes, &np);
+    probes_joincompose(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);
