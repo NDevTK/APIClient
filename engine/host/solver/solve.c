@@ -336,10 +336,12 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
 /* Run a fired breakout as more code of the running flow. The sunk code is the page's and may loop, await or
    recurse, so it is queued as a program of this flow (engine_queue_candidate) and the one BFS runs it,
    preemptible and parkable. The position is part of the sink's firing semantics; both callers append, because
-   an event handler and a javascript: URL evaluation each run from a task. The payload crosses as (src, len),
-   so a U+0000 in it is fired whole; the queue copies it into the body it makes (solver/dyn_body.h). */
-static void fire_js(const char *src, size_t len, DynPos pos) {
-    engine_queue_candidate(src, len, pos);
+   an event handler and a javascript: URL evaluation each run from a task. It runs in the document of the realm
+   the sink was written in (`ctx`), which a fresh open of the page makes another document than the session's.
+   The payload crosses as (src, len), so a U+0000 in it is fired whole; the queue copies it into the body it
+   makes (solver/dyn_body.h). */
+static void fire_js(JSContext *ctx, const char *src, size_t len, DynPos pos) {
+    engine_queue_candidate(document_environment_doc(ctx), src, len, pos);
 }
 
 /* The written-down breakouts of a single-context sink. Only the URL sink qualifies: navigating executes the
@@ -1600,7 +1602,7 @@ JSValue solve_eval_sink_source(JSContext *ctx, JSValueConst handler) {
    §8.1.1), and the walk returns whether any did. That differs from `fires`, which counts every auto-firing
    handler in the parse, the page's own template included. The walk is `node`'s own subtree through
    node_next_in, which needs no stack, because the tree's depth is the candidate's data. */
-static int html_fire_walk(Cand *e, lxb_dom_node_t *node) {
+static int html_fire_walk(Cand *e, JSContext *ctx, lxb_dom_node_t *node) {
     lxb_dom_node_t *n;
     int at_exec = 0;
 
@@ -1618,7 +1620,7 @@ static int html_fire_walk(Cand *e, lxb_dom_node_t *node) {
                     for (size_t k = 0; k + 2 <= vl; k++)
                         if (v[k] == 'X' && v[k + 1] == '9') { at_exec = 1; break; }
                     e->fires++;
-                    fire_js((const char *)v, vl, DYN_POS_APPEND);
+                    fire_js(ctx, (const char *)v, vl, DYN_POS_APPEND);
                 }
             }
         }
@@ -1630,7 +1632,7 @@ static int html_fire_walk(Cand *e, lxb_dom_node_t *node) {
    allocation and the parse status are CHECKs: HTML §13.2 tree construction is error-recovering and rejects no
    input, so a non-OK status is memory. A missing document element is a DCHECK, because §13.2.6 inserts html,
    head and body for every input. */
-static void html_fire(Cand *e, const char *html) {
+static void html_fire(Cand *e, JSContext *ctx, const char *html) {
     lxb_html_document_t *doc = dom_document_create();
     lxb_dom_element_t *root;
     lxb_status_t st;
@@ -1648,7 +1650,7 @@ static void html_fire(Cand *e, const char *html) {
     DCHECK(root != NULL, "a completed HTML parse produced no document element — §13.2.6 inserts html, head and "
                          "body for every input including the empty one, so the tree this oracle is about to "
                          "walk was built by something that is not the parser");
-    if (html_fire_walk(e, lxb_dom_interface_node(root))) escape_reached(e);
+    if (html_fire_walk(e, ctx, lxb_dom_interface_node(root))) escape_reached(e);
     dom_document_destroy(doc);
 }
 
@@ -1667,7 +1669,7 @@ static void url_fire(Cand *e, JSContext *ctx, const char *url) {
            the queued evaluation (§7.4.2.3.2 "The javascript: URL special case"). */
         escape_reached(e);
         e->fires++;
-        fire_js(js, strlen(js), DYN_POS_APPEND);
+        fire_js(ctx, js, strlen(js), DYN_POS_APPEND);
     }
 }
 /* location = arg (or el.href = arg): a URL-context sink. */
@@ -1714,7 +1716,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
                so a string without it is not parsed at all; otherwise every innerHTML the page writes would be
                parsed once per candidate. */
             if (strstr(html, SOLVE_HTML_LOCATOR)) { learn_witness(e, html); derive_from_witness(e); }
-            else if (strstr(html, "X9"))          { breakout_arrived(e); html_fire(e, html); }
+            else if (strstr(html, "X9"))          { breakout_arrived(e); html_fire(e, ctx, html); }
             JS_FreeCString(ctx, html);
         }
         return;

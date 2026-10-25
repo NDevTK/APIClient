@@ -7105,7 +7105,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     DCHECK(doc != 0, "a program was queued naming no document — the realm it compiles in is its document's");
     DCHECK(doc != DYN_DOC_TOP_LEVEL || kind == DYN_VALUE_DUMP,
            "a program other than a host instrument's was queued for whatever page its timeline shows — a page's own "
-           "program belongs to the document that caused it");
+           "program, and a fired candidate, belongs to the document that caused it");
     /* The kind and the token are one statement, asserted both ways at the one site that creates a row: a
        cross-agent operation's row carries the token of the peer parked on its completion, and no other kind's
        completion is read as an answer. */
@@ -7735,14 +7735,14 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
 
 /* An @S candidate, queued as the program it would be if it fired: the same queue (it is code the page caused to
    run) with one difference, that it may fail to compile. Most breakouts do not fit most sink contexts, and a
-   candidate that does not parse simply never fires. The document is the session's: a candidate is the same
-   document re-run with one attacker value substituted (a breakout in a child navigable is a candidate session of
-   that document's instance). `pos` is the sink's semantics (engine.h): an eval sink's code runs inside the call
+   candidate that does not parse simply never fires. `doc` is the document whose sink fired: the session's, or the
+   page a fresh open of it loaded in this timeline (a breakout in a cross-origin child navigable is a candidate
+   session of that document's instance). `pos` is the sink's semantics (engine.h): an eval sink's code runs inside the call
    expression (ECMAScript §19.2.1.1 PerformEval); a markup sink's auto-firing handler and a URL sink's `javascript:`
    navigation are tasks. `(body, body_n)`, because a candidate is built from attacker-shaped bytes (a decoded `%00`,
    a `\0` from a reply), and read to the first NUL it would fire a different program from the one the search chose. */
-void engine_queue_candidate(const char *body, size_t body_n, DynPos pos) {
-    engine_queue(g_sess_doc, body, body_n, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL,
+void engine_queue_candidate(uint32_t doc, const char *body, size_t body_n, DynPos pos) {
+    engine_queue(doc, body, body_n, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL,
                  TASK_SOURCE_SOLVER_CANDIDATE, pos);
 }
 

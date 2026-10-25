@@ -88,7 +88,7 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
    is TASK_SOURCE_NOT_A_TASK: the row is a position, and the reply's networking task is delivered separately. */
 void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el,
                                 int parser_inserted);
-/* Queue an @S candidate, in the session's document, as the program it would be if it fired. Unlike a page
+/* Queue an @S candidate, in `doc` (the document whose sink fired), as the program it would be if it fired. Unlike a page
    script it may fail to compile: most breakouts do not fit most sink contexts, and one that does not parse
    never fires.
    `pos` is the sink's own semantics: an eval sink is ECMAScript §19.2.1.1 PerformEval (DYN_POS_IMMEDIATE); a
@@ -97,7 +97,7 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
    it would fire a program the search did not choose.
    The task source is TASK_SOURCE_SOLVER_CANDIDATE, which is not an HTML §8.1.7.1 source, so the candidate is
    never ordered against the page's real tasks by a fact nobody observed. */
-void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
+void engine_queue_candidate(uint32_t doc, const char *body, size_t body_n, DynPos pos);
 /* The attacker sources naming the `data` and `origin` of the message chain member `k` of drive `f` delivers (a
    member whose act is a `message` act), as engine_orphan_call minted them: `message.data:<id>` and
    `message.origin:<id>`, each written into a room of `cap` bytes. Every member's origin is the attacker
