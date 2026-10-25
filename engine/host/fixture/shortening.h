@@ -6,7 +6,10 @@
    float with `clear: left`, a padding edge inside the float's band, and `text-align: right` against a shortened
    line. Chrome 155.0.8059.84, the oracle, gives every number the rows expect for this markup. Cross-engine note:
    Firefox 158.0.1 agrees on every inline position and height and puts each inline-block's baseline half a pixel
-   lower. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   lower. The script's query is one plain string concatenation on purpose: an `Array.join` over the same pieces
+   is opaque as a whole once any piece carries the font metrics' environment, which the baselines here do, and
+   would hide every concrete value; keep it concatenated until a join composes like concatenation. It ends with
+   TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SHORTENING_H
 #define ENGINE_HOST_FIXTURE_SHORTENING_H
 #ifndef TF_CANVAS_INK

@@ -1135,6 +1135,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/clearance.h"
 #include "fixture/avoidance.h"
 #include "fixture/shortening.h"
+#include "fixture/floatintrinsic.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1623,6 +1624,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "clearance", HTML_CLEARANCE },
     { "avoidance", HTML_AVOIDANCE },
     { "shortening", HTML_SHORTENING },
+    { "floatintrinsic", HTML_FLOATINTRINSIC },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -14961,6 +14963,50 @@ TF_UNIT void probes_shortening(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `floatintrinsic` document (fixture/floatintrinsic.h). */
+TF_UNIT void probes_floatintrinsic(const char *js, Probe *tab, int *n) {
+    const char *fi_why = NULL; int fi_reached = !!strstr(js, "\"/api/floatintrinsic\"");
+    const char *fi_w_why = NULL; int fi_w_tt = 1;
+
+    fold_row(&fi_reached, &fi_why, fi_reached,
+             "NOT REACHED: there is no /api/floatintrinsic record at all, so the document aborted before its fetch");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "a", "50"),
+             "css-sizing-3 §5.1: inline-block a (a float then two ordinary blocks) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "b", "50"),
+             "css-sizing-3 §5.1: inline-block b (a float, a block, a second float, a block) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "c", "70"),
+             "css-sizing-3 §5.1: inline-block c (a left and a right float side by side) is not 70px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "d", "50"),
+             "css-sizing-3 §5.1: inline-block d (a block clearing the other side) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "e", "50"),
+             "css-sizing-3 §5.1: inline-block e (a right float clearing the left one) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "f", "50"),
+             "css-sizing-3 §5.1: inline-block f (a left float clearing the left one) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "g", "55"),
+             "css-sizing-3 §5.1: inline-block g (a float with a right margin beside a block with a left margin)"
+             " is not 55px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "i", "50"),
+             "css-sizing-3 §5.1: inline-block i (a float nested in a child block) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "j", "50"),
+             "css-sizing-3 §5.1: inline-block j (a float after an ordinary block) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "k", "50"),
+             "css-sizing-3 §5.1: inline-block k (a float and an ordinary block) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "l", "50"),
+             "css-sizing-3 §5.1: inline-block l (a float and two ordinary blocks) is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "n", "80"),
+             "css-sizing-3 §5.1: inline-block n (a float beside two boxes that avoid it) is not 80px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "o", "50"),
+             "css-sizing-3 §5.1: inline-block o (an empty block between a float and a box that avoids it)"
+             " is not 50px wide");
+    fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "q", "80"),
+             "css-sizing-3 §5.1: inline-block q (a float beside a flex container) is not 80px wide");
+    const Probe rows[] = {
+        { "float-intrinsic-width", fi_reached && fi_w_tt, "/api/floatintrinsic", SESS_EXPLORE,
+          fi_reached ? fi_w_why : fi_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -19681,6 +19727,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_clearance(js, probes, &np);
     probes_avoidance(js, probes, &np);
     probes_shortening(js, probes, &np);
+    probes_floatintrinsic(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

@@ -1768,7 +1768,7 @@ static CssPx bf_declared_margin_px(lxb_dom_element_t *ce, const char *name)
    the flex and inline-flex display values" ("floats do not intrude into the flex container") and css-grid-1 §5.1
    "Establishing Grid Containers: the grid and inline-grid display values" ("floats do not intrude into the grid
    container") say it of a flex and a grid container. */
-static bool bf_avoids_floats(lxb_dom_element_t *ce)
+bool block_flow_avoids_floats(lxb_dom_element_t *ce)
 {
     CssDisplay d = css_computed_display(ce);
 
@@ -1801,7 +1801,7 @@ static bool bf_avoidance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const
 
     *moved = false;
     *band_h = css_px(0.0);
-    if (!bf_avoids_floats(ce)) return true;
+    if (!block_flow_avoids_floats(ce)) return true;
     if (!block_flow_context_floats_ask(el, &v, &n)) return false;
     for (; last < n && block_flow_node_precedes(lxb_dom_interface_node(v[last]), lxb_dom_interface_node(ce)); last++)
         if (w->escaping && block_flow_static_position_containing_block(v[last]) == el) held_float = true;

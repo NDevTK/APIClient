@@ -499,6 +499,10 @@ bool block_flow_is_floated(lxb_dom_element_t *el);
 bool block_flow_float_is_right(lxb_dom_element_t *f);
 /* CSS 2.2 §9.5.2's sides `el`'s computed `clear` clears, physical: whether it clears any. */
 bool block_flow_clear_sides(lxb_dom_element_t *el, bool *left, bool *right);
+/* Whether in-flow block-level `ce` must not overlap the floats of its block formatting context: CSS 2.2 §9.5's
+   table, block-level replaced element and box establishing a formatting context, and a flex or grid container
+   (css-flexbox-1 §3, css-grid-1 §5.1). */
+bool block_flow_avoids_floats(lxb_dom_element_t *ce);
 
 /* The distance from `table`'s table wrapper box's top content edge to its table box's top border edge: CSS 2.1
    §17.4's wrapper stack, past the captions §17.4.1's `caption-side: top` puts above the table box. Zero with

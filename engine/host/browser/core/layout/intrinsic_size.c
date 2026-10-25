@@ -856,54 +856,86 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
     return out;
 }
 
+/* Whether float `f`, whose containing block is `el`, sits in `el`'s content between the block-level boxes `prev`
+   and `brk` (NULL for the content's start and end). */
+static bool is_float_in_run(lxb_dom_element_t *f, lxb_dom_node_t *prev, lxb_dom_node_t *brk)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(f);
+
+    return (prev == NULL || block_flow_node_precedes(prev, n)) && (brk == NULL || block_flow_node_precedes(n, brk));
+}
+
 /* CSS 2.2 §9.4.1 "Block formatting contexts"' context, whose intrinsic inline sizes are a maximum: "each box's
    left outer edge touches the left edge of the containing block", so children overlap in the inline axis and
-   css-sizing-3 §5.2's hypothetical float is as wide as the widest.
-   The list is §9.2.1.1's boxes, from core/layout/block_flow.h: one anonymous block box per maximal inline run,
-   and an inline box broken around a block-level box yields three ("a block box representing the BODY,
-   containing an anonymous block box around C1, the SPAN block box, and another anonymous block box around
-   C2"). The loop is over `block_flow_next_block_box`'s breaks, where `-Wswitch` over box kinds lives; a float
-   sits inside a run and the run walk refuses it (§9.4.2: "line boxes may vary in width if available horizontal
-   space is reduced due to floats").
-   Anonymous boxes have zero edges ("Non-inherited properties have their initial value … the margins will be
-   0") and `el`'s style. An empty range contributes nothing, so a container with no in-flow child (an empty
-   `<td>`, which core/layout/table_column_width.c asks about constantly) takes this arm at no cost. */
+   css-sizing-3 §5.2's hypothetical float is as wide as the widest. The list is §9.2.1.1's boxes, from
+   core/layout/block_flow.h: one anonymous block box per maximal inline run, and the block-level boxes between.
+   CSS 2.2 §9.5's floats are beside the content that follows them: the floats `el` holds between two block-level
+   boxes add their margin boxes side by side, left and right apart, until a box with `clear` set clears a side; the
+   next box's max-content contribution adds them when its line boxes are shortened beside them (an anonymous block
+   box) or it must not overlap them (`block_flow_avoids_floats`), and it starts the next set, since later floats sit
+   below it. Min-content is a maximum over all of them. A float
+   in a run with inline content is the run walk's, which refuses it. Anonymous boxes have zero edges ("the margins
+   will be 0") and `el`'s style. */
 static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *prev = NULL;
+    lxb_dom_element_t **fv = NULL;
+    size_t fn = 0, i;
+    CssPx left = css_px(0.0), right = css_px(0.0);
     IntrinsicInlineSizes out;
 
     out.min_content = css_px(0.0);
     out.max_content = css_px(0.0);
+    if (!block_flow_context_floats_ask(el, &fv, &fn))
+        CHECK_FAIL("a block container's floats were read before `is_block_context_ask` gathered them");
     for (;;) {
         lxb_dom_node_t *brk = block_flow_next_block_box(el, prev);
         IntrinsicInlineSizes one;
+        BlockFlowRun run;
+        bool cl, cr;
 
-        /* §9.2.1.1's anonymous block box: everything strictly between the previous break and this one. */
-        {
-            BlockFlowRun run;
-
-            run.after = prev;
-            run.end = brk;
-            /* Only where the section generates one: a run with no inline-level content is not a box ("we assume that
-               there is an anonymous block box around 'Some text'"), so `<div><p></p></div>` has one box. The same
-               predicate §9.4.1's placement uses keeps the two on one box list. */
-            if (!block_flow_run_generates_box(el, run)) one = out;
-            else one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(el, run));
+        run.after = prev;
+        run.end = brk;
+        if (!block_flow_run_generates_box(el, run)) {
+            for (i = 0; i < fn; i++) {
+                if (block_flow_static_position_containing_block(fv[i]) != el || !is_float_in_run(fv[i], prev, brk))
+                    continue;
+                if (block_flow_clear_sides(fv[i], &cl, &cr)) {
+                    if (cl) left = css_px(0.0);
+                    if (cr) right = css_px(0.0);
+                }
+                one = intrinsic_inline_contributions(fv[i]);
+                if (block_flow_float_is_right(fv[i])) right = css_px_add(right, one.max_content);
+                else left = css_px_add(left, one.max_content);
+                out.min_content = css_px_max(out.min_content, one.min_content);
+                out.max_content = css_px_max(out.max_content, css_px_add(left, right));
+            }
+        } else {
+            one = intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(el, run));
+            out.min_content = css_px_max(out.min_content, one.min_content);
+            out.max_content = css_px_max(out.max_content, css_px_add(one.max_content, css_px_add(left, right)));
+            left = right = css_px(0.0);
         }
-        out.min_content = css_px_max(out.min_content, one.min_content);
-        out.max_content = css_px_max(out.max_content, one.max_content);
-        if (brk == NULL) return out;
+        if (brk == NULL) break;
         {
             lxb_dom_element_t *ch = lxb_dom_interface_element(brk);
 
+            if (block_flow_clear_sides(ch, &cl, &cr)) {
+                if (cl) left = css_px(0.0);
+                if (cr) right = css_px(0.0);
+            }
             one = intrinsic_inline_contributions(ch);
+            out.min_content = css_px_max(out.min_content, one.min_content);
+            out.max_content = css_px_max(out.max_content, block_flow_avoids_floats(ch)
+                                                              ? css_px_add(one.max_content, css_px_add(left, right))
+                                                              : one.max_content);
+            left = right = css_px(0.0);
         }
-        out.min_content = css_px_max(out.min_content, one.min_content);
-        out.max_content = css_px_max(out.max_content, one.max_content);
         /* Strictly forward: the enumeration is exclusive of the box it is seeded with, so the loop is one pass. */
         prev = brk;
     }
+    free(fv);
+    return out;
 }
 
 /* css-sizing-3 §5.1 "Intrinsic Sizes" for a replaced box. Which rule applies depends on natural dimensions: "a
@@ -1020,6 +1052,19 @@ static bool is_block_context_ask(lxb_dom_element_t *el)
     none.after = NULL;
     none.end = NULL;
     h = is_held_of(el, IS_ENTRY_STACK, none);
+    /* The floats `is_block_context` reads, gathered and measured first. */
+    if (!h->answered) {
+        lxb_dom_element_t **fv;
+        size_t fn, i;
+
+        if (!block_flow_context_floats_ask(el, &fv, &fn)) return false;
+        for (i = 0; i < fn; i++)
+            if (block_flow_static_position_containing_block(fv[i]) == el && !intrinsic_inline_sizes_ask(fv[i])) {
+                free(fv);
+                return false;
+            }
+        free(fv);
+    }
     while (!h->answered) {
         lxb_dom_node_t *brk;
         BlockFlowRun run;
