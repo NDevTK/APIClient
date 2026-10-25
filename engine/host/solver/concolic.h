@@ -1041,6 +1041,10 @@ enum { CONCOLIC_TYF_UNDEFINED = 1u << 0, CONCOLIC_TYF_NULL = 1u << 1, CONCOLIC_T
        CONCOLIC_TYF_BIGINT = 1u << 6, CONCOLIC_TYF_OBJECT = 1u << 7, CONCOLIC_TYF_FUNCTION = 1u << 8,
        CONCOLIC_TYF_ALL = 0x1FFu };
 int         concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds);
+/* Whether the equality `cond` records holds, as far as the compared value's facet decides it: 1 or 0 where the
+   facet leaves only one arm's types (`typeof d === 'string'` once `d == null` held answers 0), -1 where both
+   arms stay open or the compared value owns no `src`. Runs no page code. */
+int         concolic_equality_outcome(JSContext *ctx, JSValueConst cond);
 int         concolic_cmp_is_typeof(JSValueConst cond);
 unsigned    concolic_types(const char *src);
 /* A DECLARED ROOT'S MEMBER STRUCTURE, as the member reads this session minted: every read under `root` with its

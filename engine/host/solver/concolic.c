@@ -3443,40 +3443,67 @@ static void type_facet_narrow(const char *src, unsigned admitted)
     g_type_facet_any = 1;
 }
 
-int concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds)
+/* The types the equality `c` admits for the value it compares on the arm where it `holds`, and in `*subject`
+   the `src` that value owns (NULL where it owns none, and the answer is then every type): a typeof outcome by
+   §13.5.3.1's row for its operand, a `==` by §7.2.13, any other equality by §7.2.14. */
+static unsigned eq_admitted(JSContext *ctx, const Concolic *c, int holds, const char **subject)
 {
-    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
     double num = 0;
     int big = 0;
 
+    *subject = NULL;
+    if (c->cmp_typeof) {
+        unsigned row = c->cmp_kind == CONCOLIC_LIT_STRING ? tyf_of_typeof(c->cmp_tok) : 0;
+
+        *subject = c->cmp_typeof_of;
+        return holds ? row : CONCOLIC_TYF_ALL & ~row;
+    }
+    if (c->cmp_src_own != 1 || !c->src) return CONCOLIC_TYF_ALL;
+    *subject = c->src;
+    if (c->cmp_algo != JS_CONCOLIC_EQ_LOOSE) return tyf_strict((ConcolicLit)c->cmp_kind, c->cmp_tok, holds);
+    if (c->cmp_kind == CONCOLIC_LIT_STRING) {
+        JSValue str = JS_NewString(ctx, c->cmp_tok);
+        double d;
+
+        CHECK(!JS_IsException(str), "concolic: OOM converting an equality's token");
+        CHECK(JS_ToFloat64(ctx, &d, str) == 0, "concolic: ToNumber of a String token threw");
+        num = d;
+        big = JS_StringToBigIntDefined(ctx, str);
+        CHECK(big >= 0, "concolic: StringToBigInt of a String token threw");
+        JS_FreeValue(ctx, str);
+    }
+    return tyf_loose((ConcolicLit)c->cmp_kind, c->cmp_tok, num, big, holds);
+}
+
+int concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
+    const char *subject;
+    unsigned admitted;
+
     DCHECK(c != NULL && c->cmp_op != OPCMP_NONE && c->cmp_tok != NULL,
            "an equality facet was asked of a value that records no equality with a token");
-    /* A typeof outcome narrows its operand by §13.5.3.1's row, and is never itself a source. */
-    if (c->cmp_typeof) {
-        if (c->cmp_typeof_of) {
-            unsigned row = c->cmp_kind == CONCOLIC_LIT_STRING ? tyf_of_typeof(c->cmp_tok) : 0;
-            type_facet_narrow(c->cmp_typeof_of, holds ? row : CONCOLIC_TYF_ALL & ~row);
-        }
-        return 1;
-    }
-    if (c->cmp_src_own != 1 || !c->src) return 0;
-    if (c->cmp_algo == JS_CONCOLIC_EQ_LOOSE) {
-        if (c->cmp_kind == CONCOLIC_LIT_STRING) {
-            JSValue str = JS_NewString(ctx, c->cmp_tok);
-            double d;
+    admitted = eq_admitted(ctx, c, holds, &subject);
+    if (subject) type_facet_narrow(subject, admitted);
+    return c->cmp_typeof != 0;
+}
 
-            CHECK(!JS_IsException(str), "concolic: OOM converting an equality's token");
-            CHECK(JS_ToFloat64(ctx, &d, str) == 0, "concolic: ToNumber of a String token threw");
-            num = d;
-            big = JS_StringToBigIntDefined(ctx, str);
-            CHECK(big >= 0, "concolic: StringToBigInt of a String token threw");
-            JS_FreeValue(ctx, str);
-        }
-        type_facet_narrow(c->src, tyf_loose((ConcolicLit)c->cmp_kind, c->cmp_tok, num, big, holds));
-    } else {
-        type_facet_narrow(c->src, tyf_strict((ConcolicLit)c->cmp_kind, c->cmp_tok, holds));
-    }
-    return 0;
+int concolic_equality_outcome(JSContext *ctx, JSValueConst cond)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
+    const char *subject;
+    unsigned can_hold, can_fail, types;
+
+    if (!c || c->cmp_op == OPCMP_NONE || !c->cmp_tok) return -1;
+    can_hold = eq_admitted(ctx, c, 1, &subject);
+    if (!subject) return -1;
+    can_fail = eq_admitted(ctx, c, 0, &subject);
+    types = concolic_types(subject);
+    DCHECK(types & (can_hold | can_fail),
+           "an equality's two arms each admit only types the compared value's facet excludes — a facet emptied "
+           "by an earlier arm is a world the outcome refinement should have pruned before it was filed");
+    if ((types & can_hold) && (types & can_fail)) return -1;
+    return (types & can_hold) != 0;
 }
 
 int concolic_cmp_is_typeof(JSValueConst cond)

@@ -1378,7 +1378,7 @@ static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
    question by its code site (dec_site_hash) and name its census row, never for the arm; both entries assert
    `subject` is a concolic (decide_branch's guard, solver_outcome's DCHECK). `op` is NULL for a branch. */
 static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, const char *op, int completion,
-                      int restartable, int nonforking, int real_arm, int *forked, const char *site) {
+                      int restartable, int nonforking, int real_arm, int refined, int *forked, const char *site) {
     uint32_t asked = key ? dec_key_hash(key) : dec_site_hash(ctx, subject, op, completion, site);
     int arm;
     *forked = 0;
@@ -1394,6 +1394,12 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, con
            cold-tier flow replaying its whole path from cursor 0 with an empty constraint consumes exactly the
            recorded slots, and repeat tests of a decided flag cost none. A fork never pre-records the sibling's arm
            into its constraint, so the constraint is never ahead of the cursor. */
+    } else if (refined >= 0) {
+        /* The constraint's facets leave this predicate one arm (decide_branch's `refined`), so the other is a
+           world no value produces, keyed or not. Asked before the vector for the reason above: a replay reaches
+           it with the same facets filed and consumes no slot either. */
+        arm = refined;
+        if (key) g_branch_refined++;
     } else if (g_c < dec_total() && (arm = dec_replay(asked)) >= 0) {   /* REPLAY: a recorded decision */
         /* the cursor moved inside dec_replay, and only because the slot answered this question */
     } else {
@@ -1496,7 +1502,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     const char *src = NULL, *tok = NULL;
     ConcolicLit tok_kind = CONCOLIC_LIT_NONE;
     char *key;
-    int op, forked = 0, arm, real, neg, eq_holds, eq_fails, forced_arm, pinned = 0;
+    int op, forked = 0, arm, real, neg, eq_holds, eq_fails, forced_arm, pinned = 0, refined;
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
@@ -1522,7 +1528,10 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        reads the same observation from the other end. UNOBSERVED has no complement. */
     if (real != REAL_ARM_UNOBSERVED) real ^= neg;
     key = decide_key(cond);
-    arm = decide_arm(ctx, key, cond, NULL, -1, restartable, nonforking, real, &forked, site);
+    /* The arm the compared value's type facet leaves an equality, in the predicate's terms (-1 when both). */
+    refined = tok && op != OPCMP_NONE ? concolic_equality_outcome(ctx, cond) : -1;
+    if (refined >= 0 && op == OPCMP_NE) refined = !refined;
+    arm = decide_arm(ctx, key, cond, NULL, -1, restartable, nonforking, real, refined, &forked, site);
     /* Whether that fork was taken over a subject this flow had already proved (see the counter). Raised here,
        the one line holding both `forked` (decide_arm's answer) and `src` (the subject's source as concolic_cmp
        read it); the pin consulted is from an earlier branch, since this branch's `concolic_pin` is below. */
@@ -1854,7 +1863,7 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
            no outcome hook, and the driver takes outcome 0 itself (core/timing/timer.c states the convention at
            §8.7's step 4), so SOLVER_NO_NONFORKING_ARM makes reaching here in such a session crash naming the
            question. */
-        arm = decide_arm(ctx, key, over, op, c, 0, SOLVER_NO_NONFORKING_ARM, real_arm, &forked, site);
+        arm = decide_arm(ctx, key, over, op, c, 0, SOLVER_NO_NONFORKING_ARM, real_arm, -1, &forked, site);
         free(key);
         /* The arm this flow ends on, against the machine's declaration, as decide_branch does, before the forked
            bit (a message to the driver, not part of the arm) is composed. Only i == 0 can fire it. */

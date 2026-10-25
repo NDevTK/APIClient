@@ -389,7 +389,7 @@ void decide_fork_observation_stats(long *total, long *observed, long *unobserved
  * had no row at all.
  *
  * WHAT THEY ARE FOR. Every decision this file reaches over a question it can SPELL is answered exactly one of
- * three ways: REFINED out of this flow's own constraint (concolic_branch_decided answered, no slot is consumed,
+ * three ways: REFINED out of this flow's own constraint (a decided key or a type facet; no slot is consumed,
  * no member is minted, nothing is explored twice), REPLAYED from a recorded slot (`replayHits`), or NEW (a fork,
  * counted per predicate by the `_forkAt` census, or dec_answer_here's declared answer). The last two were
  * published and the FIRST was counted nowhere, so the question every naming diff in this engine exists to move
