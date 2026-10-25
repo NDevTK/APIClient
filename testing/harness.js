@@ -1111,6 +1111,17 @@ async function cmdPopup(args) {
   });
 }
 
+// A read of the attacker page that grants it nothing. Puppeteer's evaluate and `$` call into the page with CDP's
+// `userGesture: true`, which gives the page transient activation, so a poll through them would let a PoC's
+// window.open pass the popup blocker with no click at all. This asks with `userGesture: false`.
+async function evalNoGesture(pg, expression) {
+  const s = await pg.target().createCDPSession();
+  try {
+    const r = await s.send("Runtime.evaluate", { expression, userGesture: false, returnByValue: true });
+    return r.exceptionDetails ? undefined : r.result.value;
+  } finally { await s.detach().catch(() => {}); }
+}
+
 // Fire the ATTACKER PAGE the way a USER does: a real (trusted) click on the "Run PoC" button the extension's
 // named injector armed in that document. A trusted click is the user activation window.open needs — a JS
 // dispatchEvent would be untrusted and the PoC's window.open would be popup-blocked, so this can't be done via
@@ -1137,7 +1148,7 @@ async function cmdPocRun(args) {
     for (let i = 0; i < 60 && !attacker; i++) {
       const pages = await browser.pages();
       for (const pg of pages) {
-        const armed = await pg.evaluate(() => !!document.getElementById("__apiclient_poc_overlay")).catch(() => false);
+        const armed = await evalNoGesture(pg, "!!document.getElementById('__apiclient_poc_overlay')").catch(() => false);
         if (armed) { attacker = pg; break; }
       }
       if (!attacker) await sleep(150);
@@ -1158,7 +1169,9 @@ async function cmdPocRun(args) {
     while (Date.now() < deadline) {
       // A PoC whose acts include `open` arms a second button on the attacker page; the victim's click there is
       // the activation that open needs, so it is clicked the same trusted, foreground way.
-      if (await attacker.$("#__apiclient_poc_overlay button[data-act=open]:not([disabled])").catch(() => null)) {
+      if (await evalNoGesture(attacker,
+            "!!document.querySelector('#__apiclient_poc_overlay button[data-act=open]:not([disabled])')")
+            .catch(() => false)) {
         await attacker.bringToFront();
         await sleep(500);
         await attacker.click("#__apiclient_poc_overlay button[data-act=open]");
