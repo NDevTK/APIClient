@@ -1256,7 +1256,9 @@ JS_EXTERN int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBuffer
 JS_EXTERN int JS_StringToBigIntDefined(JSContext *ctx, JSValueConst str);
 JS_EXTERN void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *pieces, int n);
 /* A Uint8Array holding `buf`, recorded as `codec`'s output over the unknown `unknown` (whose example `buf` was
-   computed from), so each element reads as an unknown derived from it. `codec` is a static string. */
+   computed from), so each element reads as an unknown derived from it. `codec` is a static string. A NULL
+   `buf` with `len` 0 is the output over an unknown with no primitive example: no example bytes, and its length
+   is an unknown with no example. */
 JS_EXTERN JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
                                         const char *codec);
 /* The same for an ArrayBuffer: its bytes read through any view as unknowns derived from `unknown`. */

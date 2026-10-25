@@ -1597,22 +1597,18 @@ static JSValue js_encoder_encode(JSContext *ctx, JSValueConst this_val, int argc
            "body exactly one argument — a different count means the declaration in encoding_init lost either "
            "its argument list or its idl_arg_default, and the reads below would be off the end");
     /* An unknown input is encoded as its example, and the output is recorded as this codec's image of the
-       unknown (JS_NewUint8ArrayImage): every element the page reads is an unknown derived from it, and a bulk
-       consumer finds the run with JS_BufferSourceUnknowns. The example takes §3.2.12's USVString conversion
-       here because the declaration crossed the unknown unconverted.
-       NAMED RESIDUAL. Not covered: the output's length, which is the example's, where §7.4's result length
-       over unknown input is itself unknown. Next diff: a typed array whose length is a derived unknown.
-       Absence shows as a branch on an encoded length that never forks. */
+       unknown (JS_NewUint8ArrayImage): its length is an unknown derived from the input, every element the page
+       reads is an unknown derived from it, and a bulk consumer finds the run with JS_BufferSourceUnknowns. The
+       example takes §3.2.12's USVString conversion here because the declaration crossed the unknown
+       unconverted. An input with no primitive example yields the image with no example bytes: its length and
+       every element are unknowns with no example. */
     if (concolic_is(argv[0])) {
         JSValue ex = concolic_example_string(ctx, argv[0]);
         const char *b;
         size_t blen = 0;
 
-        if (JS_IsUndefined(ex)) {
-            DFAIL("§7.4 encode(input) was given unknown input with no example, so there are no bytes to record "
-                  "a codec image over — build a Uint8Array whose length and bytes are both unknown");
-            return JS_ThrowTypeError(ctx, "TextEncoder.encode: unknown input with no example has no bytes");
-        }
+        if (JS_IsUndefined(ex))
+            return JS_NewUint8ArrayImage(ctx, NULL, 0, argv[0], "TextEncoder.encode");
         ex = JS_ToScalarValueString(ctx, ex);
         if (JS_IsException(ex))
             return JS_EXCEPTION;

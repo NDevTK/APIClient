@@ -1160,6 +1160,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
 #include "fixture/rxcompile.h"
+#include "fixture/textencunk.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
@@ -1653,6 +1654,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
     { "rxcompile", HTML_RXCOMPILE },
+    { "textencunk", HTML_TEXTENCUNK },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
@@ -15632,6 +15634,29 @@ TF_UNIT void probes_rxcompile(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
+   length and both arms of the gate on its first byte. */
+TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
+    const char *ln_why = NULL; int ln_tt = 1;
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/teu-len", "w", "teuLONG") ||
+                              param_value_is(js, "/api/teu-len", "w", "teuSHORT"),
+             "NOT REACHED: no /api/teu-len record, so encode() over the example-less string did not return");
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/teu-len", "w", "teuLONG") &&
+                              param_value_is(js, "/api/teu-len", "w", "teuSHORT"),
+             "only one arm of the gate on the encoded length ran, so the length was a number and not the "
+             "image's unknown");
+    const char *by_why = NULL; int by_tt = 1;
+    fold_row(&by_tt, &by_why, param_value_is(js, "/api/teu-byte", "w", "teuLT") &&
+                              param_value_is(js, "/api/teu-byte", "w", "teuOTHER"),
+             "only one arm of the gate on the encoded first byte ran, so that byte was not an unknown derived "
+             "from the input");
+    const Probe rows[] = {
+        { "teu-length-both", ln_tt, "/api/teu-len", SESS_EXPLORE, ln_why },
+        { "teu-byte-both", by_tt, "/api/teu-byte", SESS_EXPLORE, by_why, .gate = "teu-length-both" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `framemsg` document (fixture/framemsg.h). */
 TF_UNIT void probes_framemsg(const char *js, Probe *tab, int *n) {
     char src[192] = "";
@@ -19955,6 +19980,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);
     probes_rxcompile(js, probes, &np);
+    probes_textencunk(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);

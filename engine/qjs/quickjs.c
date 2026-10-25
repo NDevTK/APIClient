@@ -123107,19 +123107,27 @@ static JSValue js_array_buffer_get_immutable(JSContext *ctx,
 
 /* A length the buffer's bytes give no number for: derived from the unknown whose codec output they are
    (JSArrayBuffer.length_unknown) under the getter's algorithm `op`, with `example` (a byte or element count) as
-   its example. `offset` and `size_log2` are the view's window, 0 for the buffer itself. */
+   its example. `offset` and `size_log2` are the view's window, 0 for the buffer itself. The bytes are the
+   codec's run over the unknown's example only when that example is a held primitive; over any other unknown
+   the buffer holds no example bytes, so the length has no example either. */
 static JSValue js_ab_length_derive(JSContext *ctx, const JSArrayBuffer *abuf, const char *op, uint32_t offset,
                                    int size_log2, int64_t example)
 {
-    JSValue ops[3], r;
+    JSValue ops[3], r, ex;
+    bool held;
 
     DCHECK(!JS_IsUninitialized(abuf->length_unknown) && !abuf->detached,
            "a length was derived for a buffer whose length is stated");
     DCHECK(g_concolic.derived != NULL, "a buffer's length is an unknown's with no JSConcolicHooks.derived installed");
+    ex = js_concolic_operand(ctx, abuf->length_unknown);
+    held = js_concolic_codec_operand(abuf->length_unknown, ex);
+    JS_FreeValue(ctx, ex);
+    DCHECK(held || abuf->byte_length == 0, "a buffer holds example bytes for a codec output whose unknown has no "
+                                           "primitive example to have run the codec over");
     ops[0] = abuf->length_unknown;
     ops[1] = js_uint32(offset);
     ops[2] = js_int32(size_log2);
-    r = g_concolic.derived(ctx, op, ops, 3, js_int64(example));
+    r = g_concolic.derived(ctx, op, ops, 3, held ? js_int64(example) : JS_UNDEFINED);
     DCHECK(!JS_IsUninitialized(r), "a buffer's unknown length derived no unknown");
     return r;
 }
@@ -127067,11 +127075,14 @@ JSValue JS_NewUint8Array(JSContext *ctx, uint8_t *buf, size_t len,
 JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
                               const char *codec)
 {
-    JSValue arr = JS_NewUint8ArrayCopy(ctx, buf, len);
+    static const uint8_t none[1];
+    JSValue arr;
     JSArrayBuffer *abuf;
 
     DCHECK(js_value_is_concolic(unknown), "a codec image was recorded over a value that is not unknown input — "
                                           "a known operand's output is ordinary bytes");
+    DCHECK(buf != NULL || len == 0, "a codec image with no example bytes was given a length for them");
+    arr = JS_NewUint8ArrayCopy(ctx, buf ? buf : none, len);
     DCHECK(codec != NULL, "a codec image names no codec, which is half the identity of every byte in it");
     if (JS_IsException(arr))
         return arr;
