@@ -45,7 +45,9 @@ static char *act_with_data(const char *act, const char *data)
 static char *message_act(const Flow *f, int k, char **refused, int *unsolved, char **dl)
 {
     char root[96], *data, *why = NULL, *act;
-    const char *inject = f->cand_src, *delivered;
+    /* An exploring flow (a sighting's witness) injects nothing: every message holds what its own domain admits. */
+    const char *inject = f->cand_src ? f->cand_src : "", *payload = f->cand_payload ? f->cand_payload : "";
+    const char *delivered;
 
     engine_orphan_message_data_src(f, k, root, sizeof root);
     delivered = flow_delivery_of(f, root);
@@ -53,8 +55,8 @@ static char *message_act(const Flow *f, int k, char **refused, int *unsolved, ch
     *unsolved = 1;
     /* The payload rides this message only where the search's injection is this message's data or one of its
        members; every other message of the chain carries what its own domain admits. */
-    if (strcmp(inject, root) && !concolic_member_of_root(inject, root)) inject = "";
-    data = message_compose(root, inject, f->cand_payload, &why);
+    if (*inject && strcmp(inject, root) && !concolic_member_of_root(inject, root)) inject = "";
+    data = message_compose(root, inject, payload, &why);
     if (!data) {
         if (!*refused) *refused = why;
         else free(why);
