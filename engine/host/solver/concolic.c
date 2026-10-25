@@ -6492,6 +6492,14 @@ static JSValue concolic_exotic_get_prototype(JSContext *ctx, JSValueConst obj) {
                       "object answering to it with no record is one this file did not mint");
     if (!c)
         return JS_NULL;
+    /* A link the page wrote (prototype_slot_settable below): the record is minted with a null link, so a
+       non-null one is a set this flow made, and it is the answer. A set to null keeps the derived answer. */
+    {
+        JSValue slot = JS_GetPrototypeSlot(ctx, obj);
+
+        if (!JS_IsNull(slot))
+            return slot;
+    }
     /* Derived once and held. The operand is the receiver, so the answer's identity is composed from this
        value's own, and two asks about one record are one question here and at the link walk's seam. */
     if (JS_IsUninitialized(c->proto))
@@ -6514,6 +6522,10 @@ static JSClassExoticMethods g_concolic_exotic = {
     .define_own_property = concolic_exotic_define_own,
     .get_property = concolic_exotic_get,
     .get_prototype = concolic_exotic_get_prototype,
+    /* An unknown denotes a value whose [[SetPrototypeOf]] is the ordinary one (only a WindowProxy or a Location is
+       an immutable prototype exotic object): where it is extensible its prototype is V after the set whichever
+       arm step 2's SameValue takes, so the ordinary path writes V to the record's own link. */
+    .prototype_slot_settable = true,
     .has_property = concolic_exotic_has,
     /* The lookup is a slot read of this value's own example and a derivation composed in this file, so it runs
        no page code by construction, which lets the engine's accessor walk and COW slot read run it from C. */

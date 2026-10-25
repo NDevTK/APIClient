@@ -13820,7 +13820,7 @@ static int JS_SetPrototypeInternal(JSContext *ctx, JSValueConst obj,
        Object.prototype's own arm below is the same clause (20.1.3 makes it an immutable prototype exotic
        object) reached from a different direction, which is why the two read alike. */
     em = js_exotic_getproto(ctx->rt, p);
-    if (unlikely(em != NULL)) {
+    if (unlikely(em != NULL) && !em->prototype_slot_settable) {
         JSValue cur = em->get_prototype(ctx, obj);   /* step 1 */
         JSObject *cur_p;
         if (unlikely(JS_IsException(cur)))
@@ -14206,6 +14206,15 @@ static JSValueConst JS_GetPrototypePrimitive(JSContext *ctx, JSValueConst val)
    an object of the right document.
    The ordinary property walks ask the same hook through js_walk_proto for a class that declares
    get_prototype_walkable, so such a class is answered one way by every route. */
+JSValue JS_GetPrototypeSlot(JSContext *ctx, JSValueConst obj)
+{
+    JSObject *proto;
+
+    DCHECK(JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT, "a prototype slot was asked of a value that is not an object");
+    proto = JS_VALUE_GET_OBJ(obj)->shape->proto;
+    return proto ? js_dup(JS_MKPTR(JS_TAG_OBJECT, proto)) : JS_NULL;
+}
+
 JSValue JS_GetPrototype(JSContext *ctx, JSValueConst obj)
 {
     JSValue val;
