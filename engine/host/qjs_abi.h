@@ -125,6 +125,11 @@ QJS_EXPORT void qjs_host_answers_exhausted(unsigned req);
 QJS_EXPORT const char *qjs_level1_account(void);
 QJS_EXPORT void qjs_request_park(void);
 QJS_EXPORT void qjs_emit_partial(void);
+/* The same line at a census instant, over the census objects the host just printed (solver/result.h's
+   ResultCensus, which stays the caller's): a native line-stream host's form, so one sample walks the frontier
+   once. */
+struct ResultCensus;
+void qjs_emit_partial_census(const struct ResultCensus *c);
 
 /* The product's known identities for this cluster (solver/novelty.h's set text), at boot and incrementally. */
 QJS_EXPORT void qjs_novelty_learn(const char *text);

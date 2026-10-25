@@ -33013,7 +33013,8 @@ TF_UNIT int abi_main(int argc, char **argv)
            ITS COST IS PUBLISHED ON THE LINE ITSELF and is not this driver's to state twice — see
            engine_census_emit, and read @WFQ's `scanCensusWeights` against `scanNextWeights` on any sample.
            AND WHAT IT ANSWERS IS SPENT ON THE LINE BELOW — see there for why. */
-        if (engine_census_emit()) {
+        ResultCensus census = { 0 };
+        if (engine_census_emit(&census)) {
             /* ...AND THE PRODUCT'S OWN DOCUMENT AT THAT SAME SAMPLE, WHICH IS THE ONE THING THIS HOST COULD
                NOT REPORT AT ALL. The paragraph above fixed the SCHEDULER's half of a single defect and left
                the other half standing: `@RESULT` below is written after the step loop, so it is composed only
@@ -33039,25 +33040,21 @@ TF_UNIT int abi_main(int argc, char **argv)
                so, and the two carry the same five censuses from the same composers — so a reader comparing
                them would be differencing one quantity across two moments, which is the defect that reading is
                most often the victim of.
-               AFTER THE LINES AND BEFORE THE PAINT, WHICH IS AN ORDERING WITH A REASON AT BOTH ENDS. AFTER,
-               because composing a document WEIGHS the frontier (main.c names the four `_wfq` rows it raises),
-               so a document composed second carries the census's own cost and this host's reporting prices
-               itself honestly; a document composed first would report a cheaper sample than the one the
-               reader is holding. BEFORE the paint, for the reason the FINAL paint is placed after `@RESULT`
-               below: a painter aborting at a capability this engine has not built should cost a picture and
-               not a finding set.
-               ITS PRICE, STATED RATHER THAN LEFT TO BE DISCOVERED: it DOUBLES the per-sample reporting cost,
-               because the census walk and this composition each weigh every member twice. That is not an
-               estimate this comment is asking to be believed — `_wfq`'s `scanCensusWeights` against
-               `scanNextWeights`, on the very document this line prints, is the share of all frontier-weighing
-               that went to the report, and a reader who thinks the cadence is wrong has the number in hand
-               rather than an argument.
+               AFTER THE LINES AND BEFORE THE PAINT. AFTER, because the document borrows the census objects
+               the lines were printed from (solver/result.h's ResultCensus), so the two carry one sample and the
+               frontier is walked for it once. BEFORE the paint, for the reason the FINAL paint is placed after
+               `@RESULT` below: a painter aborting at a capability this engine has not built should cost a
+               picture and not a finding set.
+               ITS PRICE: the document's own surfaces (endpoints, sinks, page errors) and nothing of the
+               census's, which `_wfq`'s `scanCensusWeights` against `scanNextWeights` on this line's document
+               states.
                AND A CHANGE FILTER IS DELIBERATELY NOT HERE, because it would never fire: those four `_wfq`
                rows are LIFETIME scan counters that rise on every sample, so no two documents this line
                composes are ever byte-equal and "announce it only when it changed" — which is exactly the rule
                `abi_announce` one line below correctly uses for the bill — would be a comparison that always
                answers yes plus a second mechanism to maintain. */
-            qjs_emit_partial();
+            qjs_emit_partial_census(&census);
+            result_census_free(&census);
         }
         /* AND THE IMAGE THIS ROUND WAS HANDED THE THREAD FOR — @PERWORLD. A yield leaves the member the
            scheduler was holding SWITCHED IN, with its COW and DOM deltas applied (solver/engine.c holds it in

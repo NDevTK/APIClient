@@ -1742,7 +1742,14 @@ char *result_heap_json(JSContext *ctx) {
 /* The composition, and nothing else. Each surface serializes itself — endpoint.c walks its deduped endpoints,
    solve.c its fire-verified sinks — and this only decides that they are one document and what it is called,
    so no host assembles structure again. */
-char *result_json(JSContext *ctx) {
+char *result_json(JSContext *ctx) { return result_json_census(ctx, NULL); }
+
+void result_census_free(ResultCensus *c) {
+    free(c->swap); free(c->cold); free(c->heap); free(c->wfq); free(c->fork_at);
+    c->swap = c->cold = c->heap = c->wfq = c->fork_at = NULL;
+}
+
+char *result_json_census(JSContext *ctx, const ResultCensus *c) {
     char *eps = endpoint_json_array();
     char *sinks = solve_json_array(ctx);
     /* The routed posts this sender made whose messages held unknowns (solver/post_index.h). */
@@ -1756,14 +1763,15 @@ char *result_json(JSContext *ctx) {
     char *errsExplored = errs_json_array(ERRS_EXPLORED);
     /* The ordering, on the one surface that crosses the ABI — see result.h. Composed here rather than by a host
        so the production entry carries it. */
-    char *wfq = result_wfq_json();
+    char *wfq = c ? c->wfq : result_wfq_json();
     /* …and what the frontier is made of, what the runtime holds, and what a context switch costs (see
        result.h); `decide.c`'s table joins them as the same question one level down — which predicate grows
-       the frontier. */
-    char *cold = result_cold_json();
-    char *heap = result_heap_json(ctx);
-    char *swap = result_swap_json();
-    char *forkAt = decide_fork_json();
+       the frontier. Borrowed from `c` when the host has just composed them for its census lines, since each is
+       a walk of the frontier and the two consumers are one instant. */
+    char *cold = c ? c->cold : result_cold_json();
+    char *heap = c ? c->heap : result_heap_json(ctx);
+    char *swap = c ? c->swap : result_swap_json();
+    char *forkAt = c ? c->fork_at : decide_fork_json();
     /* …and what the document asked a standard for that this realm did not answer. An unbuilt API a page
        feature-detects answers `undefined`, so every endpoint and sink behind that guard is unreachable with
        nothing else saying so. Emitted on every document, including ones with no rows, because the run that
@@ -1784,8 +1792,9 @@ char *result_json(JSContext *ctx) {
 
     if (!eps || !sinks || !errs || !errsRetracted || !errsExplored || !wfq || !cold || !heap || !swap ||
         !forkAt || !quantum || !absent || !novelty) {
-        free(eps); free(sinks); free(errs); free(errsRetracted); free(errsExplored); free(wfq);
-        free(cold); free(heap); free(swap); free(forkAt); free(quantum); free(absent); free(novelty);
+        free(eps); free(sinks); free(errs); free(errsRetracted); free(errsExplored);
+        if (!c) { free(wfq); free(cold); free(heap); free(swap); free(forkAt); }
+        free(quantum); free(absent); free(novelty);
         return NULL;
     }
     /* Sized by composef (solver/compose.h), so a field added below needs no count, slack or margin. The fit is
@@ -2008,11 +2017,7 @@ char *result_json(JSContext *ctx) {
     free(errsRetracted);
     free(errsExplored);
     free(posts);
-    free(wfq);
-    free(cold);
-    free(heap);
-    free(swap);
-    free(forkAt);
+    if (!c) { free(wfq); free(cold); free(heap); free(swap); free(forkAt); }
     free(absent);
     free(quantum);
     free(novelty);

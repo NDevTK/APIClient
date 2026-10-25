@@ -23,6 +23,19 @@
  * BFS actually interleaves rather than running its flows FIFO. */
 char *result_json(JSContext *ctx);
 
+/* One census sample's five composed objects (result_swap_json, result_cold_json, result_heap_json, result_wfq_json,
+   solver/decide.c's decide_fork_json), each malloc'd and owned by whoever holds the struct. A host that prints the
+   census and the document at one instant composes the census once (engine_census_emit) and hands it here. */
+typedef struct ResultCensus {
+    char *swap, *cold, *heap, *wfq, *fork_at;
+} ResultCensus;
+
+/* result_json with the census objects borrowed from `c`, composed afresh when `c` is NULL. `c` must be a sample
+   of the frontier as it stands: nothing may have stepped, answered or paged between its composition and this
+   call. Caller frees the result; `c` stays the caller's. */
+char *result_json_census(JSContext *ctx, const ResultCensus *c);
+void  result_census_free(ResultCensus *c);
+
 /* THE ORDER'S OWN INPUTS, COMPOSED ONCE — solver/flow.h's WfqCensus rendered as one JSON object (caller
  * frees), which `result_json` embeds as the document's `_wfq` and which a host with a line-oriented output
  * prints verbatim. ONE composer, because the alternative is what it replaced: a struct whose rows are added by

@@ -401,9 +401,12 @@ int  engine_sched_step(void);
  * instead, and engine_sched_step does not emit, so a console host is not handed a record stream. A sample is
  * O(frontier members) and weighs each member twice (solver/flow.h's FLOW_SCAN_CENSUS), visible as @WFQ's
  * `scanCensusWeights` against `scanNextWeights`.
- * Returns 1 when the lines went out and 0 when not due, so a line-stream host can emit its findings
- * (main.c's `qjs_emit_partial`) at the census's instant. Ignoring the return changes nothing. */
-int engine_census_emit(void);
+ * Returns 1 when the lines went out and 0 when not due, so a line-stream host can emit its findings at the
+ * census's instant. With `keep` non-NULL the five composed objects pass to it when the lines went out (it is
+ * untouched when they did not), so that host hands them to main.c's qjs_emit_partial_census instead of composing
+ * the frontier walks a second time; NULL frees them here. */
+struct ResultCensus;
+int engine_census_emit(struct ResultCensus *keep);
 
 /* End the session when the host stops stepping. Call it unconditionally where the host leaves its loop, never
  * behind `if (r != ENGINE_STEP_DONE)`. Only DONE closes a session by itself; any other exit leaves the hooks

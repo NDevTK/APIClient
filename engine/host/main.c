@@ -1271,15 +1271,17 @@ QJS_EXPORT int qjs_step(void)
 /* The result document, composed between steps with the RAM floor's refusal loop: the composition walks the
    frontier, so it cannot sell a flow mid-walk; a composition the allocator refused is dropped whole, one flow is
    sold at rest, and it is composed again, until it fits or nothing is left to sell. */
-static char *result_json_at_rest(void)
+static char *result_json_at_rest(const ResultCensus *c)
 {
     static size_t need;   /* the previous composition's measured footprint */
     char *js;
     engine_headroom_at_rest(need);
     (void)json_buf_grown_take();
     for (;;) {
-        js = result_json(g_ctx);
+        js = result_json_census(g_ctx, c);
         if (js || !engine_reclaim_at_rest()) break;
+        /* A sale changed the frontier the borrowed census describes, so the retry composes its own. */
+        c = NULL;
     }
     /* …and the document itself, which result_json composes outside any JSON buffer. */
     need = json_buf_grown_take() + (js ? strlen(js) + 1 : 0);
@@ -1292,7 +1294,7 @@ QJS_EXPORT const char *qjs_result(void)
 {
     DCHECK(g_begun, "qjs_result was asked of an engine that never ran");
     free(g_result);   /* the previous answer: the host has read it or not, and either way it asked again */
-    g_result = result_json_at_rest();
+    g_result = result_json_at_rest(NULL);
     /* At the origin, where the composition failed: a null crosses this ABI as the empty string (the binding
        converts address zero to ""), which would read as an engine that ran and found nothing. result_json answers
        nothing only when the composition could not be allocated, which is always fatal. */
@@ -2038,14 +2040,14 @@ QJS_EXPORT const char *qjs_dumps(void)
    other callers and the pager, so a streaming host inflates it by one frontier per call and nothing subtracts that.
    Every other `_wfq` row and every other field is composed from state this entry does not touch, so a checker of
    this contract exempts these four rows by name and holds the rest to equality. */
-QJS_EXPORT void qjs_emit_partial(void)
+static void emit_partial(const ResultCensus *c)
 {
     char *js;
     DCHECK(g_begun, "qjs_emit_partial was asked of an engine that never ran");
     /* The document is this line's to free: it is composed per call on the host's cadence and grows with the
        finding set, and a leaked copy would count in HEAPU8.length, which every reply reports as
        `workingSetBytes`, so the pool would page out the most productive instance first. */
-    js = result_json_at_rest();
+    js = result_json_at_rest(c);
     /* The same always-fatal allocation failure as qjs_result's, asserted rather than left to the printf: `%s` over
        a null pointer is undefined, and the host's JSON.parse would reject the line. */
     CHECK(js != NULL, "a partial result document could not be composed — the findings this engine has "
@@ -2053,6 +2055,16 @@ QJS_EXPORT void qjs_emit_partial(void)
     printf("@RESULT %s\n", js);
     free(js);
     fflush(stdout);
+}
+
+QJS_EXPORT void qjs_emit_partial(void) { emit_partial(NULL); }
+
+void qjs_emit_partial_census(const ResultCensus *c)
+{
+    DCHECK(c != NULL && c->swap && c->cold && c->heap && c->wfq && c->fork_at,
+           "a partial document was asked over a census holding no objects — engine_census_emit fills all five "
+           "when its lines go out, and the host calls this only then");
+    emit_partial(c);
 }
 
 /* The trusted zone's known identities for this instance's cluster, in solver/novelty.h's set text: what the

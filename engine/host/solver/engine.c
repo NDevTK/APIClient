@@ -12795,7 +12795,7 @@ void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
  * which a line-stream host cannot re-derive without a second copy of the cadence: the result document is composed
  * only when the frontier drains or stalls, which a real page's never does, so test_forced.c's `--abi` arm spends
  * this return on `qjs_emit_partial` to stream its findings too. */
-int engine_census_emit(void)
+int engine_census_emit(ResultCensus *keep)
 {
     static long next = ENGINE_PROGRESS_EVERY;
     static int  last_cands = -1;
@@ -12894,7 +12894,14 @@ int engine_census_emit(void)
         printf("@HEAP {\"censusSeq\":%ld%s%s\n", seq, heap[1] == '}' ? "" : ",", heap + 1);
         printf("@WFQ {\"censusSeq\":%ld%s%s\n", seq, wfq[1] == '}' ? "" : ",", wfq + 1);
         printf("@FORKAT %s\n", forks);
-        free(swap); free(cold); free(heap); free(wfq); free(forks);
+        if (keep) {
+            DCHECK(!keep->swap && !keep->cold && !keep->heap && !keep->wfq && !keep->fork_at,
+                   "a census was handed to a holder that still owns a previous one — the host frees each sample's "
+                   "objects after the document that borrows them, so a held sample would leak");
+            keep->swap = swap; keep->cold = cold; keep->heap = heap; keep->wfq = wfq; keep->fork_at = forks;
+        } else {
+            free(swap); free(cold); free(heap); free(wfq); free(forks);
+        }
     }
     fflush(stdout);
     /* The sample happened, said after the flush, because a caller writes more of its own stream on this answer,
@@ -12974,7 +12981,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                 continue;
             }
         }
-        engine_census_emit();
+        engine_census_emit(NULL);
     }
     /* The loop leaves only on DONE, and both DONE exits (a drained frontier, a park) close the session. */
     DCHECK(!g_sess_live, "the one-call driver stopped stepping over a live session");
