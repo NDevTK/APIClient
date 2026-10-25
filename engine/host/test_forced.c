@@ -742,6 +742,16 @@ static const TfServed TF_SERVED[] = {
       "fetch('/api/mhdep?w=mhDEP');"
       "export const mhTag = 'mhTAG';"
       "export default { tag: 'mhDEF' };" },
+    /* HTML_SPAROUTE's `#/reports` chunk: a module whose mount registers the handler that holds the sink. */
+    { "https://x.test/chunk/srreports.js", "text/javascript",
+      "fetch('/api/sr-chunk');"
+      "export function srMount(view) {"
+      "  fetch('/api/sr-mounted');"
+      "  view.addEventListener('click', function srOnClick() {"
+      "    fetch('/api/sr-click');"
+      "    view.innerHTML = new URLSearchParams(location.search).get('q');"
+      "  });"
+      "}" },
     /* HTML_REPLYROLE's account reply: a viewer, so the document's admin arm is reachable only by forcing. */
     { "https://x.test/api/rrme", "application/json", "{\"role\":\"viewer\",\"id\":42,\"org\":\"acme\"}" },
 };
@@ -1117,6 +1127,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/windowname.h"
 #include "fixture/clobber.h"
 #include "fixture/typedinput.h"
+#include "fixture/sparoute.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1580,6 +1591,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
+    { "sparoute", HTML_SPAROUTE },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14708,6 +14720,45 @@ TF_UNIT void probes_typedinput(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `sparoute` document (fixture/sparoute.h); the chunk's witnesses are in TF_SERVED's body,
+   so those rows are keyed by the document's own import of it. */
+TF_UNIT void probes_sparoute(const char *js, Probe *tab, int *n) {
+    char src[192] = "";
+    int has = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, src, sizeof src);
+    size_t span = 0;
+    const char *rec = has ? s_record(js, "innerHTML", src, &span) : NULL;
+    const char *rt_why = NULL; int rt_tt = 1;
+    fold_row(&rt_tt, &rt_why, !!strstr(js, "\"/api/sr-route\""),
+             "NOT REACHED: there is no /api/sr-route record, so `location.hash === '#/reports'` never took its "
+             "route arm");
+    const char *ck_why = NULL; int ck_tt = 1;
+    fold_row(&ck_tt, &ck_why, !!strstr(js, "\"/api/sr-chunk\""),
+             "NOT REACHED: there is no /api/sr-chunk record, so the route's chunk was never loaded and evaluated");
+    fold_row(&ck_tt, &ck_why, !!strstr(js, "\"/api/sr-mounted\""),
+             "the chunk evaluated but its exported srMount was never called from the import's reaction");
+    const char *hd_why = NULL; int hd_tt = 1;
+    fold_row(&hd_tt, &hd_why, !!strstr(js, "\"/api/sr-click\""),
+             "NOT REACHED: there is no /api/sr-click record, so the click handler the chunk registered was never "
+             "driven");
+    const char *sk_why = NULL; int sk_tt = 1;
+    fold_row(&sk_tt, &sk_why, has,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in location.search, so the chunk "
+             "handler's write was never reached tainted");
+    const char *pc_why = NULL; int pc_tt = 1;
+    fold_row(&pc_tt, &pc_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the innerHTML <- location.search search did not fire a PoC");
+    fold_row(&pc_tt, &pc_why, rec && memmem(rec, span, "#/reports", 9) != NULL,
+             "the PoC does not state the `#/reports` fragment its route needs beside the query");
+    const Probe rows[] = {
+        { "sr-route", rt_tt, "/api/sr-route", SESS_EXPLORE, rt_why },
+        { "sr-chunk", ck_tt, "'/chunk/srreports.js'", SESS_EXPLORE, ck_why },
+        { "sr-handler", hd_tt, "m.srMount(", SESS_EXPLORE, hd_why },
+        { "sr-sink", sk_tt, "'srView'", SESS_EXPLORE, sk_why },
+        { "sr-poc", pc_tt, "'#/reports'", SESS_EXPLORE, pc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18527,6 +18578,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);
     probes_typedinput(js, probes, &np);
+    probes_sparoute(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
