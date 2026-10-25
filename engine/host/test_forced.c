@@ -1128,6 +1128,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/clobber.h"
 #include "fixture/typedinput.h"
 #include "fixture/sparoute.h"
+#include "fixture/envgate.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1592,6 +1593,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
     { "sparoute", HTML_SPAROUTE },
+    { "envgate", HTML_ENVGATE },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14759,6 +14761,27 @@ TF_UNIT void probes_sparoute(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `envgate` document (fixture/envgate.h): both arms of each environment gate. */
+TF_UNIT void probes_envgate(const char *js, Probe *tab, int *n) {
+    const char *lg_why = NULL; int lg_tt = 1;
+    fold_row(&lg_tt, &lg_why, !!strstr(js, "\"/api/eg-lang-other\""),
+             "NOT REACHED: there is no /api/eg-lang-other record, so the modelled locale's own arm never ran");
+    fold_row(&lg_tt, &lg_why, !!strstr(js, "\"/api/eg-lang-de\""),
+             "the `de` arm of the navigator.language gate never ran: the environment value decided the branch "
+             "instead of forking it");
+    const char *mq_why = NULL; int mq_tt = 1;
+    fold_row(&mq_tt, &mq_why, !!strstr(js, "\"/api/eg-mq-wide\""),
+             "NOT REACHED: there is no /api/eg-mq-wide record, so the modelled viewport's own arm never ran");
+    fold_row(&mq_tt, &mq_why, !!strstr(js, "\"/api/eg-mq-narrow\""),
+             "the narrow arm of the matchMedia gate never ran: the environment value decided the branch instead "
+             "of forking it");
+    const Probe rows[] = {
+        { "eg-lang-both", lg_tt, "/api/eg-lang-", SESS_EXPLORE, lg_why },
+        { "eg-mq-both", mq_tt, "/api/eg-mq-", SESS_EXPLORE, mq_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18579,6 +18602,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_clobber(js, probes, &np);
     probes_typedinput(js, probes, &np);
     probes_sparoute(js, probes, &np);
+    probes_envgate(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
