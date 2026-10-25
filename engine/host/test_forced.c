@@ -15861,9 +15861,18 @@ TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     fold_row(&nm_tt, &nm_why, param_value_is(js, "/api/dn-number", "w", "dnFUTURE") &&
                               param_value_is(js, "/api/dn-number", "w", "dnPRESENT"),
              "only one arm of the gate after Number() ran, so the coercion collapsed the clock's unknown");
+    const char *st_why = NULL; int st_tt = 1;
+    fold_row(&st_tt, &st_why, param_value_is(js, "/api/dn-settime", "w", "dnFUTURE") ||
+                              param_value_is(js, "/api/dn-settime", "w", "dnPRESENT"),
+             "NOT REACHED: no /api/dn-settime record, so setTime over the clock's sum did not return");
+    fold_row(&st_tt, &st_why, param_value_is(js, "/api/dn-settime", "w", "dnFUTURE") &&
+                              param_value_is(js, "/api/dn-settime", "w", "dnPRESENT"),
+             "only one arm of the gate on the year after setTime ran, so the Date's [[DateValue]] was a number "
+             "and not TimeClip of the clock's unknown");
     const Probe rows[] = {
         { "dn-plus-both", pl_tt, "/api/dn-plus", SESS_EXPLORE, pl_why },
         { "dn-number-both", nm_tt, "/api/dn-number", SESS_EXPLORE, nm_why },
+        { "dn-settime-both", st_tt, "/api/dn-settime", SESS_EXPLORE, st_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

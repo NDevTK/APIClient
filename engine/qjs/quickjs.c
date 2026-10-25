@@ -120803,6 +120803,19 @@ static int64_t floor_div_int64(int64_t a, int64_t b) {
 static JSValue js_Date_parse(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv);
 
+/* A Date's [[DateValue]] when it is unknown input (§21.4.4.27 setTime over one), or JS_UNINITIALIZED for a time
+   value this engine holds. Asked of a value already known to be a Date. Borrowed. */
+static JSValueConst js_date_value_unknown(JSValueConst this_val)
+{
+    JSObject *p = JS_VALUE_GET_OBJ(this_val);
+
+    DCHECK(p->class_id == JS_CLASS_DATE, "an unknown [[DateValue]] was asked of an object that is not a Date");
+    return js_value_is_concolic(p->u.object_data) ? p->u.object_data : JS_UNINITIALIZED;
+}
+
+/* thisTimeValue: the [[DateValue]] of a Date, or a TypeError. For an unknown [[DateValue]] it is the example time
+   value (NaN where there is none), which only the example world's computations may read; a caller that answers
+   the page asks js_date_value_unknown first. */
 static __exception int JS_ThisTimeValue(JSContext *ctx, double *valp,
                                         JSValueConst this_val)
 {
@@ -120810,6 +120823,14 @@ static __exception int JS_ThisTimeValue(JSContext *ctx, double *valp,
         JSObject *p = JS_VALUE_GET_OBJ(this_val);
         if (p->class_id == JS_CLASS_DATE && JS_IsNumber(p->u.object_data))
             return JS_ToFloat64(ctx, valp, p->u.object_data);
+        if (p->class_id == JS_CLASS_DATE && js_value_is_concolic(p->u.object_data)) {
+            JSValue ex = js_concolic_operand(ctx, p->u.object_data);
+
+            *valp = JS_IsNumber(ex) ? (JS_VALUE_GET_TAG(ex) == JS_TAG_INT ? (double)JS_VALUE_GET_INT(ex)
+                                                                           : JS_VALUE_GET_FLOAT64(ex)) : NAN;
+            JS_FreeValue(ctx, ex);
+            return 0;
+        }
     }
     JS_ThrowTypeError(ctx, "not a Date object");
     return -1;
@@ -121004,6 +121025,24 @@ static JSValue get_date_field(JSContext *ctx, JSValueConst this_val,
     res = get_date_fields(ctx, this_val, fields, is_local, 0);
     if (res < 0)
         return JS_EXCEPTION;
+    if (!JS_IsUninitialized(js_date_value_unknown(this_val))) {
+        /* §21.4.4's field getters over an unknown time value: each field is derived from it under its own
+           getter's name, with the example time value's field as its example. */
+        static const char *const getters[2][8] = {
+            { "21.4.4.14 Date.prototype.getUTCFullYear", "21.4.4.18 Date.prototype.getUTCMonth",
+              "21.4.4.12 Date.prototype.getUTCDate", "21.4.4.15 Date.prototype.getUTCHours",
+              "21.4.4.17 Date.prototype.getUTCMinutes", "21.4.4.19 Date.prototype.getUTCSeconds",
+              "21.4.4.16 Date.prototype.getUTCMilliseconds", "21.4.4.13 Date.prototype.getUTCDay" },
+            { "21.4.4.4 Date.prototype.getFullYear", "21.4.4.8 Date.prototype.getMonth",
+              "21.4.4.2 Date.prototype.getDate", "21.4.4.5 Date.prototype.getHours",
+              "21.4.4.7 Date.prototype.getMinutes", "21.4.4.9 Date.prototype.getSeconds",
+              "21.4.4.6 Date.prototype.getMilliseconds", "21.4.4.3 Date.prototype.getDay" } };
+        JSValue real = !res ? JS_NAN : js_number(fields[n] - ((magic & 0x100) ? 1900 : 0));
+
+        DCHECK(n < 8 && is_local < 2, "a Date field getter's magic names no field");
+        return js_concolic_derive(ctx, js_date_value_unknown(this_val),
+                                  (magic & 0x100) ? "B.2.3.1 Date.prototype.getYear" : getters[is_local][n], real);
+    }
     if (!res)
         return JS_NAN;
 
@@ -121042,6 +121081,11 @@ static int js_date_set_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->res = get_date_fields(ctx, s->hdr.this_val, s->fields, is_local, first_field == 0);
         if (s->res < 0)
             return -1;
+        if (!JS_IsUninitialized(js_date_value_unknown(s->hdr.this_val))) {
+            DFAIL("a Date field setter over an unknown [[DateValue]] (setTime over unknown input): build the new "
+                  "time value derived from the unknown and the coerced fields, as setTime's TimeClip is");
+            return -1;
+        }
         s->n = min_int(s->hdr.argc, end_field - first_field);
         s->i = 0;
         s->nonfinite = false;
@@ -121109,8 +121153,36 @@ static JSValue js_date_set_fini(JSContext *ctx, void *st, bool take_result)
    part: 1=date, 2=time 3=all
    XXX: should use a variant of strftime().
  */
+static JSValue get_date_string_of(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+
+/* The string forms (§21.4.4.35-21.4.4.43). Over an unknown [[DateValue]]
+   the string is derived from it, with the string of the example time value as its example. */
 static JSValue get_date_string(JSContext *ctx, JSValueConst this_val,
                                int argc, JSValueConst *argv, int magic)
+{
+    JSValue real = get_date_string_of(ctx, this_val, argc, argv, magic);
+    const char *op;
+
+    if (JS_IsException(real) || JS_IsUninitialized(js_date_value_unknown(this_val)))
+        return real;
+    switch (magic) {
+    case 0x13: op = "21.4.4.41 Date.prototype.toString"; break;
+    case 0x03: op = "21.4.4.43 Date.prototype.toUTCString"; break;
+    case 0x23: op = "21.4.4.36 Date.prototype.toISOString"; break;
+    case 0x11: op = "21.4.4.35 Date.prototype.toDateString"; break;
+    case 0x12: op = "21.4.4.42 Date.prototype.toTimeString"; break;
+    case 0x33: op = "21.4.4.39 Date.prototype.toLocaleString"; break;
+    case 0x31: op = "21.4.4.38 Date.prototype.toLocaleDateString"; break;
+    case 0x32: op = "21.4.4.40 Date.prototype.toLocaleTimeString"; break;
+    default:
+        DFAIL("a Date string form with no algorithm to name its derivation over an unknown time value");
+        op = NULL;
+    }
+    return js_concolic_derive(ctx, js_date_value_unknown(this_val), op, real);
+}
+
+static JSValue get_date_string_of(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv, int magic)
 {
     // _string(obj, fmt, part)
     char buf[64];
@@ -121787,6 +121859,10 @@ static JSValue js_date_getTimezoneOffset(JSContext *ctx, JSValueConst this_val,
 
     if (JS_ThisTimeValue(ctx, &v, this_val))
         return JS_EXCEPTION;
+    if (!JS_IsUninitialized(js_date_value_unknown(this_val)))
+        return js_concolic_derive(ctx, js_date_value_unknown(this_val),
+                                  "21.4.4.11 Date.prototype.getTimezoneOffset",
+                                  isnan(v) ? JS_NAN : js_int64(getTimezoneOffset((int64_t)trunc(v))));
     if (isnan(v))
         return JS_NAN;
     else
@@ -121802,6 +121878,9 @@ static JSValue js_date_getTime(JSContext *ctx, JSValueConst this_val,
 
     if (JS_ThisTimeValue(ctx, &v, this_val))
         return JS_EXCEPTION;
+    /* §21.4.4.10 step 3: return dateObject.[[DateValue]], which is the unknown itself where it is one */
+    if (!JS_IsUninitialized(js_date_value_unknown(this_val)))
+        return js_dup(js_date_value_unknown(this_val));
     return js_float64(v);
 }
 
@@ -121811,7 +121890,26 @@ static JSValue js_date_setTime(JSContext *ctx, JSValueConst this_val,
     // setTime(v)
     double v;
 
-    if (JS_ThisTimeValue(ctx, &v, this_val) || JS_ToFloat64(ctx, &v, argv[0]))
+    if (JS_ThisTimeValue(ctx, &v, this_val))
+        return JS_EXCEPTION;
+    /* §21.4.4.27 steps 3-5 over unknown input: t is the Number itself (§7.1.4 step 1), TimeClip(t) is derived
+       from it with the real clip over its example, and that unknown becomes the [[DateValue]]. */
+    if (js_value_is_concolic(argv[0])) {
+        JSObject *p = JS_VALUE_GET_OBJ(this_val);
+        JSValue ex = js_concolic_operand(ctx, argv[0]), real = JS_UNDEFINED, dv;
+        double e;
+
+        if (JS_IsNumber(ex) && JS_ToFloat64(ctx, &e, ex) == 0)
+            real = js_float64(time_clip(e));
+        JS_FreeValue(ctx, ex);
+        dv = js_concolic_derive(ctx, argv[0], "21.4.4.27 Date.prototype.setTime TimeClip(t)", real);
+        DCHECK(js_value_is_concolic(dv), "setTime's TimeClip over unknown input derived no unknown");
+        cow_capture_obj(ctx, p);
+        JS_FreeValue(ctx, p->u.object_data);
+        p->u.object_data = dv;
+        return js_dup(dv);
+    }
+    if (JS_ToFloat64(ctx, &v, argv[0]))
         return JS_EXCEPTION;
     return JS_SetThisTimeValue(ctx, this_val, time_clip(v));
 }
@@ -121897,8 +121995,11 @@ double JS_GetDateValue(JSValueConst v)
     DCHECK(JS_IsDate(v), "a [[DateValue]] was read off something that is not a Date — JS_IsDate is how a "
                          "caller finds that out, and an object of another class has no such slot");
     p = JS_VALUE_GET_OBJ(v);
+    if (js_value_is_concolic(p->u.object_data))
+        DFAIL("a host component read the [[DateValue]] of a Date whose time value is unknown input (setTime over "
+              "one) — derive that component's answer from the unknown instead of reading a number");
     DCHECK(JS_IsNumber(p->u.object_data), "a Date's [[DateValue]] is not a number — the slot is set to a "
-                                          "time-clipped double at construction and never to anything else");
+                                          "time-clipped double at construction or to an unknown by setTime");
     /* An integral time value is stored with the INT tag by the float constructor's own normalisation, so both
        tags are the one slot and reading only the float half would answer garbage for `new Date(0)`. */
     return JS_VALUE_GET_TAG(p->u.object_data) == JS_TAG_INT ? (double)JS_VALUE_GET_INT(p->u.object_data)
