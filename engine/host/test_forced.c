@@ -21084,8 +21084,9 @@ TF_UNIT void probes_msgorigin(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/mo-sub-entered record, so moSub was never driven");
     fold_row(&ms_tt, &ms_why, s_fired_with(js, "innerHTML", SUB, 4),
              "no fired innerHTML record states a moSub message posted from a name under the attacker's own site "
-             "holding `trusted.example` with data whose kind is 'show' — the origin the substring check admits "
-             "was not composed from its own constant and fired");
+             "holding `trusted.example` with data whose kind is 'show'. A registered domain holding it also meets "
+             "the check, so a fire from one alone is a valid PoC; what this row catches is candidates composed "
+             "from another listener's constants, which leave the subdomain uncomposed");
     const char *me_why = NULL; int me_tt = 1;
     fold_row(&me_tt, &me_why, !!strstr(js, "\"/api/mo-exact-entered\""),
              "NOT REACHED: there is no /api/mo-exact-entered record, so moExact was never driven");
