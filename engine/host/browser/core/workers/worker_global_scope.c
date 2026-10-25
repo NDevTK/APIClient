@@ -141,6 +141,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event_target.h"
+#include "core/events/message_port.h"
 #include "core/workers/worker_global_scope.h"
 
 /* §10.2.1.2's INTERFACE, AS THE CLASS THE REALM'S GLOBAL OBJECT CARRIES — one class id doing the two jobs
@@ -467,6 +468,34 @@ static void wgs_assert_handlers_placed(JSContext *ctx, int mask, WgsPlacement wh
 
 /* ---- THE REALM ---------------------------------------------------------------------------------------- */
 
+/* HTML §10.2.1.2: "All messages received by that port are immediately retargeted at the
+   DedicatedWorkerGlobalScope object" — the global's inside port, a per-realm value that run a worker sets once
+   (core/workers/worker.c), and the declared postMessage pool entry. */
+static JSClassID g_inside_port_slot = JS_INVALID_CLASS_ID;
+static int g_id_post = -1;
+
+/* §10.2.1.2's postMessage(message, transfer) and postMessage(message, options): "run the message port post
+   message steps providing this's inside port, message and options". A [Global] interface's operation takes the
+   realm's global for an absent receiver (Web IDL §3.7.7 Operations). */
+static JSValue js_dwgs_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue port, r;
+
+    (void)magic;
+    if (!JS_IsUndefined(this_val) && !JS_IsNull(this_val) && !worker_global_scope_implements(this_val))
+        return JS_ThrowTypeError(ctx, "Illegal invocation");
+    port = realm_value_get(ctx, g_inside_port_slot);
+    r = message_port_post_message(ctx, port, argc, argv);
+    JS_FreeValue(ctx, port);
+    return r;
+}
+
+void worker_global_scope_set_inside_port(JSContext *ctx, JSValueConst port)
+{
+    DCHECK(message_port_is(port), "a worker global scope's inside port is not a MessagePort");
+    realm_value_set(ctx, g_inside_port_slot, JS_DupValue(ctx, port));
+}
+
 static void worker_global_scope_install_realm(JSContext *ctx)
 {
     JSValue wgs_p, dwgs_p, g, prev;
@@ -614,6 +643,9 @@ static void worker_global_scope_install_realm(JSContext *ctx)
        they could not see is a row newly given EH_PORT, which would be installed on this global and audited by
        nothing. Same walk, same three objects, different bit and different arm. */
     WGS_ASSERT_HANDLERS_PLACED(ctx, EH_PORT, WGS_ON_GLOBAL, g, dwgs_p, wgs_p);
+    /* §10.2.1.2's postMessage, a regular operation of the [Global] interface, so §3.8's create-instance arm
+       defines it on the global itself. */
+    idl_install_method(ctx, g, "postMessage", g_id_post);
 
     /* §3.8's define the global property references, step 3.1 — for both interfaces, because both are exposed
        in this realm and §3.8's population is every interface that is, not every interface that has a member
@@ -666,6 +698,18 @@ void worker_global_scope_init(JSContext *ctx)
        function is realm-aware and answers JS_UNDEFINED where there is no such object. */
     idl_set_global_ancestor_terms(worker_global_scope_proto, worker_global_scope_implements,
                                   "WorkerGlobalScope");
+    {
+        /* §10.2.1.2 declares both overloads exactly as §9.4.4 does for MessagePort, so the same two positions:
+           the message, then the sequence-or-dictionary split with StructuredSerializeOptions' one member. */
+        static const IdlArgType POST_ARGS[2] = { IDL_ANY, IDL_SEQUENCE_OBJECT_OR_DICT };
+        static const IdlDictMember POST_OPTS[] = { { "transfer", IDL_SEQUENCE_OBJECT, false, NULL, 0 } };
+
+        g_id_post = idl_method_id_dict(ctx, POST_ARGS, 2, POST_OPTS, 1, js_dwgs_post, 0);
+        idl_optional_from(1);
+    }
+    g_inside_port_slot = realm_value_declare(ctx, "HTML §10.2.1.2's inside port of a DedicatedWorkerGlobalScope");
+    agent_state_id("worker_global_scope", &g_id_post, "§10.2.1.2's postMessage pool entry");
+    agent_state_realm_slot("worker_global_scope", &g_inside_port_slot, "§10.2.1.2's inside port");
     realm_declare_intrinsic(worker_global_scope_install_realm);
 }
 

@@ -49,4 +49,8 @@ bool worker_global_scope_implements(JSValueConst v);
  * `WorkerGlobalScope`'s prototype and names no component at all. */
 JSValue worker_global_scope_proto(JSContext *ctx);
 
+/* HTML §10.2.4's run a worker: "Set worker global scope's inside port to inside port". `ctx` is the worker realm;
+   set once. */
+void worker_global_scope_set_inside_port(JSContext *ctx, JSValueConst port);
+
 #endif

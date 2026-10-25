@@ -67,6 +67,10 @@ typedef struct {
        delivered every message as an event belonging to the parent.
        BORROWED: the agent owns its realms and releases them with itself, exactly as a WindowProxy's is. */
     JSContext *realm;
+    /* §9.4.4's message event target: where the delivery fires `message`, JS_UNDEFINED for the port itself. A
+       Worker's outside port fires at the Worker and its inside port at the worker global scope (HTML §10.2.4
+       Processing model, run a worker). Owned. */
+    JSValue target;
     uint8_t enabled;     /* §9.4.4: the queue starts DISABLED */
     uint8_t detached;    /* §9.4.4's [[Detached]], set by close() */
 } PortData;
@@ -103,8 +107,8 @@ static JSValue   g_deliver_fn = JS_UNDEFINED;   /* the queued delivery task's ca
    components give: a record a flow has reached is one it may write, and there is then no write site to miss.
    The offset list is the same list the finalizer frees. */
 #define MP_OFF(f) (uint16_t)offsetof(PortData, f)
-static const uint16_t PORT_VALS[] = { MP_OFF(entangled), MP_OFF(queue) };
-static const CowRecord PORT_REC = { sizeof(PortData), PORT_VALS, 2 };
+static const uint16_t PORT_VALS[] = { MP_OFF(entangled), MP_OFF(queue), MP_OFF(target) };
+static const CowRecord PORT_REC = { sizeof(PortData), PORT_VALS, 3 };
 
 /* WRITE ONE OF THE TWO, and never `JS_FreeValue(ctx, d->f); d->f = <build one>;` — see cow.h for the order and
    the defect. Both slots make the release side of it real: giving back `queue` releases every message still on
@@ -259,6 +263,7 @@ static void port_finalizer(JSRuntime *rt, JSValue val)
     port_untrack(d);
     JS_FreeValueRT(rt, d->entangled);
     JS_FreeValueRT(rt, d->queue);
+    JS_FreeValueRT(rt, d->target);
     free(d);
 }
 
@@ -305,6 +310,7 @@ static void port_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
        collector and every MessageChannel a page makes is a leak the runtime's own walk reports. */
     JS_MarkValue(rt, d->entangled, mark_func);
     JS_MarkValue(rt, d->queue, mark_func);
+    JS_MarkValue(rt, d->target, mark_func);
 }
 
 /* ---- delivery ----------------------------------------------------------------------------------------------
@@ -431,8 +437,8 @@ static int js_port_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
                       "way to this stage and it answers DONE for a port that has none");
     rctx = d->realm;
     DCHECK(JS_IsObject(s->ev), "§9.4.4's delivery resumed at its fire with no MessageEvent to dispatch");
-    r = event_target_fire_run(rctx, &s->fphase, STEP_CB(s->cb), port, s->ev, JS_UNDEFINED, cb_result,
-                              NULL, out_cb, out_argc);
+    r = event_target_fire_run(rctx, &s->fphase, STEP_CB(s->cb), JS_IsUndefined(d->target) ? port : d->target,
+                              s->ev, JS_UNDEFINED, cb_result, NULL, out_cb, out_argc);
     if (r > 0) return r;
     if (r < 0) return JS_STEP_ABRUPT;
     JS_FreeValue(rctx, s->ev);
@@ -462,9 +468,14 @@ static const JSTrampStepDef js_port_deliver_def = {
 static void port_enqueue_delivery(JSContext *ctx, JSValueConst port)
 {
     JSValueConst args[1];
+    PortData *d = port_of(port);
+
     args[0] = port;
     DCHECK(JS_IsFunction(ctx, g_deliver_fn), "a port delivery was queued before message_port_init built it");
-    JS_EnqueueCallTask(ctx, g_deliver_fn, 1, args, TASK_SOURCE_PORT_MESSAGE_QUEUE);
+    DCHECK(d != NULL && d->realm != NULL, "a delivery was queued for a port with no relevant realm");
+    /* On the port's own relevant realm, so the task joins the queue of that realm's agent: a Worker's inside
+       port is delivered on the worker's event loop, not on the poster's. */
+    JS_EnqueueCallTask(d->realm, g_deliver_fn, 1, args, TASK_SOURCE_PORT_MESSAGE_QUEUE);
 }
 
 /* §9.4.4's "enable this's port message queue": everything already in it becomes a task, in order. */
@@ -890,7 +901,7 @@ static JSValue port_new(JSContext *ctx)
     if (JS_IsException(obj)) return obj;
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "message port: OOM building a MessagePort");
-    d->entangled = d->queue = JS_UNDEFINED;
+    d->entangled = d->queue = d->target = JS_UNDEFINED;
     d->realm = ctx;   /* §9.4.4's relevant realm, taken where the port is created */
     port_track(d);
     JS_SetOpaque(obj, d);
@@ -912,6 +923,44 @@ JSValue message_port_pair(JSContext *ctx, JSValue *port2)
     mp_set(ctx, d2, &d2->entangled, JS_DupValue(ctx, p1));
     *port2 = p2;
     return p1;
+}
+
+JSValue message_port_new_in(JSContext *realm)
+{
+    return port_new(realm);
+}
+
+void message_port_entangle(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    PortData *da = port_of(a), *db = port_of(b);
+
+    DCHECK(da != NULL && db != NULL && JS_IsUndefined(da->entangled) && JS_IsUndefined(db->entangled),
+           "§9.4.4's entangle was asked of something that is not a pair of free MessagePorts");
+    mp_set(ctx, da, &da->entangled, JS_DupValue(ctx, b));
+    mp_set(ctx, db, &db->entangled, JS_DupValue(ctx, a));
+}
+
+void message_port_set_message_event_target(JSContext *ctx, JSValueConst port, JSValueConst target)
+{
+    PortData *d = port_of(port);
+
+    DCHECK(d != NULL && JS_IsUndefined(d->target) && JS_IsObject(target),
+           "a message event target was set on something that is not a MessagePort, twice, or to a non-object");
+    mp_set(ctx, d, &d->target, JS_DupValue(ctx, target));
+}
+
+void message_port_enable(JSContext *ctx, JSValueConst port)
+{
+    PortData *d = port_of(port);
+
+    DCHECK(d != NULL, "§9.4.4's enable was asked of something that is not a MessagePort");
+    port_enable(ctx, port, d);
+}
+
+JSValue message_port_post_message(JSContext *ctx, JSValueConst port, int argc, JSValueConst *argv)
+{
+    DCHECK(port_of(port) != NULL, "§9.4.4's post message steps were run on something that is not a MessagePort");
+    return js_port_post(ctx, port, argc, argv, 0);
 }
 
 /* §9.4.2's `port1` and `port2` getter steps — "return this's port 1" / "return this's port 2", which are the

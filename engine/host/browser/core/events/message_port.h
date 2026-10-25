@@ -44,4 +44,14 @@ int message_port_count_in_realm(JSContext *realm);
    (owned) and writes port2 (owned) through the out-parameter. */
 JSValue message_port_pair(JSContext *ctx, JSValue *port2);
 
+/* The pieces of §9.4.4 an interface that owns a port uses (HTML §10.2.6.3's Worker and §10.2.1.2's
+   DedicatedWorkerGlobalScope): a new port in `realm`, its queue disabled (owned); the entangle of two free
+   ports; the port's message event target, where its `message` events fire instead of at the port; the enable;
+   and the message port post message steps, given postMessage's converted (message, transfer-or-options). */
+JSValue message_port_new_in(JSContext *realm);
+void message_port_entangle(JSContext *ctx, JSValueConst a, JSValueConst b);
+void message_port_set_message_event_target(JSContext *ctx, JSValueConst port, JSValueConst target);
+void message_port_enable(JSContext *ctx, JSValueConst port);
+JSValue message_port_post_message(JSContext *ctx, JSValueConst port, int argc, JSValueConst *argv);
+
 #endif
