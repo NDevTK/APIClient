@@ -16158,7 +16158,7 @@ TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
         { "rqu-sink-query", sq_tt, "rquParam('src')", SESS_EXPLORE, sq_why, .gate = "rqu-built" },
         { "rqu-refused", rf_tt, "/api/rqu-refused", SESS_EXPLORE, rf_why },
         { "rqu-pinned-reached", pr_tt, "/api/rqu-pinned", SESS_EXPLORE, pr_why },
-        { "rqu-pinned-no-query", pn_tt, "rquParam('page')", SESS_EXPLORE, pn_why, .gate = "rqu-pinned-reached" },
+        { "rqu-pinned-no-query", pn_tt, "rquParam('page')", SESS_EXPLORE, pn_why, .reach = "rqu-pinned-reached" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
