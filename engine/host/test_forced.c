@@ -8481,7 +8481,7 @@ static void fold_row(int *row, const char **why, int ok, const char *what) {
    `-sSTACK_SIZE=8388608`, which is three thousandths of the stack.
    RETIREMENT: this record goes when the caller's room is derived from the table rather than declared beside it,
    because the two are then unable to disagree and there is no relationship left for a reader to re-argue. */
-#define PROBE_MAX 512
+#define PROBE_MAX 1024
 /* AND THE ROOM FOR THE NAMES OF THE ROWS THAT ARE 0, which is what the run's verdict SENTENCE is composed of.
    DERIVED FROM THE TABLE'S OWN CAP rather than typed, for the reason the cap above is not typed against the
    table's current length: a number sized to today's names is a number the next lane to add a longer one spends
