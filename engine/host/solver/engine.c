@@ -450,7 +450,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
                "a request whose address is unknown reached the park without the unknown it stands for — the "
                "producer states both from the one value the page passed (core/fetch/fetch.h)");
         pending_set(e, PEND_ADDRESS_VALUE, JS_DupValue(ctx, req->address_value));
-        pending_set(e, PEND_SAME_ORIGIN, fetch_main_same_origin_unknown(ctx, req->address_value));
+        pending_set(e, PEND_SAME_ORIGIN, fetch_main_same_origin_unknown(ctx, req->address_value, req->address_url));
         pending_set(e, PEND_DECLINED, JS_NewString(ctx, PENDING_DECLINED_UNADDRESSED));
         g_reply_unaddressed++;
         free(up_url);

@@ -28,6 +28,11 @@ bool request_is(JSValueConst v);
    revoking the URL afterwards does not stop that request. Borrowed. */
 JSValueConst request_blob_entry(JSValueConst v);
 
+/* §5.4 step 5's parsed URL of a Request built from an unknown input string: the unknown URL record, or
+   JS_UNDEFINED where the URL is stated. `*pgrounded` is the URL a fetch of it sends where the input's example
+   parsed, else NULL. Both borrowed. */
+JSValueConst request_url_unknown(JSValueConst v, const char **pgrounded);
+
 /* §5.4 step 25 — "if method is not a method or is a forbidden method, throw a TypeError", then "normalize
    method" — as ONE operation, because `fetch(input, init)` performs §5.4 inline and needs the same answer.
    Returns the normalized method, which the caller releases with js_free, or NULL with a TypeError live. */

@@ -271,6 +271,10 @@ typedef struct {
     /* The unknown `url` is the display shape of, read only where `address` is FETCH_ADDRESS_UNKNOWN; fetch()
        states it from the value the page passed. BORROWED. */
     JSValueConst address_value;
+    /* The current URL a Request's constructor already parsed `address_value` from (request_url_unknown), an
+       unknown URL record, or JS_UNDEFINED where the park parses the address itself; fetch() states it, and it is
+       read only beside `address_value`. BORROWED. */
+    JSValueConst address_url;
 } FetchRequest;
 
 /* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to
@@ -502,8 +506,9 @@ JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode);
    the document base URL (url_construct_unknown, the identity a page's `new URL(address, base)` composes), and
    HTML §7.1.1 Origins' same origin between that URL's origin and this agent's tuple origin is the strict
    equality of their serializations. An unknown boolean, or false for an opaque agent origin, which no URL's
-   origin is same origin with. Owned. */
-JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address);
+   origin is same origin with. `current_url` is that parse where a Request's constructor already made it
+   (FetchRequest.address_url), else JS_UNDEFINED. Owned. */
+JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address, JSValueConst current_url);
 /* The reply on the arm where a request to the unknown `address` (display shape `url`) went to another origin
    (fetch_main_same_origin_unknown answered false), under §4.1 step 12's rows for `mode`: JS_UNINITIALIZED for
    `same-origin`, whose only completion is the network error; an opaque reply for `no-cors`; for `cors` a cors

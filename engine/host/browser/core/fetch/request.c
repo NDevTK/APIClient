@@ -46,13 +46,18 @@
 #include "core/realm.h"
 #include "core/streams/readable_stream.h"
 #include "core/url/url.h"
+#include "core/dom/document.h"
 #include "core/url/origin.h"
 
 /* §5.4's request, as the fields the interface reports. The enumerated members are stored as their spec strings
    because that is what the attributes return and what `init` supplies — there is no computation on them yet,
    and inventing an enum would be a second spelling to keep in step with the first. */
 typedef struct {
-    char     *url;             /* the serialized parsed URL */
+    char     *url;             /* the serialized parsed URL; for an unknown one, its example's or its shape */
+    /* §5.4 step 5's parsed URL when the input string is unknown: the URL constructor's derivation over the input
+       and the API base URL (url_construct_unknown), JS_UNDEFINED where the URL is stated. Owned. */
+    JSValue   url_unknown;
+    bool      url_grounded;    /* `url` is the unknown's example parsed, which a fetch of this request sends */
     /* §2.2.5's request, as the record §5.4 steps 10-27 fill — request.h, and the ONE place those steps run. */
     RequestRecord rec;
     BodyState body;
@@ -86,6 +91,7 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, d->headers);
     JS_FreeValueRT(rt, d->blob_entry);
     JS_FreeValueRT(rt, d->signal);
+    JS_FreeValueRT(rt, d->url_unknown);
     js_free_rt(rt, d->url);
     request_record_free(rt, &d->rec);
     body_state_free(rt, &d->body);
@@ -101,6 +107,7 @@ static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_f
         JS_MarkValue(rt, d->headers, mark_func);
         JS_MarkValue(rt, d->blob_entry, mark_func);
         JS_MarkValue(rt, d->signal, mark_func);
+        JS_MarkValue(rt, d->url_unknown, mark_func);
         /* …AND §2.2.5's RECORD, WHICH IS NINE MORE OWNED VALUES SINCE THEY STOPPED BEING `char *`.
            IT IS A NO-OP TODAY AND IT IS NOT DECORATION, AND BOTH HALVES OF THAT HAVE TO BE SAID OR IT READS AS
            ONE OR THE OTHER. `JS_MarkValue` reaches `mark_func` for JS_TAG_OBJECT and JS_TAG_FUNCTION_BYTECODE
@@ -249,6 +256,15 @@ JSValueConst request_blob_entry(JSValueConst v)
     return d ? d->blob_entry : JS_UNDEFINED;
 }
 
+JSValueConst request_url_unknown(JSValueConst v, const char **pgrounded)
+{
+    RequestData *d = g_request_class ? JS_GetOpaque(v, g_request_class) : NULL;
+
+    DCHECK(d != NULL, "a Request's unknown URL was asked of a value that is not a Request");
+    *pgrounded = d && d->url_grounded ? d->url : NULL;
+    return d ? d->url_unknown : JS_UNDEFINED;
+}
+
 /* §2.2.1's "normalize a method": UPPERCASE for the six HTTP names, and byte-for-byte for anything else — `patch`
    stays lowercase while `post` becomes `POST`, which is the difference a server sees. */
 static char *method_normalize(JSContext *ctx, const char *m)
@@ -300,6 +316,55 @@ int request_parse_input_url(JSContext *ctx, const char *in, size_t n, UrlRecord 
     return 0;
 }
 
+/* §5.4 step 5 over an input string that is unknown: the parsed URL is the URL constructor's derivation over the
+   input and the API base URL (url_construct_unknown), so a page's own `new URL(input, base)` and this request's
+   URL are one value. The input's example, where it parses with no credentials (steps 5.1-5.3), is the URL a
+   fetch of this request sends, as fetch() grounds its own address; otherwise no world is refused with step 5's
+   TypeError and `url` holds the unknown's shape for display. 0, or -1 with a throw live. */
+static int request_url_unknown_parse(JSContext *ctx, JSValueConst input, RequestData *d)
+{
+    const char *base = document_base_url(ctx), *sh;
+    JSValueConst argv[2];
+    JSValue base_v = JS_UNDEFINED, ex;
+
+    argv[0] = input;
+    if (base) {
+        base_v = JS_NewString(ctx, base);
+        if (JS_IsException(base_v)) return -1;
+        argv[1] = base_v;
+    }
+    d->url_unknown = url_construct_unknown(ctx, base ? 2 : 1, argv);
+    JS_FreeValue(ctx, base_v);
+    DCHECK(concolic_is(d->url_unknown), "the URL constructor's derivation over an unknown input answered none");
+    ex = concolic_example(ctx, input);
+    if (JS_IsString(ex)) {
+        UrlRecord rec;
+        size_t n = 0;
+        const char *in = JS_ToCStringLen(ctx, &n, ex);
+
+        CHECK(in != NULL, "request: OOM reading an unknown input's example for §5.4 step 5");
+        url_record_init(&rec);
+        if (fetch_parse_url(ctx, &rec, in, n) && !(rec.username && *rec.username) &&
+            !(rec.password && *rec.password)) {
+            char *ser = url_serialize(&rec, false);
+
+            CHECK(ser != NULL, "request: OOM serializing an unknown input's example");
+            d->url = js_strdup(ctx, ser);
+            free(ser);
+            d->url_grounded = true;
+        }
+        url_record_free(&rec);
+        JS_FreeCString(ctx, in);
+    }
+    JS_FreeValue(ctx, ex);
+    if (!d->url_grounded) {
+        sh = concolic_shape_c(input);
+        DCHECK(sh != NULL, "an unknown Request input has no display shape");
+        d->url = js_strdup(ctx, sh);
+    }
+    return d->url ? 0 : -1;
+}
+
 /* §5.4 STEP 25 AS ONE OPERATION, because two call sites perform it: this constructor, and `fetch(input, init)`,
    which runs §5.4 inline over an init it never turns into a Request. fetch() had none of it — no token test, no
    forbidden-method refusal and no normalization — so `{method:"connect"}` went out and `{method:"post"}` was
@@ -329,7 +394,9 @@ static JSValue js_request_get(JSContext *ctx, JSValueConst this_val, int magic)
        — which is the same thing `headers` below has always done for the same reason, and is what makes
        `request.method` answer the unknown itself the day §5.4 step 25 can store one. */
     case REQ_METHOD:          return JS_DupValue(ctx, d->rec.method);
-    case REQ_URL:             return JS_NewString(ctx, d->url);
+    /* An unknown URL's serialization is its `href`, the member read a page's `new URL(x, base).href` performs. */
+    case REQ_URL:             return JS_IsUndefined(d->url_unknown) ? JS_NewString(ctx, d->url)
+                                                                    : JS_GetPropertyStr(ctx, d->url_unknown, "href");
     case REQ_HEADERS:         return JS_DupValue(ctx, d->headers);   /* [SameObject] */
     case REQ_DESTINATION:     return JS_DupValue(ctx, d->rec.destination);
     case REQ_REFERRER:        return JS_DupValue(ctx, d->rec.referrer);
@@ -384,6 +451,7 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
     if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     c->headers = JS_UNDEFINED;
     c->signal  = JS_UNDEFINED;   /* placed before the first step that can fail — see the constructor's */
+    c->url_unknown = JS_UNDEFINED;
     /* …AND §2.2.5's RECORD, FOR THE SAME REASON AND ONE MORE: `js_mallocz` leaves its nine slots holding the
        INTEGER 0, not JS_UNDEFINED, and the `js_strdup` below can fail into the finalizer. A free over integer
        0 is harmless, so this is not what makes the failure path safe — it is what makes the record's STATED
@@ -394,6 +462,8 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
     /* §5.4 clone copies the request, and its blob URL ENTRY is part of what it is — a clone of a request built
        from a since-revoked URL fetches exactly as the original does. */
     c->blob_entry      = JS_DupValue(ctx, d->blob_entry);
+    c->url_unknown     = JS_DupValue(ctx, d->url_unknown);
+    c->url_grounded    = d->url_grounded;
     c->url             = js_strdup(ctx, d->url);
     /* §5.4 clone(): every field of the request comes with it, through the one copy of the record — a field
        added to §2.2.5's record is then carried here without this site being touched, which is the whole
@@ -1161,6 +1231,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            what the record holds, so a field handed over late is one the teardown reads uninitialised. The
            signal is BUILT at the end of this stage, where §5.4 builds it. */
         d->signal = JS_UNDEFINED;
+        d->url_unknown = JS_UNDEFINED;
         JS_SetOpaque(obj, d);
         s->result = obj;
 
@@ -1177,6 +1248,13 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            the page never made. */
         if (from_request) {
             d->url = js_strdup(ctx, from_request);
+            d->url_unknown = JS_DupValue(ctx, from->url_unknown);
+            d->url_grounded = from->url_grounded;
+        } else if (concolic_is(input)) {
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            if (request_url_unknown_parse(ctx, input, d) < 0)
+                return -1;
         } else {
             UrlRecord rec;
             size_t n = 0;

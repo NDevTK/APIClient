@@ -1174,6 +1174,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
 #include "fixture/fileparsetext.h"
+#include "fixture/requestunk.h"
 #include "fixture/uspiso.h"
 #include "fixture/boundpark.h"
 #include "fixture/bytesimage.h"
@@ -1673,6 +1674,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
     { "fileparse-text", HTML_FILEPARSE_TEXT },
+    { "requestunk", HTML_REQUESTUNK },
     { "uspiso", HTML_USPISO },
     { "boundpark", HTML_BOUNDPARK },
     { "bytesimage", HTML_BYTESIMAGE },
@@ -16127,6 +16129,40 @@ TF_UNIT void probes_fileparse_text(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `requestunk` document (fixture/requestunk.h): the wrapped request to the address the query
+   names reaches new Function as attacker input, and the same-origin-pinned one does not. */
+TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
+    char open_src[256] = "", pinned_src[256] = "";
+    int has_open = s_rooted_source(js, "eval", "src=", open_src, sizeof open_src);
+    int has_pinned = s_rooted_source(js, "eval", "page=", pinned_src, sizeof pinned_src);
+    const char *bt_why = NULL; int bt_tt = 1;
+    fold_row(&bt_tt, &bt_why, !!strstr(js, "\"/api/rqu-built\""),
+             "NOT REACHED: there is no /api/rqu-built record, so new Request() over the query's address did not "
+             "return");
+    const char *sq_why = NULL; int sq_tt = 1;
+    fold_row(&sq_tt, &sq_why, has_open,
+             "no eval @S record carries a source rooted in the query's `src=`, so the reply to a Request whose "
+             "address the attacker chooses did not reach new Function as attacker input");
+    const char *rf_why = NULL; int rf_tt = 1;
+    fold_row(&rf_tt, &rf_why, !!strstr(js, "\"/api/rqu-refused\""),
+             "NOT REACHED: there is no /api/rqu-refused record, so the origin check over `page=` did not fork");
+    const char *pr_why = NULL; int pr_tt = 1;
+    fold_row(&pr_tt, &pr_why, !!strstr(js, "\"/api/rqu-pinned\""),
+             "NOT REACHED: there is no /api/rqu-pinned record, so the same-origin statement never compiled a reply");
+    const char *pn_why = NULL; int pn_tt = 1;
+    fold_row(&pn_tt, &pn_why, !has_pinned,
+             "an eval @S record carries a source rooted in the query's `page=`, but that Request only reaches "
+             "this document's own origin, whose bytes no attacker writes");
+    const Probe rows[] = {
+        { "rqu-built", bt_tt, "/api/rqu-built", SESS_EXPLORE, bt_why },
+        { "rqu-sink-query", sq_tt, "rquParam('src')", SESS_EXPLORE, sq_why, .gate = "rqu-built" },
+        { "rqu-refused", rf_tt, "/api/rqu-refused", SESS_EXPLORE, rf_why },
+        { "rqu-pinned-reached", pr_tt, "/api/rqu-pinned", SESS_EXPLORE, pr_why },
+        { "rqu-pinned-no-query", pn_tt, "rquParam('page')", SESS_EXPLORE, pn_why, .gate = "rqu-pinned-reached" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `agenfork` document (fixture/agenfork.h). */
 TF_UNIT void probes_agenfork(const char *js, Probe *tab, int *n) {
     /* Both arms of a branch inside an async generator body on the chain and inside its parameter binding, and
@@ -20184,6 +20220,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
     probes_fileparse_text(js, probes, &np);
+    probes_requestunk(js, probes, &np);
     probes_uspiso(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_bytesimage(js, probes, &np);

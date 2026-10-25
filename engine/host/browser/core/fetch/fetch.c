@@ -1298,7 +1298,7 @@ JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
     return fetch_reply_forced(ctx, url, type, body);
 }
 
-JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address)
+JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address, JSValueConst current_url)
 {
     const Origin *self = origin_agent();
     const char *base = document_base_url(ctx);
@@ -1307,17 +1307,23 @@ JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address)
 
     DCHECK(concolic_is(address), "the same-origin test over an unknown address was asked of a known one — a "
                                  "known address is parsed and compared (fetch_reply_unknown)");
+    DCHECK(JS_IsUndefined(current_url) || concolic_is(current_url),
+           "a request's already-parsed current URL is neither absent nor an unknown URL record");
     /* §7.1.1 step 1: an opaque origin is same origin only with itself, and a URL's origin is a new one. */
     if (origin_is_opaque(self))
         return JS_FALSE;
-    argv[0] = address;
-    if (base) {
-        base_v = JS_NewString(ctx, base);
-        CHECK(!JS_IsException(base_v), "fetch: OOM spelling the document base URL");
-        argv[1] = base_v;
+    if (!JS_IsUndefined(current_url)) {
+        current = JS_DupValue(ctx, current_url);
+    } else {
+        argv[0] = address;
+        if (base) {
+            base_v = JS_NewString(ctx, base);
+            CHECK(!JS_IsException(base_v), "fetch: OOM spelling the document base URL");
+            argv[1] = base_v;
+        }
+        current = url_construct_unknown(ctx, base ? 2 : 1, argv);
+        JS_FreeValue(ctx, base_v);
     }
-    current = url_construct_unknown(ctx, base ? 2 : 1, argv);
-    JS_FreeValue(ctx, base_v);
     /* The member read the page's `.origin` performs (concolic_exotic_get), so the two are one value. */
     origin = JS_GetPropertyStr(ctx, current, "origin");
     JS_FreeValue(ctx, current);
@@ -1832,6 +1838,13 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
             req.referrer_policy = m_refpol;
             req.address = address;
             req.address_value = url;
+            if (request_is(input)) {
+                const char *grounded;
+
+                req.address_url = request_url_unknown(input, &grounded);
+            } else {
+                req.address_url = JS_UNDEFINED;
+            }
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;
@@ -2111,6 +2124,20 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                 JS_FreeCString(ctx, in);
             }
             JS_FreeValue(ctx, ex);
+        }
+        /* A Request built from an unknown input grounded its URL on the input's example the same way, at its own
+           §5.4 step 5 (request_url_unknown). */
+        if (request_is(s->input) && concolic_is(s->url)) {
+            const char *grounded = NULL;
+
+            request_url_unknown(s->input, &grounded);
+            if (grounded) {
+                JSValue v = JS_NewString(ctx, grounded);
+
+                CHECK(!JS_IsException(v), "OOM holding a Request's grounded URL for Fetch §5.4 step 6");
+                JS_FreeValue(ctx, s->req_url);
+                s->req_url = v;
+            }
         }
         if (!request_is(s->input) && !concolic_is(s->url)) {
             UrlRecord parsed;
