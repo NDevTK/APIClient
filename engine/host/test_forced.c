@@ -32374,7 +32374,8 @@ int main(int argc, char **argv) {
     html_parse_document(dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     {
-        /* The fixture built this document, so the navigable's name is the initial "" and is known. */
+        /* The navigable's name is NULL, unstated, as main.c roots a page the browser navigated to: each document
+           stands in for a page served at TF_TOP_URL, whose name whoever navigated or embedded it set. */
         /* §7.5.1's OPENER POLICY ROW — §7.1.3's initial value, for the same reason the agent's is: this
            fixture's document came from no response. */
         /* AND §7.3.1.3's PARENT IS `u` — core/frame/remote_object.h's undefined, which is the POSITIVE
@@ -32392,7 +32393,7 @@ int main(int argc, char **argv) {
         /* AND AN EMPTY §7.1.5 CREATION SANDBOXING FLAG SET, from the same fact one link along: a top-level
            traversable has no embedder element, so §7.1.5 answers from its POPUP sandboxing flag set, which
            begins empty and which only §7.3.1.7's rules for choosing a navigable ever fill. */
-        root_proxy = navigable_root(ctx, world_local_doc(), "", OPENER_POLICY_UNSAFE_NONE, "u",
+        root_proxy = navigable_root(ctx, world_local_doc(), NULL, OPENER_POLICY_UNSAFE_NONE, "u",
                                     serialized_policy_container_none(), &root_embedder, 0);
         embedder_policy_free(&root_embedder);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
