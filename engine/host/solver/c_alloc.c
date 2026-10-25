@@ -87,8 +87,10 @@ extern void *__libc_memalign(size_t align, size_t n);
    blocks, headers included, since a heap of small blocks spends a word on each. */
 static size_t g_heap_chunks, g_mmap_chunks;
 
-/* The open span (c_alloc.h): live bytes at its open, the most it has held since, and the largest refused request.
-   Read and written on the engine's thread only, as every span is opened and taken there. */
+/* The open span (c_alloc.h): the footprint at its open, the most it has reached since, and the largest refused
+   request. In footprint, not live bytes, because a block freed inside the span can leave a hole the next, larger
+   block does not fit, so the address space a span takes grows faster than what it holds. Read and written on the
+   engine's thread only, as every span is opened and taken there. */
 static int    g_span_open;
 static size_t g_span_base, g_span_peak, g_span_refused;
 
@@ -143,8 +145,8 @@ static void c_alloc_add(void *p)
     c = c_alloc_chunk(p, &total);
     __atomic_add_fetch(total, c, __ATOMIC_RELAXED);
     if (g_span_open) {
-        size_t live = c_alloc_live();
-        if (live > g_span_peak) g_span_peak = live;
+        size_t fp = c_alloc_footprint();
+        if (fp > g_span_peak) g_span_peak = fp;
     }
 }
 
@@ -238,7 +240,7 @@ void c_alloc_span_open(void)
     DCHECK(!g_span_open, "an allocation span was opened inside another — the inner open would reset the outer's "
                          "base and its caller would read a peak measured from the wrong live bytes");
     g_span_open = 1;
-    g_span_base = g_span_peak = c_alloc_live();
+    g_span_base = g_span_peak = c_alloc_footprint();
     g_span_refused = 0;
 }
 

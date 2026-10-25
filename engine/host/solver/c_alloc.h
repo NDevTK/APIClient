@@ -24,9 +24,9 @@ size_t c_alloc_live(void);
    plus the mmapped chunks (checked against mallinfo2 per census). */
 size_t c_alloc_footprint(void);
 
-/* A span of allocations its caller measures: c_alloc_span_take answers the most live bytes the span held above the
-   live bytes at c_alloc_span_open, plus the largest request refused inside it — what the span asked beyond what was
-   already live, every entry of the family counted. One span at a time (asserted). Under a sanitizer, which owns
+/* A span of allocations its caller measures: c_alloc_span_take answers how far the footprint rose above its value
+   at c_alloc_span_open, plus the largest request refused inside it — the address space the span asked for beyond
+   what the allocator already held, every entry of the family counted. One span at a time (asserted). Under a sanitizer, which owns
    malloc, the span is not measured and c_alloc_span_take is a DFAIL. */
 void   c_alloc_span_open(void);
 size_t c_alloc_span_take(void);
