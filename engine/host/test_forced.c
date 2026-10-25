@@ -1176,6 +1176,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparseslice.h"
 #include "fixture/fileparsesub.h"
 #include "fixture/spaniso.h"
+#include "fixture/fileparseset.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1681,6 +1682,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-slice", HTML_FILEPARSE_SLICE },
     { "fileparse-sub", HTML_FILEPARSE_SUB },
     { "spaniso", HTML_SPANISO },
+    { "fileparse-set", HTML_FILEPARSE_SET },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16246,6 +16248,41 @@ TF_UNIT void probes_fileparse_sub(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fileparse-set` document (fixture/fileparseset.h): the copy set from the reply reaches new
+   Function rooted in the seed's reply and in location.search, its byte past the seed's length is unknown, and a
+   4-byte target fits on the arm where the reply is that short. */
+TF_UNIT void probes_fileparse_set(const char *js, Probe *tab, int *n) {
+    char seed[192] = "", query[192] = "";
+    int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
+    int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, !!strstr(js, "\"/api/fpz-parsed\""),
+             "NOT REACHED: there is no /api/fpz-parsed record, so no arm decoded the set copy");
+    const char *x_why = NULL; int x_tt = 1;
+    fold_row(&x_tt, &x_why, !!strstr(js, "\"/api/fpz-past\""),
+             "no /api/fpz-past record: the copy's byte past the seed's length read as the target's own 0, so set "
+             "copied only the source's example extent");
+    const char *f_why = NULL; int f_tt = 1;
+    fold_row(&f_tt, &f_why, !!strstr(js, "\"/api/fpz-fit\""),
+             "no /api/fpz-fit record: setting the reply into a 4-byte view threw on every arm, so step 14's range "
+             "test was decided on the example length");
+    const char *sf_why = NULL; int sf_tt = 1;
+    fold_row(&sf_tt, &sf_why, has_seed,
+             "no eval @S record carries a source rooted in the seed file's reply, so set lost the bytes' provenance");
+    const char *sq_why = NULL; int sq_tt = 1;
+    fold_row(&sq_tt, &sq_why, has_query,
+             "no eval @S record carries a source rooted in location.search, so the set copy of the reply to the "
+             "address the attacker names stopped at that reply's example");
+    const Probe rows[] = {
+        { "fpz-parsed", p_tt, "/api/fpz-parsed", SESS_EXPLORE, p_why },
+        { "fpz-past", x_tt, "/api/fpz-past", SESS_EXPLORE, x_why },
+        { "fpz-fit", f_tt, "/api/fpz-fit", SESS_EXPLORE, f_why },
+        { "fpz-sink-file", sf_tt, "function fpzParse", SESS_EXPLORE, sf_why, .gate = "fpz-parsed" },
+        { "fpz-sink-query", sq_tt, "out.set(src)", SESS_EXPLORE, sq_why, .gate = "fpz-parsed" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20514,6 +20551,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_slice(js, probes, &np);
     probes_fileparse_sub(js, probes, &np);
     probes_spaniso(js, probes, &np);
+    probes_fileparse_set(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
