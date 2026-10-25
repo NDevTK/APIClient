@@ -124374,13 +124374,19 @@ int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPie
 {
     JSArrayBuffer *abuf = js_buffer_source_buffer(obj);
     JSObject *p = JS_VALUE_GET_OBJ(obj), *bufobj = p;
+    JSBufferUnknownPiece *pieces, *g;
+    JSValue extent, ops[3], ex;
     uint32_t lo = 0, hi;
+    int n;
 
     *ppieces = NULL;
-    if (abuf->n_span == 0 || abuf->detached || abuf->data == NULL)
+    if (abuf->detached)
         return 0;
     if (p->class_id == JS_CLASS_ARRAY_BUFFER || p->class_id == JS_CLASS_SHARED_ARRAY_BUFFER) {
         hi = (uint32_t)abuf->byte_length;
+        extent = JS_IsUninitialized(abuf->length_unknown) ? JS_UNINITIALIZED
+               : js_ab_length_derive(ctx, abuf, "25.1.6.1 get ArrayBuffer.prototype.byteLength", 0, 0,
+                                     abuf->byte_length);
     } else {
         DCHECK(p->class_id == JS_CLASS_DATAVIEW ? !dataview_is_oob(p) : !typed_array_is_oob(p),
                "a buffer source's unknown bytes were asked of an out-of-bounds view — Web IDL §3.2.26's copy "
@@ -124388,8 +124394,35 @@ int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPie
         bufobj = p->u.typed_array->buffer;
         lo = p->u.typed_array->offset;
         hi = lo + (uint32_t)js_buffer_view_byte_length(p);
+        extent = js_dup(p->u.typed_array->length_unknown);
     }
-    return js_ab_unknown_pieces(ctx, abuf, bufobj, lo, hi, ppieces);
+    n = abuf->data == NULL ? 0 : js_ab_unknown_pieces(ctx, abuf, bufobj, lo, hi, ppieces);
+    if (JS_IsUninitialized(extent))
+        return n;
+    /* The window's length is an unknown, so the bytes past its stored example are a run too: the tail, derived
+       from the buffer's unknown at the window's end and over that length, as an element read past the example
+       is. It holds no bytes in the block; they are the example's exactly when the length has an example. */
+    DCHECK(!JS_IsUninitialized(abuf->length_unknown), "a window's length is unknown over a stated buffer length");
+    pieces = *ppieces;
+    g = js_realloc(ctx, pieces, sizeof(*pieces) * (size_t)(n + 1));
+    CHECK(g != NULL, "OOM listing the unknown tail of a buffer source");
+    pieces = g;
+    ops[0] = abuf->length_unknown;
+    ops[1] = JS_NewInt64(ctx, (int64_t)hi);
+    ops[2] = extent;
+    pieces[n].offset = hi - lo;
+    pieces[n].length = 0;
+    pieces[n].codec = NULL;
+    pieces[n].image_pos = 0;
+    pieces[n].unknown = g_concolic.derived(ctx, "the bytes of a buffer source past its example", ops, 3,
+                                           JS_UNDEFINED);
+    DCHECK(!JS_IsUninitialized(pieces[n].unknown), "a buffer source's unknown tail derived no unknown");
+    ex = js_concolic_operand(ctx, extent);
+    pieces[n].example = js_concolic_held(extent) && JS_IsNumber(ex);
+    JS_FreeValue(ctx, ex);
+    JS_FreeValue(ctx, extent);
+    *ppieces = pieces;
+    return n + 1;
 }
 
 void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *pieces, int n)

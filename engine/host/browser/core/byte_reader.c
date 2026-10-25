@@ -476,11 +476,11 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
    with the example's length as their example, so a length gate forks.
    A DataView read forks its in-range test on that length (js_dv_get_step), and an element read past the example
    is an unknown whose example is undefined (js_ta_get_past_example).
-   An array iterator's done test forks per iteration on it (js_array_iter_next_step).
-   NAMED RESIDUAL — BULK OPERATIONS USE THE EXAMPLE'S COUNT. What is not covered: the copying methods (slice,
-   set, subarray, a decoder's read) stop at the example's extent. What the next diff builds: each copy's extent
-   as the unknown length, its bytes past the example derived as an element read past it is. How its absence
-   shows: a decoded reply ends where the example ends, in every world. */
+   An array iterator's done test forks per iteration on it (js_array_iter_next_step), and a consumer reading
+   through JS_BufferSourceUnknowns (a decoder, a digest, a body) is handed the bytes past the example as a run. */
+/* Named residual. Not covered: slice, set and subarray copy only the example's extent. Next diff builds: each
+   copy's extent as the unknown length, its bytes past the example derived as an element read past it is.
+   Absence shows as: a copied reply's length is the example's in every world. */
 static const char BYTE_READER_IMAGE[] = "the byte sequence whose UTF-8 decode text() reads";
 
 /* The copy, recorded as an image of text()'s unknown when these bytes have one. */

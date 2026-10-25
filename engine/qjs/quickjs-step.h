@@ -1241,8 +1241,10 @@ JS_EXTERN bool JS_IsDetachedBufferSource(JSValueConst obj);
 /* The unknown bytes of a buffer source's window, as maximal runs each described by one span, in byte order;
    bytes in no run are concrete. `offset` is window-relative. `unknown` is owned; for a codec image (`codec`
    set) it is the unknown the codec ran over and `image_pos` is the run's first position in that output.
-   `example` says the run's bytes in the block are its unknown's example. Requires a brand-tested buffer
-   source that is not out of bounds. Returns the count; free with JS_FreeBufferUnknowns. */
+   `example` says the run's bytes in the block are its unknown's example. A window whose length is an unknown
+   ends with one more run, of length 0 at the window's end: the bytes past its stored example, whose `example`
+   says that length has one. Requires a brand-tested buffer source that is not out of bounds. Returns the
+   count; free with JS_FreeBufferUnknowns. */
 typedef struct JSBufferUnknownPiece {
     uint32_t offset, length;
     JSValue unknown;
