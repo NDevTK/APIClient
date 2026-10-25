@@ -186,6 +186,13 @@ void *realloc(void *p, size_t n)
 {
     void *q;
     if (!p) return malloc(n);
+    /* While the call is in flight both blocks may be mapped (glibc's malloc-copy-free fallback), so an open span
+       takes the footprint plus the new size as its peak first: exact for that fallback, an upper bound for an
+       in-place grow or an mremap. */
+    if (g_span_open && n) {
+        size_t fp = c_alloc_footprint() + n;
+        if (fp > g_span_peak) g_span_peak = fp;
+    }
     c_alloc_sub(p);
     q = C_ALLOC_REALLOC(p, n);
     /* A failed growth leaves `p` standing, so it is counted again; a zero-size realloc that freed it is not. */
