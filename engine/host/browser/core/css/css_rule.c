@@ -4450,7 +4450,15 @@ typedef struct {
     const CssLayerNode **layer;
     uint32_t             n, cap;
     CssLayerOrder       *order;
+    /* CSS Properties and Values API 1 §3's registrations the walk met, in document order, owned; a scratch
+       emitter records none, since what it writes is discarded */
+    CssPropertyRegistrationEntry *regs;
+    uint32_t             nregs, regs_cap;
+    bool                 scratch;
 } CascadeEmit;
+
+static void cascade_emit_registration(JSContext *ctx, CascadeEmit *e, const CssRuleData *r);
+static void cascade_emit_registrations_free(CascadeEmit *e);
 
 /* The memo of `@media` answers the walk's current run reads (core/css/media_query.h): set for the run's length
    and cleared at every return, so it is never kept across a rest. */
@@ -4512,6 +4520,7 @@ static CascadeFrame *cascade_frame_new(JSContext *ctx, JSValue kids, CascadeEmit
     f->owns_scratch = scratch;
     if (scratch) {
         f->scratch.order = e->order;
+        f->scratch.scratch = true;
         f->e = &f->scratch;
     } else {
         f->e = e;
@@ -4533,6 +4542,7 @@ static void cascade_frame_free(JSContext *ctx, CascadeFrame *f)
     if (f->owns_scratch) {
         free(f->scratch.out.s);
         free(f->scratch.layer);
+        cascade_emit_registrations_free(&f->scratch);
     }
     free((char *)f->own.sel);
     free(f);
@@ -4721,9 +4731,14 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        CSS Properties and Values API 1 §3.2's and CSS Properties and Values API 1 §3.3's descriptors and no property of
        any element. It has no selector, so it matches nothing and cannot; what it changes is how a custom property's
        value is PARSED at computed-value time (CSS Properties and Values API 1 §2.2 through
-       CSS Properties and Values API 1 §2.4), which is a step below the cascade and reads the registration rather than
-       this rule list. */
-    if (r->type == RULE_TYPE_PROPERTY) return true;
+       CSS Properties and Values API 1 §2.4), which is a step below the cascade. That step reads the registrations
+       this walk collects for the sheet set: under the same gates as the rules it emits, and none under a scratch
+       emitter (`@container`, `@starting-style`), whose conditions hold per element and a registration is per
+       document. */
+    if (r->type == RULE_TYPE_PROPERTY) {
+        if (!e->scratch) cascade_emit_registration(ctx, e, r);
+        return true;
+    }
     /* Nor does an `@font-feature-values`: CSS Fonts 4 §6.9 "Defining font specific alternates: the
        @font-feature-values rule" names feature values for font families, and has no selector. Those values reach
        an element only through §6.8 "Alternates and swashes: the font-variant-alternates property", at font
@@ -4925,9 +4940,13 @@ CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk 
     out->text = w->e.out.s;
     out->layer = w->e.layer;
     out->n = w->e.n;
+    out->regs = w->e.regs;
+    out->nregs = w->e.nregs;
     w->e.out.s = NULL;
     w->e.layer = NULL;
     w->e.n = 0;
+    w->e.regs = NULL;
+    w->e.nregs = w->e.regs_cap = 0;
     DCHECK(out->n == 0 || out->text != NULL,
            "the author cascade emitted rules and no text to hold them — the two are written by one call per "
            "rule and cannot disagree about whether a rule went in");
@@ -4946,17 +4965,24 @@ void css_rule_cascade_walk_free(JSContext *ctx, CssRuleCascadeWalk *w)
     }
     free(w->e.out.s);
     free(w->e.layer);
+    cascade_emit_registrations_free(&w->e);
     free(w);
 }
 
 void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s)
 {
+    uint32_t i;
+
     DCHECK(s != NULL, "the author cascade's view of a sheet was freed through nothing");
     free(s->text);
     free((void *)s->layer);
+    for (i = 0; i < s->nregs; i++) css_property_registration_entry_free(&s->regs[i]);
+    free(s->regs);
     s->text = NULL;
     s->layer = NULL;
     s->n = 0;
+    s->regs = NULL;
+    s->nregs = 0;
 }
 
 /* ---- CSS Properties and Values API 1 §2.1's `@property` half ------------------------------------------------ */
@@ -4974,98 +5000,43 @@ static char *rule_field_cstr(JSContext *ctx, JSValueConst v)
     return out;
 }
 
-/* Whether the `@property` record `r` represents a registration for `name` (§3: one per name in its prelude). */
-static bool property_rule_names(JSContext *ctx, const CssRuleData *r, const char *name)
+/* `r`'s registrations, one per name in its prelude (§3), appended to `e`'s in document order. */
+static void cascade_emit_registration(JSContext *ctx, CascadeEmit *e, const CssRuleData *r)
 {
     uint32_t i, n = array_len(ctx, r->property_names);
-    bool hit = false;
 
-    for (i = 0; i < n && !hit; i++) {
+    DCHECK(JS_IsString(r->property_syntax) && JS_IsBool(r->property_inherits),
+           "an `@property` record lacks the syntax or inherits field its constructor always writes");
+    for (i = 0; i < n; i++) {
         JSValue v = JS_GetPropertyUint32(ctx, r->property_names, i);
-        const char *c = JS_ToCString(ctx, v);
+        CssPropertyRegistrationEntry *x;
 
-        CHECK(c != NULL, "cssom: OOM reading an `@property` rule's name");
-        hit = strcmp(c, name) == 0;
-        JS_FreeCString(ctx, c);
+        if (e->nregs == e->regs_cap) {
+            uint32_t cap = e->regs_cap ? e->regs_cap * 2 : 8;
+            CssPropertyRegistrationEntry *grown = realloc(e->regs, (size_t)cap * sizeof *grown);
+
+            CHECK(grown != NULL, "cssom: OOM recording a sheet's `@property` registrations");
+            e->regs = grown;
+            e->regs_cap = cap;
+        }
+        x = &e->regs[e->nregs++];
+        x->name = rule_field_cstr(ctx, v);
+        x->reg.syntax = rule_field_cstr(ctx, r->property_syntax);
+        x->reg.inherits = JS_ToBool(ctx, r->property_inherits);
+        x->reg.initial_value = JS_IsNull(r->property_initial_value)
+                                   ? NULL : rule_field_cstr(ctx, r->property_initial_value);
         JS_FreeValue(ctx, v);
     }
-    return hit;
 }
 
-/* One rule list being walked: its Array, the next index and its length. */
-typedef struct {
-    JSValue  kids;
-    uint32_t i, n;
-} RegistrationFrame;
-
-void css_rule_property_registration(JSContext *ctx, JSValueConst list, const char *name,
-                                    CssPropertyRegistration *out, bool *found)
+static void cascade_emit_registrations_free(CascadeEmit *e)
 {
-    RegistrationFrame *v;
-    size_t depth = 1, cap = 8;
+    uint32_t i;
 
-    DCHECK(name != NULL && name[0] == '-' && name[1] == '-',
-           "a registration was looked up for a name that is not a <custom-property-name>");
-    DCHECK(JS_IsArray(list), "a registration was looked up in something that is not a rule list");
-    v = malloc(cap * sizeof *v);
-    CHECK(v != NULL, "cssom: OOM walking a sheet's rules for `@property` registrations");
-    v[0].kids = JS_DupValue(ctx, list);
-    v[0].i = 0;
-    v[0].n = array_len(ctx, list);
-    while (depth > 0) {
-        RegistrationFrame *f = &v[depth - 1];
-        JSValue rule, kids = JS_UNDEFINED;
-        CssRuleData *r;
-
-        if (f->i == f->n) {
-            JS_FreeValue(ctx, f->kids);
-            depth--;
-            continue;
-        }
-        rule = JS_GetPropertyUint32(ctx, f->kids, f->i++);
-        r = rule_of(rule);
-        DCHECK(r != NULL, "a CSS rule list holds something that is not a CSS rule");
-        if (r->type == RULE_TYPE_PROPERTY && property_rule_names(ctx, r, name)) {
-            DCHECK(JS_IsString(r->property_syntax) && JS_IsBool(r->property_inherits),
-                   "an `@property` record lacks the syntax or inherits field its constructor always writes");
-            if (*found) css_property_registration_free(out);
-            out->syntax = rule_field_cstr(ctx, r->property_syntax);
-            out->inherits = JS_ToBool(ctx, r->property_inherits);
-            out->initial_value = JS_IsNull(r->property_initial_value)
-                                     ? NULL : rule_field_cstr(ctx, r->property_initial_value);
-            *found = true;
-        } else if (r->type == RULE_TYPE_MEDIA) {
-            /* CSS Conditional 3 §2: a group rule's rules apply only while its condition is true. */
-            MediaQuerySet *set = media_list_query_set(ctx, r->media);
-
-            if (media_query_matches_now(ctx, set)) kids = rule_child_rules(ctx, rule);
-            media_query_free(set);
-        } else if (r->type == RULE_TYPE_SUPPORTS) {
-            if (rule_supports_matches(ctx, r)) kids = rule_child_rules(ctx, rule);
-        } else if (r->type == RULE_TYPE_LAYER_BLOCK) {
-            /* CSS Cascade 5 §6.4.4.1: processed as a conditional group rule with a true condition. */
-            kids = rule_child_rules(ctx, rule);
-        }
-        /* NAMED RESIDUAL: an `@property` inside `@container` or `@starting-style` is not read. Their
-           conditions hold per element or per style change, and a registration is per document. The next
-           diff decides those from CSS Conditional 5 and CSS Transitions 2. Its absence shows as such a
-           property reading as unregistered. */
-        JS_FreeValue(ctx, rule);
-        if (JS_IsUndefined(kids)) continue;
-        if (depth == cap) {
-            RegistrationFrame *grown;
-
-            cap *= 2;
-            grown = realloc(v, cap * sizeof *grown);
-            CHECK(grown != NULL, "cssom: OOM walking a sheet's nested rules for `@property` registrations");
-            v = grown;
-        }
-        v[depth].kids = kids;
-        v[depth].i = 0;
-        v[depth].n = array_len(ctx, kids);
-        depth++;
-    }
-    free(v);
+    for (i = 0; i < e->nregs; i++) css_property_registration_entry_free(&e->regs[i]);
+    free(e->regs);
+    e->regs = NULL;
+    e->nregs = e->regs_cap = 0;
 }
 
 /* ---- the interfaces -------------------------------------------------------------------------------------- */

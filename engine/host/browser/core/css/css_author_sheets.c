@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -21,6 +22,8 @@ struct CssAuthorSheets {
     CssLayerOrder      *order;    /* owned; sealed by the build's last run */
     CssAuthorSheet     *v;        /* owned, `n` long, in the sheet list's order */
     uint32_t            n, cap;
+    CssPropertyRegistrationEntry *regs;   /* every applying sheet's `@property` registrations, in order, owned */
+    uint32_t            nregs, regs_cap;
     uint32_t            at;       /* the sheet list position the build reads next */
     CssRuleCascadeWalk *walk;     /* owned: the walk over the sheet at `at`, NULL between sheets */
     bool                sealed;
@@ -39,6 +42,28 @@ static void cas_push(CssAuthorSheets *s, uint32_t si, CssRuleCascadeSheet view)
     s->v[s->n].si = si;
     s->v[s->n].view = view;
     s->n++;
+}
+
+/* `view`'s registrations moved onto the set's, after every earlier sheet's (document order across sheets). */
+static void cas_take_registrations(CssAuthorSheets *s, CssRuleCascadeSheet *view)
+{
+    uint32_t i;
+
+    if (view->nregs == 0) return;
+    if (s->nregs + view->nregs > s->regs_cap) {
+        uint32_t cap = s->regs_cap ? s->regs_cap : 8;
+        CssPropertyRegistrationEntry *grown;
+
+        while (cap < s->nregs + view->nregs) cap *= 2;
+        grown = realloc(s->regs, (size_t)cap * sizeof *grown);
+        CHECK(grown != NULL, "cssom: OOM recording the author origin's `@property` registrations");
+        s->regs = grown;
+        s->regs_cap = cap;
+    }
+    for (i = 0; i < view->nregs; i++) s->regs[s->nregs++] = view->regs[i];
+    free(view->regs);
+    view->regs = NULL;
+    view->nregs = 0;
 }
 
 /* The sheets hang off the root's wrapper, which belongs to the realm whose record owns the document. */
@@ -82,7 +107,7 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
         JS_FreeValue(ctx, len);
     }
     for (; s->at < ns; s->at++) {
-        CssRuleCascadeSheet view = { NULL, NULL, 0 };
+        CssRuleCascadeSheet view = { NULL, NULL, 0, NULL, 0 };
         CssRuleCascadeStep step;
 
         if (s->walk == NULL) {
@@ -113,6 +138,7 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
         css_rule_cascade_walk_free(ctx, s->walk);
         s->walk = NULL;
         if (step == CSS_RULE_CASCADE_FAILED) continue;
+        cas_take_registrations(s, &view);
         /* A sheet of `@layer a, b;` alone emits no rule and has already declared its layers. */
         if (view.text == NULL) { css_rule_cascade_sheet_free(&view); continue; }
         cas_push(s, s->at, view);
@@ -137,6 +163,8 @@ void css_author_sheets_free(CssAuthorSheets *s)
     DCHECK(s != NULL, "the author origin's sheet set was freed through nothing");
     if (s->walk != NULL) css_rule_cascade_walk_free(cas_realm(s), s->walk);
     for (i = 0; i < s->n; i++) css_rule_cascade_sheet_free(&s->v[i].view);
+    for (i = 0; i < s->nregs; i++) css_property_registration_entry_free(&s->regs[i]);
+    free(s->regs);
     free(s->v);
     css_layer_order_free(s->order);
     free(s);
@@ -158,6 +186,26 @@ uint32_t css_author_sheets_count(const CssAuthorSheets *s)
 {
     DCHECK(s != NULL && s->sealed, "the author origin's sheet count was read through no sheet set or an open one");
     return s->n;
+}
+
+bool css_author_sheets_registration(const CssAuthorSheets *s, const char *name, CssPropertyRegistration *out)
+{
+    uint32_t i;
+
+    DCHECK(s != NULL && s->sealed && name != NULL && out != NULL,
+           "a registration was read from no sheet set, an open one, for no name or with nowhere to put it");
+    for (i = s->nregs; i-- > 0;) {
+        const CssPropertyRegistrationEntry *x = &s->regs[i];
+
+        if (strcmp(x->name, name) != 0) continue;
+        out->syntax = strdup(x->reg.syntax);
+        out->inherits = x->reg.inherits;
+        out->initial_value = x->reg.initial_value != NULL ? strdup(x->reg.initial_value) : NULL;
+        CHECK(out->syntax != NULL && (x->reg.initial_value == NULL || out->initial_value != NULL),
+              "cssom: OOM copying a `@property` registration");
+        return true;
+    }
+    return false;
 }
 
 const CssAuthorSheet *css_author_sheets_at(const CssAuthorSheets *s, uint32_t i)

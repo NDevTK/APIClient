@@ -3267,12 +3267,11 @@ static void cssd_hint_add(void *ud, const char *longhand, const char *value)
                            value);
 }
 
-/* The author origin's sheet set `el`'s root resolves under, held by the record and built at its first ask.
-   With `rests`, the emission takes each rule from the resting drive's allowance and NULL answers that it
-   parked in the record; without, a parked build is finished here. */
-static CssAuthorSheets *cssd_author_sheets(lxb_dom_element_t *el, bool rests)
+/* The author origin's sheet set for `root`, held by the record and built at its first ask. With `rests`, the
+   emission takes each rule from the resting drive's allowance and NULL answers that it parked in the record;
+   without, a parked build is finished here. */
+static CssAuthorSheets *cssd_author_sheets(lxb_dom_node_t *root, bool rests)
 {
-    lxb_dom_node_t *root = node_root(lxb_dom_interface_node(el));
     CssAuthorSheets *sheets;
 
     if (css_cascade_pass_author_ask(root, &sheets)) return sheets;
@@ -3312,7 +3311,7 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
            "css-logical-1 §4's pairing is the one nested resolution an element's cascade makes, and it runs "
            "after collection; a nested read added inside the collection is what this crash names");
     g_collecting_sheets = true;
-    sheets = cssd_author_sheets(el, false);
+    sheets = cssd_author_sheets(node_root(lxb_dom_interface_node(el)), false);
     order = css_author_sheets_order(sheets);
     if (!css_cascade_pass_match_ask(el, sheets, &match)) {
         /* A build a resting ask parked is finished here: this reader cannot rest.
@@ -3341,6 +3340,18 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
     return s;
 }
 
+CssAuthorSheets *cssom_author_sheets(lxb_dom_node_t *root)
+{
+    CssAuthorSheets *sheets;
+
+    DCHECK(root != NULL && root->parent == NULL, "an author sheet set was asked for a node that is not a root");
+    DCHECK(!g_collecting_sheets, "an author sheet set was asked inside an element's collection");
+    g_collecting_sheets = true;
+    sheets = cssd_author_sheets(root, false);
+    g_collecting_sheets = false;
+    return sheets;
+}
+
 bool cssom_style_ask(lxb_dom_element_t *el)
 {
     CssAuthorSheets *sheets;
@@ -3351,7 +3362,7 @@ bool cssom_style_ask(lxb_dom_element_t *el)
     if (!layout_job_rests_innermost()) return true;
     DCHECK(!g_collecting_sheets, "a resting author match was asked inside another element's collection");
     g_collecting_sheets = true;
-    sheets = cssd_author_sheets(el, true);
+    sheets = cssd_author_sheets(node_root(lxb_dom_interface_node(el)), true);
     if (sheets == NULL) {
         g_collecting_sheets = false;
         return false;

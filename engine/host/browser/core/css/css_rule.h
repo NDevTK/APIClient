@@ -374,6 +374,8 @@ typedef struct {
     char                *text;    /* the flattened sheet. OWNED. NULL when the sheet emitted nothing. */
     const CssLayerNode **layer;   /* one entry per emitted rule, in emission order. OWNED. */
     uint32_t             n;       /* how many rules were emitted, and how long `layer` is */
+    CssPropertyRegistrationEntry *regs;   /* the sheet's `@property` registrations in document order. OWNED. */
+    uint32_t             nregs;
 } CssRuleCascadeSheet;
 
 void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s);
@@ -392,10 +394,5 @@ CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk 
                                              struct MediaQueryMemo *memo, CssRuleCascadeSheet *out);
 void css_rule_cascade_walk_free(JSContext *ctx, CssRuleCascadeWalk *w);
 
-/* CSS Properties and Values API 1 §2.1's `@property` half over one rule list, in document order among the rules
-   that apply in `ctx`'s environment: each `@property` rule naming `name` replaces `*out` (freeing the one before
-   it when `*found`) and sets `*found`, so over a document's lists in order the last one stands. */
-void css_rule_property_registration(JSContext *ctx, JSValueConst list, const char *name,
-                                    CssPropertyRegistration *out, bool *found);
 
 #endif

@@ -34,6 +34,11 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
    read builds the match in place. */
 bool cssom_style_ask(lxb_dom_element_t *el);
 
+/* The author origin's sheet set for `root` (core/css/css_author_sheets.h), borrowed from the layout job's
+   cascade record, which holds it; built whole at its first ask. */
+struct CssAuthorSheets;
+struct CssAuthorSheets *cssom_author_sheets(lxb_dom_node_t *root);
+
 /* CSS Cascade §7.1's INITIAL VALUE of `name` — the property's own `Initial:` line, out of lexbor's registry and
    out of this component's table of the eight border longhands the registry does not carry. OWNED; NULL for a
    property with no initial value anywhere (a custom property nobody set), which §6.6.1 answers as the empty

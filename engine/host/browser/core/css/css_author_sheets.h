@@ -42,5 +42,9 @@ const lxb_dom_node_t *css_author_sheets_root(const CssAuthorSheets *s);
 CssLayerOrder *css_author_sheets_order(CssAuthorSheets *s);
 uint32_t css_author_sheets_count(const CssAuthorSheets *s);
 const CssAuthorSheet *css_author_sheets_at(const CssAuthorSheets *s, uint32_t i);
+/* CSS Properties and Values API 1 §2.1's `@property` half over the set's sheets: the last registration of
+   `name` in document order, copied into `*out` (freed by css_property_registration_free), or false with `*out`
+   untouched. */
+bool css_author_sheets_registration(const CssAuthorSheets *s, const char *name, CssPropertyRegistration *out);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_AUTHOR_SHEETS_H */
