@@ -64,6 +64,7 @@
 #include "core/rendering/visual_update.h"   /* an attribute change is a visible effect HTML §8.1.7.3 asks about */
 #include "core/html/input_value.h"   /* HTML §4.10.5's type change steps, in the family below */
 #include "core/html/fragment_parser.h"
+#include "core/dom/unknown_markup.h"
 #include "core/html/fragment_serializer.h"
 #include "core/html/sanitizer.h"
 #include "core/dom/dom_token_list.h"
@@ -760,6 +761,17 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         solve_html_sink(ctx, val);
         html = fragment_markup_cstr(ctx, val);
         if (!html) return JS_STEP_ABRUPT;
+        {
+            /* The children this write replaces: the parent's for outerHTML, a <template>'s contents, and
+               otherwise the receiver's. Unknown markup leaves them a region; known markup retires one. */
+            lxb_dom_node_t *region = magic == ELEMENT_SET_OUTER_HTML ? n->parent : n;
+
+            if (magic != ELEMENT_SET_OUTER_HTML && n->type == LXB_DOM_NODE_TYPE_ELEMENT &&
+                lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE))
+                region = &lxb_html_interface_template(n)->content->node;
+            if (concolic_is(val)) unknown_markup_note(ctx, region, val);
+            else unknown_markup_forget(ctx, region);
+        }
         if (magic == ELEMENT_SET_OUTER_HTML) {
             /* §8.5.5 step 6: parsed in the PARENT's context, because that is where it lives — or in step 5's
                `body` when the parent is a fragment. Step 7 still replaces `this` within THIS'S parent, which
@@ -989,6 +1001,8 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
         solve_html_sink(ctx, s->compliant);
         html = fragment_markup_cstr(ctx, s->compliant);
         if (!html) return JS_STEP_ABRUPT;
+        if (concolic_is(s->compliant))   /* the context's children now include the parse of unknown markup */
+            unknown_markup_note(ctx, lxb_dom_interface_node(context), s->compliant);
         /* Parsed in the context it will LIVE in: the parent for the outside positions, this element for the
            inside ones — or step 4's `body` where neither of those is a context §13.4 can parse against. A
            `<td>` inserted beforeend of a `<tr>` survives; parsed against the wrong context it would be dropped

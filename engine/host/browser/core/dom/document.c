@@ -67,6 +67,7 @@
 #include "core/dom/page_visibility.h"
 #include "core/dom/render_blocking.h"
 #include "core/html/autofocus.h"
+#include "core/dom/unknown_markup.h"
 #include "core/html/focus.h"
 #include "core/dom/document_fragment.h"
 #include "core/dom/shadow_root.h"
@@ -4122,6 +4123,8 @@ void document_init(JSContext *ctx)
     /* HTML §6.6.7's autofocus candidates and processed flag, filled by the insertion steps and drained by §8.1.7.3's
        step 7, declared with the focused area they designate. */
     autofocus_init(ctx);
+    /* The regions whose children are the parse of unknown markup, which §7.2.2.3's named access asks. */
+    unknown_markup_init(ctx);
     /* Fullscreen §2 "Model"'s per-element fullscreen flag is a slot key, and both members stated over it
        (`fullscreen` on this prototype, `fullscreenElement` on this one and on ShadowRoot's) install from this
        component's list, so the declaration is paired here. */
@@ -4188,6 +4191,7 @@ void document_install_proto(JSContext *ctx)
     /* HTML §6.6.7's per-document autofocus candidates and processed flag, built with the realm so an element the
        first flow inserts does not find a list that flow created. */
     autofocus_install_document(ctx);
+    unknown_markup_install_document(ctx);
     {
         /* DOM §4.5's `[Exposed=Window] interface XMLDocument : Document {};`: Web IDL §3.7.3 "Interface prototype
            object" for an interface with no members, so it is empty and everything comes through Document.prototype.
@@ -5015,6 +5019,7 @@ void document_agent_free(JSRuntime *rt)
        component declared after another may hold what that one minted. document_fragment, shadow_root and slot are
        declared only by document_init, so only this releases them. */
     fullscreen_free(rt);
+    unknown_markup_free();
     autofocus_free();
     focus_free();
     render_blocking_free();

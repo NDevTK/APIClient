@@ -54,7 +54,11 @@
 #include "core/events/report_exception.h"
 #include "core/dom/collections.h"
 #include "core/dom/node.h"
+#include "core/dom/unknown_markup.h"
 #include "core/idl_args.h"
+#include "core/idl_name_chain.h"
+#include "quickjs-step.h"
+#include "solver/concolic.h"
 #include "core/realm.h"
 #include "solver/cow.h"
 
@@ -934,6 +938,157 @@ static int win_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
     return 1;
 }
 
+/* ---- named access over unknown markup -------------------------------------------------------------------
+   A region whose children are the parse of unknown markup (core/dom/unknown_markup.h) may or may not hold an
+   element named `name`, and only a step machine can fork over that. So while the realm's document holds one,
+   a [[Get]] or [[HasProperty]] reaching WindowProperties calls win_named_step (get_own_property_step); a C walk
+   (a [[Set]]'s, an enumeration's) is answered from the tree, where a named property is a writable data
+   property and a [[Set]] lands on the receiver either way.
+   Named residual. Not covered: Object.getOwnPropertyDescriptor and hasOwnProperty on WindowProperties answer
+   from the tree. Next diff builds: GP_GETOWNPROP's route to the step function. Absence shows as: a descriptor
+   read over a region-holding document agreeing with the example's tree in every world. */
+#define WIN_NAMED_PREDICATE "HTML §7.2.2.3 Named access on the Window object (this markup's parse names"
+#define WIN_NAMED_ALGORITHM "HTML §7.2.2.3 Named access on the Window object over a region of unknown markup"
+#define WN_STAGES(X) X(WN_LOOKUP, WIN_NAMED_ALGORITHM)
+enum { IDL_STEP_STAGE_BASE(WN_STAGES) WN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const WN_STEPS[] = { WN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static int g_id_named_step = -1;
+
+/* `next` is the first region not yet asked about, so a resumed or forked machine re-asks the same one. */
+typedef struct {
+    IdlNameChainSuppliedKey key;
+    int next;
+} WinNamedState;
+
+static void win_named_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    idl_name_chain_supplied_visit(ctx, &((WinNamedState *)st)->key, v);
+}
+
+static bool win_node_within(const lxb_dom_node_t *n, const lxb_dom_node_t *region)
+{
+    for (; n; n = n->parent)
+        if (n == region) return true;
+    return false;
+}
+
+/* Whether an element named `name` stands in the tree within `region` (NULL: outside every connected region). */
+static bool win_named_found(JSContext *ctx, const char *name, const lxb_dom_node_t *region)
+{
+    JSValue doc = node_wrap(ctx, document_root_node(ctx)), coll = collections_named(ctx, doc, name);
+    int nreg = region ? 0 : unknown_markup_count(ctx);
+    bool found = false;
+    uint32_t i;
+
+    JS_FreeValue(ctx, doc);
+    CHECK(!JS_IsException(coll), "window: the named elements could not be collected");
+    for (i = 0; !found; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, coll, i);
+        const lxb_dom_node_t *en = node_of(e);
+        int r;
+
+        JS_FreeValue(ctx, e);
+        if (!en) break;
+        if (region) { found = win_node_within(en, region); continue; }
+        found = true;
+        for (r = 0; r < nreg && found; r++) {
+            lxb_dom_node_t *rn;
+            JSValue m = unknown_markup_at(ctx, r, &rn);
+
+            JS_FreeValue(ctx, m);
+            if (node_is_connected(rn) && win_node_within(en, rn)) found = false;
+        }
+    }
+    JS_FreeValue(ctx, coll);
+    return found;
+}
+
+/* f(obj, key, receiver, op): §7.2.2.3's answer for `key` over a document holding regions of unknown markup, op 0
+   for [[Get]] (the value, or undefined for a miss) and 1 for [[HasProperty]] (whether it is named). A child
+   navigable or an element outside every region answers from the tree; each region then asks the name chain
+   whether its markup names `key`. The found arm answers the example's elements where its parse names them, and
+   otherwise the element the markup holds, an unknown derived from (markup, key). */
+static int win_named_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    WinNamedState *s = st;
+    const char *name;
+    int op, n, rc = JS_STEP_DONE;
+    JSValue v = JS_UNDEFINED;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == WN_LOOKUP && argc == 4 && JS_IsString(argv[1]) && JS_VALUE_GET_TAG(argv[3]) == JS_TAG_INT,
+           "the named-access step was called with a shape the keyed entry does not issue (obj, key, receiver, op)");
+    op = JS_VALUE_GET_INT(argv[3]);
+    DCHECK(op == 0 || op == 1, "the named-access step was asked an operation other than [[Get]] or [[HasProperty]]");
+    name = JS_ToCString(ctx, argv[1]);
+    if (!name) return JS_STEP_ABRUPT;
+    if (s->next == 0 && *name && document_root_node(ctx) &&
+        (!JS_IsUndefined(v = win_named_navigable(ctx, name)) || win_named_found(ctx, name, NULL))) {
+        if (JS_IsUndefined(v)) v = win_named_value(ctx, name);
+        goto answer;
+    }
+    n = unknown_markup_count(ctx);
+    for (; *name && s->next < n; s->next++) {
+        lxb_dom_node_t *region;
+        JSValue markup = unknown_markup_at(ctx, s->next, &region);
+        int real;
+        bool yes = false;
+
+        if (!node_is_connected(region)) { JS_FreeValue(ctx, markup); continue; }
+        real = concolic_example_present(markup) ? (win_named_found(ctx, name, region) ? 1 : 0)
+                                                : JS_OUTCOME_REAL_UNSTATED;
+        rc = idl_name_chain_ask_supplied(ctx, hdr, &s->key, markup, WIN_NAMED_PREDICATE, name, real,
+                                         WIN_NAMED_ALGORITHM, &yes);
+        if (rc || !yes) {
+            JS_FreeValue(ctx, markup);
+            if (rc) { JS_FreeCString(ctx, name); return rc; }
+            continue;
+        }
+        if (real == 1) {
+            v = win_named_value(ctx, name);
+        } else {
+            JSValueConst ops[2] = { markup, argv[1] };
+            v = concolic_new_derived(ctx, "HTML §7.2.2.3 named access", ops, 2, JS_UNDEFINED);
+        }
+        JS_FreeValue(ctx, markup);
+        goto answer;
+    }
+    JS_FreeCString(ctx, name);
+    *presult = op == 0 ? JS_UNDEFINED : JS_FALSE;
+    return JS_STEP_DONE;
+
+answer:
+    JS_FreeCString(ctx, name);
+    DCHECK(!JS_IsUndefined(v), "§7.2.2.3's named access found the name and answered no value");
+    if (op == 1) { JS_FreeValue(ctx, v); v = JS_TRUE; }
+    *presult = v;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl WN_DECL = {
+    win_named_step, sizeof(WinNamedState), win_named_visit, NULL, WIN_NAMED_ALGORITHM, WN_STEPS
+};
+
+/* JSClassExoticMethods.get_own_property_step: the step function while the document holds a region of unknown
+   markup and the key is a name, JS_UNDEFINED otherwise. Owned. */
+static JSValue win_named_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    JSValue pv;
+    bool name;
+
+    (void)obj;
+    if (unknown_markup_count(ctx) == 0) return JS_UNDEFINED;
+    pv = JS_AtomToValue(ctx, prop);
+    name = JS_IsString(pv);
+    JS_FreeValue(ctx, pv);
+    if (!name) return JS_UNDEFINED;
+    DCHECK(g_id_named_step >= 0, "named access asked for its step before window_init declared it");
+    return idl_step_function(ctx, "WindowProperties named access", g_id_named_step);
+}
+
 /* WEB IDL §3.7.4.5 [[PreventExtensions]] — the NAMED PROPERTIES OBJECT's, whose steps are "When the
    [[PreventExtensions]] internal method of a named properties object is called, the following steps are taken:
    Return false." It is a DIFFERENT section from Web IDL §3.9.5 [[PreventExtensions]], which states the
@@ -954,6 +1109,7 @@ static int win_named_prevent_extensions(JSContext *ctx, JSValueConst obj)
 
 static const JSClassExoticMethods WINDOW_PROPS_EXOTIC = {
     .get_own_property = win_named_get_own,
+    .get_own_property_step = win_named_get_own_step,
     .prevent_extensions = win_named_prevent_extensions,
     /* The lookup is a walk of the document tree and a read of content attributes — no page code, by
        construction, which is what lets the engine's own accessor walks run it from C. */
@@ -1011,6 +1167,10 @@ void window_init(JSContext *ctx)
     g_id_opener_set = idl_setter_id(ctx, IDL_ANY, false, js_win_set_opener, 0);
     g_id_name_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_name, 0);
     g_id_status_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_status, 0);
+    {
+        static const IdlArgType NAMED_ARGS[4] = { IDL_ANY, IDL_ANY, IDL_ANY, IDL_ANY };
+        g_id_named_step = idl_method_id_step(ctx, NAMED_ARGS, 4, NULL, 0, &WN_DECL, 0);
+    }
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
     /* ONE BODY PER MEMBER. `stop` and §6.6.6's `blur` shared `js_win_noeffect` and were told apart only by a
        magic, which is how §6.6.6's specified do-nothing and §7.2.2.1's unbuilt two steps came to be
@@ -1050,6 +1210,8 @@ void window_init(JSContext *ctx)
                    "HTML §7.2.2.4 Accessing related windows' `opener` setter declaration");
     agent_state_id("window", &g_id_name_set,
                    "HTML §7.2.2.1 Opening and closing windows' `name` setter declaration");
+    agent_state_id("window", &g_id_named_step,
+                   "HTML §7.2.2.3 Named access on the Window object's step over regions of unknown markup");
     agent_state_id("window", &g_id_status_set,
                    "HTML §7.2.2.5 Historical browser interface element APIs' `status` setter declaration");
     agent_state_id("window", &g_id_close,
@@ -1292,7 +1454,7 @@ void window_free(JSRuntime *rt)
        over, and the same consequence: a declaration is a registration in a runtime, so a carried index names an
        entry in a pool the next agent has not built, read by the first window_install that agent runs. Their
        pre-init value is -1 and not 0, because entry 0 is a real member (see the declarations above). */
-    g_id_opener_set = g_id_name_set = g_id_status_set = -1;
+    g_id_opener_set = g_id_name_set = g_id_status_set = g_id_named_step = -1;
     g_id_close = g_id_stop = -1;
     /* AND §8.1.4.6's MACHINE, for the reason the five pool entries above are given back and the one
        core/events/report_exception.c states at its own flow definition: JS_RegisterStepDef hands out an index
