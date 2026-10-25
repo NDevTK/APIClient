@@ -4738,51 +4738,6 @@ static void js_gc_object_census(JSRuntime *rt, const char *tag)
     (free)(n);
 }
 
-#if APICLIENT_DEV
-/* The nested-entry inventory: every entry to JS_CallInternal made while a frame is live below it on the C
-   stack, which is C calling into the engine from inside a running activation rather than the flow base or the
-   chain's own dispatch. A bytecode callee entered that way cannot park, and the bytecode arm below DFAILs on
-   it once a flow exists; this counts every such entry, keyed by the two return addresses above it (relative to
-   JS_CallInternal, so `nm` plus addr2line name them) and by callee kind, and prints the census at teardown. */
-typedef struct JSNestedEntry { uintptr_t ra0, ra1; uint8_t bytecode; uint64_t n; } JSNestedEntry;
-static JSNestedEntry g_nested_entries[1024];
-static int g_nested_entry_count;
-static void js_nested_entry_note(uintptr_t ra0, uintptr_t ra1, bool bytecode)
-{
-    uintptr_t base = (uintptr_t)JS_CallInternal;
-    int i;
-    for (i = 0; i < g_nested_entry_count; i++) {
-        JSNestedEntry *e = &g_nested_entries[i];
-        if (e->ra0 == ra0 && e->ra1 == ra1 && e->bytecode == bytecode) { e->n++; return; }
-    }
-    CHECK(g_nested_entry_count < (int)countof(g_nested_entries),
-          "the nested-entry census holds more distinct call sites than its table: grow the table");
-    g_nested_entries[g_nested_entry_count++] = (JSNestedEntry){ ra0, ra1, bytecode, 1 };
-    /* each new site as it is first seen, so a run that aborts before teardown still names it */
-    fprintf(stderr, "@NESTED-NEW {\"ra0\":\"%+lld\",\"ra1\":\"%+lld\",\"bytecode\":%d,\"abs0\":\"%#llx\","
-            "\"abs1\":\"%#llx\"}\n", (long long)(intptr_t)ra0, (long long)(intptr_t)ra1, bytecode,
-            (unsigned long long)(ra0 + base), (unsigned long long)(ra1 + base));
-}
-#define JS_NESTED_ENTRY_NOTE(rt_, bytecode_)                                                                \
-    do {                                                                                                      \
-        if ((rt_)->current_stack_frame)                                                                       \
-            js_nested_entry_note((uintptr_t)__builtin_return_address(0) - (uintptr_t)JS_CallInternal,         \
-                                 (uintptr_t)__builtin_return_address(1) - (uintptr_t)JS_CallInternal,         \
-                                 (bytecode_));                                                                \
-    } while (0)
-static void js_nested_entry_report(void)
-{
-    int i;
-    for (i = 0; i < g_nested_entry_count; i++)
-        fprintf(stderr, "@NESTED {\"ra0\":\"%+lld\",\"ra1\":\"%+lld\",\"bytecode\":%d,\"n\":%llu}\n",
-               (long long)(intptr_t)g_nested_entries[i].ra0, (long long)(intptr_t)g_nested_entries[i].ra1,
-               g_nested_entries[i].bytecode, (unsigned long long)g_nested_entries[i].n);
-    fprintf(stderr, "@NESTED-SITES %d\n", g_nested_entry_count);
-}
-#else
-#define JS_NESTED_ENTRY_NOTE(rt_, bytecode_) ((void)0)
-#endif
-
 void JS_FreeRuntime(JSRuntime *rt)
 {
     struct list_head *el, *el1;
@@ -4792,9 +4747,6 @@ void JS_FreeRuntime(JSRuntime *rt)
     rt->in_free = true;
     DCHECK(JS_IsUndefined(rt->suspended_on),
            "JS_FreeRuntime with a suspension the host never took (JS_TakeSuspension)");
-#if APICLIENT_DEV
-    js_nested_entry_report();
-#endif
     /* A PARKED FLOW AT TEARDOWN IS A DROPPED FLOW. The queue is not a GC root: each member holds a raw callback
        plus a reference the park took (the suspended async activation, or the async generator whose body is
        mid-run), and tearing the runtime down without resuming it leaks that whole graph silently — the
@@ -25341,7 +25293,7 @@ static void close_lexical_var(JSContext *ctx, JSFunctionBytecode *b,
 #define JS_CALL_FLAG_COPY_ARGV   (1 << 1)
 #define JS_CALL_FLAG_GENERATOR   (1 << 2)
 /* The interpreter's own call of a callee with no chain entry (a C function or class call hook): a nested entry
-   by construction, made by no C activation, so the nested-entry census does not count it. */
+   by construction, made by no C activation, so the nested-entry check in JS_CallInternal exempts it. */
 #define JS_CALL_FLAG_LEAF_DISPATCH (1 << 3)
 
 /* A continuation-holding builtin holds loop state across a JS callback, and a C frame cannot be parked — so the
@@ -35920,8 +35872,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
     }
     p = JS_VALUE_GET_OBJ(func_obj);
-    if (!(flags & JS_CALL_FLAG_LEAF_DISPATCH))
-        JS_NESTED_ENTRY_NOTE(rt, p->class_id == JS_CLASS_BYTECODE_FUNCTION);
+    /* An entry made while a frame is live below it is C calling into the engine from inside a running
+       activation: the callee runs to completion inside that C frame and cannot park. The two return addresses
+       name the C caller (gdb's backtrace names them too). */
+    DCHECKF((flags & JS_CALL_FLAG_LEAF_DISPATCH) || rt->current_stack_frame == NULL,
+            "a C activation entered JS_CallInternal below a live frame (%s callee, ra0=%p ra1=%p, "
+            "JS_CallInternal%+lld and %+lld), so the callee cannot park: convert that C caller to a step "
+            "machine (JS_CFUNC_STEP_DEF) or resolve the call at its operator site",
+            p->class_id == JS_CLASS_BYTECODE_FUNCTION ? "a bytecode" : "a C",
+            __builtin_return_address(0), __builtin_return_address(1),
+            (long long)((intptr_t)__builtin_return_address(0) - (intptr_t)JS_CallInternal),
+            (long long)((intptr_t)__builtin_return_address(1) - (intptr_t)JS_CallInternal));
     if (unlikely(p->class_id != JS_CLASS_BYTECODE_FUNCTION)) {
         JSClassCall *call_func;
         call_func = rt->class_array[p->class_id].call;
@@ -62960,6 +62921,11 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             if (js_parse_regexp(s))
                 PD_RET(-1);
             emit_r = emit_push_const(s, s->token.u.regexp.body, 0);
+            /* Named residual. Not covered: the literal's pattern compiles to its end inside this one
+               production, charged but never resting, though the script parse around it can park. Next diff
+               builds: a production state holding the literal's REParseState across the drive's suspension,
+               asked through js_parse_want_yield. Absence shows as: a script parse stint whose host CPU is
+               large against its work, on a script with a long regexp literal. */
             str = s->ctx->compile_regexp(s->ctx, s->token.u.regexp.body,
                                          s->token.u.regexp.flags);
             if (JS_IsException(str)) {

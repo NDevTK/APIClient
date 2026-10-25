@@ -3348,11 +3348,10 @@ void lre_compile_end(REParseState *s)
 }
 
 /* The compile for a caller that cannot park: charged as host work like any compile, never asked to rest.
-   NULL with the message in error_msg on failure. Named residual. Not covered: a regexp literal compiles
-   inside one production of the script parse, and constraint validation compiles a pattern attribute on its
-   own call, so neither rests inside a long pattern. Next diff builds: the script parse holding the literal's
-   REParseState across its own suspension, and constraint validation's compile as a stage of a machine.
-   Absence shows as: a script parse stint, or a validity check, whose host CPU is large against its work. */
+   NULL with the message in error_msg on failure. Named residual. Not covered: constraint validation compiles
+   a pattern attribute on its own call, so it does not rest inside a long pattern. Next diff builds: that
+   compile as a stage of the validity machine. Absence shows as: a validity check whose host CPU is large
+   against the work it charged. The script parse's regexp literal states its own residual at its site. */
 uint8_t *lre_compile(int *plen, char *error_msg, int error_msg_size,
                      const char *buf, size_t buf_len, int re_flags,
                      void *opaque)

@@ -155,6 +155,7 @@
 #include <stdlib.h>
 #include <errno.h>   /* `abi_paint`'s file I/O — the one place this host's failures are the DISK's */
 #include <sys/resource.h>   /* RLIMIT_AS: the address-space ceiling native_ceiling_arm gives this host */
+#include <signal.h>         /* SIGABRT, the nested-entry child's expected end */
 #include <sys/wait.h>       /* nested_entry_selftest's children, whose abort is the answer it reads */
 #include <unistd.h>
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
@@ -5358,7 +5359,7 @@ TF_UNIT void concat_keyed_selftest(JSContext *ctx)
 
 #if APICLIENT_DEV
 /* The nested-entry witness: a C function this selftest alone registers, which calls JS_Call on the page's
-   callback from inside its own activation, is the shape the engine refuses to run below a live frame. */
+   callback from inside its own activation, is the shape JS_CallInternal's nested-entry DCHECK refuses. */
 static bool g_tf_nest_leaf_ran;
 static __attribute__((noinline)) JSValue tf_nest_call(JSContext *ctx, JSValueConst this_val, int argc,
                                                        JSValueConst *argv)
@@ -5433,20 +5434,21 @@ TF_UNIT void nested_entry_selftest(JSContext *ctx)
 {
     char out[8192];
     int nest, leaf;
-    bool named;
+    bool aborted, named, leaf_why;
 
     nest = tf_nest_child(ctx, "__tfNestCall(function () { return 1; }); 0", "__tfNestCall", tf_nest_call,
                          out, sizeof out);
-    named = strstr(out, "@NESTED-NEW") && tf_nest_names_witness(out, "\"abs0\":\"", "\"abs1\":\"");
+    aborted = WIFSIGNALED(nest) && WTERMSIG(nest) == SIGABRT;
+    named = strstr(out, "a C activation entered JS_CallInternal below a live frame") &&
+            tf_nest_names_witness(out, "ra0=", "ra1=");
     leaf = tf_nest_child(ctx, "__tfNestLeaf(); 0", "__tfNestLeaf", tf_nest_leaf, out, sizeof out);
-    printf("@NESTED-SELFTEST {\"nestNamed\":%d,\"leafExit\":%d,\"leafRows\":%d}\n", named,
-           WIFEXITED(leaf) ? WEXITSTATUS(leaf) : -1, strstr(out, "@NESTED-NEW") != NULL);
-    (void)nest;
-    CHECK(named, "a C function calling JS_Call on a callback from inside its activation was not named by the "
-                 "nested-entry census at its own address");
-    CHECK(WIFEXITED(leaf) && WEXITSTATUS(leaf) == 0,
-          "the leaf-dispatch witness did not complete with its C function run");
-    CHECK(!strstr(out, "@NESTED-NEW"), "the interpreter's own call of a C function was counted as a nested entry");
+    leaf_why = strstr(out, "@WHY") != NULL;
+    printf("@NESTED-SELFTEST {\"nestAborted\":%d,\"nestNamed\":%d,\"leafExit\":%d,\"leafWhy\":%d}\n", aborted,
+           named, WIFEXITED(leaf) ? WEXITSTATUS(leaf) : -1, leaf_why);
+    CHECK(aborted && named, "a C function calling JS_Call on a callback from inside its activation was not refused "
+                            "by the nested-entry DCHECK naming its own address");
+    CHECK(WIFEXITED(leaf) && WEXITSTATUS(leaf) == 0 && !leaf_why,
+          "the interpreter's own call of a C function did not complete untouched by the nested-entry DCHECK");
 }
 #endif
 
