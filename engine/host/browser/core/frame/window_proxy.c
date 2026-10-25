@@ -176,9 +176,6 @@ typedef struct {
      * navigable and a sibling that did not each read their own. It moves with the rest of the binding in
      * window_proxy_navigate, since a navigation replaces the active document and this is that document's row. */
     OpenerPolicyValue opener_policy;
-    /* Whether the active document's response lets a cross-origin document embed it
-       (navigation_params_allows_cross_origin_parent): 1 or 0 as the host states it at the root, -1 unstated. */
-    int8_t cross_origin_framing;
     /* HTML §8.1.3.1's top-level creation URL for the environments of this navigable's documents, beside the policy
        container because it is the same kind of fact: decided by the operation that created the navigable, read
        when a realm is built. §7.4 makes a child navigable inherit its creator's and gives an auxiliary one its own
@@ -752,7 +749,6 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
        this call replaces one; the value is the operation's (from the response the load fetched), never re-derived
        through this proxy, which by now reaches the document being replaced. */
     p->opener_policy = opener_policy;
-    p->cross_origin_framing = -1;
     /* The navigable no longer shows what §7.4 created it with (see `ever_navigated`), written at the site that
        replaces a navigable's active document. */
     p->ever_navigated = 1;
@@ -799,24 +795,6 @@ void window_proxy_navigate_to_peer(JSContext *ctx, JSValueConst proxy, uint32_t 
 /* §7.5.1's opener policy row, read from the navigable's side (see the field). Through proxy_of like every other
    read of this record, so the answer is the running flow's: an arm that navigated this navigable to a
    `same-origin` document and a sibling that did not have two answers. */
-int window_proxy_cross_origin_framing(JSValueConst proxy)
-{
-    ProxyData *p = proxy_of(proxy);
-
-    DCHECK(p != NULL && world_doc_hosted(p->doc),
-           "whether a navigable may be framed cross-origin was asked of something that is not a hosted WindowProxy");
-    return p->cross_origin_framing;
-}
-
-void window_proxy_set_cross_origin_framing(JSValueConst proxy, bool allowed)
-{
-    ProxyData *p = proxy_of(proxy);
-
-    DCHECK(p != NULL && world_doc_hosted(p->doc),
-           "a hosted navigable's framing was stated on something that is not one");
-    p->cross_origin_framing = allowed ? 1 : 0;
-}
-
 OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
@@ -981,7 +959,6 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
        because which arm applies is a fact about the creating operation that the navigable being created cannot
        recover. */
     p->opener_policy = opener_policy;
-    p->cross_origin_framing = -1;
     /* Every environment has a top-level creation URL, so there is no "none" to spell: §7.4 either nests the
        navigable (the creator's) or makes it a top-level traversable (its own address). A caller with nothing to
        pass has not decided which it is building, and every member gated on §8.1.3.5 would be installed on a

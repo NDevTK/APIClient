@@ -8,8 +8,6 @@
 #include "core/frame/policy_container.h"
 #include "core/html/trusted_types.h"
 #include "core/dom/document.h"
-#include "core/frame/window_proxy.h"  /* the opener policy a message route is judged by */
-#include "core/url/url.h"
 #include "core/dom/node.h"             /* node_next_in, the pre-order successor bounded to a subtree */
 #include "solver/concolic.h"
 #include "solver/decide.h"
@@ -2153,26 +2151,12 @@ static void emit_sender_pins(JsonBuf *b, const SenderPins *sp) {
    matches only declared sources. A root with neither a delivery nor a precondition writes neither; a fired PoC
    always has one (record_sink asserts it), so that silence is a parked search over a source no component
    declares. A missing root is not that fact, which is why it is asserted. The search comes too, for what its path demanded of an attacker's principal. */
-/* The routes by which ATTACKER_PAGE holds a handle to post this Document a message (HTML §9.3.3 "Posting
-   messages"): `frame` when it may present this Document in a child navigable (document_embeddable_cross_origin),
-   `opener` when this Document is a top-level traversable's whose opener policy keeps the handle of the page
-   that opened it — §7.1.3.2 switches the group of a navigation from a cross-origin opener for every value but
-   `unsafe-none`. An empty list is the target's response refusing both, and the PoC is not attacker-deliverable.
-   Named residual: a nested navigable's Document has no obtained opener policy (§7.4.5 obtains it only for a
-   top-level traversable), so `opener` is not stated for it. The next diff obtains every response's opener
-   policy, so a top-level load of its address is judged. Its absence shows as a framed message PoC offering
-   `frame` alone. */
+/* The message routes (document_message_routes) beside a cross-document-message delivery; an empty list is the
+   target's response refusing both, and the PoC is not attacker-deliverable. */
 static void emit_message_routes(JsonBuf *b, JSContext *ctx) {
-    JSValueConst proxy = document_window_proxy(ctx);
-    UrlRecord attacker;
     bool frame, opener;
 
-    url_record_init(&attacker);
-    CHECK(url_parse(&attacker, ATTACKER_PAGE, strlen(ATTACKER_PAGE), NULL),
-          "solve: the attacker page's own address did not parse");
-    frame = document_embeddable_cross_origin(ctx, &attacker);
-    url_record_free(&attacker);
-    opener = window_proxy_is_top_level(proxy) && window_proxy_opener_policy(proxy) == OPENER_POLICY_UNSAFE_NONE;
+    document_message_routes(ctx, &frame, &opener);
     json_buf_raw(b, ","); json_buf_key(b, "messageRoutes"); json_buf_raw(b, "[");
     if (frame) json_buf_str(b, "frame");
     if (opener) { if (frame) json_buf_raw(b, ","); json_buf_str(b, "opener"); }

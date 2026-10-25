@@ -2013,6 +2013,23 @@ bool document_embeddable_cross_origin(JSContext *ctx, const UrlRecord *ancestor)
     return true;
 }
 
+/* Named residual: a nested navigable's Document has no obtained opener policy (§7.4.5 obtains it only for a
+   top-level traversable), so `opener` is not stated for it. The next diff obtains every response's opener
+   policy, so a top-level load of its address is judged. Its absence shows as a framed document's message
+   offering `frame` alone. */
+void document_message_routes(JSContext *ctx, bool *frame, bool *opener)
+{
+    JSValueConst proxy = document_window_proxy(ctx);
+    UrlRecord attacker;
+
+    url_record_init(&attacker);
+    CHECK(url_parse(&attacker, ATTACKER_PAGE, strlen(ATTACKER_PAGE), NULL),
+          "document: the attacker page's own address did not parse");
+    *frame = document_embeddable_cross_origin(ctx, &attacker);
+    url_record_free(&attacker);
+    *opener = window_proxy_is_top_level(proxy) && window_proxy_opener_policy(proxy) == OPENER_POLICY_UNSAFE_NONE;
+}
+
 void document_set_encoding(JSContext *ctx, int encoding)
 {
     Document *d = doc_here(ctx);

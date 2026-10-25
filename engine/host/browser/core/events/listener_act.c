@@ -16,10 +16,7 @@
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
 #include "core/events/listener_act.h"
-#include "core/frame/opener_policy.h"
-#include "core/frame/window_proxy.h"
 #include "core/html/input_value.h"
-#include "solver/world.h"
 
 /* The user-interface event types a page user causes by acting on a node. A click is stated as itself, because a
    live verifier performs it through HTMLElement's click(); a drop is the person dropping a file (HTML §6.11.5);
@@ -233,21 +230,19 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
         /* §9.3.3's `message` on the Window is caused by another document's postMessage, so it is an act when
            an attacker document holds this window: as its opener, unless the document's Cross-Origin-Opener-
            Policy severs a cross-origin opener (every value but `unsafe-none`, HTML §7.1.3), or as its parent,
-           where the response lets a cross-origin document embed it (HTML §7.7 and frame-ancestors, as the host
-           stated it on the navigable). Its data and origin are the event argument's, which the PoC composition
+           where the response lets a cross-origin document embed it (document_message_routes). Its data and origin are the event argument's, which the PoC composition
            does not solve yet, so solve.c refuses a fire verified under one (`firedUnderUnsolvedAct`) and states
            the act on the parked search. */
         if (!act && !strcmp(type, "message")) {
             char *name = handler_name(ctx, fn);
-            JSValue proxy = window_proxy_of_document(ctx, world_local_doc());
-            OpenerPolicyValue coop = window_proxy_opener_policy(proxy);
-            int framing = window_proxy_cross_origin_framing(proxy);
-            const char *route = coop == OPENER_POLICY_UNSAFE_NONE ? "\"route\":\"opener\""
-                                : framing == 1 ? "\"route\":\"frame\""
-                                : framing == 0 ? "\"route\":\"none\",\"routeRefused\":\"Cross-Origin-Opener-Policy "
-                                                 "and the response's framing policy\""
-                                : "\"route\":\"none\",\"routeRefused\":\"Cross-Origin-Opener-Policy, and no "
-                                  "framing policy was stated for the response\"";
+            bool frame, opener;
+            const char *route;
+
+            document_message_routes(ctx, &frame, &opener);
+            route = opener ? "\"route\":\"opener\""
+                    : frame ? "\"route\":\"frame\""
+                    : "\"route\":\"none\",\"routeRefused\":\"Cross-Origin-Opener-Policy and the response's "
+                      "framing policy\"";
             size_t n = (name ? strlen(name) : 0) + strlen(route) + 96;
 
             act = malloc(n);
@@ -255,7 +250,6 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
             snprintf(act, n, "{\"kind\":\"message\",\"target\":\"window\",\"type\":\"message\",%s%s%s%s}",
                      route, name ? ",\"handler\":\"" : "", name ? name : "", name ? "\"" : "");
             free(name);
-            JS_FreeValue(ctx, proxy);
         }
         free(type);
         return act;

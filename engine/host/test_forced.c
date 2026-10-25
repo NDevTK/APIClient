@@ -33937,8 +33937,6 @@ int main(int argc, char **argv) {
                                     serialized_policy_container_none(), &root_embedder, 0);
         embedder_policy_free(&root_embedder);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        /* The document came from no response, so no header refuses a cross-origin parent. */
-        window_proxy_set_cross_origin_framing(root_proxy, true);
         /* NULL: this fixture's document is a C string literal, so it came from no response and has no
            header-borne policy. That is a fact about it, not a gap. */
         /* AND AN EMPTY §7.1.5 ACTIVE SANDBOXING FLAG SET, from the same fact and the same sentence: the two

@@ -2808,7 +2808,6 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                             inherited, &np.embedder, creation_flags);
 
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        window_proxy_set_cross_origin_framing(root_proxy, navigation_params_allows_cross_origin_parent(&np));
         /* §7.3.1.3's container, before the install below: Permissions Policy §9.5 runs once per Document a
            navigable is given, and for a navigable rooted in another process's frame tree only that process could
            run it. Stated after the rooting, in §7.3.1.3's order, as the product host states it. */

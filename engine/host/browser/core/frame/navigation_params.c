@@ -2,7 +2,6 @@
    navigation_params.h. */
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 
 #include "check.h"
 #include "core/fetch/structured_fields.h"
@@ -49,7 +48,6 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
        disposition ENFORCE (core/frame/policy_container.h), and a report-only policy blocks nothing. */
     out->csp = header_list_get(headers, "content-security-policy");
     out->csp_report_only = header_list_get(headers, "content-security-policy-report-only");
-    out->x_frame_options = header_list_get(headers, "x-frame-options");
 
     /* §7.4.5's FINAL SANDBOXING FLAG SET. The caller's half plus this response's, and the union is HERE rather
        than at the call site because the second half is a fact about the response and this is the one place a
@@ -143,8 +141,6 @@ void navigation_params_free(NavigationParams *p)
     p->csp = NULL;
     free(p->csp_report_only);
     p->csp_report_only = NULL;
-    free(p->x_frame_options);
-    p->x_frame_options = NULL;
     free(p->permissions_policy);
     p->permissions_policy = NULL;
     free(p->permissions_policy_report_only);
@@ -158,59 +154,4 @@ void navigation_params_free(NavigationParams *p)
     header_values_free(p->x_frame_options, p->n_x_frame_options);
     p->x_frame_options = NULL;
     p->n_x_frame_options = 0;
-}
-
-/* The sources of the first `frame-ancestors` directive in the policy list `csp` (CSP §2.2's serialization: policies
-   joined by commas, directives by semicolons), copied into `out`; 0 where no policy states the directive. */
-static int frame_ancestors_of(const char *csp, char *out, size_t cap)
-{
-    const char *p = csp;
-
-    while (p && *p) {
-        const char *end = p + strcspn(p, ";,");
-        while (p < end && (*p == ' ' || *p == '\t')) p++;
-        if ((size_t)(end - p) >= 15 && !strncasecmp(p, "frame-ancestors", 15) &&
-            (end - p == 15 || p[15] == ' ' || p[15] == '\t')) {
-            size_t n = (size_t)(end - (p + 15));
-            if (n >= cap) n = cap - 1;
-            memcpy(out, p + 15, n);
-            out[n] = 0;
-            return 1;
-        }
-        p = *end ? end + 1 : end;
-    }
-    return 0;
-}
-
-bool navigation_params_allows_cross_origin_parent(const NavigationParams *np)
-{
-    char fa[512];
-
-    /* §7.7 step 2: an enforced policy with a frame-ancestors directive returns true here, and that directive
-       decides: an attacker picks its own origin, so only a source every origin of a network scheme matches
-       admits it. */
-    if (np->csp && frame_ancestors_of(np->csp, fa, sizeof fa)) {
-        for (char *t = strtok(fa, " \t"); t; t = strtok(NULL, " \t"))
-            if (!strcmp(t, "*") || !strcasecmp(t, "https:") || !strcasecmp(t, "http:")) return true;
-        return false;
-    }
-    if (!np->x_frame_options) return true;
-    {
-        /* Steps 3-8 over the split, lowercased values: more than one value containing a known token is
-           refused, several unknown values are the header omitted, a lone `deny` refuses, a lone `sameorigin`
-           refuses a container that is not same origin, and a lone unknown value is ignored. */
-        char buf[256], *save = NULL;
-        int n = 0, known = 0, deny_or_same = 0;
-
-        snprintf(buf, sizeof buf, "%s", np->x_frame_options);
-        for (char *t = strtok_r(buf, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
-            while (*t == ' ' || *t == '\t') t++;
-            for (char *e = t + strlen(t); e > t && (e[-1] == ' ' || e[-1] == '\t'); ) *--e = 0;
-            n++;
-            if (!strcasecmp(t, "deny") || !strcasecmp(t, "sameorigin")) { known = 1; deny_or_same = 1; }
-            else if (!strcasecmp(t, "allowall")) known = 1;
-        }
-        if (n > 1) return !known;
-        return !deny_or_same;
-    }
 }

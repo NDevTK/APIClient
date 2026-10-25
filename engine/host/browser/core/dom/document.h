@@ -330,6 +330,12 @@ void document_state_x_frame_options(JSContext *ctx, char *const *values, size_t 
    policy stating `frame-ancestors`, and when none does, HTML §7.7's check a navigation response's adherence to
    `X-Frame-Options`. */
 bool document_embeddable_cross_origin(JSContext *ctx, const UrlRecord *ancestor);
+/* The routes by which ATTACKER_PAGE holds a handle to post this realm's Document a message (HTML §9.3.3
+   "Posting messages"): `*frame` when it may embed the Document (document_embeddable_cross_origin), `*opener`
+   when the Document is a top-level traversable's whose opener policy keeps the handle of the page that opened
+   it — §7.1.3.2 switches the group of a navigation from a cross-origin opener for every value but
+   `unsafe-none`. */
+void document_message_routes(JSContext *ctx, bool *frame, bool *opener);
 /* HTML's SET THE URL — what HTML §7.4.4 "Non-fragment synchronous \"navigations\""'s URL and history update
    steps step 8 performs ("set the URL given document to newURL"), and the only way a Document's address
    changes without a new Document being installed. PER FLOW: the address rides the running flow's COW delta, so
