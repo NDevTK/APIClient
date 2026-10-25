@@ -2868,7 +2868,8 @@ typedef struct JSConcolicHooks {
        Returns JS_UNINITIALIZED when the operand is not concolic. */
     JSValue (*to_bool)(JSContext *ctx, JSValueConst v, int negate);
     /* `obj[x]` with an UNKNOWN key. Not a coercion of the operand — a lookup that names no particular slot, so
-       the read yields a concolic derived from the base and the key's source. JS_UNINITIALIZED = not concolic. */
+       the read yields a concolic derived from the base and the key's source, or `undefined` where the key's
+       known prefix misses a primitive's whole chain. JS_UNINITIALIZED = not concolic. */
     JSValue (*key_read)(JSContext *ctx, JSValueConst obj, JSValueConst key);
     /* THE NAME an unknown key denotes, as a REAL string — the concolic's own shape. A property key must be an
        atom, which a concolic cannot be, but the shape IS a string and it is stable per source: two writes

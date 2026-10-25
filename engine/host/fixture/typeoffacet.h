@@ -1,14 +1,13 @@
-/* THE TYPE-FACET DOCUMENT: an absent global's member is tested `typeof … === 'string'`, and inside that arm the
-   same member is tested `typeof … === 'number'`. A world that took the first arm has fixed the member's type, so
-   the second test has one answer there and its number arm is a world no value produces. Each witness fetch
-   carries a constant: /api/tf-string marks the reached arm and /api/tf-impossible the world that must not exist.
-   A second absent global's members are compared loosely, so §7.2.13 IsLooselyEqual ( x, y )'s steps decide the
-   types each arm leaves: `== null` holding admits only null, undefined and an [[IsHTMLDDA]] object, failing
-   excludes exactly null and undefined, and `== "5"` holding admits no Boolean (ToNumber gives 5, not 0 or 1).
-   /api/tf-loose-* mark those arms and /api/tf-loose-impossible-* the worlds they rule out. A third global's
-   member ordered `> 5` and held is no Undefined (§7.2.12 IsLessThan answers undefined for NaN), and one whose
-   `startsWith` call completed is no Number (%Number.prototype% holds no startsWith): /api/tf-ord and
-   /api/tf-call mark the arms, /api/tf-ord-impossible and /api/tf-call-impossible the worlds they rule out.
+/* THE TYPE-FACET DOCUMENT: each gate below narrows an absent global member's type facet, and a later test over
+   the same value has an arm no value of the remaining types takes. Each /api/tf-X marks the arm a world takes
+   and /api/tf-X-impossible (or /api/tf-impossible) the world that must not exist:
+   - tf-string: `typeof … === 'string'` held, so `typeof … === 'number'` cannot;
+   - tf-loose-null, -other, -five: §7.2.13 IsLooselyEqual ( x, y )'s steps decide each arm's types (`== null`
+     holding admits null, undefined and an [[IsHTMLDDA]] object, failing neither; `== "5"` admits no Boolean);
+   - tf-ord: `> 5` held, so not Undefined (§7.2.12 IsLessThan answers undefined for NaN);
+   - tf-call: `startsWith` completed, so not a Number (%Number.prototype% holds none);
+   - tf-concat: a concatenation onto a String literal is a String (§13.15.3 step 1.c), never undefined;
+   - tf-prefix: a key beginning "jq" names no member of a String primitive's chain, so the read is undefined.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_TYPEOFFACET_H
@@ -46,6 +45,9 @@ static const char HTML_TYPEOFFACET[] =
     "  if (typeof ocCfg.s === 'number') fetch('/api/tf-call-impossible');"
     "  else fetch('/api/tf-call');"
     "}"
+    "var skKey = 'jq' + window.__tfStrCfg;"
+    "if (void 0 !== skKey) fetch('/api/tf-concat'); else fetch('/api/tf-concat-impossible');"
+    "if ('abc'[skKey]) fetch('/api/tf-prefix-impossible'); else fetch('/api/tf-prefix');"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

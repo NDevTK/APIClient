@@ -15670,7 +15670,7 @@ TF_UNIT void probes_typeoffacet(const char *js, Probe *tab, int *n) {
     fold_row(&ti_tt, &ti_why, !strstr(js, "\"/api/tf-impossible\""),
              "a world that proved the member a string took its `typeof … === 'number'` arm — the typeof outcome was "
              "not filed as the member's type facet");
-    static const char *const LOOSE[5][4] = {
+    static const char *const LOOSE[7][4] = {
         { "tf-loose-null", "\"/api/tf-loose-null\"", "\"/api/tf-loose-impossible-null\"",
           "a world where `lfCfg.v == null` held took `typeof … === 'string'`: the loose equality left String open" },
         { "tf-loose-other", "\"/api/tf-loose-other\"", "\"/api/tf-loose-impossible-other\"",
@@ -15681,9 +15681,13 @@ TF_UNIT void probes_typeoffacet(const char *js, Probe *tab, int *n) {
           "a world where `ocCfg.n > 5` held took `typeof … === 'undefined'`: the ordering did not narrow the type facet" },
         { "tf-call", "\"/api/tf-call\"", "\"/api/tf-call-impossible\"",
           "a world where `ocCfg.s.startsWith('a')` completed took `typeof … === 'number'`: the call did not narrow" },
+        { "tf-concat", "\"/api/tf-concat\"", "\"/api/tf-concat-impossible\"",
+          "a world took `void 0 !== 'jq' + x` false: the concatenation's String type did not decide the equality" },
+        { "tf-prefix", "\"/api/tf-prefix\"", "\"/api/tf-prefix-impossible\"",
+          "a world read a truthy `'abc'['jq' + x]`: the key's prefix did not decide the primitive's chain miss" },
     };
-    const char *lw[5] = { NULL, NULL, NULL, NULL, NULL }; int lt[5] = { 1, 1, 1, 1, 1 };
-    for (int i = 0; i < 5; i++) {
+    const char *lw[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL }; int lt[7] = { 1, 1, 1, 1, 1, 1, 1 };
+    for (int i = 0; i < 7; i++) {
         fold_row(&lt[i], &lw[i], !!strstr(js, LOOSE[i][1]), "NOT REACHED: the arm's witness fetch has no record");
         fold_row(&lt[i], &lw[i], !strstr(js, LOOSE[i][2]), LOOSE[i][3]);
     }
@@ -15695,6 +15699,8 @@ TF_UNIT void probes_typeoffacet(const char *js, Probe *tab, int *n) {
         { LOOSE[2][0], lt[2], "/api/tf-loose-five", SESS_EXPLORE, lw[2] },
         { LOOSE[3][0], lt[3], "/api/tf-ord", SESS_EXPLORE, lw[3] },
         { LOOSE[4][0], lt[4], "/api/tf-call", SESS_EXPLORE, lw[4] },
+        { LOOSE[5][0], lt[5], "/api/tf-concat", SESS_EXPLORE, lw[5] },
+        { LOOSE[6][0], lt[6], "/api/tf-prefix", SESS_EXPLORE, lw[6] },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

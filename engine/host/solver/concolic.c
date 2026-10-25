@@ -134,6 +134,12 @@ typedef struct {
     /* Whether this value is a typeof result (`is_typeof`), or an equality whose subject is one (`cmp_typeof`),
        whatever its operand: a typeof outcome is a fact about its operand's type, never a value to pin. */
     signed char is_typeof, cmp_typeof;
+    /* The CONCOLIC_TYF_* types its mint states the compared value takes (`subj_types`, on an equality; for a
+       typeof subject, its operand's), and on a typeof result its operand's (`typeof_types`): what §13.15.3's
+       concatenation or a String-valued builtin fixes, which a derivation owning no `src` has no facet to
+       hold. 0 on any value that is neither; written at the equality mints and the typeof hook, and carried
+       through a negation with the rest of the observation. */
+    unsigned short cmp_subj_types, typeof_types;
     /* The ordering's own fields, kept apart from the equality's: an equality determines a value on one arm, an
        ordering a bound on both. `rel_op` is normalised subject-on-the-left (`5 < x` arrives as `x > 5`), so
        decide.c reads a relation without knowing which operand the page wrote first. */
@@ -1882,6 +1888,16 @@ static void pred_set_src_own(JSValueConst pred, int own) {
            "a subject's ownership of `src` was stated on something that is not a fresh equality result, or "
            "stated twice, or stated as neither");
     c->cmp_src_own = (signed char)own;
+}
+
+/* An equality's statement of the types its subject's mint fixes, written once at the two equality mints. */
+static void pred_set_subject_types(JSValueConst pred, unsigned types) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(pred, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL && c->cmp_op != OPCMP_NONE && c->cmp_subj_types == 0 && types != 0,
+           "a subject's type set was stated on something that is not a fresh equality result, or stated twice, "
+           "or stated empty");
+    c->cmp_subj_types = (unsigned short)types;
 }
 
 /* See concolic.h. Concretize-on-pin names the value the equality compared and nothing it was derived from:
@@ -3709,8 +3725,8 @@ void concolic_ordering_facet(JSValueConst cond, int holds)
 }
 
 /* The types the equality `c` admits for the value it compares on the arm where it `holds`, and in `*subject`
-   the `src` that value owns (NULL where it owns none, and the answer is then every type): a typeof outcome by
-   §13.5.3.1's row for its operand, a `==` by §7.2.13, any other equality by §7.2.14. */
+   the `src` whose facet holds that value's types (NULL where it owns none): a typeof outcome by §13.5.3.1's
+   row for its operand, a `==` by §7.2.13, any other equality by §7.2.14. */
 static unsigned eq_admitted(JSContext *ctx, const Concolic *c, int holds, const char **subject)
 {
     double num = 0;
@@ -3723,8 +3739,7 @@ static unsigned eq_admitted(JSContext *ctx, const Concolic *c, int holds, const 
         *subject = c->cmp_typeof_of;
         return holds ? row : CONCOLIC_TYF_ALL & ~row;
     }
-    if (c->cmp_src_own != 1 || !c->src) return CONCOLIC_TYF_ALL;
-    *subject = c->src;
+    if (c->cmp_src_own == 1 && c->src) *subject = c->src;
     if (c->cmp_algo != JS_CONCOLIC_EQ_LOOSE) return tyf_strict((ConcolicLit)c->cmp_kind, c->cmp_tok, holds);
     if (c->cmp_kind == CONCOLIC_LIT_STRING) {
         JSValue str = JS_NewString(ctx, c->cmp_tok);
@@ -3760,10 +3775,11 @@ int concolic_equality_outcome(JSContext *ctx, JSValueConst cond)
     unsigned can_hold, can_fail, types;
 
     if (!c || c->cmp_op == OPCMP_NONE || !c->cmp_tok) return -1;
+    DCHECK(c->cmp_subj_types != 0, "an equality reached its outcome with no stated subject type set — both "
+                                   "equality mints state one");
     can_hold = eq_admitted(ctx, c, 1, &subject);
-    if (!subject) return -1;
     can_fail = eq_admitted(ctx, c, 0, &subject);
-    types = concolic_types(subject);
+    types = c->cmp_subj_types & (subject ? concolic_types(subject) : CONCOLIC_TYF_ALL);
     DCHECK(types & (can_hold | can_fail),
            "an equality's two arms each admit only types the compared value's facet excludes — a facet emptied "
            "by an earlier arm is a world the outcome refinement should have pruned before it was filed");
@@ -3986,6 +4002,7 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     if (s->cmp_subj_ident) { d->cmp_subj_ident = strdup(s->cmp_subj_ident); CHECK(d->cmp_subj_ident, "concolic: OOM carrying an equality's subject identity through a negation"); }
     if (s->cmp_typeof_of)  { d->cmp_typeof_of  = strdup(s->cmp_typeof_of);  CHECK(d->cmp_typeof_of,  "concolic: OOM carrying a typeof equality's operand through a negation"); }
     d->cmp_typeof = s->cmp_typeof;
+    d->cmp_subj_types = s->cmp_subj_types;
     d->rel_op  = s->rel_op;
     d->rel_num = s->rel_num;
     if (s->rel_op != REL_NONE && s->facet_src) {
@@ -4047,8 +4064,9 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, ConcolicLit ki
                  src ? (1u << CONCOLIC_WHOSE_WORLD) : 0u,
                  concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2),
                  op, JS_CONCOLIC_EQ_STRICT, kind, tok, src, shape);
-    /* The member compares its own source, so its subject is the value `src` names. */
+    /* The member compares its own source, so its subject is the value `src` names, typed by its facet alone. */
     pred_set_src_own(r, 1);
+    pred_set_subject_types(r, CONCOLIC_TYF_ALL);
     return r;
 }
 /* …and the twin for a relation over two live values, for a component whose own algorithm compares two
@@ -4489,6 +4507,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
         Concolic *rc = JS_GetOpaque(res, g_concolic_class);
 
         if (rc) rc->cmp_typeof = oc->is_typeof;
+        pred_set_subject_types(res, oc->is_typeof ? oc->typeof_types : tyf_of_cty(oc->ty));
         if (oc->typeof_of && rc) {
             rc->cmp_typeof_of = strdup(oc->typeof_of);
             CHECK(rc->cmp_typeof_of, "concolic: OOM naming a typeof equality's operand");
@@ -5706,12 +5725,63 @@ JSValue concolic_key_value_hook(JSContext *ctx, JSValueConst name)
 /* `obj[x]` with an unknown key. Nothing about x says which slot was meant, so the result is a concolic that
    keeps the key's source: a gate on the value still forks, and a sink still solves for the key that would
    reach it. Example-free on purpose: which property the attacker names is what is not known. */
+/* Whether §10.1.8.1 OrdinaryGet ( obj, propertyKey, receiver ) over the primitive `base` misses for every key
+   that begins with `prefix`: no own key of its §7.1.20 ToObject wrapper (a String's `length` and indices) and
+   no own String key of any link of its realm's intrinsic chain begins so. 0 where it cannot say: a prefix a
+   String index could begin, or a link that is not an ordinary object or a primitive's own prototype. */
+static int primitive_chain_misses_prefix(JSContext *ctx, JSValueConst base, const char *prefix, size_t plen)
+{
+    JSClassID id = JS_IsString(base) ? JS_CLASS_STRING : JS_IsNumber(base) ? JS_CLASS_NUMBER
+                 : JS_IsBool(base) ? JS_CLASS_BOOLEAN : JS_IsBigInt(base) ? JS_CLASS_BIG_INT
+                 : JS_IsSymbol(base) ? JS_CLASS_SYMBOL : 0;
+    JSValue o;
+    int misses = 1;
+
+    if (!id || plen == 0) return 0;
+    if (id == JS_CLASS_STRING && (strncmp("length", prefix, plen < 6 ? plen : 6) == 0 ||
+                                  (prefix[0] >= '0' && prefix[0] <= '9')))
+        return 0;
+    for (o = JS_GetClassProto(ctx, id); misses && JS_IsObject(o);) {
+        JSClassID oid = JS_GetClassID(o);
+        JSPropertyEnum *tab;
+        uint32_t n, i;
+        JSValue next;
+
+        if (oid != JS_CLASS_OBJECT && oid != id) { misses = 0; break; }
+        CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, o, JS_GPN_STRING_MASK) == 0,
+              "concolic: an ordinary prototype's own keys could not be listed");
+        for (i = 0; i < n && misses; i++) {
+            const char *name = JS_AtomToCString(ctx, tab[i].atom);
+
+            CHECK(name, "concolic: OOM spelling a prototype's own key");
+            misses = strncmp(name, prefix, plen) != 0;
+            JS_FreeCString(ctx, name);
+        }
+        JS_FreePropertyEnum(ctx, tab, n);
+        next = JS_GetPrototype(ctx, o);
+        CHECK(!JS_IsException(next), "concolic: an intrinsic prototype's [[Prototype]] could not be read");
+        JS_FreeValue(ctx, o);
+        o = next;
+    }
+    JS_FreeValue(ctx, o);
+    return misses;
+}
+
 JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
     const char *src, *root, *f[2];
     char *shape, *ident, *io, *ik;
     JSValue r;
 
     if (!concolic_is(key)) return JS_UNINITIALIZED;
+    /* A String key whose leading bytes are the page's own (a concatenation's prefix before its first hole)
+       names no member of a primitive whose chain holds no key so beginning: the read is the chain's miss. */
+    {
+        const Concolic *kc = JS_GetOpaque(key, g_concolic_class);
+
+        if (!JS_IsObject(obj) && kc->ty == CTY_STRING && kc->hole_span && kc->hole_span[0] > 0 &&
+            primitive_chain_misses_prefix(ctx, obj, kc->shape, (size_t)kc->hole_span[0]))
+            return JS_UNDEFINED;
+    }
     src = concolic_src_c(key);
     root = concolic_root_c(key);
     /* Which object was read is half the identity and half the shape: `a[x]` and `b[x]` are two reads, and two
@@ -5776,6 +5846,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
         Concolic *rc = concolic_is(r) ? JS_GetOpaque(r, g_concolic_class) : NULL;
 
         if (rc) rc->is_typeof = 1;
+        if (rc) rc->typeof_types = (unsigned short)tyf_of_cty(oc->ty);
         if (rc && oc->src_own == 1 && oc->src) {
             rc->typeof_of = strdup(oc->src);
             CHECK(rc->typeof_of, "concolic: OOM naming a typeof result's operand");
