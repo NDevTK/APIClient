@@ -1022,6 +1022,12 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
                 "with a browser delivery (concolic_declare_source) or as a precondition "
                 "(concolic_declare_source_precondition) — the PoC cannot say how an attacker puts these bytes "
                 "there. Declare the source where it is minted", twin->root);
+        /* One delivery per source per world: the bytes entered at the root's declared source read, which
+           every read of that source answered. */
+        DCHECKF(!delivered || concolic_candidate_at_root(twin->root),
+                "a fire-verified @S PoC over `%s` was delivered somewhere other than its root's declared source "
+                "read, so its world may hold two values of one source — concolic_set_candidate delivers at the "
+                "root", twin->root);
         (void)delivered;
     }
     sink_class(cls);   /* the row exists before anything is stored against it */
@@ -1994,7 +2000,17 @@ static void observe_runway(Cand *e, const Flow *f) {
    and closes, so a candidate's payload and endpoint suppression cannot leak into an ordinary flow scheduled
    after it, which would read the attacker's concrete string where its concolic source belongs. */
 void solve_flow_begin(Flow *f) {
-    concolic_set_candidate(f ? f->cand_src : NULL, f ? f->cand_payload : NULL);
+    const char *root = NULL;
+
+    /* A sink candidate is delivered through its search's root; a witness verification pins a value at its
+       identity and is no search's. */
+    if (f && f->cand_src && !f->cand_vfy) {
+        const Cand *rc = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+
+        DCHECK(rc != NULL && rc->root != NULL, "a candidate flow was switched in whose search holds no root");
+        root = rc ? rc->root : NULL;
+    }
+    concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
     /* A witness verification substitutes and suppresses like a sink candidate and is no search's: its sinks
        take the exploration arm, which detect_sink then declines. */

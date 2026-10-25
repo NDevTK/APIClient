@@ -2083,15 +2083,17 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
     if (c && !JS_IsUninitialized(c->proto)) JS_MarkValue(rt, c->proto, mark_func);
 }
 
-/* @S candidate injection: during a verification re-run, the attacker source named by g_cand_src returns the
-   concrete breakout payload instead of a concolic, so the real code builds the exploit and it fires. */
-static char *g_cand_src = NULL, *g_cand_payload = NULL;
+/* @S candidate injection: during a verification re-run, every read of the source g_cand_at returns
+   g_cand_bytes instead of a concolic, so the real code builds the exploit and it fires. g_cand_src and
+   g_cand_payload are the search's identity and breakout as the running flow carries them; concolic_set_candidate
+   derives the other two from the search's root. */
+static char *g_cand_src = NULL, *g_cand_payload = NULL, *g_cand_at = NULL, *g_cand_bytes = NULL;
 
 /* Whether this source is the one a candidate re-fire substitutes. One spelling, because it is asked at every
    mint a source can be reached through, including a source installed as a plain property value (see
    concolic_derived). */
 static int cand_matches(const char *src) {
-    return g_cand_src && src && !strcmp(src, g_cand_src);
+    return g_cand_at && src && !strcmp(src, g_cand_at);
 }
 
 /* Whether the mint will answer a plain value for a source (concolic.h says why it is this disjunction). Both
@@ -2112,10 +2114,11 @@ int concolic_src_determined(const char *src) {
    merely owns it (concolic.h states the pair; HTML §9.3.2.2 "User agents" states why one exists). The
    claimant's release then takes the property with the row. */
 /* `key` is the URL §5.2 serialization of the name of the application/x-www-form-urlencoded tuple whose value
-   the payload is, within the component (concolic_new_urlencoded_value), and NULL for a row whose payload is the
-   component's own bytes. */
+   the payload is, `parent` the declared source whose bytes carry that tuple, and `serialize` the claimant's §5.2
+   value serializer (concolic_new_urlencoded_value); all three NULL for a row whose payload is the component's
+   own bytes. A candidate over a keyed root is delivered at `parent` (concolic_set_candidate). */
 typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver;
-                 int principal; char *key; }
+                 int principal; char *key; char *parent; char *(*serialize)(const char *s, size_t n); }
         SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
@@ -2343,6 +2346,8 @@ void concolic_declare_source(const char *component, const char *src, const char 
        (concolic_declare_source_principal); written here at the mint so the column is never uninitialized. */
     g_srcs[g_srcs_n].principal = 0;
     g_srcs[g_srcs_n].key = NULL;
+    g_srcs[g_srcs_n].parent = NULL;
+    g_srcs[g_srcs_n].serialize = NULL;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
 }
@@ -2369,6 +2374,7 @@ void concolic_undeclare_sources(const char *component)
         free(g_srcs[i].src);
         free(g_srcs[i].encode);
         free(g_srcs[i].key);
+        free(g_srcs[i].parent);
         /* The order of the rest is preserved rather than closed with a swap: lookups are by identity, but a
            walk's order must not depend on which unrelated component released first. */
         memmove(&g_srcs[i], &g_srcs[i + 1], (size_t)(g_srcs_n - i - 1) * sizeof *g_srcs);
@@ -2693,7 +2699,8 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
               "concolic: an @S candidate's bytes are entering the program with no flow running — a delivery is "
               "an observation ABOUT a flow (its ladder rung, its survival fraction, its PoC), so a delivery "
               "belonging to nobody is a substitution installed outside the scheduler's switch");
-        DCHECK(f->cand_payload != NULL && !strcmp(f->cand_payload, payload),
+        DCHECK(f->cand_payload != NULL && g_cand_payload != NULL && !strcmp(f->cand_payload, g_cand_payload) &&
+               g_cand_bytes != NULL && !strcmp(payload, g_cand_bytes),
                "an @S candidate's bytes are entering the program under a flow that is not carrying them — the "
                "survival and arrival rungs, and any PoC, are recorded against the RUNNING flow, so this "
                "delivery is about to be credited to a flow whose own payload is a different string");
@@ -2736,9 +2743,8 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
            "each, so this value took them from two, and the payload would be percent-encoded for one source "
            "and prefixed for the other");
     if (!at && !encode) return JS_NewString(ctx, payload);   /* nothing carries these bytes: delivered as itself */
-    /* A tuple's value arrives as written: the reproduction serializes it (URL §5.2) and the page's own §5.1
-       parse percent-decodes every byte the serialization encoded. */
-    if (at && at->key) return JS_NewString(ctx, payload);
+    DCHECK(!at || !at->key, "a candidate was delivered at a keyed tuple's own read — concolic_set_candidate "
+                            "delivers it at the parent component, whose parse yields the tuple");
     if (!encode) encode = "";
     /* The same key as the encode set: the declared and the shared halves of one row's answer, so reading them
        from different rows would apply one mechanism's rule to another's bytes. */
@@ -2779,10 +2785,37 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
    caller, the scheduler. A mismatch would have an exploring flow read an attacker payload where its concolic
    source belongs, silently stop forking and stop being a detectable sink. Two-sided: a candidate flow must
    have its payload installed, and any other flow must have none. */
-void concolic_set_candidate(const char *src, const char *payload) {
-    free(g_cand_src); free(g_cand_payload);
-    g_cand_src = src ? strdup(src) : NULL;
-    g_cand_payload = payload ? strdup(payload) : NULL;
+void concolic_set_candidate(const char *src, const char *root, const char *payload) {
+    int row = root ? root_declared_row(root) : -1;
+
+    free(g_cand_src); free(g_cand_payload); free(g_cand_at); free(g_cand_bytes);
+    g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = NULL;
+    DCHECK(!!src == !!payload, "an @S substitution was installed with an identity and no payload, or the reverse");
+    if (src) {
+        g_cand_src = strdup(src);
+        g_cand_payload = strdup(payload);
+        CHECK(g_cand_src && g_cand_payload, "concolic: OOM installing an @S candidate");
+        /* One delivery per source per world: the payload enters at the root's declared source read, so every
+           read of that source answers it and every derivation re-runs on it. A keyed root rides its parent
+           component as one urlencoded tuple (URL §5.2). A root no component declares (a precondition, or a
+           witness verification's pinned value, which passes no root) substitutes at the identity itself. */
+        if (row >= 0 && g_srcs[row].key) {
+            char *v = g_srcs[row].serialize(payload, strlen(payload));
+            size_t n;
+
+            CHECK(v != NULL, "concolic: OOM serializing a candidate as a tuple's value");
+            n = strlen(g_srcs[row].key) + strlen(v) + 2;
+            g_cand_bytes = malloc(n);
+            CHECK(g_cand_bytes != NULL, "concolic: OOM composing a candidate's tuple");
+            snprintf(g_cand_bytes, n, "%s=%s", g_srcs[row].key, v);
+            free(v);
+            g_cand_at = strdup(g_srcs[row].parent);
+        } else {
+            g_cand_bytes = strdup(payload);
+            g_cand_at = strdup(row >= 0 ? g_srcs[row].src : src);
+        }
+        CHECK(g_cand_at && g_cand_bytes, "concolic: OOM installing an @S candidate's delivery");
+    }
     {
         const Flow *f = flow_running();
         DCHECK(!!src == !!(f && f->cand_src),
@@ -2801,6 +2834,13 @@ void concolic_set_candidate(const char *src, const char *payload) {
    It is not FLOW_RUNG_DELIVERED (flow.h), the WFQ's monotone comparator coordinate: this is the live answer
    and is cleared for a flow entered fresh, because a restarted candidate's bytes are not in its replay. See
    the writer in concolic_deliver for why the opposite reset rules are both needed. */
+int concolic_candidate_at_root(const char *root) {
+    int row = root ? root_declared_row(root) : -1;
+
+    if (row < 0 || !g_cand_at) return 0;
+    return !strcmp(g_cand_at, g_srcs[row].key ? g_srcs[row].parent : g_srcs[row].src) && g_cand_delivered;
+}
+
 int concolic_candidate_delivered(void) {
     DCHECK(!g_cand_delivered || g_cand_payload != NULL,
            "a flow is recorded as having delivered its @S payload while no substitution is installed — the "
@@ -3236,7 +3276,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     member_row_file(c, shape, ident, field);
     if (field) JS_FreeCString(ctx, field);
     if (cand_matches(shape)) {                               /* candidate run: this source -> the concrete breakout */
-        r = concolic_deliver(ctx, shape, c->root, g_cand_payload);
+        r = concolic_deliver(ctx, shape, c->root, g_cand_bytes);
         free(shape); free(ident);
         return r;
     }
@@ -5045,7 +5085,8 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
 
 /* See concolic.h. */
 JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *component, const char *op, JSValueConst list,
-                                      JSValueConst name, const char *key, JSValue example)
+                                      JSValueConst name, const char *key,
+                                      char *(*serialize)(const char *s, size_t n), JSValue example)
 {
     JSValueConst ops[2] = { list, name };
     const char *psrc = concolic_src_c(list), *fields[3];
@@ -5053,8 +5094,9 @@ JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *component, con
     char *src, *ident;
     JSValue r;
 
-    DCHECK(concolic_is(list) && !concolic_is(name) && key != NULL && *key && component != NULL,
-           "a tuple's value was minted over a list that is not unknown, a name that is, or no spelled key");
+    DCHECK(concolic_is(list) && !concolic_is(name) && key != NULL && *key && component != NULL && serialize,
+           "a tuple's value was minted over a list that is not unknown, a name that is, no spelled key or no "
+           "serializer");
     row = root_declared_row(concolic_root_c(list));
     /* Named residual. Not covered: a list parsed from a derivation of a component (`location.hash.slice(1)`), or
        from a carrier other than the query, whose reproduction this row cannot compose. Next diff builds: the
@@ -5067,7 +5109,9 @@ JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *component, con
     if (!concolic_source_declared_by(component, src)) {
         concolic_declare_source(component, src, "", '?', SRC_DELIVER_ADDRESS);
         g_srcs[g_srcs_n - 1].key = strdup(key);
-        CHECK(g_srcs[g_srcs_n - 1].key, "concolic: OOM declaring a tuple's key");
+        g_srcs[g_srcs_n - 1].parent = strdup(psrc);
+        g_srcs[g_srcs_n - 1].serialize = serialize;
+        CHECK(g_srcs[g_srcs_n - 1].key && g_srcs[g_srcs_n - 1].parent, "concolic: OOM declaring a tuple's key");
     }
     for (i = 0; i < 2; i++) fields[i] = ident_of_operand(ctx, ops[i]);
     fields[2] = op;
@@ -6171,7 +6215,9 @@ void concolic_free(void)
        this call. */
     free(g_cand_src);
     free(g_cand_payload);
-    g_cand_src = g_cand_payload = NULL;
+    free(g_cand_at);
+    free(g_cand_bytes);
+    g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = NULL;
     /* The delivery fact goes with the pair it is about: concolic_candidate_delivered asserts a 1 never stands
        beside a NULL payload. This is the running flow's live copy; parked copies went with their blobs. */
     g_cand_delivered = 0;
@@ -6279,7 +6325,7 @@ static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *s
            under substitution reads the attacker's bytes, not what the address held. */
         JS_FreeValue(ctx, example);
         free(ident);
-        return concolic_deliver(ctx, src, root, g_cand_payload);
+        return concolic_deliver(ctx, src, root, g_cand_bytes);
     }
     return concolic_alloc(ctx, shape, src, root, root_whose, ident, example);
 }

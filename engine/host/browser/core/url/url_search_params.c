@@ -478,6 +478,13 @@ static int usp_find(const UspList *l, const char *name, size_t nn, const char *v
     return -1;
 }
 
+/* URL §5.2 application/x-www-form-urlencoded serializing of one tuple value: the urlencoded percent-encode set.
+   The delivery of a candidate over a query parameter runs it (concolic_new_urlencoded_value). Owned. */
+static char *usp_serialize_value(const char *s, size_t n)
+{
+    return url_percent_encode(s, n, URL_SET_URLENCODED);
+}
+
 /* URL §6.2's get(name) and has(name, value) over a list parsed from an unknown string ask one question of the
    string: whether its list holds a tuple whose name is `name`. It is asked through the name chain, keyed by the
    name spelled in §1.3's urlencoded percent-encode set (injective, so a name holding U+0000 keys apart). */
@@ -542,7 +549,7 @@ static int usp_lookup_answer(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, 
         *presult = concolic_new_derived(ctx, "URLSearchParams.get", ops, 2, ex);
     } else {
         *presult = concolic_new_urlencoded_value(ctx, USP_COMPONENT, "URLSearchParams.get", u->unknown, argv[0],
-                                                 member, ex);
+                                                 member, usp_serialize_value, ex);
     }
     free(member);
     concolic_state_string(*presult);   /* §6.2: the found arm's value is a USVString */

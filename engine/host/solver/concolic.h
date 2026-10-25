@@ -525,9 +525,15 @@ JSValue concolic_source_wrap_joint_affine(JSContext *ctx, const char *const *sha
    String.prototype.concat does not; see JSConcolicAddOp in quickjs.h. */
 int         concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op);
 
-/* @S candidate injection: during a verification re-run, the source identified by `src` (a field path like
-   "{state}.code") returns the concrete `payload` instead of a concolic. NULL/NULL clears it. */
-void        concolic_set_candidate(const char *src, const char *payload);
+/* @S candidate injection for the running flow: the search identified by `src`, over the delivery root `root`,
+   tries `payload`. Every read of the root's declared source returns the payload through that source's real
+   transform, a keyed root's as its tuple in the parent component, so one delivered value answers every read in
+   the world. A root no component declares (or NULL, a witness verification) substitutes at `src` itself.
+   NULL src and payload clear it. */
+void        concolic_set_candidate(const char *src, const char *root, const char *payload);
+/* Whether the installed candidate is delivered at `root`'s declared source read (its parent's, for a keyed root)
+   and its bytes have entered the program: the one delivery a fired PoC over a declared root may have. */
+int         concolic_candidate_at_root(const char *root);
 
 /* …AND WHETHER THAT SUBSTITUTION HAS ACTUALLY HAPPENED YET IN THE RUNNING FLOW. Installing a substitution says
    what a source read WILL return; this says whether one has been reached. They are different facts and only
@@ -965,11 +971,13 @@ JSValue     concolic_new_derived(JSContext *ctx, const char *op, const JSValueCo
                                  JSValue example);
 /* The value of the first tuple named `name` in the application/x-www-form-urlencoded list (URL §5.1) parsed from
    the unknown string `list`, as `op` reads it. Where `list` is a declared query's own bytes, the value is its own
-   injection point and delivery root, `<list's shape>[key]`, which `component` declares an address row for on
-   first use: the payload rides the query as that tuple's value, `key` being the name's URL §5.2 serialization.
-   Otherwise it is concolic_new_derived over (list, name). Operands borrowed, `example` consumed. */
+   identity and delivery root, `<list's shape>[key]`, which `component` declares an address row for on first use:
+   the payload rides the query as that tuple's value, `key` being the name's URL §5.2 serialization and
+   `serialize` the claimant's §5.2 value serializer, which a candidate's delivery runs. Otherwise it is
+   concolic_new_derived over (list, name). Operands borrowed, `example` consumed. */
 JSValue     concolic_new_urlencoded_value(JSContext *ctx, const char *component, const char *op, JSValueConst list,
-                                          JSValueConst name, const char *key, JSValue example);
+                                          JSValueConst name, const char *key,
+                                          char *(*serialize)(const char *s, size_t n), JSValue example);
 /* concolic_new_derived over the elements of the array `list`, which is borrowed. */
 JSValue     concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example);
 struct JSBufferUnknownPiece;
