@@ -15342,25 +15342,31 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
    `onceread` the same derived reads, read once, fire. */
 TF_UNIT void probes_twinread(const char *js, Probe *tab, int *n) {
     static const char *const roots[2] = { LOCATION_SEARCH_SRC, LOCATION_HASH_SRC };
-    const char *tw_why[2] = { NULL, NULL }, *on_why[2] = { NULL, NULL };
-    int tw_tt[2] = { 1, 1 }, on_tt[2] = { 1, 1 }, i;
+    const char *tr_why[2] = { NULL, NULL }, *tw_why[2] = { NULL, NULL }, *on_why[2] = { NULL, NULL };
+    int tr_tt[2] = { 1, 1 }, tw_tt[2] = { 1, 1 }, on_tt[2] = { 1, 1 }, i;
 
     for (i = 0; i < 2; i++) {
         char src[192] = "";
         int has = s_rooted_source(js, "eval", roots[i], src, sizeof src);
+        int st = has ? s_stage(js, "eval", src) : S_UNSEEN;
 
-        fold_row(&tw_tt[i], &tw_why[i], !(has && s_stage(js, "eval", src) == S_FIRED),
+        fold_row(&tr_tt[i], &tr_why[i], st >= S_RAN,
+                 "NOT REACHED: no eval search over this component has run a candidate, so whether a re-fire world "
+                 "holds one value of it is not asked yet");
+        fold_row(&tw_tt[i], &tw_why[i], st != S_FIRED,
                  i == 0 ? "a fired eval record over the query: the re-fire world read `x` as the payload while "
                           "`location.search` read empty, two values of one delivered URL"
                         : "a fired eval record over the fragment: the re-fire world read the slice as the payload "
                           "while `location.hash` read empty, two values of one delivered URL");
-        fold_row(&on_tt[i], &on_why[i], has && s_stage(js, "eval", src) == S_FIRED,
+        fold_row(&on_tt[i], &on_why[i], st == S_FIRED,
                  i == 0 ? "the query parameter's eval did not fire with one read of the query"
                         : "the fragment slice's eval did not fire with one read of the fragment");
     }
     const Probe rows[] = {
-        { "tw-key-one-world", tw_tt[0], "twKey", SESS_EXPLORE, tw_why[0] },
-        { "tw-hash-one-world", tw_tt[1], "twFrag", SESS_EXPLORE, tw_why[1] },
+        { "tw-key-ran", tr_tt[0], "twKey", SESS_EXPLORE, tr_why[0] },
+        { "tw-hash-ran", tr_tt[1], "twFrag", SESS_EXPLORE, tr_why[1] },
+        { "tw-key-one-world", tw_tt[0], "twKey", SESS_EXPLORE, tw_why[0], .reach = "tw-key-ran" },
+        { "tw-hash-one-world", tw_tt[1], "twFrag", SESS_EXPLORE, tw_why[1], .reach = "tw-hash-ran" },
         { "on-key-fires", on_tt[0], "onKey", SESS_EXPLORE, on_why[0] },
         { "on-hash-fires", on_tt[1], "onFrag", SESS_EXPLORE, on_why[1] },
     };
