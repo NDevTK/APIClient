@@ -122,6 +122,12 @@ void file_system_local_add(JSContext *ctx, const char *name, const char *type,
    Minted in `ctx`'s realm, because a File wears that realm's File.prototype. OWNED. */
 JSValue file_system_file_new(JSContext *ctx, JSValueConst entry);
 
+/* A File the person hands the document from outside the modelled device — HTML §6.11.5's drop of a file dragged
+   from another application — whose bytes are the attacker source `file:NAME` (delivery `user-file`), declared
+   as file_system_local_add declares it, with no example, no type and a zero timestamp. The device is not
+   written. Minted in `ctx`'s realm. OWNED. */
+JSValue file_system_user_file_new(JSContext *ctx, const char *name);
+
 /* The MIME type the device recorded for a file entry, or "" — OWNED (JS_FreeCString). */
 const char *file_system_type_cstr(JSContext *ctx, JSValueConst file);
 /* The entry's §2.1 NAME. OWNED (JS_FreeCString). */

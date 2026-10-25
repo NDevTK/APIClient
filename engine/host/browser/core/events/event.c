@@ -61,6 +61,7 @@
 #include "core/events/mouse_event.h"
 #include "core/events/pointer_event.h"
 #include "core/events/wheel_event.h"
+#include "core/events/drag_event.h"
 #include "core/events/keyboard_event.h"
 #include "core/events/focus_event.h"
 #include "core/events/event_path.h"
@@ -1098,6 +1099,8 @@ static void event_declare_subclasses(JSContext *ctx)
        interface" declares the one it extends: UI Events hands BOTH names to [POINTEREVENTS4] in its own
        terms section, which is why neither is cited to UI Events here or in either component. */
     wheel_event_init(ctx);
+    /* `DragEvent : MouseEvent` (HTML §6.11.4), beside the other two that extend it. */
+    drag_event_init(ctx);
     keyboard_event_init(ctx);
     focus_event_init(ctx);
 }
@@ -1112,6 +1115,7 @@ static void event_free_subclasses(JSRuntime *rt)
 {
     focus_event_free(rt);
     keyboard_event_free(rt);
+    drag_event_free(rt);
     wheel_event_free(rt);
     pointer_event_free(rt);
     mouse_event_free(rt);

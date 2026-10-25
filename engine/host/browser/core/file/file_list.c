@@ -236,8 +236,25 @@ JSValue file_list_new(JSContext *ctx, JSValue files)
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "FileList: a list object could not be allocated");
     DCHECK(g_files_atom != JS_ATOM_NULL, "the FileList slot key was not interned");
-    JS_DefinePropertyValue(ctx, obj, g_files_atom, files, 0);   /* CONSUMES `files` */
+    /* Writable so a live list (HTML §6.11.3's `files`) can be refilled by file_list_set_files. */
+    JS_DefinePropertyValue(ctx, obj, g_files_atom, files, JS_PROP_WRITABLE);   /* CONSUMES `files` */
     return obj;
+}
+
+void file_list_set_files(JSContext *ctx, JSValueConst list, JSValue files)
+{
+    uint32_t n, i;
+
+    DCHECK(file_list_is(ctx, list) && JS_IsArray(files), "a FileList was refilled with something that is not a "
+                                                         "list of files, or a list was refilled that is not one");
+    n = fl_count(ctx, files);
+    for (i = 0; i < n; i++) {
+        JSValue f = JS_GetPropertyUint32(ctx, files, i);
+
+        DCHECK(blob_file_name_of(f) != NULL, "a FileList was refilled with a value that is not a File");
+        JS_FreeValue(ctx, f);
+    }
+    JS_SetProperty(ctx, (JSValue)list, g_files_atom, files);   /* CONSUMES `files` */
 }
 
 JSValue file_list_new_empty(JSContext *ctx)

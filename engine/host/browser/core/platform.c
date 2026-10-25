@@ -40,6 +40,7 @@
 #include "core/fetch/response.h"
 #include "core/file/blob.h"
 #include "core/file/file_reader.h"
+#include "core/clipboard/data_transfer.h"
 #include "core/file/file_system.h"
 #include "core/file/file_system_access.h"
 #include "core/file/file_picker.h"
@@ -188,6 +189,7 @@ static void d_queuing_strategy(JSContext *c, const PlatformAgent *a) { (void)a; 
 static void d_writable_stream(JSContext *c, const PlatformAgent *a) { (void)a; writable_stream_init(c); }
 static void d_transform_stream(JSContext *c, const PlatformAgent *a) { (void)a; transform_stream_init(c); }
 static void d_blob(JSContext *c, const PlatformAgent *a) { (void)a; blob_init(c); }
+static void d_data_transfer(JSContext *c, const PlatformAgent *a) { (void)a; data_transfer_init(c); }
 static void d_encoding(JSContext *c, const PlatformAgent *a) { (void)a; encoding_init(c); }
 static void d_text_stream(JSContext *c, const PlatformAgent *a) { (void)a; text_stream_init(c); }
 static void d_event_target(JSContext *c, const PlatformAgent *a) { (void)a; event_target_init(c); }
@@ -383,6 +385,7 @@ static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
    BlobPart and BodyInit position checks. It takes the runtime: §8's blob URL store is a value and its two keys are
    atoms, and §5's slot key is one of each, all agent-lifetime, freed with JS_FreeValueRT and JS_FreeAtomRT. */
 static void r_blob(JSRuntime *rt) { blob_free(rt); }
+static void r_data_transfer(JSRuntime *rt) { data_transfer_free(rt); }
 /* URL §6.1 "URL class" and §6.2 "URLSearchParams class": two class ids (one the brand Fetch §5.2's BodyInit arm
    reads a URLSearchParams body through), runtime handles and pool indices, with no JSValue or JSAtom, so neither
    takes the runtime. These are the third and fourth rows, so reverse declaration order runs them last but for
@@ -648,6 +651,9 @@ static const PlatformComponent PLATFORM[] = {
        no document half; blob_install_protos places both interface objects. This row also declares §5 "The
        FileList Interface" (blob_init calls file_list_init), whose own realm intrinsic places its interface object. */
     { "blob",                d_blob,                NULL,        r_blob },
+    /* HTML §6.11.3's DataTransfer with its §6.11.3.1 item list and §6.11.3.2 items, `[Exposed=Window]` and
+       built per realm. After `blob`: a store's `files` is a §5 FileList of §4 File objects. */
+    { "data_transfer",       d_data_transfer,       NULL,        r_data_transfer },
     /* Encoding §7.2 TextDecoder, §7.4 TextEncoder, §7.5 TextDecoderStream and §7.6 TextEncoderStream, all
        `[Exposed=*]`: no document half. */
     { "encoding",            d_encoding,            NULL,        r_encoding },
@@ -1118,6 +1124,7 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "URLSearchParams",       "url_search_params" },
     { "FormData",              "form_data" },
     { "Blob",                  "blob" },
+    { "DataTransfer",          "data_transfer" },
     { "TextEncoder",           "encoding" },
     { "TextDecoderStream",     "text_stream" },
     { "ReadableStream",        "readable_stream" },
@@ -1129,6 +1136,7 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     /* Both owed by the `event` row: message_event_install_realm and error_event_install_realm place them, and
        core/events/event.c's event_init declares both. */
     { "MessageEvent",          "event" },
+    { "DragEvent",             "event" },
     { "ErrorEvent",            "event" },
     { "MessageChannel",        "message_port" },
     { "XMLHttpRequest",        "xml_http_request" },

@@ -168,16 +168,17 @@ function docSinkPin(p, f) {
     ? null : f + " is not {principal, equals, kind, loose[, subject]}";
 }
 /* One act of solve.c's `acts`: a click is stated as `click` of type `click`, the person typing into a text
-   control as `input` of type `input`, `keyup` or `change`, any other user-interface event as `dispatch`, on a
-   locator a page script resolves (core/events/listener_act.h). */
-const SINK_ACT_KINDS = Object.freeze(["click", "dispatch", "input"]);
+   control as `input` of type `input`, `keyup` or `change`, the person dropping a file as `drop` of type `drop`,
+   any other user-interface event as `dispatch`, on a locator a page script resolves
+   (core/events/listener_act.h). */
+const SINK_ACT_KINDS = Object.freeze(["click", "dispatch", "input", "drop"]);
 const SINK_TYPING_TYPES = Object.freeze(["input", "keyup", "change"]);
 function docSinkAct(a, f) {
   return docIsRecord(a) && SINK_ACT_KINDS.indexOf(a.kind) >= 0 && docIsName(a.target) && docIsName(a.type) &&
-         (a.kind === "click") === (a.type === "click") &&
+         (a.kind === "click") === (a.type === "click") && (a.kind === "drop") === (a.type === "drop") &&
          (a.kind !== "input" || SINK_TYPING_TYPES.indexOf(a.type) >= 0) && (!("handler" in a) || docIsName(a.handler))
-    ? null : f + " is not {kind: click|dispatch|input, target, type[, handler]} with a click exactly where the "
-           + "type is click and typing only under input, keyup or change";
+    ? null : f + " is not {kind: click|dispatch|input|drop, target, type[, handler]} with a click or a drop "
+           + "exactly where the type is click or drop, and typing only under input, keyup or change";
 }
 function docSink(e, f) {
   if (!docIsRecord(e)) return f + " is not an object";

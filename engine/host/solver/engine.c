@@ -2,6 +2,9 @@
 #include "core/fetch/fetch.h"
 #include "core/events/listener_act.h"   /* the user act a driven listener is reached by, stated by a PoC */
 #include "core/html/input_value.h"      /* the person typing into a text control, a drive's typing act */
+#include "core/clipboard/data_transfer.h"   /* a drop act's drag data store */
+#include "core/events/drag_event.h"        /* a drop act's DragEvent */
+#include "core/file/file_system.h"         /* a drop act's user file */
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/heap.h>   /* emscripten_get_heap_max: the linear memory's ceiling, RAM pressure's limit */
 #else
@@ -6264,6 +6267,36 @@ static void engine_orphan_type(JSContext *ctx, JSValueConst fn, uint64_t hash, i
     input_value_user_edit(ctx, control, src);
 }
 
+/* The event a driven `drop` listener is handed when the person drops a file dragged from another application
+   (HTML §6.11.5): fire a DND event's DragEvent named drop (§6.11.4), whose DataTransfer is associated with a drag
+   data store in the read-only mode holding one File item. The File's bytes are the attacker source
+   `file:drop-<locator>[-pos].bin` (core/file/file_system.h's user file). No page dragstart ran, so the store's
+   allowed effects state is still "uninitialized", and the drop's dropEffect is the current drag operation that
+   state and a "copy" dropEffect give in §6.11.5's table. Owned.
+   Named residual. Not covered: the dragenter and dragover the browser fires at the target first, the drop
+   firing only when one was canceled, and the association broken after dispatch. Next diff builds: the drop
+   act as §6.11.5's sequence dispatched through DOM §2.9 at the act's target, with this drive's call replaced
+   by that dispatch. Absence shows as: a fire-verified drop PoC on a target whose dragover listener never
+   cancels, or a page reading a stashed dataTransfer's files after its listener returned. */
+static JSValue engine_attacker_drop_event(JSContext *ctx, uint64_t hash, int pos) {
+    char name[64];
+    JSValue file, files, dt, global, ev;
+
+    if (pos > 0) snprintf(name, sizeof name, "drop-%016llx-%d.bin", (unsigned long long)hash, pos);
+    else snprintf(name, sizeof name, "drop-%016llx.bin", (unsigned long long)hash);
+    file = file_system_user_file_new(ctx, name);
+    files = JS_NewArray(ctx);
+    CHECK(!JS_IsException(files), "engine: OOM building a dropped file's list");
+    JS_DefinePropertyValueUint32(ctx, files, 0, file, JS_PROP_C_W_E);
+    dt = data_transfer_new_for_drag(ctx, files, DND_MODE_READ_ONLY, "copy", "uninitialized");
+    JS_FreeValue(ctx, files);
+    global = JS_GetGlobalObject(ctx);
+    ev = drag_event_new_for_dnd(ctx, "drop", global, dt);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, dt);
+    return ev;
+}
+
 static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash, int pos,
                                    const char *act) {
     JSValue *args = NULL, self, *base;
@@ -6305,6 +6338,11 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
     k = 0;
     if (act && strstr(act, "\"kind\":\"message\"") && argc > 0) {
         args[0] = engine_attacker_message_event(ctx, hash, pos);
+        for (k = 1; k < argc; k++) args[k] = JS_UNDEFINED;
+    }
+    /* A driven `drop` listener is handed the DragEvent the person's drop fires. */
+    if (act && strstr(act, "\"kind\":\"drop\"") && argc > 0) {
+        args[0] = engine_attacker_drop_event(ctx, hash, pos);
         for (k = 1; k < argc; k++) args[k] = JS_UNDEFINED;
     }
     for (; k < argc; k++) {

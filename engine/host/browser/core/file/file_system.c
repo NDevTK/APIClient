@@ -546,20 +546,13 @@ JSValue file_system_locate(JSContext *ctx, const char *root, const char *const *
 
 /* ---- §2.3.1's File over an entry -------------------------------------------------------------------------- */
 
-JSValue file_system_file_new(JSContext *ctx, JSValueConst entry)
+/* A File over binary data `data` (borrowed), with its type, name and timestamp. */
+static JSValue fs_file_over(JSContext *ctx, JSValueConst data, const char *type, const char *name, double modified)
 {
-    JSValue data, f;
-    const char *type, *name;
     size_t len = 0;
-    char *bytes;
+    char *bytes = file_system_value_bytes(ctx, data, &len);
+    JSValue f = file_new(ctx, bytes, len, type, strlen(type), name, strlen(name), (int64_t)modified);
 
-    DCHECK(file_system_is_file(entry), "§2.3.1's File was asked for over an entry that is not a file entry");
-    data = file_system_data(ctx, entry);
-    type = file_system_type_cstr(ctx, entry);
-    name = file_system_name_cstr(ctx, entry);
-    bytes = file_system_value_bytes(ctx, data, &len);
-    f = file_new(ctx, bytes, len, type, strlen(type), name, strlen(name),
-                 (int64_t)file_system_modified(ctx, entry));
     CHECK(!JS_IsException(f), "file system: §2.3.1's File could not be allocated");
     /* THE SOURCE TRAVELS WITH THE BYTES. A File whose byte sequence is external input is an attacker-controlled
        path to whatever the page does with `text()`, and that identity is what an @S candidate is delivered to
@@ -567,6 +560,19 @@ JSValue file_system_file_new(JSContext *ctx, JSValueConst entry)
     if (concolic_is(data))
         blob_set_source(ctx, f, concolic_shape_c(data), concolic_src_c(data));
     free(bytes);
+    return f;
+}
+
+JSValue file_system_file_new(JSContext *ctx, JSValueConst entry)
+{
+    JSValue data, f;
+    const char *type, *name;
+
+    DCHECK(file_system_is_file(entry), "§2.3.1's File was asked for over an entry that is not a file entry");
+    data = file_system_data(ctx, entry);
+    type = file_system_type_cstr(ctx, entry);
+    name = file_system_name_cstr(ctx, entry);
+    f = fs_file_over(ctx, data, type, name, file_system_modified(ctx, entry));
     JS_FreeCString(ctx, type);
     JS_FreeCString(ctx, name);
     JS_FreeValue(ctx, data);
@@ -635,6 +641,24 @@ void file_system_local_add(JSContext *ctx, const char *name, const char *type,
     data = concolic_source_wrap(ctx, shape, src, file_system_bytes_value(ctx, bytes, len));
     file_system_set_data(ctx, entry, data);
     JS_FreeValue(ctx, entry);
+}
+
+JSValue file_system_user_file_new(JSContext *ctx, const char *name)
+{
+    char shape[128], src[128];
+    JSValue data, f;
+
+    DCHECK(g_ready, "a user file was handed over before file_system_init built the model");
+    DCHECK(name != NULL && strchr(name, '\\') == NULL && file_system_valid_name(name, strlen(name)),
+           "a user file was named with something §2.1 does not admit or with a path component");
+    snprintf(shape, sizeof shape, "{file:%s}", name);
+    snprintf(src, sizeof src, "file:%s", name);
+    fs_declare_bytes_source(src);
+    /* No example: the person's file is the attacker's, and no byte of it was supplied to this engine. */
+    data = concolic_source_wrap(ctx, shape, src, file_system_bytes_value(ctx, "", 0));
+    f = fs_file_over(ctx, data, "", name, 0);
+    JS_FreeValue(ctx, data);
+    return f;
 }
 
 /* ---- the model's own lifetime ---------------------------------------------------------------------------- */

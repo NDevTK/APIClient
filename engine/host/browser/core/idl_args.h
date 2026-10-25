@@ -227,6 +227,11 @@ typedef enum {
        matters because idl_split_longer_type answers the longer entry's type, which here is the dictionary.
        Its concolic rule is UNASKED, as for IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
     IDL_CALLBACK_OR_DICT,
+    /* The same arity-only split with an interface on the shorter entry and a DOMString on the longer: HTML
+       §6.11.3.1's `add(File data)` against `add(DOMString data, DOMString type)`. One argument is the File
+       entry, branded by the position's idl_arg_iface; two are the string entry. Its concolic rule is UNASKED,
+       as for IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
+    IDL_INTERFACE_OR_DOMSTRING_BY_ARITY,
     /* A §3.6 split where neither entry is longer: MessagePort's `postMessage(any, sequence<object> transfer)`
        against `postMessage(any, optional StructuredSerializeOptions options = {})`. Step 4 removes neither, so
        step 12 decides and reads the page's value (a rest point): undefined (12.2) and null (12.3) take the
@@ -391,6 +396,7 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     case IDL_UNRESTRICTED_DOUBLE_OR_DICT:
     case IDL_USVSTRING_OR_DICT_BY_ARITY:
     case IDL_CALLBACK_OR_DICT:
+    case IDL_INTERFACE_OR_DOMSTRING_BY_ARITY:
     /* Resolved from the entry the distinguishing index already settled, so this row tests nothing and a fork
        here would be a second ask with no question behind it. */
     case IDL_ULONG_OR_DICT_BY_ENTRY:
@@ -524,6 +530,8 @@ static inline bool idl_type_brands_interface(IdlArgType t)
     case IDL_STRING_UNLESS_IFACE:
     /* Likewise: without a brand every value, the CSSNumericValue included, would take the numeric arm. */
     case IDL_DOUBLE_UNLESS_IFACE:
+    /* The shorter entry's position is an interface. */
+    case IDL_INTERFACE_OR_DOMSTRING_BY_ARITY:
         return true;
     default:
         return false;

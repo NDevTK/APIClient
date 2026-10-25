@@ -1243,7 +1243,8 @@ static bool idl_type_is_dictionary(IdlArgType t)
 static bool idl_type_is_length_split(IdlArgType t)
 {
     return t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT ||
-           t == IDL_CALLBACK_OR_DICT || t == IDL_USVSTRING_OR_DICT_BY_ARITY;
+           t == IDL_CALLBACK_OR_DICT || t == IDL_USVSTRING_OR_DICT_BY_ARITY ||
+           t == IDL_INTERFACE_OR_DOMSTRING_BY_ARITY;
 }
 
 /* §3.6's SAME-LENGTH SPLIT — the other half of what `a member declaring two overload entries` can mean,
@@ -1326,6 +1327,7 @@ static IdlArgType idl_split_longer_type(IdlArgType t)
        because that is what THEIR longer entries declare; this function's contract is the LONGER ENTRY'S TYPE
        and not "the arm that is not the dictionary", which the two of them made it possible to read it as. */
     case IDL_CALLBACK_OR_DICT:            return IDL_DICT;
+    case IDL_INTERFACE_OR_DOMSTRING_BY_ARITY: return IDL_DOMSTRING;
     default: break;
     }
     DFAIL("§3.6 steps 3-4 removed the shorter overload entry at a position whose declared type names no LONGER "
@@ -4960,6 +4962,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    "§3.6 steps 3-4 chose the LONGER entry and the position still carries the split type — the "
                    "rewrite at the top of this loop is what performs that choice, so the two have come apart");
             t = IDL_CALLBACK;
+        }
+        /* The same arity-only resolution for an interface on the shorter entry: step 4 removed the longer
+           entry, so this position is the File the shorter entry declares and §3.2.15's brand test below. */
+        if (t == IDL_INTERFACE_OR_DOMSTRING_BY_ARITY) {
+            DCHECK(!step4_only_longer,
+                   "§3.6 steps 3-4 chose the LONGER entry and the position still carries the split type — the "
+                   "rewrite at the top of this loop is what performs that choice, so the two have come apart");
+            t = IDL_INTERFACE;
         }
 
         /* §3.2.25 over `(DOMString or sequence<DOMString>)`, whose arm is decided by a READ of the page's value

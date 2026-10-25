@@ -1460,7 +1460,8 @@ function _attackerSaid(ran) {
    steps after the delivery: the finding needs that interaction, which lowers its severity and not its truth. */
 function _actsSentence(acts) {
   return acts.map(function (a) {
-    return (a.kind === "click" ? "click " : a.kind === "input" ? "type into " : "a `" + a.type + "` event on ")
+    return (a.kind === "click" ? "click " : a.kind === "input" ? "type into "
+            : a.kind === "drop" ? "drop a file on " : "a `" + a.type + "` event on ")
          + "`" + a.target + "`";
   }).join(", then ");
 }

@@ -9,11 +9,11 @@
    `acts` list — `{"kind":"click","target":"#id","type":"click"}` — or NULL when no node of the document and not
    its Window holds `fn` as a listener of a type a page user can cause. `kind` is `click` for a click and
    `dispatch` for another user-interface event, `input` for a person typing into the text control whose
-   `input`, `keyup` or `change` listener `fn` is, `message` for a postMessage to the Window; `target` is a
-   locator a page script can resolve (`#id` for a unique identifier, otherwise a tag path from the document
-   element, or `document` / `window`); `handler` is the listener's own `name` where it is a non-empty
-   identifier, for a reader. Asked in the running flow's world, so it reads the registrations that world holds.
-   malloc'd. */
+   `input`, `keyup` or `change` listener `fn` is, `drop` for a person dropping a file on the target, `message`
+   for a postMessage to the Window; `target` is a locator a page script can resolve (`#id` for a unique
+   identifier, otherwise a tag path from the document element, or `document` / `window`); `handler` is the
+   listener's own `name` where it is a non-empty identifier, for a reader. Asked in the running flow's world, so
+   it reads the registrations that world holds. malloc'd. */
 char *listener_act_of(JSContext *ctx, JSValueConst fn);
 
 /* The text control a person types into to run `fn` (the target of its `input` act), borrowed from the node's

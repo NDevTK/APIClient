@@ -30,6 +30,9 @@ JSValue file_list_new(JSContext *ctx, JSValue files);
 /* §5 WITH NO FILES — the state a file control is in before anything selects. It is a real FileList, which is
    the whole difference between "nothing is selected" and "there is no such thing here". */
 JSValue file_list_new_empty(JSContext *ctx);
+/* REFILL a FileList with `files` (a JS Array of File objects, consumed), keeping its identity: the live list
+   HTML §6.11.3's `files` returns is one [SameObject] list whose contents follow the drag data store. */
+void file_list_set_files(JSContext *ctx, JSValueConst list, JSValue files);
 
 /* THE BRAND TEST — is this value a FileList. The list hangs off a Symbol this component minted and never
    published, so a page cannot forge one. */

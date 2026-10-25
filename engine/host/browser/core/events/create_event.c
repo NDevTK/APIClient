@@ -23,6 +23,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/events/drag_event.h"
 #include "core/events/before_unload_event.h"
 #include "core/events/create_event.h"
 #include "core/events/custom_event.h"
@@ -104,7 +105,7 @@ static const CreateEventRow CREATE_EVENT[] = {
     { "customevent",            "CustomEvent",            custom_event_new },
     { "devicemotionevent",      "DeviceMotionEvent",      NULL },
     { "deviceorientationevent", "DeviceOrientationEvent", NULL },
-    { "dragevent",              "DragEvent",              NULL },
+    { "dragevent",              "DragEvent",              drag_event_new },
     { "event",                  "Event",                  make_event },
     { "events",                 "Event",                  make_event },
     { "focusevent",             "FocusEvent",             focus_event_new },

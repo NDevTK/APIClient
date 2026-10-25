@@ -22,11 +22,12 @@
 #include "solver/world.h"
 
 /* The user-interface event types a page user causes by acting on a node. A click is stated as itself, because a
-   live verifier performs it through HTMLElement's click(); every other listed type is dispatched. */
+   live verifier performs it through HTMLElement's click(); a drop is the person dropping a file (HTML §6.11.5);
+   every other listed type is dispatched. */
 static const char *const ACT_TYPES[] = {
     "click", "dblclick", "auxclick", "contextmenu", "mousedown", "mouseup", "mouseover", "mouseout",
     "mouseenter", "mouseleave", "pointerdown", "pointerup", "pointerover", "pointerout", "focus", "blur",
-    "focusin", "focusout", "input", "change", "keydown", "keyup", "keypress", "submit", NULL
+    "focusin", "focusout", "input", "change", "keydown", "keyup", "keypress", "submit", "drop", NULL
 };
 
 static bool act_type_ok(const char *type)
@@ -206,7 +207,7 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
         if (u == doc) loc = strdup("document");
         else if (!(loc = locator_by_id(ctx, u, doc))) loc = locator_by_path(u);
         if (!loc) { free(type); return NULL; }
-        kind = !strcmp(type, "click") ? "click"
+        kind = !strcmp(type, "click") ? "click" : !strcmp(type, "drop") ? "drop"
              : typing_type(type) && input_value_user_types(ctx, node_wrap_peek(u)) ? "input" : "dispatch";
         act = act_json(ctx, fn, kind, type, loc);
         free(type);
@@ -215,7 +216,8 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
     }
     win = document_window_of(doc);
     if (JS_IsObject(win) && (type = event_target_listener_type_of(ctx, win, fn))) {
-        char *act = act_type_ok(type) ? act_json(ctx, fn, !strcmp(type, "click") ? "click" : "dispatch", type,
+        char *act = act_type_ok(type) ? act_json(ctx, fn, !strcmp(type, "click") ? "click"
+                                                          : !strcmp(type, "drop") ? "drop" : "dispatch", type,
                                                 "window") : NULL;
 
         /* §9.3.3's `message` on the Window is caused by another document's postMessage, so it is an act when
