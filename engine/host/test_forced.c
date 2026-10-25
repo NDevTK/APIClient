@@ -1194,6 +1194,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbindexfork.h"
 #include "fixture/idbscopejson.h"
 #include "fixture/idbscopeown.h"
+#include "fixture/fparecjson.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1718,6 +1719,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbindexfork", HTML_IDBINDEXFORK },
     { "idbscopejson", HTML_IDBSCOPEJSON },
     { "idbscopeown", HTML_IDBSCOPEOWN },
+    { "fparecjson", HTML_FPARECJSON },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16661,6 +16663,25 @@ TF_UNIT void probes_idbscopeown(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fparecjson` document (fixture/fparecjson.h): an `accept` record value read from a JSON reply
+   reaches validate a suffix as unknown input, which runs its invalid world (TypeError) beside its valid one
+   (the step 4 SecurityError). */
+TF_UNIT void probes_fparecjson(const char *js, Probe *tab, int *n) {
+    const char *i_why = NULL; int i_tt = 1;
+    fold_row(&i_tt, &i_why, param_value_is(js, "/api/fpa-pick", "got", "TypeError"),
+             "no /api/fpa-pick?got=TypeError record: no arm took the reply's suffix as one validate a suffix "
+             "refuses");
+    const char *v_why = NULL; int v_tt = 1;
+    fold_row(&v_tt, &v_why, param_value_is(js, "/api/fpa-pick", "got", "SecurityError"),
+             "no /api/fpa-pick?got=SecurityError record: no arm passed process accept types and reached step 4's "
+             "activation check");
+    const Probe rows[] = {
+        { "fpa-invalid", i_tt, "/api/fpa-pick", SESS_EXPLORE, i_why },
+        { "fpa-valid", v_tt, "/api/fpa-pick", SESS_EXPLORE, v_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -21013,6 +21034,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbindexfork(js, probes, &np);
     probes_idbscopejson(js, probes, &np);
     probes_idbscopeown(js, probes, &np);
+    probes_fparecjson(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
