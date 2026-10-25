@@ -1141,6 +1141,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/shortening.h"
 #include "fixture/linefloat.h"
 #include "fixture/floatintrinsic.h"
+#include "fixture/flexwrap.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1659,6 +1660,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "shortening", HTML_SHORTENING },
     { "linefloat", HTML_LINEFLOAT },
     { "floatintrinsic", HTML_FLOATINTRINSIC },
+    { "flexwrap", HTML_FLEXWRAP },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15248,6 +15250,44 @@ TF_UNIT void probes_shortening(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexwrap` document (fixture/flexwrap.h). */
+TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
+    const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
+
+    fold_row(&fw_tt, &fw_why, fw_tt,
+             "NOT REACHED: there is no /api/flexwrap record at all, so the document aborted before its fetch");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "a1", "0"),
+             "css-flexbox-1 §9.6: the first line's item under `align-content: normal` is not at the top");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "b1", "25"),
+             "css-flexbox-1 §9.6: the second line under `align-content: normal` does not start at 25px (§9.4 step 9 stretches the 10px line to 25px)");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "a2", "15"),
+             "css-flexbox-1 §9.6: the lines under `align-content: center` do not start 15px down");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "b2", "25"),
+             "css-flexbox-1 §9.6: the second line under `align-content: center` does not start at 25px");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "a3", "0"),
+             "css-flexbox-1 §9.6: the first line under `align-content: space-between` is not at the top");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "b3", "40"),
+             "css-flexbox-1 §9.6: the second line under `align-content: space-between` is not flush with the bottom");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "a4", "7.5"),
+             "css-flexbox-1 §9.6: an `align-items: center` item is not centred in its stretched 25px line");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "b4", "32.5"),
+             "css-flexbox-1 §9.6: an `align-items: center` item is not centred in its stretched 35px second line");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "a5", "0"),
+             "css-flexbox-1 §9.6: the first line of an auto-height container is not at the top");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "b5", "10"),
+             "css-flexbox-1 §9.6: the second line of an auto-height container does not start below the 10px first line");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "c5", "10"),
+             "css-flexbox-1 §9.6: the third item does not share the second line");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "c5l", "60"),
+             "css-flexbox-1 §9.6: the third item is not beside the second on its line");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "f5h", "30"),
+             "css-flexbox-1 §9.6: the auto-height container is not its two lines' 30px");
+    const Probe rows[] = {
+        { "flex-wrap-placement", fw_tt, "/api/flexwrap", SESS_EXPLORE, fw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `floatintrinsic` document (fixture/floatintrinsic.h). */
 TF_UNIT void probes_floatintrinsic(const char *js, Probe *tab, int *n) {
     const char *fi_why = NULL; int fi_reached = !!strstr(js, "\"/api/floatintrinsic\"");
@@ -20748,6 +20788,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_shortening(js, probes, &np);
     probes_linefloat(js, probes, &np);
     probes_floatintrinsic(js, probes, &np);
+    probes_flexwrap(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

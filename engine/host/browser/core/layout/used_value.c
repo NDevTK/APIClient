@@ -1632,6 +1632,76 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
     return cb.element;
 }
 
+/* Whether the rectangle a percentage or stretch-fit width of `el` resolves against is definite. */
+static bool uv_cb_width_is_definite(lxb_dom_element_t *el)
+{
+    UvCb cb = uv_cb(el);
+
+    switch (cb.box) {
+    case UV_CB_INITIAL:
+    case UV_CB_VIEWPORT:
+    case UV_CB_POSITIONED_PADDING:
+        /* The initial containing block is definite, and an absolutely positioned box's containing block is
+           definite with respect to it. */
+        return true;
+    case UV_CB_PRINCIPAL:
+        return used_value_width_is_definite(cb.element);
+    case UV_CB_TABLE_WRAPPER:
+    case UV_CB_GRID_AREA:
+        /* A caption's wrapper is as wide as its table, and a grid area is its tracks' sizing: content-based. */
+        return false;
+    }
+    DFAIL("§10.1's containing block took a case `UvCbBox` does not enumerate");
+    return false;
+}
+
+bool used_value_width_is_definite(lxb_dom_element_t *el)
+{
+    UvBox kind = uv_box_kind(el);
+    CssLength w = css_computed_length(el, "width");
+    char nbuf[160];
+
+    DCHECKF(kind != UV_BOX_INLINE, "%s: definiteness was asked of an inline box's width, which `width` does "
+                                   "not apply to (CSS 2.1 §10.3.1)", box_subject(el, nbuf, sizeof nbuf));
+    switch (w.kind) {
+    case CSS_LENGTH_ABSOLUTE:
+        return true;
+    case CSS_LENGTH_PERCENTAGE:
+    case CSS_LENGTH_CALCULATED:
+        return uv_cb_width_is_definite(el);
+    case CSS_LENGTH_KEYWORD:
+        break;
+    }
+    DCHECKF(w.kind == CSS_LENGTH_KEYWORD && w.keyword == CSS_KEYWORD_AUTO,
+            "%s: definiteness was asked of a width whose computed keyword is not `auto`; css-sizing-3 §3.2's "
+            "keyword widths are refused where the width is used", box_subject(el, nbuf, sizeof nbuf));
+    switch (kind) {
+    case UV_BOX_BLOCK_FLOW:
+        /* CSS 2.1 §10.3.3's stretch-fit width: definite over a definite containing block. */
+        return uv_cb_width_is_definite(el);
+    case UV_BOX_ABS:
+        /* §10.3.7: with both insets stated the width is solved from the containing block, else it shrinks to
+           fit. */
+        return !css_computed_length_is(el, "left", CSS_KEYWORD_AUTO) &&
+               !css_computed_length_is(el, "right", CSS_KEYWORD_AUTO);
+    case UV_BOX_FLOAT:
+    case UV_BOX_INLINE_BLOCK:
+    case UV_BOX_INLINE_FLEX_GRID:
+    case UV_BOX_TABLE:
+        return false;
+    case UV_BOX_ITEM:
+        /* Named residual. Not covered: css-flexbox-1 §9.8 "Definite and Indefinite Sizes"' rules that make a
+           flex item's stretched cross size or post-flexing main size definite, and a grid item's stretched
+           size in a definite grid area; such an item counts as indefinite. Next: those rules over the
+           container's own definiteness. Absence shows as a multi-line container inside such an item not
+           stretching its lines to its width. */
+        return false;
+    case UV_BOX_INLINE:
+        break;
+    }
+    return false;
+}
+
 UsedValueCbLink used_value_containing_block_link(lxb_dom_element_t *el)
 {
     UvCb cb = uv_cb(el);

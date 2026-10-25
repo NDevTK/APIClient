@@ -407,6 +407,14 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el);
    table's. True at once where the width reads none; it computes no size. */
 bool used_value_width_ask(lxb_dom_element_t *el);
 
+/* Whether `el`'s used width is css-sizing-3 §2's definite size: "A size that can be determined without
+   performing layout; that is, a <length>, ... or a <percentage> or other formula (such the “stretch-fit” sizing
+   of non-replaced blocks [CSS2]) that is resolved solely against definite sizes", the initial containing block
+   being definite, and an absolutely positioned box's containing block "always definite with respect to that
+   element". A shrink-to-fit width (CSS 2.1 §10.3.5, §10.3.7, §10.3.9) and a table's are content-based, so not
+   definite. Asserts `el` is not an inline box, which `width` does not apply to. */
+bool used_value_width_is_definite(lxb_dom_element_t *el);
+
 /* The same rectangle's `direction`, true for `rtl`. §10.3.3's over-constrained case ("if the 'direction'
    property of the containing block has the value 'ltr', the specified value of 'margin-right' is ignored") and
    CSS 2 §9.4.1's horizontal placement ("each box's left outer edge touches the left edge of the containing

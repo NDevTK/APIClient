@@ -64,6 +64,10 @@ bool flex_cross_size_content_based_ask(lxb_dom_element_t *container, CssPx *out)
    one, but a stretched item of a multi-line container needs the block one. `horizontal-tb` keeps the one
    `vertical` bit naming both the physical edge pair (css-writing-modes-4 §7.2 "Dimensional Mapping") and the
    sizing dimension (CSS 2.1 §10.6 versus css-sizing-3 §5.1 "Intrinsic Sizes"). */
+/* §9.4's steps 8 and 9 for every line of a multi-line `container`, on its cross axis: one cross size per line,
+   in order, to a calloc'd `*sizes` the caller frees; returns the line count. */
+size_t flex_cross_size_lines(lxb_dom_element_t *container, CssPx **sizes);
+
 CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item);
 
 /* css-align-3 §6.2 "Block-Axis (or Cross-Axis) Self-Alignment: the align-self property"' resolved alignment of
