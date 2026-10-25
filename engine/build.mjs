@@ -15,7 +15,7 @@
  * harness once the browser target is wired.
  */
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, readFileSync, renameSync, rmSync, openSync, closeSync, symlinkSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, readFileSync, renameSync, rmSync, openSync, closeSync, symlinkSync, linkSync } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
@@ -7487,6 +7487,18 @@ function contentId(tc, deps) {
   return h.digest("hex");
 }
 const objFor = (id) => join(OBJDIR, id + ".o");
+/* A store object this build links is pinned by a hard link in a directory of its own, so pruning or replacing
+   the shared name between the lookup and the link cannot take the object away. The pin is the build's and is
+   removed at exit; null means the store object vanished first, so the source counts as stale. */
+const PIN_DIR = join(OBJDIR, ".pin-" + process.pid);
+mkdirSync(PIN_DIR, { recursive: true });
+process.on("exit", () => rmSync(PIN_DIR, { recursive: true, force: true }));
+const pinObj = (id) => {
+  const pin = join(PIN_DIR, id + ".o");
+  if (existsSync(pin)) return pin;
+  try { linkSync(objFor(id), pin); } catch (e) { if (e.code === "ENOENT") return null; throw e; }
+  return pin;
+};
 
 /* THE DEPENDENCY RECORD IS A HINT AND THE OBJECT NAME IS A FACT — the invariant the whole scheme rests on, and
    the answer to "can a stale record produce a false HIT?".
@@ -7550,7 +7562,8 @@ async function compileAll(tc, sources) {
     const deps = recordedDeps(tc, src);
     if (deps) for (const d of deps) consulted.add(d);
     const id = deps && contentId(tc, deps);
-    if (id && existsSync(objFor(id))) objOf.set(src, objFor(id));
+    const pin = id && pinObj(id);
+    if (pin) objOf.set(src, pin);
   }
   const identityMs = Date.now() - identityT0;
   const stale = sources.filter((s) => !objOf.has(s));
@@ -7593,7 +7606,9 @@ async function compileAll(tc, sources) {
             renameSync(tmp + ".o", objFor(id));            /* the FACT, published atomically */
             writeFileSync(depRecord(tc, src), [depName(src), ...deps].join("\n") + "\n");   /* the HINT, after it */
             rmSync(tmp + ".d", { force: true });
-            objOf.set(src, objFor(id));
+            const pin = pinObj(id);
+            if (!pin) return "the object this compile just published is already gone from the store";
+            objOf.set(src, pin);
             return null;
           };
           let settled = false;
