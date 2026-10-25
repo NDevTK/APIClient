@@ -15529,7 +15529,7 @@ static void rq_marks(const char *js, const char *prefix, int *seen, int *marked,
    the request (a click listener, a never-called function) or only stored state roots it. The zone's
    can-change-nothing predicate is not the engine's, so the uncredentialed rows carry the engine's mark here. */
 TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
-    static const char *const marked_at[3] = { "/api/users/", "https://rq-other.test/q", "/api/rq-pinned" };
+    static const char *const marked_at[3] = { "/api/users/", "https://rq-other.test/q", "https://x.test/api/rq-pinned" };
     static const char *const plain_at[3] = { "/api/drafts/", "/api/rq-orphan/", "/api/rq-store" };
     const char *mk_why[3] = { NULL, NULL, NULL }, *pr_why[3] = { NULL, NULL, NULL }, *pl_why[3] = { NULL, NULL, NULL };
     int mk_tt[3] = { 1, 1, 1 }, pr_tt[3] = { 1, 1, 1 }, pl_tt[3] = { 1, 1, 1 }, i, seen, marked, plain;

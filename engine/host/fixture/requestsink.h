@@ -29,7 +29,7 @@ static const char HTML_REQUESTSINK[] =
     "if (rqH !== null) fetch('https://rq-other.test/q?x=' + encodeURIComponent(rqH), { credentials: 'omit' });"
     "var rqP = rqQ.get('p');"
     "if (rqP !== null) fetch(location.origin + '/api/rq-pinned?x=' + encodeURIComponent(rqP), { credentials: 'omit' });"
-    "function rqNeverCalled() { fetch('/api/rq-orphan/' + rqQ.get('o')); }"
+    "function rqNeverCalled() { var o = rqQ.get('o'); if (o !== null) fetch('/api/rq-orphan/' + o); }"
     "var rqStored = localStorage.getItem('rqk');"
     "if (rqStored !== null) fetch('/api/rq-store?k=' + encodeURIComponent(rqStored));"
     "document.getElementById('rqGoBtn').addEventListener('click', function () {"
