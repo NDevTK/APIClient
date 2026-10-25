@@ -789,19 +789,20 @@ static const TfServed TF_SERVED[] = {
 static const char *g_doc;
 static const char *g_tf_doc_url;
 
-/* Is `abs` a document load of this run's own page: the zone serves the page's bytes for it, as it does when the
-   page is loaded again (a reload, or the attacker opening its address in a new window). The fragment is
-   compared away because no server sees it: RFC 9112 §3.2.1 origin-form is `absolute-path [ "?" query ]`. */
-static int tf_own_document_at(const char *abs, const char *destination) {
+/* Is `asked` (`n` bytes) this run's own page: the zone serves the page's bytes for a document load of it, as it
+   does when the page is loaded again (a reload, or the attacker opening its address in a new window). The
+   fragment is compared away because no server sees it: RFC 9112 §3.2.1 origin-form is
+   `absolute-path [ "?" query ]`. */
+static int tf_own_document_at(const char *asked, size_t n) {
     UrlRecord u;
     char *bare;
     int own;
 
-    if (strcmp(destination, "document") != 0) return 0;
     DCHECK(g_doc != NULL && g_tf_doc_url != NULL,
            "a document load was answered before this run named its document and that document's address");
     url_record_init(&u);
-    CHECK(url_parse(&u, abs, strlen(abs), NULL), "the fixture could not re-parse an address it serialized");
+    CHECK(url_parse(&u, asked, n, NULL),
+          "the fixture was asked to load a document at an address that does not parse");
     bare = url_serialize(&u, /*exclude_fragment*/ true);
     url_record_free(&u);
     CHECK(bare, "the fixture could not serialize the address it is answering");
@@ -962,9 +963,8 @@ static int fixture_provide(JSContext *ctx) {
                is the JSON above. See TF_SERVED for its rows: a `fetch()` pair of which one is the other's
                control, and a third answered to a `<script src>` park rather than to a `fetch()` at all. */
             const TfServed *sv = tf_served_at(abs);
-            int own = !sv && tf_own_document_at(abs, destination);
-            const char *rbody = sv ? sv->body : own ? g_doc : "{\"region\":\"us-west-2\"}";
-            const char *rtype = sv ? sv->type : own ? "text/html" : "application/json";
+            const char *rbody = sv ? sv->body : "{\"region\":\"us-west-2\"}";
+            const char *rtype = sv ? sv->type : "application/json";
 
             header_list_append(&eh, "x-echo-method", method);
             /* AND THE REFERRER, for the sandbox-fetch rows of HTML_NAVIGATION only: whose request a fetch taken
@@ -985,7 +985,7 @@ static int fixture_provide(JSContext *ctx) {
                IT IS APPENDED FOR THIS TABLE'S ROWS ONLY. Every other reply here has always carried none,
                and giving them all one would change what several statements that read `r.headers` observe — a
                change to rows under test, made in passing, to tidy a reply nobody is asking about. */
-            if (sv || own) header_list_append(&eh, "content-type", rtype);
+            if (sv) header_list_append(&eh, "content-type", rtype);
             reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
                                     (const char *const *)&abs, 1, rtype, "basic");
             header_list_free(&eh);
@@ -6112,7 +6112,8 @@ static int hostreq_answer_all(JSContext *ctx)
                    the peer above, so the load's suspend/resume runs end to end. `{url, body, headers}` is ONE
                    answer because everything §7.5.1 creates a Document from is a property of THE RESPONSE.
                    The body is a DOCUMENT WITH A SCRIPT,
-                   because the only thing that proves a navigation happened is the loaded document RUNNING. */
+                   because the only thing that proves a navigation happened is the loaded document RUNNING. The
+                   page's own address is answered with the page's own bytes (tf_own_document_at). */
                 static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
@@ -6157,6 +6158,7 @@ static int hostreq_answer_all(JSContext *ctx)
                     g_docfetch_cross_site++;
                 bool cookie_doc = false;
                 size_t ask_len = (size_t)(end - asked), ak;
+                bool own_doc = tf_own_document_at(asked, ask_len);
                 for (ak = 0; ak + 11 <= ask_len && !cookie_doc; ak++)
                     cookie_doc = !memcmp(asked + ak, "/cookieload", 11);
                 JS_DefinePropertyValueStr(ctx, v, "url",
@@ -6172,7 +6174,9 @@ static int hostreq_answer_all(JSContext *ctx)
                    be CALLED here, where no flow is running and a park may be outstanding, and a frozen
                    prototype would make the write refuse by throwing into a region that has no owner for it. */
                 JS_DefinePropertyValueStr(ctx, v, "body",
-                                          cookie_doc
+                                          own_doc
+                                            ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)g_doc, strlen(g_doc))
+                                          : cookie_doc
                                             ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC_COOKIE,
                                                                     sizeof DOC_COOKIE - 1)
                                             : JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC, sizeof DOC - 1),
