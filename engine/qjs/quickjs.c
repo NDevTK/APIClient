@@ -1041,8 +1041,6 @@ struct JSContext {
 
     double time_origin;
 
-    uint64_t random_state;
-
     /* when the counter reaches zero, JSRutime.interrupt_handler is called */
     int interrupt_counter;
 
@@ -32370,7 +32368,7 @@ typedef struct JSDateCtor {
     double val;
     int n, i;
 } JSDateCtor;
-static int64_t date_now(void);
+static JSValue js_date_current_time(JSContext *ctx);
 static double time_clip(double t);
 static double set_date_fields(double fields[], int is_local);
 static JSValue js_Date_parse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
@@ -89328,7 +89326,32 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         /* `Date(...)` called as a FUNCTION ignores its arguments entirely — it does not coerce them. */
         s->n = JS_IsUndefined(s->hdr.this_val) ? 0 : s->hdr.argc;
         if (s->n == 0) {
-            s->val = date_now();                                   /* step 3.a */
+            JSValue now = js_date_current_time(ctx);               /* step 1.a or step 3.a */
+
+            if (!JS_IsNumber(now)) {
+                /* An unknown current time makes this whole completion unknown: the String of step 1.b, or the
+                   Date of steps 6-8. Each form is its own derivation, so a branch over one decides nothing about
+                   the other. Named residual: the Date form carries no example, since its prototype is
+                   NewTarget's and is read at step 6; a Date the page reads members of then derives examples
+                   from nothing, which shows as unknown time-of-day gates whose arms carry no example. */
+                bool fn = JS_IsUndefined(s->hdr.this_val);
+                JSValue real = JS_UNDEFINED, ex = js_concolic_operand(ctx, now);
+
+                if (fn && JS_IsNumber(ex)) {
+                    JSValue d = JS_NewDate(ctx, JS_VALUE_GET_NORM_TAG(ex) == JS_TAG_FLOAT64
+                                                ? JS_VALUE_GET_FLOAT64(ex) : JS_VALUE_GET_INT(ex));
+                    real = JS_IsException(d) ? d : get_date_string(ctx, d, 0, NULL, 0x13);
+                    JS_FreeValue(ctx, d);
+                }
+                JS_FreeValue(ctx, ex);
+                s->result = js_concolic_derive(ctx, now, fn ? "21.4.2.1 Date ( ...values ) step 1.b ToDateString(now)"
+                                                            : "21.4.2.1 Date ( ...values ) steps 3.a and 6-8, a Date "
+                                                              "whose [[DateValue]] is the current time", real);
+                JS_FreeValue(ctx, now);
+                DCHECK(!JS_IsUninitialized(s->result), "the current time was not a Number and not unknown");
+                return 0;
+            }
+            if (JS_ToFloat64Free(ctx, &s->val, now)) return -1;
             STEP_GOTO(s->hdr.stage, DATECTOR_CREATE, DATECTOR_CURSORS);
             STEP_JUMP(DATECTOR_CREATE);
         }
@@ -104866,36 +104889,22 @@ static double sum_precise_get_result(SumPreciseState *s)
 /* DELETED: js_math_sumPrecise. Its last case was a non-iterable argument, whose TypeError the acquire raises on
    the tramp like any other — so with the sink declared at the definition there is nothing for a C entry to do. */
 
-/* xorshift* random number generator by Marsaglia */
-static uint64_t xorshift64star(uint64_t *pstate)
-{
-    uint64_t x;
-    x = *pstate;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    *pstate = x;
-    return x * 0x2545F4914F6CDD1D;
-}
-
-static void js_random_init(JSContext *ctx)
-{
-    ctx->random_state = js__gettimeofday_us();
-    /* the state must be non zero */
-    if (ctx->random_state == 0)
-        ctx->random_state = 1;
-}
-
+/* ECMAScript §21.3.2.28 Math.random ( ): the value is chosen by "an implementation-defined algorithm or
+   strategy", and the host is the implementation that knows which flow is asking, so it answers. A generator
+   state on the context would be shared by every flow interleaved on it, making each value depend on the
+   schedule. The answer is a Number in [+0, 1) or an unknown whose example is one. */
 static JSValue js_math_random(JSContext *ctx, JSValueConst this_val,
                               int argc, JSValueConst *argv)
 {
-    JSFloat64Union u;
-    uint64_t v;
+    JSValue v;
 
-    v = xorshift64star(&ctx->random_state);
-    /* 1.0 <= u.d < 2 */
-    u.u64 = ((uint64_t)0x3ff << 52) | (v >> 12);
-    return js_float64(u.d - 1.0);
+    CHECK(g_concolic.random != NULL,
+          "Math.random was called under a host that installed no JSConcolicHooks.random; the engine holds no "
+          "generator of its own, so every host installs one before it builds a realm");
+    v = g_concolic.random(ctx);
+    DCHECK(JS_IsNumber(v) || (g_concolic.is && g_concolic.is(v)),
+           "JSConcolicHooks.random answered neither a Number nor an unknown");
+    return v;
 }
 
 /* use local wrappers for math functions to
@@ -120557,14 +120566,23 @@ static JSValue get_date_string(JSContext *ctx, JSValueConst this_val,
     return js_new_string8_len(ctx, buf, pos);
 }
 
-/* OS dependent: return the UTC time in ms since 1970. */
-static int64_t date_now(void) {
-    return js__gettimeofday_us() / 1000;
-}
-
-double JS_DateNow(void)
+/* ECMAScript §21.4.2.1 Date ( ...values )'s "the time value (UTC) identifying the current time", which §21.4.3.1
+   Date.now ( ) also returns: a §21.4.1.1 time value, or an unknown whose example is one. The host answers
+   because the current time is the visitor's, and a wall-clock read here would decide every gate over it. */
+static JSValue js_date_current_time(JSContext *ctx)
 {
-    return (double)date_now();
+    JSValue v;
+
+    CHECK(g_concolic.clock != NULL,
+          "the current time was asked under a host that installed no JSConcolicHooks.clock; the engine reads "
+          "no clock of its own, so every host installs one before it builds a realm");
+    v = g_concolic.clock(ctx);
+    DCHECK((g_concolic.is && g_concolic.is(v)) ||
+           (JS_IsNumber(v) && (JS_VALUE_GET_NORM_TAG(v) != JS_TAG_FLOAT64 ||
+                               JS_VALUE_GET_FLOAT64(v) == trunc(JS_VALUE_GET_FLOAT64(v)))),
+           "JSConcolicHooks.clock answered neither an integral Number nor an unknown; §21.4.1.1 makes a finite "
+           "time value integral");
+    return v;
 }
 
 
@@ -121103,8 +121121,8 @@ static JSValue js_Date_parse(JSContext *ctx, JSValueConst this_val,
 static JSValue js_Date_now(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv)
 {
-    // now()
-    return js_int64(date_now());
+    /* §21.4.3.1 Date.now ( ) */
+    return js_date_current_time(ctx);
 }
 
 
@@ -121859,7 +121877,6 @@ int JS_AddIntrinsicBaseObjects(JSContext *ctx)
         return -1;
 
     /* Math: create as autoinit object */
-    js_random_init(ctx);
     if (JS_SetPropertyFunctionList(ctx, ctx->global_obj, js_math_obj, countof(js_math_obj)))
         return -1;
 

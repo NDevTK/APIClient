@@ -883,7 +883,9 @@ const char *cold_park_json(void);
    A document whose generation record does not state this build's JS_ORPHAN_LOCATOR_SPELLING was written by a
    build whose cross-session names (orphan locators, and every site and creation name folded from one into a
    decision key) this build cannot meet, so it is refused whole: nothing is rebuilt, `@RESUMED 0` is printed,
-   ColdResumed's `refused` is 1, and this answers 0 so the session seeds a boot flow. 1 otherwise. */
+   ColdResumed's `refused` is 1, and this answers 0 so the session seeds a boot flow. 1 otherwise. A record that
+   states no session start (hr_time_session_start) is refused the same way: its flows' current-time examples
+   were built on a start this build cannot replay. An admitted one hands its start back before any flow runs. */
 int cold_resume(JSContext *ctx, const char *recipes);
 
 /* WHAT THE LAST cold_resume REBUILT, PER RECORD KIND — the observable that says which ARMS of the grammar ran.
@@ -937,7 +939,8 @@ typedef struct {
        so a 0 that is a MISSING COUNTER cannot reach a reader as a 0 that is an ABSENT RECORD. */
     long commits;
     long delivers;
-    /* 1 when the residue handed over was refused whole for an older name spelling (cold_resume), 0 otherwise. */
+    /* 1 when the residue handed over was refused whole for an older name spelling or a missing session start
+       (cold_resume), 0 otherwise. */
     long refused;
 } ColdResumed;
 void cold_resumed(ColdResumed *out);

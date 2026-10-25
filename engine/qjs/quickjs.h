@@ -2978,6 +2978,14 @@ typedef struct JSConcolicHooks {
     /* §6.2.5.5 GetValue step 3.a's ToObject over an unknown base, asked by the property-read operators before
        their [[Get]] and by nothing else: the host notes what this session's own value does there. */
     void (*get_value_base)(JSContext *ctx, JSValueConst base);
+    /* ECMAScript §21.3.2.28 Math.random ( ): the value of one call, OWNED — a Number in [+0, 1), or an unknown
+       whose example is one. Derived from the asking flow's path and never from a clock, so a replay of the
+       path answers the same, and distinct per call, so two calls are two unknowns. Required: the engine holds
+       no generator. */
+    JSValue (*random)(JSContext *ctx);
+    /* ECMAScript §21.4.2.1 Date ( ...values )'s "the time value (UTC) identifying the current time", OWNED — an
+       integral Number, or an unknown whose example is one. Required: the engine reads no clock. */
+    JSValue (*clock)(JSContext *ctx);
 } JSConcolicHooks;
 JS_EXTERN void JS_SetConcolicHooks(const JSConcolicHooks *hooks);
 
@@ -3522,8 +3530,6 @@ JS_EXTERN void JS_FreeAgentSlot(JSRuntime *rt, int slot);
    required before any script reads local time. */
 typedef int JSLocalTimeZoneOffsetFunc(int64_t time_ms);
 JS_EXTERN void JS_SetLocalTimeZoneOffsetFunc(JSLocalTimeZoneOffsetFunc *fn);
-/* ECMAScript §21.4.3.1 Date.now ( )'s time value, for an embedder algorithm that calls %Date.now%. */
-JS_EXTERN double JS_DateNow(void);
 /* set the [IsHTMLDDA] internal slot */
 JS_EXTERN void JS_SetIsHTMLDDA(JSContext *ctx, JSValueConst obj);
 

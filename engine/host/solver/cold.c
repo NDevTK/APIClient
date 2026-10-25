@@ -11,6 +11,7 @@
 #include "solver/pending.h"   /* the session's context, which a flow's JS-valued queues are read through */
 #include "solver/dyn_body.h"  /* …and the program text, which is SHARED and so is counted once, not per flow */
 #include "solver/engine.h"    /* the one entry a rebuilt routed delivery goes back through — see the 'm' arm */
+#include "core/timing/hr_time.h"   /* the session start the current time's example is built on — the 'g' record */
 #include "check.h"
 
 #include <stdio.h>
@@ -460,7 +461,7 @@ static int g_park_gen_written;
 
 static void park_gen_rec(void)
 {
-    char rec[32];
+    char rec[64];
 
     if (g_park_gen_written) return;
     DCHECK(g_park_recs == 0,
@@ -469,7 +470,9 @@ static void park_gen_rec(void)
            "namespace and hand a peer a name it already holds a segment for");
     /* And the spelling every cross-session name in this document is folded in, after a comma, so a later build
        that folds names otherwise refuses the document whole (cold_resume) rather than meeting names no body has. */
-    snprintf(rec, sizeof rec, "g%u,%d", world_session(), JS_ORPHAN_LOCATOR_SPELLING);
+    /* And the session start the current time's example is built on (hr_time_wall_now), so a resumed flow
+       replays the example its first session computed rather than one from this session's clock. */
+    snprintf(rec, sizeof rec, "g%u,%d,%.0f", world_session(), JS_ORPHAN_LOCATOR_SPELLING, hr_time_session_start());
     park_rec(rec);
     /* THE FLAG GOES UP AFTER THE WRITE, SO IT IS A COUNT AND NOT AN INTENTION. park_doc_agrees reads it as the
        number of 'g' records in this document, and one raised BEFORE park_rec would make that identity false
@@ -1915,7 +1918,8 @@ void cold_resumed(ColdResumed *out)
     *out = g_resumed;
 }
 
-/* Whether `recipes` opens with a generation record stating this build's name spelling: `g<digits>,<spelling>`. */
+/* Whether `recipes` opens with a generation record stating this build's name spelling and its session's start:
+   `g<digits>,<spelling>,<start ms>`. */
 static int park_doc_spelling_current(const char *recipes)
 {
     const char *q = recipes;
@@ -1926,7 +1930,12 @@ static int park_doc_spelling_current(const char *recipes)
     while (*q >= '0' && *q <= '9') q++;
     if (*q++ != ',') return 0;
     sp = strtol(q, &ep, 10);
-    return ep != q && (*ep == ';' || *ep == '\0') && sp == JS_ORPHAN_LOCATOR_SPELLING;
+    if (ep == q || *ep != ',' || sp != JS_ORPHAN_LOCATOR_SPELLING) return 0;
+    q = ep + 1;
+    if (*q == '-') q++;
+    if (*q < '0' || *q > '9') return 0;
+    while (*q >= '0' && *q <= '9') q++;
+    return *q == ';' || *q == '\0';
 }
 
 int cold_resume(JSContext *ctx, const char *recipes)
@@ -1990,6 +1999,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
                computed here rather than written out there, so a document cannot state a namespace that is not
                strictly beyond the one its own flows ran in. */
             uint32_t gen;
+            long spell;
 
             DCHECK(p == recipes,
                    "a park document's generation record is not its first — every flow read before it would be "
@@ -2020,10 +2030,12 @@ int cold_resume(JSContext *ctx, const char *recipes)
                    "an unreadable record and a real `g0` are one value. The resumed session would mint in "
                    "generation 1 — the namespace the first resumed session of this document already used — and "
                    "a peer that never left memory keys its segments on exactly those names");
-            DCHECK(ep < end && *ep == ',' && strtol(ep + 1, NULL, 10) == JS_ORPHAN_LOCATOR_SPELLING,
-                   "a generation record carries no name spelling after its number — park_doc_spelling_current "
-                   "admitted this document, so the two readers of one record disagree");
+            spell = (ep < end && *ep == ',') ? strtol(ep + 1, &ep, 10) : -1;
+            DCHECK(spell == JS_ORPHAN_LOCATOR_SPELLING && ep < end && *ep == ',',
+                   "a generation record carries no name spelling and session start after its number — "
+                   "park_doc_spelling_current admitted this document, so the two readers of one record disagree");
             world_session_resume(gen);
+            hr_time_session_start_adopt(strtod(ep + 1, NULL));
         } else if (kind == 'w') {
             /* A PEER'S TIMELINE, RE-MATERIALIZED FROM THE ONE THING ABOUT IT THAT HAS AN IDENTITY OUTSIDE THE
                SESSION THAT HELD IT. The vector is handed straight back to world_segment, which is the same

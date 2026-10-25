@@ -12,6 +12,7 @@
 #include "solver/rung_entry.h" /* the scheduler is told the arms a program asks for by name */
 #include "solver/metrics.h"   /* the attacker-source mint raises `_sourceReads` */
 #include "core/timing/thread_work.h"   /* a constraint probe is priced by the bytes it hashes */
+#include "core/timing/hr_time.h"       /* the current time the engine asks for (`.clock`) */
 #include "check.h"
 #include <stdarg.h>
 #include <stdlib.h>
@@ -1614,6 +1615,31 @@ static uint32_t concolic_mint_ordinal_hook(JSContext *ctx) {
            "asks for is a 64-bit ordinal, which fits all three carriers without widening JSObject's union");
     return ++g_mint_ord;
 }
+/* ECMAScript §21.3.2.28 Math.random ( ) (JSConcolicHooks.random). Each call spends one of this flow's ordinals,
+   so its identity (`Math.random()#n`) is distinct from every other call's and a replay of the path names it
+   again; the address shape (`{Math.random()}`) is one for every call. The example is SplitMix64 over the
+   ordinal, scaled onto [+0, 1) by its high 53 bits: a function of the path and never of a clock. A host that
+   does not explore answers the example itself, which is the browser's Number. */
+static JSValue concolic_random_hook(JSContext *ctx) {
+    uint32_t ord = concolic_mint_ordinal_hook(ctx);
+    uint64_t z = (uint64_t)ord * 0x9E3779B97F4A7C15ull;
+    char src[32];
+    int w;
+    double ex;
+
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    ex = (double)(z >> 11) * 0x1p-53;
+    DCHECK(ex >= 0.0 && ex < 1.0, "Math.random's example left [+0, 1)");
+    if (!concolic_is_exploring())
+        return JS_NewFloat64(ctx, ex);
+    w = snprintf(src, sizeof src, "Math.random()#%u", ord);
+    DCHECK(w > 0 && (size_t)w < sizeof src, "a Math.random call's provenance did not fit its buffer");
+    (void)w;
+    return concolic_new(ctx, "{Math.random()}", src, CONCOLIC_WHOSE_WORLD, JS_NewFloat64(ctx, ex));
+}
+
 /* The pin this flow holds for `src`, as the value it is. The in-file read sites take a JSValue, never bytes, so
    they cannot decide differently what bytes mean. JS_UNINITIALIZED = no pin, distinct from a pin of
    `undefined`, which must answer undefined. */
@@ -6314,6 +6340,8 @@ static JSConcolicHooks g_hooks = {
        JS_CreationName answers absent for every value, and literal_ident's creation-name arm returns NULL: a host
        declining the edge, byte-identical to a build without the seam. */
     .mint_ordinal = concolic_mint_ordinal_hook,
+    .random = concolic_random_hook,
+    .clock = hr_time_wall_now,
     /* §10.1.11 [[OwnPropertyKeys]] ( ) asked: the engine's step_ownkeys_run asks this on the branch seam and
        the record hands its enumeration to decide_value_arm. With the member NULL, decide_value_arm answers -1
        for ever and concolic_exotic_own_names crashes naming a consumer that exists. Its own member, not

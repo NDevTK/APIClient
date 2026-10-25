@@ -45,12 +45,20 @@ static JSClassID g_origin_slot = JS_INVALID_CLASS_ID;
  * an engine that answers `performance.timeOrigin` from the monotonic origin alone reports every document as
  * having been navigated to in January 1970, and `new Date(performance.timeOrigin + performance.now())` renders
  * it. That is a plausible datum rather than an absence, which is the one thing this tree refuses. This engine
- * already hands the page the same clock through ECMAScript's `Date.now()` (quickjs's js_Date_now over
- * js__gettimeofday_us) and through File §4.1's `lastModified`, so the entropy is not new and §9.2 Clock drift's
+ * already hands the page the same reading through ECMAScript's `Date.now()` (hr_time_wall_now, as the example of
+ * its session start) and through File §4.1's `lastModified`, so the entropy is not new and §9.2 Clock drift's
  * own comparison — `performance.timeOrigin` against `Date.now() - performance.now()` — is the relationship a
  * page can already make either way. What WOULD be new is the two disagreeing. */
 static int    g_epoch_known;         /* §4's "whose value is initialized by the following steps", once per agent */
 static double g_epoch_estimate_ms;   /* defined ONLY while g_epoch_known — see above for why no value can latch */
+/* The same install's two readings, kept for ECMAScript's current time (hr_time_wall_now): the monotonic moment
+   and the wall clock floored to a millisecond. Defined only while g_epoch_known. The wall reading is the
+   session's: a residue resumed from an earlier session hands back that session's (`recorded`), which the
+   install then keeps, and no read of the current time may precede the hand-back (`reads`). */
+static double g_session_moment_ms;
+static double g_session_wall_ms;
+static int    g_session_wall_recorded;
+static long   g_session_wall_reads;
 
 /* §4 STEP 3's FLOOR, run on a number. The one arithmetic in this file, so that the known path and the example
    of the unknown path cannot drift apart — and so that every call of `coarsen time` this component makes rounds
@@ -143,6 +151,9 @@ static void hr_time_install(JSContext *ctx)
            to ask an environment (and whose non-negative assertion is about moments of THIS clock; §4's epoch
            time is legitimately far in this clock's past, which is the entire point of it). */
         g_epoch_estimate_ms = hr_floor(monotonic_ms - wall_ms, HR_TIME_RESOLUTION_MS);
+        g_session_moment_ms = monotonic_ms;
+        if (!g_session_wall_recorded)
+            g_session_wall_ms = floor(wall_ms);
         g_epoch_known = 1;
     }
     /* Running twice in one realm is asserted by realm_value_set, which is where the first moment is standing. */
@@ -391,6 +402,67 @@ JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
     return hr_duration(ctx, origin, coarse);
 }
 
+JSValue hr_time_wall_now(JSContext *ctx)
+{
+    JSValue elapsed, start, sp[2];
+
+    DCHECK(g_epoch_known, "ECMAScript's current time was asked before the first realm's install read the wall "
+                          "clock, which every realm's construction runs before any script");
+    g_session_wall_reads++;
+    elapsed = hr_duration(ctx, JS_NewFloat64(ctx, g_session_moment_ms), hr_time_unsafe_shared_current(ctx));
+    /* §21.4.1.1 Time Values and Time Range: millisecond precision, so the elapsed part is floored. */
+    if (!concolic_is(elapsed)) {
+        double e = 0;
+
+        JS_ToFloat64(ctx, &e, elapsed);
+        DCHECK(e >= 0, "the monotonic clock read earlier than the first realm's install");
+        elapsed = JS_NewFloat64(ctx, floor(e));
+    } else {
+        JSValue ex = concolic_example(ctx, elapsed), fl;
+        double e = 0;
+
+        if (JS_IsNumber(ex)) JS_ToFloat64(ctx, &e, ex);
+        fl = concolic_builtin_hook(ctx, elapsed, "ECMAScript §21.4.1.1 Time Values and Time Range "
+                                   "(millisecond precision)", JS_IsNumber(ex) ? JS_NewFloat64(ctx, floor(e))
+                                                                              : JS_UNDEFINED);
+        JS_FreeValue(ctx, ex);
+        JS_FreeValue(ctx, elapsed);
+        elapsed = fl;
+    }
+    start = concolic_is_exploring()
+          ? concolic_new(ctx, "{Date.now()}", "Date.now()", CONCOLIC_WHOSE_WORLD,
+                         JS_NewFloat64(ctx, g_session_wall_ms))
+          : JS_NewFloat64(ctx, g_session_wall_ms);
+    if (!concolic_is(start) && !concolic_is(elapsed)) {
+        double e = 0;
+
+        JS_ToFloat64(ctx, &e, elapsed);
+        return JS_NewFloat64(ctx, g_session_wall_ms + e);
+    }
+    sp[0] = start;
+    sp[1] = elapsed;
+    CHECK(concolic_add_hook(ctx, sp + 2, JS_CONCOLIC_ADD_PLUS),
+          "§13.15.3's + declined an unknown operand, so the concolic value semantics are not installed");
+    return sp[0];
+}
+
+double hr_time_session_start(void)
+{
+    DCHECK(g_epoch_known || g_session_wall_recorded,
+           "the session's start time was asked before the first realm's install read it or a residue handed it back");
+    return g_session_wall_ms;
+}
+
+void hr_time_session_start_adopt(double wall_ms)
+{
+    DCHECK(g_session_wall_reads == 0,
+           "a resumed residue handed back its session's start time after a flow had already read the current time "
+           "against this session's reading — the two reads would disagree about when the session began");
+    DCHECK(wall_ms == floor(wall_ms), "a recorded session start is not a whole millisecond");
+    g_session_wall_ms = wall_ms;
+    g_session_wall_recorded = 1;
+}
+
 JSValue hr_time_current(JSContext *ctx)
 {
     /* §4's CURRENT HIGH RESOLUTION TIME, in its own words: "the result of relative high resolution time given
@@ -426,4 +498,8 @@ void hr_time_free(void)
        monotonic clock that no longer runs, and the pair is one fact. */
     g_epoch_known = 0;
     g_epoch_estimate_ms = 0.0;
+    g_session_moment_ms = 0.0;
+    g_session_wall_ms = 0.0;
+    g_session_wall_recorded = 0;
+    g_session_wall_reads = 0;
 }

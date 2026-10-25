@@ -10,6 +10,7 @@
 #include "core/intl/date_time_format.h"
 #include "core/intl/intl_environment.h"
 #include "core/intl/intl_service.h"
+#include "core/timing/hr_time.h"   /* %Date.now%'s current time */
 #include "solver/concolic.h"
 
 static JSClassID g_class;
@@ -396,7 +397,7 @@ static int dtf_format(JSContext *ctx, FormatState *s, JSValueConst dtf, IntlHost
 {
     JSStepHdr *h = &s->hdr;
     JSValueConst date = step_arg(h, 0);
-    JSValue slots, loc, real;
+    JSValue now = JS_UNDEFINED, slots, loc, real;
     IntlHostValue x;
     const char *l;
     double t;
@@ -411,10 +412,10 @@ static int dtf_format(JSContext *ctx, FormatState *s, JSValueConst dtf, IntlHost
         JS_ThrowTypeError(ctx, "%s called on an object that is not an Intl.DateTimeFormat", algorithm);
         return JS_STEP_ABRUPT;
     }
-    if (JS_IsUndefined(date)) {
-        JS_FreeValue(ctx, cb);
-        t = JS_DateNow();                                                                /* ! Call(%Date.now%) */
-    } else {
+    /* ! Call(%Date.now%) for an undefined date: a Number or an unknown, which then takes the date's own arms. */
+    if (JS_IsUndefined(date))
+        date = now = hr_time_wall_now(ctx);
+    {
         ConcolicExState st = concolic_is(date) ? concolic_example_state(date) : CONCOLIC_EX_NONE;
 
         if (st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED) {
@@ -423,15 +424,17 @@ static int dtf_format(JSContext *ctx, FormatState *s, JSValueConst dtf, IntlHost
             JS_FreeValue(ctx, cb);
             r = JS_ToFloat64(ctx, &t, ex);                                               /* a primitive */
             JS_FreeValue(ctx, ex);
-            if (r < 0) { JS_FreeValue(ctx, slots); return JS_STEP_ABRUPT; }
+            if (r < 0) { JS_FreeValue(ctx, slots); JS_FreeValue(ctx, now); return JS_STEP_ABRUPT; }
         } else {
             r = step_todouble_run(ctx, h, date, cb, &t, out_cb, out_argc);
-            if (r) { JS_FreeValue(ctx, slots); return r < 0 ? JS_STEP_ABRUPT : r; }
+            DCHECK(r != 5 || JS_IsUndefined(now), "the current time asked for a ToPrimitive");
+            if (r) { JS_FreeValue(ctx, slots); JS_FreeValue(ctx, now); return r < 0 ? JS_STEP_ABRUPT : r; }
         }
     }
     /* §11.5.5 PartitionDateTimePattern steps 1-2: TimeClip, and NaN is a RangeError. */
     if (!isfinite(t) || fabs(t) > 8.64e15) {
         JS_FreeValue(ctx, slots);
+        JS_FreeValue(ctx, now);
         JS_ThrowRangeError(ctx, "Invalid time value");
         return JS_STEP_ABRUPT;
     }
@@ -443,9 +446,10 @@ static int dtf_format(JSContext *ctx, FormatState *s, JSValueConst dtf, IntlHost
     real = intl_ask(ctx, op, JS_UNDEFINED, l, false, slots, FORMAT_SLOTS, &x, 1);
     JS_FreeCString(ctx, l);
     JS_FreeValue(ctx, loc);
-    if (JS_IsException(real)) { JS_FreeValue(ctx, slots); return JS_STEP_ABRUPT; }
-    s->result = intl_derive(ctx, algorithm, slots, &date, JS_IsUndefined(date) ? 0 : 1, real);
+    if (JS_IsException(real)) { JS_FreeValue(ctx, slots); JS_FreeValue(ctx, now); return JS_STEP_ABRUPT; }
+    s->result = intl_derive(ctx, algorithm, slots, &date, 1, real);
     JS_FreeValue(ctx, slots);
+    JS_FreeValue(ctx, now);
     return JS_STEP_DONE;
 }
 

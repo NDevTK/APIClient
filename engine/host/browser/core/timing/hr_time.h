@@ -132,4 +132,18 @@ JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment);
    what makes it identical on every schedule and across a park. */
 JSValue hr_time_current(JSContext *ctx);   /* OWNED */
 
+/* ECMAScript §21.4.2.1 Date ( ...values )'s "the time value (UTC) identifying the current time" — what
+   JSConcolicHooks.clock and %Date.now% answer. It is the wall clock read once by the first realm's install,
+   plus this flow's elapsed monotonic time floored to a millisecond, so it is a function of the path. An
+   exploring host makes that session start an unknown the visitor's clock supplies (`{Date.now()}`), with the
+   reading as its example: a time-of-day gate forks, while two reads stay ordered by their elapsed time.
+   The elapsed part is the event loop's virtual clock (event_loop_now), which is work the flow retired, so a
+   replay of the path reads the same value on every host. OWNED. */
+JSValue hr_time_wall_now(JSContext *ctx);
+/* The session start that example is built on, which the cold tier writes into a residue's generation record. */
+double hr_time_session_start(void);
+/* …and hands back when a later session resumes that residue, before any flow reads the current time, so a
+   resumed flow replays the example its first session computed. */
+void hr_time_session_start_adopt(double wall_ms);
+
 #endif
