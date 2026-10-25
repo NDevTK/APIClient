@@ -4571,6 +4571,11 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
        so a candidate substitutes at the call), and not new bytes: whatever carried the callee's bytes in
        carried these. */
     r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, example);
+    /* Named residual. Not covered: the result's type set where a built-in's algorithm fixes it (§22.1.3.19
+       String.prototype.replace answers a String unless a searchValue's @@replace answers). Next diff builds:
+       a result type declared on the built-in's step-machine definition, stated on `r` where the callee's
+       example is that built-in. Absence shows as: an equality between such a call's result and undefined or
+       null still forking where the receiver's facet admits only Strings. */
     /* The call completed, so the member read under it found a callable (§13.3.6.2 EvaluateCall steps 4-5),
        which narrows the parent the member was read off. */
     if (c->member && c->facet_src) type_facet_narrow(c->facet_src, tyf_callable_member(ctx, c->member));
