@@ -380,6 +380,15 @@ void node_set_element_resolver(lxb_ns_id_t ns, JSValue (*fn)(JSContext *ctx, lxb
    torn down has no meaningful one. The map is per AGENT by construction (it is keyed on a raw pointer into
    the agent's one node heap), so the runtime is asked once, at the agent's own declaration point. */
 void node_wrap_forget(lxb_dom_node_t *n);
+
+/* The identity map's references held for realm `realm`'s wrappers, reported as that realm's edges: called from
+   the realm's mark hook (document.c's document_realm_mark), so the collector subtracts the map's reference and a
+   realm nothing else holds is collectable with its wrappers. */
+void node_wrap_realm_mark(JSRuntime *rt, JSContext *realm, JS_MarkFunc *mark_func);
+/* Realm `realm` is being torn down: releases every identity-map entry whose wrapper it created that its
+   documents' destruction did not (a node adopted into a surviving document), and its list. From the realm
+   teardown hook, after document_free. */
+void node_wrap_realm_teardown(JSContext *realm);
 /* THE AGENT'S JS RUNTIME, recorded at node_init — the ONE fact a node death needs and the one thing a node
    cannot be asked for. It is not a realm and must never stand in for one: a per-realm question is answered per
    realm (see the prototype resolution in node_wrap), and this exists precisely so that the agent-wide side maps

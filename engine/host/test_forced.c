@@ -1119,6 +1119,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/windowclose.h"
 #include "fixture/realmsell.h"
 #include "fixture/realmsellclose.h"
+#include "fixture/adoptexpando.h"
 #include "fixture/fragfork.h"
 #include "fixture/fragplace.h"
 #include "fixture/fragxml.h"
@@ -1657,6 +1658,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "windowclose", HTML_WINDOWCLOSE },
     { "realmsell", HTML_REALMSELL, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "realmsellclose", HTML_REALMSELLCLOSE, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "adoptexpando", HTML_ADOPTEXPANDO },
     { "fragfork", HTML_FRAGFORK },
     { "fragplace", HTML_FRAGPLACE },
     { "fragxml", HTML_FRAGXML },
@@ -17549,6 +17551,26 @@ TF_UNIT void probes_realmsellclose(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `adoptexpando` document: an element adopted out of a popup whose realm is then collected keeps
+   the wrapper a browser keeps — the RealmWraps residual in core/dom/node.c, read red until that diff is built. */
+TF_UNIT void probes_adoptexpando(const char *js, Probe *tab, int *n) {
+    const char *axp_why = NULL;
+    int axp_tt = 1;
+    fold_row(&axp_tt, &axp_why, !!strstr(js, "\"/api/adoptexp\""),
+             "NOT REACHED: there is no /api/adoptexp record, so the element was never read back");
+    fold_row(&axp_tt, &axp_why, navigable_realm_made() >= 1 && tf_heap_row(js, "childRealms") == 0,
+             "NOT REACHED: the popup's realm was not collected before the read, so the read says nothing about "
+             "a wrapper whose creation realm is gone");
+    fold_row(&axp_tt, &axp_why, param_value_is(js, "/api/adoptexp", "v", "kept"),
+             "an element adopted out of a realm since collected lost its expando: the identity map's entry "
+             "belonged to the wrapper's creation realm, whose teardown forgot it, so the read minted a new "
+             "wrapper (core/dom/node.c's RealmWraps residual: report the edge from the node's tree owner)");
+    const Probe rows[] = {
+        { "adopt-expando", axp_tt, "/api/adoptexp", SESS_EXPLORE, axp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowopenerclose` document. */
 TF_UNIT void probes_windowopenerclose(const char *js, Probe *tab, int *n) {
     /* And over a cross-origin popup, which the incumbent is familiar with only through its opener link. */
@@ -21327,6 +21349,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_windowclose(js, probes, &np);
     probes_realmsell(js, probes, &np);
     probes_realmsellclose(js, probes, &np);
+    probes_adoptexpando(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);
     probes_idlindex(js, probes, &np);

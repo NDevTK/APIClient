@@ -450,6 +450,7 @@ static void document_realm_mark(JSRuntime *rt, JSContext *ctx, JS_MarkFunc *mark
                "realm's collection and freed by another's teardown");
         doc_rec_refs(c, doc_ref_mark, &m);
     }
+    node_wrap_realm_mark(rt, ctx, mark_func);   /* the identity map's references to this realm's wrappers */
 }
 
 /* The record for a DOM document, whatever realm is asking. NULL for a Lexbor document no record was built for, which

@@ -115,9 +115,28 @@ static int     g_protos_ready;
    deletion means no tombstones, so a probe stops at the first empty slot and nothing else.
    FIBONACCI HASHING on the pointer: node addresses come from Lexbor's mraw pool and are therefore highly
    regular — consecutive nodes differ by a fixed stride — so the low bits alone would collide in runs. */
-typedef struct { lxb_dom_node_t *n; JSValue obj; } NodeEntry;
+/* `realm` is the wrapper's [[Realm]], the realm whose prototype it was created with, and `at` the entry's index
+   in that realm's RealmWraps list. */
+typedef struct { lxb_dom_node_t *n; JSValue obj; JSContext *realm; int at; } NodeEntry;
 static NodeEntry *g_wraps;        /* g_wrap_cap slots, a power of two; a NULL `n` is empty */
 static int        g_wrap_n, g_wrap_cap;
+
+/* THE MAP'S REFERENCE IS THE WRAPPER'S REALM'S. A C table is invisible to the collector, so a reference it holds
+   reads as rooted from outside the graph, and a child realm whose Document was ever wrapped could never be
+   collected: map -> Document wrapper -> the realm's prototypes -> the realm, whose teardown is the only thing that
+   destroys the nodes whose death releases the entry. So each entry belongs to the realm that created its wrapper:
+   that realm's mark hook (document.c's document_realm_mark) reports the entry's reference as one of its own edges
+   (node_wrap_realm_mark), and its teardown (navigable.c) releases what its document's destruction did not
+   (node_wrap_realm_teardown). The creation realm is the owner because it is the wrapper's [[Realm]] in every
+   world; a node's document is time-travelled per flow, and an edge must be reported by exactly one GC object.
+   Named residual. Not covered: a browser keeps a node's wrapper alive while the node is in a live document,
+   also when the node was adopted out of the realm that created its wrapper and nothing in JS holds the wrapper.
+   Here the creation realm's teardown forgets that entry, so the node's next wrapper is a new object. Next diff
+   builds: the edge reported from the node's current tree owner, once a per-world owner can be one edge. Absence
+   shows as: an expando set on a node adopted out of a realm since collected reads undefined. */
+typedef struct { JSContext *realm; lxb_dom_node_t **nodes; int n, cap; } RealmWraps;
+static RealmWraps *g_rwraps;      /* g_rwrap_cap slots, a power of two; a NULL `realm` is empty */
+static int         g_rwrap_n, g_rwrap_cap;
 
 /* THE AGENT'S RUNTIME, and it is here because the map is. Every entry holds a strong reference (see
    node_wrap_forget), and the site that has to release one is a node's DESTROY — which reaches this file with a
@@ -151,6 +170,71 @@ static unsigned node_wrap_slot(const NodeEntry *tab, int cap, const lxb_dom_node
    removal, driven from the one point every node death converges on, and identity then holds for exactly as
    long as the NODE exists, which is what the DOM says it holds for. */
 void node_wrap_stats(long *n, long *cap) { if (n) *n = g_wrap_n; if (cap) *cap = g_wrap_cap; }
+
+static unsigned rwrap_slot(const RealmWraps *tab, int cap, const JSContext *r)
+{
+    unsigned i = (unsigned)(((uintptr_t)r * 2654435769u) >> 16) & (unsigned)(cap - 1);
+    while (tab[i].realm && tab[i].realm != r)
+        i = (i + 1) & (unsigned)(cap - 1);
+    return i;
+}
+
+static void rwrap_grow(void)
+{
+    int cap = g_rwrap_cap ? g_rwrap_cap * 2 : 16, i;
+    RealmWraps *tab = calloc((size_t)cap, sizeof *tab);
+
+    CHECK(tab != NULL, "the per-realm wrapper lists could not grow: an entry with no realm list is a reference "
+                       "no collector edge reports");
+    for (i = 0; i < g_rwrap_cap; i++)
+        if (g_rwraps[i].realm)
+            tab[rwrap_slot(tab, cap, g_rwraps[i].realm)] = g_rwraps[i];
+    free(g_rwraps);
+    g_rwraps = tab;
+    g_rwrap_cap = cap;
+}
+
+/* The list of realm `r`'s entries, created when `create`; NULL for a realm with none and !create. */
+static RealmWraps *rwrap_of(JSContext *r, bool create)
+{
+    unsigned slot;
+
+    if (!g_rwrap_cap) {
+        if (!create) return NULL;
+        rwrap_grow();
+    }
+    slot = rwrap_slot(g_rwraps, g_rwrap_cap, r);
+    if (g_rwraps[slot].realm) return &g_rwraps[slot];
+    if (!create) return NULL;
+    if ((g_rwrap_n + 1) * 2 > g_rwrap_cap) {
+        rwrap_grow();
+        slot = rwrap_slot(g_rwraps, g_rwrap_cap, r);
+    }
+    g_rwraps[slot].realm = r;
+    g_rwrap_n++;
+    return &g_rwraps[slot];
+}
+
+/* Removes realm `r`'s empty list, keeping the probe chains intact by backward shift (see node_wrap_remove). */
+static void rwrap_remove(JSContext *r)
+{
+    unsigned i, j, k, mask = (unsigned)(g_rwrap_cap - 1);
+
+    i = rwrap_slot(g_rwraps, g_rwrap_cap, r);
+    DCHECK(g_rwraps[i].realm == r && g_rwraps[i].n == 0,
+           "a realm's wrapper list was removed while absent or still naming entries");
+    free(g_rwraps[i].nodes);
+    memset(&g_rwraps[i], 0, sizeof g_rwraps[i]);
+    g_rwrap_n--;
+    for (j = (i + 1) & mask; g_rwraps[j].realm; j = (j + 1) & mask) {
+        k = (unsigned)(((uintptr_t)g_rwraps[j].realm * 2654435769u) >> 16) & mask;
+        if ((i <= j) ? (i < k && k <= j) : (i < k || k <= j))
+            continue;
+        g_rwraps[i] = g_rwraps[j];
+        memset(&g_rwraps[j], 0, sizeof g_rwraps[j]);
+        i = j;
+    }
+}
 
 static void node_wrap_grow(void)
 {
@@ -5213,8 +5297,8 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
        parent's realm for no reason but the order of the reads.
        It is OWNED, which is the one cost this conversion adds to the hottest path in the DOM: a refcount pair
        per wrap. */
+    JSContext *rctx = document_realm_of(n);
     {
-        JSContext *rctx = document_realm_of(n);
         JSValue proto;
         uint32_t gen;
 
@@ -5294,8 +5378,21 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
                "state a component keeps in a hidden slot on it, is read back by a sibling world. Mint it "
                "inside node_wrap's own JS_SetFlowGen bracket rather than relaxing this: an object registered "
                "in a registry the delta cannot capture is born BASELINE");
+        RealmWraps *rw = rwrap_of(rctx, true);
+
+        if (rw->n == rw->cap) {
+            int cap = rw->cap ? rw->cap * 2 : 16;
+            lxb_dom_node_t **nodes = realloc(rw->nodes, (size_t)cap * sizeof *nodes);
+            CHECK(nodes != NULL, "a realm's wrapper list could not grow: an entry with no list is a reference no "
+                                 "collector edge reports");
+            rw->nodes = nodes;
+            rw->cap = cap;
+        }
         g_wraps[slot].n = n;
-        g_wraps[slot].obj = JS_DupValue(ctx, obj);   /* the map holds it; node_wrap_forget releases it */
+        g_wraps[slot].obj = JS_DupValue(ctx, obj);   /* the realm's edge; node_wrap_forget releases it */
+        g_wraps[slot].realm = rctx;
+        g_wraps[slot].at = rw->n;
+        rw->nodes[rw->n++] = n;
         g_wrap_n++;
     }
     return obj;
@@ -5331,6 +5428,20 @@ static void node_wrap_remove(const lxb_dom_node_t *n)
     i = node_wrap_slot(g_wraps, g_wrap_cap, n);
     if (g_wraps[i].n != n)
         return;                      /* already gone: a wrapper outliving its node is the flow's teardown order */
+    {
+        RealmWraps *rw = rwrap_of(g_wraps[i].realm, false);
+        int at = g_wraps[i].at;
+        lxb_dom_node_t *last;
+
+        DCHECK(rw != NULL && at >= 0 && at < rw->n && rw->nodes[at] == n,
+               "a wrapped node's entry names a slot of its realm's list that holds another node — the list and "
+               "the map have come apart, so the realm's mark hook reports some other entry's reference");
+        last = rw->nodes[--rw->n];
+        if (last != n) {
+            rw->nodes[at] = last;
+            g_wraps[node_wrap_slot(g_wraps, g_wrap_cap, last)].at = at;
+        }
+    }
     g_wraps[i].n = NULL;
     g_wrap_n--;
     for (j = (i + 1) & mask; g_wraps[j].n; j = (j + 1) & mask) {
@@ -5387,6 +5498,40 @@ void node_wrap_forget(lxb_dom_node_t *n)
     JS_SetOpaque(g_wraps[slot].obj, NULL);
     JS_FreeValueRT(g_agent_rt, g_wraps[slot].obj);
     node_wrap_remove(n);
+}
+
+/* See node.h. */
+void node_wrap_realm_mark(JSRuntime *rt, JSContext *realm, JS_MarkFunc *mark_func)
+{
+    RealmWraps *rw = rwrap_of(realm, false);
+
+    if (!rw) return;
+    for (int i = 0; i < rw->n; i++) {
+        unsigned slot = node_wrap_slot(g_wraps, g_wrap_cap, rw->nodes[i]);
+        DCHECK(g_wraps[slot].n == rw->nodes[i] && g_wraps[slot].realm == realm,
+               "a realm's wrapper list names a node the map holds for no realm or for another one");
+        JS_MarkValue(rt, g_wraps[slot].obj, mark_func);
+    }
+}
+
+/* See node.h. */
+void node_wrap_realm_teardown(JSContext *realm)
+{
+    RealmWraps *rw = rwrap_of(realm, false);
+
+    if (!rw) return;
+    while (rw->n > 0) {
+        lxb_dom_node_t *n = rw->nodes[rw->n - 1];
+        unsigned slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
+        /* A node whose wrapper's realm is dying and which outlived that realm's documents: it was adopted into a
+           document that survives. Nothing in JS reaches the wrapper (it would hold this realm), so its entry is
+           released and the node's next wrapper is a new object — the residual stated at RealmWraps. */
+        JS_SetOpaque(g_wraps[slot].obj, NULL);
+        JS_FreeValueRT(g_agent_rt, g_wraps[slot].obj);
+        node_wrap_remove(n);
+        rw = rwrap_of(realm, false);
+    }
+    rwrap_remove(realm);
 }
 
 /* NULL IS AN ANSWER HERE AND IT IS A POSITIVE ONE: "this agent has no runtime", which is true before node_init
@@ -5822,6 +5967,9 @@ void node_init(JSContext *ctx)
     agent_state_ptr("element", &g_wraps, "the wrapper identity table — one entry per node this agent wrapped");
     agent_state_flag("element", &g_wrap_n, "how many nodes of this agent hold a wrapper");
     agent_state_flag("element", &g_wrap_cap, "the wrapper identity table's extent");
+    agent_state_ptr("element", &g_rwraps, "the per-realm lists of the wrapper identity table's entries");
+    agent_state_flag("element", &g_rwrap_n, "how many realms own wrapper entries");
+    agent_state_flag("element", &g_rwrap_cap, "the per-realm wrapper list table's extent");
     agent_state_flag("element", &g_tree_hook_n, "DOM §4.2.3's insertion- and removing-steps list, its length");
     agent_state_flag("element", &g_cc_hook_n, "DOM §4.2.3's children-changed-steps list, its length");
     agent_state_flag("element", &g_moving_hook_n, "DOM §4.2.3's moving-steps list, its length");
@@ -6197,6 +6345,9 @@ void node_free(JSRuntime *rt)
             JS_FreeValueRT(rt, g_wraps[i].obj);
     free(g_wraps);
     g_wraps = NULL; g_wrap_n = g_wrap_cap = 0;
+    for (i = 0; i < g_rwrap_cap; i++) free(g_rwraps[i].nodes);
+    free(g_rwraps);
+    g_rwraps = NULL; g_rwrap_n = g_rwrap_cap = 0;
     /* The prototypes are the REALMS' — each is released with its context. What the AGENT holds is the table of
        CLASS IDS, which is not a reference to anything. */
     g_protos_ready = 0;
