@@ -1798,6 +1798,11 @@ typedef struct JSArrayBuffer {
     JSArrayBufferSpan *span;
     int n_span;
     int span_size;
+    /* The unknown whose codec output these bytes are, when [[ArrayBufferByteLength]] is that output's length
+       rather than a number anyone stated (JS_NewArrayBufferImage, JS_NewUint8ArrayImage), with byte_length as
+       its example; JS_UNINITIALIZED otherwise, and after a detach or a resize states a length. One counted
+       reference when set; it swaps with the storage state (JSBufferState). */
+    JSValue length_unknown;
 } JSArrayBuffer;
 
 /* ECMA-262 §6.2.9 Data Blocks' Shared Data Block, owned by the SharedArrayBuffer objects that view it, all of one
@@ -1818,6 +1823,10 @@ typedef struct JSTypedArray {
     uint32_t offset; /* byte offset in the array buffer */
     uint32_t length; /* byte length in the array buffer */
     bool track_rab; /* auto-track length of backing array buffer */
+    /* The unknown that [[ArrayLength]] (a DataView's [[ByteLength]]) is, when construction computed it from an
+       unknown buffer length or took it from an unknown argument, with the stored count as its example;
+       JS_UNINITIALIZED otherwise. One counted reference, fixed at construction. */
+    JSValue length_unknown;
 } JSTypedArray;
 
 /* How a flow base COMPLETES — an explicit frame-KIND on the base, dispatched at ONE point, mirroring
@@ -32513,6 +32522,7 @@ typedef struct JSTAViewPlan {
     JSValue buffer;    /* owned */
     uint64_t len, offset;
     bool track_rab;
+    bool len_from_buffer;   /* InitializeTypedArrayFromArrayBuffer steps 8-9: `length` was undefined */
     int size_log2;
 } JSTAViewPlan;
 
@@ -32526,6 +32536,8 @@ typedef struct JSTACtor {
     uint8_t planned;   /* the plan owns a buffer the teardown must release */
     uint8_t proto_read;/* `proto` holds the allocation's prototype; the tail must not read it a second time */
     uint8_t is_copy;   /* the TYPED-ARRAY source form: no plan, and the tail copies instead of viewing */
+    JSValue len_unknown; /* step 5's `length` when it is unknown and argp[2] holds its example (owned), or
+                            JS_UNINITIALIZED; the view built takes it as its length */
 } JSTACtor;
 
 typedef struct JSIterZip {
@@ -79475,6 +79487,7 @@ static JSValue js_dataview_new(JSContext *ctx, JSValueConst buffer, uint32_t off
     ta->offset = offset;
     ta->length = len;
     ta->track_rab = false;
+    ta->length_unknown = JS_UNINITIALIZED;   /* both bounds are stated */
     list_add_tail(&ta->link, &abuf->array_list);
     p->u.typed_array = ta;
     return obj;
@@ -122153,6 +122166,7 @@ static JSValue js_array_buffer_init(JSContext *ctx, JSValue obj,
     abuf->span = NULL;
     abuf->n_span = 0;
     abuf->span_size = 0;
+    abuf->length_unknown = JS_UNINITIALIZED;
     abuf->waiter_lists = JS_UNDEFINED;
     abuf->byte_length = len;
     abuf->max_byte_length = max_len ? *max_len : -1;
@@ -122251,6 +122265,8 @@ JSValue JS_NewSharedArrayBufferView(JSContext *ctx, JSValueConst sab)
     }
     *view = *abuf;
     view->span = NULL; view->n_span = 0; view->span_size = 0;
+    DCHECK(JS_IsUninitialized(abuf->length_unknown), "a SharedArrayBuffer's length is a codec image's");
+    view->length_unknown = JS_UNINITIALIZED;
     init_list_head(&view->array_list);
     view->waiter_lists = js_dup(abuf->waiter_lists);
     block->ref_count++;
@@ -122739,6 +122755,7 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValueConst val)
 
     if (abuf) {
         js_ab_spans_free(rt, abuf);
+        JS_FreeValueRT(rt, abuf->length_unknown);
         /* The ArrayBuffer finalizer may be called before the typed
            array finalizers using it, so abuf->array_list is not
            necessarily empty. */
@@ -122827,6 +122844,25 @@ static JSValue js_array_buffer_get_immutable(JSContext *ctx,
     return js_bool(abuf->immutable);
 }
 
+/* A length the buffer's bytes give no number for: derived from the unknown whose codec output they are
+   (JSArrayBuffer.length_unknown) under the getter's algorithm `op`, with `example` (a byte or element count) as
+   its example. `offset` and `size_log2` are the view's window, 0 for the buffer itself. */
+static JSValue js_ab_length_derive(JSContext *ctx, const JSArrayBuffer *abuf, const char *op, uint32_t offset,
+                                   int size_log2, int64_t example)
+{
+    JSValue ops[3], r;
+
+    DCHECK(!JS_IsUninitialized(abuf->length_unknown) && !abuf->detached,
+           "a length was derived for a buffer whose length is stated");
+    DCHECK(g_concolic.derived != NULL, "a buffer's length is an unknown's with no JSConcolicHooks.derived installed");
+    ops[0] = abuf->length_unknown;
+    ops[1] = js_uint32(offset);
+    ops[2] = js_int32(size_log2);
+    r = g_concolic.derived(ctx, op, ops, 3, js_int64(example));
+    DCHECK(!JS_IsUninitialized(r), "a buffer's unknown length derived no unknown");
+    return r;
+}
+
 static JSValue js_array_buffer_get_byteLength(JSContext *ctx,
                                               JSValueConst this_val,
                                               int class_id)
@@ -122834,6 +122870,9 @@ static JSValue js_array_buffer_get_byteLength(JSContext *ctx,
     JSArrayBuffer *abuf = JS_GetOpaque2(ctx, this_val, class_id);
     if (!abuf)
         return JS_EXCEPTION;
+    if (!JS_IsUninitialized(abuf->length_unknown))
+        return js_ab_length_derive(ctx, abuf, "25.1.6.1 get ArrayBuffer.prototype.byteLength", 0, 0,
+                                   abuf->byte_length);
     /* return 0 if detached */
     return js_uint32(abuf->byte_length);
 }
@@ -122882,6 +122921,9 @@ void JS_DetachArrayBuffer(JSContext *ctx, JSValueConst obj)
     abuf->data = NULL;
     abuf->byte_length = 0;
     abuf->detached = true;
+    /* §25.1.3.5 DetachArrayBuffer step 5: [[ArrayBufferByteLength]] is 0, a stated length */
+    JS_FreeValue(ctx, abuf->length_unknown);
+    abuf->length_unknown = JS_UNINITIALIZED;
 
     list_for_each(el, &abuf->array_list) {
         JSTypedArray *ta;
@@ -123040,6 +123082,7 @@ typedef struct JSBufferState {
        released in JS_BufferStateFree like the views'. */
     int n_span;
     JSArrayBufferSpan *span;
+    JSValue length_unknown;   /* JSArrayBuffer.length_unknown, one counted reference when set */
 } JSBufferState;
 
 void JS_BufferStateFree(JSRuntime *rt, void *blob)
@@ -123057,6 +123100,7 @@ void JS_BufferStateFree(JSRuntime *rt, void *blob)
     js_free_rt(rt, st->span);
     js_free_rt(rt, st->view);
     js_free_rt(rt, st->data);
+    JS_FreeValueRT(rt, st->length_unknown);
     js_free_rt(rt, st);
 }
 
@@ -123088,6 +123132,7 @@ void *JS_BufferStateSave(JSContext *ctx, JSValueConst obj)
     if (!st)
         return NULL;
     st->byte_length = abuf->byte_length;
+    st->length_unknown = js_dup(abuf->length_unknown);
     st->max_byte_length = abuf->max_byte_length;
     st->detached = abuf->detached;
     st->immutable = abuf->immutable;
@@ -123269,6 +123314,8 @@ void JS_BufferStateRestore(JSContext *ctx, JSValueConst obj, void *blob)
        THE LIVE LIST IS RELEASED AND THE BLOB'S IS COPIED, never moved: the baseline is put back at every
        unapply, so a move would empty the blob on the first one and every later restore would answer "no
        unknowns" for a flow that had them. */
+    JS_FreeValueRT(rt, abuf->length_unknown);
+    abuf->length_unknown = js_dup(st->length_unknown);
     js_ab_spans_free(rt, abuf);
     if (st->n_span > 0) {
         abuf->span = js_malloc_rt(rt, sizeof(*abuf->span) * (size_t)st->n_span);
@@ -123293,7 +123340,8 @@ static JSValue js_array_buffer_transfer(JSContext *ctx, JSValueConst this_val,
     JSArrayBuffer *abuf;
     uint64_t new_len, old_len, max_len, *pmax_len;
     uint8_t *bs, *new_bs;
-    JSValue ret;
+    JSValue ret, length_unknown = JS_UNINITIALIZED;
+    bool len_stated;
 
     abuf = JS_GetOpaque2(ctx, this_val, JS_CLASS_ARRAY_BUFFER);
     if (!abuf)
@@ -123303,7 +123351,8 @@ static JSValue js_array_buffer_transfer(JSContext *ctx, JSValueConst this_val,
     // Spec (ArrayBufferCopyAndDetach): the newLength argument must be
     // coerced (its valueOf observed) before the buffer's detachability /
     // immutability is checked, so side effects of coercion are visible.
-    if (argc < 1 || JS_IsUndefined(argv[0]))
+    len_stated = !(argc < 1 || JS_IsUndefined(argv[0]));
+    if (!len_stated)
         new_len = abuf->byte_length;
     else if (JS_ToIndex(ctx, &new_len, argv[0]))
         return JS_EXCEPTION;
@@ -123328,9 +123377,16 @@ static JSValue js_array_buffer_transfer(JSContext *ctx, JSValueConst this_val,
     cow_capture_buffer_lifetime(ctx, this_val);
     /* create an empty AB */
     if (new_len == 0) {
+        if (!len_stated)
+            length_unknown = js_dup(abuf->length_unknown);
         JS_DetachArrayBuffer(ctx, this_val);
         ret = js_array_buffer_constructor2(ctx, 0, pmax_len,
                                            JS_CLASS_ARRAY_BUFFER);
+        if (!JS_IsException(ret)) {
+            JS_VALUE_GET_OBJ(ret)->u.array_buffer->length_unknown = length_unknown;
+            length_unknown = JS_UNINITIALIZED;
+        }
+        JS_FreeValue(ctx, length_unknown);
         goto fini;
     }
     bs = abuf->data;
@@ -123344,15 +123400,33 @@ static JSValue js_array_buffer_transfer(JSContext *ctx, JSValueConst this_val,
         if (new_len > old_len)
             memset(bs + old_len, 0, new_len - old_len);
     }
+    /* §25.1.3.3 ArrayBufferCopyAndDetach copies the bytes, so the facts about them go with them: the spans
+       over the copied prefix, and a length nobody stated when newLength was absent. */
+    if (!len_stated)
+        length_unknown = js_dup(abuf->length_unknown);
     /* neuter the backing buffer */
     abuf->data = NULL;
     abuf->byte_length = 0;
     abuf->detached = true;
+    JS_FreeValue(ctx, abuf->length_unknown);
+    abuf->length_unknown = JS_UNINITIALIZED;
     js_array_buffer_update_typed_arrays(abuf);
     ret = js_array_buffer_constructor3(ctx, new_len, pmax_len,
                                        JS_CLASS_ARRAY_BUFFER, bs,
                                        abuf->free_func, NULL,
                                        /*alloc_flag*/false);
+    if (!JS_IsException(ret)) {
+        JSArrayBuffer *nabuf = JS_VALUE_GET_OBJ(ret)->u.array_buffer, src = *abuf;
+
+        src.data = bs;
+        src.byte_length = (int)(new_len < old_len ? new_len : old_len);
+        src.detached = false;
+        js_ab_spans_copy(ctx, nabuf, 0, &src, 0, (uint32_t)src.byte_length);
+        nabuf->length_unknown = length_unknown;
+        length_unknown = JS_UNINITIALIZED;
+    }
+    JS_FreeValue(ctx, length_unknown);
+    js_ab_spans_free(ctx->rt, abuf);
 fini:
     if (magic == JS_ARRAY_BUFFER_TRANSFER_TO_IMMUTABLE) {
         if (JS_IsException(ret))
@@ -123457,6 +123531,9 @@ static JSValue js_array_buffer_resize(JSContext *ctx, JSValueConst this_val,
         abuf->byte_length = len;
         abuf->data = data;
     }
+    /* §25.1.6.6 step 15: the new [[ArrayBufferByteLength]] is the stated newLength */
+    JS_FreeValue(ctx, abuf->length_unknown);
+    abuf->length_unknown = JS_UNINITIALIZED;
     js_array_buffer_update_typed_arrays(abuf);
     return JS_UNDEFINED;
 }
@@ -123619,6 +123696,8 @@ static JSValue js_typed_array_get_length(JSContext *ctx, JSValueConst this_val)
     p = get_typed_array(ctx, this_val);
     if (!p)
         return JS_EXCEPTION;
+    if (!JS_IsUninitialized(p->u.typed_array->length_unknown) && !typed_array_is_oob(p))
+        return js_dup(p->u.typed_array->length_unknown);   /* §23.2.3.21 step 6, TypedArrayLength */
     return js_int32(p->u.array.count);
 }
 
@@ -123645,6 +123724,15 @@ static JSValue js_typed_array_get_byteLength(JSContext *ctx, JSValueConst this_v
     if (typed_array_is_oob(p))
         return js_int32(0);
     ta = p->u.typed_array;
+    if (!JS_IsUninitialized(ta->length_unknown)) {
+        /* §23.2.3.3 step 6, TypedArrayByteLength: the length times the element size */
+        JSValue ops[2] = { ta->length_unknown, js_int32(typed_array_size_log2(p->class_id)) }, r;
+
+        r = g_concolic.derived(ctx, "23.2.3.3 get %TypedArray%.prototype.byteLength", ops, 2,
+                               js_int64((int64_t)p->u.array.count << typed_array_size_log2(p->class_id)));
+        DCHECK(!JS_IsUninitialized(r), "a view's unknown length derived no unknown byte length");
+        return r;
+    }
     if (!ta->track_rab)
         return js_uint32(ta->length);
     size_log2 = typed_array_size_log2(p->class_id);
@@ -125542,6 +125630,7 @@ static int typed_array_init(JSContext *ctx, JSValue obj, JSValue buffer,
     ta->offset = offset;
     ta->length = len << size_log2;
     ta->track_rab = track_rab;
+    ta->length_unknown = JS_UNINITIALIZED;   /* a caller whose len is an unknown's example sets it */
     list_add_tail(&ta->link, &abuf->array_list);
     p->u.typed_array = ta;
     p->u.array.count = len;
@@ -125707,6 +125796,7 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         cb_result = JS_UNDEFINED;
         s->result = JS_UNDEFINED;
         s->proto = JS_UNDEFINED;
+        s->len_unknown = JS_UNINITIALIZED;
         s->offset = 0;
         for (i = 0; i < 3; i++)
             s->argp[i] = js_dup(step_arg(&s->hdr, i));
@@ -125748,6 +125838,12 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         JS_FreeValue(ctx, s->argp[1]);
         s->argp[1] = prim;                   /* the primitive REPLACES the operand the body reads */
     have_offset:
+        if (js_value_is_concolic(s->argp[1])) {
+            DFAIL("23.2.5.1.5 step 2 ToIndex(byteOffset) over unknown input: build a view whose byteOffset is "
+                  "that unknown, at its example, as the length below is; completing the constructor as one "
+                  "unknown value would break the view's brand and invent a TypeError downstream");
+            return -1;
+        }
         s->hdr.stage = TAC_LENGTH;
         /* Steps 2-3 HERE, not in the plan: the alignment RangeError is ordered before step 5's ToIndex(length),
            and that ToIndex may need a ToPrimitive this machine can only perform as a request. Which is also why
@@ -125769,6 +125865,24 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->argp[2] = prim;
     }
  have_length:
+    /* 23.2.5.1.5 step 5 ToIndex(length) over unknown input: the view is built at the length's example and the
+       unknown becomes its [[ArrayLength]], so its elements stay the buffer's indexed bytes. The plan's range
+       check runs on the example. */
+    if (!s->is_copy && JS_VALUE_GET_TAG(s->argp[0]) == JS_TAG_OBJECT && js_value_is_concolic(s->argp[2]) &&
+        JS_IsUninitialized(s->len_unknown)) {
+        JSValue ex = js_concolic_operand(ctx, s->argp[2]);
+        double d = 0;
+
+        if (!js_concolic_held(s->argp[2]) || !JS_IsNumber(ex) || JS_ToFloat64(ctx, &d, ex) ||
+            !(d >= 0 && d <= MAX_SAFE_INTEGER && d == trunc(d))) {
+            JS_FreeValue(ctx, ex);
+            DFAIL("23.2.5.1.5 step 5 ToIndex(length) over unknown input with no index for an example: build "
+                  "the fork over the view's extent this length leaves open");
+            return -1;
+        }
+        s->len_unknown = s->argp[2];
+        s->argp[2] = ex;
+    }
     /* ARRIVING FROM ABOVE IS NOT THE SAME AS BEING RE-ENTERED HERE, and the arm is what says so. This was
        `if (s->hdr.stage != TAC_PROTO)` around the reset — the negation asking "have I been here already", which
        is the one question a machine can never answer from its stage. It is answered by WHERE the dispatch
@@ -125809,6 +125923,13 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         } else {
             s->planned = 0;                  /* the finish takes the plan's buffer */
             s->result = js_ta_view_finish(ctx, obj, &s->plan);
+            if (!JS_IsException(s->result) && !JS_IsUninitialized(s->len_unknown)) {
+                JSTypedArray *nta = JS_VALUE_GET_OBJ(s->result)->u.typed_array;
+
+                JS_FreeValue(ctx, nta->length_unknown);
+                nta->length_unknown = s->len_unknown;
+                s->len_unknown = JS_UNINITIALIZED;
+            }
         }
     }
     return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
@@ -125825,6 +125946,7 @@ static void js_ta_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->result);
     v->val(ctx, &s->proto);
     for (i = 0; i < 3; i++) v->val(ctx, &s->argp[i]);
+    v->val(ctx, &s->len_unknown);
     if (s->planned) v->val(ctx, &s->plan.buffer);
 }
 
@@ -125874,7 +125996,7 @@ static int ta_view_offset(JSContext *ctx, JSValueConst byte_offset, int size_log
 static int js_ta_view_plan(JSContext *ctx, JSTAViewPlan *pl, int argc, JSValueConst *argv, int classid,
                            uint64_t offset)
 {
-    bool track_rab = false;
+    bool track_rab = false, len_from_buffer = false;
     JSValue buffer;
     JSArrayBuffer *abuf;
     int size_log2;
@@ -125912,6 +126034,7 @@ static int js_ta_view_plan(JSContext *ctx, JSTAViewPlan *pl, int argc, JSValueCo
         buf_len = abuf->byte_length;                            /* step 7 */
         if (JS_IsUndefined(argv[2])) {
             track_rab = !fixed_length;
+            len_from_buffer = true;
             /* step 8 for a length-tracking view, step 9 for a fixed one: the first only requires the offset to
                be inside the buffer, the second also requires the WHOLE buffer to divide into elements. */
             if (fixed_length && (buf_len & (elem_size - 1)) != 0)
@@ -125933,6 +126056,7 @@ static int js_ta_view_plan(JSContext *ctx, JSTAViewPlan *pl, int argc, JSValueCo
     pl->len = len;
     pl->offset = offset;
     pl->track_rab = track_rab;
+    pl->len_from_buffer = len_from_buffer;
     pl->size_log2 = size_log2;
     return 0;
 }
@@ -125971,6 +126095,11 @@ static JSValue js_ta_view_finish(JSContext *ctx, JSValue obj, JSTAViewPlan *pl)
     if (typed_array_init(ctx, obj, buffer, offset, len, track_rab)) {
         JS_FreeValue(ctx, obj);
         return JS_EXCEPTION;
+    }
+    if (pl->len_from_buffer && !JS_IsUninitialized(abuf->length_unknown)) {
+        JS_VALUE_GET_OBJ(obj)->u.typed_array->length_unknown =
+            js_ab_length_derive(ctx, abuf, "23.2.5.1.3 InitializeTypedArrayFromArrayBuffer step 9", (uint32_t)offset,
+                                size_log2, (int64_t)len);
     }
     return obj;
 }
@@ -126017,6 +126146,7 @@ static void js_typed_array_finalizer(JSRuntime *rt, JSValueConst val)
             list_del(&ta->link);
         }
         JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, ta->buffer));
+        JS_FreeValueRT(rt, ta->length_unknown);
         js_free_rt(rt, ta);
     }
 }
@@ -126028,6 +126158,7 @@ static void js_typed_array_mark(JSRuntime *rt, JSValueConst val,
     JSTypedArray *ta = p->u.typed_array;
     if (ta) {
         JS_MarkValue(rt, JS_MKPTR(JS_TAG_OBJECT, ta->buffer), mark_func);
+        JS_MarkValue(rt, ta->length_unknown, mark_func);
     }
 }
 
@@ -126128,6 +126259,12 @@ static int js_dataview_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JS
     ta->offset = s->offset;
     ta->length = s->len;
     ta->track_rab = s->track_rab;
+    /* §25.3.2.1 DataView ( buffer [ , byteOffset [ , byteLength ] ] ): an absent byteLength is the buffer's
+       length minus the offset */
+    ta->length_unknown = s->recompute_len && !JS_IsUninitialized(abuf->length_unknown)
+        ? js_ab_length_derive(ctx, abuf, "25.3.2.1 DataView ( buffer [ , byteOffset [ , byteLength ] ] ) step 8.a",
+                              s->offset, 0, s->len)
+        : JS_UNINITIALIZED;
     list_add_tail(&ta->link, &abuf->array_list);
     p->u.typed_array = ta;
     return 0;
@@ -126204,10 +126341,11 @@ static JSValue js_dataview_get_byteLength(JSContext *ctx, JSValueConst this_val)
     if (dataview_is_oob(p))
         return JS_ThrowTypeErrorArrayBufferOOB(ctx);
     ta = p->u.typed_array;
-    if (ta->track_rab) {
-        abuf = ta->buffer->u.array_buffer;
+    abuf = ta->buffer->u.array_buffer;
+    if (!JS_IsUninitialized(ta->length_unknown))
+        return js_dup(ta->length_unknown);   /* §25.3.4.2 step 6, GetViewByteLength */
+    if (ta->track_rab)
         return js_uint32(abuf->byte_length - ta->offset);
-    }
     return js_uint32(ta->length);
 }
 
@@ -126573,14 +126711,19 @@ JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JS
                               const char *codec)
 {
     JSValue arr = JS_NewUint8ArrayCopy(ctx, buf, len);
+    JSArrayBuffer *abuf;
 
     DCHECK(js_value_is_concolic(unknown), "a codec image was recorded over a value that is not unknown input — "
                                           "a known operand's output is ordinary bytes");
     DCHECK(codec != NULL, "a codec image names no codec, which is half the identity of every byte in it");
-    if (JS_IsException(arr) || len == 0)
+    if (JS_IsException(arr))
         return arr;
-    js_ab_span_set_image(ctx, JS_VALUE_GET_OBJ(arr)->u.typed_array->buffer->u.array_buffer, 0, (uint32_t)len,
-                         unknown, 0, codec);
+    abuf = JS_VALUE_GET_OBJ(arr)->u.typed_array->buffer->u.array_buffer;
+    abuf->length_unknown = js_dup(unknown);   /* the codec output's length, len its example */
+    JS_VALUE_GET_OBJ(arr)->u.typed_array->length_unknown =
+        js_ab_length_derive(ctx, abuf, "23.2.5.1.3 InitializeTypedArrayFromArrayBuffer step 9", 0, 0, (int64_t)len);
+    if (len > 0)
+        js_ab_span_set_image(ctx, abuf, 0, (uint32_t)len, unknown, 0, codec);
     return arr;
 }
 
@@ -126593,9 +126736,11 @@ JSValue JS_NewArrayBufferImage(JSContext *ctx, const uint8_t *buf, size_t len, J
     DCHECK(js_value_is_concolic(unknown), "a codec image was recorded over a value that is not unknown input — "
                                           "a known operand's output is ordinary bytes");
     DCHECK(codec != NULL, "a codec image names no codec, which is half the identity of every byte in it");
-    if (JS_IsException(ab) || len == 0)
+    if (JS_IsException(ab))
         return ab;
-    js_ab_span_set_image(ctx, JS_VALUE_GET_OBJ(ab)->u.array_buffer, 0, (uint32_t)len, unknown, 0, codec);
+    JS_VALUE_GET_OBJ(ab)->u.array_buffer->length_unknown = js_dup(unknown);
+    if (len > 0)
+        js_ab_span_set_image(ctx, JS_VALUE_GET_OBJ(ab)->u.array_buffer, 0, (uint32_t)len, unknown, 0, codec);
     return ab;
 }
 

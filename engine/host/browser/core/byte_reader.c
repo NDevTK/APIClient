@@ -467,11 +467,12 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
    records that its bytes are the byte sequence behind text()'s unknown (the same source, minted by the same
    door), so `by[0]` and a DataView read derive from it while the brand stays the buffer's.
 
-   NAMED RESIDUAL — THE LENGTH IS CONCRETE. What is not covered: `byteLength` and `length` answer the example's
-   length, and a sequence with no example bytes is a zero-length buffer, so a length gate is decided and a read
-   past the example throws RangeError where a longer sequence was a world. What the next diff builds: a length
-   that is unknown with the example as its value, in the buffer's state, with the bounds tests of the views
-   forking on it. How its absence shows: a page gating on a reply's or file's length takes one arm. */
+   The length is the unknown's too (JSArrayBuffer.length_unknown): `byteLength` and `length` derive from it,
+   with the example's length as their example, so a length gate forks.
+   NAMED RESIDUAL — THE BOUNDS ARE THE EXAMPLE'S. What is not covered: a view's range checks and element reads
+   test the example's extent, so a read past it throws RangeError or answers undefined where a longer sequence
+   was a world. What the next diff builds: those checks forking on the unknown length, the in-range arm reading
+   an element with no example. How its absence shows: a length gate's long arm reaches a read that throws. */
 static const char BYTE_READER_IMAGE[] = "the byte sequence whose UTF-8 decode text() reads";
 
 /* The copy, recorded as an image of text()'s unknown when these bytes have one. */
