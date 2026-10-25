@@ -767,7 +767,7 @@ function _mergeMethodInto(em, nm) {
   if (nm._astWitnesses !== undefined) {
     const where = "lib/merge.js moat-merging a method's witnesses";
     for (const p of checkWitnessPool(nm._astWitnesses, where)) {
-      em._astWitnesses = witnessPoolWith(em._astWitnesses, p.provenance, p.assumed, p.verification, where);
+      em._astWitnesses = witnessPoolWith(em._astWitnesses, p.provenance, p.acts, p.assumed, p.verification, where);
     }
   }
   if (nm.parameters) {

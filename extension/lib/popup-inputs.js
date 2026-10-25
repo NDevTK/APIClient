@@ -4,10 +4,12 @@
    the engine spells a source read, the text between a shape's braces (lib/callsite-url.js's astHoleNames):
    `location.search`, `window.name`, `document.referrer`, `message.data:<id>`. It reads the producer fields
    the Endpoints panel reads and says "unknown" where none is carried. Built only through lib/dom-builder.js.
-   Named residual. Not covered: an input's delivery (address, message, act), a message's route and composed
-   data, and a victim act, none of which an endpoint witness states. Next diff builds: inputRecipeOf over the
-   composed, verified recipes that replace the spelled witness. How its absence shows: an endpoint reached
-   only after a click lists its later conditions or reads unknown, with no act under any input. */
+   A sighting's acts (the act list its flow performed) are steps too: a message act is one unit under
+   `postMessage`, with its route and the data its domain composes, and every other act sits under `user act`.
+   Named residual. Not covered: an input's address delivery and the value a verified recipe composes for it;
+   the witness still spells its pins and branches. Next diff builds: inputRecipeOf over the composed, verified
+   recipes that replace the spelled entries. How its absence shows: a source's conditions listed as the page
+   spelled them, with no composed value and no verification beside a message act's data. */
 
 // The panel. Reads `tabData` (GET_STATE, lib/serialize.js's serializeTabData) and nothing else.
 function renderInputsPanel() {
@@ -36,12 +38,26 @@ function renderInputsPanel() {
    nothing else. */
 function inputRecipeOf(member, where) {
   if (member.assumed === null) return { provenance: member.provenance, asked: false, verification: null, steps: null };
-  const steps = member.assumed.map((x) => {
-    const holes = astHoleNames("source" in x ? x.source : x.decision);
-    return { text: endpointAssumptionText(x, where),
-             inputs: holes.length === 0 && "source" in x ? [x.source] : holes };
-  });
+  const steps = (member.acts === null ? [] : member.acts.map((a) => inputActStep(a, where))).concat(
+    member.assumed.map((x) => {
+      const holes = astHoleNames("source" in x ? x.source : x.decision);
+      return { text: endpointAssumptionText(x, where),
+               inputs: holes.length === 0 && "source" in x ? [x.source] : holes };
+    }));
   return { provenance: member.provenance, asked: true, verification: member.verification, steps: steps };
+}
+
+/* One act of a sighting's act list as a step: a message posted to the window (its route, and the data its
+   domain composes, as one unit) or a victim act on its target. */
+function inputActStep(a, where) {
+  DCHECK(!!a && typeof a === "object" && typeof a.kind === "string" && typeof a.target === "string",
+         "a stored witness act is not {kind, target, …} (" + where + "): " + JSON.stringify(a));
+  if (a.kind === "message") {
+    return { text: "a message posted to the window by " + a.route + " route" +
+                   ("data" in a ? " with data " + JSON.stringify(a.data) : ", its data not composed"),
+             inputs: ["postMessage"] };
+  }
+  return { text: a.kind + " " + a.target + (a.type !== a.kind ? " (" + a.type + ")" : ""), inputs: ["user act"] };
 }
 
 /* The regrouping. `inputs` maps an input's name to {conditions, parts}; `unknown` holds, once per reason, the

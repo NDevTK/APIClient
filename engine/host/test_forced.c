@@ -15520,6 +15520,8 @@ static int s_names_in_order(const char *js, const char *sink, const char *src, c
     return a && memmem(a + strlen(first), span - (size_t)(a + strlen(first) - e), second, strlen(second));
 }
 
+static int cl_witness_without(const char *js, const char *url, const char *with, const char *without);
+
 /* The rows of the `flagflow` document (fixture/flagflow.h). */
 TF_UNIT void probes_flagflow(const char *js, Probe *tab, int *n) {
     char src[192] = "";
@@ -15548,12 +15550,23 @@ TF_UNIT void probes_flagflow(const char *js, Probe *tab, int *n) {
     fold_row(&fp_tt, &fp_why, has_src && s_names_in_order(js, "innerHTML", src, "ffArmClick", "ffFireClick"),
              "the PoC does not name the click on handler A followed by the click on handler B, so it cannot be "
              "reproduced by delivering the fragment alone");
+    /* The request's reach condition states the clicks: a sighting of /api/ffb-armed is a world where handler A
+       was clicked before handler B, so its witness lists both acts. */
+    const char *fk_why = NULL; int fk_tt = 1;
+    fold_row(&fk_tt, &fk_why, !!strstr(js, "\"/api/ffb-armed\""),
+             "NOT REACHED: there is no /api/ffb-armed record to read a witness from");
+    fold_row(&fk_tt, &fk_why,
+             cl_witness_without(js, "/api/ffb-armed", "\"handler\":\"ffArmClick\"", "\"acts\":[]") &&
+             cl_witness_without(js, "/api/ffb-armed", "\"handler\":\"ffFireClick\"", "\"acts\":[]"),
+             "no witness of /api/ffb-armed lists the clicks on handlers A and B — the request reads as reached "
+             "with no act, though no world reaches it without both");
     const Probe rows[] = {
         { "ff-a-driven", fa_tt, "/api/ffa-armed", SESS_EXPLORE, fa_why },
         { "ff-b-after-a", fb_tt, "/api/ffb-armed", SESS_EXPLORE, fb_why },
         { "ff-b-without-a", fu_tt, "/api/ffb-unarmed", SESS_EXPLORE, fu_why },
         { "ff-sink", fs_tt, "ffOut", SESS_EXPLORE, fs_why },
         { "ff-poc", fp_tt, "ffFireClick", SESS_EXPLORE, fp_why },
+        { "ff-armed-acts", fk_tt, "/api/ffb-armed", SESS_EXPLORE, fk_why, .gate = "ff-b-after-a" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

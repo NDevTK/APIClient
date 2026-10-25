@@ -303,40 +303,48 @@ function methodRazorClasses(m, where) {
 }
 
 /* WHAT A METHOD'S SIGHTINGS ASSUMED — the engine's per-row `witness` (solver/endpoint.h), pooled on the method
-   record as `_astWitnesses`: distinct `{provenance, assumed, verification}`, where `assumed` is one sighting
-   witness's entries (`null` where no flow stood, sorted by the engine), `provenance` the grade of the row it
-   arrived on, and `verification` what firing it established. It is its own pool: no value pool reads it, and
-   two witnesses are never joined, since their union would state a combination no flow assumed. One
-   (provenance, assumed) pair is one member whose verification only rises, in WITNESS_VERIFY_ORDER: a run that
-   reached the request is not taken back by one that has not yet. A method no engine row with the key reached
-   has none. Returns rather than mutates. */
+   record as `_astWitnesses`: distinct `{provenance, acts, assumed, verification}`, where `assumed` is one
+   sighting witness's entries (`null` where no flow stood, sorted by the engine), `acts` the act list its flow
+   performed (null where unasked or where a called member has no act a person performs), `provenance` the grade
+   of the row it arrived on, and `verification` what firing it established. It is its own pool: no value pool
+   reads it, and two witnesses are never joined, since their union would state a combination no flow assumed.
+   One (provenance, acts, assumed) triple is one member whose verification only rises, in
+   WITNESS_VERIFY_ORDER: a run that reached the request is not taken back by one that has not yet. A method no
+   engine row with the key reached has none. Returns rather than mutates. */
 const WITNESS_VERIFY_ORDER = Object.freeze(["no-candidate", "candidate", "verified"]);
-function witnessPoolWith(prior, provenance, assumed, verification, where) {
+function witnessPoolWith(prior, provenance, acts, assumed, verification, where) {
   DCHECK(isCallSiteProvenance(provenance),
          "a sighting witness arrived under the provenance " + JSON.stringify(provenance) + " (" + where + ")");
   DCHECK(assumed === null || Array.isArray(assumed),
          "a sighting witness is neither null nor an array of entries (" + where + ") — extension/bridge.js " +
          "asserts the engine's shape at the seam");
+  DCHECK(acts === null || (Array.isArray(acts) && assumed !== null),
+         "a sighting witness's acts are neither null nor an array on an asked witness (" + where + ")");
   DCHECK(assumed === null ? verification === null : WITNESS_VERIFY_ORDER.indexOf(verification) >= 0,
          "a sighting witness arrived with the verification " + JSON.stringify(verification) + " (" + where +
          ") — an asked witness states one of " + WITNESS_VERIFY_ORDER.join("/") + " and an unasked one none");
   const have = prior === undefined ? [] : checkWitnessPool(prior, where);
-  const key = JSON.stringify([provenance, assumed]);
-  const at = have.findIndex((p) => JSON.stringify([p.provenance, p.assumed]) === key);
-  if (at < 0) return have.concat([{ provenance: provenance, assumed: assumed, verification: verification }]);
+  const key = JSON.stringify([provenance, acts, assumed]);
+  const at = have.findIndex((p) => JSON.stringify([p.provenance, p.acts, p.assumed]) === key);
+  if (at < 0) {
+    return have.concat([{ provenance: provenance, acts: acts, assumed: assumed, verification: verification }]);
+  }
   if (assumed === null ||
       WITNESS_VERIFY_ORDER.indexOf(verification) <= WITNESS_VERIFY_ORDER.indexOf(have[at].verification)) return have;
-  return have.map((p, i) => i === at ? { provenance: p.provenance, assumed: p.assumed, verification: verification } : p);
+  return have.map((p, i) => i === at
+    ? { provenance: p.provenance, acts: p.acts, assumed: p.assumed, verification: verification } : p);
 }
 
-// Asserts a stored pool's shape: a non-empty list of {provenance, assumed} pairs, as witnessPoolWith writes.
+// Asserts a stored pool's shape: a non-empty list of {provenance, acts, assumed, verification}, as
+// witnessPoolWith writes.
 function checkWitnessPool(pool, where) {
   DCHECK(Array.isArray(pool) && pool.length > 0 &&
          pool.every((p) => !!p && typeof p === "object" && isCallSiteProvenance(p.provenance) &&
-                           (p.assumed === null ? p.verification === null
+                           (p.acts === null || Array.isArray(p.acts)) &&
+                           (p.assumed === null ? p.verification === null && p.acts === null
                                                : Array.isArray(p.assumed) &&
                                                  WITNESS_VERIFY_ORDER.indexOf(p.verification) >= 0)),
-         "a method's witness pool " + JSON.stringify(pool) + " is not a non-empty list of {provenance, " +
+         "a method's witness pool " + JSON.stringify(pool) + " is not a non-empty list of {provenance, acts, " +
          "assumed, verification} (" + where + ") — witnessPoolWith is its one writer");
   return pool;
 }

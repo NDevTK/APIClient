@@ -51,9 +51,10 @@ const hasHole = (s) => astAddressHasHole(s || "");
    abort are already merged into the cumulative record and are still relayed. The cost counters, the park
    residue and the right to overwrite the cross-session frontier entry are gated on `_run` at their sites. */
 /* `witness` on each @H row, per solver/endpoint.h: one element per distinct sighting witness, `null` where no
-   flow stood, else `{assumed, verification}`: the sighting's entries — `{source, value, kind}` per pin,
-   `{decision, taken}` per assumed branch, `{decision, completion}` per assumed native completion — and one of
-   WITNESS_VERIFICATIONS. A row from an engine build that predates the
+   flow stood, else `{acts, assumed, verification}`: the acts the sighting's flow performed (a PoC's act list, or
+   null where a called member has no act a person can perform), the sighting's entries — `{source, value, kind}`
+   per pin, `{decision, taken}` per assumed branch, `{decision, completion}` per assumed native completion — and
+   one of WITNESS_VERIFICATIONS. A row from an engine build that predates the
    key carries none, and then no row does (one instance emits one document shape). Beside `witnessClass`:
    `unasked` is exactly the row whose every element is `null` (the class is a MAX over the same sightings), and
    a `may-rest-on` row has a sighting whose path pinned a value, so some element holds a pin. */
@@ -99,9 +100,15 @@ function docWitness(row, f) {
   for (let j = 0; j < w.length; j++) {
     const el = w[j], g = f + ".witness[" + j + "]";
     if (el === null) continue;
-    if (!docIsRecord(el) || Object.keys(el).sort().join(",") !== "assumed,verification" ||
-        !Array.isArray(el.assumed) || WITNESS_VERIFICATIONS.indexOf(el.verification) < 0)
-      return g + " is neither null nor {assumed: [...], verification: " + WITNESS_VERIFICATIONS.join("|") + "}";
+    if (!docIsRecord(el) || Object.keys(el).sort().join(",") !== "acts,assumed,verification" ||
+        !(el.acts === null || Array.isArray(el.acts)) || !Array.isArray(el.assumed) ||
+        WITNESS_VERIFICATIONS.indexOf(el.verification) < 0)
+      return g + " is neither null nor {acts: [...]|null, assumed: [...], verification: " +
+             WITNESS_VERIFICATIONS.join("|") + "}";
+    if (el.acts !== null) {
+      const whyAct = docEach(el.acts, g + ".acts", docSinkAct);
+      if (whyAct !== null) return whyAct;
+    }
     if (el.verification !== "no-candidate" && el.assumed.length === 0)
       return g + " assumed nothing and still names a verification run";
     asked++;

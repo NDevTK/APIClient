@@ -9,6 +9,7 @@
 #include "solver/flow.h"
 #include "solver/novelty.h"   /* what a mint or a header gain is worth: its identity against the product */
 #include "solver/pending.h"   /* …and PROV_*, the vocabulary those words spell */
+#include "solver/act_list.h"   /* the acts a sighting's flow performed */
 #include "solver/witness_verify.h"   /* the queue an eligible witness is verified through */
 #include "solver/solve.h"            /* the request class an attacker-chosen host is handed to */
 #include "core/dom/document.h"       /* the base an address prefix is parsed against */
@@ -60,11 +61,13 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
 /* `verify` is what firing it established, in the order a merge may only raise (endpoint.h's `verification`):
    no candidate could be minted for it, a verification run was minted and has not yet observed it, or such a
    run reached its request assuming nothing of its own. `canon` is its identity as text, the verification key's
-   third field; both are written when a record files it. */
+   third field; both are written when a record files it. `acts` is the act list the sighting's flow performed
+   (solver/act_list.h): a JSON array, `[]` for none, or `null` where a called member has no act a person can
+   perform; owned, and part of the witness's identity. */
 typedef enum { WIT_PIN = 0, WIT_BRANCH, WIT_OUTCOME } WitWhat;
 typedef enum { WIT_VERIFY_NO_CANDIDATE = 0, WIT_VERIFY_CANDIDATE, WIT_VERIFY_VERIFIED } WitVerify;
 typedef struct { WitWhat what; char *subject; char *value; ConcolicLit kind; int taken; } WitEntry;
-typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *canon; } Witness;
+typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *canon; char *acts; } Witness;
 /* `is_asset` is what the resource at this address turned out to be, written after the record exists. Whether a
    static asset is an endpoint is decided by bytes (magic bytes and content type, not a URL suffix), which arrive on
    a reply, while a request is recorded before its policy check (a request a policy refuses is still one the bundle
@@ -303,11 +306,21 @@ static int wit_entry_cmp(const void *pa, const void *pb) {
 /* The running flow's witness, read at the act: its pin store and its assumed decisions. Two decision keys whose
    spellings and arms agree state one assumption, so a repeat is kept once. */
 static Witness witness_now(void) {
-    Witness w = { 0, NULL, 0, 0, WIT_VERIFY_NO_CANDIDATE, NULL };
+    Witness w = { 0, NULL, 0, 0, WIT_VERIFY_NO_CANDIDATE, NULL, NULL };
     int i, u;
 
     if (flow_running() == NULL) return w;
     w.asked = 1;
+    {
+        int no_act, unsolved;
+        char *refused, *dl, *acts = act_list_json(flow_running(), &no_act, &unsolved, &refused, &dl);
+
+        w.acts = no_act ? strdup("null") : acts ? acts : strdup("[]");
+        CHECK(w.acts, "endpoint: OOM recording a sighting's acts");
+        if (no_act) free(acts);
+        free(refused);
+        free(dl);
+    }
     concolic_pins_each(wit_pin_visit, &w);
     concolic_assumed_decisions_each(wit_decision_visit, &w);
     if (w.n > 1) qsort(w.e, (size_t)w.n, sizeof *w.e, wit_entry_cmp);
@@ -325,7 +338,7 @@ static int witness_has_pin(const Witness *w) {
 }
 
 static int witness_same(const Witness *a, const Witness *b) {
-    if (a->asked != b->asked || a->n != b->n) return 0;
+    if (a->asked != b->asked || a->n != b->n || wit_str_cmp(a->acts, b->acts)) return 0;
     for (int i = 0; i < a->n; i++) if (wit_entry_cmp(&a->e[i], &b->e[i]) != 0) return 0;
     return 1;
 }
@@ -334,7 +347,8 @@ static void witness_free(Witness *w) {
     for (int i = 0; i < w->n; i++) { free(w->e[i].subject); free(w->e[i].value); }
     free(w->e);
     free(w->canon);
-    w->e = NULL; w->n = w->cap = 0; w->canon = NULL;
+    free(w->acts);
+    w->e = NULL; w->n = w->cap = 0; w->canon = NULL; w->acts = NULL;
 }
 
 static const char *const wit_verify_token[] = { "no-candidate", "candidate", "verified" };
@@ -348,13 +362,15 @@ static void witness_json(JsonBuf *b, const Endpoint *e) {
         const Witness *w = &e->wit[i];
         if (i) json_buf_raw(b, ",");
         if (!w->asked) {
-            DCHECK(w->n == 0, "a witness no flow stood at carries entries");
+            DCHECK(w->n == 0 && !w->acts, "a witness no flow stood at carries entries or acts");
             json_buf_raw(b, "null");
             continue;
         }
+        DCHECK(w->acts != NULL, "an asked witness carries no act list — witness_now writes one");
         CHECK(w->verify >= WIT_VERIFY_NO_CANDIDATE && w->verify <= WIT_VERIFY_VERIFIED,
               "endpoint: a sighting witness states a verification outside its three states");
         json_buf_raw(b, "{"); json_buf_key(b, "verification"); json_buf_str(b, wit_verify_token[w->verify]);
+        json_buf_raw(b, ","); json_buf_key(b, "acts"); json_buf_raw(b, w->acts);
         json_buf_raw(b, ","); json_buf_key(b, "assumed");
         json_buf_raw(b, "[");
         for (int j = 0; j < w->n; j++) {
@@ -404,9 +420,13 @@ static char *witness_canon(const Witness *w) {
         ents[i] = concolic_ident_compose("e", f, 5);
         CHECK(ents[i], "endpoint: OOM spelling a witness entry");
     }
-    out = concolic_ident_compose("w", ents, w->n);
+    ents = realloc(ents, (size_t)(w->n + 1) * sizeof *ents);
+    CHECK(ents, "endpoint: OOM spelling a witness");
+    ents[w->n] = strdup(w->acts ? w->acts : "");
+    CHECK(ents[w->n], "endpoint: OOM spelling a witness's acts");
+    out = concolic_ident_compose("w", ents, w->n + 1);
     CHECK(out, "endpoint: OOM spelling a witness");
-    for (int i = 0; i < w->n; i++) free((char *)ents[i]);
+    for (int i = 0; i <= w->n; i++) free((char *)ents[i]);
     free(ents);
     return out;
 }
@@ -474,6 +494,7 @@ static void endpoint_witness_add(Endpoint *e, Witness *w) {
     }
     e->wit[e->nwit++] = *w;
     w->e = NULL; w->n = w->cap = 0; w->asked = 0; w->canon = NULL; w->verify = WIT_VERIFY_NO_CANDIDATE;
+    w->acts = NULL;
 }
 
 /* See endpoint.h. A union rather than an intersection, for the address class's own merge's reason: each operand is

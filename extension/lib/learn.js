@@ -580,8 +580,9 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   if ("witness" in callSite) {
     const where = "lib/learn.js registering method " + JSON.stringify(methodName);
     for (const el of callSite.witness) {
-      m._astWitnesses = witnessPoolWith(m._astWitnesses, callSite.provenance, el === null ? null : el.assumed,
-                                        el === null ? null : el.verification, where);
+      m._astWitnesses = witnessPoolWith(m._astWitnesses, callSite.provenance, el === null ? null : el.acts,
+                                        el === null ? null : el.assumed, el === null ? null : el.verification,
+                                        where);
     }
   }
 

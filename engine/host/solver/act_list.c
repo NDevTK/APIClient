@@ -89,8 +89,8 @@ char *act_list_json(const Flow *f, int *no_act, int *unsolved, char **refused, c
        claim is the page's own reach, as engine.c's fork treats it ("a drive that has called nothing"), so it
        contributes no drive act; the modelled user acts still name themselves. */
     DCHECK(!f->orphan || called > 0 || (f->orphan_want && f->orphan_claim_at == 0),
-           "a fire ran in a drive whose chain has no called member and which is not a resumed drive waiting "
-           "for its first call — the mark and the chain are written together at the seed and at the claim");
+           "an act list was asked of a drive whose chain has no called member and which is not a resumed drive "
+           "waiting for its first call — the mark and the chain are written together at the seed and at the claim");
     if (called == 0 && f->user_acts_n == 0) return NULL;
     for (k = 0; k < called; k++)
         if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
