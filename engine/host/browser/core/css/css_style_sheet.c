@@ -574,7 +574,7 @@ void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, con
            "a CSS style sheet's rules were parsed into a list that is not empty — this is the operation "
            "§6.1.2's replaceSync is stated over and it SETS the rules, so a second call would append to the "
            "first instead of replacing it");
-    /* The parse inside charges its bytes (css_style_declaration.c's cssd_stylesheet_parse). */
+    /* The parse inside charges its bytes (core/css/css_sheet_parse.c). */
     css_rule_build_sheet(ctx, s->rules, sheet, text, len);
 }
 

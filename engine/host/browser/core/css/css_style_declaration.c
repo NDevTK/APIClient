@@ -119,11 +119,11 @@
 #include "core/css/css_property_numeric.h"
 #include "core/css/css_presentational_hints.h"
 #include "core/css/css_rule.h"
+#include "core/css/css_sheet_parse.h"
 #include "core/css/css_background_shorthand.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_var.h"   /* css-variables-1 §3's var(), for the parse-time rule below */
 #include "core/timing/thread_work.h"
-#include "solver/engine.h"   /* ENGINE_QUANTUM_WORK, the work a sheet parse charges between suspensions */
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -1377,14 +1377,6 @@ static uint32_t        g_sheet_parse_n;
 static void cssd_sheet_parse_drop(CssdSheetParse *e)
 {
     if (e->mem != NULL) {
-        /* THE ARENA BEING FREED MUST NOT BE THE ONE THE PARSER IS CURRENTLY PARSING INTO. Every parse below
-           sets the parser's arena and takes it back on the same two lines, so this can only fire if a parse
-           acquired a slot's arena and left it installed — which is the dangling-parser-state defect
-           `cssd_selectors_intact` already exists for, arriving through the memory pointer instead. */
-        DCHECK(g_parser == NULL || lxb_css_parser_memory(g_parser) != e->mem,
-               "a cached sheet parse was dropped while the CSS parser was still pointing at its arena — the "
-               "next parse would allocate out of freed memory. Every parse in this file sets the parser's "
-               "arena and takes it back before it returns, so find the one that returned without doing so");
         /* The arena is destroyed outright: `lxb_css_stylesheet_create` ref-increments the memory it is handed
            and `lxb_css_stylesheet_destroy` only decrements it, so the arena the stylesheet, its rules and its
            selectors are allocated from is what releases them. */
@@ -1410,51 +1402,6 @@ static void cssd_sheet_parse_free(void)
     g_sheet_parse_n = 0;
 }
 
-/* A sheet parse's meter: how many of its bytes the tokenizer has passed that are already charged. */
-typedef struct {
-    size_t len, charged;
-} CssdParseMeter;
-
-/* The parser's yield hook: between two tokens, once the bytes tokenized since the last charge cost a work
-   quantum, they are charged and the run suspends. Charging only there keeps thread_work_charge's per-call
-   rounding to one unit per quantum. */
-static bool cssd_parse_yield(lxb_css_parser_t *parser, void *ctx)
-{
-    CssdParseMeter *m = ctx;
-    size_t at = (size_t)(parser->tkz->in_p - parser->tkz->in_begin), fresh;
-
-    DCHECK(at >= m->charged && at <= m->len, "a sheet's tokenizer stands outside the bytes it was handed");
-    fresh = at - m->charged;
-    if ((uint64_t)fresh * THREAD_WORK_UNITS_PER_KIB_CSS / 1024 < (uint64_t)ENGINE_QUANTUM_WORK) return false;
-    thread_work_charge(THREAD_WORK_CSS_PARSE, fresh);
-    m->charged = at;
-    return true;
-}
-
-/* A style sheet parse over `g_parser`, which the caller has given its arena: CSS parse work, charged by its
-   bytes a quantum at a time as lexbor's run suspends at the yield hook.
-   NAMED RESIDUAL: every caller is a C activation that cannot park (a sheet's text set from script, the
-   cascade's per-sheet parse), so the run is resumed here at once and only the charge is per quantum. The next
-   diff gives the parse its own parser and selectors in a record a flow carries, so a suspended run parks with
-   the flow. Its absence shows as a single sheet's parse spanning several quanta of one flow's slice. */
-static bool cssd_stylesheet_parse(lxb_css_stylesheet_t *sst, const char *text, size_t len)
-{
-    CssdParseMeter m = { len, 0 };
-    ThreadWorkSpan tw;
-    lxb_status_t st;
-
-    DCHECK(g_parser->yield == NULL, "a sheet parse began while another parse's yield hook was set");
-    thread_work_begin(&tw);
-    g_parser->yield = cssd_parse_yield;
-    g_parser->yield_ctx = &m;
-    st = lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text, len);
-    while (st == LXB_STATUS_SUSPENDED) st = lxb_css_stylesheet_parse_resume(sst, g_parser);
-    g_parser->yield = NULL;
-    g_parser->yield_ctx = NULL;
-    thread_work_charge(THREAD_WORK_CSS_PARSE, len - m.charged);
-    thread_work_end(&tw, THREAD_WORK_CSS_PARSE, len);
-    return st == LXB_STATUS_OK;
-}
 
 /* THE PARSE OF `text`, WHICH IS EITHER THE ONE SLOT `si` ALREADY HOLDS OF THESE EXACT BYTES OR A FRESH ONE
    THAT REPLACES IT. NULL when the text did not parse, which is the same answer and the same cost the
@@ -1506,13 +1453,8 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
         return NULL;
     }
     sst = lxb_css_stylesheet_create(mem);
-    /* The ARENA IS THE PARSER'S FOR THE DURATION OF THE PARSE AND THIS TABLE'S AFTERWARDS — set it, parse,
-       take it back, exactly as `cssd_parse_block` does. What differs is only who owns it when the parse
-       returns. */
-    lxb_css_parser_memory_set(g_parser, mem);
-    if (sst && !cssd_stylesheet_parse(sst, text, len)) sst = NULL;
-    lxb_css_parser_memory_set(g_parser, NULL);
-    cssd_selectors_intact();
+    /* The arena is the sheet's, so the run fills it and this table owns it afterwards. */
+    if (sst && !css_sheet_parse(sst, text, len)) sst = NULL;
     if (sst == NULL) {
         lxb_css_memory_destroy(mem, true);
         return NULL;
@@ -1535,9 +1477,8 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
     return e;
 }
 
-/* The match-result build below drives `g_parser` (it sets the parser's arena around each parse it makes) and
-   replaces a slot of the parse table above when a sheet's emission has changed, destroying the arena the slot's
-   previous parse lived in. css-logical-1 §4 "Flow-Relative Box Model Properties"'s pairing asks for a computed
+/* The match-result build below makes a sheet parse per slot of the parse table above, and replaces a slot when
+   a sheet's emission has changed, destroying the arena the slot's previous parse lived in. css-logical-1 §4 "Flow-Relative Box Model Properties"'s pairing asks for a computed
    `writing-mode` in the middle of resolving another property, which is a second resolution and so possibly a
    second build. The bracket asserting the two do not nest is at the call, in `cssom_cascaded_value`, where the
    ordering that keeps them apart is written. */
@@ -2111,10 +2052,7 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
         return 0;
     }
     sst = lxb_css_stylesheet_create(mem);
-    lxb_css_parser_memory_set(g_parser, mem);
-    if (sst && !cssd_stylesheet_parse(sst, text, len)) sst = NULL;
-    lxb_css_parser_memory_set(g_parser, NULL);
-    cssd_selectors_intact();
+    if (sst && !css_sheet_parse(sst, text, len)) sst = NULL;
     if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST)
         cssd_emit_rules(text, len, lxb_css_rule_list(sst->root), cb, ud, &n);
     /* THE ARENA IS THE ONE OWNER and it is freed outright, for the reason the author cascade's is: creating a
@@ -3360,12 +3298,12 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
     CssLayerOrder *order;
     uint32_t seq;
 
-    /* The match-result build owns `g_parser` and the per-sheet parse table, and an inner build whose sheet
+    /* The match-result build owns the per-sheet parse table, and an inner build whose sheet
        emits different text for a slot the outer build is reading destroys that slot's arena under it. No
        resolution nests inside the collection — the pairing that asks other values runs after it — and this
        asserts it. */
     DCHECK(!g_collecting_sheets,
-           "the author origin's match-result build was re-entered. It owns `g_parser` and the per-sheet parse "
+           "the author origin's match-result build was re-entered. It owns the per-sheet parse "
            "table the arenas live in, so the outer build would go on reading its rules out of freed memory. "
            "css-logical-1 §4's pairing is the one nested resolution an element's cascade makes, and it runs "
            "after collection; a nested read added inside the collection is what this crash names");
