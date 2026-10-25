@@ -94,7 +94,6 @@
 //     node site.mjs control-preload http://127.0.0.1:8910/ <pass>
 //     node site.mjs control-navdecline http://127.0.0.1:8911/ <pass>
 //     node site.mjs control-navload http://127.0.0.1:8912/ <pass>
-//     node site.mjs control-libs http://127.0.0.1:8913/?item=42&view=compact <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
