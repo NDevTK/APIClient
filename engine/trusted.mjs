@@ -2477,7 +2477,7 @@ async function main() {
      solver/engine.c takes its first sample unconditionally rather than waiting for the first work gate:
        · NONE — the instance never reached a round with a live session, or the binary predates the emitter.
          It is not a claim that nothing happened; it is a claim that nothing was asked.
-       · ONE — the frontier has not moved `ENGINE_PROGRESS_EVERY` units of work nor minted a candidate since
+       · ONE — the frontier has not retired `ENGINE_PROGRESS_WORK` units of work nor minted a candidate since
          the run began. That is a WEDGED run, said POSITIVELY and with the numbers it wedged at, and it is
          the state that used to be indistinguishable from a busy one.
        · MANY — the engine was exploring, and the echoed series above says how: @COLD's `live` and `forks`,
@@ -2527,7 +2527,7 @@ async function main() {
     else if (i.census.n === 1)
       console.error(`[trusted] [${i.tag}] wrote exactly ONE scheduler census (ended ${i.ended}), with ` +
                     `${i.census.lastLive} live frontier member(s) in it — the run never advanced another ` +
-                    'ENGINE_PROGRESS_EVERY units of work nor minted a candidate after its first round, ' +
+                    'ENGINE_PROGRESS_WORK units of work nor minted a candidate after its first round, ' +
                     'which is a WEDGED engine rather than a quiet one. The sample above is where it stopped.');
     else
       console.error(`[trusted] [${i.tag}] wrote ${i.census.n} scheduler censuses (ended ${i.ended}); the ` +

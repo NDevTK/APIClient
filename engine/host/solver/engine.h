@@ -393,7 +393,7 @@ int  engine_sched_step(void);
 
 /* Emit the periodic census for a host whose output is a stream of lines: @SWAP, @COLD, @HEAP, @WFQ, @FORKAT, in
  * that order, from the composers that put the same bytes on the result document. Call it after each step; it
- * decides whether a sample is due (`ENGINE_PROGRESS_EVERY` units of engine_sched_events() or a new @S candidate),
+ * decides whether a sample is due (`ENGINE_PROGRESS_WORK` units of engine work, `stepWork`, or a new @S candidate),
  * because a cadence in work performed belongs to the engine, and an elapsed-time cadence would describe the
  * machine. A host needs it because the result document is built only when the frontier drains or stalls, which
  * a real page may never do; rising or frozen counters tell exploration from one member holding the thread.

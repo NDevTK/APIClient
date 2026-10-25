@@ -12578,13 +12578,13 @@ int engine_sched_step(void) {
 /* A host with nothing else to do between quanta (the node smoke test) drives the same steps in a loop: a host's
    loop over the one scheduler, to which a quantum boundary is invisible. */
 /* The host streams what the run is costing, because the result document is built when the frontier drains and a
-   run that does not finish would otherwise say nothing about why. Between returns from the scheduler the host pumps
-   messages, interleaves engines, streams findings and snapshots, and this is one more finding. The cadence is a
-   count, not a clock: a switch count is what the engine did, so two runs of one page emit the same lines, and as a
-   reporting interval it drops, skips and reorders nothing. */
-/* Sized against what a run costs: this fixture's whole exploration is under six thousand switches, so a cadence in
-   the hundreds of thousands would emit nothing. */
-#define ENGINE_PROGRESS_EVERY 1000
+   run that does not finish would otherwise say nothing about why. The cadence is engine work (`stepWork`), the
+   scheduler's one currency: a function of the path, so two runs of one page emit the same lines on every host, and
+   a census costs a fixed share of the work it reports rather than one per so many scheduler events, which multiply
+   per unit of work once the RAM floor sells and switches every step. As a reporting interval it drops, skips and
+   reorders nothing. One hundred quanta, stated as a literal for engine/build.mjs's reader. */
+#define ENGINE_PROGRESS_WORK ((int64_t)5400000)
+_Static_assert(ENGINE_PROGRESS_WORK == 100 * ENGINE_QUANTUM_WORK, "the census cadence is one hundred quanta");
 
 /* The frontier's own reading (engine.h has each row and why it is one struct). It decides nothing and reads no other
    component: every row is a static of this file, and what a reader wants beside them (the delta chains, the cold
@@ -12752,23 +12752,22 @@ void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
  *
  * It runs on the host's own time between two steps, never inside a slice, so with the flow stamp and capture route
  * down it creates no flow's JS value, which makes `result_heap_json`'s runtime walk legal here. The cadence is
- * ENGINE_PROGRESS_EVERY units of engine_sched_events() (forks + flows + jobs + switches) or a new candidate, whichever
- * comes first; a sample is O(frontier members) and prices itself on its own output (`scanCensusWeights` against
+ * ENGINE_PROGRESS_WORK units of engine work (`stepWork`) or a new candidate, whichever comes first; a sample is O(frontier members) and prices itself on its own output (`scanCensusWeights` against
  * `scanNextWeights` on the @WFQ line).
  *
  * The first sample is unconditional, which separates three states: no census line is a host that never reached its
- * first round; exactly one is a frontier that has neither moved ENGINE_PROGRESS_EVERY units nor minted a candidate
- * since, a wedged run stated with its numbers; many is a run exploring. Each line carries its sample ordinal, so the
+ * first round; exactly one is a frontier that has neither retired ENGINE_PROGRESS_WORK units of work nor minted a
+ * candidate since, a wedged run stated with its numbers; many is a run exploring. Each line carries its sample ordinal, so the
  * state is readable off one line: the greatest ordinal in a log is the series length, and a last line reading 1 is
- * the wedged state. The cadence and the ordinal are statics, because engine_sched_events is a lifetime counter not
- * reset at a session boundary, and `long`, like that counter. It answers whether it sampled (solver/engine.h),
+ * the wedged state. The cadence and the ordinal are statics, because `stepWork` is a lifetime counter not reset at a
+ * session boundary, and the cadence is 64-bit like that counter. It answers whether it sampled (solver/engine.h),
  * which a line-stream host cannot re-derive without a second copy of the cadence: the result document is composed
  * only when the frontier drains or stalls, which a real page's never does, so test_forced.c's `--abi` arm spends
  * this return on `qjs_emit_partial` to stream its findings too. */
 int engine_census_emit(ResultCensus *keep)
 {
-    static long next = ENGINE_PROGRESS_EVERY;
-    static int  last_cands = -1;
+    static int64_t next = ENGINE_PROGRESS_WORK;
+    static int     last_cands = -1;
     /* The sample ordinal, static for the cadence's reason: an ordinal that restarted while the cadence it numbers
        did not would give two samples of one process one number. */
     static long seq = 0;
@@ -12781,9 +12780,9 @@ int engine_census_emit(ResultCensus *keep)
 
     /* Either enough work has happened to be worth a line, or the search grew: a new candidate changes what the
        rest of the run will cost. */
-    if (engine_sched_events() < next && solve_candidate_count() == last_cands)
+    if (g_step_work < next && solve_candidate_count() == last_cands)
         return 0;
-    while (engine_sched_events() >= next) next += ENGINE_PROGRESS_EVERY;
+    while (g_step_work >= next) next += ENGINE_PROGRESS_WORK;
     last_cands = solve_candidate_count();
     /* The sample is numbered before it is composed, so the emissions carry one ordinal and a block's lines join by
        it rather than by arrival order. On its own statement, since an increment is a side effect a DCHECK

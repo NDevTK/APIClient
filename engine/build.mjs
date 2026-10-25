@@ -1323,8 +1323,8 @@ const abiPointerSignatures = sourceFact(() => {
   return sigs;
 });
 const progressEvery = sourceFact(() =>
-  hostDefine("solver/engine.c", "ENGINE_PROGRESS_EVERY",
-             "hungCause states its window as an absolute span of engine_sched_events and the census cadence is " +
+  hostDefine("solver/engine.c", "ENGINE_PROGRESS_WORK",
+             "hungCause states its window as an absolute span of engine work and the census cadence is " +
              "what converts censuses to work units"));
 const hworkFields = sourceFact(() =>
   censusComposerFields("test_forced.c", 'printf("@HEVENTS {', '}\\n"',
@@ -4971,14 +4971,12 @@ function hungCauseCensus(out) {
   /* EXACTLY ONE CENSUS IS AN ANSWER AND ITS PRODUCER SAYS SO, which is why this arm no longer declines. It
      read "only 1 @COLD census line(s) — too few to say why", and solver/engine.c's `engine_census_emit` states
      the opposite in its own banner: "THE FIRST SAMPLE IS UNCONDITIONAL AND THAT IS LOAD-BEARING … EXACTLY ONE
-     is a frontier that has not moved ENGINE_PROGRESS_EVERY units nor minted a candidate since — a wedged run,
+     is a frontier that has not moved ENGINE_PROGRESS_WORK units nor minted a candidate since — a wedged run,
      said POSITIVELY, with the numbers it wedged at". The producer made that sample unconditional IN ORDER to
      carry this state, and this reader was throwing the line away and calling the run unexplainable — which is
      the same defect as the word below, one arm over: a verdict saying less than the evidence in its hand.
      AND IT IS THE POPULATION A HUNG-CAUSE VERDICT IS MOST NEEDED FOR. One census means under
-     ENGINE_PROGRESS_EVERY further units of forks+flows+jobs+switches since the first, and CLAUDE.md §Testing
-     records real runs whose WHOLE work total is ~1003 units, in the low mode a wall-denominated slice puts
-     builds into. A run that did almost nothing is exactly the run a reader is trying to explain, so it is not
+     ENGINE_PROGRESS_WORK further units of engine work since the first. A run that did almost nothing is exactly the run a reader is trying to explain, so it is not
      a boundary curiosity — it is the short-run arm of this function, reached through the same non-pass outcome
      as every other.
      WHAT IT STILL CANNOT SAY IS THE PAIR, AND THAT IS STATED RATHER THAN IMPLIED. Every arm below reads a
@@ -5003,7 +5001,7 @@ function hungCauseCensus(out) {
     coldPartition(one, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
     return `a WEDGED FRONTIER (this stage printed EXACTLY ONE @COLD census, and solver/engine.c's ` +
            `engine_census_emit makes the first sample unconditional so that this is a POSITIVE statement and ` +
-           `not a hole: the frontier has not moved ${progressEvery()} units of engine_sched_events nor minted a ` +
+           `not a hole: the frontier has not retired ${progressEvery()} units of engine work nor minted a ` +
            `candidate since that sample was taken. live ${one.live}, framed ${one.framed}, blocked ` +
            `${one.blocked}, owed ${one.owed}, finished ${one.finished} (exploration ${one.finishedFlows}, @S ` +
            `candidate MEMBERS ${one.finishedCands}), sold ${one.sold}. There is no SECOND census, so nothing ` +
@@ -5049,12 +5047,11 @@ function hungCauseCensus(out) {
      IT IS A GRANULARITY AND NOT A BOUND (§NO BOUNDS): it truncates nothing, drops no flow, and decides only how
      much of the tail this reader looks at. So it is a POLICY INPUT stated here with its reasoning and PRINTED
      with the verdict, rather than a constant hidden in an expression. The width is in CENSUSES because that is
-     what the stream is made of, and one census is ENGINE_PROGRESS_EVERY units of engine_sched_events — read from
+     what the stream is made of, and one census is ENGINE_PROGRESS_WORK units of engine work — read from
      engine.c so a retuned cadence cannot leave this sentence quoting a span the engine stopped taking.
      WHY TWENTY: the window has to be longer than one WFQ RE-RANKING PAUSE, which is this function's own
      standing reason for not comparing adjacent samples — a flow outranked and another picked costs a handful of
-     context switches, and twenty censuses is twenty thousand units of forks+flows+jobs+switches, four orders of
-     magnitude above that. It is clamped to half the run so a SHORT run never reads a window longer than it has
+     context switches, and twenty censuses is two thousand quanta of engine work, far above that. It is clamped to half the run so a SHORT run never reads a window longer than it has
      evidence for, which is exactly the old behaviour and is therefore the floor rather than a new risk. */
   const PROGRESS_EVERY = progressEvery();
   const HUNG_WINDOW_CENSUSES = 20;
@@ -5137,7 +5134,7 @@ function hungCauseCensus(out) {
                     `${markRise(lastRetireCand, n, b.finishedCands)} cand, ` +
                     `flip ${markFlip(lastFlip, h.length)}`;
   const span = `over the last ${width} of ${n} censuses — an ABSOLUTE window of ${width * PROGRESS_EVERY} ` +
-               `units of engine_sched_events, not a fraction of the run: ` +
+               `units of engine work, not a fraction of the run: ` +
                `finished ${a.finished}→${b.finished} (exploration ${a.finishedFlows}→${b.finishedFlows}, ` +
                `@S candidate MEMBERS ${a.finishedCands}→${b.finishedCands}), live ${a.live}→${b.live}, ` +
                `sold ${a.sold}→${b.sold} (exploration ${a.soldFlows}→${b.soldFlows}, candidate ` +

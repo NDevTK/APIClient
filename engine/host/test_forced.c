@@ -20522,7 +20522,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
  *
  * HOW OFTEN IT IS ASKED is a SAMPLING RATE of a MEASUREMENT and not a budget: it decides when the verdict is
  * recomputed, never how much the frontier may explore, and the verdict cannot change without something being
- * emitted. It is the engine's own progress cadence (ENGINE_PROGRESS_EVERY units of engine_sched_events), so the @H
+ * emitted. It is the engine's own progress cadence (ENGINE_PROGRESS_WORK units of engine work), so the @H
  * stream lands beside the @PROGRESS/@COLD/@HEAP lines it has to be read against — a report at some other rate
  * would be a second cadence to keep in step.
  *
