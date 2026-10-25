@@ -1157,6 +1157,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
 #include "fixture/fileparsetext.h"
+#include "fixture/uspiso.h"
 #include "fixture/boundpark.h"
 #include "fixture/recordless.h"
 #include "fixture/agenfork.h"
@@ -1638,6 +1639,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
     { "fileparse-text", HTML_FILEPARSE_TEXT },
+    { "uspiso", HTML_USPISO },
     { "boundpark", HTML_BOUNDPARK },
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
@@ -15471,6 +15473,32 @@ TF_UNIT void probes_recordless(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `uspiso` document (fixture/uspiso.h): an arm's set() on a URLSearchParams and on a URL's
+   searchParams is seen by that arm only. */
+TF_UNIT void probes_uspiso(const char *js, Probe *tab, int *n) {
+    const char *st_why = NULL; int st_tt = 1;
+    fold_row(&st_tt, &st_why, !!strstr(js, "\"/api/usiso-set\""),
+             "NOT REACHED: there is no /api/usiso-set record, so the mutating arm never read its objects");
+    fold_row(&st_tt, &st_why, param_value_only(js, "/api/usiso-set", "p", "changed"),
+             "URL §6.2 set(): the mutating arm's URLSearchParams does not read back its own `changed`");
+    fold_row(&st_tt, &st_why, param_value_only(js, "/api/usiso-set", "u", "%3Fmode%3Dchanged"),
+             "URL §6.2's update steps: the mutating arm's URL query is not `?mode=changed`");
+    const char *kp_why = NULL; int kp_tt = 1;
+    fold_row(&kp_tt, &kp_why, !!strstr(js, "\"/api/usiso-kept\""),
+             "NOT REACHED: there is no /api/usiso-kept record, so the arm that keeps its objects never read them");
+    fold_row(&kp_tt, &kp_why, param_value_only(js, "/api/usiso-kept", "p", "base"),
+             "the arm that never called set() reads a URLSearchParams value its sibling wrote: the list is not "
+             "per-flow state");
+    fold_row(&kp_tt, &kp_why, param_value_only(js, "/api/usiso-kept", "u", "%3Fmode%3Dbase"),
+             "the arm that never called set() reads a URL query its sibling's searchParams wrote: the URL record "
+             "is not per-flow state");
+    const Probe rows[] = {
+        { "usiso-set", st_tt, "/api/usiso-set", SESS_EXPLORE, st_why },
+        { "usiso-kept", kp_tt, "/api/usiso-kept", SESS_EXPLORE, kp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -19338,6 +19366,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
     probes_fileparse_text(js, probes, &np);
+    probes_uspiso(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
