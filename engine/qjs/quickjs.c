@@ -32614,6 +32614,9 @@ typedef struct JSTAViewPlan {
     uint64_t len, offset;
     bool track_rab;
     bool len_from_buffer;   /* InitializeTypedArrayFromArrayBuffer steps 8-9: `length` was undefined */
+    /* The caller decided steps 8-10's range test over a buffer whose length is an unknown and holds this world's
+       in-range arm, so the view may reach past the buffer's example bytes. Set by the caller before planning. */
+    bool in_range;
     int size_log2;
 } JSTAViewPlan;
 
@@ -32629,6 +32632,7 @@ typedef struct JSTACtor {
     uint8_t is_copy;   /* the TYPED-ARRAY source form: no plan, and the tail copies instead of viewing */
     JSValue len_unknown; /* step 5's `length` when it is unknown and argp[2] holds its example (owned), or
                             JS_UNINITIALIZED; the view built takes it as its length */
+    JSValue range_pred;  /* steps 8-10's range test over an unknown buffer length, held across its fork (owned) */
 } JSTACtor;
 
 typedef struct JSIterZip {
@@ -124112,6 +124116,10 @@ static bool typed_array_is_oob(JSObject *p)
     abuf = ta->buffer->u.array_buffer;
     if (abuf->detached)
         return true;
+    /* A view whose length is an unknown over a buffer whose length is one was built on its range test's in-range
+       arm (js_ta_ctor_step's TAC_RANGE), so its window is in bounds in this world wherever the example bytes end. */
+    if (!JS_IsUninitialized(ta->length_unknown) && !JS_IsUninitialized(abuf->length_unknown))
+        return false;
     len = abuf->byte_length;
     if (ta->offset > len)
         return true;
@@ -126262,6 +126270,7 @@ static JSValue js_ta_view_finish(JSContext *ctx, JSValue obj, JSTAViewPlan *pl);
     X(TAC_PROTO_EARLY, "23.2.5.1 step 6.b.i via 23.2.5.1.1 step 1 (proto is GetPrototypeFromConstructor(newTarget))") \
     X(TAC_OFFSET,      "23.2.5.1.5 step 2 (offset is ToIndex(byteOffset))") \
     X(TAC_LENGTH,      "23.2.5.1.5 step 5 (newLength is ToIndex(length))") \
+    X(TAC_RANGE,       "23.2.5.1.5 steps 8-10 over a buffer whose length is unknown (the range test forks)") \
     X(TAC_PROTO,       "23.2.5.1 steps 5 and 6.c.iii via 23.2.5.1.1 (AllocateTypedArray, then the initialization)")
 enum { TACTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_ta_ctor_steps[] = { TACTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -126286,6 +126295,8 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->result = JS_UNDEFINED;
         s->proto = JS_UNDEFINED;
         s->len_unknown = JS_UNINITIALIZED;
+        s->range_pred = JS_UNINITIALIZED;
+        s->plan.in_range = false;
         s->offset = 0;
         for (i = 0; i < 3; i++)
             s->argp[i] = js_dup(step_arg(&s->hdr, i));
@@ -126383,8 +126394,57 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
        just delivered is still in cb_result. Without that, 10.1.14's realm fallback handed back the intrinsic
        prototype and `Reflect.construct(BigInt64Array, [], customProto)` silently ignored the custom one. State
        that must survive a suspension cannot be re-initialised on the path the suspension returns to. */
-    s->hdr.stage = TAC_PROTO;
+    s->hdr.stage = TAC_RANGE;
     cb_result = JS_UNDEFINED;
+    STEP_ARM(TAC_RANGE);
+    {
+        /* Steps 8-10's RangeError over a buffer whose length is an unknown: a predicate over that length, so both
+           arms run, and the in-range arm builds its view even where it reaches past the example bytes. */
+        JSObject *bp = !s->is_copy && JS_VALUE_GET_TAG(s->argp[0]) == JS_TAG_OBJECT
+                       ? JS_VALUE_GET_OBJ(s->argp[0]) : NULL;
+        JSArrayBuffer *abuf = bp && bp->class_id == JS_CLASS_ARRAY_BUFFER ? bp->u.array_buffer : NULL;
+        int arm;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (abuf && !abuf->detached && !JS_IsUninitialized(abuf->length_unknown)) {
+            if (JS_IsUninitialized(s->range_pred)) {
+                int size_log2 = typed_array_size_log2(s->hdr.arg);
+                JSValue sp[2];
+
+                if (JS_IsUndefined(s->argp[2])) {
+                    sp[0] = JS_NewInt64(ctx, (int64_t)s->offset);
+                } else if (!JS_IsUninitialized(s->len_unknown)) {
+                    JSValue ops[3];
+
+                    ops[0] = s->len_unknown;
+                    ops[1] = JS_NewInt64(ctx, (int64_t)s->offset);
+                    ops[2] = js_int32(size_log2);
+                    sp[0] = g_concolic.derived(ctx, "23.2.5.1.5 step 10.b offset + newByteLength", ops, 3,
+                                               JS_UNDEFINED);
+                    DCHECK(!JS_IsUninitialized(sp[0]), "a view's unknown length derived no byte extent");
+                } else {
+                    uint64_t len;
+
+                    if (JS_ToIndex(ctx, &len, s->argp[2])) return -1;   /* a primitive: invokes nothing */
+                    sp[0] = JS_NewInt64(ctx, (int64_t)(s->offset + (len << size_log2)));
+                }
+                sp[1] = js_ab_length_derive(ctx, abuf, "25.1.6.1 get ArrayBuffer.prototype.byteLength", 0, 0,
+                                            abuf->byte_length);
+                DCHECK(g_concolic.rel != NULL, "a buffer's length is unknown with no JSConcolicHooks.rel installed");
+                CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a buffer's unknown length");
+                s->range_pred = sp[0];
+            }
+            r = step_tobool_run(ctx, &s->hdr, s->range_pred, "23.2.5.1.5 steps 8-10 range test", &arm);
+            if (r) return r < 0 ? -1 : r;
+            if (!arm) {
+                JS_ThrowRangeError(ctx, "invalid length");
+                return -1;
+            }
+            s->plan.in_range = true;
+        }
+        s->hdr.stage = TAC_PROTO;
+    }
     STEP_ARM(TAC_PROTO);
     {
         /* Every operand is primitive now, so the plan's ToIndex and range checks invoke nothing and can run
@@ -126416,6 +126476,15 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         } else {
             s->planned = 0;                  /* the finish takes the plan's buffer */
             s->result = js_ta_view_finish(ctx, obj, &s->plan);
+            if (!JS_IsException(s->result) && s->plan.in_range && JS_IsUninitialized(s->len_unknown) &&
+                !JS_IsUndefined(s->argp[2])) {
+                uint64_t want = 0;
+
+                if (JS_ToIndex(ctx, &want, s->argp[2]) == 0 && JS_VALUE_GET_OBJ(s->result)->u.array.count < want)
+                    DFAIL("23.2.5.1.5 step 10 over a buffer whose length is unknown: a stated length reaches past "
+                          "the buffer's example bytes — build a view whose stated length holds and whose bytes "
+                          "past the example derive as a read past an unknown length does");
+            }
             if (!JS_IsException(s->result) && !JS_IsUninitialized(s->len_unknown)) {
                 JSTypedArray *nta = JS_VALUE_GET_OBJ(s->result)->u.typed_array;
 
@@ -126440,6 +126509,7 @@ static void js_ta_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->proto);
     for (i = 0; i < 3; i++) v->val(ctx, &s->argp[i]);
     v->val(ctx, &s->len_unknown);
+    v->val(ctx, &s->range_pred);
     if (s->planned) v->val(ctx, &s->plan.buffer);
 }
 
@@ -126525,7 +126595,13 @@ static int js_ta_view_plan(JSContext *ctx, JSTAViewPlan *pl, int argc, JSValueCo
             return -1;
         }
         buf_len = abuf->byte_length;                            /* step 7 */
-        if (JS_IsUndefined(argv[2])) {
+        if (pl->in_range) {
+            /* the caller's fork decided steps 8-10 over the unknown length; the stored bytes are its example */
+            DCHECK(!JS_IsUninitialized(abuf->length_unknown), "an in-range plan over a buffer whose length is stated");
+            len_from_buffer = JS_IsUndefined(argv[2]);
+            if (len_from_buffer)
+                len = offset <= buf_len ? (buf_len - offset) >> size_log2 : 0;
+        } else if (JS_IsUndefined(argv[2])) {
             track_rab = !fixed_length;
             len_from_buffer = true;
             /* step 8 for a length-tracking view, step 9 for a fixed one: the first only requires the offset to
@@ -126572,6 +126648,23 @@ static JSValue js_ta_view_finish(JSContext *ctx, JSValue obj, JSTAViewPlan *pl)
         JS_FreeValue(ctx, obj);
         return JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
     }
+    if (pl->in_range && !JS_IsUninitialized(abuf->length_unknown)) {
+        /* In range in this world: the view holds the example bytes its window covers, possibly none, and its
+           length is an unknown (below, or the constructor's), which every read past those bytes derives from. */
+        uint64_t have = offset <= abuf->byte_length ? (abuf->byte_length - offset) >> size_log2 : 0;
+
+        if (!pl->len_from_buffer)
+            len = len < have ? len : have;
+        if (typed_array_init(ctx, obj, buffer, offset, len, false)) {
+            JS_FreeValue(ctx, obj);
+            return JS_EXCEPTION;
+        }
+        if (pl->len_from_buffer)
+            JS_VALUE_GET_OBJ(obj)->u.typed_array->length_unknown =
+                js_ab_length_derive(ctx, abuf, "23.2.5.1.3 InitializeTypedArrayFromArrayBuffer step 9",
+                                    (uint32_t)offset, size_log2, (int64_t)len);
+        return obj;
+    }
     if (offset > abuf->byte_length) {
         JS_FreeValue(ctx, buffer);
         JS_FreeValue(ctx, obj);
@@ -126604,7 +126697,7 @@ static JSValue js_typed_array_constructor(JSContext *ctx,
                                           int argc, JSValueConst *argv,
                                           int classid)
 {
-    JSTAViewPlan pl;
+    JSTAViewPlan pl = { .in_range = false };
     JSValue obj;
     uint64_t offset = 0;
 
