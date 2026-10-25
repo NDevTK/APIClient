@@ -15545,7 +15545,7 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
                  "no record of this address carries the mark, though a query value roots it on the page's own path");
         rq_marks(js, plain_at[i], &seen, &marked, &plain);
         fold_row(&pr_tt[i], &pr_why[i], seen > 0, "NOT REACHED: there is no record of this address");
-        fold_row(&pl_tt[i], &pl_why[i], seen > 0 && marked == 0 && plain == seen,
+        fold_row(&pl_tt[i], &pl_why[i], marked == 0 && plain == seen,
                  i == 2 ? "a record rooted only in stored state carries the mark, so a precondition was read as an "
                           "attacker source"
                         : "a record only a drive reaches carries the mark, so this tool's own act was read as the "
