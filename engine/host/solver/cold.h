@@ -526,7 +526,7 @@ void cold_census_release(ColdCensus *out);
  *                                 of the one frontier, so it branches and is preempted like anything else and
  *                                 needs its path; and its IDENTITY is what it injects, so it needs that too.
  *                                 `sink` is solve.c's sink-class NAME, re-bound to that table's own pointer by
- *                                 solve_resume_candidate (a `cand_sink` is a pointer into static storage and
+ *                                 solve_resume_candidate (a `fire.sink` is a pointer into static storage and
  *                                 has no identity outside the session that minted it). The source, the root
  *                                 and the payload cross as lower-case HEX — the payload is ATTACKER TEXT and
  *                                 never an index into solve.c's breakout tables, which §@S's derived-breakout

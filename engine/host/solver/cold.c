@@ -217,7 +217,7 @@ void cold_census(ColdCensus *out)
         out->misc_bytes += (long)sizeof(Flow);
         if (f->cand_src) out->misc_bytes += (long)strlen(f->cand_src) + 1;
         if (f->cand_payload) out->misc_bytes += (long)strlen(f->cand_payload) + 1;
-        if (f->cand_vfy) out->misc_bytes += (long)strlen(f->cand_vfy) + 1;
+        if (f->fire.kind == FIRE_REQUEST) out->misc_bytes += (long)strlen(fire_target_key(&f->fire)) + 1;
         /* THE ROUTED DELIVERIES ARE NOT COUNTED HERE, and the two `strlen` rows that were are gone with the
            two `char *` they measured. The queue is a JS Array of [record, senderOrigin] pairs now, so its
            bytes are quickjs's and its strings are shared with everything else that names them — the same
@@ -558,7 +558,7 @@ static char *park_unhex(const char *p, const char *end)
    context, and the day that derivation lands the payload becomes a computed string and every index written by
    an older session names a row that no longer exists — silently, because an index is always a valid index.
    Text costs a hex doubling of a few dozen bytes and is correct in both worlds.
-   THE SINK CROSSES AS ITS NAME, because `cand_sink` is a pointer into solve.c's static table and a pointer has
+   THE SINK CROSSES AS ITS NAME, because `fire.sink` is a pointer into solve.c's static table and a pointer has
    no identity outside the session that minted it. solve_resume_candidate is what binds the name back to that
    table's own pointer, which is what keeps solve.c's identity compare exact on a resumed flow.
    AND TWO CANDIDATE FIELDS DELIBERATELY DO NOT CROSS, which is a decision and not an omission:
@@ -577,7 +577,7 @@ static void park_rec_cand(const Flow *f, long id)
     const char *p;
     const char *root;
 
-    DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->cand_sink,
+    DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->fire.kind == FIRE_MARKER,
            "an @S candidate was parked missing part of its substitution — the source, the payload and the sink "
            "class are one identity, and a record holding two of the three resumes a flow that injects nothing "
            "or cannot say what it fired");
@@ -585,7 +585,7 @@ static void park_rec_cand(const Flow *f, long id)
        search. solve_candidate_root asserts that the search is there and knows its route; this asserts that
        what came back is a field the grammar can carry, so a record short of the whole identity cannot be
        written. */
-    root = solve_candidate_root(f->cand_src, f->cand_sink);
+    root = solve_candidate_root(f->cand_src, fire_target_sink(&f->fire));
     DCHECK(root && *root,
            "an @S candidate was parked with no delivery ROOT — the source, the root, the payload and the sink "
            "class are ONE identity, and a record holding three of the four resumes a flow that fires and then "
@@ -596,7 +596,7 @@ static void park_rec_cand(const Flow *f, long id)
     /* THE SINK NAME IS THE ONE VARIABLE FIELD LEFT IN THE GRAMMAR'S OWN CHARSET, so it is asserted rather than
        hexed: it comes from solve.c's closed table and stays readable at the one point a human ever looks at
        this document. A ',' in it would move every field after it; a ';' would split the record in two. */
-    for (p = f->cand_sink; *p; p++)
+    for (p = fire_target_sink(&f->fire); *p; p++)
         DCHECK((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z'),
                "a sink class name holds something other than letters — it is a field of the recipe grammar, so "
                "a ',' in it shifts every field after it and a ';' splits the record in two");
@@ -607,7 +607,7 @@ static void park_rec_cand(const Flow *f, long id)
     else        snprintf(head, sizeof head, "c%ld,%.17g,", id, flow_reward(f));
     park_open_rec();
     park_str(head);
-    park_str(f->cand_sink);
+    park_str(fire_target_sink(&f->fire));
     park_str(",");
     park_hex(f->cand_src);
     park_str(",");
@@ -641,15 +641,15 @@ static void park_rec_vfy(const Flow *f, long id)
 {
     char head[96];
 
-    DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->cand_vfy && !f->cand_sink,
-           "a witness verification was parked missing its substitution or its key, or carrying a sink class");
+    DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->fire.kind == FIRE_REQUEST,
+           "a witness verification was parked missing its substitution or its key");
     if (id < 0) snprintf(head, sizeof head, "v-,%.17g,", flow_reward(f));
     else        snprintf(head, sizeof head, "v%ld,%.17g,", id, flow_reward(f));
     park_open_rec();
     park_str(head);
     park_hex(f->cand_src);
     park_str(",");
-    park_hex(f->cand_vfy);
+    park_hex(fire_target_key(&f->fire));
     park_str(",");
     park_hex(f->cand_payload);
 }
@@ -934,7 +934,7 @@ typedef enum { PARK_KIND_CAND, PARK_KIND_VFY, PARK_KIND_FLOW } ParkKind;
 
 static ParkKind park_kind_of(const Flow *f)
 {
-    if (f->cand_vfy) return PARK_KIND_VFY;
+    if (f->fire.kind == FIRE_REQUEST) return PARK_KIND_VFY;
     if (f->cand_src) return PARK_KIND_CAND;
     return PARK_KIND_FLOW;
 }
@@ -2356,10 +2356,15 @@ int cold_resume(JSContext *ctx, const char *recipes)
             q = park_comma(q);
             for (kb = q; q < end && *q != ','; q++)
                 ;
-            fl->cand_vfy = park_unhex(kb, q);
+            {
+                char *key = park_unhex(kb, q);
+
+                fire_target_request(&fl->fire, key);
+                free(key);
+            }
             q = park_comma(q);
             fl->cand_payload = park_unhex(q, end);
-            witness_verify_resumed(fl->cand_vfy);
+            witness_verify_resumed(fire_target_key(&fl->fire));
             g_resumed.cands++;
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
@@ -2461,9 +2466,13 @@ int cold_resume(JSContext *ctx, const char *recipes)
                names the delivery rather than the record. Passing them is what lets solve.c ask the SAME
                solve_delivered_ok it asks of a freshly derived escape, so a refusal is spelled once for both
                doors instead of existing at only one of them. */
-            fl->cand_sink = solve_resume_candidate(fl->cand_src, root, sname, fl->cand_payload);
+            {
+                const char *sink = solve_resume_candidate(fl->cand_src, root, sname, fl->cand_payload);
+
+                if (sink) fire_target_marker(&fl->fire, sink);
+            }
             free(root);
-            if (!fl->cand_sink) {
+            if (fl->fire.kind == FIRE_NONE) {
                 /* WITHDRAWN — this build's carrier rules have moved past the session that wrote this record,
                    and the bytes are refused rather than replayed. THE FLOW SURVIVES AND ONLY THE SUBSTITUTION
                    GOES, which is the whole difference between a narrowing and a cap: what the declaration

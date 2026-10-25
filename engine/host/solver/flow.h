@@ -18,6 +18,7 @@
 
 #include "quickjs.h"
 #include "solver/world.h"
+#include "solver/fire_target.h"   /* what a candidate flow's fire proves */
 #include "solver/pending.h"   /* the replies the host still owes a flow (a JS Array, not a malloc'd list) */
 #include "solver/dyn_body.h"  /* the program text a flow's sequence holds; shared, because no flow writes it */
 #include "solver/step_unit.h" /* the named arm of flow_step a flow last returned through */
@@ -218,12 +219,11 @@ typedef struct Flow {
        carries the substitution. NULL for an ordinary flow. */
     char *cand_src;        /* the source identity the payload replaces (owned) */
     char *cand_payload;    /* the breakout to try (owned) */
-    const char *cand_sink; /* the sink name to record if it fires (static) */
-    /* …or, instead of a sink, the endpoint witness this substitution verifies (solver/witness_verify.h): the
-       verification key, owned. A candidate session carries exactly one of `cand_sink` and `cand_vfy`. A
-       verification run records no endpoint and opens no @S search; it reports only whether it reached the
-       witnessed request assuming nothing of its own. Crosses the cold tier as a 'v' record. */
-    char *cand_vfy;
+    /* What its fire proves (solver/fire_target.h): an @S sink's marker, or the request an endpoint witness
+       names (a verification run records no endpoint and opens no @S search; it reports only whether it reached
+       the witnessed request assuming nothing of its own, and crosses the cold tier as a 'v' record). FIRE_NONE
+       exactly when `cand_src` is NULL. */
+    FireTarget fire;
     /* Per-flow because a candidate is preempted and resumed among other flows, so a global would record another
        flow's marker or leave the substitution live for the next one. They swap with the flow. */
     /* Neither crosses the cold tier. solve_flow_begin re-derives `cand_verifying` from `cand_src` at every

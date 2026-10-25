@@ -2199,9 +2199,9 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     if (g_suppress) {                       /* candidate/verify run: not a real @H endpoint */
         const Flow *f = flow_running();
         g_ask_suppressed++;
-        if (f && f->cand_vfy) endpoint_verify_observe(ctx, f->cand_vfy, method, url);
+        if (f && f->fire.kind == FIRE_REQUEST) endpoint_verify_observe(ctx, fire_target_key(&f->fire), method, url);
         /* A sink candidate's request is where the request class reads its context probe. */
-        if (f && f->cand_sink && door_sends_request(door)) solve_request_sink(ctx, url, document_base_url(ctx));
+        if (f && f->fire.kind == FIRE_MARKER && door_sends_request(door)) solve_request_sink(ctx, url, document_base_url(ctx));
         return;
     }
     /* Whether this sighting's address was one the run had determined, read once here from the value the display

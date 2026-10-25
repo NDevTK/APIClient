@@ -1419,8 +1419,8 @@ int flow_path_driven(const Flow *f) {
     DCHECK(f->orphan == 0 || f->orphan == 1,
            "a flow's orphan mark is neither set nor clear — engine.c's orphan seed writes it as a constant and a "
            "fork copies it, so any other value is memory this field does not own");
-    DCHECK(!f->cand_src || (f->cand_payload && !f->cand_sink != !f->cand_vfy),
-           "a candidate session is missing its payload or names neither or both of a sink and a witness key");
+    DCHECK(!f->cand_src == (f->fire.kind == FIRE_NONE) && (!f->cand_src || f->cand_payload),
+           "a candidate session is missing its payload, or its fire target disagrees with whether it is one");
     DCHECK(f->path_peer_driven == 0 || f->path_peer_driven == 1,
            "a flow's peer drive mark is neither set nor clear — flow_take_peer_marks writes it as a bit");
     return f->orphan || f->user_acts_n > 0 || f->cand_src != NULL || f->path_peer_driven;
@@ -2320,7 +2320,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        preconditions check. */
     f->family = f->acct;
     g_acct_live++;
-    f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL; f->cand_vfy = NULL;
+    f->cand_src = NULL; f->cand_payload = NULL; f->fire = (FireTarget){ 0 };
     f->orphan_claim_fn = JS_UNDEFINED;
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
     /* Nothing interposed yet; flow.h says why the pair is what says so and why -1 is a cursor no program can stand
@@ -6146,9 +6146,9 @@ void flow_remove(JSContext *ctx, Flow *f) {
         JS_FreeValue(ctx, f->fn);
         /* A routed record's queue is released in flow_release beside the operation queue, and its emptiness is
            asserted above: freeing it here would make a dropped work item invisible. */
-        /* The candidate it was verifying: both strings are this flow's copies, freed nowhere else for a removed flow
-           (the teardown walks the flows still there). `cand_sink` is static text. */
-        free(f->cand_src); free(f->cand_payload); free(f->cand_vfy);
+        /* The candidate it was verifying: the strings and the target's key are this flow's copies, freed nowhere
+           else for a removed flow (the teardown walks the flows still there). */
+        free(f->cand_src); free(f->cand_payload); fire_target_clear(&f->fire);
         free(f->assumed_slots);
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);
         free(f->orphan_acts);

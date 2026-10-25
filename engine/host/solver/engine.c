@@ -5209,18 +5209,14 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        branch is both timelines'; record_sink dedups), unlike at the cold tier; `cand_verifying` does not, since
        solve_flow_begin re-derives it from `cand_src` at every switch-in. */
     if (parent->cand_src) {
-        DCHECK(parent->cand_payload && !parent->cand_sink != !parent->cand_vfy,
+        DCHECK(parent->cand_payload && parent->fire.kind != FIRE_NONE,
                "a candidate session forked holding only part of its substitution — the source, the payload and "
                "exactly one of a sink class or a witness verification key are one identity, and the arm would "
                "inject nothing or be unable to say what it was trying");
         sib->cand_src = strdup(parent->cand_src);
         sib->cand_payload = strdup(parent->cand_payload);
         CHECK(sib->cand_src && sib->cand_payload, "engine: OOM forking an @S candidate session's substitution");
-        sib->cand_sink = parent->cand_sink;   /* solve.c's static table text: not owned, not copied */
-        if (parent->cand_vfy) {
-            sib->cand_vfy = strdup(parent->cand_vfy);
-            CHECK(sib->cand_vfy, "engine: OOM forking a witness verification's key");
-        }
+        fire_target_copy(&sib->fire, &parent->fire);
         sib->cand_fired = parent->cand_fired;
         /* Where the payload came from is a fact about the bytes, so both arms have it; an arm without it would
            claim to be seeded from this session's search list with no row there, which solve.c's arrival assert
@@ -5254,8 +5250,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* A field added to the candidate identity is an obligation here: the fields are copied one by one so that a
        new one is visible, and this checks they arrived. */
     DCHECK(!!sib->cand_src == !!parent->cand_src && !!sib->cand_payload == !!parent->cand_payload &&
-           (sib->cand_sink != NULL) == (parent->cand_sink != NULL) &&
-           (sib->cand_vfy != NULL) == (parent->cand_vfy != NULL) &&
+           sib->fire.kind == parent->fire.kind &&
            sib->cand_resumed == parent->cand_resumed,
            "an arm of an @S candidate session left the fork without the substitution or its provenance — both are "
            "copied with the arm, which is the payload's flow continued");
@@ -12313,7 +12308,7 @@ static int engine_sched_slice(void) {
                        body) are page bytes of any length; everything else is the assert's message, sized by
                        check.h. */
                     char pl_txt[512], body_txt[1024];
-                    const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";
+                    const char *sk = cur && cur->fire.kind == FIRE_MARKER ? cur->fire.sink : "(exploration flow)";
                     const char *pl = cur ? cur->cand_payload : NULL;
                     /* Which program: script_i indexes the one sequence, the document's scripts and the flow's own
                        dynamic bodies (a lazy chunk, an injected <script>, a fired PoC) as rows of one table

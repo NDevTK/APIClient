@@ -143,7 +143,7 @@ const char *solve_candidate_root(const char *src, const char *sink_name);
 
 /* A PARKED @S CANDIDATE IS COMING BACK — the cold tier's one call, and it does the whole of what a resumed
    candidate needs this file to know. It answers the sink table's OWN pointer for `sink_name`, which is what
-   re-binds a class that crossed the tier by NAME (a `cand_sink` is a pointer into static storage with no
+   re-binds a class that crossed the tier by NAME (a `fire.sink` is a pointer into static storage with no
    identity outside the session it was minted in), and it re-registers that sink as PENDING and already-TRIED
    once — OR it REFUSES the record, which is the fourth thing and the reason the payload is an argument.
    ALL FOUR OR NONE, WHICH IS WHY IT IS ONE CALL AND NOT FOUR.

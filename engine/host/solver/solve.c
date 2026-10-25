@@ -364,13 +364,13 @@ static void fire_observed(Flow *f) {
     int no_act, unsolved;
     char *acts, *refused;
 
-    DCHECK(f && f->cand_src && f->cand_payload && f->cand_sink,
+    DCHECK(f && f->cand_src && f->cand_payload && f->fire.kind == FIRE_MARKER,
            "an @S candidate flow fired holding no source, no payload or no sink class — a finding IS that "
            "triple, so a flow carrying half of it was assembled somewhere that does not go through the seeder "
            "or the cold tier's rebuild");
     acts = fire_acts(f, &no_act, &unsolved, &refused);
     if (no_act || unsolved) {
-        Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+        Cand *e = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
 
         CHECK(e != NULL, "an @S candidate fired for a search this session has no entry for");
         if (no_act) e->fired_no_act++;
@@ -380,7 +380,7 @@ static void fire_observed(Flow *f) {
         return;
     }
     DCHECK(refused == NULL, "a fire recorded as a PoC carries a message composition's refusal");
-    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, acts != NULL);
+    record_sink(sink_class_of_name(fire_target_sink(&f->fire)), f->cand_src, f->cand_payload, acts, acts != NULL);
 }
 
 static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
@@ -529,7 +529,7 @@ static NoveltyId sink_identity(NoveltyKind kind, int sink, const char *src) {
     return novelty_id(kind, f, 2);
 }
 
-/* The class of a candidate flow's `cand_sink`. The flow holds this table's own name pointer, so the binding is
+/* The class of a candidate flow's marker target (`fire.sink`). The flow holds this table's own name pointer, so the binding is
    identity rather than a string compare, and any other pointer is a candidate this table did not seed. */
 static int sink_class_of_name(const char *name) {
     int i;
@@ -1131,7 +1131,7 @@ static void detect_sink(JSValueConst arg, int cls) {
        another source's taint is reached by the ordinary flows too, and a search opened here would freeze a path
        whose substituted source no seeded candidate carries. Declined before the census, which counts
        exploration. */
-    { const Flow *f = flow_running(); if (f && f->cand_vfy) return; }
+    { const Flow *f = flow_running(); if (f && f->fire.kind == FIRE_REQUEST) return; }
     METRIC_ADD(sink_reached, 1);
     if (!concolic_is(arg)) return;
     METRIC_ADD(sink_tainted, 1);
@@ -1438,11 +1438,11 @@ static void filter_survived(const char *out) {
     Cand *e;
     double had, now;
 
-    CHECK(f != NULL && f->cand_src != NULL && f->cand_payload != NULL && f->cand_sink != NULL,
+    CHECK(f != NULL && f->cand_src != NULL && f->cand_payload != NULL && f->fire.kind == FIRE_MARKER,
           "solve: a string reached a code-execution sink inside a candidate run while the running flow holds "
           "no substitution — this rung measures the sink's output against the bytes THIS flow injected, so a "
           "flow with none is not a candidate at all, and all three are dereferenced immediately below");
-    e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+    e = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
     CHECK(e != NULL,
           "solve: a candidate flow's bytes reached a sink for a search this session has no entry for — the "
           "candidate exists only because detection opened one and a cold-resumed one re-registers before it "
@@ -1588,10 +1588,10 @@ static Cand *candidate_search(int sink) {
     int created = 0;
     Cand *e;
 
-    DCHECK(f && f->cand_src && f->cand_sink,
+    DCHECK(f && f->cand_src && f->fire.kind == FIRE_MARKER,
            "an @S candidate's own bytes reached a sink outside a candidate flow — nothing but a candidate run "
            "injects them, so a string carrying one was built by something that is not this search");
-    if (sink_class_of_name(f->cand_sink) != sink) return NULL;
+    if (sink_class_of_name(fire_target_sink(&f->fire)) != sink) return NULL;
     e = sink_search(f->cand_src, sink, &created);
     DCHECK(!created,
            "the sink a candidate is running for was not on the pending list — the candidate exists only "
@@ -1987,7 +1987,7 @@ int solve_seed_candidates(JSContext *ctx) {
             f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
             f->cand_src     = strdup(e->src);
             f->cand_payload = strdup(e->pl[e->seeded].bytes);
-            f->cand_sink    = sink_name(e->sink);
+            fire_target_marker(&f->fire, sink_name(e->sink));
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
             flow_seed(f);
             /* The other side of the withdrawal, asserted where the cost is taken: this is where a payload becomes
@@ -2047,11 +2047,11 @@ int solve_seed_candidates(JSContext *ctx) {
 void solve_observe_substitution(Flow *f) {
     Cand *e;
 
-    CHECK(f != NULL && f->cand_src != NULL && f->cand_sink != NULL,
+    CHECK(f != NULL && f->cand_src != NULL && f->fire.kind == FIRE_MARKER,
           "solve: an @S substitution was performed for a flow carrying no source or no sink class — a search "
           "is the pair, and both are dereferenced immediately below, so a flow holding half of one is a "
           "candidate assembled outside solve_seed_candidates and solve_resume_candidate");
-    e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+    e = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
     CHECK(e != NULL,
           "solve: an @S substitution was performed for a search this session has no entry for — a candidate "
           "exists only because detection opened one and a cold-resumed one re-registers before it runs an "
@@ -2122,8 +2122,8 @@ void solve_flow_begin(Flow *f) {
 
     /* A sink candidate is delivered through its search's root; a witness verification pins a value at its
        identity and is no search's. */
-    if (f && f->cand_src && !f->cand_vfy) {
-        const Cand *rc = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+    if (f && f->cand_src && f->fire.kind == FIRE_MARKER) {
+        const Cand *rc = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
 
         DCHECK(rc != NULL && rc->root != NULL, "a candidate flow was switched in whose search holds no root");
         root = rc ? rc->root : NULL;
@@ -2132,9 +2132,8 @@ void solve_flow_begin(Flow *f) {
     endpoint_suppress(f && f->cand_src ? 1 : 0);
     /* A witness verification substitutes and suppresses like a sink candidate and is no search's: its sinks
        take the exploration arm, which detect_sink then declines. */
-    if (f && f->cand_vfy) {
-        DCHECK(f->cand_src && !f->cand_sink,
-               "a witness verification flow carries no substitution, or a sink class besides its key");
+    if (f && f->fire.kind == FIRE_REQUEST) {
+        DCHECK(f->cand_src, "a witness verification flow carries no substitution");
         f->cand_verifying = 0;
         return;
     }
@@ -2144,7 +2143,7 @@ void solve_flow_begin(Flow *f) {
            `tried` (seeded) and `reached` (arrived) it separates a search the WFQ has never served from one whose
            flows ran and fell short of the sink. It counts switch-ins, not distinct flows: a candidate preempted
            and resumed twenty times has had twenty turns. */
-        Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+        Cand *e = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
         DCHECK(e != NULL,
                "a candidate flow was switched in for a sink search this session has no entry for — a candidate "
                "exists only because detection opened one, and a cold-resumed one re-registers before it runs "
@@ -2177,10 +2176,10 @@ void solve_flow_begin(Flow *f) {
    flow's state, and clearing in two places is how an asymmetry gets in. This file no longer sets
    Flow.cand_fired, so engine.c's sibling copy of it and cold.c's drop of it carry nothing. */
 void solve_flow_end(Flow *f) {
-    if (!f || !f->cand_src || f->cand_vfy) return;   /* a verification is no search's; see solve_flow_begin */
+    if (!f || !f->cand_src || f->fire.kind == FIRE_REQUEST) return;   /* a verification is no search's; see solve_flow_begin */
     /* The last runway reading this candidate will offer, which switch-in sampling cannot take for a flow that
        holds the thread from its final switch-in to its end. Taken before `cand_verifying` is cleared. */
-    Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+    Cand *e = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
     DCHECK(e != NULL,
            "a candidate flow ended for a sink search this session has no entry for — a candidate exists only "
            "because detection opened one and a cold-resumed one re-registers before it runs an opcode, so an "
@@ -2205,7 +2204,7 @@ void solve_flow_end(Flow *f) {
                 "payloads=%d turns=%d verifying=%d sink=%s src=\"%s\"",
                 e->tried, e->ends, e->resumed, e->resumed_withdrawn, e->seeded, e->npl, e->turns,
                 f->cand_verifying,
-                f->cand_sink ? f->cand_sink : "(null)", e->src ? e->src : "(null)");
+                f->fire.kind == FIRE_MARKER ? f->fire.sink : "(null)", e->src ? e->src : "(null)");
         e->ends++;
     }
     f->cand_verifying = 0;

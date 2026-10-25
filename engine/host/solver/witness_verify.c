@@ -107,8 +107,8 @@ int witness_verify_seed(JSContext *ctx) {
         f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
         f->cand_src = strdup(v->src);
         f->cand_payload = strdup(v->payload);
-        f->cand_vfy = strdup(v->key);
-        CHECK(f->cand_src && f->cand_payload && f->cand_vfy, "witness_verify: OOM minting a verification flow");
+        CHECK(f->cand_src && f->cand_payload, "witness_verify: OOM minting a verification flow");
+        fire_target_request(&f->fire, v->key);
         flow_seed(f);   /* named first: its seed's parks are this tool's act */
         v->seeded = 1;
         added++;
