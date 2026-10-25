@@ -1910,15 +1910,19 @@ static char *dl_variant(const char *tmpl, int v, int *nvar) {
         if (hash) {
             const char *q, *qs, *qx;
             size_t qsn, qxn;
+            int keys = 0;
 
             k = dl_key_variant(s, sn, hash);
             for (q = tmpl; *q;) {
                 dl_field(&q, &qs, &qsn);
                 dl_field(&q, &qx, &qxn);
-                if (qsn > base && !memcmp(qs, s, base) && qs[base] == '#' &&
-                    dl_key_variant(qs, qsn, qs + base) > last)
-                    last = dl_key_variant(qs, qsn, qs + base);
+                if (qsn > base && !memcmp(qs, s, base) && qs[base] == '#') {
+                    keys++;
+                    if (dl_key_variant(qs, qsn, qs + base) > last) last = dl_key_variant(qs, qsn, qs + base);
+                }
             }
+            DCHECK(keys == last + 1, "a message template's origin keys are not the candidates 0 to n-1 the "
+                                     "composer writes for one source");
             if (k != (v < last ? v : last)) continue;
         }
         {

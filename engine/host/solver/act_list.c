@@ -73,15 +73,16 @@ static void dl_append(char **dl, const char *src, const char *val)
     *dl = grown;
 }
 
-/* Candidate `v` of the origins message_compose_origins composes for `osrc` (the last where there are fewer), as
-   a JSON String, malloc'd; `*n` takes how many there are. */
+/* Candidate `v` of the origins message_compose_origins composes for `osrc`, which composes at least one, as a
+   JSON String, malloc'd; `*n` takes how many there are, and `v` must be below it. */
 static char *origin_json(const char *osrc, int v, int *n)
 {
     char **origins, *out;
     JsonBuf b = { 0 };
 
     *n = message_compose_origins(osrc, &origins);
-    json_buf_str(&b, origins[v < *n ? v : *n - 1]);
+    DCHECK(v >= 0 && v < *n, "an origin candidate was asked for past the candidates composed for its source");
+    json_buf_str(&b, origins[v]);
     for (int i = 0; i < *n; i++) free(origins[i]);
     free(origins);
     out = json_buf_take(&b);
