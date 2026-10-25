@@ -535,7 +535,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     /* Which document asked: the realm this chokepoint was entered with. `flow_step`'s realm is the session's,
        so a delivery re-deriving it would compile the reply in whichever realm the session is rooted at. It is
        carried rather than defaulted because `PEND_DOC`'s default 0 names no document. */
-    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
+    pending_set_int(e, PEND_DOC, (int)document_environment_doc(ctx));
     /* The address and what travels with it go through the one door, which also asks §4.3. Requests reaching
        here always get NETWORK: `fetch_owe` and `fetch()` run §4.3 with their own `deliver` closure and return
        before touching this register when it answers locally, so a local answer here means one of those seams
@@ -627,7 +627,7 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
     pending_set(e, PEND_REJECT, JS_DupValue(ctx, reject));
     /* And which document asked, as every other fetch park records it: the importing realm is the asking
        document's, and HTML §7.5.11 step 2 cancels this load with that document's other fetches. */
-    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
+    pending_set_int(e, PEND_DOC, (int)document_environment_doc(ctx));
     /* And §4.3 Scheme fetch with it: `import("data:text/javascript,export default 1")` is answered from the
        specifier's own bytes, settling the promise JS_ModuleLoadPending is about to be handed. */
     pending_park_request(ctx, e, &req);
@@ -679,7 +679,7 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
                      /*parser_inserted*/0, flow_work_seq_next());
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
     /* Which document asked, as in the parks above. */
-    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
+    pending_set_int(e, PEND_DOC, (int)document_environment_doc(ctx));
     pending_park_request(ctx, e, req);
     JS_FreeValue(ctx, e);
 }
@@ -733,7 +733,7 @@ static void engine_pending_script_url_into(Flow *f, JSContext *ctx, const char *
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
     /* Which document's program the reply will be: the realm this chokepoint was entered with is the document
        the element was inserted into, not whichever realm the session is rooted at. */
-    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
+    pending_set_int(e, PEND_DOC, (int)document_environment_doc(ctx));
     /* Whose element it is. Every caller reaches this from §4.12.1.1's steps over an element, so NULL is
        asserted rather than defaulted past. */
     DCHECK(el != NULL, "a <script src> was parked on with no element — §4.12.1.1 reaches this destination only from "
@@ -1125,7 +1125,7 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
     /* Which document asked: the realm the operation was entered with. The trusted zone judges the request
        against that document's record (engine_host_requests). */
-    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
+    pending_set_int(e, PEND_DOC, (int)document_environment_doc(ctx));
     id = mint_req();   /* the ask half of the rate above, counted at the mint */
     /* Both names of one rendezvous, equal at the first ask and not the same field. `PEND_REQ` is what this
        returns, so the asking machine stores it in its step state, inside a frame a fork clones verbatim;

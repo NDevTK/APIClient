@@ -161,6 +161,15 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
    same-origin child of a child is named from the child and not from the instance root. */
 uint32_t document_doc(JSContext *ctx);
+/* The world-registry handle of this realm's environment, for a work item the scheduler files under a document: the
+   realm's own Document's, or, for a dedicated worker's realm, which has none (HTML §10.2.6.2 "Script settings for
+   workers" sets up no Document), its owner's, which run a worker records with document_set_worker_environment. A
+   dedicated worker's requests and program are its owner document's work, as its owner set's first member. */
+uint32_t document_environment_doc(JSContext *ctx);
+/* Gives a dedicated worker's realm, which has no Document, the environment record run a worker sets up: its
+   owner's handle (above), its policy container (document_policy answers it for the worker's realm) and its
+   global scope's url, which document_base_url and document_referrer_source answer. */
+void document_set_worker_environment(JSContext *ctx, JSContext *owner, const char *url);
 
 /* THE LOAD LIFECYCLE, PER DOCUMENT — see the definition. Advances ONE document of this agent by one stage
    (DOMContentLoaded in tree order, then `load` innermost-first) and returns 1, or 0 when every document is

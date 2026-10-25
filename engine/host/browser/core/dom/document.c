@@ -249,6 +249,15 @@ static Document *doc_of(JSContext *ctx)
     return (Document *)JS_GetContextOpaque(ctx);
 }
 
+/* A dedicated worker realm's environment record, defined with its accessors below. */
+typedef struct WorkerEnvironment {
+    uint32_t doc;              /* the world-registry handle its work is filed under (its owner's) */
+    PolicyContainer *policy;   /* owned */
+    char *url;                 /* the worker global scope's url, its API base URL and creation URL (owned) */
+    JSContext *owner;          /* the outside settings' realm, a reference this record holds */
+} WorkerEnvironment;
+static WorkerEnvironment *worker_env_of(JSContext *ctx);
+
 /* The same pointer for the readers that dereference it, guarded by a CHECK because they dereference it in every
  * build. Two kinds of realm have no Document: a WorkerGlobalScope realm, which core/realm.h's per-realm column
  * builds without document_install and on which every `[Exposed]` member is placed (core/xhr/xml_http_request.c
@@ -1831,7 +1840,11 @@ const char *document_base_url_of(const lxb_dom_document_t *dom)
 
 const char *document_base_url(JSContext *ctx)
 {
-    Document *d = doc_here(ctx);
+    Document *d;
+
+    /* HTML §10.2.6.2 Script settings for workers: a worker's API base URL is its global scope's url. */
+    if (!doc_of(ctx)) return worker_env_of(ctx)->url;
+    d = doc_here(ctx);
     DCHECK(d->addr.bytes[0] != '\0', "this realm's API base URL was read before its document was installed");
     return document_base_url_of(lxb_dom_interface_document(d->dom));
 }
@@ -3197,7 +3210,13 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
     }
 }
 
-const PolicyContainer *document_policy(JSContext *ctx) { return doc_here(ctx)->policy; }
+
+const PolicyContainer *document_policy(JSContext *ctx)
+{
+    Document *d = doc_of(ctx);
+
+    return d ? d->policy : worker_env_of(ctx)->policy;   /* a worker realm's is its environment record's */
+}
 
 /* The same container as a fact about one document: CSP §6.3.1.1 step 1 states it that way ("let CSP list be
    document's global object's csp list"), and §4.2.3's freeze runs for elements whose node document is often not the
@@ -3782,7 +3801,12 @@ bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature)
 
 JSValueConst document_window_proxy(JSContext *ctx)
 {
-    Document *d = doc_here(ctx);
+    Document *d;
+
+    /* A dedicated worker answers for its owner's navigable, whose descendant it is for Mixed Content's parent
+       question (HTML §10.2.4: the owner set). */
+    if (!doc_of(ctx)) return document_window_proxy(worker_env_of(ctx)->owner);
+    d = doc_here(ctx);
     DCHECK(!JS_IsUndefined(d->proxy), "this realm's WindowProxy was read before its Document was installed — "
                                       "§7.2.3 gives a navigable ONE, and it is minted with the realm");
     return d->proxy;
@@ -3829,6 +3853,67 @@ bool document_fully_active(JSContext *ctx)
 }
 
 uint32_t document_doc(JSContext *ctx) { return doc_here(ctx)->doc; }
+
+/* A dedicated worker realm's environment record, which stands where a Window realm's Document does for the two
+   facts the engine asks of an environment: the world-registry handle its work is filed under (its owner's), and
+   its policy container. A realm value holding an object of an internal class whose opaque is the record. */
+
+static JSClassID g_env_slot = JS_INVALID_CLASS_ID, g_env_class;
+
+static void worker_env_finalizer(JSRuntime *rt, JSValue val)
+{
+    JSClassID id;
+    WorkerEnvironment *e = JS_GetAnyOpaque(val, &id);
+
+    (void)rt;
+    if (!e) return;
+    policy_container_free(e->policy);
+    free(e->url);
+    JS_FreeContext(e->owner);
+    free(e);
+}
+
+static WorkerEnvironment *worker_env_of(JSContext *ctx)
+{
+    JSValue v = realm_value_get(ctx, g_env_slot);
+    WorkerEnvironment *e = JS_GetOpaque(v, g_env_class);
+
+    JS_FreeValue(ctx, v);   /* the realm's slot keeps the object */
+    DCHECK(e != NULL, "a worker realm's environment slot holds no environment record");
+    return e;
+}
+
+uint32_t document_environment_doc(JSContext *ctx)
+{
+    Document *d = doc_of(ctx);
+
+    return d ? d->doc : worker_env_of(ctx)->doc;
+}
+
+void document_set_worker_environment(JSContext *ctx, JSContext *owner, const char *url)
+{
+    WorkerEnvironment *e;
+    JSValue obj;
+
+    DCHECK(doc_of(ctx) == NULL, "a realm with its own Document was given a worker's environment");
+    e = calloc(1, sizeof *e);
+    CHECK(e != NULL, "document: OOM building a worker's environment record");
+    e->doc = document_environment_doc(owner);
+    e->url = strdup(url);
+    CHECK(e->url != NULL, "document: OOM copying a worker's url");
+    e->owner = JS_DupContext(owner);
+    /* HTML §7.1.7 Policy containers' create a policy container from a fetch response: "If response's URL's
+       scheme is "blob", then return a clone of response's URL's blob URL entry's environment's policy container"
+       — the owner's, for a blob the owner created.
+       Named residual. Not covered: a worker fetched over HTTP(S), whose CSP list is parsed from its own response.
+       Next diff builds: the worker's policy container set from the script's response at run a worker's delivery.
+       Absence shows as: an HTTP(S) worker enforcing its owner's CSP rather than the one its response carries. */
+    e->policy = policy_container_clone(document_policy(owner));
+    obj = JS_NewObjectProtoClass(ctx, JS_NULL, g_env_class);
+    CHECK(!JS_IsException(obj), "document: OOM holding a worker's environment record");
+    JS_SetOpaque(obj, e);
+    realm_value_set(ctx, g_env_slot, obj);
+}
 
 JSValueConst document_object(JSContext *ctx) { return doc_here(ctx)->doc_obj; }
 
@@ -3904,6 +3989,13 @@ void document_init(JSContext *ctx)
     g_ready_slot = realm_value_declare(ctx, "HTML current document readiness");
     /* §7.5.9's page showing, the readiness's twin (written by "the end" and by unloading), declared beside it. */
     g_showing_slot = realm_value_declare(ctx, "HTML §7.5.9 page showing");
+    g_env_slot = realm_value_declare(ctx, "a dedicated worker realm's environment record");
+    {
+        JSClassDef ed = { "WorkerEnvironment", .finalizer = worker_env_finalizer };
+        JS_NewClassID(JS_GetRuntime(ctx), &g_env_class);
+        CHECK(JS_NewClass(JS_GetRuntime(ctx), g_env_class, &ed) == 0,
+              "the worker environment record's class could not be registered");
+    }
     document_declare_members(ctx);
     /* §3.1.4's resource metadata members declare their own setter and per-realm cookie store;
        document_metadata_install runs from document_install_proto below, so the declaration is paired here, not in
@@ -3953,6 +4045,8 @@ void document_init(JSContext *ctx)
                     "the runtime §4.5's interface and its ten sub-components declared into, and the latch");
     agent_state_class("document", &g_document_class, "§4.5's interface prototype slot and brand");
     agent_state_class("document", &g_xml_document_class, "DOM §4.5's XMLDocument interface prototype slot");
+    agent_state_realm_slot("document", &g_env_slot, "a dedicated worker realm's environment record");
+    agent_state_class("document", &g_env_class, "a dedicated worker realm's environment record class");
     agent_state_realm_slot("document", &g_ready_slot,
                            "the per-realm slot §3.1.5's current document readiness lives in");
     agent_state_realm_slot("document", &g_showing_slot, "the per-realm slot §7.5.9's page showing lives in");
@@ -4335,8 +4429,18 @@ const char *document_url_of(const lxb_dom_document_t *dom)
 
 char *document_referrer_source(JSContext *ctx)
 {
-    const lxb_dom_document_t *dom = lxb_dom_interface_document(doc_here(ctx)->dom);
-    Document *d = doc_rec(dom);
+    const lxb_dom_document_t *dom;
+    Document *d;
+
+    /* Referrer Policy §8.3: an environment whose global is not a Window has its creation URL as the referrer
+       source, which for a worker is its global scope's url. */
+    if (!doc_of(ctx)) {
+        char *src = strdup(worker_env_of(ctx)->url);
+        CHECK(src != NULL, "document: OOM copying a worker's referrer source");
+        return src;
+    }
+    dom = lxb_dom_interface_document(doc_here(ctx)->dom);
+    d = doc_rec(dom);
 
     /* "If document's origin is an opaque origin, return no referrer." This instance is one origin-keyed agent
        cluster, so the agent's origin is the document's. */
