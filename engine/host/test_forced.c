@@ -1130,6 +1130,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/sparoute.h"
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
+#include "fixture/framemsg.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1531,8 +1532,10 @@ static const char *HTML_POPOVER =
    and the set runs in parallel. A row belongs to the one document whose source contains its key: probes_eval
    asserts that no two of these do, and that a row's gate and reach stand in its document beside it.
    HTML_MIN, HTML_COLD and HTML_POPOVER are selected by their own flags and are not members: their rows
-   answer different questions (the ASan gate, the cross-session round trip, a one-flow frontier). */
-static const struct { const char *name; const char *src; } TF_DOCS[] = {
+   answer different questions (the ASan gate, the cross-session round trip, a one-flow frontier).
+   `coop` is the opener policy the root navigable is created with, as a response header would set it (HTML §7.1.3
+   Cross-origin opener policies); a row that omits it gets §7.1.3's initial `unsafe-none`. */
+static const struct { const char *name; const char *src; OpenerPolicyValue coop; } TF_DOCS[] = {
     { "css", HTML_CSS },
     { "timers", HTML_TIMERS },
     { "idb", HTML_IDB },
@@ -1596,6 +1599,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "sparoute", HTML_SPAROUTE },
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
+    { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -1613,6 +1617,15 @@ TF_UNIT const char *tf_doc_named(const char *name) {
         if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].src;
     CHECK_FAILF("`--doc %s` names no document of this fixture; `--list-docs` prints the members", name);
     return NULL;
+}
+
+/* The opener policy the member named `name` is served with, or §7.1.3's initial value for no member. */
+static OpenerPolicyValue tf_doc_coop(const char *name) {
+    size_t i;
+
+    for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
+        if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].coop;
+    return OPENER_POLICY_UNSAFE_NONE;
 }
 
 /* How many exploring documents contain `key` — the row-to-document declaration probes_eval asserts. */
@@ -14843,6 +14856,41 @@ TF_UNIT void probes_timegate(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `framemsg` document (fixture/framemsg.h). */
+TF_UNIT void probes_framemsg(const char *js, Probe *tab, int *n) {
+    char src[192] = "";
+    int has = s_rooted_source(js, "innerHTML", MESSAGE_DATA_SRC, src, sizeof src);
+    size_t span = 0;
+    const char *rec = has ? s_record(js, "innerHTML", src, &span) : NULL;
+    const char *fr_why = NULL; int fr_tt = 1;
+    fold_row(&fr_tt, &fr_why, !!strstr(js, "\"/api/fm-render\""),
+             "NOT REACHED: there is no /api/fm-render record, so the listener's render arm never ran");
+    const char *fs_why = NULL; int fs_tt = 1;
+    fold_row(&fs_tt, &fs_why, has,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in message.data, so the listener was "
+             "not reached as a cross-document message");
+    const char *fp_why = NULL; int fp_tt = 1;
+    fold_row(&fp_tt, &fp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the innerHTML <- message.data search did not fire a PoC");
+    fold_row(&fp_tt, &fp_why, has && s_field(js, "innerHTML", src, "\"delivery\":\"cross-document-message\""),
+             "the PoC does not state a cross-document message delivery");
+    /* The negative half needs the record to state its route at all, or its silence would pass it. */
+    const char *fc_why = NULL; int fc_tt = 1;
+    fold_row(&fc_tt, &fc_why, has, "NOT REACHED: there is no message.data record to read a route from");
+    fold_row(&fc_tt, &fc_why, rec && memmem(rec, span, "frame", 5) != NULL,
+             "the PoC does not state that its message is posted through a frame embedding this page");
+    fold_row(&fc_tt, &fc_why, !(rec && memmem(rec, span, "opener", 6) != NULL),
+             "the PoC routes its message through an opener, but the page's opener policy is same-origin, so a "
+             "cross-origin opener's handle to it is severed");
+    const Probe rows[] = {
+        { "fm-render", fr_tt, "/api/fm-render", SESS_EXPLORE, fr_why },
+        { "fm-sink", fs_tt, "'fmOut'", SESS_EXPLORE, fs_why },
+        { "fm-poc", fp_tt, "e.data.html", SESS_EXPLORE, fp_why },
+        { "fm-coop-route", fc_tt, "function fmOnMessage", SESS_EXPLORE, fc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18665,6 +18713,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_sparoute(js, probes, &np);
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);
+    probes_framemsg(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
@@ -32531,7 +32580,7 @@ int main(int argc, char **argv) {
         /* AND AN EMPTY §7.1.5 CREATION SANDBOXING FLAG SET, from the same fact one link along: a top-level
            traversable has no embedder element, so §7.1.5 answers from its POPUP sandboxing flag set, which
            begins empty and which only §7.3.1.7's rules for choosing a navigable ever fill. */
-        root_proxy = navigable_root(ctx, world_local_doc(), NULL, OPENER_POLICY_UNSAFE_NONE, "u",
+        root_proxy = navigable_root(ctx, world_local_doc(), NULL, tf_doc_coop(doc_name), "u",
                                     serialized_policy_container_none(), &root_embedder, 0);
         embedder_policy_free(&root_embedder);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
