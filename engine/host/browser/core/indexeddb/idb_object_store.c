@@ -36,6 +36,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/indexeddb/indexed_db.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
@@ -1431,7 +1432,7 @@ static JSValue js_os_set_name(JSContext *ctx, JSValueConst this_val, JSValueCons
         JS_ThrowDOMException(ctx, "TransactionInactiveError", "the upgrade transaction is not active");
         goto fail;
     }
-    name = JS_ToCString(ctx, val);
+    name = idb_name_cstr(ctx, val);
     if (name == NULL) goto fail;
     old = idb_object_store_name(ctx, store);
     {
@@ -1515,7 +1516,7 @@ static JSValue js_os_index(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         JS_ThrowDOMException(ctx, "InvalidStateError", "the transaction has finished");
         goto fail;
     }
-    name = JS_ToCString(ctx, argv[0]);
+    name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) goto fail;
     set = idb_object_store_handle_index_set(ctx, this_val);
     index = idb_index_find_in(ctx, set, name);
@@ -1595,7 +1596,7 @@ static JSValue js_os_create_index(JSContext *ctx, JSValueConst this_val, int arg
                                  "`optional IDBIndexParameters options = {}`, so the conversion builds one "
                                  "with every member at its default even for `createIndex(n, k)`");
     if (os_upgrade_check(ctx, this_val, &store, &tx) < 0) return JS_EXCEPTION;      /* STEPS 1-5 */
-    name = JS_ToCString(ctx, argv[0]);
+    name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) goto fail;
     existing = idb_index_find(ctx, store, name);                                    /* STEP 6 */
     if (!JS_IsNull(existing)) {
@@ -1666,7 +1667,7 @@ static JSValue js_os_delete_index(JSContext *ctx, JSValueConst this_val, int arg
 
     (void)argc; (void)magic;
     if (os_upgrade_check(ctx, this_val, &store, &tx) < 0) return JS_EXCEPTION;      /* STEPS 1-5 */
-    name = JS_ToCString(ctx, argv[0]);
+    name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) { JS_FreeValue(ctx, store); JS_FreeValue(ctx, tx); return JS_EXCEPTION; }
     index = idb_index_find(ctx, store, name);                                       /* STEP 6 */
     JS_FreeCString(ctx, name);

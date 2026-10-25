@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/indexeddb/indexed_db.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
@@ -710,7 +711,7 @@ static JSValue js_ix_set_name(JSContext *ctx, JSValueConst this_val, JSValueCons
                              "the index, or the object store it references, has been deleted");
         goto fail;
     }
-    name = JS_ToCString(ctx, val);
+    name = idb_name_cstr(ctx, val);
     if (name == NULL) goto fail;
     old = idb_index_name(ctx, index);
     {

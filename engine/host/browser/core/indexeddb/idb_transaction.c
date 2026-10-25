@@ -42,6 +42,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/indexeddb/indexed_db.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
@@ -1572,7 +1573,7 @@ static JSValue js_tx_object_store(JSContext *ctx, JSValueConst this_val, int arg
     if (idb_transaction_state(ctx, this_val) == IDB_TX_FINISHED)
         return JS_ThrowDOMException(ctx, "InvalidStateError",
                                     "the transaction has finished, so it has no object stores");
-    name = JS_ToCString(ctx, argv[0]);
+    name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) return JS_EXCEPTION;
     scope = tx_scope(ctx, this_val);
     n = tx_array_len(ctx, scope);

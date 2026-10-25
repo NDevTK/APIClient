@@ -36,6 +36,8 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/indexeddb/indexed_db.h"
+#include "solver/concolic.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/events/event_target.h"
@@ -406,7 +408,7 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
                                  "one with every member at its default even for `createObjectStore(name)`");
     if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
     if (conn_upgrade_transaction(ctx, this_val, &db, &tx) < 0) return JS_EXCEPTION;
-    name = JS_ToCString(ctx, argv[0]);
+    name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) goto fail;
 
     key_path = idl_dict_get(ctx, options, "keyPath");
@@ -504,7 +506,7 @@ static JSValue js_conn_delete_object_store(JSContext *ctx, JSValueConst this_val
     (void)argc; (void)magic;
     if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
     if (conn_upgrade_transaction(ctx, this_val, &db, &tx) < 0) return JS_EXCEPTION;
-    name = JS_ToCString(ctx, argv[0]);
+    name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) { JS_FreeValue(ctx, db); JS_FreeValue(ctx, tx); return JS_EXCEPTION; }
     store = idb_object_store_find(ctx, db, name);
     JS_FreeCString(ctx, name);
@@ -567,11 +569,11 @@ static int conn_scope_add(JSContext *ctx, JSValueConst db, JSValueConst scope, u
     JSValue store;
     uint32_t k;
 
-    DCHECK(JS_IsString(name_v),
-           "§4.4 step 3 was handed a scope entry that is not a string — the `(DOMString or "
-           "sequence<DOMString>)` conversion produces strings and this engine builds the list they arrive "
-           "in, so nothing else can be in it");
-    name = JS_ToCString(ctx, name_v);
+    DCHECK(JS_IsString(name_v) || concolic_is(name_v),
+           "§4.4 step 3 was handed a scope entry that is neither a string nor unknown — the `(DOMString or "
+           "sequence<DOMString>)` conversion produces strings, passing unknown input through as itself, and "
+           "this engine builds the list they arrive in, so nothing else can be in it");
+    name = idb_name_cstr(ctx, name_v);
     if (name == NULL) return -1;
     store = idb_object_store_find(ctx, db, name);
     JS_FreeCString(ctx, name);

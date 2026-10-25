@@ -57,6 +57,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/realm.h"
 #include "core/url/origin.h"
+#include "solver/concolic.h"
 /* THIS COMPONENT NO LONGER NAMES core/workers/, AND THAT IS THE POINT RATHER THAN A TIDY-UP. It used to
    include that header to ask for the Web IDL §3.7.3 prototype `indexedDB` lands on in a worker realm, which
    made an Indexed Database component depend on the worker layer for a fact neither of them owns — §3.7.3's
@@ -262,11 +263,31 @@ static JSValue js_idb_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     if (origin_is_opaque(window_proxy_origin(document_window_proxy(ctx))))
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "a document with an opaque origin has no storage key");
-    name = JS_ToCString(ctx, argv[0]);
+    name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) return JS_EXCEPTION;
     req = idb_open_request(ctx, name, version, has_version);
     JS_FreeCString(ctx, name);
     return req;
+}
+
+/* An unknown name is spent as a property key is (concolic_key_name_hook): a real string named by the unknown's
+   identity, so two requests through one value reach one database, store or index and two values never share
+   one, while a stated name converts as the DOMString it is.
+   Named residual. Not covered: the worlds where the unknown name equals a name the set already holds. Next
+   diff: fork the set lookup (a database named name, an object store or index named name) over the set's names
+   plus a fresh one, at the step that asks it. How its absence shows: a page that opens a database by a stated
+   name and later deletes it through an unknown name still holds it in every world. */
+const char *idb_name_cstr(JSContext *ctx, JSValueConst v)
+{
+    JSValue atom;
+    const char *s;
+
+    if (!concolic_is(v)) return JS_ToCString(ctx, v);
+    atom = concolic_key_name_hook(ctx, v);
+    DCHECK(JS_IsString(atom), "an unknown IndexedDB name bought no property-key name");
+    s = JS_ToCString(ctx, atom);
+    JS_FreeValue(ctx, atom);
+    return s;
 }
 
 /* "The deleteDatabase(name) method steps are: let environment be this's relevant settings object. Let
@@ -291,7 +312,7 @@ static JSValue js_idb_delete_database(JSContext *ctx, JSValueConst this_val, int
     if (origin_is_opaque(window_proxy_origin(document_window_proxy(ctx))))
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "a document with an opaque origin has no storage key");
-    name = JS_ToCString(ctx, argv[0]);
+    name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) return JS_EXCEPTION;
     req = idb_delete_request(ctx, name);
     JS_FreeCString(ctx, name);

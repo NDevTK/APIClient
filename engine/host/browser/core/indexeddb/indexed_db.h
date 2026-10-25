@@ -14,5 +14,8 @@ void indexed_db_init(JSContext *ctx);
    follow from the first: a class id, a realm-value slot and five declarations are all made in and against ONE
    runtime, and every one of them was carried across it. */
 void indexed_db_free(void);
+/* A name the page hands IndexedDB (a database, object store or index name, a DOMString) as the bytes the
+   engine's sets are keyed by. Owned (JS_FreeCString); NULL with an exception pending. See indexed_db.c. */
+const char *idb_name_cstr(JSContext *ctx, JSValueConst v);
 
 #endif
