@@ -23,7 +23,7 @@ static const char HTML_FILEPARSE_SET[] =
     "  out.set(src);"
     "  if (out[19] === 0x41) fetch('/api/fpz-past');"
     "  try { new Uint8Array(4).set(src); fetch('/api/fpz-fit'); } catch (e) {}"
-    "  var body = new TextDecoder().decode(out.subarray(6, 6 + len));"
+    "  var body = new TextDecoder().decode(out.subarray(6, len + 6));"
     "  fetch('/api/fpz-parsed');"
     "  return new Function('x', body);"
     "}"
