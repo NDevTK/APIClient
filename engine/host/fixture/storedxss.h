@@ -9,6 +9,8 @@
      window, whose load reads the user agent's storage the first one wrote.
    `storedread` is the negative of the act: a page that only reads a key it never wrote stays a precondition
    finding, and the open is never offered, since without a write a second load is the first one again.
+   `storedidb` is the same write path through IndexedDB: a load carrying a fragment puts it in the `memos`
+   store, and a later load reads it back into markup.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_STOREDXSS_H
@@ -74,6 +76,29 @@ static const char HTML_STOREDREAD[] =
     "  fetch('/api/rd-read');"
     "  document.getElementById('rdView').innerHTML = rdNote;"
     "}"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+static const char HTML_STOREDIDB[] =
+    "<!doctype html><html><body>"
+    "<div id='siView'></div>"
+    "<script>"
+    "var siReq = indexedDB.open('siDb', 1);"
+    "siReq.onupgradeneeded = function () { siReq.result.createObjectStore('memos'); };"
+    "siReq.onsuccess = function () {"
+    "  var db = siReq.result, got = db.transaction('memos').objectStore('memos').get('memo');"
+    "  got.onsuccess = function () {"
+    "    if (got.result !== undefined) {"
+    "      fetch('/api/si-memo-shown');"
+    "      document.getElementById('siView').innerHTML = got.result;"
+    "    } else if (location.hash.length > 1) {"
+    "      var tx = db.transaction('memos', 'readwrite');"
+    "      tx.objectStore('memos').put(decodeURIComponent(location.hash.slice(1)), 'memo');"
+    "      tx.oncomplete = function () { fetch('/api/si-memo-saved'); };"
+    "    }"
+    "  };"
+    "};"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

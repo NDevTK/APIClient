@@ -49,6 +49,7 @@
 #include "core/agent_state.h"
 /* cow_entries_naming -- the PARTITION the finishing-transaction refcount assert reports; see its site. */
 #include "solver/cow.h"
+#include "solver/engine.h"   /* a committed change survives a fresh load of the page */
 #include "solver/flow.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
@@ -785,6 +786,9 @@ static int js_idb_tx_complete_step(JSContext *ctx, void *st, JSValue cb_result, 
            order that matters: a `complete` handler reading `db.createObjectStore` must already be refused. */
         tx_clear_upgrade_transaction(ctx, tx);
         idb_transaction_set_state(ctx, tx, IDB_TX_FINISHED);
+        /* The changes are now the database's, which a fresh open of the page reads: the open-again act's
+           precondition (solver/engine.h). A transaction that changed nothing wrote nothing. */
+        if (idb_transaction_change_count(ctx, tx) > 0) engine_note_persistent_write();
         STEP_GOTO(s->hdr.stage, TXC_FIRE, &s->phase, NULL);
 
     STEP_ARM(TXC_FIRE);

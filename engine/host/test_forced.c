@@ -1718,6 +1718,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "replyrole", HTML_REPLYROLE },
     { "storedxss", HTML_STOREDXSS },
     { "storedread", HTML_STOREDREAD },
+    { "storedidb", HTML_STOREDIDB },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
@@ -15923,6 +15924,16 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
              "a flow of a page that writes no user-agent-wide state was opened again — the act's precondition "
              "(engine_note_persistent_write) is a write that survives a load, and without one a second load is "
              "the first");
+    /* `storedidb`: the fragment's write path through an IndexedDB store. */
+    const char *is_why = NULL, *iw_why = NULL, *ip_why = NULL;
+    int is_tt = 1, iw_tt = 1, ip_tt = 1;
+
+    fold_row(&is_tt, &is_why, !!strstr(js, "\"/api/si-memo-saved\""),
+             "NOT REACHED: there is no /api/si-memo-saved record, so the load that puts the fragment in IndexedDB "
+             "never committed");
+    fold_row(&iw_tt, &iw_why, !!strstr(js, "\"/api/si-memo-shown\""),
+             "NOT REACHED: there is no /api/si-memo-shown record, so no load read the memo back out of IndexedDB");
+    sx_write_path_row(js, LOCATION_HASH_SRC, "\"deliveryPrefix\":\"#\"", &ip_tt, &ip_why);
     const Probe rows[] = {
         { "sx-ls-read", lr_tt, "/api/sx-ls-read", SESS_EXPLORE, lr_why },
         { "sx-ls-sink", ls_tt, "'sxLs'", SESS_EXPLORE, ls_why },
@@ -15939,6 +15950,9 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
         { "rd-read", sr_tt, "rdNote", SESS_EXPLORE, sr_why },
         { "rd-precondition", srp_tt, "rdNote", SESS_EXPLORE, srp_why, .reach = "rd-read" },
         { "rd-no-open", sro_tt, "rdNote", SESS_EXPLORE, sro_why, .reach = "rd-read" },
+        { "si-memo-saved", is_tt, "/api/si-memo-saved", SESS_EXPLORE, is_why },
+        { "si-memo-shown", iw_tt, "/api/si-memo-shown", SESS_EXPLORE, iw_why, .reach = "si-memo-saved" },
+        { "si-memo-poc", ip_tt, "'siView'", SESS_EXPLORE, ip_why, .reach = "si-memo-shown" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

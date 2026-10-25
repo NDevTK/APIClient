@@ -70,6 +70,7 @@
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/idb_transaction.h"
 #include "core/structured_clone.h"
+#include "solver/engine.h"   /* a deletion survives a fresh load of the page */
 
 /* §2.1's, §2.2's and the record's OWN FIELDS, spelled once so the writers and the readers cannot disagree. */
 #define IDB_DB_NAME             "name"
@@ -383,6 +384,7 @@ void idb_database_destroy(JSContext *ctx, JSValueConst db)
            "request to completion before the next, so the open that created one has finished and §5.4 step "
            "2.5.1 or §5.5 step 7.1 has cleared it");
     idb_slots_delete(ctx, g_databases, cname);
+    engine_note_persistent_write();   /* a fresh open of the page finds the name gone (solver/engine.h) */
     JS_FreeCString(ctx, cname);
     JS_FreeValue(ctx, upgrade);
     JS_FreeValue(ctx, connections);
