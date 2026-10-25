@@ -768,6 +768,12 @@ typedef struct JSStepHdr {
        real, in range, and recorded under the other operand's key — and the symptom is a report in which two
        unknowns of one call carry one unknown's narrowing. */
     uint16_t     fork_stage;
+    /* THE `real` THE OUTSTANDING ASK STATED, written with `fork_ask_key` on the first ask of a question. The
+       seam orders its walk by `real` and composes its keys from that order, and its own forced-arm note takes
+       the operand's example away on the sibling it mints; a machine recomputing `real` from the example there
+       would order the sibling's walk differently and file one fact under two keys. So a re-ask under the same
+       key takes this value rather than the machine's. */
+    int          fork_real_asked;
     /* the key a GETPROP sub-sequence is holding across its suspension. It is OWNED here because the driver
        BORROWS the atom the request carries, and released by the shared teardown so an abandon mid-read cannot
        leak it. JS_ATOM_NULL is zero, so a js_mallocz'd state already reads as "no read in flight". */

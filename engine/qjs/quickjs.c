@@ -26976,6 +26976,12 @@ static int step_fork_ask(JSContext *ctx, JSStepHdr *h, JSValueConst over, const 
            sees a request whose operands never left, and this sees one whose SITE did. Asked before the writes
            below, because they are what destroys the evidence. */
         step_fork_inflight(h);
+        /* A sibling re-asks the question it was forked at, under the key it carries: the walk's `real` is the
+           one the first ask stated (JSStepHdr::fork_real_asked). */
+        if (h->fork_ask_key != 0 && h->fork_ask_key == step_fork_key(op))
+            real = h->fork_real_asked;
+        else
+            h->fork_real_asked = real;
         h->fork_over = over;   /* BORROWED for the length of the request; the driver reads and resets it */
         h->fork_op = op;
         h->fork_n = n;
