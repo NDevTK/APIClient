@@ -234,7 +234,7 @@ static bool tr_kind_has_code_point(TextRunItemKind kind)
    stored. The two questions cross, so they are two functions. */
 static bool tr_kind_has_size(TextRunItemKind kind)
 {
-    return kind == TEXT_RUN_ITEM_EDGE || kind == TEXT_RUN_ITEM_ATOMIC;
+    return kind == TEXT_RUN_ITEM_EDGE || kind == TEXT_RUN_ITEM_ATOMIC || kind == TEXT_RUN_ITEM_FLOAT;
 }
 
 /* Whether this item is content that css-text-3 §4.1.2 "Phase II: Trimming and Positioning" stops at when it
@@ -330,6 +330,19 @@ void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, 
     /* An edge does not close a collapsible white-space run: §4.1.1 collapses over the inline formatting context,
        "even one outside the boundary of the inline containing that space", so spaces either side of a box
        boundary collapse to one U+0020. */
+}
+
+void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style)
+{
+    TextRunItem *it;
+
+    DCHECK(m != NULL && style != NULL && !m->finished,
+           "a float was added with no accumulator, no element, or to a measurement already closed");
+    /* A zero size under both constraints: the float is beside the line boxes, never on one. It closes no
+       collapsible white-space run, as an inline box edge does not. */
+    it = tr_append_item(m, TEXT_RUN_ITEM_FLOAT, style);
+    it->size[TEXT_RUN_SIZE_MIN_CONTENT] = css_px(0.0);
+    it->size[TEXT_RUN_SIZE_MAX_CONTENT] = css_px(0.0);
 }
 
 /* HTML §15.3.4's newline, as the one code point [UAX14] needs to decide it. css-text-3 §4 "White Space
@@ -1285,6 +1298,13 @@ bool text_run_measure_item_is_atomic(const TextRunMeasure *m, size_t i)
     return m->items[i].kind == TEXT_RUN_ITEM_ATOMIC;
 }
 
+bool text_run_measure_item_is_float(const TextRunMeasure *m, size_t i)
+{
+    tr_require_answers(m);
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    return m->items[i].kind == TEXT_RUN_ITEM_FLOAT;
+}
+
 uint32_t text_run_measure_item_cp(const TextRunMeasure *m, size_t i)
 {
     tr_require_answers(m);
@@ -1481,6 +1501,17 @@ size_t text_run_fill_lines(const TextRunFill *f, const TextRunLine **lines)
     DCHECK(f != NULL && lines != NULL, "CSS 2.2 §9.4.2's emitted lines were asked with no fill or nowhere");
     *lines = f->out;
     return f->n;
+}
+
+size_t text_run_fill_items_taken(const TextRunFill *f, const TextRunMeasure *m)
+{
+    size_t i;
+
+    DCHECK(f != NULL && m != NULL, "CSS 2.2 §9.4.2's fill progress was asked with no fill or no run");
+    if (f->complete) return m->count;
+    i = f->walk - 1;
+    if (i == 0) return 0;
+    return i == m->ncps ? m->count : tr_item_boundary_of_cp(m->item_of_cp, i);
 }
 
 void text_run_fill_set_available(TextRunFill *f, CssPx available)

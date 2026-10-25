@@ -1138,6 +1138,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/clearance.h"
 #include "fixture/avoidance.h"
 #include "fixture/shortening.h"
+#include "fixture/linefloat.h"
 #include "fixture/floatintrinsic.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
@@ -1644,6 +1645,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "clearance", HTML_CLEARANCE },
     { "avoidance", HTML_AVOIDANCE },
     { "shortening", HTML_SHORTENING },
+    { "linefloat", HTML_LINEFLOAT },
     { "floatintrinsic", HTML_FLOATINTRINSIC },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
@@ -15260,6 +15262,87 @@ TF_UNIT void probes_floatintrinsic(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `linefloat` document (fixture/linefloat.h). */
+TF_UNIT void probes_linefloat(const char *js, Probe *tab, int *n) {
+    const char *lf_why = NULL; int lf_reached = !!strstr(js, "\"/api/linefloat\"");
+    const char *lf_p_why = NULL; int lf_p_tt = 1;
+    const char *lf_h_why = NULL; int lf_h_tt = 1;
+
+    fold_row(&lf_reached, &lf_why, lf_reached,
+             "NOT REACHED: there is no /api/linefloat record at all, so the document aborted before its fetch");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "f3x", "0") &&
+                                  param_value_is(js, "/api/linefloat", "f3y", "0"),
+             "CSS 2.2 §9.5: float f3 is not at (0, 0)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i3x", "80") &&
+                                  param_value_is(js, "/api/linefloat", "i3y", "3"),
+             "CSS 2.2 §9.5: inline-block i3 is not at (80, 3)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "f4x", "0") &&
+                                  param_value_is(js, "/api/linefloat", "f4y", "10"),
+             "CSS 2.2 §9.5: float f4 is not at (0, 10)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i4x", "160") &&
+                                  param_value_is(js, "/api/linefloat", "i4y", "3"),
+             "CSS 2.2 §9.5: inline-block i4 is not at (160, 3)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "f5x", "0") &&
+                                  param_value_is(js, "/api/linefloat", "f5y", "0"),
+             "CSS 2.2 §9.5: float f5 is not at (0, 0)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i5ax", "60") &&
+                                  param_value_is(js, "/api/linefloat", "i5ay", "3"),
+             "CSS 2.2 §9.5: inline-block i5a is not at (60, 3)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i5cx", "60") &&
+                                  param_value_is(js, "/api/linefloat", "i5cy", "23"),
+             "CSS 2.2 §9.5: inline-block i5c is not at (60, 23)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i5dx", "0") &&
+                                  param_value_is(js, "/api/linefloat", "i5dy", "33"),
+             "CSS 2.2 §9.5: inline-block i5d is not at (0, 33)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "f6x", "130") &&
+                                  param_value_is(js, "/api/linefloat", "f6y", "0"),
+             "CSS 2.2 §9.5: float f6 is not at (130, 0)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i6bx", "40") &&
+                                  param_value_is(js, "/api/linefloat", "i6by", "3"),
+             "CSS 2.2 §9.5: inline-block i6b is not at (40, 3)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i6cx", "80") &&
+                                  param_value_is(js, "/api/linefloat", "i6cy", "3"),
+             "CSS 2.2 §9.5: inline-block i6c is not at (80, 3)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i6dx", "0") &&
+                                  param_value_is(js, "/api/linefloat", "i6dy", "13"),
+             "CSS 2.2 §9.5: inline-block i6d is not at (0, 13)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "f7ax", "0") &&
+                                  param_value_is(js, "/api/linefloat", "f7ay", "0"),
+             "CSS 2.2 §9.5: float f7a is not at (0, 0)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "f7bx", "30") &&
+                                  param_value_is(js, "/api/linefloat", "f7by", "0"),
+             "CSS 2.2 §9.5: float f7b is not at (30, 0)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i7ax", "70") &&
+                                  param_value_is(js, "/api/linefloat", "i7ay", "3"),
+             "CSS 2.2 §9.5: inline-block i7a is not at (70, 3)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i7bx", "30") &&
+                                  param_value_is(js, "/api/linefloat", "i7by", "13"),
+             "CSS 2.2 §9.5: inline-block i7b is not at (30, 13)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "f8x", "0") &&
+                                  param_value_is(js, "/api/linefloat", "f8y", "10"),
+             "CSS 2.2 §9.5: float f8 is not at (0, 10)");
+    fold_row(&lf_p_tt, &lf_p_why, param_value_is(js, "/api/linefloat", "i8bx", "30") &&
+                                  param_value_is(js, "/api/linefloat", "i8by", "13"),
+             "CSS 2.2 §9.5: inline-block i8b is not at (30, 13)");
+    fold_row(&lf_h_tt, &lf_h_why, param_value_is(js, "/api/linefloat", "c3h", "20"),
+             "CSS 2.2 §10.6.7: c3's auto height is not 20px");
+    fold_row(&lf_h_tt, &lf_h_why, param_value_is(js, "/api/linefloat", "c4h", "30"),
+             "CSS 2.2 §10.6.7: c4's auto height is not 30px");
+    fold_row(&lf_h_tt, &lf_h_why, param_value_is(js, "/api/linefloat", "c5h", "40"),
+             "CSS 2.2 §10.6.7: c5's auto height is not 40px");
+    fold_row(&lf_h_tt, &lf_h_why, param_value_is(js, "/api/linefloat", "c6h", "20"),
+             "CSS 2.2 §10.6.7: c6's auto height is not 20px");
+    fold_row(&lf_h_tt, &lf_h_why, param_value_is(js, "/api/linefloat", "c7h", "20"),
+             "CSS 2.2 §10.6.7: c7's auto height is not 20px");
+    fold_row(&lf_h_tt, &lf_h_why, param_value_is(js, "/api/linefloat", "c8h", "30"),
+             "CSS 2.2 §10.6.7: c8's auto height is not 30px");
+    const Probe rows[] = {
+        { "linefloat-position", lf_reached && lf_p_tt, "/api/linefloat", SESS_EXPLORE, lf_reached ? lf_p_why : lf_why },
+        { "linefloat-height", lf_reached && lf_h_tt, "/api/linefloat", SESS_EXPLORE, lf_reached ? lf_h_why : lf_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -20434,6 +20517,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_clearance(js, probes, &np);
     probes_avoidance(js, probes, &np);
     probes_shortening(js, probes, &np);
+    probes_linefloat(js, probes, &np);
     probes_floatintrinsic(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);

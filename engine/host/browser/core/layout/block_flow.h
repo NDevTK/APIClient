@@ -495,6 +495,9 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
    §9.7's computed `float: none` for those. The root is floated like any element: §9.5.1 permits treating
    `float` as `none` on it, and Chrome floats it. Every layout reader of the question asks here. */
 bool block_flow_is_floated(lxb_dom_element_t *el);
+/* Whether float `f` sits in one of §9.2.1.1's runs that generates line boxes, where core/layout/line_box.c's fill
+   places it at the line it falls on; otherwise it starts where §9.4.1's stack stands (`block_flow_float_top_ask`). */
+bool block_flow_float_on_line(lxb_dom_element_t *f);
 /* Whether floated `f` floats to the right: §9.5.1's `Value:` line is `left | right | none`. */
 bool block_flow_float_is_right(lxb_dom_element_t *f);
 /* CSS 2.2 §9.5.2's sides `el`'s computed `clear` clears, physical: whether it clears any. */

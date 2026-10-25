@@ -495,17 +495,15 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
        forced line break or soft wrap opportunity in the flow"). Its position is §9.3.2's over a static
        position. */
     if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return LB_CHILD_PLACED;
-    if (block_flow_is_floated(el))
-        DFAIL("CSS 2.2 §9.5 \"Floats\" takes this box out of the line and puts it beside the line boxes, which "
-              "changes the WIDTH available to every one of them: §9.4.2 says line boxes \"may vary in width if "
-              "available horizontal space is reduced due to floats\", and §9.5's own rule shortens the line "
-              "boxes beside a float rather than moving them. A float in this formatting context therefore "
-              "makes the number of line boxes a function of the float's own width and height, which is the "
-              "measurement this component exists to avoid needing. BUILD the float's placement at the line this "
-              "fill has reached (§9.5: \"if there is a line box, the outer top of the floated box is aligned "
-              "with the top of the current line box\") over core/layout/float_placement.h");
     d = css_computed_display(el);
     if (css_display_spells(d, CSS_KEYWORD_NONE)) { return LB_CHILD_PLACED; }
+    /* CSS 2.2 §9.5 takes a float out of the line and puts it beside the line boxes. Its place in the content
+       decides which line box it is placed at ("if there is a line box, the outer top of the floated box is aligned
+       with the top of the current line box"), so it is collected there, with no size and no break. */
+    if (block_flow_is_floated(el)) {
+        text_run_measure_add_float(m, el);
+        return LB_CHILD_PLACED;
+    }
     if (css_display_spells(d, CSS_KEYWORD_CONTENTS)) {
         DFAIL("css-display-3 §2.5 \"Box Generation: the none and contents keywords\" gives this child "
               "`display: contents`: \"The element itself does not generate any boxes, but its children and "
@@ -715,6 +713,8 @@ static size_t lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
     bool atom = text_run_measure_item_is_atomic(m, i);
 
     DCHECK(i < w->line.to, "CSS 2.2 §10.8's walk over one line box took an item past the line's end");
+    /* A float is beside the line box, not on it: no extent, and it does not make the line exist. */
+    if (text_run_measure_item_is_float(m, i)) return 0;
     /* §10.8's step 1 has a semicolon: "for replaced elements, inline-block elements, and inline-table
        elements, this is the height of their margin box; for inline boxes, this is their 'line-height'." An
        atomic item's box is on the first side, every other item's on the second. */
@@ -968,7 +968,12 @@ typedef struct LbFill {
     bool           bands, bands_asked;
     size_t         banded;     /* lines whose band is set: the open line's is set once the line before it closes */
     FlowFloatBox  *bands_v;
-    size_t         bands_n;
+    size_t         bands_n, bands_cap;
+    /* The run's own floats: the next item to look at for one, and those waiting for the open line to close
+       because they did not fit beside its content. */
+    size_t         float_next;
+    lxb_dom_element_t **waiting;
+    size_t         waiting_n;
     CssPx          origin_top, origin_left, content_w;
     CssPx         *line_left, *line_w;
     bool           checks;     /* a dev build re-derives this fill; false for that re-derivation */
@@ -1009,6 +1014,10 @@ static void lb_fill_init(LbFill *f, lxb_dom_element_t *style, BlockFlowRun run, 
     f->bands = false;
     f->bands_asked = false;
     f->banded = 0;
+    f->bands_cap = 0;
+    f->float_next = 0;
+    f->waiting = NULL;
+    f->waiting_n = 0;
     f->bands_v = NULL;
     f->bands_n = 0;
     f->line_left = NULL;
@@ -1034,6 +1043,7 @@ static void lb_fill_release(LbFill *f)
     free(f->align);
     free(f->aligned);
     free(f->bands_v);
+    free(f->waiting);
     free(f->line_left);
     free(f->line_w);
     text_run_measure_release(&f->m);
@@ -1200,11 +1210,16 @@ static bool lb_fill_bands_ask(LbFill *f)
     lxb_dom_node_t *sn = lxb_dom_interface_node(f->style), *first = sn;
     lxb_dom_element_t **v, *after = f->run.after != NULL ? lxb_dom_interface_element(f->run.after) : NULL;
     CssPx top, unused;
-    size_t n, i, k = 0;
+    size_t n, i, k = 0, anchors = 0;
     char sbuf[160], fbuf[160];
 
     if (f->bands_asked) return true;
+    for (i = 0; i < f->m.count; i++)
+        if (text_run_measure_item_is_float(&f->m, i)) anchors++;
     if (f->avail.stated) {
+        DCHECKF(anchors == 0, "%s: a float sits in a run of line boxes sized at a stated width, outside a block "
+                "formatting context's walk. BUILD the float's placement in that box's own formatting context",
+                box_subject(f->style, sbuf, sizeof sbuf));
         f->bands_asked = true;
         return true;
     }
@@ -1217,7 +1232,7 @@ static bool lb_fill_bands_ask(LbFill *f)
     }
     for (i = 0; i < n; i++)
         if (first != NULL && block_flow_node_precedes(lxb_dom_interface_node(v[i]), first)) v[k++] = v[i];
-    if (k == 0) {
+    if (k == 0 && anchors == 0) {
         free(v);
         f->bands_asked = true;
         return true;
@@ -1231,9 +1246,8 @@ static bool lb_fill_bands_ask(LbFill *f)
         }
     }
     if (!flow_placement_run_top_peek(f->style, after, &top)) {
-        DFAILF("%s: %s precedes this run of line boxes in its block formatting context, and the walk recorded no top "
-               "for the run's line boxes", box_subject(f->style, sbuf, sizeof sbuf), box_subject(v[0], fbuf,
-               sizeof fbuf));
+        DFAILF("%s: a float precedes or sits in this run of line boxes, and the walk recorded no top for the run's "
+               "line boxes", box_subject(f->style, sbuf, sizeof sbuf));
         free(v);
         f->bands_asked = true;
         return true;
@@ -1256,8 +1270,10 @@ static bool lb_fill_bands_ask(LbFill *f)
         return true;
     }
     if (f->bands_v == NULL) {
-        f->bands_v = malloc(k * sizeof *f->bands_v);
-        CHECK(f->bands_v != NULL, "out of memory holding the floats beside one run of line boxes");
+        f->bands_cap = k + anchors;
+        f->bands_v = malloc(f->bands_cap * sizeof *f->bands_v);
+        f->waiting = malloc((anchors + 1) * sizeof *f->waiting);
+        CHECK(f->bands_v != NULL && f->waiting != NULL, "out of memory holding the floats beside one run of line boxes");
     }
     for (i = 0; i < k; i++)
         if (!float_placement_ask(v[i], &f->bands_v[i])) {
@@ -1265,6 +1281,8 @@ static bool lb_fill_bands_ask(LbFill *f)
             return false;
         }
     free(v);
+    /* The content box's width the bands narrow: a shrink-to-fit container's reads its intrinsic sizes. */
+    if (!used_value_width_ask(f->style)) return false;
     f->bands_n = k;
     f->origin_top = top;
     f->origin_left = float_placement_content_left(f->style, block_flow_context_root(f->style));
@@ -1292,7 +1310,52 @@ static void lb_fill_band(LbFill *f, size_t line, CssPx y)
                                &next);
     f->line_left[line] = css_px_sub(left, f->origin_left);
     f->line_w[line] = css_px_max(css_px_sub(right, left), css_px(0.0));
-    f->banded = line + 1;
+}
+
+/* Places float `fl` of the run from `y` below the run's line box top, and adds it to the floats the bands read. */
+static bool lb_fill_place_float(LbFill *f, lxb_dom_element_t *fl, CssPx y)
+{
+    FlowFloatBox b;
+
+    if (!float_placement_place_at(fl, css_px_add(f->origin_top, y), &b)) return false;
+    DCHECK(f->bands_n < f->bands_cap, "a run placed more floats than it collected");
+    f->bands_v[f->bands_n++] = b;
+    return true;
+}
+
+/* The run's floats on line `k` before item `upto`, `line` holding that line's content so far (`closed` once the
+   fill has closed it), each placed at the line it falls on. CSS 2.2 §9.5: "if there is a line box, the outer top
+   of the floated box is aligned with the top of the current line box", when its margin box fits beside the content
+   before it on that line, which then starts beside it; otherwise it waits and starts at the next line box's top.
+   False ("not yet") when a measurement or placement was deferred; a float is passed only once it is placed or
+   waiting. */
+static bool lb_fill_floats_on_line(LbFill *f, size_t k, TextRunLine line, size_t upto, bool closed)
+{
+    char sbuf[160];
+
+    for (; f->float_next < upto; f->float_next++) {
+        size_t a = f->float_next;
+        lxb_dom_element_t *fl;
+        CssPx w, before;
+
+        if (!text_run_measure_item_is_float(&f->m, a)) continue;
+        fl = text_run_measure_item_style(&f->m, a);
+        if (!float_placement_margin_width_ask(fl, &w)) return false;
+        before = text_run_measure_line_offset(&f->m, line, a);
+        if (f->waiting_n == 0 && before.px + w.px <= f->line_w[k].px) {
+            if (!lb_fill_place_float(f, fl, f->top)) return false;
+            lb_fill_band(f, k, f->top);
+            /* A line the fill closed before reaching the float keeps its content, which must still fit. */
+            DCHECKF(!closed || line.size.px <= f->line_w[k].px,
+                    "%s: a float placed beside a closed line box leaves too little room for the content after it "
+                    "on that line. BUILD the line's break taken again at the narrowed width",
+                    box_subject(f->style, sbuf, sizeof sbuf));
+            if (!closed) text_run_fill_set_available(&f->dist, f->line_w[k]);
+        } else {
+            f->waiting[f->waiting_n++] = fl;
+        }
+    }
+    return true;
 }
 
 /* With floats beside the run, each line box's extent is taken as the fill closes it, since it fixes where the
@@ -1310,7 +1373,11 @@ static bool lb_fill_band_pull(LbFill *f)
             if (!lb_left()) return false;
             /* A step can close two lines (an overflow and then a forced break or the end of the text), so the
                second takes its band here, at its own top, from the line just walked. */
-            if (f->banded <= f->extents) lb_fill_band(f, f->extents, f->top);
+            if (f->banded <= f->extents) {
+                lb_fill_band(f, f->extents, f->top);
+                f->banded = f->extents + 1;
+            }
+            if (!lb_fill_floats_on_line(f, f->extents, lines[f->extents], lines[f->extents].to, true)) return false;
             layout_job_line_metrics_spend(lb_line_walk_begin(&f->walk, f->style, lines[f->extents]));
             f->walking = true;
             layout_job_line_items_spend(1);
@@ -1331,6 +1398,12 @@ static bool lb_fill_band_pull(LbFill *f)
         /* §9.5: "If a shortened line box is too small to contain any content, then the line box is shifted
            downward (and its width recomputed) until either some content fits or there are no more floats
            present." */
+        /* The floats that waited for this line start at the next one's top, in the order the run holds them. */
+        while (f->waiting_n > 0) {
+            if (!lb_fill_place_float(f, f->waiting[0], f->top)) return false;
+            memmove(f->waiting, f->waiting + 1, (f->waiting_n - 1) * sizeof *f->waiting);
+            f->waiting_n--;
+        }
         DCHECKF(lines[f->extents].size.px <= f->line_w[f->extents].px || f->line_w[f->extents].px >= f->content_w.px,
                 "%s: a line box beside a float is too narrow for its first piece of content (%g px in %g px). "
                 "BUILD CSS 2.2 §9.5's shift of the line box below the float",
@@ -1339,7 +1412,22 @@ static bool lb_fill_band_pull(LbFill *f)
     }
     if (!text_run_fill_done(&f->dist) && f->banded == n) {
         lb_fill_band(f, n, f->top);
+        f->banded = n + 1;
         text_run_fill_set_available(&f->dist, f->line_w[n]);
+    }
+    if (!text_run_fill_done(&f->dist)) {
+        TextRunLine open;
+
+        open.from = n == 0 ? 0 : lines[n - 1].to;
+        open.to = text_run_fill_items_taken(&f->dist, &f->m);
+        open.size = css_px(0.0);
+        return lb_fill_floats_on_line(f, n, open, open.to, false);
+    }
+    /* The floats that waited past the run's last line start below it. */
+    while (f->waiting_n > 0) {
+        if (!lb_fill_place_float(f, f->waiting[0], f->top)) return false;
+        memmove(f->waiting, f->waiting + 1, (f->waiting_n - 1) * sizeof *f->waiting);
+        f->waiting_n--;
     }
     return true;
 }
@@ -1379,6 +1467,7 @@ static bool lb_fill_lines_pull(LbFill *f)
         lb_fill_distribute_begin(&f->dist, &f->m, f->style, f->avail);
         if (f->bands) {
             lb_fill_band(f, 0, css_px(0.0));
+            f->banded = 1;
             if (!text_run_fill_done(&f->dist)) text_run_fill_set_available(&f->dist, f->line_w[0]);
         }
         f->phase = LB_FILL_DISTRIBUTE;
@@ -2384,7 +2473,7 @@ static bool lb_box_items(const TextRunMeasure *m, lxb_dom_element_t *el, size_t 
            to `el` here (it is a non-replaced inline box and the walk does not descend into atomics); the test
            makes that a statement, so no such kind delimits a fragment. */
         if (text_run_measure_item_is_text(m, i) || text_run_measure_item_is_forced_break(m, i) ||
-            text_run_measure_item_is_atomic(m, i))
+            text_run_measure_item_is_atomic(m, i) || text_run_measure_item_is_float(m, i))
             continue;
         if (found == 0) first = i;
         last = i;

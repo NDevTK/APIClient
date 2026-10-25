@@ -19,6 +19,15 @@
    reads. */
 bool float_placement_ask(lxb_dom_element_t *f, FlowFloatBox *out);
 
+/* The placement of float `f`, which sits on a line (`block_flow_float_on_line`), from `top` in the context root's
+   frame: the line box fill's choice of the line it starts at (CSS 2.2 §9.5: "if there is a line box, the outer
+   top of the floated box is aligned with the top of the current line box"). Recorded like `float_placement_ask`'s,
+   which defers to the fill for such a float. */
+bool float_placement_place_at(lxb_dom_element_t *f, CssPx top, FlowFloatBox *out);
+
+/* The width of float `f`'s margin box. False ("not yet") when its shrink-to-fit measurement was deferred. */
+bool float_placement_margin_width_ask(lxb_dom_element_t *f, CssPx *out);
+
 /* The left content edge of block container `cb` in the content-box frame of its context root `root`. */
 CssPx float_placement_content_left(lxb_dom_element_t *cb, lxb_dom_element_t *root);
 

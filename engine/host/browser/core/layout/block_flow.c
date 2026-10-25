@@ -3247,15 +3247,11 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
        container's content, has only collapsible white space in front of it. */
     before.after = after;
     before.end = n;
-    /* A float with box-generating inline content ahead of it in its run is on a line: CSS 2.2 §9.5.1 "if
-       there is a line box, the outer top of the floated box is aligned with the top of the current line box",
-       which is §9.4.2's fill over a run holding the float. */
-    if (flt && block_flow_run_generates_box(cb, before))
-        DFAILF("%s, in %s: a float with inline content ahead of it in its run sits on a line box — CSS 2.2 §9.5's "
-               "\"if there is a line box, the outer top of the floated box is aligned with the top of the current "
-               "line box\" — and §9.5.1's placement then shortens that very line if the float fits beside it. "
-               "BUILD the float's placement inside core/layout/line_box.c's fill, at the line the fill has reached",
-               box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
+    /* A float on a line is the line box fill's to place (`block_flow_float_on_line`), so its static top is
+       never asked. */
+    DCHECKF(!flt || !block_flow_float_on_line(el),
+            "%s, in %s: the stack's starting top was asked of a float the line box fill places",
+            box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
     if (!flt && block_flow_run_generates_box(cb, before))
         DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1 would break the anonymous "
                "block box this element sits in — \"if a block container box … has a block-level box inside it "
@@ -3298,6 +3294,22 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
 bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
 {
     return bf_static_top_ask(el, false, out);
+}
+
+bool block_flow_float_on_line(lxb_dom_element_t *f)
+{
+    lxb_dom_element_t *cb = block_flow_static_position_containing_block(f);
+    BlockFlowRun run;
+    bool reached = false;
+    char fbuf[160];
+
+    DCHECKF(block_flow_is_floated(f), "%s: whether a box that does not float is on a line was asked",
+            box_subject(f, fbuf, sizeof fbuf));
+    run.after = bf_static_run_after(cb, lxb_dom_interface_node(f), &reached);
+    DCHECKF(reached, "%s: its containing block's content order never reached this float",
+            box_subject(f, fbuf, sizeof fbuf));
+    run.end = bf_next_block_box(cb, run.after, NULL);
+    return block_flow_run_generates_box(cb, run);
 }
 
 bool block_flow_float_top_ask(lxb_dom_element_t *f, CssPx *out)

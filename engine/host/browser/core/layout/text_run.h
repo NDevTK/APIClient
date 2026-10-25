@@ -96,6 +96,9 @@ typedef enum {
                                  point — CSS 2.2 §8.1 "Box dimensions"' margin box, put on the line by CSS 2.2
                                  §9.4.2 "Inline formatting contexts", and the U+FFFC whose [UAX14] class CB
                                  puts an opportunity on each side of it */
+    TEXT_RUN_ITEM_FLOAT       /* CSS 2.2 §9.5's float at its place in the content: out of flow, so no size and
+                                 no code point (css-text-3 §5.5: "out-of-flow boxes ... do not introduce a
+                                 forced line break or soft wrap opportunity in the flow") */
 } TextRunItemKind;
 
 /* Which of css-sizing-3 §2.1 "Auto Box Sizes"' two constraints a per-line sum is taken under. Only an atomic
@@ -273,6 +276,10 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
 void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx min_content,
                                  CssPx max_content);
 
+/* Add one float at the current position, `style` being the floated element: the fill places it at the line it
+   falls on (core/layout/line_box.c). */
+void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style);
+
 /* Close the collection; nothing may be added afterwards. Each `step` then takes one item or position: the code
    points copied out, [UAX14]'s pass, §5.5's tailoring, and css-sizing-3 §2.1's walk; it answers how many items
    it took, and `done` says the two answers are readable. The pass is kept for the fill; each caller owes
@@ -325,6 +332,8 @@ void text_run_fill_release(TextRunFill *f);
    horizontal space is reduced due to floats"). */
 size_t text_run_fill_lines(const TextRunFill *f, const TextRunLine **lines);
 void text_run_fill_set_available(TextRunFill *f, CssPx available);
+/* The items the fill has taken so far: every item before this index is on an emitted or the open line. */
+size_t text_run_fill_items_taken(const TextRunFill *f, const TextRunMeasure *m);
 
 /* CSS 2.2 §9.4.2's theorem: is there anywhere inside this run for the fill to break. False means one line box
    at every available width, so a caller need not derive one. */
@@ -361,6 +370,7 @@ bool text_run_measure_item_is_forced_break(const TextRunMeasure *m, size_t i);
    inline-table elements, this is the height of their margin box; for inline boxes, this is their
    'line-height'." */
 bool text_run_measure_item_is_atomic(const TextRunMeasure *m, size_t i);
+bool text_run_measure_item_is_float(const TextRunMeasure *m, size_t i);
 
 /* Item `i`'s code point, for the character kind only: what css-values-4 §6.1.1 "Font-relative Lengths…"
    measured an advance for, for a painter (CSS 2.1 §E.2 "Painting order"'s step 7.2.1, "the text", at
