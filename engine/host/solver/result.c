@@ -1492,6 +1492,7 @@ char *result_cold_json(void) {
     METRIC_SET(paged_unarmed, e.paged_unarmed);
     METRIC_SET(paged_floor, e.paged_floor);
     METRIC_SET(pressure_sold, e.pressure_sold);
+    METRIC_SET(pressure_collects, e.pressure_collects);
     METRIC_SET(ram_limit_kib, e.ram_limit_kib);
     METRIC_SET_OBJECT(ram_limit_source, e.ram_limit_source);
     METRIC_SET(ram_share, e.ram_share);

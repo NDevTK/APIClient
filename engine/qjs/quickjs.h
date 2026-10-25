@@ -675,6 +675,9 @@ JS_EXTERN void JS_RunGC(JSRuntime *rt);
    for an embedder whose scheduler drives the steps; JS_RunGC drives one to its end. */
 JS_EXTERN void JS_SetGCDriven(JSRuntime *rt, bool driven);
 JS_EXTERN bool JS_GCOwed(JSRuntime *rt);
+/* Owe a collection in a driven runtime now, whatever the threshold says: the embedder has a reason of its own (RAM
+   pressure). The next step it drives begins it. */
+JS_EXTERN void JS_GCOwe(JSRuntime *rt);
 JS_EXTERN void JS_GCBegin(JSRuntime *rt);
 JS_EXTERN bool JS_GCStep(JSRuntime *rt, uint64_t budget);
 JS_EXTERN void JS_MutatorEnter(JSRuntime *rt);

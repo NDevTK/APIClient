@@ -1095,6 +1095,10 @@ static unsigned g_ram_share = ENGINE_RAM_SHARE_DEFAULT;
 static uint64_t g_ram_limit;
 static const char *g_ram_limit_source = "{\"none\":1}";
 static long g_pressure_sold;
+/* The cycle collections pressure owed, and the count of finished collections it last sold at (UINT64_MAX before the
+   first sale of the session). */
+static long g_pressure_collects;
+static uint64_t g_pressure_sold_at_collections = UINT64_MAX;
 
 int engine_take_paged_owed(void) {
     /* The credit counts entries the host was shown and has not answered (engine_reclaim_tail), and this is its
@@ -11200,15 +11204,30 @@ static void engine_ram_limit_read(void) {
 
 /* RAM pressure relocates the cold tail (engine.h): sell at rest while the live bytes stand above the share of the
    limit, so the frontier gives memory back before an allocation that does not ask the refusal edge meets the wall.
-   It ends at the share or at the frontier's floor (engine_reclaim_at_rest's 0), never at a count. */
-static void engine_relocate_under_pressure(void) {
+   It ends at the share or at the frontier's floor (engine_reclaim_at_rest's 0), never at a count.
+   A collection comes before each sale: what a sale gives back is mostly cycles (a child realm is one, held by its
+   own intrinsics), which only the cycle collector frees, and the allocation threshold that would owe one may stand
+   above the share. So when no collection has finished since the last sale, pressure owes one and returns; the
+   steps that follow are the collector's (engine_collect_slice), and pressure sells only if the live bytes still
+   stand above the share once it has finished. */
+static void engine_relocate_under_pressure(JSRuntime *rt) {
     uint64_t line;
+    JSGCCycleStats st;
 
     if (g_ram_limit == 0) return;
     line = g_ram_limit / 1000 * g_ram_share;
     while ((uint64_t)c_alloc_live() > line) {
+        JS_GCCycleStats(rt, &st);
+        if (st.collections == g_pressure_sold_at_collections || g_pressure_sold_at_collections == UINT64_MAX) {
+            if (g_pressure_sold_at_collections == UINT64_MAX)
+                g_pressure_sold_at_collections = st.collections;   /* the session's first pressure collects first */
+            JS_GCOwe(rt);
+            g_pressure_collects++;
+            return;
+        }
         if (!engine_reclaim_at_rest()) return;
         g_pressure_sold++;
+        g_pressure_sold_at_collections = st.collections;
     }
 }
 
@@ -11447,6 +11466,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     /* The cycle collector's steps are this scheduler's from here: the allocation threshold owes a collection and
        engine_sched_step pays it (engine_collect_slice). */
     JS_SetGCDriven(JS_GetRuntime(ctx), true);
+    g_pressure_sold_at_collections = UINT64_MAX;   /* this session's first pressure collects before it sells */
 }
 
 void engine_host_baseline(void) {
@@ -12561,7 +12581,7 @@ int engine_sched_step(void) {
     /* The host's time, with no flow stepping and no frontier walk open: where RAM pressure sells, as
        engine_reclaim_at_rest requires. */
     if (!collecting)
-        engine_relocate_under_pressure();
+        engine_relocate_under_pressure(gc_rt);
     quantum_begin();
     /* The slice's budget is counted from here: its work on the instance's counter, and the dispatch countdown
        that decides where the budget is asked, both of which a session resumed from the cold tier also starts
@@ -12695,6 +12715,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_unarmed      = g_reclaim_unarmed;
     out->paged_floor        = g_reclaim_floor;
     out->pressure_sold      = g_pressure_sold;
+    out->pressure_collects  = g_pressure_collects;
     out->ram_limit_kib      = (long)(g_ram_limit / 1024);
     out->ram_limit_source   = g_ram_limit_source;
     out->ram_share          = (long)g_ram_share;

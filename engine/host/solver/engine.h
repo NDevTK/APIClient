@@ -1145,6 +1145,7 @@ typedef struct {
                                g_flows_sold */
     long sold_flows;        /* …the exploration flows among them */
     long pressure_sold;     /* …those sold by RAM pressure at rest (engine_set_ram_share), `<= sold`, asserted */
+    long pressure_collects; /* cycle collections RAM pressure owed before a sale */
     long ram_limit_kib;     /* the limit that pressure is a share of, 0 when there is none */
     const char *ram_limit_source; /* where it came from, as `{"source":…}`: "wasm-heap-max", "rlimit-as"
                                      or "none" */

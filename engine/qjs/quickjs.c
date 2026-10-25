@@ -11793,6 +11793,13 @@ void JS_SetGCDriven(JSRuntime *rt, bool driven)
     rt->gc_driven = driven;
 }
 
+void JS_GCOwe(JSRuntime *rt)
+{
+    DCHECK(rt->gc_driven, "a collection was owed in a runtime whose embedder does not drive its steps — nothing would "
+                          "pay it, so the debt would stand until the next threshold crossing ran one inline");
+    rt->gc_cycle.owed = true;
+}
+
 bool JS_GCOwed(JSRuntime *rt)
 {
     return rt->gc_cycle.owed || rt->gc_cycle.step != JS_GC_CYCLE_IDLE;

@@ -199,6 +199,8 @@ METRIC(paged_floor, "pagedFloor", LIFETIME, "ask", PROCESS, "solver/engine.c", I
    limit, where it came from, and the share that decided them. `ramLimitSource` is a one-arm histogram naming the source (a census row is a count or counts), and its "none" arm is a process with no known
    limit, where pressure sells nothing and `ramLimitKiB` reads 0. */
 METRIC(pressure_sold, "pressureSold", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
+/* …and the cycle collections RAM pressure owed before a sale: a sold flow's cycles are freed only by one. */
+METRIC(pressure_collects, "pressureCollects", LIFETIME, "collection", PROCESS, "solver/engine.c", INT)
 METRIC(ram_limit_kib, "ramLimitKiB", CONSTANT, "KiB", AGENT, "solver/engine.c", INT)
 METRIC(ram_limit_source, "ramLimitSource", CONSTANT, "source", AGENT, "solver/engine.c", OBJECT)
 METRIC(ram_share, "ramShare", CONSTANT, "permille", AGENT, "solver/engine.c", INT)
