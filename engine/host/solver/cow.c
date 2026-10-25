@@ -539,6 +539,38 @@ int cow_entries_naming(JSValueConst v, int *out_base)
     return own;
 }
 
+int cow_entries_naming_in(JSValueConst v, void *const *ds, int n)
+{
+    void *p = JS_VALUE_GET_PTR(v);
+    const CowSeg **seen = NULL;
+    int nseen = 0, cap = 0, count = 0, i, j, k;
+
+    for (i = 0; i < n; i++) {
+        const CowDelta *d = ds[i];
+        const CowSeg *s;
+
+        if (!d) continue;
+        for (j = 0; j < i && ds[j] != ds[i]; j++) {}
+        if (j < i) continue;                          /* the same delta named twice */
+        for (k = 0; k < d->n; k++)
+            if (JS_VALUE_GET_PTR(d->e[k].obj) == p) count++;
+        for (s = d->base; s; s = s->base) {
+            for (j = 0; j < nseen && seen[j] != s; j++) {}
+            if (j < nseen) break;                     /* a shared suffix: everything below is counted */
+            if (nseen == cap) {
+                cap = cap ? cap * 2 : 16;
+                seen = realloc(seen, sizeof *seen * (size_t)cap);
+                CHECK(seen != NULL, "cow: OOM recording the segments a frontier-wide count has visited");
+            }
+            seen[nseen++] = s;
+            for (k = 0; k < s->n; k++)
+                if (JS_VALUE_GET_PTR(s->e[k].obj) == p) count++;
+        }
+    }
+    free(seen);
+    return count;
+}
+
 /* WHAT EACH STATE UNIT WAS ASKED FOR AND WHAT IT RECORDED — see cow.h for why this is a PAIR and not one
    number. Both are LIFETIME COUNTS over this instance, raised and lowered by nothing, so a reader may difference
    two samples of either; neither is a gauge and the two must not be divided (a walk asks per key and records

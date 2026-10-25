@@ -80,6 +80,11 @@ CowDelta *cow_current(void);
    A shortfall against the refcount is therefore a POSITIVE statement that the rest is elsewhere: a sibling
    flow's delta, a pending task's closure, or the cold tier. See cow.c for why `obj` is the field. */
 int cow_entries_naming(JSValueConst v, int *out_base);
+/* How many COW entries name `v` across the deltas `ds` (n of them; NULL and repeated deltas skipped): each
+   delta's own entries, and each base segment once however many of the deltas stand on it, since chains share
+   suffixes and a segment's entries each hold one dup. Every capture dups its target, so the answer is exactly
+   the references those deltas hold. For a refcount identity over the whole frontier (flow_cow_entries_naming). */
+int cow_entries_naming_in(JSValueConst v, void *const *ds, int n);
 
 /* Install as JSTimeTravelHooks.prop_write: called before a write to a baseline object; appends to the current
    delta.

@@ -49,6 +49,7 @@
 #include "core/agent_state.h"
 /* cow_entries_naming -- the PARTITION the finishing-transaction refcount assert reports; see its site. */
 #include "solver/cow.h"
+#include "solver/flow.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -435,124 +436,30 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
            page stored — and a finished transaction the page still has a reference to would hold all of them. */
         JSValue changes = idb_transaction_changes(ctx, tx);
         uint32_t i, n;
-        /* AND NOBODY ELSE MAY STILL BE HOLDING IT — the one moment that question is decidable, which is why
-           the assert is here and not at the accessor. idb_transaction_changes hands out an OWNED reference,
-           and EVERY caller of it frees before returning, so at this line the list is held by exactly two
-           things: the transaction's slot record, and this local. The consequence of a third is out of all
-           proportion to the mistake: the list is emptied on the next line, so what leaks is an EMPTY Array —
-           which holds Array.prototype, which holds the realm's function objects, each of which holds the
-           REALM. One dropped reference kept a whole browser alive (2612 Functions, 408 shapes, a JSContext at
-           refcount 3108) and the runtime's leak walk could name nothing but three anonymous Arrays, three
-           sessions apart, before gdb found the allocation. This is the line that names it at the transaction
-           instead.
-           THE CALLER SET IS A DERIVATION AND NOT A NUMBER, and the sentence it replaces is why: it read "both
-           of its other callers run strictly BEFORE this door (§5.5's revert and §5.8's was-this-store-created
-           each assert that the state is not yet finished)", and the population had grown to five while that
-           stood — with `idb_transaction_change_count` among them asserting nothing about state at all, so the
-           clause was wrong about the count AND about what the members have in common. `git grep -n
-           idb_transaction_changes -- engine/host` is the command; what the reader needs from it is that each
-           hit frees, which is a property of each site and not of how many there are.
-           THE COUNT IS IN THE MESSAGE BECAUSE 3 AND 3108 TAKE DIFFERENT WORK. A static message cannot separate
-           ONE dropped reference from a holder that is itself held by a chain, and those are a two-line repair
-           and an ownership investigation respectively — the §a-bare-count-over-a-population shape arriving in
-           a crash, where the reader standing at the abort is the only one who can see the number. WHAT IT DOES
-           NOT NAME IS THE HOLDER, and that is the honest state rather than a gap in the message: a refcount
-           says how many and never who, so the next diff is a dev-only walk at this line that DUMPS the list
-           (JS_DumpValue / JS_DumpGCObject, which §Architecture names for exactly this) instead of a bespoke
-           probe. Its absence shows as this abort firing with a plausible count and no next step. */
-/* THE WALK IS DEV-ONLY BY CONSTRUCTION, AND THE COMMENT THAT STOOD HERE NAMED THE HAZARD WHILE THE CODE
-   UNDER IT COMMITTED IT. It read "a walk spelled HERE would run in release for a message nobody prints", and
-   the line beneath it was spelled HERE, in a file carrying no `#if APICLIENT_DEV` at all — so every finishing
-   transaction in a release build walked the whole running delta and its base chain to compose two integers
-   that a release build has no DCHECKF to print. That is CLAUDE.md §AND-THE-FORM-THAT-IS-IMMUNE-TO-REVIEW
-   exactly: a site that states the rule correctly and breaks it in the same paragraph reads as ALREADY
-   AUDITED, so scrutiny stops where it was needed, and the better the prose argues the less it is one.
-   THE RETIRED ARGUMENT IS KEPT BECAUSE ITS PREMISE WAS TRUE: a DCHECKF's arguments really do vanish with its
-   condition, so a walk read only by the message belongs in the argument list. What it missed is that the walk
-   is now read by the CONDITION, where it may not be called twice without being two walks over one state --
-   and once the condition needs it, the whole computation is dev-only and the preprocessor is what says so. */
+        /* Nobody else may still hold the list, and this is the one moment that is decidable.
+           idb_transaction_changes hands out an owned reference and every caller (`git grep -n
+           idb_transaction_changes -- engine/host`) frees before returning, so the holders are the transaction's
+           slot record, this local and the COW deltas that captured a write to it. */
+/* The walk is dev-only: its result is read by the DCHECKF's condition and message alone, so a release build
+   would walk every member's delta to compose integers nothing prints. */
 #if APICLIENT_DEV
-        /* THE DUMP THIS CLAUSE NAMED IS WITHDRAWN: IT ANSWERS THE FORWARD QUESTION AND IS NOT CALLABLE FROM
-           HERE. A refcount says HOW MANY and the question is WHO, which is the REVERSE edge, and both names the
-           retired wording reached for answer the other way round: JS_DumpValue prints a value's own CONTENTS and
-           JS_DumpObject its address, refcount, shape, proto, class and props, so either one pointed at `changes`
-           prints the list's ENTRIES and nothing about the holders the sum could not account for. Both are also
-           `static __maybe_unused` in quickjs.c, and the only JS_Dump quickjs.h declares is JS_DumpMemoryUsage, a
-           runtime-wide memory report that names no holder of anything — grepped with an invented name as the
-           control rather than argued. THE RETIRED WORDING, kept because that section's own sentence sends a
-           reader to the same two names: it read `the next diff is the dev-only dump the paragraph above asks for
-           (JS_DumpValue / JS_DumpGCObject, which §Architecture names for exactly this)`. That section is right
-           that a bespoke probe is the wrong answer and this is not one: the reverse walk is already in the tree.
-           WHAT IS NOT COVERED: a holder that is not an entry of the RUNNING delta or of its ancestry — a
-           property of the holder rather than a list of places, which is why the message below names the doors
-           and this clause does not.
-           WHAT THE NEXT DIFF BUILDS: the SIBLING arm, off the frontier rather than off a dump. `flow_count` and
-           `flow_at` walk the members and `struct Flow`, defined in flow.h, names each member's CowDelta in its
-           `delta` field, so the missing count needs no engine change — and it is driven from the frontier's own
-           layer, because cow.c holds no registry (it includes no flow.h and every `flow_` it spells is PROSE:
-           `git show origin/main:engine/host/solver/cow.c | grep -c flow_at` answers 0) while CowSeg is private
-           to cow.c (0 hits in cow.h and in flow.h). Only cow.c can count; only its caller can enumerate.
-           THE DEDUP IS THE DIFFICULTY AND NOT A DETAIL. A CowSeg is REFCOUNTED AND STRUCTURALLY SHARED, one dup
-           per entry however many members stand on it — which the identity's own IT IS EXACT AND NOT A FLOOR
-           paragraph already states — so summing the existing own+base scan over every member counts each shared
-           segment once PER MEMBER. That sum EXCEEDS the refcount, and this assert reads a remainder below the
-           identity as a reference the delta claims and does not hold, so a naive walk does not over-count: it
-           reports a DOUBLE FREE THAT IS NOT THERE. Chains share SUFFIXES, so descending each member's chain and
-           stopping at the first segment already seen counts every distinct one exactly once.
-           AND THE CLOSURE DOOR IS SECOND BECAUSE IT HAS ITS OWN MECHANISM. quickjs.c's `gc_edge_census_run`
-           re-walks gc_obj_list and tmp_obj_list with a counting JS_MarkFunc and names the parents reporting one
-           child with the EDGE ORDINAL each reported it through (three of them; the rest counted and their
-           absence stated). It is `static` too, and its currency is MARK EDGES rather than REFERENCES — which is
-           a FEATURE here and not a mismatch, since a delta entry is a JSValue in host malloc and
-           JSTimeTravelHooks declares eleven capture hooks and no mark hook, so neither a COW entry nor a C local
-           is reachable by mark_children. A holder it CAN name is an object or a closure, which is the second
-           door; one it cannot is host-side, which is the first. It may never be asked for a COUNT to difference
-           against the refcount — that differences two denominators.
-           HOW ITS ABSENCE SHOWS: this abort firing with a nonzero remainder and no row anywhere saying whether
-           the missing holders are delta entries at all.
-           RETIREMENT: this record goes when the sum below is composed from a walk over the frontier's MEMBERS
-           rather than over ONE CHAIN, because a remainder is then silent only about a door no delta holds.
-           MEASURED ABSENT with the command, so this condition is not born met: cow_entries_naming_frontier and
-           flow_entries_naming each answer 0 in cow.h, cow.c and flow.c, against `cow_entries_naming` answering
-           1 in cow.h and 1 in cow.c as the armed control, and that scan's only delta source is `cow_current()`.
-        */
+        /* THE IDENTITY. Every COW capture dups its target, so N entries naming this Array in the deltas of the
+           frontier are N references, counted once per shared base segment (flow_cow_entries_naming); with the
+           transaction's slot record and this reader, that is every holder. It is two-sided: a refcount above it
+           is a holder no delta accounts for (a pending request task's operation closure is the one door left),
+           and one below it is a reference a delta claims and does not hold, which the next unapply frees twice.
+           The list is emptied on the next line, so an unaccounted holder leaks an empty Array whose
+           Array.prototype edge keeps the whole realm alive. */
         int cow_base = 0, cow_own = cow_entries_naming(changes, &cow_base);
+        int cow_all = flow_cow_entries_naming(changes);
 
-        /* RE-KEYED ON THE IDENTITY RATHER THAN WEAKENED, AND THE MEASUREMENT IS WHAT DECIDED IT. The condition
-           that stood here was `== 2` -- the transaction's slot record and this reader -- and it was standing on
-           a SCHEDULER FACT: the partition landed one commit earlier and read, on the first native smoke that
-           reached this line, a refcount of 6 of which 4 were entries of the RUNNING flow's own COW delta and 0
-           were in the base chain. 2 + 4 + 0 = 6, so the partition accounted for the WHOLE excess and not part
-           of it. §Offensive-programming: an invariant over a value a flow LEGITIMATELY wrote is the wrong
-           invariant and not a bad value, so the repair is to say what the right number is rather than to raise
-           the old one or delete it.
-           IT IS EXACT AND NOT A FLOOR. Every capture dups its target, so N delta entries naming this Array are
-           N references -- and that holds across a SHARED base segment too, because a CowSeg is shared by
-           reference while each of its ENTRIES holds its own dup, so walking the chain counts each dup once
-           however many flows stand on it.
-           AND IT IS TWO-SIDED, WHICH `== 2` WAS NOT IN THE DIRECTION THAT MATTERS: a refcount BELOW the
-           identity is a reference this flow's delta claims to hold and does not, which is a double free waiting
-           for the next unapply, and the old condition could only ever report it as the thing it was already
-           reporting for four legitimate writes. */
-        DCHECKF(JS_ValueRefCount(changes) == 2 + cow_own + cow_base,
+        DCHECKF(JS_ValueRefCount(changes) == 2 + cow_all,
                 "a finishing transaction's list of database changes is held by %d things where the holders "
-                "this line can ACCOUNT FOR are %d — the transaction's slot record, this reader, and one per "
-                "COW delta entry naming it (%d in the RUNNING flow's own delta, %d in the BASE CHAIN behind "
-                "it, which is this flow's ancestry). idb_transaction_changes hands out an OWNED reference and "
-                "every caller of it frees before returning, and every COW capture dups its target, so one "
-                "entry naming this Array is one legitimate reference and a count above two is a measurement "
-                "of how many times a flow wrote it rather than a defect on its own. A REMAINDER ABOVE THE "
-                "IDENTITY is the finding and names TWO doors this walk cannot see: a SIBLING flow's delta, "
-                "or a pending request task's operation closure. THE COLD TIER IS NOT A THIRD — a member that "
-                "leaves the frontier has its delta RELEASED, and a released delta holds no live reference, "
-                "every arm of cow_entries_free being a free of its entry's object — so a walk over the "
-                "frontier's own members would close the first of the two and leave the closure the only one. "
-                "A REMAINDER BELOW IT is the "
-                "other defect entirely — a reference the delta claims and does not hold, which the next "
-                "unapply frees twice. The list is emptied on the next line, so what an unaccounted holder "
-                "leaks is an empty Array whose only remaining edge is Array.prototype, and that edge makes "
-                "the whole realm behind it immortal",
-                JS_ValueRefCount(changes), 2 + cow_own + cow_base, cow_own, cow_base);
+                "this line can account for are %d: the transaction's slot record, this reader, and %d COW delta "
+                "entries naming it across the frontier (%d in the running flow's own delta, %d in its base "
+                "chain). A remainder above that is a holder no delta accounts for, such as a pending request "
+                "task's operation closure; one below is a reference a delta claims and does not hold",
+                JS_ValueRefCount(changes), 2 + cow_all, cow_all, cow_own, cow_base);
 #endif
         JS_FreeValue(ctx, changes);
         /* AND SO IS §2.7'S LIST OF HELD REQUEST TASKS, at the same door and for the same reason. A transaction

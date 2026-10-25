@@ -914,6 +914,20 @@ void flow_agents_fork(JSContext *ctx, Flow *sib, const Flow *parent)
 
 Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
 
+int flow_cow_entries_naming(JSValueConst v)
+{
+    void **ds = malloc(sizeof *ds * (size_t)(g_flows_n + 1));
+    int i, n = 0, r;
+
+    CHECK(ds != NULL, "flow: OOM listing the frontier's deltas");
+    ds[n++] = cow_current();
+    for (i = 0; i < g_flows_n; i++)
+        ds[n++] = g_flows[i]->delta;
+    r = cow_entries_naming_in(v, ds, n);
+    free(ds);
+    return r;
+}
+
 void flow_registry_init(const char *doc_name) {
     /* The frontier this replaces must have gone. The assignment below drops `g_flows`, so a registry raised over a
        live frontier leaks every standing flow (its COW delta, DOM head, suspended frame and queued jobs), and no

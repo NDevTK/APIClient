@@ -1802,6 +1802,10 @@ int   flow_is_member(const Flow *f);
 /* The i'th flow in registry order, or NULL past the end — a walk over the frontier's members, which is what a
    register living on the flows needs. flow_best answers which one to run; this answers who exists. */
 Flow *flow_at(int i);
+/* How many COW entries name `v` across every member's delta and the running one, each shared segment once
+   (cow_entries_naming_in): the references the frontier's deltas hold. Cold members hold none (their deltas
+   are released). */
+int   flow_cow_entries_naming(JSValueConst v);
 
 /* How many queued programs the whole frontier holds for one document, summed over every member's `dyn_doc`.
  * A `dyn_doc` entry is a uint32 handle that keeps nothing alive and stays readable after its realm is gone,
