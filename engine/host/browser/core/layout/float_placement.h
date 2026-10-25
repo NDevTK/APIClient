@@ -15,7 +15,8 @@
 
 /* The margin box of float `f` in its context root's content-box frame. Places every earlier float of the context
    that is not yet placed first. False ("not yet") when a walk or measurement it needs was deferred; `*out` is
-   then unwritten. Asked with a placement record held: the record holds the walks' frames it reads. */
+   then unwritten. Asked only with a placement record held (checked): the record holds the walks' frames it
+   reads. */
 bool float_placement_ask(lxb_dom_element_t *f, FlowFloatBox *out);
 
 #endif
