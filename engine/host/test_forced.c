@@ -14453,6 +14453,12 @@ TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
              "the arm in which the local name is valid did not create an element");
     fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/lname", "arm", "InvalidCharacterError"),
              "the arm in which the local name is not valid did not throw InvalidCharacterError");
+    /* createProcessingInstruction over an unknown target reaches §4.13 step 1's two completions. */
+    const char *pi_why = NULL; int pi_tt = 1;
+    fold_row(&pi_tt, &pi_why, param_value_is(js, "/api/piname", "arm", "pi"),
+             "createProcessingInstruction's arm in which the target is a Name did not create the node");
+    fold_row(&pi_tt, &pi_why, param_value_is(js, "/api/piname", "arm", "InvalidCharacterError"),
+             "createProcessingInstruction's arm in which the target is not a Name did not throw");
     /* createAttribute reaches §4.5 step 1's two completions and createAttributeNS §1.4's three. */
     const char *ca_why = NULL; int ca_tt = 1;
     fold_row(&ca_tt, &ca_why, param_value_is(js, "/api/caname", "arm", "attr"),
@@ -14482,6 +14488,7 @@ TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
         { "unknown-local-name-forks", ln_tt, "/api/lname", SESS_EXPLORE, ln_why },
         { "unknown-attribute-name-forks", an_tt, "/api/aname", SESS_EXPLORE, an_why },
         { "unknown-attribute-factory-name-forks", ca_tt, "/api/caname", SESS_EXPLORE, ca_why },
+        { "unknown-pi-target-forks", pi_tt, "/api/piname", SESS_EXPLORE, pi_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

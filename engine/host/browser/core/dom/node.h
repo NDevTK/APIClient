@@ -215,6 +215,10 @@ lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t o
    supplies both strings, so a malformed one is that page's TypeError-shaped answer and never an assertion. */
 JSValue node_pi_create(JSContext *ctx, lxb_dom_document_t *document,
                        const char *target, size_t tlen, const char *data, size_t dlen);
+/* The same algorithm with step 1 or step 2 already decided to pass by a fork over unknown external input (the
+   caller then hands the unknown's shape, which the step is not asked of). */
+JSValue node_pi_create_decided(JSContext *ctx, lxb_dom_document_t *document, const char *target, size_t tlen,
+                               const char *data, size_t dlen, bool target_decided, bool data_decided);
 /* DOM §4.5 "ADOPT A NODE", given `node` and `document` — the whole algorithm, which is what §4.2.3's insert
    reaches at its step 7.1 and what `Document.adoptNode()`/`importNode()` are stated over.
    IT IS NOT A "SET THE OWNER DOCUMENT": step 3 walks `node`'s SHADOW-INCLUDING inclusive descendants in

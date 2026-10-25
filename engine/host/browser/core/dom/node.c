@@ -2592,6 +2592,12 @@ static JSValue js_pi_attr_write(JSContext *ctx, JSValueConst this_val, int argc,
 JSValue node_pi_create(JSContext *ctx, lxb_dom_document_t *document,
                        const char *target, size_t tlen, const char *data, size_t dlen)
 {
+    return node_pi_create_decided(ctx, document, target, tlen, data, dlen, false, false);
+}
+
+JSValue node_pi_create_decided(JSContext *ctx, lxb_dom_document_t *document, const char *target, size_t tlen,
+                               const char *data, size_t dlen, bool target_decided, bool data_decided)
+{
     lxb_dom_processing_instruction_t *pi;
     lxb_dom_node_t *made;
 
@@ -2608,12 +2614,12 @@ JSValue node_pi_create(JSContext *ctx, lxb_dom_document_t *document,
        the production because every name an XML parser scans is it. `xml:fail` IS a legal target — §2.3 requires
        a processor to accept the colon as a name character, and narrowing it to an NCName is the namespace
        layer's job, not this one's. */
-    if (!xml_name_is_name(target, tlen))
+    if (!target_decided && !xml_name_is_name(target, tlen))
         return JS_ThrowDOMException(ctx, "InvalidCharacterError",
                                     "a processing instruction target must match the XML Name production");
     /* STEP 2: "If data contains the string "?>", then throw an "InvalidCharacterError" DOMException" — the
        one sequence the node's own serialization cannot survive. */
-    if (dlen >= 2 && memmem(data, dlen, "?>", 2) != NULL)
+    if (!data_decided && dlen >= 2 && memmem(data, dlen, "?>", 2) != NULL)
         return JS_ThrowDOMException(ctx, "InvalidCharacterError",
                                     "a processing instruction cannot contain \"?>\"");
     /* STEPS 3 AND 4, and the node "create a processing instruction node" step 1 makes: one call, because the

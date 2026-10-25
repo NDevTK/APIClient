@@ -2,7 +2,8 @@
    SVG factory driven with an unknown argument. DOM §1.4's validate-and-extract has three completions over such a
    name, so the page's try/catch reaches three fetches: the element, InvalidCharacterError and NamespaceError.
    createElement over the same name has §4.5 step 1's two: the element and InvalidCharacterError; setAttribute has
-   §4.9 step 1's two and setAttributeNS §1.4's three, as do createAttribute and createAttributeNS.
+   §4.9 step 1's two and setAttributeNS §1.4's three, as do createAttribute and createAttributeNS;
+   createProcessingInstruction over the name as its target has §4.13 step 1's two.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_QNAMEFORK_H
@@ -51,6 +52,12 @@ static const char HTML_QNAMEFORK[] =
     "  fetch('/api/cansname?arm=attr');"
     "} catch (e) {"
     "  fetch('/api/cansname?arm=' + e.name);"
+    "}"
+    "try {"
+    "  document.createProcessingInstruction(qnName, 'd');"
+    "  fetch('/api/piname?arm=pi');"
+    "} catch (e) {"
+    "  fetch('/api/piname?arm=' + e.name);"
     "}"
     "</script>"
     TF_CANVAS_INK

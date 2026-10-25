@@ -75,6 +75,7 @@
 #include "core/dom/document_type.h"
 #include "core/dom/dom_implementation.h"
 #include "core/dom/names.h"      /* §1.4's validate-and-extract, createElementNS's step 1, one implementation */
+#include "core/xml/xml_name.h"   /* XML 1.0 §2.3 [5] Name, which createProcessingInstruction's target fork asks */
 #include "core/idl_args.h"
 #include "core/realm.h"
 
@@ -1434,8 +1435,8 @@ static JSValue js_doc_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
    `new ProcessingInstruction(target, data)`. createCDATASection has its own HTML-document refusal and `]]>` test
    and is defined nowhere else. One body, so a parked flow can say which member it is in.
    magic 0 = createCDATASection, 1 = createProcessingInstruction. */
-static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                      int magic)
+static JSValue doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic, bool target_decided, bool data_decided)
 {
     Document *d = doc_receiver(ctx, this_val);
     lxb_dom_document_t *dom;
@@ -1459,7 +1460,7 @@ static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int
         if (!target) return JS_EXCEPTION;
         data = JS_ToCStringLen(ctx, &dlen, argv[1]);
         if (!data) { JS_FreeCString(ctx, target); return JS_EXCEPTION; }
-        r = node_pi_create(ctx, dom, target, tlen, data, dlen);
+        r = node_pi_create_decided(ctx, dom, target, tlen, data, dlen, target_decided, data_decided);
         JS_FreeCString(ctx, data);
         JS_FreeCString(ctx, target);
         return r;
@@ -1476,7 +1477,7 @@ static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int
        sequence the node's serialization cannot survive. Over `dlen` bytes, since a DOMString may contain U+0000,
        which would end a C-string search early; `memmem` is this tree's spelling (core/html/form_data.c,
        core/html/html_encoding_sniff.c). */
-    if (dlen >= 3 && memmem(data, dlen, "]]>", 3) != NULL) {
+    if (!data_decided && dlen >= 3 && memmem(data, dlen, "]]>", 3) != NULL) {
         JS_FreeCString(ctx, data);
         return JS_ThrowDOMException(ctx, "InvalidCharacterError",
                                     "a CDATA section cannot contain \"]]>\"");
@@ -1489,6 +1490,127 @@ static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int
     r = node_wrap(ctx, made);
     return r;
 }
+
+/* The two factories as the page calls them: step machines, because a string they test may be unknown external
+ * input, and each test then has both completions — createProcessingInstruction's §4.13 step 1 (the target matches
+ * XML's Name) and step 2 (the data contains `?>`), createCDATASection's step 2 (the data contains `]]>`) — so each
+ * forks, one stage per test in the algorithm's order. A passing arm creates the node over the unknown's shape, as
+ * createTextNode does; known strings run the factory directly. createCDATASection's step 1, the HTML-document
+ * refusal, reads no string and runs before its fork. magic 0 = createCDATASection, 1 = createProcessingInstruction. */
+#define XN_ALGORITHM "DOM §4.5 Interface Document createCDATASection / createProcessingInstruction"
+#define XN_STAGES(X)                                                                                         \
+    X(XN_TARGET, "DOM §4.13 create a processing instruction node step 1 (the target matches XML's Name)")     \
+    X(XN_DATA,   "DOM §4.13 step 2 / §4.5 createCDATASection step 2 (the data contains the closing sequence)") \
+    X(XN_CREATE, XN_ALGORITHM " (create the node)")
+enum { IDL_STEP_STAGE_BASE(XN_STAGES) XN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const XN_STEPS[] = { XN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+#define XN_TARGET_OP "DOM §4.13 create a processing instruction node step 1 (target matches the XML Name production)"
+static const char *const XN_DATA_OP[2] = {
+    "DOM §4.5 createCDATASection step 2 (data contains ]]>)",
+    "DOM §4.13 create a processing instruction node step 2 (data contains ?>)",
+};
+
+typedef struct { bool target_decided, data_decided; } XnState;   /* the passing arms taken; nothing owned */
+static void xn_visit(JSContext *ctx, void *state, JSStepVisit *v) { (void)ctx; (void)state; (void)v; }
+
+/* Which completion a test reaches on the unknown's example: 0 passes, 1 throws. */
+static int xn_real(JSContext *ctx, JSValueConst v, bool target, int magic)
+{
+    JSValue ex = concolic_example(ctx, v);
+    int real = JS_OUTCOME_REAL_UNSTATED;
+
+    if (JS_IsString(ex)) {
+        size_t len = 0;
+        const char *b = JS_ToCStringLen(ctx, &len, ex);
+
+        CHECK(b != NULL, "an XML node factory could not read the bytes of a string it was handed");
+        if (target)
+            real = xml_name_is_name(b, len) ? 0 : 1;
+        else if (magic == 0)
+            real = (len >= 3 && memmem(b, len, "]]>", 3) != NULL) ? 1 : 0;
+        else
+            real = (len >= 2 && memmem(b, len, "?>", 2) != NULL) ? 1 : 0;
+        JS_FreeCString(ctx, b);
+    }
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
+static int js_doc_create_xml_node_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
+                                       JSValueConst *argv, JSValue cb_result, JSValue *presult,
+                                       JSValue **out_cb, int *out_argc)
+{
+    XnState *s = state;
+    int magic = idl_step_magic(hdr), di = magic == 0 ? 0 : 1, rc, arm = 0;
+    JSValueConst a2[2];
+    JSValue shapes[2] = { JS_UNDEFINED, JS_UNDEFINED }, r;
+    int i;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(magic == 0 || magic == 1, "an XML node factory was declared with a magic this file does not name");
+    DCHECK(argc == di + 1, "an XML node factory reached its body with an argument count its declaration does not produce");
+    if (hdr->stage == XN_TARGET) {
+        Document *d = doc_receiver(ctx, hdr->this_val);
+
+        if (!d) return JS_STEP_ABRUPT;
+        if (magic == 0 && !d->is_xml) {   /* createCDATASection step 1, before the string it tests */
+            JS_ThrowDOMException(ctx, "NotSupportedError", "an HTML document has no CDATA sections");
+            return JS_STEP_ABRUPT;
+        }
+        if (magic == 1 && concolic_is(argv[0])) {
+            rc = step_fork_run(ctx, hdr, argv[0], XN_TARGET_OP, 2, xn_real(ctx, argv[0], true, magic), &arm);
+            if (rc)
+                return rc;
+            if (arm != 0) {
+                JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                     "a processing instruction target must match the XML Name production");
+                return JS_STEP_ABRUPT;
+            }
+            s->target_decided = true;
+        }
+        hdr->stage = XN_DATA;
+    }
+    if (hdr->stage == XN_DATA) {
+        if (concolic_is(argv[di])) {
+            rc = step_fork_run(ctx, hdr, argv[di], XN_DATA_OP[magic], 2, xn_real(ctx, argv[di], false, magic), &arm);
+            if (rc)
+                return rc;
+            if (arm != 0) {
+                JS_ThrowDOMException(ctx, "InvalidCharacterError", "the data contains the node's closing sequence");
+                return JS_STEP_ABRUPT;
+            }
+            s->data_decided = true;
+        }
+        hdr->stage = XN_CREATE;
+    }
+    DCHECK(hdr->stage == XN_CREATE, "an XML node factory resumed into a stage its declaration does not have");
+    /* An unknown string the arms decided stands as its shape, a real string. */
+    for (i = 0; i <= di; i++) {
+        if (concolic_is(argv[i])) {
+            const char *sh = concolic_shape_c(argv[i]);
+
+            DCHECK(sh != NULL, "an unknown string answered no display shape");
+            shapes[i] = JS_NewString(ctx, sh);
+            CHECK(!JS_IsException(shapes[i]), "an XML node factory could not make a string of a shape");
+            a2[i] = shapes[i];
+        } else {
+            a2[i] = argv[i];
+        }
+    }
+    r = doc_create_xml_node(ctx, hdr->this_val, argc, a2, magic, s->target_decided, s->data_decided);
+    JS_FreeValue(ctx, shapes[0]);
+    JS_FreeValue(ctx, shapes[1]);
+    if (JS_IsException(r))
+        return JS_STEP_ABRUPT;
+    *presult = r;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl XN_DECL = {
+    js_doc_create_xml_node_step, sizeof(XnState), xn_visit, NULL, XN_ALGORITHM, XN_STEPS, 0, NULL
+};
 
 static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -1564,8 +1686,8 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
  * element the example name creates when that name is valid. A known name runs the internal steps directly.
  *
  * Named residual. Not covered: an unknown namespace beside the name, §4.5.1 createDocument's qualified name and
- * createDocumentType's name and createProcessingInstruction's target, each a byte consumer of its name, and
- * toggleAttribute, which validates the unknown's shape. Next diff builds: the same fork
+ * createDocumentType's name, each a byte consumer of its name, and toggleAttribute, which validates the unknown's
+ * shape. Next diff builds: the same fork
  * at each, asking dom_qname_outcome or the entry's own name predicate. Absence shows as: a @WHY naming ToString
  * over unknown external input at one of those entries' conversions. */
 #define CEN_ALGORITHM "DOM §4.5 Interface Document createElementNS(namespace, qualifiedName)"
@@ -3182,8 +3304,8 @@ static void document_declare_members(JSContext *ctx)
     }
     g_id_create_text = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_text, 0);
     g_id_create_comment = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_comment, 0);
-    g_id_create_cdata = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_xml_node, 0);
-    g_id_create_pi = idl_method_id(ctx, IDL_2STR, 2, js_doc_create_xml_node, 1);
+    g_id_create_cdata = idl_method_id_step(ctx, IDL_1STR, 1, NULL, 0, &XN_DECL, 0);
+    g_id_create_pi = idl_method_id_step(ctx, IDL_2STR, 2, NULL, 0, &XN_DECL, 1);
     /* §4.5's `[Exposed=Window] interface Document { constructor(); }`: the interface object is constructible, and
        `new Document()` is how a page gets an XML document without DOMImplementation. */
     g_id_doc_ctor = idl_method_id(ctx, NULL, 0, js_doc_ctor, 0);
