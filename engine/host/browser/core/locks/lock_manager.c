@@ -844,6 +844,10 @@ static const IdlDictMember LK_OPTIONS[] = {
     { "steal",       IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
 };
 #define LK_OPTIONS_N ((int)(sizeof LK_OPTIONS / sizeof LK_OPTIONS[0]))
+/* The same list as an algorithm's dictionary, for §3.2.1 step 1's default-members dictionary on the entry with
+   no options argument; its member names are interned once per runtime by idl_dict_declare. */
+static const IdlDictDecl LK_OPTIONS_DECL = { "LockOptions", LK_OPTIONS, LK_OPTIONS_N };
+static const JSAtom *g_lk_options_atoms;
 
 /* §3.2's TWO OVERLOADS AS ONE DECLARATION — the longest type list the effective overload set has, with the
    position the entries split at carrying that split as its type:
@@ -873,7 +877,11 @@ typedef struct {
        INTEGER 0 rather than JS_UNDEFINED. `query` has no signal and never writes it, which is why it is stated
        beside the capability both members build rather than at the one member's ask. */
     JSValue sig_flag;
+    /* §3.2.1 step 1's "new LockOptions dictionary with default members", owned, on the two-argument entry;
+       built once per invocation because a fork re-enters the stage at its top. */
+    JSValue dflt_opts;
     uint8_t started;
+    uint8_t dflt_built;
 } LkReqState;
 
 static void lk_req_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -889,6 +897,8 @@ static void lk_req_visit(JSContext *ctx, void *st, JSStepVisit *v)
        writes this slot in the same guarded block that sets `started`, so a state that has not begun holds the
        INTEGER 0 here and there is nothing for a visit to take or release. */
     v->val(ctx, &s->sig_flag);
+    if (s->dflt_built)
+        v->val(ctx, &s->dflt_opts);
 }
 
 /* EVERY REFUSAL OF §3.2.1 AND §3.2.2, as the one operation all of them are: settle the promise the algorithm
@@ -980,7 +990,6 @@ static int lk_request_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     bool if_available, steal;
     int rejected;
 
-    (void)out_cb; (void)out_argc;
     /* ONE STAGE, AND THE REASON IS NO LONGER THAT NOTHING BELOW RUNS THE PAGE'S CODE. This comment used to say
        exactly that, and the engine's own `js_step_labels_check` bans that sentence FROM A LABEL for the reason
        it is wrong here too: a stage boundary is a rest point because the ENGINE may have to park there — RAM
@@ -1013,15 +1022,29 @@ static int lk_request_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
        argc 3 position 1 is the dictionary and position 2 is the callback. The type at position 1 states both,
        so this reads the ARITY the conversion already resolved rather than testing the value again. */
     name = argv[0];
-    options = (argc >= 3) ? argv[1] : JS_UNDEFINED;
+    /* STEP 1: "If options was not passed, then let options be a new LockOptions dictionary with default
+       members." That is Web IDL §3.2.17 over undefined: every member reads undefined (step 4.1.2) and takes its
+       declared default, and no [[Get]] runs, so the walk cannot park. */
+    if (argc < 3 && !s->dflt_built) {
+        IdlDictWalk w = { 0 };
+        int r;
+
+        DCHECK(g_lk_options_atoms != NULL, "§3.2.1 step 1 ran before lock_manager_init declared LockOptions");
+        CHECK(idl_dict_walk_start(ctx, &w, JS_UNDEFINED, LK_OPTIONS, LK_OPTIONS_N, g_lk_options_atoms,
+                                  LK_OPTIONS_DECL.name, 0, NULL, NULL, 0) == 0,
+              "§3.2.1 step 1's LockOptions dictionary could not be allocated");
+        r = idl_dict_walk_run(ctx, hdr, &w, NULL, 0, JS_UNDEFINED, out_cb, out_argc);
+        DCHECK(r == 0, "§3.2.17 over undefined parked or threw — no member has a [[Get]] to run, so every "
+                       "member takes its default without suspending");
+        s->dflt_opts = idl_dict_walk_take(ctx, &w);
+        s->dflt_built = 1;
+    }
+    options = (argc >= 3) ? argv[1] : s->dflt_opts;
     callback = (argc >= 3) ? argv[2] : argv[1];
     DCHECK(JS_IsFunction(ctx, callback),
            "§3.2.1's request reached its steps with a callback that is not callable — Web IDL §3.2.19's "
            "callback function conversion refuses that at the argument boundary, so the declaration's type list "
            "and this body have come apart about which position the callback is at");
-    /* STEP 1: "If options was not passed, then let options be a new LockOptions dictionary with default
-       members." An absent dictionary has every member absent, and reading each as its IDL default IS that step
-       — which is why the member rows above carry the defaults and this body reads values rather than presence. */
     if_available = idl_dict_bool(ctx, options, "ifAvailable");
     steal = idl_dict_bool(ctx, options, "steal");
     /* `LockMode mode = "exclusive"` — the DEFAULT is the declaration's, so an absent member arrives as the
@@ -1495,6 +1518,9 @@ void lock_manager_init(JSContext *ctx)
     g_grant_stepid = JS_RegisterStepDef(rt, &lk_grant_def);
     g_settled_stepid = JS_RegisterStepDef(rt, &lk_settled_def);
     g_abort_stepid = JS_RegisterStepDef(rt, &lk_abort_def);
+    g_lk_options_atoms = idl_dict_declare(ctx, &LK_OPTIONS_DECL);
+    agent_state_ptr("navigator", &g_lk_options_atoms,
+                    "the handle on Web Locks §3.2.1's LockOptions member names — the atoms are the IDL pool's");
     g_id_request = idl_method_id_step(ctx, LK_REQUEST_ARGS, 3, LK_OPTIONS, LK_OPTIONS_N, &LK_REQUEST_DECL, 0);
     /* §3.7.7's PROMISE RETURN TYPE, which is what turns the prologue's arity TypeError — and every refusal
        above — into a rejection in the one place that rule belongs. */
