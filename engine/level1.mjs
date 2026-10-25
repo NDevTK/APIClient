@@ -1218,12 +1218,18 @@ async function mintDrive(minted, slices) {
 
   /* The result door over each @S entry's delivery facts, through resultDocumentRefusal on a minimal document the
      door accepts with no sink (the control): an entry of each shape the live-verify layer performs from is
-     accepted, and each invented one refuses the whole document naming the field. */
+     accepted, and each invented one refuses the whole document naming the field. Each declared census is
+     built from lib/census-rows.js's rows, every number 0 and every object empty, except `_wfq`, whose term rows
+     appear only above zero members. */
   const counters = runInContext('RESULT_COUNTERS', ZONE), scensus = runInContext('SCENSUS_READ', ZONE);
+  const censusRows = runInContext('CENSUS_ROWS', ZONE);
+  const declaredCensus = (f) => f === '_wfq' ? { members: 0 }
+    : Object.fromEntries([...censusRows[f].numeric.map((k) => [k, 0]), ...censusRows[f].object.map((k) => [k, {}])]);
   const doc = (sinks) => {
     const d = { fetchCallSites: [], securitySinks: sinks, pageErrors: [], pageErrorsRetracted: [], pageErrorsExplored: [],
-                routedPosts: [], _wfq: { members: 0 }, _quantum: { sliceWork: 1, hostYieldMs: 0, price: 'work', priceIsCpu: false },
-                _cold: { live: 0 }, _heap: { bytes: 0 }, _swap: { out: 0 }, _absent: { rows: 0 }, _forkAt: {}, _park: [],
+                routedPosts: [], ...Object.fromEntries(Object.keys(censusRows).map((f) => [f, declaredCensus(f)])),
+                _quantum: { sliceWork: 1, hostYieldMs: 0, price: 'work', priceIsCpu: false },
+                _absent: { rows: 0 }, _forkAt: {}, _park: [],
                 _parkWhy: 'none', _metricsSchema: { families: [{ family: 'scensus', identities: [],
                   rows: scensus.map((key) => ({ key, kind: 'lifetime', unit: 'reads', scope: 'session', owner: 'level1' })) }] } };
     for (const k of counters) d[k] = 0;
