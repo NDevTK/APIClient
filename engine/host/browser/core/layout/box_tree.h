@@ -91,4 +91,10 @@ BoxTreeChild box_tree_prev_sibling(lxb_dom_element_t *box, BoxTreeChild child);
    parent is exactly the box its contents are spliced into. */
 lxb_dom_element_t *box_tree_parent(BoxTreeChild n);
 
+/* core/css/css_style_declaration.h's cssom_style_ask of every element `box`'s child sequence resolves a style
+   for: each element child, and the children of one §2.5 splices, in document order. False ("not yet") at the
+   first that parked; a walk over the sequence asks this before its reads until a style read answers "not yet"
+   itself. */
+bool box_tree_children_style_ask(lxb_dom_element_t *box);
+
 #endif

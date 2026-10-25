@@ -3316,11 +3316,11 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
     order = css_author_sheets_order(sheets);
     if (!css_cascade_pass_match_ask(el, sheets, &match)) {
         /* A build a resting ask parked is finished here: this reader cannot rest.
-           Named residual. Not covered: an author match first asked by a reader that cannot rest is built whole
-           in its activation, which is the general case of descendant styles read inside box bodies during
-           layout. Next diff builds: style reads in layout bodies answering "not yet" to the resting drive, as
-           CSS 2.1 §9.4.1 questions do, so those builds park through cssom_match_ask too. Absence shows as: a
-           REST_UNIT_LAYOUT_DESCENDANTS overrun whose host charges are rule tests beside box questions. */
+           Named residual. Not covered: an element whose style no cssom_style_ask reached first is matched whole
+           by its first read, which is the general case of the styles layout walks read under a resting drive.
+           Next diff builds: the computed-style read itself answering "not yet" under a resting drive, as
+           CSS 2.1 §9.4.1 asks do, which deletes every cssom_style_ask a walk makes before its reads. Absence
+           shows as: a REST_UNIT_LAYOUT_DESCENDANTS overrun whose host charges are rule tests. */
         if (match == NULL) match = css_match_result_create(el, sheets);
         if (!cssd_match_result_run(match, false))
             DFAIL("an author match built with no resting drive stopped before the set's end — only a resting "
@@ -3341,13 +3341,14 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
     return s;
 }
 
-bool cssom_match_ask(lxb_dom_element_t *el)
+bool cssom_style_ask(lxb_dom_element_t *el)
 {
     CssAuthorSheets *sheets;
     CssMatchResult *match;
     bool closed;
 
-    DCHECK(el != NULL, "an author match was asked for no element");
+    DCHECK(el != NULL, "an element's style was asked for no element");
+    if (!layout_job_rests_innermost()) return true;
     DCHECK(!g_collecting_sheets, "a resting author match was asked inside another element's collection");
     g_collecting_sheets = true;
     sheets = cssd_author_sheets(el, true);

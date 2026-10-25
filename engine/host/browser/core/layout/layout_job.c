@@ -738,9 +738,10 @@ void layout_job_suspend(size_t at)
         DCHECK(job->stack[i].state == LJ_SUSPENDED,
                "a body returned \"not yet\" while a question above it is still computing — \"not yet\" "
                "propagates from the deferred ask down, so every entry above a suspending body is suspended");
-    DCHECK(at + 1 < job->n || job->stack[at].staged,
-           "a body returned \"not yet\" with no deferred question above it and no walk staged; only a walk "
-           "stopped by a spent quota suspends with nothing above it, and it stages first");
+    DCHECK(at + 1 < job->n || job->stack[at].staged || lj_quota_spent(job),
+           "a body returned \"not yet\" with no deferred question above it, no walk staged and its drive's "
+           "allowance unspent; only a walk stopped by a spent quota, or a style ask parked on one, suspends "
+           "with nothing above it");
     DCHECKF(job->ctx == job->stack[at].ctx, "a CSS 2.1 §9.4.1 body suspended in grid row context %u, asked in "
             "%u; a row sizing its body began ends before the body returns", job->ctx, job->stack[at].ctx);
     job->stack[at].state = LJ_SUSPENDED;

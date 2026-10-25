@@ -299,7 +299,7 @@ static bool ev_box_tests_ask(const lxb_dom_node_t *n)
            "a CSSOM VIEW §6 member's box tests were asked of no element — each member states element_is");
     if (!ev_in_presented_document(n)) return true;
     for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent)
-        if (!cssom_match_ask(lxb_dom_interface_element((lxb_dom_node_t *)a))) return false;
+        if (!cssom_style_ask(lxb_dom_interface_element((lxb_dom_node_t *)a))) return false;
     return true;
 }
 

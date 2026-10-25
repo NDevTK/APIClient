@@ -10,6 +10,7 @@
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_style_declaration.h"   /* the style ask a child walk makes before its reads */
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/list_marker.h"
@@ -71,6 +72,24 @@ static lxb_dom_node_t *bt_resolve(lxb_dom_element_t *box, lxb_dom_node_t *n)
     while (n != NULL && bt_is_spliced(n))
         n = n->first_child != NULL ? n->first_child : bt_continue_after(box, n);
     return n;
+}
+
+bool box_tree_children_style_ask(lxb_dom_element_t *box)
+{
+    lxb_dom_node_t *n;
+
+    DCHECK(box != NULL, "a box's children's styles were asked of no box");
+    for (n = lxb_dom_interface_node(box)->first_child; n != NULL;) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            if (!cssom_style_ask(lxb_dom_interface_element(n))) return false;
+            if (bt_is_spliced(n) && n->first_child != NULL) {
+                n = n->first_child;
+                continue;
+            }
+        }
+        n = bt_continue_after(box, n);
+    }
+    return true;
 }
 
 /* `bt_continue_after` read backward: the position before a spliced element's first child is the position

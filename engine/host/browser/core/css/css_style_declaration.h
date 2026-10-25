@@ -27,11 +27,12 @@ void cssom_init(JSContext *ctx);
    the user-agent origin "is equivalent to unset" — which is answered as that keyword for §7 to resolve. */
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
 
-/* The author origin's match for `el` (core/css/css_match_result.h), asked under a resting drive on the entered
-   layout job: true when the job's cascade record holds it closed, false when the build spent the drive's
-   allowance and parked its position there, to continue at the next ask. The root's sheet set is emitted the
-   same way first. */
-bool cssom_match_ask(lxb_dom_element_t *el);
+/* Whether `el`'s style can be read now, the contract a computed-style read will take under a resting drive:
+   true when the entered job's cascade record holds its author match (core/css/css_match_result.h), false
+   ("not yet") when the build spent the drive's allowance and parked there, to continue at the next ask. The
+   root's sheet set is emitted the same way first. With no resting drive innermost it answers true and the
+   read builds the match in place. */
+bool cssom_style_ask(lxb_dom_element_t *el);
 
 /* CSS Cascade §7.1's INITIAL VALUE of `name` — the property's own `Initial:` line, out of lexbor's registry and
    out of this component's table of the eight border longhands the registry does not carry. OWNED; NULL for a

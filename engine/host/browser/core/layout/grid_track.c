@@ -9,6 +9,7 @@
 #include "core/css/css_style_declaration.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"   /* the style ask placement makes of the items before it reads them */
 #include "core/layout/grid_explicit_tracks.h"
 #include "core/layout/grid_placement.h"
 #include "core/layout/grid_track.h"
@@ -1005,6 +1006,8 @@ void grid_axis_sizing_end(GridAxisSizing *g)
 static bool gt_run_ask(GridAxisSizing *g, lxb_dom_element_t *container, lxb_dom_element_t *target, bool vertical,
                        GridSizingConstraint constraint)
 {
+    /* css-grid-1 §8's placement, which the run begins with, reads every item's style. */
+    if (!box_tree_children_style_ask(container)) return false;
     grid_axis_sizing_begin(g, container, target, vertical, constraint);
     while (!grid_axis_sizing_done(g))
         if (!grid_axis_sizing_step(g)) { grid_axis_sizing_end(g); return false; }

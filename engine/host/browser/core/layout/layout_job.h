@@ -224,7 +224,7 @@ bool layout_job_bf_step(size_t at);
    "not yet"; otherwise it takes one element when a resting drive is innermost. */
 bool layout_job_scan_take(void);
 
-/* A resting build of an author match (core/css/css_style_declaration.h's cssom_match_ask) is about to test one
+/* A resting build of an author match (core/css/css_style_declaration.h's cssom_style_ask) is about to test one
    style rule. Asserts a resting drive is innermost; answers false when it has spent its items, and the build
    then parks its position and answers "not yet"; otherwise it takes one rule. */
 bool layout_job_rule_take(void);
