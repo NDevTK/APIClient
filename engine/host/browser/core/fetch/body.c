@@ -631,6 +631,19 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
         return r;
     }
     if ((list = usp_list_of(init)) != NULL) {
+        /* §5.2's URLSearchParams arm, "the result of running the application/x-www-form-urlencoded serializer
+           with object's list": over a list derived from unknown input that serialization is the unknown its
+           stringification derives, carried as §5.2's string arm carries an unknown, with this arm's type. */
+        JSValue unknown = usp_unknown_serialization(ctx, init);
+        if (!JS_IsUndefined(unknown)) {
+            r = body_state_set_unknown(ctx, b, unknown);
+            JS_FreeValue(ctx, unknown);
+            *out_mime = strdup("application/x-www-form-urlencoded;charset=UTF-8");
+            CHECK(*out_mime != NULL, "body: OOM naming §5.2's URLSearchParams arm type");
+            return r;
+        }
+    }
+    if (list != NULL) {
         char *body = url_encoded_serialize(list, &len);
         r = body_state_set(ctx, b, body, len);
         free(body);

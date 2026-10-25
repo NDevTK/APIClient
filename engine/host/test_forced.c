@@ -15381,6 +15381,13 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
     fold_row(&ms_tt, &ms_why, has,
              "NOT REACHED: no innerHTML @S record carries a source rooted in location.search, so the read after "
              "the mutations lost the query's provenance");
+    const char *ub_why = NULL; int ub_tt = 1;
+    fold_row(&ub_tt, &ub_why, !!strstr(js, "\"/api/uspb\""),
+             "NOT REACHED: there is no /api/uspb record, so the mutated list was never sent as a body");
+    fold_row(&ub_tt, &ub_why, emitted_record_has(js, "/api/uspb", "URLSearchParams.toString()") &&
+                              emitted_record_has(js, "/api/uspb", LOCATION_SEARCH_SRC),
+             "Fetch §5.2's URLSearchParams arm: the body is not the serialization derived from the query, so the "
+             "list's example parse was sent as concrete bytes");
     const Probe rows[] = {
         { "usp-iter-key", ik_tt, "/api/uspi-key", SESS_EXPLORE, ik_why },
         { "usp-iter-counts", ic_tt, "/api/uspi-done", SESS_EXPLORE, ic_why },
@@ -15388,6 +15395,7 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
         { "usp-keys-fork", ky_tt, "/api/uspk-first", SESS_EXPLORE, ky_why },
         { "usp-mutate-read", mg_tt, "/api/uspm-get", SESS_EXPLORE, mg_why },
         { "usp-mutate-sink", ms_tt, "'uspOut'", SESS_EXPLORE, ms_why },
+        { "usp-body-unknown", ub_tt, "/api/uspb", SESS_EXPLORE, ub_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

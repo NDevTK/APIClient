@@ -146,6 +146,24 @@ const UrlEncodedList *usp_list_of(JSValueConst v)
     return u ? u->list : NULL;
 }
 
+/* Declared below beside the reads it serves. */
+static JSValue usp_derive(JSContext *ctx, UspObj *u, const char *op, JSValue r, int argc, JSValueConst *argv);
+
+JSValue usp_unknown_serialization(JSContext *ctx, JSValueConst v)
+{
+    UspObj *u = usp_rec(v);
+    char *q;
+
+    DCHECK(u != NULL, "a body asked for the serialization of something that is not a URLSearchParams");
+    if (JS_IsUndefined(u->unknown)) return JS_UNDEFINED;
+    q = usp_serialize(u->list, NULL);
+    {
+        JSValue r = JS_NewString(ctx, q);
+        free(q);
+        return usp_derive(ctx, u, "URLSearchParams.toString", r, 0, NULL);
+    }
+}
+
 static UspObj *usp_of(JSContext *ctx, JSValueConst v)
 {
     UspObj *u = usp_rec(v);
