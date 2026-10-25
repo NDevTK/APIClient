@@ -17,6 +17,7 @@
 #include "solver/metrics.h"   /* detect_sink raises the arrival census */
 #include "solver/novelty.h"   /* what opening a search and proving it are worth against the product */
 #include "solver/compose.h"   /* a sender row's subject, spelled with its presence */
+#include "solver/message_compose.h"   /* a message act's candidate data, from its domain */
 #include "check.h"
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
@@ -139,8 +140,11 @@ typedef struct {
        Emitted as `firedUnderUnsolvedAct`. */
     int fired_unsolved_act;
     /* The acts the first such fire was verified under (fire_acts' array), so the parked entry states the route
-       and handler a reproduction would need; malloc'd, NULL until one fires. */
+       and handler a reproduction would need, with each message's candidate data where its domain composes one;
+       malloc'd, NULL until one fires. `composition_refused` names what the first refused composition could not
+       compose (message_compose), NULL when every message composed. */
     char *refused_acts;
+    char *composition_refused;
     /* The runway position as its two halves, emitted as `runwayWalked`/`runwayOf`, so a best of 3/8000 is not
        rounded to 0 as it is in `replay_pm`. Ratcheted on itself by cross-multiplication (observe_runway), in
        integers. `replay_of` is dec_total() at that sample, not `reinject_len`: for an arm forked off a
@@ -263,49 +267,94 @@ static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
    chain has no act a page user can perform: a browser never makes that call, so the fire proves the bytes
    execute and is not a PoC. Members a resumed drive has not built a call for yet are not part of the path the
    fire ran on. malloc'd. */
-static void acts_append(char *out, size_t *at, const char *act)
+static void acts_append(JsonBuf *b, int *first, const char *act)
 {
-    size_t l = strlen(act);
-
-    if (*at > 1) out[(*at)++] = ',';
-    memcpy(out + *at, act, l);
-    *at += l;
+    if (!*first) json_buf_raw(b, ",");
+    *first = 0;
+    json_buf_raw(b, act);
 }
 
-static char *fire_acts(const Flow *f, int *no_act, int *unsolved)
+/* `act` with the candidate `data` composed for its message (borrowed), malloc'd. */
+static char *act_with_data(const char *act, const char *data)
 {
-    int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k, s = 0;
-    size_t n = 3, at = 1;
-    char *out;
+    JsonBuf b = { 0 };
+    size_t l = strlen(act);
+    char *body = malloc(l);
+
+    DCHECK(l > 2 && act[l - 1] == '}', "a message act is not an object");
+    CHECK(body, "solve: OOM composing a message act");
+    memcpy(body, act, l - 1);
+    body[l - 1] = 0;
+    json_buf_raw(&b, body);
+    free(body);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "data");
+    json_buf_raw(&b, data);
+    json_buf_raw(&b, "}");
+    return json_buf_take(&b);
+}
+
+/* A message act of the chain, with the data its message's domain composes (message_compose) where it can; a
+   fire under one is never a PoC yet (see js_x9), so the composed data is the candidate the parked entry states.
+   `*refused` takes the first composition refusal, malloc'd. */
+static char *message_act(const Flow *f, int k, char **refused)
+{
+    char root[96], *data, *why = NULL, *act;
+    const char *inject = f->cand_src;
+
+    engine_orphan_message_data_src(f, k, root, sizeof root);
+    /* The payload rides this message only where the search's injection is this message's data or one of its
+       members; every other message of the chain carries what its own domain admits. */
+    if (strcmp(inject, root) && !concolic_member_of_root(inject, root)) inject = "";
+    data = message_compose(root, inject, f->cand_payload, &why);
+    if (!data) {
+        if (!*refused) *refused = why;
+        else free(why);
+        act = strdup(f->orphan_acts[k]);
+        CHECK(act, "solve: OOM copying a message act");
+        return act;
+    }
+    act = act_with_data(f->orphan_acts[k], data);
+    free(data);
+    return act;
+}
+
+static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused)
+{
+    int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k, s = 0, first = 1;
+    JsonBuf b = { 0 };
 
     *no_act = 0;
     *unsolved = 0;
+    *refused = NULL;
     if (!f->orphan && f->user_acts_n == 0) return NULL;
     DCHECK(!f->orphan || called > 0, "a fire ran in a drive whose chain has no called member — the mark and the "
                                      "chain are written together at the seed and at the claim");
-    for (k = 0; k < called; k++) {
+    for (k = 0; k < called; k++)
         if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
-        if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) *unsolved = 1;
-        n += strlen(f->orphan_acts[k]) + 1;
-    }
-    for (k = 0; k < f->user_acts_n; k++) n += strlen(f->user_acts[k]) + 1;
-    out = malloc(n);
-    CHECK(out, "solve: OOM spelling the acts a PoC was verified under");
-    out[0] = '[';
+    json_buf_raw(&b, "[");
     /* In performance order: a user act performed after `user_act_at` called members stands before that member. */
     for (k = 0; k <= called; k++) {
-        for (; s < f->user_acts_n && f->user_act_at[s] <= k; s++) acts_append(out, &at, f->user_acts[s]);
-        if (k < called) acts_append(out, &at, f->orphan_acts[k]);
+        for (; s < f->user_acts_n && f->user_act_at[s] <= k; s++) acts_append(&b, &first, f->user_acts[s]);
+        if (k == called) break;
+        if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) {
+            char *act = message_act(f, k, refused);
+
+            *unsolved = 1;
+            acts_append(&b, &first, act);
+            free(act);
+        } else {
+            acts_append(&b, &first, f->orphan_acts[k]);
+        }
     }
-    out[at++] = ']';
-    out[at] = 0;
-    return out;
+    json_buf_raw(&b, "]");
+    return json_buf_take(&b);
 }
 
 static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     Flow *f = flow_running();
     int no_act, unsolved;
-    char *acts;
+    char *acts, *refused;
 
     (void)ctx; (void)t; (void)c; (void)v;
     if (!f || !f->cand_src) return JS_UNDEFINED;   /* the page's own call — no substitution, nothing proved */
@@ -313,17 +362,18 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
            "an @S candidate flow fired the marker holding a source but no payload or no sink class — a finding "
            "IS that triple, so a flow carrying half of it was assembled somewhere that does not go through the "
            "seeder or the cold tier's rebuild");
-    acts = fire_acts(f, &no_act, &unsolved);
+    acts = fire_acts(f, &no_act, &unsolved, &refused);
     if (no_act || unsolved) {
         Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
 
         CHECK(e != NULL, "an @S candidate fired for a search this session has no entry for");
         if (no_act) e->fired_no_act++;
         else e->fired_unsolved_act++;
-        if (!e->refused_acts) e->refused_acts = acts;
-        else free(acts);
+        if (!e->refused_acts) { e->refused_acts = acts; e->composition_refused = refused; }
+        else { free(acts); free(refused); }
         return JS_UNDEFINED;
     }
+    DCHECK(refused == NULL, "a fire recorded as a PoC carries a message composition's refusal");
     record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan || f->user_acts_n > 0);
     return JS_UNDEFINED;
 }
@@ -2452,6 +2502,10 @@ char *solve_json_array(JSContext *ctx) {
             DCHECK(g_pending[i].refused_acts != NULL, "a search counts a fire under an unsolved act and holds "
                                                       "none of its acts — js_x9 keeps the first");
             json_buf_raw(&b, ","); json_buf_key(&b, "refusedFireActs"); json_buf_raw(&b, g_pending[i].refused_acts);
+            if (g_pending[i].composition_refused) {
+                json_buf_raw(&b, ","); json_buf_key(&b, "compositionRefused");
+                json_buf_str(&b, g_pending[i].composition_refused);
+            }
         }
         json_buf_raw(&b, "}");
     }
@@ -2475,6 +2529,7 @@ void solve_free(void) {
         /* The segment reference an unsolved search still holds; the frozen chain goes with its last reference. */
         if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);
         free(g_pending[i].refused_acts);
+        free(g_pending[i].composition_refused);
         /* The principal demands: this file owns each name and row array, and the rows' strings are concolic.c's
            (gate_pred_free routes to concolic_pred_release). */
         for (int c = 0; c < g_pending[i].npg; c++) {

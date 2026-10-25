@@ -217,7 +217,9 @@ function docSink(e, f) {
              : f + ".firedUnderUnsolvedAct is not a positive integer") ||
             (Array.isArray(e.refusedFireActs) && e.refusedFireActs.length > 0 &&
              e.refusedFireActs.every((a) => docIsRecord(a) && docIsName(a.kind) && docIsName(a.target))
-               ? null : f + ".refusedFireActs is not the non-empty act list a refused fire carries");
+               ? null : f + ".refusedFireActs is not the non-empty act list a refused fire carries") ||
+            (!("compositionRefused" in e) || docIsName(e.compositionRefused) ? null
+               : f + ".compositionRefused is not the reason a message's data could not be composed");
   if (why === null && "firedUnderNoAct" in e)
     why = "poc" in e ? f + " states firedUnderNoAct on a fire-verified entry, which only a parked search carries"
           : (Number.isInteger(e.firedUnderNoAct) && e.firedUnderNoAct > 0 ? null

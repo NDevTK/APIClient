@@ -787,9 +787,9 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    leq: the loose equalities that held, each as the operand the page wrote and its kind. A strict equality's
    holding arm determines a value (`val`); a loose one's (§7.2.13 IsLooselyEqual ( x, y )) bounds the operand
    to a set only that algorithm can read; both failing arms are `excl`. An exact repeat adds nothing. */
-/* typeof_out: the §13.5.3.1 typeof rows (TYR_* bits) this flow proved the source at this key does not answer: a
-   typeof equality's holding arm excludes every other row and its failing arm the one it tested. It is the
-   source's type facet, filed on the operand's own key by concolic_type_facet; cty_of_operand narrows by it. */
+/* typeof_out: the §13.5.3.1 typeof rows (CONCOLIC_TYR_* bits) this flow proved the source at this key does not
+   answer: a typeof equality's holding arm excludes every other row and its failing arm the one it tested. It is
+   the source's type facet, filed on the operand's own key by concolic_type_facet; cty_of_operand narrows by it. */
 /* adec, adec_what, adec_arm, adec_neg: this flow took an arm no observation of the run established (its
    example contradicts it, or it has none) at the decision this key names, and the arm determined no value (a pin states the ones that did). `adec` is the decision as the
    page wrote it; for a branch `adec_arm` is the predicate's arm and `adec_neg` the polarity `adec` reads it in,
@@ -1883,6 +1883,15 @@ const char *concolic_pin_bytes(JSValueConst v) {
 
 /* The same question asked of a source path rather than a value (concolic.h says which to reach for). The same
    lookup and test as `pin_of`, spelled once so a caller outside this file gets the mint's answer. */
+int concolic_src_pin(const char *src, ConcolicLit *kind, const char **val) {
+    const Cons *e = src ? cons_lookup(src) : NULL;
+
+    if (!e || !e->val) return 0;
+    *kind = (ConcolicLit)e->valkind;
+    *val = e->val;
+    return 1;
+}
+
 int concolic_src_pinned(const char *src) {
     const Cons *e;
 
@@ -3024,6 +3033,132 @@ static void concolic_get_value_base_hook(JSContext *ctx, JSValueConst base)
     JS_FreeValue(ctx, bex);
 }
 
+/* THE MEMBER STRUCTURE OF A ROOT: which member path of which declared root each member read is, by its `src` and
+   its identity. It is a fact about naming, not about a world: a member read's `src` and identity are a pure
+   function of its parent's and the field, so one session-wide table answers every flow, and nothing reads a
+   structure back out of a spelling. Filled at the member mint; a root's own row (path length 0) is filed with
+   its first member. */
+typedef struct { char *src, *ident, *root; char **path; int n; } MemberRow;
+static MemberRow *g_members;
+static int g_members_n, g_members_cap;
+static int *g_members_ix, g_members_ix_cap;   /* open addressing over `src`, -1 empty; at most half full */
+
+static uint64_t member_hash(const char *s)
+{
+    uint64_t h = 1469598103934665603ull;
+
+    for (; *s; s++) { h ^= (unsigned char)*s; h *= 1099511628211ull; }
+    return h;
+}
+
+static int member_row_of(const char *src)
+{
+    if (!g_members_ix_cap) return -1;
+    for (uint64_t i = member_hash(src) & (uint64_t)(g_members_ix_cap - 1);; i = (i + 1) & (uint64_t)(g_members_ix_cap - 1)) {
+        int r = g_members_ix[i];
+        if (r < 0) return -1;
+        if (!strcmp(g_members[r].src, src)) return r;
+    }
+}
+
+static void member_ix_put(int row)
+{
+    uint64_t i = member_hash(g_members[row].src) & (uint64_t)(g_members_ix_cap - 1);
+
+    while (g_members_ix[i] >= 0) i = (i + 1) & (uint64_t)(g_members_ix_cap - 1);
+    g_members_ix[i] = row;
+}
+
+static void member_ix_grow(void)
+{
+    int nc = g_members_ix_cap ? g_members_ix_cap * 2 : 64;
+    int *ix = malloc((size_t)nc * sizeof *ix);
+
+    CHECK(ix, "concolic: OOM growing the member structure index");
+    for (int i = 0; i < nc; i++) ix[i] = -1;
+    free(g_members_ix);
+    g_members_ix = ix;
+    g_members_ix_cap = nc;
+    for (int r = 0; r < g_members_n; r++) member_ix_put(r);
+}
+
+static int member_row_add(const char *src, const char *ident, const char *root, const char *const *path, int n)
+{
+    MemberRow *r;
+
+    if (g_members_n == g_members_cap) {
+        int nc = g_members_cap ? g_members_cap * 2 : 16;
+        MemberRow *g = realloc(g_members, (size_t)nc * sizeof *g);
+        CHECK(g, "concolic: OOM growing the member structure table");
+        g_members = g; g_members_cap = nc;
+    }
+    r = &g_members[g_members_n];
+    r->src = strdup(src);
+    r->ident = ident ? strdup(ident) : NULL;
+    r->root = strdup(root);
+    r->n = n;
+    r->path = n ? malloc((size_t)n * sizeof *r->path) : NULL;
+    CHECK(r->src && r->root && (!ident || r->ident) && (!n || r->path), "concolic: OOM filing a member's structure");
+    for (int i = 0; i < n; i++) { r->path[i] = strdup(path[i]); CHECK(r->path[i], "concolic: OOM filing a member path"); }
+    g_members_n++;
+    if (g_members_n * 2 > g_members_ix_cap) member_ix_grow();
+    else member_ix_put(g_members_n - 1);
+    return g_members_n - 1;
+}
+
+/* Files the member read `src` (identity `ident`) of the parent `c` under field `field`, where the parent is a
+   declared root's own read or a member already filed. */
+static void member_row_file(const Concolic *c, const char *src, const char *ident, const char *field)
+{
+    int p;
+
+    if (!c->src || !c->root || !field) return;
+    p = member_row_of(c->src);
+    if (p < 0 && strcmp(c->src, c->root)) return;   /* neither a root's own read nor a filed member */
+    if (member_row_of(src) >= 0) return;
+    if (p < 0 && !strcmp(c->src, c->root) && root_declared_row(c->root) >= 0)
+        p = member_row_add(c->src, c->ident, c->root, NULL, 0);
+    if (p < 0) return;
+    {
+        int n = g_members[p].n + 1;
+        const char **path = malloc((size_t)n * sizeof *path);
+
+        CHECK(path, "concolic: OOM composing a member path");
+        for (int i = 0; i < n - 1; i++) path[i] = g_members[p].path[i];
+        path[n - 1] = field;
+        member_row_add(src, ident, g_members[p].root, path, n);
+        free(path);
+    }
+}
+
+void concolic_members_each(const char *root, ConcolicMemberVisit visit, void *ud)
+{
+    for (int i = 0; i < g_members_n; i++)
+        if (!strcmp(g_members[i].root, root))
+            visit(g_members[i].src, g_members[i].ident, (const char *const *)g_members[i].path, g_members[i].n, ud);
+}
+
+int concolic_member_of_root(const char *src, const char *root)
+{
+    int r = src ? member_row_of(src) : -1;
+
+    return r >= 0 && !strcmp(g_members[r].root, root);
+}
+
+int concolic_value_truth(const char *ident)
+{
+    const char *f[1] = { ident };
+    char *key;
+    int arm;
+
+    if (!ident) return -1;
+    key = concolic_ident_compose("branch", f, 1);
+    CHECK(key, "concolic: OOM composing a value's branch key");
+    arm = concolic_branch_decided(key);
+    free(key);
+    return arm;
+}
+
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -3036,6 +3171,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     shape = shapef("%s.%s", c->shape ? c->shape : "{}", field ? field : "?");
     f[0] = c->ident; f[1] = field;                           /* a name that would not convert -> no identity */
     ident = concolic_ident_compose(".", f, 2);
+    member_row_file(c, shape, ident, field);
     if (field) JS_FreeCString(ctx, field);
     if (cand_matches(shape)) {                               /* candidate run: this source -> the concrete breakout */
         r = concolic_deliver(ctx, shape, c->root, g_cand_payload);
@@ -3147,8 +3283,6 @@ static unsigned cty_of_concrete(JSValueConst v)
 
 /* §13.5.3.1 typeof's table as rows: the eight strings it answers, in TYR_* bit order. The Object type takes two
    rows, "object" or "function" by [[Call]], and Null shares "object" with it. */
-enum { TYR_UNDEFINED = 1u << 0, TYR_OBJECT = 1u << 1, TYR_BOOLEAN = 1u << 2, TYR_STRING = 1u << 3,
-       TYR_SYMBOL = 1u << 4, TYR_NUMBER = 1u << 5, TYR_BIGINT = 1u << 6, TYR_FUNCTION = 1u << 7, TYR_ALL = 0xFFu };
 static const char *const TYR_NAME[8] = { "undefined", "object", "boolean", "string", "symbol", "number", "bigint",
                                          "function" };
 
@@ -3165,15 +3299,15 @@ static unsigned tyr_of_cty(unsigned ty)
 {
     unsigned r = 0;
 
-    if (!ty) return TYR_ALL;
-    if (ty & CTY_UNDEFINED) r |= TYR_UNDEFINED;
-    if (ty & CTY_NULL) r |= TYR_OBJECT;
-    if (ty & CTY_BOOLEAN) r |= TYR_BOOLEAN;
-    if (ty & CTY_STRING) r |= TYR_STRING;
-    if (ty & CTY_SYMBOL) r |= TYR_SYMBOL;
-    if (ty & CTY_NUMBER) r |= TYR_NUMBER;
-    if (ty & CTY_BIGINT) r |= TYR_BIGINT;
-    if (ty & CTY_OBJECT) r |= TYR_OBJECT | TYR_FUNCTION;
+    if (!ty) return CONCOLIC_TYR_ALL;
+    if (ty & CTY_UNDEFINED) r |= CONCOLIC_TYR_UNDEFINED;
+    if (ty & CTY_NULL) r |= CONCOLIC_TYR_OBJECT;
+    if (ty & CTY_BOOLEAN) r |= CONCOLIC_TYR_BOOLEAN;
+    if (ty & CTY_STRING) r |= CONCOLIC_TYR_STRING;
+    if (ty & CTY_SYMBOL) r |= CONCOLIC_TYR_SYMBOL;
+    if (ty & CTY_NUMBER) r |= CONCOLIC_TYR_NUMBER;
+    if (ty & CTY_BIGINT) r |= CONCOLIC_TYR_BIGINT;
+    if (ty & CTY_OBJECT) r |= CONCOLIC_TYR_OBJECT | CONCOLIC_TYR_FUNCTION;
     return r;
 }
 
@@ -3181,14 +3315,14 @@ static unsigned cty_of_tyr(unsigned rows)
 {
     unsigned ty = 0;
 
-    if (rows & TYR_UNDEFINED) ty |= CTY_UNDEFINED;
-    if (rows & TYR_OBJECT) ty |= CTY_NULL | CTY_OBJECT;
-    if (rows & TYR_BOOLEAN) ty |= CTY_BOOLEAN;
-    if (rows & TYR_STRING) ty |= CTY_STRING;
-    if (rows & TYR_SYMBOL) ty |= CTY_SYMBOL;
-    if (rows & TYR_NUMBER) ty |= CTY_NUMBER;
-    if (rows & TYR_BIGINT) ty |= CTY_BIGINT;
-    if (rows & TYR_FUNCTION) ty |= CTY_OBJECT;
+    if (rows & CONCOLIC_TYR_UNDEFINED) ty |= CTY_UNDEFINED;
+    if (rows & CONCOLIC_TYR_OBJECT) ty |= CTY_NULL | CTY_OBJECT;
+    if (rows & CONCOLIC_TYR_BOOLEAN) ty |= CTY_BOOLEAN;
+    if (rows & CONCOLIC_TYR_STRING) ty |= CTY_STRING;
+    if (rows & CONCOLIC_TYR_SYMBOL) ty |= CTY_SYMBOL;
+    if (rows & CONCOLIC_TYR_NUMBER) ty |= CTY_NUMBER;
+    if (rows & CONCOLIC_TYR_BIGINT) ty |= CTY_BIGINT;
+    if (rows & CONCOLIC_TYR_FUNCTION) ty |= CTY_OBJECT;
     return ty;
 }
 
@@ -3242,7 +3376,7 @@ void concolic_type_facet(JSValueConst cond, int holds)
     /* A typeof result is a String, so a token of any other kind is a row the operand never answers. */
     row = c->cmp_kind == CONCOLIC_LIT_STRING ? tyr_of_name(c->cmp_tok) : 0;
     e = cons_entry(c->cmp_typeof_of);
-    e->typeof_out |= (unsigned char)(holds ? (TYR_ALL & ~row) : row);
+    e->typeof_out |= (unsigned char)(holds ? (CONCOLIC_TYR_ALL & ~row) : row);
     g_typeof_facet_any = 1;
 }
 
@@ -3264,7 +3398,7 @@ unsigned concolic_typeof_rows(const char *src)
 {
     const Cons *e = src && g_typeof_facet_any ? cons_lookup(src) : NULL;
 
-    return TYR_ALL & ~(e ? e->typeof_out : 0u);
+    return CONCOLIC_TYR_ALL & ~(e ? e->typeof_out : 0u);
 }
 
 /* State a fresh mint's type set: what its algorithm fixes the result's type to. Once per value, and the
@@ -5711,6 +5845,17 @@ static void source_overlay_withdraw(void);
 
 void concolic_free(void)
 {
+    for (int i = 0; i < g_members_n; i++) {
+        free(g_members[i].src); free(g_members[i].ident); free(g_members[i].root);
+        for (int k = 0; k < g_members[i].n; k++) free(g_members[i].path[k]);
+        free(g_members[i].path);
+    }
+    free(g_members);
+    g_members = NULL;
+    g_members_n = g_members_cap = 0;
+    free(g_members_ix);
+    g_members_ix = NULL;
+    g_members_ix_cap = 0;
     int i;
 
     source_overlay_withdraw();

@@ -1025,6 +1025,9 @@ int         concolic_pin_store(const char *src, const char *root, ConcolicLit ki
    two its subject is. Answers concolic_pin_store's 1 where a value was written, 0 otherwise. Only this and the
    store's own selftests call concolic_pin_store, because only they know `src` names the compared value. */
 int         concolic_pin(JSValueConst cmp);
+/* The pin itself: 1 with the literal's kind and spelling (borrowed from the constraint until it next changes),
+   0 when the running flow pinned nothing at `src`. */
+int concolic_src_pin(const char *src, ConcolicLit *kind, const char **val);
 /* A SOURCE'S TYPE FACET. An equality over a §13.5.3.1 typeof result narrows the operand's types, not a value:
    `typeof d.session === 'string'` holding leaves the "string" row alone and failing removes it. Where the
    operand owns its `src` (a source or member read), concolic_cmp_typeof_of names it, and decide.c files the arm
@@ -1032,11 +1035,26 @@ int         concolic_pin(JSValueConst cmp);
    it is an outcome over its operand, not a source. The facet is per flow, lives in the
    constraint under the operand's `src`, and narrows every later reading of the operand's type in this flow (a
    typeof answers its row once one remains). concolic_typeof_rows answers the rows still open for `src`, as
-   TYR bits in §13.5.3.1's table order (undefined, object, boolean, string, symbol, number, bigint, function). */
+   CONCOLIC_TYR_* bits in §13.5.3.1's table order. */
+enum { CONCOLIC_TYR_UNDEFINED = 1u << 0, CONCOLIC_TYR_OBJECT = 1u << 1, CONCOLIC_TYR_BOOLEAN = 1u << 2,
+       CONCOLIC_TYR_STRING = 1u << 3, CONCOLIC_TYR_SYMBOL = 1u << 4, CONCOLIC_TYR_NUMBER = 1u << 5,
+       CONCOLIC_TYR_BIGINT = 1u << 6, CONCOLIC_TYR_FUNCTION = 1u << 7, CONCOLIC_TYR_ALL = 0xFFu };
 void        concolic_type_facet(JSValueConst cond, int holds);
 int         concolic_cmp_is_typeof(JSValueConst cond);
 const char *concolic_cmp_typeof_of(JSValueConst cond);
 unsigned    concolic_typeof_rows(const char *src);
+/* A DECLARED ROOT'S MEMBER STRUCTURE, as the member reads this session minted: every read under `root` with its
+   `src`, its identity and its member path from the root (the root's own row has length 0). A fact about naming
+   rather than a world, so it answers every flow; what one flow decided about each read is asked of the
+   constraint by its `src` (a pin, concolic_typeof_rows) or its identity (concolic_value_truth). Borrowed for the
+   visit, in filing order. */
+typedef void (*ConcolicMemberVisit)(const char *src, const char *ident, const char *const *path, int n, void *ud);
+void        concolic_members_each(const char *root, ConcolicMemberVisit visit, void *ud);
+/* Is `src` a member read filed under `root` in that structure? */
+int         concolic_member_of_root(const char *src, const char *root);
+/* The truthiness the running flow decided for the value with identity `ident` (a branch on it, or on its
+   negation, which shares its key): 1, 0, or -1 when undecided. */
+int         concolic_value_truth(const char *ident);
 /* One pin of the running flow, as concolic_pins_each hands it over: `src` is the source path the pin is keyed
    under (what a later read concretizes through), `val` the §7.1.19 ToString ( argument ) spelling of the
    operand the page's equality wrote, and `kind` what that spelling denotes. All three are borrowed from the

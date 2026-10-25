@@ -6225,6 +6225,23 @@ static int orphan_chain_position(const Flow *f, int k) {
     return 0;
 }
 
+/* The delivery record a driven message listener's call at chain position `pos` names its event after. */
+static void engine_attacker_post_record(uint64_t hash, int pos, char *out, size_t cap) {
+    int n = snprintf(out, cap, "attacker-post:%016llx#%d", (unsigned long long)hash, pos);
+
+    CHECK(n > 0 && (size_t)n < cap, "engine: an attacker post's record name did not fit its room");
+}
+
+void engine_orphan_message_data_src(const Flow *f, int k, char *out, size_t cap) {
+    char record[64], osrc[64];
+
+    DCHECK(f != NULL && f->orphan && k >= 0 && k < f->orphan_chain_n && f->orphan_acts[k] &&
+           strstr(f->orphan_acts[k], "\"kind\":\"message\"") != NULL,
+           "a message delivery's source was asked of a chain member that is not a driven message listener");
+    engine_attacker_post_record(f->orphan_chain[k], orphan_chain_position(f, k), record, sizeof record);
+    window_message_delivery_sources(record, out, osrc, cap < sizeof osrc ? cap : sizeof osrc);
+}
+
 /* The event an attacker document's postMessage hands a driven Window `message` listener (§9.3.3 step 8.4):
    a MessageEvent whose data and origin are the delivery's attacker sources, named after the drive's chain
    position so each event is its own delivery, with no lastEventId, no source and no ports. Owned. */
@@ -6232,7 +6249,7 @@ static JSValue engine_attacker_message_event(JSContext *ctx, uint64_t hash, int 
     char record[64], dsrc[64], osrc[64], dshape[68], oshape[68];
     JSValue data, origin, ports, noid, ev;
 
-    snprintf(record, sizeof record, "attacker-post:%016llx#%d", (unsigned long long)hash, pos);
+    engine_attacker_post_record(hash, pos, record, sizeof record);
     window_message_delivery_sources(record, dsrc, osrc, sizeof dsrc);
     snprintf(dshape, sizeof dshape, "{%s}", dsrc);
     snprintf(oshape, sizeof oshape, "{%s}", osrc);

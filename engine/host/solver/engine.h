@@ -98,6 +98,9 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
    The task source is TASK_SOURCE_SOLVER_CANDIDATE, which is not an HTML §8.1.7.1 source, so the candidate is
    never ordered against the page's real tasks by a fact nobody observed. */
 void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
+/* The attacker source naming the `data` of the message chain member `k` of drive `f` delivers (a member whose act
+   is a `message` act), as engine_orphan_call minted it: `message.data:<id>`, written into `out`. */
+void engine_orphan_message_data_src(const struct Flow *f, int k, char *out, size_t cap);
 /* Queue a `javascript:` URL's script source as the program HTML §7.4.2.3.2's evaluate-a-javascript:-URL runs.
    It may fail to compile: "create a classic script" with a syntax error yields an abrupt completion and a
    navigation that does not happen. Its completion value decides a navigation (step 9: a String replaces the
