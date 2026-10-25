@@ -224,6 +224,11 @@ typedef struct Flow {
        the witnessed request assuming nothing of its own, and crosses the cold tier as a 'v' record). FIRE_NONE
        exactly when `cand_src` is NULL. */
     FireTarget fire;
+    /* The world's further deliveries beside `cand_src`'s (the candidate row, one value per source): each a
+       declared source `cand_dsrc[i]` and the JSON text `cand_dval[i]` of the structured value an attacker
+       document posts at it (message_compose's composition), owned. Crosses the cold tier in the 'c' record. */
+    char **cand_dsrc, **cand_dval;
+    int cand_dn;
     /* Per-flow because a candidate is preempted and resumed among other flows, so a global would record another
        flow's marker or leave the substitution live for the next one. They swap with the flow. */
     /* Neither crosses the cold tier. solve_flow_begin re-derives `cand_verifying` from `cand_src` at every
@@ -1686,6 +1691,15 @@ void  flow_orphan_chain_copy(Flow *dst, const Flow *src, int n);
 /* Append a modelled user act (`act` consumed) performed after `at` called drive members; copy `src`'s acts. */
 void  flow_user_act_push(Flow *f, char *act, int at);
 void  flow_user_acts_copy(Flow *dst, const Flow *src);
+/* Add the delivery of `val` (JSON text) at the source `src` to `f`'s candidate (both copied; one per source);
+   the value `f` delivers at `src`, NULL for none; copy `src`'s deliveries onto `dst`, which has none. */
+void  flow_delivery_add(Flow *f, const char *src, const char *val);
+const char *flow_delivery_of(const Flow *f, const char *src);
+void  flow_deliveries_copy(Flow *dst, const Flow *src);
+/* The deliveries as one length-prefixed text (`<n>:<src><n>:<val>…`, malloc'd; NULL for none), and back onto
+   `f`, which has none: the cold tier's field for them. */
+char *flow_deliveries_text(const Flow *f);
+void  flow_deliveries_parse(Flow *f, const char *text);
 /* Record that `f` asked the scroll question about the target `loc` (consumed). */
 void  flow_scroll_asked_push(Flow *f, char *loc);
 /* A new @H/@S from the running flow: raise reward, reset aging. Answers 1 when an account was paid and 0 on the

@@ -148,6 +148,11 @@ typedef struct {
        compose (message_compose), NULL when every message composed. */
     char *refused_acts;
     char *composition_refused;
+    /* The verifications owed: a fire under message acts the run left unknown, with every message composed,
+       re-run on this search's path with those compositions delivered (flow.h's deliveries). Each holds the
+       payload and the deliveries' text (flow_deliveries_text), owned; `vf_seeded` is the seeding cursor. */
+    struct { char *payload; char *dl; } *vf;
+    int nvf, vf_seeded;
     /* The runway position as its two halves, emitted as `runwayWalked`/`runwayOf`, so a best of 3/8000 is not
        rounded to 0 as it is in `replay_pm`. Ratcheted on itself by cross-multiplication (observe_runway), in
        integers. `replay_of` is dec_total() at that sample, not `reinject_len`: for an arm forked off a
@@ -296,15 +301,19 @@ static char *act_with_data(const char *act, const char *data)
     return json_buf_take(&b);
 }
 
-/* A message act of the chain, with the data its message's domain composes (message_compose) where it can; a
-   fire under one is never a PoC yet (see js_x9), so the composed data is the candidate the parked entry states.
-   `*refused` takes the first composition refusal, malloc'd. */
-static char *message_act(const Flow *f, int k, char **refused)
+/* A message act of the chain. Where the flow delivers this message's data (a verification), the act states the
+   delivered value and is solved. Otherwise it states the data its message's domain composes (message_compose)
+   where it can, `*unsolved` is raised, and the composition is appended to `*dl` (flow_deliveries_text's format)
+   for the verification that delivers it; `*refused` takes the first composition refusal, malloc'd. */
+static char *message_act(const Flow *f, int k, char **refused, int *unsolved, char **dl)
 {
     char root[96], *data, *why = NULL, *act;
-    const char *inject = f->cand_src;
+    const char *inject = f->cand_src, *delivered;
 
     engine_orphan_message_data_src(f, k, root, sizeof root);
+    delivered = flow_delivery_of(f, root);
+    if (delivered) return act_with_data(f->orphan_acts[k], delivered);
+    *unsolved = 1;
     /* The payload rides this message only where the search's injection is this message's data or one of its
        members; every other message of the chain carries what its own domain admits. */
     if (strcmp(inject, root) && !concolic_member_of_root(inject, root)) inject = "";
@@ -317,11 +326,19 @@ static char *message_act(const Flow *f, int k, char **refused)
         return act;
     }
     act = act_with_data(f->orphan_acts[k], data);
+    {
+        size_t o = *dl ? strlen(*dl) : 0, n = o + strlen(root) + strlen(data) + 44;
+        char *grown = realloc(*dl, n);
+
+        CHECK(grown, "solve: OOM recording a message's composition");
+        snprintf(grown + o, n - o, "%zu:%s%zu:%s", strlen(root), root, strlen(data), data);
+        *dl = grown;
+    }
     free(data);
     return act;
 }
 
-static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused)
+static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused, char **dl)
 {
     int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k, s = 0, first = 1;
     JsonBuf b = { 0 };
@@ -329,6 +346,7 @@ static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused
     *no_act = 0;
     *unsolved = 0;
     *refused = NULL;
+    *dl = NULL;
     /* A seeded drive writes its chain with its mark, so only the cold tier's rebuild (cold.c's 'o' record:
        `orphan_want` with nothing claimed) leaves a drive that has called nothing. Its replay before the first
        claim is the page's own reach, as engine.c's fork treats it ("a drive that has called nothing"), so it
@@ -345,9 +363,8 @@ static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused
         for (; s < f->user_acts_n && f->user_act_at[s] <= k; s++) acts_append(&b, &first, f->user_acts[s]);
         if (k == called) break;
         if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) {
-            char *act = message_act(f, k, refused);
+            char *act = message_act(f, k, refused, unsolved, dl);
 
-            *unsolved = 1;
             acts_append(&b, &first, act);
             free(act);
         } else {
@@ -358,27 +375,67 @@ static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused
     return json_buf_take(&b);
 }
 
+/* Whether the running flow's world asked anything of a declared principal (an origin's pin or a forgeable
+   predicate over it): the count callbacks of concolic_principal_pins and concolic_principal_preds. */
+static void principal_seen(void *user, const char *src, const ConcolicPred *pred, int n) {
+    (void)src; (void)pred; (void)n;
+    (*(int *)user)++;
+}
+static int flow_demands_principal(void) {
+    int n = concolic_principal_pins(NULL, NULL);
+
+    concolic_principal_preds(principal_seen, &n);
+    return n;
+}
+
+/* A fire under message acts the run left unknown, every message composed, queued for its verification: the
+   same payload on this search's path with the compositions delivered (`dl`, consumed). One per distinct pair. */
+static void queue_verification(Cand *e, const char *payload, char *dl) {
+    void *grown;
+
+    for (int i = 0; i < e->nvf; i++)
+        if (!strcmp(e->vf[i].payload, payload) && !strcmp(e->vf[i].dl, dl)) { free(dl); return; }
+    grown = realloc(e->vf, (size_t)(e->nvf + 1) * sizeof *e->vf);
+    CHECK(grown, "solve: OOM queueing a fire's verification");
+    e->vf = grown;
+    e->vf[e->nvf].payload = strdup(payload);
+    CHECK(e->vf[e->nvf].payload, "solve: OOM queueing a fire's verification");
+    e->vf[e->nvf++].dl = dl;
+}
+
 /* A candidate's fire was observed (the marker called, or a request class's request leaving): a PoC when every act
    its path needs is one a person performs, else a refusal the search records. */
 static void fire_observed(Flow *f) {
     int no_act, unsolved;
-    char *acts, *refused;
+    char *acts, *refused, *dl;
 
     DCHECK(f && f->cand_src && f->cand_payload && f->fire.kind == FIRE_MARKER,
            "an @S candidate flow fired holding no source, no payload or no sink class — a finding IS that "
            "triple, so a flow carrying half of it was assembled somewhere that does not go through the seeder "
            "or the cold tier's rebuild");
-    acts = fire_acts(f, &no_act, &unsolved, &refused);
+    acts = fire_acts(f, &no_act, &unsolved, &refused, &dl);
+    /* Named residual. Not covered: a world that asked anything of a message's origin, whose sender would have
+       to hold an origin composed from that demand under the source's forgeability rules (an attacker owns an
+       origin's host, never another site's). Next diff builds: the origin composed from the principal's
+       domain beside the data, delivered at the origin source and stated in the act's route. Absence shows as:
+       a fire behind an origin check counted under `firedUnsolvedAct` with no verification run. */
+    if (!no_act && f->cand_dn > 0 && flow_demands_principal()) unsolved = 1;
     if (no_act || unsolved) {
         Cand *e = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
 
         CHECK(e != NULL, "an @S candidate fired for a search this session has no entry for");
         if (no_act) e->fired_no_act++;
         else e->fired_unsolved_act++;
+        if (!no_act && !refused && dl && f->cand_dn == 0 && e->pg_demand == PG_NONE && !flow_demands_principal()) {
+            queue_verification(e, f->cand_payload, dl);
+            dl = NULL;
+        }
+        free(dl);
         if (!e->refused_acts) { e->refused_acts = acts; e->composition_refused = refused; }
         else { free(acts); free(refused); }
         return;
     }
+    DCHECK(dl == NULL, "a fire with every message delivered still composed one");
     DCHECK(refused == NULL, "a fire recorded as a PoC carries a message composition's refusal");
     record_sink(sink_class_of_name(fire_target_sink(&f->fire)), f->cand_src, f->cand_payload, acts, acts != NULL);
 }
@@ -1957,8 +2014,52 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    picks both up without seeding anything twice. */
 int solve_seeds_owed(void) {
     for (int i = 0; i < g_pending_n; i++)
-        if (search_seeds(&g_pending[i]) && g_pending[i].seeded < g_pending[i].npl) return 1;
+        if (search_seeds(&g_pending[i]) &&
+            (g_pending[i].seeded < g_pending[i].npl || g_pending[i].vf_seeded < g_pending[i].nvf)) return 1;
     return 0;
+}
+
+/* A candidate flow of search `e` carrying `payload`, standing on the path its detection froze. */
+static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload) {
+    Flow *f;
+
+    /* A candidate session runs from the baseline, and is this tool's act from its first park, so it is
+       named before its seed grades the document's program loads. */
+    f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
+    f->cand_src     = strdup(e->src);
+    f->cand_payload = strdup(payload);
+    fire_target_marker(&f->fire, sink_name(e->sink));
+    CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
+    flow_seed(f);
+    /* And the flow stands on the path the detection proved reaches this sink. It still re-runs the
+       document from the baseline (the payload enters at the source read), but it consumes the recorded
+       arms at each branch it re-reaches instead of forking over them. decide_blob_new takes its own
+       reference on the frozen segment and replays at cursor 0, forking normally once the cursor runs past
+       what the detecting flow knew, which is where this candidate's own exploration begins. It is
+       unconditional: every class needs a path, and both doors onto a search take one before anything can
+       be queued against it. */
+    {
+        DCHECK(e->reinject != NULL,
+               "a candidate is being seeded for a search that holds no re-injection point — both "
+               "doors onto a search freeze the path of the flow standing at its sink before anything "
+               "can be queued against it, so a payload list with no path behind it belongs to an "
+               "entry that acquired breakouts without either a detection or a witness");
+        DCHECK(f->dec_blob == NULL && f->pin_blob == NULL && !f->started,
+               "a freshly added flow already carries decision state — the re-injection install below "
+               "would overwrite it and drop that segment's reference, and the flow would replay a path "
+               "that is not the one it was given");
+        /* The triple is one install. A flow on a recorded path must be `started`, because flow_switch_in
+           routes on that bit and a never-run flow takes decide_enter, which replays from nothing and never
+           reads `dec_blob`; the blob alone would be ignored, then leaked with its segment reference when
+           engine.c overwrites `dec_blob` at the first suspend. The empty pin blob is the third member
+           because flow_switch_in's resume branch calls concolic_pins_resume beside decide_resume, and a
+           replaying flow re-derives every pin from the gates it replays. cold.c's 'f' and 'c' arms install
+           the same triple for a cold-resumed candidate. */
+        f->started  = 1;
+        f->dec_blob = decide_blob_new((void *)decide_blob_seg(e->reinject));
+        f->pin_blob = concolic_pins_blob_empty();
+    }
+    return f;
 }
 
 int solve_seed_candidates(JSContext *ctx) {
@@ -1982,14 +2083,7 @@ int solve_seed_candidates(JSContext *ctx) {
                context probe is ASCII alphanumeric, so both are measurements rather than attacks. */
             if (e->pl[e->seeded].kind == CAND_ESCAPE &&
                 !solve_delivered_ok(&e->deliv, e->pl[e->seeded].bytes)) continue;
-            /* A candidate session runs from the baseline, and is this tool's act from its first park, so it is
-               named before its seed grades the document's program loads. */
-            f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
-            f->cand_src     = strdup(e->src);
-            f->cand_payload = strdup(e->pl[e->seeded].bytes);
-            fire_target_marker(&f->fire, sink_name(e->sink));
-            CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
-            flow_seed(f);
+            f = seed_on_path(ctx, e, e->pl[e->seeded].bytes);
             /* The other side of the withdrawal, asserted where the cost is taken: this is where a payload becomes
                a document re-run, so a route into flow creation that skips the check above crashes here instead
                of quietly spending the run. */
@@ -1998,34 +2092,16 @@ int solve_seed_candidates(JSContext *ctx) {
                    "the delivery table narrows after a breakout is queued, so deliverability asked once at the "
                    "derivation is a constraint that has expired by the time the flow is made, and this run can "
                    "only end with the candidate arriving transformed at its own sink");
-            /* And the flow stands on the path the detection proved reaches this sink. It still re-runs the
-               document from the baseline (the payload enters at the source read), but it consumes the recorded
-               arms at each branch it re-reaches instead of forking over them. decide_blob_new takes its own
-               reference on the frozen segment and replays at cursor 0, forking normally once the cursor runs past
-               what the detecting flow knew, which is where this candidate's own exploration begins. It is
-               unconditional: every class needs a path, and both doors onto a search take one before anything can
-               be queued against it. */
-            {
-                DCHECK(e->reinject != NULL,
-                       "a candidate is being seeded for a search that holds no re-injection point — both "
-                       "doors onto a search freeze the path of the flow standing at its sink before anything "
-                       "can be queued against it, so a payload list with no path behind it belongs to an "
-                       "entry that acquired breakouts without either a detection or a witness");
-                DCHECK(f->dec_blob == NULL && f->pin_blob == NULL && !f->started,
-                       "a freshly added flow already carries decision state — the re-injection install below "
-                       "would overwrite it and drop that segment's reference, and the flow would replay a path "
-                       "that is not the one it was given");
-                /* The triple is one install. A flow on a recorded path must be `started`, because flow_switch_in
-                   routes on that bit and a never-run flow takes decide_enter, which replays from nothing and never
-                   reads `dec_blob`; the blob alone would be ignored, then leaked with its segment reference when
-                   engine.c overwrites `dec_blob` at the first suspend. The empty pin blob is the third member
-                   because flow_switch_in's resume branch calls concolic_pins_resume beside decide_resume, and a
-                   replaying flow re-derives every pin from the gates it replays. cold.c's 'f' and 'c' arms install
-                   the same triple for a cold-resumed candidate. */
-                f->started  = 1;
-                f->dec_blob = decide_blob_new((void *)decide_blob_seg(e->reinject));
-                f->pin_blob = concolic_pins_blob_empty();
-            }
+            added++;
+            g_cands_seeded++;
+            e->tried++;
+        }
+        /* A fire's verification: the same path and payload with the fire's message compositions delivered, so
+           its own fire, if it comes, is under messages a sender reproduces. */
+        for (; e->vf_seeded < e->nvf; e->vf_seeded++) {
+            Flow *f = seed_on_path(ctx, e, e->vf[e->vf_seeded].payload);
+
+            flow_deliveries_parse(f, e->vf[e->vf_seeded].dl);
             added++;
             g_cands_seeded++;
             e->tried++;
@@ -2129,6 +2205,7 @@ void solve_flow_begin(Flow *f) {
         root = rc ? rc->root : NULL;
     }
     concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL);
+    concolic_set_deliveries(f ? f->cand_dsrc : NULL, f ? f->cand_dval : NULL, f ? f->cand_dn : 0);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
     /* A witness verification substitutes and suppresses like a sink candidate and is no search's: its sinks
        take the exploration arm, which detect_sink then declines. */
@@ -2707,6 +2784,11 @@ void solve_free(void) {
         if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);
         free(g_pending[i].refused_acts);
         free(g_pending[i].composition_refused);
+        for (int k = 0; k < g_pending[i].nvf; k++) {
+            free(g_pending[i].vf[k].payload);
+            free(g_pending[i].vf[k].dl);
+        }
+        free(g_pending[i].vf);
         /* The principal demands: this file owns each name and row array, and the rows' strings are concolic.c's
            (gate_pred_free routes to concolic_pred_release). */
         for (int c = 0; c < g_pending[i].npg; c++) {

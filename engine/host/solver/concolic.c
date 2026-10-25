@@ -2152,8 +2152,24 @@ static int cand_matches(const char *src) {
 /* Whether the mint will answer a plain value for a source (concolic.h says why it is this disjunction). Both
    arms are this file's: the pin is `concolic_new`'s early return and the substitution is `concolic_derived`'s,
    so a consumer composing the pair would copy a rule it cannot see change. */
+/* The running flow's further deliveries (concolic_set_deliveries): the candidate row's other sources, each
+   answering the structured value its JSON text spells. Copies, replaced at every switch-in. */
+static char **g_dl_src, **g_dl_val;
+static int g_dl_n;
+
+static int deliv_find(const char *src) {
+    for (int i = 0; src && i < g_dl_n; i++) if (!strcmp(g_dl_src[i], src)) return i;
+    return -1;
+}
+
+/* Whether a source read answers a delivered value rather than an unknown: the search's own bytes or a further
+   delivery. */
+static int src_delivered(const char *src) {
+    return cand_matches(src) || deliv_find(src) >= 0;
+}
+
 int concolic_src_determined(const char *src) {
-    return cand_matches(src) || concolic_src_pinned(src);
+    return src_delivered(src) || concolic_src_pinned(src);
 }
 
 /* The declared sources and what their component does to an attacker's bytes. A source that declares nothing
@@ -2748,6 +2764,36 @@ static int concolic_lead_hook(JSValueConst v)
  *   comes off `src`'s own row, which a derived identity does not have.
  * When `src` has a row it is the root's row: a value carrying a declared source's name as its identity
  * inherited the root unchanged too. Asserted, because the two are threaded from an operand each. */
+/* The candidate's own bytes entering the program, observed for the running flow `f` (concolic_deliver's
+   precondition checks are the caller's): the live fact, the arrival rung, the search's substitution count and
+   the marks that its addresses may rest on bytes this engine chose. */
+static void cand_observe_delivery(Flow *f)
+{
+    g_cand_delivered = 1;
+    /* The bottom ladder rung, written here because this is its site. Every other rung reports at a sink,
+       and each rung needs an observation site strictly before what it measures; without this a candidate
+       that replayed many gates without reaching its source read would rank with one never served. It
+       states only that the bytes are in the program, which needs no taint tracker; recorded at solve.c's
+       sink entries it would add nothing the sink rungs do not carry.
+       It is not `g_cand_delivered`: that flag is the live answer for this replay, cleared by
+       concolic_clear_pins when a restarted candidate replays from the baseline, so solve.c's sinks see 0.
+       The rung is the comparator and monotone; flow_observe_rung's early return makes re-delivery free. */
+    flow_observe_rung(f, FLOW_RUNG_DELIVERED);
+    DCHECK(f->fire.kind != FIRE_NONE,
+           "an @S substitution is being delivered for a flow whose fire target says it is no candidate");
+    /* The same event counted on the search, the one unit a reader sees; it orders nothing and outlives the
+       flows. It lets a parked report tell "bytes never entered" from "entered and reached no sink" and from
+       "sinks ran carrying none", which otherwise all read `turns:N,reached:0,survived:0`. Not a credit:
+       solve.c raises a counter and moves no ordering. */
+    if (f->fire.kind == FIRE_MARKER) solve_observe_substitution(f);   /* a verification is no search's (solve_flow_begin) */
+    /* Every candidate delivers bytes this engine chose (a breakout, or the value a witness's pin chose), so
+       from here an address the run composes may rest on them, and its requests say so (flow.h's
+       `path_forced` and `path_pinned`). Whose act the run is, which holds from its first opcode, is the
+       separate fact flow_path_driven answers. */
+    flow_mark_forced_arm();
+    flow_mark_pinned_value();
+}
+
 static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *root, const char *payload)
 {
     const SourceDelivery *at = NULL;   /* the injection point's row, if it has one: the component's prefix */
@@ -2783,29 +2829,7 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
                "an @S candidate's bytes are entering the program under a flow that is not carrying them — the "
                "survival and arrival rungs, and any PoC, are recorded against the RUNNING flow, so this "
                "delivery is about to be credited to a flow whose own payload is a different string");
-        g_cand_delivered = 1;
-        /* The bottom ladder rung, written here because this is its site. Every other rung reports at a sink,
-           and each rung needs an observation site strictly before what it measures; without this a candidate
-           that replayed many gates without reaching its source read would rank with one never served. It
-           states only that the bytes are in the program, which needs no taint tracker; recorded at solve.c's
-           sink entries it would add nothing the sink rungs do not carry.
-           It is not `g_cand_delivered`: that flag is the live answer for this replay, cleared by
-           concolic_clear_pins when a restarted candidate replays from the baseline, so solve.c's sinks see 0.
-           The rung is the comparator and monotone; flow_observe_rung's early return makes re-delivery free. */
-        flow_observe_rung(f, FLOW_RUNG_DELIVERED);
-        DCHECK(f->fire.kind != FIRE_NONE,
-               "an @S substitution is being delivered for a flow whose fire target says it is no candidate");
-        /* The same event counted on the search, the one unit a reader sees; it orders nothing and outlives the
-           flows. It lets a parked report tell "bytes never entered" from "entered and reached no sink" and from
-           "sinks ran carrying none", which otherwise all read `turns:N,reached:0,survived:0`. Not a credit:
-           solve.c raises a counter and moves no ordering. */
-        if (f->fire.kind == FIRE_MARKER) solve_observe_substitution(f);   /* a verification is no search's (solve_flow_begin) */
-        /* Every candidate delivers bytes this engine chose (a breakout, or the value a witness's pin chose), so
-           from here an address the run composes may rest on them, and its requests say so (flow.h's
-           `path_forced` and `path_pinned`). Whose act the run is, which holds from its first opcode, is the
-           separate fact flow_path_driven answers. */
-        flow_mark_forced_arm();
-        flow_mark_pinned_value();
+        cand_observe_delivery(f);
     }
     for (i = 0; i < g_srcs_n; i++)
         if (src && !strcmp(g_srcs[i].src, src)) { at = &g_srcs[i]; break; }
@@ -2947,6 +2971,55 @@ void concolic_set_candidate(const char *src, const char *root, const char *paylo
                "the installed @S substitution does not match the running flow — an exploring flow would read "
                "the previous candidate's payload in place of its concolic source");
     }
+}
+
+void concolic_set_deliveries(char *const *srcs, char *const *vals, int n) {
+    const Flow *f = flow_running();
+
+    for (int i = 0; i < g_dl_n; i++) { free(g_dl_src[i]); free(g_dl_val[i]); }
+    free(g_dl_src); free(g_dl_val);
+    g_dl_src = g_dl_val = NULL;
+    g_dl_n = 0;
+    DCHECK(n == (f ? f->cand_dn : 0) && (n == 0 || g_cand_src),
+           "the installed deliveries are not the running flow's, or ride no candidate");
+    if (n == 0) return;
+    g_dl_src = malloc((size_t)n * sizeof *g_dl_src);
+    g_dl_val = malloc((size_t)n * sizeof *g_dl_val);
+    CHECK(g_dl_src && g_dl_val, "concolic: OOM installing a candidate's deliveries");
+    for (int i = 0; i < n; i++) {
+        int row = src_row(srcs[i], strlen(srcs[i]));
+
+        DCHECK(deliv_find(srcs[i]) < 0 && row >= 0 && g_srcs[row].deliver == SRC_DELIVER_CROSS_DOCUMENT_MESSAGE &&
+               !g_srcs[row].principal,
+               "a further delivery names a source twice, or a source that is not a cross-document message's data: "
+               "only a message's data is delivered as a structured value");
+        (void)row;
+        g_dl_src[i] = strdup(srcs[i]);
+        g_dl_val[i] = strdup(vals[i]);
+        CHECK(g_dl_src[i] && g_dl_val[i], "concolic: OOM installing a candidate's delivery");
+        g_dl_n = i + 1;
+    }
+}
+
+/* The structured value a further delivery posts: HTML §9.3.3 step 8.4's StructuredDeserializeWithTransfer
+   of what the attacker document serialized, which for the JSON-expressible value a composition spells is
+   ParseJSON over its text in this realm. Where the search injects inside this message, the payload rides in
+   the value and the delivery is the candidate's own (cand_observe_delivery); otherwise it is bytes this engine
+   chose. */
+static JSValue deliver_structured(JSContext *ctx, int i) {
+    Flow *f = flow_running();
+    JSValue v;
+
+    CHECK(f != NULL, "concolic: a candidate's delivery is entering the program with no flow running");
+    if (g_cand_at && !strcmp(g_cand_at, g_dl_src[i])) {
+        cand_observe_delivery(f);
+    } else {
+        flow_mark_forced_arm();
+        flow_mark_pinned_value();
+    }
+    v = JS_ParseJSON(ctx, g_dl_val[i], strlen(g_dl_val[i]), "<delivery>");
+    CHECK(!JS_IsException(v), "concolic: a delivery's composed JSON did not parse — message_compose writes it");
+    return v;
 }
 
 /* Whether the running flow's own candidate bytes have entered the program (the static above says where the
@@ -6806,6 +6879,11 @@ static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const 
     /* A candidate run substitutes one source with a breakout. Checked here, at the one place every source mint
        goes through, so a source installed as a plain property value (location.hash, document.cookie) is
        substituted too. */
+    if (deliv_find(src) >= 0) {   /* a further delivery, before the search's bytes: it carries them inside */
+        JS_FreeValue(ctx, example);
+        free(ident);
+        return deliver_structured(ctx, deliv_find(src));
+    }
     if (cand_matches(src)) {
         /* `example` is owned by this call whichever value comes back, and the payload replaces it: a source
            under substitution reads the attacker's bytes, not what the address held. */
@@ -6843,7 +6921,7 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
        site is concolic_example, for a value the page already holds, under the same `src_self` precondition.
        After the candidate test: a re-fire delivering the attacker's bytes at this source must not be shadowed
        by a pin. */
-    if (!cand_matches(src)) {
+    if (!src_delivered(src)) {
         JSValue pv = src ? pin_of(ctx, src) : JS_UNINITIALIZED;
         if (!JS_IsUninitialized(pv)) {
             JS_FreeValue(ctx, example);
@@ -6852,7 +6930,7 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
     }
     /* The tie `concolic_exotic_get`'s pin arm asserts. A candidate re-fire skips the arm deliberately, so a
        pinned source then reaches the mint and concolic_derived returns the attacker's bytes. */
-    DCHECK(cand_matches(src) || !src || !src_pinned_unpriced(src),
+    DCHECK(src_delivered(src) || !src || !src_pinned_unpriced(src),
            "a source this flow had PINNED reached the ordinary source mint on a path no candidate is "
            "substituting — `pin_of` answered NO PIN for a path `concolic_src_pinned` says is pinned, so the "
            "two tests over one chain have diverged and this read is about to mint an unknown for a value the "
@@ -6900,7 +6978,7 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
            the contract every consumer reads off the return; the two early returns are invisible in the
            signature, so a consumer must not assert that a source mint is always concolic. Stated over the whole
            function rather than this path, so it survives a reordering of the arms. */
-        DCHECK(concolic_is(r) || cand_matches(src) || src_pinned_unpriced(src),
+        DCHECK(concolic_is(r) || src_delivered(src) || src_pinned_unpriced(src),
                "the source mint answered a value that is not concolic for a source this flow has NEITHER "
                "pinned NOR substituted a candidate at — the two early returns above are the only arms "
                "entitled to answer a plain value, so this is a derivation that lost the triple and every "

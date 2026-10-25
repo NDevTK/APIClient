@@ -182,19 +182,26 @@ function docSinkPin(p, f) {
    control as `input` of type `input`, `keyup` or `change`, the person dropping a file as `drop` of type `drop`,
    the person scrolling a target into view as `scroll` of type `scroll` (solver/engine.c's engine_user_scroll),
    a potential close request at the document as `close-request` of type `close-request`,
-   any other user-interface event as `dispatch`, on a locator a page script resolves
-   (core/events/listener_act.h). */
-const SINK_ACT_KINDS = Object.freeze(["click", "dispatch", "input", "drop", "scroll", "close-request"]);
+   an attacker document's postMessage to the window as `message` of type `message` with its `route` (and, under
+   a verified fire, the structured `data` it posts), any other user-interface event as `dispatch`, on a locator
+   a page script resolves (core/events/listener_act.h). */
+const SINK_ACT_KINDS = Object.freeze(["click", "dispatch", "input", "drop", "scroll", "close-request", "message"]);
 const SINK_TYPING_TYPES = Object.freeze(["input", "keyup", "change"]);
+const SINK_MESSAGE_ROUTES = Object.freeze(["opener", "frame", "none"]);
 function docSinkAct(a, f) {
+  const message = docIsRecord(a) && a.kind === "message";
   return docIsRecord(a) && SINK_ACT_KINDS.indexOf(a.kind) >= 0 && docIsName(a.target) && docIsName(a.type) &&
          (a.kind === "click") === (a.type === "click") && (a.kind === "drop") === (a.type === "drop") &&
          (a.kind === "scroll") === (a.type === "scroll") &&
          (a.kind === "close-request") === (a.type === "close-request") &&
+         message === (a.type === "message") && message === ("route" in a) && (!("data" in a) || message) &&
+         (!message || (a.target === "window" && SINK_MESSAGE_ROUTES.indexOf(a.route) >= 0 &&
+                       (a.route === "none") === ("routeRefused" in a))) &&
          (a.kind !== "input" || SINK_TYPING_TYPES.indexOf(a.type) >= 0) && (!("handler" in a) || docIsName(a.handler))
-    ? null : f + " is not {kind: click|dispatch|input|drop|scroll|close-request, target, type[, handler]} with "
-           + "a click, a drop, a scroll or a close request exactly where the type is that word, and typing only "
-           + "under input, keyup or change";
+    ? null : f + " is not {kind: click|dispatch|input|drop|scroll|close-request|message, target, type[, handler]} "
+           + "with a click, a drop, a scroll, a close request or a message exactly where the type is that word, a "
+           + "message at the window with its route (and a refusal exactly where it has none) and only a message "
+           + "carrying data, and typing only under input, keyup or change";
 }
 function docSink(e, f) {
   if (!docIsRecord(e)) return f + " is not an object";

@@ -627,6 +627,16 @@ static void park_rec_cand(const Flow *f, long id)
         park_str(",");
         free(chain);
     }
+    /* The world's further deliveries (flow_deliveries_text), `-` for none: inputs the candidate runs under, so
+       a record without them would resume a verification as the unsolved fire it verifies. */
+    {
+        char *dl = flow_deliveries_text(f);
+
+        if (dl) park_hex(dl);
+        else park_str("-");
+        park_str(",");
+        free(dl);
+    }
     /* THE PAYLOAD IS LAST AND STAYS LAST. The 'c' arm reads it to the record's `end` and not to a separator,
        which is what makes it the field a new one goes BEFORE: appended after, its hex would be read as the
        payload's own and every resumed candidate would inject a string no session ever built. */
@@ -2434,7 +2444,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
 
                 for (cb = q; q < end && *q != ','; q++)
                     ;
-                DCHECK(q < end, "a parked @S candidate has no payload after its root's row chain — a residue from "
+                DCHECK(q < end, "a parked @S candidate has no field after its root's row chain — a residue from "
                                 "a build whose 'c' record carried no chain field; drop it and re-seed");
                 /* The rows are derivations of what the record names: declared before the candidate is installed
                    at its first switch-in, so its delivery is at the chain's base component. */
@@ -2443,6 +2453,21 @@ int cold_resume(JSContext *ctx, const char *recipes)
 
                     concolic_declare_source_chain(chain);
                     free(chain);
+                }
+                q = park_comma(q);
+            }
+            {
+                const char *db;
+
+                for (db = q; q < end && *q != ','; q++)
+                    ;
+                DCHECK(q < end, "a parked @S candidate has no payload after its deliveries — a residue from a "
+                                "build whose 'c' record carried no deliveries field; drop it and re-seed");
+                if (!(q - db == 1 && *db == '-')) {
+                    char *dl = park_unhex(db, q);
+
+                    flow_deliveries_parse(fl, dl);
+                    free(dl);
                 }
                 q = park_comma(q);
             }

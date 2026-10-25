@@ -5217,6 +5217,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         sib->cand_payload = strdup(parent->cand_payload);
         CHECK(sib->cand_src && sib->cand_payload, "engine: OOM forking an @S candidate session's substitution");
         fire_target_copy(&sib->fire, &parent->fire);
+        flow_deliveries_copy(sib, parent);
         sib->cand_fired = parent->cand_fired;
         /* Where the payload came from is a fact about the bytes, so both arms have it; an arm without it would
            claim to be seeded from this session's search list with no row there, which solve.c's arrival assert
@@ -5250,7 +5251,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* A field added to the candidate identity is an obligation here: the fields are copied one by one so that a
        new one is visible, and this checks they arrived. */
     DCHECK(!!sib->cand_src == !!parent->cand_src && !!sib->cand_payload == !!parent->cand_payload &&
-           sib->fire.kind == parent->fire.kind &&
+           sib->fire.kind == parent->fire.kind && sib->cand_dn == parent->cand_dn &&
            sib->cand_resumed == parent->cand_resumed,
            "an arm of an @S candidate session left the fork without the substitution or its provenance — both are "
            "copied with the arm, which is the payload's flow continued");

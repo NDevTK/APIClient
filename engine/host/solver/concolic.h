@@ -536,6 +536,10 @@ int         concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op);
    the world. A root no component declares (or NULL, a witness verification) substitutes at `src` itself.
    NULL src and payload clear it. */
 void        concolic_set_candidate(const char *src, const char *root, const char *payload);
+/* The running flow's further deliveries (flow.h's `cand_dsrc`/`cand_dval`), installed after its candidate at
+   every switch-in: each a cross-document message's data source whose read answers the structured value its
+   JSON text spells, the payload's own delivery included where the search injects inside that message. */
+void        concolic_set_deliveries(char *const *srcs, char *const *vals, int n);
 /* Whether the installed candidate is delivered at `root`'s declared source read (its parent's, for a keyed root)
    and its bytes have entered the program: the one delivery a fired PoC over a declared root may have. */
 int         concolic_candidate_at_root(const char *root);

@@ -1213,6 +1213,83 @@ void flow_user_act_push(Flow *f, char *act, int at)
     f->user_act_at[f->user_acts_n++] = at;
 }
 
+void flow_delivery_add(Flow *f, const char *src, const char *val)
+{
+    char **s, **v;
+
+    DCHECK(src && *src && val && *val && !flow_delivery_of(f, src),
+           "a delivery was added with no source or value, or at a source the candidate already delivers at");
+    s = realloc(f->cand_dsrc, (size_t)(f->cand_dn + 1) * sizeof *s);
+    CHECK(s, "flow: OOM growing a candidate's deliveries");
+    f->cand_dsrc = s;
+    v = realloc(f->cand_dval, (size_t)(f->cand_dn + 1) * sizeof *v);
+    CHECK(v, "flow: OOM growing a candidate's deliveries");
+    f->cand_dval = v;
+    f->cand_dsrc[f->cand_dn] = strdup(src);
+    f->cand_dval[f->cand_dn] = strdup(val);
+    CHECK(f->cand_dsrc[f->cand_dn] && f->cand_dval[f->cand_dn], "flow: OOM copying a delivery");
+    f->cand_dn++;
+}
+
+const char *flow_delivery_of(const Flow *f, const char *src)
+{
+    for (int i = 0; i < f->cand_dn; i++) if (!strcmp(f->cand_dsrc[i], src)) return f->cand_dval[i];
+    return NULL;
+}
+
+void flow_deliveries_copy(Flow *dst, const Flow *src)
+{
+    DCHECK(dst->cand_dn == 0, "a candidate's deliveries were copied over ones it already had");
+    for (int i = 0; i < src->cand_dn; i++) flow_delivery_add(dst, src->cand_dsrc[i], src->cand_dval[i]);
+}
+
+char *flow_deliveries_text(const Flow *f)
+{
+    size_t n = 1, o = 0;
+    char *out;
+
+    if (f->cand_dn == 0) return NULL;
+    for (int i = 0; i < f->cand_dn; i++) n += strlen(f->cand_dsrc[i]) + strlen(f->cand_dval[i]) + 42;
+    out = malloc(n);
+    CHECK(out, "flow: OOM spelling a candidate's deliveries");
+    for (int i = 0; i < f->cand_dn; i++)
+        o += (size_t)snprintf(out + o, n - o, "%zu:%s%zu:%s", strlen(f->cand_dsrc[i]), f->cand_dsrc[i],
+                              strlen(f->cand_dval[i]), f->cand_dval[i]);
+    return out;
+}
+
+/* One `<n>:<bytes>` field at `*p`, malloc'd; advances past it. The text is this engine's own (a park record
+   it wrote), so a field that does not parse is a corrupt record. */
+static char *delivery_field(const char **p)
+{
+    char *end, *out;
+    unsigned long n = strtoul(*p, &end, 10);
+
+    CHECK(end != *p && *end == ':' && strlen(end + 1) >= n,
+          "flow: a parked delivery field is not one this engine wrote");
+    out = malloc(n + 1);
+    CHECK(out, "flow: OOM reading a parked delivery");
+    memcpy(out, end + 1, n);
+    out[n] = 0;
+    *p = end + 1 + n;
+    return out;
+}
+
+void flow_deliveries_parse(Flow *f, const char *text)
+{
+    const char *p = text;
+
+    DCHECK(f->cand_dn == 0 && text && *text,
+           "parked deliveries were read onto a candidate that has some, or from nothing");
+    while (*p) {
+        char *src = delivery_field(&p), *val = delivery_field(&p);
+
+        flow_delivery_add(f, src, val);
+        free(src);
+        free(val);
+    }
+}
+
 void flow_scroll_asked_push(Flow *f, char *loc)
 {
     char **asked = realloc(f->scroll_asked, (size_t)(f->scroll_asked_n + 1) * sizeof *asked);
@@ -6150,6 +6227,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
            else for a removed flow (the teardown walks the flows still there). */
         free(f->cand_src); free(f->cand_payload); fire_target_clear(&f->fire);
         free(f->assumed_slots);
+        for (int k = 0; k < f->cand_dn; k++) { free(f->cand_dsrc[k]); free(f->cand_dval[k]); }
+        free(f->cand_dsrc); free(f->cand_dval);
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);
         free(f->orphan_acts);
         free(f->orphan_chain);

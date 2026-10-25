@@ -16177,6 +16177,15 @@ TF_UNIT void probes_framemsg(const char *js, Probe *tab, int *n) {
              "the innerHTML <- message.data search did not fire a PoC");
     fold_row(&fp_tt, &fp_why, has && s_field(js, "innerHTML", src, "\"delivery\":\"cross-document-message\""),
              "the PoC does not state a cross-document message delivery");
+    /* The fire is verified under the message a sender posts: its act carries the composed data, whose `kind`
+       the handler's gate demanded. */
+    const char *fd_why = NULL; int fd_tt = 1;
+    fold_row(&fd_tt, &fd_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "NOT REACHED: the innerHTML <- message.data search fired no PoC to read a message act from");
+    fold_row(&fd_tt, &fd_why, has && s_field(js, "innerHTML", src, "\"kind\":\"message\"") &&
+                              s_field(js, "innerHTML", src, "\"kind\":\"render\""),
+             "the PoC's message act carries no data whose `kind` is 'render' — the fire was not verified under the "
+             "message its handler's gate demands");
     /* The negative half needs the record to state its route at all, or its silence would pass it. */
     const char *fc_why = NULL; int fc_tt = 1;
     fold_row(&fc_tt, &fc_why, has, "NOT REACHED: there is no message.data record to read a route from");
@@ -16189,6 +16198,7 @@ TF_UNIT void probes_framemsg(const char *js, Probe *tab, int *n) {
         { "fm-render", fr_tt, "/api/fm-render", SESS_EXPLORE, fr_why },
         { "fm-sink", fs_tt, "'fmOut'", SESS_EXPLORE, fs_why },
         { "fm-poc", fp_tt, "e.data.html", SESS_EXPLORE, fp_why },
+        { "fm-poc-message", fd_tt, "e.data.kind === 'render'", SESS_EXPLORE, fd_why, .gate = "fm-poc" },
         { "fm-coop-route", fc_tt, "function fmOnMessage", SESS_EXPLORE, fc_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
