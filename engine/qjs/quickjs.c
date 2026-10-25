@@ -12104,8 +12104,14 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
             }
             break;
         case JS_CLASS_REGEXP:            /* u.regexp */
-            compute_jsstring_size(p->u.regexp.pattern, hp);
-            compute_jsstring_size(p->u.regexp.bytecode, hp);
+            /* An object 22.2.3.2 RegExpAlloc made and RegExpInitialize has not yet filled holds neither slot (see
+               js_regexp_finalizer); a constructor resting inside its compile leaves one standing across steps. */
+            DCHECK(!p->u.regexp.pattern == !p->u.regexp.bytecode,
+                   "a RegExp holds one of its pattern and bytecode slots without the other");
+            if (p->u.regexp.pattern) {
+                compute_jsstring_size(p->u.regexp.pattern, hp);
+                compute_jsstring_size(p->u.regexp.bytecode, hp);
+            }
             break;
         case JS_CLASS_OBJECT:            /* u.object — a creation name, NOT an opaque block */
             /* APIClient forced-exec: NAMED HERE ONLY SO THE `default` ARM BELOW CANNOT SEE IT. That arm's own
@@ -79569,6 +79575,8 @@ static int JS_WriteArrayBuffer(BCWriterState *s, JSValueConst obj)
 static int JS_WriteRegExp(BCWriterState *s, JSRegExp regexp)
 {
     JSString *bc = regexp.bytecode;
+    DCHECK(bc != NULL && regexp.pattern != NULL,
+           "the serializer reached a RegExp RegExpInitialize has not filled, which only its constructor holds");
     DCHECK(!bc->is_wide_char, "!bc->is_wide_char");
     JS_WriteString(s, regexp.pattern);
     JS_WriteString(s, bc);
