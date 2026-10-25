@@ -107,52 +107,7 @@ lxb_html_tokenizer_init(lxb_html_tokenizer_t *tkz)
     tkz->is_eof = false;
     tkz->status = LXB_STATUS_OK;
 
-    tkz->base = NULL;
     tkz->ref_count = 1;
-
-    return LXB_STATUS_OK;
-}
-
-lxb_status_t
-lxb_html_tokenizer_inherit(lxb_html_tokenizer_t *tkz_to,
-                           lxb_html_tokenizer_t *tkz_from)
-{
-    lxb_status_t status;
-
-    tkz_to->tags = tkz_from->tags;
-    tkz_to->attrs = tkz_from->attrs;
-    tkz_to->attrs_mraw = tkz_from->attrs_mraw;
-    tkz_to->mraw = tkz_from->mraw;
-
-    /* Token and Attributes */
-    tkz_to->token = NULL;
-
-    tkz_to->dobj_token = tkz_from->dobj_token;
-    tkz_to->dobj_token_attr = tkz_from->dobj_token_attr;
-
-    /* Parse errors */
-    tkz_to->parse_errors = lexbor_array_obj_create();
-    status = lexbor_array_obj_init(tkz_to->parse_errors, 16,
-                                   sizeof(lxb_html_tokenizer_error_t));
-    if (status != LXB_STATUS_OK) {
-        return status;
-    }
-
-    tkz_to->state = lxb_html_tokenizer_state_data_before;
-    tkz_to->state_return = NULL;
-
-    tkz_to->callback_token_done = lxb_html_tokenizer_token_done;
-    tkz_to->callback_token_ctx = NULL;
-
-    tkz_to->is_eof = false;
-    tkz_to->status = LXB_STATUS_OK;
-
-    tkz_to->base = tkz_from;
-    tkz_to->ref_count = 1;
-
-    tkz_to->start = tkz_from->start;
-    tkz_to->end = tkz_from->end;
-    tkz_to->pos = tkz_to->start;
 
     return LXB_STATUS_OK;
 }
@@ -162,10 +117,6 @@ lxb_html_tokenizer_ref(lxb_html_tokenizer_t *tkz)
 {
     if (tkz == NULL) {
         return NULL;
-    }
-
-    if (tkz->base != NULL) {
-        return lxb_html_tokenizer_ref(tkz->base);
     }
 
     tkz->ref_count++;
@@ -178,10 +129,6 @@ lxb_html_tokenizer_unref(lxb_html_tokenizer_t *tkz)
 {
     if (tkz == NULL || tkz->ref_count == 0) {
         return NULL;
-    }
-
-    if (tkz->base != NULL) {
-        tkz->base = lxb_html_tokenizer_unref(tkz->base);
     }
 
     tkz->ref_count--;
@@ -222,20 +169,18 @@ lxb_html_tokenizer_destroy(lxb_html_tokenizer_t *tkz)
         return NULL;
     }
 
-    if (tkz->base == NULL) {
-        if (tkz->opt & LXB_HTML_TOKENIZER_OPT_TAGS_SELF) {
-            lxb_html_tokenizer_tags_destroy(tkz);
-        }
-
-        if (tkz->opt & LXB_HTML_TOKENIZER_OPT_ATTRS_SELF) {
-            lxb_html_tokenizer_attrs_destroy(tkz);
-        }
-
-        lexbor_mraw_destroy(tkz->mraw, true);
-        lexbor_dobject_destroy(tkz->dobj_token, true);
-        lexbor_dobject_destroy(tkz->dobj_token_attr, true);
-        lexbor_free(tkz->start);
+    if (tkz->opt & LXB_HTML_TOKENIZER_OPT_TAGS_SELF) {
+        lxb_html_tokenizer_tags_destroy(tkz);
     }
+
+    if (tkz->opt & LXB_HTML_TOKENIZER_OPT_ATTRS_SELF) {
+        lxb_html_tokenizer_attrs_destroy(tkz);
+    }
+
+    lexbor_mraw_destroy(tkz->mraw, true);
+    lexbor_dobject_destroy(tkz->dobj_token, true);
+    lexbor_dobject_destroy(tkz->dobj_token_attr, true);
+    lexbor_free(tkz->start);
 
     tkz->parse_errors = lexbor_array_obj_destroy(tkz->parse_errors, true);
 

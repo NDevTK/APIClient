@@ -80,10 +80,6 @@ LXB_API lxb_status_t
 lexbor_avl_foreach(lexbor_avl_t *avl, lexbor_avl_node_t **scope,
                    lexbor_avl_node_f cb, void *ctx);
 
-LXB_API void
-lexbor_avl_foreach_recursion(lexbor_avl_t *avl, lexbor_avl_node_t *scope,
-                             lexbor_avl_node_f callback, void *ctx);
-
 
 #ifdef __cplusplus
 } /* extern "C" */

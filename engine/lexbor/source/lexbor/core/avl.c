@@ -509,17 +509,3 @@ lexbor_avl_foreach(lexbor_avl_t *avl, lexbor_avl_node_t **scope,
 
     return LXB_STATUS_OK;
 }
-
-void
-lexbor_avl_foreach_recursion(lexbor_avl_t *avl, lexbor_avl_node_t *scope,
-                             lexbor_avl_node_f callback, void *ctx)
-{
-    if (scope == NULL) {
-        return;
-    }
-
-    callback(avl, NULL, scope, ctx);
-
-    lexbor_avl_foreach_recursion(avl, scope->left, callback, ctx);
-    lexbor_avl_foreach_recursion(avl, scope->right, callback, ctx);
-}

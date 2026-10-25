@@ -98,7 +98,6 @@ struct lxb_html_tokenizer {
     lxb_char_t                       utf8_buf[4];
     unsigned                         utf8_buf_len;
 
-    lxb_html_tokenizer_t             *base;
     size_t                           ref_count;
 };
 
@@ -114,10 +113,6 @@ lxb_html_tokenizer_create(void);
 
 LXB_API lxb_status_t
 lxb_html_tokenizer_init(lxb_html_tokenizer_t *tkz);
-
-LXB_API lxb_status_t
-lxb_html_tokenizer_inherit(lxb_html_tokenizer_t *tkz_to,
-                           lxb_html_tokenizer_t *tkz_from);
 
 LXB_API lxb_html_tokenizer_t *
 lxb_html_tokenizer_ref(lxb_html_tokenizer_t *tkz);

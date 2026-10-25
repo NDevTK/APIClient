@@ -39,10 +39,9 @@
  * LEXBOR OWNS THE SERIALIZATION OF ONE NODE and this file owns the WALK. The escaping, the attribute quoting
  * and the raw-text elements are HTML's own rules and lexbor implements them beside the parser that reads them
  * back; hand-rolling a second copy here would be a serializer that disagrees with the parser sitting next to
- * it. What lexbor cannot do is SUSPEND: `lxb_html_serialize_tree_str` runs a walk of the PAGE'S SIZE inside
- * one opcode, and `document.body.outerHTML` on a real page held the scheduler for the whole document with
- * every other flow parked behind it. So the walk is a machine that emits ONE node per step and yields, and
- * lexbor is asked for that one node.
+ * it. The walk is not lexbor's because it must suspend: a walk of the page's size inside one opcode would hold
+ * the scheduler for the whole document with every other flow parked behind it. So the walk is a machine that
+ * emits one node per step and yields, and lexbor is asked for that one node.
  *
  * TWO DELIBERATE DIVERGENCES FROM LEXBOR, AND THE SPEC DECIDES BOTH.
  *   - §13.3 step 3: "If the node is a template element, then let the node instead be the template element's

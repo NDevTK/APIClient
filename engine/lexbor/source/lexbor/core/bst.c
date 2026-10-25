@@ -5,7 +5,6 @@
  */
 
 #include "lexbor/core/bst.h"
-#include "lexbor/core/conv.h"
 
 
 lexbor_bst_t *
@@ -402,70 +401,4 @@ lexbor_bst_remove_by_pointer(lexbor_bst_t *bst, lexbor_bst_entry_t *entry,
     }
 
     return value;
-}
-
-void
-lexbor_bst_serialize(lexbor_bst_t *bst, lexbor_callback_f callback, void *ctx)
-{
-    lexbor_bst_serialize_entry(bst->root, callback, ctx, 0);
-}
-
-void
-lexbor_bst_serialize_entry(lexbor_bst_entry_t *entry,
-                           lexbor_callback_f callback, void *ctx, size_t tabs)
-{
-    size_t len;
-    lxb_char_t buff[1024];
-
-    if (entry == NULL) {
-        return;
-    }
-
-    /* Left */
-    for (size_t i = 0; i < tabs; i++) {
-        callback((lxb_char_t *) "\t", 1, ctx);
-    }
-    callback((lxb_char_t *) "<left ", 6, ctx);
-
-    if (entry->left) {
-        len = lexbor_conv_int64_to_data((int64_t) entry->left->size,
-                                        buff, sizeof(buff));
-        callback(buff, len, ctx);
-
-        callback((lxb_char_t *) ">\n", 2, ctx);
-        lexbor_bst_serialize_entry(entry->left, callback, ctx, (tabs + 1));
-
-        for (size_t i = 0; i < tabs; i++) {
-            callback((lxb_char_t *) "\t", 1, ctx);
-        }
-    }
-    else {
-        callback((lxb_char_t *) "NULL>", 5, ctx);
-    }
-
-    callback((lxb_char_t *) "</left>\n", 8, ctx);
-
-    /* Right */
-    for (size_t i = 0; i < tabs; i++) {
-        callback((lxb_char_t *) "\t", 1, ctx);
-    }
-    callback((lxb_char_t *) "<right ", 7, ctx);
-
-    if (entry->right) {
-        len = lexbor_conv_int64_to_data((int64_t) entry->right->size,
-                                        buff, sizeof(buff));
-        callback(buff, len, ctx);
-
-        callback((lxb_char_t *) ">\n", 2, ctx);
-        lexbor_bst_serialize_entry(entry->right, callback, ctx, (tabs + 1));
-
-        for (size_t i = 0; i < tabs; i++) {
-            callback((lxb_char_t *) "\t", 1, ctx);
-        }
-    }
-    else {
-        callback((lxb_char_t *) "NULL>", 5, ctx);
-    }
-
-    callback((lxb_char_t *) "</right>\n", 9, ctx);
 }

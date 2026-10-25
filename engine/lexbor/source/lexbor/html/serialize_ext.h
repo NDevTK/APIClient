@@ -5,7 +5,7 @@
  * 
  * This is a new, flexible implementation of HTML serialization.  It produces
  * the same spec-compliant output as the original serialize.h interface
- * (see lxb_html_serialize_tree_str, lxb_html_serialize_cb, etc.), but gives
+ * (see lxb_html_serialize_cb), but gives
  * the caller fine-grained control over every part of the output through
  * per-node-type callback structures.
  *

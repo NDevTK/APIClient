@@ -90,13 +90,6 @@ lexbor_bst_remove_by_pointer(lexbor_bst_t *bst, lexbor_bst_entry_t *entry,
                              lexbor_bst_entry_t **root);
 
 
-LXB_API void
-lexbor_bst_serialize(lexbor_bst_t *bst, lexbor_callback_f callback, void *ctx);
-
-LXB_API void
-lexbor_bst_serialize_entry(lexbor_bst_entry_t *entry,
-                           lexbor_callback_f callback, void *ctx, size_t tabs);
-
 
 #ifdef __cplusplus
 } /* extern "C" */
