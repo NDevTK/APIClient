@@ -93,7 +93,12 @@ typedef enum {
        reads and a walk step all spend it, so an activation whose work is in no counted item still stops at
        the drive's next pick. Cost: one unit, by definition; bound (2) is asserted by the
        REST_UNIT_LAYOUT_DESCENDANTS bracket. */
-    REST_UNIT_LAYOUT_WORK
+    REST_UNIT_LAYOUT_WORK,
+    /* One unit of the cycle collector's work (quickjs.h's JS_GCStep: an object or an edge visited, or an object
+       freed) in one collector step. The slice the collector holds (solver/engine.c's engine_collect_slice) asks
+       for the quantum and the host's claim after each step. Cost: a few loads and a compare per unit; the
+       scan and the freeing still run whole inside a collection's last step, which JSGCCycle's residual names. */
+    REST_UNIT_GC_WORK
 } RestUnitKind;
 
 /* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is

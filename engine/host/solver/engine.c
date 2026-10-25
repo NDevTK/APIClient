@@ -62,6 +62,7 @@
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "solver/cold.h"      /* the park and the resume themselves; their census is composed in result.c */
 #include "solver/quantum.h"   /* the slice's bracket, the host's claim on the thread, and the pricing clock */
+#include "solver/rest_unit.h" /* the collector's step, a rest unit of its work */
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/reply_decode.h" /* …and what the reply body itself teaches — see engine_provide */
 #include "solver/pending_index.h" /* which records a reply answers, without walking the frontier to find out */
@@ -10921,6 +10922,9 @@ static void engine_session_close(void) {
     /* And the frontier is no longer for sale: past this line there is no scheduler to page for, and the teardown
        allocates (the result document, the leak walk), so an allocation there must fail as an allocation. */
     reclaim_uninstall(JS_GetRuntime(g_sess_ctx));
+    /* And no scheduler pays an owed collection: the allocation that crosses the threshold runs it, and one standing
+       now is finished by the next JS_RunGC. */
+    JS_SetGCDriven(JS_GetRuntime(g_sess_ctx), false);
     JS_SetJobEnqueueHook(NULL);
     JS_SetJobDropHook(NULL);
     JS_SetJobRemoveHook(NULL);
@@ -11440,6 +11444,9 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        engine's memory is the HTML parser's, so most refusals are Lexbor's. */
     reclaim_install(JS_GetRuntime(ctx), engine_reclaim_tail, NULL);
     engine_ram_limit_read();
+    /* The cycle collector's steps are this scheduler's from here: the allocation threshold owes a collection and
+       engine_sched_step pays it (engine_collect_slice). */
+    JS_SetGCDriven(JS_GetRuntime(ctx), true);
 }
 
 void engine_host_baseline(void) {
@@ -12457,6 +12464,50 @@ void engine_sched_end(void) {
     engine_session_close();
 }
 
+/* The cycle collector's slices (solver/rest_unit.c's REST_UNIT_GC_WORK states the policy): how many the scheduler
+   gave it, and their thread time on the pricing clock, which prices the collector's work rate and decides nothing.
+   Lifetime counts, read by result.c's @HEAP. */
+static long long g_gc_slices;
+static int64_t   g_gc_us;
+long long engine_gc_slices(void) { return g_gc_slices; }
+long long engine_gc_us(void) { return (long long)g_gc_us; }
+
+/* A slice the collector holds: it begins an owed collection, then takes steps of rest_unit_items(REST_UNIT_GC_WORK)
+   units until the collection finishes, the slice's work reaches the quantum or the host claims its thread. No
+   flow runs in it, so nothing separates two steps but the host's own time between slices. Each step's work is
+   banked in the instance's currency at THREAD_WORK_UNITS_PER_KI_GC, so the slice ends at the quantum like any
+   other and Level 1 sees the instance's collection as service. It answers YIELD: every flow is where it was. */
+static int engine_collect_slice(JSRuntime *rt) {
+    const uint64_t budget = rest_unit_items(REST_UNIT_GC_WORK);
+    int64_t t0 = quantum_thread_us();
+    JSGCCycleStats st;
+    uint64_t w0;
+    bool done;
+
+    DCHECK(JS_GCOwed(rt), "a collector slice was opened with no collection owed or standing");
+    g_gc_slices++;
+    JS_GCCycleStats(rt, &st);
+    if (st.step == 0)
+        JS_GCBegin(rt);
+    w0 = st.work;
+    do {
+        uint64_t units;
+
+        done = JS_GCStep(rt, budget);
+        JS_GCCycleStats(rt, &st);
+        DCHECKF(st.work >= w0, "the collector's lifetime work fell from %llu to %llu across one step",
+                (unsigned long long)w0, (unsigned long long)st.work);
+        units = ((st.work - w0) * THREAD_WORK_UNITS_PER_KI_GC + 1023) / 1024;
+        DCHECKF(units <= (uint64_t)(INT64_MAX - g_service_work),
+                "banking %llu collector units would overflow the instance's work counter (%lld)",
+                (unsigned long long)units, (long long)g_service_work);
+        g_service_work += (int64_t)units;
+        w0 = st.work;
+    } while (!done && engine_slice_work() < ENGINE_QUANTUM_WORK && !quantum_host_wants_thread());
+    g_gc_us += quantum_thread_us() - t0;
+    return ENGINE_STEP_YIELD;
+}
+
 /* One quantum. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are
  * uninstalled) and ENGINE_STEP_YIELD when the slice's work was spent with the frontier intact. The slice is a
  * budget of engine work (ENGINE_QUANTUM_WORK), not a cap: nothing is dropped, starved, reordered or forgotten
@@ -12469,6 +12520,8 @@ void engine_sched_end(void) {
  * accumulators are here and not at those returns. */
 int engine_sched_step(void) {
     int r;
+    JSRuntime *gc_rt;
+    bool collecting;
     /* The earliest reading this engine takes on its own thread, the function's first statement: everything between
        here and engine_sched_slice's entry (arming the quantum, restoring the flow stamp and capture route, the stray
        check) is thread the engine spent, so a span opened past it would report that work as the host's and the
@@ -12500,9 +12553,15 @@ int engine_sched_step(void) {
        cooperative clause. Raised before the body because it counts slices entered, the population both spans are
        over. */
     g_slices++;
+    /* A collection owed or standing takes the slice (engine_collect_slice). RAM pressure waits for it: a sale frees
+       objects, which would restart the trial at every step, and the collection is itself the cheapest relief. */
+    DCHECK(g_sess_ctx != NULL, "a step was taken with no session context");
+    gc_rt = JS_GetRuntime(g_sess_ctx);
+    collecting = JS_GCOwed(gc_rt);
     /* The host's time, with no flow stepping and no frontier walk open: where RAM pressure sells, as
        engine_reclaim_at_rest requires. */
-    engine_relocate_under_pressure();
+    if (!collecting)
+        engine_relocate_under_pressure();
     quantum_begin();
     /* The slice's budget is counted from here: its work on the instance's counter, and the dispatch countdown
        that decides where the budget is asked, both of which a session resumed from the cold tier also starts
@@ -12537,7 +12596,7 @@ int engine_sched_step(void) {
        session's live flag, separating before the session opened from between two slices. */
     ENGINE_NO_STRAY(g_sess_ctx, "slice-entry: the host's own time between slices (and the session setup before "
                                 "the first one)", g_sess_live);
-    r = engine_sched_slice();
+    r = collecting ? engine_collect_slice(gc_rt) : engine_sched_slice();
     /* And the scheduler's tail: HTML §8.1.7.3's end-of-checkpoint hook, the aging charge and flow_finish run after
        the loop's post-step boundary, so only this line watches them. Asked before the marks are put back, so it
        reports the state the slice ended in. */

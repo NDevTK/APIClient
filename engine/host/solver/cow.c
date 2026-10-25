@@ -1514,7 +1514,14 @@ const CowHostRecSite *cow_host_rec_sites(void) {
 void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *rec,
                                 const char *file, int line, CowHostRecSite *site) {
     JSContext *ctx = g_cow_ctx;
-    CowDelta *d = cow_state_ask(COW_STATE_HOST_REC);
+    CowDelta *d;
+
+    /* A record a mark function walks is part of the heap's graph, so a write to it falsifies a standing cycle
+       collection trial whether or not a delta records it. Before cow_set_ctx names the session's context no
+       collection is driven by steps (engine_sched_begin drives it after), so there is no trial to falsify. */
+    if (ctx != NULL)
+        JS_MutatorEnter(JS_GetRuntime(ctx));
+    d = cow_state_ask(COW_STATE_HOST_REC);
     if (!d) return;
     /* THE SITE'S ASK, IN THE SAME BREATH AS THE KIND'S AND BEFORE THIS UNIT'S OWN GATE — which is what makes
        the rows a partition of `cowStateAsks.hostRec` rather than a second census with its own denominator.

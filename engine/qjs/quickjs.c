@@ -205,24 +205,31 @@ typedef enum {
 
 /* A cycle collection's progress record. The decref phase visits gc_obj_list's first object and moves it to
    `decref_done` (or to tmp_obj_list when nothing outside the graph holds it), so gc_obj_list's head is the cursor
-   and the visited objects keep their order. `work` counts the objects and edges visited, the unit a step is
-   budgeted in. The trial counts live in each object's header under `serial`, never in ref_count, so the mutator
-   may run between two steps; a step that finds JSRuntime.gc_mut_epoch moved since the trial began restarts it.
+   and the visited objects keep their order. The trial counts live in each object's header under `serial`, never
+   in ref_count, so the mutator may run between two steps; a step that finds JSRuntime.gc_mut_epoch moved since
+   the trial began restarts it.
    Named residual. Not covered: the scan and the freeing run to their end inside the decref's last step
-   (JS_GCStep), and the engine drives no collection as steps yet (JS_RunGC runs one whole). Next diff builds: the
-   scan as a step over this record, the weak references to the cycles reset before any mutator can run, the
-   freeing as steps the mutator interleaves with, and the scheduler's collector steps at the work quantum.
-   Absence shows as: a collection's scan and free work arriving inside one engine step however large the heap. */
+   (JS_GCStep). Next diff builds: the scan as a step over this record, the weak references to the cycles reset
+   before any mutator can run, and the freeing as steps the mutator interleaves with. Absence shows as: a
+   collector slice whose work overruns the quantum by the live heap's size (@HEAP gcWork against gcSlices). */
+/* Opcodes dispatched on this thread, lifetime: every opcode may store into the graph, so a trial that any opcode
+   followed is restarted (gc_mut_reading). Raised beside the flow's retired work, which the scheduler resets. */
+static _Thread_local uint64_t g_js_dispatch_life __attribute__((tls_model("local-exec"))) = 0;
+
 typedef struct JSGCCycle {
     JSGCCycleStep step;
     struct list_head decref_done;
-    uint64_t work;
+    /* A collection is owed: the allocation threshold was crossed in a runtime whose embedder drives the steps
+       (JSRuntime.gc_driven). Cleared when the collection begins. */
+    bool owed;
     /* Which collection the trial counts belong to; raised at every begin and restart, never 0. */
     uint32_t serial;
-    /* JSRuntime.gc_mut_epoch when the trial began: a mutator's entry since then restarts it (gc_decref_step). */
+    /* gc_mut_reading when the trial began: any change since then restarts it (gc_decref_step). */
     uint64_t mut_epoch0;
-    /* Lifetime counts, read by JS_GCCycleStats: steps taken, trials restarted, GC objects freed as cycles. */
-    uint64_t steps, restarts, freed;
+    /* Lifetime counts, read by JS_GCCycleStats: the work done in every phase (objects and edges visited, objects
+       freed), the unit a step is budgeted in; decref steps taken; trials restarted; collections finished; GC
+       objects freed as cycles. */
+    uint64_t work, steps, restarts, collections, freed;
 } JSGCCycle;
 
 typedef struct JSMallocState {
@@ -496,9 +503,14 @@ struct JSRuntime {
     struct list_head gc_zero_ref_count_list;
     struct list_head tmp_obj_list; /* used during GC */
     JSGCCycle gc_cycle;
-    /* Raised by JS_MutatorEnter at every entry of code that can change the heap's graph between two of a
-       collection's steps. */
+    /* Raised at every change outside the interpreter that can falsify a standing trial: a store into the graph
+       (the time-travel capture hooks, which every write of heap state reaches), a GC object's birth
+       (add_gc_object) or death (remove_gc_object), a WeakRef handing its target back, and JS_MutatorEnter for an
+       embedder's own records. The interpreter's are counted per opcode (g_js_dispatch_life). */
     uint64_t gc_mut_epoch;
+    /* The embedder drives the collection's steps (JS_SetGCDriven): crossing the allocation threshold owes a
+       collection rather than running one inside the allocation. */
+    bool gc_driven;
     /* THE OBJECT WHOSE CHILDREN THE DECREF PASS IS WALKING. gc_decref_child is a JS_MarkFunc, so it is handed
        a CHILD and nothing else — and the edge being walked belongs to the PARENT, which is where a mark with
        no reference behind it is written. Every gc_mark in this engine reaches that one line, so the abort
@@ -2804,9 +2816,10 @@ static JSValue js_compile_regexp(JSContext *ctx, JSValueConst pattern,
                                  JSValueConst flags);
 static JSValue js_regexp_constructor_internal(JSContext *ctx, JSValueConst ctor,
                                               JSValue pattern, JSValue bc);
-static void gc_decref(JSRuntime *rt);
-/* Its inverse, forward for the SAME reason gc_decref is: JS_FreeRuntime's leak report runs the pair to learn
-   which leaked objects are rooted from outside the heap, and puts every refcount back with it. */
+/* Forward because JS_FreeRuntime's leak report runs a trial to learn which leaked objects are rooted from outside
+   the heap, and the scan to put every object back. */
+static void gc_decref_begin(JSRuntime *rt);
+static bool gc_decref_step(JSRuntime *rt, uint64_t budget);
 static void gc_scan(JSRuntime *rt);
 static int JS_NewClass1(JSRuntime *rt, JSClassID class_id,
                         const JSClassDef *class_def, JSAtom name);
@@ -2982,7 +2995,7 @@ static JSAtom JS_ValueToAtomInternalAt(JSContext *ctx, JSValueConst val,
 static JSAtom js_symbol_to_atom(JSContext *ctx, JSValueConst val);
 static void add_gc_object(JSRuntime *rt, JSGCObjectHeader *h,
                           JSGCObjectTypeEnum type);
-static void remove_gc_object(JSGCObjectHeader *h);
+static void remove_gc_object(JSRuntime *rt, JSGCObjectHeader *h);
 static void js_async_function_free0(JSRuntime *rt, JSAsyncFunctionData *s);
 static void js_async_function_free(JSRuntime *rt, JSAsyncFunctionData *s);
 static void js_release_coro(JSRuntime *rt, JSGCObjectHeader *coro);
@@ -3132,10 +3145,23 @@ static void js_trigger_gc(JSRuntime *rt, size_t size)
             printf("GC: size=%zd\n", rt->malloc_state.malloc_size);
         }
 #endif
+        if (rt->gc_driven) {
+            /* Owed, not run: the embedder's scheduler begins it at its next step, where no mutator stands
+               between the begin and the first decref (JS_GCOwed). The threshold moves when it finishes. */
+            rt->gc_cycle.owed = true;
+            return;
+        }
         JS_RunGC(rt);
-        rt->malloc_gc_threshold = rt->malloc_state.malloc_size +
-            (rt->malloc_state.malloc_size >> 1);
     }
+}
+
+/* A collection finished: the next one is owed past half again the memory that survived it, and a crossing the
+   host made while this one stood is answered by it. */
+static void gc_cycle_finished(JSRuntime *rt)
+{
+    rt->gc_cycle.collections++;
+    rt->gc_cycle.owed = false;
+    rt->malloc_gc_threshold = rt->malloc_state.malloc_size + (rt->malloc_state.malloc_size >> 1);
 }
 
 static size_t js_malloc_usable_size_unknown(const void *ptr)
@@ -4830,7 +4856,9 @@ void JS_FreeRuntime(JSRuntime *rt)
            refcount, its prototype and its own property names — so the next reading of this report starts from
            the objects rather than from their class names. The dump lands on STDOUT because that is where every
            other user of quickjs's dump infra writes, so it is flushed and labelled rather than redirected. */
-        gc_decref(rt);
+        gc_decref_begin(rt);
+        while (!gc_decref_step(rt, UINT64_MAX))
+            ;
         printf("[gcroot] the GC objects still held from OUTSIDE the heap, one line each:\n");
         /* EVERY LINE OF THIS REPORT CARRIES THE TAG, INCLUDING THE DUMP'S — and that is not cosmetic, it is
            the difference between this report being read and being read PAST. The dump above me says each root
@@ -5131,14 +5159,14 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
     if (!ctx->class_proto) {
         /* THE REALM IS ALREADY ON THE COLLECTOR'S LIST by the line above, so freeing it here without taking it
            off leaves the gc_obj_list walk — and JS_FreeRuntime's leak report — holding freed memory. */
-        remove_gc_object(&ctx->header);
+        remove_gc_object(rt, &ctx->header);
         js_free_rt(rt, ctx);
         return NULL;
     }
     ctx->class_ctor = js_malloc_rt(rt, sizeof(ctx->class_ctor[0]) *
                                    rt->class_count);
     if (!ctx->class_ctor) {
-        remove_gc_object(&ctx->header);
+        remove_gc_object(rt, &ctx->header);
         js_free_rt(rt, ctx->class_proto);
         js_free_rt(rt, ctx);
         return NULL;
@@ -5533,7 +5561,7 @@ static void js_context_release_refs(JSRuntime *rt, JSContext *ctx)
     ctx->regexp_result_shape = NULL;
 
     list_del(&ctx->link);              /* rt->context_list — nothing may walk to a realm in this state */
-    remove_gc_object(&ctx->header);    /* and the sweep parks it by the link this frees */
+    remove_gc_object(rt, &ctx->header);    /* and the sweep parks it by the link this frees */
 }
 
 static void js_context_free_tables(JSRuntime *rt, JSContext *ctx)
@@ -8946,7 +8974,7 @@ static void js_free_shape0(JSRuntime *rt, JSShape *sh)
         }
         JS_KEY_LEDGER_OWNER_POP();
     }
-    remove_gc_object(&sh->header);
+    remove_gc_object(rt, &sh->header);
     js_free_rt(rt, get_alloc_from_shape(sh));
 }
 
@@ -9504,6 +9532,7 @@ static inline void cow_capture(JSContext *ctx, JSValueConst obj, JSAtom prop) {
     JSObject *p;
     if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT)
         return;
+    ctx->rt->gc_mut_epoch++;   /* a slot write is a store into the graph (JSRuntime.gc_mut_epoch) */
     p = JS_VALUE_GET_OBJ(obj);
     if (is_typed_array(p->class_id) && __JS_AtomIsTaggedInt(prop)) {
         cow_capture_bytes(ctx, p);
@@ -9569,6 +9598,7 @@ static inline void cow_capture(JSContext *ctx, JSValueConst obj, JSAtom prop) {
    The length capture is hash-deduped by the host after the first append, so an N-element accumulator pays one
    hash lookup per append and holds one length entry in total. */
 static inline void cow_capture_append(JSContext *ctx, JSValueConst obj, JSAtom idx) {
+    ctx->rt->gc_mut_epoch++;
     if (!g_time_travel.arr_append)
         return;
     cow_capture(ctx, obj, JS_ATOM_length);
@@ -9678,6 +9708,7 @@ static inline bool js_class_has_object_data(JSClassID class_id) {
  * kinds whose save/restore/free arms are the same four lines. What is NOT here is the class's own record
  * (cow_capture_host_record) and the slots (prop_write): those have their own units. */
 static inline void cow_capture_obj(JSContext *ctx, JSObject *p) {
+    ctx->rt->gc_mut_epoch++;   /* a prototype or internal-slot write */
     if (g_time_travel.obj_state)
         g_time_travel.obj_state(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
 }
@@ -9688,6 +9719,7 @@ static inline void cow_capture_obj(JSContext *ctx, JSObject *p) {
    the delta dedups to one entry per iterator per flow, and there is then no write site left to miss, which is
    the only way this goes wrong. See JSTimeTravelHooks.iter_state. */
 static inline void cow_capture_iter(JSContext *ctx, JSObject *p) {
+    ctx->rt->gc_mut_epoch++;
     if (g_time_travel.iter_state)
         g_time_travel.iter_state(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
 }
@@ -9697,6 +9729,7 @@ static inline void cow_capture_iter(JSContext *ctx, JSObject *p) {
    into the running flow's delta so a snapshot-forked sibling sharing the cell stays isolated. The cell is opaque
    to the host (JSVarRef is engine-internal); the host reads/writes its value via JS_VarRefGetValue/SetValue. */
 static inline void cow_capture_vr(JSContext *ctx, void *vref) {
+    ctx->rt->gc_mut_epoch++;   /* a closure cell's value is an edge of the cell */
     if (g_time_travel.cell_write && vref) g_time_travel.cell_write(ctx, vref);
 }
 
@@ -10718,7 +10751,7 @@ static void free_var_ref(JSRuntime *rt, JSVarRef *var_ref)
         if (--JS_REF_COUNT(var_ref) == 0) {
             if (var_ref->is_detached) {
                 JS_FreeValueRT(rt, var_ref->value);
-                remove_gc_object(&var_ref->header);
+                remove_gc_object(rt, &var_ref->header);
             } else {
                 JSStackFrame *sf = var_ref->stack_frame;
                 DCHECK(sf->var_refs[var_ref->var_ref_idx] == var_ref, "sf->var_refs[var_ref->var_ref_idx] == var_ref");
@@ -10728,7 +10761,7 @@ static void free_var_ref(JSRuntime *rt, JSVarRef *var_ref)
                    owner is read off the FRAME, which the slot above being cleared does not affect, and the
                    release is last because it can free that frame and nothing below reads it again. */
                 if (var_ref->is_coro) {
-                    remove_gc_object(&var_ref->header);
+                    remove_gc_object(rt, &var_ref->header);
                     js_release_coro(rt, sf->cur_gc_obj);
                 }
             }
@@ -10926,7 +10959,7 @@ static void free_object(JSRuntime *rt, JSObject *p)
     p->u.func.var_refs = NULL;
     p->u.func.home_object = NULL;
 
-    remove_gc_object(&p->header);
+    remove_gc_object(rt, &p->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(p) != 0) {
         list_add_tail(&p->header.link, &rt->gc_zero_ref_count_list);
     } else {
@@ -11094,10 +11127,12 @@ static void add_gc_object(JSRuntime *rt, JSGCObjectHeader *h,
     h->gc_serial = 0;   /* no collection's: JSGCCycle.serial is never 0 */
     h->gc_trial = 0;
     list_add_tail(&h->link, &rt->gc_obj_list);
+    rt->gc_mut_epoch++;   /* a new object's edges were never subtracted from its children's counts */
 }
 
-static void remove_gc_object(JSGCObjectHeader *h)
+static void remove_gc_object(JSRuntime *rt, JSGCObjectHeader *h)
 {
+    rt->gc_mut_epoch++;   /* a death can cut the path a reference taken since the trial began was found by */
     list_del(&h->link);
 }
 
@@ -11542,12 +11577,19 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
     }
 }
 
+/* What a trial's validity is read against: the sum of two lifetime counts, so it moves when either does — the
+   graph changes the runtime records (JSRuntime.gc_mut_epoch) and the opcodes dispatched. */
+static inline uint64_t gc_mut_reading(JSRuntime *rt)
+{
+    return rt->gc_mut_epoch + g_js_dispatch_life;
+}
+
 /* A new trial: a serial no object's trial count carries, so every count is taken afresh from ref_count. */
 static void gc_cycle_serial_next(JSRuntime *rt)
 {
     if (++rt->gc_cycle.serial == 0)
         rt->gc_cycle.serial = 1;
-    rt->gc_cycle.mut_epoch0 = rt->gc_mut_epoch;
+    rt->gc_cycle.mut_epoch0 = gc_mut_reading(rt);
 }
 
 /* A collection's start: nothing visited, nothing found unreferenced. */
@@ -11559,7 +11601,7 @@ static void gc_decref_begin(JSRuntime *rt)
     init_list_head(&rt->tmp_obj_list);
     init_list_head(&rt->gc_cycle.decref_done);
     rt->gc_cycle.step = JS_GC_CYCLE_DECREF;
-    rt->gc_cycle.work = 0;
+    rt->gc_cycle.owed = false;
     gc_cycle_serial_next(rt);
 }
 
@@ -11596,7 +11638,7 @@ static bool gc_decref_step(JSRuntime *rt, uint64_t budget)
 
     DCHECKF(rt->gc_cycle.step == JS_GC_CYCLE_DECREF,
             "a decref step ran with the collection at step %d", (int)rt->gc_cycle.step);
-    if (rt->gc_mut_epoch != rt->gc_cycle.mut_epoch0)
+    if (gc_mut_reading(rt) != rt->gc_cycle.mut_epoch0)
         gc_decref_restart(rt);
     rt->gc_cycle.steps++;
     while (!list_empty(&rt->gc_obj_list) && spent < budget) {
@@ -11635,18 +11677,11 @@ static bool gc_decref_step(JSRuntime *rt, uint64_t budget)
     return done;
 }
 
-/* The decref phase in one call: the collection's steps with no budget, which the residual on JSGCCycle names. */
-static void gc_decref(JSRuntime *rt)
-{
-    gc_decref_begin(rt);
-    while (!gc_decref_step(rt, UINT64_MAX))
-        ;
-}
-
 static void gc_scan_incref_child(JSRuntime *rt, JSGCObjectHeader *p)
 {
     int *trial = gc_trial(rt, p);
 
+    rt->gc_cycle.work++;
     (*trial)++;
     if (*trial == 1) {
         /* ref_count was 0: remove from tmp_obj_list and add at the
@@ -11673,6 +11708,7 @@ static void gc_scan(JSRuntime *rt)
                "every object whose trial count reaches zero to tmp_obj_list, and the scan only returns one with "
                "its count raised again");
         JS_GC_MARK(p) = 0; /* reset the mark for the next GC call */
+        rt->gc_cycle.work++;
         mark_children(rt, p, gc_scan_incref_child);
     }
     /* What is left on tmp_obj_list is the cycles. Their real refcounts were never subtracted, so unlike the
@@ -11708,6 +11744,7 @@ static void gc_free_cycles(JSRuntime *rt)
            list, where the assert at the end of this function is what would have reported it. */
         case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:
             rt->gc_cycle.freed++;
+            rt->gc_cycle.work++;
 #ifdef ENABLE_DUMPS // JS_DUMP_GC_FREE
             if (check_dump_flag(rt, JS_DUMP_GC_FREE)) {
                 if (!header_done) {
@@ -11751,6 +11788,16 @@ static void gc_free_cycles(JSRuntime *rt)
     free_zero_refcount(rt);   /* the realms and weak resets the collection queued */
 }
 
+void JS_SetGCDriven(JSRuntime *rt, bool driven)
+{
+    rt->gc_driven = driven;
+}
+
+bool JS_GCOwed(JSRuntime *rt)
+{
+    return rt->gc_cycle.owed || rt->gc_cycle.step != JS_GC_CYCLE_IDLE;
+}
+
 void JS_GCBegin(JSRuntime *rt)
 {
     gc_decref_begin(rt);
@@ -11762,6 +11809,7 @@ bool JS_GCStep(JSRuntime *rt, uint64_t budget)
         return false;
     gc_scan(rt);
     gc_free_cycles(rt);
+    gc_cycle_finished(rt);
     return true;
 }
 
@@ -11773,23 +11821,22 @@ void JS_MutatorEnter(JSRuntime *rt)
 void JS_GCCycleStats(JSRuntime *rt, JSGCCycleStats *out)
 {
     out->step = (int)rt->gc_cycle.step;
+    out->owed = rt->gc_cycle.owed;
     out->work = rt->gc_cycle.work;
     out->steps = rt->gc_cycle.steps;
     out->restarts = rt->gc_cycle.restarts;
+    out->collections = rt->gc_cycle.collections;
     out->freed = rt->gc_cycle.freed;
 }
 
+/* The collection driven to its end in one call, for a host with no scheduler and for teardown. A trial already
+   standing is finished rather than begun again. */
 void JS_RunGC(JSRuntime *rt)
 {
-    /* decrement the reference of the children of each object. mark =
-       1 after this pass. */
-    gc_decref(rt);
-
-    /* keep the GC objects with a non zero refcount and their childs */
-    gc_scan(rt);
-
-    /* free the GC objects in a cycle */
-    gc_free_cycles(rt);
+    if (rt->gc_cycle.step == JS_GC_CYCLE_IDLE)
+        gc_decref_begin(rt);
+    while (!JS_GCStep(rt, UINT64_MAX))
+        ;
 }
 
 /* Return false if not an object or if the object has already been
@@ -34479,7 +34526,7 @@ void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
  * every opcode. Discarded at a flow's switch-in (JS_FlowDiscardRetiredWork): what stands there then is host
  * work or a finished flow's residue, neither of them the incoming flow's. */
 static _Thread_local uint64_t g_flow_work_retired __attribute__((tls_model("local-exec"))) = 0;
-#define FLOW_WORK_RETIRE()  (g_flow_work_retired++)
+#define FLOW_WORK_RETIRE()  (g_flow_work_retired++, g_js_dispatch_life++)
 uint64_t JS_FlowDiscardRetiredWork(void)
 {
     uint64_t u = g_flow_work_retired;
@@ -55614,7 +55661,7 @@ static void js_async_function_free0(JSRuntime *rt, JSAsyncFunctionData *s)
     JS_FreeValueRT(rt, s->resolving_funcs[1]);
     s->resolving_funcs[0] = JS_UNDEFINED;
     s->resolving_funcs[1] = JS_UNDEFINED;
-    remove_gc_object(&s->header);
+    remove_gc_object(rt, &s->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(s) != 0) {
         /* still named by a cycle member the walk has not reached; it will decrement this header, so the memory
            outlives the phase and the sweep at the end of gc_free_cycles releases it */
@@ -77780,7 +77827,7 @@ static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b)
     js_free_rt(rt, b->stack_level_tab);   /* NULL for a body the bytecode reader built — see the field */
 #endif
 
-    remove_gc_object(&b->header);
+    remove_gc_object(rt, &b->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(b) != 0) {
         list_add_tail(&b->header.link, &rt->gc_zero_ref_count_list);
     } else {
@@ -128393,6 +128440,9 @@ static JSValue js_weakref_deref(JSContext *ctx, JSValueConst this_val, int argc,
         return JS_EXCEPTION;
     if (wrd == &js_weakref_sentinel)
         return JS_UNDEFINED;
+    /* The one way a reference to an unreachable object is taken: a standing trial may already count the target
+       as garbage. */
+    ctx->rt->gc_mut_epoch++;
     return js_dup(wrd->target);
 }
 

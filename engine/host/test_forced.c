@@ -1147,6 +1147,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/intl.h"
 #include "fixture/contchain.h"
 #include "fixture/weakchain.h"
+#include "fixture/gcchurn.h"
 #include "fixture/importchain.h"
 #include "fixture/borrowedkey.h"
 #include "fixture/replyrole.h"
@@ -1642,6 +1643,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "intl", HTML_INTL },
     { "contchain", HTML_CONTCHAIN },
     { "weakchain", HTML_WEAKCHAIN },
+    { "gcchurn", HTML_GCCHURN },
     { "importchain", HTML_IMPORTCHAIN },
     { "borrowedkey", HTML_BORROWEDKEY },
     { "replyrole", HTML_REPLYROLE },
@@ -2656,9 +2658,10 @@ TF_UNIT void policy_container_selftest(void)
  * Chrome applies — so the whole cascade below it would then resolve from a document no browser has. */
 /* @GCSTEP: the cycle collector as budgeted steps (JS_GCBegin/JS_GCStep), on a runtime of its own. The heap holds
    N garbage two-object cycles and one live cycle reachable only through the global `g`. Between the first and second
-   steps a mutator, announced by JS_MutatorEnter, moves the live cycle's only path from `g` to a new object's field.
-   The step after it must restart the trial, the live cycle must survive whole, and the garbage must be freed. The
-   heap is built through the C API because a program evaluated from C needs a flow to run on. */
+   steps a mutator moves the live cycle's only path from `g` to a new object's field, announcing nothing: the new
+   object's birth and the property stores are what the runtime records. The step after it must restart the trial,
+   the live cycle must survive whole, and the garbage must be freed. The heap is built through the C API because a
+   program evaluated from C needs a flow to run on. */
 TF_UNIT void gc_cycle_step_selftest(void)
 {
     enum { N = 2000, BUDGET = 64 };
@@ -2692,7 +2695,6 @@ TF_UNIT void gc_cycle_step_selftest(void)
     done = JS_GCStep(rt, BUDGET);
     steps++;
     CHECK(!done, "the collector finished a heap of thousands of objects inside one 64-unit step");
-    JS_MutatorEnter(rt);
     holder = JS_NewObject(ctx);
     CHECK(JS_SetPropertyStr(ctx, holder, "c", JS_GetPropertyStr(ctx, global, "g")) >= 0 &&
           JS_SetPropertyStr(ctx, global, "keep", holder) >= 0 &&
@@ -2711,10 +2713,10 @@ TF_UNIT void gc_cycle_step_selftest(void)
     alive = JS_IsObject(c) && JS_IsObject(cba) && JS_VALUE_GET_PTR(cba) == JS_VALUE_GET_PTR(c);
     printf("@GCSTEP {\"steps\":%llu,\"restarts\":%llu,\"freed\":%llu,\"work\":%llu,\"alive\":%d}\n",
            (unsigned long long)steps, (unsigned long long)(st.restarts - st0.restarts),
-           (unsigned long long)(st.freed - st0.freed), (unsigned long long)st.work, alive);
+           (unsigned long long)(st.freed - st0.freed), (unsigned long long)(st.work - st0.work), alive);
     CHECK(st.restarts - st0.restarts == 1,
-          "the step after a mutator's entry did not restart the trial, so it read counts off a graph the mutator "
-          "changed");
+          "the step after the mutator did not restart the trial, so it read counts off a graph the mutator changed "
+          "without the runtime recording it");
     CHECK(alive, "the live cycle the mutator moved did not survive the collection whole");
     CHECK(st.freed - st0.freed >= 2 * N, "the collection freed fewer GC objects than the garbage cycles hold");
     JS_FreeValue(ctx, cba);
@@ -14395,6 +14397,21 @@ TF_UNIT void probes_weakchain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gcchurn` document (fixture/gcchurn.h). */
+TF_UNIT void probes_gcchurn(const char *js, Probe *tab, int *n) {
+    /* A collection finishes and frees the WeakRef's cycle while the page allocates cycles at every task. */
+    const char *gc_why = NULL; int gc_tt = 1;
+    fold_row(&gc_tt, &gc_why, !!strstr(js, "\"/api/gcchurn\""),
+             "NOT REACHED: there is no /api/gcchurn record, so no collection freed the WeakRef's cycle while the page "
+             "kept allocating");
+    fold_row(&gc_tt, &gc_why, param_value_is(js, "/api/gcchurn", "kept", "400000"),
+             "the live set was not the document's 400000 objects when the cycle was found collected");
+    const Probe rows[] = {
+        { "cycle-collected-under-churn", gc_tt, "/api/gcchurn", SESS_EXPLORE, gc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `importchain` document (fixture/importchain.h). */
 TF_UNIT void probes_importchain(const char *js, Probe *tab, int *n) {
     /* A 20000-module import chain loads, links and evaluates, and the first module reads the last one's depth
@@ -20019,6 +20036,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_inlineflex(js, probes, &np);
     probes_contchain(js, probes, &np);
     probes_weakchain(js, probes, &np);
+    probes_gcchurn(js, probes, &np);
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
     probes_replyrole(js, probes, &np);

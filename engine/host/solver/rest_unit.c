@@ -67,6 +67,17 @@
    derivation overruns the slice rests mid-node through its job's resting drive (core/layout/layout_job.h). */
 #define REST_UNIT_LAYOUT_DESCENDANTS_N   32u
 
+/* Collector work per step, 4096. The floor is the step's own cost (a stats read and the quantum's two questions),
+   which a few thousand loads amortize. The ceiling is bound (2): at the collector's rate
+   (THREAD_WORK_UNITS_PER_KI_GC) a step is about 950 units of engine work, under 2% of the quantum.
+   The step is the rest point, and the trial is not: while a collection stands, the slices are the collector's
+   and no flow runs. A trial counts only if nothing changed the graph between its first step and its last, so a
+   flow between two steps would restart it, and a page that never stops allocating would restart every trial.
+   Holding the slices is that policy, charged in work: each step banks its work in the instance's currency, so
+   the collection is paid for in quanta the scheduler counts, and the host still gets its thread back between
+   two steps. */
+#define REST_UNIT_GC_WORK_N   4096u
+
 size_t rest_unit_items(RestUnitKind kind)
 {
     size_t n = 0;
@@ -82,6 +93,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_LAYOUT_LINE_METRICS: n = REST_UNIT_LAYOUT_LINE_METRICS_N; break;
     case REST_UNIT_CASCADE_RULES: n = REST_UNIT_CASCADE_RULES_N; break;
     case REST_UNIT_LAYOUT_WORK: n = (size_t)REST_UNIT_LAYOUT_WORK_N; break;
+    case REST_UNIT_GC_WORK:     n = REST_UNIT_GC_WORK_N;     break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a
        kind, or an integer cast into the enum, leaves `n` at zero and fails the check below. */

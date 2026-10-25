@@ -1665,10 +1665,11 @@ char *result_cold_json(void) {
    into `memory_used_size`, so adding them again would count the named heap twice. `stepMachines` and
    `trampFrames` decompose it, being the two largest things QuickJS cannot name.
    Kinds: every row is a gauge (`allocations` is QuickJS's live `malloc_count`, lowered on free) except
-   `childRealmsMade`, a lifetime count and the only row that may be differenced, and `childRealmsPeak`, a
-   high-water mark. Sized by composef (solver/compose.h). */
+   `childRealmsMade` and the `gc` rows but `gcOwed`, lifetime counts and the only rows that may be differenced,
+   and `childRealmsPeak`, a high-water mark. Sized by composef (solver/compose.h). */
 char *result_heap_json(JSContext *ctx) {
     JSMemoryUsage mem;
+    JSGCCycleStats gc;
     JSRuntime *rt;
     long long attributed;
     /* Who holds the child realms, taken in one call beside the three counts it explains (see navigable.h).
@@ -1694,6 +1695,10 @@ char *result_heap_json(JSContext *ctx) {
                         "runtime, so a census with no runtime to walk is a reading of nothing");
     rt = JS_GetRuntime(ctx);
     JS_ComputeMemoryUsage(rt, &mem);
+    /* The cycle collector's rows (quickjs.h's JSGCCycleStats, engine.h's engine_gc_slices): work, decref steps,
+       restarted trials, finished collections, objects freed as cycles, the scheduler's collector slices and their
+       thread time on the pricing clock; `gcOwed` is 1 while a collection is owed or standing. */
+    JS_GCCycleStats(rt, &gc);
     navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
     rsites_n = navigable_realm_ref_sites(rsites, NAVIGABLE_REALM_REF_SITES_MAX, &rreleased);
     /* `null` for a build that watches no references, never `[]`: an empty array is a run holding no live
@@ -1732,7 +1737,9 @@ char *result_heap_json(JSContext *ctx) {
                  "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
                  "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
                  "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,"
-                 "\"cLiveKiB\":%lld,\"arenaKiB\":%lld,\"cResidueBytes\":%s}",
+                 "\"cLiveKiB\":%lld,\"arenaKiB\":%lld,\"cResidueBytes\":%s,"
+                 "\"gcWork\":%llu,\"gcSteps\":%llu,\"gcRestarts\":%llu,\"gcCollections\":%llu,"
+                 "\"gcFreed\":%llu,\"gcSlices\":%lld,\"gcUs\":%lld,\"gcOwed\":%d}",
                  (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
                  (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
                  (long long)mem.js_func_count, (long long)mem.js_func_code_size, (long long)mem.array_count,
@@ -1745,7 +1752,10 @@ char *result_heap_json(JSContext *ctx) {
                  (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
                  (long long)mem.malloc_size - attributed,
                  JS_StepMachineCount(rt), JS_TrampFrameCount(rt),
-                 (long long)c_alloc_live() / 1024, (long long)ca.arena / 1024, residue);
+                 (long long)c_alloc_live() / 1024, (long long)ca.arena / 1024, residue,
+                 (unsigned long long)gc.work, (unsigned long long)gc.steps, (unsigned long long)gc.restarts,
+                 (unsigned long long)gc.collections, (unsigned long long)gc.freed, engine_gc_slices(),
+                 engine_gc_us(), (int)JS_GCOwed(rt));
     free(rsites_json);
     return heap;
 }

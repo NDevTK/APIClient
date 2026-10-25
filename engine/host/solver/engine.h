@@ -1252,6 +1252,11 @@ void engine_note_net_prog_fetch_queued(void);
 void engine_note_net_prog_xhr_ask(void);
 void engine_note_net_prog_xhr_queued(void);
 
+/* The cycle collector's slices and their thread time on the pricing clock (lifetime; engine.c's
+   engine_collect_slice). */
+long long engine_gc_slices(void);
+long long engine_gc_us(void);
+
 /* What this instance's timelines did with the routed records handed to it. `delivered` counts tasks queued
    (each is HTML §9.3.3 step 8's one global task at the receiving Window; engine_routed_task_census says how
    each ended), and `refused` counts records a timeline consumed as not its own (the other side of a sender

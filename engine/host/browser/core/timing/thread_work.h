@@ -32,6 +32,12 @@
    heap entries visited: 112 ns an entry on the live `platform` fixture at load ~35 (scratchpad
    level1w_walkrate.sh: 59876243 entries over 6.72 s of thread CPU), read as about half that unloaded. */
 #define THREAD_WORK_UNITS_PER_KI_ORPHAN_ENTRIES 256
+/* The cycle collector, per 1024 units of its work (quickjs.h's JS_GCStep: an object or edge visited, an object
+   freed), banked by solver/engine.c's engine_collect_slice in the instance's currency rather than a flow's,
+   since the collection is no flow's. The `gcchurn` fixture (bff7adf2, dev, load ~20) spent 122,291 us of
+   collector slices on 8,139,551 units, 15.0 ns each, against 64.6 ns a unit of stepUs over stepWork in the same
+   census, so 0.233 units. */
+#define THREAD_WORK_UNITS_PER_KI_GC 238
 /* An Intl host question (core/intl/intl_host.h), priced by the bytes it asks with, which both hosts are asked
    with alike: 20,000 time zone offset questions asked with 220,000 bytes took 20,314 us at load ~16 (1d05ecec,
    dev), against 0.13 us a unit of stepUs over stepWork in the same census, so 727 units per KiB. */
