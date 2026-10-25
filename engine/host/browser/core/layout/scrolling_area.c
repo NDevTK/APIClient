@@ -13,7 +13,11 @@
 #include "core/dom/element_view.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/containment.h"
+#include "core/layout/flex_item.h"
+#include "core/layout/flex_line.h"
+#include "core/layout/flex_position.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
@@ -229,16 +233,16 @@ static bool sa_inline_box_edge(lxb_dom_element_t *d, bool vertical, bool ending_
    of its lines the content grows from and `el`'s decides which end of the SCROLLING AREA is the ending one:
    a `rtl` block inside a `ltr` scroller overflows toward the LOWER coordinate, which is `el`'s BEGINNING edge.
    §2's two rows are then one expression rather than a case per combination. */
-static bool sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, CssPx origin,
+static bool sa_fold_span(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail, CssPx origin,
                          bool vertical, bool ending_at_hi, CssPx *best)
 {
     char sbuf[160], fbuf[160], ebuf[160];
     CssPx lo, hi;
 
     /* The span reads every line's extent, which reads the atomic inlines' heights and baselines. */
-    if (!line_box_atomics_ask(style, run, line_box_available_width_derived())) return false;
-    if (vertical && !line_box_extents_ask(style, run, line_box_available_width_derived())) return false;
-    if (!line_box_content_span_ask(style, run, vertical, &lo, &hi)) return false;
+    if (!line_box_atomics_ask(style, run, avail)) return false;
+    if (vertical && !line_box_extents_ask(style, run, avail)) return false;
+    if (!line_box_content_span_ask(style, run, avail, vertical, &lo, &hi)) return false;
     /* THE ESTABLISHING BOX AND THE RUN'S TWO DELIMITERS ARE THE SUBJECT, AND THE TWO COORDINATES ARE THE FACT.
        Which of this function's two callers reached it is already in a frame list — they are distinct functions
        — so the address that is missing is the RUN: its two bounds are §9.2.1.1's own block-level boxes, either
@@ -271,7 +275,7 @@ static bool sa_inline_context_extreme(lxb_dom_element_t *b, bool vertical, bool 
         whole.after = NULL;
         whole.end = NULL;
         if (!sa_content_origin(b, vertical, &origin)) return false;
-        return sa_fold_span(b, whole, origin, vertical, ending_at_hi, best);
+        return sa_fold_span(b, whole, line_box_available_width_derived(), origin, vertical, ending_at_hi, best);
     }
 }
 
@@ -306,12 +310,47 @@ static bool sa_anon_block_box_fold(lxb_dom_element_t *b, size_t i, bool vertical
     }
     if (!sa_content_origin(b, vertical, &content)) { free(v); return false; }
     origin = css_px_add(content, vertical ? v[i].content_y : v[i].content_x);
-    if (!sa_fold_span(b, v[i].run, origin, vertical, ending_at_hi, best)) { free(v); return false; }
+    if (!sa_fold_span(b, v[i].run, line_box_available_width_derived(), origin, vertical, ending_at_hi, best)) {
+        free(v);
+        return false;
+    }
     if (vertical)
         *best = ending_at_hi ? css_px_max(*best, css_px_add(origin, v[i].height)) : css_px_min(*best, origin);
     *last = i + 1 == n;
     free(v);
     return true;
+}
+
+/* css-flexbox-1 §4's anonymous flex items of flex container `c` folded in: "each child text sequence is
+   wrapped in an anonymous block container flex item", a descendant's box with no element to place. Each one's
+   border box is folded (its margins, border and padding are zero, so it is its margin box), then the line boxes
+   of the inline formatting context it establishes, which can reach past it. The lines are filled at the item's
+   used main size, and measured from its own content box, which is its border box. */
+static bool sa_anon_flex_items_fold(lxb_dom_element_t *c, bool vertical, bool ending_at_hi, CssPx *best)
+{
+    FlexLineMember *m = NULL;
+    size_t n, i;
+    CssPx origin;
+    bool ready = true;
+
+    if (!sa_content_origin(c, vertical, &origin)) return false;
+    n = flex_line_members(c, &m);
+    for (i = 0; ready && i < n; i++) {
+        CssPx x, y, w, h, at, extent;
+        BlockFlowRun seq;
+
+        if (!m[i].anonymous) continue;
+        flex_position_anonymous_box(c, m[i].first, &x, &y, &w, &h);
+        at = css_px_add(origin, vertical ? y : x);
+        extent = vertical ? h : w;
+        *best = ending_at_hi ? css_px_max(*best, css_px_add(at, extent)) : css_px_min(*best, at);
+        /* The sequence as core/layout/block_flow.h's half-open run, as core/layout/flex_line.c measures it. */
+        seq.after = box_tree_child_node(box_tree_prev_sibling(c, box_tree_child_of_node(m[i].first)));
+        seq.end = m[i].end;
+        ready = sa_fold_span(c, seq, line_box_available_width_stated(w), at, vertical, ending_at_hi, best);
+    }
+    free(m);
+    return ready;
 }
 
 /* THE EXTREME OVER EVERY DESCENDANT'S BOX, in tree order. WHICH NODES HAVE A BOX IS TWO QUESTIONS AND NOT ONE,
@@ -428,6 +467,9 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
 
                     if (context && !sa_inline_context_extreme(d, w->vertical, w->ending_at_hi, &w->best))
                         return false;
+                    if (flex_item_display_is_flex_container(css_computed_display(d)) &&
+                        !sa_anon_flex_items_fold(d, w->vertical, w->ending_at_hi, &w->best))
+                        return false;
                     w->stage = SA_STAGE_ANON;
                     w->anon = 0;
                     if (context) return true;
@@ -456,9 +498,11 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
            forcing is what makes the sentence true of a container holding both, by wrapping each maximal
            run of inline-level children in a box of its own. So the parent being a block container IS the
            guarantee — the run is either on the element's own context or inside one of its anonymous block
-           boxes, and both were folded when the walk reached it. */
+           boxes, and both were folded when the walk reached it. A flex container's run is in one of its
+           anonymous flex items, folded at the container (sa_anon_flex_items_fold). */
         if (block_flow_text_child_generates_box(n) && !sa_is_block_container(parent) &&
-            !sa_is_non_replaced_inline(parent))
+            !sa_is_non_replaced_inline(parent) &&
+            !flex_item_display_is_flex_container(css_computed_display(parent)))
             DFAILF("text run's parent %s, walk root %s: "
                   "CSSOM VIEW §2's scrolling area takes the extreme over \"all of the element's "
                   "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1 "
@@ -478,13 +522,11 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                   "Generation: the none and contents keywords\" splices into the grandparent's box list — "
                   "\"the element must be treated as if it had been replaced in the element tree by its "
                   "contents\" — so this run's context is the grandparent's and the splice is what is "
-                  "missing; core/layout/block_flow.c's own child walk names the same absence. (2) A FLEX "
-                  "or GRID container parent, whose text is not §9.2.1.1's box at all: css-flexbox-1 §4 "
-                  "\"Flex Items\" says \"each child text sequence is wrapped in an ANONYMOUS BLOCK "
-                  "CONTAINER FLEX ITEM\", css-grid-2 §6 \"Grid Items\" says the same with `grid item` for "
-                  "`flex item`, and both add that a sequence of only white space \"is instead not "
-                  "rendered\" — a different box, generated by a different rule, laid out by a different "
-                  "algorithm. (3) A REPLACED INLINE parent (`<object>x</object>`): CSS 2.2 §3.1 "
+                  "missing; core/layout/block_flow.c's own child walk names the same absence. (2) A GRID "
+                  "container parent, whose text is not §9.2.1.1's box at all: css-grid-2 §6 \"Grid Items\" "
+                  "wraps each child text sequence in an anonymous grid item, as css-flexbox-1 §4 \"Flex "
+                  "Items\" does for a flex container, whose items sa_anon_flex_items_fold folds; build the "
+                  "grid item's placement and fold it the same way. (3) A REPLACED INLINE parent (`<object>x</object>`): CSS 2.2 §3.1 "
                   "\"Definitions\" says of a replaced element that \"the content of replaced elements is "
                   "not considered in the CSS rendering model\", so this run generates NO BOX and the "
                   "missing thing is not a box at all but the SUPPRESSION — the walk should not have "
@@ -514,7 +556,7 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                   "assigned it. Until then the cell's line boxes have no available width to be filled "
                   "into. "
                   "WHICH OF THE FOUR THIS IS, THE PARENT'S COMPUTED `display` NAMED ABOVE ALREADY SAYS, and "
-                  "it says it ALONE: `contents` is (1); `flex`, `grid`, `inline-flex` and `inline-grid` are "
+                  "it says it ALONE: `contents` is (1); `grid` and `inline-grid` are "
                   "(2); `inline` is (3), because reaching this line with `inline` means "
                   "`sa_is_non_replaced_inline` answered FALSE for a parent whose `display` IS `inline`, "
                   "which it can only do for a REPLACED one; and `table`, `inline-table`, `table-row`, a row "

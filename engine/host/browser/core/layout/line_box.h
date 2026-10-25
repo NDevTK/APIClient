@@ -129,20 +129,19 @@ void line_box_record_release(LineBoxRecord *r);
        line box in the cell"; reading the last there makes a row too short when a taller cell's first line
        sits above its last.
    Both baselines are distances only when `*any_line_box` is true. */
-/* Named residual. Not covered: `avail` is on this entry only; `line_box_content_span_ask`, `line_box_glyphs` and
-   `line_box_inline_fragments` reduce the same fill but derive their width from `style`, so a box whose
-   containing rectangle is not `style`'s content box and which is painted or scrolled, not only measured,
-   would be filled at two widths. Next: the same argument on those three entries, threaded to the same
-   `lb_fill`. How its absence would show: a box's height taken over one set of line breaks and its glyph
-   positions over another, so its painted text overflows or falls short of the rectangle its height claimed.
-   Whether any caller both states a width and places the box is a grep of those entries' call sites. */
+/* Named residual. Not covered: `line_box_glyphs` and `line_box_inline_fragments` reduce the same fill but
+   derive their width from `style`, so a box whose containing rectangle is not `style`'s content box and which
+   is painted, not only measured or scrolled, would be filled at two widths. Next: the same argument on those
+   two entries, threaded to the same `lb_fill`, as `line_box_content_span_ask` takes it. How its absence would
+   show: a box's height taken over one set of line breaks and its glyph positions over another, so its painted
+   text overflows or falls short of the rectangle its height claimed. */
 CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                               bool *any_line_box, CssPx *first_baseline, CssPx *last_baseline);
 
 /* Where the boxes on this context's line boxes reach on one physical axis: `*lo` and `*hi` receive the lowest
  * and highest coordinates any of them occupies, as offsets from the establishing box's content box origin on
- * that axis (left edge horizontally, top edge vertically). `style` and `run` mean what they mean for
- * `line_box_content_height`. It is a second reduction over one fill, not a second layout, so a height and a
+ * that axis (left edge horizontally, top edge vertically). `style`, `run` and `avail` mean what they mean
+ * for `line_box_content_height`. It is a second reduction over one fill, not a second layout, so a height and a
  * span cannot disagree about which line a box is on.
  *
  * It exists for CSSOM View §2 "Terminology"'s scrolling area, an extreme over "the … margin edge of all of the
@@ -169,7 +168,7 @@ CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run, LineBo
    key. The block axis is a walk over the items, held by the job's line box record and taken one item at a time
    under a resting drive's line box items: false ("not yet") when those were spent, with `*lo` and `*hi`
    unwritten. The inline axis is a walk over the lines and always answers. */
-bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
+bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                                bool vertical, CssPx *lo, CssPx *hi);
 
 /* One placed character of this context's line boxes: the code point, its inline box, and the pen position

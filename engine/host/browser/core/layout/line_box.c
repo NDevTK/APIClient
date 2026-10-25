@@ -1853,7 +1853,7 @@ static bool lb_span_pull(LbFill *f)
     return true;
 }
 
-bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
+bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                                bool vertical, CssPx *lo, CssPx *hi)
 {
     LbFill *f;
@@ -1864,7 +1864,7 @@ bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
            "two edges. They are two answers and not one: css-writing-modes-4 §6.2 \"Flow-relative Directions\" "
            "puts the ENDING edge of an axis at the lower coordinate for a `rtl` inline axis and at the higher "
            "one otherwise, and a caller that received only the far edge would have the wrong one half the time");
-    f = lb_layout(style, run, line_box_available_width_derived());
+    f = lb_layout(style, run, avail);
     if (!vertical) {
         /* §9.4.2's inline axis: "In general, the left edge of a line box touches the left edge of its
            containing block and the right edge touches the right edge of its containing block", and css-text-4
@@ -1899,7 +1899,7 @@ bool line_box_content_span_ask(lxb_dom_element_t *style, BlockFlowRun run,
             /* The start edge is line-right, so content grows toward the lower coordinate and the line box's
                right edge is the far one. Only this arm needs the line box's width, so the used content width is
                read here rather than beside the fill, where it would run CSS 2.1 §10.3 for every unbreakable run. */
-            CssPx width = used_value_content_px(style, false);
+            CssPx width = avail.stated ? avail.px : used_value_content_px(style, false);
 
             *lo = css_px_min(*lo, css_px_sub(width, widest));
             *hi = css_px_max(*hi, width);

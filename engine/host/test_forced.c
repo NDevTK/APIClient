@@ -1149,6 +1149,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/scrollicb.h"
 #include "fixture/cascfork.h"
 #include "fixture/cascforkview.h"
+#include "fixture/scrollflex.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1686,6 +1687,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "scrollicb", HTML_SCROLLICB },
     { "cascfork", HTML_CASCFORK },
     { "cascforkview", HTML_CASCFORKVIEW },
+    { "scrollflex", HTML_SCROLLFLEX },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15386,6 +15388,27 @@ TF_UNIT void probes_cascforkview(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `scrollflex` document (fixture/scrollflex.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give
+   every number they expect. */
+TF_UNIT void probes_scrollflex(const char *js, Probe *tab, int *n) {
+    const char *sf_why = NULL; int sf_tt = !!strstr(js, "\"/api/scrollflex\"");
+
+    fold_row(&sf_tt, &sf_why, sf_tt,
+             "NOT REACHED: there is no /api/scrollflex record at all, so the document aborted before its fetch");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "d1", "300"),
+             "CSSOM VIEW §2: an anonymous flex item after a 300px item does not end the scrolling area 300px past the same text in a block");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "w2", "50"),
+             "CSSOM VIEW §2: an anonymous flex item that fits widens its 50px container's scrolling area");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "d3", "0"),
+             "CSSOM VIEW §2: a stretched anonymous flex item's line boxes do not reach as far down as the same text in a block");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "h4", "5"),
+             "CSSOM VIEW §2: an anonymous flex item aligned to its 5px line's end deepens its container's scrolling area");
+    const Probe rows[] = {
+        { "scrolling-area-anonymous-flex-item", sf_tt, "/api/scrollflex", SESS_EXPLORE, sf_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21294,6 +21317,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_scrollicb(js, probes, &np);
     probes_cascfork(js, probes, &np);
     probes_cascforkview(js, probes, &np);
+    probes_scrollflex(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
