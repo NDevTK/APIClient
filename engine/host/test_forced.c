@@ -744,6 +744,8 @@ static const TfServed TF_SERVED[] = {
       "export default { tag: 'mhDEF' };" },
     /* The fileparse documents' benign seed file: magic `FPX1`, version 1, a 13-byte body. */
     { "https://x.test/files/fpseed.bin", "application/octet-stream", "FPX1\x01\x0d" "return x + 1;" },
+    /* HTML_FILEPARSE_TEXT's benign seed: the magic line, then the body line. */
+    { "https://x.test/files/fpseed.txt", "text/plain", "FPX1\nreturn x + 1;" },
     /* HTML_FILEPARSE_WORKER's dedicated worker: the FPX1 walk over the transferred buffer. */
     { "https://x.test/chunk/fpworker.js", "text/javascript",
       "self.onmessage = function fpwOnMessage(e) {"
@@ -1152,6 +1154,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
+#include "fixture/fileparsetext.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1628,6 +1631,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
+    { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -15149,6 +15153,47 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fileparse-text` document (fixture/fileparsetext.h). Reach and taint only; the two
+   statements' sources are told apart by the query parameter each composes (`file=` and `doc=`). */
+TF_UNIT void probes_fileparse_text(const char *js, Probe *tab, int *n) {
+    char open_src[256] = "", pinned_src[256] = "";
+    int has_open = s_rooted_source(js, "eval", "file=", open_src, sizeof open_src);
+    int has_pinned = s_rooted_source(js, "eval", "doc=", pinned_src, sizeof pinned_src);
+    const char *so_why = NULL; int so_tt = 1;
+    fold_row(&so_tt, &so_why, !!strstr(js, "\"/api/fpt-parsed-open\""),
+             "NOT REACHED: there is no /api/fpt-parsed-open record, so the unrestricted statement never walked a "
+             "text body to its second line");
+    const char *ua_why = NULL; int ua_tt = 1;
+    fold_row(&ua_tt, &ua_why, fcs_has(js, "file="),
+             "no endpoint record's address carries the query's `file=`, so the fetch of the file the query names "
+             "was not learned as attacker-steered");
+    const char *sq_why = NULL; int sq_tt = 1;
+    fold_row(&sq_tt, &sq_why, has_open,
+             "NOT REACHED: no eval @S record carries a source rooted in the query's `file=`, so the reply to an "
+             "address whose origin the attacker chooses did not reach new Function as attacker input");
+    const char *rf_why = NULL; int rf_tt = 1;
+    fold_row(&rf_tt, &rf_why, !!strstr(js, "\"/api/fpt-refused\""),
+             "NOT REACHED: there is no /api/fpt-refused record, so no world's `doc=` resolved to another origin: "
+             "the origin check over the query did not fork");
+    const char *pr_why = NULL; int pr_tt = 1;
+    fold_row(&pr_tt, &pr_why, !!strstr(js, "\"/api/fpt-parsed-pinned\""),
+             "NOT REACHED: there is no /api/fpt-parsed-pinned record, so the same-origin statement never walked "
+             "a text body to its second line");
+    const char *pn_why = NULL; int pn_tt = 1;
+    fold_row(&pn_tt, &pn_why, !has_pinned,
+             "an eval @S record carries a source rooted in the query's `doc=`, but that fetch only reaches this "
+             "document's own origin, whose bytes no attacker writes");
+    const Probe rows[] = {
+        { "fpt-seed-open", so_tt, "/api/fpt-parsed-", SESS_EXPLORE, so_why },
+        { "fpt-url-attacker", ua_tt, "fptParam('file')", SESS_EXPLORE, ua_why },
+        { "fpt-sink-query", sq_tt, "function fptParse", SESS_EXPLORE, sq_why },
+        { "fpt-refused", rf_tt, "/api/fpt-refused", SESS_EXPLORE, rf_why },
+        { "fpt-pinned-reached", pr_tt, "'pinned'", SESS_EXPLORE, pr_why },
+        { "fpt-pinned-no-query", pn_tt, "fptParam('doc')", SESS_EXPLORE, pn_why, 0, NULL, "fpt-pinned-reached" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -19015,6 +19060,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
+    probes_fileparse_text(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
