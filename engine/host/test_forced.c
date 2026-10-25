@@ -1091,6 +1091,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/decoder.h"
 #include "fixture/forms.h"
 #include "fixture/hashsinks.h"
+#include "fixture/dwfork.h"
 #include "fixture/tokenlist.h"
 #include "fixture/srcdoc.h"
 #include "fixture/messaging.h"
@@ -1574,6 +1575,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "decoder", HTML_DECODER },
     { "forms", HTML_FORMS },
     { "hashsinks", HTML_HASHSINKS },
+    { "dwfork", HTML_DWFORK },
     { "tokenlist", HTML_TOKENLIST },
     { "srcdoc", HTML_SRCDOC },
     { "messaging", HTML_MESSAGING },
@@ -16825,6 +16827,19 @@ TF_UNIT void probes_idb(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `dwfork` document: each arm of the fork reads its own written document. */
+TF_UNIT void probes_dwfork(const char *js, Probe *tab, int *n) {
+    const Probe rows[] = {
+        { "dwfork-a", param_value_is(js, "/api/dwfork", "v", "DWA"), "/api/dwfork", SESS_EXPLORE },
+        { "dwfork-b", param_value_is(js, "/api/dwfork", "v", "DWB"), "/api/dwfork", SESS_EXPLORE },
+        { "dwfork-clean", param_value_count(js, "/api/dwfork", "v") > 0 &&
+                              param_value_count_of(js, "/api/dwfork", "v", "DWA") +
+                              param_value_count_of(js, "/api/dwfork", "v", "DWB") ==
+                          param_value_count(js, "/api/dwfork", "v"), "/api/dwfork", SESS_EXPLORE },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `css` document. */
 TF_UNIT void probes_css(const char *js, Probe *tab, int *n) {
     /* §6.1's TWO CLAIMS, as the tokens the page's own comparison emitted. The expected bytes are in the
@@ -19434,6 +19449,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_platform(js, probes, &np);
     probes_rejection(js, probes, &np);
     probes_hashsinks_statesinks(js, probes, &np);
+    probes_dwfork(js, probes, &np);
     probes_park_resume(js, probes, &np);
     probes_popover(js, probes, &np);
     probes_forms(js, probes, &np);

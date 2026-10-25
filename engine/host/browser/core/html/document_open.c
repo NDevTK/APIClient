@@ -43,13 +43,14 @@ void document_open_free(JSRuntime *rt)
 
 /* The record, read and written as an OWN slot — never a property lookup, for the reason event_target.c's
    listener map states: a miss on a page-reachable object is the solver's absent-state seam and would mint a
-   concolic where an internal slot belongs. ABSENT IS FALSE and that is §8.4.1's own initial state: a Document
-   has no parser until an algorithm creates one. */
-static bool open_record_read(JSContext *ctx, JSValueConst doc_obj)
+   concolic where an internal slot belongs. It is this flow's statement that it opened the stream, as the
+   parser's write_epoch at its last write into it (a number), or absent/false for no stream: §8.4.1's own initial
+   state, a Document with no parser until an algorithm creates one. Being a JS slot it time-travels, so after a
+   fork each arm holds the epoch it last wrote. */
+static JSValue open_record_get(JSContext *ctx, JSValueConst doc_obj)
 {
     JSAtom k;
     JSValue v;
-    bool on;
 
     DCHECK(g_ready, "§8.4.2 step 3's record was asked for before the key existed");
     DCHECK(JS_IsObject(doc_obj),
@@ -58,19 +59,59 @@ static bool open_record_read(JSContext *ctx, JSValueConst doc_obj)
     k = JS_ValueToAtom(ctx, g_key);
     if (JS_GetOwnSlot(ctx, &v, doc_obj, k) <= 0) v = JS_UNDEFINED;
     JS_FreeAtom(ctx, k);
-    on = JS_ToBool(ctx, v) != 0;
+    return v;
+}
+
+static bool open_record_read(JSContext *ctx, JSValueConst doc_obj)
+{
+    JSValue v = open_record_get(ctx, doc_obj);
+    bool on = JS_IsNumber(v);
+
     JS_FreeValue(ctx, v);
     return on;
 }
 
-static void open_record_write(JSContext *ctx, JSValueConst doc_obj, bool on)
+/* `epoch` is the parser's write_epoch this flow last saw, or 0 for no open stream. */
+static void open_record_write(JSContext *ctx, JSValueConst doc_obj, uint64_t epoch)
 {
     JSAtom k;
 
     DCHECK(g_ready, "§8.4.2 step 3's record was written before the key existed");
     k = JS_ValueToAtom(ctx, g_key);
-    JS_SetProperty(ctx, (JSValue)doc_obj, k, JS_NewBool(ctx, on));
+    JS_SetProperty(ctx, (JSValue)doc_obj, k, epoch ? JS_NewFloat64(ctx, (double)epoch) : JS_FALSE);
     JS_FreeAtom(ctx, k);
+}
+
+/* The script-created parser's state is one lxb_html_parser_t, not in any delta, so the arm that writes must be
+   the timeline that wrote last. The parser's write_epoch counts writes; this flow's record holds the count at
+   its own last write. They differ only when a sibling arm of a fork has written since. */
+static void open_record_assert_current(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom)
+{
+    JSValue v = open_record_get(ctx, doc_obj);
+    double mine = 0.0;
+    const lxb_html_parser_t *parser = (const lxb_html_parser_t *)dom->parser;
+
+    if (JS_IsNumber(v)) JS_ToFloat64(ctx, &mine, v);
+    JS_FreeValue(ctx, v);
+    DCHECK(parser != NULL, "a script-created parser was written with no parser on the document");
+    DCHECKF(mine == (double)parser->write_epoch,
+            "§8.4.3 document.write() into a script-created parser whose last write (epoch %llu) was another arm "
+            "of a fork, while this arm last wrote at epoch %.0f: the tokenizer cursor, the stack of open "
+            "elements and the insertion mode are one lxb_html_parser_t shared by both arms. BUILD the parser's "
+            "record capture (cow_capture_host_record at this access, restoring this arm's parser state)",
+            (unsigned long long)parser->write_epoch, mine);
+}
+
+void document_open_stream_write(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom,
+                                const lxb_char_t *text, size_t size)
+{
+    lxb_html_parser_t *parser;
+
+    open_record_assert_current(ctx, doc_obj, dom);
+    html_parse_document_write(lxb_html_interface_document(dom), text, size);
+    parser = (lxb_html_parser_t *)dom->parser;
+    parser->write_epoch++;
+    open_record_write(ctx, doc_obj, parser->write_epoch);
 }
 
 bool document_open_stream_is_ours(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom)
@@ -387,7 +428,12 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
           "§8.4.1 step 16's parser could not be created — the document has already been emptied by step 11, so "
           "there is no state to return to and a page whose `document.write` silently did nothing would be "
           "reported on as a blank document it never built");
-    open_record_write(ctx, doc_obj, true);
+    {
+        lxb_html_parser_t *parser = (lxb_html_parser_t *)dom->parser;
+
+        parser->write_epoch++;   /* the open is this timeline's first write */
+        open_record_write(ctx, doc_obj, parser->write_epoch);
+    }
 
     /* STEP 18 — "Update the current document readiness of document to 'loading'", whose note is why it is last:
        the `readystatechange` it fires "is actually unobservable to author code, because of the previous step
@@ -423,10 +469,11 @@ void document_close_input_stream(JSContext *ctx, JSValueConst doc_obj, lxb_dom_d
        sends a parser-inserted external script to the flow's own sequence instead, and names the
        parser-suspension capability that would change it. So there is nothing for this step to read, and it
        becomes a real read in the diff that gives the tokenizer a way to stop. */
+    open_record_assert_current(ctx, doc_obj, dom);
     st = html_parse_document_close(lxb_html_interface_document(dom));
     CHECK(st == LXB_STATUS_OK,
           "§8.4.2 step 6's tokenizer run did not complete — the document is left with an input stream that is "
           "neither open nor closed, and every later `document.write` would insert into a parser that will "
           "never emit its EOF");
-    open_record_write(ctx, doc_obj, false);
+    open_record_write(ctx, doc_obj, 0);
 }

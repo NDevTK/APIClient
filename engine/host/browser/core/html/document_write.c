@@ -316,7 +316,7 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
               "the document write steps could not read the String they had already converted — a markup sink "
               "that dropped its bytes would report on a document the page's own write was supposed to build");
         n = strlen(text);
-        html_parse_document_write(lxb_html_interface_document(dom), (const lxb_char_t *)text, n);
+        document_open_stream_write(ctx, hdr->this_val, dom, (const lxb_char_t *)text, n);
         JS_FreeCString(ctx, text);
     }
     return JS_STEP_DONE;

@@ -41,6 +41,10 @@ typedef struct {
     lxb_dom_document_opt_t  dom_opt;
 
     size_t                  ref_count;
+
+    /* How many writes into this parser's input stream have run since it was created; an embedder compares it
+       with its own record of the last write it made, to tell whether another timeline has written since. */
+    uint64_t                write_epoch;
 }
 lxb_html_parser_t;
 
