@@ -552,8 +552,8 @@ void        concolic_set_deliveries(char *const *srcs, char *const *vals, int n)
    a principal however the predicate was spelled (`origin.indexOf(x) === -1` pins and gates nothing). */
 void        concolic_note_principal_branch(JSValueConst cond);
 int         concolic_principal_decided(void);
-/* The String operands the page passed to methods it called over the declared principal `src` this session,
-   each handed to `cb` once (borrowed for the call). */
+/* The String operands the running flow passed to methods it called over the declared principal `src`, each
+   handed to `cb` once (borrowed until the constraint next grows). */
 void        concolic_principal_tokens_each(const char *src, void (*cb)(void *ud, const char *tok), void *ud);
 /* Whether the installed candidate is delivered at `root`'s declared source read (its parent's, for a keyed root)
    and its bytes have entered the program: the one delivery a fired PoC over a declared root may have. */

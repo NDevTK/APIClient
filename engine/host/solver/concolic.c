@@ -821,7 +821,10 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    principal. `event.origin`, `event.origin.toLowerCase()` and `String(event.origin)` are three identities and
    one demand on the attacker's principal. It is not `val`: writing the lowercased token under `message.origin`
    would make a later read of `event.origin` answer it, a fabricated value. A §7.2.13 IsLooselyEqual ( x, y )
-   gate makes the demand without a determination, because its holding arm bounds the operand to a set. */
+   gate makes the demand without a determination, because its holding arm bounds the operand to a set.
+   ptok: the String operands this flow passed to methods it called over the principal at this key, the constants
+   message_compose_origins builds the flow's candidate origins from. A path fact, so a fork inherits it and a
+   sibling's tests never reach it. */
 /* The domain rows, each keyed by the hole and accumulated by conjunction within one flow:
    excl: the tokens an equality gate proved the hole is not, on the arm `val` does not cover. Forced
    multi-path runs both arms of every `x === "admin"`, so this is the second flow's report of its parameter.
@@ -847,7 +850,8 @@ typedef struct { double num; char *txt; signed char present; signed char inclusi
 typedef struct { BoundSide lo, hi; } Bound;
 typedef struct { char *key; char *val; signed char valkind; char **excl; int nexcl; Bound *bnd;
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
-                 ConcolicPrincipalPin *ppin; int nppin; signed char truth; signed char ex_contra;
+                 ConcolicPrincipalPin *ppin; int nppin; char **ptok; int nptok;
+                 signed char truth; signed char ex_contra;
                  char *adec; int adec_arm; signed char adec_what; signed char adec_neg;
                  unsigned short types_out; } Cons;
 
@@ -881,6 +885,8 @@ static void cons_entry_free(Cons *e) {
     free(e->leq);
     for (i = 0; i < e->nppin; i++) concolic_principal_pin_release(&e->ppin[i]);
     free(e->ppin);
+    for (i = 0; i < e->nptok; i++) free(e->ptok[i]);
+    free(e->ptok);
     free(e->adec);
 }
 /* …and one measurement: the freeze's byte census reads exactly the fields the free above disposes of. */
@@ -906,6 +912,8 @@ static long cons_entry_bytes(const Cons *e) {
     n += (long)e->nppin * (long)sizeof(ConcolicPrincipalPin);
     for (i = 0; i < e->nppin; i++)
         n += (long)strlen(e->ppin[i].tok) + 1 + (e->ppin[i].subject ? (long)strlen(e->ppin[i].subject) + 1 : 0);
+    n += (long)e->nptok * (long)sizeof(char *);
+    for (i = 0; i < e->nptok; i++) n += (long)strlen(e->ptok[i]) + 1;
     if (e->adec) n += (long)strlen(e->adec) + 1;
     return n;
 }
@@ -1068,6 +1076,18 @@ static Cons *cons_entry(const char *key) {
         for (k = 0; k < below->nppin; k++)
             concolic_principal_pin_copy(&g_pins[g_pins_n].ppin[k], &below->ppin[k]);
         g_pins[g_pins_n].nppin = below->nppin;
+    }
+    g_pins[g_pins_n].ptok = NULL;
+    g_pins[g_pins_n].nptok = 0;
+    if (below && below->nptok) {
+        int k;
+        g_pins[g_pins_n].ptok = malloc((size_t)below->nptok * sizeof(char *));
+        CHECK(g_pins[g_pins_n].ptok, "concolic: OOM copying an inherited principal operand set");
+        for (k = 0; k < below->nptok; k++) {
+            g_pins[g_pins_n].ptok[k] = strdup(below->ptok[k]);
+            CHECK(g_pins[g_pins_n].ptok[k], "concolic: OOM copying an inherited principal operand");
+        }
+        g_pins[g_pins_n].nptok = below->nptok;
     }
     g_pins[g_pins_n].truth = below ? below->truth : -1;
     g_pins[g_pins_n].ex_contra = below ? below->ex_contra : 0;
@@ -3066,49 +3086,50 @@ int concolic_candidate_at_root(const char *root) {
    from every `branch` key. */
 #define PRINCIPAL_DECIDED_TAG "principal-decided"
 
-/* The String operands the page passed to a method it called over a declared principal (an origin), per
-   principal: the constants a composed origin is built from (message_compose_origin), each checked by firing.
-   A naming fact of the session, like the member table, so it answers every flow. */
-typedef struct { char *src, *tok; } PrincipalToken;
-static PrincipalToken *g_ptok;
-static int g_ptok_n, g_ptok_cap;
-
+/* The String operands of a method the page called over a declared principal (an origin), filed on each
+   principal member of the receiver's root in the running flow's constraint (Cons.ptok), once each. */
 static void principal_tokens_note(JSContext *ctx, JSValueConst recv, int argc, JSValueConst *argv) {
     const char *root = concolic_root_c(recv), *p;
     size_t n;
 
     for (int i = 0; root_member(root, i, &p, &n); i++) {
+        char *member;
+
         if (!src_principal(p, n)) continue;
+        member = strndup(p, n);
+        CHECK(member, "concolic: OOM naming a principal's operand set");
         for (int a = 0; a < argc; a++) {
             const char *tok;
+            Cons *c;
             int dup = 0;
 
             if (!JS_IsString(argv[a])) continue;
             tok = JS_ToCString(ctx, argv[a]);
             CHECK(tok, "concolic: OOM reading a principal's operand");
-            for (int k = 0; k < g_ptok_n && !dup; k++)
-                dup = strlen(g_ptok[k].src) == n && !strncmp(g_ptok[k].src, p, n) && !strcmp(g_ptok[k].tok, tok);
+            c = cons_entry(member);
+            for (int k = 0; k < c->nptok && !dup; k++) dup = !strcmp(c->ptok[k], tok);
             if (!dup && *tok) {
-                if (g_ptok_n == g_ptok_cap) {
-                    int nc = g_ptok_cap ? g_ptok_cap * 2 : 8;
-                    PrincipalToken *g = realloc(g_ptok, (size_t)nc * sizeof *g);
+                char **grown = reclaim_realloc(c->ptok, (size_t)(c->nptok + 1) * sizeof *grown);
 
-                    CHECK(g, "concolic: OOM recording a principal's operand");
-                    g_ptok = g; g_ptok_cap = nc;
-                }
-                g_ptok[g_ptok_n].src = strndup(p, n);
-                g_ptok[g_ptok_n].tok = strdup(tok);
-                CHECK(g_ptok[g_ptok_n].src && g_ptok[g_ptok_n].tok, "concolic: OOM recording a principal's operand");
-                g_ptok_n++;
+                CHECK(grown, "concolic: OOM recording a principal's operand");
+                c->ptok = grown;
+                c->ptok[c->nptok] = strdup(tok);
+                CHECK(c->ptok[c->nptok], "concolic: OOM recording a principal's operand");
+                c->nptok++;
             }
             JS_FreeCString(ctx, tok);
         }
+        free(member);
     }
 }
 
 void concolic_principal_tokens_each(const char *src, void (*cb)(void *ud, const char *tok), void *ud) {
+    const Cons *c;
+
     DCHECK(src && cb, "a principal's operands were enumerated with no principal or no visitor");
-    for (int i = 0; i < g_ptok_n; i++) if (!strcmp(g_ptok[i].src, src)) cb(ud, g_ptok[i].tok);
+    c = cons_lookup(src);
+    if (!c) return;
+    for (int i = 0; i < c->nptok; i++) cb(ud, c->ptok[i]);
 }
 
 void concolic_note_principal_branch(JSValueConst cond) {
@@ -6805,10 +6826,6 @@ static void source_overlay_withdraw(void);
 
 void concolic_free(void)
 {
-    for (int i = 0; i < g_ptok_n; i++) { free(g_ptok[i].src); free(g_ptok[i].tok); }
-    free(g_ptok);
-    g_ptok = NULL;
-    g_ptok_n = g_ptok_cap = 0;
     for (int i = 0; i < g_members_n; i++) {
         free(g_members[i].src); free(g_members[i].ident); free(g_members[i].root);
         for (int k = 0; k < g_members[i].n; k++) free(g_members[i].path[k]);
