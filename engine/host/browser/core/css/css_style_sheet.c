@@ -170,6 +170,7 @@ static void sheet_set_at(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JS
             "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
             "a layout job's activation (core/layout/layout_job.h) and take it out of the walk",
             file, line);
+    css_cascade_input_written();
     visual_update_document_changed(sheet_rec_document(s));   /* resolved before the write moves an owner */
     cow_record_set_at(ctx, s, &SHEET_REC, slot, v, file, line);
 }
@@ -395,6 +396,7 @@ void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)
            "for it. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    css_cascade_input_written();
     if (s->disabled != disabled) visual_update_document_changed(sheet_rec_document(s));
     s->disabled = disabled;
 }

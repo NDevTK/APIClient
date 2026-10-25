@@ -168,7 +168,8 @@ void layout_job_drive_end(LayoutJobDrive *d);
    outermost drive and takes every suspended entry the last activation left as its own; `spent` answers whether
    this activation has laid out its rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes, examined its
    rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN) elements, taken its rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS)
-   line box items or derived its rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS) box metrics; `end` on a resting drive
+   line box items, derived its rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS) box metrics or tested its
+   rest_unit_items(REST_UNIT_CASCADE_RULES) style rules; `end` on a resting drive
    leaves suspended entries in place for the next activation and asserts none is computing. */
 void layout_job_drive_begin_resting(LayoutJobDrive *d);
 bool layout_job_drive_spent(const LayoutJobDrive *d);
@@ -221,6 +222,11 @@ bool layout_job_bf_step(size_t at);
    when a resting drive is innermost and has spent its items, and the search then holds its place and answers
    "not yet"; otherwise it takes one element when a resting drive is innermost. */
 bool layout_job_scan_take(void);
+
+/* A resting build of an author match (core/css/css_style_declaration.h's cssom_match_ask) is about to test one
+   style rule. Asserts a resting drive is innermost; answers false when it has spent its items, and the build
+   then parks its position and answers "not yet"; otherwise it takes one rule. */
+bool layout_job_rule_take(void);
 
 /* ---- the open chain, for the kinds that are not stacked in release ------------------------------------- */
 

@@ -14,6 +14,7 @@
 #include "core/css/css_computed_style.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/css/css_style_declaration.h"   /* the author matches the box tests read, asked resting */
 #include "core/css/css_transform_matrix.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
@@ -245,14 +246,11 @@ static JSValue ev_env_long(JSContext *ctx, const EvTarget *t, const char *member
    which invokes the attribute in those words) is what said so: §2 requires an algorithm that calls an attribute
    to invoke its internal API, and an internal API each caller re-states is not one API. */
 
-bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
+/* Whether `n` is in a document a viewport presents, the half of the subtree question no `display` decides. */
+static bool ev_in_presented_document(const lxb_dom_node_t *n)
 {
-    const lxb_dom_node_t *a;
     JSContext *dctx;
 
-    DCHECK(n && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
-           "css-display-3 §2.5's subtree question was asked about a node that is not an element — the two "
-           "keywords it is stated over are values of `display`, and only an element has one");
     /* A node whose root is not a document has no boxes in any user agent. */
     if (!node_is_connected(n)) return false;
     /* And neither does one in a document nothing is presenting: a DOMParser document, a `<template>`'s
@@ -261,7 +259,17 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
        ELEMENT'S document. */
     if (!n->owner_document) return false;
     dctx = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
-    if (!dctx || !viewport_exists(dctx)) return false;
+    return dctx != NULL && viewport_exists(dctx);
+}
+
+bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
+{
+    const lxb_dom_node_t *a;
+
+    DCHECK(n && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "css-display-3 §2.5's subtree question was asked about a node that is not an element — the two "
+           "keywords it is stated over are values of `display`, and only an element has one");
+    if (!ev_in_presented_document(n)) return false;
     /* AND THE COMPUTED `display`, which is the property this question was always about. This walk used to look
        for the `hidden` CONTENT ATTRIBUTE, which is one UA-stylesheet rule for one of the values `display` can
        take — so an author `display: none`, the rule for `<head>` and `<script>`, and a page's own
@@ -276,6 +284,22 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
         none = css_display_spells(d, CSS_KEYWORD_NONE);
         if (none) return false;
     }
+    return true;
+}
+
+/* The author matches element_view_has_box reads, each inclusive ancestor's for its computed `display`, asked
+   under the resting drive on the entered job, so a page-sized sheet rests between rules rather than inside one
+   box test. False when a build parked; the step rests and asks again. A node in no presented document reads
+   no `display`, so nothing is asked for it. */
+static bool ev_box_tests_ask(const lxb_dom_node_t *n)
+{
+    const lxb_dom_node_t *a;
+
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "a CSSOM VIEW §6 member's box tests were asked of no element — each member states element_is");
+    if (!ev_in_presented_document(n)) return true;
+    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent)
+        if (!cssom_match_ask(lxb_dom_interface_element((lxb_dom_node_t *)a))) return false;
     return true;
 }
 
@@ -800,8 +824,11 @@ static char *ev_scroll_keyword(JSContext *ctx, JSValueConst v, const char *membe
  * memo and placement record serve every later unit, and the machine rests between units with the job alive:
  * the flow is parked inside its own member call, where it writes nothing, so both stay valid (layout_job.h). */
 #define EV_SIV_STAGES(X) \
-    X(EV_SIV_ARGS, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg) steps 1-7 (the " \
-                   "four defaults, the argument, and the termination for an element with no box)") \
+    X(EV_SIV_ARGS, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg) steps 1-6 (the " \
+                   "four defaults and the argument)") \
+    X(EV_SIV_TARGET, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg) step 7 (the " \
+                     "termination for an element with no box, its box tests' author matches asked under a " \
+                     "resting drive)") \
     X(EV_SIV_BOX,  "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollIntoView(arg) step 8 (scroll a " \
                    "target into view: CSSOM VIEW §6.1 \"Element Scrolling Members\" step 2, one unit of its " \
                    "ancestor walk)")
@@ -810,8 +837,10 @@ static const char *const EV_SIV_STEPS[] = { EV_SIV_STAGES(JS_STEP_STAGE_LABEL) N
 
 typedef struct {
     ElementScrollingIntoView walk;   /* the ancestor walk's cursor: DOM nodes, which a fork shares by address */
-    LayoutJob *job;                  /* owned, declared through layout_job_step_ops; NULL until step 8 */
+    LayoutJob *job;                  /* owned, declared through layout_job_step_ops; NULL until step 7 */
     char       behavior[16];         /* §4's ScrollBehavior keyword, one of the three the enumeration admits */
+    ScrollLogicalPosition block, inline_pos;   /* steps 1-6's answers, which step 8 begins the walk with */
+    lxb_dom_element_t *container;    /* step 4's, a DOM node a fork shares by address; NULL for none */
 } EvScrollIntoViewState;
 
 static void ev_siv_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -836,9 +865,7 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
         lxb_dom_element_t *container = NULL;   /* step 4 */
         const char *behavior = "auto";         /* step 1 */
         char *owned = NULL;
-        EvTarget t;
 
-        ev_target(hdr->this_val, &t);
         DCHECK(argc == 1,
                "§6 declares `scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg = {})` — one "
                "argument, with the default materialized by the argument machine — so a body seeing any other "
@@ -887,7 +914,7 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
                      "§6's `enum ScrollIntoViewContainer { \"all\", \"nearest\" }` admits two values and the "
                      "declaration's §3.2.18 check rejects every other, so a third here is the declaration and "
                      "this read having come apart");
-              if (strcmp(k, "nearest") == 0) container = lxb_dom_interface_element(t.node);
+              if (strcmp(k, "nearest") == 0) container = element_of_value(hdr->this_val);
               free(k); }
             JS_FreeValue(ctx, v);
         }
@@ -896,6 +923,19 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
                 "are what §3.2.18 admits, and each is shorter than the copy", behavior);
         strcpy(s->behavior, behavior);
         free(owned);
+        s->block = block;
+        s->inline_pos = inline_pos;
+        s->container = container;
+        s->job = layout_job_new(LAYOUT_JOB_STEP);
+        hdr->stage = EV_SIV_TARGET;
+    }
+
+    STEP_ARM(EV_SIV_TARGET);
+    {
+        LayoutJobDrive d;
+        bool matched;
+        EvTarget t;
+
         /* Step 7 */
         DCHECK(!css_computed_models("content-visibility"),
                "css-contain-2's `content-visibility` is in this engine's cascade now, so CSSOM VIEW §6's "
@@ -904,13 +944,28 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
                "content-visibility property\" states over SKIPPED CONTENTS. BUILD the flat-tree walk over the "
                "computed value and terminate here for a skipped element; §6's `checkVisibility` wants the same "
                "walk");
+        rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+        layout_job_enter(s->job);
+        layout_job_drive_begin_resting(&d);
+        matched = ev_box_tests_ask(lxb_dom_interface_node(element_of_value(hdr->this_val)));
+        DCHECK(matched || layout_job_drive_spent(&d),
+               "CSSOM VIEW §6's `scrollIntoView` box tests parked an author match with the drive's allowance "
+               "unspent, so the next activation would ask the same thing over the same state for ever");
+        /* Read inside the job, so the box tests' cascade is held by the job's records for step 8's walk. */
+        if (matched) ev_target(hdr->this_val, &t);
+        layout_job_drive_end(&d);
+        layout_job_leave(s->job);
+        rest_unit_end();
+        if (!matched) {
+            layout_job_rested(s->job);
+            return JS_STEP_YIELD;
+        }
         if (!t.has_box) {
             *presult = ev_resolved_promise(ctx);
             return JS_STEP_DONE;
         }
-        element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(t.node), block, inline_pos,
-                                          container);
-        s->job = layout_job_new(LAYOUT_JOB_STEP);
+        element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(t.node), s->block, s->inline_pos,
+                                          s->container);
         hdr->stage = EV_SIV_BOX;
     }
 
@@ -1019,9 +1074,9 @@ static bool ev_client_extent_direct(JSContext *ctx, const EvTarget *t, bool vert
     return false;
 }
 
-/* Step 3 is the step machine's: the padding edge's layout is asked under a resting drive on the job the state
-   owns, so a box whose layout is wide rests between activations with its questions suspended, as
-   `scrollIntoView` does. Steps 1 and 2 answer in the first activation. */
+/* Every step is the step machine's, asked under a resting drive on the job the state owns: step 1's box test
+   reads the author matches of the element and its ancestors, which rest between rules (ev_box_tests_ask), and
+   step 3's padding edge is laid out with its questions suspended across rests, as `scrollIntoView` does. */
 #define EV_CLIENT_STAGES(X) \
     X(EV_CLIENT_MEASURE, "CSSOM VIEW §6 \"Extensions to the Element Interface\" clientWidth / clientHeight " \
                          "(steps 1-2, then step 3's padding edge, one resting drive per activation)")
@@ -1029,7 +1084,8 @@ enum { IDL_STEP_STAGE_BASE(EV_CLIENT_STAGES) EV_CLIENT_STAGES(JS_STEP_STAGE_ENUM
 static const char *const EV_CLIENT_STEPS[] = { EV_CLIENT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL until step 3 */
+    LayoutJob *job;       /* owned, declared through layout_job_step_ops; NULL before the first activation */
+    bool       measures;  /* steps 1 and 2 did not answer, so step 3 is being asked */
 } EvClientState;
 
 static void ev_client_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1043,8 +1099,8 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     EvClientState *s = st;
-    bool vertical = idl_step_magic(hdr) == EV_CLIENT_HEIGHT, done = false;
-    lxb_dom_element_t *el;
+    bool vertical = idl_step_magic(hdr) == EV_CLIENT_HEIGHT, done = false, direct = false;
+    lxb_dom_element_t *el = element_of_value(hdr->this_val);
     LayoutJobDrive d;
     EvTarget t;
     CssPx px = css_px(0.0);
@@ -1053,20 +1109,27 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     STEP_DISPATCH(EV_CLIENT_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
 
     STEP_ARM(EV_CLIENT_MEASURE);
-    if (s->job == NULL) {
-        ev_target(hdr->this_val, &t);
-        if (ev_client_extent_direct(ctx, &t, vertical, presult)) return JS_STEP_DONE;
-        s->job = layout_job_new(LAYOUT_JOB_STEP);
-        METRIC_ADD(client_extent_asks, 1);
-    }
+    DCHECK(el != NULL, "CSSOM VIEW §6's client extent reached its body on a receiver that is not an Element — the "
+                       "member states element_is at its install");
+    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
     /* One activation is one unit, measured against the slice like each of `scrollIntoView`'s. */
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
-    /* Read inside the job, so the box tests' cascade is held by the job's records across activations. */
-    ev_target(hdr->this_val, &t);
-    el = lxb_dom_interface_element(t.node);
     layout_job_drive_begin_resting(&d);
-    while (block_flow_drive_deferred(&d)) {
+    if (!ev_box_tests_ask(lxb_dom_interface_node(el))) {
+        DCHECK(layout_job_drive_spent(&d),
+               "CSSOM VIEW §6's client extent's box tests parked an author match with the drive's allowance "
+               "unspent, so its next activation would ask the same thing over the same state for ever");
+    } else {
+        /* Read inside the job, so the box tests' cascade is held by the job's records across activations. */
+        ev_target(hdr->this_val, &t);
+        direct = ev_client_extent_direct(ctx, &t, vertical, presult);
+        if (!direct && !s->measures) {
+            s->measures = true;
+            METRIC_ADD(client_extent_asks, 1);
+        }
+    }
+    while (s->measures && block_flow_drive_deferred(&d)) {
         if (used_value_padding_edge_ask(el, vertical, &px)) {
             done = true;
             break;
@@ -1078,6 +1141,7 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     layout_job_drive_end(&d);
     layout_job_leave(s->job);
     rest_unit_end();
+    if (direct) return JS_STEP_DONE;
     if (!done) {
         layout_job_rested(s->job);
         METRIC_ADD(client_extent_rests, 1);
@@ -1618,7 +1682,7 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     EvRectsState *s = st;
     CssPx (*r)[4] = NULL;
     size_t n = 0;
-    bool done = false;
+    bool done = false, matched;
     LayoutJobDrive d;
     EvTarget t;
 
@@ -1632,10 +1696,14 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     }
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
-    /* Read inside the job, so the box tests' cascade is held by the job's records across activations. */
-    ev_target(hdr->this_val, &t);
     layout_job_drive_begin_resting(&d);
-    while (block_flow_drive_deferred(&d)) {
+    matched = ev_box_tests_ask(lxb_dom_interface_node(element_of_value(hdr->this_val)));
+    DCHECK(matched || layout_job_drive_spent(&d),
+           "CSSOM VIEW §6's client rectangles' box tests parked an author match with the drive's allowance "
+           "unspent, so the next activation would ask the same thing over the same state for ever");
+    /* Read inside the job, so the box tests' cascade is held by the job's records across activations. */
+    if (matched) ev_target(hdr->this_val, &t);
+    while (matched && block_flow_drive_deferred(&d)) {
         if (ev_client_rects_ask(&t)) {
             n = ev_client_rects_px(&t, &r);
             done = true;

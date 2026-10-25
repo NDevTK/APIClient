@@ -8,6 +8,7 @@
 #include "solver/dom_cow.h"
 #include "core/dom/document.h"   /* document_record_release — a destroyed document hands back its record */
 #include "core/layout/layout_job.h"   /* a layout job's memo, which every write below may invalidate */
+#include "core/css/css_cascade_pass.h"   /* the running flow's cascade input generation, which every write raises */
 #include "core/dom/attr_list.h"   /* §4.9's attribute-list algorithms — what the delta restores an attribute THROUGH */
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
 #include "core/dom/node_heap.h"     /* …and its BYTES are the agent's, which is why kind 8 asserts and moves nothing */
@@ -195,11 +196,13 @@ static int g_dom_capturing;
    activation holds the thread would leave answers it already served computed from a tree that is gone.
    Layout writes nothing, so a write here is a component calling a mutator from inside layout. A macro, so
    the crash names the write entry. */
-#define DOM_WRITE_OUTSIDE_LAYOUT() \
+#define DOM_WRITE_OUTSIDE_LAYOUT() do { \
     DCHECK(!layout_job_holds_thread(), \
            "a DOM write was made while a layout job's activation holds the thread — layout reads the tree " \
            "and the cascade and writes neither, and the job's memo is valid only while neither moves; find " \
-           "the mutator called from inside layout and take it out of the walk")
+           "the mutator called from inside layout and take it out of the walk"); \
+    css_cascade_input_written(); \
+} while (0)
 
 static void dom_capture_begin(void) {
     DCHECK(g_dom_capturing == 0,

@@ -44,6 +44,16 @@ void css_match_result_add(CssMatchResult *m, const char *name, const char *value
 /* Close the result. `span` is how many rules the set emitted: every `seq` is below it, and the cascade's Order
    of Appearance continues from it after the author origin. The readers below need a closed result. */
 void css_match_result_finish(CssMatchResult *m, uint32_t span);
+bool css_match_result_closed(const CssMatchResult *m);
+
+/* An open result's build position, which a build that rests leaves here and continues from: the sheet and the
+   rule index in it the next test reads, the Order of Appearance the sheets before it emitted, and whether the
+   build has begun (it charges the element's own cost once). Owned by the result; asserted open. */
+typedef struct {
+    uint32_t sheet, rule, seq;
+    bool     begun;
+} CssMatchPosition;
+CssMatchPosition *css_match_result_position(CssMatchResult *m);
 
 lxb_dom_element_t *css_match_result_element(const CssMatchResult *m);
 const CssAuthorSheets *css_match_result_sheets(const CssMatchResult *m);

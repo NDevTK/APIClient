@@ -662,6 +662,10 @@ typedef struct Flow {
        (members out of the index, re-admitted by flow_clear_host_owed_all). NULL-linked, owned by flow.c. */
     struct Flow *away_prev, *away_next;
     struct Flow *owed_prev, *owed_next;
+    /* How many cascade inputs this flow has written: a generation raised at each write chokepoint
+       core/css/css_cascade_pass.h lists, which a layout job's held record stamps and checks. Zero at birth,
+       never inherited: a fork's arm gets a fresh job, so no record spans the fork. */
+    uint64_t cascade_writes;
 } Flow;
 
 /* The selected agent's entry in `f`'s agent list, asserted in range. The entry is the flow's own. */
@@ -1654,6 +1658,11 @@ uint64_t flow_running_switches(void);
 /* The running flow (scheduler-set). Detectors credit emitted value to it; the scheduler ages it. */
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);
+/* The running flow's cascade input generation (`cascade_writes`): raised by a write to one, read with the flow
+   it belongs to. With no flow running (host time: a parse before the first flow, a paint) the write raises
+   nothing and the read answers NULL and 0, since no step's record spans host time. */
+void  flow_running_cascade_written(void);
+const Flow *flow_running_cascade_writes(uint64_t *gen);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
 /* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */

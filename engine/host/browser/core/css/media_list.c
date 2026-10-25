@@ -201,6 +201,7 @@ static void ml_set_text(JSContext *ctx, JSValueConst self, const char *text)
            "render has already served was cascaded over the other one. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    css_cascade_input_written();
     JS_SetPropertyStr(ctx, arr, "length", JS_NewUint32(ctx, 0));      /* STEP 1 */
     if (!text || !*text) { JS_FreeValue(ctx, arr); return; }          /* STEP 2 */
     set = media_query_parse(text);                                    /* STEP 3 */

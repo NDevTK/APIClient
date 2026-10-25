@@ -18,6 +18,7 @@ struct CssMatchResult {
     uint32_t               n, cap;
     uint32_t               span;
     bool                   finished;
+    CssMatchPosition       at;         /* the build's position while open */
 };
 
 CssMatchResult *css_match_result_create(lxb_dom_element_t *el, const CssAuthorSheets *sheets)
@@ -86,6 +87,18 @@ void css_match_result_finish(CssMatchResult *m, uint32_t span)
             span, m->n ? m->v[m->n - 1].seq : 0);
     m->span = span;
     m->finished = true;
+}
+
+bool css_match_result_closed(const CssMatchResult *m)
+{
+    DCHECK(m != NULL, "a match result's state was read through nothing");
+    return m->finished;
+}
+
+CssMatchPosition *css_match_result_position(CssMatchResult *m)
+{
+    DCHECK(m != NULL && !m->finished, "a match result's build position was asked of a closed result");
+    return &m->at;
 }
 
 lxb_dom_element_t *css_match_result_element(const CssMatchResult *m)

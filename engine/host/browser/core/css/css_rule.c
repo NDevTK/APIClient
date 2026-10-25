@@ -414,6 +414,7 @@ lxb_dom_document_t *css_rule_node_document(JSValueConst rule)
                "the rule this write is replacing, and nothing else in this engine can see it happen. "         \
                "Layout reads the cascade and writes none of its inputs: find the write reached from inside "   \
                "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");            \
+        css_cascade_input_written();                                                                           \
                                                                                                                \
         CHECKF(!JS_IsException(rule_set_v_),                                                                    \
                "a CSS rule record's owned slot was published with the FAILURE VALUE of `%s`, so the mint that "  \
@@ -2292,6 +2293,7 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
            "for it. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    css_cascade_input_written();
     /* STEP 2, FIRST and before the parse, which is the order the algorithm states: a bad index throws even for
        text that would not have parsed. `index > length` and NOT `>=` — appending at the very end is LEGAL, and
        that asymmetry against remove's `>=` is the whole reason both are spelled out here. */
@@ -2388,6 +2390,7 @@ JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index)
            "for it. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    css_cascade_input_written();
     /* STEP 2 — `index >= length`, the asymmetry against insert's `>`. */
     if (index >= array_len(ctx, list))
         return JS_ThrowDOMException(ctx, "IndexSizeError", "the index is at or past the end of the rule list");

@@ -83,8 +83,13 @@ typedef enum {
        hundred of those do, and how many a line derives is the document's choice (a box per character).
        Cost: three font metric derivations or one memoized layout answer; bound (2) as above. */
     REST_UNIT_LAYOUT_LINE_METRICS,
+    /* One style rule tested against one element by the author origin's match (core/css/css_match_result.h),
+       built under a resting drive. Past this many the build parks its position in the job's cascade record and
+       the drive rests. Cost: one selector match, whose compound and attribute tests the sheet chooses; bound
+       (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket. */
+    REST_UNIT_CASCADE_RULES,
     /* One unit of engine work (opcodes and host charges, core/timing/thread_work.h) a resting drive spends in
-       one activation, beside the four counts above: a body the drive takes, resumed or new, a cascade it
+       one activation, beside the five counts above: a body the drive takes, resumed or new, a cascade it
        reads and a walk step all spend it, so an activation whose work is in no counted item still stops at
        the drive's next pick. Cost: one unit, by definition; bound (2) is asserted by the
        REST_UNIT_LAYOUT_DESCENDANTS bracket. */

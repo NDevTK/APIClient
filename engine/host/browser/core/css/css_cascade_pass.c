@@ -13,11 +13,12 @@
 #include "core/css/css_computed_style.h"
 #include "core/css/css_match_result.h"
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
+#include "solver/flow.h"               /* the running flow's cascade input generation */
 
 /* One element's answers; each is NULL until its first ask, and owned. */
 typedef struct CpElement {
     lxb_dom_element_t        *el;         /* NULL is empty; nothing is ever removed, so there are no tombstones */
-    struct CssMatchResult    *match;
+    struct CssMatchResult    *match;      /* closed, or open where a resting build parked */
     struct CssCascadedStyle  *cascaded;
     struct CssComputedStyle  *style;
 } CpElement;
@@ -29,10 +30,34 @@ static long long g_resolved;
 static long long g_match_asks;
 static long long g_match_served;
 static long long g_match_built;
+static long long g_match_parked;
 
 /* The initial capacity, which decides only when the table is rebuilt at twice the size and never which
    questions are answered; a document that asks for more gets a bigger table, without limit. */
 #define CP_CAP0 ((size_t)256)
+
+/* The validity argument in the header, checked at every ask: the record stamps the running flow and its
+   cascade input generation at its first ask, and a later ask under another flow, or after that flow wrote an
+   input, is a held answer read over inputs that moved. */
+static void cp_valid(CssCascadeRecord *r)
+{
+    uint64_t writes;
+    const void *flow = flow_running_cascade_writes(&writes);
+
+    if (!r->stamped) {
+        r->flow = flow;
+        r->writes = writes;
+        r->stamped = true;
+        return;
+    }
+    DCHECKF(r->flow == flow && r->writes == writes,
+            "a layout job's cascade record was asked under %s after %llu cascade input writes against %llu at "
+            "its first ask. Its answers are valid only while no input moves, and a job rests only inside its "
+            "own flow's member call, so a flow ran code between two activations of its job, or a job was "
+            "entered by another flow; whatever let it must shed the record first",
+            r->flow == flow ? "its own flow" : "another flow", (unsigned long long)writes,
+            (unsigned long long)r->writes);
+}
 
 static CssCascadeRecord *cp_held(void)
 {
@@ -40,6 +65,7 @@ static CssCascadeRecord *cp_held(void)
 
     DCHECK(r != NULL, "the cascade record was asked with none held — every ask is made inside a computed style "
                       "hold, which opens a drive on the synchronous job when no driven job is entered");
+    cp_valid(r);
     return r;
 }
 
@@ -107,9 +133,14 @@ void css_cascade_record_release(CssCascadeRecord *r)
     r->author = NULL;
     r->author_n = 0;
     r->author_cap = 0;
+    r->flow = NULL;
+    r->writes = 0;
+    r->stamped = false;
 }
 
 bool css_cascade_record_is_held(void) { return layout_job_cascade() != NULL; }
+
+void css_cascade_input_written(void) { flow_running_cascade_written(); }
 
 bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorSheets **out)
 {
@@ -163,7 +194,16 @@ bool css_cascade_pass_match_ask(lxb_dom_element_t *el, const struct CssAuthorShe
     DCHECK(sheets != NULL && out != NULL, "a match result was asked of the record under no sheet set or with "
                                           "nowhere to put it");
     g_match_asks++;
+    *out = NULL;
     if (slot->match == NULL) return false;
+    if (!css_match_result_closed(slot->match)) {
+        DCHECK(css_match_result_sheets(slot->match) == sheets,
+               "the record handed back a parked match result opened under a different sheet set than the one "
+               "its root now resolves under — the set it borrows was replaced while the record was held");
+        *out = slot->match;
+        slot->match = NULL;
+        return false;
+    }
     /* The record holds one sheet set per root and no tree write moves an element between roots while it is
        held, so the set this result was matched under is the one its root resolves under now. */
     DCHECK(css_match_result_sheets(slot->match) == sheets,
@@ -180,7 +220,7 @@ void css_cascade_pass_match_hold(struct CssMatchResult *m)
     CssCascadeRecord *r = cp_held();
     CpElement *slot;
 
-    DCHECK(m != NULL, "a match result was offered to the record as nothing");
+    DCHECK(m != NULL && css_match_result_closed(m), "a match result was offered to the record as nothing or open");
     DCHECK(cp_sheets_held(r, css_match_result_sheets(m)),
            "a match result was offered to the record under a sheet set the record does not hold — its layer "
            "nodes would be freed with that set while the result is served on");
@@ -189,6 +229,22 @@ void css_cascade_pass_match_hold(struct CssMatchResult *m)
                                 "for — its one caller asks before it builds");
     slot->match = m;
     g_match_built++;
+}
+
+void css_cascade_pass_match_park(struct CssMatchResult *m)
+{
+    CssCascadeRecord *r = cp_held();
+    CpElement *slot;
+
+    DCHECK(m != NULL && !css_match_result_closed(m), "a match result was parked as nothing or closed");
+    DCHECK(cp_sheets_held(r, css_match_result_sheets(m)),
+           "a match result was parked under a sheet set the record does not hold — its layer nodes would be "
+           "freed with that set while the build is parked");
+    slot = cp_slot(r, css_match_result_element(m));
+    DCHECK(slot->match == NULL, "a match result was parked for an element whose slot holds one — the ask that "
+                                "missed handed the parked one back to its builder");
+    slot->match = m;
+    g_match_parked++;
 }
 
 struct CssCascadedStyle *css_cascade_pass_cascaded_ask(lxb_dom_element_t *el)
@@ -219,6 +275,7 @@ struct CssComputedStyle *css_cascade_pass_style(lxb_dom_element_t *el)
     CpElement *slot;
 
     if (r == NULL) return NULL;
+    cp_valid(r);
     slot = cp_slot(r, el);
     if (slot->style == NULL) slot->style = css_computed_style_create(el);
     return slot->style;
@@ -234,11 +291,11 @@ void css_cascade_pass_census(CssCascadePassCensus *out)
             "%lld resolved. A gap is an arm that took an answer without saying which outcome it was, and "
             "every share a reader divides out of these rows is over a denominator that is not the population",
             g_asks, g_served, g_resolved);
-    DCHECKF(g_match_asks == g_match_served + g_match_built,
-            "the match-result census does not close: %lld asks against %lld served and %lld built. "
-            "cssom_cascaded_value asks the record and on a miss builds and offers the result with no return "
-            "between, so a gap is an arm that matched without saying which outcome it was",
-            g_match_asks, g_match_served, g_match_built);
+    DCHECKF(g_match_asks == g_match_served + g_match_built + g_match_parked,
+            "the match-result census does not close: %lld asks against %lld served, %lld built and %lld "
+            "parked. Every miss builds on and either offers the closed result or parks the open one with no "
+            "return between, so a gap is an arm that matched without saying which outcome it was",
+            g_match_asks, g_match_served, g_match_built, g_match_parked);
     out->asks_life = g_asks;
     out->served_life = g_served;
     out->resolved_life = g_resolved;

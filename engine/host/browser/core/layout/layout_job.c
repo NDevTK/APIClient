@@ -72,6 +72,7 @@ struct LayoutJob {
     size_t    scan;      /* elements a resting drive's float search may still examine in this activation */
     size_t    line_items;   /* items a resting drive's line box fills may still take in this activation */
     size_t    line_metrics; /* box metrics its line box walks may still derive in this activation */
+    size_t    rules;     /* style rules its author matches may still test in this activation */
     int64_t   work_end;     /* the engine work count at which a resting drive's activation has spent its work */
     bool      resting;   /* a resting drive is open, as the job's outermost */
     LjSlot   *memo;
@@ -486,15 +487,16 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
     job->scan = rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN);
     job->line_items = rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS);
     job->line_metrics = rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS);
+    job->rules = rest_unit_items(REST_UNIT_CASCADE_RULES);
     job->work_end = engine_work_retired() + (int64_t)rest_unit_items(REST_UNIT_LAYOUT_WORK);
     job->resting = true;
 }
 
-/* Whether one of the activation's five allowances is spent: four counts and its engine work. */
+/* Whether one of the activation's six allowances is spent: five counts and its engine work. */
 static bool lj_allowance_spent(const LayoutJob *job)
 {
     return job->quota == 0 || job->scan == 0 || job->line_items == 0 || job->line_metrics == 0 ||
-           engine_work_retired() >= job->work_end;
+           job->rules == 0 || engine_work_retired() >= job->work_end;
 }
 
 bool layout_job_drive_pending(const LayoutJobDrive *d)
@@ -558,6 +560,18 @@ bool layout_job_scan_take(void)
     if (!(job->resting && job->drives == 1)) return true;
     if (lj_quota_spent(job)) return false;
     job->scan--;
+    return true;
+}
+
+bool layout_job_rule_take(void)
+{
+    LayoutJob *job = lj_current();
+
+    DCHECK(job->resting && job->drives == 1,
+           "an author match's rule was taken from a resting drive's allowance with no resting drive innermost "
+           "— only a resting build asks, and a build under any other drive runs to completion");
+    if (lj_quota_spent(job)) return false;
+    job->rules--;
     return true;
 }
 

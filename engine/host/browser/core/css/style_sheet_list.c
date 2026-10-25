@@ -201,6 +201,7 @@ void style_sheet_list_add(JSContext *ctx, JSValueConst sheet, JSValueConst owner
            "for it. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    css_cascade_input_written();
     /* §6.2's create is the only caller, and every sheet IT builds has an owner node. Two other kinds of sheet
        have none, and neither belongs in a document's collection: an @import'd sheet (a parent CSS style sheet
        and an owner CSS rule, no owner node) and a CONSTRUCTED one. The constructed one exists in this build —
@@ -278,6 +279,7 @@ void style_sheet_list_remove(JSContext *ctx, JSValueConst sheet)
            "for it. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    css_cascade_input_written();
     if (JS_GetOwnSlot(ctx, &root_wrap, sheet, g_atom_holder) <= 0) root_wrap = JS_UNDEFINED;
     DCHECK(JS_IsObject(root_wrap),
            "§6.2's remove a CSS style sheet reached a sheet that no add ever put in a list — §6.1's create runs "

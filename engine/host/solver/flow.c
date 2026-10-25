@@ -988,6 +988,18 @@ void  flow_set_running(Flow *f) {
 }
 Flow *flow_running(void) { return g_running; }
 
+void flow_running_cascade_written(void)
+{
+    if (g_running != NULL) g_running->cascade_writes++;
+}
+
+const Flow *flow_running_cascade_writes(uint64_t *gen)
+{
+    DCHECK(gen != NULL, "the running flow's cascade input generation was asked with nowhere to put it");
+    *gen = g_running != NULL ? g_running->cascade_writes : 0;
+    return g_running;
+}
+
 /* How many times a finding was offered to the order, and how many of those the order could not be given: the
  * partition `valTop`, `topForgiven` and `selfEmit` presuppose. All three read zero both when no detector fired (a
  * reach question: build the surface) and when detectors fired with no flow to pay (a question about which side of

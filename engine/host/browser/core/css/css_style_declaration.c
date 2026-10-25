@@ -112,6 +112,7 @@
 #include "core/css/css_keyframes.h"
 #include "core/css/css_logical.h"
 #include "core/css/css_match_result.h"   /* the author origin's matched declarations, one result per element */
+#include "core/layout/layout_job.h"   /* the resting drive a build takes its rules from */
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_math.h"
 #include "core/css/css_page.h"
@@ -1363,6 +1364,9 @@ typedef struct {
     size_t                len;
     lxb_css_memory_t     *mem;   /* OWNED — the arena the stylesheet, its rules and its selectors live in */
     lxb_css_stylesheet_t *sst;   /* BORROWED from `mem`, which is the one owner */
+    lxb_css_rule_t      **rules; /* OWNED array of rules borrowed from `mem`: the top-level list, by index, so a
+                                    build that rests continues at a rule without walking the list to it */
+    uint32_t              nrules;
 } CssdSheetParse;
 
 /* Indexed by the sheet's position in CSSOM §6.2's list — a POSITION and not an identity, so two documents in
@@ -1387,10 +1391,13 @@ static void cssd_sheet_parse_drop(CssdSheetParse *e)
         lxb_css_memory_destroy(e->mem, true);
     }
     free(e->text);
+    free(e->rules);
     e->text = NULL;
     e->len = 0;
     e->mem = NULL;
     e->sst = NULL;
+    e->rules = NULL;
+    e->nrules = 0;
 }
 
 static void cssd_sheet_parse_free(void)
@@ -1451,14 +1458,15 @@ static bool cssd_stylesheet_parse(lxb_css_stylesheet_t *sst, const char *text, s
 
 /* THE PARSE OF `text`, WHICH IS EITHER THE ONE SLOT `si` ALREADY HOLDS OF THESE EXACT BYTES OR A FRESH ONE
    THAT REPLACES IT. NULL when the text did not parse, which is the same answer and the same cost the
-   uncached path gave. The returned stylesheet is BORROWED and is valid until this slot is next replaced —
-   which, because the author walk is asserted non-re-entrant at its call, cannot happen while a caller holds
-   one. */
-static lxb_css_stylesheet_t *cssd_sheet_parsed(uint32_t si, const char *text, size_t len)
+   uncached path gave. The returned entry is BORROWED and is valid until this slot is next replaced — which,
+   because the author walk is asserted non-re-entrant at its call, cannot happen while a caller holds one. */
+static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, size_t len)
 {
     CssdSheetParse *e;
     lxb_css_memory_t *mem;
     lxb_css_stylesheet_t *sst;
+    lxb_css_rule_t *r;
+    uint32_t n;
     char *copy;
 
     DCHECK(text != NULL && len > 0,
@@ -1488,7 +1496,7 @@ static lxb_css_stylesheet_t *cssd_sheet_parsed(uint32_t si, const char *text, si
                "the per-sheet parse table holds an emission with no stylesheet parsed from it — the store "
                "below is the only writer and it stores the two together, so a half-filled slot is a failure "
                "arm that took the key with it");
-        return e->sst;
+        return e;
     }
     cssd_sheet_parse_drop(e);
     mem = lxb_css_memory_create();
@@ -1517,7 +1525,14 @@ static lxb_css_stylesheet_t *cssd_sheet_parsed(uint32_t si, const char *text, si
     e->len = len;
     e->mem = mem;
     e->sst = sst;
-    return sst;
+    if (sst->root != NULL && sst->root->type == LXB_CSS_RULE_LIST) {
+        for (n = 0, r = lxb_css_rule_list(sst->root)->first; r; r = r->next) n++;
+        e->rules = malloc((size_t)(n ? n : 1) * sizeof *e->rules);
+        CHECK(e->rules != NULL, "cssom: the per-sheet parse's rule index allocation failed");
+        for (n = 0, r = lxb_css_rule_list(sst->root)->first; r; r = r->next) e->rules[n++] = r;
+        e->nrules = n;
+    }
+    return e;
 }
 
 /* The match-result build below drives `g_parser` (it sets the parser's arena around each parse it makes) and
@@ -1528,86 +1543,84 @@ static lxb_css_stylesheet_t *cssd_sheet_parsed(uint32_t si, const char *text, si
    ordering that keeps them apart is written. */
 static bool g_collecting_sheets = false;
 
-/* The author origin's match result for `el` under `sheets` (core/css/css_match_result.h), owned by the caller:
-   every longhand declaration of every style rule whose selector matches `el`, with the rule's position in the
-   set's emission counted across sheets and the declaration's index in its rule's collapsed block. */
-static CssMatchResult *cssd_match_result_build(lxb_dom_element_t *el, const CssAuthorSheets *sheets)
+/* Builds `m`, an open author match result (core/css/css_match_result.h), from its position on: every longhand
+   declaration of every style rule whose selector matches its element, with the rule's position in the set's
+   emission counted across sheets and the declaration's index in its rule's collapsed block, closed at the set's
+   end. With `rests`, each rule tested is taken from the resting drive's allowance (layout_job_rule_take) and
+   the build stops where one is refused, its position left in `m`; the sheet's parse is found again by its text
+   when it continues, because another flow's build may have replaced the slot in between. True when closed. */
+static bool cssd_match_result_run(CssMatchResult *m, bool rests)
 {
-    lxb_dom_node_t *self = lxb_dom_interface_node(el);
-    CssMatchResult *m = css_match_result_create(el, sheets);
-    uint32_t k, seq = 0;
-    uint64_t tested = 0;
+    lxb_dom_node_t *self = lxb_dom_interface_node(css_match_result_element(m));
+    const CssAuthorSheets *sheets = css_match_result_sheets(m);
+    CssMatchPosition *at = css_match_result_position(m);
+    uint64_t tested = 0, own = at->begun ? 0 : THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT;
+    bool closed = false;
     ThreadWorkSpan tw;
 
     thread_work_begin(&tw);
-
-    for (k = 0; k < css_author_sheets_count(sheets); k++) {
-        const CssAuthorSheet *sheet = css_author_sheets_at(sheets, k);
+    at->begun = true;
+    for (; at->sheet < css_author_sheets_count(sheets); at->sheet++, at->rule = 0) {
+        const CssAuthorSheet *sheet = css_author_sheets_at(sheets, at->sheet);
         const CssRuleCascadeSheet *view = &sheet->view;
-        lxb_css_stylesheet_t *sst;
+        const CssdSheetParse *p;
 
         /* The selector lists and declaration blocks this emission parses back to; a parse only when this sheet
            position's emission has changed since the last build (the parse table above). The table's arena owns
            the stylesheet, and nothing kept here points into it: every value taken from a matched rule is
-           copied. */
-        sst = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text));
-        if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
-            lxb_css_rule_t *r;
-            uint32_t back = 0;
-
-            for (r = lxb_css_rule_list(sst->root)->first; r; r = r->next) {
+           copied, and a parked build keeps only indices. */
+        p = cssd_sheet_parsed(sheet->si, view->text, strlen(view->text));
+        if (p != NULL && p->rules != NULL) {
+            /* The round trip is asserted per rule: each emitted rule parses back as exactly one rule at the
+               same index, because the index names its cascade layer. The layer entry is NULL for exactly the
+               non-style rules the emission writes (an `@namespace`), so the two answer each other. */
+            DCHECKF(p->nrules == view->n,
+                    "a CSS style sheet's rules did not round-trip: the rule objects serialized to a text that "
+                    "parses back to %u rules where %u went in. A rule holds the serialization lexbor produced "
+                    "for it, so find which rule's text does not re-parse to itself and fix the serializer that "
+                    "wrote it", p->nrules, view->n);
+            for (; at->rule < p->nrules && at->rule < view->n; at->rule++) {
+                lxb_css_rule_t *r = p->rules[at->rule];
                 lxb_css_rule_style_t *st = lxb_css_rule_style(r);
+                const CssLayerNode *layer = view->layer[at->rule];
                 lxb_css_selector_specificity_t spec = 0;
-                const CssLayerNode *layer;
                 CssDecls rd = { 0 };
-                uint32_t at_rule = back++, j;
+                uint32_t j;
 
-                /* The round trip is asserted per rule: each emitted rule parses back as exactly one rule at the
-                   same index, because the index names its cascade layer. The layer entry is NULL for exactly
-                   the non-style rules the emission writes (an `@namespace`), so the two answer each other. */
-                DCHECK(at_rule < view->n,
-                       "a CSS style sheet's rules did not round-trip: the rule objects serialized to a text "
-                       "that parses back to more rules than went in. A rule holds the serialization lexbor "
-                       "produced for it, so find which rule's text does not re-parse to itself and fix the "
-                       "serializer that wrote it");
-                if (at_rule >= view->n) break;
-                layer = view->layer[at_rule];
                 DCHECK((r->type == LXB_CSS_RULE_STYLE) == (layer != NULL),
                        "a CSS style sheet's rules did not round-trip in order: the rule at this index parses "
                        "back as a different kind of rule than the one the author cascade emitted there, so "
                        "every rule after it would be cascaded in a neighbour's layer");
                 if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
+                if (rests && !layout_job_rule_take()) goto out;
                 tested++;
-                /* No `decided` and no `out_undet`: this is a plain C loop with no rest point, so it cannot
-                   keep an arm, and selector_match_node aborts naming the declaration to build
-                   (JS_CFUNC_STEP_DEF over this walk) if a match would fork. */
+                /* No `decided` and no `out_undet`: no test keeps an arm, and selector_match_node aborts
+                   naming the declaration to build (JS_CFUNC_STEP_DEF over this walk) if a match would fork. */
                 if (!selector_match_node(self, st->selector, &spec, NULL, NULL)) continue;
                 /* The rule's own §6.6 declarations, expanded to longhands and collapsed to one per property,
-                   so every declaration of one rule shares `seq + at_rule` (css-cascade-5 §6.1's Order of
+                   so every declaration of one rule shares `seq + rule` (css-cascade-5 §6.1's Order of
                    Appearance, and §7.3.6 `revert-rule`'s rule identity) and is ordered within it by its
                    index. css-logical-1 §4's pair is two names in one such block. */
                 cssd_decls_from_list(st->declarations, view->text, strlen(view->text), &rd);
                 for (j = 0; j < rd.n; j++)
                     if (rd.v[j].value)
                         css_match_result_add(m, rd.v[j].name, rd.v[j].value, rd.v[j].important, layer,
-                                             (uint32_t)spec, seq + at_rule, j);
+                                             (uint32_t)spec, at->seq + at->rule, j);
                 cssd_decls_free(&rd);
             }
-            DCHECK(back == view->n,
-                   "a CSS style sheet's rules did not round-trip: the rule objects serialized to a text that "
-                   "parses back to fewer rules than went in. A rule holds the serialization lexbor produced "
-                   "for it, so find which rule's text does not re-parse to itself and fix the serializer");
         }
         /* css-cascade-5 §6.1's Order of Appearance across sheets: "declarations from style sheets independently
            linked by the originating document are treated as if they were concatenated in linking order". */
-        seq += view->n;
+        at->seq += view->n;
     }
-    css_match_result_finish(m, seq);
-    /* Charged by the match's input, the element and the rules it tested; a sheet re-parsed for it charges its
-       bytes inside. */
+    css_match_result_finish(m, at->seq);
+    closed = true;
+out:
+    /* Charged by the match's input, the rules this run tested and the element once; a sheet re-parsed for it
+       charges its bytes inside. */
     thread_work_end(&tw, THREAD_WORK_SELECTOR_MATCH, tested);
-    thread_work_charge(THREAD_WORK_SELECTOR_MATCH, tested + THREAD_WORK_SELECTOR_TESTS_PER_ELEMENT);
-    return m;
+    thread_work_charge(THREAD_WORK_SELECTOR_MATCH, tested + own);
+    return closed;
 }
 
 /* Every author-origin declaration in `m`, added to `s`: css-cascade-5 §6.1's sort is over the whole list and
@@ -2230,7 +2243,7 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  *     HTML §15.3.7 "Lists"' `dir, dl, menu, ol, ul { margin-block: 1em }`, for the companion-rule reason
  *     above. WHAT THE NEXT DIFF BUILDS: a UA rule whose key is a SELECTOR compiled through
  *     core/dom/selector_match.h's `selector_list_compile` and matched with `selector_match_node` — which
- *     `cssd_match_result_build` above already runs once per element per rule — so this table's `{tag, prop}` key
+ *     `cssd_match_result_run` above already runs once per element per rule — so this table's `{tag, prop}` key
  *     becomes the degenerate shape of one; the §15.3.8 `table > tr` comment below names the same diff.
  *     HTML §15.3.3 "Flow content"'s `dialog { margin: auto; padding: 1em }`, which is NINE declarations of one
  *     rule whose parts decide each other: `position: absolute`, `width: fit-content` and `height: fit-content`
@@ -2446,7 +2459,7 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
        confined to a tree the HTML parser does not build — HTML §13.2.6.4.9 The "in table" insertion mode
        answers a `"tr"` start tag by "Insert an HTML element for a "tbody" start tag token with no attributes,
        then switch the insertion mode to "in table body". Reprocess the current token." The next diff gives this
-       layer core/dom/selector_match.h's matcher, which `cssd_match_result_build` above already runs once
+       layer core/dom/selector_match.h's matcher, which `cssd_match_result_run` above already runs once
        per element per rule, so a UA rule becomes a SELECTOR and this table's `{tag, prop}` key becomes the
        degenerate shape of one — which is also what `cssd_ua_display_conditional` below stops being. Its absence
        shows as a script-built `table.appendChild(tr)` row of two or more cells whose §17.5.3 height is measured
@@ -3312,6 +3325,23 @@ static void cssd_hint_add(void *ud, const char *longhand, const char *value)
                            value);
 }
 
+/* The author origin's sheet set `el`'s root resolves under, held by the record, built at its first ask.
+   Named residual. Not covered: the set's emission (core/css/css_rule.h's css_rule_cascade_sheet) is a walk
+   over every rule of every sheet, run whole at that ask even under a resting drive. Next diff builds: the
+   emission parking its frame stack in the record under the drive's allowance. Absence shows as: an overrun
+   whose host charges are constraint bytes or rules emitted with no rule tests. */
+static CssAuthorSheets *cssd_author_sheets(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *root = node_root(lxb_dom_interface_node(el));
+    CssAuthorSheets *sheets;
+
+    if (!css_cascade_pass_author_ask(root, &sheets)) {
+        sheets = css_author_sheets_build(root);
+        css_cascade_pass_author_hold(sheets);
+    }
+    return sheets;
+}
+
 /* `el`'s cascaded style: every origin's declarations collected into one list and resolved once, which
    css-cascade-5 §6.1 is — the sort decides between origins, so an origin is never asked in turn. In Order of
    Appearance: the author origin's style rules, its element-attached style attribute, css-cascade-5 §6.5's
@@ -3324,7 +3354,6 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
     CssMatchResult *match;
     CssCascadedStyle *s;
     CssdHintCollect hints;
-    lxb_dom_node_t *root;
     CssLayerOrder *order;
     uint32_t seq;
 
@@ -3338,14 +3367,19 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
            "css-logical-1 §4's pairing is the one nested resolution an element's cascade makes, and it runs "
            "after collection; a nested read added inside the collection is what this crash names");
     g_collecting_sheets = true;
-    root = node_root(lxb_dom_interface_node(el));
-    if (!css_cascade_pass_author_ask(root, &sheets)) {
-        sheets = css_author_sheets_build(root);
-        css_cascade_pass_author_hold(sheets);
-    }
+    sheets = cssd_author_sheets(el);
     order = css_author_sheets_order(sheets);
     if (!css_cascade_pass_match_ask(el, sheets, &match)) {
-        match = cssd_match_result_build(el, sheets);
+        /* A build a resting ask parked is finished here: this reader cannot rest.
+           Named residual. Not covered: an author match first asked by a reader that cannot rest is built whole
+           in its activation, which is the general case of descendant styles read inside box bodies during
+           layout. Next diff builds: style reads in layout bodies answering "not yet" to the resting drive, as
+           CSS 2.1 §9.4.1 questions do, so those builds park through cssom_match_ask too. Absence shows as: a
+           REST_UNIT_LAYOUT_DESCENDANTS overrun whose host charges are rule tests beside box questions. */
+        if (match == NULL) match = css_match_result_create(el, sheets);
+        if (!cssd_match_result_run(match, false))
+            DFAIL("an author match built with no resting drive stopped before the set's end — only a resting "
+                  "build takes rules from an allowance");
         css_cascade_pass_match_hold(match);
     }
     g_collecting_sheets = false;
@@ -3360,6 +3394,27 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
     css_cascade_pass_cascaded_hold(s);
     css_cascaded_style_resolve(s);
     return s;
+}
+
+bool cssom_match_ask(lxb_dom_element_t *el)
+{
+    CssAuthorSheets *sheets;
+    CssMatchResult *match;
+    bool closed;
+
+    DCHECK(el != NULL, "an author match was asked for no element");
+    DCHECK(!g_collecting_sheets, "a resting author match was asked inside another element's collection");
+    g_collecting_sheets = true;
+    sheets = cssd_author_sheets(el);
+    closed = css_cascade_pass_match_ask(el, sheets, &match);
+    if (!closed) {
+        if (match == NULL) match = css_match_result_create(el, sheets);
+        closed = cssd_match_result_run(match, true);
+        if (closed) css_cascade_pass_match_hold(match);
+        else css_cascade_pass_match_park(match);
+    }
+    g_collecting_sheets = false;
+    return closed;
 }
 
 /* THE CASCADE's answer for one property, from the element's cascaded style. What comes out is the cascaded

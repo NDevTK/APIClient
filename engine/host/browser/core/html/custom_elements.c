@@ -826,6 +826,7 @@ static void ce_set_state(JSContext *ctx, JSValueConst wrap, int state)
            "else in this engine can see it happen. "
            "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
            "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
+    css_cascade_input_written();
     {
         lxb_dom_node_t *n = node_of(wrap);   /* `:defined` re-decided is a visible effect for its document */
 

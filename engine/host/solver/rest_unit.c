@@ -48,6 +48,13 @@
    1.3 ms. */
 #define REST_UNIT_LAYOUT_LINE_METRICS_N   32u
 
+/* Style rules a resting build of one element's author match tests per rest point, 4096. The floor is the rest's
+   cost: a re-entry re-reads the held matches of the box tests' ancestors and finds the sheet's parse by its
+   text. The ceiling is bound (2): a test is 0.67 units by core/timing/thread_work.h's selector rate, so 4096
+   charge under 3000 of the quantum's 54000, and the drive's work allowance stops an activation whose tests
+   cost more. */
+#define REST_UNIT_CASCADE_RULES_N   4096u
+
 /* Engine work a resting drive spends per activation, a quarter of the quantum. The ceiling is bound (2) less one
    body's work past the last pick, which the drive cannot interrupt, and the unit's work outside the drive (its
    target's box tests and the reads that follow the last answer); a quarter leaves the other three quarters of
@@ -73,6 +80,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_LAYOUT_DESCENDANTS: n = REST_UNIT_LAYOUT_DESCENDANTS_N; break;
     case REST_UNIT_LAYOUT_LINE_ITEMS: n = REST_UNIT_LAYOUT_LINE_ITEMS_N; break;
     case REST_UNIT_LAYOUT_LINE_METRICS: n = REST_UNIT_LAYOUT_LINE_METRICS_N; break;
+    case REST_UNIT_CASCADE_RULES: n = REST_UNIT_CASCADE_RULES_N; break;
     case REST_UNIT_LAYOUT_WORK: n = (size_t)REST_UNIT_LAYOUT_WORK_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a

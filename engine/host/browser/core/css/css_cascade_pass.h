@@ -22,12 +22,16 @@
  * the custom element state `:defined` matches on, each at its own write through css_cascade_record_is_held().
  * A driven job rests only inside its own flow's member call, where that flow writes nothing and other flows'
  * writes stay in their deltas; the environment a media query reads is the realm's viewport, fixed per job.
- * It does not re-derive an answer at a hit, because that is re-running the cascade it exists to skip. */
+ * Each of those writes raises the running flow's cascade input generation (css_cascade_input_written), which
+ * the record stamps with the flow at its first ask and asserts unchanged at every later one, so a flow that
+ * ran code between two activations of its job trips there. It does not re-derive an answer at a hit, because
+ * that is re-running the cascade it exists to skip. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_CASCADE_PASS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_CASCADE_PASS_H
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -43,6 +47,9 @@ typedef struct {
     size_t                   author_n, author_cap;
     struct CpElement        *elem;        /* one slot per element asked about, owned */
     size_t                   elem_cap, elem_used;
+    const void              *flow;        /* the running flow at the first ask, and its generation then */
+    uint64_t                 writes;
+    bool                     stamped;
 } CssCascadeRecord;
 void css_cascade_record_release(CssCascadeRecord *r);
 
@@ -50,17 +57,23 @@ void css_cascade_record_release(CssCascadeRecord *r);
    assert it is not, and by the asks below, which require it. */
 bool css_cascade_record_is_held(void);
 
+/* A cascade input is being written: raises the running flow's generation (solver/flow.h). Called at every
+   chokepoint the validity list above names, beside its assert that no record is held. */
+void css_cascade_input_written(void);
+
 /* The author origin's sheet set for `root` (core/css/css_author_sheets.h). `ask` answers the held set,
    borrowed, or false; on false the caller builds one and hands it to `hold`, which takes it. */
 bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorSheets **out);
 void css_cascade_pass_author_hold(struct CssAuthorSheets *sheets);
 
 /* The author origin's match result for `el` under `sheets`, the set its root resolves under. `ask` answers
-   the held result, borrowed, or false; on false the caller builds one and hands it to `hold` with no return
-   between the two. A held result borrows a sheet set the record holds. */
+   the held closed result, borrowed, or false; on false `*out` is the open result a resting build parked, now
+   the caller's again, or NULL, and the caller builds on and hands the result to `hold` when it is closed or to
+   `park` when its drive rests first. A held or parked result borrows a sheet set the record holds. */
 bool css_cascade_pass_match_ask(lxb_dom_element_t *el, const struct CssAuthorSheets *sheets,
                                 struct CssMatchResult **out);
 void css_cascade_pass_match_hold(struct CssMatchResult *m);
+void css_cascade_pass_match_park(struct CssMatchResult *m);
 
 /* `el`'s cascaded style, borrowed, or NULL when the record holds none yet; on NULL the caller collects one,
    hands it to `hold` and then resolves it, with no return between. A held style borrows the layer order of
@@ -77,7 +90,7 @@ struct CssComputedStyle *css_cascade_pass_style(lxb_dom_element_t *el);
    style answered and `resolved_life` those that resolved the element's cascaded style first;
    `asks_life == served_life + resolved_life` is asserted. The `computed_*` rows are
    core/css/css_computed_style.h's asks, served and derived, over every shape. The match result's asks, served
-   and built close the same way and are asserted here; they are not rows yet. */
+   built and parked close the same way and are asserted here; they are not rows yet. */
 typedef struct {
     long long asks_life;
     long long served_life;
