@@ -20,7 +20,7 @@
 #include "solver/metrics.h"   /* detect_sink raises the arrival census */
 #include "solver/novelty.h"   /* what opening a search and proving it are worth against the product */
 #include "solver/compose.h"   /* a sender row's subject, spelled with its presence */
-#include "solver/message_compose.h"   /* a message act's candidate data, from its domain */
+#include "solver/act_list.h"   /* the acts a fire was verified under */
 #include "check.h"
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
@@ -142,7 +142,7 @@ typedef struct {
        origin are the event argument's. Each proved the bytes execute; none states how a sender reproduces it.
        Emitted as `firedUnderUnsolvedAct`. */
     int fired_unsolved_act;
-    /* The acts the first such fire was verified under (fire_acts' array), so the parked entry states the route
+    /* The acts the first such fire was verified under (act_list_json's array), so the parked entry states the route
        and handler a reproduction would need, with each message's candidate data where its domain composes one;
        malloc'd, NULL until one fires. `composition_refused` names what the first refused composition could not
        compose (message_compose), NULL when every message composed. */
@@ -265,116 +265,6 @@ static Cand *search_of(const char *src, int sink);
 typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
-/* The fire marker X9. Only firing proves a PoC, so the finding is recorded the instant the marker runs and not
-   at flow completion: a flow owes nobody completion, cold.c drops `cand_fired` on a park, and flow_remove frees
-   a sold flow's substitution without passing solve_flow_end. A call outside a candidate flow is the page's own,
-   since X9 is a global the bundle can reach, and proves nothing. */
-/* The acts a fire in `f` was verified under, as the envelope's `acts` array in performance order (its drives'
-   acts and its modelled user acts), or NULL when `f` has neither. `*no_act` is set where a called member of the
-   chain has no act a page user can perform: a browser never makes that call, so the fire proves the bytes
-   execute and is not a PoC. Members a resumed drive has not built a call for yet are not part of the path the
-   fire ran on. malloc'd. */
-static void acts_append(JsonBuf *b, int *first, const char *act)
-{
-    if (!*first) json_buf_raw(b, ",");
-    *first = 0;
-    json_buf_raw(b, act);
-}
-
-/* `act` with the candidate `data` composed for its message (borrowed), malloc'd. */
-static char *act_with_data(const char *act, const char *data)
-{
-    JsonBuf b = { 0 };
-    size_t l = strlen(act);
-    char *body = malloc(l);
-
-    DCHECK(l > 2 && act[l - 1] == '}', "a message act is not an object");
-    CHECK(body, "solve: OOM composing a message act");
-    memcpy(body, act, l - 1);
-    body[l - 1] = 0;
-    json_buf_raw(&b, body);
-    free(body);
-    json_buf_raw(&b, ",");
-    json_buf_key(&b, "data");
-    json_buf_raw(&b, data);
-    json_buf_raw(&b, "}");
-    return json_buf_take(&b);
-}
-
-/* A message act of the chain. Where the flow delivers this message's data (a verification), the act states the
-   delivered value and is solved. Otherwise it states the data its message's domain composes (message_compose)
-   where it can, `*unsolved` is raised, and the composition is appended to `*dl` (flow_deliveries_text's format)
-   for the verification that delivers it; `*refused` takes the first composition refusal, malloc'd. */
-static char *message_act(const Flow *f, int k, char **refused, int *unsolved, char **dl)
-{
-    char root[96], *data, *why = NULL, *act;
-    const char *inject = f->cand_src, *delivered;
-
-    engine_orphan_message_data_src(f, k, root, sizeof root);
-    delivered = flow_delivery_of(f, root);
-    if (delivered) return act_with_data(f->orphan_acts[k], delivered);
-    *unsolved = 1;
-    /* The payload rides this message only where the search's injection is this message's data or one of its
-       members; every other message of the chain carries what its own domain admits. */
-    if (strcmp(inject, root) && !concolic_member_of_root(inject, root)) inject = "";
-    data = message_compose(root, inject, f->cand_payload, &why);
-    if (!data) {
-        if (!*refused) *refused = why;
-        else free(why);
-        act = strdup(f->orphan_acts[k]);
-        CHECK(act, "solve: OOM copying a message act");
-        return act;
-    }
-    act = act_with_data(f->orphan_acts[k], data);
-    {
-        size_t o = *dl ? strlen(*dl) : 0, n = o + strlen(root) + strlen(data) + 44;
-        char *grown = realloc(*dl, n);
-
-        CHECK(grown, "solve: OOM recording a message's composition");
-        snprintf(grown + o, n - o, "%zu:%s%zu:%s", strlen(root), root, strlen(data), data);
-        *dl = grown;
-    }
-    free(data);
-    return act;
-}
-
-static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused, char **dl)
-{
-    int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k, s = 0, first = 1;
-    JsonBuf b = { 0 };
-
-    *no_act = 0;
-    *unsolved = 0;
-    *refused = NULL;
-    *dl = NULL;
-    /* A seeded drive writes its chain with its mark, so only the cold tier's rebuild (cold.c's 'o' record:
-       `orphan_want` with nothing claimed) leaves a drive that has called nothing. Its replay before the first
-       claim is the page's own reach, as engine.c's fork treats it ("a drive that has called nothing"), so it
-       contributes no drive act; the modelled user acts still name themselves. */
-    DCHECK(!f->orphan || called > 0 || (f->orphan_want && f->orphan_claim_at == 0),
-           "a fire ran in a drive whose chain has no called member and which is not a resumed drive waiting "
-           "for its first call — the mark and the chain are written together at the seed and at the claim");
-    if (called == 0 && f->user_acts_n == 0) return NULL;
-    for (k = 0; k < called; k++)
-        if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
-    json_buf_raw(&b, "[");
-    /* In performance order: a user act performed after `user_act_at` called members stands before that member. */
-    for (k = 0; k <= called; k++) {
-        for (; s < f->user_acts_n && f->user_act_at[s] <= k; s++) acts_append(&b, &first, f->user_acts[s]);
-        if (k == called) break;
-        if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) {
-            char *act = message_act(f, k, refused, unsolved, dl);
-
-            acts_append(&b, &first, act);
-            free(act);
-        } else {
-            acts_append(&b, &first, f->orphan_acts[k]);
-        }
-    }
-    json_buf_raw(&b, "]");
-    return json_buf_take(&b);
-}
-
 /* Whether the running flow's world asked anything of a declared principal (an origin's pin or a forgeable
    predicate over it): the count callbacks of concolic_principal_pins and concolic_principal_preds. */
 static void principal_seen(void *user, const char *src, const ConcolicPred *pred, int n) {
@@ -413,7 +303,7 @@ static void fire_observed(Flow *f) {
            "an @S candidate flow fired holding no source, no payload or no sink class — a finding IS that "
            "triple, so a flow carrying half of it was assembled somewhere that does not go through the seeder "
            "or the cold tier's rebuild");
-    acts = fire_acts(f, &no_act, &unsolved, &refused, &dl);
+    acts = act_list_json(f, &no_act, &unsolved, &refused, &dl);
     /* Named residual. Not covered: a world that asked anything of a message's origin, whose sender would have
        to hold an origin composed from that demand under the source's forgeability rules (an attacker owns an
        origin's host, never another site's). Next diff builds: the origin composed from the principal's
@@ -440,6 +330,10 @@ static void fire_observed(Flow *f) {
     record_sink(sink_class_of_name(fire_target_sink(&f->fire)), f->cand_src, f->cand_payload, acts, acts != NULL);
 }
 
+/* The fire marker X9. Only firing proves a PoC, so the finding is recorded the instant the marker runs and not
+   at flow completion: a flow owes nobody completion, cold.c drops `cand_fired` on a park, and flow_remove frees
+   a sold flow's substitution without passing solve_flow_end. A call outside a candidate flow is the page's own,
+   since X9 is a global the bundle can reach, and proves nothing. */
 static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     Flow *f = flow_running();
 
