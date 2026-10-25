@@ -847,6 +847,14 @@ const char *engine_pinned_token(int pinned);
 /* The drive mark for an act that is not a park, read off the running flow. With no running flow the answer is
  * 0, which is the fact: a drive is always a flow (engine.c's orphan seed), so no flow is no drive. */
 int engine_driven_of_running_path(void);
+/* State that survives a fresh open of the page was written on the running flow's path: a bottle of the user
+   agent's local shed (core/storage/storage_shed.h's one door) or the cookie jar. It is the precondition of the
+   open-again act (engine.c), since without such a write a second load is the first load again. No flow running
+   (the pre-boot baseline) records nothing.
+   Named residual. Not covered: IndexedDB, whose records this build keeps outside the shed's bottles. Next diff
+   builds: the note at IndexedDB's record writes (or its records on the shed's indexedDB bottle). Absence shows
+   as: a page that stores an attacker value only in IndexedDB is never opened again. */
+void engine_note_persistent_write(void);
 
 /* The drive mark's wire spelling, shared by every writer of the field. An unknown value is fatal (CHECK). */
 const char *engine_driven_token(int driven);

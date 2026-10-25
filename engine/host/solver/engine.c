@@ -30,6 +30,7 @@
 #include "solver/c_alloc.h"   /* the C heap's running total, RAM pressure's reading */
 #include "solver/solve.h"
 #include "solver/witness_verify.h"
+#include "core/frame/open_again.h"   /* the attacker opening the page again */
 #include "solver/request_observe.h"
 #include "solver/post_index.h"
 #include "solver/flow.h"
@@ -3652,6 +3653,14 @@ const char *engine_navigation_pinned_token(void)
 }
 
 /* See engine.h. */
+void engine_note_persistent_write(void)
+{
+    Flow *f = flow_running();
+
+    if (f) f->persist_wrote = 1;
+}
+
+/* See engine.h. */
 int engine_driven_of_running_path(void)
 {
     const Flow *f = flow_running();
@@ -5188,6 +5197,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        again. */
     sib->close_req = parent->close_req;
     sib->close_req_none = parent->close_req_none;
+    sib->persist_wrote = parent->persist_wrote;
     /* The modelled user acts the parent's world has had performed: the arm stands in them. */
     flow_user_acts_copy(sib, parent);
     /* How far the sequence has been run, so the no-replay assert at the compile site holds for an arm, which has
@@ -6928,6 +6938,51 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     return 1;
 }
 
+
+/* The attacker opens this page's address again in a new window (core/frame/open_again.h): a second load of the
+ * page that reads what the first load left in the user agent's local shed, cookie jar and IndexedDB, which is
+ * how a value the first load stored from an attacker source reaches code the second load runs. Whether it
+ * happens is the attacker's choice, so both arms run: a recorded two-armed choice (decide_completion) whose arm 1
+ * performs the open as its next frame and states it as the attacker's act. That act is the tool's at egress
+ * (flow_path_driven) and gates nothing a victim asked for (flow_path_victim_driven). A replay re-asks the choice
+ * at this rung and takes the recorded arm.
+ * Named residual. Not covered: the open is hosted in this instance rather than in a new browsing context
+ * group's instance. Next diff builds: the user agent's local shed as cross-instance state in the trusted zone,
+ * after which the open is a real new agent cluster. Absence shows as: a same-origin document in another group
+ * reads none of this group's writes.
+ * Returns 1 when the question was asked. */
+static int engine_open_again(JSContext *ctx, Flow *f) {
+    char *act;
+    void *dblob;
+    int arm, at;
+
+    if (!g_sess_forking) return 0;   /* an @S re-fire and a conformance run open nothing */
+    /* The act's precondition, not a dedup: without a write of user-agent-wide state since the question was
+       last asked, a second load is the first load again. */
+    if (!f->persist_wrote) return 0;
+    DCHECK(flow_running() == f && flow_frame(f) == NULL,
+           "the page was opened again for a flow that is not running, or with a frame live — it is modelled only "
+           "where the running flow has nothing left to run");
+    if (!document_fully_active(ctx) || !open_again_available(ctx)) return 0;
+    f->persist_wrote = 0;   /* before the fork, so both arms stand in the answer */
+    act = strdup("{\"kind\":\"open\",\"target\":\"address\",\"type\":\"open\"}");
+    CHECK(act, "engine: OOM spelling an open act");
+    at = f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0;
+    arm = decide_completion("(the attacker opens this page's address again in a new window)", &dblob);
+    if (arm == 1) {   /* a replay whose recorded path opened the page again: this flow is that arm */
+        DCHECK(dblob == NULL, "a recorded open choice handed back a sibling's decision state");
+        flow_attacker_act_push(f, act, at);
+        flow_install_base(f, ctx, open_again_flow(ctx));
+    } else if (dblob != NULL) {   /* a new choice: this flow does not open it, its sibling does */
+        Flow *sib = engine_sibling_assemble(ctx, f, open_again_flow(ctx), dblob, concolic_pins_suspend(),
+                                            flow_path_marks(f));
+
+        flow_attacker_act_push(sib, act, at);
+    } else {
+        free(act);   /* a replay whose recorded path did not open it */
+    }
+    return 1;
+}
 
 /* The @S search's ask, counted at the one site a candidate row is born: the denominator of `progStartsCand`
    (g_prog_starts). Without it a zero there is either no breakout reaching an executable position (a question for
@@ -9657,6 +9712,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 g_step_unit = STEP_UNIT_USER_SCROLL; return 0; }
             else if (engine_close_request_fork(ctx, f)) {
                 g_step_unit = STEP_UNIT_CLOSE_REQUEST; return 0; }
+            /* The attacker loading the page again, after every act inside this document has been offered. See
+               engine_open_again. */
+            else if (engine_open_again(ctx, f)) {
+                g_step_unit = STEP_UNIT_OPEN_AGAIN; return 0; }
             else {
                 /* A flow may not finish holding work. Every arm above has offered its queue a turn, so a job still
                    on it here means one of them returned first, and the job would be dropped with the flow silently:

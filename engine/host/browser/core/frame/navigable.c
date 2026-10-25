@@ -3526,6 +3526,26 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
     }
 }
 
+/* The document-load job of a fresh open of this page (core/frame/open_again.h), on this realm's own navigable.
+   The provenance, drive and pin words are the running path's: the open is the attacker's act the tool performs,
+   so its request is the tool's at egress. Its referrer policy is the attacker page's, which the zone's referrer
+   derivation reads.
+   Named residual. Not covered: the initiator is stated as this agent, as for a reload, where the attacker page's
+   origin opened it. Next diff builds: ATTACKER_PAGE's origin record as the initiator once the open is hosted in
+   its own browsing context group's instance. Absence shows as: a second load's request carrying same-origin
+   initiator facts a real cross-site open does not send. */
+void navigable_open_again_load(JSContext *ctx, const char *addr)
+{
+    JSValueConst proxy = document_window_proxy(ctx);
+
+    DCHECK(window_proxy_is(proxy) && !window_proxy_is_remote(proxy) && addr && strncmp(addr, "about:", 6) != 0,
+           "a fresh open of the page was enqueued for a realm with no local navigable, or for no fetchable address");
+    navigable_load_enqueue(ctx, proxy, addr, origin_agent(), serialized_policy_container_of(document_policy(ctx)),
+                           NULL, NULL, engine_provenance_of_running_path(),
+                           engine_driven_token(engine_driven_of_running_path()), engine_navigation_pinned_token(),
+                           REFERRER_ATTACKER_POLICY);
+}
+
 int navigable_reload_run(JSContext *ctx, NavigableReloadWork *w, JSValue in, JSValue **out_cb, int *out_argc)
 {
     bool proceed = false;

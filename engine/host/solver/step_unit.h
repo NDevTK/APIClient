@@ -197,6 +197,9 @@
     /* page's uncalled code, and one modelling close requests is running the     */ \
     /* page's own `cancel` and `close` handlers.                                 */ \
     X(CLOSE_REQUEST,      "model-a-potential-close-request")                      \
+    /* the attacker opening the page's address again in a new window, an act */ \
+    /* of the attacker's the tool performs (solver/engine.c's engine_open_again) */ \
+    X(OPEN_AGAIN,         "open-the-page-again")                                  \
     /* THE BLOCK THAT STARTS A PROGRAM HAS THREE EXITS AND USED TO HAVE ONE NAME */ \
     /* — §8.1.4.4 "Calling scripts" has TWO entries (run a classic script, run a */ \
     /* module script) and a compile has two outcomes, and `compile-program` was  */ \

@@ -36,10 +36,10 @@
  * go(optional long delta = 0)` means: a page that calls `back()` and reads `location.href` on the next line
  * still reads the address it was at.
  *
- * `go(0)` IS NOT A TRAVERSAL AT ALL — "if delta is 0, then RELOAD document's node navigable, and return" — and
- * reloading is a capability this build does not have (every Location member's setter, `assign`, `replace` and
- * `reload` end in Location-object navigate, which is likewise absent). It crashes at the step that needs it,
- * naming it, rather than doing nothing and letting a page believe it reloaded. */
+ * `go(0)` IS NOT A TRAVERSAL AT ALL — "if delta is 0, then RELOAD document's node navigable, and return". The
+ * reload exists (navigable_reload_*, driven by location.c's `reload()`) and runs the page's `navigate` listeners,
+ * so only a step machine can drive it, and this member is a plain C body. It crashes at that step, naming the
+ * conversion, rather than doing nothing and letting a page believe it reloaded. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -674,15 +674,11 @@ static JSValue js_hist_delta_traverse(JSContext *ctx, JSValueConst this_val, int
        crash above, which is dev-only. */
     if (delta == 0) {
         DFAIL("HTML §7.2.5's delta traverse step 4 answers a delta of 0 with a RELOAD of the document's node "
-              "navigable, and this build cannot reload one. §7.4.3's RELOAD A NAVIGABLE sets the active session "
-              "history entry's document state's RELOAD PENDING and applies the reload history step, which is "
-              "§7.4.6.1's apply-the-history-step with navigationType \"reload\" — the CROSS-DOCUMENT half: "
-              "§7.4.5's populate-the-history-entry's-document fetches the entry's URL, §7.4.6.1's DEACTIVATE "
-              "fires pageswap and unloads the displayed document (pagehide, the unload event, destroy), and "
-              "activate-history-entry then makes the new Document active. Build it in "
-              "core/frame/session_history.c beside the same-document traversal, driven from the same machine, "
-              "and core/frame/location.c's `reload` — which is the same algorithm reached from the other "
-              "member — installs with it");
+              "navigable. The reload is built (core/frame/navigable.h's navigable_reload_begin/run, driven by "
+              "core/frame/location.c's `reload()`), and its step 1 fires the page's `navigate` listeners, so "
+              "it can only run from a step machine. This member is declared with idl_method_id, a plain C body: "
+              "redeclare §7.2.5's three spellings with idl_method_id_step over one IdlStepBody and drive a "
+              "NavigableReloadWork from the delta-0 arm, as location.c's js_loc_reload does");
         return JS_UNDEFINED;
     }
     /* STEP 5: "TRAVERSE THE HISTORY BY A DELTA given document's node navigable's traversable navigable, delta,

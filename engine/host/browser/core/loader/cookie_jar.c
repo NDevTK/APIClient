@@ -87,6 +87,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "solver/engine.h"   /* a jar write survives a fresh load of the page */
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
@@ -889,6 +890,9 @@ static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, siz
             CHECK(JS_SetProperty(ctx, jar, atom, v) >= 0,
                   "document.cookie: the cookie store refused a write, and nothing of the page's is on it");
         }
+        /* The jar is the user agent's (RFC 6265 §5.3's cookie store), so this write survives a fresh load of the
+           page: the load-again act's precondition (solver/engine.h). */
+        engine_note_persistent_write();
         /* COOKIE STORE API §2.2's FIRST CONDITION, "A newly-created cookie is inserted into the cookie store",
            classified by §7.4's own bullets — see cookie_jar.h. §5.3's step 12 inserts the newly created cookie
            on BOTH arms above and the eviction rule then removes it on the first, so the classification asks

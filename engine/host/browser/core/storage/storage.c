@@ -280,6 +280,12 @@ static JSValue st_absent_value(JSContext *ctx, JSValueConst slots, JSAtom key)
    reader (§6's usage, which sums it over a shelf's bottles) would have been a second copy of "what a stored
    string costs" to disagree with the first the day either changed. */
 
+/* The shed a Storage object's bottle is in, from its §4.1 type. */
+static StorageType st_type(JSContext *ctx, JSValueConst slots)
+{
+    return st_type_is_local(ctx, slots) ? STORAGE_TYPE_LOCAL : STORAGE_TYPE_SESSION;
+}
+
 /* §12.2.1's "get the keys on this's map", as the own enumerable string keys of the backing map. Storage §4.7's
    own note licenses whatever order this is: "To reorder a Storage object storage, reorder storage's map's
    entries in an implementation-defined manner … iteration order is not defined and can change upon most
@@ -550,7 +556,7 @@ static JSValue js_st_set_item(JSContext *ctx, JSValueConst this_val, int argc, J
         }
     }
 
-    if (JS_SetProperty(ctx, map, a, JS_DupValue(ctx, argv[1])) < 0) goto fail_atom;   /* step 5 */
+    if (storage_shed_backing_set(ctx, st_type(ctx, slots), map, a, JS_DupValue(ctx, argv[1])) < 0) goto fail_atom;   /* step 5 */
     JS_FreeAtom(ctx, a);
     if (reorder) st_reorder(ctx, this_val);                              /* step 6 */
     /* STEP 7's THREE ARGUMENTS ARE THIS MEMBER'S OWN, not the map's: `key` is the argument the page passed —
@@ -593,7 +599,7 @@ static JSValue js_st_remove_item(JSContext *ctx, JSValueConst this_val, int argc
         JS_FreeValue(ctx, slots);
         return JS_UNDEFINED;
     }
-    r = JS_DeleteProperty(ctx, map, a, 0);                               /* step 3 — the COW delta's capture */
+    r = storage_shed_backing_delete(ctx, st_type(ctx, slots), map, a);                       /* step 3 — the COW delta's capture */
     JS_FreeAtom(ctx, a);
     JS_FreeValue(ctx, map);
     if (r < 0) { JS_FreeValue(ctx, old); JS_FreeValue(ctx, slots); return JS_EXCEPTION; }
@@ -628,7 +634,7 @@ static JSValue js_st_clear(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_UNDEFINED;
     }
     for (i = 0; i < n; i++) {
-        int r = JS_DeleteProperty(ctx, map, tab[i].atom, 0);             /* step 2 */
+        int r = storage_shed_backing_delete(ctx, st_type(ctx, slots), map, tab[i].atom);     /* step 2 */
         DCHECK(r == 1, "a Storage entry refused to be removed by clear()");
         if (r < 0) { st_keys_free(ctx, tab, n); JS_FreeValue(ctx, map); JS_FreeValue(ctx, slots); return JS_EXCEPTION; }
     }
@@ -811,7 +817,7 @@ static int st_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueC
         JS_FreeValue(ctx, map); JS_FreeValue(ctx, slots);
         return 1;
     }
-    r = JS_SetProperty(ctx, map, prop, JS_DupValue(ctx, str));           /* setItem step 5 */
+    r = storage_shed_backing_set(ctx, st_type(ctx, slots), map, prop, JS_DupValue(ctx, str)); /* setItem step 5 */
     JS_FreeValue(ctx, map);
     if (r < 0) { JS_FreeValue(ctx, old); JS_FreeValue(ctx, str); JS_FreeValue(ctx, slots); return -1; }
     if (!exists) st_reorder(ctx, obj);                                   /* setItem step 6 */
@@ -851,7 +857,7 @@ static int st_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
         JS_FreeValue(ctx, map); JS_FreeValue(ctx, slots);
         return 1;
     }
-    r = JS_DeleteProperty(ctx, map, prop, 0);                            /* removeItem step 3 */
+    r = storage_shed_backing_delete(ctx, st_type(ctx, slots), map, prop);                    /* removeItem step 3 */
     JS_FreeValue(ctx, map);
     if (r < 0) { JS_FreeValue(ctx, old); JS_FreeValue(ctx, slots); return -1; }
     st_reorder(ctx, obj);                                                /* removeItem step 4 */

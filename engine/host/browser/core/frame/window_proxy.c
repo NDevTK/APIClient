@@ -1753,6 +1753,16 @@ JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
 /* §7.2.2.1's `name` setter, the one place it is written. It renames the browsing context, so `frameW.name = "B"`
    leaves the element's `name` content attribute alone (the spec files assert that pair together, and reflecting
    one into the other would pass neither). Writing it makes the name known: a page that set it determined it. */
+void window_proxy_name_forget(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "the name of something that is not a WindowProxy was forgotten");
+    wp_set(ctx, p, &p->name_val, JS_UNDEFINED);
+    p->name = NULL;
+    p->name_known = 0;
+}
+
 JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueConst v)
 {
     ProxyData *p = proxy_of(proxy);

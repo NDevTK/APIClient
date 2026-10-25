@@ -219,6 +219,13 @@ const _PROBE_INJECTORS = {
       await new Promise((r) => window.addEventListener("load", r, { once: true }));
     const steps = [];
     for (const a of acts) {
+      /* The attacker's second load of the same address: a fresh window with no opener, as another site's
+         window.open would make, so it shares the user agent's storage and nothing of this window's. */
+      if (a.kind === "open") {
+        window.open(location.href, "_blank", "noopener");
+        steps.push({ target: a.target, type: a.type, found: true });
+        continue;
+      }
       const t = a.target === "window" ? window : a.target === "document" ? document
               : document.querySelector(a.target);
       if (!t) { steps.push({ target: a.target, type: a.type, found: false }); continue; }

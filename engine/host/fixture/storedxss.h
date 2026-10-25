@@ -5,7 +5,10 @@
      attacker PoC: the sink is reached, and no fired PoC may claim a delivery for it.
    - The page's own write paths make them PoCs: a load carrying a fragment saves it as localStorage's
      `sxDraft`, and a load carrying `?theme=` saves it as the cookie `sxTheme`; a later load shows each. The
-     PoC is two ordered acts: visit with the address, then load the page again.
+     PoC is two ordered acts: visit with the address, then the attacker opens the address again in a new
+     window, whose load reads the user agent's storage the first one wrote.
+   `storedread` is the negative of the act: a page that only reads a key it never wrote stays a precondition
+   finding, and the open is never offered, since without a write a second load is the first one again.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_STOREDXSS_H
@@ -57,6 +60,19 @@ static const char HTML_STOREDXSS[] =
     "    document.cookie = 'sxTheme=' + encodeURIComponent(sxAsk) + '; path=/';"
     "    fetch('/api/sx-theme-saved');"
     "  }"
+    "}"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+static const char HTML_STOREDREAD[] =
+    "<!doctype html><html><body>"
+    "<div id='srView'></div>"
+    "<script>"
+    "var srNote = localStorage.getItem('srNote');"
+    "if (srNote !== null) {"
+    "  fetch('/api/sr-read');"
+    "  document.getElementById('srView').innerHTML = srNote;"
     "}"
     "</script>"
     TF_CANVAS_INK

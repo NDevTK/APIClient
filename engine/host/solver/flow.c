@@ -1307,10 +1307,11 @@ void flow_orphan_chain_copy(Flow *dst, const Flow *src, int n)
     }
 }
 
-void flow_user_act_push(Flow *f, char *act, int at)
+static void user_act_append(Flow *f, char *act, int at, int attacker)
 {
     char **acts;
     int *ats;
+    unsigned char *who;
 
     DCHECK(act != NULL && at >= 0 && (f->user_acts_n == 0 || f->user_act_at[f->user_acts_n - 1] <= at),
            "a scroll act was recorded with no envelope step, or before one already recorded");
@@ -1320,7 +1321,11 @@ void flow_user_act_push(Flow *f, char *act, int at)
     ats = realloc(f->user_act_at, (size_t)(f->user_acts_n + 1) * sizeof *ats);
     CHECK(ats, "engine: OOM recording a scroll act");
     f->user_act_at = ats;
+    who = realloc(f->user_act_attacker, (size_t)(f->user_acts_n + 1));
+    CHECK(who, "engine: OOM recording whose act it was");
+    f->user_act_attacker = who;
     f->user_acts[f->user_acts_n] = act;
+    f->user_act_attacker[f->user_acts_n] = (unsigned char)attacker;
     f->user_act_at[f->user_acts_n++] = at;
 }
 
@@ -1401,6 +1406,18 @@ void flow_deliveries_parse(Flow *f, const char *text)
     }
 }
 
+void flow_user_act_push(Flow *f, char *act, int at) { user_act_append(f, act, at, 0); }
+void flow_attacker_act_push(Flow *f, char *act, int at) { user_act_append(f, act, at, 1); }
+
+/* How many of the flow's acts a victim performs. */
+static int victim_acts(const Flow *f)
+{
+    int n = 0;
+
+    for (int i = 0; i < f->user_acts_n; i++) n += !f->user_act_attacker[i];
+    return n;
+}
+
 void flow_scroll_asked_push(Flow *f, char *loc)
 {
     char **asked = realloc(f->scroll_asked, (size_t)(f->scroll_asked_n + 1) * sizeof *asked);
@@ -1419,7 +1436,7 @@ void flow_user_acts_copy(Flow *dst, const Flow *src)
         char *act = reclaim_strdup(src->user_acts[i]);
 
         CHECK(act, "engine: OOM copying a scroll act");
-        flow_user_act_push(dst, act, src->user_act_at[i]);
+        user_act_append(dst, act, src->user_act_at[i], src->user_act_attacker[i]);
     }
     for (int i = 0; i < src->scroll_asked_n; i++) {
         char *loc = reclaim_strdup(src->scroll_asked[i]);
@@ -1634,11 +1651,20 @@ int flow_path_driven(const Flow *f) {
     return f->orphan || f->user_acts_n > 0 || f->cand_src != NULL || f->path_peer_driven;
 }
 
+int flow_attacker_acts_only(const Flow *f) {
+    return f->user_acts_n > 0 && victim_acts(f) == 0 && !f->orphan && !f->cand_src && !f->path_peer_driven;
+}
+
+int flow_path_victim_driven(const Flow *f) {
+    DCHECK(f != NULL, "a flow was asked whether a victim act or a drive gates its path, of no flow");
+    return f->orphan || victim_acts(f) > 0 || f->cand_src != NULL || f->path_peer_driven;
+}
+
 int flow_path_victim_act(const Flow *f) {
     int called;
 
     DCHECK(f != NULL, "a flow was asked whether a victim act stands on its path, of no flow");
-    if (f->user_acts_n > 0) return 1;
+    if (victim_acts(f) > 0) return 1;
     if (!f->orphan) return 0;
     called = f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n;
     DCHECK(called >= 0 && called <= f->orphan_chain_n,
@@ -6214,6 +6240,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         for (int k = 0; k < f->user_acts_n; k++) free(f->user_acts[k]);
         free(f->user_acts);
         free(f->user_act_at);
+        free(f->user_act_attacker);
         for (int k = 0; k < f->scroll_asked_n; k++) free(f->scroll_asked[k]);
         free(f->scroll_asked);
         free(f->agents);

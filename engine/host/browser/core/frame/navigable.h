@@ -341,6 +341,9 @@ void navigable_reload_begin(JSContext *ctx, NavigableReloadWork *w);
    enqueued, or a `navigate` listener cancelled it — the caller cannot tell those apart and must not, because
    §7.2.4's `reload()` has no return value and a cancellation is not an error), JS_STEP_ABRUPT = it threw. */
 int navigable_reload_run(JSContext *ctx, NavigableReloadWork *w, JSValue in, JSValue **out_cb, int *out_argc);
+/* Enqueues the document-load job of a fresh open of this page at `addr`, on this realm's navigable (see
+   core/frame/open_again.h and the residual at the definition). */
+void navigable_open_again_load(JSContext *ctx, const char *addr);
 
 /* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, over a navigable whose active document is THIS one — which is
  * every `javascript:` navigation whose chosen navigable is the initiator's own, the `_self` case and the one a

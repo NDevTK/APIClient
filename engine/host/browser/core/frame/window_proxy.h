@@ -828,6 +828,9 @@ const char *window_proxy_name(JSValueConst proxy);
    is CONCRETE where the navigable's name was stated (§7.4 states it) and CONCOLIC where it was not, which is
    the navigable the instance started in. */
 JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy);
+/* The navigable's name becomes unknown again, as one a cross-origin opener set: what a fresh open of this
+   page gives the new document, since §7.2.2.1's open names the new navigable after the opener's target. */
+void window_proxy_name_forget(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueConst v);
 
 /* The active document's ORIGIN RECORD, as this flow sees it — what §7.2.1's same-origin check reads, and

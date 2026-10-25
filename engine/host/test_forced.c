@@ -1717,6 +1717,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "borrowedkey", HTML_BORROWEDKEY },
     { "replyrole", HTML_REPLYROLE },
     { "storedxss", HTML_STOREDXSS },
+    { "storedread", HTML_STOREDREAD },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
@@ -15866,9 +15867,10 @@ static void sx_precondition_rows(const char *js, const char *root, int *reach, c
 }
 
 /* The page's own write path from an address component, read back by a later load: a fired PoC rooted in that
-   component, stating its delivery, and naming the storage key the second load reads. */
-static void sx_write_path_row(const char *js, const char *root, const char *prefix, const char *key, int *tt,
-                              const char **why) {
+   component, stating its delivery, and stating the attacker's open of the same address that makes the second
+   load. */
+static void sx_write_path_row(const char *js, const char *root, const char *prefix, int *tt, const char **why) {
+    static const char open_act[] = "{\"kind\":\"open\",\"target\":\"address\",\"type\":\"open\"}";
     char src[192] = "";
     int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
     size_t span = 0;
@@ -15879,8 +15881,9 @@ static void sx_write_path_row(const char *js, const char *root, const char *pref
              "saved, so the saved value was not followed through storage into the later load's write");
     fold_row(tt, why, has && s_stage(js, "innerHTML", src) == S_FIRED, "the write-path search did not fire a PoC");
     fold_row(tt, why, has && s_field(js, "innerHTML", src, prefix), "the PoC does not state its address delivery");
-    fold_row(tt, why, rec && memmem(rec, span, key, strlen(key)) != NULL,
-             "the PoC does not state its second act, the later load that reads the saved value back");
+    fold_row(tt, why, rec && memmem(rec, span, open_act, sizeof open_act - 1) != NULL,
+             "the PoC does not state its second act, the attacker opening the address again so a second load "
+             "reads the saved value back");
 }
 
 /* The rows of the `storedxss` document (fixture/storedxss.h). */
@@ -15900,12 +15903,25 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/sx-draft-saved record, so the load that saves the fragment never ran");
     fold_row(&dw_tt, &dw_why, !!strstr(js, "\"/api/sx-draft-shown\""),
              "NOT REACHED: there is no /api/sx-draft-shown record, so the load that shows sxDraft never ran");
-    sx_write_path_row(js, LOCATION_HASH_SRC, "\"deliveryPrefix\":\"#\"", "sxDraft", &dp_tt, &dp_why);
+    sx_write_path_row(js, LOCATION_HASH_SRC, "\"deliveryPrefix\":\"#\"", &dp_tt, &dp_why);
     fold_row(&ts_tt, &ts_why, !!strstr(js, "\"/api/sx-theme-saved\""),
              "NOT REACHED: there is no /api/sx-theme-saved record, so the load that saves `?theme=` never ran");
     fold_row(&tw_tt, &tw_why, !!strstr(js, "\"/api/sx-theme-shown\""),
              "NOT REACHED: there is no /api/sx-theme-shown record, so the load that shows the sxTheme cookie never ran");
-    sx_write_path_row(js, LOCATION_SEARCH_SRC, "\"deliveryPrefix\":\"?\"", "sxTheme", &tp_tt, &tp_why);
+    sx_write_path_row(js, LOCATION_SEARCH_SRC, "\"deliveryPrefix\":\"?\"", &tp_tt, &tp_why);
+    /* `storedread`: a key the page reads and never wrote stays a precondition, and nothing offers the open. */
+    const char *sr_why = NULL, *srp_why = NULL, *sro_why = NULL;
+    int sr_tt = 1, srp_tt = 1, sro_tt = 1;
+    EngineStepUnitRuns sr_runs;
+
+    engine_step_unit_runs(&sr_runs);
+    fold_row(&sr_tt, &sr_why, !!strstr(js, "\"/api/sr-read\""),
+             "NOT REACHED: there is no /api/sr-read record, so the arm where localStorage holds srNote never ran");
+    sx_precondition_rows(js, "srNote", &sr_tt, &sr_why, &srp_tt, &srp_why);
+    fold_row(&sro_tt, &sro_why, sr_runs.arms[STEP_UNIT_OPEN_AGAIN] == 0,
+             "a flow of a page that writes no user-agent-wide state was opened again — the act's precondition "
+             "(engine_note_persistent_write) is a write that survives a load, and without one a second load is "
+             "the first");
     const Probe rows[] = {
         { "sx-ls-read", lr_tt, "/api/sx-ls-read", SESS_EXPLORE, lr_why },
         { "sx-ls-sink", ls_tt, "'sxLs'", SESS_EXPLORE, ls_why },
@@ -15919,6 +15935,9 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
         { "sx-theme-saved", ts_tt, "/api/sx-theme-saved", SESS_EXPLORE, ts_why },
         { "sx-theme-shown", tw_tt, "/api/sx-theme-shown", SESS_EXPLORE, tw_why },
         { "sx-theme-poc", tp_tt, "'sxThemeView'", SESS_EXPLORE, tp_why },
+        { "sr-read", sr_tt, "srNote", SESS_EXPLORE, sr_why },
+        { "sr-precondition", srp_tt, "srNote", SESS_EXPLORE, srp_why, .reach = "sr-read" },
+        { "sr-no-open", sro_tt, "srNote", SESS_EXPLORE, sro_why, .reach = "sr-read" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

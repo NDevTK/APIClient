@@ -43,6 +43,7 @@
 #include "core/storage/storage_shed.h"
 #include "core/url/origin.h"
 #include "solver/concolic.h"
+#include "solver/engine.h"   /* a write that survives a load is noted where it lands */
 
 /* §4.3: "A user agent holds a storage shed ... A user agent's storage shed holds all local storage data." */
 static JSValue g_local_shed = JS_UNDEFINED;
@@ -176,7 +177,12 @@ static const char *obtain_storage_key(JSContext *ctx)
                       "environment settings object has one, and §4.2's key is a tuple consisting of it");
     if (origin_is_opaque(o)) return NULL;
     /* §Security: an instance is an ORIGIN-KEYED AGENT CLUSTER, so every environment in this heap keys the same
-       shelf. A second key here is a document that reached this heap across an instance boundary. */
+       shelf. A second key here is a document that reached this heap across an instance boundary.
+       Named residual. Not covered: Storage §4.3 puts the local shed (and the cookie jar beside it) on the user
+       agent, across browsing context groups, and each instance holds its own. Next diff builds: the user
+       agent's local shed as cross-instance state in the trusted zone, read as serialized typed text with
+       suspend points. Absence shows as: a same-origin document opened in a new group reads none of another
+       group's writes. */
     DCHECK(origin_same(o, origin_agent()),
            "a second STORAGE KEY appeared inside one instance — §Security makes an instance an origin-keyed "
            "agent cluster, so the user agent's shed here holds exactly one shelf; a document with another "
@@ -321,6 +327,59 @@ JSValue storage_shed_backing_map(JSContext *ctx, JSValueConst proxy_map)
     DCHECK(JS_IsObject(m), "a storage proxy map has no backing map — §4.7 says every operation is performed on "
                            "it, so a proxy map without one stands in for nothing");
     return m;
+}
+
+void storage_shed_session_forget(JSContext *ctx)
+{
+    JSValue shelf = obtain_shelf(ctx, STORAGE_TYPE_SESSION), buckets, bucket, bottles;
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0;
+
+    if (JS_IsUndefined(shelf)) return;   /* §4.2's failure: an opaque origin has no session shelf */
+    buckets = rec_get(ctx, shelf, "bucketMap");
+    bucket = rec_get(ctx, buckets, "default");
+    bottles = rec_get(ctx, bucket, "bottleMap");
+    CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, bottles, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) >= 0,
+          "storage: OOM listing a session shelf's bottles");
+    for (uint32_t i = 0; i < n; i++) {
+        JSValue bottle = JS_GetProperty(ctx, bottles, tab[i].atom);
+        JSValue map = rec_get(ctx, bottle, "map");
+        JSPropertyEnum *keys = NULL;
+        uint32_t m = 0;
+
+        CHECK(JS_GetOwnPropertyNames(ctx, &keys, &m, map, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) >= 0,
+              "storage: OOM listing a session bottle's entries");
+        for (uint32_t k = 0; k < m; k++) {
+            CHECK(JS_DeleteProperty(ctx, map, keys[k].atom, 0) >= 0,
+                  "storage: a session bottle refused to give an entry back");
+            JS_FreeAtom(ctx, keys[k].atom);
+        }
+        js_free(ctx, keys);
+        JS_FreeValue(ctx, map);
+        JS_FreeValue(ctx, bottle);
+        JS_FreeAtom(ctx, tab[i].atom);
+    }
+    js_free(ctx, tab);
+    JS_FreeValue(ctx, bottles);
+    JS_FreeValue(ctx, bucket);
+    JS_FreeValue(ctx, buckets);
+    JS_FreeValue(ctx, shelf);
+}
+
+int storage_shed_backing_set(JSContext *ctx, StorageType type, JSValueConst backing, JSAtom key, JSValue value)
+{
+    int r = JS_SetProperty(ctx, backing, key, value);
+
+    if (r >= 0 && type == STORAGE_TYPE_LOCAL) engine_note_persistent_write();
+    return r;
+}
+
+int storage_shed_backing_delete(JSContext *ctx, StorageType type, JSValueConst backing, JSAtom key)
+{
+    int r = JS_DeleteProperty(ctx, backing, key, 0);
+
+    if (r > 0 && type == STORAGE_TYPE_LOCAL) engine_note_persistent_write();
+    return r;
 }
 
 double storage_shed_quota(JSContext *ctx, JSValueConst proxy_map)

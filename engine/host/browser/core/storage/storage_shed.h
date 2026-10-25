@@ -47,6 +47,19 @@ JSValue storage_shed_obtain_bottle_map(JSContext *ctx, StorageType type, const c
    OWNED. */
 JSValue storage_shed_backing_map(JSContext *ctx, JSValueConst proxy_map);
 
+/* A write and a delete of page data on a bottle's backing map of the shed `type` names: the one door that data
+   enters a shed by, so a write that survives a fresh load of the page is noted where it lands
+   (solver/engine.h's engine_note_persistent_write) and a new endpoint over the shed is covered by construction.
+   Only the LOCAL shed is the user agent's (§4.3); a session shed is a traversable's, which a fresh top-level
+   open does not share. `value` is consumed. Each returns what JS_SetProperty / JS_DeleteProperty return. */
+int storage_shed_backing_set(JSContext *ctx, StorageType type, JSValueConst backing, JSAtom key, JSValue value);
+int storage_shed_backing_delete(JSContext *ctx, StorageType type, JSValueConst backing, JSAtom key);
+
+/* Empties every bottle of this realm's session shelf on the running flow's delta: the session shed a new
+   top-level traversable starts with (§4.3: "A traversable navigable holds a storage shed"), for a document this
+   instance hosts as a fresh open of the page (core/frame/open_again.h). Not a page write, so not noted. */
+void storage_shed_session_forget(JSContext *ctx);
+
 /* The §4.6 QUOTA of the bottle this proxy map is over, in bytes, or -1 for §4.1's null (no limit).
    HTML §12.2.1's setItem step 4 ("if value cannot be stored, then throw a QuotaExceededError") is the only
    caller: the quota is what makes "cannot be stored" a computed fact rather than a shrug. */

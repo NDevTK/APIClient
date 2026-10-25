@@ -2277,13 +2277,22 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                CHECK(aroot, "endpoint: OOM copying an address's delivery root — the record would carry a "
                             "class derived from a provenance it cannot name, and this surface's own reader "
                             "would report the address as one this engine attributed to nothing"); } }
-    /* Whether this sighting makes the record security-relevant: an attacker source roots its address and no act
-       of this tool stands on its path. `driven` is that second fact (flow_path_driven: a drive of uncalled code,
-       a modelled victim act, a candidate run, or a delivery from one). A drive is API learning, and the page's
-       own control sending its request is the person's ask. Path-wise is exact: forced execution also reaches a
-       request that does not depend on an act on a sibling path without it, where the record is marked, so no
-       act-causality tracker is needed. */
-    int atk = aroot != NULL && driven == 0 && concolic_root_delivered_any(aroot);
+    /* Whether this sighting makes the record security-relevant: an attacker source roots its address and no
+       victim act or drive stands on its path (`gated`, flow_path_victim_driven: a drive of uncalled code, a
+       modelled victim act, a candidate run, or a delivery from one). A drive is API learning, and the page's own
+       control sending its request is the person's ask; the attacker's own act (loading the page again) is
+       neither, so it gates nothing here while `driven` still makes the request the tool's at egress. A door
+       recorded off a park has no running producer and states only `driven`. Path-wise is exact: forced
+       execution also reaches a request that does not depend on an act on a sibling path without it, where the
+       record is marked, so no act-causality tracker is needed. */
+    const Flow *gf = flow_running();
+    int off_park = door == EPD_REPLY_CHUNK || door == EPD_DOCUMENT_SCRIPT || door == EPD_INJECTED_SCRIPT ||
+                   door == EPD_MODULE_IMPORT;
+    int gated = gf && !off_park ? flow_path_victim_driven(gf) : driven;
+    DCHECK(!gf || off_park || !flow_attacker_acts_only(gf) || (!gated && driven),
+           "a path whose only acts are the attacker's own reads as gated, or not as the tool's — the two halves of "
+           "the drive fact have collapsed back into one");
+    int atk = aroot != NULL && !gated && concolic_root_delivered_any(aroot);
     DCHECK(!atk || acls != EPA_CONCRETE,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
@@ -2300,7 +2309,9 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 
         DCHECK(f != NULL, "a request whose host an attacker source decides was composed with no flow running — "
                           "an attacker source is read inside a flow");
-        if (!driven || (f && flow_path_victim_act(f))) {
+        DCHECK(!flow_attacker_acts_only(f) || (!gated && driven),
+               "a path whose only acts are the attacker's own reads as gated at the attacker-host rule");
+        if (!gated || (f && flow_path_victim_act(f))) {
             g_ask_origin_finding++;
             solve_request_sink(ctx, url, document_base_url(ctx));
         } else {

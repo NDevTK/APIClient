@@ -354,9 +354,11 @@ typedef struct Flow {
     /* The modelled user acts performed on this flow (engine.c's engine_user_scroll and
        engine_close_request_fork), each an envelope step (malloc'd) beside the number of drive members called
        before it, in performance order. Copied by a fork, owned. A resumed flow re-performs each at the rung its
-       replay re-reaches, so none is cold-tier state. */
+       replay re-reaches, so none is cold-tier state. `user_act_attacker[i]` marks an act the attacker performs
+       (loading the page again) rather than one the tool performs for the victim. */
     char **user_acts;
     int   *user_act_at;
+    unsigned char *user_act_attacker;
     int    user_acts_n;
     /* The targets (by locator, malloc'd) this flow has asked the scroll question about, whichever arm it took;
        copied by a fork, owned. */
@@ -453,6 +455,10 @@ typedef struct Flow {
      * watchers takes one group at a time). Written from the task's completion value only, which is why
      * `close_req` exists. Carried by a fork; not cold-tier state (the manager is per-flow COW state). */
     int   close_req_none;
+    /* Has this flow written state that survives a load (engine_note_persistent_write) since the load-again act
+     * was last asked? The act's precondition, cleared on both of its arms when it is asked. Carried by a fork;
+     * not cold-tier state (a replay re-performs the writes). */
+    int   persist_wrote;
     /* Has this flow's path rested on something nothing observed? It is the derived/forced discriminator a
      * request this flow builds must declare: the value's bytes are the same either way, so the fact is recorded
      * where it happens. It is the contradiction, not the fork: forced execution forks both arms of nearly every
@@ -1704,6 +1710,9 @@ void  flow_orphan_chain_push(Flow *f, uint64_t hash, char *act, int repeat);
 void  flow_orphan_chain_copy(Flow *dst, const Flow *src, int n);
 /* Append a modelled user act (`act` consumed) performed after `at` called drive members; copy `src`'s acts. */
 void  flow_user_act_push(Flow *f, char *act, int at);
+/* …the same for an act the attacker performs: it is listed in a PoC and is the tool's act at egress, but no
+   victim performed it (flow_path_victim_driven). */
+void  flow_attacker_act_push(Flow *f, char *act, int at);
 void  flow_user_acts_copy(Flow *dst, const Flow *src);
 /* Add the delivery of `val` (JSON text) at the source `src` to `f`'s candidate (both copied; one per source);
    the value `f` delivers at `src`, NULL for none; copy `src`'s deliveries onto `dst`, which has none. */
@@ -1787,6 +1796,12 @@ int   flow_path_peer_pinned(const Flow *f);
    flow_path_forced: what such a flow requests is this tool's act, so its drive mark (solver/engine.h's
    PENDING_DRIVEN_*) reads `driven` and it never fires as the page's. */
 int   flow_path_driven(const Flow *f);
+/* The grading half of the same fact: did a drive of uncalled code, a victim act this tool performed, a candidate
+   run or a delivery from one stand on this path? An attacker's own act (flow_attacker_act_push) is excluded: it
+   makes a later request the tool's at egress but not a victim's ask. */
+int   flow_path_victim_driven(const Flow *f);
+/* Do the attacker's own acts stand on this path and nothing else that drives it? */
+int   flow_attacker_acts_only(const Flow *f);
 /* Does a victim act this tool performed stand on this flow's path: a modelled user act, or a drive member whose
    body runs as the listener of an act (a click, typing, a drop)? A subset of flow_path_driven; a timeline that
    took a delivery from a driven peer reads 0, since the peer's acts are held in its own instance. */
