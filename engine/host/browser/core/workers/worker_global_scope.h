@@ -28,6 +28,10 @@ void worker_global_scope_free(JSRuntime *rt);
  * reaches that step through this one function too. */
 bool worker_global_scope_implements(JSValueConst v);
 
+/* Does `v` implement §10.2.1.2's DedicatedWorkerGlobalScope — Web IDL §3.8's test for that one interface, which
+   HTML §8.1.4.6 report an exception step 7.2 asks of the global. */
+bool dedicated_worker_global_scope_implements(JSValueConst v);
+
 /* WEB IDL §3.7.3 "Interface prototype object" — `WorkerGlobalScope.prototype` in THIS realm, or JS_UNDEFINED
  * where this realm's §3.3.8 [Global] names are not a worker's. OWNED by the caller.
  *

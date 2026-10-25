@@ -26,6 +26,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/events/message_port.h"
+#include "core/events/report_exception.h"
 #include "core/fetch/fetch.h"
 #include "core/frame/policy_container.h"
 #include "core/frame/secure_context.h"
@@ -52,7 +53,7 @@ typedef struct {
 
 static JSClassID g_worker_class;
 static JSRuntime *g_worker_rt;
-static int g_ctor_stepid = -1, g_id_post = -1, g_error_task_stepid = -1;
+static int g_ctor_stepid = -1, g_id_post = -1, g_error_task_stepid = -1, g_report_task_stepid = -1;
 /* Per worker realm: the Array [outside port, inside port, Worker]: run a worker enables the two queues after the
    script ran, and fires `error` at the Worker for a module script that did not parse. */
 static JSClassID g_ports_slot = JS_INVALID_CLASS_ID;
@@ -148,6 +149,115 @@ static void worker_queue_error(JSContext *ctx, JSValueConst worker)
     CHECK(!JS_IsException(fn), "§10.2.4: the Worker error task's callee could not be allocated");
     JS_EnqueueCallTask(ctx, fn, 1, &worker, TASK_SOURCE_DOM_MANIPULATION);
     JS_FreeValue(ctx, fn);
+}
+
+/* ---- the task report an exception queues at a dedicated worker's owner ------------------------------------ */
+
+/* HTML §8.1.4.6 report an exception, step 7.2's task: queued on the DOM manipulation task source with the
+   Worker's relevant global object. Its arguments are [workerObject, exception]; the exception is the worker
+   realm's, and is read only by report_exception_error_info, which runs none of the page's code, and by the
+   console hook. */
+#define WORKER_REPORT_STAGES(X)                                                                             \
+    X(WREP_FIRE,   "HTML §8.1.4.6 report an exception step 7.2.2 (set notHandled to the result of firing an "  \
+                   "event named error at workerObject, using ErrorEvent, with the cancelable attribute "      \
+                   "initialized to true, and additional attributes initialized according to errorInfo)")    \
+    X(WREP_REPORT, "HTML §8.1.4.6 report an exception step 7.2.3 (if notHandled is true, then report "        \
+                   "exception for workerObject's relevant global object with omitError set to true)")
+enum { WORKER_REPORT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const WORKER_REPORT_STEPS[] = { WORKER_REPORT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr   hdr;       /* first: the driver writes the def and the operand bounds through it */
+    uint8_t     fphase;
+    uint8_t     started;
+    JSValue     ev;        /* owned */
+    EventFireCb cb;
+    ReportExceptionWork rep;
+} WorkerReportTask;
+
+static void worker_report_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    WorkerReportTask *s = stp;
+    int k;
+
+    if (!s->started) return;   /* the block is zeroed until the first step places the owned fields */
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+    report_exception_work_visit(ctx, &s->rep, v);
+}
+
+static JSValue worker_report_fini(JSContext *ctx, void *stp, bool take_result)
+{
+    WorkerReportTask *s = stp;
+
+    (void)take_result;
+    if (s->started) report_exception_work_unlock(ctx, &s->rep);   /* step 6.1's flag; the visit holds the rest */
+    return JS_UNDEFINED;
+}
+
+static int worker_report_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    WorkerReportTask *s = stp;
+    bool not_handled = true;
+    int r;
+
+    STEP_DISPATCH(WORKER_REPORT_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(WREP_FIRE);
+        if (!s->started) {
+            int k;
+
+            s->fphase = 0;
+            s->ev = JS_UNDEFINED;
+            STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+            report_exception_work_start_with(&s->rep, /*omit_error*/ true);
+            s->started = 1;
+            /* errorInfo as step 7.1 left it: `error` is null. */
+            s->ev = report_exception_error_info(ctx, step_arg(&s->hdr, 1), /*error_nulled*/ true);
+            CHECK(!JS_IsException(s->ev), "§8.1.4.6 step 7.2.2's ErrorEvent could not be allocated");
+        }
+        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), step_arg(&s->hdr, 0), s->ev, JS_UNDEFINED,
+                                  cb_result, &not_handled, out_cb, out_argc);
+        if (r > 0) return r;
+        JS_FreeValue(ctx, s->ev);
+        s->ev = JS_UNDEFINED;
+        if (r < 0) return JS_STEP_ABRUPT;
+        if (!not_handled) return JS_STEP_DONE;
+        STEP_GOTO(s->hdr.stage, WREP_REPORT, &s->fphase, NULL);
+        return JS_STEP_YIELD;
+
+    STEP_ARM(WREP_REPORT);
+        r = report_exception_run(ctx, &s->rep, step_arg(&s->hdr, 1), cb_result, out_cb, out_argc);
+        return r ? r : JS_STEP_DONE;
+}
+
+static const JSTrampStepDef worker_report_def = {
+    sizeof(WorkerReportTask), worker_report_step, worker_report_fini, 0,
+    .visit = worker_report_visit,
+    .algorithm = "HTML §8.1.4.6 report an exception — step 7.2's task at a dedicated worker's owner",
+    .steps = WORKER_REPORT_STEPS
+};
+
+/* Step 7.2's queue, handed to core/events/report_exception.c: `wctx` is the realm whose global implements
+   DedicatedWorkerGlobalScope, and its port record names the Worker associated with it (step 7.2.1). */
+static void worker_queue_report(JSContext *wctx, JSValueConst exception)
+{
+    JSValue ports = realm_value_get(wctx, g_ports_slot), fn;
+    JSValueConst args[2];
+    JSValue worker = JS_GetPropertyUint32(wctx, ports, 2);
+    WorkerData *w = worker_of(worker);
+
+    DCHECK(w != NULL && w->realm == wctx,
+           "§8.1.4.6 step 7.2 was asked of a dedicated worker global whose port record names no Worker of its "
+           "realm — the constructor writes the record before the worker's program can run");
+    fn = JS_NewCFunction2(w->owner, NULL, "workerReportTask", 2, JS_CFUNC_step, g_report_task_stepid);
+    CHECK(!JS_IsException(fn), "§8.1.4.6 step 7.2: the task's callee could not be allocated");
+    args[0] = worker;
+    args[1] = exception;
+    JS_EnqueueCallTask(w->owner, fn, 2, args, TASK_SOURCE_DOM_MANIPULATION);
+    JS_FreeValue(w->owner, fn);
+    JS_FreeValue(wctx, worker);
+    JS_FreeValue(wctx, ports);
 }
 
 /* ---- run a worker's script ------------------------------------------------------------------------------- */
@@ -513,6 +623,8 @@ void worker_init(JSContext *ctx)
     g_id_post = idl_method_id_dict(ctx, POST_ARGS, 2, POST_OPTS, 1, js_worker_post, 0);
     idl_optional_from(1);
     g_error_task_stepid = JS_RegisterStepDef(rt, &worker_error_def);
+    g_report_task_stepid = JS_RegisterStepDef(rt, &worker_report_def);
+    report_exception_set_dedicated_worker_terms(dedicated_worker_global_scope_implements, worker_queue_report);
     g_ports_slot = realm_value_declare(ctx, "HTML §10.2.4 run a worker's outside and inside ports, in the worker realm");
     engine_set_agent_program_done_hook(worker_program_done);
     agent_state_ptr("worker", &g_worker_rt, "the runtime §10.2.6.3's Worker was declared in, and the latch");
@@ -520,6 +632,7 @@ void worker_init(JSContext *ctx)
     agent_state_id("worker", &g_ctor_stepid, "§10.2.6.3's constructor machine");
     agent_state_id("worker", &g_id_post, "§10.2.6.3's postMessage pool entry");
     agent_state_id("worker", &g_error_task_stepid, "§10.2.4's error task machine");
+    agent_state_id("worker", &g_report_task_stepid, "§8.1.4.6 report an exception step 7.2's task machine");
     agent_state_realm_slot("worker", &g_ports_slot, "§10.2.4's port pair of a worker realm");
     realm_declare_intrinsic(worker_install_realm);
 }
@@ -528,5 +641,6 @@ void worker_free(JSRuntime *rt)
 {
     DCHECK(g_worker_rt == rt, "§10.2.6.3's Worker was released against a runtime it was not declared in");
     engine_set_agent_program_done_hook(NULL);
+    report_exception_set_dedicated_worker_terms(NULL, NULL);   /* before report_exception_free, which asserts it */
     agent_state_undo("worker");
 }

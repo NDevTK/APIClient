@@ -11,13 +11,9 @@
  * work record belongs to the CALLING machine, exactly as abort.h's AbortSignalWork does: a fork mid-report must
  * not hand two arms one dispatch, and the caller is what has a `visit`.
  *
- * THE STEP NUMBERS IN THIS FILE WERE ONE BEHIND THE STANDARD, and every one of them is fixed here. §8.1.4.6
- * takes `optional boolean omitError (default false)` and spends step 5 on it ("if omitError is true, then set
- * errorInfo[error] to null"), which moved the error-reporting-mode block from step 5 to step 6 and the
- * notHandled block from step 6 to step 7. A stale step number is the stale-DFAIL failure exactly — it stays
- * true about the algorithm the day it was written and goes wrong about the STANDARD, so it reads as
- * authoritative while naming a step that is now something else — and the stage labels below are resolved by a
- * cross-session resume, so here it would be resolved against the wrong step rather than merely read.
+ * §8.1.4.6 takes `optional boolean omitError (default false)`, and the record takes it at its start
+ * (report_exception_work_start_with). The stage labels below are resolved by a cross-session resume, so their
+ * step numbers are the standard's current ones.
  *
  * WHAT IS NOT MODELLED, AND WHY THAT IS NOT A STUB. errorInfo's `message`, `filename`, `lineno` and `colno` are
  * IMPLEMENTATION-DEFINED by the standard's own words ("implementation-defined values derived from exception"),
@@ -36,7 +32,6 @@
 #include "core/events/error_event.h"
 #include "core/events/event_target.h"
 #include "core/events/report_exception.h"
-#include "core/realm.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* WHERE A PARKED REPORT IS, AS A STEP OF §8.1.4.6 RATHER THAN AS A PRIVATE INTEGER.
@@ -59,7 +54,7 @@
  * standard's own alternative, and step 4's condition ("script is a classic script and script's muted errors is
  * true") is therefore false. The day the classic-script loader records muted errors for a cross-origin script
  * fetched without CORS, step 4 is read here and nowhere else. Step 5 is `omitError`, whose only true is passed
- * by step 7.2 — see the assertion at step 7.
+ * by step 7.2.3's report at a worker's owner.
  *
  * A STAGE THAT IS NOT A REST POINT IS NOT DECLARED. Step 6.3 (set the mode back to false) and step 7 run in the
  * arm the fire ENDS in, because the algorithm does not stop there — the label names where the record is
@@ -107,6 +102,20 @@ static void (*g_console)(JSContext *ctx, JSValueConst exception);
 /* §8.1.4.4 step 8's third bullet, as a machine this runtime can be handed — see report_exception_flow. */
 static int g_flow_stepid = -1;
 
+/* §8.1.4.6 step 7.2's brand test and task, registered by core/workers/ (report_exception.h). */
+static bool (*g_dw_implements)(JSValueConst global);
+static void (*g_dw_queue)(JSContext *ctx, JSValueConst exception);
+
+void report_exception_set_dedicated_worker_terms(bool (*implements)(JSValueConst global),
+                                                 void (*queue)(JSContext *ctx, JSValueConst exception))
+{
+    DCHECK(!implements == !queue, "§8.1.4.6 step 7.2's brand test and its task were registered apart");
+    DCHECK(!implements != !g_dw_implements,
+           "§8.1.4.6 step 7.2's terms were registered twice, or given back unregistered, in one agent");
+    g_dw_implements = implements;
+    g_dw_queue = queue;
+}
+
 void report_exception_set_console_hook(void (*fn)(JSContext *ctx, JSValueConst exception))
 {
     /* THE SAME CLAIMANT MAY SAY SO AGAIN, AND A DIFFERENT ONE MAY NOT. A host that opens a second session on
@@ -144,6 +153,10 @@ void report_exception_init(JSContext *ctx)
        standard read one section apart. */
     agent_state_ptr("report_exception", &g_console,
                     "the host edge HTML §8.1.4.6 step 7.3's developer console is written through");
+    agent_state_ptr("report_exception", &g_dw_implements,
+                    "HTML §8.1.4.6 step 7.2's DedicatedWorkerGlobalScope brand test, core/workers/'s");
+    agent_state_ptr("report_exception", &g_dw_queue,
+                    "HTML §8.1.4.6 step 7.2's global task at a dedicated worker's owner, core/workers/'s");
 }
 
 /* THE RUNTIME, NOT A REALM — core/platform.h's release column. This was a line each of the three hosts wrote
@@ -172,6 +185,9 @@ void report_exception_free(JSRuntime *rt)
        agent's: giving it back is the inverse of the claim, and a hook left standing is what would make the
        next host's claim read as a second, different one. */
     g_console = NULL;
+    DCHECK(g_dw_implements == NULL && g_dw_queue == NULL,
+           "§8.1.4.6 step 7.2's terms were still registered when report_exception was released — "
+           "core/workers/worker.c's row follows this one, so worker_free gives them back first");
 }
 
 static bool reporting_mode(JSContext *ctx, JSValueConst global, int set, bool on)
@@ -198,7 +214,13 @@ static bool reporting_mode(JSContext *ctx, JSValueConst global, int set, bool on
 
 void report_exception_work_start(ReportExceptionWork *w)
 {
+    report_exception_work_start_with(w, /*omit_error*/ false);
+}
+
+void report_exception_work_start_with(ReportExceptionWork *w, bool omit_error)
+{
     w->stage = RX_EXTRACT;
+    w->omit_error = omit_error;
     w->reporting = 0;
     w->phase = 0;
     w->ev = JS_UNDEFINED;
@@ -403,8 +425,9 @@ char *report_exception_position(JSContext *ctx, JSValueConst exception, uint32_t
    errorInfo, and names the SECOND caller this is exported for: §7.2.6.8's abort a NavigateEvent, whose step 4
    extracts and whose step 6 fires `navigateerror` with the result.
    Steps 3-5 of report-an-exception are the only writers that standard puts between its own step 2 and its step
-   6.2, and all three are the identity here — see the stage declaration. */
-JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable)
+   6.2; report_exception_error_info performs step 5, and steps 3-4 are the identity — see the stage declaration. */
+static JSValue error_info_event(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable,
+                                JSValueConst error)
 {
     char *owned = NULL;
     const char *what = JS_DiagCString(ctx, exception, &owned);
@@ -418,10 +441,22 @@ JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const 
     filename = JS_NewString(ctx, path);
     free(path);
     JS_DiagFreeCString(ctx, what, owned);
-    ev = error_event_new(ctx, type, cancelable, message, filename, line, col, exception);
+    ev = error_event_new(ctx, type, cancelable, message, filename, line, col, error);
     JS_FreeValue(ctx, message);
     JS_FreeValue(ctx, filename);
     return ev;
+}
+
+JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable)
+{
+    return error_info_event(ctx, exception, type, cancelable, exception);
+}
+
+JSValue report_exception_error_info(JSContext *ctx, JSValueConst exception, bool error_nulled)
+{
+    /* Step 6.2's two flags: `error`, cancelable — an `onerror` returning true is how a page says it handled
+       the exception, which step 7 reads back as notHandled. */
+    return error_info_event(ctx, exception, "error", /*cancelable*/ true, error_nulled ? JS_NULL : exception);
 }
 
 int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst exception, JSValue in,
@@ -446,14 +481,9 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
        than after the whole head has run. A mint that fails is an allocation failure and nothing else — this
        runs none of the page's code — which is why it is a CHECK and not a swallowed exception: returning 0 here
        left the caller continuing with a live throw in the context and a report that had reported nothing. */
-    /* STEP 6.2's own two flags ride the extraction, because they are what the event IS: `error`, and "with the
-       cancelable attribute initialized to true" — which is how an `onerror` returning true says it handled the
-       exception, and which step 7 reads back as notHandled. */
-    w->ev = extract_error_information(ctx, exception, "error", /*cancelable*/ true);
+    /* Steps 3-4 are the identity (script is null); step 5 nulls `error` under omitError. */
+    w->ev = report_exception_error_info(ctx, exception, w->omit_error);
     CHECK(!JS_IsException(w->ev), "the ErrorEvent carrying §8.1.4.6 step 2's errorInfo could not be allocated");
-    /* STEPS 3-5 are performed and are the identity — script is null, so step 4's condition is false, and this
-       component takes no omitError, so step 5's is too. See the stage declaration for both, and step 7 for the
-       assertion that names the day step 5 acquires a caller. */
     STEP_GOTO(w->stage, RX_MODE, &w->phase, NULL);
     return JS_STEP_YIELD;
 
@@ -484,57 +514,20 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
     w->reporting = 0;                                   /* given back at the step that gives it back */
 not_handled:
     /* STEP 7's notHandled is `not_canceled`: a listener that called `preventDefault()` cancelled the event, and
-       that is how a page says it handled the error. Step 7.1 nulls errorInfo[error], whose only readers are 7.2
-       and 7.3; 7.2 is the WORKER branch — also the one caller in the standard that passes step 5's omitError
-       true — and 7.3 is "the user agent MAY report exception to a developer console", which is the hook below.
-       THE CONSOLE IS WHERE THE EXCEPTION'S NAME SURVIVES, and this file used to say this build had none. It
-       has: solver/result.h's `pageErrors` is exactly a developer console — one line per distinct message,
-       carried out of the run — and the sentence that denied it was written before the classic-script arm had
-       any route through this algorithm at all. Every earlier caller (a §2.9 listener that threw, a custom
-       element reaction, an animation-frame callback, an IntersectionObserver callback, an Observable) was
-       therefore reporting into a fire and nowhere else: the page's `error` listeners ran and, if nothing was
-       listening, the exception's message left no trace anywhere. That is not a smaller report than the classic
-       arm's, it is the SAME step, so it belongs at this one site rather than at each caller.
-       IT IS BEHIND notHandled, WHICH IS THE WHOLE OF WHAT `preventDefault()` BUYS A PAGE. A page that cancels
-       the `error` event is doing its own reporting, so §8.1.4.6 stops here — and a console line written anyway
-       would report as unhandled an exception the page handled. */
-    if (not_canceled && g_console)
-        g_console(ctx, exception);
-    /* THE PATH IS §8.1.4.6 STEP 7.2's OWN CONDITION, AND IT USED TO BE `Worker` — A NAME THE STEP NEVER
-       ASKS ABOUT AND WHICH IS EXPOSED IN EVERY WINDOW REALM. The retired argument is rewritten rather than
-       dropped, because it is the one a reader re-derives: it read that `Worker` is what makes a
-       DedicatedWorkerGlobalScope reachable, so with it in this build step 7.2 is due. Both halves are wrong.
-       STEP 7.2 IS STATED OVER THE GLOBAL THIS EXCEPTION IS BEING REPORTED FOR — "If global implements
-       DedicatedWorkerGlobalScope" — and never over what that global can NAME, which for this interface is a
-       different question: HTML §10.2.6.3 "Dedicated workers and the Worker interface" declares
-       `[Exposed=(Window,DedicatedWorker,SharedWorker)]`, and browser/idl_exposure.h carries that row with
-       IDL_GLOBAL_WINDOW set. So the probe would have fired in every WINDOW realm, on every uncaught exception
-       a page did not cancel, for a step a Window global can never reach.
-       IT IS A THIRD DIRECTION BESIDE THE TWO core/realm.h RECORDS, which are a producer that is an internal
-       algorithm and an operand with several writers. Here the producer is a real member a page can name and
-       the probe still cannot be aimed by it, because the name's EXPOSURE SET is wider than the set of realms
-       the step governs — so the question to ask of a path is not only whether a page could name it, but
-       whether every realm that can name it is a realm the step is about.
-       AND THE PREMISE WAS FALSE, WHICH IS THE HALF WORTH KEEPING: exposing the interface object does not make
-       a worker global reachable. HTML §10.2.4 "Processing model"'s run a worker step 4 is "Let agent be the
-       result of obtaining a dedicated/shared worker agent given outside settings and is shared", and its next
-       sentence is "Run the rest of these steps in that agent" — so the realm whose global implements
-       DedicatedWorkerGlobalScope is built by a SECOND AGENT, while §10.2.6.3's constructor hands run-a-worker
-       to an in-parallel step and keeps the rest for itself. A `new Worker()` can therefore construct, hold the
-       outside MessagePort that constructor mints and serialize into nowhere — §9.4.4's own step 6 arm for a
-       port with nothing on the other end — with no such agent anywhere in the process.
-       HTML §10.2.1.2 "Dedicated workers and the DedicatedWorkerGlobalScope interface" declares
-       `[Exposed=DedicatedWorker]`, so the path below names exactly the realms step 7.2 governs and no others.
-       RETIREMENT: this record goes when core/workers/ exports the brand step 7.2's condition asks for and this
-       site tests THAT, because the question is then asked of the global rather than of a name on it. */
-    if (not_canceled)
-        realm_awaits(ctx, "DedicatedWorkerGlobalScope",
-                     "§8.1.4.6 step 7.2 queues a global task on the DOM manipulation task source, at the "
-                     "worker's owner, that fires `error` at the Worker object using ErrorEvent and — if that "
-                     "is not handled either — REPORTS the exception again for the owner's global with "
-                     "omitError true. That parameter is step 5, which this component does not yet take, so "
-                     "both land together: give report_exception_run an omitError argument that nulls the "
-                     "ErrorEvent's `error` before the fire, and write 7.1 and 7.2 here");
+       that is how a page says it handled the error, so nothing below runs for it.
+       Step 7.2 tests the global's brand, never a name the global can reach: `Worker` is exposed in Window
+       realms too, and DedicatedWorkerGlobalScope is the one interface whose implementers are the globals the
+       step governs. Its task carries the exception itself and the owner's report nulls `error` (step 7.1 and
+       7.2.3's omitError), so no page in the owner's agent reads the value; the console is written once, by the
+       report that reaches a global that is not a dedicated worker's.
+       Step 7.3 is "the user agent may report exception to a developer console", which is the host's hook:
+       solver/result.h's `pageErrors`. */
+    if (not_canceled) {
+        if (g_dw_implements != NULL && g_dw_implements(global))
+            g_dw_queue(ctx, exception);         /* steps 7.1-7.2 */
+        else if (g_console)
+            g_console(ctx, exception);          /* step 7.3 */
+    }
     JS_FreeValue(ctx, w->ev);
     w->ev = JS_UNDEFINED;
     /* AND THE ALGORITHM IS BACK AT ITS FIRST STEP: the record a caller holds names the step it would be

@@ -209,14 +209,20 @@ static JSClassID g_dwgs_class;
    RETIREMENT: this record goes when every member `WorkerGlobalScope includes WindowOrWorkerGlobalScope`
    brings is placed by §3.7.3's arm, because the three things are then not a shape anybody has to re-derive. */
 
+bool dedicated_worker_global_scope_implements(JSValueConst v)
+{
+    /* No interface inherits from DedicatedWorkerGlobalScope, so its class id is the whole set. A value that is
+       not an object is not a platform object, so the object test comes first. */
+    return JS_IsObject(v) && g_dwgs_class != 0 && JS_GetClassID(v) == g_dwgs_class;
+}
+
 bool worker_global_scope_implements(JSValueConst v)
 {
     /* §3.8: "value is a platform object and the inclusive inherited interfaces of value.[[PrimaryInterface]]
        contains interface". browser/idl_inheritance.h states the ancestry this reads —
-       `{ "DedicatedWorkerGlobalScope", "WorkerGlobalScope", IDL_PROTO_INHERITS }` — so the one class id below
-       is the whole of the set today. A value that is not an object is not a platform object, and
-       JS_GetClassID of a non-object is not a question worth asking, so the object test comes first. */
-    return JS_IsObject(v) && g_dwgs_class != 0 && JS_GetClassID(v) == g_dwgs_class;
+       `{ "DedicatedWorkerGlobalScope", "WorkerGlobalScope", IDL_PROTO_INHERITS }` — so the one interface below
+       is the whole of the set today. */
+    return dedicated_worker_global_scope_implements(v);
 }
 
 /* WEB IDL §3.7.3 "Interface prototype object" — `WorkerGlobalScope.prototype` IN THIS REALM, which is where
