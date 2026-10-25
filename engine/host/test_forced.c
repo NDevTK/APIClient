@@ -6531,6 +6531,7 @@ TF_UNIT void tf_agent_init(JSContext *ctx, const char *origin, const char *top_l
        get their answers from §7.4.2.1 "Supporting concepts"' navigation params in one line (§7.4.6 stood here
        and is "Applying the history step", which never mentions them), and this one has to think. */
     platform_agent_init(ctx, origin, top_level_url, false, OPENER_POLICY_UNSAFE_NONE);
+    solve_declare_realm_intrinsics();   /* the fire marker, in every realm this agent builds */
 }
 
 /* ONE DOCUMENT — run once per document including the first. THE PLATFORM FIRST, then this fixture's own

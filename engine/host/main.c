@@ -180,6 +180,7 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
        "Populating a session history entry" creates by fetching, and which `qjs_init` and `qjs_join` run over the
        zone's header list). core/platform.h says why no host builds the fact struct itself. */
     platform_agent_init(ctx, origin, top_level_url, requests_oac, opener_policy);
+    solve_declare_realm_intrinsics();   /* the fire marker, in every realm this agent builds */
 }
 
 /* One document: the per-realm half, run once per document including the first. `url` is the document's address

@@ -11,6 +11,7 @@
 #include "core/frame/policy_container.h"
 #include "core/html/trusted_types.h"
 #include "core/dom/document.h"
+#include "core/realm.h"              /* the fire marker is declared for every realm */
 #include "core/dom/node.h"             /* node_next_in, the pre-order successor bounded to a subtree */
 #include "solver/concolic.h"
 #include "solver/decide.h"
@@ -527,9 +528,21 @@ void solve_init(JSContext *ctx) {
        the Function constructor are ECMAScript intrinsics, so the engine announces them (JSEvalSinkFunc) and the
        detector is registered here, beside the marker they fire. */
     JS_SetEvalSinkHook(solve_eval_sink);
+    (void)ctx;
+}
+
+/* The fire marker on one realm's global, as the realm is built. */
+static void solve_install_fire_marker(JSContext *ctx) {
     JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "X9", JS_NewCFunction(ctx, js_x9, "X9", 0));
+    JSValue fn = JS_NewCFunction(ctx, js_x9, "X9", 0);
+
+    CHECK(!JS_IsException(fn), "solve: OOM making a realm's fire marker");
+    CHECK(JS_SetPropertyStr(ctx, g, "X9", fn) >= 0, "solve: a realm's global refused the fire marker");
     JS_FreeValue(ctx, g);
+}
+
+void solve_declare_realm_intrinsics(void) {
+    realm_declare_intrinsic(solve_install_fire_marker);
 }
 
 /* The search for (source, class), or NULL. This is the read half, separate from sink_search because a lookup
