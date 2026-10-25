@@ -496,6 +496,8 @@ static double flow_member_key(const Flow *f);
    above asserts the sum and this one the half, at the same seam, for solver/flow.h's `ikey_last` reason. */
 static double flow_index_key(const Flow *f);
 #endif
+/* The weight with the assumption term left out, for flow_fork_inherit's equality; defined beside flow_order_key. */
+static double flow_weight_observed(const Flow *f);
 
 /* The frontier's virtual time: SFQ's v(t), the service tag of the item in service, stored as a scalar because it
  * must be readable when nothing is in service (the frontier persists across slices and sessions, so a definition
@@ -1425,8 +1427,62 @@ int flow_path_driven(const Flow *f) {
 }
 
 FlowPathMarks flow_path_marks(const Flow *f) {
-    FlowPathMarks m = { flow_path_forced(f), f->path_pinned, f->path_peer_driven, f->path_peer_pinned };
+    FlowPathMarks m = { flow_path_forced(f), f->path_pinned, f->path_peer_driven, f->path_peer_pinned, -1 };
     return m;
+}
+
+int flow_assumed(const Flow *f) {
+    DCHECK(f->assumed_reads >= 0 && f->assumed_slots_n >= 0 && (f->assumed_slots_n == 0) == !f->assumed_slots,
+           "a flow's assumption count is negative, or its slot list and its length disagree");
+    return f->assumed_reads + f->assumed_slots_n;
+}
+
+/* Appends `slot` to `f`'s assumed slots, which stay ascending because a flow's decisions are consumed in cursor
+   order and a fork's sibling arm is the slot past every one its parent holds. */
+static void flow_assumed_slot_push(Flow *f, int slot) {
+    int *g;
+    DCHECK(slot >= 0 && (f->assumed_slots_n == 0 || f->assumed_slots[f->assumed_slots_n - 1] < slot),
+           "an assumed decision slot arrived below one the flow already holds — slots are taken in cursor order");
+    g = realloc(f->assumed_slots, (size_t)(f->assumed_slots_n + 1) * sizeof *g);
+    CHECK(g, "flow: OOM recording an assumed decision slot");
+    f->assumed_slots = g;
+    f->assumed_slots[f->assumed_slots_n++] = slot;
+}
+
+/* An assumption count moved: the member's key and the order with it. */
+static void flow_assumed_moved(Flow *f) {
+    flow_ix_rekey(f);
+    frontier_rank_changed();
+}
+
+void flow_note_assumed_read(void) {
+    DCHECK(g_running != NULL, "an assumed read was recorded with no flow running");
+    g_running->assumed_reads++;
+    flow_assumed_moved(g_running);
+}
+
+void flow_note_assumed_slot(int slot) {
+    Flow *f = g_running;
+    DCHECK(f != NULL, "an assumed decision slot was recorded with no flow running");
+    if (f->assumed_slots_n && f->assumed_slots[f->assumed_slots_n - 1] >= slot) {
+        DCHECK(f->assumed_slots[f->assumed_slots_n - 1] == slot,
+               "a replayed slot below the flow's last assumed slot was not among them — slots are replayed in "
+               "cursor order, so only the sibling's own fork slot can be met again");
+        return;
+    }
+    flow_assumed_slot_push(f, slot);
+    flow_assumed_moved(f);
+}
+
+void flow_assumed_truncate(int c) {
+    Flow *f = g_running;
+    int n;
+    DCHECK(f != NULL && c >= 0, "an assumed-slot truncation was asked with no flow running or below slot 0");
+    for (n = f->assumed_slots_n; n > 0 && f->assumed_slots[n - 1] >= c; n--) {}
+    if (n == f->assumed_slots_n) return;
+    f->assumed_slots_n = n;
+    if (!n) { free(f->assumed_slots); f->assumed_slots = NULL; }
+    flow_assumed_moved(f);
 }
 
 int flow_path_forced(const Flow *f) {
@@ -1765,6 +1821,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            sib->cand_replay == 0.0 && sib->cand_replay_of == 0 && sib->cand_replay_arms == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->path_pinned == 0 && sib->path_peer_driven == 0 && sib->path_peer_pinned == 0 &&
+           sib->assumed_reads == 0 && sib->assumed_slots_n == 0 &&
            sib->family == sib->acct && sib->family->fam_work == 0 && sib->family->emit_gen == 0 &&
            sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
            "a forked sibling was credited, charged, dispatched or decided before inheriting its parent's account — "
@@ -1904,6 +1961,12 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->path_pinned = at_branch.pinned;
     sib->path_peer_driven = at_branch.peer_driven;
     sib->path_peer_pinned = at_branch.peer_pinned;
+    /* And the assumptions: the parent's, plus the sibling's own arm when that arm takes absent application state
+       as present. That one is the stated exception to the equality below, which compares the weights with the
+       assumption term left out. */
+    sib->assumed_reads = parent->assumed_reads;
+    for (int i = 0; i < parent->assumed_slots_n; i++) flow_assumed_slot_push(sib, parent->assumed_slots[i]);
+    if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot);
     /* The scheduler's one WFQ, asserted at the fork: a fork is rank-neutral. At the instant it is born the sibling is
        worth exactly what its parent is worth. The equality fires the moment anything enters flow_weight that a fork
        does not carry, which is the shape of every banned fix (a depth bonus, a script-index term, a separate visit
@@ -1925,10 +1988,12 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        passes however the halves are split, including the split an arm is born into if `work` is carried without
        `work_gen`. This is the site that mints that population, so the relation is asserted on the newborn. */
     DCHECK_AGING_ONE_WINDOW(sib, "a fork handed this arm its parent's account");
-    DCHECK(flow_weight(sib) == flow_weight(parent),
+    DCHECK(flow_weight_observed(sib) == flow_weight_observed(parent) &&
+               flow_assumed(sib) == flow_assumed(parent) + (at_branch.assumed_slot >= 0),
            "a fork changed the ranking — the sibling is the parent's path with one arm appended, so the two "
-           "must be worth the same at the instant of the branch; a weight term the fork does not carry lets a "
-           "flow change its own rank by branching, which is the one thing the WFQ may never let it do");
+           "must be worth the same at the instant of the branch apart from the one assumption the sibling's arm "
+           "may take; a weight term the fork does not carry lets a flow change its own rank by branching, which "
+           "is the one thing the WFQ may never let it do");
 }
 
 /* Release one flow (flow.h): the one place every field a Flow owns is given back. */
@@ -3303,6 +3368,10 @@ typedef char flow_quantum_costs_at_most_one_finding[(FLOW_SILENCE_WORK >= FLOW_S
  * multiply then floor: two flows on the same notch get the identical product, which keeps the fork's
  * rank-neutrality equality exact. */
 #define FLOW_AGE_QUANTUM ((double)FLOW_SERVICE_WORK * FLOW_AGE_RATE)
+/* The price of one assumption (flow.h's `assumed_reads`/`assumed_slots`): one never-run member's whole optimism
+ * bonus, so a world resting on absent application state ranks behind the observed world's unexplored arms and
+ * ahead of it once the observed world has aged past that much; a cost and not a tier, so nothing is dropped. */
+#define FLOW_ASSUMPTION_COST 1.0
 
 /* How many whole quanta of the thread this flow has consumed: the one quantised reading of `work`, a census quantity
  * saying who is consuming the thread at the granularity it is handed out in. Not a term of the weight; the
@@ -3494,7 +3563,8 @@ static double acct_branch_offset(const FlowAcct *br) {
                                                                                         /* fractions + the top  */ \
                                                                                         /* boolean rung         */ \
                            + 1.0 / 1.0                                                  /* branch: alone in it  */ \
-                           - 0.0 * FLOW_AGE_QUANTUM )                                   /* aging, no silence    */
+                           - 0.0 * FLOW_AGE_QUANTUM                                     /* aging, no silence    */ \
+                           - 0.0 * FLOW_ASSUMPTION_COST )                               /* no assumption        */
 
 /* How many arms this member's branch has ever taken: the reading that tells the first arm of an unexplored branch
    from the many-thousandth arm of one already taken, which no other term can. On a real bundle whose frontier is one
@@ -3571,9 +3641,15 @@ long flow_branch_born(const Flow *f) {
    re-keys more members than it moved. A subexpression of flow_order_key's weight, and flow_member_key is this value
    plus the bucket term, bit for bit; excess precision (FLT_EVAL_METHOD 2) is the one way that fails, which
    flow_member_key's DCHECK guards. */
-static double flow_index_key(const Flow *f) {
+static double flow_index_key_observed(const Flow *f) {
     return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
            + flow_optimism(f) + flow_distance(f);
+}
+
+/* The member key with each assumption priced in, the last summand, so a member with none reads
+   flow_index_key_observed to the bit (`x - 0.0 == x`). */
+static double flow_index_key(const Flow *f) {
+    return flow_index_key_observed(f) - (double)flow_assumed(f) * FLOW_ASSUMPTION_COST;
 }
 
 /* A member's weight rebuilt from its operands, in flow_order_key's composition and order of operations, so it is
@@ -3581,7 +3657,8 @@ static double flow_index_key(const Flow *f) {
 static double flow_weight_recompose(const FlowWeightOperands *o) {
     double opt = 1.0 / (1.0 + (double)o->visits + (double)o->orphan_seen);
     double dist = (o->replay + o->surv + (double)o->rung) / (double)FLOW_RUNGS_N;
-    double ikey = -(double)o->own_notch * FLOW_AGE_QUANTUM + opt + dist;
+    double ikey = -(double)o->own_notch * FLOW_AGE_QUANTUM + opt + dist
+                  - (double)o->assumed * FLOW_ASSUMPTION_COST;
     double x = 1.0 / (double)o->born + ikey;
     return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + x;
 }
@@ -3602,6 +3679,8 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
     o->rung = f->cand_rung;
     o->w = flow_weight(f);
     o->age_quantum = FLOW_AGE_QUANTUM;
+    o->assumed = flow_assumed(f);
+    o->assume_cost = FLOW_ASSUMPTION_COST;
     o->host_owed = flow_host_owed(f);
     o->running = (f == g_running);
     DCHECKF(flow_weight_recompose(o) == o->w,
@@ -3636,7 +3715,8 @@ static double flow_member_key(const Flow *f) {
        call, so in a dev build flow_pick_walk's per-member stamp pays this key twice; in release the condition is a
        `sizeof` and neither side is evaluated. */
     DCHECK(k == -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
-                + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f),
+                + flow_optimism(f) + flow_distance(f) - (double)flow_assumed(f) * FLOW_ASSUMPTION_COST
+                + flow_branch_bonus(f),
            "the member half of the WFQ's weight is not its per-member key plus its bucket term — the two spellings "
            "associate identically, so a summand reached one and not the other, or this host evaluates doubles wider "
            "than binary64");
@@ -3703,6 +3783,12 @@ static FlowOrderKey flow_order_key(const Flow *f) {
     o.w = flow_family_coord(f) + o.x;
     o.seq = f->ix_t.seq;
     return o;
+}
+
+/* The weight with the assumption term left out, in flow_order_key's composition: what the fork's rank-neutrality
+   equality compares. Mentioned only inside DCHECK conditions. */
+static double flow_weight_observed(const Flow *f) {
+    return flow_family_coord(f) + (flow_branch_bonus(f) + flow_index_key_observed(f));
 }
 
 /* Positive when `a` ranks above `b`, negative below; zero only for one member, since a birth sequence is unique. */
@@ -5154,6 +5240,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->vt = frontier_vt();
     out->never_picked = 0;
     out->never_picked_gap = 0.0;
+    out->assumed_members = out->assumed_sum = out->assumed_max = 0;
     out->never_picked_at_top = 0;
     out->picks_live = out->picks_max = 0;
     /* The lifetime half, not a reading of this walk: dispatches this instance has ever made, unconditional, and the
@@ -5307,6 +5394,11 @@ void flow_wfq_census(WfqCensus *out) {
         /* How many members stand at zero of the aging's own half, read through flow_own_silence, the quantity the
            order is made of, rather than `Flow.work`, which is that quantity only while its window mark is current. */
         if (flow_own_silence(f) == 0) out->unrun++;
+        if (flow_assumed(f) > 0) {
+            out->assumed_members++;
+            out->assumed_sum += flow_assumed(f);
+            if (flow_assumed(f) > out->assumed_max) out->assumed_max = flow_assumed(f);
+        }
         /* And the population the row above cannot name: zero own silence is also what an emission by any arm of the
            family produces. A member never handed the thread is the population starvation is about, and `picks` is
            the one field nothing resets. The best weight among them goes to the gap below: how far the most-favoured
@@ -6038,6 +6130,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         /* The candidate it was verifying: both strings are this flow's copies, freed nowhere else for a removed flow
            (the teardown walks the flows still there). `cand_sink` is static text. */
         free(f->cand_src); free(f->cand_payload); free(f->cand_vfy);
+        free(f->assumed_slots);
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);
         free(f->orphan_acts);
         free(f->orphan_chain);

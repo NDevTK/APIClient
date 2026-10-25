@@ -3,6 +3,7 @@
 #include "solver/concolic.h"
 #include "solver/flow.h"
 #include "solver/engine.h"
+#include "solver/absent.h"    /* which roots are absent application state: an arm against their example assumes */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include "core/json_buf.h"   /* json_buf_block: the fork census's block is counted in the census's footprint */
@@ -320,6 +321,7 @@ static void dec_leave_path(void) {
        `replayLeftArms >= replayLeft` holds of the printed numbers. */
     g_replay_left++;
     g_replay_left_arms += dec_total() - g_c;
+    flow_assumed_truncate(g_c);   /* the slots above the cursor are no longer this flow's */
     if (g_c == 0) {                      /* the very first branch disagreed: this flow stands on nothing */
         g_dec_base = NULL; g_dec_below = 0;
         dec_seg_unref(old);
@@ -1297,9 +1299,18 @@ static int dec_replay(uint32_t asked) {
    sibling's resume point (engine_prepare_fork). The parent's own arm is constrained by decide_arm's tail, so
    the constraint is applied in one place for all three ways a decision is reached, and the seam, which may
    assemble the sibling before this returns, sees the parent's constraint as the sibling's frozen copy left it. */
+/* Does an arm over `v` against its example take absent application state as present: is every root of `v` a read
+   absent.c answered at its injected-state arm? An attacker source's root is never one, so its arms assume nothing. */
+static int dec_subject_assumed(JSValueConst v) {
+    return concolic_root_every(v, absent_assumed_member);
+}
+
 static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, uint32_t asked,
                         int restartable, int real_arm, int *forked, const char *site) {
     int take = real_arm < 0 ? 1 : real_arm;
+    /* The sibling's arm is the one the example contradicts, so over absent application state it is an
+       assumption, priced on the sibling from its birth at this slot. */
+    int assumed_slot = real_arm != REAL_ARM_UNOBSERVED && dec_subject_assumed(subject) ? g_c : -1;
     void *dblob;
     void *pblob;
 
@@ -1322,7 +1333,7 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
     if (key) fork_key_count(key, FORK_ROW_PREDICATE);
     else     fork_key_count(fork_site_name(subject), FORK_ROW_SITE);
     pblob = concolic_pins_suspend();
-    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable, site);
+    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable, site, assumed_slot);
     /* This flow's own arm, onto the head the freeze emptied, under the question both arms answer, so the sibling
        and every later replay of this path check the slot against what they ask and diverge on a mismatch.
        Named residual. Not covered: one code site with the same subject shape met in swapped order across
@@ -1502,7 +1513,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     const char *src = NULL, *tok = NULL;
     ConcolicLit tok_kind = CONCOLIC_LIT_NONE;
     char *key;
-    int op, forked = 0, arm, real, neg, eq_holds, eq_fails, forced_arm, pinned = 0, refined;
+    int op, forked = 0, arm, real, neg, eq_holds, eq_fails, forced_arm, pinned = 0, refined, slot;
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
@@ -1530,6 +1541,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     key = decide_key(cond);
     /* The arm the compared value's type facet leaves an equality, in the predicate's terms (-1 when both). */
     refined = tok && op != OPCMP_NONE ? concolic_equality_outcome(ctx, cond) : -1;
+    slot = g_c;
     arm = decide_arm(ctx, key, cond, NULL, -1, restartable, nonforking, real, refined, &forked, site);
     /* Whether that fork was taken over a subject this flow had already proved (see the counter). Raised here,
        the one line holding both `forked` (decide_arm's answer) and `src` (the subject's source as concolic_cmp
@@ -1537,6 +1549,9 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     if (forked && concolic_src_pinned(src)) g_fork_over_pinned++;
 
     forced_arm = decide_note_forced_arm(cond, real, arm);
+    /* A slot this decision consumed on the arm its example contradicts, over absent application state: the
+       sibling replaying its own fork slot, or a resumed flow replaying its path, records the assumption. */
+    if (forced_arm && g_c > slot && dec_subject_assumed(cond)) flow_note_assumed_slot(slot);
 
     /* The source equals tok on the arm that makes the equality true (arm 1; `!==` arrives as `===`). The root
        travels with the pin, read off the comparison result (pred_new gives it the tested operand's root): whose
@@ -1793,7 +1808,7 @@ static void outcome_note_assumed(JSValueConst over, const char *op, int c) {
 
 int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, int real,
                       const char *site) {
-    int i, forked = 0;
+    int i, forked = 0, slot;
 
     if (!g_running) return -1;
     /* The operation and the site go in the message, so a reader can tell which of the interpreter's callers
@@ -1863,11 +1878,13 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
            no outcome hook, and the driver takes outcome 0 itself (core/timing/timer.c states the convention at
            §8.7's step 4), so SOLVER_NO_NONFORKING_ARM makes reaching here in such a session crash naming the
            question. */
+        slot = g_c;
         arm = decide_arm(ctx, key, over, op, c, 0, SOLVER_NO_NONFORKING_ARM, real_arm, -1, &forked, site);
         free(key);
         /* The arm this flow ends on, against the machine's declaration, as decide_branch does, before the forked
            bit (a message to the driver, not part of the arm) is composed. Only i == 0 can fire it. */
-        decide_note_forced_arm(over, real_arm, arm);
+        if (decide_note_forced_arm(over, real_arm, arm) && g_c > slot && dec_subject_assumed(over))
+            flow_note_assumed_slot(slot);
         if (arm == 1) {
             /* The answer, written under every name it has (see outcome_settle), after decide_note_forced_arm,
                which may have taken this operand's example away, and on the arm that ended the walk, which also

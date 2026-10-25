@@ -99,6 +99,9 @@ typedef enum { CONCOLIC_ROOT_WHOSE(CONCOLIC_WHOSE_ARM) CONCOLIC_WHOSE_COUNT } Co
  * Side-effect-free and allocation-free. */
 int         concolic_root_whose_any(JSValueConst v, ConcolicRootWhose whose);
 int         concolic_root_whose_all(JSValueConst v, ConcolicRootWhose whose);
+/* The universal over a value's root members for a property the caller owns: 1 when `member` answers 1 for every
+   member (a slice `p`/`n` of the root, not terminated), 0 for a value with no root, as `_all` answers. */
+int         concolic_root_every(JSValueConst v, int (*member)(const char *p, size_t n));
 
 /* Mint a concolic value AT A SOURCE — the root of a derivation, where an unknown enters the program. `shape`
    is the @H/@S display form ("{location.hash}", "/api/{region}"); a DECLARED source's shape is its provenance

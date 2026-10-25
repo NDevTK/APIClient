@@ -6926,6 +6926,18 @@ const char *concolic_root_c(JSValueConst v) {
     return c ? c->root : NULL;
 }
 
+int concolic_root_every(JSValueConst v, int (*member)(const char *p, size_t n)) {
+    const char *root = concolic_root_c(v), *p;
+    size_t n;
+    int i;
+
+    DCHECK(member != NULL, "a property over a value's root members was asked with no property");
+    if (!root) return 0;
+    for (i = 0; root_member(root, i, &p, &n); i++)
+        if (!member(p, n)) return 0;
+    return 1;
+}
+
 const char *concolic_ident_c(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     return c ? c->ident : NULL;

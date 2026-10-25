@@ -53,9 +53,10 @@ typedef struct FlowAcct FlowAcct;
 #define FLOW_STEP_RETIRED 3
 
 /* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
-   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/born + ((-own_notch*Q + 1/(1+visits+orphan_seen))
-   + (replay + surv + rung)/FLOW_RUNGS_N))`, with Q = FLOW_AGE_QUANTUM. `coord_notch` is the family notch plus
-   the carry bit. `host_owed`, `running` and `picks` say whether the member could take the thread. */
+   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/born + (((-own_notch*Q + 1/(1+visits+orphan_seen))
+   + (replay + surv + rung)/FLOW_RUNGS_N) - assumed*A))`, with Q = FLOW_AGE_QUANTUM and A = FLOW_ASSUMPTION_COST.
+   `coord_notch` is the family notch plus the carry bit. `host_owed`, `running` and `picks` say whether the
+   member could take the thread. */
 typedef struct {
     int present;
     double reward;
@@ -65,6 +66,8 @@ typedef struct {
     int rung;
     double w;
     double age_quantum;   /* FLOW_AGE_QUANTUM, which the two notches are priced at */
+    int64_t assumed;      /* flow_assumed */
+    double assume_cost;   /* FLOW_ASSUMPTION_COST, which each assumption is priced at */
     int host_owed, running;
 } FlowWeightOperands;
 
@@ -458,6 +461,14 @@ typedef struct Flow {
        by flow_take_peer_marks alone; monotone, fork-carried, not cold-tier state. */
     int   path_peer_driven;
     int   path_peer_pinned;
+    /* The assumed application state this path rests on (solver/absent.c's injected-state arm): reads of an absent
+       global or member the session throws at and this flow read past (`assumed_reads`), and the decision slots
+       whose arm took such a value as present against its example (`assumed_slots`, ascending slot indices,
+       malloc'd and owned). Their sum is flow_assumed, a weight term. Fork-carried; not cold-tier state, since a
+       resumed flow's replay re-reaches each read and slot. */
+    int   assumed_reads;
+    int  *assumed_slots;
+    int   assumed_slots_n;
     /* The document's load stage is not here: a flow reaches several Documents in its agent cluster and each has
        its own readiness, so it lives on each Document (document.c's readiness slot), isolated per flow by the
        COW delta. */
@@ -989,6 +1000,7 @@ typedef struct {
        not being reached (build.mjs reads the series). */
     long never_picked;
     double never_picked_gap;
+    long assumed_members, assumed_sum, assumed_max;   /* flow_assumed over the members: above zero, sum, max */
     /* How many never-picked members stand exactly at the front (weight == `w_top`): the N of the tie above. A
        small N is a sweep in progress; a large N is an order whose within-family terms no longer separate
        anything, so `g_flows` position decides the pick. On a one-family frontier the reward and the family
@@ -1704,8 +1716,9 @@ void  flow_observe_survival(Flow *f, double frac);
    Monotone and ordered: it raises `cand_rung`, never lowers it, and refuses a rung whose predecessor this flow
    has not stood on. */
 void  flow_observe_rung(Flow *f, int rung);
-/* A flow's path marks, read at one instant. */
-typedef struct { int forced, pinned, peer_driven, peer_pinned; } FlowPathMarks;
+/* A flow's path marks, read at one instant. `assumed_slot` is the decision slot of a fork's sibling arm when that
+   arm takes absent application state as present (decide.c's dec_fork_here), and -1 otherwise. */
+typedef struct { int forced, pinned, peer_driven, peer_pinned, assumed_slot; } FlowPathMarks;
 /* The running flow just took an arm its concrete example contradicts: `path_forced`'s one writer. Idempotent and
    monotone. Not a credit or a charge: a fork is rank-neutral, so it does not bump the frontier generation. */
 void  flow_mark_forced_arm(void);
@@ -1720,6 +1733,15 @@ void  flow_take_peer_marks(Flow *f, FlowPeerMarks m);
 int   flow_path_forced(const Flow *f);
 /* Both path marks of `f` at one instant: what a fork hands its sibling, read where it takes the blobs. */
 FlowPathMarks flow_path_marks(const Flow *f);
+/* How many assumptions `f`'s path rests on: its assumed reads plus its assumed slots. */
+int   flow_assumed(const Flow *f);
+/* The running flow read past an absent global or member the session throws at (absent.c). */
+void  flow_note_assumed_read(void);
+/* The running flow's decision slot `slot` took absent application state as present against its example
+   (decide.c, at a replay). Idempotent per slot, since a fork's sibling holds its own arm's slot from the fork. */
+void  flow_note_assumed_slot(int slot);
+/* The running flow's decision vector now ends at slot `c` (decide.c's dec_leave_path): its slots at or above go. */
+void  flow_assumed_truncate(int c);
 /* The running flow just determined a source's value on an arm no example confirmed: `path_pinned`'s one writer,
    idempotent and monotone. Called where decide.c's pin determined a value on an arm decide_note_forced_arm
    marked or decide_real_arm answered REAL_ARM_UNOBSERVED for, and where a witness verification delivers a

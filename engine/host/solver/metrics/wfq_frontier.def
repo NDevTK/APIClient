@@ -35,6 +35,12 @@ METRIC(never_picked_gap, "neverPickedGap", GAUGE, "point", AGENT, "solver/flow.c
    flow_credit_visit asserts `frame == NULL`) or the own silence (forgiven account-wide at
    any arm's emission). */
 METRIC(never_picked_at_top, "neverPickedAtTop", GAUGE, "member", AGENT, "solver/flow.c", INT)
+/* …and the members resting on assumed application state (flow_assumed above zero), the
+   assumptions they rest on in all, and the most any one rests on: the share of the frontier
+   that descends from a world absent.c's injected-state arm took as present. */
+METRIC(assumed_members, "assumedMembers", GAUGE, "member", AGENT, "solver/flow.c", INT)
+METRIC(assumed_sum, "assumedSum", GAUGE, "assumption", AGENT, "solver/flow.c", INT)
+METRIC(assumed_max, "assumedMax", GAUGE, "assumption", AGENT, "solver/flow.c", INT)
 /* …and where the dispatches went (solver/flow.h has the three states). `picksLive / (members
    - neverPicked)` near 1: the thread reached a fresh member nearly every time and the
    frontier is outgrowing one thread; well above 1: the order re-serves members ahead of

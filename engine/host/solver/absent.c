@@ -1156,11 +1156,62 @@ static const char *ns_path_of(JSValueConst v)
     return NULL;
 }
 
+/* The sources minted at the injected-state arm (absent_read_hook's miss), as a set of their spellings: what
+   absent_assumed_member answers. Open addressing over FNV-1a, grown at half full; each spelling is owned. Per agent,
+   given back by absent_free with the namespace registry. */
+static char  **g_assumed;
+static size_t  g_assumed_n, g_assumed_cap;
+
+static uint64_t assumed_hash(const char *p, size_t n)
+{
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < n; i++) h = (h ^ (uint8_t)p[i]) * 1099511628211ULL;
+    return h;
+}
+
+/* The slot holding `p`/`n`, or the empty slot it would take. */
+static size_t assumed_slot(char **tab, size_t cap, const char *p, size_t n)
+{
+    size_t i = (size_t)assumed_hash(p, n) & (cap - 1);
+    while (tab[i] && !(strncmp(tab[i], p, n) == 0 && tab[i][n] == '\0')) i = (i + 1) & (cap - 1);
+    return i;
+}
+
+static void assumed_record(const char *src)
+{
+    size_t n = strlen(src), i;
+
+    if (2 * (g_assumed_n + 1) > g_assumed_cap) {
+        size_t cap = g_assumed_cap ? 2 * g_assumed_cap : 64;
+        char **tab = calloc(cap, sizeof *tab);
+        CHECK(tab != NULL, "absent: OOM growing the set of injected-state sources");
+        for (i = 0; i < g_assumed_cap; i++)
+            if (g_assumed[i]) tab[assumed_slot(tab, cap, g_assumed[i], strlen(g_assumed[i]))] = g_assumed[i];
+        free(g_assumed);
+        g_assumed = tab;
+        g_assumed_cap = cap;
+    }
+    i = assumed_slot(g_assumed, g_assumed_cap, src, n);
+    if (g_assumed[i]) return;
+    g_assumed[i] = strdup(src);
+    CHECK(g_assumed[i] != NULL, "absent: OOM recording an injected-state source");
+    g_assumed_n++;
+}
+
+int absent_assumed_member(const char *p, size_t n)
+{
+    return g_assumed_cap && g_assumed[assumed_slot(g_assumed, g_assumed_cap, p, n)] != NULL;
+}
+
 void absent_free(void)
 {
     int i;
 
     concolic_undeclare_sources(ABSENT_COMPONENT);
+    for (size_t k = 0; k < g_assumed_cap; k++) free(g_assumed[k]);
+    free(g_assumed);
+    g_assumed = NULL;
+    g_assumed_n = g_assumed_cap = 0;
 
     for (i = 0; i < g_ns_n; i++)
         free(g_ns[i].path);
@@ -1545,6 +1596,7 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcol
        this run received can state it, which is the population the bar exists for. */
     absent_declare_precondition(src);
     r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
+    if (concolic_is(r)) assumed_record(src);
     /* What this session itself reads here. A property read that misses answers undefined (§10.1.8.1
        OrdinaryGet step 2.b), which the unknown holds as its example, so every derivation computes the session's
        value from it and decide.c marks the arm the session does not take forced. An identifier no binding
@@ -1556,6 +1608,7 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcol
         break;
     case JS_CONCOLIC_ABSENT_ANSWERS_THROW:
         flow_mark_forced_arm();
+        flow_note_assumed_read();   /* reading past the throw takes the absent name as present */
         break;
     }
 done:

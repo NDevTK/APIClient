@@ -4973,8 +4973,9 @@ int engine_session_forks(void) { return g_sess_forking; }
    and overwriting would leak a decision blob and pin blob nothing names, keeping the frozen decision prefix under
    them alive. A backstop: the two ways to reach it without a consumer crash where they are born. */
 int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable,
-                        const char *site) {
+                        const char *site, int assumed_slot) {
     Flow *f = flow_running();
+    FlowPathMarks marks;
 
     DCHECK(f != NULL, "a sibling was prepared with no flow running — the blobs would describe no timeline");
     DCHECK(g_sess_forking,
@@ -4994,7 +4995,9 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
                    "a restartable fork was asked for with page code on the stack (a queued job's callback, a "
                    "listener in a rendering step) — the sibling would resume at a step that does not re-reach the "
                    "ask");
-            engine_sibling_assemble(ctx, f, NULL, dec_blob, pin_blob, flow_path_marks(f));
+            marks = flow_path_marks(f);
+            marks.assumed_slot = assumed_slot;
+            engine_sibling_assemble(ctx, f, NULL, dec_blob, pin_blob, marks);
             return 0;
         }
         /* A C body mid-algorithm has neither: it is inside its own activation, with no machine state to snapshot
@@ -5033,6 +5036,7 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
            "a sibling's snapshot state was prepared while a previous one was unconsumed — the branch that prepared "
            "it never reached its fork hook");
     g_fork_dec = dec_blob; g_fork_pins = pin_blob; g_fork_marks = flow_path_marks(f);
+    g_fork_marks.assumed_slot = assumed_slot;
     return 1;
 }
 

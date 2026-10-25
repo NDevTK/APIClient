@@ -46,6 +46,11 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
    and this file disagreeing about what is published, which crashes rather than inventing a root. */
 void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value);
 
+/* Is this root member (a slice `p`/`n`, not terminated) a source this file minted at its injected-state arm: an
+   absent global or record member the document's world is taken to hold? decide.c prices an arm taken against such
+   a value's example as an assumption (solver/flow.h's `assumed_slots`). */
+int  absent_assumed_member(const char *p, size_t n);
+
 /* Give back the published-namespace registry. Called on the agent's release column, beside the source
    registry: a path names a record of a document that is gone. */
 void absent_free(void);

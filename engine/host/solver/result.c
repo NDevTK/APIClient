@@ -511,10 +511,10 @@ static char *errs_json_array(ErrsArray which) {
 static char *weight_operands_json(const FlowWeightOperands *o) {
     return composef("{\"w\":%.17g,\"reward\":%.17g,\"coordNotch\":%lld,\"ownNotch\":%lld,\"visits\":%lld,"
                     "\"orphanSeen\":%lld,\"born\":%ld,\"replay\":%.17g,\"surv\":%.17g,\"rung\":%d,"
-                    "\"picks\":%lld,\"hostOwed\":%d,\"running\":%d}",
+                    "\"assumed\":%lld,\"picks\":%lld,\"hostOwed\":%d,\"running\":%d}",
                     o->w, o->reward, (long long)o->coord_notch, (long long)o->own_notch, (long long)o->visits,
-                    (long long)o->orphan_seen, o->born, o->replay, o->surv, o->rung, (long long)o->picks,
-                    o->host_owed, o->running);
+                    (long long)o->orphan_seen, o->born, o->replay, o->surv, o->rung, (long long)o->assumed,
+                    (long long)o->picks, o->host_owed, o->running);
 }
 
 char *result_wfq_json(void) {
@@ -647,6 +647,9 @@ char *result_wfq_json(void) {
     METRIC_SET(never_picked, w.never_picked);
     METRIC_SET_REAL(never_picked_gap, w.never_picked_gap);
     METRIC_SET(never_picked_at_top, w.never_picked_at_top);
+    METRIC_SET(assumed_members, w.assumed_members);
+    METRIC_SET(assumed_sum, w.assumed_sum);
+    METRIC_SET(assumed_max, w.assumed_max);
     METRIC_SET(picks_live, w.picks_live);
     METRIC_SET(picks_max, w.picks_max);
     METRIC_SET(picks_lifetime, w.picks_lifetime);
@@ -722,8 +725,10 @@ char *result_wfq_json(void) {
     METRIC_SET_REAL(cur_deep_wgap, w.cur_deep_w_gap);
     if (w.cur_deep_top_ops.present) {
         char *top = weight_operands_json(&w.cur_deep_top_ops), *deep = weight_operands_json(&w.cur_deep_ops);
-        terms = composef("{\"ageQuantum\":%.17g,\"rungs\":%d,\"gap\":%.17g,\"top\":%s,\"deep\":%s}",
-                         w.cur_deep_top_ops.age_quantum, FLOW_RUNGS_N, w.cur_deep_w_gap, top, deep);
+        terms = composef("{\"ageQuantum\":%.17g,\"assumeCost\":%.17g,\"rungs\":%d,\"gap\":%.17g,"
+                         "\"top\":%s,\"deep\":%s}",
+                         w.cur_deep_top_ops.age_quantum, w.cur_deep_top_ops.assume_cost, FLOW_RUNGS_N,
+                         w.cur_deep_w_gap, top, deep);
         CHECK(top && deep && terms, "result: OOM composing the curDeepWGap operands");
         METRIC_SET_OBJECT(cur_deep_terms, terms);   /* borrowed until the rows are rendered below */
         free(top); free(deep);
@@ -732,8 +737,10 @@ char *result_wfq_json(void) {
     }
     if (w.never_picked_top_ops.present) {
         char *top = weight_operands_json(&w.never_picked_top_ops), *never = weight_operands_json(&w.never_picked_ops);
-        never_terms = composef("{\"ageQuantum\":%.17g,\"rungs\":%d,\"gap\":%.17g,\"top\":%s,\"never\":%s}",
-                               w.never_picked_top_ops.age_quantum, FLOW_RUNGS_N, w.never_picked_gap, top, never);
+        never_terms = composef("{\"ageQuantum\":%.17g,\"assumeCost\":%.17g,\"rungs\":%d,\"gap\":%.17g,"
+                               "\"top\":%s,\"never\":%s}",
+                               w.never_picked_top_ops.age_quantum, w.never_picked_top_ops.assume_cost,
+                               FLOW_RUNGS_N, w.never_picked_gap, top, never);
         CHECK(top && never && never_terms, "result: OOM composing the neverPickedGap operands");
         METRIC_SET_OBJECT(never_picked_terms, never_terms);   /* borrowed until the rows are rendered below */
         free(top); free(never);

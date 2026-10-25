@@ -226,7 +226,7 @@ void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx));
  * abort the next fork far from its cause. `asked` is the constraint key, or NULL. Requires a running flow in
  * a forking session (asserted). */
 int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable,
-                        const char *site);
+                        const char *site, int assumed_slot);
 
 /* Whether this session forks at all (explore vs verify). The interpreter and step driver read the policy
  * through the flow-control hook table, whose absent `branch`/`outcome` already mean the ordinary arm (-1, or
