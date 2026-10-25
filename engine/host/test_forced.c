@@ -15870,7 +15870,8 @@ static void sx_precondition_rows(const char *js, const char *root, int *reach, c
    component, stating its delivery, and stating the attacker's open of the same address that makes the second
    load. */
 static void sx_write_path_row(const char *js, const char *root, const char *prefix, int *tt, const char **why) {
-    static const char open_act[] = "{\"kind\":\"open\",\"target\":\"address\",\"type\":\"open\"}";
+    static const char open_act[] =
+        "{\"kind\":\"open\",\"target\":\"address\",\"type\":\"open\",\"activation\":\"attacker-page\"}";
     char src[192] = "";
     int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
     size_t span = 0;

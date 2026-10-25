@@ -1885,9 +1885,10 @@ function startExploitProbe(msg) {
           principalDemand, principalPins, acts } = msg || {};
   if (!poc) throw new Error("need the engine's poc (the fire-verified breakout input from the @S finding)");
   DCHECK(acts === undefined || (Array.isArray(acts) && acts.length > 0 && acts.every(function (a) {
-           return a && (a.kind === "click" || a.kind === "dispatch" || a.kind === "message") &&
-                  typeof a.target === "string" &&
-                  typeof a.type === "string"; })),
+           return a && ["click", "dispatch", "input", "drop", "scroll", "close-request", "message",
+                        "open"].indexOf(a.kind) >= 0
+                  && typeof a.target === "string" && typeof a.type === "string" &&
+                  (a.kind === "open") === (a.activation === "attacker-page"); })),
          "a probe carries acts that are not the engine's shape — bridge.js docSinkAct admitted the record, so "
          + "this is the popup relaying something other than the finding's `acts`");
 
@@ -1960,6 +1961,11 @@ function startExploitProbe(msg) {
        under no act. */
     acts: acts || null,
     acted: null,
+    /* The next act to perform, the attacker tab armAttackerPage opened (where an `open` act is performed), and
+       the documents an open has replaced: a hit from one of those is not the fire the engine verified. */
+    actAt: 0,
+    attackerTabId: null,
+    replaced: [],
   };
   // ENGINE AGREEMENT: perform the delivery the ENGINE declared, carrying its EXACT poc (X9 -> apiclientsink).
   // The user runs it by clicking Run on the ATTACKER PAGE, a real registrable origin the trusted zone opens as
@@ -2033,6 +2039,7 @@ async function armAttackerPage(ses) {
                     + "standing there — which for a tab still loading is about:blank, at the wrong origin",
              attackerTabId: tabId };
   }
+  ses.attackerTabId = tabId;
   const results = await swRpc("scripting.exec", { op: "pocAttackerButton", tabId: tabId,
                                                   args: [ses.pocJs, ses.marker] });
   const top = (results || []).find(function (r) { return r && r.frameId === 0; }) || (results || [])[0];
@@ -2156,6 +2163,7 @@ function _recordProbeDelivery(seedUrl, facts) {
     const exp = ses.expect;
     if (!exp) continue;                 // this session performed no delivery — there is nothing to witness
     if (ses.delivered) continue;        // latched: the first document to arrive at the address is the delivery
+    if (ses.replaced.indexOf(facts.documentId) >= 0) continue;   // a load an open act already came after
     if (facts.origin !== exp.origin) continue;
     if (facts.frameId !== exp.frameId) continue;
     const browserStated = _sameAddress(exp.url, facts.url);
@@ -2182,21 +2190,51 @@ function _recordProbeDelivery(seedUrl, facts) {
 /* The PoC's acts, in the delivered document and nowhere else: the worker's `pocPerformActs` injector is pinned
    to that document's id, which is the browser's statement of which document announced itself at the
    delivered address. A dispatched event is untrusted (`isTrusted` false), so a page that checks it is not
-   reproduced by this run; that residual travels on the record rather than being read as a divergence. */
+   reproduced by this run; that residual travels on the record rather than being read as a divergence.
+   An `open` act ends the acts this document gets: the attacker tab is armed to open the delivered address
+   again under the victim's click there, this document is replaced, and the next document announcing itself at
+   the address gets the acts after it. */
 async function _performProbeActs(ses) {
   const d = ses.delivered;
-  ses.acted = { state: "running", steps: null, error: null,
-                residual: "each act is dispatched by script, so its event is untrusted (isTrusted false)" };
+  let end = ses.acts.findIndex(function (a, i) { return i >= ses.actAt && a.kind === "open"; });
+  if (end < 0) end = ses.acts.length;
+  const segment = ses.acts.slice(ses.actAt, end);
+  if (!ses.acted) ses.acted = { state: "running", steps: [], error: null,
+                                residual: "each act is dispatched by script, so its event is untrusted (isTrusted false)" };
+  ses.acted.state = "running";
+  ses.actAt = end < ses.acts.length ? end + 1 : end;
   try {
-    const results = await swRpc("scripting.exec", { op: "pocPerformActs", tabId: d.tabId,
-                                                    documentId: d.documentId, args: [ses.acts] });
-    const top = (results || []).find(function (r) { return r && r.frameId === 0; });
-    ses.acted.steps = top && top.result ? top.result.steps : null;
-    ses.acted.state = ses.acted.steps ? "performed" : "no-result";
+    if (segment.length > 0) {
+      const results = await swRpc("scripting.exec", { op: "pocPerformActs", tabId: d.tabId,
+                                                      documentId: d.documentId, args: [segment] });
+      const top = (results || []).find(function (r) { return r && r.frameId === 0; });
+      if (!top || !top.result) { ses.acted.state = "no-result"; return; }
+      Array.prototype.push.apply(ses.acted.steps, top.result.steps);
+    }
+    if (end < ses.acts.length) {
+      DCHECK(typeof ses.attackerTabId === "number",
+             "a PoC's acts were performed before armAttackerPage recorded the attacker tab that delivered them");
+      ses.replaced.push(d.documentId);
+      ses.delivered = null;
+      ses.deliveredDocumentId = null;
+      const results = await swRpc("scripting.exec", { op: "pocAttackerOpen", tabId: ses.attackerTabId,
+                                                      args: [ses.expect.url] });
+      const top = (results || []).find(function (r) { return r && r.frameId === 0; });
+      const armed = !!(top && top.result && top.result.armed);
+      ses.acted.steps.push({ target: ses.acts[end].target, type: "open", found: armed });
+      ses.acted.state = armed ? "awaiting-open" : "no-result";
+      return;
+    }
+    ses.acted.state = "performed";
   } catch (err) {
     ses.acted.state = "refused";
     ses.acted.error = String((err && err.message) || err);
   }
+}
+/* Does the PoC still wait on an `open` act: one not yet reached, or one armed whose document has not arrived? */
+function _opensPending(ses) {
+  return !!ses.acts && (ses.acts.slice(ses.actAt).some(function (a) { return a.kind === "open"; }) ||
+                        (ses.replaced.length > 0 && ses.delivered === null));
 }
 function _recordProbeHit(msg, facts) {
   // `hit` crosses from the UNTRUSTED renderer, so its fields are validated as attacker input rather than
@@ -2218,6 +2256,9 @@ function _recordProbeHit(msg, facts) {
     mismatch = "reported by " + facts.origin + ", but the payload was delivered to " + exp.origin;
   } else if (facts.frameId !== exp.frameId) {
     mismatch = "reported by frame " + facts.frameId + ", but the payload was delivered to the top-level document";
+  } else if (ses.replaced.indexOf(facts.documentId) >= 0 || _opensPending(ses)) {
+    mismatch = "reported by a load the PoC's `open` act comes after — the engine's fire is in the document the "
+             + "attacker page opens at the address again";
   } else if (ses.deliveredDocumentId !== null && ses.deliveredDocumentId !== facts.documentId) {
     mismatch = "reported by a second document of " + exp.origin + " — the delivered one already fired this marker";
   }

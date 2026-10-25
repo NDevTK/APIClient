@@ -1156,6 +1156,14 @@ async function cmdPocRun(args) {
     const deadline = Date.now() + waitMs;
     let verdict = "(no verdict yet)";
     while (Date.now() < deadline) {
+      // A PoC whose acts include `open` arms a second button on the attacker page; the victim's click there is
+      // the activation that open needs, so it is clicked the same trusted, foreground way.
+      if (await attacker.$("#__apiclient_poc_overlay button[data-act=open]:not([disabled])").catch(() => null)) {
+        await attacker.bringToFront();
+        await sleep(500);
+        await attacker.click("#__apiclient_poc_overlay button[data-act=open]");
+        log("clicked Open the page again on the attacker page (trusted gesture)");
+      }
       verdict = await popup.evaluate(() => {
         const c = document.querySelector("#security-findings .card");
         if (!c) return "(no card)";

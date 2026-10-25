@@ -6965,7 +6965,11 @@ static int engine_open_again(JSContext *ctx, Flow *f) {
            "where the running flow has nothing left to run");
     if (!document_fully_active(ctx) || !open_again_available(ctx)) return 0;
     f->persist_wrote = 0;   /* before the fork, so both arms stand in the answer */
-    act = strdup("{\"kind\":\"open\",\"target\":\"address\",\"type\":\"open\"}");
+    /* The act carries its precondition: HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable
+       create the new top-level traversable only past a popup blocker when the attacker page's active window has
+       transient activation, and consume it. So the PoC states the victim's click on the attacker page, which the
+       live verify performs as a real click there. */
+    act = strdup("{\"kind\":\"open\",\"target\":\"address\",\"type\":\"open\",\"activation\":\"attacker-page\"}");
     CHECK(act, "engine: OOM spelling an open act");
     at = f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0;
     arm = decide_completion("(the attacker opens this page's address again in a new window)", &dblob);

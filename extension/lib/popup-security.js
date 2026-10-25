@@ -1493,6 +1493,7 @@ function _actsSentence(acts) {
     return (a.kind === "click" ? "click " : a.kind === "input" ? "type into "
             : a.kind === "drop" ? "drop a file on " : a.kind === "scroll" ? "scroll into view "
             : a.kind === "close-request" ? "send a close request (Escape) to "
+            : a.kind === "open" ? "click on the attacker page, which opens again "
             : "a `" + a.type + "` event on ")
          + "`" + a.target + "`";
   }).join(", then ");
@@ -1503,12 +1504,15 @@ function _actedSentence(snap) {
   DCHECK("acts" in snap && "acted" in snap,
          "EXPLOIT_PROBE_STATUS answered without `acts`/`acted` — startExploitProbe declares both on every session");
   if (!snap.acts) return "";
-  if (!snap.acted || !snap.acted.steps)
+  if (!snap.acted || snap.acted.steps.length === 0)
     return " The PoC's acts (" + _actsSentence(snap.acts) + ") were not reported performed ("
       + (snap.acted ? snap.acted.state + (snap.acted.error ? ": " + snap.acted.error : "") : "not started") + ").";
   return " Performed after the delivery: " + snap.acted.steps.map(function (st) {
     return st.type + " on `" + st.target + "`" + (st.found ? "" : " (target not found)");
-  }).join(", then ") + " — " + snap.acted.residual + ".";
+  }).join(", then ") + (snap.acted.state === "performed" ? ""
+    : snap.acted.state === "awaiting-open" ? ", armed on the attacker page and waiting for the click there"
+    : " (then " + snap.acted.state + (snap.acted.error ? ": " + snap.acted.error : "") + ")")
+    + " — " + snap.acted.residual + ".";
 }
 var _ATTACKER_HANDLE = new Map([
   ["window", "its window.open answered a WindowProxy"],

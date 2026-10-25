@@ -219,13 +219,6 @@ const _PROBE_INJECTORS = {
       await new Promise((r) => window.addEventListener("load", r, { once: true }));
     const steps = [];
     for (const a of acts) {
-      /* The attacker's second load of the same address: a fresh window with no opener, as another site's
-         window.open would make, so it shares the user agent's storage and nothing of this window's. */
-      if (a.kind === "open") {
-        window.open(location.href, "_blank", "noopener");
-        steps.push({ target: a.target, type: a.type, found: true });
-        continue;
-      }
       const t = a.target === "window" ? window : a.target === "document" ? document
               : document.querySelector(a.target);
       if (!t) { steps.push({ target: a.target, type: a.type, found: false }); continue; }
@@ -239,6 +232,26 @@ const _PROBE_INJECTORS = {
       steps.push({ target: a.target, type: a.type, found: true });
     }
     return { steps: steps };
+  },
+  /* The PoC's `open` act, on the attacker page that made the first delivery: a button whose click (the victim's,
+     which is the transient activation HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable
+     need past a popup blocker, and consume) opens the exact delivered address again in a new window, as the
+     first delivery's `window.open(address, "_blank")` did. The document it makes announces itself at the
+     address (offscreen _recordProbeDelivery), which is the evidence; the handle is not read. */
+  pocAttackerOpen: (address) => {
+    const box = document.getElementById("__apiclient_poc_overlay");
+    if (!box) return { armed: false };
+    const btn = document.createElement("button");
+    btn.dataset.act = "open";
+    btn.setAttribute("style", "margin-top:6px;background:#1f6feb;color:#fff;border:0;border-radius:4px;"
+      + "padding:5px 12px;font-size:12px;cursor:pointer");
+    btn.textContent = "\u25B6 Open the page again";
+    box.appendChild(btn);
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      window.open(address, "_blank");
+    }, { once: true });
+    return { armed: true };
   },
 };
 
@@ -344,6 +357,9 @@ async function _swRpc(msg) {
                    + "opened, or with no delivered document id to pin them to"
                  : "scripting.exec was asked to arm tab " + o.tabId + ", which is not a tab attackerPage.open "
                    + "opened and that is still open — the injector runs only in the attacker page this worker created");
+      CHECK(!acts || (o.args[0] || []).every((a) => a.kind !== "open"),
+            "scripting.exec was asked to perform an `open` act in the delivered document — the attacker page opens "
+            + "the address again (pocAttackerOpen), under the victim's click there");
       const target = acts ? { tabId: o.tabId, documentIds: [o.documentId] } : { tabId: o.tabId };
       const results = await chrome.scripting.executeScript({ target, world: "MAIN", func: fn, args: o.args || [] });
       return (results || []).map((r) => ({ frameId: r && r.frameId, result: r ? r.result : undefined }));
