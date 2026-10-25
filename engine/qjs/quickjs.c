@@ -32427,8 +32427,12 @@ typedef struct JSABSlice {
     JSValue prim[2];      /* the coerced bounds (owned) */
     JSValue ctor;         /* `constructor`, then its @@species (owned) */
     JSValue cargs[2];     /* [ctor, newLength] — the CONSTRUCT request (owned) */
+    /* Steps 6-8 over an unknown: first and newLen derived from the bounds and the buffer's length where any of
+       them is unknown, JS_UNINITIALIZED otherwise (owned). `start` and `new_len` then hold their examples. */
+    JSValue first_u, new_len_u;
     int64_t len, start, new_len;
     int i;
+    uint8_t unknown;      /* a bound or the buffer's length is unknown: the bounds are derived, not clamped */
 } JSABSlice;
 static JSValue js_array_buffer_slice_build(JSContext *ctx, JSValueConst this_val, JSValue new_obj,
                                            int64_t start, int64_t new_len, int magic);
@@ -90201,6 +90205,69 @@ static const char *const js_sab_slice_steps[] = {
         "25.2.5.6 step 9 (new is Construct(ctor, <<newLen>>))")
     NULL };
 
+static JSValue js_ab_length_derive(JSContext *ctx, const JSArrayBuffer *abuf, const char *op, uint32_t offset,
+                                   int size_log2, int64_t example);
+/* §25.1.6.7 steps 5-8 where a bound or the buffer's length is unknown: len is the byteLength getter's derivation,
+   and first and newLen are derived from the bounds and len, each with the real clamp over the examples as its
+   example. `start` and `new_len` take those examples, 0 where there is none, so the copy holds the example
+   bytes it covers. 0, or -1 with a throw live. */
+static int js_ab_slice_bounds_unknown(JSContext *ctx, JSABSlice *s)
+{
+    JSArrayBuffer *abuf = JS_GetOpaque(s->hdr.this_val, s->hdr.arg >> 1);
+    JSValueConst start = s->prim[0], end = s->prim[1];
+    JSValue len_v, final_v, ex, ops[2];
+    int64_t len_ex = s->len, start_ex = 0, final_ex = 0;
+    bool have = true;
+
+    DCHECK(abuf != NULL && !abuf->detached, "the slice's buffer was lost between its own stages");
+    len_v = JS_IsUninitialized(abuf->length_unknown) ? js_int64(s->len)
+          : js_ab_length_derive(ctx, abuf, "25.1.6.1 get ArrayBuffer.prototype.byteLength", 0, 0, abuf->byte_length);
+    ex = js_value_is_concolic(len_v) ? js_concolic_operand(ctx, len_v) : js_dup(len_v);
+    have = JS_IsNumber(ex) && JS_ToInt64Sat(ctx, &len_ex, ex) == 0;
+    JS_FreeValue(ctx, ex);
+    /* the examples run the real clamp, ToIntegerOrInfinity of each bound against the example length: a known
+       bound already passed it in the bounds stage, and an unknown one's example only when it is a Number */
+    ex = js_value_is_concolic(start) ? js_concolic_operand(ctx, start) : js_dup(start);
+    have = have && (!js_value_is_concolic(start) || JS_IsNumber(ex)) &&
+           JS_ToInt64Clamp(ctx, &start_ex, ex, 0, len_ex, len_ex) == 0;
+    JS_FreeValue(ctx, ex);
+    if (JS_IsUndefined(step_arg(&s->hdr, 1))) {
+        final_ex = len_ex;
+    } else {
+        ex = js_value_is_concolic(end) ? js_concolic_operand(ctx, end) : js_dup(end);
+        have = have && (!js_value_is_concolic(end) || JS_IsNumber(ex)) &&
+               JS_ToInt64Clamp(ctx, &final_ex, ex, 0, len_ex, len_ex) == 0;
+        JS_FreeValue(ctx, ex);
+    }
+    ops[0] = start;
+    ops[1] = len_v;
+    s->first_u = g_concolic.derived(ctx, "25.1.6.7 step 6 (first is the clamped relative start)", ops, 2,
+                                    have ? js_int64(start_ex) : JS_UNDEFINED);
+    if (JS_IsUndefined(step_arg(&s->hdr, 1))) {
+        final_v = js_dup(len_v);
+    } else {
+        ops[0] = end;
+        final_v = g_concolic.derived(ctx, "25.1.6.7 step 7 (final is the clamped relative end)", ops, 2,
+                                     have ? js_int64(final_ex) : JS_UNDEFINED);
+        if (JS_IsUninitialized(final_v))
+            final_v = js_int64(final_ex);
+    }
+    ops[0] = final_v;
+    ops[1] = JS_IsUninitialized(s->first_u) ? js_int64(start_ex) : s->first_u;
+    s->new_len_u = g_concolic.derived(ctx, "25.1.6.7 step 8 (newLen is max(final - first, 0))", ops, 2,
+                                      have ? js_int64(max_int64(final_ex - start_ex, 0)) : JS_UNDEFINED);
+    JS_FreeValue(ctx, final_v);
+    JS_FreeValue(ctx, len_v);
+    s->start = have ? start_ex : 0;
+    s->new_len = have ? max_int64(final_ex - start_ex, 0) : 0;
+    /* the example bytes the copy holds are the source's stored ones its window covers */
+    if (s->start > (int64_t)abuf->byte_length)
+        s->start = abuf->byte_length;
+    if (s->start + s->new_len > (int64_t)abuf->byte_length)
+        s->new_len = abuf->byte_length - s->start;
+    return 0;
+}
+
 static int js_ab_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSABSlice *s = st;
@@ -90214,12 +90281,14 @@ static int js_ab_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->result = JS_UNDEFINED; s->ctor = JS_UNDEFINED;
         s->prim[0] = JS_UNDEFINED; s->prim[1] = JS_UNDEFINED;
         s->cargs[0] = JS_UNDEFINED; s->cargs[1] = JS_UNDEFINED;
+        s->first_u = JS_UNINITIALIZED; s->new_len_u = JS_UNINITIALIZED;
         s->len = 0; s->start = 0; s->new_len = 0; s->i = 0;
         abuf = JS_GetOpaque2(ctx, s->hdr.this_val, class_id);
         if (!abuf) return -1;
         if (abuf->detached) { JS_ThrowTypeErrorDetachedArrayBuffer(ctx); return -1; }
         if (abuf->immutable) { JS_ThrowTypeErrorImmutableArrayBuffer(ctx); return -1; }
         s->len = abuf->byte_length;
+        s->unknown = !JS_IsUninitialized(abuf->length_unknown);
         s->hdr.stage = ABSLICE_BOUNDS;
     }
     while (s->hdr.stage == ABSLICE_BOUNDS) {
@@ -90233,10 +90302,23 @@ static int js_ab_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         if (r) return r < 0 ? -1 : r;
         /* the NUMERIC half runs right here, not after both bounds: ToIntegerOrInfinity is where a Symbol's
            TypeError is ordered, and `slice(Symbol(), {valueOf(){…}})` must throw BEFORE the second argument's
-           valueOf runs. Nothing in it invokes anything — the operand is a primitive already. */
+           valueOf runs. Nothing in it invokes anything — the operand is a primitive already. An unknown bound
+           is a Number in some world and is derived below, never clamped here. */
+        if (js_value_is_concolic(s->prim[s->i])) {
+            s->unknown = 1;
+            s->i++;
+            continue;
+        }
         if (JS_ToInt64Clamp(ctx, &v, s->prim[s->i], 0, s->len, s->len)) return -1;
         if (s->i == 0) s->start = v; else s->new_len = v;
         s->i++;
+    }
+    if (s->hdr.stage == ABSLICE_BOUNDS && s->unknown) {
+        JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+        if (js_ab_slice_bounds_unknown(ctx, s) < 0)
+            return -1;
+        if (magic & 1) goto construct;
+        s->hdr.stage = ABSLICE_CTOR;
     }
     if (s->hdr.stage == ABSLICE_BOUNDS) {
         int64_t end = JS_IsUndefined(step_arg(&s->hdr, 1)) ? s->len : s->new_len;
@@ -90270,11 +90352,33 @@ static int js_ab_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         /* the CONSTRUCT is issued from the tail of whichever stage decided the constructor: a stage of its own
            would be entered and left inside one step() call, and so would rest at no step at all. */
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+        /* This realm's own %ArrayBuffer% as the species: its Construct reads `prototype` off itself, a
+           non-writable, non-configurable data property, so building the copy here is that Construct. */
+        if (!JS_IsUninitialized(s->new_len_u) && JS_IsObject(s->ctor)) {
+            JSObject *cp = JS_VALUE_GET_OBJ(s->ctor);
+
+            if (cp->class_id == JS_CLASS_C_FUNCTION && cp->u.cfunc.cproto == JS_CFUNC_step_ctor &&
+                cp->u.cfunc.magic == STEPDEF_AB_CTOR && cp->u.cfunc.realm == ctx && class_id == JS_CLASS_ARRAY_BUFFER) {
+                JS_FreeValue(ctx, s->ctor);
+                s->ctor = JS_UNDEFINED;
+            }
+        }
         if (JS_IsUndefined(s->ctor)) {
             JSValue nb = js_array_buffer_constructor2(ctx, s->new_len, NULL, class_id);
             s->result = js_array_buffer_slice_build(ctx, s->hdr.this_val, nb, s->start, s->new_len, magic);
+            if (!JS_IsException(s->result) && !JS_IsUninitialized(s->new_len_u)) {
+                /* the copy's length is the derived newLen, its example the bytes copied; the source's bytes past
+                   its example are the copy's bytes past its own */
+                JSArrayBuffer *nab = JS_VALUE_GET_OBJ(s->result)->u.array_buffer;
+
+                nab->length_unknown = s->new_len_u;
+                s->new_len_u = JS_UNINITIALIZED;
+            }
             return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
         }
+        if (!JS_IsUninitialized(s->new_len_u))
+            DFAIL("25.1.6.7 step 10 over an unknown newLen with a species constructor: build the Construct over "
+                  "the unknown length, as the intrinsic path derives the copy's");
         s->cargs[0] = js_dup(s->ctor);
         s->cargs[1] = js_int64(s->new_len);
         s->hdr.stage = ABSLICE_NEW;
@@ -90296,6 +90400,8 @@ static void js_ab_slice_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->prim[1]);
     v->val(ctx, &s->cargs[0]);
     v->val(ctx, &s->cargs[1]);
+    v->val(ctx, &s->first_u);
+    v->val(ctx, &s->new_len_u);
 }
 
 static JSValue js_ab_slice_fini(JSContext *ctx, void *st, bool take_result)
