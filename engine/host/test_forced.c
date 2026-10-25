@@ -1116,6 +1116,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/storedxss.h"
 #include "fixture/windowname.h"
 #include "fixture/clobber.h"
+#include "fixture/typedinput.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1578,6 +1579,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "storedxss", HTML_STOREDXSS },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
+    { "typedinput", HTML_TYPEDINPUT },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14679,6 +14681,33 @@ TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `typedinput` document (fixture/typedinput.h). The document has one markup write, so its
+   record is located by sink alone and its source is whatever the run says the field's value is. */
+TF_UNIT void probes_typedinput(const char *js, Probe *tab, int *n) {
+    char src[192] = "";
+    int has = s_rooted_source(js, "innerHTML", "", src, sizeof src);
+    size_t span = 0;
+    const char *rec = has ? s_record(js, "innerHTML", src, &span) : NULL;
+    const char *td_why = NULL; int td_tt = 1;
+    fold_row(&td_tt, &td_why, !!strstr(js, "\"/api/ti-input\""),
+             "NOT REACHED: there is no /api/ti-input record, so the `input` handler was never driven");
+    const char *ts_why = NULL; int ts_tt = 1;
+    fold_row(&ts_tt, &ts_why, has,
+             "NOT REACHED: there is no innerHTML @S record, so the field's value was not treated as input at the "
+             "write");
+    const char *tp_why = NULL; int tp_tt = 1;
+    fold_row(&tp_tt, &tp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the innerHTML search over the field's value did not fire a PoC");
+    fold_row(&tp_tt, &tp_why, rec && memmem(rec, span, "tiField", 7) != NULL,
+             "the PoC does not name the element `tiField`, so it cannot state typing into it");
+    const Probe rows[] = {
+        { "ti-driven", td_tt, "/api/ti-input", SESS_EXPLORE, td_why },
+        { "ti-sink", ts_tt, "'tiPreview'", SESS_EXPLORE, ts_why },
+        { "ti-poc", tp_tt, "function tiOnInput", SESS_EXPLORE, tp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18497,6 +18526,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_storedxss(js, probes, &np);
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);
+    probes_typedinput(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
