@@ -103,6 +103,9 @@ if [ -n "${FROZEN_SNAPSHOT_SEAL:-}" ]; then
 fi
 REV="$1"; LANE="$2"; shift 2 || true
 SRC=$(git rev-parse --show-toplevel)
+# The provisioned toolchain (emsdk, wpt, node_modules) is untracked and lives only in the main working tree, so a
+# snapshot launched from a linked worktree takes it from there, never from the worktree it was launched in.
+TOOLS=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 ROOT="${FROZEN_SNAPSHOT_ROOT:-${TMPDIR:-/tmp}/apiclient-frozen}"
 mkdir -p "$ROOT"
 
@@ -602,8 +605,8 @@ rm -rf "$DIR/engine/.work/emsdk" "$DIR/engine/.work/wpt"
 # WITHOUT `APICLIENT_OBJ_STORE` set falls back to it — and those objects are that snapshot's own at that SHA,
 # which is why a REUSED snapshot keeps them and a replaced one does not. Nothing about that reading changed.
 [ -n "$REUSE" ] || rm -rf "$DIR/engine/.work/obj"
-[ -d "$SRC/engine/.work/emsdk" ] && ln -s "$SRC/engine/.work/emsdk" "$DIR/engine/.work/emsdk"
-[ -d "$SRC/engine/.work/wpt" ]   && ln -s "$SRC/engine/.work/wpt"   "$DIR/engine/.work/wpt"
+[ -d "$TOOLS/engine/.work/emsdk" ] && ln -s "$TOOLS/engine/.work/emsdk" "$DIR/engine/.work/emsdk"
+[ -d "$TOOLS/engine/.work/wpt" ]   && ln -s "$TOOLS/engine/.work/wpt"   "$DIR/engine/.work/wpt"
 mkdir -p "$DIR/engine/.work/obj"
 
 # THE DEPENDENCY TREE IS PROVISIONED LIKE THE TOOLCHAIN, AND FOR THE SAME REASON emsdk IS.
@@ -635,8 +638,8 @@ mkdir -p "$DIR/engine/.work/obj"
 # snapshot's OWN path is the only thing that tells them apart — asking "can node resolve it" cannot, because
 # that question passes via the root fallback exactly when this provisioning is broken.
 rm -rf "$DIR/node_modules"
-if [ -d "$SRC/node_modules" ]; then
-  ln -s "$SRC/node_modules" "$DIR/node_modules"
+if [ -d "$TOOLS/node_modules" ]; then
+  ln -s "$TOOLS/node_modules" "$DIR/node_modules"
   NM=$(ls -A "$DIR/node_modules" 2>/dev/null | wc -l)
   if [ "$NM" -lt 1 ]; then
     echo "REFUSING: $DIR/node_modules resolves to nothing — this script's own provisioning is broken, and what" >&2
@@ -645,7 +648,7 @@ if [ -d "$SRC/node_modules" ]; then
   fi
 else
   NM=0
-  echo "WARNING: $SRC/node_modules does not exist, so nothing was linked and the snapshot has none." >&2
+  echo "WARNING: $TOOLS/node_modules does not exist, so nothing was linked and the snapshot has none." >&2
   echo "  The build's Web IDL gap audit stage and every puppeteer driver will fail in it; run npm install in" >&2
   echo "  the source tree. Proceeding — those gates report their own failure rather than this guessing at one." >&2
 fi
@@ -730,7 +733,7 @@ echo "engine/qjs $QN entries  (subtree of $SHA; no revision of its own)"
 # PRINTED BECAUSE AN INPUT NOBODY NAMES IS READ FROM WHEREVER THE RESOLVER FINDS IT. This is the one line that
 # distinguishes a gate that read this snapshot's dependency tree from one that walked out to the root fallback,
 # and it states the edition is the source tree's rather than the revision's — see the residual above.
-echo "node_modules $NM entries  (symlink to $SRC/node_modules; edition is whatever is installed there)"
+echo "node_modules $NM entries  (symlink to $TOOLS/node_modules; edition is whatever is installed there)"
 
 # A GITLINK IS TRACKED AND STILL ARRIVES EMPTY, WHICH IS THE ONE PROVISIONING CASE THE TOOLCHAIN REASONING
 # ABOVE DOES NOT REACH. emsdk and node_modules are provisioned because the clone brings NOTHING that git does
