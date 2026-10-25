@@ -6689,56 +6689,70 @@ static StepUnit engine_orphan_unit(int r) {
     return STEP_UNIT_NONE;
 }
 
-/* Skips a target this flow already scrolled into view whose observer still reports it out of view: the act is
-   one the flow has performed, and repeating it over the target would be the same scroll. */
+/* Skips a target this flow has already asked the scroll question about: the question is asked once per target
+   per world, and an arm forked after the ask stands in its answer. */
 typedef struct { JSContext *ctx; const Flow *f; } ScrollSkip;
-static bool scroll_already_done(void *arg, lxb_dom_element_t *t) {
+static bool scroll_already_asked(void *arg, lxb_dom_element_t *t) {
     const ScrollSkip *k = arg;
-    char *loc = listener_act_target_locator(k->ctx, lxb_dom_interface_node(t)), want[256];
-    bool done = false;
+    char *loc = listener_act_target_locator(k->ctx, lxb_dom_interface_node(t));
+    bool asked = false;
 
     if (!loc) return true;   /* a target no locator names is one no PoC could tell a person to scroll to */
-    snprintf(want, sizeof want, "\"target\":\"%s\"", loc);
-    for (int i = 0; i < k->f->scroll_n && !done; i++) done = strstr(k->f->scroll_acts[i], want) != NULL;
+    for (int i = 0; i < k->f->scroll_asked_n && !asked; i++) asked = strcmp(k->f->scroll_asked[i], loc) == 0;
     free(loc);
-    return done;
+    return asked;
 }
 
-/* A modelled user scroll: the person scrolls an observed target into view (core/dom/user_scroll.h), so the
- * observer's next Intersection Observer §3.2.10 update sees it intersect. An observer's callback that runs only
- * once its target intersects is reached only by this act, the same kind of act as a drive of a listener.
- * This flow, not a sibling, for engine_close_request_fork's reason: the flow has nothing left to run, so the world
- * in which the person does not scroll adds nothing past here. The act is one frame on this flow, appended to its
- * scroll acts (which a PoC states) after the drives it has called, and everything past it is forced. A resumed flow
- * re-performs it when its replay re-reaches this rung, since the target and the observer state are the replay's.
- * Returns 1 if it installed the scroll as this flow's frame; 0 when no observed target is out of view.
- * Named residual. Not covered: a target the page scrolls out of view again after this flow scrolled it in, which
- * scroll_already_done refuses to scroll a second time. Next diff builds: the act keyed by the observer's own
- * transition (an entry queued after the scroll) rather than by the target's locator. Absence shows as: a second
- * isIntersecting arm missing from a page whose callback moves its own target away. */
+/* A modelled user scroll: the person may scroll an observed target into view (core/dom/user_scroll.h), so the
+ * observer's next Intersection Observer §3.2.10 update sees it intersect. A person may or may not scroll, so both
+ * arms run: a recorded two-armed choice (decide_completion) whose arm 0 does not scroll and whose arm 1 performs
+ * the scroll as its next frame and states it as a scroll act (which a PoC states). Like a drive of a listener,
+ * the scrolling arm is this tool's act, so flow_path_driven reads its scroll acts. A replay re-asks the choice
+ * at this rung and takes the recorded arm, so nothing is cold-tier state.
+ * Returns 1 when the question was asked; 0 when no observed target is out of view or every one was asked.
+ * Named residual. Not covered: the other members of what a scroll changes — `scroll` and `scrollend` listeners
+ * on a Window or an element, and a branch over scrollX/scrollY/scrollTop — and a scroll at any task boundary
+ * other than quiescence. Next diff builds: the act offered for a scroll listener's target and for a document whose
+ * program read a scroll position, at each task boundary. Absence shows as: a page whose scroll listener holds a
+ * sink, or whose branch on scrollY does, never reaching it. */
 static int engine_user_scroll(JSContext *ctx, Flow *f) {
     ScrollSkip skip = { ctx, f };
     lxb_dom_element_t *target;
     char *loc, *act;
     size_t n;
+    void *dblob;
+    int arm, at;
+    JSValue *base;
 
     if (!g_sess_forking) return 0;   /* an @S re-fire and a conformance run send no scroll */
     DCHECK(flow_running() == f && flow_frame(f) == NULL,
            "a user scroll was modelled for a flow that is not running, or with a frame live — it is modelled only "
            "where the running flow has nothing left to run");
     if (!document_fully_active(ctx)) return 0;
-    target = intersection_observer_target_out_of_view(ctx, scroll_already_done, &skip);
+    target = intersection_observer_target_out_of_view(ctx, scroll_already_asked, &skip);
     if (!target) return 0;
     loc = listener_act_target_locator(ctx, lxb_dom_interface_node(target));
-    DCHECK(loc != NULL, "a target scroll_already_done admitted has no locator — it refuses exactly those");
+    DCHECK(loc != NULL, "a target scroll_already_asked admitted has no locator — it refuses exactly those");
     n = strlen(loc) + 64;
     act = malloc(n);
     CHECK(act, "engine: OOM spelling a scroll act");
     snprintf(act, n, "{\"kind\":\"scroll\",\"target\":\"%s\",\"type\":\"scroll\"}", loc);
-    free(loc);
-    flow_scroll_act_push(f, act, f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0);
-    flow_install_base(f, ctx, user_scroll_flow(ctx, target));
-    flow_mark_forced_arm();
+    flow_scroll_asked_push(f, loc);   /* before the fork, so both arms stand in the answer */
+    at = f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0;
+    arm = decide_completion("(the person scrolls an observed target into view)", &dblob);
+    if (arm == 1) {   /* a replay whose recorded path scrolled: this flow is the scrolling arm */
+        DCHECK(dblob == NULL, "a recorded scroll choice handed back a sibling's decision state");
+        flow_scroll_act_push(f, act, at);
+        flow_install_base(f, ctx, user_scroll_flow(ctx, target));
+    } else if (dblob != NULL) {   /* a new choice: this flow does not scroll, its sibling does */
+        Flow *sib;
+
+        base = user_scroll_flow(ctx, target);
+        sib = engine_sibling_assemble(ctx, f, base, dblob, concolic_pins_suspend(), flow_path_marks(f));
+        flow_scroll_act_push(sib, act, at);
+    } else {
+        free(act);   /* a replay whose recorded path did not scroll */
+    }
     return 1;
 }
 

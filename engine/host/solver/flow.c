@@ -1080,14 +1080,31 @@ void flow_scroll_act_push(Flow *f, char *act, int at)
     f->scroll_at[f->scroll_n++] = at;
 }
 
+void flow_scroll_asked_push(Flow *f, char *loc)
+{
+    char **asked = realloc(f->scroll_asked, (size_t)(f->scroll_asked_n + 1) * sizeof *asked);
+
+    DCHECK(loc != NULL, "a scroll question was recorded about no target");
+    CHECK(asked, "engine: OOM recording a scroll question");
+    f->scroll_asked = asked;
+    f->scroll_asked[f->scroll_asked_n++] = loc;
+}
+
 void flow_scroll_acts_copy(Flow *dst, const Flow *src)
 {
-    DCHECK(dst->scroll_n == 0, "an arm's scroll acts were copied over ones it already had");
+    DCHECK(dst->scroll_n == 0 && dst->scroll_asked_n == 0,
+           "an arm's scroll acts were copied over ones it already had");
     for (int i = 0; i < src->scroll_n; i++) {
         char *act = strdup(src->scroll_acts[i]);
 
         CHECK(act, "engine: OOM copying a scroll act");
         flow_scroll_act_push(dst, act, src->scroll_at[i]);
+    }
+    for (int i = 0; i < src->scroll_asked_n; i++) {
+        char *loc = strdup(src->scroll_asked[i]);
+
+        CHECK(loc, "engine: OOM copying a scroll question");
+        flow_scroll_asked_push(dst, loc);
     }
 }
 
@@ -1273,7 +1290,7 @@ int flow_path_driven(const Flow *f) {
            "a candidate session is missing its payload or names neither or both of a sink and a witness key");
     DCHECK(f->path_peer_driven == 0 || f->path_peer_driven == 1,
            "a flow's peer drive mark is neither set nor clear — flow_take_peer_marks writes it as a bit");
-    return f->orphan || f->cand_src != NULL || f->path_peer_driven;
+    return f->orphan || f->scroll_n > 0 || f->cand_src != NULL || f->path_peer_driven;
 }
 
 FlowPathMarks flow_path_marks(const Flow *f) {
@@ -5751,6 +5768,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
         for (int k = 0; k < f->scroll_n; k++) free(f->scroll_acts[k]);
         free(f->scroll_acts);
         free(f->scroll_at);
+        for (int k = 0; k < f->scroll_asked_n; k++) free(f->scroll_asked[k]);
+        free(f->scroll_asked);
         free(f->agents);
         JS_FreeValue(ctx, f->orphan_claim_fn);
         /* And its place in the fork tree. Its work is already on the family's account (flow_age_running

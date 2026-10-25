@@ -324,6 +324,10 @@ typedef struct Flow {
     char **scroll_acts;
     int   *scroll_at;
     int    scroll_n;
+    /* The targets (by locator, malloc'd) this flow has asked the scroll question about, whichever arm it took;
+       copied by a fork, owned. */
+    char **scroll_asked;
+    int    scroll_asked_n;
 
     /* Has this flow's recipe been written to the park document? A per-flow fact because a partial self-park
        writes and releases the lowest-value tail while the engine keeps running. flow_release reads it (a
@@ -412,7 +416,7 @@ typedef struct Flow {
      *   - a branch whose arm the concrete example contradicts (solver/decide.c);
      *   - a request the trusted zone declined, whose failure arm runs the page's `catch` over an outcome nobody
      *     sent (solver/engine.c's flow_decline_fork);
-     *   - a modelled close request or user scroll, an act no user performed (solver/engine.c's two arms);
+     *   - a modelled potential close request, an arrival no user performed (solver/engine.c's close-request arm);
      *   - a witness verification delivering the value a pin chose (solver/concolic.c's concolic_deliver);
      *   - a read the session throws at and the flow reads past (absent.c's unbound identifier, concolic.c's
      *     member read over an undefined or null example).
@@ -1635,6 +1639,8 @@ void  flow_orphan_chain_copy(Flow *dst, const Flow *src, int n);
 /* Append a scroll act (`act` consumed) performed after `at` called drive members; copy `src`'s scroll acts. */
 void  flow_scroll_act_push(Flow *f, char *act, int at);
 void  flow_scroll_acts_copy(Flow *dst, const Flow *src);
+/* Record that `f` asked the scroll question about the target `loc` (consumed). */
+void  flow_scroll_asked_push(Flow *f, char *loc);
 /* A new @H/@S from the running flow: raise reward, reset aging. Answers 1 when an account was paid and 0 on the
    dropped arm (no flow holds the thread). */
 int   flow_credit_emit(double v);
@@ -1689,10 +1695,10 @@ void  flow_mark_pinned_value(void);
 int   flow_path_pinned(const Flow *f);
 /* Did another instance's flow's pin, held in that instance's store, reach this timeline? */
 int   flow_path_peer_pinned(const Flow *f);
-/* Is this flow this tool's own act: a drive of a function the page never called (`orphan`), or a candidate
-   session re-running the document with a payload this engine chose (`cand_src`, an @S sink candidate or a
-   witness verification), or a timeline that took a delivery from such a flow (`path_peer_driven`)? All three
-   are inherited by every fork. Read at the park and at every act, beside
+/* Is this flow this tool's own act: a drive of a function the page never called (`orphan`), a modelled user
+   scroll (`scroll_n`), a candidate session re-running the document with a payload this engine chose (`cand_src`,
+   an @S sink candidate or a witness verification), or a timeline that took a delivery from such a flow
+   (`path_peer_driven`)? All four are inherited by every fork. Read at the park and at every act, beside
    flow_path_forced: what such a flow requests is this tool's act, so its drive mark (solver/engine.h's
    PENDING_DRIVEN_*) reads `driven` and it never fires as the page's. */
 int   flow_path_driven(const Flow *f);
