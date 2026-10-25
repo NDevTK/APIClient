@@ -1184,6 +1184,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/lockgrant.h"
 #include "fixture/protoset.h"
 #include "fixture/idbnamefork.h"
+#include "fixture/idbnameorder.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1697,6 +1698,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "lockgrant", HTML_LOCKGRANT },
     { "protoset", HTML_PROTOSET },
     { "idbnamefork", HTML_IDBNAMEFORK },
+    { "idbnameorder", HTML_IDBNAMEORDER },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16386,6 +16388,25 @@ TF_UNIT void probes_idbnamefork(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbnameorder` document (fixture/idbnameorder.h): the arm where the unknown name is 'app' runs
+   behind the queued delete of 'app' (a fresh version 1 with no store), never ahead of it; the fresh arm runs too. */
+TF_UNIT void probes_idbnameorder(const char *js, Probe *tab, int *n) {
+    const char *e_why = NULL; int e_tt = 1;
+    fold_row(&e_tt, &e_why, param_value_is(js, "/api/idbo-open", "arm", "1-1-0-1"),
+             "no /api/idbo-open?arm=1-1-0-1 record: no arm opened 'app' after the queued delete removed it");
+    fold_row(&e_tt, &e_why, !param_value_is(js, "/api/idbo-open", "arm", "0-2-1-1"),
+             "an arm opened 'app' at version 2 with its store: it ran ahead of the deleteDatabase queued before "
+             "it, which Indexed Database §2.8.2's queue for that name orders first");
+    const char *f_why = NULL; int f_tt = 1;
+    fold_row(&f_tt, &f_why, param_value_is(js, "/api/idbo-open", "arm", "1-1-0-0"),
+             "no /api/idbo-open?arm=1-1-0-0 record: no arm took the unknown name as a fresh database");
+    const Probe rows[] = {
+        { "idbo-equal", e_tt, "/api/idbo-open", SESS_EXPLORE, e_why },
+        { "idbo-fresh", f_tt, "/api/idbo-open", SESS_EXPLORE, f_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20665,6 +20686,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_lockgrant(js, probes, &np);
     probes_protoset(js, probes, &np);
     probes_idbnamefork(js, probes, &np);
+    probes_idbnameorder(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
