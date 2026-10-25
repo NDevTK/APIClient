@@ -1918,6 +1918,40 @@ int concolic_pin(JSValueConst cmp) {
                               (JSConcolicEqOp)c->cmp_algo);
 }
 
+/* Whether a Number or a BigInt could spell `s` under §6.1.6.1.20 Number::toString ( x, radix ) or
+   §6.1.6.2.21 BigInt::toString ( x, radix ) with radix 10: digits, a sign, a point and an exponent, or one of
+   the two non-finite names. A wider test only refuses more pins. */
+static int tostring_numeric_spelling(const char *s)
+{
+    size_t i;
+
+    if (strcmp(s, "NaN") == 0 || strcmp(s, "Infinity") == 0 || strcmp(s, "-Infinity") == 0) return 1;
+    if (s[0] == '\0') return 0;
+    for (i = 0; s[i] != '\0'; i++)
+        if (!strchr("0123456789.-+e", s[i])) return 0;
+    return 1;
+}
+
+static unsigned tyf_of_cty(unsigned ty);
+
+int concolic_pin_tostring(JSValueConst v, const char *s)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    unsigned ty;
+
+    DCHECK(c != NULL && s != NULL, "a ToString determination was asked of a value that is not unknown input, "
+                                   "or of no spelling");
+    if (!c->src_self || !c->src) return 0;
+    ty = tyf_of_cty(c->ty) & concolic_types(c->src);
+    if (ty & (CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION)) return 0;
+    if ((ty & CONCOLIC_TYF_NULL) && strcmp(s, "null") == 0) return 0;
+    if ((ty & CONCOLIC_TYF_UNDEFINED) && strcmp(s, "undefined") == 0) return 0;
+    if ((ty & CONCOLIC_TYF_BOOLEAN) && (strcmp(s, "true") == 0 || strcmp(s, "false") == 0)) return 0;
+    if ((ty & (CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_BIGINT)) && tostring_numeric_spelling(s)) return 0;
+    if (!(ty & CONCOLIC_TYF_STRING)) return 0;
+    return concolic_pin_store(c->src, c->root, CONCOLIC_LIT_STRING, s, JS_CONCOLIC_EQ_STRICT);
+}
+
 /* The bytes this flow has proved this value holds (concolic.h says who may read it and why it answers bytes
    where the in-file reads answer a JSValue). */
 const char *concolic_pin_bytes(JSValueConst v) {
@@ -4526,6 +4560,7 @@ int concolic_example_present(JSValueConst v) {
 
 /* See concolic.h. The answer is a string or absent, so no caller can read a held `undefined` as absence. */
 void concolic_state_string(JSValueConst v) { concolic_type_state(v, CTY_STRING); }
+void concolic_state_string_or_null(JSValueConst v) { concolic_type_state(v, CTY_STRING | CTY_NULL); }
 
 int concolic_type_is_string(JSValueConst v) { return concolic_is(v) && cty_of_operand(v) == CTY_STRING; }
 

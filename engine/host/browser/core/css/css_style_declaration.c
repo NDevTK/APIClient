@@ -1541,9 +1541,22 @@ static bool cssd_match_result_run(CssMatchResult *m, bool rests)
                 if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
                 if (rests && !layout_job_rule_take()) goto out;
                 tested++;
-                /* No `decided` and no `out_undet`: no test keeps an arm, and selector_match_node aborts
-                   naming the declaration to build (JS_CFUNC_STEP_DEF over this walk) if a match would fork. */
-                if (!selector_match_node(self, st->selector, &spec, NULL, NULL)) continue;
+                /* A resting build keeps Kleene's third answer: the job's step machine forks on the predicate
+                   (layout_job_decline) and the build parks at this rule, which the next run tests again with
+                   the arm settled in the flow's constraint. A build that cannot rest passes no record, and
+                   selector_match_node aborts naming the reader to convert if a match would fork. */
+                if (rests) {
+                    SelectorUndet u;
+                    bool hit = selector_match_node(self, st->selector, &spec, &u);
+
+                    if (u.undetermined && u.forkable) {
+                        layout_job_decline(&u);
+                        goto out;
+                    }
+                    if (!hit) continue;
+                } else if (!selector_match_node(self, st->selector, &spec, NULL)) {
+                    continue;
+                }
                 /* The rule's own §6.6 declarations, expanded to longhands and collapsed to one per property,
                    so every declaration of one rule shares `seq + rule` (css-cascade-5 §6.1's Order of
                    Appearance, and §7.3.6 `revert-rule`'s rule identity) and is ordered within it by its

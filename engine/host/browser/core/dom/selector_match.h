@@ -119,6 +119,14 @@ bool selector_undet_key(char *out, size_t cap, const SelectorUndet *u);
    half of the key and its accessor is the solver's, so the one site that needs both asks each once. */
 bool selector_pred_same(const SelectorUndet *a, const SelectorUndet *b);
 
+/* What an answered predicate establishes about the value it tests, filed in the running flow's constraint
+   (solver/concolic.h): a holding `=` determines the attribute's string, so the value is pinned
+   (concolic_pin_tostring) and every later test of it, under any operator and in any consumer, runs on the
+   pinned bytes; a failing `=` excludes its operand (concolic_exclude) and pins nothing. Asserts `u` is a
+   forkable record. Called once per arm a consumer takes, the replayed answer included, which both writes
+   allow. */
+void selector_pred_settle(const SelectorUndet *u, bool holds);
+
 /* Selectors 4 §17.3 — does `node` match `list`? `out_spec` receives the HIGHEST specificity that matched (a
    list matches through whichever of its selectors did, and CSS 2.1 §6.4's cascade weighs that one), or is
    NULL for a caller that only asks the question. A non-element never matches.
@@ -128,25 +136,16 @@ bool selector_pred_same(const SelectorUndet *a, const SelectorUndet *b);
    undetermined in a shape no fork can realise (`SelectorUndet::forkable`). It is the out-parameter the old
    note here said the next diff would build, and `document.c`'s selector walk is the consumer that makes it
    one rather than a write whose reader is the crash it replaces.
-   THE TWO CALLERS ARE NOT ALIKE AND THIS IS ROUTING RATHER THAN A FALLBACK, by §C-stack's own test: delete
-   the abort and the question "can this caller keep the arm" still has to be asked, because a caller that
-   cannot must not be handed one. `document.c`'s walk is a step machine and holds the resume point
-   `engine_prepare_fork` requires; the cascade's is a plain C loop inside `cssom_cascaded_value` and that same
-   function DFAILs by name for one, naming JS_CFUNC_STEP_DEF as the declaration to build. So the cascade half
-   is a step machine to DECLARE and this signature is what it will pass when it exists.
+   The callers are not alike and this is routing rather than a fallback: a caller that cannot keep the arm must
+   not be handed one. `document.c`'s walk is a step machine and forks itself; the cascade's resting build hands
+   the record to its layout job, whose owning step machine forks (layout_job_decline); the cascade's build with
+   no resting drive has no resume point and passes NULL.
 
-   `decided` IS WHAT THIS FLOW HAS ALREADY PROVED ABOUT ONE §6 PREDICATE, or NULL, and it is the half that
-   makes an answered fork ACTIONABLE. An arm that says "this test HOLDS" is realised by supplying the matcher
-   the predicate's own operand for that ONE ask — so the matcher, not this engine, composes the answer through
-   §6.6's `~=`, the compound's AND, the list's OR and any `:not()`, and a compound whose LATER member is also
-   undetermined declines again and is forked in its own right rather than being decided by an arm that was
-   never about it. The record's `over` must be the value the arm was about and is compared by
-   `concolic_ident_c`, which is what the constraint key is composed from, so a park and a cross-session resume
-   compare the same fact the solver filed. The FALSE arm needs nothing here: an undetermined read already
-   behaves as no-match in the matcher's control flow, so the answer a caller already holds IS the answer under
-   "this test does not hold". */
+   A predicate a fork already answered in the running flow, by any consumer, is not asked again: the value seam
+   reads the settled completion from the flow's constraint (solver_outcome_settled under selector_undet_key's
+   key) and realises it for that one ask, so a park, a resume and a consumer with no resume point all see the
+   flow's answer. */
 bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *list,
-                         lxb_css_selector_specificity_t *out_spec,
-                         const SelectorUndet *decided, SelectorUndet *out_undet);
+                         lxb_css_selector_specificity_t *out_spec, SelectorUndet *out_undet);
 
 #endif

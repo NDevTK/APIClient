@@ -95,6 +95,8 @@ struct LayoutJob {
     CssCascadeRecord    cascade;     /* core/css/css_cascade_pass.h's cascaded values, for this job */
     LineBoxRecord       line_boxes;  /* core/layout/line_box.h's fills, for this job */
     IntrinsicSizeRecord intrinsic;   /* core/layout/intrinsic_size.h's measurements, for this job */
+    SelectorUndet       decline;     /* a resting match's unanswered decline; `undetermined` while held */
+    char                fork_key[SELECTOR_UNDET_KEY_MAX];   /* step_fork_run's `op`, read after the return */
 };
 
 /* The job whose activation holds the thread when a driver entered one, and the thread's synchronous job.
@@ -251,6 +253,7 @@ LayoutJob *layout_job_new(LayoutJobDriver driver)
     CHECK(job != NULL, "a layout job could not be allocated");
     job->gen = 1;
     job->driven = true;
+    job->decline.over = JS_UNDEFINED;
     g_alive++;
     switch (driver) {
     case LAYOUT_JOB_STEP:  METRIC_ADD(jobs_step, 1);  break;
@@ -499,7 +502,8 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
 static bool lj_allowance_spent(const LayoutJob *job)
 {
     return job->quota == 0 || job->scan == 0 || job->line_items == 0 || job->line_metrics == 0 ||
-           job->rules == 0 || job->emits == 0 || engine_work_retired() >= job->work_end;
+           job->rules == 0 || job->emits == 0 || job->decline.undetermined ||
+           engine_work_retired() >= job->work_end;
 }
 
 bool layout_job_drive_pending(const LayoutJobDrive *d)
@@ -576,6 +580,51 @@ bool layout_job_rule_take(void)
     if (lj_quota_spent(job)) return false;
     job->rules--;
     return true;
+}
+
+void layout_job_decline(const SelectorUndet *u)
+{
+    LayoutJob *job = lj_current();
+
+    DCHECK(job->resting && job->drives == 1,
+           "an author match declined into a job with no resting drive innermost — only a resting build passes a "
+           "record to keep a decline in");
+    DCHECK(u->undetermined && u->forkable, "a decline was kept that no fork can realise");
+    DCHECK(!job->decline.undetermined,
+           "an author match declined while the job still holds an unanswered decline — the first stops every "
+           "allowance, so a second match ran under a drive that should have stopped");
+    job->decline = *u;
+}
+
+bool layout_job_declined(const LayoutJob *job)
+{
+    return job->decline.undetermined;
+}
+
+int layout_job_fork(JSContext *ctx, JSStepHdr *hdr, LayoutJob *job)
+{
+    int arm, rc;
+
+    DCHECK(job != NULL && job != g_entered, "a layout job forked while its activation holds the thread");
+    if (!job->decline.undetermined) return 0;
+    CHECK(selector_undet_key(job->fork_key, sizeof job->fork_key, &job->decline),
+          "a §6 predicate's constraint key did not fit SELECTOR_UNDET_KEY_MAX, which is sized from the record's "
+          "own two buffers, so the two widths have stopped agreeing");
+    /* Completion 0 is "does not hold", the arm the match already ran under, and the arm a run with no forking
+       policy takes.
+       Named residual. Not covered: the real arm is unstated, though a value with an example has bytes the
+       predicate could be run on, so the arm its example fails keeps the example. Next diff: the example's
+       ToString supplied to one match at the value seam, so the real arm is stated and the other arm's example
+       contradicted (concolic_contradict_example). Absence shows as: a world reporting the unknown's example
+       where it took the arm that example fails. */
+    rc = step_fork_run(ctx, hdr, job->decline.over, job->fork_key, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
+    if (rc) return rc;
+    DCHECKF(arm == 0 || arm == 1, "a §6 predicate's fork answered completion %d of the two it declared", arm);
+    /* The arm is now settled in the flow's constraint, where the value seam reads it when the match runs again. */
+    selector_pred_settle(&job->decline, arm == 1);
+    memset(&job->decline, 0, sizeof job->decline);
+    job->decline.over = JS_UNDEFINED;
+    return 0;
 }
 
 bool layout_job_parse_take(void)

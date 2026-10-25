@@ -160,6 +160,11 @@ int  solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n,
                        const char *site);
 #define solver_outcome(ctx, over, op, n, real) \
     solver_outcome_at((ctx), (over), (op), (n), (real), SOLVER_SITE_HERE)
+/* The completion of `op` over `over` that the running flow's constraint has already settled (an earlier
+   solver_outcome over the same operand and operation, by any asker), or -1 when none is settled, there is no
+   running flow, or the operand has no identity. A read: it forks nothing, consumes no slot and records
+   nothing, so a caller with no resume point may ask it. */
+int  solver_outcome_settled(JSValueConst over, const char *op, int n);
 
 /* Take the decision vector out of a fork blob (ownership transfers; blob struct freed). For the replay fork. */
 

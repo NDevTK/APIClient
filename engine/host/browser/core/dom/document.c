@@ -529,26 +529,22 @@ typedef struct {
     lxb_dom_node_t *root, *cursor;
     JSValue arr;      /* QS_ALL's collected matches (owned) */
     uint32_t n;
-    /* The §6 predicate this flow has proved holds, on the state because the snapshot must carry it: a sibling
-       minted at the fork resumes here and re-runs the match, whose answer depends on what is supplied, so an arm in
-       a C local would never reach the sibling and the re-run would fork again forever. Its `over` is owned (qs_visit
-       names it), since the value must outlive the park the arm was decided across. */
-    SelectorUndet decided;
-    /* The name of the fork this walk is asking: step_fork_run's `op`, half the constraint key. On the state because
-       the driver reads `JSStepHdr::fork_op` after the machine returns JS_STEP_FORK; it is re-composed from the
-       record on every entry, so what survives the park is `fork_ask_key`'s content hash. */
+    /* The fork this walk is asking, kept until its answer is consumed: the predicate (its `over` owned, as
+       qs_visit names it) and its key, step_fork_run's `op`, which the driver reads after the machine returns
+       JS_STEP_FORK. Consumed first on every entry, because once the arm is settled the flow's constraint answers
+       the predicate and a re-run match no longer declines on it. */
+    SelectorUndet asking;
     char ask[SELECTOR_UNDET_KEY_MAX];
 } QsState;
 
 /* Everything this machine owns, which is what makes it forkable. The compiled selector is refcounted and read-only
    after selector_list_compile, so the sibling takes a reference and interior pointers stay valid in both arms; the
-   cursor and root are tree pointers the COW delta isolates. The decided predicate's `over` is the third reference;
-   the rest of that record, and `ask`, are inline bytes the fork's byte copy carries. */
+   cursor and root are tree pointers the COW delta isolates; `ask` is inline bytes the fork's byte copy carries. */
 static void qs_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     QsState *s = st;
     v->val(ctx, &s->arr);
-    v->val(ctx, &s->decided.over);
+    v->val(ctx, &s->asking.over);
     v->shared(ctx, (void **)&s->compiled, s->compiled ? &s->compiled->refs : NULL, selector_list_destroy);
 }
 
@@ -586,6 +582,7 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             return JS_STEP_ABRUPT;
         }
         s->root = n;
+        s->asking.over = JS_UNDEFINED;
         /* Where the cursor goes is all the four members differ in: a subtree for the two queries, the node for
            matches, the node and its ancestors for closest. */
         s->cursor = (magic == QS_FIRST || magic == QS_ALL) ? node_next_in(n, n) : n;
@@ -615,49 +612,44 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 
     /* Selectors 4 §17.3 against this one node, and a fork where its answer is Kleene's third value. The loop
      * walks this node's questions, not the tree (the cursor does not move inside it): the matcher abandons a
-     * compound at the first simple selector it cannot decide, so answers arrive one at a time (decide one
-     * predicate, run the match again, and it concludes or declines on the next), as `step_ownkeys_chain` does,
-     * and the flow ends up holding a constraint on every undetermined member. Re-running is sound because a match
-     * runs no page code: it reads the tree, this flow's pins and its decided predicate. Every entry does it,
-     * including the parent's fork delivery and the sibling's resume: neither carries a value, so an entry re-runs
-     * with `decided` unchanged, declines on the same predicate, re-composes the same key and consumes its answer
-     * at the same call site, which `JSStepHdr::fork_ask_key`'s content hash asserts. */
+     * compound at the first simple selector it cannot decide, so answers arrive one at a time (fork one
+     * predicate, run the match again, and it concludes or declines on the next), and the flow ends up holding a
+     * constraint on every undetermined member. Re-running is sound because a match runs no page code: it reads
+     * the tree and this flow's constraint, where the value seam finds every predicate a fork has answered. */
     for (;;) {
         SelectorUndet u;
         int arm, rc;
 
-        matched = selector_match_node(s->cursor, s->compiled->list, NULL,
-                                      s->decided.undetermined ? &s->decided : NULL, &u);
-        /* A definite answer: every node of every document that put no unknown in an attribute. */
-        if (!u.undetermined) break;
-        /* An undetermined answer this fork cannot realise, which selector_match_node has already aborted on in dev
-           (see SelectorUndet::forkable). This is that abort's release arm: `matched` is the answer under "the test
-           does not hold". */
-        if (!u.forkable) break;
-        /* The same predicate declining again after this flow proved it holds would make this loop unbounded, and it
-           cannot arise: host_attr_value_read grants the arm on `selector_pred_same`, the comparison asked here, and
-           `SelectorUndet::forkable` refused every ask whose value has no identity and every operand that cannot
-           satisfy its test. Its release arm breaks with `matched`, the "does not hold" answer, since a re-decline
-           would be a sibling per re-match over one question that emits and explores nothing. */
-        if (s->decided.undetermined && selector_pred_same(&s->decided, &u)) {
-            DFAILF("DOM §1.3 step 3's walk proved `[%s\"%s\"]` HOLDS and the next match declined on that same "
-                   "predicate — the supply at core/dom/selector_match.c's host_attr_value_read grants the arm "
-                   "on selector_pred_same and on the value's own identity, and this asks the same comparison, "
-                   "so a re-decline means the VALUE the match read is not the one the arm was decided about. "
-                   "The usual cause is a flow whose attribute shadow moved under it between the fork and the "
-                   "re-match, which a match cannot do because it runs none of the page's code",
-                   u.attr, u.operand);
-            break;
-        }
-        if (!selector_undet_key(s->ask, sizeof s->ask, &u)) {
-            /* A truncated key files two questions under one name. SelectorUndet::forkable refuses a truncated field;
-               this checks the composed key's width, so each bound is checked where it is. */
-            DFAILF("DOM §1.3 step 3's walk could not spell the constraint key for `[%s\"%s\"]` — the key is what "
-                   "a parked flow's recorded answers are filed under, and a truncated one lets one predicate's "
-                   "arm decide another's. SELECTOR_UNDET_KEY_MAX is sized from SelectorUndet's own two buffers, "
-                   "so reaching this means those two widths and this one have stopped agreeing",
-                   u.attr, u.operand);
-            break;
+        if (!step_fork_pending(hdr)) {
+            matched = selector_match_node(s->cursor, s->compiled->list, NULL, &u);
+            /* A definite answer: every node of every document that put no unknown in an attribute. */
+            if (!u.undetermined) break;
+            /* An undetermined answer this fork cannot realise, which selector_match_node has already aborted on
+               in dev (see SelectorUndet::forkable). This is that abort's release arm: `matched` is the answer
+               under "the test does not hold". */
+            if (!u.forkable) break;
+            /* A predicate this flow answered is read back at the value seam, so declining on it again means the
+               seam did not find the answer the fork settled, and this loop would fork it for ever. */
+            if (s->asking.undetermined && selector_pred_same(&s->asking, &u)) {
+                DFAILF("DOM §1.3 step 3's walk answered `[%s\"%s\"]` and the next match declined on that same "
+                       "predicate: core/dom/selector_match.c's host_attr_value_read reads a settled fork under "
+                       "selector_undet_key's key and the value's identity, so the match read a value or a key "
+                       "the fork was not about", u.attr, u.operand);
+                break;
+            }
+            if (!selector_undet_key(s->ask, sizeof s->ask, &u)) {
+                /* A truncated key files two questions under one name. SelectorUndet::forkable refuses a truncated
+                   field; this checks the composed key's width, so each bound is checked where it is. */
+                DFAILF("DOM §1.3 step 3's walk could not spell the constraint key for `[%s\"%s\"]` — the key is "
+                       "what a parked flow's recorded answers are filed under, and a truncated one lets one "
+                       "predicate's arm decide another's. SELECTOR_UNDET_KEY_MAX is sized from SelectorUndet's own "
+                       "two buffers, so reaching this means those two widths and this one have stopped agreeing",
+                       u.attr, u.operand);
+                break;
+            }
+            JS_FreeValue(ctx, s->asking.over);
+            s->asking = u;
+            s->asking.over = JS_DupValue(ctx, u.over);   /* owned: the park carries the value */
         }
         /* `real` is JS_OUTCOME_REAL_UNSTATED: which completion the predicate reaches on the operand's example is
            not computable here, because host_attr_value_read answers undetermined rather than handing over unproved
@@ -666,31 +658,14 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
            so `real` is knowable for that population. Next diff builds: a probe answer at the value seam supplying
            the example for one ask, so this machine can run the predicate on it. How its absence would show: a
            forced request whose provenance says no arm was forced, on a page whose attribute has an example. */
-        rc = step_fork_run(ctx, hdr, u.over, s->ask, QS_PRED_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
+        rc = step_fork_run(ctx, hdr, s->asking.over, s->ask, QS_PRED_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
         if (rc) return rc;   /* parked at the fork; the sibling resumes at this stage with the other completion */
         DCHECKF(arm == QS_PRED_FALSE || arm == QS_PRED_TRUE,
                 "DOM §1.3 step 3's walk was answered with a completion it never declared (%d) — a §6 predicate "
                 "has two and the numbering is `does not hold` first", arm);
-        /* Outcome 0: the test does not hold, and the match just performed already answers under it. */
-        if (arm == QS_PRED_FALSE) break;
-        /* Outcome 1: it holds. Hand it to the next match, which realises it and concludes or declines on the next
-           question.
-           Named residual: one decided slot. Not covered: a compound with two undetermined members whose flow takes
-           the holding arm of both, which needs both supplied to one match; overwriting the first would decide the
-           second against the first's operand. Next diff builds: the slot as a set the machine's `visit` carries. How
-           its absence shows: the DFAILF below, and in release that selector answering no-match. */
-        if (s->decided.undetermined) {
-            DFAILF("DOM §1.3 step 3's walk proved a SECOND §6 predicate holds in one match — `[%s\"%s\"]` "
-                   "beside `[%s\"%s\"]` — and this machine supplies one at a time. A compound with two "
-                   "undetermined members whose flow takes the holding arm of both needs both supplied to the "
-                   "same match; build the decided slot into a SET the machine's `visit` carries. Until then the "
-                   "second test is undetermined at the re-match and this selector answers no-match, which is "
-                   "the answer every build gave before this fork existed",
-                   s->decided.attr, s->decided.operand, u.attr, u.operand);
-            break;
-        }
-        s->decided = u;
-        s->decided.over = JS_DupValue(ctx, u.over);   /* owned from here: the park has to carry the value */
+        /* Either arm: the next match reads it from the flow's constraint and concludes or declines on the next
+           question. */
+        selector_pred_settle(&s->asking, arm == QS_PRED_TRUE);
     }
 
     if (matched) {
@@ -707,14 +682,11 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         }
     }
 
-    /* The decided predicate is spent when the cursor moves, and dropping it loses no fact: it is one match's supply,
-       while the knowledge is in the flow's constraint record, so a later node with the same value under the same
-       predicate has its answer replayed at the ask. Keeping it would make the one-slot limit apply to the whole
-       walk, so two nodes holding two different unknowns under one selector would hit the abort above. */
-    if (s->decided.undetermined) {
-        JS_FreeValue(ctx, s->decided.over);
-        memset(&s->decided, 0, sizeof s->decided);
-    }
+    /* The answered predicate is spent when the cursor moves: the knowledge is in the flow's constraint, and the
+       record only guards this node's loop. */
+    JS_FreeValue(ctx, s->asking.over);
+    memset(&s->asking, 0, sizeof s->asking);
+    s->asking.over = JS_UNDEFINED;
     switch (magic) {
     case QS_FIRST:
     case QS_ALL:     s->cursor = node_next_in(s->cursor, s->root); break;

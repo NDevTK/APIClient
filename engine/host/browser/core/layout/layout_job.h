@@ -57,6 +57,7 @@
 #include "check.h"
 #include "core/css/css_length.h"
 #include "core/css/css_cascade_pass.h"
+#include "core/dom/selector_match.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/layout_question.h"
 #include "core/layout/intrinsic_size.h"
@@ -237,6 +238,24 @@ bool layout_job_emit_take(void);
    unit of bytes whose work the drive's work allowance counts: false when any allowance is spent, and the
    build then parks; it takes no count of its own. */
 bool layout_job_parse_take(void);
+
+/* ---- forks over the cascade ---------------------------------------------------------------------------- */
+
+/* Selectors 4 §17.3 answered UNKNOWN for a rule a resting author match tested (core/dom/selector_match.h),
+   and the arm is kept by the step machine that owns the job, which is the resume point a fork needs. `decline`
+   records the forkable predicate (its `over` borrowed from the attribute shadow, which the job's flow does not
+   write while the job is alive) and stops the drive: every allowance reads spent until it is answered, and the
+   match parks at the untested rule. Asserts a resting drive is innermost. */
+void layout_job_decline(const SelectorUndet *u);
+/* Whether `job` holds an unanswered decline. */
+bool layout_job_declined(const LayoutJob *job);
+/* The owning step machine's ask: with a decline held, forks the flow over the predicate (step_fork_run, two
+   completions, "does not hold" first, its constraint key spelled by selector_undet_key into the job), and on
+   the answered entry settles the arm (selector_pred_settle); the match reads it back from the flow's
+   constraint when it runs again. Returns step_fork_run's nonzero code for the machine to return, or 0 when
+   nothing was held or the arm is settled. Called with the job left, at the stage the decline was taken in, and
+   first on every entry, since a held decline is consumed before the drive runs again. */
+int layout_job_fork(JSContext *ctx, JSStepHdr *hdr, LayoutJob *job);
 
 /* ---- the open chain, for the kinds that are not stacked in release ------------------------------------- */
 

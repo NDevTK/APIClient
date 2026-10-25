@@ -9,8 +9,10 @@
 #include "core/html/custom_elements.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
+#include "solver/decide.h"
 #include "solver/dom_cow.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
+#include "solver/flow.h"
 
 /* THE HOST LANGUAGE'S ANSWERS, for the pseudo-classes whose truth is not a shape of the tree. Selectors Level
    5 §7 "Exposing custom state: the :state() pseudo-class" states the rule in general — "The exact matching
@@ -71,12 +73,8 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
    the assert at `selector_match_node` is what holds the two together. */
 static SelectorUndet g_undet;
 
-/* WHAT THIS FLOW HAS ALREADY PROVED ABOUT ONE §6 PREDICATE, for the length of ONE match -- the caller's
-   `decided`, parked here because `lxb_selectors_host_cb_t`'s ctx is the ARENA's and is installed once at init,
-   while this fact is the MATCH's. A file static is correct for exactly the reason one arena is: `g_in_match`
-   asserts there is no rest point inside a match and no two matches can interleave, so the span this is live
-   over is the span that assert already owns. Cleared on the way out beside the bit it is read with. */
-static const SelectorUndet *g_decided;
+/* Whether the agent's arena is inside a match (see the arena note below). */
+static bool g_in_match;
 
 /* BOUNDED, ALWAYS NUL-TERMINATED, and the length is the DESTINATION's because the source is a lexbor string
    with no terminator of its own. IT REPORTS TRUNCATION, and that is a correctness answer rather than a
@@ -138,6 +136,18 @@ static bool sel_undet_satisfiable(const SelectorUndet *u)
     return u->operand[0] != '\0';
 }
 
+/* The bytes that realise a failing arm for one asking predicate: a value its test rejects. Only `=` and `|=`
+   ask with an empty operand (the other four are decided false by it without asking), and both reject a
+   one-character value that is not `-`; with a non-empty operand every operator rejects the empty value, since
+   each needs at least the operand's length (§6.1's `~=` needs a word, and the empty value has none). */
+static const char *sel_undet_refuting_bytes(const SelectorUndet *u)
+{
+    DCHECK(u->operand[0] != '\0' || u->op == LXB_CSS_SELECTOR_MATCH_EQUAL || u->op == LXB_CSS_SELECTOR_MATCH_DASH,
+           "a §6 predicate with an empty operand asked about a value under an operator that is decided by the "
+           "operand alone, so lxb_selectors_match_attribute asked where it states it does not");
+    return u->operand[0] != '\0' ? "" : "x";
+}
+
 /* WHICH TEST THIS ASK IS -- the record's four key fields, composed from the seam's own arguments, through ONE
    entry. Every decline and every decided-arm comparison goes through it, so the fields the crash prints, the
    fields the key is spelled from and the fields a supply is granted on cannot be three spellings of one test.
@@ -188,6 +198,40 @@ bool selector_pred_same(const SelectorUndet *a, const SelectorUndet *b)
            && strcmp(a->attr, b->attr) == 0 && strcmp(a->operand, b->operand) == 0;
 }
 
+void selector_pred_settle(const SelectorUndet *u, bool holds)
+{
+    char *hole;
+
+    DCHECK(u != NULL && u->undetermined && u->forkable,
+           "an answered §6 predicate was settled from a record no consumer could have forked");
+    /* §6.1's `[att=val]` "Represents an element with the att attribute whose value is exactly "val"", so only a
+       case-sensitive `=` states the value; the other operators and §6.3's `i` leave a set. */
+    /* Named residual. Not covered: a holding test under another operator or under `i` determines no value, so
+       such answers are not checked against each other or against a later `=` (`[a^=da]` and `[a=light]` can
+       both hold in one flow). Next diff: those answers filed as the value's string facets (prefix, suffix,
+       substring, case-folded equality), against which a later fork's holding arm is pruned. Absence shows as:
+       a flow whose pinned attribute value fails a test the same flow took as holding. */
+    if (u->op != LXB_CSS_SELECTOR_MATCH_EQUAL || u->insensitive) return;
+    if (holds) {
+        /* Chosen by a fork with no real arm stated, so the pin is a witness no observation confirmed. */
+        if (concolic_pin_tostring(u->over, u->operand)) {
+            flow_mark_pinned_value();
+            return;
+        }
+        DFAILF("Selectors 4 §6.1's `[%s=\"%s\"]` holds in this flow and the pin store could not state the "
+               "attribute's value: the value is a derivation, which owns no `src` to pin, or its type facet admits "
+               "another value whose ToString is the operand. A later test with another operand then forks into a "
+               "world where the attribute equals two strings. Build a determination keyed by the value's identity "
+               "that concolic_pin_bytes reads", u->attr, u->operand);
+        return;
+    }
+    hole = concolic_hole_key(concolic_shape_c(u->over));
+    if (hole != NULL) {
+        concolic_exclude(hole, u->operand);
+        free(hole);
+    }
+}
+
 bool selector_undet_key(char *out, size_t cap, const SelectorUndet *u)
 {
     int wrote;
@@ -228,128 +272,29 @@ bool selector_undet_key(char *out, size_t cap, const SelectorUndet *u)
  * nothing about the selector it is inside, so it fired for `#known, [att=x]` on an element `#known` matches
  * — a question whose answer was never in doubt — and it fired three times for a selector that poses one
  * question. A crash at the CONCLUSION fires only where the selector's own answer is undetermined, which is
- * the population (2)-(5) are for. Nothing about the category changed; the engine simply now knows which
+ * the population a fork is for. Nothing about the category changed; the engine simply now knows which
  * asks are real.
  *
  * IT WAS NEVER THE PAGE-HELD ABORT SWITCH §WHOSE-BYTES-STATE-THE-VALUE FORBIDS, and it is further from one
  * now: the value declined on is one THIS ENGINE MINTED to stand for something it does not know, not bytes a
  * stranger stated, and no string a page can write reaches this. The refusal itself asserts nothing at all.
  *
- * WHAT THE NEXT DIFFS BUILD, IN ORDER, and why none of them is this one:
- *   (0) CONCRETIZE-ON-PIN AT THE MATCH — LANDED, AND IT IS WHAT THIS FUNCTION STILL DOES FIRST. A flow whose
- *       own `===` already determined the value HAS the answer, so the match need only ASK: §Solver-half's
- *       "once `x==='admin'` pins the value, a later READ of that source returns the pinned bytes, so a later
- *       branch on it is decided by RUNNING the real predicate on a real string and does not fork at all".
- *       `concolic_pin_bytes` is that read, and the matcher's own byte comparison is then the right one for
- *       EVERY operator §6 has — including §6.6's, which is `~=` over `class` and is the arm a real bundle
- *       reaches most (`el.className = <unknown>`). THE ONE THING THAT MADE THIS EASY TO MISS IS WORTH KEEPING
- *       AND IS ONE SENTENCE: the pin is written by the PAGE and is therefore in neither this file nor the
- *       sheet, so a reader of either sees a value nothing can decide and reaches for a fork.
- *       ITS RESIDUAL IS RETIRED BY (1) AND ITS ARGUMENT IS NOT, which is why the argument stays: a value the
- *       page DERIVED before storing it (`el.setAttribute('t', 'x-' + cfg.theme)`) files a DERIVATION in the
- *       shadow, and a derivation carries its first unknown operand's `src` (concolic_add_hook takes
- *       `ca ? concolic_src_c(a) : …` and says why), so a flow's pin on `cfg.theme` is a determination of the
- *       OPERAND and not of the stored value and `concolic_pin_bytes` answers NULL for it by construction.
- *       THE OBVIOUS REPAIR IS STILL THE ONE NOT TO MAKE: re-deriving the stored value at the READ would need
- *       the record to have kept its operands, and a value plus the expression that made it is the recorded
- *       transform-expression §Re-execution forbids BY NAME — the record deliberately keeps a shape, an
- *       identity and an example and no operands. The sound way to get a derivation's real bytes is the one
- *       this engine already has: RE-EXECUTE the write under the constraint, which is what a resumed flow and
- *       a candidate re-fire both do, and what the pin cannot do for a store that already happened. So the
- *       derived case is not a narrower version of the pin read; it is an UNDETERMINED value like any other,
- *       and three-valued matching is now its answer.
- *   (1) THREE-VALUED MATCHING — LANDED, AND IT IS WHY THIS FUNCTION RETURNS RATHER THAN ABORTS.
- *       `lxb_selectors_host_cb_t.attr_value_read` has a third answer, `:not()`, `:is()`, `:has()`,
- *       `:nth-child(… of …)` and the combinators propagate it, and `lxb_selectors_t::unknown` carries the
- *       conclusion out. The RULE is Kleene's and the arithmetic was never the work: the state machine already
- *       computes AND as a compound's short-circuit and OR as a list's and a combinator walk's, so what (1)
- *       added is a sticky per-scope bit and one inverted arm. ITS CAUSE IS NOT THE CAUSE IN
- *       core/css/media_query.c, whose `mq_not`/`mq_and`/`mq_or` hold the same table for a different reason —
- *       Media Queries Level 4 §3.1 "Evaluating Media Queries" makes a query UNKNOWN when the UA does not
- *       UNDERSTAND it (`<general-enclosed>`), where a selector here is perfectly understood and it is the
- *       ATTRIBUTE'S VALUE that is unknown. AND THE TWO TABLES ARE NOT SHARED, WHICH IS A FACT ABOUT THE BUILD
- *       AND NOT A CHOICE: `engine/build.mjs` compiles lexbor into its own archive with `-I` LEXBOR_INC ALONE,
- *       so no host header is reachable from `selectors.c` and a shared spelling would invert the embedding.
- *       What keeps them from drifting is that lexbor grew no table at all — it has one inverted arm, at
- *       `lxb_selectors_state_after_not`, and its own comment there is what a reader checks.
- *       WHAT (1) DOES NOT COVER is recorded where it is caused, at `lxb_selectors_host_attr_value`: an
- *       undetermined read behaves as no-match in CONTROL FLOW, so a compound abandons at the undetermined
- *       member rather than reaching a later member that would decide it false. That answers UNKNOWN where
- *       FALSE was available, which keeps an arm that could have been dropped and is the safe direction.
- *   (2) A CASCADE THAT REPORTS ITS UNANSWERED PREDICATE, rather than an answer it does not have. STILL OPEN,
- *       AND ITS "THIS IS NEXT" IS SPENT: the sentence read "THIS IS NEXT, AND `selector_match_node`'s abort
- *       below is where it lands: the answer exists now and the signature has nowhere to put it, so the abort is
- *       standing in for the out-parameter." The out-parameter LANDED — `selector_match_node`'s `out_undet` —
- *       and it landed for the DOM half, which is why the paragraph below this one was right about the order and
- *       this one's own numbering was not. What (2) still needs is unchanged and is a CONSUMER rather than a
- *       type: the cascade's walk has no resume point, so a third state at `cssom_cascaded_value` has nothing
- *       that can keep an arm and is a write whose reader is the crash it replaces.
- *       THE MEASUREMENT THAT SETTLED IT IS KEPT BECAUSE IT IS WHAT MAKES THE ORDER CHECKABLE, and not because
- *       the count is durable: GREPPED, the cascade's three callers are core/css/css_computed_value.c's
- *       `css_cv_cascaded` (which asks WHAT THE VALUE IS and reads NULL as css-cascade-5 §4.2's empty list),
- *       core/html/html_element_view.c's `hev_declares` and core/layout/used_value.c's
- *       `uv_require_readable_positioning` (which ask DOES THIS ELEMENT DECLARE IT and whose own comments say
- *       the answer's only outcome is a crash) — so all three spell `decl != NULL`, the only thing any of them
- *       can do with a third state is abort, and two of them abort already. In RELEASE every one of those aborts
- *       is compiled out, so the widening alone changes nothing observable in EITHER build.
- *       AND (4) IS A PREREQUISITE OF (3) RATHER THAN A REFINEMENT AFTER IT, which is the half of this list that
- *       cannot simply be reordered by a reader who notices. `step_fork_run` takes the unknown operand as `over`
- *       and the PREDICATE as `op`, and together they are the constraint key — so a fork keyed on anything
- *       coarser than (the value's identity, the operator, the operand) merges `[att=dark]` and `[att=light]`
- *       into ONE question, answers one arm for both, and leaves the flow standing on two constraints saying the
- *       attribute is two different strings. That is not a loose key, it is an inconsistent world, and it is
- *       what building (3) before (4) produces. THE KEY COULD NOT BE COMPOSED AT ALL until the value seam was
- *       told which test it was being asked about: `lxb_selectors_t::unknown` is a BARE BOOL and the callback
- *       took `(node, attr, out, ctx)`, so the operator and the operand were never in the host's hands.
- *       `lxb_selectors_predicate_t` and the record above are that, and they are the first member rather than
- *       the fourth.
- *       AND THE CONSUMER FOR (3) EXISTS ON ONE OF THE TWO CALLERS AND NOT THE OTHER, which is why the DOM half
- *       lands before the cascade half however the numbering reads: `core/dom/document.c`'s selector walk is
- *       ALREADY a step machine (an `IdlStepDecl`, stages and a `visit`), so it holds the resume point
- *       `engine_prepare_fork` requires and its `selector_match_node` call sits one line from a `JS_STEP_YIELD`;
- *       the cascade's walk is a plain C loop and `engine_prepare_fork` DFAILs by name for one, naming
- *       JS_CFUNC_STEP_DEF as the declaration to build. So (3) for `querySelectorAll` is a call to add and (3)
- *       for `getComputedStyle` is a step machine to declare first.
- *       RETIREMENT: this record goes when the ordered list itself is numbered in landing order, because the
- *       hazard is then a property of the numbering rather than of a paragraph a reader has to reach.
- *   (3) AND (4) TOGETHER — A CONSUMER THAT CAN ASK, KEYED ONE PER PREDICATE. LANDED FOR THE DOM HALF, at
- *       core/dom/document.c's selector walk, and the two are ONE landing because the paragraph above says so:
- *       a fork keyed coarser than the predicate merges two operands' questions, so there was never a (3) to
- *       land without (4). A fork needs a RESUME POINT and there is none inside a match — the arena note below
- *       says lxb_selectors_match_node "is a single C call that returns before the machine driving it can
- *       yield", and solver/engine.c's `engine_prepare_fork` aborts by name for a C body that forks from inside
- *       its own activation — so the ask is at the MACHINE, which re-runs the match once per answered predicate
- *       exactly as quickjs.c's `step_ownkeys_chain` re-runs its enumeration.
- *       THE COMPLETIONS ARE THE PREDICATE'S AND NOT THE SELECTOR'S, and that is the load-bearing choice rather
- *       than a spelling. A fork over "does this SELECTOR match" cannot be keyed soundly at all: the matcher
- *       abandons a compound at its first undetermined member, so a `matched` arm would be a claim the matcher
- *       never verified AND the flow would hold no constraint on the members it never reached — after which a
- *       second element sharing the recorded value replays that arm and its own undetermined member is decided
- *       by an answer that was never about it, which is §a-wrong-narrowing's deleted arm. Forking the PREDICATE
- *       has neither problem: the matcher composes it, and a later undetermined member declines in its own
- *       right and is forked in its own right.
- *       THE TRUE ARM IS REALISED WITHOUT A LEXBOR CHANGE and the FALSE ARM NEEDS NOTHING AT ALL, which is why
- *       this is a call to add rather than a seam to widen. TRUE hands the matcher the predicate's own operand
- *       (see sel_undet_satisfiable for the one operator that has no such realisation); FALSE is already what
- *       an undetermined read does in control flow, so the answer the machine already holds IS the answer under
- *       it. OUTCOME 0 IS THEREFORE "THE TEST DOES NOT HOLD", which is step_fork_run's one numbering rule read
- *       against this predicate: a run with no forking policy takes it and gets the byte-identical answer every
- *       build gave before this landed.
- *       WHAT IS NOT COVERED: ONE DECIDED PREDICATE PER MATCH. A compound both of whose members are undetermined
- *       and whose flow answers TRUE to BOTH needs two supplied at once, and `document.c`'s machine holds one
- *       slot and aborts by name for the second. The next diff is the slot becoming a SET the machine's `visit`
- *       carries. How its absence would show: that abort, on a selector with two undetermined tests in one
- *       compound, in a flow that took the holding arm of both.
- *       WHICH MACHINES THE CASCADE HALF NEEDS IS STILL THE PART TO DERIVE RATHER THAN ASSUME:
- *       `cssom_cascaded_value`'s callers are what reach it, and the ones a page drives (`getComputedStyle`, the
- *       §7 view members) are plain C bodies today, so each is a declaration to build and not a call to add.
- *   (5) THE PIN TAKEN *AT* THE MATCH, which is the direction (0) does NOT cover and is a different fact:
- *       (0) READS a determination the page's own predicate made, while this one MAKES one — `[att=dark]`
- *       answered TRUE by a fork of (3) pins the value, after which `[att=light]` is DECIDED by the flow's own
- *       constraint rather than forked again. Without it the worlds multiply with the number of operands the
- *       sheet tests, where the page can only be in one.
- * HOW ITS ABSENCE WOULD SHOW once (2)-(5) exist: a document whose only style difference between two flows is
- * an attribute this engine never observed would report one computed value where a browser has two.
+ * How an undetermined value is answered, in the order this function and its consumers apply it:
+ *   - A flow that determined the value has a pin, read first through concolic_pin_bytes, and the matcher's own
+ *     comparison then decides every operator on real bytes. The page's own `===` makes one; so does a holding
+ *     `=` a consumer's fork settles (selector_pred_settle). A value the page derived before storing it
+ *     (`'x-' + cfg.theme`) owns no `src` and has no pin, so it is undetermined like any other.
+ *   - Otherwise the seam answers UNDETERMINED. lexbor's matcher carries Kleene's third value through `:not()`,
+ *     `:is()`, `:has()`, `:nth-child(… of …)` and the combinators, with its one inverted arm at
+ *     lxb_selectors_state_after_not; an undetermined read is no-match in control flow, so a compound abandons
+ *     at it (UNKNOWN where FALSE was available, which keeps an arm rather than dropping one).
+ *     core/css/media_query.c holds its own Kleene table because lexbor is compiled with LEXBOR_INC alone and
+ *     reaches no host header.
+ *   - A consumer that can keep the arm forks on the predicate, keyed by selector_undet_key and the value's
+ *     identity: core/dom/document.c's walk forks itself, and the cascade's resting build hands the decline to
+ *     its layout job, whose step machine forks (layout_job_decline). The fork is over the predicate rather than
+ *     the selector, so a later undetermined member declines and forks in its own right, and the answer comes
+ *     back here from the flow's constraint.
  *
  * WHAT IT DOES NOT COVER, AND THE NEXT DIFF FOR IT: §6.1's `~=` with WHITESPACE in its operand ("If "val"
  * contains whitespace, it will never represent anything") is decided false by the operand alone, exactly as
@@ -436,39 +381,34 @@ static lxb_selectors_value_t host_attr_value_read(const lxb_dom_node_t *node,
     /* WHICH ASK THIS IS, composed for THIS ask and not for the match -- see sel_undet_compose. */
     sel_undet_compose(&ask, attr, pred, taint);
 
-    /* AND WHAT THIS FLOW HAS ALREADY PROVED ABOUT *THIS TEST* -- the answered fork, realised. §Solver-half's
-       "uncertainty keeps the arm" is what the decline below is; this is the OTHER arm, where a consumer that
-       kept it has come back with the answer. The arm says the test HOLDS, and the honest realisation of that
-       is to hand the matcher the predicate's OWN OPERAND: it satisfies every operator §6 defines (see
-       sel_undet_satisfiable, which is why an unsatisfiable one is never declared forkable), so the matcher
-       decides this ONE test true and composes it through §6.6's `~=`, the compound's AND, the list's OR and
-       any `:not()` exactly as it would have on real bytes.
-       IT IS NOT A VALUE AND MUST NEVER BECOME ONE. The bytes decide THIS test and nothing else: a second test
-       over the same attribute is a DIFFERENT predicate, does not match this record, and declines again -- so
-       `[a^=dark][a$=mode]` forks twice and ends holding both facts, rather than having the first arm's bytes
-       answer the second test. Nothing is PINNED, which is the difference between this and §Solver-half's
-       concretize-on-pin: a pin is a claim about the VALUE, and `^=dark` does not determine one. The pin taken
-       AT a match is a later diff and is named in the ordered list above.
-       THE COMPARISON IS THE FULL KEY. The predicate's four fields AND the value's identity -- because two
-       attributes of one element can hold two different unknowns under one predicate, and `concolic_ident_c` is
-       what the solver's own key is composed from, so this compares the fact the solver filed and survives a
-       park and a cross-session resume. An absent identity on either side is a value this engine cannot spell:
-       it matches nothing here and was never declared forkable at the ask that produced it either, so there is
-       no arm to realise and no route to a supply that names the wrong value. */
-    if (g_decided != NULL && g_decided->undetermined && selector_pred_same(g_decided, &ask)) {
-        const char *want = concolic_ident_c(g_decided->over), *have = concolic_ident_c(taint);
+    /* What this flow has already answered about this test: a fork over this predicate and value that any
+       consumer took, settled in the flow's constraint under the key the fork was asked with. It is realised
+       for this one ask by bytes that decide this test and no other: a holding answer by the operand itself,
+       which satisfies every operator a forkable predicate has (sel_undet_satisfiable), a failing one by bytes
+       the test rejects (sel_undet_refuting_bytes). The matcher composes that answer through §6.6's `~=`, the
+       compound's AND, the list's OR and any `:not()`; a second test of the same attribute is a different
+       predicate and declines in its own right. What an answer establishes about the value itself is
+       selector_pred_settle's, read above as a pin. */
+    if (ask.forkable) {
+        char key[SELECTOR_UNDET_KEY_MAX];
+        int c = selector_undet_key(key, sizeof key, &ask) ? solver_outcome_settled(taint, key, 2) : -1;
 
-        /* BOTH ARE NON-NULL FOR ANY RECORD A CALLER COULD HAVE FORKED, because `forkable` required one at the
-           ask -- so this is the assertion that a `decided` record came from THIS seam rather than a test. */
-        DCHECK(want != NULL, "a decided §6 predicate was handed back naming a value this engine cannot spell — "
-                             "the ask that produced it would not have been declared forkable, so this record "
-                             "was composed somewhere other than sel_undet_compose");
-        if (want != NULL && have != NULL && strcmp(want, have) == 0) {
-            /* BORROWED FOR THE LENGTH OF THE MATCH, exactly as the pin's bytes are and for the same reason:
-               the operand points into the compiled selector list, which nothing writes after it is built, and
-               a match runs none of the page's code. */
-            out->data = (lxb_char_t *)g_decided->operand;
-            out->length = strlen(g_decided->operand);
+        if (c >= 0) {
+            /* These bytes only make the byte matcher return the answer the constraint holds; they are no
+               value of the attribute, so they reach nothing but lxb_selectors_match_attribute. */
+            DCHECK(g_in_match, "a settled §6 predicate was realised outside the agent's selector match, so its "
+                               "bytes could reach a reader that takes them for the attribute's value");
+            /* Borrowed for the match: the operand is the compiled list's, which nothing writes after it is
+               built, and the refuting bytes are literals. */
+            if (c == 1) {
+                out->data = pred->operand->data;
+                out->length = pred->operand->length;
+            } else {
+                const char *no = sel_undet_refuting_bytes(&ask);
+
+                out->data = (lxb_char_t *)no;
+                out->length = strlen(no);
+            }
             return LXB_SELECTORS_VALUE_HOST;
         }
     }
@@ -494,7 +434,6 @@ const lxb_selectors_host_cb_t *selector_match_host_cb(void) { return &HOST_CB; }
    difference between a shared scratch allocator and a shared piece of state. `g_in_match` asserts it at the
    one call, because the day it stops holding is the day two interleaved matches share one entry pool. */
 static lxb_selectors_t *g_arena;
-static bool g_in_match;
 
 void selector_match_init(void)
 {
@@ -589,8 +528,7 @@ static lxb_status_t sel_text_cb(const lxb_char_t *data, size_t len, void *vctx)
 #endif
 
 bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *list,
-                         lxb_css_selector_specificity_t *out_spec,
-                         const SelectorUndet *decided, SelectorUndet *out_undet)
+                         lxb_css_selector_specificity_t *out_spec, SelectorUndet *out_undet)
 {
     SelHit h = { false, 0 };
 
@@ -631,14 +569,11 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
        because a tag of 0 is a tag and not `undefined` -- it is borrowed, so nothing is released. */
     memset(&g_undet, 0, sizeof g_undet);
     g_undet.over = JS_UNDEFINED;
-    /* AND WHAT THE CALLER HAS ALREADY PROVED, live for exactly this match -- see g_decided. */
-    g_decided = decided;
     /* lxb_selectors_match_node, not a subtree find: a combinator is resolved by walking UP from the candidate
        through the whole document, so §1.3's scoped matching still holds when the caller filters the results to
        a subtree — `el.querySelectorAll('div p')` finds a <p> under `el` whose <div> ancestor is OUTSIDE it. */
     lxb_selectors_match_node(g_arena, node, list, sel_hit_cb, &h);
     g_in_match = false;
-    g_decided = NULL;
 
     /* THE THIRD ANSWER, HANDED TO A CALLER THAT SAID IT COULD KEEP IT. `g_arena->unknown` is Kleene's value
        carried out of the match and the record is which ask produced it; the two are ONE fact and the assert
@@ -654,37 +589,18 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
     }
 
 #if APICLIENT_DEV
-    /* THE QUESTION THIS SELECTOR ASKED AND NOBODY CAN ANSWER — §Offensive-programming's category (2), a
-       capability that should exist and does not, and the crash that (1) MOVED here from the value seam.
-       `g_arena->unknown` is Kleene's third value carried out of the match: some test in this selector was
-       decided from an attribute whose value the host declined to state, and the conclusion "did not match"
-       is therefore UNKNOWN rather than false.
-       IT IS GATED ON `!h.matched`, WHICH IS KLEENE'S OR AND IS WHY THIS IS NOT THE OLD CRASH WITH A NEW
-       ADDRESS. A selector list matches through whichever of its selectors did, so a definite match makes the
-       list's answer TRUE whatever some other branch could not decide — `#known, [att=x]` on an element
-       `#known` matches is answered, and the seam being asked along the way is not a question the engine
-       failed. The old crash could not tell those apart because it fired before the list had one.
-       AND WHAT IT IS STANDING IN FOR IS NOW A PROPERTY OF THE CALLER RATHER THAN OF THIS FILE, which is the
-       argument this paragraph retires rather than deletes: it read "WHAT THE NEXT DIFF BUILDS is (2) in this
-       file's ordered list, and this abort is standing in for its signature: the answer exists now and `bool`
-       has nowhere to put it, so the cascade cannot yet REPORT an unanswered predicate and the process stops
-       instead." The signature HAS somewhere to put it — `out_undet` — and `document.c`'s selector walk forks
-       on it. A reader who re-derives the old reason from the `bool` in front of them will re-propose the
-       out-parameter and find it built, which is the same wasted reading the note in the header was written to
-       prevent one layer up. What remains true is the SECOND half: the CASCADE still cannot keep an arm,
-       because keeping one needs a resume point and its walk is a plain C loop, so a third state at
-       `cssom_cascaded_value` is still a write whose only reader would be the crash it replaces until that walk
-       is a step machine. The condition below is what says which of the two a reader is standing at.
-       THE VALUE IS NOT ASSERTED ON and no page string reaches this condition: `g_arena->unknown` is a bit
-       THIS ENGINE set about its own capability, which is what a `DFAIL` is for.
-       NAMED RESIDUAL — `out_spec` IS A LOWER BOUND WHEN A BRANCH WAS UNDETERMINED. What is not covered: a
-       list reports the HIGHEST specificity that MATCHED, so a branch this match could not decide contributes
-       none, and `div, #a[att=x]` on a div with that id weighs the rule at 0,0,1 where the undecided branch
-       would have weighed it 1,1,0 — the rule APPLIES either way and CSS 2.1 §6.4 orders it wrongly against a
-       competitor in between. What the next diff builds: (2)'s out-parameter carries the undetermined
-       branches' specificities beside the answer, since a cascade that must fork on the predicate must fork on
-       its weight too. How its absence would show: two rules whose winner changes with an attribute this
-       engine never observed, reported with the loser's declaration and no question asked. */
+    /* The question this selector asked and this caller cannot keep: `g_arena->unknown` is Kleene's third
+       value carried out of the match, so "did not match" is UNKNOWN rather than false, and either the caller
+       passed no record (it has no resume point) or the record cannot be realised by a fork. It is gated on
+       `!h.matched`, Kleene's OR: a list that matched through one selector is answered whatever another branch
+       could not decide. The bit is one this engine set about its own capability; no page string reaches it.
+       Named residual. Not covered: `out_spec` is a lower bound when a branch was undetermined, since a list
+       reports the highest specificity that matched, so `div, #a[att=x]` on a div with that id weighs the rule
+       at 0,0,1 where the undecided branch would weigh it 1,1,0, and CSS 2.1 §6.4 orders it wrongly against a
+       competitor in between. Next diff: the record carries the undetermined branches' specificities, since a
+       cascade that forks on the predicate forks on its weight too. Absence shows as: two rules whose winner
+       changes with an attribute this engine never observed, reported with the loser's declaration and no
+       question asked. */
     if (!h.matched && g_arena->unknown && (out_undet == NULL || !out_undet->forkable)) {
         SelText t;
         const lxb_char_t *tag;
@@ -723,11 +639,11 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
                   is the whole of what changed here: the abort no longer means "nothing in this engine can
                   carry a third answer", it means "not THIS caller, for THIS reason". */
                out_undet == NULL
-                 ? "THIS CALLER PASSED NO `out_undet`, so it has not declared that it can keep the arm — and "
-                   "keeping one needs a RESUME POINT. `document.c`'s selector walk is a step machine and forks "
-                   "here; the cascade's is a plain C loop inside `cssom_cascaded_value`, which "
-                   "solver/engine.c's `engine_prepare_fork` refuses by name. Declare that walk "
-                   "JS_CFUNC_STEP_DEF and pass this record — see host_attr_value_read's ordered diffs."
+                 ? "THIS CALLER PASSED NO `out_undet`: the cascade's build with no resting drive, reached by a "
+                   "style read from a member that does not own a layout job, so nothing can rest and keep the "
+                   "arm. A resting build keeps it (layout_job_decline, forked by the job's step machine). "
+                   "Convert the member in the backtrace to a step machine that owns a driven job and asks "
+                   "cssom_style_ask first, as `clientWidth` does."
                  : "THIS CALLER CAN KEEP AN ARM AND THIS PREDICATE'S CANNOT BE REALISED — either a field of "
                    "the key was TRUNCATED into its buffer (two operands would spell one question) or the TRUE "
                    "arm has no realisation, which for §6.1's `~=` means the operand contains whitespace and "

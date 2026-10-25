@@ -266,6 +266,9 @@ static JSValue st_absent_value(JSContext *ctx, JSValueConst slots, JSAtom key)
     if (!concolic_source_precondition_declared_by("storage", src))
         concolic_declare_source_precondition("storage", src, SRC_PRE_SAME_ORIGIN_STORE);
     r = concolic_source_wrap(ctx, shape, src, JS_NULL);
+    /* §12.2.1's `getter DOMString? getItem(DOMString key)`: a prior session's value is a String or null in every
+       world. */
+    concolic_state_string_or_null(r);
     js_free(ctx, shape);
     js_free(ctx, src);
     return r;

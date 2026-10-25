@@ -46,6 +46,7 @@ static int user_scroll_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 {
     UserScrollFlow *s = st;
     bool more;
+    int rc;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -66,9 +67,16 @@ static int user_scroll_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     }
 
     STEP_ARM(USF_BOX);
+    /* An entry the job's fork delivers to: its arm is recorded before the walk runs again. */
+    rc = layout_job_fork(ctx, &s->hdr, s->job);
+    if (rc) return rc;
     layout_job_enter(s->job);
     more = element_scrolling_into_view_next(&s->walk, "auto");
     layout_job_leave(s->job);
+    if (layout_job_declined(s->job)) {
+        rc = layout_job_fork(ctx, &s->hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
     if (more) {
         layout_job_rested(s->job);
         return JS_STEP_YIELD;

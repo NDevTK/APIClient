@@ -1147,6 +1147,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/flexwrap.h"
 #include "fixture/valignmiddle.h"
 #include "fixture/scrollicb.h"
+#include "fixture/cascfork.h"
+#include "fixture/cascforkview.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1681,6 +1683,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "flexwrap", HTML_FLEXWRAP },
     { "valignmiddle", HTML_VALIGNMIDDLE },
     { "scrollicb", HTML_SCROLLICB },
+    { "cascfork", HTML_CASCFORK },
+    { "cascforkview", HTML_CASCFORKVIEW },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15346,6 +15350,40 @@ TF_UNIT void probes_valignmiddle(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cascfork` document (fixture/cascfork.h). Each world reports `#t width-#u width-value`. */
+TF_UNIT void probes_cascfork(const char *js, Probe *tab, int *n) {
+    const char *cf_why = NULL; int cf_tt = !!strstr(js, "\"/api/cascfork\"");
+
+    fold_row(&cf_tt, &cf_why, cf_tt,
+             "NOT REACHED: there is no /api/cascfork record at all, so the document aborted before its fetch");
+    fold_row(&cf_tt, &cf_why, param_value_is(js, "/api/cascfork", "r", "50-20-dark"),
+             "Selectors 4 §6.1: no world where `[data-theme=\"dark\"]` holds, pins the value to `dark`, and decides `^=\"d\"` on it");
+    fold_row(&cf_tt, &cf_why, param_value_is(js, "/api/cascfork", "r", "30-7-light"),
+             "Selectors 4 §6.1: no world where `[data-theme=\"light\"]` holds and pins the value to `light`");
+    fold_row(&cf_tt, &cf_why, param_value_count(js, "/api/cascfork", "r") == 4,
+             "Selectors 4 §6.1: the cascade did not end in exactly four worlds (dark, light, and the unpinned value under each arm of `^=\"d\"`): a fifth is a world where both equalities held or a replayed answer forked again");
+    const Probe rows[] = {
+        { "cascade-predicate-fork", cf_tt, "/api/cascfork", SESS_EXPLORE, cf_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `cascforkview` document (fixture/cascforkview.h). Each world reports `scrollWidth-value`. */
+TF_UNIT void probes_cascforkview(const char *js, Probe *tab, int *n) {
+    const char *cv_why = NULL; int cv_tt = !!strstr(js, "\"/api/viewfork\"");
+
+    fold_row(&cv_tt, &cv_why, cv_tt,
+             "NOT REACHED: there is no /api/viewfork record at all, so the document aborted before its fetch");
+    fold_row(&cv_tt, &cv_why, param_value_is(js, "/api/viewfork", "r", "40-wide"),
+             "Selectors 4 §6.1: no `scrollWidth` world where `[data-mode=\"wide\"]` holds and pins the value to `wide`");
+    fold_row(&cv_tt, &cv_why, param_value_count(js, "/api/viewfork", "r") == 2,
+             "Selectors 4 §6.1: `scrollWidth`'s cascade did not end in exactly two worlds, one per arm of `[data-mode=\"wide\"]`");
+    const Probe rows[] = {
+        { "cascade-predicate-fork-view", cv_tt, "/api/viewfork", SESS_EXPLORE, cv_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21219,6 +21257,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_flexwrap(js, probes, &np);
     probes_valignmiddle(js, probes, &np);
     probes_scrollicb(js, probes, &np);
+    probes_cascfork(js, probes, &np);
+    probes_cascforkview(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

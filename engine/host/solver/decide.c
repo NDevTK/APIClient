@@ -1796,6 +1796,23 @@ static void outcome_settle(JSValueConst over, const char *op, int n, int c) {
     }
 }
 
+int solver_outcome_settled(JSValueConst over, const char *op, int n) {
+    int c;
+
+    DCHECK(op != NULL && n >= 2, "a settled completion was asked of no operation or of fewer than two");
+    if (!g_running || !concolic_is(over)) return -1;
+    for (c = 0; c < n; c++) {
+        char *key = outcome_key(over, op, c);
+        int had;
+
+        if (!key) return -1;
+        had = concolic_branch_decided(key);
+        free(key);
+        if (had == 1) return c;
+    }
+    return -1;
+}
+
 /* The completion this walk ended on, filed as an assumed decision under its settled key when it is not the
    completion the machine declared real (or the machine declared none). An operand with no identity has no
    key, as outcome_settle answers for it. */

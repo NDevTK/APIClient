@@ -235,6 +235,9 @@ JSValue     concolic_example_string(JSContext *ctx, JSValueConst v);
    type, such as a Web IDL USVString getter. Once per value; a non-concolic `v` (a candidate re-fire's bytes) is
    left alone. */
 void        concolic_state_string(JSValueConst v);
+/* The same for a mint whose algorithm returns a nullable String (a Web IDL `DOMString?`), such as a storage
+   area's getItem: a String or null in every world. */
+void        concolic_state_string_or_null(JSValueConst v);
 /* Whether `v` is an unknown whose stated type set is exactly String, so a runtime type test over it (a
    §3.2.25 union arm) has one answer in every world. Side-effect-free. */
 int         concolic_type_is_string(JSValueConst v);
@@ -1118,6 +1121,15 @@ int         concolic_pin_store(const char *src, const char *root, ConcolicLit ki
    two its subject is. Answers concolic_pin_store's 1 where a value was written, 0 otherwise. Only this and the
    store's own selftests call concolic_pin_store, because only they know `src` names the compared value. */
 int         concolic_pin(JSValueConst cmp);
+/* The pin a holding test over a value's §7.1.19 ToString ( argument ) makes, where the test is the engine's
+   rather than the page's: an attribute holds the ToString of the value written into it (DOM §4.9 through Web
+   IDL's DOMString), and Selectors 4 §6.1's `[att=val]` holding says that ToString is exactly `s`. That
+   determines the value only where one member of its type set spells `s`: never for an Object or a Function
+   (the page's own toString), and not where `s` is a spelling a Null, Undefined, Boolean, Number or BigInt in
+   the set could produce. Where it does, the value's own `src` is pinned to the String `s` through
+   concolic_pin_store under §7.2.14's determination; a derivation, which owns no `src`, pins nothing. Answers
+   concolic_pin_store's 1 where a value was written, 0 otherwise. */
+int         concolic_pin_tostring(JSValueConst v, const char *s);
 /* The pin itself: 1 with the literal's kind and spelling (borrowed from the constraint until it next changes),
    0 when the running flow pinned nothing at `src`. */
 int concolic_src_pin(const char *src, ConcolicLit *kind, const char **val);

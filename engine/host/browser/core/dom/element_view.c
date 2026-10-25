@@ -123,14 +123,10 @@ static void ev_target_of_element(lxb_dom_element_t *el, EvTarget *t)
 /* WEB IDL §3.7.6 "Attributes"' AND §3.7.7 "Operations"' RECEIVER TEST IS STATED AT EACH DECLARATION AND
    PERFORMED BEFORE THIS RUNS, so this fills the four questions and decides nothing.
 
-   THIS FUNCTION USED TO BE THE BRAND CHECK, AND THE ARGUMENT IS KEPT BECAUSE A READER WILL RE-DERIVE IT. It
-   read: `Element.prototype.clientWidth` read off a plain object is a TypeError, and a page tells that apart
-   from `undefined` — a feature detector that probes the descriptor and applies the getter reads the throw as
-   "this is a real interface". Every clause of that is still true of the PLATFORM and none of it is this
-   file's to answer any more: the eight attributes are installed through core/idl_args.h's
-   idl_install_accessor_this and the six operations declare idl_this_iface, both naming core/dom/element.h's
-   own `element_is`, so Web IDL §3.7 Interfaces' implementation-check step 3 runs at ONE place for all
-   fourteen. Writing it again here would be the second answer to one question §A-FIX-OF-THE-FORM forbids.
+   `Element.prototype.clientWidth` read off a plain object is a TypeError, which a feature detector that probes
+   the descriptor and applies the getter reads as "this is a real interface". It is not this function's to
+   answer: the eight attributes and the six operations all declare idl_this_iface over core/dom/element.h's
+   `element_is`, so Web IDL §3.7 Interfaces' implementation-check step 3 runs at one place for all fourteen.
 
    AND THE ORDER IS WHAT THE MOVE BUYS, WHICH A BODY-SIDE TEST CANNOT HAVE. §3.7.7's try-list asks the
    receiver at step 2.1.2.3, BEFORE step 2.1.4 computes the effective overload set, and §3.7.6's setter asks
@@ -857,6 +853,7 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
 {
     EvScrollIntoViewState *s = st;
     bool more;
+    int rc;
 
     (void)cb_result; (void)out_cb; (void)out_argc;
     STEP_DISPATCH(EV_SIV_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
@@ -937,7 +934,11 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
         LayoutJobDrive d;
         bool matched;
         EvTarget t;
+        int rc;
 
+        /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+        rc = layout_job_fork(ctx, hdr, s->job);
+        if (rc) return rc;
         /* Step 7 */
         DCHECK(!css_computed_models("content-visibility"),
                "css-contain-2's `content-visibility` is in this engine's cascade now, so CSSOM VIEW §6's "
@@ -958,6 +959,10 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
         layout_job_drive_end(&d);
         layout_job_leave(s->job);
         rest_unit_end();
+        if (layout_job_declined(s->job)) {
+            rc = layout_job_fork(ctx, hdr, s->job);
+            return rc ? rc : JS_STEP_YIELD;
+        }
         if (!matched) {
             layout_job_rested(s->job);
             return JS_STEP_YIELD;
@@ -972,9 +977,15 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
     }
 
     STEP_ARM(EV_SIV_BOX);
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
     layout_job_enter(s->job);
     more = element_scrolling_into_view_next(&s->walk, s->behavior);
     layout_job_leave(s->job);
+    if (layout_job_declined(s->job)) {
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
     if (more) {
         layout_job_rested(s->job);
         return JS_STEP_YIELD;
@@ -1106,6 +1117,7 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     LayoutJobDrive d;
     EvTarget t;
     CssPx px = css_px(0.0);
+    int rc;
 
     (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
     STEP_DISPATCH(EV_CLIENT_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
@@ -1114,6 +1126,9 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     DCHECK(el != NULL, "CSSOM VIEW §6's client extent reached its body on a receiver that is not an Element — the "
                        "member states element_is at its install");
     if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
     /* One activation is one unit, measured against the slice like each of `scrollIntoView`'s. */
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
@@ -1144,6 +1159,10 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     layout_job_leave(s->job);
     rest_unit_end();
     if (direct) return JS_STEP_DONE;
+    if (layout_job_declined(s->job)) {
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
     if (!done) {
         layout_job_rested(s->job);
         METRIC_ADD(client_extent_rests, 1);
@@ -1687,8 +1706,9 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     bool done = false, matched;
     LayoutJobDrive d;
     EvTarget t;
+    int rc;
 
-    (void)ctx; (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
     STEP_DISPATCH(EV_RECTS_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
 
     STEP_ARM(EV_RECTS_MEASURE);
@@ -1696,6 +1716,9 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         s->job = layout_job_new(LAYOUT_JOB_STEP);
         METRIC_ADD(client_rects_asks, 1);
     }
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
     layout_job_drive_begin_resting(&d);
@@ -1718,6 +1741,10 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     layout_job_drive_end(&d);
     layout_job_leave(s->job);
     rest_unit_end();
+    if (layout_job_declined(s->job)) {
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
     if (!done) {
         layout_job_rested(s->job);
         METRIC_ADD(client_rects_rests, 1);
@@ -1757,21 +1784,87 @@ static JSValue ev_get_member(JSContext *ctx, const EvTarget *t, ElementViewMembe
     return JS_UNDEFINED;
 }
 
-/* One getter is one layout activation: the hold keeps the synchronous job's cascade record for the whole
-   member, so every element and property the member's layout asks is cascaded once rather than once per ask
-   (core/css/css_cascade_pass.h). The member still runs to completion on that job. */
-static JSValue js_ev_get(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    CssComputedStyleHold hold;
-    EvTarget t;
-    JSValue v;
+/* `scrollTop`, `scrollLeft`, `scrollWidth`, `scrollHeight`, `clientTop` and `clientLeft` as one step machine
+   owning a layout job: the box tests every member opens with read the author matches of the element and its
+   ancestors under a resting drive, so a page-sized sheet rests between rules and a selector the cascade cannot
+   decide forks the flow (layout_job_fork); the member then runs on the same job, whose cascade record holds
+   those matches for every element and property it asks.
+   Named residual. Not covered: the member's own layout (§2's scrolling area over the descendants, a scroll
+   position) runs to completion after the box tests, so a descendant's style it reads is matched with no
+   resting drive, cannot keep a fork and does not rest. Next diff: those walks asking their styles and
+   questions under the resting drive, as `clientWidth`'s padding edge is asked. Absence shows as:
+   selector_match_node's abort for a build with no resting drive under one of these six members, or a rest
+   unit overrun inside one. */
+#define EV_VIEW_STAGES(X) \
+    X(EV_VIEW_MEASURE, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollTop / scrollLeft / " \
+                       "scrollWidth / scrollHeight / clientTop / clientLeft (the box tests under a resting " \
+                       "drive, then the member on the same job)")
+enum { IDL_STEP_STAGE_BASE(EV_VIEW_STAGES) EV_VIEW_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EV_VIEW_STEPS[] = { EV_VIEW_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    ev_target(this_val, &t);
-    css_computed_style_hold_begin(&hold);
-    v = ev_get_member(ctx, &t, (ElementViewMember)magic);
-    css_computed_style_hold_end(&hold);
-    return v;
+typedef struct {
+    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL before the first activation */
+} EvViewState;
+
+static void ev_view_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    EvViewState *s = st;
+
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
 }
+
+static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    EvViewState *s = st;
+    lxb_dom_element_t *el = element_of_value(hdr->this_val);
+    LayoutJobDrive d;
+    EvTarget t;
+    bool matched;
+    int rc;
+
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(EV_VIEW_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(EV_VIEW_MEASURE);
+    DCHECK(el != NULL, "a CSSOM VIEW §6 member reached its body on a receiver that is not an Element — the "
+                       "member states element_is at its install");
+    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    matched = ev_box_tests_ask(lxb_dom_interface_node(el));
+    DCHECK(matched || layout_job_drive_spent(&d),
+           "a CSSOM VIEW §6 member's box tests parked an author match with the drive's allowance unspent, so its "
+           "next activation would ask the same thing over the same state for ever");
+    layout_job_drive_end(&d);
+    rest_unit_end();
+    if (matched) {
+        ev_target(hdr->this_val, &t);
+        *presult = ev_get_member(ctx, &t, (ElementViewMember)idl_step_magic(hdr));
+    }
+    layout_job_leave(s->job);
+    if (layout_job_declined(s->job)) {
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
+    if (!matched) {
+        layout_job_rested(s->job);
+        return JS_STEP_YIELD;
+    }
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl EV_VIEW_STEP = {
+    js_ev_view_step, sizeof(EvViewState), ev_view_visit, NULL,
+    "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollTop / scrollLeft / scrollWidth / scrollHeight / "
+    "clientTop / clientLeft",
+    EV_VIEW_STEPS
+};
+static int g_id_view[EV_CLIENT_LEFT + 1] = { -1, -1, -1, -1, -1, -1 };
 
 /* §4's `ScrollToOptions`, WHICH §6's THREE MEMBERS TAKE — declared where they are declared, because a
    dictionary is part of the TYPE of the argument that names it and this is the only member list that carries
@@ -1891,6 +1984,10 @@ void element_view_init(JSContext *ctx)
     idl_this_iface(element_is, "Element");
     g_id_scroll          = ev_declare_scroll(ctx, EV_SCROLL_ABSOLUTE);
     g_id_scroll_by       = ev_declare_scroll(ctx, EV_SCROLL_RELATIVE);
+    for (int m = EV_SCROLL_TOP; m <= EV_CLIENT_LEFT; m++) {
+        g_id_view[m] = idl_getter_id_step(ctx, &EV_VIEW_STEP, m);
+        idl_this_iface(element_is, "Element");
+    }
     g_id_client_width = idl_getter_id_step(ctx, &EV_CLIENT_STEP, EV_CLIENT_WIDTH);
     idl_this_iface(element_is, "Element");
     g_id_client_height = idl_getter_id_step(ctx, &EV_CLIENT_STEP, EV_CLIENT_HEIGHT);
@@ -1918,22 +2015,15 @@ void element_view_install(JSContext *ctx, JSValueConst proto)
     DCHECK(g_id_set_scroll_top >= 0,
            "§6's members were installed in a realm before element_view_init declared their setters — the "
            "component declares once per agent and installs from the cached ids");
-    /* WEB IDL §3.7.6 "Attributes"' RECEIVER TEST, STATED HERE AND PERFORMED BEFORE js_ev_get RUNS. §6's
-       members are a `partial interface Element`, so the interface the receiver must implement is Element and
-       the predicate is core/dom/element.h's own `element_is` — the same answer the six operations below
-       declare through idl_this_iface, so this file's attributes and its operations cannot come apart. */
-    idl_install_accessor_this(ctx, proto, "scrollTop",    js_ev_get, EV_SCROLL_TOP,    g_id_set_scroll_top,
-                              element_is, "Element");
-    idl_install_accessor_this(ctx, proto, "scrollLeft",   js_ev_get, EV_SCROLL_LEFT,   g_id_set_scroll_left,
-                              element_is, "Element");
-    idl_install_accessor_this(ctx, proto, "scrollWidth",  js_ev_get, EV_SCROLL_WIDTH,  -1,
-                              element_is, "Element");
-    idl_install_accessor_this(ctx, proto, "scrollHeight", js_ev_get, EV_SCROLL_HEIGHT, -1,
-                              element_is, "Element");
-    idl_install_accessor_this(ctx, proto, "clientTop",    js_ev_get, EV_CLIENT_TOP,    -1,
-                              element_is, "Element");
-    idl_install_accessor_this(ctx, proto, "clientLeft",   js_ev_get, EV_CLIENT_LEFT,   -1,
-                              element_is, "Element");
+    /* Web IDL §3.7.6 "Attributes"' receiver test is declared with each getter (idl_this_iface over
+       core/dom/element.h's `element_is`, as §6 is a `partial interface Element`), the same answer the
+       operations below declare, so this file's attributes and its operations cannot come apart. */
+    idl_install_accessor_step(ctx, proto, "scrollTop", g_id_view[EV_SCROLL_TOP], g_id_set_scroll_top);
+    idl_install_accessor_step(ctx, proto, "scrollLeft", g_id_view[EV_SCROLL_LEFT], g_id_set_scroll_left);
+    idl_install_accessor_step(ctx, proto, "scrollWidth", g_id_view[EV_SCROLL_WIDTH], -1);
+    idl_install_accessor_step(ctx, proto, "scrollHeight", g_id_view[EV_SCROLL_HEIGHT], -1);
+    idl_install_accessor_step(ctx, proto, "clientTop", g_id_view[EV_CLIENT_TOP], -1);
+    idl_install_accessor_step(ctx, proto, "clientLeft", g_id_view[EV_CLIENT_LEFT], -1);
     idl_install_accessor_step(ctx, proto, "clientWidth", g_id_client_width, -1);
     idl_install_accessor_step(ctx, proto, "clientHeight", g_id_client_height, -1);
     idl_install_method(ctx, proto, "getClientRects", g_id_client_rects);
@@ -1958,4 +2048,5 @@ void element_view_free(void)
     g_id_set_scroll_top = g_id_set_scroll_left = -1;
     g_id_client_rects = g_id_bounding_rect = -1;
     g_id_scroll = g_id_scroll_by = g_id_scroll_into_view = -1;
+    for (int m = EV_SCROLL_TOP; m <= EV_CLIENT_LEFT; m++) g_id_view[m] = -1;
 }
