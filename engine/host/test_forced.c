@@ -1130,6 +1130,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/gridsizing.h"
 #include "fixture/insetpct.h"
 #include "fixture/floatplace.h"
+#include "fixture/clearance.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1610,6 +1611,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "gridsizing", HTML_GRIDSIZING },
     { "insetpct", HTML_INSETPCT },
     { "floatplace", HTML_FLOATPLACE },
+    { "clearance", HTML_CLEARANCE },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -14645,6 +14647,84 @@ TF_UNIT void probes_floatplace(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `clearance` document (fixture/clearance.h). */
+TF_UNIT void probes_clearance(const char *js, Probe *tab, int *n) {
+    const char *cl_why = NULL; int cl_reached = !!strstr(js, "\"/api/clearance\"");
+    const char *cl_p_why = NULL; int cl_p_tt = 1;
+    const char *cl_h_why = NULL; int cl_h_tt = 1;
+
+    fold_row(&cl_reached, &cl_why, cl_reached,
+             "NOT REACHED: there is no /api/clearance record at all, so the document aborted before its fetch");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb1", "30"),
+             "CSS 2.2 §9.5.2: kb1 (below a left float) is not 30px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb2", "40"),
+             "CSS 2.2 §9.5.2: kb2 (`clear: both` below two floats its container holds)"
+             " is not 40px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kn2", "40"),
+             "CSS 2.2 §9.5.2: kn2 (the box after the cleared one) is not 40px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb3", "40"),
+             "CSS 2.2 §9.5.2: kb3 (clearance absorbing a 100px top margin while its container's margin escapes)"
+             " is not 40px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb4", "40"),
+             "CSS 2.2 §9.5.2: kb4 (clearance while its container's margin escapes)"
+             " is not 40px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb5", "60"),
+             "CSS 2.2 §9.5.2: kb5 (clearance after collapsed margins) is not 60px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kn5", "77"),
+             "CSS 2.2 §9.5.2: kn5 (the box after the cleared one) is not 77px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb6", "35"),
+             "CSS 2.2 §9.5.2: kb6 (clearance after collapsed margins above a short float)"
+             " is not 35px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb7", "0"),
+             "CSS 2.2 §9.5.2: kb7 (`clear: left` beside only a right float, which has no clearance)"
+             " is not 0px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kc7", "30"),
+             "CSS 2.2 §9.5.2: kc7 (`clear: right` below a right float) is not 30px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb8", "40"),
+             "CSS 2.2 §9.5.2: kb8 (an empty box with clearance) is not 40px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kn8", "60"),
+             "CSS 2.2 §9.5.2: kn8 (the box after an empty box with clearance) is not 60px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb9", "60"),
+             "CSS 2.2 §9.5.2: kb9 (no clearance where the collapsed margins already put the box below the float)"
+             " is not 60px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb10", "80"),
+             "CSS 2.2 §9.5.2: kb10 (clearance absorbing a 40px top margin) is not 80px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kn10", "95"),
+             "CSS 2.2 §9.5.2: kn10 (the box after the cleared one, its margins collapsing with the cleared box's bottom margin)"
+             " is not 95px below its container's top");
+    fold_row(&cl_p_tt, &cl_p_why, param_value_is(js, "/api/clearance", "kb11", "35"),
+             "CSS 2.2 §9.5.2: kb11 (`clear: right` below a float its container holds beside an earlier left float)"
+             " is not 35px below its container's top");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k1h", "40"),
+             "CSS 2.2 §10.6.7: k1's auto height is not 40px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k2h", "50"),
+             "CSS 2.2 §10.6.7: k2's auto height is not 50px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k3h", "50"),
+             "CSS 2.2 §10.6.7: k3's auto height is not 50px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k4h", "50"),
+             "CSS 2.2 §10.6.7: k4's auto height is not 50px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k5h", "87"),
+             "CSS 2.2 §10.6.7: k5's auto height is not 87px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k6h", "45"),
+             "CSS 2.2 §10.6.7: k6's auto height is not 45px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k7h", "40"),
+             "CSS 2.2 §10.6.7: k7's auto height is not 40px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k8h", "70"),
+             "CSS 2.2 §10.6.7: k8's auto height is not 70px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k9h", "70"),
+             "CSS 2.2 §10.6.7: k9's auto height is not 70px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k10h", "105"),
+             "CSS 2.2 §10.6.7: k10's auto height is not 105px");
+    fold_row(&cl_h_tt, &cl_h_why, param_value_is(js, "/api/clearance", "k11h", "45"),
+             "CSS 2.2 §10.6.7: k11's auto height is not 45px");
+    const Probe rows[] = {
+        { "clearance-position", cl_reached && cl_p_tt, "/api/clearance", SESS_EXPLORE, cl_reached ? cl_p_why : cl_why },
+        { "clearance-context-height", cl_reached && cl_h_tt, "/api/clearance", SESS_EXPLORE,
+          cl_reached ? cl_h_why : cl_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -19268,6 +19348,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_gridsizing(js, probes, &np);
     probes_insetpct(js, probes, &np);
     probes_floatplace(js, probes, &np);
+    probes_clearance(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

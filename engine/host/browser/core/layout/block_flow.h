@@ -62,8 +62,8 @@
  *     §9.5.2's `clear` on a box of this stack introduces
  *     CLEARANCE, which §8.3.1 makes non-adjoining and which is measured from the float's bottom outer edge; and
  *     §10.6.7's own rule reaches a floating descendant's bottom margin edge for a container that ESTABLISHES a
- *     formatting context and whose height is `auto`. The first is refused in block_flow.c, the second reads
- *     core/layout/float_placement.h, and the THIRD — §9.4.2's line boxes shortened beside the float — is
+ *     formatting context and whose height is `auto`. Both read core/layout/float_placement.h in block_flow.c,
+ *     and the THIRD — §9.4.2's line boxes shortened beside the float — is
  *     refused in core/layout/line_box.c over the CONTEXT rather than here over a child list.
  *   - A FLEX or GRID container's height is its own spec's, not §10.6.3's walk, and a container whose children
  *     this walk placed would be a wrong number rather than an absent one.

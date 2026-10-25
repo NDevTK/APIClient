@@ -1304,7 +1304,6 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
     return bf_next_block_box(el, after, NULL);
 }
 
-#if APICLIENT_DEV
 /* Whether node `a` precedes node `b` in tree order (DOM §4.2 "Node tree": "preceding ... if A and B are in the
    same tree and A comes before B in tree order"). An ancestor precedes its descendants. */
 static bool bf_precedes(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
@@ -1326,49 +1325,6 @@ static bool bf_precedes(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
     for (x = a->next; x != NULL; x = x->next)
         if (x == b) return true;
     return false;
-}
-#endif
-
-/* CSS 2.2 §9.5.2 "Controlling flow next to floats: the clear property" over this stack: a box with `clear` set
-   below a float of its context moves down by clearance, which "inhibits margin collapsing and acts as spacing
-   above the margin-top of an element", so every position below it on the stack moves with it. It answers false
-   ("not yet") when the float search held its place for a resting drive.
-   Named residual. Not covered: §9.5.2 considers only floats "earlier in the source document" and not "floats
-   inside the element itself or in other block formatting contexts", so this refuses a box whose only float in
-   the context comes after it, where the clearance is zero and the walk is already right. Next: the clearance
-   itself, the float's bottom outer edge from core/layout/float_placement.h against the box's hypothetical
-   position. How its absence shows: this abort firing for a stack where no float precedes the box with `clear`
-   set. */
-static bool bf_require_no_clearance(lxb_dom_element_t *el)
-{
-#if APICLIENT_DEV
-    lxb_dom_element_t *fl;
-    lxb_dom_node_t *b, *cleared = NULL;
-    char nbuf[160], fbuf[160], ebuf[160], vbuf[64];
-
-    /* The `clear` test comes first because it is false for almost every container, and the float search is a
-       walk of the whole formatting context. §9.5.2 applies to "block-level elements", so the anonymous runs are
-       skipped. */
-    for (b = block_flow_next_block_box(el, NULL); b != NULL; b = block_flow_next_block_box(el, b)) {
-        if (b->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        if (!css_computed_keyword_is(lxb_dom_interface_element(b), "clear", CSS_KEYWORD_NONE)) {
-            cleared = b;
-            break;
-        }
-    }
-    if (cleared == NULL) return true;
-    if (!block_flow_context_first_float_ask(el, &fl)) return false;
-    if (fl == NULL) return true;
-    DFAILF("%s, computed `clear` `%s`, in %s: CSS 2.2 §9.5.2 puts this box's top border edge \"below the bottom "
-           "outer edge\" of an earlier float on its side, and %s floats in this box's formatting context. BUILD "
-           "the clearance over core/layout/float_placement.h's placement",
-           box_subject_node(cleared, nbuf, sizeof nbuf),
-           box_subject_computed(lxb_dom_interface_element(cleared), "clear", vbuf, sizeof vbuf),
-           box_subject(el, ebuf, sizeof ebuf), box_subject(fl, fbuf, sizeof fbuf));
-#else
-    (void) el;
-#endif
-    return true;
 }
 
 /* CSS 2.2 §9.5: "The border box of a table, a block-level replaced element, or an element in the normal flow that
@@ -1714,6 +1670,116 @@ static bool bf_float_bottom_ask(lxb_dom_element_t *el, CssPx *bottom, bool *any)
     return true;
 }
 
+/* Whether `a` is `el` or one of its ancestors. */
+static bool bf_is_inclusive_ancestor(const lxb_dom_element_t *a, const lxb_dom_element_t *el)
+{
+    const lxb_dom_node_t *x;
+
+    for (x = lxb_dom_interface_node(el); x != NULL; x = x->parent)
+        if (x == lxb_dom_interface_node(a)) return true;
+    return false;
+}
+
+/* CSS 2.2 §9.5.2 "Controlling flow next to floats: the clear property" for child `ce` of `el`'s stack, whose
+   contribution `b` the walk `w` is about to place. `*cleared` is whether `ce` has clearance and `*top` is then
+   its top border edge in the context root's frame: "the bottom outer edge" of the lowest float it clears. Each
+   value clears floats "that resulted from elements earlier in the source document" on its side, in this block
+   formatting context. Clearance applies when the box's hypothetical position, its top border edge as if `clear`
+   were `none`, is above that edge, and then "inhibits margin collapsing": the box's own top margin collapses with
+   nothing before it. While the run still escapes through `el`'s top edge, the floats `el` holds sit at its top
+   content edge, which with clearance is resolved before `ce`'s margin and without it would include it; so a
+   float `el` holds is beside or below the hypothetical box and always calls for clearance, and that edge is
+   recorded here before the floats are placed. False ("not yet") when a search or placement was deferred. */
+static bool bf_clearance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const BfBox *b, const BfWalk *w,
+                             const FlowBfcEntry *e, bool *has_frame, CssPx *frame_top, bool *cleared, CssPx *top)
+{
+    bool left = false, right = false;
+    bool held_float = false, any = false;
+    lxb_dom_element_t **v;
+    CssPx hyp, bottom = css_px(0.0), frame_clear;
+    size_t n, i, last = 0;
+    char cbuf[160], fbuf[160];
+
+    *cleared = false;
+    /* The computed value is css-page-floats-3 §4's set. `inline-start` and `inline-end` are `left` and `right`
+       under the containing block's `direction`; the block-axis values clear only page floats, of which a CSS 2
+       float is none, so like `none` they clear nothing here. */
+    switch (css_computed_keyword(ce, "clear")) {
+    case CSS_KEYWORD_LEFT:         left = true; break;
+    case CSS_KEYWORD_RIGHT:        right = true; break;
+    case CSS_KEYWORD_BOTH:
+    case CSS_KEYWORD_BOTH_INLINE:  left = right = true; break;
+    case CSS_KEYWORD_INLINE_START: *(used_value_containing_block_is_rtl(ce) ? &right : &left) = true; break;
+    case CSS_KEYWORD_INLINE_END:   *(used_value_containing_block_is_rtl(ce) ? &left : &right) = true; break;
+    case CSS_KEYWORD_NONE:
+    case CSS_KEYWORD_BLOCK_START:
+    case CSS_KEYWORD_BLOCK_END:
+    case CSS_KEYWORD_TOP:
+    case CSS_KEYWORD_BOTTOM:
+    case CSS_KEYWORD_BOTH_BLOCK:   return true;
+    default:
+        DFAILF("%s: computed `clear` is outside css-page-floats-3 §4's set", box_subject(ce, cbuf, sizeof cbuf));
+        return true;
+    }
+    if (!block_flow_context_floats_ask(el, &v, &n)) return false;
+    frame_clear = w->escaping ? bf_frame_top(el, e, w->run) : *frame_top;
+    hyp = w->escaping ? bf_frame_top(el, e, bf_run_merge(w->run, b->top))
+                      : css_px_add(css_px_add(*frame_top, w->pos), bf_run_value(bf_run_merge(w->run, b->top)));
+    /* `last` ends the floats this box clears and every float before them, which placing them places. */
+    for (i = 0; i < n && bf_precedes(lxb_dom_interface_node(v[i]), lxb_dom_interface_node(ce)); i++) {
+        if (!(block_flow_float_is_right(v[i]) ? right : left)) continue;
+        last = i + 1;
+        if (w->escaping && block_flow_static_position_containing_block(v[i]) == el) held_float = true;
+    }
+    if (held_float && !*has_frame) {
+        flow_placement_bfc_frame_record(el, frame_clear);
+        *frame_top = frame_clear;
+        *has_frame = true;
+    }
+    /* Placing a float places every float before it, and one whose containing block is an ancestor still
+       resolving its top edge (its margins escaping into the walk placing this box) waits for that edge. */
+    for (i = 0; i < last; i++) {
+        lxb_dom_element_t *fcb = block_flow_static_position_containing_block(v[i]);
+        FlowFloatBox fb;
+        CssPx unused;
+
+        if (flow_placement_float_box_peek(v[i], &fb) || !bf_is_inclusive_ancestor(fcb, el) ||
+            flow_placement_bfc_frame_peek(fcb, &unused))
+            continue;
+        DFAILF("%s has `clear` set after %s, whose containing block's top content edge is not resolved yet. BUILD "
+               "the float's placement deferred to where that edge resolves", box_subject(ce, cbuf, sizeof cbuf),
+               box_subject(v[i], fbuf, sizeof fbuf));
+        free(v);
+        return true;
+    }
+    DCHECKF(!w->escaping || !*has_frame || css_px_sub(*frame_top, frame_clear).px == 0.0,
+            "%s: its walk recorded a top content edge for its parent while the margins still escaped, and not the "
+            "one clearance resolves", box_subject(ce, cbuf, sizeof cbuf));
+    for (i = 0; i < last; i++) {
+        FlowFloatBox fb;
+        CssPx edge;
+
+        if (!(block_flow_float_is_right(v[i]) ? right : left)) continue;
+        if (!float_placement_ask(v[i], &fb)) {
+            free(v);
+            return false;
+        }
+        edge = css_px_add(fb.top, fb.height);
+        bottom = any ? css_px_max(bottom, edge) : edge;
+        any = true;
+    }
+    free(v);
+    if (!any || (!held_float && hyp.px >= bottom.px)) return true;
+    if (!*has_frame) {
+        flow_placement_bfc_frame_record(el, frame_clear);
+        *frame_top = frame_clear;
+        *has_frame = true;
+    }
+    *cleared = true;
+    *top = bottom;
+    return true;
+}
+
 /* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container: the body of
    the LAYOUT_Q_BF_WALK question at `body`, which it stages on "not yet" and continues on its next run. It
    answers the box's own reduction and writes what its other readers take from it into flow_placement.h's
@@ -1900,6 +1966,8 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
         lxb_dom_element_t *ce = NULL;
         BlockFlowRun anon_run;
         BfBox b;
+        bool cleared = false;
+        CssPx clear_top = css_px(0.0);
 
         anon_run.after = w.prev;
         anon_run.end = w.brk;
@@ -1955,11 +2023,34 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             if (held) bf_entry_write(el, ce, &w, &entry, has_frame, frame_top);
             if (!bf_box(ce, pass, &b))
                 return bf_walk_stage(body, el, &w, &out);   /* "not yet": a question beneath was deferred */
+            if (held && !bf_clearance_ask(el, ce, &b, &w, &entry, &has_frame, &frame_top, &cleared, &clear_top))
+                return bf_walk_stage(body, el, &w, &out);
             w.prev = w.brk;
             w.brk = bf_next_block_box(el, w.prev, &w.run_inline);
             w.at_run = true;
         } else {
             break;
+        }
+        /* §9.5.2's clearance: the margins met before the box resolve where they stand, the box's top border edge
+           is the cleared floats' bottom outer edge, and its own top margin collapses with nothing. A box that
+           would collapse through is placed as an empty box there. */
+        if (cleared) {
+            if (w.escaping) {
+                w.esc_run = w.run;
+                w.escaping = false;
+            }
+            DCHECKF(!b.collapse_through || (b.bottom.pos.px == 0.0 && b.bottom.neg.px == 0.0),
+                    "%s has clearance and collapses through with margins. BUILD CSS 2.1 §8.3.1's rule for them: "
+                    "\"the top border edge of the box is defined to be the same as the parent's\" does not hold, "
+                    "and its bottom margin collapses with what follows but not with its parent's bottom margin",
+                    box_subject(ce, nbuf, sizeof nbuf));
+            w.pos = css_px_sub(clear_top, frame_top);
+            w.run = bf_run_empty();
+            b.top = bf_run_empty();
+            if (b.collapse_through) {
+                b.collapse_through = false;
+                b.bottom = bf_run_empty();
+            }
         }
         /* §8.3.1's second adjoining pair — "bottom margin of box and top margin of its next in-flow following
            sibling" — and its first, "top margin of a box and top margin of its first in-flow child": both are
@@ -2098,10 +2189,9 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
         w.placed = true;
     }
     free(wl);
-    /* §9.5.2's refusal and §10.6.7's float bottoms, asked once the stack is laid out so that a search or a
-       placement a resting drive stops is staged at the loop's end and resumed there. A wrapper's members are the
-       table box and captions, each a formatting context root, so no float is on its stack. */
-    if (!wrapper && !bf_require_no_clearance(el)) return bf_walk_stage(body, el, &w, &out);
+    /* §10.6.7's float bottoms, asked once the stack is laid out so that a search or a placement a resting drive
+       stops is staged at the loop's end and resumed there. A wrapper's members are the table box and captions,
+       each a formatting context root, so no float is on its stack. */
     if (held && !has_frame) flow_placement_bfc_frame_record(el, bf_frame_top(el, &entry, w.run));
     if (!wrapper && auto_h && bf_is_context_root(el) &&
         !bf_float_bottom_ask(el, &float_bottom, &has_float_bottom))
