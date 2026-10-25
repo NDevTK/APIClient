@@ -1177,6 +1177,9 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparsesub.h"
 #include "fixture/spaniso.h"
 #include "fixture/fileparseset.h"
+#include "fixture/mrkeys.h"
+#include "fixture/mruid.h"
+#include "fixture/mrconsole.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1683,6 +1686,9 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-sub", HTML_FILEPARSE_SUB },
     { "spaniso", HTML_SPANISO },
     { "fileparse-set", HTML_FILEPARSE_SET },
+    { "mrkeys", HTML_MRKEYS },
+    { "mruid", HTML_MRUID },
+    { "mrconsole", HTML_MRCONSOLE },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16283,6 +16289,32 @@ TF_UNIT void probes_fileparse_set(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `mrkeys`, `mruid` and `mrconsole` documents (fixture/mrkeys.h, mruid.h, mrconsole.h): each
+   Math.random() call is its own unknown, so two calls are two property keys and one value is one, Number's
+   toString derives over an unknown receiver, and console's %s/%d substitute an unknown. */
+TF_UNIT void probes_mathrandom(const char *js, Probe *tab, int *n) {
+    const char *k_why = NULL; int k_tt = 1;
+    fold_row(&k_tt, &k_why, !!strstr(js, "\"/api/mrk-keys\""),
+             "NOT REACHED: there is no /api/mrk-keys record, so the document aborted naming its random keys");
+    fold_row(&k_tt, &k_why, param_value_is(js, "/api/mrk-keys", "n", "2"),
+             "the two closure-style keys over two Math.random() calls did not make two own properties");
+    fold_row(&k_tt, &k_why, param_value_is(js, "/api/mrk-keys", "ex", "3"),
+             "the expando written on two objects through one value did not read back as one key each");
+    const char *u_why = NULL; int u_tt = 1;
+    fold_row(&u_tt, &u_why, param_value_is(js, "/api/mru-built", "n", "2"),
+             "no /api/mru-built?n=2 record: core-js's uncurried Number.prototype.toString over an unknown receiver "
+             "threw, or its two uids keyed one property");
+    const char *c_why = NULL; int c_tt = 1;
+    fold_row(&c_tt, &c_why, !!strstr(js, "\"/api/mrc-logged\""),
+             "no /api/mrc-logged record: console.log's %s/%d over an unknown did not complete");
+    const Probe rows[] = {
+        { "mrk-keys", k_tt, "/api/mrk-keys", SESS_EXPLORE, k_why },
+        { "mru-built", u_tt, "/api/mru-built", SESS_EXPLORE, u_why },
+        { "mrc-logged", c_tt, "/api/mrc-logged", SESS_EXPLORE, c_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20552,6 +20584,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_sub(js, probes, &np);
     probes_spaniso(js, probes, &np);
     probes_fileparse_set(js, probes, &np);
+    probes_mathrandom(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
