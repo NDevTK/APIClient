@@ -115,8 +115,9 @@ function docWitness(row, f) {
     return f + " states may-rest-on and no witness holds a pin";
   return null;
 }
-/* The per-row facts solver/endpoint.c writes as tokens, and `addressRoot`, whose domain is null, false or a
-   non-empty string. A key is stated on every row or on none, since one instance emits one document shape. */
+/* The per-row facts solver/endpoint.c writes as tokens; `addressRoot`, whose domain is null, false or a
+   non-empty string; and `attackerRooted`, false or `{address}`. A key is stated on every row or on none, since
+   one instance emits one document shape. */
 const ENDPOINT_FACT_KEYS = Object.freeze(["door", "mintedAt", "addressClass", "razorClass", "witnessClass"]);
 function docEndpointRow(row, f) {
   if (!docIsRecord(row)) return f + " is not an object";
@@ -124,12 +125,16 @@ function docEndpointRow(row, f) {
     if (k in row && !docIsName(row[k])) return f + "." + k + " is not a non-empty string";
   if ("addressRoot" in row && row.addressRoot !== null && row.addressRoot !== false && !docIsName(row.addressRoot))
     return f + ".addressRoot is none of null, false or a non-empty string";
+  if ("attackerRooted" in row && row.attackerRooted !== false &&
+      !(docIsRecord(row.attackerRooted) && Object.keys(row.attackerRooted).join(",") === "address" &&
+        docIsName(row.attackerRooted.address)))
+    return f + ".attackerRooted is neither false nor {address: a non-empty string}";
   return "witness" in row ? docWitness(row, f) : null;
 }
 function docEndpoints(rows) {
   const why = docArray(rows, "fetchCallSites") || docEach(rows, "fetchCallSites", docEndpointRow);
   if (why !== null) return why;
-  for (const k of [...ENDPOINT_FACT_KEYS, "addressRoot", "witness"]) {
+  for (const k of [...ENDPOINT_FACT_KEYS, "addressRoot", "attackerRooted", "witness"]) {
     const stated = rows.filter((r) => k in r).length;
     if (stated !== 0 && stated !== rows.length)
       return "fetchCallSites states `" + k + "` on " + stated + " of " + rows.length + " rows";

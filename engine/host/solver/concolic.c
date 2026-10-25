@@ -2550,6 +2550,16 @@ void concolic_principal_preds(void (*cb)(void *user, const char *src, const Conc
     }
 }
 
+int concolic_root_delivered_any(const char *root)
+{
+    const char *p;
+    size_t n;
+
+    for (int i = 0; root_member(root, i, &p, &n); i++)
+        if (src_row(p, n) >= 0) return 1;
+    return 0;
+}
+
 int concolic_source_delivery(const char *root, const char **kind, char *prefix)
 {
     int row = root_declared_row(root);

@@ -108,6 +108,10 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     `addr_class == EPA_CONCRETE` and the second is not, so the class on the same row tells them
                     apart, which is why the emit spells NULL in two JSON types. */
                  char *addr_root;
+                 /* The delivery root of the first sighting whose address an attacker source roots on a path no
+                    act of this tool stands on, which makes the record security-relevant; NULL while there is none.
+                    Raised once and never cleared, the max-merge `addr_class` takes. */
+                 char *atk_addr_root;
                  /* The body this engine had no field reader for (endpoint.h): set only where `body_params` named
                     nothing, so never a second spelling of `params`' fields, and never overwritten, since a request
                     body is one example. Exactly one of two fields is set: `body_b64` is bytes the request sends, a
@@ -2040,6 +2044,16 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
     free(path); free(vm); free(vp); free(vc);
 }
 
+/* Mark `e` security-relevant with the root of the sighting that made it so (see the struct). The root is copied:
+   the caller's copy may move to `addr_root` on the same call. */
+static void endpoint_mark_attacker_rooted(Endpoint *e, const char *root) {
+    DCHECK(e->atk_addr_root == NULL && root != NULL,
+           "a record was marked attacker-rooted twice, or with no root — the mark is raised once, by the first "
+           "sighting that carries one");
+    e->atk_addr_root = strdup(root);
+    CHECK(e->atk_addr_root, "endpoint: OOM copying the root that marks a record security-relevant");
+}
+
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                      const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int driven,
                      int door) {
@@ -2176,6 +2190,16 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                CHECK(aroot, "endpoint: OOM copying an address's delivery root — the record would carry a "
                             "class derived from a provenance it cannot name, and this surface's own reader "
                             "would report the address as one this engine attributed to nothing"); } }
+    /* Whether this sighting makes the record security-relevant: an attacker source roots its address and no act
+       of this tool stands on its path. `driven` is that second fact (flow_path_driven: a drive of uncalled code,
+       a modelled victim act, a candidate run, or a delivery from one). A drive is API learning, and the page's
+       own control sending its request is the person's ask. Path-wise is exact: forced execution also reaches a
+       request that does not depend on an act on a sibling path without it, where the record is marked, so no
+       act-causality tracker is needed. */
+    int atk = aroot != NULL && driven == 0 && concolic_root_delivered_any(aroot);
+    DCHECK(!atk || acls != EPA_CONCRETE,
+           "an address whose root names a declared attacker source was classed concrete — the root is read off "
+           "the same concolic value address_class_of classes, so one of the two misread it");
     /* Path, then query, then body: the order a request is written in and the identity compares in. The path is
        re-spelled by the scan (see path_scan), and the re-spelled one becomes the endpoint's `url`, because the
        params are named in its grammar. The example is aligned against both halves of the address, so a hole in a
@@ -2230,6 +2254,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                spelling, which for a concolic address is its shape and for a determined one its bytes, so sightings
                here may disagree about the class. The delivery root moves with the class on this line and nowhere
                else, so the two are always one sighting's. */
+            if (atk && !g_eps[i].atk_addr_root) endpoint_mark_attacker_rooted(&g_eps[i], aroot);
             if (acls > g_eps[i].addr_class) {
                 g_eps[i].addr_class = acls;
                 free(g_eps[i].addr_root);
@@ -2276,6 +2301,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* And the provenance that class was derived from, transferred rather than copied, since class and root are one
        sighting's fact (see the struct); the `done:` arm frees this local only where no record took it. NULL is the
        value's own answer, never a declined allocation (the CHECK at the read). */
+    if (atk) endpoint_mark_attacker_rooted(e, aroot);
     e->addr_root = aroot; aroot = NULL;
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because
        `EPW_UNASKED` happens to be zero, and the list's order is a later diff's to change. */
@@ -3158,6 +3184,10 @@ char *endpoint_json_array(void) {
         if (e->addr_class == EPA_CONCRETE)   json_buf_raw(&b, "null");
         else if (!e->addr_root)              json_buf_raw(&b, "false");
         else                                 json_buf_str(&b, e->addr_root);
+        json_buf_raw(&b, ","); json_buf_key(&b, "attackerRooted");
+        if (!e->atk_addr_root) json_buf_raw(&b, "false");
+        else { json_buf_raw(&b, "{"); json_buf_key(&b, "address"); json_buf_str(&b, e->atk_addr_root);
+               json_buf_raw(&b, "}"); }
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");
@@ -3312,6 +3342,7 @@ void endpoint_free(void) {
         free(g_eps[i].body_mime); free(g_eps[i].body_b64); free(g_eps[i].body_shape);
         free(g_eps[i].body_example_b64);
         free(g_eps[i].addr_root);
+        free(g_eps[i].atk_addr_root);
         for (int j = 0; j < g_eps[i].np; j++) {
             free(g_eps[i].params[j].name);
             for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]);

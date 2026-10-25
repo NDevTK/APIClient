@@ -1157,6 +1157,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/storedxss.h"
 #include "fixture/windowname.h"
 #include "fixture/twinread.h"
+#include "fixture/requestsink.h"
 #include "fixture/clobber.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
@@ -1686,6 +1687,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "joincompose", HTML_JOINCOMPOSE },
     { "twinread", HTML_TWINREAD },
     { "onceread", HTML_ONCEREAD },
+    { "requestsink", HTML_REQUESTSINK },
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
@@ -15505,6 +15507,65 @@ TF_UNIT void probes_twinread(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+static int fcs_has(const char *js, const char *needle);
+
+/* How the records of the one address beginning `prefix` state `attackerRooted`: `*seen` is the record count,
+   `*marked` how many carry the mark, `*plain` how many state `false`. */
+static void rq_marks(const char *js, const char *prefix, int *seen, int *marked, int *plain) {
+    EmittedRec r[EMITTED_REC_MAX];
+    static const char mk[] = "\"attackerRooted\":{\"address\":", pl[] = "\"attackerRooted\":false";
+    int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX), i;
+
+    *seen = n; *marked = 0; *plain = 0;
+    for (i = 0; i < n; i++) {
+        *marked += memmem(r[i].b, r[i].n, mk, sizeof mk - 1) != NULL;
+        *plain += memmem(r[i].b, r[i].n, pl, sizeof pl - 1) != NULL;
+    }
+}
+
+/* The rows of the `requestsink` document (fixture/requestsink.h): the engine's security-relevant mark on a
+   request record. Marked where an attacker source roots the address on a path no act of this tool stands on;
+   plain where only a drive reaches the request (a click listener, a never-called function) or only stored state
+   roots it. The zone's can-change-nothing predicate is not the engine's, so the uncredentialed rows carry the
+   engine's mark here. */
+TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
+    static const char *const marked_at[3] = { "/api/users/", "https://rq-other.test/q", "/api/rq-pinned" };
+    static const char *const plain_at[3] = { "/api/drafts/", "/api/rq-orphan/", "/api/rq-store" };
+    const char *mk_why[3] = { NULL, NULL, NULL }, *pr_why[3] = { NULL, NULL, NULL }, *pl_why[3] = { NULL, NULL, NULL };
+    int mk_tt[3] = { 1, 1, 1 }, pr_tt[3] = { 1, 1, 1 }, pl_tt[3] = { 1, 1, 1 }, i, seen, marked, plain;
+    const char *to_why = NULL; int to_tt = 1;
+
+    fold_row(&to_tt, &to_why, fcs_has(js, "\"attackerRooted\":{\"address\":\"" LOCATION_HASH_SRC "\"}"),
+             "no request record is marked with the fragment as its root, so the credentialed fetch to an address "
+             "the fragment supplies was not read as attacker-rooted");
+    for (i = 0; i < 3; i++) {
+        rq_marks(js, marked_at[i], &seen, &marked, &plain);
+        fold_row(&mk_tt[i], &mk_why[i], seen > 0, "NOT REACHED: there is no record of this address");
+        fold_row(&mk_tt[i], &mk_why[i], marked > 0,
+                 "no record of this address carries the mark, though a query value roots it on the page's own path");
+        rq_marks(js, plain_at[i], &seen, &marked, &plain);
+        fold_row(&pr_tt[i], &pr_why[i], seen > 0, "NOT REACHED: there is no record of this address");
+        fold_row(&pl_tt[i], &pl_why[i], seen > 0 && marked == 0 && plain == seen,
+                 i == 2 ? "a record rooted only in stored state carries the mark, so a precondition was read as an "
+                          "attacker source"
+                        : "a record only a drive reaches carries the mark, so this tool's own act was read as the "
+                          "page's");
+    }
+    const Probe rows[] = {
+        { "rq-to-marked", to_tt, "rqTo", SESS_EXPLORE, to_why },
+        { "rq-id-marked", mk_tt[0], "rqId", SESS_EXPLORE, mk_why[0] },
+        { "rq-other-marked", mk_tt[1], "rqH", SESS_EXPLORE, mk_why[1] },
+        { "rq-pinned-marked", mk_tt[2], "rqP", SESS_EXPLORE, mk_why[2] },
+        { "rq-click-reached", pr_tt[0], "rqDel", SESS_EXPLORE, pr_why[0] },
+        { "rq-click-plain", pl_tt[0], "rqDel", SESS_EXPLORE, pl_why[0], .reach = "rq-click-reached" },
+        { "rq-orphan-reached", pr_tt[1], "rqNeverCalled", SESS_EXPLORE, pr_why[1] },
+        { "rq-orphan-plain", pl_tt[1], "rqNeverCalled", SESS_EXPLORE, pl_why[1], .reach = "rq-orphan-reached" },
+        { "rq-storage-reached", pr_tt[2], "rqStored", SESS_EXPLORE, pr_why[2] },
+        { "rq-storage-plain", pl_tt[2], "rqStored", SESS_EXPLORE, pl_why[2], .reach = "rq-storage-reached" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowname` document (fixture/windowname.h): per sink, the write is reached tainted by
    `window.name`, and the fired PoC states a delivery for it that is not this document's address. */
 TF_UNIT void probes_windowname(const char *js, Probe *tab, int *n) {
@@ -20290,6 +20351,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_dynfuncsink(js, probes, &np);
     probes_joincompose(js, probes, &np);
     probes_twinread(js, probes, &np);
+    probes_requestsink(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);

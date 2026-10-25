@@ -738,6 +738,10 @@ const char *concolic_source_precondition(const char *root);
    constraint as the whole of one; the mechanism to build is one candidate per declaring member, each with its
    own envelope, and the one that fires is the one emitted. */
 int         concolic_source_delivery(const char *root, const char **kind, char *prefix);
+/* Does any member of `root` name a source declared with a browser delivery? 0 for NULL. The quantifier a record
+   asks to learn whether an attacker source roots it at all, so two declaring members answer 1 rather than
+   crashing as concolic_source_delivery does, which must name one member's envelope. */
+int         concolic_root_delivered_any(const char *root);
 /* The URL §5.2 serialization of the tuple name a root's payload rides as the value of, or NULL where the
    payload is the component's own bytes (concolic_new_urlencoded_value). */
 const char *concolic_source_delivery_key(const char *root);

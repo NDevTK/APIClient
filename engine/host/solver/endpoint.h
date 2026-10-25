@@ -381,7 +381,7 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        (a boolean: the sighting was minted inside a drive of a function the page never called); `door`;
        `mintedAt` (`pre-program`|`post-program`); `addressClass`; `razorClass`; `witnessClass`; `witness`
        (below); `addressRoot` (null for a `concrete` address, false when the value has no root, else the
-       root's name); `params`; and `headers` (an object, present only when some header was seen).
+       root's name); `attackerRooted` (below); `params`; `headers` (an object, only when a header was seen).
    Every class key is always present, since its words are exhaustive. `provenance` is the record's, its grade
    being part of the identity: `derived` is the headline claim (the app's code computes a request no session
    sent), `observed` a real load of the document, and `forced` an address that exists only because a gate was
@@ -389,6 +389,8 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    `url`: extension/lib/learn.js mints `{path_*}` holes from live traffic into addresses it reads `concrete`
    for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, which `razorClass` already
    composes, so a consumer reading the bar as `!= "concrete"` over-claims. */
+/* `attackerRooted`: false, or `{address}` naming the root of the first sighting whose address an attacker
+   source rooted on a path no act of this tool stands on, which marks the record security-relevant. */
 /* `witness`: one element per distinct sighting witness, never a union of two (it would state a combination no
    flow assumed), never empty. An element is `null` where no flow stood (`witnessClass` `unasked`), else
    `{assumed, verification}`, `assumed` being the minting flow's assumptions at the act, sorted by kind then
