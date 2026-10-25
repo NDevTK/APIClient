@@ -1199,6 +1199,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbscopeown.h"
 #include "fixture/fparecjson.h"
 #include "fixture/idbkeypath.h"
+#include "fixture/idbkpwalk.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1729,6 +1730,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbscopeown", HTML_IDBSCOPEOWN },
     { "fparecjson", HTML_FPARECJSON },
     { "idbkeypath", HTML_IDBKEYPATH },
+    { "idbkpwalk", HTML_IDBKPWALK },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16729,6 +16731,27 @@ TF_UNIT void probes_idbkeypath(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, 6);
 }
 
+/* The rows of the `idbkpwalk` document (fixture/idbkpwalk.h): a put into a store whose key path is unknown runs
+   one world per member of the value the key path can name, and the world where it names none. */
+TF_UNIT void probes_idbkpwalk(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *got, *why; } R[] = {
+        { "idbkw-id", "7", "no /api/idbkw-put?got=7 record: no arm took the key path as the value's `id`" },
+        { "idbkw-name", "nm", "no /api/idbkw-put?got=nm record: no arm took the key path as the value's `name`" },
+        { "idbkw-length", "2", "no /api/idbkw-put?got=2 record: no arm took the key path as `name.length`" },
+        { "idbkw-none", "DataError", "no /api/idbkw-put?got=DataError record: no arm took the key path as "
+          "naming no member of the value" },
+    };
+    Probe rows[4];
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        const char *why = NULL; int tt = 1;
+        fold_row(&tt, &why, param_value_is(js, "/api/idbkw-put", "got", R[i].got), R[i].why);
+        rows[i] = (Probe){ R[i].row, tt, "/api/idbkw-put", SESS_EXPLORE, why };
+    }
+    probes_append(tab, n, rows, 4);
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -21142,6 +21165,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbscopeown(js, probes, &np);
     probes_fparecjson(js, probes, &np);
     probes_idbkeypath(js, probes, &np);
+    probes_idbkpwalk(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
