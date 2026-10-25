@@ -7259,6 +7259,9 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
 
     JSValue result = concolic_derived_shaped(ctx, shape, src, root, derived_root_whose(ops, 2), ident, example,
                                              string_arm);   /* consumes example and ident */
+    /* A sum or concatenation is never the source it inherits `src` from, though `x + ""` spells exactly x's
+       shape, which concolic_alloc reads as owning: an equality over it must not pin or narrow x. */
+    if (concolic_is(result)) ((Concolic *)JS_GetOpaque(result, g_concolic_class))->src_own = 0;
     if (af) aff_attach(result, af);
     if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
     /* §13.15.3 answers a String, a Number or a BigInt; the numeric arm is a Number unless both operands may be
