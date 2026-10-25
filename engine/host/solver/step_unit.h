@@ -184,6 +184,7 @@
     /* behind a per-flow drain that this fixture has never once completed.        */ \
     X(ORPHAN_SEED,        "seed-one-orphan-flow")                                 \
     X(ORPHAN_ROUTE,       "hand-a-parked-drive-its-function")                     \
+    X(ORPHAN_RETIRE,      "retire-an-orphan-of-a-destroyed-document")             \
     X(ORPHAN_RESUME,      "resume-a-parked-orphan-drive")                         \
     /* the person scrolling an observed target into view: a modelled act, as  */ \
     /* the close request below is (solver/engine.c's engine_user_scroll)       */ \

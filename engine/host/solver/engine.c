@@ -6200,8 +6200,9 @@ long engine_orphan_scripts(void) {
 static uint32_t g_orphan_gen_seen;
 static WorldId  g_orphan_gen_world;
 static int      g_orphan_gen_valid;
-/* What each ask did. engine_orphan_seed has four exits past `g_orphan_asks++`, and solver/step_unit.h names only the
-   two that produce work (`seed-one-orphan-flow`, `hand-a-parked-drive-its-function`), so the residue would be
+/* What each ask did. engine_orphan_seed has five exits past `g_orphan_asks++`, and solver/step_unit.h names only the
+   three a take ends in (`seed-one-orphan-flow`, `hand-a-parked-drive-its-function`,
+   `retire-an-orphan-of-a-destroyed-document`), so the residue would be
    either the memo answering for an unchanged generation or the walk finding the heap empty, which take opposite
    work (js_closure2's generation bump and the asking rate, or the heap; see the residual at the take). Each row is
    raised at exactly one exit, and engine_step_unit_runs asserts they sum to the asks, which an early return added
@@ -6537,6 +6538,7 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
 #define ORPHAN_STEP_SEEDED   1
 #define ORPHAN_STEP_ROUTED   2
 #define ORPHAN_STEP_RESUMED  3
+#define ORPHAN_STEP_RETIRED  4
 
 /* Two functions because they answer two questions. `engine_orphan_resume` is this flow's own work: a drive it is,
  * whose body was handed back, and whose call it must build before it can run anything. `engine_orphan_seed` is the
@@ -6725,6 +6727,14 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
            "a flow took an orphan with a suspended frame live — the take happens where the flow has run out of "
            "arranged work, and a sibling forked mid-call would carry a half-finished expression");
 
+    /* HTML §7.3.3 "Fully active documents": a body of a document this timeline destroyed (the page a fresh open
+       replaced) is code no event of that document will ever call, so the take retires it. The walk marked it
+       entered in this timeline only, and a timeline where that document lives still takes it. */
+    if (!document_fully_active(JS_GetFunctionRealm(ctx, t.fn))) {
+        JS_FreeValue(ctx, t.fn);
+        return ORPHAN_STEP_RETIRED;
+    }
+
     /* What this body is called across sessions, computed once per body (a body is taken once): every drive must
        be parkable and the locator is its recipe; the routing below reads the same number. One pass over the
        function's source text, so the session pays one pass over the bundle. */
@@ -6812,6 +6822,7 @@ static StepUnit engine_orphan_unit(int r) {
     case ORPHAN_STEP_SEEDED:  return STEP_UNIT_ORPHAN_SEED;
     case ORPHAN_STEP_ROUTED:  return STEP_UNIT_ORPHAN_ROUTE;
     case ORPHAN_STEP_RESUMED: return STEP_UNIT_ORPHAN_RESUME;
+    case ORPHAN_STEP_RETIRED: return STEP_UNIT_ORPHAN_RETIRE;
     }
     DFAIL("the orphan step reported an outcome it does not have");
     return STEP_UNIT_NONE;
@@ -10787,13 +10798,13 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
      * STEP_UNIT_RENDERING or STEP_UNIT_TIMER, each of which changes what a zero on `queue-rendering-opportunity`
      * means.
      *
-     * The thirteen units at or below the boundary (RENDERING, TIMER, IDLE_PERIOD, ORPHAN_SEED, ORPHAN_ROUTE,
-     * AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED, USER_SCROLL, CLOSE_REQUEST, OPEN_AGAIN, AWAIT_PEER,
-     * FINISHED) are each written at one site at or below it, so their sum is the dispatches that descended this
+     * The fourteen units at or below the boundary (RENDERING, TIMER, IDLE_PERIOD, ORPHAN_SEED, ORPHAN_ROUTE,
+     * ORPHAN_RETIRE, AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED, USER_SCROLL, CLOSE_REQUEST, OPEN_AGAIN,
+     * AWAIT_PEER, FINISHED) are each written at one site at or below it, so their sum is the dispatches that descended this
      * far, which `g_clock_render_asks` counts at the arm; the third assert below is that agreement. `finished` at zero with the sum at zero says
      * the retirement arm was never asked (a fact about the arms above); with the sum large, it was asked and
      * something below declined.
-     * Named residual. Not covered: the thirteen-unit list is written here by hand, not derived from the ladder.
+     * Named residual. Not covered: the fourteen-unit list is written here by hand, not derived from the ladder.
      * Next diff builds: a marker on solver/step_unit.h's list naming which side of the boundary each arm is written
      * on, from which the sum is derived. Absence shows as: the boundary-sum assert firing after a rung moves across
      * the clock on purpose, until this list is edited to match. */
@@ -10815,20 +10826,21 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        the triple's internal adjacency and are blind to anything moving past all three. A unit that descends
        without joining the list reads the sum too small, one that rises without leaving it too large, a unit
        written at a second site above the boundary too large, a rung asked twice per step too small. One sum of
-       thirteen rows rather than thirteen containments, because the claim is the partition. ORPHAN_RESUME is absent:
+       fourteen rows rather than fourteen containments, because the claim is the partition. ORPHAN_RESUME is absent:
        engine_orphan_seed returns SEEDED or ROUTED, never RESUMED, so the third outcome of `engine_orphan_unit`
        belongs to the rung above the boundary. */
     {
         long below = g_step_unit_runs[STEP_UNIT_RENDERING] + g_step_unit_runs[STEP_UNIT_TIMER] +
                      g_step_unit_runs[STEP_UNIT_IDLE_PERIOD] + g_step_unit_runs[STEP_UNIT_ORPHAN_SEED] +
-                     g_step_unit_runs[STEP_UNIT_ORPHAN_ROUTE] + g_step_unit_runs[STEP_UNIT_AWAIT_FETCH_RECORD] +
+                     g_step_unit_runs[STEP_UNIT_ORPHAN_ROUTE] + g_step_unit_runs[STEP_UNIT_ORPHAN_RETIRE] +
+                     g_step_unit_runs[STEP_UNIT_AWAIT_FETCH_RECORD] +
                      g_step_unit_runs[STEP_UNIT_AWAIT_OWED_REPLY] + g_step_unit_runs[STEP_UNIT_AWAIT_DECLINED] +
                      g_step_unit_runs[STEP_UNIT_USER_SCROLL] +
                      g_step_unit_runs[STEP_UNIT_CLOSE_REQUEST] + g_step_unit_runs[STEP_UNIT_OPEN_AGAIN] +
                      g_step_unit_runs[STEP_UNIT_AWAIT_PEER] +
                      g_step_unit_runs[STEP_UNIT_FINISHED];
         DCHECKF(below == g_clock_render_asks,
-                "the clock boundary was reached %ld times and the thirteen arms at or below it account for %ld — "
+                "the clock boundary was reached %ld times and the fourteen arms at or below it account for %ld — "
                 "every dispatch reaching the rendering rung leaves through one of them, so a unit crossed the boundary, is "
                 "written on both sides of it, or the rung is asked twice per step",
                 g_clock_render_asks, below);
