@@ -1166,6 +1166,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparsetext.h"
 #include "fixture/uspiso.h"
 #include "fixture/boundpark.h"
+#include "fixture/bytesimage.h"
 #include "fixture/recordless.h"
 #include "fixture/agenfork.h"
 #include "fixture/msgchain.h"
@@ -1655,6 +1656,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "uspiso", HTML_USPISO },
     { "boundpark", HTML_BOUNDPARK },
+    { "bytesimage", HTML_BYTESIMAGE },
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
@@ -15830,6 +15832,26 @@ TF_UNIT void probes_uspiso(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `bytesimage` document (fixture/bytesimage.h). */
+TF_UNIT void probes_bytesimage(const char *js, Probe *tab, int *n) {
+    int brace = !!strstr(js, "\"/api/bimg/lead-brace\""), other = !!strstr(js, "\"/api/bimg/lead-other\"");
+    int one = !!strstr(js, "\"/api/bimg/wrote-one\""), wother = !!strstr(js, "\"/api/bimg/wrote-other\"");
+    const char *im_why = NULL; int im_tt = 1;
+    fold_row(&im_tt, &im_why, brace || other, "NOT REACHED: neither arm of the first-byte gate emitted");
+    fold_row(&im_tt, &im_why, brace && other,
+             "only one arm of the first-byte gate ran: the DataView read the buffer's example byte as concrete");
+    const char *wr_why = NULL; int wr_tt = 1;
+    fold_row(&wr_tt, &wr_why, one, "NOT REACHED: the gate after the page's own write did not take its 1 arm");
+    fold_row(&wr_tt, &wr_why, !wother,
+             "the gate after the page wrote 1 over the byte forked: the image still described a byte it no "
+             "longer holds");
+    const Probe rows[] = {
+        { "bytes-image-fork", im_tt, "/api/bimg/lead-brace", SESS_EXPLORE, im_why },
+        { "bytes-image-overwrite", wr_tt, "/api/bimg/wrote-one", SESS_EXPLORE, wr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -19715,6 +19737,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_text(js, probes, &np);
     probes_uspiso(js, probes, &np);
     probes_boundpark(js, probes, &np);
+    probes_bytesimage(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);
