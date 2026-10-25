@@ -1174,6 +1174,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparsefetch.h"
 #include "fixture/fileparseslice.h"
 #include "fixture/fileparsesub.h"
+#include "fixture/spaniso.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1677,6 +1678,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-fetch", HTML_FILEPARSE_FETCH },
     { "fileparse-slice", HTML_FILEPARSE_SLICE },
     { "fileparse-sub", HTML_FILEPARSE_SUB },
+    { "spaniso", HTML_SPANISO },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16140,6 +16142,23 @@ TF_UNIT void probes_fileparse_sub(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
+   element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
+TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
+    const char *w_why = NULL; int w_tt = 1;
+    fold_row(&w_tt, &w_why, !!strstr(js, "\"/api/spi-wrote\""),
+             "NOT REACHED: there is no /api/spi-wrote record, so no arm stored at the unknown index");
+    const char *o_why = NULL; int o_tt = 1;
+    fold_row(&o_tt, &o_why, param_value_only_undriven(js, "/api/spi-read", "v", "5"),
+             "a /api/spi-read record's v is not the sibling's own 5 (or there is none): the writer's span over the "
+             "shared buffer reached the arm that never wrote it");
+    const Probe rows[] = {
+        { "spi-wrote", w_tt, "/api/spi-wrote", SESS_EXPLORE, w_why },
+        { "spi-own", o_tt, "/api/spi-read", SESS_EXPLORE, o_why, .gate = "spi-wrote" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fileparse-drop` document (fixture/fileparsedrop.h). Reach and taint, and the PoC's act; a
    dropped file's source is core/file/file_system.c's `file:NAME`, whose delivery is `user-file`. */
 TF_UNIT void probes_fileparse_drop(const char *js, Probe *tab, int *n) {
@@ -20390,6 +20409,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_fetch(js, probes, &np);
     probes_fileparse_slice(js, probes, &np);
     probes_fileparse_sub(js, probes, &np);
+    probes_spaniso(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
