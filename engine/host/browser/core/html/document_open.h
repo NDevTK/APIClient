@@ -76,8 +76,8 @@ void document_close_input_stream(JSContext *ctx, JSValueConst doc_obj, lxb_dom_d
 bool document_open_stream_is_ours(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom);
 
 /* §8.4.3 steps 10-11 into the script-created parser this flow opened: the bytes are inserted and processed, and
-   this flow's record advances to the parser's new write count. The parser is asserted to hold this timeline's
-   state (no sibling arm of a fork has written since). */
+   this flow's record advances to the parser's new write count. When a sibling arm of a fork has written since,
+   the parser state this flow's last write left is put back first (core/html/html_parser_snapshot.h). */
 void document_open_stream_write(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom,
                                 const lxb_char_t *text, size_t size);
 
