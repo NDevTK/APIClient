@@ -8619,6 +8619,11 @@ const LDFLAGS_COMMON = [
      sanitized target is not here: see `sanitize` above. */
   ...WASM_TARGET, "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=" + WASM_ADDRESS_BYTES,
   "-sSTACK_SIZE=8388608",
+  /* INITIAL_HEAP, stated, so the initial memory is static data + stack + this heap and tracks the binary. Left
+     unstated, emscripten (tools/link.py set_initial_memory) drops INITIAL_HEAP whenever MAXIMUM_MEMORY is given
+     and falls back to a fixed 16 MiB INITIAL_MEMORY, which the dev smoke binary's fixtures outgrew. A starting
+     size, never a cap: ALLOW_MEMORY_GROWTH and MAXIMUM_MEMORY decide the ceiling. */
+  "-sINITIAL_HEAP=16777216",
   /* THE MODULE NAMES ITS OWN FUNCTIONS, so a stack is readable without a second instrument. `wasm-ld` strips
      the name section by default — emscripten's own `building.py` says so in its own words, "wasm-ld can strip
      debug info for us. this strips both the Names section and DWARF, so we can only use it when we don't need
