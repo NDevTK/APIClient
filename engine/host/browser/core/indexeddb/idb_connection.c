@@ -581,16 +581,85 @@ static JSValue js_conn_delete_object_store(JSContext *ctx, JSValueConst this_val
  * IDBTransactionMode lists "versionchange", so §3.2.18 accepts it and this algorithm then throws a TypeError
  * for it — an upgrade transaction is created by §5.7 and never by a page. */
 
+typedef struct {
+    uint8_t  started;
+    uint32_t i;      /* the next name of storeNames steps 3-4 resolve */
+    uint32_t n;      /* how many stores the scope holds */
+    uint32_t cand;   /* which of the database's stores an unknown name's fork asks next */
+    JSValue  scope;  /* steps 3-4's records, handed to step 7 (owned) */
+    JSValue  pred;   /* that ask's IsStrictlyEqual, held across its fork (owned) */
+} ConnTxState;
+
+static void conn_tx_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    ConnTxState *s = st;
+
+    if (!s->started) return;
+    v->val(ctx, &s->scope);
+    v->val(ctx, &s->pred);
+}
+
+/* The store an unknown name names among the connected database's, where no store is filed under the name its
+   identity bought: which one depends on the unknown, so this forks over IsStrictlyEqual of the unknown and
+   each store name in the set's order, each equal arm a predicate over the unknown's domain; the arm equal to
+   none answers JS_NULL. 0 with the store in *pstore (owned), or a request code. */
+static int conn_scope_fork(JSContext *ctx, JSStepHdr *hdr, ConnTxState *s, JSValueConst db, JSValueConst name_v,
+                           JSValue *pstore)
+{
+    JSValue set = idb_database_store_set(ctx, db);
+    JSPropertyEnum *keys = NULL;
+    uint32_t count = 0, i;
+    int r = 0, arm;
+
+    *pstore = JS_NULL;
+    CHECK(JS_GetOwnPropertyNames(ctx, &keys, &count, set, JS_GPN_STRING_MASK) == 0,
+          "IndexedDB: the connected database's object store set could not be enumerated");
+    for (; s->cand < count; s->cand++) {
+        JSValue nm = JS_AtomToString(ctx, keys[s->cand].atom);
+
+        if (JS_IsUninitialized(s->pred)) {
+            JSValue sp[2];
+
+            sp[0] = JS_DupValue(ctx, name_v);
+            sp[1] = JS_DupValue(ctx, nm);
+            CHECK(concolic_cmp_hook(ctx, sp + 2, 0, JS_CONCOLIC_EQ_STRICT),
+                  "IndexedDB: the transaction scope's equality declined a name already established as unknown");
+            s->pred = sp[0];
+        }
+        r = step_tobool_run(ctx, hdr, s->pred, "Indexed Database §4.4 transaction() step 4 (a name in "
+                            "storeNames is the name of an object store in this's associated database)", &arm);
+        if (r) { JS_FreeValue(ctx, nm); break; }
+        JS_FreeValue(ctx, s->pred);
+        s->pred = JS_UNINITIALIZED;
+        if (arm) {
+            const char *c = JS_ToCString(ctx, nm);
+
+            CHECK(c != NULL, "IndexedDB: a store name of the connected database could not be read");
+            *pstore = idb_object_store_find(ctx, db, c);
+            JS_FreeCString(ctx, c);
+            JS_FreeValue(ctx, nm);
+            break;
+        }
+        JS_FreeValue(ctx, nm);
+    }
+    for (i = 0; i < count; i++)
+        JS_FreeAtom(ctx, keys[i].atom);
+    js_free(ctx, keys);
+    JS_FreeValue(ctx, set);
+    return r;
+}
+
 /* §4.4 step 3's "the set of UNIQUE strings", resolved to the §2.2 object store RECORDS step 7 names, with step
    4's "NotFoundError" thrown for the first name the connected database does not have. The uniqueness is by
    RECORD IDENTITY because idb_object_store_find answers the database's own record for a name rather than a copy
-   of it, so `db.transaction(['s','s'])` names one store and its scope has one entry. */
-static int conn_scope_add(JSContext *ctx, JSValueConst db, JSValueConst scope, uint32_t *n,
-                          JSValueConst name_v)
+   of it, so `db.transaction(['s','s'])` names one store and its scope has one entry. An unknown name with no
+   store under its identity's name forks (conn_scope_fork). 0, a request code, or -1. */
+static int conn_scope_add(JSContext *ctx, JSStepHdr *hdr, ConnTxState *s, JSValueConst db, JSValueConst name_v)
 {
     const char *name;
     JSValue store;
     uint32_t k;
+    int r;
 
     DCHECK(JS_IsString(name_v) || concolic_is(name_v),
            "§4.4 step 3 was handed a scope entry that is neither a string nor unknown — the `(DOMString or "
@@ -600,6 +669,10 @@ static int conn_scope_add(JSContext *ctx, JSValueConst db, JSValueConst scope, u
     if (name == NULL) return -1;
     store = idb_object_store_find(ctx, db, name);
     JS_FreeCString(ctx, name);
+    if (JS_IsNull(store) && concolic_is(name_v)) {
+        r = conn_scope_fork(ctx, hdr, s, db, name_v, &store);
+        if (r) return r;
+    }
     if (JS_IsNull(store)) {
         JS_FreeValue(ctx, store);
         JS_ThrowDOMException(ctx, "NotFoundError",
@@ -607,8 +680,8 @@ static int conn_scope_add(JSContext *ctx, JSValueConst db, JSValueConst scope, u
                              "connected database");
         return -1;
     }
-    for (k = 0; k < *n; k++) {
-        JSValue have = JS_GetPropertyUint32(ctx, scope, k);
+    for (k = 0; k < s->n; k++) {
+        JSValue have = JS_GetPropertyUint32(ctx, s->scope, k);
         bool dup = JS_VALUE_GET_PTR(have) == JS_VALUE_GET_PTR(store);
 
         JS_FreeValue(ctx, have);
@@ -617,20 +690,35 @@ static int conn_scope_add(JSContext *ctx, JSValueConst db, JSValueConst scope, u
             return 0;
         }
     }
-    JS_DefinePropertyValueUint32(ctx, scope, (*n)++, store, JS_PROP_C_W_E);
+    JS_DefinePropertyValueUint32(ctx, s->scope, s->n++, store, JS_PROP_C_W_E);
     return 0;
 }
 
-static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                   int magic)
-{
-    JSValueConst names = argv[0], options = argv[2];
-    JSValue db = JS_UNDEFINED, upgrade, scope = JS_UNDEFINED, durability, tx;
-    uint32_t n = 0;
-    int mode, durab;
+#define CONNTX_STAGES(X) \
+    X(CONNTX_SCOPE, "Indexed Database §4.4 transaction() steps 3-4 (the unique names of storeNames, each the name " \
+                    "of an object store in the database or a NotFoundError) - an unknown name forks over the " \
+                    "database's store names, one ask per store")
+enum { IDL_STEP_STAGE_BASE(CONNTX_STAGES) CONNTX_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CONNTX_STEPS[] = { CONNTX_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)argc; (void)magic;
-    if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
+static int conn_tx_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    ConnTxState *s = st;
+    JSValueConst this_val = hdr->this_val, names = argv[0], options = argv[2];
+    JSValue db = JS_UNDEFINED, upgrade, durability, tx;
+    uint32_t count;
+    int mode, durab, r;
+
+    (void)argc; (void)out_cb; (void)out_argc;
+    *presult = JS_UNDEFINED;
+    JS_FreeValue(ctx, cb_result);
+    if (s->started) goto scope;
+    s->started = 1;
+    s->scope = JS_UNDEFINED;
+    s->pred = JS_UNINITIALIZED;
+    s->i = s->n = s->cand = 0;
+    if (!conn_brand(ctx, this_val)) return JS_STEP_ABRUPT;
     /* THE ONE VALUE THIS ASSERT DOES NOT SPEAK FOR IS THE ONE THE MEMBER IS EXPLORED WITH, AND THE DISJUNCT IS
        THE WHOLE OF THIS HUNK. Web IDL §3.2.18 Enumeration types is a MEMBERSHIP TEST, and the paragraph at
        step 6 below is this file's own statement that unknown external input therefore has no arm to cross as —
@@ -668,9 +756,9 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
         JS_FreeValue(ctx, upgrade);
         if (mine) {
             JS_FreeValue(ctx, db);
-            return JS_ThrowDOMException(ctx, "InvalidStateError",
-                                        "an upgrade transaction is live on this connection, so no other "
-                                        "transaction can be created with it");
+            JS_ThrowDOMException(ctx, "InvalidStateError", "an upgrade transaction is live on this connection, so "
+                                                           "no other transaction can be created with it");
+            return JS_STEP_ABRUPT;
         }
     } else {
         JS_FreeValue(ctx, upgrade);
@@ -679,38 +767,47 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
        transactions can be created using the connection." */
     if (idb_connection_close_pending(ctx, this_val)) {
         JS_FreeValue(ctx, db);
-        return JS_ThrowDOMException(ctx, "InvalidStateError",
-                                    "the connection is closing, so no new transaction can be created with it");
+        JS_ThrowDOMException(ctx, "InvalidStateError",
+                             "the connection is closing, so no new transaction can be created with it");
+        return JS_STEP_ABRUPT;
     }
+    JS_FreeValue(ctx, db);
+    s->scope = JS_NewArray(ctx);
+    CHECK(!JS_IsException(s->scope), "IndexedDB: the transaction's scope could not be allocated");
+    hdr->stage = CONNTX_SCOPE;
 
+scope:
     /* Steps 3 and 4, together, because step 4 asks its question of every string step 3 collected and the
-       records are what step 7 wants anyway. */
-    scope = JS_NewArray(ctx);
-    CHECK(!JS_IsException(scope), "IndexedDB: the transaction's scope could not be allocated");
-    if (JS_IsString(names)) {
-        if (conn_scope_add(ctx, db, scope, &n, names) < 0) goto fail;
+       records are what step 7 wants anyway. A string, or an unknown that crossed the union as itself, is one
+       name; otherwise the engine's own array of them. */
+    db = idb_connection_database(ctx, this_val);
+    if (JS_IsString(names) || concolic_is(names)) {
+        count = 1;
     } else {
         JSValue lv;
-        uint32_t len = 0, i;
 
         DCHECK(JS_IsArray(names),
                "§4.4 step 3 was handed a storeNames that is neither a string nor a sequence — §3.2.25's union "
                "answers with one or the other and this engine builds the sequence itself");
         lv = JS_GetPropertyStr(ctx, names, "length");
-        CHECK(JS_ToUint32(ctx, &len, lv) == 0,
+        CHECK(JS_ToUint32(ctx, &count, lv) == 0,
               "IndexedDB: the length of the transaction's scope sequence could not be read");
         JS_FreeValue(ctx, lv);
-        for (i = 0; i < len; i++) {
-            JSValue e = JS_GetPropertyUint32(ctx, names, i);
-            int r = conn_scope_add(ctx, db, scope, &n, e);
+    }
+    for (; s->i < count; s->i++) {
+        JSValue e = count == 1 && !JS_IsArray(names) ? JS_DupValue(ctx, names) : JS_GetPropertyUint32(ctx, names, s->i);
 
-            JS_FreeValue(ctx, e);
-            if (r < 0) goto fail;
+        r = conn_scope_add(ctx, hdr, s, db, e);
+        JS_FreeValue(ctx, e);
+        if (r) {
+            JS_FreeValue(ctx, db);
+            return r < 0 ? JS_STEP_ABRUPT : r;
         }
+        s->cand = 0;
     }
     /* Step 5. It is AFTER step 4 and the order is observable: `db.transaction([])` is an "InvalidAccessError"
        while `db.transaction(['nope'])` is a "NotFoundError". */
-    if (n == 0) {
+    if (s->n == 0) {
         JS_ThrowDOMException(ctx, "InvalidAccessError",
                              "a transaction cannot be created with an empty scope");
         goto fail;
@@ -766,16 +863,22 @@ static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int ar
            "having lost its default");
     durab = conn_enum_index(ctx, durability, TX_DURABILITY);
     JS_FreeValue(ctx, durability);
-    tx = idb_transaction_new(ctx, this_val, scope, mode, durab);
+    tx = idb_transaction_new(ctx, this_val, s->scope, mode, durab);   /* takes the scope */
+    s->scope = JS_UNDEFINED;
     idb_transaction_set_cleanup_loop(ctx, tx);
     JS_FreeValue(ctx, db);
-    return tx;
+    *presult = tx;
+    return JS_STEP_DONE;
 
 fail:
-    JS_FreeValue(ctx, scope);
     JS_FreeValue(ctx, db);
-    return JS_EXCEPTION;
+    return JS_STEP_ABRUPT;
 }
+
+static const IdlStepDecl CONNTX_DECL = {
+    conn_tx_step, sizeof(ConnTxState), conn_tx_visit, NULL,
+    "Indexed Database §4.4 IDBDatabase transaction(storeNames, mode, options)", CONNTX_STEPS
+};
 
 /* ---- install ------------------------------------------------------------------------------------------------ */
 
@@ -846,9 +949,8 @@ void idb_connection_init(JSContext *ctx)
     CHECK(JS_NewClass(rt, g_conn_class, &d) == 0,
           "IDBDatabase: the per-realm prototype slot could not be declared");
     g_id_close = idl_method_id(ctx, NULL, 0, js_conn_close, 0);
-    g_id_transaction = idl_method_id_dict(ctx, TX_ARGS, 3, TX_OPTIONS,
-                                          (int)(sizeof TX_OPTIONS / sizeof TX_OPTIONS[0]),
-                                          js_conn_transaction, 0);
+    g_id_transaction = idl_method_id_step(ctx, TX_ARGS, 3, TX_OPTIONS,
+                                          (int)(sizeof TX_OPTIONS / sizeof TX_OPTIONS[0]), &CONNTX_DECL, 0);
     idl_optional_from(1);                                 /* `mode` and `options` are both optional */
     idl_arg_enum(1, TX_MODES);                            /* §3.2.18's value list for the `mode` position */
     idl_arg_default(1, IDL_DEFAULT_STRING, "readonly");   /* §3.6 steps 15.4.1 and 16.1's `= "readonly"` */
