@@ -1036,21 +1036,59 @@ static int park_rows_equal(const Flow *a, const Flow *b)
     return eq;
 }
 
-/* A flow already written into this park whose records say what `f`'s will: the same drive chain (none for a
-   flow that drives nothing), on the same path, in the same sending timelines and owing the same messages. Asked
-   of the members still in the registry, so a flow a partial park sold before this one is not compared. */
-static const Flow *park_same_recipe_written(const Flow *f)
+/* The cheap half of two recipes' equality, the order the census sorts paged flows by: drive mark, chain length,
+   chain, and the path's length. Equal here is necessary for equal recipes, so only equal runs are compared whole. */
+static int park_recipe_cmp(const void *pa, const void *pb)
 {
-    const Flow *g;
-    int i;
+    const Flow *a = *(const Flow *const *)pa, *b = *(const Flow *const *)pb;
+    int ca = a->dec_blob ? decide_blob_cursor(a->dec_blob) : -1;
+    int cb = b->dec_blob ? decide_blob_cursor(b->dec_blob) : -1;
 
-    for (i = 0; (g = flow_at(i)) != NULL; i++)
-        if (g != f && g->paged && g->orphan == f->orphan && g->orphan_chain_n == f->orphan_chain_n &&
-            (!f->orphan_chain_n ||
-             memcmp(g->orphan_chain, f->orphan_chain, (size_t)f->orphan_chain_n * sizeof *f->orphan_chain) == 0) &&
-            park_kind_of(g) == PARK_KIND_FLOW && park_path_equal(g, f) && park_rows_equal(g, f))
-            return g;
-    return NULL;
+    if (a->orphan != b->orphan) return a->orphan < b->orphan ? -1 : 1;
+    if (a->orphan_chain_n != b->orphan_chain_n) return a->orphan_chain_n < b->orphan_chain_n ? -1 : 1;
+    if (a->orphan_chain_n) {
+        int c = memcmp(a->orphan_chain, b->orphan_chain, (size_t)a->orphan_chain_n * sizeof *a->orphan_chain);
+        if (c) return c;
+    }
+    return ca < cb ? -1 : ca > cb;
+}
+
+/* A record is a recipe, so two records with equal recipes are one flow written twice: each resumes and re-runs the
+   same path, a drive to the same call. Asked once a whole-frontier park has written every member, over the members
+   written (`paged`), sorted by the cheap half of the comparison so only equal runs are compared whole: O(paged log
+   paged) per park, never per record. A partial park releases each flow it writes at once, so no written member
+   stands in the registry for it to be compared with. */
+static void park_twins_check(void)
+{
+    const Flow *f, **v = NULL;
+    int i, n = 0, cap = 0;
+
+    for (i = 0; (f = flow_at(i)) != NULL; i++) {
+        if (!f->paged || park_kind_of(f) != PARK_KIND_FLOW) continue;
+        if (n == cap) {
+            const Flow **g = realloc(v, (size_t)(cap = cap ? cap * 2 : 64) * sizeof *v);
+            CHECK(g, "the cold tier could not gather the paged flows to compare their recipes");
+            v = g;
+        }
+        v[n++] = f;
+    }
+    if (n > 1) qsort(v, (size_t)n, sizeof *v, park_recipe_cmp);
+    for (i = 0; i + 1 < n; i++)
+        for (int k = i + 1; k < n && park_recipe_cmp(&v[i], &v[k]) == 0; k++) {
+            const Flow *a = v[i], *b = v[k];
+            char loc[17] = "-";
+
+            if (a->orphan_chain_n) park_orphan_hex(a->orphan_chain[a->orphan_chain_n - 1], loc);
+            DCHECKF(!(park_path_equal(a, b) && park_rows_equal(a, b)),
+                    "the park document holds two records of a chain of %d drive(s) ending in body o%s on one path "
+                    "(cursor %d) with the same %d commitment(s) and %d undelivered message(s) — two records that "
+                    "say the same thing resume as two copies of one flow. One is waiting %d, driving %d; the other "
+                    "is waiting %d, driving %d",
+                    a->orphan_chain_n, loc, a->dec_blob ? decide_blob_cursor(a->dec_blob) : -1,
+                    flow_world_commits(a), flow_deliver_pending(a), a->orphan_want, !JS_IsUndefined(a->fn),
+                    b->orphan_want, !JS_IsUndefined(b->fn));
+        }
+    free(v);
 }
 #endif
 
@@ -1401,25 +1439,6 @@ void cold_park_flow(Flow *f)
         g_parked_census.cands++;   /* a candidate session, as the preview counts it */
         break;
     case PARK_KIND_FLOW:
-#if APICLIENT_DEV
-        /* A record is a recipe, so two records with equal recipes are one flow written twice: each resumes and
-           re-runs the same path, a drive to the same call. */
-        {
-            const Flow *twin = park_same_recipe_written(f);
-            char loc[17] = "-";
-
-            if (f->orphan_chain_n) park_orphan_hex(f->orphan_chain[f->orphan_chain_n - 1], loc);
-            DCHECKF(twin == NULL,
-                    "the park document already holds a record of a chain of %d drive(s) ending in body o%s on this "
-                    "flow's path (chain %ld, cursor %d) with the same %d commitment(s) and %d undelivered "
-                    "message(s) — two records that say the same thing resume as two copies of one flow. This one "
-                    "is waiting %d, driving %d; the one written first is waiting %d, driving %d",
-                    f->orphan_chain_n, loc, id, f->dec_blob ? decide_blob_cursor(f->dec_blob) : -1,
-                    flow_world_commits(f),
-                    flow_deliver_pending(f), f->orphan_want, !JS_IsUndefined(f->fn),
-                    twin ? twin->orphan_want : -1, twin ? !JS_IsUndefined(twin->fn) : -1);
-        }
-#endif
         if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", flow_reward(f));
         else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, flow_reward(f));
         park_rec(rec);
@@ -1580,6 +1599,9 @@ void cold_park(void)
         if (park_flow_deep(f)) deep_written++;
         cold_park_flow(f);
     }
+#if APICLIENT_DEV
+    park_twins_check();
+#endif
     cold_parked(&after);
     /* THE RESIDUE IS THE ONE THE HOST WAS SHOWN. Not a restatement of the loop above: the preview walks the
        frontier and the park writes RECORDS, so this is where "one record per member, and of the kind the host
