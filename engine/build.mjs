@@ -9238,6 +9238,15 @@ if (NATIVE_BUILT.bin !== null)
                          "a cycle of direct calls is recursion on the C stack, which no flow can park inside and an " +
                          "input can deepen until the stack overflows. Convert the cycle to a step machine over a " +
                          "heap frame stack. Exit 2 means the census itself could not be taken."), STAGE_HOST.NATIVE));
+/* HTML tree construction against html5lib's corpus: each case's verdict from the Lexbor this tree compiles,
+   compared with the recorded one, so a Lexbor change cannot move tree construction unnoticed. It compiles its
+   runner against the native Lexbor archive, so it is a native stage. */
+if (NATIVE_BUILT.bin !== null)
+  STAGES.push(onHost(runProgram("HTML tree-construction corpus", [join(ENGINE, "treegate.mjs")],
+                         "each line names a case whose verdict moved from testing/tree_construction/expected.txt. " +
+                         "A PASS that became FAIL is a regression in tree construction: fix it. A FAIL that " +
+                         "became PASS is a fix: record it with `node engine/treegate.mjs --write`. Exit 2 means " +
+                         "the runner could not be built or run, or its own control failed."), STAGE_HOST.NATIVE));
 /* The provisioning notices' field table: extension/lib/navigable-notice.js must be what navigable_notice.h
    renders, since bridge.js indexes the engine's notices by it. The node readers refuse a stale copy on import;
    this stage states the same disagreement for a build that runs none of them. */
