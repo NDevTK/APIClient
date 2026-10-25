@@ -1195,6 +1195,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbscopejson.h"
 #include "fixture/idbscopeown.h"
 #include "fixture/fparecjson.h"
+#include "fixture/idbkeypath.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1720,6 +1721,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbscopejson", HTML_IDBSCOPEJSON },
     { "idbscopeown", HTML_IDBSCOPEOWN },
     { "fparecjson", HTML_FPARECJSON },
+    { "idbkeypath", HTML_IDBKEYPATH },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16682,6 +16684,35 @@ TF_UNIT void probes_fparecjson(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbkeypath` document (fixture/idbkeypath.h): key paths read from a JSON reply run §2.5's
+   valid world and its SyntaxError world at createObjectStore and createIndex, and §4.4 step 8's
+   InvalidAccessError world beside the created store under autoIncrement. */
+TF_UNIT void probes_idbkeypath(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *url, *got, *why; } R[] = {
+        { "idbkp-store-ok", "/api/idbkp-store", "ok", "no /api/idbkp-store?got=ok record: no arm created the "
+          "store with the reply's key path as a valid one" },
+        { "idbkp-store-syntax", "/api/idbkp-store", "SyntaxError", "no /api/idbkp-store?got=SyntaxError record: "
+          "no arm took the reply's key path as one §2.5 refuses" },
+        { "idbkp-index-ok", "/api/idbkp-index", "ok", "no /api/idbkp-index?got=ok record: no arm created the "
+          "index with the reply's key path as a valid one" },
+        { "idbkp-index-syntax", "/api/idbkp-index", "SyntaxError", "no /api/idbkp-index?got=SyntaxError record: "
+          "no arm took the reply's index key path as one §2.5 refuses" },
+        { "idbkp-auto-ok", "/api/idbkp-auto", "ok", "no /api/idbkp-auto?got=ok record: no arm created the "
+          "autoIncrement store over a non-empty key path" },
+        { "idbkp-auto-access", "/api/idbkp-auto", "InvalidAccessError", "no /api/idbkp-auto?got="
+          "InvalidAccessError record: no arm took the autoIncrement key path as empty or a sequence" },
+    };
+    Probe rows[6];
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        const char *why = NULL; int tt = 1;
+        fold_row(&tt, &why, param_value_is(js, R[i].url, "got", R[i].got), R[i].why);
+        rows[i] = (Probe){ R[i].row, tt, R[i].url, SESS_EXPLORE, why };
+    }
+    probes_append(tab, n, rows, 6);
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -21035,6 +21066,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbscopejson(js, probes, &np);
     probes_idbscopeown(js, probes, &np);
     probes_fparecjson(js, probes, &np);
+    probes_idbkeypath(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
