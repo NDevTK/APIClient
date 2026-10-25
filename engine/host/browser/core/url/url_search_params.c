@@ -201,6 +201,10 @@ static JSValue usp_new_with(JSContext *ctx, JSValueConst owner, UspList *l, JSVa
     JSValue obj;
 
     DCHECK(g_usp_class != 0, "a URLSearchParams was built before the class existed");
+    DCHECK(JS_IsUndefined(unknown) || concolic_is(unknown),
+           "a URLSearchParams list was built over an `unknown` that is neither absent nor unknown input — every "
+           "read and mutation derives from that field whenever it is not undefined, so a concrete value there "
+           "asks for a derivation over nothing");
     {
         JSValue proto = JS_GetClassProto(ctx, g_usp_class);
         DCHECK(!JS_IsNull(proto), "a URLSearchParams was minted in a realm that never ran its install");
@@ -310,7 +314,10 @@ static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JS
         free(q);
     }
     d = concolic_new_derived(ctx, op, ops, n, ex);
-    DCHECK(!JS_IsUninitialized(d), "a URLSearchParams list parsed from an unknown derived no unknown list");
+    DCHECK(concolic_is(d),
+           "a mutation of a URLSearchParams list parsed from an unknown derived no unknown list — the field it "
+           "writes is the list's unknown, so a concrete answer here (a candidate delivered at the list's source) "
+           "needs the list re-parsed from the delivered value and made concrete; build that rather than store it");
     cow_record_set(ctx, u, &USP_REC, &u->unknown, d);
     u->mutated = 1;   /* a POD field of the record usp_rec captured */
 }
@@ -818,6 +825,10 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             return -1;
         }
         s->item[0] = s->item[1] = JS_UNDEFINED;
+        /* No unknown init yet, stated before the first arm that can leave: an absent init goes to UC_DONE
+           below, which hands `unknown` to the object. */
+        s->unknown = JS_UNDEFINED;
+        s->unknown_example = 0;
         iter_cursor_init(&s->outer);
         iter_cursor_init(&s->inner);
         record_cursor_init(&s->rec);
@@ -829,7 +840,6 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             UC_GOTO(hdr, s, UC_DONE);
             return JS_STEP_YIELD;
         }
-        s->unknown = JS_UNDEFINED;
         /* §3.2.25 OVER UNKNOWN INPUT: the union's arm is a runtime type test on the value, which an unknown
            answers only through its stated type set. A String in every world takes the USVString arm; the list
            is the parse of its example and every read derives from the unknown (usp_derive). */
