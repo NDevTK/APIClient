@@ -259,14 +259,18 @@ void document_metadata_init(JSContext *ctx)
 {
     DCHECK(g_id_cookie_set < 0, "document_metadata_init ran twice — the setter's declaration and the two "
                                 "sources are declared once per AGENT");
-    /* A REFERRER is the attacker's own URL, which the victim arrives from: a SERIALIZED URL with its fragment
-       stripped, so the bytes a URL serialization percent-encodes never reach the page — space, `"`, `<`, `>`,
-       the backtick, and `#`, because there is no fragment left for one to introduce. The apostrophe survives,
-       which is what makes a JS-context breakout through a referrer real where an HTML-context one is not.
+    /* A REFERRER is the attacker page's own URL, which the victim arrives from (Referrer Policy §8.3
+       "Determine request's Referrer"), served under `unsafe-url` with the payload in its path. The page's
+       address is parsed with URL §1.3's path percent-encode set — space, `"`, `#`, `<`, `>`, `?`, `^`, the
+       backtick, `{` and `}` — and Chrome encodes `|` there too; `#` and `?` would end the path, so they arrive
+       encoded as well. The apostrophe survives, which makes a JS-context breakout through a referrer real.
+       Named residual: a backslash is not covered — in a special URL's path it becomes `/`, which no encode set
+       states. The next diff gives the carrier a byte map for such a substitution. Its absence shows as a
+       referrer PoC with a backslash that fires in the model and not in Chrome.
        A COOKIE is application state, not an attacker source: only the application's Set-Cookie or its own
        script writes the jar, so a finding rooted there is labelled with that precondition. */
     concolic_declare_source_precondition(DM_COMPONENT, "document.cookie", SRC_PRE_APPLICATION_STATE);
-    concolic_declare_source(DM_COMPONENT, "document.referrer", " \"<>`#", 0, SRC_DELIVER_REFERRING_ADDRESS);
+    concolic_declare_source(DM_COMPONENT, "document.referrer", " \"#<>?^`{}|", 0, SRC_DELIVER_REFERRING_ADDRESS);
     /* §3.1.1's `attribute USVString cookie` — the only read-write member here, and its type is what performs
        §3.2.12's scalar value conversion before the body ever sees the string. */
     g_id_cookie_set = idl_setter_id(ctx, IDL_USVSTRING, false, js_doc_set_cookie, 0);

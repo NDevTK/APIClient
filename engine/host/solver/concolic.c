@@ -2559,6 +2559,13 @@ const char *concolic_source_precondition(const char *root)
     return NULL;
 }
 
+const char *concolic_source_attacker_page(const char *root)
+{
+    int row = root_declared_row(root);
+
+    return row >= 0 && g_srcs[row].deliver == SRC_DELIVER_REFERRING_ADDRESS ? REFERRER_ATTACKER_PAGE : NULL;
+}
+
 const char *concolic_source_encodes(const char *root)
 {
     int row = root_declared_row(root);
@@ -2570,8 +2577,8 @@ const char *concolic_source_encodes(const char *root)
  *
  * A declared `encode` set states only what distinguishes one component from its siblings (location.c declares
  * the backtick for the fragment, the apostrophe and `#` for the query); the part every URL component shares is
- * the standard's, and `bytes_probe` addresses each declared byte by one decimal digit and asserts the set at
- * ten, so it could not hold it anyway. The shared part is asked of the `deliver` column, so a mechanism added
+ * the standard's, and `bytes_probe` addresses each declared byte by one index character, so it could not hold
+ * that set anyway. The shared part is asked of the `deliver` column, so a mechanism added
  * later must answer the question (the switch has no default, so the compiler warns).
  *
  * Two answers. A payload serialized into a URL inherits URL §1.3 "Percent-encoded bytes"'s C0 control
@@ -2723,9 +2730,14 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     carrier = root_carrier(root);
 
     n = strlen(payload);
-    out = reclaim_malloc(n * 3 + 2);
+    out = reclaim_malloc(n * 3 + 2 + sizeof REFERRER_ATTACKER_PAGE);
     CHECK(out != NULL, "concolic: OOM delivering a candidate");
     if (at && at->prefix) out[o++] = at->prefix;
+    /* A referrer is the attacker page's whole URL, its address before the payload included. */
+    if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS) {
+        memcpy(out, REFERRER_ATTACKER_PAGE, sizeof REFERRER_ATTACKER_PAGE - 1);
+        o = sizeof REFERRER_ATTACKER_PAGE - 1;
+    }
     for (p = (const unsigned char *)payload; *p; p++) {
         /* A byte outside printable US-ASCII is the mechanism's to answer for, not the row's (root_carrier). */
         int shared = carrier_shared_byte(*p);
@@ -2738,6 +2750,10 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
         }
     }
     out[o] = 0;
+    /* Chrome hands a referrer longer than its limit as the attacker page's origin, so such a candidate arrives
+       without its payload. */
+    if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS && o > REFERRER_CHROME_LIMIT)
+        o = strlen(REFERRER_ATTACKER_PAGE);
     {
         JSValue r = JS_NewStringLen(ctx, out, o);
         free(out);

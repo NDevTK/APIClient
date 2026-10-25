@@ -688,6 +688,15 @@ typedef enum {
 void        concolic_declare_source_precondition(const char *component, const char *src,
                                                  SourcePreconditionKind kind);
 int         concolic_source_precondition_declared_by(const char *component, const char *src);
+/* A referring-address delivery's attacker page (Referrer Policy §8.3 "Determine request's Referrer"): the page
+   at REFERRER_ATTACKER_PAGE + payload, served under `unsafe-url`, whose URL less its fragment (§8.4 "Strip url
+   for use as a referrer") is what the victim reads. NULL for every other mechanism. */
+#define REFERRER_ATTACKER_PAGE   "https://attacker.test/"
+#define REFERRER_ATTACKER_POLICY "unsafe-url"
+/* Chrome reduces a referrer longer than this many bytes to its origin, beyond what §8.3 states (measured on
+   Chrome for Testing 155.0.8059.84, the version testing/harness.js drives). */
+#define REFERRER_CHROME_LIMIT    4096
+const char *concolic_source_attacker_page(const char *root);
 /* The precondition token of the first precondition member of `root`, or NULL when no member declares one. */
 const char *concolic_source_precondition(const char *root);
 

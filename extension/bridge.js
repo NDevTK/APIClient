@@ -144,7 +144,9 @@ function docEndpoints(rows) {
 }
 /* One @S entry's delivery facts, as solver/solve.c's emit_delivery writes them (solve.h's field list): `delivery`
    is absent (the source declares none) or one of the mechanism tokens, `deliveryPrefix` is the victim's address
-   component, present exactly on an `address` delivery, and `precondition` labels a root no attacker writes
+   component, present exactly on an `address` delivery, `attackerPolicy` (and on a fired entry `attackerPage`) is
+   a `referring-address` delivery's attacker page and its referrer policy, and `precondition` labels a root no
+   attacker writes
    (a fire-verified entry carries a delivery, a precondition, or both); `principalDemand` is absent
    (unexamined) or one of three verdicts, with `principalGates` only beside `forgeable` (and on every one) and
    `principalPins` exactly beside `unforgeable`; `poc` is absent on a parked search and a non-empty string on a
@@ -195,6 +197,12 @@ function docSink(e, f) {
     return f + " states a deliveryPrefix exactly where its delivery is not `address`";
   if ("deliveryPrefix" in e && e.deliveryPrefix !== "#" && e.deliveryPrefix !== "?")
     return f + ".deliveryPrefix " + JSON.stringify(e.deliveryPrefix) + " is neither # nor ?";
+  if (("attackerPolicy" in e) !== (e.delivery === "referring-address"))
+    return f + " states an attackerPolicy exactly where its delivery is not `referring-address`";
+  if ("attackerPolicy" in e && e.attackerPolicy !== "unsafe-url")
+    return f + ".attackerPolicy " + JSON.stringify(e.attackerPolicy) + " is not unsafe-url";
+  if (("attackerPage" in e) !== (e.delivery === "referring-address" && "poc" in e))
+    return f + " states an attackerPage exactly where it is not a fire-verified referring-address entry";
   if ("precondition" in e && SINK_PRECONDITIONS.indexOf(e.precondition) < 0)
     return f + ".precondition " + JSON.stringify(e.precondition) + " is none of " + SINK_PRECONDITIONS.join(", ");
   if ("principalDemand" in e && SINK_DEMANDS.indexOf(e.principalDemand) < 0)

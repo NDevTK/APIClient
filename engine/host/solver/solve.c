@@ -446,6 +446,18 @@ static const SinkClass SINKS[] = {
    no language: one token serves every class and is read at the class-independent point (filter_survived). */
 #define SOLVE_BYTES_LOCATOR "apiclientbytes"
 
+/* The probe's index for the K'th declared byte: one character, so the byte after it is read exactly. A digit
+   or a lowercase letter, which the token's own alphabet already is. */
+static const char BYTES_PROBE_INDEX[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+static char bytes_probe_index(size_t k)
+{
+    DCHECK(k < sizeof BYTES_PROBE_INDEX - 1,
+           "a source declared more percent-encoded bytes than the delivery probe can index — each byte is "
+           "addressed by ONE index character appended to the token, so a byte past the alphabet would be read "
+           "back as another");
+    return BYTES_PROBE_INDEX[k];
+}
+
 /* Build the delivery probe: `apiclientbytesK` followed by the K'th byte of `encodes`, for each byte, so the
    answer is read per byte instead of aligned through a mangled string. Percent-encoded, dropped,
    entity-escaped and moved all read as "not delivered" (solve_filter.h says why). `encodes` is the source's
@@ -459,15 +471,11 @@ static char *bytes_probe(const char *encodes) {
            "then no byte whose arrival is in question, and the probe would be a document re-run measuring "
            "nothing");
     n = strlen(encodes);
-    DCHECK(n <= 10,
-           "a source declared more percent-encoded bytes than the delivery probe can index — each byte is "
-           "addressed by ONE decimal digit appended to the token, which is what makes the observation exact "
-           "rather than an alignment guess, so an eleventh byte would be read back as the first");
     s = malloc(n * (tl + 2) + 1);
     CHECK(s != NULL, "solve: OOM building the @S byte-delivery probe");
     for (i = 0; i < n; i++) {
         memcpy(s + o, SOLVE_BYTES_LOCATOR, tl); o += tl;
-        s[o++] = (char)('0' + (int)i);
+        s[o++] = bytes_probe_index(i);
         s[o++] = encodes[i];
     }
     s[o] = 0;
@@ -1266,7 +1274,7 @@ static void observe_delivery(Cand *e, const char *out) {
         unsigned char b = (unsigned char)enc[i];
         const char *p;
 
-        tok[tl] = (char)('0' + (int)i); tok[tl + 1] = 0;
+        tok[tl] = bytes_probe_index(i); tok[tl + 1] = 0;
         if (!(p = strstr(out, tok))) continue;          /* this token never arrived: says nothing about the byte */
         /* The probe's own token got here, so the character after it is an observation of that byte. */
         e->deliv_seen = 1;
@@ -2143,7 +2151,7 @@ static void emit_sender_pins(JsonBuf *b, const SenderPins *sp) {
    matches only declared sources. A root with neither a delivery nor a precondition writes neither; a fired PoC
    always has one (record_sink asserts it), so that silence is a parked search over a source no component
    declares. A missing root is not that fact, which is why it is asserted. The search comes too, for what its path demanded of an attacker's principal. */
-static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const char *delivers) {
+static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const char *delivers, const char *poc) {
     const char *enc, *kind = NULL;
     char prefix = 0;
 
@@ -2170,6 +2178,24 @@ static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const cha
         if (prefix) {
             char p[2] = { prefix, 0 };
             json_buf_raw(b, ","); json_buf_key(b, "deliveryPrefix"); json_buf_str(b, p);
+        }
+    }
+    /* A referrer PoC states the attacker's page and the policy it is served under; a fired one states the page's
+       address with this PoC in its path. */
+    {
+        const char *page = concolic_source_attacker_page(root);
+
+        if (page) {
+            json_buf_raw(b, ","); json_buf_key(b, "attackerPolicy"); json_buf_str(b, REFERRER_ATTACKER_POLICY);
+            if (poc) {
+                char *url = malloc(strlen(page) + strlen(poc) + 1);
+
+                CHECK(url != NULL, "solve: OOM spelling a referrer PoC's attacker page");
+                strcpy(url, page);
+                strcat(url, poc);
+                json_buf_raw(b, ","); json_buf_key(b, "attackerPage"); json_buf_str(b, url);
+                free(url);
+            }
         }
     }
     /* A member of the root that no attacker writes from outside the victim's own state: the finding is a sink
@@ -2304,7 +2330,7 @@ char *solve_json_array(JSContext *ctx) {
             emit_delivery_probed(&b, tw);
             /* And the measured constraint the PoC was built under, which tells anyone reproducing it by hand which
                bytes the browser would have eaten. */
-            emit_delivery(&b, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv));
+            emit_delivery(&b, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv), g_sinks[i].poc);
         }
         /* The acts after the delivery they follow: a fire verified under an engine drive of a listener
            reproduces only when a person performs the act that runs it, so the envelope states each in order. */
@@ -2483,7 +2509,7 @@ char *solve_json_array(JSContext *ctx) {
            attacker would reach the victim if one fires. */
         {
             char dv[64];
-            emit_delivery(&b, &g_pending[i], g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv));
+            emit_delivery(&b, &g_pending[i], g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv), NULL);
         }
         /* `senderDemand`: the senders this parked search waits on, one per pinned path that reached the sink.
            Parked entries only: a fired search has a PoC, and its own path's identity is `principalDemand`. */

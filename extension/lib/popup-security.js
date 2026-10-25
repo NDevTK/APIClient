@@ -72,7 +72,8 @@ function _deliverySentence(item) {
     + "come from solve_json_array (source=" + item.source + ")");
   if (!_DELIVERY[item.delivery])
     return "the engine declares the delivery `" + item.delivery + "`, which this view has no sentence for";
-  return _DELIVERY[item.delivery](item.deliveryPrefix);
+  return _DELIVERY[item.delivery](item.deliveryPrefix)
+       + (item.attackerPage ? " (the attacker serves " + item.attackerPage + " under Referrer-Policy: " + item.attackerPolicy + ")" : "");
 }
 
 // §@S(a): A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT — it has to run under the page's ACTUAL

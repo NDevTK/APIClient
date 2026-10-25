@@ -1240,6 +1240,8 @@ async function mintDrive(minted, slices) {
                  ['an address with no prefix', { delivery: 'address' }, 'deliveryPrefix'],
                  ['a prefix beside a navigable name', { delivery: 'navigable-name', deliveryPrefix: '#' }, 'deliveryPrefix'],
                  ['a precondition outside the vocabulary', { precondition: 'sibling' }, '.precondition'],
+                 ['a fired referrer with its attacker page', { delivery: 'referring-address', attackerPolicy: 'unsafe-url', attackerPage: 'https://attacker.test/x', poc: 'x' }, null],
+                 ['a referrer with no policy', { delivery: 'referring-address' }, 'attackerPolicy'],
                  ['a fired entry under a precondition', { precondition: 'same-origin', poc: 'X9()' }, null],
                  ['a fired entry with neither a delivery nor a precondition', { poc: 'X9()' }, 'neither a delivery'],
                  ['a third address component', { delivery: 'address', deliveryPrefix: '/' }, 'deliveryPrefix'],
