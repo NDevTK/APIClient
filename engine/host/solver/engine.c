@@ -8056,27 +8056,23 @@ static uint64_t g_rival_miss_gen = 0, g_rival_miss_cur = 0, g_rival_miss_both = 
    would put the assertion's operands behind a second condition. */
 static int64_t g_rival_own_notch = 0, g_rival_visits = 0;
 static double g_rival_val = 0.0, g_rival_dist = 0.0;
-/* The fifth summand: flow_weight adds flow_branch_bonus, `1.0 / sub_born` over the member's top-level arm.
-   `sub_born` is a bucket field, so one sibling forking re-ranks the whole arm at once. The integer is snapshotted,
-   not the quotient (solver/flow.h): the term is a pure function of it and the comparison is exact. */
-static long g_rival_branch_born = 0;
 /* The integer the rival's family coordinate prices (solver/flow.c's acct_family_coord): its family's notch plus its
    carry bit, which is its total notch less its own. flow_age_running charges the family without a rank change, so
    this moves between two generations, and only up: the own notch stands still and the total is a floor of a sum
-   that only grows. The sixth term, and the one-sided one. */
+   that only grows. The fifth term, and the one-sided one. */
 static int64_t g_rival_fam_coord_notch = 0;
-/* The weight itself, the one clause that survives a summand being added: the six above are fields of a computed
+/* The weight itself, the one clause that survives a summand being added: the five above are fields of a computed
    value, and an assert over the accessor cannot be short a summand. It is one-sided by design: between two
-   generations five stand still and the sixth only rises, so the computed weight is non-increasing (rounding to
+   generations four stand still and the fifth only rises, so the computed weight is non-increasing (rounding to
    nearest is monotone in each operand of flow_order_key's sums); equality would fire on the one movement the
-   interval permits. It fires on what the six cannot see: a forgiveness of the family's silence with the generation
+   interval permits. It fires on what the five cannot see: a forgiveness of the family's silence with the generation
    unchanged (flow_credit_emit is that writer and bumps today), a summand that moves up, or a notch that decreases.
    The direction is the precondition for any cached maximum, heap or index over flow_index_key; flow.h's
    `sil_phases` prices the magnitude. Written in every build, read only in dev (in release the condition is inside
    a `sizeof`).
    Named residual. Not covered: every member but the cached rival. solver/flow.c's walk asserts each member's own
    half equal across a generation, but nothing asserts the direction of the whole weight for the rest. Next diff
-   builds: a per-member weight stamp beside `key_last`, compared with `<=` at that walk, dev-only. Absence shows
+   builds: a per-member weight stamp beside `ikey_last`, compared with `<=` at that walk, dev-only. Absence shows
    as: a member whose weight rises between two generations passes every check unless it is the cached rival, and
    an index over the frontier returns a member the walk would not have, with no assert naming why. */
 static double g_rival_w = 0.0;
@@ -8204,7 +8200,6 @@ static int preempt_hook(int kind) {
         if (g_rival) {
             g_rival_own_notch = flow_service_notch(g_rival); g_rival_visits = g_rival->visits;
             g_rival_val = flow_reward(g_rival); g_rival_dist = flow_distance(g_rival);
-            g_rival_branch_born = flow_branch_born(g_rival);
             g_rival_fam_coord_notch = flow_family_notch(g_rival) + flow_silence_carry(g_rival);
             g_rival_w = flow_weight(g_rival);
         }
@@ -8218,9 +8213,7 @@ static int preempt_hook(int kind) {
        the generation nor `cur` changed, so the rival is the member the readings were taken of, and each reading
        is a flow_weight term the generation claims to speak for. `flow_service_notch` is the member's own silence,
        charged by flow_age_running only to `g_running`; the same charge moves the family's notch and carry with
-       no rank change, and their sum may only rise. Dev-only and O(1). The bucket mint count guards a bucket minted
-       into without flow_new (`sub_born`'s writers are flow_new and flow_fork_inherit, whose raise follows
-       flow_new's bump), which would re-rank an arm silently.
+       no rank change, and their sum may only rise. Dev-only and O(1).
        The message names which term moved, and whether the rival is still a member: a departure the cache outlived
        reads as a moved term (a freed flow answers 0 through the early returns that ask `family`), and the two
        take opposite diffs. flow_is_member is free on the passing path, since DCHECKF evaluates its arguments only
@@ -8230,21 +8223,19 @@ static int preempt_hook(int kind) {
     DCHECKF(!g_rival ||
             (flow_service_notch(g_rival) == g_rival_own_notch && g_rival->visits == g_rival_visits &&
              flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
-             flow_branch_born(g_rival) == g_rival_branch_born &&
              flow_family_notch(g_rival) + flow_silence_carry(g_rival) >= g_rival_fam_coord_notch),
             "a term of the cached rival's weight moved while the frontier generation stood still (own notch %lld -> "
-            "%lld, completed units %lld -> %lld, reward %g -> %g, distance %g -> %g, bucket mint count %ld -> %ld, "
+            "%lld, completed units %lld -> %lld, reward %g -> %g, distance %g -> %g, "
             "family notch plus carry %lld -> %lld, still a member: %d; -1 and 0 mean it departed) — raise "
             "frontier_rank_changed() at the writer that moved it",
             (long long)g_rival_own_notch, (long long)flow_service_notch(g_rival),
             (long long)g_rival_visits, (long long)g_rival->visits,
             g_rival_val, flow_reward(g_rival),
             g_rival_dist, flow_distance(g_rival),
-            g_rival_branch_born, flow_is_member(g_rival) ? flow_branch_born(g_rival) : -1L,
             (long long)g_rival_fam_coord_notch, (long long)(flow_family_notch(g_rival) + flow_silence_carry(g_rival)),
             flow_is_member(g_rival));
-    /* The same claim over the whole weight, after the six so that a fire here is a movement the six have no
-       name for: six terms in bounds and a weight that rose, which no term of today's weight can do. See the
+    /* The same claim over the whole weight, after the five so that a fire here is a movement the five have no
+       name for: five terms in bounds and a weight that rose, which no term of today's weight can do. See the
        declaration for the state and the one-sided bound. */
     DCHECKF(!g_rival || flow_weight(g_rival) <= g_rival_w,
             "the cached rival's weight rose while the frontier generation stood still (cached %.17g, current %.17g; "

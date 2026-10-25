@@ -2152,11 +2152,7 @@ function wfqReading(out) {
      not one was ever turned into a sentence. That is not the same defect as a missing field and it is quieter:
      nothing is undefined, nothing defaults, the build is green, and a measurement nobody reads is indistinguishable
      from one nobody took.
-     WHY IT IS WORTH READING AT ALL, WHICH IS A CLAIM ABOUT THE ORDER AND NOT ABOUT A DIAGNOSTIC. flow_weight
-     sums flow_branch_bonus — `1.0 / live` over the top-level arm's bucket — so these rows are the only
-     published statement of a TERM OF THE ORDERING. Two declarations in solver/flow.c used to say the order read
-     nothing at this scope; three consumers priced it the whole time. A reader that renders four of the five
-     terms is the same omission one layer out.
+     No term of the order reads a bucket: these rows describe the fork tree and where the thread went.
      THE KINDS ARE TAKEN FROM THE DECLARATION AND NOT GUESSED: `branches`, `brLive*` and `brDepthMax` are
      GAUGES and are read at this instant only; `brBornLife*`, `brWorkLife*`, `brRetiredWorkLife` and
      `chargedWorkLife` are LIFETIME counters and are read as RATIOS, which is what survives the 2x run-to-run
@@ -2177,8 +2173,7 @@ function wfqReading(out) {
      THE FLAG NOW SELECTS ONE STATE AND THE ENGINE ASSERTS IT CANNOT ARISE WITH MEMBERS STANDING
      (flow_wfq_census's `members == 0 || br_live_min > 0`). It is kept rather than deleted because this reader
      runs against RELEASE artifacts too, where that DCHECK is compiled out, and against artifacts built before
-     it existed — where a 0 is the old defect and the honest rendering is that the term says nothing here
-     rather than a range computed by dividing by it. */
+     it existed — where a 0 is the old defect and the extrema say nothing. */
   const brOk = w.branches > 0 && w.brLiveMin > 0 && w.brBornLifeMin > 0;
   /* THE TWO CONSERVATION IDENTITIES, CHECKED FROM OUTSIDE THE PROCESS. The engine DCHECKs both in
      flow_wfq_census where every term is in one hand, and that check is compiled OUT of a release build where
@@ -2228,25 +2223,13 @@ function wfqReading(out) {
                     `microsecond belongs to a bucket somebody stands in, a bucket still taken and standing ` +
                     `empty, or a bucket whose subtree has wholly departed — this total cannot move without ` +
                     `one of its three parts moving, and a break is thread time attributed to nobody.`);
-  /* THE BRANCH TERM'S RANGE IS OVER THE MINT PAIR AND NOT THE LIVE PAIR, BECAUSE flow_branch_bonus DIVIDES
-     BY `sub_born`. This read the live pair while the engine read the live gauge, and both moved together; it
-     is repointed here in the same diff rather than left to agree by coincidence. The two are NOT
-     interchangeable in either direction: two buckets holding one member apiece span 0.0 of the live reading
-     and 1 - 1/N of this one when one of them has minted N arms and shed them, which is exactly the
-     mints-and-sheds frontier the sentence below already names. */
-  const brLift = brOk ? 1 / w.brBornLifeMin - 1 / w.brBornLifeMax : 0;
   const branch = !brOk
     ? `${w.branches} branch bucket(s) taken, live minimum ${w.brLiveMin} and mint minimum ` +
-      `${w.brBornLifeMin}, so the branch ` +
-      `term's range is not computable from this census — with members standing that is an artifact ` +
-      `built before solver/flow.c's branch_take split the live extrema from the burn totals, where ` +
-      `a bucket whose root flow had DEPARTED dragged the minimum to zero and deleted this term from ` +
-      `wfq_accounted_spread as well`
+      `${w.brBornLifeMin}, so the bucket extrema are not readable from this census — with members ` +
+      `standing that is an artifact built before solver/flow.c's branch_take split the live extrema from ` +
+      `the burn totals, where a bucket whose root flow had DEPARTED dragged the minimum to zero`
     : w.branches === 1
-    ? `ONE top-level arm holds the whole frontier, so every member reads the same 1/${w.brBornLifeMax} ` +
-      `from flow_branch_bonus and that term is a COMMON OFFSET that orders nothing — the same shape as a ` +
-      `one-family reward one scope up, and the reason a frontier can be branching hard while the one term ` +
-      `written to price branching is constant across it. The bucket that received the most thread took ` +
+    ? `ONE top-level arm holds the whole frontier. The bucket that received the most thread took ` +
       `${w.chargedWorkLife > 0 ? (100 * w.brWorkLifeMax / w.chargedWorkLife).toFixed(0) : "?"}% of every ` +
       `microsecond the scheduler has charged, which is a receipt and not a verdict: with one arm there is no ` +
       `other side for it to have taken anything FROM`
@@ -2279,19 +2262,9 @@ function wfqReading(out) {
       (w.brBornLifeMax > w.brLiveMax * 2
         ? `Across those buckets the largest MINT count is ${w.brBornLifeMax} against ${w.brLiveMax} standing ` +
           `in the fattest — TWO MAXIMA THAT NEED NOT BE ONE ARM — so some arm mints and sheds rather than ` +
-          `accumulating: its arms are departing, and the frontier it leaves is not where its cost went. That ` +
-          `is the state flow_branch_bonus reads \`sub_born\` rather than the live gauge for, because occupancy ` +
-          `is RESTORED by a departure and the arms taken are not`
+          `accumulating: its arms are departing, and the frontier it leaves is not where its cost went`
         : `The largest mint count is ${w.brBornLifeMax} against ${w.brLiveMax} standing in the fattest, so ` +
           `the frontier ACCUMULATES rather than minting and shedding — what was forked is still here`) +
-      `; the branch term therefore spans ${brLift.toFixed(3)} points across this frontier ` +
-      `(1/${w.brBornLifeMin} at the bucket that has taken fewest arms against 1/${w.brBornLifeMax} at the ` +
-      `one that has taken most — the MINT pair, which is what flow_branch_bonus divides by, and not the ` +
-      `live pair the concentration reading above is made of), which is ` +
-      (brLift > 0.5
-        ? `MOST of the one point that term can lift a member: a lone arm is being ranked most of an emission ` +
-          `ahead of every member of the crowd, by the crowd's size alone`
-        : `a fraction of the one point that term can lift a member`) +
     `. Fork tree depth ${w.brDepthMax} against ${w.members} live member(s): ` +
       /* THE COMPARISON IS DEPTH AGAINST THE FRONTIER AND NOT AGAINST A CONSTANT, WHICH IS A CORRECTION AND NOT
          A REFINEMENT. This read `brDepthMax <= 2` and called everything above it a CHAIN whose maintenance is
@@ -2318,9 +2291,8 @@ function wfqReading(out) {
        solver/flow.c's \`up\` residual names for holding its three counters per NODE, and this census MEETS
        it". The precondition was met and the residual was refuted anyway — the cost that binds is RETENTION
        (a per-node bucket pins every dead fork node with a live descendant, which is the unbounded retention
-       acct_compress_dead exists to prevent) and the scope would have re-keyed the \`branch\` that
-       flow_branch_bonus divides by, which is a term of the ORDER. A reader who acted on the old sentence
-       would have built a weight change and an unbounded retention on the strength of a depth reading. The
+       acct_compress_dead exists to prevent). A reader who acted on the old sentence would have built an
+       unbounded retention on the strength of a depth reading. The
        \`brFan*\` rows are what answers the question instead, and they cost no retention and no charge-time
        walk at all.
        WHY IT IS READ HERE AND NOT LEFT AS A ROW: a fan is the only published statement of the fork structure
@@ -2446,17 +2418,10 @@ function wfqReading(out) {
        frontier whose ranges are all zero is one the pick cannot distinguish at all — which is a true and
        reportable state (one fork family, equal reward, no candidates) and not a defect to be inferred into. */
     orderedBy: (() => {
-      /* FIVE TERMS AND NOT FOUR. flow_weight is reward + fitness + optimism + BRANCH + aging, and this list
-         carried four — so on a frontier the branch term was ordering, this function could name any term but
-         that one, and on a one-family frontier with a live branch spread it would answer "nothing — every
-         term reads the same at both ends", which is a confident false statement of the kind the arms below it
-         exist to avoid. The same omission the fork's own rank-neutrality re-derivation carried in
-         solver/flow.c, arriving in the reader: a term carried by a bucket TRANSFER rather than by a field
-         copy is invisible to any list written out of the assignments. Its range is derived from the two live
-         extrema rather than published as a row, because the term IS `1/live` and both ends are already
-         emitted. */
+      /* One entry per term of flow_weight (reward + fitness + optimism + aging, Level 2's four); a term
+         missing here can be the one ordering the frontier while this answers another or "nothing". */
       const t = [["reward", rangeVal], ["fitness", w.distMax], ["optimism", rangeUcb],
-                 ["branch", brLift], ["aging", rangeOwn + rangeFam]].sort((a, b) => b[1] - a[1]);
+                 ["aging", rangeOwn + rangeFam]].sort((a, b) => b[1] - a[1]);
       return t[0][1] <= 0 ? "nothing — every term reads the same at both ends of this frontier" : t[0][0];
     })(),
     text: `@WFQ: ${w.members} members, account reward ${w.valMin}..${w.valMax} (top ${w.valTop}), ` +

@@ -145,10 +145,8 @@ typedef struct FlowAcct {
      * flow_wfq_census, and the one-level branch derivation in flow_fork_inherit. The third accounting scope is
      * `branch` below, one level deep: every flow reaches the top-level arm its subtree hangs under in one
      * indirection, and flow_wfq_census publishes that bucket's live and lifetime membership and lifetime burn.
-     * Per-node buckets would be wrong twice: re-keying `branch` to the nearest fork point would move a term of the
-     * order (flow_branch_bonus, `1.0 / sub_born` over the bucket, is summed into flow_weight, and flow_fork_inherit's
-     * DCHECK fires on it), and it would pin, per departed arm and without bound, the nodes acct_compress_dead exists
-     * to free. The minting fan (`br_fan_max`, `br_fan_sum`, `br_fan_depth`), counted by `up` over non-root parents
+     * Per-node buckets would pin, per departed arm and without bound, the nodes acct_compress_dead exists to
+     * free. The minting fan (`br_fan_max`, `br_fan_sum`, `br_fan_depth`), counted by `up` over non-root parents
      * in the census's existing walk, says which deep fork is minting and how wide it stands now.
      * Named residual. Not covered: the burn and lifetime mint count of a deep fork; `sub_work`, `sub_born` and
      * `sub_gone` are maintained only where `branch == self`, and the fan is a gauge that says nothing about
@@ -240,12 +238,10 @@ typedef struct FlowAcct {
      * every flow reaches its bucket in one indirection, as `Flow.family` reaches the root, because flow_weight is
      * evaluated inside DCHECK conditions where a compressing walk is forbidden.
      *
-     * The order reads it: flow_nonreward sums flow_branch_bonus (`1.0 / sub_born` over this bucket) into
-     * flow_weight, FLOW_NONREWARD_MAX carries a line for it, and flow_silence_us_to_sink's bound is `+ 2.0` because
-     * of it. It is rank-neutral at a fork for two reasons in two cases: a fork off a non-root moves the newborn into
-     * its parent's bucket (flow_fork_inherit), so both read one `sub_born`; a fork off a root gives the arm its own
-     * bucket, and the two are equal because both hold one member (nothing raises a root's own `sub_born` past the 1
-     * flow_new wrote), the fragile case, asserted where it is decided.
+     * No term of the weight reads it: the order's index files members by it (flow_ix_bucket_sync) and the census
+     * reports it. A weight term over its membership would not be fork-neutral: a fork off a non-root raises the
+     * bucket's `sub_born`, moving the forker and every bucket-mate, while a fork off a root raises nothing, so a
+     * root alone in its bucket would keep the term's maximum for its life.
      *
      * It is why acct_compress_dead has a third stop: retention wants the dead spine gone, while a subtree figure
      * wants it (a departed arm's service is part of what its subtree received). Only one node per path must
@@ -267,15 +263,6 @@ typedef struct FlowAcct {
        `sub_born++` there, in one statement, never a retraction. */
     long sub_born;
     long sub_gone;
-    /* The order's reading of `sub_born`, held once per bucket: `1.0 / sub_born`, the whole of what
-       flow_branch_bonus returns and this scope contributes to each live member's weight. Not a cache for speed: it
-       makes the term spellable as a bucket quantity, the form the order's index reads once per bucket and applies to
-       a whole arm (flow_ix_bucket_sync). Written on the statement that writes `sub_born` and nowhere else
-       (flow_new's initialisation and flow_fork_inherit's join write both adjacently), and acct_branch_offset
-       compares it with the quotient recomputed from the integer at every read, so a raise without its offset fires
-       at the next weighing. A pure function of `sub_born` at the instant read, monotone downward and published
-       nowhere (flow_branch_born publishes the integer); flow_member_key asserts the two routes agree bit for bit. */
-    double sub_offset;
     /* How deep in the fork tree this node sits: 0 at a root, parent + 1 at a fork, never moved by the compression
        (which rewrites `up`). A gauge over the members the census reaches that ranks nothing; it says whether the
        fork tree is a star or a chain, which decides whether an aggregate maintained by walking to the root per
@@ -486,14 +473,7 @@ static Flow *g_owed_head;     /* the host-owed members, out of the index; see fl
 /* And the member half of the weight, forward-declared for the one writer that moves it without raising the
    statement above: flow_age_running is deliberately silent (its banner: the charge is what the aging term reads,
    and a bump per charge would invalidate every cached rival every dispatch), so it maintains the stamp flow_best's
-   walk compares against. Defined beside the terms it is made of. Dev-only in declaration and use, for
-   `Flow.key_last`'s reason. */
-static double flow_member_key(const Flow *f);
-
-/* And the per-member half of that key, for the same writer and a different claim: flow_member_key is the quantity
-   that must stand still between two frontier generations, while this is the quantity an index may be keyed on
-   (flow_index_key's banner: one quantity, two questions, and the stricter decides the composition). The stamp
-   above asserts the sum and this one the half, at the same seam, for solver/flow.h's `ikey_last` reason. */
+   walk compares against. Defined beside the terms it is made of. */
 static double flow_index_key(const Flow *f);
 #endif
 /* The weight with the assumption term left out, for flow_fork_inherit's equality; defined beside flow_order_key. */
@@ -1687,7 +1667,7 @@ void flow_age_running(int64_t us) {
 #if APICLIENT_DEV
     /* And the stamp flow_best's walk compares against, maintained here because this is the one writer of a
        member-half summand that raises no generation: `work` is read by flow_own_silence, quantised by
-       flow_service_notch and priced into flow_member_key's first term, so the charge above moves the member half
+       flow_service_notch and priced into flow_index_key's first term, so the charge above moves the member half
        of the flow it charges while the generation stands still. The walk exempts `m == g_running` at the scan,
        which covers this member only while it holds the thread; flow_switch_out clears the pointer and leaves the
        charge in the key, so without this stamp the first scan after a slice boundary would meet a non-running
@@ -1696,16 +1676,11 @@ void flow_age_running(int64_t us) {
        AT MOST ONE MEMBER of the frontier", so the stamp restores the claim it makes and every other member still
        fires. One re-key per dispatch is O(1), so an index over this key updates here and needs no walk. After both
        charges and the window assert, so the stamp is the key the member now carries; read-only on its operands. */
-    g_running->key_last    = flow_member_key(g_running);
+    g_running->ikey_last   = flow_index_key(g_running);
     g_running->key_gen     = g_gen;
     g_running->key_stamped = 1;
-    /* And the per-member half, in the same group, because this charge moves it by the same `k`: flow_index_key
-       reads flow_service_notch, the floor this line advances, so a charge crossing a quantum moves both stamps and
-       one inside a quantum neither. Stamping only the sum would leave the half's check firing on the member the
-       charge is about. */
-    g_running->ikey_last   = flow_index_key(g_running);
     /* And the phase, for the same reason: this charge is the one writer of `own_silence` that raises no
-       generation, so it is the one writer all three stamps must survive, and the phase is the half the key cannot
+       generation, so it is the one writer both stamps must survive, and the phase is the half the key cannot
        carry (the key reads the floor; a sub-quantum charge moves only the remainder). See solver/flow.h's
        `phase_last`. */
     g_running->phase_last  = flow_silence_phase(g_running);
@@ -1987,11 +1962,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        The membership moves as a departure and an arrival in one statement: both counters are lifetime, and a census
        can land between flow_new and here (flow_new's allocations may page a flow out), so retracting the `sub_born`
        flow_new published would make a lifetime counter fall. The sibling's own node is left at born == gone, a
-       bucket no census reaches because nothing points `branch` at it.
-       The transfer is load-bearing for the rank-neutrality equality: flow_nonreward sums flow_branch_bonus, which is
-       `1.0 / sub_born` over the bucket the arm moves into, and both sides read that bucket after the increment.
-       Without the transfer the newborn keeps a bucket at one member (bonus 1.0) against a parent bucket of L, and
-       the equality fires for every L above one. The root arm passes for a different reason, asserted below. */
+       bucket no census reaches because nothing points `branch` at it. */
     sib->acct->depth = parent->acct->depth + 1;
     {
         FlowAcct *br = parent->acct->up ? parent->acct->branch : sib->acct;
@@ -1999,32 +1970,11 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
                sib->acct->sub_gone == 0,
                "a forked sibling reached its inheritance without the branch bucket flow_new opens, or already "
                "holding membership in one — the transfer below moves exactly one member");
-        /* The root arm's neutrality, asserted where it is decided. Where the arm keeps its own bucket the two sides
-           share no denominator, so flow_branch_bonus is equal across them only while both buckets stand at the
-           `sub_born == 1` flow_new wrote. The arm's is one by the precondition above; the parent's is one only
-           because `br` is never `parent->acct` when the parent is a root. That is a property of this expression,
-           not of any field, so a bucket policy that let a root be some node's `branch` would leave every other
-           check green and make a fork off the root a promotion of up to a full point. It names `sub_born` and
-           `sub_gone` separately rather than their difference, because the term reads `sub_born`: a live count of
-           one is satisfied by a bucket at (born 100, gone 99), which would read 1/1 against 1/100. Unlike the
-           equality below, which compares two sums any cancelling pair satisfies, this names the structural fact,
-           and it is false for any frontier in which a root has been forked into. */
-        DCHECK(br != sib->acct ||
-               (parent->acct->branch == parent->acct &&
-                parent->acct->sub_born == 1 && parent->acct->sub_gone == 0),
-               "a fork left the newborn in its own branch bucket while the parent's bucket has minted or shed "
-               "past the one member flow_new wrote — so the two sides of this branch read different "
-               "`1/sub_born` from flow_branch_bonus and branching just changed a flow's own rank, which is "
-               "the one thing the WFQ may never let it do");
-        /* And the bucket's offset moves on the statement that moves the counter it is a function of: the
-           `br->sub_born++` re-ranks every live member of the bucket the arm joins, the term is read out of
-           `sub_offset`, and an increment that left the offset standing would let the equality compare the old
-           denominator against itself and pass. Adjacent, the pair cannot come apart without acct_branch_offset's
-           guard firing at the next weighing. The departure, the arrival and the re-pointing are the body of one
-           `if`, so a census landing outside it reads a coherent frontier. */
+        /* The departure, the arrival and the re-pointing are the body of one `if`, so a census landing outside it
+           reads a coherent frontier. */
         if (br != sib->acct) {
             sib->acct->sub_gone++;
-            br->sub_born++; br->sub_offset = 1.0 / (double)br->sub_born;
+            br->sub_born++;
             sib->acct->branch = br;
         }
     }
@@ -2034,9 +1984,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->assumed_reads = parent->assumed_reads;
     for (int i = 0; i < parent->assumed_slots_n; i++) flow_assumed_slot_push(sib, parent->assumed_slots[i]);
     if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot);
-    /* Back into the index under its final bucket and family. Inserting into `br` re-keys that bucket in its
-       family's heap, which is where the `sub_born++` above, a new offset for every member of the arm, reaches the
-       index: one bucket re-keyed, no member. */
+    /* Back into the index under its final bucket and family. */
     flow_ix_insert(sib);
     /* And the path's forced mark, the one inherited thing the ranking never reads: an arm is its parent's path with
        one more arm on it, so it stands on everything the parent's path stood on. A sibling born clean of it would
@@ -2058,23 +2006,19 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->path_pinned = at_branch.pinned;
     sib->path_peer_driven = at_branch.peer_driven;
     sib->path_peer_pinned = at_branch.peer_pinned;
-    /* The scheduler's one WFQ, asserted at the fork: a fork is rank-neutral. At the instant it is born the sibling is
-       worth exactly what its parent is worth. The equality fires the moment anything enters flow_weight that a fork
-       does not carry, which is the shape of every banned fix (a depth bonus, a script-index term, a separate visit
-       counter, a "prefer flows that have run" tiebreak), here at the fork rather than later in a progress line
-       reading `finished 0`.
-       flow_weight is `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) + 1/sub_born
-       − (own_silence + fam_work)*RATE`, so a fork carries nine things through eight assignments: `cand_replay`,
-       `cand_surv` and `cand_rung` (the runway fraction is a fact about the path both arms share, and
-       decide_fork_blob hands the sibling the parent's cursor); `visits`; `work` and `work_gen` (a reading and the
-       window it is a reading of); the family tag, joined, which carries both the reward and the aging's family
-       half; and the bucket transfer, which carries `1/sub_born`. Each addition to the formula has arrived through
-       this line firing. Had the arm kept its fresh root, its `fam_work` would be 0 against a family that has burned
-       and its `val` 0 against one that has emitted, and this would fire at the first fork.
-       It is a claim about one instant: it compares the arm born here against the parent here, so it cannot see two
-       arms of one parent forked at two instants, which a term copied at the fork makes differ by birth order. A term
-       read through the shared root is equal across every arm at every instant, so any future term whose value can
-       move between two forks of one parent belongs on the account, not on the flow. */
+    /* The scheduler's one WFQ, asserted at the fork: a fork is rank-neutral, so at birth the sibling is worth exactly
+       what its parent is worth. It fires the moment anything enters flow_weight that a fork does not carry (a depth
+       bonus, a script-index term, a separate visit counter, a "prefer flows that have run" tiebreak).
+       flow_weight is `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits)
+       − (own_silence + fam_work)*RATE`, so a fork carries eight things through seven assignments: the three `cand_*`
+       (decide_fork_blob hands the sibling the parent's cursor); `visits`; `work` and `work_gen`; and the family tag,
+       joined, which carries the reward and the aging's family half (a fresh root would read 0 for both and fire).
+       What it cannot see: it compares the arm with the parent after the fork has written both, so a term over a
+       count the fork raises in a shared place (a bucket's membership, as `1/sub_born` was) moves the forker and
+       everyone sharing the count while passing this line, and is not fork-neutral. And it is a claim about one
+       instant, blind to two arms of one parent forked at two instants, which a term copied at the fork makes differ
+       by birth order; a term read through the shared root is equal across every arm at every instant, so any term
+       whose value can move between two forks of one parent belongs on the account, not on the flow. */
     /* And the aging's two halves are one reading for the arm, which the equality cannot say: it compares a sum, so it
        passes however the halves are split, including the split an arm is born into if `work` is carried without
        `work_gen`. This is the site that mints that population, so the relation is asserted on the newborn. */
@@ -2385,10 +2329,6 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        flow_fork_inherit alone moves it into another's, as a departure from this bucket and an arrival in that one,
        so neither counter falls. Depth zero likewise. */
     f->acct->branch = f->acct; f->acct->sub_born = 1;
-    /* And the bucket's contribution to its members' weight, derived from the field above rather than written as the
-       literal `1.0`, so acct_branch_offset's guard compares two evaluations of one expression on one operand, the
-       one form in which an equality of doubles is exact. */
-    f->acct->sub_offset = 1.0 / (double)f->acct->sub_born;
     f->acct->depth = 0;
     /* And it is its own family until something says otherwise: a from-baseline flow founds a family and keeps this;
        a fork joins its parent's (flow_fork_inherit) and this root becomes a plain ancestry node. Pointed here so no
@@ -3611,29 +3551,6 @@ double flow_distance(const Flow *f) {
     return (f->cand_replay + f->cand_surv + (double)f->cand_rung) / (double)FLOW_RUNGS_N;
 }
 
-/* The bucket's contribution to the order, asked of the bucket: the one entry that reads the branch term without
-   holding a member, which is how the order's index applies it: once per bucket, where its key is filed
-   (flow_ix_bucket_sync), so a fork's `sub_born++` re-keys one bucket in its family's heap and no member.
-   The guard is two writers against one reader: the stored double is maintained at flow_new and at
-   flow_fork_inherit's join, and the quotient is recomputed here from the integer those statements wrote, the same
-   expression on the same operand, so the equality is exact. It breaks only for a third writer of `sub_born` that
-   leaves the offset, or a host with FLT_EVAL_METHOD 2 (evaluating wider than binary64 against a rounded store);
-   both hosts this project builds for are binary64 throughout. solver/flow.h publishes `flow_branch_born` as the
-   integer because a double "would be compared with `==` against a quotient recomputed at ANOTHER INSTANT" (engine.c's
-   rival snapshot); this compares at one instant against the integer it was derived from. */
-static double acct_branch_offset(const FlowAcct *br) {
-    DCHECK(br != NULL,
-           "a branch bucket's contribution to the order was asked of no bucket — flow_new opens one for every node "
-           "and the fork moves membership rather than clearing it");
-    DCHECK(br->sub_born >= 1,
-           "a branch bucket reports a lifetime mint count below one — `sub_born` is written to 1 at flow_new and "
-           "only raised after");
-    DCHECK(br->sub_offset == 1.0 / (double)br->sub_born,
-           "a branch bucket's stored offset is not `1.0 / sub_born` — flow_new and flow_fork_inherit's join write "
-           "the two together, so a third writer of `sub_born` left the offset standing, or this host evaluates "
-           "doubles wider than binary64");
-    return br->sub_offset;
-}
 
 /* The range of everything the order is made of except the reward, written as the derivation, term by term against
    flow_nonreward's summands (as wfq_accounted_spread is written against flow_weight's). Each line is one term at
@@ -3643,7 +3560,6 @@ static double acct_branch_offset(const FlowAcct *br) {
      - the fitness distance is (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N with the two fractions asserted in
        [0,1] (flow_observe_replay, flow_observe_survival) and cand_rung on the ladder (flow_observe_rung), whose top
        is FLOW_RUNGS_N - 2, so its maximum is (1 + 1 + (N-2))/N = 1 for any N;
-     - the branch bonus is 1/sub_born with `sub_born >= 1`, so its maximum is a member alone in its bucket;
      - the aging enters negatively at FLOW_AGE_QUANTUM per notch, and the notch is a floor of non-negative work
        counts (flow_age_running asserts the charge), so it contributes at most nothing.
    One-sided by design: a flow that burns the thread without emitting must be able to sink arbitrarily far, and a
@@ -3653,60 +3569,12 @@ static double acct_branch_offset(const FlowAcct *br) {
                            + (1.0 + 1.0 + (double)(FLOW_RUNGS_N - 2)) / (double)FLOW_RUNGS_N /* distance: two   */ \
                                                                                         /* fractions + the top  */ \
                                                                                         /* boolean rung         */ \
-                           + 1.0 / 1.0                                                  /* branch: alone in it  */ \
                            - 0.0 * FLOW_AGE_QUANTUM                                     /* aging, no silence    */ \
                            - 0.0 * FLOW_ASSUMPTION_COST )                               /* no assumption        */
 
-/* How many arms this member's branch has ever taken: the reading that tells the first arm of an unexplored branch
-   from the many-thousandth arm of one already taken, which no other term can. On a real bundle whose frontier is one
-   family (one reward for every member) every other term is common to the two sides of the branches that made the
-   frontier, the state absent.c's banner names: "what must exist afterward is a frontier on which the two sides of an
-   example-free branch are COMPARABLE AT ALL". This is a reading about the search, not about either arm.
-   A bonus for a sparse bucket, not a penalty for a crowded one, and the sign is what makes it admissible: a crowding
-   penalty would drop an unrun member beneath the 1.0 the crossing bound rests on ("an optimism term keyed on
-   something a never-run flow does not stand at zero of"). As a bonus nothing is lowered, and its range joins
-   FLOW_NONREWARD_MAX, loosening the silence bound by one point, the same shape as the fitness comparator.
-   Fork-neutral by construction: a forked sibling joins its parent's bucket (raising `sub_born` before the fork's
-   equality is evaluated), and this is read at the pick, so both arms read one number at every instant after the
-   branch, which also passes the two-instants test. A root's own bucket is `sub_born == 1` for its life, asserted
-   where the fork decides it.
-   The denominator is the lifetime mint count, not the live gauge `sub_born - sub_gone`: occupancy falls when an arm
-   departs, so a branch that minted a hundred arms and shed ninety-nine would read 1.0, like a branch that took none,
-   a rank changed by branching through the departure, which the fork's equality cannot see. `sub_work` is inadmissible
-   too: a root's own bucket accumulates every unit the root burns while an arm's fresh bucket stands at zero,
-   so a term over it would make forking off a root a promotion, and seeding the arm with the parent's total is a copy
-   at the fork instant (birth order). `depth` fails the same way (0 against 1). So the branch scope admits only the
-   membership pair as a weight term, and its receipt rows stay observations.
-   The cost to the guarantee: a never-run flow is still never starved (this only adds), but two never-run members
-   now differ: one whose branch took no other arm outranks one of N by (1 - 1/N), at most a point. The range is
-   unchanged, (0, 1], so FLOW_NONREWARD_MAX's `branch: alone in it` line and flow_silence_us_to_sink's `+ 2.0` stand.
-   This record retires when no reading of a bucket's live count can be re-derived as a term: when `sub_gone` no
-   longer exists, or the code makes an occupancy reading impossible. */
-static double flow_branch_bonus(const Flow *f) {
-    const FlowAcct *br;
-    long live;
 
-    DCHECK(f != NULL && f->acct != NULL && f->acct->branch != NULL,
-           "a member was weighed with no branch bucket — flow_new opens one for every node and the fork moves "
-           "membership rather than clearing it");
-    br = f->acct->branch;
-    live = br->sub_born - br->sub_gone;
-    DCHECK(live >= 1,
-           "a member's own branch bucket reports fewer than one live member while that member is standing in "
-           "it — `sub_born`/`sub_gone` are a matched pair moved in one statement, so a count below the member "
-           "doing the reading is a departure charged to a bucket the flow had already left");
-    /* And the denominator is the other half of that pair. The precondition above is the pair's own invariant and
-       makes `sub_born >= 1` a consequence (`sub_born = live + sub_gone`, `live >= 1`, `sub_gone >= 0`). The return
-       is the bucket's own reading: acct_branch_offset returns the double flow_new and the fork derived from that
-       `sub_born` by the same expression, so flow_weight, flow_nonreward, flow_member_key and flow_index_surrogate
-       read the bits a quotient here would give. This is the per-member adapter, the only thing the order calls. */
-    return acct_branch_offset(br);
-}
-
-/* The denominator that term divides by (solver/flow.h says why it is published as the integer). Read through the
-   same two indirections flow_branch_bonus reads, so the two agree on which bucket the member is in. The
-   preconditions are asserted here because this is an entry from outside this file, whose callers have no other
-   statement of them. */
+/* A member's birth sequence and its bucket's lifetime mint count, entries from outside this file whose callers have
+   no other statement of their preconditions. The mint count is an operand the census publishes; no term reads it. */
 uint64_t flow_birth_seq(const Flow *f) {
     DCHECK(f != NULL && f->ix_t.seq != 0, "a birth sequence was asked of no member, or of one flow_new never stamped");
     return f->ix_t.seq;
@@ -3722,16 +3590,11 @@ long flow_branch_born(const Flow *f) {
     return f->acct->branch->sub_born;
 }
 
-/* The half of the member key the order's index is keyed on: every summand that is a reading of this member and of
-   nothing it shares. The weight's terms partition by scope three ways: acct_family_val and the family notch are
-   per account, flow_branch_bonus is per bucket (`1.0 / sub_born` through `f->acct->branch`, one pointer shared by
-   every live arm, so the fork's `br->sub_born++` re-weighs the whole bucket), and the own notch, the optimism and
-   the fitness distance are per member (`f->work` against its family's `emit_gen`, `f->visits`,
-   `f->cand_replay`/`cand_surv`/`cand_rung`), which no other member can move. The index holds each scope where it
-   moves: this per member, the bucket offset per bucket, the family's reward and notch per family, so no write
-   re-keys more members than it moved. A subexpression of flow_order_key's weight, and flow_member_key is this value
-   plus the bucket term, bit for bit; excess precision (FLT_EVAL_METHOD 2) is the one way that fails, which
-   flow_member_key's DCHECK guards. */
+/* The member half of the weight, the key the order's index is keyed on: every summand that is a reading of this
+   member and of nothing it shares. The weight's terms partition by scope two ways: acct_family_val and the family
+   notch are per account, and the own notch, the optimism and the fitness distance are per member (`f->work` against
+   its family's `emit_gen`, `f->visits`, `f->cand_replay`/`cand_surv`/`cand_rung`), which no other member can move.
+   The index holds each scope where it moves, so no write re-keys more members than it moved. */
 static double flow_index_key_observed(const Flow *f) {
     return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
            + flow_optimism(f) + flow_distance(f);
@@ -3750,8 +3613,7 @@ static double flow_weight_recompose(const FlowWeightOperands *o) {
     double dist = (o->replay + o->surv + (double)o->rung) / (double)FLOW_RUNGS_N;
     double ikey = -(double)o->own_notch * FLOW_AGE_QUANTUM + opt + dist
                   - (double)o->assumed * FLOW_ASSUMPTION_COST;
-    double x = 1.0 / (double)o->born + ikey;
-    return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + x;
+    return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + ikey;
 }
 
 /* The operands of `f`'s weight, read through the accessors flow_order_key reads, and asserted to recompose to
@@ -3780,52 +3642,6 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
             o->w, flow_weight_recompose(o));
 }
 
-/* Every term of the weight that is not the family's: the quantity whose invariance between two frontier
-   generations every proposed sub-linear order presupposes, and not the key an order may be keyed on, which is
-   flow_index_key above. One quantity, two questions, and the stricter decides the composition: what must stand
-   still between generations includes the bucket term, or flow_pick_walk's stamps go blind to a fork re-ranking a whole
-   arm; what an index is keyed on excludes it. Two functions over one composition.
-   flow_weight is the family's coordinate at the member's carry bit plus this: the reward and the family notch are
-   read through one pointer by every arm, a common offset that orders nothing within a family, and
-   flow_silence_phase decomposes the carry out as one bit against a family threshold. Not a term and nothing ranks by
-   it: a weight rebuilt as this plus the family's halves would sum three products where flow_weight sums one and
-   differ in the last bit. It exists to be stamped and compared with itself, exact because it is the same
-   expression on the same operands.
-   The summands are in flow_nonreward's order, which arms the guard below: where the family has burned nothing since
-   its last emission the two functions are the same operations on the same operands and agree bit for bit, a state
-   every emission produces, so a summand reaching flow_nonreward and not this fires. Mentioned only inside DCHECK
-   conditions, so release neither calls nor emits it, as acct_vt_leads and flow_is_min_weight. */
-static double flow_member_key(const Flow *f) {
-    /* The bucket term is the last summand, which makes the split exact: flow_index_key is this expression's first
-       three summands, and this is that value plus the fourth. */
-    double k = flow_index_key(f) + flow_branch_bonus(f);
-    /* The flat spelling is the other side: two statements maintain the two, so a summand reaching one and not the
-       other fires here, and so does a host evaluating doubles wider than binary64 that rounds at the call
-       boundary. A new member-half term goes at the end of flow_index_key and a new bucket term after this one, the
-       only placements under which both sides associate the same way. A second evaluation of the member half per
-       call, so in a dev build flow_pick_walk's per-member stamp pays this key twice; in release the condition is a
-       `sizeof` and neither side is evaluated. */
-    DCHECK(k == -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
-                + flow_optimism(f) + flow_distance(f) - (double)flow_assumed(f) * FLOW_ASSUMPTION_COST
-                + flow_branch_bonus(f),
-           "the member half of the WFQ's weight is not its per-member key plus its bucket term — the two spellings "
-           "associate identically, so a summand reached one and not the other, or this host evaluates doubles wider "
-           "than binary64");
-    /* And the same equality as a holder of the published integer would take it, the one route across this file's
-       boundary: the left side reaches the bucket term through `FlowAcct.sub_offset`, the double the order reads,
-       and the right rebuilds it from `flow_branch_born`, the integer solver/flow.h publishes because `FlowAcct` is
-       private. So the two halves an ask outside flow.c could hold, a per-member key and a per-bucket denominator,
-       rebuild the member half bit for bit, which decides whether a candidate set may be taken from that key.
-       Unlike acct_branch_offset's guard (a stored field against a quotient in one bucket), this compares two sums
-       built by two routes, so it also catches excess precision rounding `k` at the store, and it is the one site
-       where the integer an index would carry meets the double the order reads. Another evaluation per call in a
-       dev build; nothing in release. */
-    DCHECK(k == flow_index_key(f) + 1.0 / (double)flow_branch_born(f),
-           "the member half of the WFQ's weight is not its per-member key plus `1/sub_born` rebuilt from "
-           "flow_branch_born — flow_new and the fork's join write the offset with `sub_born`, so the two came apart "
-           "or this host evaluates doubles wider than binary64");
-    return k;
-}
 
 /* What the order is made of besides the reward, and the one place "the reward is the only unranged term" is asked.
    Every ordering assertion in this file is derived from that claim; asked against a reference member whose
@@ -3858,20 +3674,18 @@ static double flow_family_coord(const Flow *f) {
 }
 
 /* The order's key. The weight is composed in the order the index bounds it: the family's coordinate at the member's
-   carry (`notch = k + K + carry`, flow_silence_phase), plus the bucket offset plus the member's key. Each partial
-   sum is kept, because rounding can make two members with unequal operands weigh one double: a tie in the weight
-   goes to the larger bucket-relative sum, then the larger key, and only an exact tie in all three goes to the older
-   member by birth sequence, the queue's oldest-arm-first order. */
+   carry (`notch = k + K + carry`, flow_silence_phase), plus the member's key. The key is kept, because rounding can
+   make two members with unequal operands weigh one double: a tie in the weight goes to the larger key, and only an
+   exact tie in both goes to the older member by birth sequence, the queue's oldest-arm-first order. */
 typedef struct {
-    double w, x, ikey;
+    double w, ikey;
     uint64_t seq;
 } FlowOrderKey;
 
 static FlowOrderKey flow_order_key(const Flow *f) {
     FlowOrderKey o;
     o.ikey = flow_index_key(f);
-    o.x = flow_branch_bonus(f) + o.ikey;
-    o.w = flow_family_coord(f) + o.x;
+    o.w = flow_family_coord(f) + o.ikey;
     o.seq = f->ix_t.seq;
     return o;
 }
@@ -3879,13 +3693,12 @@ static FlowOrderKey flow_order_key(const Flow *f) {
 /* The weight with the assumption term left out, in flow_order_key's composition: what the fork's rank-neutrality
    equality compares. Mentioned only inside DCHECK conditions. */
 static double flow_weight_observed(const Flow *f) {
-    return flow_family_coord(f) + (flow_branch_bonus(f) + flow_index_key_observed(f));
+    return flow_family_coord(f) + flow_index_key_observed(f);
 }
 
 /* Positive when `a` ranks above `b`, negative below; zero only for one member, since a birth sequence is unique. */
 static int flow_order_cmp(const FlowOrderKey *a, const FlowOrderKey *b) {
     if (a->w != b->w) return a->w > b->w ? 1 : -1;
-    if (a->x != b->x) return a->x > b->x ? 1 : -1;
     if (a->ikey != b->ikey) return a->ikey > b->ikey ? 1 : -1;
     if (a->seq != b->seq) return a->seq < b->seq ? 1 : -1;
     return 0;
@@ -3898,15 +3711,8 @@ static int flow_order_above(const Flow *a, const Flow *b) {
 
 static double flow_nonreward(const Flow *f) {
     /* The weight's own composition with the reward left out: the family's aging at the member's carry, then the
-       bucket-relative sum. */
-    double x = flow_order_key(f).x;
-    double n = -(double)(flow_family_notch(f) + flow_silence_carry(f)) * FLOW_AGE_QUANTUM + x;
-    /* And the bucket-relative sum is flow_member_key: the same two operands added in the other order, which
-       binary64 addition does not distinguish. A summand that reached one and not the other fires. */
-    DCHECK(flow_member_key(f) == x,
-           "the member half of the WFQ's weight differs from flow_member_key — both are the bucket term plus "
-           "flow_index_key, so a summand reached one and not the other");
-    return n;
+       member's key. */
+    return -(double)(flow_family_notch(f) + flow_silence_carry(f)) * FLOW_AGE_QUANTUM + flow_order_key(f).ikey;
 }
 
 /* The comparator's first term: the account's ledger plus everything else, with everything else bounded once, in
@@ -3923,10 +3729,10 @@ double flow_weight(const Flow *f) {
    operand tuple form a class, which weighs one number; each bucket's classes stand in a treap ordered by the tuple,
    phase first, each node holding over its subtree the largest key (`max`), the oldest class at that key (`floor`),
    the phase range, and the largest key of a class holding a never-dispatched member (`nmax`); a class's members
-   wait in a heap by birth sequence. Buckets stand in two leftist heaps per family, every bucket keyed on its offset
-   plus its treap's `max`, and the buckets holding a never-dispatched member keyed on their offset plus `nmax`;
-   families holding a bucket are on one list. The family's coordinate and carry threshold are read at the query,
-   so a fork re-keys one bucket and an emission one family.
+   wait in a heap by birth sequence. Buckets stand in two leftist heaps per family, every bucket keyed on its
+   treap's `max`, and the buckets holding a never-dispatched member keyed on their `nmax`; families holding a
+   bucket are on one list. The family's coordinate and carry threshold are read at the query, so an emission
+   re-keys one family.
    The bound is exact: flow_order_key composes the weight in the order the index bounds it, and rounding to nearest
    is monotone in each operand, so the same expression over a subtree's largest key is at least every member's weight
    and equals the weight of the member at it. Every heap is ordered by the order's own key (ix_above), so a query
@@ -3938,16 +3744,15 @@ static int ix_s(const FlowIxNode *n) { return n ? n->s : 0; }
 /* Whether `a` ranks strictly above `b`: flow_order_cmp's comparison over a node's copy of the key. */
 static int ix_above(const FlowIxNode *a, const FlowIxNode *b) {
     if (a->key != b->key) return a->key > b->key;
-    if (a->x != b->x) return a->x > b->x;
     if (a->ikey != b->ikey) return a->ikey > b->ikey;
     return a->seq < b->seq;
 }
 
-static void ix_set(FlowIxNode *n, double key, double x, double ikey, uint64_t seq) {
-    DCHECK(key == key && x == x && ikey == ikey,
+static void ix_set(FlowIxNode *n, double key, double ikey, uint64_t seq) {
+    DCHECK(key == key && ikey == ikey,
            "a key entered the order's index as NaN — it compares false both ways, so the heap order and every bound "
            "read through it would be undefined");
-    n->key = key; n->x = x; n->ikey = ikey; n->seq = seq;
+    n->key = key; n->ikey = ikey; n->seq = seq;
 }
 
 /* Meld two leftist heaps and return the root (whose `up` the caller sets). The recursion runs down the two right
@@ -4081,10 +3886,9 @@ static double ix_coord(const FlowAcct *fam, double off, int carries) {
     return carries ? acct_family_coord(fam, 1) : off;
 }
 
-/* Re-file a bucket in its family's heaps after its treap or its offset moved, and the family on the list after its
-   bucket heap did. `fam` is the family every member of `br` names. A bucket's key is the bucket-relative half of
-   flow_order_key over its treap's uncarried maximum, so it bounds every member at every residue its family can
-   stand at. */
+/* Re-file a bucket in its family's heaps after its treap moved, and the family on the list after its bucket heap
+   did. `fam` is the family every member of `br` names. A bucket's key is its treap's uncarried maximum member key,
+   so it bounds every member at every residue its family can stand at. */
 static void flow_ix_bucket_sync(FlowAcct *br, FlowAcct *fam) {
     if (br->ix_bin) {
         ix_unlink(&fam->ix_buckets, &br->ix_b); ix_unlink(&fam->ix_mbuckets, &br->ix_bm); br->ix_bin = 0;
@@ -4092,15 +3896,14 @@ static void flow_ix_bucket_sync(FlowAcct *br, FlowAcct *fam) {
     if (br->ix_bnin) { ix_unlink(&fam->ix_nbuckets, &br->ix_bn); br->ix_bnin = 0; }
     if (br->ix_members) {
         const FlowIxTreap *t = br->ix_members;
-        double b = acct_branch_offset(br), x = b + t->max;
-        ix_set(&br->ix_b, x, x, t->max, t->floor);
+        ix_set(&br->ix_b, t->max, t->max, t->floor);
         ix_push(&fam->ix_buckets, &br->ix_b); br->ix_bin = 1;
-        /* And in the tail heap, keyed on the negated bucket-relative half over the treap's smallest key, so the
-           max-heap's order is the ascending order of the bucket's least member. */
-        ix_set(&br->ix_bm, -(b + t->min), -(b + t->min), -(b + t->min), 0);
+        /* And in the tail heap, keyed on the negated smallest key of the treap, so the max-heap's order is the
+           ascending order of the bucket's least member. */
+        ix_set(&br->ix_bm, -t->min, -t->min, 0);
         ix_push(&fam->ix_mbuckets, &br->ix_bm);
         if (t->nmax > -INFINITY) {
-            ix_set(&br->ix_bn, b + t->nmax, 0.0, 0.0, 0);
+            ix_set(&br->ix_bn, t->nmax, 0.0, 0);
             ix_push(&fam->ix_nbuckets, &br->ix_bn); br->ix_bnin = 1;
         }
     }
@@ -4193,7 +3996,7 @@ static void flow_ix_insert(Flow *f) {
         ix_t_insert(&br->ix_members, &f->ix_t);
         c = &f->ix_t;
     }
-    ix_set(&f->ix_c, 0.0, 0.0, 0.0, f->ix_t.seq);
+    ix_set(&f->ix_c, 0.0, 0.0, f->ix_t.seq);
     ix_push(&c->cls, &f->ix_c);
     c->ncls++;
     if (f->picks == 0) c->nnever++;
@@ -4262,18 +4065,18 @@ typedef struct {
 
 /* Push a query entry: `n`'s key over the family coordinate `fc`, with `off`, the family's uncarried coordinate,
    kept for the entries below it. */
-static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double off, double fc, double x, double ikey, uint64_t seq,
+static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double off, double fc, double ikey, uint64_t seq,
                       unsigned char kind) {
-    ix_set(n, fc + x, x, ikey, seq);
+    ix_set(n, fc + ikey, ikey, seq);
     n->off = off; n->kind = kind;
     ix_push(q, n);
 }
 
 /* A treap subtree as a query entry, bounded by its largest key, carried when the whole subtree carries. A subtree
    straddling the threshold is read uncarried: one root-to-leaf path of each treap. */
-static void ix_q_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, double b, int64_t from) {
+static void ix_q_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, int64_t from) {
     FlowIxNode *e = &IX_TREAP_FLOW(n)->ix_qt;
-    ix_q_push(q, e, parent->off, ix_coord(IX_TREAP_FLOW(n)->family, parent->off, n->lo >= from), b + n->max, n->max,
+    ix_q_push(q, e, parent->off, ix_coord(IX_TREAP_FLOW(n)->family, parent->off, n->lo >= from), n->max,
               n->floor, IX_Q_TREE);
     DCHECK(!ix_above(e, parent), "a treap subtree's bound in the order's index ranks above the entry it was opened "
                                  "from — a bucket's key or a parent's aggregates are stale against its treap");
@@ -4306,7 +4109,7 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
     for (fam = g_ix_fams; fam; fam = fam->ix_fnext) {
         FlowIxNode *top = fam->ix_buckets;
         double fc = acct_family_coord(fam, 0);
-        ix_q_push(&q, &IX_BUCKET(top)->ix_q, fc, fc, top->x, top->ikey, top->seq, IX_Q_BUCKET);
+        ix_q_push(&q, &IX_BUCKET(top)->ix_q, fc, fc, top->ikey, top->seq, IX_Q_BUCKET);
     }
     while (q) {
         FlowIxNode *e = q;
@@ -4317,7 +4120,7 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
         if (e->kind == IX_Q_SELF) {
             Flow *m = (Flow *)((char *)e - offsetof(Flow, ix_qs));
             FlowOrderKey o = flow_order_key(m);
-            DCHECKF(e->key == o.w && e->x == o.x && e->ikey == o.ikey && e->seq == o.seq &&
+            DCHECKF(e->key == o.w && e->ikey == o.ikey && e->seq == o.seq &&
                         m->ix_t.phase == flow_silence_phase(m),
                     "the order's index keyed a member off its weight (weight %.17g, index %.17g, key %.17g, fresh key "
                     "%.17g, phase %lld, fresh phase %lld) — the index and flow_order_key compose different "
@@ -4328,26 +4131,22 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
         }
         if (e->kind == IX_Q_BUCKET) {
             FlowAcct *br = (FlowAcct *)((char *)e - offsetof(FlowAcct, ix_q));
-            double b = acct_branch_offset(br);
-            DCHECK(br->ix_bin && br->ix_members != NULL && br->ix_b.key == b + br->ix_members->max &&
+            DCHECK(br->ix_bin && br->ix_members != NULL && br->ix_b.key == br->ix_members->max &&
                        br->ix_b.seq == br->ix_members->floor,
-                   "a bucket in the order's index holds no member, or its key is not its offset plus its treap's "
-                   "largest key at its oldest class — flow_ix_bucket_sync files it from both, so a writer of either "
-                   "skipped the sync");
-            ix_q_push_tree(&q, e, br->ix_members, b, flow_ix_carry_from(IX_TREAP_FLOW(br->ix_members)->family));
+                   "a bucket in the order's index holds no member, or its key is not its treap's largest key at its "
+                   "oldest class — flow_ix_bucket_sync files it from both, so a writer of either skipped the sync");
+            ix_q_push_tree(&q, e, br->ix_members, flow_ix_carry_from(IX_TREAP_FLOW(br->ix_members)->family));
             for (int side = 0; side < 2; side++) {
                 FlowIxNode *c = side ? br->ix_b.r : br->ix_b.l;
                 FlowIxNode *ce;
                 if (!c) continue;
                 ce = &IX_BUCKET(c)->ix_q;
-                ix_q_push(&q, ce, e->off, e->off, c->x, c->ikey, c->seq, IX_Q_BUCKET);
+                ix_q_push(&q, ce, e->off, e->off, c->ikey, c->seq, IX_Q_BUCKET);
                 DCHECK(!ix_above(ce, e), "a bucket heap of the order's index lost its order — a child bucket ranks "
                                          "above its parent");
             }
         } else {
             Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt)), *m = r;
-            FlowAcct *br = r->acct->branch;
-            double b = acct_branch_offset(br);
             int64_t from = flow_ix_carry_from(r->family);
             /* The class through its oldest member that is neither the seed nor the excluded one. */
             if (m == seed || m == exclude) {
@@ -4357,14 +4156,14 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
             }
             if (m) {
                 FlowIxNode *se = &m->ix_qs;
-                ix_q_push(&q, se, e->off, ix_coord(r->family, e->off, r->ix_t.phase >= from), b + r->ix_t.key,
-                          r->ix_t.key, m->ix_t.seq, IX_Q_SELF);
+                ix_q_push(&q, se, e->off, ix_coord(r->family, e->off, r->ix_t.phase >= from), r->ix_t.key,
+                          m->ix_t.seq, IX_Q_SELF);
                 a.weighed++;
                 DCHECK(!ix_above(se, e), "a class's own key in the order's index ranks above its subtree's bound — "
                                          "a treap aggregate is stale");
             }
-            if (r->ix_t.l) ix_q_push_tree(&q, e, r->ix_t.l, b, from);
-            if (r->ix_t.r) ix_q_push_tree(&q, e, r->ix_t.r, b, from);
+            if (r->ix_t.l) ix_q_push_tree(&q, e, r->ix_t.l, from);
+            if (r->ix_t.r) ix_q_push_tree(&q, e, r->ix_t.r, from);
         }
     }
     if (a.seeded && !a.best) { a.best = (Flow *)seed; a.bw = sw; }
@@ -4382,7 +4181,7 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
         FlowIxNode *top = fam->ix_nbuckets;
         double fc = acct_family_coord(fam, 0);
         if (!top) continue;
-        ix_q_push(&q, &IX_NBUCKET(top)->ix_q, fc, fc, top->key, 0.0, 0, IX_Q_BUCKET);
+        ix_q_push(&q, &IX_NBUCKET(top)->ix_q, fc, fc, top->key, 0, IX_Q_BUCKET);
     }
     while (q) {
         FlowIxNode *e = q;
@@ -4400,32 +4199,29 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
         if (e->kind == IX_Q_BUCKET) {
             FlowAcct *br = (FlowAcct *)((char *)e - offsetof(FlowAcct, ix_q));
             FlowIxTreap *t = br->ix_members;
-            double b = acct_branch_offset(br);
             int64_t from = flow_ix_carry_from(IX_TREAP_FLOW(t)->family);
-            DCHECK(br->ix_bnin && t != NULL && t->nmax > -INFINITY && br->ix_bn.key == b + t->nmax,
+            DCHECK(br->ix_bnin && t != NULL && t->nmax > -INFINITY && br->ix_bn.key == t->nmax,
                    "a bucket in the order's never-dispatched heap holds no never-dispatched member, or its key is not "
-                   "its offset plus its treap's `nmax` — flow_ix_bucket_sync files it from both");
+                   "its treap's `nmax` — flow_ix_bucket_sync files it from both");
             ix_q_push(&q, &IX_TREAP_FLOW(t)->ix_qt, e->off, ix_coord(IX_TREAP_FLOW(t)->family, e->off, t->lo >= from),
-                      b + t->nmax, 0.0, 0, IX_Q_TREE);
-            if (br->ix_bn.l) ix_q_push(&q, &IX_NBUCKET(br->ix_bn.l)->ix_q, e->off, e->off, br->ix_bn.l->key, 0.0, 0,
+                      t->nmax, 0, IX_Q_TREE);
+            if (br->ix_bn.l) ix_q_push(&q, &IX_NBUCKET(br->ix_bn.l)->ix_q, e->off, e->off, br->ix_bn.l->key, 0,
                                        IX_Q_BUCKET);
-            if (br->ix_bn.r) ix_q_push(&q, &IX_NBUCKET(br->ix_bn.r)->ix_q, e->off, e->off, br->ix_bn.r->key, 0.0, 0,
+            if (br->ix_bn.r) ix_q_push(&q, &IX_NBUCKET(br->ix_bn.r)->ix_q, e->off, e->off, br->ix_bn.r->key, 0,
                                        IX_Q_BUCKET);
         } else {
             Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt));
-            FlowAcct *br = r->acct->branch;
-            double b = acct_branch_offset(br);
             int64_t from = flow_ix_carry_from(r->family);
             FlowIxTreap *c[2] = { r->ix_t.l, r->ix_t.r };
             if (r->ix_t.nnever > 0) {
                 Flow *m = IX_CLASS_FLOW(r->ix_t.cls);
                 ix_q_push(&q, &m->ix_qs, e->off, ix_coord(r->family, e->off, r->ix_t.phase >= from),
-                          b + r->ix_t.key, 0.0, 0, IX_Q_SELF);
+                          r->ix_t.key, 0, IX_Q_SELF);
             }
             for (int i = 0; i < 2; i++)
                 if (c[i] && c[i]->nmax > -INFINITY)
                     ix_q_push(&q, &IX_TREAP_FLOW(c[i])->ix_qt, e->off,
-                              ix_coord(r->family, e->off, c[i]->lo >= from), b + c[i]->nmax, 0.0, 0, IX_Q_TREE);
+                              ix_coord(r->family, e->off, c[i]->lo >= from), c[i]->nmax, 0, IX_Q_TREE);
         }
     }
     return 0;
@@ -4436,7 +4232,7 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
 /* Push a tail-query entry: the max query's nodes, keyed on the negated lower bound `lb`, so the heap pops the
    smallest bound first. */
 static void ix_mq_push(FlowIxNode **q, FlowIxNode *n, double lb, uint64_t seq, unsigned char kind) {
-    ix_set(n, -lb, -lb, -lb, seq);
+    ix_set(n, -lb, -lb, seq);
     n->off = 0.0; n->kind = kind;
     ix_push(q, n);
 }
@@ -4444,9 +4240,9 @@ static void ix_mq_push(FlowIxNode **q, FlowIxNode *n, double lb, uint64_t seq, u
 /* A treap subtree as a tail entry, bounded below by its smallest key at the coordinate its least-carried member
    could stand at: carried when any member of the subtree may carry (`hi >= from`), since carrying lowers the
    coordinate, and uncarried only when none can. */
-static void ix_mq_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, double b, int64_t from) {
+static void ix_mq_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, int64_t from) {
     FlowIxNode *e = &IX_TREAP_FLOW(n)->ix_qt;
-    ix_mq_push(q, e, acct_family_coord(IX_TREAP_FLOW(n)->family, n->hi >= from) + (b + n->min), 0, IX_Q_TREE);
+    ix_mq_push(q, e, acct_family_coord(IX_TREAP_FLOW(n)->family, n->hi >= from) + n->min, 0, IX_Q_TREE);
     DCHECK(!ix_above(e, parent), "a treap subtree's lower bound in the order's tail query ranks below the entry it "
                                  "was opened from — a bucket's tail key or a parent's `min` is stale against its "
                                  "treap");
@@ -4482,12 +4278,11 @@ static Flow *flow_ix_tail(const Flow *exclude, int64_t *entries, int64_t *weighe
         if (e->kind == IX_Q_BUCKET) {
             FlowAcct *br = (FlowAcct *)((char *)e - offsetof(FlowAcct, ix_q));
             FlowIxTreap *t = br->ix_members;
-            double b = acct_branch_offset(br);
             FlowAcct *f = IX_TREAP_FLOW(t)->family;
-            DCHECK(br->ix_bin && t != NULL && br->ix_bm.key == -(b + t->min),
-                   "a bucket in the order's tail heap holds no member, or its key is not its negated offset plus its "
-                   "treap's `min` — flow_ix_bucket_sync files it from both");
-            ix_mq_push_tree(&q, e, t, b, flow_ix_carry_from(f));
+            DCHECK(br->ix_bin && t != NULL && br->ix_bm.key == -t->min,
+                   "a bucket in the order's tail heap holds no member, or its key is not its treap's negated `min` — "
+                   "flow_ix_bucket_sync files it from the treap");
+            ix_mq_push_tree(&q, e, t, flow_ix_carry_from(f));
             for (int side = 0; side < 2; side++) {
                 FlowIxNode *c = side ? br->ix_bm.r : br->ix_bm.l;
                 FlowIxNode *ce;
@@ -4499,7 +4294,6 @@ static Flow *flow_ix_tail(const Flow *exclude, int64_t *entries, int64_t *weighe
             }
         } else {
             Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt)), *m = r;
-            double b = acct_branch_offset(r->acct->branch);
             int64_t from = flow_ix_carry_from(r->family);
             /* The class through its oldest member that is not the excluded one. */
             if (m == exclude) {
@@ -4508,14 +4302,14 @@ static Flow *flow_ix_tail(const Flow *exclude, int64_t *entries, int64_t *weighe
                 m = n2 ? IX_CLASS_FLOW(n2) : NULL;
             }
             if (m) {
-                ix_mq_push(&q, &m->ix_qs, acct_family_coord(r->family, r->ix_t.phase >= from) + (b + r->ix_t.key),
+                ix_mq_push(&q, &m->ix_qs, acct_family_coord(r->family, r->ix_t.phase >= from) + r->ix_t.key,
                            m->ix_t.seq, IX_Q_SELF);
                 (*weighed)++;
                 DCHECK(!ix_above(&m->ix_qs, e), "a class's own weight in the order's tail query ranks below its "
                                                 "subtree's bound — a treap `min` is stale");
             }
-            if (r->ix_t.l) ix_mq_push_tree(&q, e, r->ix_t.l, b, from);
-            if (r->ix_t.r) ix_mq_push_tree(&q, e, r->ix_t.r, b, from);
+            if (r->ix_t.l) ix_mq_push_tree(&q, e, r->ix_t.l, from);
+            if (r->ix_t.r) ix_mq_push_tree(&q, e, r->ix_t.r, from);
         }
     }
     return NULL;
@@ -4540,16 +4334,15 @@ static Flow *flow_tail_of(const Flow *exclude, int64_t *entries, int64_t *weighe
    per-arm half alone it holds for a family whose arms each burn a sliver while the family monopolises the thread,
    and against the family half alone it holds for every member of a one-family frontier at once.
    Derived from flow_weight, and redone whenever the formula moves. An unrun candidate (all its terms at zero, as
-   flow_pick_walk's `unrun` tests) weighs its reward plus its distance and branch bonus plus 1.0, at least 1.0, so the
-   pick's maximum is at least 1.0. For the picked flow, with `v` its visit count, `D` its fitness distance, `B` its
-   branch bonus, `A` its silence notch in quanta and `Q` the price of one quantum (FLOW_AGE_QUANTUM):
-   `val + D + B + 1/(1+v) − A*Q >= 1`, and `1/(1+v) <= 1` forces `A*Q <= val + D + B`. `D` and `B` are each in
-   [0, 1] (FLOW_NONREWARD_MAX's derivation), so `A <= (val + 2) / Q`, and since `A` is a floor of
-   `(own_silence + fam_work) / S` with `S` the cooperative quantum, `own_silence + fam_work < (val + 2) *
-   FLOW_SILENCE_WORK + S`. The caller reads the own half through flow_own_silence, since the raw field is that
+   flow_pick_walk's `unrun` tests) weighs its reward plus its distance plus 1.0, at least 1.0, so the pick's maximum
+   is at least 1.0. For the picked flow, with `v` its visit count, `D` its fitness distance, `A` its silence notch in
+   quanta and `Q` the price of one quantum (FLOW_AGE_QUANTUM): `val + D + 1/(1+v) − A*Q >= 1`, and `1/(1+v) <= 1`
+   forces `A*Q <= val + D`. `D` is in [0, 1] (FLOW_NONREWARD_MAX's derivation), so `A <= (val + 1) / Q`, and since
+   `A` is a floor of `(own_silence + fam_work) / S` with `S` the cooperative quantum, `own_silence + fam_work <
+   (val + 1) * FLOW_SILENCE_WORK + S`. The caller reads the own half through flow_own_silence, since the raw field is that
    quantity only while its window mark is current.
-   Neither term is slack: each of the two extra points is the whole range of a term (the fitness comparator, the
-   branch bonus) doing its job, and `+ S` is the width of the aging's own step, below which no bound can resolve.
+   Neither term is slack: the extra point is the whole range of the fitness comparator doing its job, and `+ S` is
+   the width of the aging's own step, below which no bound can resolve.
    It catches an edit, not a state: a clamped or capped aging term, an optimism term without a ceiling of 1, a
    reward that grows with the work it is weighed against, a fitness comparator that is not a fraction, or an
    optimism term keyed on something a never-run flow does not stand at zero of, each the shape a fix for a
@@ -4557,11 +4350,11 @@ static Flow *flow_tail_of(const Flow *exclude, int64_t *entries, int64_t *weighe
    warn. */
 static inline int64_t flow_silence_us_to_sink(const Flow *f, double floor) {
     /* The reward is the one flow_queue_weight reads, the family's, the account the silence on the other side is
-       charged to; read off the flow, the bound would be on a quantity the weight does not contain. `+ 2.0` is the
-       fitness fraction and the branch bonus, each in [0, 1], per the derivation above. `floor` is the untouched
+       charged to; read off the flow, the bound would be on a quantity the weight does not contain. `+ 1.0` is the
+       fitness fraction, in [0, 1], per the derivation above. `floor` is the untouched
        member's optimism, 1.0 unless it is a drive of code explored elsewhere (`1/(1 + orphan_seen)`); the
        derivation's `>= 1` becomes `>= floor`, which loosens the bound by `1 - floor`, under one point. */
-    return (int64_t)((acct_family_val(f) + 2.0 + (1.0 - floor)) * (double)FLOW_SILENCE_WORK) + FLOW_SERVICE_WORK;
+    return (int64_t)((acct_family_val(f) + 1.0 + (1.0 - floor)) * (double)FLOW_SILENCE_WORK) + FLOW_SERVICE_WORK;
 }
 
 /* Host-owed marks (flow.h says what a mark means and why the flow carries one). A generation rather than a per-flow
@@ -4776,27 +4569,17 @@ static Flow *flow_pick_walk(FlowScan why) {
            frontier: between two frontier generations only a non-running member's family half and carry bit may
            move, so its member half must stand still. Every writer of that half's quantities raises the generation:
            flow_observe_replay, flow_observe_survival and flow_observe_rung (distance), flow_credit_visit (optimism),
-           flow_new and flow_remove (branch bucket), and flow_credit_emit through frontier_vt_serve (the emission
+           and flow_credit_emit through frontier_vt_serve (the emission
            that zeroes the own half). flow_age_running raises none and charges only the running flow, so the running
            flow is exempt; because the exemption is evaluated at the scan and `m == g_running` is false once
            flow_switch_out clears it, flow_age_running maintains the charged member's stamps itself, which is what
            the decomposition permits ("between two dispatches this moves for AT MOST ONE MEMBER of the frontier").
-           One writer is correct by adjacency, hence an assert: flow_fork_inherit raises `sub_born` for the bucket
-           the arm joins, re-ranking that arm, with no generation of its own, sound only because flow_add_unseeded
-           bumped one just before and nothing weighs the frontier in between; the `sub_offset` written on the same
-           statement moves with it or acct_branch_offset's guard fires. acct_depart's `sub_gone++` reaches no term
-           (the branch term divides by the lifetime mint count), so a departure re-ranks nobody; its adjacency to
-           flow_remove's bump matters to the census's membership identity (`br_fan_max <= br_live_max` in
-           flow_wfq_census), not here.
            It raises no scan counter (flow.h's FLOW_SCANS counts only the scan's own flow_weight). Dev-only in check
            and stamp, for solver/flow.h's reason: a second evaluation of the member half and its remainder per member
            per scan is affordable in the build that checks and would change the run in the build that does not. */
 #if APICLIENT_DEV
         {
             Flow *m = g_flows[i];
-            double mk = flow_member_key(m);
-            /* And the half of that key an index would be built on (solver/flow.h's `ikey_last` says why the sum
-               standing still is not the claim a candidate set rests on). */
             double ik = flow_index_key(m);
             /* And the remainder that key throws away (solver/flow.h's `phase_last`). */
             int64_t mp = flow_silence_phase(m);
@@ -4812,15 +4595,13 @@ static Flow *flow_pick_walk(FlowScan why) {
                        :                       &g_key_checks.armed;
             (*kind)++;
             DCHECKF(kind != &g_key_checks.armed
-                        || (mk == m->key_last && mp == m->phase_last && ik == m->ikey_last),
+                        || (mp == m->phase_last && ik == m->ikey_last),
                     "a non-running member changed its own half of the WFQ's weight at generation %u with no "
                     "generation bump — only the family's common half and the carry bit may move between generations, "
-                    "so a writer of the optimism, distance, branch bucket or own silence skipped its bump, or a "
-                    "weighing landed between flow_fork_inherit's `sub_born++` and its bump (member half %.17g -> "
-                    "%.17g, phase %lld -> %lld, index key %.17g -> %.17g)",
-                    g_gen, m->key_last, mk, (long long)m->phase_last, (long long)mp,
-                    m->ikey_last, ik);
-            m->key_last = mk; m->key_gen = g_gen; m->key_stamped = 1; m->phase_last = mp;
+                    "so a writer of the optimism, distance or own silence skipped its bump (phase %lld -> %lld, "
+                    "member half %.17g -> %.17g)",
+                    g_gen, (long long)m->phase_last, (long long)mp, m->ikey_last, ik);
+            m->key_gen = g_gen; m->key_stamped = 1; m->phase_last = mp;
             m->ikey_last = ik;
         }
 #endif
@@ -5022,8 +4803,8 @@ static void flow_ix_check(void) {
         DCHECK(m->ix_in, "a runnable member is missing from the order's index — the runnable ask can never name it");
         in++;
         {
-            double w = flow_weight(m), k = flow_index_key(m), b = acct_branch_offset(br);
-            double bound = acct_family_coord(m->family, t->phase >= flow_ix_carry_from(m->family)) + (b + t->key);
+            double w = flow_weight(m), k = flow_index_key(m);
+            double bound = acct_family_coord(m->family, t->phase >= flow_ix_carry_from(m->family)) + t->key;
             DCHECKF(t->key == k && t->phase == flow_silence_phase(m) && bound == w,
                     "the order's index holds a stale key or phase for a member, or its composition does not give the "
                     "member's weight (key %.17g, fresh %.17g, phase %lld, fresh %lld, weight %.17g, index %.17g) — a "
@@ -5065,17 +4846,15 @@ static void flow_ix_check(void) {
         }
         {
             const FlowIxTreap *tr = br->ix_members;
-            double b = acct_branch_offset(br);
             const FlowIxNode *n = &br->ix_b, *nn = &br->ix_bn;
-            DCHECK(br->ix_bin && n->key == b + tr->max && n->x == n->key &&
-                       n->ikey == tr->max && n->seq == tr->floor &&
+            DCHECK(br->ix_bin && n->key == tr->max && n->ikey == tr->max && n->seq == tr->floor &&
                        (!n->l || (n->l->up == n && !ix_above(n->l, n))) &&
                        (!n->r || (n->r->up == n && !ix_above(n->r, n))) &&
                        ix_s(n->l) >= ix_s(n->r) && n->s == ix_s(n->r) + 1 && m->family->ix_listed,
-                   "a bucket of the order's index is unfiled, keyed off its offset and treap, out of order or "
+                   "a bucket of the order's index is unfiled, keyed off other than its treap, out of order or "
                    "leftist shape in its family's heap, or its family is off the list");
             DCHECK(br->ix_bnin == (tr->nmax > -INFINITY) &&
-                       (!br->ix_bnin || (nn->key == b + tr->nmax &&
+                       (!br->ix_bnin || (nn->key == tr->nmax &&
                                          (!nn->l || (nn->l->up == nn && !ix_above(nn->l, nn))) &&
                                          (!nn->r || (nn->r->up == nn && !ix_above(nn->r, nn))) &&
                                          ix_s(nn->l) >= ix_s(nn->r) && nn->s == ix_s(nn->r) + 1)),
@@ -5083,12 +4862,12 @@ static void flow_ix_check(void) {
                    "while it holds a never-dispatched member, under a key off its offset and `nmax`, or out of order");
             {
                 const FlowIxNode *mn = &br->ix_bm;
-                DCHECK(mn->key == -(b + tr->min) &&
+                DCHECK(mn->key == -tr->min &&
                            (!mn->l || (mn->l->up == mn && !ix_above(mn->l, mn))) &&
                            (!mn->r || (mn->r->up == mn && !ix_above(mn->r, mn))) &&
                            ix_s(mn->l) >= ix_s(mn->r) && mn->s == ix_s(mn->r) + 1,
                        "a bucket of the order's index stands in its family's tail heap under a key other than its "
-                       "negated offset plus its treap's `min`, or out of order or leftist shape there");
+                       "treap's negated `min`, or out of order or leftist shape there");
             }
         }
     }
@@ -5165,14 +4944,6 @@ static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
          + c->dist_max
          + (1.0 / (double)c->opt_den_min - 1.0 / (double)c->opt_den_max)
-         /* And the branch bonus's range, the least-minting bucket against the most (the extrema invert, since the
-            fewest arms carry the largest bonus). The mint pair, not the live pair, because flow_branch_bonus
-            divides by `sub_born`, and the live pair bounds the mint range in neither direction: two buckets at one
-            live member each span 0.0 live and 1 - 1/N here when one has minted N and shed them. Guarded because a
-            census that reached no live bucket has no range to report; branch_take takes both mint extrema inside
-            its live guard, so the two ends are over one population. */
-         + (c->br_born_min > 0 && c->br_born_max > 0
-              ? 1.0 / (double)c->br_born_min - 1.0 / (double)c->br_born_max : 0.0)
          + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM
          /* And the assumptions, which enter negatively at FLOW_ASSUMPTION_COST each and are at least zero, so the
             most any member rests on bounds their range. */
@@ -5213,8 +4984,8 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
        populations through one walk. A bucket with zero live members is the ordinary state once a family's root
        flow has departed: the family-root door takes exactly such a node, deliberately, because its lifetime burn
        (boot's, on a real page) must stay inside the identity at the end of this function and nothing names it
-       through `branch` any more. A minimum over an empty bucket describes the thinnest bucket nobody stands in, and
-       would score the branch bonus's whole range as 0.0 in wfq_accounted_spread. `br_work_max` and `br_work_min` keep
+       through `branch` any more. A minimum over an empty bucket describes the thinnest bucket nobody stands in.
+       `br_work_max` and `br_work_min` keep
        every taken bucket: a departed root's subtree really did receive that work, and the burn identity is
        over the same population. `br_live_min == 0` means "no live bucket seen yet", since every assignment below
        writes at least one; flow_wfq_census's closing assert says a frontier with members cannot leave it at zero.
@@ -5237,11 +5008,9 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
                is the crowd's receipt, and the hungriest bucket is already `br_work_max`. */
             g_wfq_census_crowd = br;
         }
-        /* And the mint pair, over the same population and inside the same guard, because it is the order's range,
-           not a receipt: `sub_born` is what flow_branch_bonus divides by, so these extrema are the branch term's
-           range (wfq_accounted_spread reads them so). A weight is read only for a standing member, and a member
-           stands only in a bucket with a live count, so extrema over an empty bucket describe a range nobody spans;
-           folded by separate statements, the two pairs are one population only through this guard. flow.h declares
+        /* And the mint pair, over the same population and inside the same guard, because it is a membership
+           reading, not a receipt: extrema over an empty bucket describe buckets nobody stands in; folded by separate
+           statements, the two pairs are one population only through this guard. flow.h declares
            `br_born_max` as "the most members ever MINTED into one live bucket", paired with `br_live_max`. The
            `br_us_*` pair keeps every taken bucket, because receipt is a different question from membership. */
         if (out->br_born_min == 0 || br->sub_born < out->br_born_min) out->br_born_min = br->sub_born;
@@ -6073,22 +5842,20 @@ void flow_wfq_census(WfqCensus *out) {
            "the frontier's branch buckets do not partition its members — each live member belongs to one bucket and "
            "each bucket is opened once per census");
     /* And a frontier with members standing has a thinnest bucket somebody stands in: every live member's bucket is
-       taken by the member door with a live count of at least one, so this keeps wfq_accounted_spread's branch guard
-       from deleting the branch term on a live frontier. The partition identity above cannot say it, since it is
-       satisfied by any set of buckets whose live counts sum correctly, empty ones included. */
+       taken by the member door with a live count of at least one. The partition identity above cannot say it, since
+       it is satisfied by any set of buckets whose live counts sum correctly, empty ones included. */
     DCHECK(out->members == 0 || out->br_live_min > 0,
            "the census reports members standing and no live branch bucket — every live member stands in a bucket "
            "with a live count of at least one");
-    /* And the mint pair against the live pair it is folded beside, which makes `1/br_born_min - 1/br_born_max` a
-       range over one population: `sub_born = live + sub_gone` with `sub_gone >= 0`, so over one set of buckets each
+    /* And the mint pair against the live pair it is folded beside, which makes the two pairs readings of one
+       population: `sub_born = live + sub_gone` with `sub_gone >= 0`, so over one set of buckets each
        end of the mint pair dominates its opposite number. The two pairs are written by two statements in
        branch_take, kept to one population only by a shared guard: a minimum over every taken bucket would let a
        departed root's single-member bucket drag `br_born_min` to 1 beneath a `br_live_min` of 2, which fires here. */
     DCHECK(out->br_born_min >= out->br_live_min && out->br_born_max >= out->br_live_max,
            "a branch bucket's lifetime mint count is below its own live membership — `sub_born` is `live` "
            "plus everything that has ever departed the bucket, so this is the mint extrema and the live "
-           "extrema ranging over two different sets of buckets, and the branch term's range is about to be "
-           "published as a difference between two numbers that are not two ends of one reading");
+           "extrema ranging over two different sets of buckets");
     /* And the crowd triple against the row it is selected by, which says the three describe one bucket: the left is
        a dereference of the retained node after the walk, the right a running maximum folded during it, and they agree
        only while one statement moves both. Writing the rows at the maximum's assignment would compare a statement

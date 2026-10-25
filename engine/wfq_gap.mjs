@@ -10,24 +10,25 @@ import { fileURLToPath } from "node:url";
 const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "visits", "orphanSeen", "born", "replay", "surv",
                     "rung", "assumed", "picks", "hostOwed", "running"];
 
-/* The six terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. */
+/* The five terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The
+   aging is split into its family half (in `coord`, with the reward) and its own half. `born` is an operand the
+   row carries and no term reads. */
 function termsOf(o, q, a, rungs, where) {
   for (const k of END_FIELDS)
     if (typeof o[k] !== "number")
       throw new Error(`${where}: a curDeepTerms end carries no number \`${k}\` — solver/result.c's ` +
                       `weight_operands_json writes all of ${END_FIELDS.join(", ")}`);
   const coord = o.reward - o.coordNotch * q;
-  const branch = 1.0 / o.born;
   const own = -o.ownNotch * q;
   const opt = 1.0 / (1.0 + o.visits + o.orphanSeen);
   const dist = (o.replay + o.surv + o.rung) / rungs;
   const assume = -o.assumed * a;
-  const w = coord + (branch + (own + opt + dist + assume));
+  const w = coord + (own + opt + dist + assume);
   if (w !== o.w)
     throw new Error(`${where}: a curDeepTerms end does not recompose to its weight (published ${o.w}, ` +
                     `recomposed ${w}) — this reader and solver/flow.c's flow_weight_recompose compose ` +
                     `different expressions`);
-  return { coord, branch, own, opt, dist, assume, w };
+  return { coord, own, opt, dist, assume, w };
 }
 
 /* The split of one gap row: each term's difference between the front (`top`) and the gap's far end (`far`), and
@@ -43,7 +44,7 @@ function termSplit(t, far, row, where) {
     throw new Error(`${where}: the ${row} gap recomposed from its two weights (${top.w - end.w}) is not the ` +
                     `gap the census computed (${t.gap})`);
   const d = {};
-  for (const k of ["coord", "branch", "own", "opt", "dist", "assume"]) d[k] = top[k] - end[k];
+  for (const k of ["coord", "own", "opt", "dist", "assume"]) d[k] = top[k] - end[k];
   return { gap: t.gap, terms: d, top: t.top, far: t[far] };
 }
 
@@ -71,9 +72,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     for (const [name, r] of [["curDeep", curDeepTermSplit(c, `${path} census ${c.censusSeq}`)],
                              ["neverPicked", neverPickedTermSplit(c, `${path} census ${c.censusSeq}`)]]) {
       if (!r) continue;
-      console.log(`census ${c.censusSeq} ${name} gap ${f(r.gap)} = coord ${f(r.terms.coord)} + branch ` +
-                  `${f(r.terms.branch)} + own ${f(r.terms.own)} + opt ${f(r.terms.opt)} + dist ${f(r.terms.dist)} + ` +
-                  `assume ${f(r.terms.assume)} | ` +
+      console.log(`census ${c.censusSeq} ${name} gap ${f(r.gap)} = coord ${f(r.terms.coord)} + own ` +
+                  `${f(r.terms.own)} + opt ${f(r.terms.opt)} + dist ${f(r.terms.dist)} + assume ` +
+                  `${f(r.terms.assume)} | ` +
                   `top ${end(r.top)} | far ${end(r.far)}`);
     }
   }

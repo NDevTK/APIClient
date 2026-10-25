@@ -74,11 +74,11 @@ typedef struct {
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
    the index allocates nothing. It carries a copy of the order's key (flow.c's FlowOrderKey: `key` the weight, then
-   the partial sums `x` and `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is the
+   the member half `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is the
    null-path length; `off`, the family's coordinate with no carry, and `kind` are used only by a query's queue. */
 typedef struct FlowIxNode {
     struct FlowIxNode *l, *r, *up;
-    double key, x, ikey, off;
+    double key, ikey, off;
     uint64_t seq;
     int s;
     unsigned char kind;
@@ -643,25 +643,17 @@ typedef struct Flow {
     /* Dev-only stamps for the assertion sub-linear ordering rests on: a member not holding the thread cannot
        change its own half of the weight while the frontier generation stands still. flow_weight is the family's
        coordinate plus this member's plus a carry bit; the family's half is a common offset within a family, and
-       flow.c's flow_silence_phase decomposes the carry out, leaving flow_member_key.
+       flow.c's flow_silence_phase decomposes the carry out, leaving flow_index_key.
        The walk stamps each member it weighs (it already holds the member and the key), and flow_age_running
-       re-stamps the member it charges. Three operands are compared as one condition into one counter bucket,
+       re-stamps the member it charges. Two operands are compared as one condition into one counter bucket,
        because key_checks_total() is asserted equal to the weighings one loop performed:
-         - `key_last`: flow_member_key, the sum that must stand still or flow_pick_walk goes blind to a fork
-           re-ranking a whole arm;
+         - `ikey_last`: flow_index_key, the member half, which must stand still or the order's index holds a
+           stale key;
          - `phase_last`: flow_silence_phase, `own_silence % FLOW_SERVICE_WORK`, which the key's floor discards and
-           which is the bucket key; a sub-quantum writer would re-bucket a member without moving `key_last`;
-         - `ikey_last`: flow_index_key, the key without the bucket term, which an index is keyed on; a fork's
-           join raises `sub_born` for a whole arm with no generation bump, which the sum alone cannot see.
+           which is the bucket key; a sub-quantum writer would re-bucket a member without moving `ikey_last`.
        `key_stamped` rather than a sentinel generation, because `g_gen` starts at zero and flow_registry_init
        resets it. Dev-only in field and check, since stamping is a call per member per scan. */
-    /* Named residual. Not covered: `ikey_last` is a third evaluation per member per scan. flow_order_key now
-       contains flow_index_key and flow_member_key as partial sums, but the walk stamps them apart
-       from its weighing. Next diff builds: the walk stamping flow_order_key's own partial sums, taken once with
-       the weighing, so one evaluation covers the claims and this field is deleted. Absence shows as: a key check
-       that passes while the index's key moved by an amount the bucket term compensated. */
 #if APICLIENT_DEV
-    double   key_last;
     unsigned key_gen;
     int      key_stamped;
     int64_t  phase_last;
@@ -1145,9 +1137,8 @@ typedef struct {
     /* Reading them: `br_live_max / members` is how concentrated the frontier is on one side of one branch;
      * `br_work_max / charged_work` is how concentrated the thread is. The extrema can belong to different buckets
      * (the burn maximum is often a departed family root holding nobody), so a one-arm pair is read off the
-     * crowd or minter triple. The mint pair is the branch term's own range: flow_branch_bonus returns
-     * `1.0 / sub_born`, so `1/br_born_min - 1/br_born_max` is the span wfq_accounted_spread reads. The live and
-     * mint extrema fold only buckets holding a live member (a weight is read only for a standing member); the
+     * crowd or minter triple. No weight term reads a bucket: these rows are observations of the fork tree. The
+     * live and mint extrema fold only buckets holding a live member; the
      * `br_us_*` extrema do not, since receipt survives a departed subtree. `br_live_min` is 0 or 1 while a
      * family root's own bucket stands, since a root's bucket holds exactly that root.
      * Cost: a few adds per charge, fork, departure and node free, and per-member work inside the census's
@@ -1165,7 +1156,7 @@ typedef struct {
     long br_live_min;   /* gauge: the fewest; see above for why the root's bucket usually owns this */
     long br_live_sum;   /* gauge: their sum, published because `== members` is the partition identity */
     long br_born_max;   /* lifetime: the most members ever minted into one live bucket */
-    long br_born_min;   /* lifetime: the fewest — the two ends of flow_branch_bonus's own denominator */
+    long br_born_min;   /* lifetime: the fewest */
     /* The crowd: the fattest live bucket's own membership, mint and receipt, from one bucket. Its share of the
        members (`br_crowd_live / members`) against its share of the live buckets' thread
        (`br_crowd_work / br_held_work`) separates three states: at par, a branching arm converting fork factor into
@@ -1184,9 +1175,9 @@ typedef struct {
     int64_t br_crowd_work;   /* lifetime work: that same bucket's own receipt */
     /* The minter: the same three numbers for the bucket that has minted the most, a different arm whenever an arm
        shed what it minted (`sub_born = live + sub_gone`). A walk over an unknown length forks a `stop at n` arm
-       at every position and each arm finishes, so the minter stands narrow and is not the crowd. It carries
-       the smallest branch bonus, so `br_minter_work / br_held_work` against `br_minter_live / members` says whether
-       the branch term's demotion reaches the thread (the crowd's three states, asked of this arm).
+       at every position and each arm finishes, so the minter stands narrow and is not the crowd.
+       `br_minter_work / br_held_work` against `br_minter_live / members` says whether that arm holds the thread
+       (the crowd's three states, asked of this arm).
        `br_minter_gone` is the shed count, published nowhere else. flow_wfq_census asserts
        `br_minter_live + br_minter_gone == br_born_max` (different writers, as for the crowd);
        `br_minter_work == br_crowd_work` says the two selectors name one arm. Zero semantics are the crowd's. */
@@ -1476,7 +1467,7 @@ int64_t flow_scan_weights(FlowScan s);   /* per member per scan — 64-bit for F
      - `first_seen` (at most one per member ever) and `running` (at most one per scan).
    One struct and one call, because the four are a partition and a partition is read at one instant. Lifetime
    counts of comparisons, monotone, may be differenced, never read against `members`. Zero in a release build,
-   where the check is compiled out (see `Flow.key_last`) while solver/result.c still publishes them: all four
+   where the check is compiled out (see `Flow.ikey_last`) while solver/result.c still publishes them: all four
    zero with any `scan<Entry>Weights` nonzero is a build that makes no check, and `armed: 0` with the four
    summing above zero is the walk comparing nothing. flow_pick_walk asserts their delta over one loop equals
    `g_scan_weights[why]`'s, which catches a `continue` inserted between the weighing and the block. They
@@ -1607,10 +1598,9 @@ int64_t flow_silence_notch(const Flow *f);
 int64_t flow_silence_phase(const Flow *f);
 int flow_silence_carry(const Flow *f);
 
-/* The member's top-level arm's `sub_born`, the denominator of flow_branch_bonus (`1.0 / sub_born`), published
-   because FlowAcct is private to flow.c and one fork raises it for every member of the arm. engine.c's rival
-   assertion reads it to check what may move while the generation stands still. The integer rather than the
-   term, so equality is exact. Reconciles against `brBornMax`/`brBornMin`. Not a term; nothing ranks by it. */
+/* The member's top-level arm's `sub_born`, its bucket's lifetime mint count, published because FlowAcct is private
+   to flow.c; the census's weight operands report it. Reconciles against `brBornMax`/`brBornMin`. Not a term;
+   nothing ranks by it. */
 long flow_branch_born(const Flow *f);
 /* The member's birth sequence, unique for the instance's life and assigned in birth order, so it names the same
    member on two runs that took the same path. */

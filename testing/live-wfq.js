@@ -130,9 +130,9 @@ const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPicke
                 "delivReady", "delivFramed", "delivOwed", "valTop", "valMin", "valMax"];
 
 /* THE BRANCH SCOPE, WHICH THE TWO LISTS ABOVE DO NOT REACH AND WHICH IS THE ONE FAMILY A PAGE-SCALE
-   SAMPLER EXISTS FOR. solver/result.c publishes twenty-three rows at this scope and says why they are
-   worth reading at all: flow_weight sums flow_branch_bonus over the top-level arm's bucket, so these are
-   "the only published statement of a TERM OF THE ORDERING". engine/build.mjs reads eleven of them on the
+   SAMPLER EXISTS FOR. solver/result.c publishes twenty-three rows at this scope; no term of the order
+   reads a bucket, so they describe the fork tree and where the thread went. engine/build.mjs reads eleven of
+   them on the
    SMOKE FIXTURE; this file read NONE of them, so the question a branching frontier actually poses — does
    an arm convert fork factor into thread time — had no instrument outside a fixture whose fork factor is
    its author's design decision rather than a document's.
@@ -903,7 +903,7 @@ async function main() {
            FACT ABOUT THE ENGINE. Re-derived at terminal from the archive with these same accessors: the smoke
            fixture reads 5e-05 .. 3.2e-04, a DIFFERENT fixture of the same engine in the same directory reads
            0.52 .. 0.86, and the page-scale runs read ~0.94 .. 1.04. Three orders of magnitude between two
-           documents under one accessor. A fixture-scale crowd figure offered as evidence that the branch term
+           documents under one accessor. A fixture-scale crowd figure offered as evidence that the order
            demotes a branching arm is therefore evidence about that fixture; the smoke figures above disagree
            with a relayed 0.0027-0.0046 by an order of magnitude at an unestablished revision, which is a
            disagreement to RE-TAKE and not a refutation of either. */
