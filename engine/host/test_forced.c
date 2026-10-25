@@ -1135,6 +1135,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/timegate.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
+#include "fixture/ttsink.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1605,6 +1606,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "timegate", HTML_TIMEGATE },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
+    { "ttsink", HTML_TTSINK },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14918,6 +14920,38 @@ TF_UNIT void probes_lazyload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `ttsink` document (fixture/ttsink.h). Each negative row is a statement only while the
+   positive row it names reads 1: an unreached write fires nothing either. */
+TF_UNIT void probes_ttsink(const char *js, Probe *tab, int *n) {
+    char safe[192] = "", raw[192] = "";
+    int has_safe = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, safe, sizeof safe);
+    int has_raw = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, raw, sizeof raw);
+    const char *ss_why = NULL; int ss_tt = 1;
+    fold_row(&ss_tt, &ss_why, has_safe,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in location.search, so the write through "
+             "appPolicy was never reached tainted");
+    const char *sn_why = NULL; int sn_tt = 1;
+    fold_row(&sn_tt, &sn_why, !(has_safe && s_stage(js, "innerHTML", safe) == S_FIRED),
+             "a PoC fired through appPolicy, whose createHTML replaces every `<`: a markup breakout cannot survive it");
+    const char *rb_why = NULL; int rb_tt = 1;
+    fold_row(&rb_tt, &rb_why, param_value_is(js, "/api/tt-raw-blocked", "e", "TypeError"),
+             "NOT REACHED: the raw write did not throw a TypeError, so the required Trusted Types check was not "
+             "applied to a plain string");
+    fold_row(&rb_tt, &rb_why, !strstr(js, "\"/api/tt-raw-wrote\""),
+             "the raw write of a plain string completed under `require-trusted-types-for 'script'` with no default "
+             "policy");
+    const char *rn_why = NULL; int rn_tt = 1;
+    fold_row(&rn_tt, &rn_why, !(has_raw && s_stage(js, "innerHTML", raw) == S_FIRED),
+             "a PoC fired through a write Trusted Types refuses, so no breakout could ever be parsed");
+    const Probe rows[] = {
+        { "tt-policy-sink", ss_tt, "'ttSafe'", SESS_EXPLORE, ss_why },
+        { "tt-policy-no-poc", sn_tt, "ttPolicy.createHTML(", SESS_EXPLORE, sn_why, 0, NULL, "tt-policy-sink" },
+        { "tt-raw-blocked", rb_tt, "/api/tt-raw-blocked", SESS_EXPLORE, rb_why },
+        { "tt-raw-no-poc", rn_tt, "'ttRaw'", SESS_EXPLORE, rn_why, 0, NULL, "tt-raw-blocked" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18742,6 +18776,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_timegate(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
+    probes_ttsink(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
