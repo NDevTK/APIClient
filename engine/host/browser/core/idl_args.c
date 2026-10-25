@@ -53,6 +53,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include "solver/reclaim.h"
 
 /* §3.2'S INTEGER CONVERSION, ONCE, over the number ToNumber produced.
  *
@@ -674,7 +675,7 @@ static void idl_pool_reserve(int i)
         CHECK(c, "idl: OOM growing the member pool — a member that cannot be declared is an API the page cannot "
                  "call");
         g_chunks = c;
-        g_chunks[g_nchunks] = calloc(1, sizeof **g_chunks);
+        g_chunks[g_nchunks] = lexbor_calloc(1, sizeof **g_chunks);
         CHECK(g_chunks[g_nchunks], "idl: OOM allocating a member-pool block");
         g_nchunks++;
     }
@@ -925,7 +926,7 @@ static void idl_dict_intern(JSContext *ctx, const IdlDictDecl *d)
     DCHECK(d->name != NULL && d->members != NULL && d->n > 0,
            "a nested dictionary was declared with no identifier or no members — the identifier is what a "
            "conversion diagnostic names, and a dictionary with no members converts nothing");
-    atoms = malloc(sizeof(JSAtom) * (size_t)d->n);
+    atoms = lexbor_malloc(sizeof(JSAtom) * (size_t)d->n);
     CHECK(atoms != NULL, "idl: OOM interning a nested dictionary's member names");
     g = lexbor_realloc(g_dicts, (size_t)(g_ndicts + 1) * sizeof *g);
     CHECK(g != NULL, "idl: OOM recording a nested dictionary's declaration");
@@ -6498,7 +6499,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
        fatal in release too, never a truncation to whatever would fit. */
     idl_member(idx)->types = NULL;
     if (nargs > 0) {
-        idl_member(idx)->types = malloc(sizeof(IdlArgType) * (size_t)nargs);
+        idl_member(idx)->types = lexbor_malloc(sizeof(IdlArgType) * (size_t)nargs);
         CHECK(idl_member(idx)->types != NULL,
               "idl: OOM copying a member's declared argument types — a member that cannot be declared is an API "
               "the page cannot call");
@@ -6530,7 +6531,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
                "second dictionary REACHABLE IN THE SAME CALL would read the first's names. A member with no "
                "§3.6 split has one entry and may name one; a member with a distinguishing argument index has "
                "two and may name one apiece");
-        idl_member(idx)->dict_atoms = malloc(sizeof(JSAtom) * (size_t)nmembers);
+        idl_member(idx)->dict_atoms = lexbor_malloc(sizeof(JSAtom) * (size_t)nmembers);
         CHECK(idl_member(idx)->dict_atoms, "idl: OOM interning a dictionary's member names");
         for (k = 0; k < nmembers; k++) {
             idl_dict_order_check(members, nmembers, k);
@@ -6612,7 +6613,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
             const char **all;
 
             while (decl->steps[n]) n++;
-            all = malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + IDL_EPILOGUE_NSTEPS + 1));
+            all = lexbor_malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + IDL_EPILOGUE_NSTEPS + 1));
             CHECK(all != NULL, "idl: OOM joining a member's declared steps to the prologue's — a member whose "
                                "stages cannot be named is a resume point nothing can check");
             for (j = 0; j < IDL_STEP_FIRST; j++) all[j] = IDL_PROLOGUE_STEPS[j];
@@ -6807,7 +6808,7 @@ void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str)
            "an argument default declared IDL_DEFAULT_NONE, which is the ABSENCE of a default — that is what a "
            "position with no declaration already is, and saying it here means the IDL was misread");
     if (m->arg_dflts == NULL) {
-        m->arg_dflts = calloc((size_t)m->nargs, sizeof *m->arg_dflts);
+        m->arg_dflts = lexbor_calloc((size_t)m->nargs, sizeof *m->arg_dflts);
         CHECK(m->arg_dflts != NULL,
               "idl: OOM recording a member's declared argument defaults — a member that cannot be declared is "
               "an API the page cannot call");
@@ -6842,7 +6843,7 @@ void idl_typed_array(int index, JSTypedArrayEnum kind, bool allow_shared, bool a
            "the twelve the enumeration names");
     if (m->arg_views == NULL) {
         int k;
-        m->arg_views = calloc((size_t)m->nargs, sizeof *m->arg_views);
+        m->arg_views = lexbor_calloc((size_t)m->nargs, sizeof *m->arg_views);
         CHECK(m->arg_views != NULL,
               "idl: OOM recording a member's declared typed arrays — a member that cannot be declared is an "
               "API the page cannot call");
@@ -6935,7 +6936,7 @@ void idl_arg_enum(int index, const char *const *values)
            "an enumeration declared an empty value list — every §3.2.18 enumeration has at least one value, and "
            "a member whose type admits nothing is a member no assignment can satisfy");
     if (m->arg_enums == NULL) {
-        m->arg_enums = calloc((size_t)m->nargs, sizeof *m->arg_enums);
+        m->arg_enums = lexbor_calloc((size_t)m->nargs, sizeof *m->arg_enums);
         CHECK(m->arg_enums != NULL,
               "idl: OOM recording a member's per-position enumeration values — a member that cannot be "
               "declared is an API the page cannot call");
@@ -6986,7 +6987,7 @@ void idl_arg_iface(int index, bool (*is)(JSContext *ctx, JSValueConst v), const 
            "TypeError §3.2.15 throws, so a page told only that `the declared interface` was not implemented "
            "learns nothing it did not already know");
     if (m->arg_ifaces == NULL) {
-        m->arg_ifaces = calloc((size_t)m->nargs, sizeof *m->arg_ifaces);
+        m->arg_ifaces = lexbor_calloc((size_t)m->nargs, sizeof *m->arg_ifaces);
         CHECK(m->arg_ifaces != NULL,
               "idl: OOM recording a member's per-position interfaces — a member that cannot be declared is an "
               "API the page cannot call");
@@ -10094,7 +10095,7 @@ static void idl_note_construct_mint(const char *id)
         g_ctor_minted = t;
         g_ctor_minted_cap = cap;
     }
-    copy = strdup(id);
+    copy = reclaim_strdup(id);
     CHECK(copy != NULL, "idl: OOM copying a §3.7.1 constructor mint's identifier");
     g_ctor_minted[g_ctor_minted_n++] = copy;
 }

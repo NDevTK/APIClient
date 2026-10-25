@@ -9,6 +9,7 @@
 #include "quickjs.h"
 #include "core/canvas/canvas_path.h"
 #include "core/canvas/svg_path_data.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 typedef struct {
     JSContext *ctx;
@@ -77,7 +78,7 @@ static bool sp_number(SvgPathParser *s, double *out)
     }
 
     n = (size_t)(q - start);
-    buf = n < sizeof(stackbuf) ? stackbuf : malloc(n + 1);
+    buf = n < sizeof(stackbuf) ? stackbuf : lexbor_malloc(n + 1);
     if (!buf) return false;
     memcpy(buf, start, n);
     buf[n] = '\0';

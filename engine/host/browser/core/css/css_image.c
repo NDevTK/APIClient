@@ -13,6 +13,7 @@
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
 #include "core/css/css_position_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 #define IMG_N(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -155,7 +156,7 @@ static bool img_function(const char *text, size_t len, const char **name, size_t
    SPAN. core/css/css_length.h publishes both over a NUL-terminated value because every other caller has one. */
 static bool img_length_predicate(const char *w, size_t n, bool percentage_too)
 {
-    char *probe = malloc(n + 1);
+    char *probe = lexbor_malloc(n + 1);
     bool ok;
 
     CHECK(probe != NULL, "cssom: OOM testing a gradient component — a dropped one would make a valid "

@@ -27,6 +27,7 @@
 #include "core/idl_args.h"
 #include "core/frame/window_proxy.h"
 #include "core/dom/document.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_bar_class;
 static JSRuntime *g_bar_rt;
@@ -179,7 +180,7 @@ static JSValue bar_prop_new(JSContext *ctx)
     obj = JS_NewObjectClass(ctx, g_bar_class);
     if (JS_IsException(obj)) return obj;
     /* JS_NewObjectClass already gives it this REALM's class prototype, which bar_prop_install built. */
-    b = calloc(1, sizeof *b);
+    b = lexbor_calloc(1, sizeof *b);
     CHECK(b != NULL, "BarProp: OOM");
     JS_SetOpaque(obj, b);
     return obj;

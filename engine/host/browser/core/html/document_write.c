@@ -18,6 +18,7 @@
 #include "core/idl_args.h"
 #include "solver/concolic.h"
 #include "solver/solve.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §8.4.3 and §8.4.4 are ONE algorithm with two arguments — "run the document write steps with this, text,
    `false`, and 'Document write'" against "… `true`, and 'Document writeln'" — so they are one body with a
@@ -126,7 +127,7 @@ static JSValue dw_append(JSContext *ctx, JSValue acc, JSValueConst v)
           "§8.4.3 step 3's append could not read a String it had already converted — a markup sink that "
           "silently dropped half its bytes would report on a document the page never asked for");
     la = strlen(pa); lb = strlen(pb);
-    joined = malloc(la + lb + 1);
+    joined = lexbor_malloc(la + lb + 1);
     CHECK(joined != NULL, "§8.4.3 step 3's append could not be allocated");
     memcpy(joined, pa, la);
     memcpy(joined + la, pb, lb + 1);

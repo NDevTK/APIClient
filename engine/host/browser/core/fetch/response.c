@@ -28,6 +28,7 @@
 #include "core/realm.h"
 #include "core/fetch/body.h"
 #include "core/streams/readable_stream.h"
+#include "solver/reclaim.h"
 
 static JSClassID g_response_class;
 static int       g_ctor_stepid = -1, g_json_stepid = -1, g_redirect_stepid = -1, g_clone_stepid = -1;
@@ -731,7 +732,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             bad = body_state_set(ctx, &d->body, bytes, len) < 0;
             JS_FreeCString(ctx, bytes);
             if (bad) return -1;
-            mime = strdup("application/json");
+            mime = reclaim_strdup("application/json");
             CHECK(mime, "response: OOM naming a JSON body's type");
         /* §5.5's `new Response(body, init)` step 4 extracts with no keepalive flag at all — the flag is a
            REQUEST's, and a Response is not one, which is what §5.2's `= false` default says for a caller

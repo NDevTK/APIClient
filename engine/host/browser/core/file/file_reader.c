@@ -76,6 +76,7 @@
 #include "core/xhr/progress_event.h"   /* §6.4.1 Event Summary: every event of §6 IS a ProgressEvent */
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §6.2.2 FileReader States, in the order the interface's constants number them. */
 enum { FR_EMPTY = 0, FR_LOADING, FR_DONE };
@@ -237,7 +238,7 @@ static JSValue fr_package_data_url(JSContext *ctx, const char *bytes, size_t len
     char *b64, *url;
     JSValue s;
 
-    b64 = malloc(b64_cap);
+    b64 = lexbor_malloc(b64_cap);
     CHECK(b64 != NULL, "FileReader: OOM base64-encoding a byte sequence for File API §6.3's DataURL arm");
     /* THE ENGINE'S OWN CODEC — the one the platform already made it implement for `btoa` — rather than a
        second base64 grown here. §Solver's rule is the same one: an encoding builtin is modelled faithfully,
@@ -246,7 +247,7 @@ static JSValue fr_package_data_url(JSContext *ctx, const char *bytes, size_t len
     CHECK(n > 0 || len == 0, "FileReader: the base64 buffer was sized wrong for this byte sequence");
     b64[n] = 0;
     cap = strlen("data:") + strlen(mime) + strlen(";base64,") + n + 1;
-    url = malloc(cap);
+    url = lexbor_malloc(cap);
     CHECK(url != NULL, "FileReader: OOM building File API §6.3's Data URL");
     snprintf(url, cap, "data:%s;base64,%s", mime, b64);
     s = JS_NewStringLen(ctx, url, cap - 1);
@@ -281,7 +282,7 @@ JSValue file_reader_package_data(JSContext *ctx, const char *bytes, size_t len, 
             size_t i;
             JSValue s;
 
-            units = malloc((len ? len : 1) * sizeof *units);
+            units = lexbor_malloc((len ? len : 1) * sizeof *units);
             CHECK(units != NULL, "FileReader: OOM building File API §6.3's binary string");
             for (i = 0; i < len; i++)
                 units[i] = (uint16_t)(unsigned char)bytes[i];
@@ -771,7 +772,7 @@ static JSValue js_fr_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj))
         return obj;
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "FileReader: OOM building a FileReader");
     /* §6.2's three initial values, stated rather than left to calloc: a zeroed JSValue is the NUMBER 0. */
     d->state = FR_EMPTY;

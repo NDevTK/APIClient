@@ -24,6 +24,7 @@
 #include "core/layout/containment.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE MEMBERS. §7 declares six and this file answers five; `scrollParent` is absent for the reason the header
    states in full, so it has no magic here rather than a magic with no case. */
@@ -473,7 +474,7 @@ static JSValue hev_offset_extent(JSContext *ctx, const HevTarget *t, bool vertic
 
         DCHECK(n > 0, "an inline box with a box reported no line fragment; flow_position.h answers its origin "
                       "from the first");
-        r = malloc(n * sizeof *r);
+        r = lexbor_malloc(n * sizeof *r);
         CHECK(r != NULL, "§7's offsetWidth/offsetHeight could not allocate its fragment list");
         for (i = 0; i < n; i++) {
             r[i][0] = frags[i].x;

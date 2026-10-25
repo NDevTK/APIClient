@@ -14,6 +14,7 @@
 #include "core/realm.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §8.11.1's five observables. `data` is the ONE owned reference — the ImageDataArray itself, which *initialize
    an ImageData object* step 1.3 sets to the page's OWN object ("This step does not set this's data to a copy
@@ -136,7 +137,7 @@ static JSValue image_data_alloc(JSContext *ctx, JSValueConst new_target)
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
 
-    b = calloc(1, sizeof(*b));
+    b = lexbor_calloc(1, sizeof(*b));
     CHECK(b != NULL, "an ImageData's record could not be allocated");
     b->data = JS_UNDEFINED;
     JS_SetOpaque(obj, b);

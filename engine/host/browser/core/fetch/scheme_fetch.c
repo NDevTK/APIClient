@@ -49,6 +49,7 @@
 #include "core/file/blob.h"
 #include "core/mime/mime_type.h"
 #include "core/url/url.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §4.3's SWITCH, AS ONE ANSWER. The arms are the standard's own rows in the standard's own order, and the
    fallthrough is its step 4 — "Return a network error" — which is what an unlisted scheme gets. */
@@ -151,7 +152,7 @@ static SchemeFetchOutcome scheme_fetch_blob(JSContext *ctx, const FetchRequest *
         /* "Set response's status message to `OK`", "Set response's body to bodyWithType's body", and "Set
            response's header list to «(`Content-Length`, serializedFullLength), (`Content-Type`, type)»" — both
            headers, because the standard writes both and a page reads `Content-Length` off a blob response. */
-        len_s = malloc(32);
+        len_s = lexbor_malloc(32);
         CHECK(len_s, "scheme fetch: OOM serializing a blob's length");
         snprintf(len_s, 32, "%zu", blen);
         /* BOTH headers, UNCONDITIONALLY, because the standard writes both: a Blob with no type has the EMPTY

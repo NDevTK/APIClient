@@ -91,17 +91,18 @@
  * THERE IS NO reclaim_free, AND THAT IS NOT AN OMISSION. These three are the C allocator plus a retry, so what
  * they return is freed by plain free() and a converted site's free needs no edit at all. A refusal is the only
  * thing this file adds; ownership is untouched. */
-/* The browser half reaches the edge through lexbor_realloc, the library allocator reclaim_install routes here, so
-   its growth buffers over page-grown input refuse by selling rather than by their CHECK; a free path keeps plain
-   realloc, since a sale there would re-enter the release walking it.
-   Named residual. Not covered: the browser half's malloc, calloc and strdup of input-derived sizes, which still
-   call the C library directly. Next diff routes them through lexbor_malloc and lexbor_calloc. Absence shows as an
-   OOM CHECK at a browser component's malloc with `pressureSold` above zero. */
+/* The browser half reaches the edge through lexbor_malloc, lexbor_calloc and lexbor_realloc, the library allocator
+   reclaim_install routes here, and through reclaim_strdup and reclaim_strndup for its string copies, so an
+   allocation sized by page input refuses by selling rather than by its CHECK. A fixed-size allocation and a free
+   path keep the C library: the first cannot be what reaches the floor first often enough to matter, and a sale in
+   the second would re-enter the release walking it. */
 void *reclaim_malloc(size_t size);
 void *reclaim_realloc(void *ptr, size_t size);
 void *reclaim_calloc(size_t num, size_t size);
-/* strdup through reclaim_malloc: a copy of `s`, freed by free(), NULL only when nothing was left to sell. */
+/* strdup and strndup through reclaim_malloc: a copy of `s` (of at most `n` bytes for the second), freed by
+   free(), NULL only when nothing was left to sell. */
 char *reclaim_strdup(const char *s);
+char *reclaim_strndup(const char *s, size_t n);
 
 /* Route this instance's OTHER allocators into `cb`, and install `cb` as the runtime's own reclaim hook. One
    call, because "which allocators refuse through the edge" is one fact and a second install site is a list to

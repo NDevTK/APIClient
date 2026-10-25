@@ -8,6 +8,7 @@
 #include "check.h"
 #include "core/css/css_length.h"
 #include "core/css/css_position_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 #define POS_N(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -48,7 +49,7 @@ static const char *const POS_V_SIDES[] = { "top", "bottom" };
    value here is a span into the declaration, and copying it is the whole of the adaptation. */
 static bool pos_is_length_percentage(const char *w, size_t n)
 {
-    char *probe = malloc(n + 1);
+    char *probe = lexbor_malloc(n + 1);
     bool ok;
 
     CHECK(probe != NULL, "cssom: OOM testing a <position> component — a dropped one would make a valid "
@@ -225,7 +226,7 @@ char *css_position_serialize(const CssPositionValue *p)
     if (p->v_off) { piece[n] = p->v_off; piece_len[n] = p->v_off_len; n++; }
     cap = 1;
     for (i = 0; i < n; i++) cap += piece_len[i] + 1;
-    out = malloc(cap);
+    out = lexbor_malloc(cap);
     CHECK(out != NULL, "cssom: OOM serializing a <position> — a dropped one reads as the property's initial "
                        "value, which is a real coordinate and a different one");
     for (i = 0; i < n; i++) {

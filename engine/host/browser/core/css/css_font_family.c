@@ -290,7 +290,7 @@ static bool ff_ident_excluded(const char *s, size_t n)
     bool bad;
 
     if (ff_generic_of(s, n) != NULL) return true;
-    one = malloc(n + 1);
+    one = lexbor_malloc(n + 1);
     CHECK(one != NULL, "cssom: OOM testing a `<custom-ident>` against css-fonts-4 §2.1.1's exclusion");
     if (n) memcpy(one, s, n);
     one[n] = '\0';
@@ -666,7 +666,7 @@ char *css_font_family_value(const char *value)
         while (ff_is_ws(css_cp_at(k, end, &len))) k += len;
         while (end > k && ff_is_ws(css_cp_at(end - 1, end, NULL))) end--;
         len = (size_t)(end - k);
-        v = malloc(len + 1);
+        v = lexbor_malloc(len + 1);
         CHECK(v != NULL, "cssom: OOM copying a CSS-wide keyword out of a `font-family` declaration");
         for (i = 0; i < len; i++)
             v[i] = (k[i] >= 'A' && k[i] <= 'Z') ? (char)(k[i] - 'A' + 'a') : k[i];

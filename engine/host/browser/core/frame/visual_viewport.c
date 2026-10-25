@@ -16,6 +16,7 @@
 #include "core/frame/visual_viewport.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.2's SCALE FACTOR — the magnitude of the transform the visual viewport applies to the layout viewport, the
    thing usually called pinch-zoom. It is 1 because it is changed by a user gesture, or by the user agent
@@ -380,7 +381,7 @@ static void visual_viewport_install(JSContext *ctx)
     CHECK(!JS_IsException(obj), "the document's associated VisualViewport could not be allocated");
     /* THE RECORD, ATTACHED BEFORE THE OBJECT LEAVES THIS FUNCTION — which is what vv_environment's "a branded
        object without one came from a second mint that does not exist" rests on, and there is no second mint. */
-    r = calloc(1, sizeof *r);
+    r = lexbor_calloc(1, sizeof *r);
     CHECK(r != NULL, "this document's VisualViewport record could not be allocated");
     r->realm = ctx;
     r->global = JS_DupValue(ctx, global);   /* OWNED by the record from here */

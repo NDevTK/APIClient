@@ -11,6 +11,7 @@
 #include "core/layout/grid_explicit_tracks.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §7.2.3.2's "definite preferred size" of the container's content box on the axis. A row's is a height that does
    not behave as auto. A column's is a `width` other than `auto`, or an `auto` one on a block-level box in a block
@@ -144,7 +145,7 @@ bool grid_explicit_tracks(lxb_dom_element_t *container, bool vertical, bool intr
     }
     count = get_count(&list, has_space, space, has_min, mn, gap);
     cap = list.n - list.auto_n + count * list.auto_n;
-    out->list.tracks = malloc(cap * sizeof *out->list.tracks);
+    out->list.tracks = lexbor_malloc(cap * sizeof *out->list.tracks);
     CHECK(out->list.tracks != NULL, "css-grid-1 §7.2.3.2: out of memory expanding an auto-repeated track list");
     for (i = 0; i < list.auto_at; i++) out->list.tracks[out->list.n++] = list.tracks[i];
     out->repeat_lo = out->list.n;

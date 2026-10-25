@@ -130,6 +130,7 @@
 #include "solver/concolic.h"   /* §6.6.1's `item` takes an index unknown external input crosses AS ITSELF */
 #include "solver/dom_cow.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* TWO PRIVATE KEYS, BOTH SYMBOLS, AND THEY ARE TWO BECAUSE A SLOT IS A BRAND. `g_decl_key` hangs a block's own
    §6.6 record off the block; `g_inline_key` hangs CSSOM §7.1's [SameObject] block off the ELEMENT's wrapper. One key
@@ -404,7 +405,7 @@ static char *cssd_decl_source_value(const lxb_css_rule_declaration_t *d, const c
            "input buffer, which is the very string handed to the parse that produced this rule, so a caller "
            "reading a rule against a DIFFERENT buffer is the only way this can be false");
     if (begin > end || end > len) return NULL;
-    out = malloc(end - begin + 1);
+    out = lexbor_malloc(end - begin + 1);
     CHECK(out != NULL, "cssom: OOM copying a declaration's source value");
     memcpy(out, text + begin, end - begin);
     out[end - begin] = '\0';
@@ -434,7 +435,7 @@ static char *cssd_decl_source_name(const lxb_css_rule_declaration_t *d, const ch
            "a declaration's name offsets fall outside the text that was parsed — they index the tokenizer's "
            "input buffer, which is the very string handed to the parse that produced this rule");
     if (begin > end || end > len) return NULL;
-    out = malloc(end - begin + 1);
+    out = lexbor_malloc(end - begin + 1);
     CHECK(out != NULL, "cssom: OOM copying a declaration's source name");
     memcpy(out, text + begin, end - begin);
     out[end - begin] = '\0';
@@ -536,7 +537,7 @@ static void cssd_decls_remove_at(CssDecls *d, unsigned at)
 
 static char *cssd_strdup(const char *s)
 {
-    char *out = strdup(s);
+    char *out = reclaim_strdup(s);
 
     CHECK(out != NULL, "cssom: OOM copying a declaration's property name — a dropped one reads as a property "
                        "the block never declared");
@@ -1435,7 +1436,7 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
         /* THE KEY IS THIS TABLE'S OWN COPY AND NEVER THE CALLER'S POINTER: the caller frees its emission at
            the end of every sheet iteration, and the run's tokenizer reads the text it was begun on until it
            ends, across rests. */
-        e->text = malloc(len + 1);
+        e->text = lexbor_malloc(len + 1);
         CHECK(e->text != NULL, "cssom: the per-sheet parse key allocation failed");
         memcpy(e->text, text, len);
         e->text[len] = '\0';
@@ -1471,7 +1472,7 @@ static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, si
     }
     if (e->sst->root != NULL && e->sst->root->type == LXB_CSS_RULE_LIST) {
         for (n = 0, r = lxb_css_rule_list(e->sst->root)->first; r; r = r->next) n++;
-        e->rules = malloc((size_t)(n ? n : 1) * sizeof *e->rules);
+        e->rules = lexbor_malloc((size_t)(n ? n : 1) * sizeof *e->rules);
         CHECK(e->rules != NULL, "cssom: the per-sheet parse's rule index allocation failed");
         for (n = 0, r = lxb_css_rule_list(e->sst->root)->first; r; r = r->next) e->rules[n++] = r;
         e->nrules = n;
@@ -1713,7 +1714,7 @@ static char *cssd_serialize_decls(const CssDecls *d)
     unsigned i;
 
     if (d->n == 0) return NULL;
-    done = calloc(d->n, sizeof(*done));
+    done = lexbor_calloc(d->n, sizeof(*done));
     CHECK(done != NULL, "cssom: OOM serializing a declaration block — a dropped already-serialized mark would "
                         "write one declaration twice");
     for (i = 0; i < d->n; i++) {
@@ -1837,7 +1838,7 @@ static char *cssd_at_rule_name(const lxb_css_rule_at_t *at)
         raw = e ? (const char *)e->name : NULL;
     }
     if (!raw) return NULL;
-    out = strdup(raw);
+    out = reclaim_strdup(raw);
     CHECK(out != NULL, "cssom: OOM copying an at-rule's name");
     for (i = 0; out[i]; i++)
         if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] - 'A' + 'a');
@@ -1865,7 +1866,7 @@ static char *cssd_prelude_span(const char *text, size_t len, size_t begin, size_
                            text[begin] == '\r' || text[begin] == '\f')) begin++;
     while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t' || text[end - 1] == '\n' ||
                            text[end - 1] == '\r' || text[end - 1] == '\f')) end--;
-    out = malloc(end - begin + 1);
+    out = lexbor_malloc(end - begin + 1);
     CHECK(out != NULL, "cssom: OOM copying an at-rule's prelude");
     memcpy(out, text + begin, end - begin);
     out[end - begin] = '\0';
@@ -1902,7 +1903,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
     size_t n = 1, cap = 8;
     lxb_css_rule_t *r;
 
-    v = malloc(cap * sizeof *v);
+    v = lexbor_malloc(cap * sizeof *v);
     CHECK(v != NULL, "cssom: OOM walking a stylesheet's rules");
     v[0].r = list->first;
     v[0].parent = NULL;
@@ -3114,7 +3115,7 @@ char *cssom_initial_value(const char *name)
                "is the row's own expiry condition: DELETE it and let the registry answer, after checking that "
                "what it now says is the property's `Initial:` line");
         free(b.s);
-        out = strdup(CSSD_INITIAL_WRONG[i].initial);
+        out = reclaim_strdup(CSSD_INITIAL_WRONG[i].initial);
         CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
                            "which is a cascade that stopped before its last layer");
         return out;
@@ -3183,7 +3184,7 @@ char *cssom_initial_value(const char *name)
                "if it is to be overridden rather than adopted the row belongs in CSSD_INITIAL_WRONG, which is "
                "the table for disagreeing with an answer the registry gives and which records the answer it is "
                "disagreeing with so the disagreement expires too");
-        out = strdup("\"Times New Roman\"");
+        out = reclaim_strdup("\"Times New Roman\"");
         CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
                            "which is a cascade that stopped before its last layer");
         return out;
@@ -3208,7 +3209,7 @@ char *cssom_initial_value(const char *name)
            `cssd_initial_unregistered_check` asks it at cssom_init over EVERY row rather than over the row a
            caller happened to name, and with no `e->initial` in the condition, so both halves of the state are
            covered and a dead row is a crash instead of a quietly superseded one. */
-        out = strdup(CSSD_INITIAL_UNREGISTERED[i].initial);
+        out = reclaim_strdup(CSSD_INITIAL_UNREGISTERED[i].initial);
         CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
                            "which is a cascade that stopped before its last layer");
         return out;
@@ -3245,7 +3246,7 @@ char *cssom_initial_value(const char *name)
                    "line means lexbor has the row and no initial value on it: DELETE the value from "
                    "core/css/css_background_shorthand.c's BG_INITIAL and let the registry answer, after "
                    "checking that what it now says is the property's own `Initial:` line");
-            out = strdup(bg);
+            out = reclaim_strdup(bg);
             CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
                                "which is a cascade that stopped before its last layer");
             return out;
@@ -3440,7 +3441,7 @@ static char *cssd_declarations_text(JSContext *ctx, JSValueConst block, size_t *
            "kept nowhere — every creator sets exactly one of the two");
     text = cssd_inline_text(el, &len);
     if (!text || !len) return NULL;
-    out = malloc(len + 1);
+    out = lexbor_malloc(len + 1);
     CHECK(out != NULL, "cssom: OOM copying a declaration block's text");
     memcpy(out, text, len);
     out[len] = '\0';
@@ -4367,7 +4368,7 @@ static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const cha
                property's name is whatever the page wrote, so a fixed buffer would truncate two long names to
                one string and file two declarations under one constraint key. */
             size_t n = sizeof CSSD_TAINT_OP - 1 + strlen(set.name[i]) + 1;
-            char *op = malloc(n);
+            char *op = lexbor_malloc(n);
             JSValue derived;
 
             CHECK(op != NULL, "cssom: OOM naming the derivation behind an unknown declaration value");

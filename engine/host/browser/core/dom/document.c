@@ -78,6 +78,7 @@
 #include "core/xml/xml_name.h"   /* XML 1.0 §2.3 [5] Name, which createProcessingInstruction's target fork asks */
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "solver/reclaim.h"
 
 /* Every member here takes DOMStrings; createElementNS takes two. Declared, not masked. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -339,7 +340,7 @@ static const char *doc_addr_intern(Document *d, const char *s)
         d->addrs = g;
         d->cap_addrs = cap;
     }
-    copy = strdup(s);
+    copy = reclaim_strdup(s);
     CHECK(copy != NULL, "document: OOM copying a Document address");
     d->addrs[d->n_addrs++] = copy;
     return copy;
@@ -2208,10 +2209,10 @@ void document_state_x_frame_options(JSContext *ctx, char *const *values, size_t 
     DCHECK((values == NULL) == (n == 0), "a Document's X-Frame-Options was stated with a count that disagrees "
                                          "with its values — get, decode, and split answers null or a list");
     if (values) {
-        d->xfo = malloc(n * sizeof *d->xfo);
+        d->xfo = lexbor_malloc(n * sizeof *d->xfo);
         CHECK(d->xfo != NULL, "document: OOM holding X-Frame-Options");
         for (i = 0; i < n; i++) {
-            d->xfo[i] = strdup(values[i]);
+            d->xfo[i] = reclaim_strdup(values[i]);
             CHECK(d->xfo[i] != NULL, "document: OOM holding X-Frame-Options");
         }
     }
@@ -3504,7 +3505,7 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
        order changes no verdict, but the container reports its text in the order received. */
     if (csp && *csp) {
         acc_len = strlen(csp);
-        acc = malloc(acc_len + 1);
+        acc = lexbor_malloc(acc_len + 1);
         CHECK(acc != NULL, "document: OOM holding the policy this document was created with");
         memcpy(acc, csp, acc_len + 1);
     }
@@ -3834,7 +3835,7 @@ char *document_ancestor_origins_serialize(JSContext *ctx, JSValueConst list)
     /* The empty list is a word, not an empty field, as for §9.5's answer beside it: a host that stopped writing the
        field and a navigable with no ancestors are different facts, and only the first is a bug. */
     if (n == 0) {
-        out = strdup(DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
+        out = reclaim_strdup(DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
         CHECK(out != NULL, "document: OOM stating §3.1.3's empty ancestor list to a peer instance");
         return out;
     }
@@ -3847,7 +3848,7 @@ char *document_ancestor_origins_serialize(JSContext *ctx, JSValueConst list)
         JS_FreeCString(ctx, s);
         JS_FreeValue(ctx, a);
     }
-    out = malloc(cap);
+    out = lexbor_malloc(cap);
     CHECK(out != NULL, "document: OOM serializing §3.1.3's ancestor list for a peer instance");
     out[0] = '\0';
     for (i = 0; i < n; i++) {
@@ -4240,10 +4241,10 @@ void document_set_worker_environment(JSContext *ctx, JSContext *owner, const cha
     JSValue obj;
 
     DCHECK(doc_of(ctx) == NULL, "a realm with its own Document was given a worker's environment");
-    e = calloc(1, sizeof *e);
+    e = lexbor_calloc(1, sizeof *e);
     CHECK(e != NULL, "document: OOM building a worker's environment record");
     e->doc = document_environment_doc(owner);
-    e->url = strdup(url);
+    e->url = reclaim_strdup(url);
     CHECK(e->url != NULL, "document: OOM copying a worker's url");
     e->owner = JS_DupContext(owner);
     /* HTML §7.1.7 Policy containers' create a policy container from a fetch response: "If response's URL's
@@ -4533,7 +4534,7 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
            "collector — document_init declares document_realm_mark, and without it every reference the record "
            "holds is one gc_decref cannot subtract, so the realm the record points back into is a cycle with an "
            "invisible edge and is uncollectable for the life of the runtime");
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "document: OOM naming a document");
     d->realm = ctx;
     d->dom = dom;
@@ -4783,7 +4784,7 @@ char *document_referrer_source(JSContext *ctx)
     /* Referrer Policy §8.3: an environment whose global is not a Window has its creation URL as the referrer
        source, which for a worker is its global scope's url. */
     if (!doc_of(ctx)) {
-        char *src = strdup(worker_env_of(ctx)->url);
+        char *src = reclaim_strdup(worker_env_of(ctx)->url);
         CHECK(src != NULL, "document: OOM copying a worker's referrer source");
         return src;
     }
@@ -4810,7 +4811,7 @@ char *document_referrer_source(JSContext *ctx)
         CHECK(d != NULL, "an iframe srcdoc document's container is in a document with no record");
     }
     {
-        char *src = strdup(document_url_of(dom));
+        char *src = reclaim_strdup(document_url_of(dom));
         CHECK(src != NULL, "document: OOM copying a referrer source");
         return src;
     }

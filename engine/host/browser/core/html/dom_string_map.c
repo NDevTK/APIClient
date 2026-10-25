@@ -38,6 +38,7 @@
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/html/dom_string_map.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_class;
 static int       g_ready;
@@ -94,7 +95,7 @@ static char *dsm_prop_to_attr(JSContext *ctx, const char *prop, size_t plen, siz
                                  "a dataset name may not contain a dash followed by a lowercase letter");
             return NULL;
         }
-    out = malloc(plen * 2 + 6);
+    out = lexbor_malloc(plen * 2 + 6);
     CHECK(out != NULL, "dataset could not build an attribute name");
     memcpy(out, "data-", 5);
     o = 5;
@@ -192,7 +193,7 @@ static int dsm_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, 
         const lxb_char_t *an = lxb_dom_attr_qualified_name(a, &alen);
         char *buf;
         if (!an) continue;
-        buf = malloc(alen + 1);
+        buf = lexbor_malloc(alen + 1);
         CHECK(buf != NULL, "dataset could not build a property name");
         if (!dsm_attr_to_prop((const char *)an, alen, buf, &plen2)) { free(buf); continue; }
         if (n == cap) {

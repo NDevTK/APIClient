@@ -38,6 +38,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/fetch/data_url.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* Infra's "ASCII whitespace" — TAB, LF, FF, CR, SP. It is NOT Fetch's "HTTP whitespace" (which has no FF),
    and step 6 is the one place in this algorithm that uses it. The standard's own note says only U+0020 can
@@ -125,7 +126,7 @@ bool data_url_process(const UrlRecord *data_url, DataUrlStruct *out)
            itself is the ENGINE'S OWN forgiving-base64 — the one `atob` runs. A rejection here is the
            algorithm's second and last failure. */
         size_t cap = JS_Base64DecodedMax(out->body_len);
-        uint8_t *dst = malloc(cap ? cap : 1);
+        uint8_t *dst = lexbor_malloc(cap ? cap : 1);
         size_t n;
         int err = 0;
 
@@ -151,7 +152,7 @@ bool data_url_process(const UrlRecord *data_url, DataUrlStruct *out)
         size_t mn = me - ms;
         bool ok;
 
-        mime = malloc(mn + 11);
+        mime = lexbor_malloc(mn + 11);
         CHECK(mime != NULL, "data: URL: OOM building the MIME type to parse");
         if (mn && input[ms] == ';') {
             memcpy(mime, "text/plain", 10);

@@ -14,6 +14,7 @@
 #include "core/layout/box_tree.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_column_box.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* HTML §4.9.12.1 Forming a table's clamp, identical in both column arms: "If span is greater than 1000, let
    it be 1000 instead." It is the section's own step, not an engine bound. */
@@ -144,7 +145,7 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
     out->noccupied = occupied;
     out->ncols = (ngrid > occupied) ? ngrid : occupied;
     if (out->ncols == 0) return;
-    out->cols = (TableColumnBoxes *) calloc(out->ncols, sizeof *out->cols);
+    out->cols = (TableColumnBoxes *) lexbor_calloc(out->ncols, sizeof *out->cols);
     CHECK(out->cols != NULL,
           "CSS 2.1 §17.5's rules 3 and 4 could not allocate one column-box pair per grid column of the table "
           "being laid out");

@@ -14,6 +14,7 @@
 #include "core/idl_args.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §4.2's ONE INTERNAL SLOT.
  *
@@ -113,7 +114,7 @@ JSValue css_keyword_value_new(JSContext *ctx, JSValue value)
     obj = JS_NewObjectProtoClass(ctx, proto, g_kw_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "css-typed-om: a CSSKeywordValue could not be allocated");
-    k = calloc(1, sizeof *k);
+    k = lexbor_calloc(1, sizeof *k);
     CHECK(k != NULL, "css-typed-om: a CSSKeywordValue's record allocation failed");
     k->value = value;
     JS_SetOpaque(obj, k);

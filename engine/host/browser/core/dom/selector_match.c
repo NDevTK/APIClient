@@ -10,6 +10,7 @@
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE HOST LANGUAGE'S ANSWERS, for the pseudo-classes whose truth is not a shape of the tree. Selectors Level
    5 §7 "Exposing custom state: the :state() pseudo-class" states the rule in general — "The exact matching
@@ -534,7 +535,7 @@ SelectorList *selector_list_compile(const char *sel)
        which is what selector_list_destroy then owns. On failure the same function has already destroyed it. */
     lxb_css_parser_destroy(parser, true);
     if (!list) return NULL;   /* Selectors 4 §17.1's `failure` */
-    sl = malloc(sizeof(*sl));
+    sl = lexbor_malloc(sizeof(*sl));
     CHECK(sl != NULL, "a compiled selector list could not be recorded");
     sl->refs = 1;
     sl->list = list;

@@ -11,6 +11,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static const uint16_t RANGE_BOUNDS_OFF[] = { (uint16_t)offsetof(RangeBounds, start_node),
                                              (uint16_t)offsetof(RangeBounds, end_node) };
@@ -204,7 +205,7 @@ JSValue static_range_new(JSContext *ctx, JSValueConst snode, uint32_t soff, JSVa
     obj = JS_NewObjectProtoClass(ctx, proto, g_static_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
-    b = calloc(1, sizeof(*b));
+    b = lexbor_calloc(1, sizeof(*b));
     CHECK(b != NULL, "the StaticRange record allocation failed");
     b->start_node = JS_DupValue(ctx, snode);
     b->end_node = JS_DupValue(ctx, enode);
@@ -300,7 +301,7 @@ static JSValue js_static_range_ctor(JSContext *ctx, JSValueConst this_val, int a
     obj = JS_NewObjectProtoClass(ctx, proto, g_static_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) { JS_FreeValue(ctx, sc); JS_FreeValue(ctx, ec); return obj; }
-    b = calloc(1, sizeof(*b));
+    b = lexbor_calloc(1, sizeof(*b));
     CHECK(b != NULL, "the StaticRange record allocation failed");
     /* STEP 2. A static range is exactly what it was constructed with — it never tracks the tree, which is the
        whole of what makes it different from §5.5's. */

@@ -5,10 +5,11 @@
 #include "check.h"
 #include "core/fetch/structured_fields.h"
 #include "core/frame/embedder_policy.h"
+#include "solver/reclaim.h"
 
 static char *ep_dup(const char *s)
 {
-    char *r = strdup(s ? s : "");
+    char *r = reclaim_strdup(s ? s : "");
     CHECK(r != NULL, "embedder policy: OOM copying a reporting endpoint");
     return r;
 }

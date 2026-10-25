@@ -1041,9 +1041,9 @@ static size_t tr_prep_step(TextRunMeasure *m)
             m->prep = TR_PREP_EDGES;
             return 1;
         }
-        m->cps = malloc(m->ncps * sizeof *m->cps);
-        m->actions = malloc((m->ncps + 1) * sizeof *m->actions);
-        m->item_of_cp = malloc(m->ncps * sizeof *m->item_of_cp);
+        m->cps = lexbor_malloc(m->ncps * sizeof *m->cps);
+        m->actions = lexbor_malloc((m->ncps + 1) * sizeof *m->actions);
+        m->item_of_cp = lexbor_malloc(m->ncps * sizeof *m->item_of_cp);
         CHECK(m->cps != NULL && m->actions != NULL && m->item_of_cp != NULL,
               "out of memory running [UAX14]'s line breaking over one inline formatting context. Every allocation "
               "is one entry per code point of the run — its own text, its forced breaks and its atomic inlines — "
@@ -1375,7 +1375,7 @@ void text_run_fill_begin(TextRunFill *f, const TextRunMeasure *m, CssPx availabl
         f->complete = true;
         return;
     }
-    f->out = malloc(m->count * sizeof *f->out);
+    f->out = lexbor_malloc(m->count * sizeof *f->out);
     CHECK(f->out != NULL, "out of memory distributing one inline formatting context's content across CSS 2.2 "
                           "§9.4.2's line boxes. The array is one entry per collected item and the lines partition "
                           "them, so a failure here is the physical floor");

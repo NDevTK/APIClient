@@ -9,6 +9,7 @@
 #include "check.h"
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_var.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* U+0001 START OF HEADING. Its whole job is to be a byte no shorthand NAME contains — the names come from
    core/css/css_shorthand.c's own table — so the split below is exact whatever the page's value holds. */
@@ -16,7 +17,7 @@
 
 static char *cps_dupn(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out != NULL, "css-values-5's pending-substitution value: OOM");
     memcpy(out, s, n);
@@ -42,7 +43,7 @@ char *css_pending_make(const char *shorthand, const char *original)
            "step a truncated property name");
     sn = strlen(shorthand);
     on = strlen(original);
-    out = malloc(sn + on + 3);
+    out = lexbor_malloc(sn + on + 3);
     CHECK(out != NULL, "css-values-5's pending-substitution value: OOM");
     out[0] = CSS_PENDING_MARK;
     memcpy(out + 1, shorthand, sn);

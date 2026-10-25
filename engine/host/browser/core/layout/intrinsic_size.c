@@ -26,6 +26,7 @@
 #include "core/layout/table_width.h"
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static char *is_computed(lxb_dom_element_t *el, const char *name)
 {
@@ -510,7 +511,7 @@ static size_t is_key_probe(const IsEntry *tab, size_t cap, lxb_dom_element_t *el
 static void is_record_grow(IntrinsicSizeRecord *r)
 {
     size_t cap = r->cap != 0 ? r->cap * 2 : 64, i;
-    IsEntry *tab = calloc(cap, sizeof *tab);
+    IsEntry *tab = lexbor_calloc(cap, sizeof *tab);
 
     CHECK(tab != NULL, "the layout job's intrinsic size record could not grow");
     for (i = 0; i < r->cap; i++) {
@@ -587,7 +588,7 @@ static IsHeld *is_held_of(lxb_dom_element_t *el, IsKind kind, BlockFlowRun run)
             return h;
         }
     }
-    h = calloc(1, sizeof *h);
+    h = lexbor_calloc(1, sizeof *h);
     CHECK(h != NULL, "out of memory holding one intrinsic inline size measurement");
     if (r->used * 2 >= r->cap) is_record_grow(r);
     i = is_key_probe(r->tab, r->cap, el, kind, run);

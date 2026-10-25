@@ -49,6 +49,7 @@
 #include "solver/flow.h"
 #include "solver/world.h"
 #include "core/idl_args.h"
+#include "solver/reclaim.h"
 
 /* The wrapper slot the navigable lives in. Not a name a page would write, and read through JS_GetOwnSlot so no
    prototype lookup and no page code can intercept it — the same arrangement the custom-element upgrade mark
@@ -223,7 +224,7 @@ static char *iframe_srcdoc_resource(JSContext *ctx, JSValueConst wrap, const cha
           "§4.8.5's `srcdoc` would not convert to bytes: either the allocation failed, or this is a release "
           "build and the attribute holds unknown external input, whose ToString has no concolic semantics — a "
           "dev build names the capability to build at the arm above this line");
-    out = strdup(c);
+    out = reclaim_strdup(c);
     CHECK(out != NULL, "§4.8.5: OOM copying an `<iframe>`'s document resource");
     JS_FreeCString(ctx, c);
     JS_FreeValue(ctx, v);
@@ -332,7 +333,7 @@ static char *iframe_src_destination(JSContext *ctx, JSValueConst wrap, const cha
               "§4.8.5's `src` would not convert to bytes: either the allocation failed, or this is a release "
               "build and the attribute holds unknown external input, whose ToString has no concolic semantics "
               "— a dev build names the capability to build at the arm above this line");
-        out = strdup(c);
+        out = reclaim_strdup(c);
         CHECK(out != NULL, "§4.8.5: OOM copying an `<iframe>`'s destination");
         JS_FreeCString(ctx, c);
     }
@@ -379,7 +380,7 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
                                           "post-connection steps step 4, \"process the iframe attributes for "
                                           "insertedNode, with initialInsertion set to true\", into which this "
                                           "engine folds step 3's create");
-        src = strdup("about:srcdoc");
+        src = reclaim_strdup("about:srcdoc");
         CHECK(src != NULL, "§4.8.5: OOM naming step 1's destination");
     } else {
         src = iframe_src_destination(ctx, wrap,

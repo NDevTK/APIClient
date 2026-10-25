@@ -51,6 +51,7 @@
 #include "core/indexeddb/idb_record.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.12's three fields. The two keys are §2.4 key records; the value is a §2.3 value. */
 typedef struct IdbRecordData {
@@ -153,7 +154,7 @@ JSValue idb_record_new(JSContext *ctx, JSValue key, JSValue primary_key, JSValue
     obj = JS_NewObjectProtoClass(ctx, proto, g_record_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "IndexedDB: an IDBRecord could not be allocated");
-    r = calloc(1, sizeof *r);
+    r = lexbor_calloc(1, sizeof *r);
     CHECK(r != NULL, "IndexedDB: a record snapshot's allocation failed");
     r->key = key;
     r->primary_key = primary_key;

@@ -56,7 +56,7 @@ static void sf_buf_put(SfBuf *b, char c)
 
 static char *sf_span_dup(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
     CHECK(out != NULL, "structured fields: OOM copying a field value");
     memcpy(out, s, n);
     out[n] = 0;

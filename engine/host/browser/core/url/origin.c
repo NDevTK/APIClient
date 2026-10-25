@@ -9,6 +9,8 @@
 /* §7.1.1's one mutable component is per-flow state, so the one place it is written captures it — the browser
    owns the API, the solver owns the time travel. */
 #include "solver/cow.h"
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §7.1.1's TWO SHAPES IN ONE RECORD, and `nonce` is which: NON-ZERO is the OPAQUE origin — "an internal value,
    with no serialization it can be recreated from … for which the only meaningful operation is testing for
@@ -64,7 +66,7 @@ static const Origin *g_agent;
 
 static Origin *origin_alloc(void)
 {
-    Origin *o = calloc(1, sizeof *o);
+    Origin *o = lexbor_calloc(1, sizeof *o);
 
     CHECK(o != NULL, "origin: OOM minting an origin — every same-origin check in the engine compares one, so a "
                      "document without one has no principal to be judged against");
@@ -88,7 +90,7 @@ const Origin *origin_opaque_new(void)
 
 static char *origin_strdup(const char *s)
 {
-    char *c = strdup(s);
+    char *c = reclaim_strdup(s);
 
     CHECK(c != NULL, "origin: OOM recording a tuple origin's component");
     return c;
@@ -253,7 +255,7 @@ void origin_set_domain(JSContext *ctx, JSValueConst owner, const Origin *o, cons
            "cluster, so the only origins in this heap are this agent's own; one that is not came from "
            "origin_parse, which is how a PEER INSTANCE's principal arrives, and relaxing a peer's domain would "
            "be claiming same origin-domain across the boundary that exists to prevent exactly that");
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "origin: OOM recording a relaxed domain — §7.1.1.2's setter has already passed every one "
                      "of its security checks at this point, so there is no answer left that is not this one");
     origin_host_copy(&d->host, domain);
@@ -279,7 +281,7 @@ static char *tuple_serialize(const char *scheme, const UrlHost *host, int port)
 
     CHECK(h != NULL, "origin: OOM serializing a tuple origin's host");
     n = strlen(scheme) + strlen(h) + 16;
-    s = malloc(n);
+    s = lexbor_malloc(n);
     CHECK(s != NULL, "origin: OOM serializing an origin");
     if (port >= 0) snprintf(s, n, "%s://%s:%d", scheme, h, port);   /* step 5 */
     else           snprintf(s, n, "%s://%s", scheme, h);

@@ -20,6 +20,7 @@
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE THREE PER-ELEMENT SLOTS, in the per-flow property shadow the control's value already uses — so the
    cursor time-travels with the value it points into. Their ABSENCE is §4.10.20's own initial state and is read
@@ -705,7 +706,7 @@ static JSValue tcs_splice(JSContext *ctx, JSValueConst value, uint32_t start, ui
            "§4.10.20's setRangeText reached its splice with offsets outside the relevant value — its own steps "
            "clamp both to the length before this runs");
     on = vn - (end - start) + rn;
-    out = malloc((on + 1) * sizeof *out);
+    out = lexbor_malloc((on + 1) * sizeof *out);
     CHECK(out != NULL, "setRangeText: OOM building the spliced value");
     /* THE THREE COPIES ARE GUARDED ON THEIR LENGTHS because `v` and `r` are NULL where the operand carried no
        string to measure (an unknown with no example yet), and `memcpy(dst, NULL, 0)` and the pointer

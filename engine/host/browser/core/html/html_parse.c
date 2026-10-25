@@ -23,6 +23,7 @@
 #include "solver/dom_cow.h"
 #include "core/timing/thread_work.h"   /* the bytes an HTML parser is fed, for the thread-work census */
 #include "solver/rest_unit.h"   /* how many bytes one fill is: the scheduler's number */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* LEXBOR'S TOKEN-DONE CALLBACK IS STATIC, SO IT IS CAPTURED RATHER THAN NAMED — `lxb_html_tree_token_callback`
    has no declaration in any header, and re-writing its six lines here would be a second copy of a function
@@ -656,7 +657,7 @@ HtmlParseRun *html_parse_run_begin(lxb_html_document_t *document, DomParseRootKi
     DCHECK(document != NULL && html != NULL,
            "an HTML parse run began with no Document or a NULL input; an empty input is a zero size over a "
            "real pointer");
-    r = malloc(sizeof *r);
+    r = lexbor_malloc(sizeof *r);
     CHECK(r != NULL, "html-parse-oom: an HTML parse run could not be allocated");
     r->document = document;
     r->html = html;

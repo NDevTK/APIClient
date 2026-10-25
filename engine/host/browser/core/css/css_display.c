@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "core/css/css_display.h"
+#include "solver/reclaim.h"
 
 /* §2's summary table, the rows whose "Short display" is one keyword: §2.6's precomposed `<display-legacy>`
    values and the single keywords §2.1's and §2.2's defaults expand. The parse reads it one way and the
@@ -145,7 +146,7 @@ CssDisplay css_display_blockify(CssDisplay d)
 
 static char *css_display_strdup(const char *s)
 {
-    char *out = strdup(s);
+    char *out = reclaim_strdup(s);
 
     CHECK(out != NULL, "css-display-3 §2: OOM serializing a display value");
     return out;

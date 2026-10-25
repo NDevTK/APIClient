@@ -383,7 +383,7 @@ static JSValue range_new(JSContext *ctx, JSValueConst snode, uint32_t soff, JSVa
     obj = JS_NewObjectProtoClass(ctx, proto, g_range_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
-    b = calloc(1, sizeof(*b));
+    b = lexbor_calloc(1, sizeof(*b));
     CHECK(b != NULL, "the Range record allocation failed");
     b->start_node = JS_DupValue(ctx, snode);
     b->end_node = JS_DupValue(ctx, enode);

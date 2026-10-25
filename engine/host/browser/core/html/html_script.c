@@ -27,6 +27,7 @@
 #include "core/url/url.h"        /* HTML §4.12.1.1's "encoding-parsing a URL given src, relative to el's node document" */
 #include "core/loader/document_scripts.h"   /* HTML §4.12.1.1's type-string steps, asked ONCE for both halves */
 #include "core/html/html_script.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* HTML §4.12.1.1's `already started`, on the element's wrapper under a Symbol this file minted and never published —
    the store DOM §4.9's custom element state uses, for the two reasons html_script.h gives. */
@@ -1038,7 +1039,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                        that argument has been retired — what remains is that `txt` is released at the bottom of
                        this block while `imm->text` is read by the flow that performs step 36 afterwards, which
                        is a lifetime and not a byte. */
-                    imm->text = malloc(n_len + 1);
+                    imm->text = lexbor_malloc(n_len + 1);
                     CHECK(imm->text != NULL,
                           "§4.12.1.1 step 36's source text could not be copied — dropping it means an injected "
                           "inline script silently never runs, which is the whole surface this engine exists to "

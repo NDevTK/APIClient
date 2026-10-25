@@ -31,7 +31,7 @@ typedef struct {
 
 static char *val_copy(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out != NULL, "cssom: OOM copying a piece of a custom property's value");
     memcpy(out, s, n);

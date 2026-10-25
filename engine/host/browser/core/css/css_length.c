@@ -16,10 +16,11 @@
 #include "core/frame/viewport.h"
 #include "core/realm.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 static char *css_len_strdup(const char *s)
 {
-    char *out = strdup(s);
+    char *out = reclaim_strdup(s);
     CHECK(out != NULL, "cssom: OOM serializing a used length — a dropped one would read as undeclared");
     return out;
 }
@@ -82,7 +83,7 @@ static void css_length_install_realm(JSContext *ctx)
     CssPxFormTable *t;
 
     CHECK(!JS_IsException(obj), "css_length: OOM creating a realm's form table");
-    t = calloc(1, sizeof *t);
+    t = lexbor_calloc(1, sizeof *t);
     CHECK(t != NULL, "css_length: OOM creating a realm's form table");
     JS_SetOpaque(obj, t);
     realm_value_set(ctx, g_css_px_form_table_slot, obj);
@@ -177,7 +178,7 @@ static const CssPxForm *css_px_form_intern(JSContext *realm, const CssPxForm *f)
     t = css_px_realm_table(realm);
     if (2 * (t->n + 1) > t->cap) {
         size_t cap = t->cap ? 2 * t->cap : 64, j;
-        CssPxForm **grown = calloc(cap, sizeof *grown);
+        CssPxForm **grown = lexbor_calloc(cap, sizeof *grown);
 
         CHECK(grown != NULL, "css_length: OOM growing a realm's form table");
         for (j = 0; j < t->cap; j++) {
@@ -191,7 +192,7 @@ static const CssPxForm *css_px_form_intern(JSContext *realm, const CssPxForm *f)
     }
     for (i = css_px_form_hash(f) & (t->cap - 1); t->slot[i]; i = (i + 1) & (t->cap - 1))
         if (css_px_form_equal(t->slot[i], f)) return t->slot[i];
-    t->slot[i] = malloc(sizeof *f);
+    t->slot[i] = lexbor_malloc(sizeof *f);
     CHECK(t->slot[i] != NULL, "css_length: OOM interning a form");
     *t->slot[i] = *f;
     t->n++;
@@ -351,7 +352,7 @@ static void css_px_key_bytes(CssPxKey *k, const void *p, size_t n)
 {
     if (k->n + n > k->cap) {
         size_t cap = 2 * (k->n + n);
-        unsigned char *grown = malloc(cap);
+        unsigned char *grown = lexbor_malloc(cap);
 
         CHECK(grown, "css_length: OOM naming an atom");
         memcpy(grown, k->b, k->n);
@@ -381,7 +382,7 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
 
     if (2 * ((size_t)t->atoms_n + 1) > t->atoms_cap) {
         size_t cap = t->atoms_cap ? 2 * t->atoms_cap : 64, j;
-        CssPxAtomSlot *grown = calloc(cap, sizeof *grown);
+        CssPxAtomSlot *grown = lexbor_calloc(cap, sizeof *grown);
 
         CHECK(grown, "css_length: OOM growing a realm's atom table");
         for (j = 0; j < t->atoms_cap; j++) {
@@ -405,7 +406,7 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
             return t->atoms[i].id;
         }
     DCHECK(t->atoms_n != UINT_MAX, "a realm's atom table ran out of names");
-    t->atoms[i].key = malloc(key->n ? key->n : 1);
+    t->atoms[i].key = lexbor_malloc(key->n ? key->n : 1);
     CHECK(t->atoms[i].key, "css_length: OOM interning an atom's name");
     memcpy(t->atoms[i].key, key->b, key->n);
     t->atoms[i].len = key->n;
@@ -421,17 +422,17 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
         t->atom_defs_cap = cap;
     }
     d = &t->atom_defs[t->atoms_n - 1];
-    d->op = strdup(op);
+    d->op = reclaim_strdup(op);
     d->nargs = nargs;
     d->enc = enc;
-    d->args = calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *d->args);
+    d->args = lexbor_calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *d->args);
     CHECK(d->op && d->args, "css_length: OOM recording an atom's definition");
     for (a = 0; a < nargs; a++) {
         CssPxMonomial *m = NULL;
 
         d->args[a] = args[a];
         if (!args[a].determined && args[a].n > 0) {
-            m = malloc((size_t)args[a].n * sizeof *m);
+            m = lexbor_malloc((size_t)args[a].n * sizeof *m);
             CHECK(m, "css_length: OOM recording an atom's definition");
             memcpy(m, args[a].m, (size_t)args[a].n * sizeof *m);
         }
@@ -508,7 +509,7 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
             out->form = &CSS_PX_FORM_OPAQUE;
             return;
         }
-    def = calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *def);
+    def = lexbor_calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *def);
     CHECK(def, "css_length: OOM naming an atom");
     for (i = 0; i < nargs; i++) {
         def[i].determined = args[i].env == CSS_ENV_NONE;
@@ -1675,7 +1676,7 @@ char *css_length_serialize_calc(double pct, double px)
        normal" — so the sign is carried by the operator and never by the number after it. */
     char *px_s = css_length_serialize_px(px < 0.0 ? -px : px);
     size_t n = strlen(pct_s) + strlen(px_s) + sizeof("calc( + )");
-    char *out = malloc(n);
+    char *out = lexbor_malloc(n);
 
     CHECK(out != NULL, "cssom: OOM serializing css-values-4 §10.13's math-function residue — a dropped one "
                        "would read as an undeclared property rather than as a `calc()`");

@@ -12,6 +12,7 @@
 #include "core/css/css_layer_order.h"
 #include "core/css/css_logical.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 typedef struct {
     char               *name;         /* owned; a longhand */
@@ -61,7 +62,7 @@ CssCascadedStyle *css_cascaded_style_create(lxb_dom_element_t *el, CssLayerOrder
     CssCascadedStyle *s;
 
     DCHECK(el != NULL && layers != NULL, "a cascaded style was opened for no element or under no layer order");
-    s = calloc(1, sizeof *s);
+    s = lexbor_calloc(1, sizeof *s);
     CHECK(s != NULL, "css-cascaded-style-oom: an element's cascaded style could not be allocated");
     s->el = el;
     s->layers = layers;
@@ -94,7 +95,7 @@ lxb_dom_element_t *css_cascaded_style_element(const CssCascadedStyle *s)
 
 static char *csd_strdup(const char *t)
 {
-    char *out = strdup(t);
+    char *out = reclaim_strdup(t);
 
     CHECK(out != NULL, "css-cascaded-style-oom: a declaration could not be copied into an element's cascade");
     return out;
@@ -234,7 +235,7 @@ void css_cascaded_style_resolve(CssCascadedStyle *s)
     uint32_t i, len, cap = 16;
 
     DCHECK(s != NULL && s->phase == CSD_COLLECTING, "a cascaded style was resolved twice");
-    s->by_name = calloc(s->n ? s->n : 1, sizeof *s->by_name);
+    s->by_name = lexbor_calloc(s->n ? s->n : 1, sizeof *s->by_name);
     CHECK(s->by_name != NULL, "css-cascaded-style-oom: an element's declaration order could not be built");
     for (i = 0; i < s->n; i++) {
         s->by_name[i].name = s->v[i].name;
@@ -243,7 +244,7 @@ void css_cascaded_style_resolve(CssCascadedStyle *s)
     qsort(s->by_name, s->n, sizeof *s->by_name, csd_ref_cmp);
     /* Every declared name, and a partner for each grouped one, at most half full. */
     while (cap < 4u * s->n + 4u) cap *= 2;
-    s->tab = calloc(cap, sizeof *s->tab);
+    s->tab = lexbor_calloc(cap, sizeof *s->tab);
     CHECK(s->tab != NULL, "css-cascaded-style-oom: an element's cascaded values could not be allocated");
     s->tab_cap = cap;
 

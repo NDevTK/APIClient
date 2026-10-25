@@ -47,6 +47,8 @@
 #include "core/fetch/request.h"
 #include "core/dom/abort.h"    /* §5.6 step 4's already-aborted signal, and RequestInit's one interface brand */
 #include "core/idl_args.h"     /* §5.6's IDL, declared rather than hand-rolled — see fetch_init */
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The id JS_RegisterStepDef handed this runtime, and the two IDL attribute names the machine reads by. Atoms
    belong to a runtime, and SECURITY.md gives this build one WASM instance per DOCUMENT — one runtime — so these
@@ -246,7 +248,7 @@ char *fetch_referrer_policy_of_response(const HeaderList *headers)
             if (n && fetch_is_referrer_policy(tok)) policy = tok;
         }
     }
-    out = strdup(policy);
+    out = reclaim_strdup(policy);
     free(value);
     CHECK(out != NULL, "fetch: OOM spelling a response's referrer policy");
     return out;
@@ -264,7 +266,7 @@ char *fetch_referrer_for_wire(JSContext *ctx, const char *referrer)
         if (out) return out;
         referrer = "no-referrer";
     }
-    out = strdup(referrer);
+    out = reclaim_strdup(referrer);
     CHECK(out != NULL, "fetch: OOM spelling a referrer");
     return out;
 }
@@ -1286,7 +1288,7 @@ JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
 
         CHECK(src != NULL, "fetch: a declined request's address has no reply source name");
         n = strlen(src) + 3;
-        shape = malloc(n);
+        shape = lexbor_malloc(n);
         CHECK(shape != NULL, "fetch: OOM spelling an unknown reply body's provenance");
         snprintf(shape, n, "{%s}", src);   /* a source's shape is its provenance in braces (concolic.h) */
         /* The world's: a server states these bytes, and no example: no server was asked. A candidate re-fire
@@ -1431,7 +1433,7 @@ char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply)
            "may decide what a resource is, and a record without that decision is a producer that did not "
            "finish building it; a resource nothing could name is the EMPTY string");
     s = JS_ToCString(ctx, v);
-    out = s ? strdup(s) : NULL;
+    out = s ? reclaim_strdup(s) : NULL;
     if (s) JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, v);
     return out;
@@ -1469,7 +1471,7 @@ char *fetch_reply_status_text(JSContext *ctx, JSValueConst reply)
           "fetch: a reply record's `statusText` would not read back as a C string — the field is written as a "
           "string by every producer, so this is OOM or a value the page put where the trusted zone's reason "
           "phrase belongs");
-    out = strdup(s);
+    out = reclaim_strdup(s);
     CHECK(out != NULL, "fetch: OOM copying a reply's status message");
     JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, v);

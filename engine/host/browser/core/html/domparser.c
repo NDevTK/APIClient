@@ -66,6 +66,7 @@
 #include "core/xml/xml_parse.h"        /* the ONE place an XML document is parsed — shared with §3.6.6 and §7.5.3 */
 #include "solver/dom_cow.h"
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* PER REALM — §3.7. The class is the AGENT's; the prototype lives in quickjs's per-context class-proto slot. */
 static JSClassID g_class;
@@ -128,7 +129,7 @@ static JSValue js_domparser_ctor(JSContext *ctx, JSValueConst this_val, int argc
     obj = JS_NewObjectProtoClass(ctx, proto, g_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "a DOMParser object could not be allocated");
-    p = calloc(1, sizeof *p);
+    p = lexbor_calloc(1, sizeof *p);
     CHECK(p != NULL, "the DOMParser record allocation failed");
     /* §8.5.1 step 2's subject, captured HERE because here is where the relevant global is known. It is the
        REALM'S ACTIVE document — `[Exposed=Window]` means the constructor exists on a Window and nowhere else,

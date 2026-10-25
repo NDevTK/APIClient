@@ -11,6 +11,7 @@
 #include "core/css/css_layer_order.h"
 #include "core/css/css_match_result.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 struct CssMatchResult {
     lxb_dom_element_t     *el;
@@ -27,7 +28,7 @@ CssMatchResult *css_match_result_create(lxb_dom_element_t *el, const CssAuthorSh
     CssMatchResult *m;
 
     DCHECK(el != NULL && sheets != NULL, "a match result was opened for no element or under no sheet set");
-    m = calloc(1, sizeof *m);
+    m = lexbor_calloc(1, sizeof *m);
     CHECK(m != NULL, "css-match-result-oom: an element's match result could not be allocated");
     m->el = el;
     m->sheets = sheets;
@@ -67,8 +68,8 @@ void css_match_result_add(CssMatchResult *m, const char *name, const char *value
         m->cap = cap;
     }
     d = &m->v[m->n];
-    d->name = strdup(name);
-    d->value = strdup(value);
+    d->name = reclaim_strdup(name);
+    d->value = reclaim_strdup(value);
     CHECK(d->name != NULL && d->value != NULL,
           "css-match-result-oom: a matched declaration could not be copied into the element's result");
     d->important = important;

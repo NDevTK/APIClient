@@ -14,6 +14,7 @@
 #include "core/css/css_math.h"
 #include "core/css/css_position_value.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 #define BG_N(a) ((unsigned)(sizeof(a) / sizeof((a)[0])))
 
@@ -64,7 +65,7 @@ static const char *const BG_INITIAL[CSS_BACKGROUND_SHORTHAND_N] = {
 
 static char *bg_strdup(const char *s)
 {
-    char *out = strdup(s);
+    char *out = reclaim_strdup(s);
 
     CHECK(out != NULL, "cssom: OOM expanding a `background` shorthand — a dropped component would read as "
                        "undeclared, which is the property's INITIAL value and a different declaration");
@@ -73,7 +74,7 @@ static char *bg_strdup(const char *s)
 
 static char *bg_dupn(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out != NULL, "cssom: OOM copying a `background` component — a dropped one would read as undeclared");
     memcpy(out, s, n);
@@ -195,7 +196,7 @@ static void bg_buf_init(BgBuf *b)
 {
     b->cap = 64;
     b->n = 0;
-    b->s = malloc(b->cap);
+    b->s = lexbor_malloc(b->cap);
     CHECK(b->s != NULL, "cssom: OOM building a `background` value");
     b->s[0] = '\0';
 }

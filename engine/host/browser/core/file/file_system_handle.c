@@ -64,6 +64,8 @@
 #include "core/file/file_system_writable.h"
 #include "core/streams/stream_work.h"
 #include "solver/concolic.h"
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.1's FILE SYSTEM LOCATOR, as the C record a handle IS. */
 typedef struct {
@@ -161,15 +163,15 @@ JSValue fs_handle_new(JSContext *ctx, bool directory, const char *root, const ch
     if (JS_IsException(obj)) return obj;
     /* THE RECORD IS COMPLETE BEFORE IT IS ATTACHED, so a failure on the way leaves nothing half-owned: every
        string is copied here and the finalizer frees exactly this list. */
-    l = calloc(1, sizeof *l);
+    l = lexbor_calloc(1, sizeof *l);
     CHECK(l != NULL, "file system handle: OOM building a locator");
     l->directory = directory;
-    l->root = strdup(root);
+    l->root = reclaim_strdup(root);
     l->npath = npath;
-    l->path = calloc((size_t)npath, sizeof *l->path);
+    l->path = lexbor_calloc((size_t)npath, sizeof *l->path);
     CHECK(l->root && l->path, "file system handle: OOM building a locator's path");
     for (i = 0; i < npath; i++) {
-        l->path[i] = strdup(path[i]);
+        l->path[i] = reclaim_strdup(path[i]);
         CHECK(l->path[i] != NULL, "file system handle: OOM copying a locator's path component");
     }
     JS_SetOpaque(obj, l);
@@ -192,7 +194,7 @@ static JSValue fsh_child(JSContext *ctx, const FsLocator *parent, const char *na
     DCHECK(parent->directory, "File System Standard §2.3-§2.4's create a child FileSystemFileHandle / "
                               "FileSystemDirectoryHandle was given a locator that is not a DIRECTORY LOCATOR "
                               "— a child's path extends a directory's, and a file has no children");
-    path = malloc(sizeof *path * (size_t)(parent->npath + 1));
+    path = lexbor_malloc(sizeof *path * (size_t)(parent->npath + 1));
     CHECK(path != NULL, "file system handle: OOM building a child locator's path");
     for (i = 0; i < parent->npath; i++) path[i] = parent->path[i];
     path[parent->npath] = name;

@@ -84,6 +84,7 @@
    in turns its CSP list's self-origin RECORD into the bytes that cross with it. */
 #include "core/url/origin.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 struct PolicyContainer {
     /* The serialized CSP list, comma-delimited, or NULL for none (OWNED). It is kept because it is what the
@@ -146,11 +147,11 @@ PolicyContainer *policy_container_new(const char *csp_text, const char *csp_repo
                                       const char *referrer_policy, SerializedEmbedderPolicy embedder,
                                       const char *integrity_policy_text)
 {
-    PolicyContainer *p = calloc(1, sizeof *p);
+    PolicyContainer *p = lexbor_calloc(1, sizeof *p);
 
     CHECK(p != NULL, "policy container: OOM");
     if (csp_text && *csp_text) {
-        p->csp_text = strdup(csp_text);
+        p->csp_text = reclaim_strdup(csp_text);
         CHECK(p->csp_text != NULL, "policy container: OOM copying a policy");
     }
     /* THE PARSE RUNS WHETHER OR NOT THERE IS TEXT, because §2.2.2's last step does: a container with no
@@ -164,13 +165,13 @@ PolicyContainer *policy_container_new(const char *csp_text, const char *csp_repo
     /* §2.2.2's second extraction: "with a source of "header", and a disposition of "report"", appended after
        the enforce policies in §2.2.2's own order. */
     if (csp_report_text && *csp_report_text) {
-        p->csp_report_text = strdup(csp_report_text);
+        p->csp_report_text = reclaim_strdup(csp_report_text);
         CHECK(p->csp_report_text != NULL, "policy container: OOM copying a report-only policy");
         csp_list_append(&p->csp, p->csp_report_text, strlen(p->csp_report_text), CSP_DISPOSITION_REPORT);
     }
     /* §7.1.7: "A referrer policy, which is a referrer policy. It is initially the default referrer policy".
        NULL is a creator that states none. */
-    p->referrer_policy = strdup(referrer_policy ? referrer_policy : FETCH_DEFAULT_REFERRER_POLICY);
+    p->referrer_policy = reclaim_strdup(referrer_policy ? referrer_policy : FETCH_DEFAULT_REFERRER_POLICY);
     CHECK(p->referrer_policy != NULL, "policy container: OOM copying a referrer policy");
     /* §7.1.4's ITEM, TAKING ITS OWN COPY OF BOTH ENDPOINT STRINGS. The caller's bytes belong to the operation
        creating this Document — a response's header list that is freed the moment the Document is installed, or
@@ -183,7 +184,7 @@ PolicyContainer *policy_container_new(const char *csp_text, const char *csp_repo
        §3.8's "a new integrity policy"), so a container built with text and one built without are the same
        shape and no reader has to ask which it is holding. */
     if (integrity_policy_text && *integrity_policy_text) {
-        p->integrity_policy_text = strdup(integrity_policy_text);
+        p->integrity_policy_text = reclaim_strdup(integrity_policy_text);
         CHECK(p->integrity_policy_text != NULL, "policy container: OOM copying an integrity policy");
     }
     p->integrity_policy = integrity_policy_parse(p->integrity_policy_text,
@@ -371,7 +372,7 @@ void policy_container_set_referrer_policy(PolicyContainer *p, const char *policy
 
     DCHECK(p != NULL && fetch_is_referrer_policy(policy),
            "a referrer policy was set on no container, or as a token Referrer Policy §3 does not define");
-    copy = strdup(policy);
+    copy = reclaim_strdup(policy);
     CHECK(copy != NULL, "policy container: OOM copying a referrer policy");
     free(p->referrer_policy);
     p->referrer_policy = copy;

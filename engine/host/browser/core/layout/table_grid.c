@@ -78,7 +78,7 @@ static size_t tg_group_runs(const TableBoxRow *rows, size_t nrows, TableGridRowG
     *out = NULL;
     if (nrows == 0) return 0;
     /* At most one run per row, which is the `<tbody><tr></tbody>` repeated case. */
-    runs = (TableGridRowGroup *) calloc(nrows, sizeof *runs);
+    runs = (TableGridRowGroup *) lexbor_calloc(nrows, sizeof *runs);
     CHECK(runs != NULL, "CSS 2.1 §17.5's rules 2 and 6 could not allocate one row-group run per row of a table");
     while (i < nrows) {
         size_t j = i + 1;
@@ -131,7 +131,7 @@ void table_grid_build(lxb_dom_element_t *table, TableGrid *out)
        in the source document." `table_box_rows` answers in display order, so its index is the grid row. Copied,
        because `rows` is freed below while the grid outlives it. */
     if (nrows != 0) {
-        row_els = (lxb_dom_element_t **) calloc(nrows, sizeof *row_els);
+        row_els = (lxb_dom_element_t **) lexbor_calloc(nrows, sizeof *row_els);
         CHECK(row_els != NULL,
               "CSS 2.1 §17.5's rule 1 could not allocate one row element per grid row of the table being laid "
               "out");

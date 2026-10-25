@@ -13,6 +13,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/realm.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* WHICH OPERATION A RECORD IS, and everything that is a fact about it, on one row. The verb, how many fields
    it carries and the program that performs it were three lists in the host this was hoisted out of, and the
@@ -190,9 +191,9 @@ RemoteOp *remote_op_parse(const char *record)
     RemoteOp *o;
 
     DCHECK(record != NULL && *record, "a cross-agent operation arrived with no text to perform");
-    o = calloc(1, sizeof *o);
+    o = lexbor_calloc(1, sizeof *o);
     CHECK(o != NULL, "remote op: OOM receiving a cross-agent operation");
-    o->text = strdup(record);
+    o->text = reclaim_strdup(record);
     CHECK(o->text != NULL, "remote op: OOM copying a cross-agent operation");
     o->f = op_split(o->text, &o->nf);
     o->op = op_of(o->f[0]);

@@ -10,6 +10,7 @@
 #include "core/css/css_computed_style.h"
 #include "core/css/css_property_id.h"
 #include "core/layout/layout_job.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 typedef enum {
     CSS_COMPUTED_ABSENT = 0,
@@ -32,7 +33,7 @@ CssComputedStyle *css_computed_style_create(lxb_dom_element_t *el)
     CssComputedStyle *s;
 
     DCHECK(el != NULL, "a computed style record was created for no element");
-    s = calloc(1, sizeof *s);
+    s = lexbor_calloc(1, sizeof *s);
     CHECK(s != NULL, "css-computed-style-oom: an element's computed style record could not be allocated");
     s->el = el;
     return s;

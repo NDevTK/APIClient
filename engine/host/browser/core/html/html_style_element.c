@@ -34,6 +34,7 @@
 #include "core/frame/policy_container.h"
 #include "core/html/html_style_element.h"
 #include "core/idl_args.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The private key the association hangs off the element's wrapper — a Symbol, so a page can neither see it nor
    forge one, and an own SLOT rather than a lookup, so nothing on a prototype can answer for it. */
@@ -193,7 +194,7 @@ void html_style_element_update(lxb_dom_element_t *el)
             char *media = NULL;
 
             if (mv) {
-                media = malloc(mlen + 1);
+                media = lexbor_malloc(mlen + 1);
                 CHECK(media != NULL, "html: OOM reading a <style> element's media attribute");
                 memcpy(media, mv, mlen);
                 media[mlen] = '\0';

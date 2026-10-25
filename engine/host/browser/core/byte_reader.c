@@ -39,6 +39,7 @@
 #include "core/encoding/encoding.h"   /* Encoding §6 "Hooks for standards"'s UTF-8 decode — both readers run it */
 #include "core/streams/readable_stream.h"
 #include "solver/concolic.h"          /* the triple a byte sequence somebody else filled arrives as */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* HOW MANY READERS ONE INTERFACE CAN DECLARE. Fetch declares five and File API three, so the ceiling is a
    DCHECK on a fixed platform rather than a growth path nobody exercises.
@@ -384,7 +385,7 @@ static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue va
            "a byte reader's value reached the provenance question already carrying one — two doors have "
            "wrapped one read, and the value would report a derivation the run never performed");
     n = strlen(src) + 3;
-    shape = (char *)malloc(n);
+    shape = (char *)lexbor_malloc(n);
     CHECK(shape != NULL, "byte reader: OOM spelling the provenance of a byte sequence");
     snprintf(shape, n, "{%s}", src);   /* a declared source's shape IS its provenance in braces — concolic.h */
     /* THE TWO KINDS ARE MINTED THROUGH DIFFERENT DOORS BECAUSE ONE OF THEM IS COUNTED. concolic_source_wrap is

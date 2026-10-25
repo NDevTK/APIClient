@@ -68,6 +68,7 @@
 #include "solver/post_index.h"
 #include "solver/world.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* THIS DOCUMENT'S WindowProxy is §7.2.3's ONE-per-navigable, and it is READ from where that rule lives
    rather than cached here: a same-origin child is a second realm in this agent, so a file-scope copy would be
@@ -301,7 +302,7 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
                 char *shape;
 
                 CHECK(name != NULL, "window message: OOM reading a delivery's data-source name");
-                shape = malloc(strlen(name) + 3);
+                shape = lexbor_malloc(strlen(name) + 3);
                 CHECK(shape != NULL, "window message: OOM composing a delivery's data-source shape");
                 sprintf(shape, "{%s}", name);
                 data = concolic_source_wrap(tctx, shape, name, data);
@@ -420,9 +421,9 @@ static void post_paths_visit(void *opaque, uint32_t k, const char *path)
         pp->out = a;
         pp->cap = c;
     }
-    pp->out[pp->n].src = strdup(src);
-    pp->out[pp->n].shape = strdup(shape);
-    pp->out[pp->n].path = strdup(path);
+    pp->out[pp->n].src = reclaim_strdup(src);
+    pp->out[pp->n].shape = reclaim_strdup(shape);
+    pp->out[pp->n].path = reclaim_strdup(path);
     CHECK(pp->out[pp->n].src && pp->out[pp->n].shape && pp->out[pp->n].path,
           "window message: OOM indexing a routed post's unknowns");
     pp->n++;
@@ -525,7 +526,7 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     head = engine_record_head("windowproxy.post", world_doc_name(window_proxy_doc(target)), f);
 
     b64_cap = JS_Base64EncodedSize(blen) + 1;
-    b64 = malloc(b64_cap);
+    b64 = lexbor_malloc(b64_cap);
     CHECK(b64 != NULL, "window message: OOM encoding a cross-instance post — a dropped message is a delivery "
                        "the peer never makes and a handler this solver never reaches");
     n = JS_Base64Encode(b64, b64_cap, bytes, blen);
@@ -538,7 +539,7 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     if (!JS_IsNull(want) && !JS_IsUndefined(want))
         want_s = JS_ToCString(ctx, want);
     b64_cap = strlen(head) + strlen(want_s ? want_s : "*") + n + 8;
-    op = malloc(b64_cap);
+    op = lexbor_malloc(b64_cap);
     CHECK(op != NULL, "window message: OOM building the cross-instance post notice");
     snprintf(op, b64_cap, "%s\t%s\t%s", head, want_s ? want_s : "*", b64);
     if (plain.buf) {
@@ -755,12 +756,12 @@ void window_message_route(JSContext *ctx, const char *record, const char *tail, 
     b64 = strchr(tail, '\t');
     DCHECK(b64 != NULL, "a routed window message had no base64 field — the record was built by something that "
                         "is not window_message_send_remote, so the two halves of this format disagree");
-    want = strndup(tail, (size_t)(b64 - tail));
+    want = reclaim_strndup(tail, (size_t)(b64 - tail));
     CHECK(want != NULL, "window message: OOM reading a routed message's target origin");
     b64++;
     b64n = strlen(b64);
     cap = JS_Base64DecodedMax(b64n) + 1;
-    bytes = malloc(cap);
+    bytes = lexbor_malloc(cap);
     CHECK(bytes != NULL, "window message: OOM receiving a routed message");
     blen = JS_Base64Decode(bytes, cap, b64, b64n, &err);
     CHECK(err == 0, "a routed message did not survive the text channel it crossed — the bytes the peer sent and "

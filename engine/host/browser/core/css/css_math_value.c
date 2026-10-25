@@ -351,7 +351,7 @@ JSValue css_math_value_new(JSContext *ctx, CssMathOp op, JSValueConst *items, in
     obj = JS_NewObjectProtoClass(ctx, proto, g_class[op]);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "css-typed-om: a CSSMathValue could not be allocated");
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "css-typed-om: a CSSMathValue's record allocation failed");
     d->type = t;
     if (css_math_op_is_list(op)) {
@@ -673,7 +673,7 @@ static JSValue js_mv_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
                "`CSSNumberish arg` is its one required position, so the conversion machine owed it exactly one");
         /* Step 1: "Replace arg with the result of rectifying a numberish value for arg." There is no type
            step: §4.3.4 states none for CSSMathNegate or CSSMathInvert, whose types are read off the operand. */
-        items = malloc(sizeof *items);
+        items = lexbor_malloc(sizeof *items);
         CHECK(items != NULL, "css-typed-om: OOM in a §4.3.4 constructor");
         items[0] = css_numeric_value_rectify(ctx, argv[0]);
         n = 1;
@@ -685,7 +685,7 @@ static JSValue js_mv_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
                                         "%s requires at least one argument — CSS Typed OM 1 §4.3.4's "
                                         "constructor throws a SyntaxError for an empty argument list",
                                         MV[op].iface);
-        items = malloc((size_t)argc * sizeof *items);
+        items = lexbor_malloc((size_t)argc * sizeof *items);
         CHECK(items != NULL, "css-typed-om: OOM in a §4.3.4 constructor");
         /* Step 1: "Replace each item of args with the result of rectifying a numberish value for the item." */
         for (i = 0; i < argc; i++) items[i] = css_numeric_value_rectify(ctx, argv[i]);

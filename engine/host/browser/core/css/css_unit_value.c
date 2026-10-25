@@ -24,6 +24,7 @@
 #include "core/realm.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §4.3.3's TWO INTERNAL SLOTS.
  *
@@ -160,10 +161,10 @@ JSValue css_unit_value_new(JSContext *ctx, JSValue value, const char *unit)
     obj = JS_NewObjectProtoClass(ctx, proto, g_unit_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "css-typed-om: a CSSUnitValue could not be allocated");
-    u = calloc(1, sizeof *u);
+    u = lexbor_calloc(1, sizeof *u);
     CHECK(u != NULL, "css-typed-om: a CSSUnitValue's record allocation failed");
     n = strlen(unit);
-    u->unit = malloc(n + 1);
+    u->unit = lexbor_malloc(n + 1);
     CHECK(u->unit != NULL, "css-typed-om: a CSSUnitValue's unit could not be copied");
     memcpy(u->unit, unit, n + 1);
     u->value = value;

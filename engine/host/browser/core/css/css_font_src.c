@@ -483,7 +483,7 @@ static void src_tech_add(SrcItem *it, const char *kw)
 static char *src_span_dup(const char *s, const char *e)
 {
     size_t n = (size_t)(e - s);
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out != NULL, "cssom: OOM copying a css-fonts-4 §4.3.1 component value");
     if (n) memcpy(out, s, n);
@@ -793,7 +793,7 @@ char *css_font_src_descriptor_value(const char *value)
 
         while (n > 0 && src_is_ws(css_cp_at(value + n - 1, value + n, NULL))) n--;
         while (n > 0 && src_is_ws(css_cp_at(value, value + n, NULL))) { value++; n--; }
-        v = malloc(n + 1);
+        v = lexbor_malloc(n + 1);
         CHECK(v != NULL, "cssom: OOM copying a `src` whose value carries an arbitrary substitution function");
         if (n) memcpy(v, value, n);
         v[n] = '\0';

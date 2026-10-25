@@ -49,6 +49,7 @@
 #include "core/rendering/visual_update.h"   /* a sheet write is a visible effect HTML §8.1.7.3 asks about */
 #include "solver/concolic.h"   /* §6.1 step 12 asserts what it cannot parse */
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §6.1's state items, as far as anything reads them — see the header for why the other eight are not here. */
 typedef struct CssStyleSheetData {
@@ -471,7 +472,7 @@ static JSValue sheet_mint(JSContext *ctx, JSValueConst owner_node, JSValueConst 
     obj = JS_NewObjectProtoClass(ctx, proto, g_sheet_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
-    s = calloc(1, sizeof(*s));
+    s = lexbor_calloc(1, sizeof(*s));
     CHECK(s != NULL, "the CSS style sheet record allocation failed");
     s->owner_node = JS_DupValue(ctx, owner_node);
     s->parent_style_sheet = JS_DupValue(ctx, parent_style_sheet);
@@ -968,7 +969,7 @@ static JSValue js_sheet_add_rule(JSContext *ctx, JSValueConst this_val, int argc
        conditional — and step 5's "}". `addRule("p","color:red")` is therefore `p { color:red }` and
        `addRule("p")` is `p { }`, both of them byte-for-byte what a browser inserts. */
     n = sel_len + 3 + (block_len ? block_len + 1 : 0) + 1;
-    rule = malloc(n + 1);
+    rule = lexbor_malloc(n + 1);
     CHECK(rule != NULL, "cssom: OOM building the rule text of §6.1.2.1's addRule");
     memcpy(rule, sel, sel_len);
     memcpy(rule + sel_len, " { ", 3);
@@ -1121,7 +1122,7 @@ static JSValue js_css_style_sheet_ctor(JSContext *ctx, JSValueConst this_val, in
            did — so this conversion runs none of the page's code and cannot throw for a reason this body would
            have to model; a NULL is OOM, which is the one thing left. */
         CHECK(c != NULL, "§6.1 step 12 could not read the string arm of `(MediaList or DOMString) media`");
-        media_text = malloc(mlen + 1);
+        media_text = lexbor_malloc(mlen + 1);
         CHECK(media_text != NULL, "cssom: OOM copying a constructed sheet's media text");
         memcpy(media_text, c, mlen);
         media_text[mlen] = '\0';

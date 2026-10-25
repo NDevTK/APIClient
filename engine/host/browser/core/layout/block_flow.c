@@ -1454,7 +1454,7 @@ static size_t bf_wrapper_boxes(lxb_dom_element_t *table, lxb_dom_element_t ***ou
     lxb_dom_element_t **caps = NULL, **v;
     size_t n = table_box_captions(table, &caps), i, k = 0;
 
-    v = malloc((n + 1) * sizeof *v);
+    v = lexbor_malloc((n + 1) * sizeof *v);
     CHECK(v != NULL, "out of memory listing one table wrapper box's children");
     for (i = 0; i < n; i++)
         if (css_computed_keyword_is(caps[i], "caption-side", CSS_KEYWORD_TOP)) v[k++] = caps[i];
@@ -1830,7 +1830,7 @@ static bool bf_avoidance_ask(lxb_dom_element_t *el, lxb_dom_element_t *ce, const
         free(v);
         return true;
     }
-    boxes = malloc(last * sizeof *boxes);
+    boxes = lexbor_malloc(last * sizeof *boxes);
     CHECK(boxes != NULL, "out of memory placing a box beside its context's floats");
     for (i = 0; i < last; i++)
         if (!float_placement_ask(v[i], &boxes[i])) {
@@ -3337,7 +3337,7 @@ static BlockFlowAnonBox *bf_anon_copy(const BlockFlowAnonBox *v, size_t n)
     BlockFlowAnonBox *c;
 
     if (n == 0) return NULL;
-    c = malloc(n * sizeof *c);
+    c = lexbor_malloc(n * sizeof *c);
     CHECK(c != NULL, "out of memory copying one container's anonymous block boxes");
     memcpy(c, v, n * sizeof *c);
     return c;

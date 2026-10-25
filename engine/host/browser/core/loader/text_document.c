@@ -59,6 +59,7 @@
 #include "core/mime/mime_type.h"
 #include "solver/rest_unit.h"   /* how many bytes one networking task's fill is — the SCHEDULER's number */
 #include "check.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §7.5.4 step 4's TWO SYNTHETIC TOKENS, in the two pieces the paragraph above splits them into. Static storage
    because lexbor's chunked tokenizer holds pointers into the buffer it was handed until the run terminates,
@@ -102,7 +103,7 @@ TextDocumentLoad *text_document_load_begin(lxb_html_document_t *document, DomPar
            "not send to it — the arm is a fact about the COMPUTED TYPE and this loader re-asks it, so this is "
            "a route into the text loader that never asked what it fetched");
 
-    l = malloc(sizeof(*l));
+    l = lexbor_malloc(sizeof(*l));
     CHECK(l != NULL,
           "OOM opening an HTML §7.5.4 document load — the DOM this parse produces is what every flow of this "
           "instance reads, so a load that cannot even begin is not a document with no endpoints");

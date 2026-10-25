@@ -39,6 +39,7 @@
 #include "solver/concolic.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §10.2.6.3's Worker: its outside port, and the realm run a worker created for it. The record is written once,
    by the constructing flow, while the object is that flow's own, so it needs no COW capture. */
@@ -385,7 +386,7 @@ static int worker_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JS_FreeValue(ctx, proto);
     }
     if (JS_IsException(obj)) { url_record_free(&rec); return -1; }
-    w = calloc(1, sizeof *w);
+    w = lexbor_calloc(1, sizeof *w);
     CHECK(w != NULL, "worker: OOM building a Worker");
     w->url = url_serialize(&rec, /*exclude_fragment*/ false);
     url_record_free(&rec);

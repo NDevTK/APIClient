@@ -47,6 +47,7 @@
 #include "core/dom/document.h"
 #include <stdio.h>
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* §7.2.3's [[Window]] and the origin its same-origin check reads. Both are per flow (see the file comment), which
    is why this is a record behind a class rather than a property on an object. */
@@ -401,9 +402,9 @@ static char *proxy_strdup(const char *s)
     OwnedStr *e;
     char *c;
     if (!s) return NULL;
-    c = strdup(s);
+    c = reclaim_strdup(s);
     CHECK(c != NULL, "window proxy: OOM recording an origin");
-    e = malloc(sizeof *e);
+    e = lexbor_malloc(sizeof *e);
     CHECK(e != NULL, "window proxy: OOM recording an origin");
     e->s = c;
     e->next = g_strings;
@@ -894,7 +895,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
        forget. */
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
-    p = calloc(1, sizeof *p);
+    p = lexbor_calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
     /* §7.3's is created by web content: this mint is §7.4's create a new navigable, whose top-level form is
        `window.open()` (see the field). */
@@ -1116,7 +1117,7 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
            "which carries the live Window");
     obj = JS_NewObjectClass(ctx, g_proxy_class);
     if (JS_IsException(obj)) return obj;
-    p = calloc(1, sizeof *p);
+    p = lexbor_calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a remote WindowProxy");
     p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
     p->name_val = JS_UNDEFINED;

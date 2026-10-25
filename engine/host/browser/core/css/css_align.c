@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "core/css/css_align.h"
+#include "solver/reclaim.h"
 
 #define CSS_ALIGN_MAX_TOKENS 3
 
@@ -175,7 +176,7 @@ char *css_align_serialize(CssAlign a)
         snprintf(buf, sizeof buf, "%s %s", css_keyword_name(a.overflow), css_keyword_name(a.value));
     else
         snprintf(buf, sizeof buf, "%s", css_keyword_name(a.value));
-    out = strdup(buf);
+    out = reclaim_strdup(buf);
     CHECK(out != NULL, "css-align-3: OOM serializing an alignment value");
     return out;
 }

@@ -178,7 +178,7 @@ static void *idna_realloc(void *opaque, void *ptr, size_t size)
    that over, so each impossible byte is a DFAIL at the byte rather than a return the caller must interpret. */
 static int utf8_to_cps(const char *s, size_t n, uint32_t **out)
 {
-    uint32_t *cps = malloc(sizeof(uint32_t) * (n + 1));
+    uint32_t *cps = lexbor_malloc(sizeof(uint32_t) * (n + 1));
     size_t i = 0;
     int m = 0;
 
@@ -263,7 +263,7 @@ static int idna_range_of(uint32_t cp)
 static int map_uts46(const uint32_t *in, int n, uint32_t **out)
 {
     /* the longest mapping in the table is a handful of code points; four per input is ample and is asserted */
-    uint32_t *o = malloc(sizeof(uint32_t) * (size_t)(n * 8 + 1));
+    uint32_t *o = lexbor_malloc(sizeof(uint32_t) * (size_t)(n * 8 + 1));
     int i, m = 0;
 
     CHECK(o, "idna: OOM mapping a domain");
@@ -384,7 +384,7 @@ int idna_domain_to_ascii(const char *domain, size_t len, char **out, size_t *out
     if (nn < 0) return -1;
 
     cap = (size_t)nn * 8 + 16;
-    result = malloc(cap);
+    result = lexbor_malloc(cap);
     CHECK(result, "idna: OOM building an A-label");
 
     /* steps 3-4: one label at a time, split on U+002E. */

@@ -17,6 +17,7 @@
 
 #include "check.h"
 #include "core/html/date_time_microsyntax.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* ---- §2.3.5's CALENDAR ARITHMETIC ---------------------------------------------------------------------------- */
 
@@ -393,7 +394,7 @@ static double dtm_seconds_value(const char *s, size_t n)
     if (n + 1 > sizeof buf) {
         /* AN ALLOCATION SIZE AND NOT A LENGTH LIMIT: the rule puts no bound on how many digits the fractional
            part has, and the shape tests above have already accepted however many there are. */
-        heap = malloc(n + 1);
+        heap = lexbor_malloc(n + 1);
         CHECK(heap != NULL, "date/time: OOM converting a seconds component — a dropped value is a control whose "
                             "value this engine would then report as something a browser never held");
         p = heap;

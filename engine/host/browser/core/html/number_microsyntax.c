@@ -11,6 +11,7 @@
 
 #include "check.h"
 #include "core/html/number_microsyntax.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 bool html_parse_floating_point(const char *s, size_t len, double *out, bool *pvalid)
 {
@@ -65,7 +66,7 @@ bool html_parse_floating_point(const char *s, size_t len, double *out, bool *pva
     p = buf;
     if (n + 1 > sizeof buf) {
         /* An ALLOCATION SIZE and not a length limit: §2.3.4.3 puts no bound on how many digits a numeral has. */
-        heap = malloc(n + 1);
+        heap = lexbor_malloc(n + 1);
         CHECK(heap != NULL, "numbers: OOM converting a numeral — a dropped value is a missing endpoint "
                             "parameter and a constraint this engine would then answer from nothing");
         p = heap;

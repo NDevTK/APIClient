@@ -67,6 +67,7 @@
 #include "core/locks/lock_manager.h"
 #include "core/permissions/permissions.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* A real desktop Chrome's identity, used as the EXAMPLE for the environment members. §8.10.1.1's appVersion
    getter steps are a SUBSTRING of this rather than a second string: "Let trail be the substring of userAgent
@@ -718,7 +719,7 @@ static void navigator_install_realm(JSContext *ctx)
        nav_environment's "a branded object without one came from a second mint that does not exist" rests on
        this attach. The values are built here rather than on first read because a value minted lazily is built
        inside whichever flow got there first, making that flow's baseline everyone's. */
-    n = calloc(1, sizeof *n);
+    n = lexbor_calloc(1, sizeof *n);
     CHECK(n != NULL, "this realm's Navigator record could not be allocated");
     n->realm  = ctx;
     n->global = JS_DupValue(ctx, global);

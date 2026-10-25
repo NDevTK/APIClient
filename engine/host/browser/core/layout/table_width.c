@@ -22,6 +22,7 @@
 #include "core/layout/table_width.h"
 #include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* ---- §17.6 Borders' two models, asked once at the entry ---------------------------------------------------
    Two terms here belong to §17.6.1 The separated borders model alone. The cell spacing ("The lengths specify
@@ -340,7 +341,7 @@ static void tw_auto_layout(lxb_dom_element_t *table, const TableGrid *grid, CssP
     out->ncols = n;
     out->columns = NULL;
     if (n > 0) {
-        out->columns = (CssPx *) calloc(n, sizeof *out->columns);
+        out->columns = (CssPx *) lexbor_calloc(n, sizeof *out->columns);
         CHECK(out->columns != NULL,
               "CSS 2.1 §17.5.2.2's final rules could not allocate one used width per grid column of the table "
               "being laid out");
@@ -388,8 +389,8 @@ static void tw_fixed_layout(lxb_dom_element_t *table, const TableGrid *grid, Css
     out->ncols = n;
     out->columns = NULL;
     if (n > 0) {
-        out->columns = (CssPx *) calloc(n, sizeof *out->columns);
-        assigned = (bool *) calloc(n, sizeof *assigned);
+        out->columns = (CssPx *) lexbor_calloc(n, sizeof *out->columns);
+        assigned = (bool *) lexbor_calloc(n, sizeof *assigned);
         CHECK(out->columns != NULL && assigned != NULL,
               "CSS 2.1 §17.5.2.1 Fixed table layout could not allocate one used width per grid column of the "
               "table being laid out");

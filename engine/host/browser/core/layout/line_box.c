@@ -29,6 +29,7 @@
 #include "core/layout/used_value.h"
 #include "solver/metrics.h"   /* `_layoutFillRests` */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 static char *lb_computed(lxb_dom_element_t *el, const char *name)
 {
@@ -58,7 +59,7 @@ static CssPx lb_border_px(lxb_dom_element_t *el, const char *side)
 
 static char *lb_strdup(const char *s)
 {
-    char *out = strdup(s);
+    char *out = reclaim_strdup(s);
 
     CHECK(out != NULL, "out of memory copying a computed keyword while measuring CSS 2.2 §9.4.2's line boxes");
     return out;
@@ -1078,8 +1079,8 @@ static CssPx lb_fill_align(LbFill *f, lxb_dom_element_t *style, size_t i)
 {
     DCHECK(i < f->n, "a line box's alignment was asked for a line the fill does not have");
     if (f->align == NULL) {
-        f->align = malloc(f->n * sizeof *f->align);
-        f->aligned = calloc(f->n, sizeof *f->aligned);
+        f->align = lexbor_malloc(f->n * sizeof *f->align);
+        f->aligned = lexbor_calloc(f->n, sizeof *f->aligned);
         CHECK(f->align != NULL && f->aligned != NULL,
               "out of memory holding css-text-4 §7.1's line offsets for one inline formatting context");
     }
@@ -1123,7 +1124,7 @@ static size_t lb_key_probe(const LbEntry *tab, size_t cap, lxb_dom_element_t *st
 static void lb_record_grow(LineBoxRecord *r)
 {
     size_t cap = r->cap != 0 ? r->cap * 2 : 64, i;
-    LbEntry *tab = calloc(cap, sizeof *tab);
+    LbEntry *tab = lexbor_calloc(cap, sizeof *tab);
 
     CHECK(tab != NULL, "the layout job's line box record could not grow");
     for (i = 0; i < r->cap; i++) {
@@ -1286,8 +1287,8 @@ static bool lb_fill_bands_ask(LbFill *f)
     }
     if (f->bands_v == NULL) {
         f->bands_cap = k + anchors;
-        f->bands_v = malloc(f->bands_cap * sizeof *f->bands_v);
-        f->waiting = malloc((anchors + 1) * sizeof *f->waiting);
+        f->bands_v = lexbor_malloc(f->bands_cap * sizeof *f->bands_v);
+        f->waiting = lexbor_malloc((anchors + 1) * sizeof *f->waiting);
         CHECK(f->bands_v != NULL && f->waiting != NULL, "out of memory holding the floats beside one run of line boxes");
     }
     for (i = 0; i < k; i++)
@@ -1302,9 +1303,9 @@ static bool lb_fill_bands_ask(LbFill *f)
     f->origin_top = top;
     f->origin_left = float_placement_content_left(f->style, block_flow_context_root(f->style));
     f->content_w = used_value_content_px(f->style, false);
-    f->line_left = malloc((f->m.count + 1) * sizeof *f->line_left);
-    f->line_w = malloc((f->m.count + 1) * sizeof *f->line_w);
-    f->partial = malloc((f->m.count + 1) * sizeof *f->partial);
+    f->line_left = lexbor_malloc((f->m.count + 1) * sizeof *f->line_left);
+    f->line_w = lexbor_malloc((f->m.count + 1) * sizeof *f->line_w);
+    f->partial = lexbor_malloc((f->m.count + 1) * sizeof *f->partial);
     CHECK(f->line_left != NULL && f->line_w != NULL && f->partial != NULL,
           "out of memory holding the line bands of one run of line boxes");
     f->bands = true;
@@ -1507,7 +1508,7 @@ static bool lb_fill_lines_pull(LbFill *f)
     if (f->phase == LB_FILL_CHECK) {
         if (f->check == NULL) {
             if (!lb_left()) return false;
-            f->check = malloc(sizeof *f->check);
+            f->check = lexbor_malloc(sizeof *f->check);
             CHECK(f->check != NULL, "out of memory re-deriving one inline formatting context's line boxes");
             lb_fill_init(f->check, f->style, f->run, f->avail, false);
         }
@@ -1528,7 +1529,7 @@ static bool lb_fill_extents_pull(LbFill *f)
     DCHECK(f->phase == LB_FILL_LINES, "CSS 2.2 §10.8's line box extents were taken before the fill's lines");
     if (f->facts == NULL && f->n != 0) {
         if (f->partial == NULL) {
-            f->partial = malloc(f->n * sizeof *f->partial);
+            f->partial = lexbor_malloc(f->n * sizeof *f->partial);
             CHECK(f->partial != NULL,
                   "out of memory holding CSS 2.2 §10.8's line box extents for one inline formatting context");
         }
@@ -1594,7 +1595,7 @@ static LbFill *lb_fill_of(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
         r->deferred++;
         return NULL;
     }
-    f = malloc(sizeof *f);
+    f = lexbor_malloc(sizeof *f);
     CHECK(f != NULL, "out of memory holding one inline formatting context's line boxes");
     lb_fill_init(f, style, run, avail, true);
     /* Recorded before its collection is taken, so a later ask continues it; an atomic inline's own line boxes
@@ -2318,7 +2319,7 @@ static bool lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
        box(es)") and an unbroken child for exactly one. The array is sized at `n`, the container's box count,
        rather than by a second pass over block_flow.h's enumeration. */
     if (n > 0) {
-        ctx->box = malloc(n * sizeof *ctx->box);
+        ctx->box = lexbor_malloc(n * sizeof *ctx->box);
         CHECK(ctx->box != NULL,
               "out of memory naming CSS 2.2 §9.2.1.1's anonymous block boxes an inline box has a fragment on. "
               "There is at most one entry per box of one block container, so a failure here is the physical "
@@ -2425,7 +2426,7 @@ static bool lb_establishing_context(lxb_dom_element_t *el, LbContext *out)
                establishes the context itself is the run with no bound on either side, spelled as the one-entry
                collection so the fill below has one loop over both shapes. */
             if (block_flow_establishes_inline_context(anc)) {
-                ctx.box = malloc(sizeof *ctx.box);
+                ctx.box = lexbor_malloc(sizeof *ctx.box);
                 CHECK(ctx.box != NULL,
                       "out of memory naming CSS 2.2 §9.4.2's inline formatting context. It is ONE entry for a "
                       "container that establishes the context itself, so a failure here is the physical floor");

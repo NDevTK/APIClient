@@ -157,7 +157,7 @@ static void sniff_names_add(SniffNames *l, const char *s, size_t n)
         l->len = nl;
         l->cap = cap;
     }
-    copy = malloc(n ? n : 1);
+    copy = lexbor_malloc(n ? n : 1);
     CHECK(copy != NULL, "html_encoding_sniff: OOM copying a prescanned attribute name");
     if (n) memcpy(copy, s, n);
     l->s[l->n] = copy;

@@ -23,6 +23,7 @@
 #include "core/structured_clone.h"
 #include "core/url/url.h"
 #include "solver/route_seed.h"   /* §7.4.4 step 8 is where an application declares one of its own pages */
+#include "solver/reclaim.h"
 
 static JSClassID g_slot = JS_INVALID_CLASS_ID;
 
@@ -1447,7 +1448,7 @@ char *session_history_active_entry_request_referrer_policy(JSContext *ctx)
                            "the default and one setter in this file writes a policy");
     s = JS_ToCString(ctx, v);
     CHECK(s != NULL, "session history: OOM reading §7.4.1.2's request referrer policy");
-    out = strdup(s);
+    out = reclaim_strdup(s);
     CHECK(out != NULL, "session history: OOM copying §7.4.1.2's request referrer policy");
     JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, v);

@@ -49,6 +49,7 @@
 #include "core/indexeddb/idb_key_range.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.9's four fields: "an associated lower bound (null or a key)", "an associated upper bound (null or a
    key)", "an associated lower open flag", "an associated upper open flag". */
@@ -150,7 +151,7 @@ static JSValue idb_key_range_new(JSContext *ctx, JSValue lower, JSValue upper, b
     obj = JS_NewObjectProtoClass(ctx, proto, g_range_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "IndexedDB: an IDBKeyRange could not be allocated");
-    r = calloc(1, sizeof *r);
+    r = lexbor_calloc(1, sizeof *r);
     CHECK(r != NULL, "IndexedDB: a key range's record allocation failed");
     r->lower = lower;
     r->upper = upper;

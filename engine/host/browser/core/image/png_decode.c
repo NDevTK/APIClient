@@ -772,7 +772,7 @@ PngStatus png_decode_step(PngDecode *d)
         d->zdata_len = d->zdata_cap = 0;
         if (d->raw_len != d->raw_expect) return png_refuse(d, PNG_REFUSED_IMAGE_LENGTH);
 
-        d->rgba = (uint8_t *)malloc(d->rgba_len ? d->rgba_len : 1u);
+        d->rgba = (uint8_t *)lexbor_malloc(d->rgba_len ? d->rgba_len : 1u);
         if (d->rgba == NULL) return png_refuse(d, PNG_REFUSED_NO_ROOM);
         d->row = 0;
         d->phase = PH_RECON;

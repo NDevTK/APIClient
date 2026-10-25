@@ -35,7 +35,7 @@ static bool iss_is_ws(char c)
 
 static char *iss_copy(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out != NULL, "§4.8.4.3: OOM copying a piece of a source set's markup");
     if (n) memcpy(out, s, n);

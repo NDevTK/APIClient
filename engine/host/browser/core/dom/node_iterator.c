@@ -220,7 +220,7 @@ JSValue node_iterator_new(JSContext *ctx, JSValueConst root, uint32_t what, JSVa
     obj = JS_NewObjectProtoClass(ctx, proto, g_iter_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
-    it = calloc(1, sizeof(*it));
+    it = lexbor_calloc(1, sizeof(*it));
     CHECK(it != NULL, "the NodeIterator record allocation failed");
     /* §4.5 createNodeIterator steps 2-5. */
     it->t.root = JS_DupValue(ctx, root);

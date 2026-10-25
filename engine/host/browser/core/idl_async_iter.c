@@ -15,6 +15,7 @@
 #include "core/idl_args.h"
 #include "core/idl_async_iter.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §3.7.10.1's KIND — "the iteration kind". §3.7.10 mints "key" for `keys`, "value" for `values` and "key+value"
    for `entries` (and for %Symbol.asyncIterator% on a pair declaration, which IS `entries`). */
@@ -763,7 +764,7 @@ static const char **ait_join_steps(const char *const *base, const char *const *o
 
     while (base[nb]) nb++;
     while (own && own[no]) no++;
-    all = malloc(sizeof(*all) * (size_t)(nb + no + 1));
+    all = lexbor_malloc(sizeof(*all) * (size_t)(nb + no + 1));
     CHECK(all != NULL, "idl_async_iter: OOM joining a component's declared stages onto Web IDL's — an "
                        "asynchronous iteration whose stages cannot be named is a rest point nothing can check");
     for (k = 0; k < nb; k++) all[k] = base[k];

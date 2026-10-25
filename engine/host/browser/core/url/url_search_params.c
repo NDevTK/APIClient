@@ -26,6 +26,7 @@
 #include "core/idl_name_chain.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* A PAIR CARRIES ITS LENGTHS, because a name or a value may contain U+0000 — `?a=b%00c` is one pair whose
    value is three characters, and every strlen in this file would have made it one. */
@@ -136,7 +137,7 @@ static void usp_list_replace(JSContext *ctx, UspObj *u, UspList *l)
 /* §6.2's list as this flow may change it: a copy, held by the record from here. */
 static UspList *usp_list_edit(JSContext *ctx, UspObj *u)
 {
-    UspList *l = calloc(1, sizeof *l);
+    UspList *l = lexbor_calloc(1, sizeof *l);
     int i;
 
     CHECK(l != NULL, "urlsearchparams: OOM copying a list for a write");
@@ -224,7 +225,7 @@ static JSValue usp_new_with(JSContext *ctx, JSValueConst owner, UspList *l, JSVa
 
 JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t query_len)
 {
-    UspList *l = calloc(1, sizeof *l);
+    UspList *l = lexbor_calloc(1, sizeof *l);
 
     CHECK(l != NULL, "urlsearchparams: OOM building a list");
     if (query) usp_parse(l, query, query_len);
@@ -234,7 +235,7 @@ JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t qu
 void usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query_len)
 {
     UspObj *u = usp_rec(usp);
-    UspList *l = calloc(1, sizeof *l);
+    UspList *l = lexbor_calloc(1, sizeof *l);
 
     DCHECK(u != NULL, "a URL's search setter re-initialised something that is not a URLSearchParams");
     CHECK(l != NULL, "urlsearchparams: OOM building a list");
@@ -990,7 +991,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     STEP_ARM(UC_DONE);
     JS_FreeValue(ctx, in);
     {
-        UspList *l = malloc(sizeof *l);
+        UspList *l = lexbor_malloc(sizeof *l);
         JSValue unknown = s->unknown;
 
         CHECK(l != NULL, "urlsearchparams: OOM holding a constructed list");

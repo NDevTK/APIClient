@@ -14,6 +14,7 @@
 
 #include "check.h"
 #include "core/layout/line_break.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* Two values that are not classes, kept out of the enum so a rule can match them only by name and the table
    can never produce them.
@@ -432,7 +433,7 @@ void line_break_pass_begin(LineBreakPass *p, const uint32_t *cps, size_t count, 
                                  "to [UAX14]. The scan below indexes it with an int32_t, which is a real "
                                  "ceiling and is asserted rather than wrapped");
     /* One allocation carved into four, int32 array first so its alignment is the block's. */
-    p->block = malloc(count * (sizeof(int32_t) + 3));
+    p->block = lexbor_malloc(count * (sizeof(int32_t) + 3));
     CHECK(p->block != NULL, "out of memory scanning [UAX14]'s Line_Break classes for a text run. The allocation "
                             "is seven bytes per character of one inline formatting context, so a failure here is "
                             "the physical floor and not a layout that asked for something unreasonable");

@@ -11,6 +11,7 @@
 #include "core/css/css_defaulting.h"
 #include "core/css/css_layer_order.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 typedef struct {
     char               *value;            /* the declared value, OWNED */
@@ -44,7 +45,7 @@ struct CssCascade {
 
 CssCascade *css_cascade_create(CssLayerOrder *layers)
 {
-    CssCascade *c = calloc(1, sizeof(*c));
+    CssCascade *c = lexbor_calloc(1, sizeof(*c));
 
     DCHECK(layers != NULL,
            "a cascade was built over no §6.4.3 layer order. Every declaration has a cascade layer — §6.1 puts "
@@ -90,7 +91,7 @@ void css_cascade_add(CssCascade *c, CssOrigin origin, bool important, bool eleme
         c->cap = cap;
     }
     d = &c->v[c->n++];
-    d->value = strdup(value);
+    d->value = reclaim_strdup(value);
     CHECK(d->value != NULL, "cssom: OOM copying a declared value into the cascade — a dropped declaration is a "
                             "cascade that answers as if the rule had never been written");
     d->layer = layer;
@@ -292,7 +293,7 @@ char *css_cascade_value(CssCascade *c)
         if (!w) return NULL;
         switch (css_rollback_keyword(w->value)) {
         case CSS_ROLLBACK_NONE:
-            out = strdup(w->value);
+            out = reclaim_strdup(w->value);
             CHECK(out != NULL, "cssom: OOM answering CSS Cascade §6's cascaded value");
             return out;
         case CSS_ROLLBACK_ORIGIN:
@@ -300,7 +301,7 @@ char *css_cascade_value(CssCascade *c)
                Equivalent to unset." §7.3.3's keyword is exactly what §7's defaulting step resolves, so it is
                the answer rather than a fourth thing this component computes. */
             if (w->origin == CSS_ORIGIN_UA) {
-                out = strdup("unset");
+                out = reclaim_strdup("unset");
                 CHECK(out != NULL, "cssom: OOM answering §7.3.4's user-agent-origin `revert`");
                 return out;
             }

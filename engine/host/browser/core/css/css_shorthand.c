@@ -20,10 +20,12 @@
 #include "core/css/css_property_id.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_var.h"
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static char *css_sh_strdup(const char *s)
 {
-    char *out = strdup(s);
+    char *out = reclaim_strdup(s);
     CHECK(out != NULL, "cssom: OOM expanding a shorthand — a dropped component would read as undeclared");
     return out;
 }
@@ -31,7 +33,7 @@ static char *css_sh_strdup(const char *s)
 /* One component value of a shorthand, copied out of the serialized declaration. OWNED. */
 static char *css_sh_dupn(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out != NULL, "cssom: OOM copying a shorthand component — a dropped one would read as undeclared, "
                        "which is the property's INITIAL value and a different number");
@@ -1411,7 +1413,7 @@ static char *table_longhand_value(const char *longhand, const char *value)
        between two lengths however the author spaced the declaration — the same canonicalization every keyword
        grammar here performs, applied to the one production that has no keyword to canonicalize to. */
     len = wl[0] + ((n > 1) ? wl[1] + 1 : 0);
-    out = malloc(len + 1);
+    out = lexbor_malloc(len + 1);
     CHECK(out != NULL, "cssom: OOM copying a `border-spacing` — a dropped one would read as undeclared, which "
                        "is CSS 2.1 §17.6.1's initial `0` and a different distance");
     memcpy(out, w[0], wl[0]);
@@ -1900,7 +1902,7 @@ static char *css_sh_join(const char *const *parts, unsigned n)
     size_t at = 0;
 
     for (i = 0; i < n; i++) total += strlen(parts[i]) + 1;
-    out = malloc(total);
+    out = lexbor_malloc(total);
     CHECK(out != NULL, "cssom: OOM serializing a shorthand value — a dropped one reads as the empty string, "
                        "which is how §6.6 is told the shorthand could not represent the declarations");
     for (i = 0; i < n; i++) {

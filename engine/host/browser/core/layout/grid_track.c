@@ -443,7 +443,7 @@ static CssPx gt_sum(const GridAxisSizing *g)
    tracks among them. */
 static CssPx gt_find_fr(const GridAxisSizing *g, size_t lo, size_t hi, CssPx space)
 {
-    bool *inflexible = calloc(hi - lo, sizeof *inflexible);
+    bool *inflexible = lexbor_calloc(hi - lo, sizeof *inflexible);
     CssPx hyp = css_px(0.0);
     bool restart = true;
     size_t i;
@@ -653,9 +653,10 @@ static bool gt_beyond(const GridTrack *t, GtSize which, GtKind kind)
 static void gt_distribute(GridAxisSizing *g, size_t span, GtAffect affect, GtSize which, GtKind kind, bool mark)
 {
     size_t cap = g->ntracks ? g->ntracks : 1;
-    CssPx *planned = calloc(cap, sizeof *planned), *inc = calloc(cap, sizeof *inc);
-    bool *touched = calloc(cap, sizeof *touched);
-    size_t *aff = calloc(cap, sizeof *aff), *rest = calloc(cap, sizeof *rest), *over = calloc(cap, sizeof *over);
+    CssPx *planned = lexbor_calloc(cap, sizeof *planned), *inc = lexbor_calloc(cap, sizeof *inc);
+    bool *touched = lexbor_calloc(cap, sizeof *touched);
+    size_t *aff = lexbor_calloc(cap, sizeof *aff), *rest = lexbor_calloc(cap, sizeof *rest);
+    size_t *over = lexbor_calloc(cap, sizeof *over);
     size_t i, t;
 
     CHECK(planned && inc && touched && aff && rest && over,

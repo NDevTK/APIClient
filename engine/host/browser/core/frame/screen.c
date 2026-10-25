@@ -46,6 +46,7 @@
 #include "core/frame/screen.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE MODELLED DISPLAY'S BIT DEPTH, stated ONCE. It is `screen.colorDepth`'s example and it is also what MEDIA
    QUERIES §4.5's `color` feature reports — as bits per COLOR COMPONENT, which is this divided by the three
@@ -352,7 +353,7 @@ static void screen_install_realm(JSContext *ctx)
        screen_gc_mark while it has no record. `s->vals` is held by this C reference until then, so it is rooted.
        The values are built here rather than on first read because a value minted lazily is built inside
        whichever flow got there first, making that flow's baseline everyone's. */
-    s = calloc(1, sizeof *s);
+    s = lexbor_calloc(1, sizeof *s);
     CHECK(s != NULL, "this realm's Screen record could not be allocated");
     s->vals = screen_build_values(ctx);
     scr = JS_NewObjectProtoClass(ctx, proto, g_screen_class);

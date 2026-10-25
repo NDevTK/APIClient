@@ -50,6 +50,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2's DIRECTION. Three states, and the standard names all three. */
 enum { SEL_DIRECTIONLESS = 0, SEL_FORWARDS = 1, SEL_BACKWARDS = 2 };
@@ -758,7 +759,7 @@ JSValue selection_new(JSContext *ctx, JSValueConst doc)
        what makes the two collector entries' `DCHECK(s != NULL)` sound rather than hopeful. A calloc between
        them could not trigger a collection (it is not a JS allocation) but it is one more line for someone to
        put a failing call into, and the ordering costs nothing. */
-    s = calloc(1, sizeof(*s));
+    s = lexbor_calloc(1, sizeof(*s));
     CHECK(s != NULL, "the Selection record allocation failed");
     s->doc_obj = JS_DupValue(ctx, doc);
     s->range = JS_NULL;   /* §2: "The selection must be initially empty." */

@@ -17,6 +17,7 @@
 #include "core/xml/xml_tag.h"
 #include "check.h"
 #include "core/timing/thread_work.h"   /* a step's bytes, charged to the running flow's clock */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §8.5.1's own spelling of the namespace, written once. */
 #define XML_PARSERERROR_NAMESPACE "http://www.mozilla.org/newlayout/xml/parsererror.xml"
@@ -128,7 +129,7 @@ XmlParse *xml_parse_begin(lxb_dom_document_t *doc, lxb_dom_node_t *parent, DomPa
            "an XML parse was asked for without a Document, a node to append [1] document's children to, and a "
            "pointer to the entity — an EMPTY entity is a zero LENGTH over a real pointer");
 
-    p = malloc(sizeof(*p));
+    p = lexbor_malloc(sizeof(*p));
     CHECK(p != NULL,
           "OOM opening an XML parse — a dropped parse is a document the caller would go on to read as empty, "
           "which is the same false as a document that never had one");

@@ -17,6 +17,8 @@
 #include "core/events/event_target.h"
 #include "core/events/listener_act.h"
 #include "core/html/input_value.h"
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The user-interface event types a page user causes by acting on a node. A click is stated as itself, because a
    live verifier performs it through HTMLElement's click(); a drop is the person dropping a file (HTML §6.11.5);
@@ -65,7 +67,7 @@ static char *locator_by_id(JSContext *ctx, lxb_dom_node_t *el, lxb_dom_node_t *d
         if (o && m == n && !memcmp(o, id, n)) same++;
     }
     if (same != 1) return NULL;
-    out = malloc(n + 2);
+    out = lexbor_malloc(n + 2);
     CHECK(out, "listener act: OOM spelling an element locator");
     out[0] = '#';
     memcpy(out + 1, id, n);
@@ -98,7 +100,7 @@ static char *locator_by_path(lxb_dom_node_t *el)
         }
         sn = snprintf(seg, sizeof seg, "%.*s:nth-of-type(%d)%s", (int)ln, name, k, len ? " > " : "");
         CHECK(sn > 0 && (size_t)sn < sizeof seg, "listener act: an element's local name is too long to locate");
-        grown = malloc(len + (size_t)sn + 1);
+        grown = lexbor_malloc(len + (size_t)sn + 1);
         CHECK(grown, "listener act: OOM spelling an element locator");
         memcpy(grown, seg, (size_t)sn);
         if (len) memcpy(grown + sn, out, len);
@@ -139,7 +141,7 @@ static char *handler_name(JSContext *ctx, JSValueConst fn)
         const char *s = JS_ToCStringLen(ctx, &n, d.value);
 
         CHECK(s != NULL, "listener act: OOM reading a handler's name");
-        if (id_is_simple(s, n)) { out = strdup(s); CHECK(out, "listener act: OOM copying a handler's name"); }
+        if (id_is_simple(s, n)) { out = reclaim_strdup(s); CHECK(out, "listener act: OOM copying a handler's name"); }
         JS_FreeCString(ctx, s);
     }
     JS_FreeValue(ctx, d.value);
@@ -160,7 +162,7 @@ static char *act_json(JSContext *ctx, JSValueConst fn, const char *kind, const c
 {
     char *name = handler_name(ctx, fn);
     size_t n = strlen(kind) + strlen(type) + strlen(target) + (name ? strlen(name) : 0) + 80;
-    char *out = malloc(n);
+    char *out = lexbor_malloc(n);
 
     CHECK(out, "listener act: OOM spelling an act");
     snprintf(out, n, "{\"kind\":\"%s\",\"target\":\"%s\",\"type\":\"%s\"%s%s%s}", kind, target, type,
@@ -211,7 +213,7 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
         const char *kind;
 
         if (!act_type_ok(type)) { free(type); return NULL; }
-        if (u == doc) loc = strdup("document");
+        if (u == doc) loc = reclaim_strdup("document");
         else if (!(loc = locator_by_id(ctx, u, doc))) loc = locator_by_path(u);
         if (!loc) { free(type); return NULL; }
         kind = !strcmp(type, "click") ? "click" : !strcmp(type, "drop") ? "drop"
@@ -245,7 +247,7 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn)
                       "framing policy\"";
             size_t n = (name ? strlen(name) : 0) + strlen(route) + 96;
 
-            act = malloc(n);
+            act = lexbor_malloc(n);
             CHECK(act, "listener act: OOM spelling an act");
             snprintf(act, n, "{\"kind\":\"message\",\"target\":\"window\",\"type\":\"message\",%s%s%s%s}",
                      route, name ? ",\"handler\":\"" : "", name ? name : "", name ? "\"" : "");

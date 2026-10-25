@@ -105,7 +105,7 @@ static char *ml_serialize(JSContext *ctx, JSValueConst self)
     size_t cap = 1, at = 0;
     char *out;
 
-    out = malloc(cap);
+    out = lexbor_malloc(cap);
     CHECK(out != NULL, "cssom: OOM serializing a media query list");
     out[0] = '\0';
     for (i = 0; i < n; i++) {

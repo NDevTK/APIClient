@@ -14,6 +14,7 @@
 #include "core/layout/grid_explicit_tracks.h"
 #include "core/layout/grid_placement.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 lxb_dom_element_t *grid_item_of(lxb_dom_element_t *container, BoxTreeChild c)
 {
@@ -65,7 +66,7 @@ static GpLine gp_line_copy(const GpLine *l)
     GpLine out = *l;
 
     if (l->name != NULL) {
-        out.name = strdup(l->name);
+        out.name = reclaim_strdup(l->name);
         CHECK(out.name != NULL, "css-grid-1 §8.4: out of memory copying a `<custom-ident>` across a shorthand");
     }
     return out;
@@ -109,7 +110,7 @@ static GpLine gp_parse_line(const char *v, size_t len)
                 } else if (name != NULL) {
                     ok = false;
                 } else {
-                    name = malloc(s->length + 1);
+                    name = lexbor_malloc(s->length + 1);
                     CHECK(name != NULL, "css-grid-1 §8.3: out of memory copying a `<custom-ident>`");
                     memcpy(name, s->data, s->length);
                     name[s->length] = '\0';
@@ -265,7 +266,7 @@ static long gp_line_at(const GpAxis *ax, const GpLine *l, bool end_side)
     if (l->name == NULL) return l->n > 0 ? l->n - 1 : (long)ax->explicit_tracks + 1 + l->n;
     if (l->ident) {
         size_t k = strlen(l->name);
-        char *edge = malloc(k + 7);
+        char *edge = lexbor_malloc(k + 7);
 
         CHECK(edge != NULL, "css-grid-1 §8.3: out of memory naming a grid area's edge");
         memcpy(edge, l->name, k);
@@ -428,13 +429,13 @@ void grid_placement_run(lxb_dom_element_t *container, bool intrinsic, GridPlacem
         }
         items[n++] = it;
     }
-    out->cells = calloc(n ? n : 1, sizeof *out->cells);
-    row_def = calloc(n ? n : 1, sizeof *row_def);
-    col_def = calloc(n ? n : 1, sizeof *col_def);
-    row_at = calloc(n ? n : 1, sizeof *row_at);
-    col_at = calloc(n ? n : 1, sizeof *col_at);
-    rs = calloc(n ? n : 1, sizeof *rs);
-    cs = calloc(n ? n : 1, sizeof *cs);
+    out->cells = lexbor_calloc(n ? n : 1, sizeof *out->cells);
+    row_def = lexbor_calloc(n ? n : 1, sizeof *row_def);
+    col_def = lexbor_calloc(n ? n : 1, sizeof *col_def);
+    row_at = lexbor_calloc(n ? n : 1, sizeof *row_at);
+    col_at = lexbor_calloc(n ? n : 1, sizeof *col_at);
+    rs = lexbor_calloc(n ? n : 1, sizeof *rs);
+    cs = lexbor_calloc(n ? n : 1, sizeof *cs);
     CHECK(out->cells && row_def && col_def && row_at && col_at && rs && cs,
           "css-grid-1 §8.5: out of memory placing grid items");
     for (i = 0; i < n; i++) {

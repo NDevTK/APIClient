@@ -8,6 +8,7 @@
 #include "check.h"
 #include "core/css/css_grid_template_areas.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* CSS Syntax 3 §4.2's ident code point over UTF-8 bytes: a letter, a digit, `_`, `-`, or any byte of a
    non-ASCII code point. */
@@ -38,7 +39,7 @@ static bool gta_row(const unsigned char *s, size_t len, char ***names, size_t *n
         }
         if (gta_ident_byte(s[at])) {
             while (at < len && gta_ident_byte(s[at])) at++;
-            name = malloc(at - from + 1);
+            name = lexbor_malloc(at - from + 1);
             CHECK(name != NULL, "css-grid-1 §7.3: out of memory copying a named cell token");
             memcpy(name, s + from, at - from);
             name[at - from] = '\0';
@@ -87,7 +88,7 @@ static bool gta_areas(char **cells, size_t rows, size_t columns, CssGridTemplate
         for (r = a.row_start; r < a.row_end; r++)
             for (c = a.col_start; c < a.col_end; c++)
                 if (cells[r * columns + c] == NULL || strcmp(cells[r * columns + c], cells[i]) != 0) return false;
-        a.name = strdup(cells[i]);
+        a.name = reclaim_strdup(cells[i]);
         CHECK(a.name != NULL, "css-grid-1 §7.3: out of memory naming a grid area");
         if (out->n == cap) {
             CssGridArea *grown = lexbor_realloc(out->areas, (cap = cap ? 2 * cap : 4) * sizeof *grown);

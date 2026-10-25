@@ -18,6 +18,7 @@
 #include "core/layout/flex_line.h"
 #include "core/layout/flex_position.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The container's two axes as physical sides, derived once per entry: whether the main axis is the vertical one,
    and the margin longhand on its main-start and cross-start sides (core/layout/flex_item.h). */
@@ -122,7 +123,7 @@ static CssPx fp_main_offset(lxb_dom_element_t *container, lxb_dom_element_t *ite
     CssAlign jc;
     char nbuf[160];
 
-    t = n == 0 ? NULL : calloc(n, sizeof *t);
+    t = n == 0 ? NULL : lexbor_calloc(n, sizeof *t);
     CHECK(n == 0 || t != NULL, "out of memory holding one flex line's main-axis terms");
     for (i = 0; i < n; i++) {
         t[i] = fp_main_terms(container, &m[i], a);

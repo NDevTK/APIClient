@@ -19,6 +19,7 @@
 #include "core/layout/table_column_width.h"
 #include "core/layout/table_grid.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The coherence floor: a maximum below a minimum is not a width the column can take (see the header for the
    two crossings). Arithmetic only; the invariant is asserted where the pair leaves this component. */
@@ -339,7 +340,7 @@ size_t table_column_widths(lxb_dom_element_t *table, const TableGrid *grid, Tabl
         table_column_boxes_release(&boxes);
         return 0;
     }
-    cols = (TableColumnWidth *) calloc(grid->ncols, sizeof *cols);
+    cols = (TableColumnWidth *) lexbor_calloc(grid->ncols, sizeof *cols);
     CHECK(cols != NULL,
           "CSS 2.1 §17.5.2.2's column widths could not allocate one pair per grid column of the table being "
           "laid out");

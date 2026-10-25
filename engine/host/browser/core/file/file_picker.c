@@ -55,6 +55,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/html/user_activation.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE DIALOG'S OUTCOME — step 7.4's `dismissed`, the same unknown core/html/input_picker.c's file dialog is
    and declared the same way, because it IS the same dialog one standard over. The EXAMPLE is "not dismissed",
@@ -441,7 +442,7 @@ static int picker_path_c(JSContext *ctx, JSValueConst path, const char ***pout)
     JS_FreeValue(ctx, len_v);
     DCHECK(n >= 1, "a file picker path with no items — File System Access §2.1's path is a list of ONE OR "
                    "MORE strings and its first item names the root");
-    out = calloc(n ? n : 1, sizeof *out);
+    out = lexbor_calloc(n ? n : 1, sizeof *out);
     CHECK(out != NULL, "file picker: OOM building a path vector");
     for (i = 0; i < n; i++) {
         JSValue v = JS_GetPropertyUint32(ctx, path, i);
@@ -635,7 +636,7 @@ static JSValue picker_select(JSContext *ctx, JSValueConst start_path, JSValueCon
            filename and a suffix can match one — what a
            directory has no answer for is the MIME half, which is why its `type` is NULL rather than "". */
         ok = picker_accepts_admits(ctx, accepts, name, type);
-        child_path = malloc(sizeof *child_path * (size_t)(n + 1));
+        child_path = lexbor_malloc(sizeof *child_path * (size_t)(n + 1));
         CHECK(child_path != NULL, "file picker: OOM building a selected entry's locator path");
         for (k = 0; k < n; k++) child_path[k] = items[k];
         child_path[n] = name;
@@ -684,7 +685,7 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, JSVal
     }
     if (suggested) {
         JSValue entry = file_system_child(ctx, dir, suggested);
-        const char **path = malloc(sizeof *path * (size_t)(n + 1));
+        const char **path = lexbor_malloc(sizeof *path * (size_t)(n + 1));
         int k;
 
         CHECK(path != NULL, "file picker: OOM building the saved file's locator path");

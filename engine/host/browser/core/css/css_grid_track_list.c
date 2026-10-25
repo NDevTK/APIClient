@@ -88,7 +88,7 @@ static bool gtl_breadth(JSContext *realm, const CssFontMetrics *font, const char
         out->kind = CSS_GRID_BREADTH_FLEX;
         return !inflexible && out->flex >= 0.0;
     }
-    copy = malloc(n + 1);
+    copy = lexbor_malloc(n + 1);
     CHECK(copy != NULL, "css-grid-1 §7.2: out of memory copying one track breadth");
     memcpy(copy, t, n);
     copy[n] = '\0';

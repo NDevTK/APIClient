@@ -218,7 +218,7 @@ static size_t tb_remove_irrelevant(TableBoxKind pk, TbChild *v, size_t n)
     if (n == 0) return 0;
     /* Rule 1: "All child boxes of a 'table-column' parent are treated as if they had 'display: none'." */
     if (pk == TABLE_BOX_COLUMN) return 0;
-    drop = (bool *) calloc(n, sizeof *drop);
+    drop = (bool *) lexbor_calloc(n, sizeof *drop);
     CHECK(drop != NULL,
           "CSS 2.1 §17.2.1's first stage could not allocate one flag per child box of the box it is removing "
           "irrelevant boxes from");

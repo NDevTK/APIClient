@@ -10,6 +10,7 @@
 #include "core/css/css_transform_function.h"
 #include "core/json_buf.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* One argument's production. css-transforms-1 §7.1 "2D Transform Functions" gives every argument of a function
    the same one; css-transforms-2 §12.2 "3D Transform Functions" mixes them (rotate3d() is three numbers and an
@@ -140,7 +141,7 @@ static bool css_tf_number(const char *s, const char *e, double *out)
         if (exp_digits) p = q;
     }
     if (p != e) return false;
-    copy = malloc((size_t)(e - s) + 1);
+    copy = lexbor_malloc((size_t)(e - s) + 1);
     CHECK(copy != NULL, "css-transforms-1 §7: OOM copying a <number> out of a transform function");
     memcpy(copy, s, (size_t)(e - s));
     copy[e - s] = '\0';
@@ -238,7 +239,7 @@ static bool css_tf_angle(const char *s, const char *e, double *num, char unit[CS
 static bool css_tf_length(JSContext *realm, const CssFontMetrics *font, const char *s, const char *e,
                           CssLength *out)
 {
-    char *copy = malloc((size_t)(e - s) + 1);
+    char *copy = lexbor_malloc((size_t)(e - s) + 1);
     bool ok;
 
     CHECK(copy != NULL, "css-transforms-1 §7: OOM copying a <length-percentage> out of a transform function");
@@ -550,7 +551,7 @@ static char *css_tf_length_text(const CssLength *len)
           "\"2D Transform Functions\" writes no keyword in any translation's grammar. `css_tf_length` refuses "
           "one at the parse rather than only asserting against it, so no list this component builds can carry "
           "one — reaching this arm is that refusal and this switch having come apart");
-    return strdup("");
+    return reclaim_strdup("");
 }
 
 char *css_transform_list_serialize(const CssTransformList *list)
@@ -591,7 +592,7 @@ char *css_transform_list_serialize(const CssTransformList *list)
                 t = css_tf_length_text(&fn->length[n_len++]);
                 break;
             case CSS_TF_ARG_PERSPECTIVE:
-                t = fn->perspective_none ? strdup("none") : css_tf_length_text(&fn->length[n_len++]);
+                t = fn->perspective_none ? reclaim_strdup("none") : css_tf_length_text(&fn->length[n_len++]);
                 CHECK(t != NULL, "css-transforms-2 §12.2: OOM serializing perspective()");
                 break;
             case CSS_TF_ARG_ANGLE:

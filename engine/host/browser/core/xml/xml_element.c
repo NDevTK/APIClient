@@ -11,6 +11,7 @@
 #include "core/xml/xml_ref.h"
 #include "core/xml/xml_tag.h"
 #include "solver/flow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE THREE BYTES §2.4 SUBTRACTS FROM [14] `CharData`, AND THE TWO THAT END IT. Each is ASCII, so a byte test
    for one is exact: no continuation byte of a multi-byte UTF-8 sequence is ever below 0x80, which is the same
@@ -99,7 +100,7 @@ const char *xml_element_error_message(XmlElementError err)
 
 XmlElementWalk *xml_element_walk_create(void)
 {
-    XmlElementWalk *w = calloc(1, sizeof *w);
+    XmlElementWalk *w = lexbor_calloc(1, sizeof *w);
 
     CHECK(w != NULL, "the XML element walk could not be allocated");
     w->open = lexbor_array_obj_create();

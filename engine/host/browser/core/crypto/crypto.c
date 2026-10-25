@@ -12,6 +12,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/cow.h"       /* the §10.1 draw position is shared baseline state a flow mutates */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_crypto_class;
 static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
@@ -304,7 +305,7 @@ static void crypto_install_realm(JSContext *ctx)
        every sibling would get a stream of its own — the same reason core/realm.h builds this whole object
        eagerly. It starts at zero in every realm, which crypto.h argues for as a schedule-independence trade
        rather than an oversight. */
-    stream = calloc(1, sizeof *stream);
+    stream = lexbor_calloc(1, sizeof *stream);
     CHECK(stream != NULL, "this realm's §10.1 draw position could not be allocated");
     JS_SetOpaque(obj, stream);
     realm_value_set(ctx, g_obj_slot, obj);

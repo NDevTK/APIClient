@@ -19,6 +19,7 @@
 #include "core/timing/hr_time.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §6.4.1's TWO PER-WINDOW VALUES, and the initial value of each is the whole of what "never activated" means.
  *
@@ -812,7 +813,7 @@ static void user_activation_install_realm(JSContext *ctx)
        object without one came from a second mint that does not exist" rests on, and there is no second mint.
        The quoted sentence above is why the realm written here is the right one: the object is "created in the
        Window object's relevant realm", so the realm it is installed into IS the W it answers about. */
-    r = calloc(1, sizeof *r);
+    r = lexbor_calloc(1, sizeof *r);
     CHECK(r != NULL, "this realm's UserActivation record could not be allocated");
     r->realm = ctx;
     r->global = JS_GetGlobalObject(ctx);   /* OWNED by the record from here */

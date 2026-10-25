@@ -14,6 +14,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2's ELEVEN WRITABLE ATTRIBUTES IN THE ORDER THE IDL DECLARES THEM, FOLLOWED BY `status`. The enumerator IS
    the index into the state Array, IS the accessor's magic and IS the index into all THREE tables below
@@ -179,7 +180,7 @@ static char *ff_parse_descriptor(const char *descriptor, const char *value)
     char *decl, *block, *out;
     const char *colon, *semi;
 
-    decl = malloc(dlen + 2 + vlen + 1);
+    decl = lexbor_malloc(dlen + 2 + vlen + 1);
     CHECK(decl != NULL, "css-font-loading: OOM composing an @font-face descriptor declaration");
     memcpy(decl, descriptor, dlen);
     decl[dlen] = ':';
@@ -201,7 +202,7 @@ static char *ff_parse_descriptor(const char *descriptor, const char *value)
     colon++;
     while (*colon == ' ') colon++;
     n = (size_t)(semi - colon);
-    out = malloc(n + 1);
+    out = lexbor_malloc(n + 1);
     CHECK(out != NULL, "css-font-loading: OOM copying a serialized @font-face descriptor value");
     memcpy(out, colon, n);
     out[n] = '\0';

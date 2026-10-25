@@ -140,7 +140,7 @@ static bool lj_is_bf(LayoutQuestionKind kind)
 static void lj_memo_grow(LayoutJob *job)
 {
     size_t cap = job->memo_cap != 0 ? job->memo_cap * 2 : 64, i;
-    LjSlot *tab = calloc(cap, sizeof *tab);
+    LjSlot *tab = lexbor_calloc(cap, sizeof *tab);
 
     CHECK(tab != NULL, "a layout job's memo could not grow");
     for (i = 0; i < job->memo_cap; i++) {
@@ -195,7 +195,7 @@ static LayoutBfAnswer *lj_answer_alloc(LayoutJob *job)
             job->answers = v;
             job->answer_cap = cap;
         }
-        job->answers[c] = malloc(LJ_ANSWER_CHUNK * sizeof **job->answers);
+        job->answers[c] = lexbor_malloc(LJ_ANSWER_CHUNK * sizeof **job->answers);
         CHECK(job->answers[c] != NULL, "a layout job's answer storage could not grow");
         job->answer_chunks++;
     }
@@ -246,7 +246,7 @@ static bool lj_all_suspended(const LayoutJob *job)
 
 LayoutJob *layout_job_new(LayoutJobDriver driver)
 {
-    LayoutJob *job = calloc(1, sizeof *job);
+    LayoutJob *job = lexbor_calloc(1, sizeof *job);
 
     CHECK(job != NULL, "a layout job could not be allocated");
     job->gen = 1;
@@ -411,7 +411,7 @@ unsigned layout_job_grid_rows_enter(const lxb_dom_element_t *container)
             job->ctxs = v;
             job->ctx_cap = cap;
         }
-        job->ctxs[i] = calloc(1, sizeof **job->ctxs);
+        job->ctxs[i] = lexbor_calloc(1, sizeof **job->ctxs);
         CHECK(job->ctxs[i] != NULL, "a layout job's grid row context could not be allocated");
         job->ctxs[i]->parent = outer;
         job->ctxs[i]->container = container;

@@ -45,6 +45,7 @@
 #include "core/realm.h"
 #include "core/rendering/visual_update.h"   /* a rule write is a visible effect HTML §8.1.7.3 asks about */
 #include "solver/cow.h"
+#include "solver/reclaim.h"
 
 /* CSSOM §6.4's TYPE state item, which IS which interface this rule is. For every interface CSSOM §6.4.2's `type` table
    NAMES, the discriminator and that table's number are ONE number rather than a stored type beside an interface tag
@@ -770,7 +771,7 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     obj = JS_NewObjectProtoClass(ctx, proto, g_rule_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
-    r = calloc(1, sizeof(*r));
+    r = lexbor_calloc(1, sizeof(*r));
     CHECK(r != NULL, "the CSS rule record allocation failed");
     r->type = type;
     r->parent_style_sheet = JS_DupValue(ctx, parent_style_sheet);
@@ -2512,7 +2513,7 @@ static char *rule_text_copy(JSContext *ctx, JSValueConst v, size_t *plen)
     if (!JS_IsString(v)) return NULL;
     c = JS_ToCStringLen(ctx, &len, v);
     if (!c) return NULL;
-    out = malloc(len + 1);
+    out = lexbor_malloc(len + 1);
     CHECK(out != NULL, "cssom: OOM copying a rule's text");
     memcpy(out, c, len);
     out[len] = '\0';
@@ -2556,7 +2557,7 @@ static char **rule_children_serialized(JSContext *ctx, JSValueConst rule, unsign
 
     *pn = 0;
     if (n) {
-        out = calloc(n, sizeof(*out));
+        out = lexbor_calloc(n, sizeof(*out));
         CHECK(out != NULL, "cssom: OOM serializing a rule's nested rules");
     }
     for (i = 0; i < n; i++) {
@@ -2921,7 +2922,7 @@ static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigne
     *pv = NULL;
     *pn = 0;
     if (!n) return true;
-    out = calloc(n, sizeof(*out));
+    out = lexbor_calloc(n, sizeof(*out));
     CHECK(out != NULL, "cssom: OOM reading an `@layer` rule's layer names");
     for (i = 0; i < n; i++) {
         JSValue v = JS_GetPropertyUint32(ctx, r->layer_names, i);
@@ -3782,7 +3783,7 @@ static char *selector_list_reserialize(const char *sel, size_t len)
     unsigned n;
 
     DCHECK(sel != NULL, "a group of selectors was parsed from no text at all");
-    probe = malloc(len + 4);
+    probe = lexbor_malloc(len + 4);
     CHECK(probe != NULL, "cssom: OOM parsing a selector list");
     memcpy(probe, sel, len);
     memcpy(probe + len, "{}", 3);
@@ -4512,7 +4513,7 @@ struct CascadeFrame {
 static CascadeFrame *cascade_frame_new(JSContext *ctx, JSValue kids, CascadeEmit *e, bool scratch,
                                        CssLayerNode *cur, const CascadeNest *nest, char *own_sel, size_t own_len)
 {
-    CascadeFrame *f = calloc(1, sizeof *f);
+    CascadeFrame *f = lexbor_calloc(1, sizeof *f);
 
     CHECK(f != NULL, "cssom: OOM walking a sheet's rules for the author cascade");
     f->kids = kids;
@@ -4888,7 +4889,7 @@ struct CssRuleCascadeWalk {
 
 CssRuleCascadeWalk *css_rule_cascade_walk_open(JSContext *ctx, JSValueConst list, CssLayerOrder *order)
 {
-    CssRuleCascadeWalk *w = calloc(1, sizeof *w);
+    CssRuleCascadeWalk *w = lexbor_calloc(1, sizeof *w);
 
     CHECK(w != NULL, "cssom: OOM opening a sheet's walk for the author cascade");
     DCHECK(order != NULL,
@@ -4994,7 +4995,7 @@ static char *rule_field_cstr(JSContext *ctx, JSValueConst v)
     char *out;
 
     CHECK(c != NULL, "cssom: OOM reading an `@property` rule's descriptor");
-    out = strdup(c);
+    out = reclaim_strdup(c);
     JS_FreeCString(ctx, c);
     CHECK(out != NULL, "cssom: OOM copying an `@property` rule's descriptor");
     return out;

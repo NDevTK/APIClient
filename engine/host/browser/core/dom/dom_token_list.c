@@ -36,6 +36,7 @@
 #include "core/dom/node.h"
 #include "core/dom/dom_token_list.h"
 #include "core/html/supported_tokens.h"   /* §7.1: "Specifications may define supported tokens …" — HTML's */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
@@ -623,7 +624,7 @@ static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, J
     tok = token_bytes(ctx, argv[0], &tlen, NULL);
     if (!tok) return JS_EXCEPTION;
     /* Validation step 2: "Let lowercaseToken be token, in ASCII lowercase." */
-    lower = malloc(tlen + 1);
+    lower = lexbor_malloc(tlen + 1);
     CHECK(lower != NULL, "DOMTokenList: OOM lowercasing a supports() token");
     for (i = 0; i < tlen; i++) {
         char c = tok[i];
@@ -647,7 +648,7 @@ static JSValue js_tl_supports(JSContext *ctx, JSValueConst this_val, int argc, J
     tok = token_example_bytes(ctx, argv[0], &tlen);
     out = JS_UNDEFINED;
     if (tok) {
-        lower = malloc(tlen + 1);
+        lower = lexbor_malloc(tlen + 1);
         CHECK(lower != NULL, "DOMTokenList: OOM lowercasing a supports() token's example");
         for (i = 0; i < tlen; i++) {
             char c = tok[i];
@@ -848,7 +849,7 @@ static JSValue tl_mutation_taint(JSContext *ctx, const char *out, size_t out_len
 
     /* AT MOST ONE PIECE PER ARGUMENT, asserted rather than argued from the loops: §1.2's set semantics emit a
        token once, so a second range equal to an argument's shape cannot exist in `out`. */
-    pc = calloc((size_t)na, sizeof *pc);
+    pc = lexbor_calloc((size_t)na, sizeof *pc);
     CHECK(pc != NULL, "DOMTokenList: OOM recording the provenance of a token-set write");
     while (token_next(&p, end, &t, &tlen)) {
         size_t off = (size_t)(t - out);
@@ -947,7 +948,7 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
            "before this body runs, so a short argument list here is a member installed without its positions");
     if (!el) return (magic == 2 || magic == 3) ? JS_FALSE : JS_UNDEFINED;
     if (na) {
-        a = calloc((size_t)na, sizeof *a);
+        a = lexbor_calloc((size_t)na, sizeof *a);
         CHECK(a != NULL, "DOMTokenList: OOM collecting a token-list mutation's tokens");
         /* JS_UNDEFINED IS NOT ALL-ZERO BYTES (JS_TAG_UNDEFINED is 3), so a calloc'd `taint` is no JSValue at
            all. Every one of them is written by token_bytes below before the composition reads it, and this
@@ -1008,7 +1009,7 @@ static JSValue js_tl_mutate(JSContext *ctx, JSValueConst this_val, int argc, JSV
        one byte, so the existing set fits in `vlen`; the appended (or substituted) tokens cost their bytes plus
        one separator each. */
     out_cap = vlen + tok_bytes + (size_t)na + 2;
-    out = malloc(out_cap);
+    out = lexbor_malloc(out_cap);
     CHECK(out != NULL, "DOMTokenList: OOM building the updated token set");
     p = v; end = v + vlen;
     while (token_next(&p, end, &t, &tlen)) {

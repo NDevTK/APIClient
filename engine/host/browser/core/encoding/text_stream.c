@@ -486,7 +486,7 @@ static int tc_build(JSContext *ctx, JSTcState *s, bool decoder, int enc, bool fa
     if (JS_IsException(s->obj)) return -1;
     /* THE RECORD IS COMPLETE BEFORE IT IS ATTACHED, so the finalizer of an object torn down by a failure below
        frees exactly what it holds and nothing it never got. */
-    t = calloc(1, sizeof *t);
+    t = lexbor_calloc(1, sizeof *t);
     CHECK(t, "encoding: OOM building a text stream");
     t->transform = JS_UNDEFINED;
     t->dec = decoder ? enc_decoder_new(enc, fatal, ignore_bom) : NULL;

@@ -42,6 +42,7 @@
 #include "core/idl_slots.h"
 #include "core/timing/event_loop.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.1's FIELD NAMES, on the record an entry IS. They are spelled once here so the model and every reader of it
    cannot disagree about which name holds what. */
@@ -88,7 +89,7 @@ static JSValue fs_bytes_to_string(JSContext *ctx, const char *bytes, size_t len)
 {
     /* Each byte becomes ONE code point in 0x00..0xFF, whose UTF-8 form is one byte below 0x80 and two above —
        so the buffer this builds is what JS_NewStringLen must decode to get those code points back. */
-    char *utf8 = malloc(len * 2 + 1);
+    char *utf8 = lexbor_malloc(len * 2 + 1);
     size_t i, n = 0;
     JSValue s;
 
@@ -133,7 +134,7 @@ char *file_system_value_bytes(JSContext *ctx, JSValueConst v, size_t *plen)
                             "else is a writer that stored something that is not the file's contents");
     utf8 = JS_ToCStringLen(ctx, &ulen, ex);
     CHECK(utf8 != NULL, "file system: a byte sequence's value could not be read back");
-    out = malloc(ulen + 1);
+    out = lexbor_malloc(ulen + 1);
     CHECK(out != NULL, "file system: OOM reading a byte sequence back");
     for (i = 0; i < ulen; ) {
         unsigned char c = (unsigned char)utf8[i];

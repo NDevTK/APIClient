@@ -32,6 +32,7 @@
 #include "core/idl_iter.h"
 #include "solver/concolic.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 static JSClassID g_headers_class;
 static int       g_ctor_stepid = -1;
@@ -62,7 +63,7 @@ static JSRuntime *g_headers_rt;
 static char *header_lower(const char *s)
 {
     size_t i, n = strlen(s);
-    char *r = malloc(n + 1);
+    char *r = lexbor_malloc(n + 1);
     CHECK(r, "headers: OOM copying a header name — a dropped header loses what the endpoint requires");
     for (i = 0; i < n; i++)
         r[i] = (s[i] >= 'A' && s[i] <= 'Z') ? (char)(s[i] - 'A' + 'a') : s[i];
@@ -72,7 +73,7 @@ static char *header_lower(const char *s)
 
 static char *header_dup(const char *s)
 {
-    char *r = strdup(s ? s : "");
+    char *r = reclaim_strdup(s ? s : "");
     CHECK(r, "headers: OOM copying a header value");
     return r;
 }
@@ -127,7 +128,7 @@ char *header_list_field_lines(const HeaderList *l)
                       "no headers, and it is a list; NULL is a caller that has none to serialize");
     for (i = 0; i < l->n; i++)
         n += strlen(l->e[i].name) + 2 + strlen(l->e[i].value) + 1;   /* "name: value\n" */
-    out = malloc(n);
+    out = lexbor_malloc(n);
     CHECK(out != NULL, "headers: OOM serializing a response's field lines");
     w = out;
     for (i = 0; i < l->n; i++) {
@@ -186,7 +187,7 @@ void header_list_parse_field_lines(HeaderList *l, const char *block)
                              "and a release build that skipped the line would drop a policy the server sent");
         vs = colon + 1;
         while (vs < end && (*vs == ' ' || *vs == '\t')) vs++;   /* RFC 9112's OWS after the colon */
-        name = malloc((size_t)(colon - p) + 1);
+        name = lexbor_malloc((size_t)(colon - p) + 1);
         CHECK(name != NULL, "headers: OOM reading a response field line");
         memcpy(name, p, (size_t)(colon - p));
         name[colon - p] = 0;
@@ -197,7 +198,7 @@ void header_list_parse_field_lines(HeaderList *l, const char *block)
                "a response field block carries a line whose name is not an HTTP token — a header list stores "
                "what a response delivered, and a name Fetch would have rejected never was one");
         {
-            char *value = malloc((size_t)(end - vs) + 1);
+            char *value = lexbor_malloc((size_t)(end - vs) + 1);
             CHECK(value != NULL, "headers: OOM reading a response field value");
             memcpy(value, vs, (size_t)(end - vs));
             value[end - vs] = 0;
@@ -223,7 +224,7 @@ char *header_list_get(const HeaderList *l, const char *name)
         if (!strcmp(l->e[i].name, lo))
             total += strlen(l->e[i].value) + 2;   /* ", " between, never after the last */
     if (!total) { free(lo); return NULL; }
-    out = malloc(total + 1);
+    out = lexbor_malloc(total + 1);
     CHECK(out, "headers: OOM joining a header's values");
     out[0] = 0;
     for (i = 0; i < l->n; i++) {
@@ -261,7 +262,7 @@ char **header_list_get_decode_split(const HeaderList *l, const char *name, size_
     *n = 0;
     if (!value) return NULL;
     len = strlen(value);
-    tmp = malloc(len + 1);
+    tmp = lexbor_malloc(len + 1);
     CHECK(tmp != NULL, "headers: OOM splitting a header value");
     for (;;) {
         size_t s, e;
@@ -279,7 +280,7 @@ char **header_list_get_decode_split(const HeaderList *l, const char *name, size_
             CHECK(grown != NULL, "headers: OOM splitting a header value");
             values = grown;
         }
-        values[*n] = strndup(tmp + s, e - s);
+        values[*n] = reclaim_strndup(tmp + s, e - s);
         CHECK(values[*n] != NULL, "headers: OOM splitting a header value");
         (*n)++;
         o = 0;
@@ -403,7 +404,7 @@ JSValue headers_new(JSContext *ctx, const HeaderList *src, HeadersGuard guard)
     }
     if (JS_IsException(obj))
         return obj;
-    h = calloc(1, sizeof *h);
+    h = lexbor_calloc(1, sizeof *h);
     CHECK(h, "headers: OOM building a Headers");
     h->guard = (uint8_t)guard;
     /* The list is copied ALREADY VALIDATED — it is a header list this engine built, never a page's. The guard
@@ -472,7 +473,7 @@ static char *header_normalize_value(const char *v, size_t len, size_t *pn)
     while (b < e && header_is_ws((unsigned char)*b)) b++;
     while (e > b && header_is_ws((unsigned char)e[-1])) e--;
     n = (size_t)(e - b);
-    out = malloc(n + 1);
+    out = lexbor_malloc(n + 1);
     CHECK(out, "headers: OOM normalizing a header value");
     memcpy(out, b, n);
     out[n] = 0;
@@ -811,7 +812,7 @@ static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, cons
         const char *test = norm;
         if (existing) {
             size_t a = strlen(existing), b = strlen(norm);
-            combined = malloc(a + b + 3);
+            combined = lexbor_malloc(a + b + 3);
             CHECK(combined, "headers: OOM joining a no-cors value");
             memcpy(combined, existing, a);
             combined[a] = ','; combined[a + 1] = ' ';
@@ -852,7 +853,7 @@ int header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard
    allocator, which is the whole reason the copy is delegated rather than performed by the engine. */
 HeaderList *header_list_step_new(JSContext *ctx)
 {
-    HeaderList *l = calloc(1, sizeof(*l));
+    HeaderList *l = lexbor_calloc(1, sizeof(*l));
     (void)ctx;
     CHECK(l, "headers: OOM allocating the header list a step machine owns");
     return l;
@@ -880,7 +881,7 @@ static void *header_list_step_clone(JSContext *ctx, void *root, void **cursors[]
            "a header list was cloned for a fork with cursors declared standing inside it — nothing holds a "
            "pointer INTO a header list, so a count above zero is a holder whose interior pointers this copy "
            "does not re-point and would leave aimed at the original arm's entries");
-    cp = calloc(1, sizeof(*cp));
+    cp = lexbor_calloc(1, sizeof(*cp));
     CHECK(cp, "headers: OOM copying the header list a forked step machine owns");
     for (i = 0; i < src->n; i++)
         header_list_append(cp, src->e[i].name, src->e[i].value);
@@ -1189,7 +1190,7 @@ static void header_sort_and_combine(const HeaderList *l, HeaderList *out)
         }
         for (j = 0; j < l->n; j++)
             if (!strcmp(l->e[j].name, name)) total += strlen(l->e[j].value) + 2;
-        joined = malloc(total + 1);
+        joined = lexbor_malloc(total + 1);
         CHECK(joined, "headers: OOM combining a header's values for iteration");
         joined[0] = 0;
         for (j = 0; j < l->n; j++) {

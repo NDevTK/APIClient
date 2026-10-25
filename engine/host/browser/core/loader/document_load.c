@@ -32,6 +32,7 @@
 #include "solver/quantum.h"
 #include "solver/rest_unit.h"   /* the unit the HTML arm's fill is bracketed in */
 #include "check.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE ARM AND THE ARM'S OWN LOAD, and nothing else. The three §7.5 subsections hold entirely different state
    between two items — a position in a byte stream, a position in a byte stream with a different prologue in
@@ -100,7 +101,7 @@ DocumentLoad *document_load_begin(lxb_html_document_t *document, DomParseRootKin
         return NULL;
     }
 
-    l = malloc(sizeof(*l));
+    l = lexbor_malloc(sizeof(*l));
     CHECK(l != NULL,
           "OOM opening an HTML §7.4.5 load-a-document — the DOM this parse produces is what every flow of "
           "this instance reads, so a load that cannot even begin is not a document with no endpoints");

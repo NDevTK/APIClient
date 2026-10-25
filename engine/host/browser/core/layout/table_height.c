@@ -20,6 +20,7 @@
 #include "core/layout/table_height.h"
 #include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* ---- §17.6 Borders' two models, asked once at the entry ---------------------------------------------------
    The vertical twin of core/layout/table_width.c's split, asked here too so a table whose height is asked
@@ -303,7 +304,7 @@ bool table_heights_ask(lxb_dom_element_t *table, const TableGrid *grid)
 
     DCHECK(table != NULL && grid != NULL, "CSS 2.1 §17.5.3's inputs were asked with no table or no grid");
     if (grid->ncells == 0) return true;
-    bucket = calloc(grid->ncells, sizeof(*bucket));
+    bucket = lexbor_calloc(grid->ncells, sizeof(*bucket));
     CHECK(bucket != NULL, "out of memory collecting a row's cells for CSS 2.1 §17.5.3");
     /* Every cell box height `th_cell_box_height` reads, in the order `table_heights` reads them. A replaced
        cell is left to that function's own refusal. */
@@ -393,9 +394,9 @@ void table_heights(lxb_dom_element_t *table, const TableGrid *grid, TableUsedHei
     out->nrows = nrows;
     used_spacing = th_used_spacing(spacing.vertical, collapsing);
     out->spacing = used_spacing;
-    out->rows = nrows == 0 ? NULL : calloc(nrows, sizeof(*out->rows));
+    out->rows = nrows == 0 ? NULL : lexbor_calloc(nrows, sizeof(*out->rows));
     CHECK(nrows == 0 || out->rows != NULL, "out of memory allocating CSS 2.1 §17.5.3's row heights");
-    bucket = grid->ncells == 0 ? NULL : calloc(grid->ncells, sizeof(*bucket));
+    bucket = grid->ncells == 0 ? NULL : lexbor_calloc(grid->ncells, sizeof(*bucket));
     CHECK(grid->ncells == 0 || bucket != NULL, "out of memory collecting a row's cells for CSS 2.1 §17.5.3");
     for (r = 0; r < nrows; r++) {
         CssPx term = th_declared_term(rows[r].element);

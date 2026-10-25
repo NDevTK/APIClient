@@ -1315,7 +1315,7 @@ EncDecoder *enc_decoder_new(int enc, bool fatal, bool ignore_bom)
     DCHECK(enc >= 0 && enc < ENC_COUNT && enc != ENC_REPLACEMENT,
            "a decoder was asked for an encoding that has none — `replacement` is refused by the two "
            "constructors, and every other id in the registry decodes");
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d, "encoding: OOM building a decoder");
     d->enc = (EncodingId)enc;
     d->fatal = fatal;

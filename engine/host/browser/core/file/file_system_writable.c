@@ -44,6 +44,7 @@
 #include "core/streams/stream_work.h"
 #include "core/streams/writable_stream.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.5's THREE INTERNAL SLOTS, on the record the stream carries. */
 #define FW_FILE   "file"    /* [[file]] — the file entry */
@@ -152,7 +153,7 @@ static int fw_splice(JSContext *ctx, JSValueConst rec, double pos, const char *d
        unmodified." This engine's storage is RAM, so the quota is what it can hold — and `write({type:"write",
        position:2**64-1, data:"x"})` is a page reaching it deliberately, which is the case the standard names.
        The buffer is LEFT UNMODIFIED, which the ordering here gives for free: nothing has been written yet. */
-    out = malloc(total + 1);
+    out = lexbor_malloc(total + 1);
     if (!out) {
         free(oldbytes);
         JS_FreeValue(ctx, old);
@@ -193,7 +194,7 @@ static int fw_truncate(JSContext *ctx, JSValueConst rec, double newsize)
     old = fw_slot(ctx, rec, FW_BUFFER);
     oldbytes = file_system_value_bytes(ctx, old, &oldlen);
     want = (size_t)newsize;
-    out = malloc(want + 1);
+    out = lexbor_malloc(want + 1);
 
     /* §2.5's truncate command has the SAME quota clause as its write command, and the same "leaving stream's
        [[buffer]] unmodified" — which the ordering gives, since nothing has been written yet. */
@@ -318,7 +319,7 @@ static char *fww_data_bytes(JSContext *ctx, JSValueConst data, size_t *plen, JSV
 
         JS_FreeValue(ctx, str);
         CHECK(utf8 != NULL, "file system writable: a chunk's string could not be UTF-8 encoded");
-        out = malloc(len + 1);
+        out = lexbor_malloc(len + 1);
         CHECK(out != NULL, "file system writable: OOM encoding a chunk");
         memcpy(out, utf8, len);
         out[len] = 0;
@@ -332,7 +333,7 @@ static char *fww_data_bytes(JSContext *ctx, JSValueConst data, size_t *plen, JSV
                "File System §2.5's write command reached its BufferSource arm with something that is not one");
         if (encoding_buffer_source(ctx, data, &p, &len, phold) < 0) return NULL;
     }
-    out = malloc(len + 1);
+    out = lexbor_malloc(len + 1);
     CHECK(out != NULL, "file system writable: OOM copying a chunk");
     if (len) memcpy(out, p, len);
     out[len] = 0;

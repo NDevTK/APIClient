@@ -17,6 +17,7 @@
 #include "core/css/css_unit_value.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 enum { M_ESCAPE, M_SUPPORTS, M_N };
 
@@ -172,7 +173,7 @@ static bool css_supports_condition_text(const char *text, size_t len)
        bytes with one character on each side, never a re-serialization of it: §7.5 says NOTHING about
        normalising the text, and a member that trimmed or re-encoded it would answer a different question from
        the one the page asked. */
-    wrapped = malloc(len + 3);
+    wrapped = lexbor_malloc(len + 3);
     CHECK(wrapped != NULL, "cssom: OOM wrapping §7.5's condition text in parentheses");
     wrapped[0] = '(';
     memcpy(wrapped + 1, text, len);

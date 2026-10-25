@@ -36,6 +36,7 @@
 #include "core/loader/module_loader.h"
 #include "core/idl_args.h"
 #include "solver/concolic.h"
+#include "solver/reclaim.h"
 
 /* HTML §8.1.5.1 "The resolution algorithm"'s resolve a URL-like module specifier. Fills `out` and returns
    true for a URL; false is the algorithm's null, with `out` initialised-and-empty either way. */
@@ -103,7 +104,7 @@ static char *module_normalize(JSContext *ctx, const char *referrer, const char *
     serialized_base = url_serialize(&base, false);
     CHECK(serialized_base != NULL, "OOM serializing a module referrer's base URL");
     have_as_url = ml_resolve_url_like(specifier, &base, &as_url);
-    normalized = have_as_url ? url_serialize(&as_url, false) : strdup(specifier);
+    normalized = have_as_url ? url_serialize(&as_url, false) : reclaim_strdup(specifier);
     CHECK(normalized != NULL, "OOM normalizing a module specifier");
     /* Steps 9-11. */
     r = import_map_resolve(ctx, serialized_base, normalized, have_as_url ? &as_url : NULL, &result);

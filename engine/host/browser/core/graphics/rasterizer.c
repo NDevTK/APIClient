@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/graphics/raster_path.h"
 #include "core/graphics/rasterizer.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* A COVERAGE WITHIN THIS OF 0 OR 1 IS SNAPPED TO IT, AND THE NUMBER IS DERIVED RATHER THAN PICKED. The
    accumulation of a shape's interior reaches 1 up to the rounding of a few hundred additions, so without a
@@ -158,9 +159,9 @@ size_t raster_fill(const RasterEdges *edges, RasterFillRule rule, int width, int
     cells = (size_t)rows * (size_t)bw;
     CHECK((size_t)rows <= SIZE_MAX / (size_t)bw && cells <= SIZE_MAX / sizeof(double),
           "a fill's accumulation buffer is larger than an address can name");
-    acc = (double *)calloc(cells, sizeof(double));
+    acc = (double *)lexbor_calloc(cells, sizeof(double));
     CHECK(acc != NULL, "out of memory allocating a fill's accumulation buffer");
-    rowmass = (double *)calloc((size_t)rows, sizeof(double));
+    rowmass = (double *)lexbor_calloc((size_t)rows, sizeof(double));
     CHECK(rowmass != NULL, "out of memory allocating a fill's per-row mass");
 
     /* THE EDGES ARE WALKED IN PATH ORDER AND NOTHING SORTS THEM, which is the determinism requirement stated

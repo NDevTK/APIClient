@@ -138,7 +138,7 @@ static bool fp_same_example(CssPx a, CssPx b)
 static void fp_grow(FlowPlacementRecord *r)
 {
     size_t cap = r->cap ? r->cap * 2 : FP_CAP0, i;
-    FpSlot *tab = calloc(cap, sizeof *tab);
+    FpSlot *tab = lexbor_calloc(cap, sizeof *tab);
 
     CHECK(tab != NULL, "flow-placement-oom: CSS 2.1 §9.4.1's placement record could not be grown. A dropped "
                        "position is not a slower answer, it is a box placed against a stack this pass has "
@@ -160,7 +160,7 @@ static FpEntry *fp_entry_for_write(const lxb_dom_element_t *el)
     if (r->used * 2 >= r->cap) fp_grow(r);
     i = fp_probe(r->tab, r->cap, el);
     if (r->tab[i].el == NULL) {
-        FpEntry *e = calloc(1, sizeof *e);
+        FpEntry *e = lexbor_calloc(1, sizeof *e);
 
         CHECK(e != NULL, "flow-placement-oom: one box's placement entry could not be allocated");
         r->tab[i].el = el;

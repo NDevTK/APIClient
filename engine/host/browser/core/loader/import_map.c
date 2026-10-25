@@ -10,6 +10,7 @@
 #include "core/url/url.h"
 #include "core/loader/import_map.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* The per-realm record: a null-prototype object whose four properties are the global's import map's three items
    and its resolved module set. The slot holds one object for the realm's life and is never replaced; what a flow
@@ -35,7 +36,7 @@ typedef struct { char *base; char *specifier; bool bare_or_special; } ImRecord;
 
 static char *im_strdup(const char *s)
 {
-    char *d = strdup(s);
+    char *d = reclaim_strdup(s);
     CHECK(d != NULL, "import map: OOM copying a string");
     return d;
 }
@@ -384,7 +385,7 @@ static ImRecord *im_resolved_from_js(JSContext *ctx, int *pn)
 {
     JSValue l = im_record_list(ctx, "resolved");
     uint32_t n = im_length(ctx, l);
-    ImRecord *r = n ? calloc(n, sizeof *r) : NULL;
+    ImRecord *r = n ? lexbor_calloc(n, sizeof *r) : NULL;
 
     CHECK(n == 0 || r != NULL, "import map: OOM reading the resolved module set");
     for (uint32_t i = 0; i < n; i++) {

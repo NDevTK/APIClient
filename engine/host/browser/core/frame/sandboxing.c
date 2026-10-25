@@ -12,6 +12,7 @@
 
 #include "check.h"
 #include "core/frame/sandboxing.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* An ASCII case-insensitive match between a token and a sandbox keyword. §7.1.5's keywords are matched that
    way because the `sandbox` content attribute's value is an unordered set of unique space-separated tokens,
@@ -168,7 +169,7 @@ char *sandbox_flags_serialize(SandboxFlags flags)
             "with a WEAKER sandbox than the markup states with no field anywhere to say so",
             (unsigned)(flags & ~declared), (unsigned)declared);
     if (flags == 0) {
-        out = malloc(sizeof SANDBOX_FLAGS_SERIALIZED_NONE);
+        out = lexbor_malloc(sizeof SANDBOX_FLAGS_SERIALIZED_NONE);
         if (out) memcpy(out, SANDBOX_FLAGS_SERIALIZED_NONE, sizeof SANDBOX_FLAGS_SERIALIZED_NONE);
         return out;
     }
@@ -178,7 +179,7 @@ char *sandbox_flags_serialize(SandboxFlags flags)
 #define SANDBOX_FLAG_LEN_(name, text) if (flags & (SandboxFlags)(name)) n += sizeof text;
     SANDBOX_FLAG_LIST(SANDBOX_FLAG_LEN_)
 #undef SANDBOX_FLAG_LEN_
-    out = malloc(n);
+    out = lexbor_malloc(n);
     if (!out) return NULL;
     q = out;
     /* THE SEPARATOR'S OWN INVARIANT, ASSERTED OVER THE VOCABULARY RATHER THAN ASSUMED OF IT. A name that

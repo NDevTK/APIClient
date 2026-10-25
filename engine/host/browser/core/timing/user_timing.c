@@ -37,6 +37,7 @@
 #include "core/timing/user_timing.h"
 #include "solver/concolic.h"   /* an unknown NAME denotes its SHAPE — see concolic_name_cstr */
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.2's ONE ADDED FIELD over PERFORMANCE TIMELINE §3's four. The base is the FIRST member, which is what
    makes the one class id and the one opaque cover both halves — see performance_entry.h's PerfEntryClass. */
@@ -232,7 +233,7 @@ static JSValue mark_construct(JSContext *ctx, JSValueConst mark_name, JSValueCon
     DCHECK(!JS_IsNull(proto), "a PerformanceMark was constructed in a realm that never ran its install — the "
                               "two doors onto this operation are both members installed by that same install, "
                               "so reaching here without it means the prototype was taken from another realm");
-    m = calloc(1, sizeof *m);
+    m = lexbor_calloc(1, sizeof *m);
     CHECK(m != NULL, "user timing: a PerformanceMark's record could not be allocated");
     /* STEP 4: "Set entry's entryType attribute to DOMString "mark"." A constant of this standard, which is why
        PERFORMANCE TIMELINE §3's own step 1 can assert it is in the Timing Entry Types Registry. */
@@ -1002,7 +1003,7 @@ static int js_perf_measure_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         DCHECK(!JS_IsNull(proto),
                "a PerformanceMeasure was minted in a realm that never ran its install — the only door onto "
                "this operation is a member that same install declared");
-        m = calloc(1, sizeof *m);
+        m = lexbor_calloc(1, sizeof *m);
         CHECK(m != NULL, "user timing: a PerformanceMeasure's record could not be allocated");
         /* STEP 6: "Set entry's entryType attribute to DOMString "measure"." A constant of this standard. */
         entry_type = JS_NewString(ctx, "measure");

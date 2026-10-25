@@ -504,7 +504,7 @@ JSValue input_value_get(JSContext *ctx, JSValueConst wrap)
                              "list of File objects and file_list_new asserts that at every build, so a plain "
                              "Blob cannot have got in");
         nlen = name ? strlen(name) : 0;
-        buf = malloc(sizeof FAKE - 1 + nlen);
+        buf = lexbor_malloc(sizeof FAKE - 1 + nlen);
         CHECK(buf != NULL, "input: OOM building a file control's value");
         memcpy(buf, FAKE, sizeof FAKE - 1);
         if (nlen) memcpy(buf + sizeof FAKE - 1, name, nlen);

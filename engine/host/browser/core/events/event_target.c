@@ -37,6 +37,8 @@
 #include "core/events/report_exception.h"
 #include "core/frame/window_proxy.h"   /* inner invoke's `this` for a Window target is its WindowProxy */
 #include "solver/result.h"   /* §3.2.15's refusal on a forked arm is this engine's own throw — see the AEL_SIGNAL stage */
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
@@ -915,7 +917,7 @@ char *event_target_listener_type_of(JSContext *ctx, JSValueConst target, JSValue
                     const char *t = JS_AtomToCString(ctx, tab[i].atom);
 
                     CHECK(t != NULL, "event listeners: OOM reading a listener type");
-                    type = strdup(t);
+                    type = reclaim_strdup(t);
                     CHECK(type != NULL, "event listeners: OOM copying a listener type");
                     JS_FreeCString(ctx, t);
                 }
@@ -2062,7 +2064,7 @@ static char *handler_source(JSContext *ctx, JSValueConst body, bool five, unsign
     for (k = 0; k < 3; k++)
         if (layers & (1u << k))
             nhead += strlen(HEAD[k]);
-    out = malloc(nhead + npre + nbody + ntail + 1);
+    out = lexbor_malloc(nhead + npre + nbody + ntail + 1);
     CHECK(out != NULL, "§8.1.8.1 step 3.9's source text could not be allocated");
     for (k = 0; k < 3; k++)
         if (layers & (1u << k)) {

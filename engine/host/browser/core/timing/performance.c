@@ -14,6 +14,7 @@
 #include "core/timing/hr_time.h"
 #include "core/timing/performance.h"
 #include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 /* THIS COMPONENT NO LONGER NAMES core/workers/, AND THAT IS THE POINT RATHER THAN A TIDY-UP. It used to
    include that header for two things — the §3.7.3 prototype `performance` lands on in a worker realm and
    `WorkerGlobalScope`'s own brand for §3.7.6's `target` — so an HR-TIME component depended on the worker
@@ -354,7 +355,7 @@ static void performance_install(JSContext *ctx)
     obj = JS_NewObjectProtoClass(ctx, proto, g_perf_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "this realm's Performance object could not be allocated");
-    perf = calloc(1, sizeof *perf);
+    perf = lexbor_calloc(1, sizeof *perf);
     CHECK(perf != NULL, "this realm's Performance record could not be allocated");
     perf->realm = ctx;
     perf->global = JS_DupValue(ctx, global);

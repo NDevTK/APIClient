@@ -206,12 +206,12 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
     struct scr_ctx c; dom_collect_scripts(dom, &c);
     DocScripts ds = { NULL, NULL, NULL, NULL, NULL, 0 };
     if (c.n) {
-        ds.bodies = calloc((size_t)c.n, sizeof(char *));
-        ds.srcs   = calloc((size_t)c.n, sizeof(char *));
-        ds.types  = calloc((size_t)c.n, sizeof(ScriptType));
-        ds.sched  = calloc((size_t)c.n, sizeof(ScriptSchedule));
+        ds.bodies = lexbor_calloc((size_t)c.n, sizeof(char *));
+        ds.srcs   = lexbor_calloc((size_t)c.n, sizeof(char *));
+        ds.types  = lexbor_calloc((size_t)c.n, sizeof(ScriptType));
+        ds.sched  = lexbor_calloc((size_t)c.n, sizeof(ScriptSchedule));
         /* §4.12.1.1's "execute the script element" is a switch on EL, so the row keeps it — see the header. */
-        ds.els    = calloc((size_t)c.n, sizeof(lxb_dom_element_t *));
+        ds.els    = lexbor_calloc((size_t)c.n, sizeof(lxb_dom_element_t *));
         if (!ds.bodies || !ds.srcs || !ds.types || !ds.sched || !ds.els) {
             free(ds.bodies); free(ds.srcs); free(ds.types); free(ds.sched); free(ds.els); free(c.els);
             ds.bodies = ds.srcs = NULL; ds.types = NULL; ds.sched = NULL; ds.els = NULL;
@@ -266,7 +266,7 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
                    not: a `<script src>` this scan drops is an external program the document never fetches, and
                    it leaves the table looking exactly like a document that shipped one fewer script. An `if
                    (u)` here was that hole with a NULL check's face on it. */
-                char *u = malloc(sl + 1);
+                char *u = lexbor_malloc(sl + 1);
 
                 CHECK(u != NULL,
                       "OOM copying a `<script src>` URL out of the tree — a row this scan does not write is a "

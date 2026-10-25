@@ -63,7 +63,7 @@ typedef struct { Feature *e; int n, cap; } FeatureMap;
    are page-controlled and of page-controlled length, so the length is measured and the copy is sized to it. */
 static char *feat_dup_lower(const char *s, size_t len)
 {
-    char *d = malloc(len + 1);
+    char *d = lexbor_malloc(len + 1);
     size_t i;
     CHECK(d != NULL, "window feature token allocation failed");
     for (i = 0; i < len; i++) d[i] = ascii_lower(s[i]);

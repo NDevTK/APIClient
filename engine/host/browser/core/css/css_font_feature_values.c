@@ -8,6 +8,7 @@
 
 #include "check.h"
 #include "core/css/css_font_feature_values.h"
+#include "solver/reclaim.h"
 
 /* CSS Fonts 4 §6.9.1's `<font-feature-value-type>` alternatives the reference browser recognizes, in the
    spec's own order, each `@<name> { <declaration-list> }`. The production's seventh, `@historical-forms`, is
@@ -246,7 +247,7 @@ static char *ffv_kind(JSContext *ctx, JSValueConst map)
     c = JS_ToCString(ctx, v);
     JS_FreeValue(ctx, v);
     if (!c) return NULL;
-    out = strdup(c);
+    out = reclaim_strdup(c);
     JS_FreeCString(ctx, c);
     CHECK(out != NULL, "cssom: OOM reading a CSSFontFeatureValuesMap's block kind");
     return out;
@@ -393,7 +394,7 @@ void css_font_feature_values_map_fill(JSContext *ctx, JSValueConst map, const ch
         if (p == name_end) { p = semi < end ? semi + 1 : end; continue; }   /* an empty name is no `<ident>` */
         values = ffv_parse_values(ctx, colon + 1, (size_t)(semi - colon - 1), max);
         if (!JS_IsUndefined(values)) {
-            name = malloc((size_t)(name_end - p) + 1);
+            name = lexbor_malloc((size_t)(name_end - p) + 1);
             CHECK(name != NULL, "cssom: OOM copying a feature value name");
             memcpy(name, p, (size_t)(name_end - p));
             name[name_end - p] = '\0';
@@ -418,7 +419,7 @@ char *css_font_feature_values_map_serialize(JSContext *ctx, JSValueConst map)
     DCHECK(kind != NULL, "a CSSFontFeatureValuesMap was serialized without knowing which block it is");
     if (!kind) return NULL;
     cap = strlen(kind) + 8;
-    out = malloc(cap);
+    out = lexbor_malloc(cap);
     CHECK(out != NULL, "cssom: OOM serializing a feature value block");
     at = (size_t)snprintf(out, cap, "@%s {", kind);
     free(kind);

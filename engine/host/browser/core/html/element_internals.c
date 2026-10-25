@@ -80,6 +80,7 @@
 #include "core/html/html_element.h"
 #include "core/html/form_data.h"
 #include "core/html/html_form.h"
+#include "solver/reclaim.h"
 
 static JSClassID g_internals_class, g_states_class, g_validity_class;
 static int g_ready;
@@ -824,7 +825,7 @@ static char *ei_aria_attr_get(JSContext *ctx, JSValueConst target, const char *n
            SHAPE, which is the same rule §4.2.4's getElementById reads its argument under. */
         const char *c = concolic_name_cstr(ctx, v);
 
-        if (c) { out = strdup(c); JS_FreeCString(ctx, c); }
+        if (c) { out = reclaim_strdup(c); JS_FreeCString(ctx, c); }
     }
     JS_FreeValue(ctx, v);
     JS_FreeValue(ctx, map);

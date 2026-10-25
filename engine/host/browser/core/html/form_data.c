@@ -173,7 +173,7 @@ JSValue form_data_new(JSContext *ctx, const UrlEncodedList *entries)
     }
     if (JS_IsException(obj))
         return obj;
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d, "formdata: OOM building a FormData");
     for (i = 0; entries && i < entries->n; i++)
         fd_list_append(&d->list, entries->e[i].name, entries->e[i].nlen,
@@ -260,7 +260,7 @@ JSValue form_data_parse_multipart(JSContext *ctx, const char *body, size_t len,
     fd = form_data_new(ctx, NULL);
     if (JS_IsException(fd)) return fd;
     d = JS_GetOpaque(fd, g_fd_class);
-    delim = malloc(dlen + 1);
+    delim = lexbor_malloc(dlen + 1);
     CHECK(delim, "formdata: OOM parsing a multipart body");
     delim[0] = delim[1] = '-';
     memcpy(delim + 2, boundary, blen);
@@ -400,7 +400,7 @@ JSValueConst form_data_entry_value(JSValueConst fd, int i)
    string the page appended, which is why this builds a copy rather than rewriting the entry. Caller frees. */
 static char *fd_normalize_newlines(const char *s, size_t n, size_t *out_n)
 {
-    char *out = malloc(n * 2 + 1);
+    char *out = lexbor_malloc(n * 2 + 1);
     size_t i, w = 0;
 
     CHECK(out, "formdata: OOM normalizing a field's newlines");
@@ -432,7 +432,7 @@ static char *fd_escape_field(const char *s, size_t n, size_t *out_n)
 {
     size_t nn = 0, i, w = 0;
     char *norm = fd_normalize_newlines(s, n, &nn);
-    char *out = malloc(nn * 3 + 1);
+    char *out = lexbor_malloc(nn * 3 + 1);
 
     CHECK(out, "formdata: OOM escaping a multipart field name");
     for (i = 0; i < nn; i++) {
@@ -495,7 +495,7 @@ char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *bound
     DCHECK(d != NULL, "the multipart serializer was handed something that is not a FormData");
     l = &d->list;
 
-    parts = calloc((size_t)(l->n > 0 ? l->n : 1), sizeof *parts);
+    parts = lexbor_calloc((size_t)(l->n > 0 ? l->n : 1), sizeof *parts);
     CHECK(parts, "formdata: OOM preparing a multipart body's parts");
     for (i = 0; i < l->n; i++) {
         const char *cstr = NULL, *fname = NULL, *bytes;
@@ -540,7 +540,7 @@ char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *bound
         if (!clash) break;
     }
 
-    out = malloc(cap);
+    out = lexbor_malloc(cap);
     CHECK(out, "formdata: OOM serialising a multipart body");
 #define FD_PUT(p, len) do {                                                   \
         size_t need_ = (len);                                                 \

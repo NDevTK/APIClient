@@ -10,6 +10,7 @@
 #include "core/loader/document_scripts.h"
 #include "core/html/html_script.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 int data_block_is(lxb_dom_element_t *el)
 {
@@ -92,7 +93,7 @@ static char *data_block_name(lxb_dom_element_t *el)
 
     if (id && id_is_spellable(id, idl)) {
         size_t len = strlen("script#") + idl + 1;
-        out = (char *)malloc(len);
+        out = (char *)lexbor_malloc(len);
         CHECK(out != NULL, "data_block: OOM naming a data block by its id");
         snprintf(out, len, "script#%.*s", (int)idl, (const char *)id);
         return out;
@@ -111,7 +112,7 @@ static char *data_block_name(lxb_dom_element_t *el)
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && html_script_is(n))
             i++;
     }
-    out = (char *)malloc(sizeof "script[]" + 20);
+    out = (char *)lexbor_malloc(sizeof "script[]" + 20);
     CHECK(out != NULL, "data_block: OOM naming a data block by its position");
     snprintf(out, sizeof "script[]" + 20, "script[%d]", i);
     return out;
@@ -142,7 +143,7 @@ JSValue data_block_wrap_text(JSContext *ctx, lxb_dom_element_t *el, JSValue text
 
     src = data_block_name(el);
     n = strlen(src) + 3;
-    shape = (char *)malloc(n);
+    shape = (char *)lexbor_malloc(n);
     CHECK(shape != NULL, "data_block: OOM spelling the provenance of a data block's content");
     snprintf(shape, n, "{%s}", src);
     /* SERVED, AND IT IS THE REASON THIS MINT EXISTS AT ALL: §4.12.1 Embedding custom non-visible data with

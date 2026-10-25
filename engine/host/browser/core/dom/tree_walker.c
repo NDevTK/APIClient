@@ -36,6 +36,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §6.2's own state: §6's shared traverser plus "an associated current (a node)". */
 typedef struct WalkerData {
@@ -178,7 +179,7 @@ JSValue tree_walker_new(JSContext *ctx, JSValueConst root, uint32_t what, JSValu
     obj = JS_NewObjectProtoClass(ctx, proto, g_walker_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
-    w = calloc(1, sizeof(*w));
+    w = lexbor_calloc(1, sizeof(*w));
     CHECK(w != NULL, "the TreeWalker record allocation failed");
     /* §4.5 createTreeWalker steps 2-4: root AND current are the given root. */
     w->t.root = JS_DupValue(ctx, root);

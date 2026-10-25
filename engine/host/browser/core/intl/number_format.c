@@ -9,6 +9,8 @@
 #include "core/intl/intl_service.h"
 #include "core/intl/number_format.h"
 #include "solver/concolic.h"
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_class;
 static int g_ctor_stepid = -1, g_format_stepid = -1, g_parts_stepid = -1;
@@ -557,7 +559,7 @@ static size_t str_white_space(const unsigned char *p, size_t n)
 /* A non-decimal integer literal's digits in `base`, as the exact decimal string; malloc'd. */
 static char *radix_to_decimal(const char *p, size_t n, int base)
 {
-    unsigned char *dec = calloc(n * 4 + 2, 1);   /* decimal digits, least significant first */
+    unsigned char *dec = lexbor_calloc(n * 4 + 2, 1);   /* decimal digits, least significant first */
     size_t len = 1, i, k;
     char *out;
 
@@ -575,7 +577,7 @@ static char *radix_to_decimal(const char *p, size_t n, int base)
         while (carry) { dec[len++] = (unsigned char)(carry % 10); carry /= 10; }
     }
     while (len > 1 && dec[len - 1] == 0) len--;
-    out = malloc(len + 1);
+    out = lexbor_malloc(len + 1);
     CHECK(out != NULL, "a non-decimal literal's decimal could not be allocated");
     for (k = 0; k < len; k++) out[k] = (char)('0' + dec[len - 1 - k]);
     out[len] = '\0';
@@ -638,7 +640,7 @@ static void string_intl_mv(const char *s, size_t n, IntlHostValue *out, char **o
             }
             if (j != b) { out->num = NAN; return; }
         }
-        body = strndup(s + a, b - a);
+        body = reclaim_strndup(s + a, b - a);
         CHECK(body != NULL, "a decimal literal could not be copied");
     }
     d = strtod(body, NULL);

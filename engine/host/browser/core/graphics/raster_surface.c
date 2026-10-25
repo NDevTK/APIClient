@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/graphics/raster_surface.h"
 #include "core/graphics/rasterizer.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 void raster_surface_init(RasterSurface *s, int width, int height)
 {
@@ -27,7 +28,7 @@ void raster_surface_init(RasterSurface *s, int width, int height)
           "a raster surface is larger than an address can name");
     bytes = (size_t)width * (size_t)height * 4;
     /* §4.12.5.1.22 "Drawing model"'s "infinite transparent black bitmap" — all four components zero. */
-    s->px = (uint8_t *)calloc(bytes, 1);
+    s->px = (uint8_t *)lexbor_calloc(bytes, 1);
     CHECK(s->px != NULL, "out of memory allocating a raster surface");
 }
 

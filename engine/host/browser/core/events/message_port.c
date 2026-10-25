@@ -900,7 +900,7 @@ static JSValue port_new(JSContext *ctx)
     obj = JS_NewObjectProtoClass(ctx, proto, g_port_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "message port: OOM building a MessagePort");
     d->entangled = d->queue = d->target = JS_UNDEFINED;
     d->realm = ctx;   /* §9.4.4's relevant realm, taken where the port is created */
@@ -1017,7 +1017,7 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
        chan_gc_mark would then be handed a channel whose opaque was still NULL; the same object reaches
        chan_finalizer on the failure path below. A calloc'd block is not a block of JS_UNDEFINEDs, so the two
        slots are written before the record is attached. */
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "message port: OOM building a MessageChannel");
     d->port1 = d->port2 = JS_UNDEFINED;
     JS_SetOpaque(obj, d);

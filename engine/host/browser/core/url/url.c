@@ -43,6 +43,7 @@
 #include "core/url/url_search_params.h"
 #include "solver/cow.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* ---- a growable byte string --------------------------------------------------------------------------- */
 
@@ -76,7 +77,7 @@ static void ustr_puts(UStr *s, const char *b) { ustr_put(s, b, strlen(b)); }
 static char *ustr_take(UStr *s)
 {
     char *r = s->p;
-    if (!r) { r = malloc(1); CHECK(r, "url: OOM"); r[0] = 0; }
+    if (!r) { r = lexbor_malloc(1); CHECK(r, "url: OOM"); r[0] = 0; }
     ustr_init(s);
     return r;
 }
@@ -85,7 +86,7 @@ static void ustr_free(UStr *s) { free(s->p); ustr_init(s); }
 
 static char *xstrdup(const char *s)
 {
-    char *r = strdup(s ? s : "");
+    char *r = reclaim_strdup(s ? s : "");
     CHECK(r, "url: OOM copying a URL part");
     return r;
 }
@@ -321,7 +322,7 @@ static void path_push(UrlRecord *u, const char *seg, size_t n)
         u->path = lexbor_realloc(u->path, (size_t)u->cpath * sizeof(char *));
         CHECK(u->path, "url: OOM growing a path");
     }
-    s = malloc(n + 1);
+    s = lexbor_malloc(n + 1);
     CHECK(s, "url: OOM copying a path segment");
     if (n) memcpy(s, seg, n);
     s[n] = 0;
@@ -842,7 +843,7 @@ static bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len
        given" — so a SETTER does not strip, and `u.protocol = "\0http"` therefore fails to parse and leaves the
        URL alone rather than quietly setting `http`. The tab/newline removal is step 3 and is unconditional,
        which is why those three characters ARE stripped from a setter's input. */
-    input = malloc(raw_len + 1);
+    input = lexbor_malloc(raw_len + 1);
     CHECK(input, "url: OOM copying a URL input");
     {
         size_t b = 0, e = raw_len;
@@ -1445,7 +1446,7 @@ bool url_parse_override(UrlRecord *url, const char *input, size_t len, UrlStateO
  * would have been a second place for `+` decoding, the `%` rules and the code-unit ordering to drift. */
 char *url_encoded_strdup(const char *s, size_t n)
 {
-    char *r = malloc(n + 1);
+    char *r = lexbor_malloc(n + 1);
     CHECK(r, "url: OOM copying a pair");
     if (n) memcpy(r, s, n);
     r[n] = 0;
@@ -1639,7 +1640,7 @@ char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
         out[n] = 0;
         free(en); free(ev);
     }
-    if (!out) { out = malloc(1); CHECK(out, "url: OOM"); out[0] = 0; }
+    if (!out) { out = lexbor_malloc(1); CHECK(out, "url: OOM"); out[0] = 0; }
     if (out_n) *out_n = n;
     return out;
 }
@@ -1726,7 +1727,7 @@ static UrlObj *url_obj_of(JSValueConst v)
 /* The record as this flow may change it: a copy in a new box, held by the record from here. */
 static UrlRecord *url_rec_edit(JSContext *ctx, UrlObj *u)
 {
-    UrlRecord *r = malloc(sizeof *r);
+    UrlRecord *r = lexbor_malloc(sizeof *r);
 
     CHECK(r != NULL, "url: OOM copying a URL record for a write");
     url_record_init(r);
@@ -1782,9 +1783,9 @@ static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj))
         return obj;
-    held = malloc(sizeof *held);
+    held = lexbor_malloc(sizeof *held);
     CHECK(held, "url: OOM holding a URL record");
-    held->rec = malloc(sizeof *held->rec);
+    held->rec = lexbor_malloc(sizeof *held->rec);
     CHECK(held->rec, "url: OOM holding a URL record");
     *held->rec = *rec;
     url_record_init(rec);   /* the wrapper owns it now */

@@ -95,6 +95,7 @@
 #include "solver/flow.h"
 #include "solver/world.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* ---- THIS AGENT AS AN EXPORTER --------------------------------------------------------------------------- */
 
@@ -291,7 +292,7 @@ static void wk_capture(JSContext *ctx)
                "records are one tab-separated line and the peer would read one field as two");
         g_wk = lexbor_realloc(g_wk, (size_t)(g_wk_n + 1) * sizeof *g_wk);
         CHECK(g_wk != NULL, "remote object: OOM recording this agent's well-known symbols");
-        g_wk[g_wk_n].desc = strdup(desc);
+        g_wk[g_wk_n].desc = reclaim_strdup(desc);
         CHECK(g_wk[g_wk_n].desc != NULL, "remote object: OOM recording a well-known symbol's description");
         g_wk[g_wk_n].sym = member;   /* held: the table outlives whatever else names it */
         g_wk_n++;
@@ -349,7 +350,7 @@ static bool sym_registered_key(JSContext *ctx, JSValueConst v, char **pkey, size
 static char *enc_b64(char tag, const char *bytes, size_t len)
 {
     size_t cap = JS_Base64EncodedSize(len) + 2, n;
-    char *out = malloc(cap);
+    char *out = lexbor_malloc(cap);
 
     CHECK(out != NULL, "remote object: OOM encoding text for another agent");
     out[0] = tag;
@@ -364,7 +365,7 @@ static char *enc_b64(char tag, const char *bytes, size_t len)
 static char *dec_b64(const char *b64, size_t *plen)
 {
     size_t n = strlen(b64), cap = JS_Base64DecodedMax(n) + 1;
-    char *bytes = malloc(cap);
+    char *bytes = lexbor_malloc(cap);
     int err = 0;
 
     CHECK(bytes != NULL, "remote object: OOM decoding text from another agent");
@@ -432,7 +433,7 @@ static char *nav_encode(JSContext *ctx, JSValueConst nav);
 /* The identity record of the navigable a parent or opener slot holds, or "" when it holds none; malloc'd. */
 static char *nav_slot_id(JSContext *ctx, JSValueConst v)
 {
-    if (!*nav_slot_doc(v)) return strdup("");
+    if (!*nav_slot_doc(v)) return reclaim_strdup("");
     return nav_encode(ctx, v);
 }
 
@@ -463,7 +464,7 @@ static char *nav_encode(JSContext *ctx, JSValueConst nav)
                "than a navigable that has none, and \"\" is how having none is stated");
         cap += JS_Base64EncodedSize(f[i] ? strlen(f[i]) : 0) + 2;
     }
-    out = malloc(cap);
+    out = lexbor_malloc(cap);
     CHECK(out != NULL, "remote object: OOM naming a navigable for another agent");
     out[0] = NAV_TAG;
     out[1] = 0;
@@ -519,7 +520,7 @@ static JSValue nav_decode(JSContext *ctx, const char *text)
                "that ends early was truncated in transit, and resolving the part that arrived would name a "
                "different navigable rather than fail");
         if (!dot) { while (i-- > 0) free(f[i]); return JS_UNDEFINED; }
-        slice = strndup(p, (size_t)(dot - p));
+        slice = reclaim_strndup(p, (size_t)(dot - p));
         CHECK(slice != NULL, "remote object: OOM reading a navigable's identity");
         f[i] = dec_b64(slice, &len);
         free(slice);
@@ -554,12 +555,12 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
 {
     char *out;
 
-    if (JS_IsUndefined(v)) return strdup("u");
-    if (JS_IsNull(v))      return strdup("N");
-    if (JS_IsBool(v))      return strdup(JS_ToBool(ctx, v) ? "b1" : "b0");
+    if (JS_IsUndefined(v)) return reclaim_strdup("u");
+    if (JS_IsNull(v))      return reclaim_strdup("N");
+    if (JS_IsBool(v))      return reclaim_strdup(JS_ToBool(ctx, v) ? "b1" : "b0");
     if (JS_IsNumber(v)) {
         double d = 0;
-        out = malloc(40);
+        out = lexbor_malloc(40);
         CHECK(out != NULL, "remote object: OOM encoding a number for another agent");
         JS_ToFloat64(ctx, &d, v);
         snprintf(out, 40, "n%.17g", d);
@@ -589,7 +590,7 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
         k = wk_by_value(v);
         if (k >= 0) {
             size_t cap = strlen(g_wk[k].desc) + 2;
-            out = malloc(cap);
+            out = lexbor_malloc(cap);
             CHECK(out != NULL, "remote object: OOM naming a well-known symbol for another agent");
             snprintf(out, cap, "w%s", g_wk[k].desc);
             return out;
@@ -609,7 +610,7 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
               "directions so a name that comes home resolves to the original symbol and `k === k` holds on "
               "both sides. That local stand-in is a symbol and not a Proxy, which is why it is a mechanism of "
               "its own rather than a call to ref_mint");
-        return strdup("u");
+        return reclaim_strdup("u");
     }
     /* A NAVIGABLE IS NOT AN OBJECT THIS AGENT MAY LEND, and it is stopped ABOVE the generic export rather than
      * inside it, because everything below this line is right for a Document, an Error or a page's own object
@@ -667,14 +668,14 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
         DCHECK(!strchr(doc_name, '\t') && !strchr(doc_name, '\n'),
                "a document name carries a tab or a newline — these records are one tab-separated line, so the "
                "peer would read one field as two and the id would come back as zero");
-        out = malloc(cap);
+        out = lexbor_malloc(cap);
         CHECK(out != NULL, "remote object: OOM naming an object for another agent");
         snprintf(out, cap, "%c%s:%u:%u", tag, doc_name, session, id);
         return out;
     }
     DFAIL("a value crossed an agent boundary that this protocol does not name — a BigInt is the primitive that "
           "is left, and its text form is not built");
-    return strdup("u");
+    return reclaim_strdup("u");
 }
 
 JSValue remote_object_decode(JSContext *ctx, const char *text)
@@ -740,7 +741,7 @@ JSValue remote_object_decode(JSContext *ctx, const char *text)
                "lent it, and this agent would resolve it against whichever session is running now");
         if (gen <= text + 1) return JS_UNDEFINED;
         session = (uint32_t)strtoul(gen, NULL, 10);
-        doc_name = strndup(text + 1, (size_t)(gen - 1 - (text + 1)));
+        doc_name = reclaim_strndup(text + 1, (size_t)(gen - 1 - (text + 1)));
         CHECK(doc_name != NULL, "remote object: OOM reading a cross-agent object name");
         doc = world_doc_intern(doc_name);
         free(doc_name);
@@ -777,7 +778,7 @@ char *remote_completion_encode(JSContext *ctx, int completion, JSValueConst v)
 {
     char *value = remote_object_encode(ctx, v);
     size_t cap = strlen(value) + 2;
-    char *out = malloc(cap);
+    char *out = lexbor_malloc(cap);
 
     DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_THROW,
            "a cross-agent answer was encoded under a completion type ECMA-262 6.2.4 does not have — an "
@@ -1174,7 +1175,7 @@ static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t session, uint32_t
        plain target has no [[Call]] at all. */
     target = JS_NewObjectClass(ctx, callable ? g_ref_fn_class : g_ref_class);
     CHECK(!JS_IsException(target), "a cross-agent reference's target could not be allocated");
-    r = calloc(1, sizeof *r);
+    r = lexbor_calloc(1, sizeof *r);
     CHECK(r != NULL, "remote object: OOM building a cross-agent reference");
     r->doc = doc;
     r->session = session;

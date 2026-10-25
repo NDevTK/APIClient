@@ -37,6 +37,7 @@
 #include "core/html/input_value.h"
 #include "core/dom/node.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* This sub-sequence's own cursor. It is a phase and not a STAGE for the reason every other `*_run` helper's is:
    the machine that performs it rests at ONE of its own stages for the whole sub-sequence, and this says where
@@ -161,7 +162,7 @@ static void fel_image_button_entries(JSContext *ctx, JSValueConst entries, JSVal
     char *key;
 
     if (!name) nlen = 0;
-    key = malloc(nlen + 3);
+    key = lexbor_malloc(nlen + 3);
     CHECK(key != NULL, "forms: OOM building an image button's coordinate entry names");
     if (nlen) { memcpy(key, name, nlen); key[nlen] = '.'; nlen++; }
     key[nlen] = 'x';

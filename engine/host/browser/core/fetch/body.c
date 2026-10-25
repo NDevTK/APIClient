@@ -31,6 +31,7 @@
 #include "core/streams/readable_stream.h"
 #include "core/url/url_search_params.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* One interface that includes Body. There are two in the platform (Request and Response), so the table is
    fixed and full is a DCHECK rather than a growth path nobody exercises. */
@@ -407,9 +408,9 @@ int body_state_copy(JSContext *ctx, BodyState *dst, const BodyState *src)
             s = &dst->span[dst->nspan++];
             s->off = src->span[i].off;
             s->len = src->span[i].len;
-            s->shape = strdup(src->span[i].shape);
+            s->shape = reclaim_strdup(src->span[i].shape);
             CHECK(s->shape != NULL, "body: OOM copying the provenance of an unknown byte of a body");
-            s->example = src->span[i].example ? strdup(src->span[i].example) : NULL;
+            s->example = src->span[i].example ? reclaim_strdup(src->span[i].example) : NULL;
             CHECK(!src->span[i].example || s->example != NULL,
                   "body: OOM copying the example of an unknown byte of a body");
         }
@@ -614,7 +615,7 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
         if (bytes) {
             /* §5.2: a Blob's type IS the Content-Type, and a Blob with no type contributes none — which is why
                an empty type must give a NULL mime and not an empty header. */
-            if (btype && *btype) *out_mime = strdup(btype);
+            if (btype && *btype) *out_mime = reclaim_strdup(btype);
             return body_state_set(ctx, b, bytes, blen);
         }
     }

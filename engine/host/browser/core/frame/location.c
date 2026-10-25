@@ -102,6 +102,8 @@
 #include "core/frame/session_history.h"  /* §7.4.2.2's same-document test, and §7.4.2.3.3's own machine */
 #include "core/frame/window_proxy.h"     /* §7.5.10 step 6's null browsing context — the relevant Document */
 #include "core/html/dom_string_list.h"   /* §2.6.5's DOMStringList — `ancestorOrigins` answers with one */
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE MEMBER LIST, IN ONE PLACE, in the order §7.2.4's IDL declares them, and with the cross-origin entry
    §7.2.1 "Security infrastructure for Window, WindowProxy, and Location objects" gives each — read three
@@ -316,7 +318,7 @@ static char *loc_concat(const char *a, const char *b)
           "a Location member joined a serialization that is not there — every url_serialize_* answers with an "
           "allocated string, the empty one included, so a NULL here is an allocation that was never checked");
     na = strlen(a); nb = strlen(b);
-    r = malloc(na + nb + 1);
+    r = lexbor_malloc(na + nb + 1);
     CHECK(r, "location: OOM building an address");
     memcpy(r, a, na);
     memcpy(r + na, b, nb);
@@ -853,7 +855,7 @@ static int js_loc_set(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
            copyURL as url and SCHEME START STATE as state override." The trailing colon is why `https:` and
            even `https::::` mean the same as `https` — §4.4's scheme state ignores what follows the first one,
            and the standard says so in a note right there. */
-        char *with_colon = malloc(vlen + 2);
+        char *with_colon = lexbor_malloc(vlen + 2);
 
         CHECK(with_colon, "location: OOM building the protocol setter's input");
         memcpy(with_colon, v, vlen);
@@ -926,7 +928,7 @@ static int js_loc_set(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
                    "windows-1252 and `%C3%9F` under UTF-8). Give url_parse_override the encoding argument and "
                    "hand it document_encoding");
             free(copy.query);
-            copy.query = strdup("");
+            copy.query = reclaim_strdup("");
             CHECK(copy.query != NULL, "location: OOM emptying the query before the search setter's parse");
             url_parse_override(&copy, in, n, URL_OVERRIDE_QUERY);
         }
@@ -950,10 +952,10 @@ static int js_loc_set(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
         DCHECK(magic == LOC_HASH, "a Location setter was declared for a member this file does not answer — the "
                                   "magic IS the member, so an unknown one means a name was installed without a "
                                   "case to write it");
-        before = strdup(copy.fragment ? copy.fragment : "");
+        before = reclaim_strdup(copy.fragment ? copy.fragment : "");
         CHECK(before != NULL, "location: OOM recording the fragment the hash setter compares against");
         free(copy.fragment);
-        copy.fragment = strdup("");
+        copy.fragment = reclaim_strdup("");
         CHECK(copy.fragment != NULL, "location: OOM emptying the fragment before the hash setter's parse");
         url_parse_override(&copy, in, n, URL_OVERRIDE_FRAGMENT);
         if (copy.fragment && strcmp(copy.fragment, before) == 0) navigate = false;

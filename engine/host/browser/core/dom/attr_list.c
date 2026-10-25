@@ -27,6 +27,7 @@
 #include "core/dom/name_intern.h"   /* §4.9.2's storage step stores the three names AS GIVEN */
 #include "core/dom/node.h"   /* node_wrap_forget / node_agent_runtime — a destroyed Attr hands back its wrapper */
 #include "solver/attr_shadow.h"   /* …and the taint keyed on it, for the same pool-reuse reason */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 const lxb_char_t *dom_attr_ns(const lxb_dom_attr_t *a, size_t *len)
 {
@@ -234,7 +235,7 @@ lxb_dom_attr_t *dom_attr_get_qname(lxb_dom_element_t *el, const char *qname)
         lxb_dom_interface_node(el)->owner_document->type == LXB_DOM_DOCUMENT_DTYPE_HTML) {   /* step 1 */
         for (i = 0; i < want; i++) {
             if (qname[i] < 'A' || qname[i] > 'Z') continue;
-            lowered = malloc(want + 1);
+            lowered = lexbor_malloc(want + 1);
             CHECK(lowered != NULL, "dom-attr-oom: a qualified name could not be ASCII-lowercased");
             memcpy(lowered, qname, want + 1);
             for (; i < want; i++)
@@ -295,7 +296,7 @@ lxb_dom_attr_t *dom_attr_create(lxb_dom_document_t *doc, const char *ns, const c
        `prefix:local` when there is a prefix and the local name otherwise, which is the one place the two
        halves are put back together. */
     if (pl) {
-        char *q = malloc(pl + 1 + ll + 1);
+        char *q = lexbor_malloc(pl + 1 + ll + 1);
         CHECK(q != NULL, "dom-attr-oom: an attribute's qualified name could not be assembled");
         memcpy(q, prefix, pl);
         q[pl] = ':';

@@ -161,7 +161,7 @@ static char *xml_tree_dup(const char *s, size_t len)
 {
     char *out;
     if (s == NULL) return NULL;
-    out = (char *)malloc(len + 1);
+    out = (char *)lexbor_malloc(len + 1);
     CHECK(out != NULL, "OOM copying an XML name for the DOM — a dropped name is an element or attribute the "
                        "document contains and the tree would not");
     memcpy(out, s, len);
@@ -217,7 +217,7 @@ static void xml_tree_text_append_normalized(XmlTreeBuild *b, const char *s, size
        so the rule is applied into a scratch of its own exact size and the result goes through the one
        appender, which is where the single growth policy lives. */
     {
-        char *scratch = (char *)malloc(need);
+        char *scratch = (char *)lexbor_malloc(need);
         CHECK(scratch != NULL, "OOM normalizing an XML character run for §2.11 End-of-Line Handling");
         wrote = xml_char_normalize(s, len, scratch);
         DCHECK(wrote == need, "XML §2.11's sizing call and its writing call disagreed about the same slice — "
@@ -238,13 +238,13 @@ XmlTreeBuild *xml_tree_build_create(lxb_dom_document_t *doc, lxb_dom_node_t *par
     DCHECK(text != NULL,
            "an XML tree build was opened over a NULL pointer — an EMPTY entity is a zero LENGTH over a real "
            "pointer, and XML §2.1's [1] document has an answer about one (there is no element)");
-    b = (XmlTreeBuild *)calloc(1, sizeof(*b));
+    b = (XmlTreeBuild *)lexbor_calloc(1, sizeof(*b));
     CHECK(b != NULL, "OOM opening an XML tree build");
     b->doc = doc;
     b->root_parent = parent;
     b->current = parent;
     b->kind = kind;
-    b->entity = malloc(len ? len : 1);
+    b->entity = lexbor_malloc(len ? len : 1);
     CHECK(b->entity != NULL, "OOM copying the entity an XML tree build reads");
     memcpy(b->entity, text, len);
     xml_char_reader_init(&b->r, b->entity, len);
@@ -403,7 +403,7 @@ static XmlTreeError xml_tree_start_element(XmlTreeBuild *b, const XmlTag *tag, X
     }
 
     if (tag->att_n == 0) return XML_TREE_OK;
-    seen = (XmlTreeExpanded *)calloc(tag->att_n, sizeof(*seen));
+    seen = (XmlTreeExpanded *)lexbor_calloc(tag->att_n, sizeof(*seen));
     CHECK(seen != NULL, "OOM deciding Namespaces in XML §6.3 Attributes Unique over a start-tag's attributes");
 
     /* PASS TWO: expand, decide §6.3, write. */
@@ -565,7 +565,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
         char  *norm;
         xml_tree_flush_text(b);
         need = xml_char_normalized_len(item.text.raw, item.text.raw_len);
-        norm = (char *)malloc(need + 1);
+        norm = (char *)lexbor_malloc(need + 1);
         CHECK(norm != NULL, "OOM building a CDATASection node for XML §2.7's [18] CDSect");
         (void)xml_char_normalize(item.text.raw, item.text.raw_len, norm);
         c = lxb_dom_document_create_cdata_section(b->doc, (const lxb_char_t *)norm, need);
@@ -581,7 +581,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
         char  *norm;
         xml_tree_flush_text(b);
         need = xml_char_normalized_len(item.text.raw, item.text.raw_len);
-        norm = (char *)malloc(need + 1);
+        norm = (char *)lexbor_malloc(need + 1);
         CHECK(norm != NULL, "OOM building a Comment node for XML §2.5's [15] Comment");
         (void)xml_char_normalize(item.text.raw, item.text.raw_len, norm);
         cm = lxb_dom_document_create_comment(b->doc, (const lxb_char_t *)norm, need);
@@ -597,7 +597,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
         char  *norm;
         xml_tree_flush_text(b);
         need = xml_char_normalized_len(item.pi.data.raw, item.pi.data.raw_len);
-        norm = (char *)malloc(need + 1);
+        norm = (char *)lexbor_malloc(need + 1);
         CHECK(norm != NULL, "OOM building a ProcessingInstruction node for XML §2.6's [16] PI");
         (void)xml_char_normalize(item.pi.data.raw, item.pi.data.raw_len, norm);
         pi = lxb_dom_document_create_processing_instruction(b->doc,
@@ -648,13 +648,13 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
            through unchanged and the two ids are not. */
         if (item.doctype.external.public_id != NULL) {
             pub_n = xml_char_normalized_len(item.doctype.external.public_id, item.doctype.external.public_id_len);
-            pub = (char *)malloc(pub_n + 1);
+            pub = (char *)lexbor_malloc(pub_n + 1);
             CHECK(pub != NULL, "OOM normalizing the [12] PubidLiteral of a DOM §4.6 DocumentType");
             (void)xml_char_normalize(item.doctype.external.public_id, item.doctype.external.public_id_len, pub);
         }
         if (item.doctype.external.system_id != NULL) {
             sys_n = xml_char_normalized_len(item.doctype.external.system_id, item.doctype.external.system_id_len);
-            sys = (char *)malloc(sys_n + 1);
+            sys = (char *)lexbor_malloc(sys_n + 1);
             CHECK(sys != NULL, "OOM normalizing the [11] SystemLiteral of a DOM §4.6 DocumentType");
             (void)xml_char_normalize(item.doctype.external.system_id, item.doctype.external.system_id_len, sys);
         }

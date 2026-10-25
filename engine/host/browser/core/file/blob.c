@@ -45,6 +45,7 @@
 #include "core/url/url.h"
 #include <stdio.h>
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* ONE STRUCT FOR BOTH INTERFACES, and one class id, because §4 says `interface File : Blob` — a File IS a Blob,
    so every brand test that accepts a Blob must accept it, and there is exactly one byte sequence for both to be
@@ -165,8 +166,8 @@ void blob_set_source(JSContext *ctx, JSValueConst v, const char *shape, const ch
            "a Blob's byte sequence was given a SECOND source identity — a byte sequence comes from one place, "
            "and a slice of a sourced Blob is a new Blob that must be given the source at its own mint");
     if (!b) return;
-    b->shape = strdup(shape);
-    b->src = strdup(src);
+    b->shape = reclaim_strdup(shape);
+    b->src = reclaim_strdup(src);
     CHECK(b->shape && b->src, "blob: OOM recording a byte sequence's source identity");
 }
 
@@ -180,7 +181,7 @@ static char *blob_normalize_type(const char *type, size_t len)
 
     for (i = 0; i < len; i++)
         if ((unsigned char)type[i] < 0x20 || (unsigned char)type[i] > 0x7E) { len = 0; break; }
-    out = malloc(len + 1);
+    out = lexbor_malloc(len + 1);
     CHECK(out, "blob: OOM normalising a MIME type");
     for (i = 0; i < len; i++)
         out[i] = (type[i] >= 'A' && type[i] <= 'Z') ? (char)(type[i] - 'A' + 'a') : type[i];
@@ -224,7 +225,7 @@ JSValue file_new(JSContext *ctx, const char *bytes, size_t len, const char *type
     if (JS_IsException(obj))
         return obj;
     b = JS_GetOpaque(obj, g_blob_class);
-    b->name = malloc(name_len + 1);
+    b->name = lexbor_malloc(name_len + 1);
     CHECK(b->name, "blob: OOM naming a File");
     memcpy(b->name, name, name_len);
     b->name[name_len] = 0;
@@ -242,12 +243,12 @@ static JSValue blob_alloc(JSContext *ctx, JSValueConst proto, const char *bytes,
     obj = JS_NewObjectProtoClass(ctx, proto, g_blob_class);
     if (JS_IsException(obj))
         return obj;
-    b = calloc(1, sizeof *b);
+    b = lexbor_calloc(1, sizeof *b);
     CHECK(b, "blob: OOM building a Blob");
     if (len) {
         /* +1 and a NUL past the end so the bytes can still be handed to a C string consumer; `len` is what
            every read uses, and it is what an interior NUL no longer truncates. */
-        b->bytes = malloc(len + 1);
+        b->bytes = lexbor_malloc(len + 1);
         CHECK(b->bytes, "blob: OOM copying a Blob's bytes");
         memcpy(b->bytes, bytes, len);
         b->bytes[len] = 0;
@@ -385,7 +386,7 @@ char *blob_url_create(JSContext *ctx, JSValueConst obj)
        rather than of a UUID, which truncated the last group and made the path fail the shape the spec gives
        it. */
     n = strlen("blob:") + strlen(origin ? origin : "null") + 1 + 36 + 1;
-    url = malloc(n);
+    url = lexbor_malloc(n);
     CHECK(url, "blob: OOM minting an object URL");
     snprintf(url, n, "blob:%s/%08x-0000-4000-8000-%012x", origin ? origin : "null", mint, mint);
     free(origin);
@@ -583,7 +584,7 @@ static char *blob_reader_source(JSContext *ctx, JSValueConst recv, bool *attacke
            "a Blob carries a source identity with no display shape — blob_set_source records the pair or "
            "neither, so one without the other is that pair having come apart");
     *attacker = true;
-    src = strdup(b->src);
+    src = reclaim_strdup(b->src);
     CHECK(src != NULL, "blob: OOM stating where a byte sequence came from");
     return src;
 }
@@ -720,7 +721,7 @@ static void js_blob_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void
    `\r\n` in the input is TWO bytes and comes out as one. Caller frees; `*out_len` is the result's length. */
 static char *blob_native_endings(const char *s, size_t n, size_t *out_len)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
     size_t i, w = 0;
 
     CHECK(out, "blob: OOM converting line endings");

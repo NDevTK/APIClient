@@ -47,6 +47,7 @@
 #include "core/frame/csp_source_list.h"
 #include "core/frame/csp_violation.h"
 #include "core/url/url.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 CspReporter csp_reporter(JSContext *ctx)
 {
@@ -122,7 +123,7 @@ static char *csp_strip_url_for_reports(const UrlRecord *url)
            "without it is zero-filled rather than parsed");
     /* STEP 1 — "if url's scheme is not an HTTP(S) scheme, then return url's scheme." */
     if (!url_scheme_is_http_s(url->scheme)) {
-        out = malloc(strlen(url->scheme) + 1);
+        out = lexbor_malloc(strlen(url->scheme) + 1);
         if (out) strcpy(out, url->scheme);
         return out;
     }
@@ -136,10 +137,10 @@ static char *csp_strip_url_for_reports(const UrlRecord *url)
     free(stripped.fragment);                    /* STEP 2 — §5.4 says "the empty string"; see the banner */
     stripped.fragment = NULL;
     free(stripped.username);                    /* STEP 3 — "set url's username to the empty string" */
-    stripped.username = malloc(1);
+    stripped.username = lexbor_malloc(1);
     if (stripped.username) stripped.username[0] = 0;
     free(stripped.password);                    /* STEP 4 — "set url's password to the empty string" */
-    stripped.password = malloc(1);
+    stripped.password = lexbor_malloc(1);
     if (stripped.password) stripped.password[0] = 0;
     /* STEP 5 — "return the result of executing the URL serializer on url", with no exclude-fragment flag.
        THE GUARD NO LONGER NAMES THE FRAGMENT, AND MUST NOT: it is an allocation-failure test, and step 2 now
@@ -170,7 +171,7 @@ static char *csp_strip_serialized_url(const char *url)
         out = csp_strip_url_for_reports(&rec);
     url_record_free(&rec);
     if (!out) {
-        out = malloc(1);
+        out = lexbor_malloc(1);
         CHECK(out != NULL, "CSP §5.4's result could not be allocated");
         out[0] = 0;
     }
@@ -222,7 +223,7 @@ static char *csp_violation_blocked_uri(CspResourceKind kind, const char *resourc
     DCHECK(CSP_RESOURCE_STRING[kind] != NULL,
            "§2.4's resource table names no string for an arm that is not the URL one — only CSP_RESOURCE_URL "
            "carries a NULL there, and §5.2 step 2 has already answered for it");
-    out = malloc(strlen(CSP_RESOURCE_STRING[kind]) + 1);
+    out = lexbor_malloc(strlen(CSP_RESOURCE_STRING[kind]) + 1);
     CHECK(out != NULL, "CSP §5.2's result could not be allocated");
     strcpy(out, CSP_RESOURCE_STRING[kind]);
     return out;
@@ -462,7 +463,7 @@ static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const ch
     CHECK(original_policy != NULL,
           "CSP §5.5's originalPolicy could not be allocated — an allocation failure while composing a "
           "violation, and a flow that continued would report a refusal the page cannot attribute to a rule");
-    sample_z = malloc(sample_len + 1);
+    sample_z = lexbor_malloc(sample_len + 1);
     CHECK(sample_z != NULL, "CSP §2.4's sample could not be allocated");
     if (sample_len) memcpy(sample_z, sample, sample_len);
     sample_z[sample_len] = 0;

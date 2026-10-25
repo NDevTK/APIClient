@@ -509,7 +509,7 @@ static bool tk_is_ident(const MqLex *L, const char *w) { return L->kind == TK_ID
 
 static MqCond *cond_new(MqCondOp op)
 {
-    MqCond *c = calloc(1, sizeof *c);
+    MqCond *c = lexbor_calloc(1, sizeof *c);
 
     CHECK(c != NULL, "media queries: OOM building a media condition");
     c->op = op;
@@ -935,7 +935,7 @@ static void parse_query(MqLex *L, MqQuery *q)
 
 MediaQuerySet *media_query_parse(const char *text)
 {
-    MediaQuerySet *set = calloc(1, sizeof *set);
+    MediaQuerySet *set = lexbor_calloc(1, sizeof *set);
     MqLex L;
 
     CHECK(set != NULL, "media queries: OOM parsing a media query list");
@@ -1404,9 +1404,9 @@ MediaQuerySet *media_query_parse_condition(const char *text)
         cond_free(cond);
         return NULL;
     }
-    set = calloc(1, sizeof *set);
+    set = lexbor_calloc(1, sizeof *set);
     CHECK(set != NULL, "media queries: OOM holding a parsed media condition");
-    set->q = calloc(1, sizeof *set->q);
+    set->q = lexbor_calloc(1, sizeof *set->q);
     CHECK(set->q != NULL, "media queries: OOM holding a parsed media condition's query");
     set->n = 1;
     /* A bare `<media-condition>` IS §3's first arm of `<media-query>`, so it is held as a query with no
@@ -1789,7 +1789,7 @@ struct MediaQueryMemo {
 
 MediaQueryMemo *media_query_memo_open(JSContext *ctx)
 {
-    MediaQueryMemo *m = calloc(1, sizeof *m);
+    MediaQueryMemo *m = lexbor_calloc(1, sizeof *m);
 
     CHECK(m != NULL, "media queries: OOM opening a memo of answers");
     DCHECK(ctx != NULL, "a media query memo was opened in no realm");
@@ -1827,8 +1827,8 @@ bool media_query_matches_memo(MediaQueryMemo *m, const MediaQuerySet *set)
     CHECK(key != NULL, "media queries: OOM keying a memo of answers");
     if (m->used * 2 >= m->cap) {
         size_t cap = m->cap ? m->cap * 2 : 16, j;
-        char **k = calloc(cap, sizeof *k);
-        bool *v = calloc(cap, sizeof *v);
+        char **k = lexbor_calloc(cap, sizeof *k);
+        bool *v = lexbor_calloc(cap, sizeof *v);
 
         CHECK(k != NULL && v != NULL, "media queries: OOM growing a memo of answers");
         for (j = 0; j < m->cap; j++) {

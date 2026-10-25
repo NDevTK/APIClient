@@ -95,6 +95,7 @@
 #include "core/url/public_suffix.h"
 #include "core/url/url.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* ---- the agent's store ------------------------------------------------------------------------------------ */
 
@@ -252,7 +253,7 @@ static bool cj_domain_match(const char *s, size_t slen, const char *d, size_t dl
 /* §5.1.4's DEFAULT-PATH of a cookie, from the request-uri. OWNED. */
 static char *cj_root_path(void)
 {
-    char *r = strdup("/");
+    char *r = reclaim_strdup("/");
 
     CHECK(r != NULL, "OOM building §5.1.4's default-path");
     return r;
@@ -274,7 +275,7 @@ char *cookie_jar_default_path(const UrlRecord *u)
     DCHECK(last > 0, "§5.1.4 step 4 found no solidus in a path step 2 has already established begins with one");
     if (last == 1) { free(p); return cj_root_path(); }
     /* STEP 4: up to, but not including, the right-most solidus. */
-    out = malloc(last);
+    out = lexbor_malloc(last);
     CHECK(out != NULL, "OOM building §5.1.4's default-path");
     memcpy(out, p, last - 1);
     out[last - 1] = 0;
@@ -348,7 +349,7 @@ static char *cj_key(const char *name, size_t nlen, const char *dom, size_t dlen,
     CHECK(hn > 0 && (size_t)hn < sizeof hdr, "a cookie key's length header did not fit — the three lengths are "
                                              "sizes of one set-cookie-string and cannot be that large");
     total = (size_t)hn + nlen + dlen + plen;
-    k = malloc(total + 1);
+    k = lexbor_malloc(total + 1);
     CHECK(k != NULL, "OOM building a cookie store key");
     memcpy(k, hdr, (size_t)hn);
     memcpy(k + hn, name, nlen);
@@ -406,7 +407,7 @@ static char *cj_entry(bool secure, bool host_only, bool http_only, long long exp
                       http_only ? '1' : '0');
     CHECK(hn > 0 && (size_t)hn < sizeof hdr, "a cookie entry's header did not fit");
     total = (size_t)hn + vlen;
-    e = malloc(total + 1);
+    e = lexbor_malloc(total + 1);
     CHECK(e != NULL, "OOM building a cookie store entry");
     memcpy(e, hdr, (size_t)hn);
     memcpy(e + hn, value, vlen);
@@ -773,7 +774,7 @@ static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, siz
        lowercased here. Steps 5 and 6 both read it, and step 5 may EMPTY it. */
     if (attrs->domain_len) {
         size_t i;
-        dom = malloc(attrs->domain_len + 1);
+        dom = lexbor_malloc(attrs->domain_len + 1);
         CHECK(dom != NULL, "OOM lowercasing §5.2.3's cookie-domain");
         for (i = 0; i < attrs->domain_len; i++) {
             char c = attrs->domain[i];
@@ -822,7 +823,7 @@ static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, siz
     }
     /* §5.3 STEP 7. */
     if (attrs->have_path) {
-        path = malloc(attrs->path_len + 1);
+        path = lexbor_malloc(attrs->path_len + 1);
         CHECK(path != NULL, "OOM copying §5.2.4's cookie-path");
         memcpy(path, attrs->path, attrs->path_len);
         path[attrs->path_len] = 0;
@@ -964,7 +965,7 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
 
     CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, jar, JS_GPN_STRING_MASK) == 0,
           "the cookie store could not be enumerated, and nothing of the page's is on it");
-    hits = n ? calloc(n, sizeof *hits) : NULL;
+    hits = n ? lexbor_calloc(n, sizeof *hits) : NULL;
     CHECK(n == 0 || hits != NULL, "OOM collecting §5.4 step 1's cookie-list");
     /* STEP 1: the set of cookies that meet all of the requirements. */
     for (i = 0; i < n; i++) {

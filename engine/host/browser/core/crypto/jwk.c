@@ -13,6 +13,7 @@
 #include "quickjs.h"
 #include "core/crypto/crypto_key.h"
 #include "core/crypto/jwk.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* A DICTIONARY MEMBER OFF THE CONVERTED VALUE. Web IDL §3.2.17 built a plain engine object carrying exactly
    the declared members, so this is an ordinary property get with nothing of the page's on it — no accessor, no
@@ -85,14 +86,14 @@ static int jwk_k_bytes(const char *k, size_t n, uint8_t **out, uint32_t *out_len
        back. The empty string is the empty octet sequence, which that section says in its own words: "Note that
        the base64url encoding of the empty octet sequence is the empty string." */
     pad = (n % 4) ? 4 - (n % 4) : 0;
-    padded = malloc(n + pad + 1);
+    padded = lexbor_malloc(n + pad + 1);
     CHECK(padded != NULL, "the jwk arm's step 4: OOM translating a jwk `k` into the engine's base64 alphabet");
     for (i = 0; i < n; i++) padded[i] = k[i] == '-' ? '+' : (k[i] == '_' ? '/' : k[i]);
     for (i = 0; i < pad; i++) padded[n + i] = '=';
     padded[n + pad] = '\0';
 
     cap = JS_Base64DecodedMax(n + pad);
-    dst = malloc(cap ? cap : 1);
+    dst = lexbor_malloc(cap ? cap : 1);
     CHECK(dst != NULL, "the jwk arm's step 4: OOM decoding a jwk `k`");
     got = JS_Base64Decode(dst, cap, padded, n + pad, &err);
     free(padded);
@@ -274,7 +275,7 @@ int jwk_oct_tail(JSContext *ctx, JSValueConst jwk, const char *use_value, uint32
 static char *jwk_k_string(const uint8_t *data, uint32_t len)
 {
     size_t cap = JS_Base64EncodedSize(len);
-    char *b64 = malloc(cap + 1);
+    char *b64 = lexbor_malloc(cap + 1);
     size_t got, i;
 
     CHECK(b64 != NULL, "the jwk arm's `k` sub-step: OOM encoding a key's octets as base64url");

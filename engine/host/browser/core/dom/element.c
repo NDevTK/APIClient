@@ -84,6 +84,7 @@
 #include "core/html/number_microsyntax.h"   /* §2.3.4.3, which §2.6.1's `double` model parses and writes with */
 #include "core/url/url.h"
 #include <lexbor/ns/ns.h>
+#include "solver/reclaim.h"
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
 static JSAtom g_attrs_key = JS_ATOM_NULL;   /* the [SameObject] NamedNodeMap cache slot on an element's wrapper */
@@ -1853,7 +1854,7 @@ char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name)
            "so the sink this feeds reads as clean. Read it with element_attr_get_value and carry the value");
     if (!JS_IsNull(r) && !JS_IsException(r)) {
         const char *c = JS_ToCString(ctx, r);
-        if (c) { out = strdup(c); JS_FreeCString(ctx, c); }
+        if (c) { out = reclaim_strdup(c); JS_FreeCString(ctx, c); }
     }
     JS_FreeValue(ctx, r);
     return out;

@@ -27,6 +27,7 @@
 #include "core/html/trusted_type_policy_factory.h"
 #include "core/html/trusted_types.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 #define TT_NS_HTML "http://www.w3.org/1999/xhtml"
 
@@ -181,7 +182,7 @@ static char *ttpf_arg_bytes(JSContext *ctx, JSValueConst v, bool lower)
     }
     p = JS_ToCStringLen(ctx, &len, v);
     CHECK(p != NULL, "a converted DOMString argument could not be read as bytes");
-    out = malloc(len + 1);
+    out = lexbor_malloc(len + 1);
     CHECK(out != NULL, "a Trusted Types lookup argument could not be copied");
     for (i = 0; i < len; i++)
         out[i] = (lower && p[i] >= 'A' && p[i] <= 'Z') ? (char)(p[i] - 'A' + 'a') : p[i];

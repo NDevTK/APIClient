@@ -62,6 +62,7 @@
 #include "solver/concolic.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §7.2.2.1's `closed` IS THE NAVIGABLE'S, not the Window's — which is why it is not read from a byte here.
    `window.closed` and `iframe.contentWindow.closed` are the SAME fact about the SAME navigable, and a byte in
@@ -1073,7 +1074,7 @@ answer:
 static char *win_attr_escape(const char *s, size_t n)
 {
     size_t o = 0, i;
-    char *out = malloc(n * 6 + 1);
+    char *out = lexbor_malloc(n * 6 + 1);
 
     CHECK(out != NULL, "window: OOM escaping an attribute value");
     for (i = 0; i < n; i++) {
@@ -1110,7 +1111,7 @@ static char *win_named_markup(const char *path, const char *href)
     h = win_attr_escape(href, strlen(href));
     if (dot) m = win_attr_escape(dot + 1, strlen(dot + 1));
     need = 2 * strlen(n) + strlen(h) + (m ? strlen(m) : 0) + 64;
-    out = malloc(need);
+    out = lexbor_malloc(need);
     CHECK(out != NULL, "window: OOM composing named-access markup");
     if (m) snprintf(out, need, "<a id=\"%s\"></a><a id=\"%s\" name=\"%s\" href=\"%s\"></a>", n, n, m, h);
     else   snprintf(out, need, "<a id=\"%s\" href=\"%s\"></a>", n, h);

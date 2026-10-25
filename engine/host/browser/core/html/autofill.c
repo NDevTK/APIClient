@@ -15,6 +15,7 @@
 #include "core/idl_args.h"
 #include "core/html/html_form.h"      /* §4.10.5.1's `type` STATE, which decides which mantle the attribute wears */
 #include "core/html/autofill.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §4.10.19.7.2's own four categories, plus the null the table's first step returns. */
 typedef enum { AF_NULL = 0, AF_OFF, AF_AUTOMATIC, AF_NORMAL, AF_CONTACT, AF_CREDENTIAL } AfCategory;
@@ -164,7 +165,7 @@ static JSValue af_join(JSContext *ctx, const AfValue *v, bool lower_last)
     JSValue r;
 
     for (i = 0; i < v->count; i++) total += v->n[i] + 1;
-    buf = (char *)malloc(total ? total : 1);
+    buf = (char *)lexbor_malloc(total ? total : 1);
     CHECK(buf != NULL, "§4.10.19.7.2: OOM building the IDL-exposed autofill value");
     for (i = v->count - 1; i >= 0; i--) {
         size_t k;

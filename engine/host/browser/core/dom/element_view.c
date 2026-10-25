@@ -37,6 +37,8 @@
 #include "solver/concolic.h"
 #include "solver/metrics.h"
 #include "solver/rest_unit.h"
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE MEMBERS. `scrollTop` and `scrollLeft` are the two the IDL declares as `attribute` rather than `readonly
    attribute`, so their magic is a setter's magic as well as a getter's. */
@@ -799,7 +801,7 @@ static char *ev_scroll_keyword(JSContext *ctx, JSValueConst v, const char *membe
            "default, so an absent one arrives carrying that default rather than as undefined");
     s = JS_ToCString(ctx, v);
     CHECK(s != NULL, "a Web IDL enumeration value that is already a string could not be read as one");
-    owned = strdup(s);
+    owned = reclaim_strdup(s);
     CHECK(owned != NULL, "a Web IDL enumeration keyword could not be copied");
     JS_FreeCString(ctx, s);
     (void)member;
@@ -1397,7 +1399,7 @@ static size_t ev_table_fragments(lxb_dom_element_t *el, lxb_dom_element_t ***out
            "§6's getClientRects() step 3's second constraint was asked with nowhere to put its boxes — a count "
            "alone names no box for the list to measure");
     ncaps = table_box_captions(el, &caps);
-    frags = (lxb_dom_element_t **) malloc((ncaps + 1) * sizeof *frags);
+    frags = (lxb_dom_element_t **) lexbor_malloc((ncaps + 1) * sizeof *frags);
     CHECK(frags != NULL, "§6's getClientRects() step 3 could not allocate its fragment list");
     frags[0] = el;                      /* the TABLE BOX, which the split above makes this element's box */
     for (i = 0; i < ncaps; i++) frags[i + 1] = caps[i];
@@ -1440,7 +1442,7 @@ static size_t ev_client_rects_px(const EvTarget *t, CssPx (**out)[4])
         n = flow_inline_fragment_rects(el, &frags);
         DCHECK(n > 0, "an inline box with a box reported no line fragment; flow_position.h answers its origin "
                       "from the first");
-        r = malloc(n * sizeof *r);
+        r = lexbor_malloc(n * sizeof *r);
         CHECK(r != NULL, "§6's getClientRects() step 3 could not allocate its rectangle list");
         for (i = 0; i < n; i++) {
             b[0] = frags[i].x;
@@ -1462,7 +1464,7 @@ static size_t ev_client_rects_px(const EvTarget *t, CssPx (**out)[4])
         lxb_dom_element_t **frags = NULL;
 
         n = ev_table_fragments(el, &frags);
-        r = malloc(n * sizeof *r);
+        r = lexbor_malloc(n * sizeof *r);
         CHECK(r != NULL, "§6's getClientRects() step 3 could not allocate its rectangle list");
         for (i = 0; i < n; i++) {
             EvTarget ft;
@@ -1486,7 +1488,7 @@ static size_t ev_client_rects_px(const EvTarget *t, CssPx (**out)[4])
     DCHECK(kind == ELEMENT_VIEW_FRAGMENTS_ONE,
            "§6's getClientRects() step 3 reached a fragment kind with no arm; each member of core/dom/"
            "element_view.h's enumeration names a different count");
-    r = malloc(sizeof *r);
+    r = lexbor_malloc(sizeof *r);
     CHECK(r != NULL, "§6's getClientRects() step 3 could not allocate its rectangle list");
     ev_border_area_px(el, b);
     ev_client_rect_px(t, el, b, r[0]);
@@ -1605,7 +1607,7 @@ static void ev_bounding_box_of(const CssPx (*r)[4], size_t n, CssPx out[4])
     size_t i, k, m = 0;
 
     DCHECK(n > 0, "get the bounding box's steps 3 and 4 were asked over an empty list; step 2 answers it");
-    kept = malloc(n * sizeof *kept);
+    kept = lexbor_malloc(n * sizeof *kept);
     CHECK(kept != NULL, "§6's get the bounding box could not allocate its rectangle list");
     for (i = 0; i < n; i++) {
         facts = css_px_add(facts, css_px_add(css_px_sub(r[i][2], r[i][2]), css_px_sub(r[i][3], r[i][3])));

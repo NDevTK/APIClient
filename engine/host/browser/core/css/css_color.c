@@ -42,6 +42,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_color_convert.h"
 #include "core/css/css_system_color.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 const CssColor CSS_COLOR_OPAQUE_BLACK = { CSS_COLOR_SPACE_SRGB, { 0.0, 0.0, 0.0 }, 1.0, 0u };
 
@@ -624,7 +625,7 @@ static bool css_color_parse_lexbor(const char *text, size_t len, CssColor *out)
     char *buf;
     bool ok = false;
 
-    buf = malloc(plen + len + 1);
+    buf = lexbor_malloc(plen + len + 1);
     CHECK(buf != NULL, "css color: OOM building the declaration a <color> is parsed as");
     memcpy(buf, PREFIX, plen);
     if (len) memcpy(buf + plen, text, len);

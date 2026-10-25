@@ -10,6 +10,7 @@
 #include "core/realm.h"
 #include "core/url/origin.h"
 #include "core/url/url.h"
+#include "solver/reclaim.h"
 
 bool mixed_content_settings_prohibit(JSContext *ctx)
 {
@@ -128,7 +129,7 @@ char *mixed_content_upgrade_url(JSContext *ctx, const char *url, const char *des
            changed to https". So `http://x/` becomes `https://x/` and `http://x:8080/` keeps its 8080 — the
            parser has already normalised a default `:80` to the null port, so nothing here has to. */
         free(u.scheme);
-        u.scheme = strdup("https");
+        u.scheme = reclaim_strdup("https");
         CHECK(u.scheme != NULL, "Mixed Content §4.1: OOM upgrading a mixed content request's scheme");
         out = url_serialize(&u, /*exclude_fragment*/ false);
         CHECK(out != NULL, "Mixed Content §4.1: OOM serializing an upgraded mixed content request's URL");

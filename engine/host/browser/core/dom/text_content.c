@@ -15,6 +15,7 @@
 
 #include "check.h"
 #include "core/dom/text_content.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 bool dom_node_is_text(const lxb_dom_node_t *node)
 {
@@ -49,7 +50,7 @@ static const lxb_char_t *txt_data(const lxb_dom_node_t *n, size_t *len)
    entry is what catches. */
 static char *txt_alloc(size_t total)
 {
-    char *out = malloc(total + 1);
+    char *out = lexbor_malloc(total + 1);
 
     CHECK(out != NULL,
           "OOM materializing DOM §4.11 Interface Text's text content — the callers of this are a `<script>`'s "

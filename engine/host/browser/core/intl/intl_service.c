@@ -11,6 +11,7 @@
 #include "core/intl/intl_service.h"
 #include "core/timing/thread_work.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The key an instance's resolved record hangs under, and the record's member holding its unknown operands. */
 static JSValue g_slots_key = JS_UNDEFINED;
@@ -747,9 +748,9 @@ JSValue intl_ask(JSContext *ctx, IntlHostOp op, JSValueConst locales, const char
     DCHECK(nargs <= 2, "an Intl host question takes at most two arguments");
     if (!JS_IsUndefined(locales)) JS_GetLength(ctx, locales, &nl);
     while (keys && keys[nk]) nk++;
-    tags = malloc(sizeof(char *) * (size_t)(nl + 2));
-    owned = malloc(sizeof(char *) * (size_t)(nl + nk + 1));
-    fields = malloc(sizeof(IntlHostField) * (size_t)(nk + 1));
+    tags = lexbor_malloc(sizeof(char *) * (size_t)(nl + 2));
+    owned = lexbor_malloc(sizeof(char *) * (size_t)(nl + nk + 1));
+    fields = lexbor_malloc(sizeof(IntlHostField) * (size_t)(nk + 1));
     CHECK(tags != NULL && owned != NULL && fields != NULL, "an Intl host question could not be allocated");
     for (i = 0; i < nl; i++) {
         JSValue e = JS_GetPropertyInt64(ctx, locales, i);
@@ -861,8 +862,8 @@ JSValue intl_derive(JSContext *ctx, const char *op, JSValueConst slots, const JS
     int n = 0;
 
     if (!JS_IsUndefined(deps)) JS_GetLength(ctx, deps, &nd);
-    ops = malloc(sizeof(JSValueConst) * (size_t)(nd + ninputs + 1));
-    held = malloc(sizeof(JSValue) * (size_t)(nd + 1));
+    ops = lexbor_malloc(sizeof(JSValueConst) * (size_t)(nd + ninputs + 1));
+    held = lexbor_malloc(sizeof(JSValue) * (size_t)(nd + 1));
     CHECK(ops != NULL && held != NULL, "an Intl derivation's operands could not be allocated");
     for (i = 0; i < nd; i++) ops[n++] = held[i] = JS_GetPropertyInt64(ctx, deps, i);
     for (i = 0; i < ninputs; i++) ops[n++] = inputs[i];

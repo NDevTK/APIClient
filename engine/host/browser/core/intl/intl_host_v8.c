@@ -13,6 +13,7 @@
 #include "check.h"
 #include "core/intl/intl_host.h"
 #include "core/json_buf.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The security argument for this import. It is serviced in the realm that instantiated this module, which is the
    engine's own sandboxed renderer frame (extension/renderer.html, opaque origin) and nothing else: the call is
@@ -183,7 +184,7 @@ EM_JS(void, intl_host_v8_take, (char *out, int cap), {
 /* A JSON string of `n` bytes, which may hold a NUL a page's string carried. */
 static void json_str_len(JsonBuf *b, const char *s, size_t n)
 {
-    char *z = malloc(n + 1), esc[8];
+    char *z = lexbor_malloc(n + 1), esc[8];
     size_t i, start = 0;
 
     CHECK(z != NULL, "an Intl request string could not be copied");
@@ -257,7 +258,7 @@ char *intl_host_call(const IntlHostRequest *req)
     n = intl_host_v8_relay(intl_host_op_name(req->op), text);
     free(text);
     CHECK(n > 0, "the V8 Intl relay answered with no JSON document at all");
-    answer = malloc((size_t)n + 1);
+    answer = lexbor_malloc((size_t)n + 1);
     CHECK(answer != NULL, "the V8 Intl relay's answer could not be allocated");
     intl_host_v8_take(answer, n + 1);
     return answer;

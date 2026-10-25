@@ -127,7 +127,9 @@ char *css_serialize_identifier(const char *s, size_t len)
         nth++;
     }
     /* The EMPTY identifier serializes to the empty string, and the buffer above never allocated for it. */
-    if (!b.s) { b.s = malloc(1); CHECK(b.s != NULL, "cssom: OOM serializing an empty identifier"); b.s[0] = '\0'; }
+    if (!b.s) {
+        b.s = lexbor_malloc(1); CHECK(b.s != NULL, "cssom: OOM serializing an empty identifier"); b.s[0] = '\0';
+    }
     return b.s;
 }
 
@@ -135,7 +137,7 @@ char *css_serialize_url(const char *s, size_t len)
 {
     char *str = css_serialize_string(s, len);
     size_t n = strlen(str);
-    char *out = malloc(n + 6);
+    char *out = lexbor_malloc(n + 6);
 
     CHECK(out != NULL, "cssom: OOM serializing a URL");
     memcpy(out, "url(", 4);

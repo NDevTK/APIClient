@@ -42,6 +42,7 @@
 #include "core/idl_index_arg.h"   /* §4.9.1's `item` takes an index unknown external input crosses AS ITSELF */
 #include "core/realm.h"
 #include "core/idl_indexed.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* PER REALM — §3.7. Held in quickjs's per-context class-proto slots; the node-type table names the CLASS. */
 static JSClassID g_attr_class, g_nnm_class;
@@ -73,7 +74,7 @@ lxb_dom_attr_t *attr_node_of(JSValueConst v)
  * NUL-terminates only the short ones, and an attribute's name length is the page's data. */
 static char *attr_dupn(const lxb_char_t *s, size_t n)
 {
-    char *p = malloc(n + 1);
+    char *p = lexbor_malloc(n + 1);
     CHECK(p != NULL, "an attribute identity could not be copied");
     memcpy(p, s, n); p[n] = 0;
     return p;
@@ -575,7 +576,7 @@ static JSValue doc_create_attribute(JSContext *ctx, JSValueConst this_val, JSVal
             return JS_ThrowDOMException(ctx, "InvalidCharacterError",
                                         "createAttribute was given a name that is not a valid attribute local name");
         }
-        lowered = malloc(len + 1);
+        lowered = lexbor_malloc(len + 1);
         CHECK(lowered != NULL, "createAttribute could not copy its own local name");
         memcpy(lowered, local, len + 1);
         JS_FreeCString(ctx, local);
@@ -610,11 +611,15 @@ static JSValue doc_create_attribute(JSContext *ctx, JSValueConst this_val, JSVal
                nowhere else — "create an attribute" takes strings, and the colon is the separator. */
             char *nsz = NULL, *pfx = NULL, *loc;
 
-            if (ex.ns) { nsz = malloc(ex.ns_len + 1); CHECK(nsz, "createAttributeNS could not copy its namespace");
-                         memcpy(nsz, ex.ns, ex.ns_len); nsz[ex.ns_len] = 0; }
-            if (ex.prefix) { pfx = malloc(ex.prefix_len + 1); CHECK(pfx, "createAttributeNS could not copy its prefix");
-                             memcpy(pfx, ex.prefix, ex.prefix_len); pfx[ex.prefix_len] = 0; }
-            loc = malloc(ex.local_len + 1); CHECK(loc, "createAttributeNS could not copy its local name");
+            if (ex.ns) {
+                nsz = lexbor_malloc(ex.ns_len + 1); CHECK(nsz, "createAttributeNS could not copy its namespace");
+                memcpy(nsz, ex.ns, ex.ns_len); nsz[ex.ns_len] = 0;
+            }
+            if (ex.prefix) {
+                pfx = lexbor_malloc(ex.prefix_len + 1); CHECK(pfx, "createAttributeNS could not copy its prefix");
+                memcpy(pfx, ex.prefix, ex.prefix_len); pfx[ex.prefix_len] = 0;
+            }
+            loc = lexbor_malloc(ex.local_len + 1); CHECK(loc, "createAttributeNS could not copy its local name");
             memcpy(loc, ex.local, ex.local_len); loc[ex.local_len] = 0;
             a = dom_cow_create_attribute(doc, nsz, pfx, loc);        /* step 2 */
             free(nsz); free(pfx); free(loc);

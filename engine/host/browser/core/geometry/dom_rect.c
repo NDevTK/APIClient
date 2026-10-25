@@ -40,6 +40,7 @@
 #include "core/realm.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §3's four internal member variables. "Internal member variables must not be exposed in any way", which is
    what keeps them behind the class opaque rather than on an own slot the page could reach. */
@@ -201,7 +202,7 @@ static JSValue dr_alloc(JSContext *ctx, int which, JSValue x, JSValue y, JSValue
     obj = JS_NewObjectProtoClass(ctx, proto, cls);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "a DOMRect could not be allocated");
-    b = calloc(1, sizeof(*b));
+    b = lexbor_calloc(1, sizeof(*b));
     CHECK(b != NULL, "the DOMRect record allocation failed");
     /* Step 2 — "set rect's variables x coordinate to x, y coordinate to y, width dimension to width and height
        dimension to height". Every owned field is placed before anything that can fail. */

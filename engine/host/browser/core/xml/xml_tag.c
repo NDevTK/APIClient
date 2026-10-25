@@ -274,7 +274,7 @@ static XmlTagError scan_attvalue(XmlCharReader *r, char **value, size_t *value_l
     close = memchr(r->p + 1, (int)quote, (size_t)(r->end - (r->p + 1)));
     if (close == NULL) return XML_TAG_ERR_ATTVALUE_UNTERMINATED;
     span = (size_t)(close - (r->p + 1));
-    buf = malloc(span + 1);
+    buf = lexbor_malloc(span + 1);
     CHECK(buf != NULL, "an XML attribute value could not be allocated — §3.3.3 Attribute-Value Normalization "
                        "builds text the entity does not contain, so this is the physical memory floor");
     eat(r, quote);

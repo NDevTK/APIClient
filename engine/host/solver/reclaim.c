@@ -3,6 +3,7 @@
 #include "solver/reclaim.h"
 #include "check.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -44,6 +45,15 @@ char *reclaim_strdup(const char *s)
     return r;
 }
 
+char *reclaim_strndup(const char *s, size_t n)
+{
+    size_t len = strnlen(s, n);
+    char *r = reclaim_malloc(len + 1);
+
+    if (r) { memcpy(r, s, len); r[len] = '\0'; }
+    return r;
+}
+
 void *reclaim_realloc(void *dst, size_t size)
 {
     for (;;) {
@@ -62,7 +72,8 @@ void *reclaim_calloc(size_t num, size_t size)
 {
     for (;;) {
         void *p = calloc(num, size);
-        if (p || num == 0 || size == 0 || !g_rt || !JS_ReclaimMemory(g_rt, num * size))
+        /* A product past SIZE_MAX is refused by calloc whatever the frontier holds, so no sale can fund it. */
+        if (p || num == 0 || size == 0 || num > SIZE_MAX / size || !g_rt || !JS_ReclaimMemory(g_rt, num * size))
             return p;
     }
 }

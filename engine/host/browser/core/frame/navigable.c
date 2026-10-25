@@ -45,6 +45,7 @@
 #include "solver/concolic.h"         /* and the ONE predicate that asks whether a destination was computed */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 static RealmBuilder g_realm_builder;
 
@@ -947,7 +948,7 @@ static char *nav_strdup(const char *s)
     size_t n;
     if (s == NULL) return NULL;
     n = strlen(s);
-    p = malloc(n + 1);
+    p = lexbor_malloc(n + 1);
     CHECK(p != NULL, "navigable: OOM copying a §7.5.1 creation item across a suspension");
     memcpy(p, s, n + 1);
     return p;
@@ -1055,7 +1056,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
                                         document_encoding(ctx));
     }
 
-    w = calloc(1, sizeof *w);
+    w = lexbor_calloc(1, sizeof *w);
     CHECK(w != NULL, "navigable: OOM opening HTML §7.5.1's create and initialize a Document object");
     w->doc                      = doc;
     w->url                      = nav_strdup(url);
@@ -1437,7 +1438,7 @@ static char *nav_container_destination(JSValueConst container)
     char *dest;
 
     if (JS_IsNull(container)) {
-        dest = strdup("document");
+        dest = reclaim_strdup("document");
     } else {
         lxb_dom_node_t *n = node_of(container);
         const lxb_char_t *name;
@@ -1447,7 +1448,7 @@ static char *nav_container_destination(JSValueConst container)
                "§7.3.1.3's container of a navigable is not an element — the create that records it is handed "
                "the element itself");
         name = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
-        dest = strndup((const char *)name, len);
+        dest = reclaim_strndup((const char *)name, len);
     }
     CHECK(dest != NULL, "navigable: OOM spelling §7.4.5's request destination");
     DCHECK(fetch_is_destination_type(dest),
@@ -1474,7 +1475,7 @@ static char *nav_request_destination(JSContext *ctx, JSValueConst proxy)
  * be "", a container stating none. Owned. */
 static char *nav_main_fetch_referrer_policy(const char *request, const char *item)
 {
-    char *out = strdup(*request ? request : item ? item : "strict-origin-when-cross-origin");
+    char *out = reclaim_strdup(*request ? request : item ? item : "strict-origin-when-cross-origin");
 
     CHECK(out != NULL, "navigable: OOM spelling §7.4.5's request referrer policy");
     DCHECK(fetch_is_referrer_policy(out), "§7.4.5's request referrer policy is not a Referrer Policy §3 policy");
@@ -1879,8 +1880,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
         CHECK(prov != NULL && drv != NULL && pin != NULL && init != NULL,
               "navigable: OOM taking §7.4.5's provenance off the load job");
-        op = malloc(strlen(addr) + strlen(prov) + strlen(drv) + strlen(pin) + strlen(dest) + strlen(refpol) +
-                    strlen(init) + 24);
+        op = lexbor_malloc(strlen(addr) + strlen(prov) + strlen(drv) + strlen(pin) + strlen(dest) + strlen(refpol) +
+                           strlen(init) + 24);
         CHECK(op != NULL, "navigable: OOM building §7.4 step 14's fetch request");
         sprintf(op, "document.fetch\t%s\t%s\t%s\t%s\t%s\t%s\t%s", prov, drv, pin, dest, refpol, init, addr);
         s->req = engine_host_request(ctx, op);
@@ -3971,7 +3972,7 @@ static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
 static char *nav_notice_base64(const char *text)
 {
     size_t len = text ? strlen(text) : 0, cap = JS_Base64EncodedSize(len) + 1, n;
-    char *out = malloc(cap);
+    char *out = lexbor_malloc(cap);
 
     CHECK(out != NULL, "navigable: OOM encoding a create notice field for a peer instance");
     n = JS_Base64Encode(out, cap, (const uint8_t *)(text ? text : ""), len);
@@ -4581,8 +4582,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             permissions_policy_free(child_policy);
             ancestor_origins = document_ancestor_origins_for_child(ctx, container, origin);
         } else {
-            container_policy = strdup(PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
-            ancestor_origins = strdup(DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
+            container_policy = reclaim_strdup(PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
+            ancestor_origins = reclaim_strdup(DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
         }
         CHECK(container_policy != NULL,
               "navigable: OOM stating §9.5's answer for this navigable's container to a peer instance");

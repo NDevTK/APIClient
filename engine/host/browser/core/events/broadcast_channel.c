@@ -37,6 +37,7 @@
 #include "core/events/broadcast_channel.h"
 #include "solver/concolic.h"   /* an unknown NAME denotes its SHAPE — see concolic_name_cstr */
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE NAME IS AN ATOM, WHICH IS THE IDENTITY §9.5 MATCHES ON. It was a JSValue string compared by POINTER,
    with a comment claiming the interning made that immune to a page handing back an equal-but-distinct string.
@@ -385,7 +386,7 @@ static int js_bc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         JS_FreeValue(ctx, proto);
     }
     if (JS_IsException(obj)) return -1;
-    c = calloc(1, sizeof *c);
+    c = lexbor_calloc(1, sizeof *c);
     CHECK(c != NULL, "broadcast channel: OOM building a BroadcastChannel");
     c->realm = ctx;   /* §9.5's relevant realm, taken where the channel is constructed */
     /* STEP 1, "Set this's channel name to name" — AND AN UNKNOWN NAME IS A KEY QUESTION, NEVER A COERCION.

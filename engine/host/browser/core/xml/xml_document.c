@@ -11,6 +11,7 @@
 #include "core/xml/xml_markup.h"
 #include "core/xml/xml_tag.h"
 #include "solver/flow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 #define DOC_NO_BYTE 0x100u
 #define DOC_OPEN    '<'
@@ -146,7 +147,7 @@ const char *xml_document_error_message(XmlDocumentError err)
 
 XmlDocumentWalk *xml_document_walk_create(void)
 {
-    XmlDocumentWalk *w = calloc(1, sizeof *w);
+    XmlDocumentWalk *w = lexbor_calloc(1, sizeof *w);
 
     CHECK(w != NULL, "the XML document walk could not be allocated");
     w->element = xml_element_walk_create();

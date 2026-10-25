@@ -72,7 +72,7 @@ static void sv_map_add(CssUnitMap *m, const char *unit, int power)
         m->cap = want;
     }
     memmove(&m->e[i + 1], &m->e[i], (size_t)(m->n - i) * sizeof *m->e);
-    m->e[i].unit = malloc(len + 1);
+    m->e[i].unit = lexbor_malloc(len + 1);
     CHECK(m->e[i].unit != NULL, "css-typed-om: OOM copying a CSS Typed OM 1 §4.3.1 unit map key");
     memcpy(m->e[i].unit, unit, len + 1);
     m->e[i].power = power;

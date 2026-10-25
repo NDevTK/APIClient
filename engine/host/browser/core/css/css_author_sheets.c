@@ -17,6 +17,7 @@
 #include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 struct CssAuthorSheets {
     lxb_dom_node_t     *root;
@@ -83,7 +84,7 @@ CssAuthorSheets *css_author_sheets_open(lxb_dom_node_t *root)
     CssAuthorSheets *s;
 
     DCHECK(root != NULL && root->parent == NULL, "the author origin was built for a node that is not a root");
-    s = calloc(1, sizeof *s);
+    s = lexbor_calloc(1, sizeof *s);
     CHECK(s != NULL, "cssom: OOM building the author origin's sheet set");
     s->root = root;
     s->order = css_layer_order_create();
@@ -199,9 +200,9 @@ bool css_author_sheets_registration(const CssAuthorSheets *s, const char *name, 
         const CssPropertyRegistrationEntry *x = &s->regs[i];
 
         if (strcmp(x->name, name) != 0) continue;
-        out->syntax = strdup(x->reg.syntax);
+        out->syntax = reclaim_strdup(x->reg.syntax);
         out->inherits = x->reg.inherits;
-        out->initial_value = x->reg.initial_value != NULL ? strdup(x->reg.initial_value) : NULL;
+        out->initial_value = x->reg.initial_value != NULL ? reclaim_strdup(x->reg.initial_value) : NULL;
         CHECK(out->syntax != NULL && (x->reg.initial_value == NULL || out->initial_value != NULL),
               "cssom: OOM copying a `@property` registration");
         return true;

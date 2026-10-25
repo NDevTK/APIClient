@@ -28,7 +28,7 @@ typedef struct {
 
 static char *pre_copy(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out != NULL, "cssom: OOM copying a piece of an at-rule prelude");
     memcpy(out, s, n);

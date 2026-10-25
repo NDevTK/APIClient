@@ -8,6 +8,7 @@
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_layer_order.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 struct CssLayerNode {
     /* ONE SEGMENT of §6.4.2's layer name, serialized — NULL for §6.4.2.1's anonymous segment, which is why the
@@ -27,7 +28,7 @@ struct CssLayerOrder {
 
 CssLayerOrder *css_layer_order_create(void)
 {
-    CssLayerOrder *o = calloc(1, sizeof(*o));
+    CssLayerOrder *o = lexbor_calloc(1, sizeof(*o));
 
     CHECK(o != NULL, "cssom: OOM building CSS Cascade §6.4.3's layer order");
     return o;
@@ -84,11 +85,11 @@ static CssLayerNode *layer_child_named(CssLayerNode *parent, const char *name)
 /* Append a fresh node under `parent`. `name` is COPIED, or NULL for an anonymous segment. */
 static CssLayerNode *layer_child_append(CssLayerNode *parent, const char *name)
 {
-    CssLayerNode *n = calloc(1, sizeof(*n));
+    CssLayerNode *n = lexbor_calloc(1, sizeof(*n));
 
     CHECK(n != NULL, "cssom: OOM declaring a CSS Cascade §6.4 cascade layer");
     if (name) {
-        n->name = strdup(name);
+        n->name = reclaim_strdup(name);
         CHECK(n->name != NULL, "cssom: OOM copying a `<layer-name>` segment into §6.4.3's layer order");
     }
     if (parent->last) parent->last->next = n;
@@ -141,7 +142,7 @@ static unsigned layer_seal_walk(CssLayerNode *root)
     size_t depth = 1, cap = 16;
     unsigned next = 0;
 
-    v = malloc(cap * sizeof *v);
+    v = lexbor_malloc(cap * sizeof *v);
     CHECK(v != NULL, "cssom: OOM numbering CSS Cascade §6.4.3's layer order");
     v[0].n = root;
     v[0].c = root->first;

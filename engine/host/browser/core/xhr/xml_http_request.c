@@ -88,6 +88,7 @@
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 #include "core/xml/xml_parse.h"        /* the ONE place an XML document is parsed — shared with §8.5.1 and §7.5.3 */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* §3's five states, in the order the constants number them. */
 enum { XHR_UNSENT = 0, XHR_OPENED, XHR_HEADERS_RECEIVED, XHR_LOADING, XHR_DONE };
@@ -507,7 +508,7 @@ static void hl_combine(JSContext *ctx, JSValueConst arr, const char *name, const
     vv = JS_GetPropertyUint32(ctx, pair, 1);
     old = JS_ToCString(ctx, vv);
     if (old) {
-        joined = malloc(strlen(old) + strlen(value) + 3);
+        joined = lexbor_malloc(strlen(old) + strlen(value) + 3);
         CHECK(joined != NULL, "XMLHttpRequest: OOM combining a request header");
         sprintf(joined, "%s, %s", old, value);
         JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, joined));
@@ -1098,7 +1099,7 @@ static JSValue js_xhr_set_request_header(JSContext *ctx, JSValueConst this_val, 
     }
     /* Step 5: a forbidden request-header is a silent no-op, never a throw — a page that sets `Host`
        defensively must keep working. */
-    lower = malloc(name_len + 1);
+    lower = lexbor_malloc(name_len + 1);
     CHECK(lower != NULL, "XMLHttpRequest: OOM lowercasing a header name");
     for (i = 0; i < name_len; i++)
         lower[i] = (name[i] >= 'A' && name[i] <= 'Z') ? (char)(name[i] - 'A' + 'a') : name[i];
@@ -1244,7 +1245,7 @@ static JSValue js_xhr_get_all_response_headers(JSContext *ctx, JSValueConst this
     n = hl_len(ctx, d->response_headers);
     /* "sort and combine": one entry per distinct name, values joined by ", ", then sorted by the
        legacy-uppercased comparison. The distinct names first. */
-    names = calloc(n ? n : 1, sizeof *names);
+    names = lexbor_calloc(n ? n : 1, sizeof *names);
     CHECK(names != NULL, "XMLHttpRequest: OOM listing the response header names");
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, d->response_headers, i);
@@ -1253,7 +1254,7 @@ static JSValue js_xhr_get_all_response_headers(JSContext *ctx, JSValueConst this
         if (nm) {
             for (k = 0; k < nn; k++) if (hl_ci_eq(names[k], nm)) break;
             if (k == nn) {
-                names[nn] = strdup(nm);
+                names[nn] = reclaim_strdup(nm);
                 CHECK(names[nn] != NULL, "XMLHttpRequest: OOM copying a response header name");
                 nn++;
             }
@@ -1403,7 +1404,7 @@ static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, JSValue value)
     if (!src)
         return value;
     n = strlen(src) + 3;
-    shape = (char *)malloc(n);
+    shape = (char *)lexbor_malloc(n);
     CHECK(shape != NULL, "XMLHttpRequest: OOM spelling the provenance of a reply");
     snprintf(shape, n, "{%s}", src);   /* a declared source's shape IS its provenance in braces — concolic.h */
     /* concolic_new AND NOT concolic_source_wrap: a server's reply is unknown input the ATTACKER did not
@@ -3698,7 +3699,7 @@ static int js_xhr_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     upload = JS_NewObjectProtoClass(ctx, proto, g_upload_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(upload)) { JS_FreeValue(ctx, obj); return -1; }
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "XMLHttpRequest: OOM building an XMLHttpRequest");
     /* INITIALIZATION, NOT A WRITE — so this is the one place the twelve are assigned directly rather than
        through xhr_set. The record is calloc'd and unreachable until JS_SetOpaque below, so no slot holds a

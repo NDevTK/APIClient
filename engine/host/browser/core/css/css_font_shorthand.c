@@ -14,6 +14,8 @@
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/font_size_functions.h"
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §2.7's Set Explicitly group in the canonical order of its grammar, then its Reset Implicitly group. The two
    halves are ONE array because css_shorthand.c's table row is one list and the split is an index into it. */
@@ -42,7 +44,7 @@ const char *const CSS_FONT_SHORTHAND_LONGHANDS[CSS_FONT_SHORTHAND_N] = {
 
 static char *font_strdup(const char *s)
 {
-    char *out = strdup(s);
+    char *out = reclaim_strdup(s);
 
     CHECK(out != NULL, "cssom: OOM expanding a `font` shorthand — a dropped component would read as undeclared, "
                        "which is the property's INITIAL value and a different declaration");
@@ -51,7 +53,7 @@ static char *font_strdup(const char *s)
 
 static char *font_dupn(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out != NULL, "cssom: OOM copying a `font` component — a dropped one would read as undeclared");
     memcpy(out, s, n);
@@ -598,7 +600,7 @@ char *css_font_shorthand_value(const char *const *values)
     } else {
         size_t len = strlen(values[FONT_SLOT_SIZE]) + strlen(values[FONT_SLOT_LH]) + 2;
 
-        size_lh = malloc(len);
+        size_lh = lexbor_malloc(len);
         CHECK(size_lh != NULL, "cssom: OOM serializing a `font` value — a dropped one reads as the empty "
                                "string, which is how §6.6 is told the shorthand could not represent the "
                                "declarations");
@@ -610,7 +612,7 @@ char *css_font_shorthand_value(const char *const *values)
            "§2.7's serialization wrote more component values than its grammar has terms — four prefix terms, "
            "the size-and-line-height term and the family are six, and the array is sized for them");
     for (i = 0; i < n; i++) total += strlen(parts[i]) + 1;
-    out = malloc(total);
+    out = lexbor_malloc(total);
     CHECK(out != NULL, "cssom: OOM joining a `font` value");
     for (i = 0; i < n; i++) {
         size_t l = strlen(parts[i]);

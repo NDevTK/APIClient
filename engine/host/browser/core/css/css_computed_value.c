@@ -39,10 +39,11 @@
 #include "core/frame/viewport.h"
 #include "core/layout/used_value.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 static char *css_cv_strdup(const char *s)
 {
-    char *out = strdup(s);
+    char *out = reclaim_strdup(s);
     CHECK(out != NULL, "cssom: OOM deriving a computed value — a dropped value would read as undeclared");
     return out;
 }
@@ -269,7 +270,7 @@ static char *css_cv_var_lookup(void *ud, const char *name, size_t name_n)
 {
     char *full, *raw;
 
-    full = malloc(name_n + 3);
+    full = lexbor_malloc(name_n + 3);
     CHECK(full != NULL, "css-variables-1 §3: OOM naming the custom property a `var()` references");
     full[0] = '-';
     full[1] = '-';
@@ -1488,7 +1489,7 @@ static CvFontSizeOrigin cv_font_size_origin_step(lxb_dom_element_t *el, CvFontSi
        parent's, exactly as cv_length_cascaded answers it. */
     if (d == CSS_DEFAULTING_DECLARED) {
         CssLength probe;
-        char *copy = strdup(cascaded);
+        char *copy = reclaim_strdup(cascaded);
 
         CHECK(copy != NULL, "css: OOM copying a `font-size` declaration");
         if (!cv_length_of(el, CSS_PROPERTY_FONT_SIZE, copy, &probe)) d = CSS_DEFAULTING_INHERITED;
@@ -2515,7 +2516,7 @@ static char *css_cv_component(const char *text, int i, int *count)
         if (!space && from == NULL) from = s;
         if (space && from != NULL) {
             if (k == i) {
-                out = malloc((size_t)(s - from) + 1);
+                out = lexbor_malloc((size_t)(s - from) + 1);
                 CHECK(out != NULL, "out of memory copying one component of a declared value");
                 memcpy(out, from, (size_t)(s - from));
                 out[s - from] = '\0';
@@ -3552,7 +3553,7 @@ static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el,
         char *both;
         size_t n = strlen(h) + strlen(v) + 2;
 
-        both = malloc(n);
+        both = lexbor_malloc(n);
         CHECK(both != NULL, "cssom: OOM serializing a `border-spacing` — a dropped half would report one "
                             "spacing where CSS 2.1 §17.6.1 defines two");
         snprintf(both, n, "%s %s", h, v);

@@ -31,6 +31,7 @@
 #include "core/intl/intl_host.h"
 #include "core/json_buf.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/reclaim.h"
 
 /* ---- requests and answers ------------------------------------------------------------------------------ */
 
@@ -143,7 +144,7 @@ static UChar *to_u16(const char *s, size_t n, int32_t *out_len)
 
     u_strFromUTF8(NULL, 0, &len, s, (int32_t)n, &st);
     st = U_ZERO_ERROR;
-    u = malloc(sizeof(UChar) * ((size_t)len + 1));
+    u = lexbor_malloc(sizeof(UChar) * ((size_t)len + 1));
     CHECK(u != NULL, "an ICU string could not be allocated");
     u_strFromUTF8(u, len + 1, &len, s, (int32_t)n, &st);
     CHECKF(U_SUCCESS(st), "ICU could not read UTF-8 input: %s", u_errorName(st));
@@ -160,7 +161,7 @@ static char *to_u8(const UChar *u, int32_t n)
 
     u_strToUTF8(NULL, 0, &len, u, n, &st);
     st = U_ZERO_ERROR;
-    s = malloc((size_t)len + 1);
+    s = lexbor_malloc((size_t)len + 1);
     CHECK(s != NULL, "an ICU string could not be allocated");
     u_strToUTF8(s, len + 1, &len, u, n, &st);
     CHECKF(U_SUCCESS(st), "ICU could not write UTF-8: %s", u_errorName(st));
@@ -178,7 +179,7 @@ static char *icu_locale_of(const char *tag)
 
     uloc_forLanguageTag(tag, buf, (int32_t)sizeof buf, &parsed, &st);
     if (U_FAILURE(st) || st == U_STRING_NOT_TERMINATED_WARNING || parsed != (int32_t)strlen(tag)) return NULL;
-    return strdup(buf);
+    return reclaim_strdup(buf);
 }
 
 /* A BCP 47 tag for an ICU locale ID, malloc'd, or NULL. */
@@ -189,7 +190,7 @@ static char *bcp47_of(const char *icu)
 
     uloc_toLanguageTag(icu, buf, (int32_t)sizeof buf, true, &st);
     if (U_FAILURE(st) || st == U_STRING_NOT_TERMINATED_WARNING) return NULL;
-    return strdup(buf);
+    return reclaim_strdup(buf);
 }
 
 /* ECMA-402 §6.2.2 CanonicalizeUnicodeLocaleId ( locale ), by UTS #35 Annex C through ICU's canonicalization. */
@@ -259,7 +260,7 @@ static const TagList *available(Service svc)
         free(tag);
         tags_add(l, canon);
     }
-    tags_add(l, strdup(INTL_DEFAULT_LOCALE));
+    tags_add(l, reclaim_strdup(INTL_DEFAULT_LOCALE));
     return l;
 }
 
@@ -303,7 +304,7 @@ static int lookup_match(Service svc, const IntlHostRequest *req, char **found)
     for (i = 0; i < req->nlocales; i++) {
         const char *tag = req->locales[i];
         size_t at, ext, n = strlen(tag), pos;
-        char *base = malloc(n + 1);
+        char *base = lexbor_malloc(n + 1);
 
         CHECK(base != NULL, "a locale match could not be allocated");
         extension_span(tag, &at, &ext);
@@ -341,7 +342,7 @@ static char *extension_keyword(const char *ext, size_t len, const char *key)
 
         if (n == 2) {
             if (in_key) break;                              /* the keyword we were in had an empty value */
-            if (memcmp(sub, key, 2) == 0) { in_key = sub; val = strdup(""); }
+            if (memcmp(sub, key, 2) == 0) { in_key = sub; val = reclaim_strdup(""); }
         } else if (in_key) {
             size_t old = strlen(val);
 
@@ -403,7 +404,7 @@ static void kd_add_enum(KeyData *d, const char *key, UEnumeration *e)
 
         if (!t) continue;
         if (strcmp(key, "co") == 0 && (strcmp(t, "standard") == 0 || strcmp(t, "search") == 0)) continue;
-        kd_add(d, strdup(t), true);
+        kd_add(d, reclaim_strdup(t), true);
     }
     uenum_close(e);
 }
@@ -432,7 +433,7 @@ static void kd_add_numbering_systems(KeyData *d)
         UErrorCode s2 = U_ZERO_ERROR;
         UNumberingSystem *ns = unumsys_openByName(v, &s2);
 
-        if (U_SUCCESS(s2) && !unumsys_isAlgorithmic(ns)) kd_add(d, strdup(v), true);
+        if (U_SUCCESS(s2) && !unumsys_isAlgorithmic(ns)) kd_add(d, reclaim_strdup(v), true);
         if (ns) unumsys_close(ns);
     }
     uenum_close(e);
@@ -476,7 +477,7 @@ static void key_data(Service svc, const char *found, const char *key, KeyData *d
         }
         ucol_close(c);
     } else if (strcmp(key, "nu") == 0) {
-        kd_add(d, strdup(numbering_system_of(icu)), true);
+        kd_add(d, reclaim_strdup(numbering_system_of(icu)), true);
         kd_add_numbering_systems(d);
     } else if (strcmp(key, "ca") == 0) {
         kd_add_enum(d, "ca", ucal_getKeywordValuesForLocale("calendar", icu, true, &st));
@@ -504,7 +505,7 @@ static char *canonical_uvalue(const char *key, const char *value)
     low[n] = '\0';
     legacy = uloc_toLegacyType(key, low);
     t = legacy ? uloc_toUnicodeLocaleType(key, legacy) : NULL;
-    return strdup(t ? t : low);
+    return reclaim_strdup(t ? t : low);
 }
 
 typedef struct { char *locale; const char *value[4]; char *owned[4]; char *found; } Resolved;
@@ -519,10 +520,10 @@ static void resolve_locale(Service svc, const IntlHostRequest *req, const char *
     size_t at = 0, elen = 0;
 
     memset(out, 0, sizeof *out);
-    if (m < 0) found = strdup(INTL_DEFAULT_LOCALE);                     /* step 3 */
+    if (m < 0) found = reclaim_strdup(INTL_DEFAULT_LOCALE);                     /* step 3 */
     else {
         extension_span(req->locales[m], &at, &elen);
-        if (elen) extension = strndup(req->locales[m] + at, elen);
+        if (elen) extension = reclaim_strndup(req->locales[m] + at, elen);
     }
     for (k = 0; k < nkeys; k++) {                                       /* step 9 */
         KeyData d;
@@ -542,7 +543,7 @@ static void resolve_locale(Service svc, const IntlHostRequest *req, const char *
             have_opt = true;
             if (fv->kind == INTL_VALUE_STRING) {
                 ov = canonical_uvalue(keys[k], fv->str);
-                if (!*ov) { free(ov); ov = strdup("true"); }
+                if (!*ov) { free(ov); ov = reclaim_strdup("true"); }
                 opt = ov;
             }
         }
@@ -555,14 +556,14 @@ static void resolve_locale(Service svc, const IntlHostRequest *req, const char *
 
             snprintf(ext + n, sizeof ext - n, "-%s%s%s", keys[k], empty_keyword ? "" : "-", empty_keyword ? "" : value);
         }
-        out->owned[k] = value ? strdup(value) : NULL;
+        out->owned[k] = value ? reclaim_strdup(value) : NULL;
         out->value[k] = out->owned[k];
         free(requested);
         free(ov);
         kd_free(&d);
     }
     if (strcmp(ext, "-u") != 0) {                                       /* step 10 */
-        char *withext = malloc(strlen(found) + strlen(ext) + 1), *canon;
+        char *withext = lexbor_malloc(strlen(found) + strlen(ext) + 1), *canon;
 
         CHECK(withext != NULL, "a resolved locale could not be allocated");
         strcpy(withext, found);
@@ -572,7 +573,7 @@ static void resolve_locale(Service svc, const IntlHostRequest *req, const char *
         CHECK(canon != NULL, "ResolveLocale built a tag ICU cannot read");
         out->locale = canon;
     } else {
-        out->locale = strdup(found);
+        out->locale = reclaim_strdup(found);
     }
     out->found = found;
     free(extension);
@@ -626,7 +627,7 @@ static char *collator_locale(const char *locale, const char *usage, const char *
     else if (collation && strcmp(collation, "default") != 0)
         uloc_setKeywordValue("collation", uloc_toLegacyType("co", collation), buf, sizeof buf, &st);
     CHECKF(U_SUCCESS(st), "ICU could not set a collation on %s: %s", locale, u_errorName(st));
-    return strdup(buf);
+    return reclaim_strdup(buf);
 }
 
 static char *collator_resolve(const IntlHostRequest *req)
@@ -991,11 +992,11 @@ static char *number_to_parts(const IntlHostRequest *req)
     const UFormattedValue *fv = unumf_resultAsValue(r, &st);
     int32_t n, i;
     const UChar *u = ufmtval_getString(fv, &n, &st);
-    const char **types = calloc((size_t)n + 1, sizeof(char *));
+    const char **types = lexbor_calloc((size_t)n + 1, sizeof(char *));
     UConstrainedFieldPosition *pos = ucfpos_open(&st);
     char *a;
 
-    int32_t *span = calloc((size_t)n + 1, sizeof(int32_t));
+    int32_t *span = lexbor_calloc((size_t)n + 1, sizeof(int32_t));
 
     CHECK(types != NULL && span != NULL, "a parts map could not be allocated");
     ucfpos_constrainCategory(pos, UFIELD_CATEGORY_NUMBER, &st);
@@ -1032,10 +1033,10 @@ static char *primary_time_zone(const char *tz, size_t len)
 
     CHECKF(U_SUCCESS(st), "ICU could not list its time zones: %s", u_errorName(st));
     while ((id = uenum_next(e, NULL, &st)) != NULL && U_SUCCESS(st))
-        if (strlen(id) == len && strncasecmp(id, tz, len) == 0) { match = strdup(id); break; }
+        if (strlen(id) == len && strncasecmp(id, tz, len) == 0) { match = reclaim_strdup(id); break; }
     uenum_close(e);
     if (!match) {
-        if (len == 3 && strncasecmp(tz, "UTC", 3) == 0) return strdup("UTC");
+        if (len == 3 && strncasecmp(tz, "UTC", 3) == 0) return reclaim_strdup("UTC");
         return NULL;
     }
     {
@@ -1053,7 +1054,7 @@ static char *primary_time_zone(const char *tz, size_t len)
     /* §6.5.1 step 5.d: "Etc/UTC", "Etc/GMT" and "GMT" are "UTC". */
     if (strcmp(match, "Etc/UTC") == 0 || strcmp(match, "Etc/GMT") == 0 || strcmp(match, "GMT") == 0) {
         free(match);
-        match = strdup("UTC");
+        match = reclaim_strdup("UTC");
     }
     return match;
 }
@@ -1191,7 +1192,7 @@ static char *date_locale(const IntlHostRequest *req)
     if (ca) uloc_setKeywordValue("calendar", uloc_toLegacyType("ca", ca), buf, sizeof buf, &st);
     if (nu) uloc_setKeywordValue("numbers", nu, buf, sizeof buf, &st);
     CHECKF(U_SUCCESS(st), "ICU could not set a date locale's keywords: %s", u_errorName(st));
-    return strdup(buf);
+    return reclaim_strdup(buf);
 }
 
 /* Table 16's components, with each value's pattern letters. */
@@ -1495,7 +1496,7 @@ static void list_enum(TagList *l, const char *key, UEnumeration *e)
 
         if (!t) continue;
         if (key && strcmp(key, "co") == 0 && (strcmp(t, "standard") == 0 || strcmp(t, "search") == 0)) continue;
-        tags_add(l, strdup(t));
+        tags_add(l, reclaim_strdup(t));
     }
     uenum_close(e);
 }
@@ -1518,7 +1519,7 @@ static char *supported_values(const IntlHostRequest *req)
 
         memset(&d, 0, sizeof d);
         kd_add_numbering_systems(&d);
-        for (i = 0; i < d.n; i++) tags_add(&l, strdup(d.items[i]));
+        for (i = 0; i < d.n; i++) tags_add(&l, reclaim_strdup(d.items[i]));
         kd_free(&d);
     } else {
         UEnumeration *e;
@@ -1530,7 +1531,7 @@ static char *supported_values(const IntlHostRequest *req)
         while ((id = uenum_next(e, NULL, &st)) != NULL && U_SUCCESS(st))
             tags_add(&l, primary_time_zone(id, strlen(id)));
         uenum_close(e);
-        tags_add(&l, strdup("UTC"));
+        tags_add(&l, reclaim_strdup("UTC"));
     }
     CHECKF(U_SUCCESS(st), "ICU could not list the supported values of %s: %s", key, u_errorName(st));
     return sorted_answer(&l);

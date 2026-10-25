@@ -12,6 +12,7 @@
 #include "core/layout/flow_position.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/used_value.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §9.4.1's horizontal rule applied down the chain of containing blocks, which in one block formatting context is
    the chain of in-flow block containers. CSS 2.2 §9.4.3's relative translation moves no box of this frame
@@ -160,7 +161,7 @@ static bool get_place_through(lxb_dom_element_t *f, const CssPx *start_at, FlowF
     if (!block_flow_context_floats_ask(lxb_dom_interface_element(parent), &v, &n)) return false;
     for (k = 0; k < n && v[k] != f; k++) {}
     CHECKF(k < n, "%s floats and is not among its context's floats", box_subject(f, fbuf, sizeof fbuf));
-    boxes = malloc((k + 1) * sizeof *boxes);
+    boxes = lexbor_malloc((k + 1) * sizeof *boxes);
     CHECK(boxes != NULL, "out of memory placing one block formatting context's floats");
     /* Document order, each against those before it; a placement already recorded stays. */
     for (i = 0; i <= k; i++) {

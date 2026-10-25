@@ -43,6 +43,7 @@
 #include "core/realm.h"
 #include "core/structured_clone.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* ---- HTML §2.7.3's `memory`, AND THE TWO THINGS THAT SEED IT ------------------------------------------------
  *
@@ -1024,7 +1025,7 @@ void structured_symbol_paths(JSContext *ctx, const StructuredWithTransfer *in,
                 char *child;
 
                 CHECK(name != NULL, "structured clone: OOM reading a member name");
-                child = malloc(strlen(path) + strlen(name) + 2);
+                child = lexbor_malloc(strlen(path) + strlen(name) + 2);
                 CHECK(child != NULL, "structured clone: OOM composing a member path");
                 sprintf(child, "%s.%s", path, name);
                 JS_DefinePropertyValueUint32(ctx, work, nwork, JS_GetProperty(ctx, v, tab[j].atom), JS_PROP_C_W_E);

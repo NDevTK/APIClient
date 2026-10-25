@@ -114,7 +114,7 @@ static void mstr_add(MStr *b, const char *s, size_t n)
 
 static char *mime_strdup_lower(const char *s, size_t n, bool lower)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
     size_t i;
 
     CHECK(out != NULL, "MIME: OOM taking a MIME type's component");
@@ -213,7 +213,7 @@ void mime_type_copy(MimeType *out, const MimeType *src)
     out->type = mime_strdup_lower(src->type, strlen(src->type), false);
     out->subtype = mime_strdup_lower(src->subtype, strlen(src->subtype), false);
     if (src->nparams == 0) return;
-    out->params = malloc(sizeof(*out->params) * (size_t)src->nparams);
+    out->params = lexbor_malloc(sizeof(*out->params) * (size_t)src->nparams);
     CHECK(out->params != NULL, "MIME: OOM copying a MIME type's parameters");
     out->cparams = src->nparams;
     /* `nparams` grows WITH the entries and not ahead of them, so the record is a valid one at every point of
@@ -329,7 +329,7 @@ char *mime_type_essence(const MimeType *m)
            "non-empty ASCII strings, and a failed parse leaves neither");
     tn = strlen(m->type);
     sn = strlen(m->subtype);
-    out = malloc(tn + sn + 2);
+    out = lexbor_malloc(tn + sn + 2);
     CHECK(out != NULL, "MIME: OOM serializing a MIME type's essence");
     memcpy(out, m->type, tn);
     out[tn] = '/';

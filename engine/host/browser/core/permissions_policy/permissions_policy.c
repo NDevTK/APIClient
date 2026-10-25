@@ -130,7 +130,7 @@ static void pp_allowlist_add_expression(PpAllowlist *a, const char *s, size_t n)
         a->expressions = lexbor_realloc(a->expressions, (size_t)a->cap_expressions * sizeof *a->expressions);
         CHECK(a->expressions != NULL, "permissions policy: OOM growing §4.7's allowlist expressions");
     }
-    copy = malloc(n + 1);
+    copy = lexbor_malloc(n + 1);
     CHECK(copy != NULL, "permissions policy: OOM copying a §5.1 permissions-source-expression");
     memcpy(copy, s, n);
     copy[n] = '\0';
@@ -713,7 +713,7 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
     DCHECK(origin != NULL, "§9.5 was asked to create a permissions policy for a navigable with no origin — the "
                            "origin is the Document's own and every §9.7 default-allowlist step compares against "
                            "it");
-    policy = calloc(1, sizeof *policy);
+    policy = lexbor_calloc(1, sizeof *policy);
     CHECK(policy != NULL, "permissions policy: OOM creating §9.5's policy for a navigable");
     /* §9.7 STEP 4 RUNS ONCE, HERE, AND NOT PER FEATURE — which is the same answer and not an optimisation to
        be traded away later. §9.4 is a pure function of the ELEMENT (its `allow` attribute, its node document's
@@ -989,7 +989,7 @@ char *permissions_policy_serialize(const PermissionsPolicy *policy)
                "policy BEFORE permissions_policy_apply_response ran, not after");
     for (f = 0; f < PP_FEATURE_N; f++)
         n += strlen(PP_FEATURES[f].token) + 1 + strlen(pp_value_token(policy->inherited[f])) + 1;
-    out = malloc(n);
+    out = lexbor_malloc(n);
     CHECK(out != NULL, "permissions policy: OOM serializing §4.2's inherited policy for a peer instance");
     out[0] = '\0';
     for (f = 0; f < PP_FEATURE_N; f++) {
@@ -1038,7 +1038,7 @@ PermissionsPolicy *permissions_policy_deserialize(const char *text)
            "§9.5's answer was read back from a record that says there is NO container — \"container is null, "
            "return `Enabled`\" is step 1 of §9.7 and is a decision the READER of this record takes, not a "
            "policy to build: a caller that reached here has not asked whether its navigable has a container");
-    policy = calloc(1, sizeof *policy);
+    policy = lexbor_calloc(1, sizeof *policy);
     CHECK(policy != NULL, "permissions policy: OOM rebuilding §9.5's answer for a navigable's Document");
     for (f = 0; f < PP_FEATURE_N; f++) seen[f] = false;
     for (p = text; *p != '\0'; ) {

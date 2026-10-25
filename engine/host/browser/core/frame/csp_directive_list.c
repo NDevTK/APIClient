@@ -292,7 +292,7 @@ char *csp_policy_serialize(const CspPolicy *policy)
         if (policy->directives[i].value_text.n)
             len += 1 + policy->directives[i].value_text.n;    /* " " + value */
     }
-    out = malloc(len + 1);
+    out = lexbor_malloc(len + 1);
     CHECK(out != NULL, "CSP: OOM serializing a policy");
     for (i = 0; i < policy->n_directives; i++) {
         if (i) { out[at++] = ';'; out[at++] = ' '; }

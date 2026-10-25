@@ -3,6 +3,7 @@
 
 #include "check.h"
 #include "core/infra_strings.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 char *infra_normalize_newlines(const char *s, size_t n, size_t *out_n)
 {
@@ -10,7 +11,7 @@ char *infra_normalize_newlines(const char *s, size_t n, size_t *out_n)
     size_t i, w = 0;
 
     DCHECK(s != NULL || n == 0, "Infra §4.7's normalize newlines was given a null string with a non-zero length");
-    out = malloc(n + 1);
+    out = lexbor_malloc(n + 1);
     CHECK(out != NULL, "infra: OOM normalizing a string's newlines");
     for (i = 0; i < n; i++) {
         if (s[i] == '\r') {

@@ -481,7 +481,7 @@ JSValue remote_location_of_document(JSContext *ctx, uint32_t doc)
 
     obj = JS_NewObjectClass(ctx, g_rl_class);
     if (JS_IsException(obj)) return obj;
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "remote location: OOM building a cross-origin Location");
     d->doc = doc;
     JS_SetOpaque(obj, d);

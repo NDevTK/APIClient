@@ -284,7 +284,7 @@ uint32_t display_list_add_bitmap(DisplayList *dl, const uint8_t *rgba, uint32_t 
         dl->img = v;
         dl->img_cap = cap;
     }
-    bm.rgba = malloc(n);
+    bm.rgba = lexbor_malloc(n);
     CHECK(bm.rgba != NULL, "paint: OOM copying an image into a display list — the copy is what makes the list "
                            "self-contained, so a list that kept the caller's pointer instead would be the "
                            "borrowed lifetime display_list.h refuses outright");

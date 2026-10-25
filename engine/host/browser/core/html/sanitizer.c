@@ -59,6 +59,7 @@
 #include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/dom_cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The four namespaces §8.6.5's tables name. Written out because a namespace is a STRING in a canonical item —
    the spec's own key — and lexbor's ids are an index into a per-document table. */
@@ -1351,7 +1352,7 @@ static JSValue san_new_object(JSContext *ctx, JSValue config)
     obj = JS_NewObjectProtoClass(ctx, proto, g_class);
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) { JS_FreeValue(ctx, config); return obj; }
-    r = calloc(1, sizeof *r);
+    r = lexbor_calloc(1, sizeof *r);
     CHECK(r != NULL, "a Sanitizer's configuration record could not be allocated");
     r->config = config;
     JS_SetOpaque(obj, r);

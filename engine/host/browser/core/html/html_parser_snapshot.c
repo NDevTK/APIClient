@@ -10,6 +10,7 @@
 #include "quickjs.h"
 #include "core/html/html_parser_snapshot.h"
 #include "solver/dom_cow.h"   /* the parse declaration a sibling's close released */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The fixed part of a snapshot. The open-elements and active-formatting lists (node addresses) and the template
    insertion modes (their records) follow it, in that order. */
@@ -54,7 +55,7 @@ JSValue html_parser_snapshot_take(JSContext *ctx, const lxb_html_parser_t *parse
     h.n_template = tmpl_n = tree->template_insertion_modes->length;
     h.template_size = tree->template_insertion_modes->struct_size;
     total = sizeof h + (open_n + active_n) * sizeof(void *) + tmpl_n * h.template_size;
-    buf = malloc(total);
+    buf = lexbor_malloc(total);
     CHECK(buf != NULL, "html-parse-oom: a parser snapshot could not be allocated");
     memcpy(buf, &h, sizeof h);
     memcpy(buf + sizeof h, tree->open_elements->list, open_n * sizeof(void *));

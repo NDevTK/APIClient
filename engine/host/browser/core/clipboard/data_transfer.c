@@ -29,6 +29,8 @@
 #include "core/realm.h"
 #include "core/timing/task_source.h"
 #include "solver/concolic.h"
+#include "solver/reclaim.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 #define DT_COMPONENT "data_transfer"
 
@@ -216,7 +218,7 @@ static bool drop_at(JSContext *ctx, JSValueConst item, const void *target)
 
 static char *ascii_lower_dup(const char *s, size_t n)
 {
-    char *out = malloc(n + 1);
+    char *out = lexbor_malloc(n + 1);
 
     CHECK(out, "DataTransfer: OOM lowercasing a format");
     for (size_t i = 0; i < n; i++) out[i] = (s[i] >= 'A' && s[i] <= 'Z') ? (char)(s[i] - 'A' + 'a') : s[i];
@@ -241,10 +243,10 @@ static char *dt_format(JSContext *ctx, JSValueConst v, bool rename, bool *is_url
     CHECK(s != NULL, "DataTransfer: a converted format could not be read");
     f = ascii_lower_dup(s, n);
     JS_FreeCString(ctx, s);
-    if (rename && !strcmp(f, "text")) { free(f); f = strdup("text/plain"); }
+    if (rename && !strcmp(f, "text")) { free(f); f = reclaim_strdup("text/plain"); }
     else if (rename && !strcmp(f, "url")) {
         free(f);
-        f = strdup("text/uri-list");
+        f = reclaim_strdup("text/uri-list");
         if (is_url) *is_url = true;
     }
     CHECK(f, "DataTransfer: OOM renaming a format");

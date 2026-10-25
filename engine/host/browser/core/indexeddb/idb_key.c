@@ -674,8 +674,8 @@ int idb_code_unit_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
     CHECK(au != NULL && bu != NULL, "IndexedDB: a string key's value could not be read");
     an = utf8_decode_buf16(NULL, 0, au, alen);
     bn = utf8_decode_buf16(NULL, 0, bu, blen);
-    ac = malloc((an + 1) * sizeof *ac);
-    bc = malloc((bn + 1) * sizeof *bc);
+    ac = lexbor_malloc((an + 1) * sizeof *ac);
+    bc = lexbor_malloc((bn + 1) * sizeof *bc);
     CHECK(ac != NULL && bc != NULL, "IndexedDB: OOM comparing two string keys");
     utf8_decode_buf16(ac, an, au, alen);
     utf8_decode_buf16(bc, bn, bu, blen);

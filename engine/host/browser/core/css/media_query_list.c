@@ -14,6 +14,7 @@
 #include "core/realm.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static JSClassID g_mql_class, g_ev_class;
 static JSClassID g_slot = JS_INVALID_CLASS_ID;                      /* this document's collection, in creation order */
@@ -376,7 +377,7 @@ static JSValue js_match_media(JSContext *ctx, JSValueConst this_val, int argc, J
         JS_FreeValue(ctx, proto);
     }
     if (JS_IsException(obj)) { JS_FreeCString(ctx, q); return obj; }
-    d = calloc(1, sizeof *d);
+    d = lexbor_calloc(1, sizeof *d);
     CHECK(d != NULL, "matchMedia: OOM building a MediaQueryList");
     d->set = media_query_parse(q);
     JS_FreeCString(ctx, q);

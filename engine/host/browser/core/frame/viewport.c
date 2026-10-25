@@ -22,6 +22,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE TOP-LEVEL TRAVERSABLE's viewport. A UA answering the question CSS hands it, exactly as rendering.c
    answers the refresh rate: 1280 x 720 is an ordinary desktop content area, and it is deliberately NOT
@@ -380,9 +381,9 @@ static char *ve_spell_mono(JSContext *realm, const CssPxMonomial *mono, const ch
 static char *ve_spell_poly(JSContext *realm, const char *tag, double c, const CssPxMonomial *m, int n,
                            const char *const *keys)
 {
-    char **monos = calloc((size_t)n + 1, sizeof *monos);
-    char (*coeff)[32] = calloc((size_t)n + 1, sizeof *coeff);
-    const char **fields = calloc(2 * (size_t)n + 1, sizeof *fields);
+    char **monos = lexbor_calloc((size_t)n + 1, sizeof *monos);
+    char (*coeff)[32] = lexbor_calloc((size_t)n + 1, sizeof *coeff);
+    const char **fields = lexbor_calloc(2 * (size_t)n + 1, sizeof *fields);
     char *out;
     int j, nf = 0;
 
@@ -411,13 +412,13 @@ static char *ve_spell_atom(JSContext *realm, unsigned atom, const char *const *k
     const CssPxAtomArg *args;
     int nargs, a;
     const char *op = css_px_atom_definition(realm, atom, &nargs, &args);
-    char **sp = calloc((size_t)nargs + 1, sizeof *sp);
+    char **sp = lexbor_calloc((size_t)nargs + 1, sizeof *sp);
     char *out;
 
     CHECK(sp, "viewport: OOM spelling an atom");
     for (a = 0; a < nargs; a++) {
         if (args[a].determined) {
-            sp[a] = malloc(32);
+            sp[a] = lexbor_malloc(32);
             CHECK(sp[a], "viewport: OOM spelling an atom");
             snprintf(sp[a], 32, "%.17g", args[a].px);
         } else {

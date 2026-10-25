@@ -13,6 +13,7 @@
 #include "core/dom/node.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/enumerated_attribute.h"   /* the ASCII match HTML §15.3.8's rules are stated over */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE DECLARATION `property: value`, handed to `sink` as the longhands it sets. The property is the one
    HTML's rendering section writes, which is routinely a shorthand, and the cascade is over longhands only, so
@@ -120,7 +121,7 @@ static char *html_parse_dimension_value(const lxb_char_t *s, size_t n)
        `0.5` keeps its `0` rather than becoming a `.5px` whose leading dot a reader would have to admit
        separately, and `0` stays `0`. */
     while (istart + 1 < iend && s[istart] == '0') istart++;
-    out = malloc((iend - istart) + (fend > fstart ? 1 + (fend - fstart) : 0) + ulen + 1);
+    out = lexbor_malloc((iend - istart) + (fend > fstart ? 1 + (fend - fstart) : 0) + ulen + 1);
     CHECK(out != NULL, "cssom: OOM building HTML §15.4.3's dimension hint — a dropped one reads as `width` "
                        "being undeclared by this origin, which is the `auto` that sends a replaced box to "
                        "CSS 2.1 §10.3.2's 300px default instead of to the number the attribute states");
@@ -466,7 +467,7 @@ static void hint_page_margins(lxb_dom_element_t *el, CssHintSink sink, void *ud)
                one that is PRESENT whether or not it parses, and an unparseable one falls to the default rather
                than on to the next source. */
             if (html_parse_non_negative_integer(v, vlen, &digits, &dlen)) {
-                char *out = malloc(dlen + 3);
+                char *out = lexbor_malloc(dlen + 3);
 
                 CHECK(out != NULL, "cssom: OOM building a presentational hint's pixel length");
                 memcpy(out, digits, dlen);

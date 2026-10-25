@@ -70,6 +70,7 @@
 #include "solver/concolic.h"
 #include "solver/endpoint.h"
 #include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* Fetch §4.6 "HTTP-network-or-cache fetch": "If the sum of contentLength and inflightKeepaliveBytes is greater
    than 64 kibibytes, then return a network error." Beacon §3 step 6.2 is that same limit reported as a `false`
@@ -107,7 +108,7 @@ static JSValue beacon_queue_result(JSContext *ctx, const char *url_text)
                              "step 7 has either a serialized URL or an unknown URL's display shape");
     n = snprintf(NULL, 0, "navigator.sendBeacon(%s)", url_text);
     CHECK(n > 0, "beacon: measuring the queue result's source name failed");
-    name = malloc((size_t)n + 1);
+    name = lexbor_malloc((size_t)n + 1);
     CHECK(name, "beacon: OOM naming the queue result's source");
     snprintf(name, (size_t)n + 1, "navigator.sendBeacon(%s)", url_text);
     /* THE SHAPE IS THAT NAME IN BRACES — concolic_new's rule, and it is spelled here rather than folded into
@@ -116,7 +117,7 @@ static JSValue beacon_queue_result(JSContext *ctx, const char *url_text)
        strips every brace, so the nesting composes to one stable name rather than to two. */
     n = snprintf(NULL, 0, "{%s}", name);
     CHECK(n > 0, "beacon: measuring the queue result's display shape failed");
-    hole = malloc((size_t)n + 1);
+    hole = lexbor_malloc((size_t)n + 1);
     CHECK(hole, "beacon: OOM naming the queue result's hole");
     snprintf(hole, (size_t)n + 1, "{%s}", name);
     /* THE SEAM, not concolic_new: a host that is not exploring (the conformance runner installs the value
@@ -294,7 +295,7 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
             if (nespan > 0) {
                 int k;
 
-                espan = malloc(sizeof(*espan) * (size_t)nespan);
+                espan = lexbor_malloc(sizeof(*espan) * (size_t)nespan);
                 CHECK(espan != NULL, "beacon: OOM naming which bytes of a beacon's payload are unknown input");
                 for (k = 0; k < nespan; k++) {
                     espan[k].off = bs[k].off;

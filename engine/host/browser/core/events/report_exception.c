@@ -37,6 +37,7 @@
 #include "core/events/event_target.h"
 #include "core/events/report_exception.h"
 #include "core/realm.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* WHERE A PARKED REPORT IS, AS A STEP OF §8.1.4.6 RATHER THAN AS A PRIVATE INTEGER.
  *
@@ -373,7 +374,7 @@ char *report_exception_position(JSContext *ctx, JSValueConst exception, uint32_t
             e = b + strcspn(b, "\n");
             if (!frame_site(b, e, &fb, &fe, &line, &col) || fe == fb)
                 continue;
-            file = malloc((size_t)(fe - fb) + 1);
+            file = lexbor_malloc((size_t)(fe - fb) + 1);
             CHECK(file != NULL, "§8.1.4.6's filename could not be allocated — a diagnostic that answered "
                   "\"no throw site\" here would be reporting a malloc failure as a fact about the page");
             memcpy(file, fb, (size_t)(fe - fb));
@@ -387,7 +388,7 @@ char *report_exception_position(JSContext *ctx, JSValueConst exception, uint32_t
         JS_FreeValue(ctx, stack);
     }
     if (!file) {
-        file = malloc(1);
+        file = lexbor_malloc(1);
         CHECK(file != NULL, "§8.1.4.6's empty filename could not be allocated — the empty string is a POSITIVE "
               "answer here and a caller must be able to read it as one");
         file[0] = '\0';

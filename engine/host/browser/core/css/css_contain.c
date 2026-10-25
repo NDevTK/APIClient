@@ -8,6 +8,7 @@
 
 #include "check.h"
 #include "core/css/css_contain.h"
+#include "solver/reclaim.h"
 
 #define CT_STRICT (CSS_CONTAIN_SIZE | CSS_CONTAIN_LAYOUT | CSS_CONTAIN_STYLE | CSS_CONTAIN_PAINT)
 #define CT_CONTENT (CSS_CONTAIN_LAYOUT | CSS_CONTAIN_STYLE | CSS_CONTAIN_PAINT)
@@ -79,7 +80,7 @@ char *css_contain_serialize(unsigned bits)
             if (bits & CT_MEMBERS[i].bit)
                 at += (size_t)snprintf(buf + at, sizeof buf - at, "%s%s", at ? " " : "", CT_MEMBERS[i].word);
     }
-    out = strdup(buf);
+    out = reclaim_strdup(buf);
     CHECK(out != NULL, "cssom: OOM serializing a `contain` value");
     return out;
 }

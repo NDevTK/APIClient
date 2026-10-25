@@ -42,6 +42,7 @@
 #include "core/frame/window_proxy.h"   /* the brand on what §7.3.1.7's rules answer with — see §4.6.5 step 11 */
 #include "core/frame/window_features.h"
 #include "quickjs-step.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §4.6.3 "reinitialize url": "set element's url to the result of encoding-parsing a URL given element's href
    content attribute's value, RELATIVE TO ELEMENT'S NODE DOCUMENT" — which is §2.4.3's DOCUMENT BASE URL of the
@@ -488,7 +489,7 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        That is the navigable NAME's representation and not this call's: it is a DOMString the whole way down and
        the fix is to hold it as a JSValue, which the same length is already carried past here for. */
     tv = html_base_element_get_target(node_of(el), NULL, 0, &tlen);
-    target = malloc(tlen + 1);
+    target = lexbor_malloc(tlen + 1);
     CHECK(target != NULL, "§4.6.5 step 3: OOM copying a hyperlink's target");
     memcpy(target, tv, tlen);
     target[tlen] = '\0';

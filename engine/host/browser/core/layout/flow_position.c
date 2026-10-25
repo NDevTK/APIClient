@@ -401,7 +401,7 @@ bool flow_inline_fragment_rects_ask(lxb_dom_element_t *el, FlowRect **out, size_
     }
     left = css_px_add(o.x, used_value_leading_edge_px(style, false));
     top = css_px_add(o.y, used_value_leading_edge_px(style, true));
-    rects = malloc(n * sizeof *rects);
+    rects = lexbor_malloc(n * sizeof *rects);
     CHECK(rects != NULL, "out of memory placing CSS 2 §9.4.2's box fragments — one entry per fragment of one "
                          "inline box, so a failure here is the physical floor");
     for (i = 0; i < n; i++) {

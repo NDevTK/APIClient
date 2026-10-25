@@ -15,6 +15,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/cow.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* §4.12.5.1.6's "Objects that implement the CanvasPath interface have a path". One owned reference, behind the
    class opaque: the path is not exposed in any way, because the interface declares nothing that would. */
@@ -120,7 +121,7 @@ static JSValue p2d_alloc(JSContext *ctx, JSValueConst new_target)
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) { JS_FreeValue(ctx, path); return obj; }
 
-    b = calloc(1, sizeof(*b));
+    b = lexbor_calloc(1, sizeof(*b));
     CHECK(b != NULL, "a Path2D's path record could not be allocated");
     b->path = path;
     JS_SetOpaque(obj, b);

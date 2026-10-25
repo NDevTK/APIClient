@@ -318,7 +318,7 @@ static GlyphOutlineResult go_simple(const GlyphOutlines *g, size_t off, size_t n
     /* ONE ALLOCATION, PROPORTIONAL TO THIS GLYPH AND NOT TO THE FACE. The contour walk below needs random
        access — the first point of a contour is decided by looking at its LAST one — so the points cannot be
        streamed. */
-    pt = malloc((size_t)npts * sizeof *pt);
+    pt = lexbor_malloc((size_t)npts * sizeof *pt);
     CHECK(pt != NULL, "out of memory decoding one glyph's points");
 
     /* THE FLAG ARRAY IS RUN-LENGTH ENCODED AND ITS LENGTH IS NOT STATED ANYWHERE. The standard says the

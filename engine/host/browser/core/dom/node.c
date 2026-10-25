@@ -170,7 +170,7 @@ static void node_wrap_grow(void)
                                 "load factor claims");
     }
 #endif
-    tab = calloc((size_t)cap, sizeof *tab);
+    tab = lexbor_calloc((size_t)cap, sizeof *tab);
 
     CHECK(tab != NULL, "the node wrapper table could not grow: a dropped wrapper breaks node identity, and "
                        "every `n === other` the page makes after it is silently false");
@@ -1681,7 +1681,7 @@ static JSValue cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offse
     a = cd_byte_of(s, len, offset);                                 /* steps 5-7, as one splice */
     b = cd_byte_of(s, len, offset + count);
     out_len = a + data_len + (len - b);
-    out = malloc(out_len + 1);
+    out = lexbor_malloc(out_len + 1);
     CHECK(out != NULL, "CharacterData: OOM splicing a node's data — a dropped write is a document that "
                        "disagrees with the program that wrote it");
     memcpy(out, s, a);
@@ -3179,7 +3179,7 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         char *buf;
         cd = lxb_dom_interface_character_data(s->n);
         len = cd->data.length + sd->data.length;
-        buf = malloc(len ? len : 1);
+        buf = lexbor_malloc(len ? len : 1);
         CHECK(buf != NULL, "normalize: OOM merging two Text nodes — dropping the merge would leave the page a "
                            "tree it did not build");
         memcpy(buf, cd->data.data, cd->data.length);

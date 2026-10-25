@@ -13,6 +13,7 @@
 #include "core/css/css_sheet_parse.h"
 #include "core/timing/thread_work.h"
 #include "solver/rest_unit.h"   /* the bytes a step tokenizes */
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 struct CssSheetParse {
     lxb_css_parser_t     *parser;
@@ -44,7 +45,7 @@ CssSheetParse *css_sheet_parse_begin(lxb_css_stylesheet_t *sst, const char *text
     CssSheetParse *run;
 
     DCHECK(sst != NULL && (text != NULL || len == 0), "a sheet parse was begun with no sheet or no text");
-    run = calloc(1, sizeof *run);
+    run = lexbor_calloc(1, sizeof *run);
     CHECK(run != NULL, "a sheet parse's record could not be allocated");
     run->parser = lxb_css_parser_create();
     CHECK(run->parser != NULL && lxb_css_parser_init(run->parser, NULL) == LXB_STATUS_OK,

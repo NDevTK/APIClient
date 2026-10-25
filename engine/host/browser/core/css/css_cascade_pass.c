@@ -88,7 +88,7 @@ static size_t cp_probe(const CpElement *tab, size_t cap, const lxb_dom_element_t
 static void cp_grow(CssCascadeRecord *r)
 {
     size_t cap = r->elem_cap ? r->elem_cap * 2 : CP_CAP0, i;
-    CpElement *tab = calloc(cap, sizeof *tab);
+    CpElement *tab = lexbor_calloc(cap, sizeof *tab);
 
     CHECK(tab != NULL, "css-cascade-pass-oom: the record's element table could not be grown");
     for (i = 0; i < r->elem_cap; i++)

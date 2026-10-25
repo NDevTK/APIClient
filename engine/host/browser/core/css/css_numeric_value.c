@@ -1072,7 +1072,7 @@ static JSValue js_css_numeric_value_arith(JSContext *ctx, JSValueConst this_val,
         /* `mul`'s step 3: every operand was a "number", so the result's unit is "number" too. */
         if (collapses && unit == NULL) unit = "number";
         if (collapses) {
-            JSValue *slots = malloc((size_t)values.n * sizeof *slots);
+            JSValue *slots = lexbor_malloc((size_t)values.n * sizeof *slots);
 
             CHECK(slots != NULL, "css-typed-om: OOM folding a §4.3.1 collapsing arm");
             for (i = 0; i < values.n; i++) slots[i] = css_unit_value_value(ctx, values.v[i]);

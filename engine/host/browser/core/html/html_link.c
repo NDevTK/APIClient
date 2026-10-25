@@ -42,6 +42,7 @@
 #include "core/html/image_source_set.h" /* §4.6.8.20's step 1 and its "to preload" step 2: what source an
                                            `as=image` link's `imagesrcset` selects, and out of what */
 #include "core/html/html_link.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 static int      g_ready;
 static JSValue  g_state_key;
@@ -686,7 +687,7 @@ static bool link_media_matches(JSContext *ctx, lxb_dom_element_t *el)
     bool m;
 
     if (!media) return true;   /* "The default, if the media attribute is omitted, is `all`" */
-    text = malloc(media_n + 1);
+    text = lexbor_malloc(media_n + 1);
     CHECK(text, "HTML §4.2.4.1 \"Processing the media attribute\": OOM copying a link element's `media` value");
     memcpy(text, media, media_n);
     text[media_n] = 0;
@@ -1710,7 +1711,7 @@ static JSValue link_stylesheet_deliver(JSContext *ctx, JSValueConst this_val, in
            is a STRING the sheet re-reads off its owner node at every ask, so the creator specifying it would
            compute what the live read already computes. */
         if (mv) {
-            media = malloc(mlen + 1);
+            media = lexbor_malloc(mlen + 1);
             CHECK(media != NULL, "§4.6.8.23: OOM reading a <link> element's media attribute");
             memcpy(media, mv, mlen);
             media[mlen] = '\0';

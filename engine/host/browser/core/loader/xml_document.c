@@ -54,6 +54,7 @@
 #include "core/xml/xml_parse.h"
 #include "solver/rest_unit.h"   /* how many items each of this loader's phases rests after */
 #include "check.h"
+#include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE THREE THINGS A §7.5.3 LOAD CAN BE DOING, in the order it can reach them. Two of them are a LOOP over
    something the response controls, which is why each is a phase with a bounded step rather than a stretch of a
@@ -115,7 +116,7 @@ XmlDocumentLoad *xml_document_load_begin(lxb_html_document_t *document, DomParse
            "subsection — the arm is a fact about the COMPUTED TYPE and this loader re-asks it, so this is a "
            "route into the XML parse that never asked what it fetched");
 
-    l = malloc(sizeof(*l));
+    l = lexbor_malloc(sizeof(*l));
     CHECK(l != NULL,
           "OOM opening an HTML §7.5.3 document load — the DOM this parse produces is what every flow of this "
           "instance reads, so a load that cannot even begin is not a document with no endpoints");
