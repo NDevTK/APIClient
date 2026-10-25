@@ -253,9 +253,29 @@ static int console_find_specifier(JSContext *ctx, JSValueConst target, const cha
     return -1;
 }
 
+/* §2.2 step 5's last clause where `converted` is an unknown (the %String%, %parseInt% or %parseFloat% call over
+   unknown input derived one): the new target is the prefix, the unknown and the rest joined by the engine's own
+   string concatenation, so the target keeps the value's provenance. Returns the new target (owned). */
+static JSValue console_substitute_unknown(JSContext *ctx, const char *bytes, size_t len, int at,
+                                         JSValueConst converted)
+{
+    JSValue sp[2];
+
+    sp[0] = JS_NewStringLen(ctx, bytes, (size_t)at);
+    CHECK(!JS_IsException(sp[0]), "console: §2.2's prefix could not be interned");
+    sp[1] = JS_DupValue(ctx, converted);
+    CHECK(concolic_add_hook(ctx, sp + 2, JS_CONCOLIC_ADD_CONCAT),
+          "console: §2.2's replacement declined an operand already established as unknown");
+    sp[1] = JS_NewStringLen(ctx, bytes + at + 2, len - (size_t)at - 2);
+    CHECK(!JS_IsException(sp[1]), "console: §2.2's suffix could not be interned");
+    CHECK(concolic_add_hook(ctx, sp + 2, JS_CONCOLIC_ADD_CONCAT),
+          "console: §2.2's replacement declined an operand already established as unknown");
+    return sp[0];
+}
+
 /* §2.2 step 5's last clause: "replace specifier in target with converted". `converted` is a String (%s) or a
    Number (%d/%i/%f); both render without running the page's code, which is why this can build the new target
-   from bytes. Returns the new string (owned). */
+   from bytes. An unknown takes console_substitute_unknown. Returns the new string (owned). */
 static JSValue console_substitute(JSContext *ctx, const char *bytes, size_t len, int at, JSValueConst converted)
 {
     const char *ins;
@@ -264,9 +284,11 @@ static JSValue console_substitute(JSContext *ctx, const char *bytes, size_t len,
     JSValue out;
     char *whole;
 
+    if (concolic_is(converted))
+        return console_substitute_unknown(ctx, bytes, len, at, converted);
     DCHECK(JS_IsString(converted) || JS_IsNumber(converted),
-           "§2.2 step 5 produced a `converted` that is neither a String nor a Number — %s is a %String% call "
-           "and %d/%i/%f are %parseInt%/%parseFloat% calls, so there is no third shape it can have");
+           "§2.2 step 5 produced a `converted` that is neither a String nor a Number nor unknown — %s is a "
+           "%String% call and %d/%i/%f are %parseInt%/%parseFloat% calls, so there is no fourth shape it can have");
     ins = JS_ToCStringLen(ctx, &ins_len, converted);
     CHECK(ins != NULL, "console: §2.2's converted value could not be rendered");
     /* json_buf is a byte buffer; json_buf_raw appends NUL-terminated runs, and neither half here can contain a
