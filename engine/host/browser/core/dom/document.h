@@ -330,7 +330,7 @@ void document_state_x_frame_options(JSContext *ctx, char *const *values, size_t 
    policy stating `frame-ancestors`, and when none does, HTML §7.7's check a navigation response's adherence to
    `X-Frame-Options`. */
 bool document_embeddable_cross_origin(JSContext *ctx, const UrlRecord *ancestor);
-/* The routes by which ATTACKER_PAGE holds a handle to post this realm's Document a message (HTML §9.3.3
+/* The routes by which the attacker page (concolic_attacker_page) holds a handle to post this realm's Document a message (HTML §9.3.3
    "Posting messages"): `*frame` when it may embed the Document (document_embeddable_cross_origin), `*opener`
    when the Document is a top-level traversable's whose opener policy keeps the handle of the page that opened
    it — §7.1.3.2 switches the group of a navigation from a cross-origin opener for every value but

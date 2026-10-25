@@ -195,6 +195,9 @@ function docSinkPin(p, f) {
 const SINK_ACT_KINDS = Object.freeze(["click", "dispatch", "input", "drop", "scroll", "close-request", "message"]);
 const SINK_TYPING_TYPES = Object.freeze(["input", "keyup", "change"]);
 const SINK_MESSAGE_ROUTES = Object.freeze(["opener", "frame", "none"]);
+/* Who holds a message act's origin: the attacker's own site (which the person verifying serves) or a
+   registrable domain an attacker would have to register (which no live verify reproduces without one). */
+const SINK_ORIGIN_OWNERS = Object.freeze(["attacker-site", "registered-domain"]);
 function docSinkAct(a, f) {
   const message = docIsRecord(a) && a.kind === "message";
   return docIsRecord(a) && SINK_ACT_KINDS.indexOf(a.kind) >= 0 && docIsName(a.target) && docIsName(a.type) &&
@@ -203,13 +206,15 @@ function docSinkAct(a, f) {
          (a.kind === "close-request") === (a.type === "close-request") &&
          message === (a.type === "message") && message === ("route" in a) && (!("data" in a) || message) &&
          (!("origin" in a) || (message && typeof a.origin === "string" && /^https?:\/\/[^/]+$/.test(a.origin))) &&
+         ("origin" in a) === ("originOwned" in a) &&
+         (!("originOwned" in a) || SINK_ORIGIN_OWNERS.indexOf(a.originOwned) >= 0) &&
          (!message || (a.target === "window" && SINK_MESSAGE_ROUTES.indexOf(a.route) >= 0 &&
                        (a.route === "none") === ("routeRefused" in a))) &&
          (a.kind !== "input" || SINK_TYPING_TYPES.indexOf(a.type) >= 0) && (!("handler" in a) || docIsName(a.handler))
     ? null : f + " is not {kind: click|dispatch|input|drop|scroll|close-request|message, target, type[, handler]} "
            + "with a click, a drop, a scroll, a close request or a message exactly where the type is that word, a "
            + "message at the window with its route (and a refusal exactly where it has none) and only a message "
-           + "carrying data or a sender origin, and typing only under input, keyup or change";
+           + "carrying data or a sender origin (with who holds it), and typing only under input, keyup or change";
 }
 function docSink(e, f) {
   if (!docIsRecord(e)) return f + " is not an object";

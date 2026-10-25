@@ -18,8 +18,25 @@ static void acts_append(JsonBuf *b, int *first, const char *act)
     json_buf_raw(b, act);
 }
 
-/* `act` with the `data` (JSON) and the `origin` (a JSON String) its message is posted with (both borrowed),
-   malloc'd. */
+/* Who holds the origin a message act is posted from (a JSON String this file composed): `attacker-site` for
+   the attacker's own site or a name under it, which the person verifying serves, `registered-domain` for a
+   registrable domain an attacker would have to register, which no live verify reproduces without one. */
+static const char *origin_owned(const char *origin)
+{
+    const char *site = concolic_attacker_site(), *host = strstr(origin, "://");
+    size_t hn, sn = strlen(site);
+
+    DCHECK(host && origin[0] == '"', "a message act's origin is not a JSON String holding an origin");
+    host += 3;
+    hn = strcspn(host, "\":/");
+    if ((hn == sn && !memcmp(host, site, sn)) || (hn > sn + 1 && host[hn - sn - 1] == '.' &&
+                                                   !memcmp(host + hn - sn, site, sn)))
+        return "attacker-site";
+    return "registered-domain";
+}
+
+/* `act` with the `data` (JSON) and the `origin` (a JSON String) its message is posted with (both borrowed), and
+   who holds that origin (origin_owned), malloc'd. */
 static char *act_with_message(const char *act, const char *data, const char *origin)
 {
     JsonBuf b = { 0 };
@@ -35,6 +52,9 @@ static char *act_with_message(const char *act, const char *data, const char *ori
     json_buf_raw(&b, ",");
     json_buf_key(&b, "origin");
     json_buf_raw(&b, origin);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "originOwned");
+    json_buf_str(&b, origin_owned(origin));
     json_buf_raw(&b, ",");
     json_buf_key(&b, "data");
     json_buf_raw(&b, data);

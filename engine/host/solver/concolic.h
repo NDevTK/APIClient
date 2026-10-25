@@ -718,16 +718,20 @@ typedef enum {
 void        concolic_declare_source_precondition(const char *component, const char *src,
                                                  SourcePreconditionKind kind);
 int         concolic_source_precondition_declared_by(const char *component, const char *src);
-/* The attacker's own page, at a name no victim lists (RFC 2606's `.test`). A referring-address delivery serves
-   it as ATTACKER_PAGE + payload under `unsafe-url`, and its URL less its fragment (Referrer Policy §8.3
-   "Determine request's Referrer", §8.4 "Strip url for use as a referrer") is what the victim reads; a
-   cross-document-message delivery frames or opens the victim from it. */
-#define ATTACKER_PAGE "https://attacker.test/"
+/* The attacker's own site and page: the host the person verifying controls, set by the trusted zone that
+   provisions this instance (concolic_set_attacker_site), and unset a name no victim lists (RFC 2606's `.test`,
+   `attacker.test`). A referring-address delivery serves the page as concolic_attacker_page() + payload under
+   `unsafe-url`, and its URL less its fragment (Referrer Policy §8.3 "Determine request's Referrer", §8.4 "Strip
+   url for use as a referrer") is what the victim reads; a cross-document-message delivery frames or opens the
+   victim from it; a request breakout and a composed message origin reach a host under the site. */
+void        concolic_set_attacker_site(const char *host);
+const char *concolic_attacker_site(void);
+const char *concolic_attacker_page(void);
 #define REFERRER_ATTACKER_POLICY "unsafe-url"
 /* Chrome reduces a referrer longer than this many bytes to its origin, beyond what §8.3 states (measured on
    Chrome for Testing 155.0.8059.84, the version testing/harness.js drives). */
 #define REFERRER_CHROME_LIMIT    4096
-/* ATTACKER_PAGE for a root whose declared mechanism is a referring address, NULL for every other. */
+/* concolic_attacker_page() for a root whose declared mechanism is a referring address, NULL for every other. */
 const char *concolic_source_attacker_page(const char *root);
 /* The precondition token of the first precondition member of `root`, or NULL when no member declares one. */
 const char *concolic_source_precondition(const char *root);

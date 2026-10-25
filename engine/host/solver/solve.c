@@ -537,9 +537,6 @@ void solve_init(JSContext *ctx) {
            "the @S byte-delivery locator is not distinct from a context locator — one contains the other, so a "
            "probe built to carry the bytes a source encodes would be routed into a context derivation and the "
            "state it reported would be a state of the probe rather than of the page");
-    DCHECK(!strcmp(ATTACKER_PAGE, "https://" SOLVE_URL_ATTACKER_HOST "/"),
-           "the request class's breakout host is not the attacker page's — a breakout reaches the host the "
-           "attacker serves its page from, so the two name one origin");
     DCHECK(!strstr(SOLVE_BYTES_LOCATOR, "X9"),
            "the @S byte-delivery locator carries the fire marker's own bytes — the probe is inert by "
            "construction and a marker in it would be recorded as a breakout arriving at its sink");
@@ -1826,7 +1823,7 @@ void solve_request_parked(const FetchRequest *req) {
 
     if (!is_verifying() || !concolic_candidate_delivered()) return;
     if (!(e = candidate_search(SINK_REQUEST))) return;   /* another class's search owns this run */
-    if (!request_observed(req, NULL, REQUEST_PIECE_HOST, NULL, SOLVE_URL_ATTACKER_HOST)) return;
+    if (!request_observed(req, NULL, REQUEST_PIECE_HOST, NULL, concolic_attacker_site())) return;
     breakout_arrived(e);
     escape_reached(e);
     fire_observed(flow_running());

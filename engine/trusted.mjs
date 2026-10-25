@@ -444,6 +444,7 @@ async function main() {
   const positional = [];
   let paintDir = null;
   let ramShare = null;
+  let attackerSite = null;
   for (let i = 2; i < process.argv.length; i++) {
     /* `--ram-share <permille>`: RAM pressure's share of each instance's limit (solver/engine.h's
        engine_set_ram_share), forwarded to every child as `--paint` is. Absent, the engine's default stands. */
@@ -455,6 +456,19 @@ async function main() {
         process.exit(2);
       }
       ramShare = v;
+      continue;
+    }
+    /* `--attacker-site <host>`: the site the person verifying controls, forwarded to every child: the host a
+       request breakout reaches and a composed message origin sits under, so a live verify can serve it. Absent,
+       the engine's `attacker.test` stands. */
+    if (process.argv[i] === '--attacker-site') {
+      const v = process.argv[++i];
+      if (v === undefined || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(v)) {
+        console.error('[trusted] `--attacker-site` takes a lowercase host name the person controls, such as ' +
+                      'attacker.example.org.');
+        process.exit(2);
+      }
+      attackerSite = v;
       continue;
     }
     /* WHERE EACH INSTANCE WRITES AN IMAGE OF ITS OWN DOCUMENT. It is forwarded to every child rather than
@@ -813,6 +827,7 @@ async function main() {
     const args = ['--abi'];
     if (paintDir !== null) args.push('--paint-dir', paintDir);
     if (ramShare !== null) args.push('--ram-share', ramShare);
+    if (attackerSite !== null) args.push('--attacker-site', attackerSite);
     const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const e = {
       docId, docUrl: url, origin, child, group, referenced,

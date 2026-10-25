@@ -19,7 +19,6 @@
 #include "core/json_buf.h"
 #include "solver/concolic.h"
 #include "solver/message_compose.h"
-#include "solver/solve_url.h"   /* SOLVE_URL_ATTACKER_HOST, the site the attacker owns */
 
 typedef struct { const char *src, *ident; const char *const *path; int n; } Node;
 typedef struct { Node *v; int n, cap; } Nodes;
@@ -406,7 +405,7 @@ int message_compose_origins(const char *origin_src, char ***out)
     c = malloc((size_t)(o.n + 1) * sizeof *c);
     CHECK(c, "message compose: OOM listing an origin's candidates");
     for (int i = 0; i < o.n; i++) { json_buf_raw(&sub, o.frag[i]); json_buf_raw(&sub, "."); }
-    json_buf_raw(&sub, SOLVE_URL_ATTACKER_HOST);
+    json_buf_raw(&sub, concolic_attacker_site());
     host = json_buf_take(&sub);
     CHECK(host, "message compose: OOM spelling an origin");
     c[n++] = origin_of_host(host);

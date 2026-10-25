@@ -2249,7 +2249,7 @@ void document_message_routes(JSContext *ctx, bool *frame, bool *opener)
     UrlRecord attacker;
 
     url_record_init(&attacker);
-    CHECK(url_parse(&attacker, ATTACKER_PAGE, strlen(ATTACKER_PAGE), NULL),
+    CHECK(url_parse(&attacker, concolic_attacker_page(), strlen(concolic_attacker_page()), NULL),
           "document: the attacker page's own address did not parse");
     *frame = document_embeddable_cross_origin(ctx, &attacker);
     url_record_free(&attacker);

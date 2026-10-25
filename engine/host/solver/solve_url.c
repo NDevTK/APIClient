@@ -1,4 +1,5 @@
 /* solver/solve_url.c — the request class's breakout, derived from the URL parser's state (see solve_url.h). */
+#include "solver/concolic.h"   /* the attacker's site */
 #include "solver/solve_url.h"
 #include "check.h"
 #include "core/url/url.h"
@@ -65,10 +66,20 @@ static int scheme_breakouts(const char *prefix, size_t len, const SolveDelivered
     buf[n] = 0;
     for (int i = 0; i < 2; i++) {
         if (strncmp(special[i], buf, n) != 0) continue;
-        snprintf(out, sizeof out, "%s://%s/", special[i] + n, SOLVE_URL_ATTACKER_HOST);
+        snprintf(out, sizeof out, "%s://%s/", special[i] + n, concolic_attacker_site());
         built += emit_one(out, d, emit, user);
     }
     return built;
+}
+
+/* emit_one over `fmt` with the attacker's site in its one `%s`. */
+static int emit_at(const char *fmt, const SolveDelivered *d, SolveUrlEmit emit, void *user)
+{
+    char out[300];
+    int w = snprintf(out, sizeof out, fmt, concolic_attacker_site());
+
+    CHECK(w > 0 && (size_t)w < sizeof out, "solve_url: a breakout over the attacker's site did not fit its room");
+    return emit_one(out, d, emit, user);
 }
 
 int solve_url_breakouts(const char *witness, const SolveDelivered *d, SolveUrlEmit emit, void *user)
@@ -89,8 +100,8 @@ int solve_url_breakouts(const char *witness, const SolveDelivered *d, SolveUrlEm
     st = url_prefix_state(input, (size_t)(at - input), &base);
     switch (st) {
     case URL_PREFIX_SCHEME_START:
-        built += emit_one("https://" SOLVE_URL_ATTACKER_HOST "/", d, emit, user);
-        built += emit_one("//" SOLVE_URL_ATTACKER_HOST "/", d, emit, user);
+        built += emit_at("https://%s/", d, emit, user);
+        built += emit_at("//%s/", d, emit, user);
         break;
     case URL_PREFIX_SCHEME:
         built += scheme_breakouts(input, (size_t)(at - input), d, emit, user);
@@ -99,23 +110,23 @@ int solve_url_breakouts(const char *witness, const SolveDelivered *d, SolveUrlEm
     case URL_PREFIX_RELATIVE:
     case URL_PREFIX_SPECIAL_RELATIVE_OR_AUTHORITY:
     case URL_PREFIX_SPECIAL_AUTHORITY_SLASHES:
-        built += emit_one("//" SOLVE_URL_ATTACKER_HOST "/", d, emit, user);
+        built += emit_at("//%s/", d, emit, user);
         break;
     case URL_PREFIX_RELATIVE_SLASH:
-        built += emit_one("/" SOLVE_URL_ATTACKER_HOST "/", d, emit, user);
+        built += emit_at("/%s/", d, emit, user);
         break;
     case URL_PREFIX_SPECIAL_AUTHORITY_IGNORE_SLASHES:
-        built += emit_one(SOLVE_URL_ATTACKER_HOST "/", d, emit, user);
+        built += emit_at("%s/", d, emit, user);
         break;
     case URL_PREFIX_AUTHORITY:
         /* §4.4 authority state buffers until `@`, which makes everything before it credentials. */
-        built += emit_one("@" SOLVE_URL_ATTACKER_HOST "/", d, emit, user);
+        built += emit_at("@%s/", d, emit, user);
         break;
     case URL_PREFIX_HOST:
         /* The host buffer may be empty (after `@`) or hold the page's own label, which a name under the
            attacker's host extends. */
-        built += emit_one(SOLVE_URL_ATTACKER_HOST "/", d, emit, user);
-        built += emit_one("." SOLVE_URL_ATTACKER_HOST "/", d, emit, user);
+        built += emit_at("%s/", d, emit, user);
+        built += emit_at(".%s/", d, emit, user);
         break;
     case URL_PREFIX_PATH_OR_AUTHORITY:
     case URL_PREFIX_FILE:

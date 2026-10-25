@@ -34362,6 +34362,13 @@ TF_UNIT int abi_main(int argc, char **argv)
         }
     }
 
+    /* The attacker's site (solver/concolic.h's concolic_set_attacker_site): the host the person verifying
+       controls, stated by the party that spawned this process; without it the engine's `.test` default stands. */
+    {
+        const char *site = arg_val(argc, argv, "--attacker-site");
+        if (site) concolic_set_attacker_site(site);
+    }
+
     /* NO RESIDUE, STATED. `qjs_begin`'s argument is the parked frontier a previous session left, and the empty
        string is the positive statement that this session continues none. A cross-session resume is a field on
        the record above and a shelf behind it, which is a diff of its own; what must not happen is this entry

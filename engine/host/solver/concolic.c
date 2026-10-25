@@ -2706,11 +2706,29 @@ const char *concolic_source_precondition(const char *root)
     return NULL;
 }
 
+/* The attacker's site and page (concolic.h), per process: the trusted zone states it before any document runs. */
+static char g_attacker_site[254] = "attacker.test";
+static char g_attacker_page[sizeof g_attacker_site + 10] = "https://attacker.test/";
+
+void concolic_set_attacker_site(const char *host)
+{
+    size_t n = host ? strlen(host) : 0;
+
+    CHECK(n > 0 && n < sizeof g_attacker_site && strspn(host, "abcdefghijklmnopqrstuvwxyz0123456789-.") == n &&
+          host[0] != '.' && host[0] != '-' && host[n - 1] != '.' && strchr(host, '.'),
+          "concolic: the attacker site is not a lowercase registrable host name");
+    memcpy(g_attacker_site, host, n + 1);
+    snprintf(g_attacker_page, sizeof g_attacker_page, "https://%s/", host);
+}
+
+const char *concolic_attacker_site(void) { return g_attacker_site; }
+const char *concolic_attacker_page(void) { return g_attacker_page; }
+
 const char *concolic_source_attacker_page(const char *root)
 {
     int row = root_declared_row(root);
 
-    return row >= 0 && g_srcs[row].deliver == SRC_DELIVER_REFERRING_ADDRESS ? ATTACKER_PAGE : NULL;
+    return row >= 0 && g_srcs[row].deliver == SRC_DELIVER_REFERRING_ADDRESS ? concolic_attacker_page() : NULL;
 }
 
 const char *concolic_source_encodes(const char *root)
@@ -2887,13 +2905,13 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     carrier = root_carrier(root);
 
     n = strlen(payload);
-    out = reclaim_malloc(n * 3 + 2 + sizeof ATTACKER_PAGE);
+    out = reclaim_malloc(n * 3 + 2 + strlen(concolic_attacker_page()) + 1);
     CHECK(out != NULL, "concolic: OOM delivering a candidate");
     if (at && at->prefix) out[o++] = at->prefix;
     /* A referrer is the attacker page's whole URL, its address before the payload included. */
     if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS) {
-        memcpy(out, ATTACKER_PAGE, sizeof ATTACKER_PAGE - 1);
-        o = sizeof ATTACKER_PAGE - 1;
+        o = strlen(concolic_attacker_page());
+        memcpy(out, concolic_attacker_page(), o);
     }
     for (p = (const unsigned char *)payload; *p; p++) {
         /* A byte outside printable US-ASCII is the mechanism's to answer for, not the row's (root_carrier). */
@@ -2910,7 +2928,7 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     /* Chrome hands a referrer longer than its limit as the attacker page's origin, so such a candidate arrives
        without its payload. */
     if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS && o > REFERRER_CHROME_LIMIT)
-        o = strlen(ATTACKER_PAGE);
+        o = strlen(concolic_attacker_page());
     {
         JSValue r = JS_NewStringLen(ctx, out, o);
         free(out);
