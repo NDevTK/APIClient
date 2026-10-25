@@ -2144,7 +2144,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        carries the reward and the aging's family half (a fresh root would read 0 for both and fire); and the site,
        which carries the site's count and `orphan_seen`.
        What it cannot see: it compares the arm with the parent after the fork has written both, so a term over a
-       count the fork raises in a shared place (a bucket's membership, as `1/sub_born` was) moves the forker and
+       count the fork raises in a shared place (a bucket's membership, say) moves the forker and
        everyone sharing the count while passing this line, and is not fork-neutral. And it is a claim about one
        instant, blind to two arms of one parent forked at two instants, which a term copied at the fork makes differ
        by birth order; a term read through the shared root is equal across every arm at every instant, so any term
@@ -3705,22 +3705,13 @@ double flow_distance(const Flow *f) {
                            - 0.0 * FLOW_ASSUMPTION_COST )                               /* no assumption        */
 
 
-/* A member's birth sequence and its bucket's lifetime mint count, entries from outside this file whose callers have
-   no other statement of their preconditions. The mint count is an operand the census publishes; no term reads it. */
+/* A member's birth sequence, an entry from outside this file whose callers have no other statement of its
+   precondition. */
 uint64_t flow_birth_seq(const Flow *f) {
     DCHECK(f != NULL && f->ix_t.seq != 0, "a birth sequence was asked of no member, or of one flow_new never stamped");
     return f->ix_t.seq;
 }
 
-long flow_branch_born(const Flow *f) {
-    DCHECK(f != NULL && f->acct != NULL && f->acct->branch != NULL,
-           "a member's branch bucket was asked for with no bucket — flow_new opens one for every node and the fork "
-           "moves membership rather than clearing it");
-    DCHECK(f->acct->branch->sub_born >= 1,
-           "a member's own branch bucket reports a lifetime mint count below one while the member stands in it — "
-           "`sub_born` is written to 1 at flow_new and only raised after");
-    return f->acct->branch->sub_born;
-}
 
 /* The member half of the weight, the key the order's index is keyed on: every summand that is a reading of this
    member and of nothing it shares. The weight's terms partition by scope three ways: acct_family_val and the family
@@ -3760,7 +3751,6 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
     o->visits = f->visits;
     o->orphan_seen = f->orphan_seen;
     o->picks = f->picks;
-    o->born = flow_branch_born(f);
     o->replay = f->cand_replay;
     o->surv = f->cand_surv;
     o->rung = f->cand_rung;

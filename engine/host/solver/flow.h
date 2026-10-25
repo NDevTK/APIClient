@@ -61,13 +61,12 @@ typedef struct FlowSite FlowSite;
    A = FLOW_ASSUMPTION_COST. `coord_notch` is the family notch plus the carry bit; `site_served` is the work
    the member's code site has received in its family and `pull_work` the quantum it is counted in
    (ENGINE_QUANTUM_WORK).
-   `visits`, `born` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
+   `visits` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
    member could take the thread. */
 typedef struct {
     int present;
     double reward;
     int64_t coord_notch, own_notch, site_served, pull_work, visits, orphan_seen, picks;
-    long born;
     double replay, surv;
     int rung;
     double w;
@@ -1595,10 +1594,6 @@ int64_t flow_silence_notch(const Flow *f);
 int64_t flow_silence_phase(const Flow *f);
 int flow_silence_carry(const Flow *f);
 
-/* The member's top-level arm's `sub_born`, its bucket's lifetime mint count, published because FlowAcct is private
-   to flow.c; the census's weight operands report it. Reconciles against `brBornMax`/`brBornMin`. Not a term;
-   nothing ranks by it. */
-long flow_branch_born(const Flow *f);
 /* The member's birth sequence, unique for the instance's life and assigned in birth order, so it names the same
    member on two runs that took the same path. */
 uint64_t flow_birth_seq(const Flow *f);

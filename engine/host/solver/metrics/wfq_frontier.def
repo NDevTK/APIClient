@@ -88,8 +88,7 @@ METRIC(branches, "branches", GAUGE, "bucket", AGENT, "solver/flow.c", INT)
 METRIC(br_live_max, "brLiveMax", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(br_live_min, "brLiveMin", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(br_live_sum, "brLiveSum", GAUGE, "member", AGENT, "solver/flow.c", INT)
-/* The branch term is `1.0 / sub_born`, so `1/brBornLifeMin - 1/brBornLifeMax` is its span.
-   `brBornLifeMax` beside `brLiveMax` separates a bucket that mints unboundedly from one
+/* Mint counts, which no term of the weight reads. `brBornLifeMax` beside `brLiveMax` separates a bucket that mints unboundedly from one
    holding a lot now. Mint extrema are over buckets with a live member. */
 METRIC(br_born_life_max, "brBornLifeMax", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(br_born_life_min, "brBornLifeMin", GAUGE, "member", AGENT, "solver/flow.c", INT)
@@ -105,8 +104,7 @@ METRIC(br_crowd_work_life, "brCrowdWorkLife", GAUGE, "unit", AGENT, "solver/flow
 /* …and the same three for the arm that has taken the most arms (selected by `brBornLifeMax`,
    where the crowd is selected by `brLiveMax`; `sub_born = live + sub_gone` makes them one
    bucket only while nothing has departed). An arm forking at every position of an unknown
-   length and letting each finish mints unboundedly and stands narrow. It carries the smallest
-   branch bonus; compare `brMinterWorkLife / brHeldWorkLife` with `brMinterLive / members` as for
+   length and letting each finish mints unboundedly and stands narrow. Compare `brMinterWorkLife / brHeldWorkLife` with `brMinterLive / members` as for
    the crowd. `brMinterGoneLife` (shed count) is published nowhere else. The live count is a
    gauge; the shed count and burn are per-bucket lifetime counts read at one instant, since
    the bucket selected moves. `brMinterLive + brMinterGoneLife == brBornLifeMax` is asserted

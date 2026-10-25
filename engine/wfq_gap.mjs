@@ -7,13 +7,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pullWork", "visits", "orphanSeen", "born",
+const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pullWork", "visits", "orphanSeen",
                     "replay", "surv", "rung", "assumed", "picks", "hostOwed", "running"];
 
 /* The five terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The
    aging is split into its family half (in `coord`, with the reward) and its own half; the optimism is read off the
-   member's site (`siteServed` in quanta of `pullWork`). `visits` and `born` are operands the row carries and no
-   term reads. */
+   member's site (`siteServed` in quanta of `pullWork`). `visits` is an operand the row carries and no term
+   reads. */
 function termsOf(o, q, a, rungs, where) {
   for (const k of END_FIELDS)
     if (typeof o[k] !== "number")
@@ -67,7 +67,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     let c;
     try { c = JSON.parse(m[1]); } catch { continue; }
     const f = (x) => x.toFixed(6);
-    const end = (e) => `site ${e.siteServed} born ${e.born} visits ${e.visits} k ${e.ownNotch} K+c ${e.coordNotch} ` +
+    const end = (e) => `site ${e.siteServed} visits ${e.visits} k ${e.ownNotch} K+c ${e.coordNotch} ` +
                        `assumed ${e.assumed} picks ${e.picks} owed ${e.hostOwed} running ${e.running}`;
     for (const [name, r] of [["curDeep", curDeepTermSplit(c, `${path} census ${c.censusSeq}`)],
                              ["neverPicked", neverPickedTermSplit(c, `${path} census ${c.censusSeq}`)]]) {
