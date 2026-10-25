@@ -1866,6 +1866,19 @@ static void dl_field(const char **p, const char **at, size_t *n) {
     *p = end + 1 + len;
 }
 
+/* The candidate number of a template key `<source>#<k>` of `n` bytes whose `#` is at `hash`. The key is a slice
+   of the template, so the next field's length follows its last digit and the number ends at the key's end. */
+static int dl_key_variant(const char *key, size_t n, const char *hash) {
+    int k = 0;
+
+    DCHECK(hash > key && hash < key + n - 1, "a message template key has no candidate number after its `#`");
+    for (const char *d = hash + 1; d < key + n; d++) {
+        DCHECK(*d >= '0' && *d <= '9', "a message template key's candidate number is not decimal");
+        k = k * 10 + (*d - '0');
+    }
+    return k;
+}
+
 /* Variant `v` of a search's message template (Cand.dl_tmpl), in flow_deliveries_text's format, malloc'd: each
    data delivery as written, and of each origin's candidates (`<source>#<k>`) the one numbered `v`, or its last
    where it has fewer, under the bare source. `*nvar` takes how many variants the template holds. */
@@ -1882,7 +1895,7 @@ static char *dl_variant(const char *tmpl, int v, int *nvar) {
         dl_field(&p, &s, &sn);
         dl_field(&p, &x, &xn);
         hash = memchr(s, '#', sn);
-        if (hash && atoi(hash + 1) + 1 > *nvar) *nvar = atoi(hash + 1) + 1;
+        if (hash && dl_key_variant(s, sn, hash) + 1 > *nvar) *nvar = dl_key_variant(s, sn, hash) + 1;
     }
     for (p = tmpl; *p;) {
         const char *hash;
@@ -1898,12 +1911,13 @@ static char *dl_variant(const char *tmpl, int v, int *nvar) {
             const char *q, *qs, *qx;
             size_t qsn, qxn;
 
-            k = atoi(hash + 1);
+            k = dl_key_variant(s, sn, hash);
             for (q = tmpl; *q;) {
                 dl_field(&q, &qs, &qsn);
                 dl_field(&q, &qx, &qxn);
-                if (qsn > base && !memcmp(qs, s, base) && qs[base] == '#' && atoi(qs + base + 1) > last)
-                    last = atoi(qs + base + 1);
+                if (qsn > base && !memcmp(qs, s, base) && qs[base] == '#' &&
+                    dl_key_variant(qs, qsn, qs + base) > last)
+                    last = dl_key_variant(qs, qsn, qs + base);
             }
             if (k != (v < last ? v : last)) continue;
         }
