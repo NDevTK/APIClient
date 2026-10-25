@@ -101287,6 +101287,8 @@ static JSValue js_thisNumberValue(JSContext *ctx, JSValueConst this_val)
 static JSValue js_number_valueOf(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
 {
+    if (js_value_is_concolic(this_val))
+        return js_dup(this_val);   /* §21.1.3.7: ThisNumberValue of an unknown is the unknown */
     return js_thisNumberValue(ctx, this_val);
 }
 
@@ -101345,36 +101347,13 @@ static const char *const js_num_toprec_steps[] = {
         "21.1.3.5 steps 4-13 (p is between 1 and 100; the String of p significant digits)")
     NULL };
 
-static int js_number_fmt_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+/* The formatting stage of the five algorithms, over the Number in s->val and the argument in s->n. 0 with
+   s->result set, or -1. */
+static int js_number_fmt_format(JSContext *ctx, JSNumberFmt *s)
 {
-    JSNumberFmt *s = st;
     int mode = s->hdr.arg;
     JSValueConst arg0 = step_arg(&s->hdr, 0);
-    int f, flags, r;
-
-    if (s->hdr.stage == NUMFMT_RECV) {
-        JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
-        s->result = JS_UNDEFINED;
-        s->val = js_thisNumberValue(ctx, s->hdr.this_val);
-        if (JS_IsException(s->val)) { s->val = JS_UNDEFINED; return -1; }
-        s->hdr.stage = NUMFMT_ARG;
-    }
-    if (s->hdr.stage == NUMFMT_ARG) {
-        /* WHICH modes coerce, and when, is observable: toString with no radix and toPrecision with no
-           precision never touch the argument, while toExponential and toFixed coerce even an undefined one. */
-        bool coerces = (mode == NUMFMT_TOFIXED || mode == NUMFMT_TOEXPONENTIAL)
-                    || (mode == NUMFMT_TOSTRING && !JS_IsUndefined(arg0))
-                    || (mode == NUMFMT_TOPRECISION && !JS_IsUndefined(arg0));
-        s->n = 0;
-        if (coerces) {
-            r = step_toint64_run(ctx, &s->hdr, arg0, cb_result, &s->n, out_cb, out_argc);
-            cb_result = JS_UNDEFINED;
-            if (r) return r < 0 ? -1 : r;
-        }
-        s->hdr.stage = NUMFMT_FORMAT;
-    }
-    DCHECK(s->hdr.stage == NUMFMT_FORMAT, "a Number formatter resumed in no stage");
-    JS_FreeValue(ctx, cb_result);
+    int f, flags;
 
     /* JS_ToInt32Sat's saturation, applied to the int64-saturated result the sub-sequence delivers */
     f = (int)(s->n < INT32_MIN ? INT32_MIN : s->n > INT32_MAX ? INT32_MAX : s->n);
@@ -101445,6 +101424,74 @@ static int js_number_fmt_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
     }
     s->result = js_dtoa2(ctx, s->d, 10, f, JS_DTOA_FORMAT_FIXED);
     return JS_IsException(s->result) ? -1 : 0;
+}
+
+/* The five formatters where the this value is an unknown, whose ThisNumberValue (step 1) is the unknown's own:
+   the String is an unknown derived from the receiver and the coerced argument, whose example is the real
+   formatter run on the receiver's example where that is a Number. A range error over the argument holds in
+   every world, so it is thrown as the stated receiver's is. */
+static int js_number_fmt_unknown(JSContext *ctx, JSNumberFmt *s)
+{
+    JSValue recv = s->val, ex, real = JS_UNDEFINED, ops[2];
+
+    ex = js_concolic_held(recv) ? js_concolic_operand(ctx, recv) : JS_UNDEFINED;
+    if (JS_IsNumber(ex)) {
+        s->val = ex;
+        if (js_number_fmt_format(ctx, s) < 0) {
+            JS_FreeValue(ctx, s->val);
+            s->val = recv;
+            return -1;
+        }
+        real = s->result;
+        s->result = JS_UNDEFINED;
+        JS_FreeValue(ctx, s->val);
+        s->val = recv;
+    } else {
+        JS_FreeValue(ctx, ex);
+    }
+    ops[0] = recv;
+    ops[1] = JS_IsUndefined(step_arg(&s->hdr, 0)) ? JS_UNDEFINED : JS_NewInt64(ctx, s->n);
+    s->result = g_concolic.derived(ctx, s->hdr.def->algorithm, ops, 2, real);
+    DCHECK(!JS_IsUninitialized(s->result), "a Number formatter over an unknown receiver derived no unknown");
+    return 0;
+}
+
+static int js_number_fmt_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSNumberFmt *s = st;
+    int mode = s->hdr.arg;
+    JSValueConst arg0 = step_arg(&s->hdr, 0);
+    int r;
+
+    if (s->hdr.stage == NUMFMT_RECV) {
+        JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+        s->result = JS_UNDEFINED;
+        /* an unknown receiver is held as itself: its formatting derives (js_number_fmt_unknown) */
+        s->val = js_value_is_concolic(s->hdr.this_val) ? js_dup(s->hdr.this_val)
+                                                       : js_thisNumberValue(ctx, s->hdr.this_val);
+        if (JS_IsException(s->val)) { s->val = JS_UNDEFINED; return -1; }
+        s->hdr.stage = NUMFMT_ARG;
+    }
+    if (s->hdr.stage == NUMFMT_ARG) {
+        /* WHICH modes coerce, and when, is observable: toString with no radix and toPrecision with no
+           precision never touch the argument, while toExponential and toFixed coerce even an undefined one. */
+        bool coerces = (mode == NUMFMT_TOFIXED || mode == NUMFMT_TOEXPONENTIAL)
+                    || (mode == NUMFMT_TOSTRING && !JS_IsUndefined(arg0))
+                    || (mode == NUMFMT_TOPRECISION && !JS_IsUndefined(arg0));
+        s->n = 0;
+        if (coerces) {
+            r = step_toint64_run(ctx, &s->hdr, arg0, cb_result, &s->n, out_cb, out_argc);
+            cb_result = JS_UNDEFINED;
+            if (r) return r < 0 ? -1 : r;
+        }
+        s->hdr.stage = NUMFMT_FORMAT;
+    }
+    DCHECK(s->hdr.stage == NUMFMT_FORMAT, "a Number formatter resumed in no stage");
+    JS_FreeValue(ctx, cb_result);
+
+    if (js_value_is_concolic(s->val))
+        return js_number_fmt_unknown(ctx, s);
+    return js_number_fmt_format(ctx, s);
 }
 
 /* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). */
