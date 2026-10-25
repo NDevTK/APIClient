@@ -13,6 +13,7 @@
 #define ENGINE_HOST_SOLVER_CONCOLIC_H
 
 #include "quickjs.h"
+#include "quickjs-step.h"   /* JS_LANG_TYPE_*, which the type facet names */
 #include "solver/rel_op.h"   /* the four relations a bound can be stated in — see concolic_bound */
 
 /* Register the Concolic class in ctx's runtime (once, at engine init). */
@@ -1128,10 +1129,11 @@ int concolic_src_pin(const char *src, ConcolicLit *kind, const char **val);
    concolic_equality_facet, which answers 1 for a typeof outcome, never itself pinned or excluded; the facet is
    per flow, lives in the constraint under the source's `src`, and narrows every later reading of its type (a
    typeof answers once one row remains). concolic_types answers the facet for `src`. */
-enum { CONCOLIC_TYF_UNDEFINED = 1u << 0, CONCOLIC_TYF_NULL = 1u << 1, CONCOLIC_TYF_BOOLEAN = 1u << 2,
-       CONCOLIC_TYF_STRING = 1u << 3, CONCOLIC_TYF_SYMBOL = 1u << 4, CONCOLIC_TYF_NUMBER = 1u << 5,
-       CONCOLIC_TYF_BIGINT = 1u << 6, CONCOLIC_TYF_OBJECT = 1u << 7, CONCOLIC_TYF_FUNCTION = 1u << 8,
-       CONCOLIC_TYF_ALL = 0x1FFu };
+enum { CONCOLIC_TYF_UNDEFINED = JS_LANG_TYPE_UNDEFINED, CONCOLIC_TYF_NULL = JS_LANG_TYPE_NULL,
+       CONCOLIC_TYF_BOOLEAN = JS_LANG_TYPE_BOOLEAN, CONCOLIC_TYF_STRING = JS_LANG_TYPE_STRING,
+       CONCOLIC_TYF_SYMBOL = JS_LANG_TYPE_SYMBOL, CONCOLIC_TYF_NUMBER = JS_LANG_TYPE_NUMBER,
+       CONCOLIC_TYF_BIGINT = JS_LANG_TYPE_BIGINT, CONCOLIC_TYF_OBJECT = JS_LANG_TYPE_OBJECT,
+       CONCOLIC_TYF_FUNCTION = JS_LANG_TYPE_FUNCTION, CONCOLIC_TYF_ALL = JS_LANG_TYPE_ALL };
 int         concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds);
 /* Whether the equality `cond` records holds, as far as the compared value's facet decides it: 1 or 0 where the
    facet leaves only one arm's types (`typeof d === 'string'` once `d == null` held answers 0), -1 where both

@@ -93638,13 +93638,13 @@ static const char *const js_str_small_steps[];
 static const char *const js_str_strike_steps[];
 static const char *const js_str_sub_steps[];
 static const char *const js_str_sup_steps[];
-static const JSTrampStepDef js_str_trim_def       = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TRIM_BOTH, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_trim_def       = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TRIM_BOTH, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.32 String.prototype.trim",
                                                     .steps = js_str_trim_steps };
-static const JSTrampStepDef js_str_trimStart_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TRIM_START, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_trimStart_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TRIM_START, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.34 String.prototype.trimStart",
                                                     .steps = js_str_trimStart_steps };
-static const JSTrampStepDef js_str_trimEnd_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TRIM_END, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_trimEnd_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TRIM_END, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.33 String.prototype.trimEnd",
                                                     .steps = js_str_trimEnd_steps };
 static const JSTrampStepDef js_str_at_def         = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_AT, .visit = js_str_recv_visit,
@@ -93653,7 +93653,7 @@ static const JSTrampStepDef js_str_at_def         = { sizeof(JSStrRecv), js_str_
 static const JSTrampStepDef js_str_codePointAt_def= { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CODEPOINTAT, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.4 String.prototype.codePointAt",
                                                     .steps = js_str_codePointAt_steps };
-static const JSTrampStepDef js_str_substring_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SUBSTRING, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_substring_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SUBSTRING, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.25 String.prototype.substring",
                                                     .steps = js_str_substring_steps };
 static const JSTrampStepDef js_str_indexOf_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_INDEXOF, .visit = js_str_recv_visit,
@@ -93665,25 +93665,25 @@ static const JSTrampStepDef js_str_lastIndexOf_def= { sizeof(JSStrRecv), js_str_
 static const JSTrampStepDef js_str_normalize_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_NORMALIZE, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.15 String.prototype.normalize",
                                                     .steps = js_str_normalize_steps };
-static const JSTrampStepDef js_str_charAt_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CHARAT, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_charAt_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CHARAT, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.2 String.prototype.charAt",
                                                     .steps = js_str_charAt_steps };
 static const JSTrampStepDef js_str_charCodeAt_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CHARCODEAT, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.3 String.prototype.charCodeAt",
                                                     .steps = js_str_charCodeAt_steps };
-static const JSTrampStepDef js_str_slice_def      = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SLICE, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_slice_def      = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SLICE, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.22 String.prototype.slice",
                                                     .steps = js_str_slice_steps };
-static const JSTrampStepDef js_str_substr_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SUBSTR, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_substr_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SUBSTR, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "B.2.2.1 String.prototype.substr",
                                                     .steps = js_str_substr_steps };
-static const JSTrampStepDef js_str_repeat_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_REPEAT, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_repeat_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_REPEAT, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.18 String.prototype.repeat",
                                                     .steps = js_str_repeat_steps };
-static const JSTrampStepDef js_str_padStart_def   = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_PADSTART, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_padStart_def   = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_PADSTART, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.17 String.prototype.padStart",
                                                     .steps = js_str_padStart_steps };
-static const JSTrampStepDef js_str_padEnd_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_PADEND, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_padEnd_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_PADEND, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.16 String.prototype.padEnd",
                                                     .steps = js_str_padEnd_steps };
 static const JSTrampStepDef js_str_localeCmp_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_LOCALECOMPARE, .visit = js_str_recv_visit,
@@ -93695,10 +93695,10 @@ static const JSTrampStepDef js_str_localeCmp_def  = { sizeof(JSStrRecv), js_str_
    says the same of 22.1.3.27. `algorithm` is the machine's own name for itself in every abort it raises, so a
    machine driving toLocaleLowerCase was telling every crash it produced that it was running a section no
    conforming implementation runs. The two locale-sensitive functions have their own defs below. */
-static const JSTrampStepDef js_str_toLower_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOLOWER, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_toLower_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOLOWER, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.28 String.prototype.toLowerCase",
                                                     .steps = js_str_toLower_steps };
-static const JSTrampStepDef js_str_toUpper_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOUPPER, .visit = js_str_recv_visit,
+static const JSTrampStepDef js_str_toUpper_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOUPPER, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
                                                     .algorithm = "22.1.3.30 String.prototype.toUpperCase",
                                                     .steps = js_str_toUpper_steps };
 static const JSTrampStepDef js_str_toLocaleLower_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOLOCALELOWER, .visit = js_str_recv_visit,
@@ -96929,6 +96929,18 @@ static const JSTrampStepDef *tramp_step_def_of(JSValueConst func)
         DCHECK(js_tramp_step_defs[id] != NULL, "STEPDEF id has no table row");
         return js_tramp_step_defs[id];
     }
+}
+
+unsigned JS_FunctionResultTypes(JSValueConst f)
+{
+    JSObject *fp;
+
+    if (JS_VALUE_GET_TAG(f) != JS_TAG_OBJECT) return 0;
+    fp = JS_VALUE_GET_OBJ(f);
+    if (fp->class_id != JS_CLASS_C_FUNCTION ||
+        (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
+        return 0;
+    return tramp_step_def_of(f)->result_types;
 }
 
 /* the same question restricted to [[Construct]]: a plain step machine is not a constructor, so `new (arr.map)`

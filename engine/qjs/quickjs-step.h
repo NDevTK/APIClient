@@ -168,6 +168,16 @@ struct JSStepVisit {
    necessary is unchanged and is why a component must reach for this: a Web IDL attribute read performed with
    JS_GetPropertyStr from C is page code running with no flow base under it, which is what the internal-method
    entries abort on. */
+/* ECMAScript §6.1 ECMAScript Language Types as bits, with Object split by [[Call]] as §13.5.3.1 typeof splits
+   it: the set a built-in's normal completion can take (JSTrampStepDef.result_types), and the solver's type
+   facet (CONCOLIC_TYF_*), which names these. */
+enum {
+    JS_LANG_TYPE_UNDEFINED = 1u << 0, JS_LANG_TYPE_NULL = 1u << 1, JS_LANG_TYPE_BOOLEAN = 1u << 2,
+    JS_LANG_TYPE_STRING = 1u << 3, JS_LANG_TYPE_SYMBOL = 1u << 4, JS_LANG_TYPE_NUMBER = 1u << 5,
+    JS_LANG_TYPE_BIGINT = 1u << 6, JS_LANG_TYPE_OBJECT = 1u << 7, JS_LANG_TYPE_FUNCTION = 1u << 8,
+    JS_LANG_TYPE_ALL = 0x1FFu
+};
+
 typedef struct JSTrampStepDef {
     size_t   size;
     int     (*step)(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
@@ -383,7 +393,15 @@ typedef struct JSTrampStepDef {
        request it makes while it does, so the precondition the decline fork's wait relies on fails where it
        breaks. NULL for a machine whose every stage may call the page. */
     const char *(*script_forbidden)(const void *state);
+    /* The JS_LANG_TYPE_* set the algorithm's normal completion takes whatever its receiver and arguments, where
+       the standard fixes it (String.prototype.slice's every return step returns a String). 0 = not declared: a
+       call's result over unknown input then carries no type. Read through JS_FunctionResultTypes. */
+    unsigned result_types;
 } JSTrampStepDef;
+
+/* The result_types a built-in function object's definition declares, or 0 for any other value (a page
+   function, a bound function, a function whose definition declares none). Reads no property. */
+JS_EXTERN unsigned JS_FunctionResultTypes(JSValueConst f);
 
 /* ONE DECLARATION OF A MACHINE'S STAGES — the enum and the labels, from one list, so neither can move without
    the other. A machine writes:
