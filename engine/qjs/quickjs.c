@@ -2879,6 +2879,7 @@ static bool typed_array_is_oob(JSObject *p);
 static uint32_t typed_array_length(JSObject *p);
 static int typed_array_init(JSContext *ctx, JSValue obj, JSValue buffer,
                             uint64_t offset, uint64_t len, bool track_rab);
+static JSValue js_ta_get_past_example(JSContext *ctx, JSObject *p, uint32_t idx);
 static JSValue JS_ThrowTypeErrorDetachedArrayBuffer(JSContext *ctx);
 static JSValue JS_ThrowTypeErrorImmutableArrayBuffer(JSContext *ctx);
 static JSValue JS_ThrowTypeErrorArrayBufferOOB(JSContext *ctx);
@@ -15138,7 +15139,7 @@ static JSValue JS_GetPropertyInternal(JSContext *ctx, JSValueConst obj,
                               "js_get_fast_array_element rather than routing the read back through [[Get]]");
                         return JS_UNDEFINED;
                     } else if (is_typed_array(p->class_id)) {
-                        return JS_UNDEFINED;
+                        return js_ta_get_past_example(ctx, p, idx);
                     }
                 } else if (is_typed_array(p->class_id)) {
                     int ret;
@@ -16549,6 +16550,28 @@ static bool js_get_fast_array_element_concrete(JSContext *ctx, JSObject *p, uint
     default:
         return false;
     }
+}
+
+/* §10.4.5.17 TypedArrayGetElement ( O, index ) at an index past the view's stored count: undefined, unless the
+   view's length is an unknown (JSTypedArray.length_unknown), where IsValidIntegerIndex holds in the worlds the
+   length is longer. The answer is then an unknown derived from the buffer's unknown at that position, with
+   undefined, the example world's answer, as its example. */
+static JSValue js_ta_get_past_example(JSContext *ctx, JSObject *p, uint32_t idx)
+{
+    JSTypedArray *ta = p->u.typed_array;
+    JSArrayBuffer *abuf = ta->buffer->u.array_buffer;
+    int size_log2 = typed_array_size_log2(p->class_id);
+    JSValue ops[3], r;
+
+    if (JS_IsUninitialized(ta->length_unknown) || typed_array_is_oob(p))
+        return JS_UNDEFINED;
+    DCHECK(!JS_IsUninitialized(abuf->length_unknown), "a view's length is unknown over a stated buffer length");
+    ops[0] = abuf->length_unknown;
+    ops[1] = JS_NewInt64(ctx, (int64_t)ta->offset + ((int64_t)idx << size_log2));
+    ops[2] = js_int32(1 << size_log2);
+    r = g_concolic.derived(ctx, "10.4.5.17 TypedArrayGetElement past the example", ops, 3, JS_UNDEFINED);
+    DCHECK(!JS_IsUninitialized(r), "a read past an unknown view length derived no unknown");
+    return r;
 }
 
 static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,

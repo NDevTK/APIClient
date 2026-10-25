@@ -15872,11 +15872,17 @@ TF_UNIT void probes_bytesimage(const char *js, Probe *tab, int *n) {
     fold_row(&fr_tt, &fr_why, fread_ || fthrow, "NOT REACHED: neither arm of the far DataView read emitted");
     fold_row(&fr_tt, &fr_why, fread_ && fthrow,
              "only one arm of the far read's in-range test ran: the bounds test used the example's extent");
+    int pundef = !!strstr(js, "\"/api/bimg/past-undef\""), pbyte = !!strstr(js, "\"/api/bimg/past-byte\"");
+    const char *pe_why = NULL; int pe_tt = 1;
+    fold_row(&pe_tt, &pe_why, pundef || pbyte, "NOT REACHED: neither arm of the past-the-example element read emitted");
+    fold_row(&pe_tt, &pe_why, pundef && pbyte,
+             "only one arm of the past-the-example element read ran: the element read used the example's count");
     const Probe rows[] = {
         { "bytes-image-fork", im_tt, "/api/bimg/lead-brace", SESS_EXPLORE, im_why },
         { "bytes-image-overwrite", wr_tt, "/api/bimg/wrote-one", SESS_EXPLORE, wr_why },
         { "bytes-length-fork", ln_tt, "/api/bimg/len-long", SESS_EXPLORE, ln_why },
         { "bytes-bounds-fork", fr_tt, "/api/bimg/far-read", SESS_EXPLORE, fr_why },
+        { "bytes-past-element", pe_tt, "/api/bimg/past-undef", SESS_EXPLORE, pe_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

@@ -4,7 +4,8 @@
    recorded, so the second gate is decided by the 1 and takes one arm. The first gate is the positive control
    and the second the negative one, over one buffer.
    A second reply's length gates a branch (the length is the reply's unknown too), and a DataView read far past its
-   example bytes takes both arms of the in-range test: a value with no example, or the RangeError.
+   example bytes takes both arms of the in-range test: a value with no example, or the RangeError. An element
+   read past them is undefined in the example world and a byte where the reply is longer.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_BYTESIMAGE_H
@@ -29,6 +30,8 @@ static const char HTML_BYTESIMAGE[] =
     "  var dv = new DataView(ab);"
     "  try { dv.getUint32(4000); fetch('/api/bimg/far-read'); } catch (e) {"
     "    fetch(e instanceof RangeError ? '/api/bimg/far-range' : '/api/bimg/far-other'); }"
+    "  var by = new Uint8Array(ab);"
+    "  if (by[5000] === undefined) fetch('/api/bimg/past-undef'); else fetch('/api/bimg/past-byte');"
     "})();"
     "</script>"
     TF_CANVAS_INK
