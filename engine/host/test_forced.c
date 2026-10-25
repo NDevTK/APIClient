@@ -16876,6 +16876,12 @@ TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     const char *iflexw_why = NULL; int iflexw_tt = 1;
     fold_row(&iflexw_tt, &iflexw_why, param_value_is(js, "/api/iflex", "c5", "60"),
              "css-flexbox-1 §9.9.2: a `column` container's inline size is not its widest item's 60px contribution");
+    fold_row(&iflexw_tt, &iflexw_why, param_value_is(js, "/api/iflex", "c6", "60"),
+             "css-flexbox-1 §9.9.2: a multi-line `column` container with an automatic block size is not one line "
+             "60px wide");
+    fold_row(&iflexw_tt, &iflexw_why, param_value_is(js, "/api/iflex", "c7", "60"),
+             "css-flexbox-1 §9.9.2: a multi-line `column` container with only a `min-height` is not one line "
+             "60px wide");
     const Probe rows[] = {
         { "inline-flex-baseline", iflexb_tt, "/api/iflex", SESS_EXPLORE, iflexb_why },
         { "flex-column-intrinsic-width", iflexw_tt, "/api/iflex", SESS_EXPLORE, iflexw_why },

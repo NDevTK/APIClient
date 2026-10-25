@@ -17,6 +17,7 @@
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/layout_job.h"   /* the line box items an ask spends */
 #include "core/layout/replaced_element.h"
+#include "core/layout/used_value.h"   /* whether the container's block size is automatic */
 
 /* css-writing-modes-4 §7.3 "Orthogonal Flows"' perpendicular case, refused ("When a box has a writing mode that
    is perpendicular to its containing block it is said to be in, or establish, an orthogonal flow."). §9.9 sums
@@ -474,24 +475,22 @@ static IntrinsicInlineSizes fis_cross_sizes(lxb_dom_element_t *el, bool multi_li
         any = true;
         c = next;
     }
-    /* §9.9.2's multi-line column max-content arm is the one part needing flex lines; refused after the walk
-       so the min-content half runs and the message names the container. An empty multi-line container is
-       zero either way, so it is not refused. */
-    if (multi_line && any)
+    /* §9.9.2's multi-line column max-content arm: "the sum of the flex line cross sizes resulting from sizing
+       the flex container under a cross-axis max-content constraint, using the largest max-content cross-size
+       contribution among the flex items as the available space in the cross axis for each of the flex items".
+       Under that available space each item's fit-content cross size is its max-content contribution. With an
+       automatic block size and no `max-height`, §9.2's "automatic block size of a block-level flex container is
+       its max-content size" makes the inner main size the sum of the items' outer hypothetical main sizes, so
+       §9.3's step 5 collects every item into one line, whose cross size is the largest of them: the maximum
+       above. A definite or capped block size can break lines, and that arm is refused after the walk so the
+       message names the container. */
+    if (multi_line && any &&
+        !(used_value_height_behaves_as_auto(el) && css_computed_length_is(el, "max-height", CSS_KEYWORD_NONE)))
         DFAILF("%s: css-flexbox-1 §9.9.2 \"Flex Container Intrinsic Cross Sizes\" gives a MULTI-LINE COLUMN "
-               "flex container a max-content cross size this component cannot compute, and it is the only arm "
-               "of §9.9 reachable from an intrinsic INLINE size that is stated over flex lines rather than "
-               "over items: \"The max-content cross size is the sum of the flex line cross sizes resulting "
-               "from sizing the flex container under a cross-axis max-content constraint, using the largest "
-               "max-content cross-size contribution among the flex items as the available space in the cross "
-               "axis for each of the flex items during layout.\" THE MIN-CONTENT HALF IS ALREADY THE ANSWER "
-               "ABOVE — §9.9.2 makes it \"the largest min-content contribution among all of its flex items\", "
-               "a maximum over items with no line in it. §9.3 \"Main Size Determination\"'s step 5 breaks "
-               "lines (core/layout/flex_line.h's `flex_line_members`) and §9.4 \"Cross Size Determination\"' "
-               "step 8 sizes them on a BLOCK cross axis (core/layout/flex_cross_size.c). What is missing is "
-               "step 8 on this container's INLINE cross axis, with §4's anonymous item measured at "
-               "fit-content and each item's available space the largest max-content contribution, as the "
-               "sentence above states",
+               "flex container with a definite or capped block size a max-content cross size that sums the flex "
+               "lines its main size breaks the items into. BUILD §9.3's step 5 over the items' hypothetical main "
+               "sizes at their max-content cross sizes, against that main size, and sum §9.4's step 8 line "
+               "cross sizes on the inline axis",
                box_subject(el, nbuf, sizeof nbuf));
     return out;
 }
