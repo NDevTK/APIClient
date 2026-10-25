@@ -540,6 +540,9 @@ JSValue idb_object_store_create(JSContext *ctx, JSValueConst tx, JSValueConst db
            "an object store was created by a transaction that is not an upgrade transaction — IndexedDB "
            "§2.7: \"object stores and indexes can't be added or removed\" by a readwrite transaction, and §4.4's "
            "createObjectStore reports that as an InvalidStateError before it reaches this");
+    DCHECK(idb_database_version(ctx, db) >= 1,
+           "an object store was created in a database at version 0 — §5.7 step 8 sets the version before the "
+           "upgrade transaction can create a store, so a database holding stores holds a version of at least 1");
     store = idl_slots_new(ctx);
     CHECK(!JS_IsException(store), "IndexedDB: §2.2's object store record could not be allocated");
     records = JS_NewArray(ctx);

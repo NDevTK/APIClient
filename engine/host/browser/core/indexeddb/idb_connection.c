@@ -306,14 +306,37 @@ static JSValue js_conn_get_name(JSContext *ctx, JSValueConst this_val, int magic
     return name;
 }
 
+/* How many object stores the connection's §2.1.1 object store set holds. */
+static uint32_t conn_store_count(JSContext *ctx, JSValueConst connection)
+{
+    JSValue set = idb_connection_store_set(ctx, connection);
+    JSPropertyEnum *keys = NULL;
+    uint32_t count = 0, i;
+
+    CHECK(JS_GetOwnPropertyNames(ctx, &keys, &count, set, JS_GPN_STRING_MASK) == 0,
+          "IndexedDB: a connection's object store set could not be enumerated");
+    for (i = 0; i < count; i++)
+        JS_FreeAtom(ctx, keys[i].atom);
+    js_free(ctx, keys);
+    JS_FreeValue(ctx, set);
+    return count;
+}
+
 /* "The version getter steps are to return this's version." THE CONNECTION'S, not the database's, which is the
    distinction the standard's own question-box draws: "once the connection has closed, this attribute will not
    reflect changes made with a later upgrade transaction". */
 static JSValue js_conn_get_version(JSContext *ctx, JSValueConst this_val, int magic)
 {
+    double version;
+
     (void)magic;
     if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
-    return JS_NewFloat64(ctx, idb_connection_version(ctx, this_val));
+    version = idb_connection_version(ctx, this_val);
+    /* Only §5.8 step 3's newly-created arm leaves a connection at 0, and §5.5 step 2 has then emptied its set. */
+    DCHECK(version >= 1 || conn_store_count(ctx, this_val) == 0,
+           "a connection at version 0 holds object stores — stores exist only inside an upgrade that set the "
+           "version to at least 1, so this world was composed rather than reached");
+    return JS_NewFloat64(ctx, version);
 }
 
 /* "The objectStoreNames getter steps are: let names be a list of the names of the object stores in this's

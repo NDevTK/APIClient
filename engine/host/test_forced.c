@@ -7956,10 +7956,10 @@ static void idb_revert_selftest(JSContext *ctx, JSValueConst conn, JSValueConst 
 
     idb_database_revert_transaction(ctx, tx);
 
-    CHECK(idb_database_version(ctx, db) == 0,
+    CHECK(idb_database_version(ctx, db) == 1,
           "§5.7 step 8: \"this change is considered part of the transaction, and so if the transaction is "
-          "aborted, this change is reverted\" — the version this database was CREATED with is what it goes "
-          "back to, which is also the answer §5.8 step 3 needs for a database an open newly created");
+          "aborted, this change is reverted\" — the version this database held before the transaction is what "
+          "it goes back to");
     found = idb_object_store_find(ctx, db, "t");
     CHECK(JS_IsNull(found), "§5.5 step 2 left an object store the transaction CREATED in its database's set");
     JS_FreeValue(ctx, found);
@@ -8359,11 +8359,9 @@ static void idb_upgrade_abort_selftest(JSContext *ctx, JSValueConst conn, JSValu
           "§5.8 step 3 did not put the CONNECTION's version back to the database's — §2.1.1: the connection's "
           "version \"remains constant for the lifetime of the connection unless an upgrade is aborted, in "
           "which case it is set to the previous version of the database\"");
-    CHECK(idb_connection_version(ctx, conn) == 0,
-          "§5.8 step 3's second arm: \"or 0 (zero) if database was newly created\". §2.1 creates a database at "
-          "0 and only §5.7 step 8 moves it, so after §5.5 step 2's revert the database IS at the number both "
-          "of the step's arms name — a fixture reading anything else means the two have stopped agreeing and "
-          "the arms need telling apart after all");
+    CHECK(idb_connection_version(ctx, conn) == 1,
+          "§5.8 step 3's first arm: the connection's version is set to the database's version, since this "
+          "database previously existed at the 1 its first upgrade set");
     idb_selftest_handle_named(ctx, kept_handle, "s",
                               "§5.8 step 5.1: a handle whose object store was NOT newly created during the "
                               "transaction takes its store's name back — which is what makes `store.name` "
@@ -8405,6 +8403,9 @@ TF_UNIT void idb_store_selftest(JSContext *ctx)
        undo. An UPGRADE transaction, because creating an object store is what §2.7 gives only that mode. */
     conn = idb_connection_open(ctx, db);
     tx = idb_selftest_tx(ctx, conn, JS_UNDEFINED, IDB_TX_VERSIONCHANGE);
+    /* §5.1 step 9 and §5.7 step 8: an upgrade sets the version before anything can create a store in it. */
+    idb_connection_set_version(ctx, conn, 1);
+    idb_database_set_version(ctx, tx, db, 1);
 
     /* §2.2: out-of-line keys, no key generator. What a record filed INTO it does is the document's assertion —
        see the block above idb_selftest_int for why §6.1 has no C entry to reach from here. */
@@ -8421,8 +8422,15 @@ TF_UNIT void idb_store_selftest(JSContext *ctx)
     idb_extract_selftest(ctx);
     idb_revert_selftest(ctx, conn, db, store);
     /* §5.5 step 3 runs on the state step 2 has just put back, so §5.8's fixture runs on the state this one
-       left — the database at the 0 it was created with, and the store back under the name it had. */
+       left — the database at the 1 its first upgrade set, and the store back under the name it had. */
     idb_upgrade_abort_selftest(ctx, conn, db, store);
+
+    /* §5.3 steps 9-11: the fixture's database leaves the set, so no document's storage key holds it. */
+    idb_connection_close(ctx, conn);
+    idb_database_destroy(ctx, db);
+    found = idb_database_find(ctx, "selftest");
+    CHECK(JS_IsNull(found), "§5.3 step 11: the fixture's database is still in the set after its delete");
+    JS_FreeValue(ctx, found);
 
     JS_FreeValue(ctx, conn);
     JS_FreeValue(ctx, store);
