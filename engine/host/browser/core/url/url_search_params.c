@@ -24,6 +24,7 @@
 #include "core/realm.h"
 #include "core/idl_iter.h"
 #include "solver/concolic.h"
+#include "solver/cow.h"
 
 /* A PAIR CARRIES ITS LENGTHS, because a name or a value may contain U+0000 — `?a=b%00c` is one pair whose
    value is three characters, and every strlen in this file would have made it one. */
@@ -39,8 +40,14 @@ typedef UrlEncodedList UspList;
 
 /* The class opaque. `owner` is the URL wrapper this belongs to, or JS_UNDEFINED — see the file comment.
    `unknown` is the unknown string the constructor parsed, or JS_UNDEFINED: when set, `list` is the parse of its
-   example (empty where it has none) and every read answers a derivation over it (usp_derive). */
-typedef struct { UspList list; JSValue owner; JSValue unknown; int unknown_example; } UspObj;
+   example (empty where it has none) and every read answers a derivation over it (usp_derive).
+   THE LIST IS PER-FLOW STATE AND IS NEVER CHANGED IN PLACE. `list` points into `list_box`, a payload whose
+   storage the box owns (usp_list_box); a write builds a changed copy in a new box (usp_list_edit), so the
+   capture restores a sibling's `list` and `list_box` together and no arm sees another's write. */
+typedef struct { JSValue list_box; UspList *list; JSValue owner; JSValue unknown; int unknown_example; } UspObj;
+#define USP_OFF(f) (uint16_t)offsetof(UspObj, f)
+static const uint16_t USP_VALS[] = { USP_OFF(list_box), USP_OFF(owner), USP_OFF(unknown) };
+static const CowRecord USP_REC = { sizeof(UspObj), USP_VALS, (int)(sizeof USP_VALS / sizeof *USP_VALS) };
 
 static JSClassID g_usp_class;
 static JSRuntime *g_usp_rt;
@@ -62,7 +69,12 @@ static void usp_finalizer(JSRuntime *rt, JSValue val)
     UspObj *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
-    if (u) { usp_list_free(&u->list); JS_FreeValueRT(rt, u->owner); JS_FreeValueRT(rt, u->unknown); js_free_rt(rt, u); }
+    if (u) {
+        JS_FreeValueRT(rt, u->list_box);
+        JS_FreeValueRT(rt, u->owner);
+        JS_FreeValueRT(rt, u->unknown);
+        js_free_rt(rt, u);
+    }
 }
 
 static void usp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
@@ -72,18 +84,71 @@ static void usp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 
     (void)id;
     /* The URL holds this object and this object holds the URL — a real cycle, which is what gc_mark is for. */
-    if (u) { JS_MarkValue(rt, u->owner, mark_func); JS_MarkValue(rt, u->unknown, mark_func); }
+    if (u) {
+        JS_MarkValue(rt, u->list_box, mark_func);
+        JS_MarkValue(rt, u->owner, mark_func);
+        JS_MarkValue(rt, u->unknown, mark_func);
+    }
+}
+
+/* The box's release: the list and the block that held it. */
+static void usp_list_box_free(JSRuntime *rt, void *opaque, void *ptr)
+{
+    (void)rt; (void)opaque;
+    usp_list_free(ptr);
+    free(ptr);
+}
+
+/* A GC-owned payload for one list (an ArrayBuffer no page can reach, whose release is usp_list_box_free),
+   taking `l`, which is malloc'd. Owned. */
+static JSValue usp_list_box(JSContext *ctx, UspList *l)
+{
+    JSValue b = JS_NewArrayBuffer(ctx, (uint8_t *)l, sizeof *l, usp_list_box_free, NULL, false);
+
+    CHECK(!JS_IsException(b), "urlsearchparams: OOM boxing a list");
+    return b;
+}
+
+/* The record's accessor and therefore its capture point: a flow that reaches the record may write it. */
+static UspObj *usp_rec(JSValueConst v)
+{
+    UspObj *u = g_usp_class ? JS_GetOpaque(v, g_usp_class) : NULL;
+
+    if (u) cow_capture_host_record(v, u, &USP_REC);
+    return u;
+}
+
+/* Replace the record's list with `l` (malloc'd, taken), through the record's write. */
+static void usp_list_replace(JSContext *ctx, UspObj *u, UspList *l)
+{
+    cow_record_set(ctx, u, &USP_REC, &u->list_box, usp_list_box(ctx, l));
+    u->list = l;
+}
+
+/* §6.2's list as this flow may change it: a copy, held by the record from here. */
+static UspList *usp_list_edit(JSContext *ctx, UspObj *u)
+{
+    UspList *l = calloc(1, sizeof *l);
+    int i;
+
+    CHECK(l != NULL, "urlsearchparams: OOM copying a list for a write");
+    for (i = 0; i < u->list->n; i++) {
+        const UspPair *e = &u->list->e[i];
+        usp_list_append(l, e->name, e->nlen, e->nhole, e->value, e->vlen, e->vhole);
+    }
+    usp_list_replace(ctx, u, l);
+    return l;
 }
 
 const UrlEncodedList *usp_list_of(JSValueConst v)
 {
-    UspObj *u = g_usp_class ? JS_GetOpaque(v, g_usp_class) : NULL;
-    return u ? &u->list : NULL;
+    UspObj *u = usp_rec(v);
+    return u ? u->list : NULL;
 }
 
 static UspObj *usp_of(JSContext *ctx, JSValueConst v)
 {
-    UspObj *u = JS_GetOpaque(v, g_usp_class);
+    UspObj *u = usp_rec(v);
     if (!u) JS_ThrowTypeError(ctx, "not a URLSearchParams");
     return u;
 }
@@ -93,21 +158,18 @@ static UspObj *usp_of(JSContext *ctx, JSValueConst v)
    on `?a=1` gives `u.href` with no `?` at all, which is exactly the null/empty distinction the record keeps. */
 static void usp_update(JSContext *ctx, UspObj *u)
 {
-    UrlRecord *rec;
     size_t n = 0;
     char *q;
 
     if (JS_IsUndefined(u->owner)) return;
-    rec = url_record_of(u->owner);
-    DCHECK(rec != NULL, "a URLSearchParams' associated URL stopped being one");
-    q = usp_serialize(&u->list, &n);
-    free(rec->query);
-    rec->query = n ? q : NULL;
-    if (!n) free(q);
-    (void)ctx;
+    q = usp_serialize(u->list, &n);
+    if (!n) { free(q); q = NULL; }
+    url_query_assign(ctx, u->owner, q);
 }
 
-JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t query_len)
+/* A URLSearchParams over `l` (malloc'd, taken) and `unknown` (taken), initialised before the record is
+   reachable. */
+static JSValue usp_new_with(JSContext *ctx, JSValueConst owner, UspList *l, JSValue unknown, int unknown_example)
 {
     UspObj *u;
     JSValue obj;
@@ -119,24 +181,35 @@ JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t qu
         obj = JS_NewObjectProtoClass(ctx, proto, g_usp_class);
         JS_FreeValue(ctx, proto);
     }
-    if (JS_IsException(obj))
-        return obj;
-    u = js_mallocz(ctx, sizeof(*u));
-    if (!u) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    u = JS_IsException(obj) ? NULL : js_mallocz(ctx, sizeof(*u));
+    if (!u) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, unknown); usp_list_box_free(NULL, NULL, l); return JS_EXCEPTION; }
     u->owner = JS_DupValue(ctx, owner);
-    u->unknown = JS_UNDEFINED;
-    if (query) usp_parse(&u->list, query, query_len);
+    u->unknown = unknown;
+    u->unknown_example = unknown_example;
+    u->list = l;
+    u->list_box = usp_list_box(ctx, l);
     JS_SetOpaque(obj, u);
     return obj;
 }
 
+JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t query_len)
+{
+    UspList *l = calloc(1, sizeof *l);
+
+    CHECK(l != NULL, "urlsearchparams: OOM building a list");
+    if (query) usp_parse(l, query, query_len);
+    return usp_new_with(ctx, owner, l, JS_UNDEFINED, 0);
+}
+
 void usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query_len)
 {
-    UspObj *u = JS_GetOpaque(usp, g_usp_class);
-    (void)ctx;
+    UspObj *u = usp_rec(usp);
+    UspList *l = calloc(1, sizeof *l);
+
     DCHECK(u != NULL, "a URL's search setter re-initialised something that is not a URLSearchParams");
-    usp_list_free(&u->list);
-    if (query) usp_parse(&u->list, query, query_len);
+    CHECK(l != NULL, "urlsearchparams: OOM building a list");
+    if (query) usp_parse(l, query, query_len);
+    usp_list_replace(ctx, u, l);
 }
 
 /* ---- §6.2's members --------------------------------------------------------------------------------------- */
@@ -206,14 +279,13 @@ static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JS
     ops[0] = u->unknown;
     for (i = 0; i < argc && n < 3; i++) if (!JS_IsUndefined(argv[i])) ops[n++] = argv[i];
     if (u->unknown_example) {
-        char *q = usp_serialize(&u->list, NULL);
+        char *q = usp_serialize(u->list, NULL);
         ex = JS_NewString(ctx, q);
         free(q);
     }
     d = concolic_new_derived(ctx, op, ops, n, ex);
     DCHECK(!JS_IsUninitialized(d), "a URLSearchParams list parsed from an unknown derived no unknown list");
-    JS_FreeValue(ctx, u->unknown);
-    u->unknown = d;
+    cow_record_set(ctx, u, &USP_REC, &u->unknown, d);
 }
 
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -226,25 +298,28 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     int i, w;
 
     if (!u) return JS_EXCEPTION;
+    /* §6.2's four mutations write a copy of the list (see UspObj). */
+    if (magic == USP_APPEND || magic == USP_DELETE || magic == USP_SET || magic == USP_SORT)
+        usp_list_edit(ctx, u);
     if (magic == USP_SORT) {
         /* §6.2 sort(): by the NAMES' code units, and STABLE — the relative order of equal names is preserved,
            which is why this is an insertion sort and not qsort. */
-        for (i = 0; i < u->list.n; i++)
-            DCHECK(!u->list.e[i].nhole,
+        for (i = 0; i < u->list->n; i++)
+            DCHECK(!u->list->e[i].nhole,
                    USP_HOLE_WHY("sort() ordered a name that is a hole by its display shape's code units"));
-        for (i = 1; i < u->list.n; i++) {
-            UspPair tmp = u->list.e[i];
+        for (i = 1; i < u->list->n; i++) {
+            UspPair tmp = u->list->e[i];
             int j;
-            for (j = i - 1; j >= 0 && usp_name_cmp(&u->list.e[j], &tmp) > 0; j--)
-                u->list.e[j + 1] = u->list.e[j];
-            u->list.e[j + 1] = tmp;
+            for (j = i - 1; j >= 0 && usp_name_cmp(&u->list->e[j], &tmp) > 0; j--)
+                u->list->e[j + 1] = u->list->e[j];
+            u->list->e[j + 1] = tmp;
         }
         usp_update(ctx, u);
         if (!JS_IsUndefined(u->unknown)) usp_rederive(ctx, u, "URLSearchParams.sort", 0, NULL);
         return JS_UNDEFINED;
     }
     if (magic == USP_TOSTRING) {
-        char *s = usp_serialize(&u->list, NULL);
+        char *s = usp_serialize(u->list, NULL);
         r = JS_NewString(ctx, s);
         free(s);
         return JS_IsUndefined(u->unknown) ? r : usp_derive(ctx, u, "URLSearchParams.toString", r, 0, NULL);
@@ -273,8 +348,8 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
         if (!name) return JS_EXCEPTION;
         if (nhole) nn = strlen(name);
     }
-#define USP_NAME_IS(i)  (u->list.e[i].nlen == nn && !memcmp(u->list.e[i].name, name, nn))
-#define USP_VALUE_IS(i) (!value || (u->list.e[i].vlen == vn && !memcmp(u->list.e[i].value, value, vn)))
+#define USP_NAME_IS(i)  (u->list->e[i].nlen == nn && !memcmp(u->list->e[i].name, name, nn))
+#define USP_VALUE_IS(i) (!value || (u->list->e[i].vlen == vn && !memcmp(u->list->e[i].value, value, vn)))
     /* §6.2: `delete` and `has` take an OPTIONAL value, and its presence changes what they match — `delete(name)`
        removes every pair with that name, `delete(name, value)` only the pairs that also have that value. The
        optional-argument rule is what tells the two apart, so undefined must reach here as undefined. */
@@ -295,28 +370,28 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
 
     switch (magic) {
     case USP_APPEND:
-        usp_list_append(&u->list, name, nn, nhole, value, vn, vhole);
+        usp_list_append(u->list, name, nn, nhole, value, vn, vhole);
         usp_update(ctx, u);
         break;
     case USP_DELETE:
-        for (i = 0, w = 0; i < u->list.n; i++) {
+        for (i = 0, w = 0; i < u->list->n; i++) {
             int match = USP_NAME_IS(i) && USP_VALUE_IS(i);
-            if (match) { free(u->list.e[i].name); free(u->list.e[i].value); continue; }
-            u->list.e[w++] = u->list.e[i];
+            if (match) { free(u->list->e[i].name); free(u->list->e[i].value); continue; }
+            u->list->e[w++] = u->list->e[i];
         }
-        u->list.n = w;
+        u->list->n = w;
         usp_update(ctx, u);
         break;
     case USP_GET:
         r = JS_NULL;   /* §6.2: absent is null, not "" */
-        for (i = 0; i < u->list.n; i++)
+        for (i = 0; i < u->list->n; i++)
             if (USP_NAME_IS(i)) {
                 /* THE READ-BACK BARRIER — see USP_HOLE_WHY. §6.2 get() hands the page the tuple's VALUE, and a
                    page branching on what it gets back must branch on the UNKNOWN this list stored the shape
                    of; a real String here de-taints it and every gate below decides concretely. */
-                DCHECK(!u->list.e[i].vhole,
+                DCHECK(!u->list->e[i].vhole,
                        USP_HOLE_WHY("get() answered with a value that is a hole, as a real String"));
-                r = JS_NewStringLen(ctx, u->list.e[i].value, u->list.e[i].vlen);
+                r = JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen);
                 break;
             }
         break;
@@ -324,18 +399,18 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
         uint32_t k = 0;
         r = JS_NewArray(ctx);
         if (JS_IsException(r)) break;
-        for (i = 0; i < u->list.n; i++)
+        for (i = 0; i < u->list->n; i++)
             if (USP_NAME_IS(i)) {
-                DCHECK(!u->list.e[i].vhole,
+                DCHECK(!u->list->e[i].vhole,
                        USP_HOLE_WHY("getAll() answered with a value that is a hole, as a real String"));
                 JS_SetPropertyUint32(ctx, r, k++,
-                                     JS_NewStringLen(ctx, u->list.e[i].value, u->list.e[i].vlen));
+                                     JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen));
             }
         break;
     }
     case USP_HAS:
         r = JS_FALSE;
-        for (i = 0; i < u->list.n; i++)
+        for (i = 0; i < u->list->n; i++)
             if (USP_NAME_IS(i) && USP_VALUE_IS(i)) { r = JS_TRUE; break; }
         break;
     default: {
@@ -343,25 +418,25 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
            other pair with that name is removed. Appending after a delete would move it to the end. */
         int found = -1;
         DCHECK(magic == USP_SET, "a URLSearchParams member was declared with a magic this component does not answer");
-        for (i = 0, w = 0; i < u->list.n; i++) {
+        for (i = 0, w = 0; i < u->list->n; i++) {
             if (USP_NAME_IS(i)) {
                 if (found < 0) {
                     found = w;
-                    free(u->list.e[i].value);
-                    u->list.e[i].value = usp_strdup(value, vn);
-                    u->list.e[i].vlen = vn;
-                    u->list.e[i].vhole = vhole ? 1u : 0u;   /* the hole bit rides the value it describes */
-                    u->list.e[w++] = u->list.e[i];
+                    free(u->list->e[i].value);
+                    u->list->e[i].value = usp_strdup(value, vn);
+                    u->list->e[i].vlen = vn;
+                    u->list->e[i].vhole = vhole ? 1u : 0u;   /* the hole bit rides the value it describes */
+                    u->list->e[w++] = u->list->e[i];
                 } else {
-                    free(u->list.e[i].name);
-                    free(u->list.e[i].value);
+                    free(u->list->e[i].name);
+                    free(u->list->e[i].value);
                 }
                 continue;
             }
-            u->list.e[w++] = u->list.e[i];
+            u->list->e[w++] = u->list->e[i];
         }
-        u->list.n = w;
-        if (found < 0) usp_list_append(&u->list, name, nn, nhole, value, vn, vhole);
+        u->list->n = w;
+        if (found < 0) usp_list_append(u->list, name, nn, nhole, value, vn, vhole);
         usp_update(ctx, u);
         break;
     }
@@ -387,26 +462,26 @@ static JSValue js_usp_get_size(JSContext *ctx, JSValueConst this_val, int magic)
     (void)magic;
     if (!u) return JS_EXCEPTION;
     if (!JS_IsUndefined(u->unknown))
-        return usp_derive(ctx, u, "URLSearchParams.size", JS_NewInt32(ctx, u->list.n), 0, NULL);
-    return JS_NewInt32(ctx, u->list.n);
+        return usp_derive(ctx, u, "URLSearchParams.size", JS_NewInt32(ctx, u->list->n), 0, NULL);
+    return JS_NewInt32(ctx, u->list->n);
 }
 
 /* The two operations §3.7.9's binding needs of an `iterable<K, V>` interface — the count and the i-th of
    §2.5.9's "value pairs to iterate over" — over the pair list as it stands right now. */
 static int usp_pair_count(JSContext *ctx, JSValueConst target)
 {
-    UspObj *u = JS_GetOpaque(target, g_usp_class);
+    UspObj *u = usp_rec(target);
     (void)ctx;
-    return u ? u->list.n : -1;
+    return u ? u->list->n : -1;
 }
 
 /* The unknown the list derives from, and how many pairs its example's parse holds (-1 without an example). */
 static JSValueConst usp_pair_unknown(JSContext *ctx, JSValueConst target, int *example_n)
 {
-    UspObj *u = JS_GetOpaque(target, g_usp_class);
+    UspObj *u = usp_rec(target);
     (void)ctx;
     DCHECK(u != NULL, "a URLSearchParams pair iterator asked its target's unknown of something that is not one");
-    *example_n = u->unknown_example ? u->list.n : -1;
+    *example_n = u->unknown_example ? u->list->n : -1;
     return u->unknown;
 }
 
@@ -417,8 +492,8 @@ static JSValue usp_unknown_half(JSContext *ctx, UspObj *u, const char *op, int i
     JSValueConst ops[2];
     JSValue idx = JS_NewInt32(ctx, i), ex = JS_UNDEFINED, d;
 
-    if (u->unknown_example && i < u->list.n) {
-        const UspPair *e = &u->list.e[i];
+    if (u->unknown_example && i < u->list->n) {
+        const UspPair *e = &u->list->e[i];
         if (name_half ? !e->nhole : !e->vhole)
             ex = name_half ? JS_NewStringLen(ctx, e->name, e->nlen) : JS_NewStringLen(ctx, e->value, e->vlen);
     }
@@ -432,7 +507,7 @@ static JSValue usp_unknown_half(JSContext *ctx, UspObj *u, const char *op, int i
 /* §6.2's value pairs to iterate over for a list derived from unknown input: the i-th tuple's name and value. */
 static void usp_pair_of_unknown(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
 {
-    UspObj *u = JS_GetOpaque(target, g_usp_class);
+    UspObj *u = usp_rec(target);
 
     DCHECK(u != NULL && !JS_IsUndefined(u->unknown) && i >= 0,
            "a URLSearchParams pair over unknown input was asked of a list that is not derived from one");
@@ -442,15 +517,15 @@ static void usp_pair_of_unknown(JSContext *ctx, JSValueConst target, int i, JSVa
 
 static void usp_pair_at(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
 {
-    UspObj *u = JS_GetOpaque(target, g_usp_class);
-    DCHECK(u != NULL && i < u->list.n, "a URLSearchParams pair was asked for past the end of the list");
+    UspObj *u = usp_rec(target);
+    DCHECK(u != NULL && i < u->list->n, "a URLSearchParams pair was asked for past the end of the list");
     /* THE READ-BACK BARRIER, over §6.2's "value pairs to iterate over" — see USP_HOLE_WHY. `for (const [k, v]
        of params)` hands the page both halves, and a half this list holds the display shape of would arrive as
        a real String with its provenance gone. */
-    DCHECK(!u->list.e[i].nhole && !u->list.e[i].vhole,
+    DCHECK(!u->list->e[i].nhole && !u->list->e[i].vhole,
            USP_HOLE_WHY("pair iterator answered with a half that is a hole, as a real String"));
-    *key = JS_NewStringLen(ctx, u->list.e[i].name, u->list.e[i].nlen);
-    *value = JS_NewStringLen(ctx, u->list.e[i].value, u->list.e[i].vlen);
+    *key = JS_NewStringLen(ctx, u->list->e[i].name, u->list->e[i].nlen);
+    *value = JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen);
 }
 
 static const IdlPairIterOps USP_PAIR_OPS = { usp_pair_count, usp_pair_at, "URLSearchParams", false, false,
@@ -768,16 +843,17 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
     STEP_ARM(UC_DONE);
     JS_FreeValue(ctx, in);
-    *presult = usp_new(ctx, JS_UNDEFINED, NULL, 0);
-    if (JS_IsException(*presult)) return -1;
     {
-        UspObj *u = JS_GetOpaque(*presult, g_usp_class);
-        u->list = s->list;
+        UspList *l = malloc(sizeof *l);
+        JSValue unknown = s->unknown;
+
+        CHECK(l != NULL, "urlsearchparams: OOM holding a constructed list");
+        *l = s->list;
         memset(&s->list, 0, sizeof s->list);   /* the object owns it now */
-        u->unknown = s->unknown;
-        u->unknown_example = s->unknown_example;
         s->unknown = JS_UNDEFINED;
+        *presult = usp_new_with(ctx, JS_UNDEFINED, l, unknown, s->unknown_example);
     }
+    if (JS_IsException(*presult)) return -1;
     return 0;
 }
 

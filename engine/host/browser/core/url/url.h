@@ -168,9 +168,13 @@ char *url_percent_encode(const char *s, size_t len, int set);
    it will read as text — an overlong `%C1%A1` spelled the host `a.com` until §3.5 ran its decode. */
 char *url_percent_decode(const char *s, size_t len, size_t *out_n);
 
-/* The RECORD behind a `URL` wrapper, or NULL when `v` is not one — how URLSearchParams writes §6.2
-   URLSearchParams class's update steps back onto the URL it belongs to. */
-UrlRecord *url_record_of(JSValueConst v);
+/* The RECORD behind a `URL` wrapper as this flow sees it, or NULL when `v` is not one. Read-only: the record
+   is shared by every flow that has not written it, and url_query_assign is the write. */
+const UrlRecord *url_record_of(JSValueConst v);
+/* §6.2 URLSearchParams class's update steps' last step, "Set query's URL object's URL's query to
+   serializedQuery": `query` (owned, NULL for null) becomes the query of a copy of `url`'s record, which this
+   flow's delta then holds. `url` must be a URL wrapper. */
+void url_query_assign(JSContext *ctx, JSValueConst url, char *query);
 enum { URL_SET_C0 = 0, URL_SET_FRAGMENT, URL_SET_QUERY, URL_SET_SPECIAL_QUERY, URL_SET_PATH,
        URL_SET_USERINFO, URL_SET_COMPONENT, URL_SET_URLENCODED };
 

@@ -41,6 +41,7 @@
 #include "core/agent_state.h"
 #include "core/realm.h"
 #include "core/url/url_search_params.h"
+#include "solver/cow.h"
 
 /* ---- a growable byte string --------------------------------------------------------------------------- */
 
@@ -1613,8 +1614,33 @@ static int       g_url_ctor_stepid = -1;
 
 /* The wrapper holds the record AND the [SameObject] `searchParams` — §6.1 URL class declares that attribute
    SameObject, so the object is built at most once per URL and the two hold each other (the params write
-   §6.2 URLSearchParams class's update steps back onto this record). A real cycle, which is what gc_mark is for. */
-typedef struct { UrlRecord rec; JSValue params; } UrlObj;
+   §6.2 URLSearchParams class's update steps back onto this record). A real cycle, which is what gc_mark is for.
+   THE RECORD IS PER-FLOW STATE AND IS NEVER CHANGED IN PLACE. `rec` points into `rec_box`, a payload whose
+   storage the box owns (url_rec_box); a write builds a changed copy in a new box (url_rec_edit), so the
+   capture below restores a sibling's `rec` and `rec_box` together and no arm sees another's write. */
+typedef struct { JSValue rec_box; UrlRecord *rec; JSValue params; } UrlObj;
+#define URL_OBJ_OFF(f) (uint16_t)offsetof(UrlObj, f)
+static const uint16_t URL_OBJ_VALS[] = { URL_OBJ_OFF(rec_box), URL_OBJ_OFF(params) };
+static const CowRecord URL_OBJ_REC = { sizeof(UrlObj), URL_OBJ_VALS,
+                                       (int)(sizeof URL_OBJ_VALS / sizeof *URL_OBJ_VALS) };
+
+/* The box's release: the record and the block that held it. */
+static void url_rec_box_free(JSRuntime *rt, void *opaque, void *ptr)
+{
+    (void)rt; (void)opaque;
+    url_record_free(ptr);
+    free(ptr);
+}
+
+/* A GC-owned payload for one record (an ArrayBuffer no page can reach, whose release is url_rec_box_free),
+   taking `r`, which is malloc'd. Owned. */
+static JSValue url_rec_box(JSContext *ctx, UrlRecord *r)
+{
+    JSValue b = JS_NewArrayBuffer(ctx, (uint8_t *)r, sizeof *r, url_rec_box_free, NULL, false);
+
+    CHECK(!JS_IsException(b), "url: OOM boxing a URL record");
+    return b;
+}
 
 /* NEITHER OF THESE MAY LOOK THE CLASS ID UP, because the collector runs AFTER core/platform.h's release
    column — every host's teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order — and
@@ -1632,7 +1658,7 @@ static void url_finalizer(JSRuntime *rt, JSValue val)
     UrlObj *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
-    if (u) { url_record_free(&u->rec); JS_FreeValueRT(rt, u->params); free(u); }
+    if (u) { JS_FreeValueRT(rt, u->rec_box); JS_FreeValueRT(rt, u->params); free(u); }
 }
 
 static void url_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
@@ -1641,13 +1667,46 @@ static void url_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     UrlObj *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
-    if (u) JS_MarkValue(rt, u->params, mark_func);
+    if (u) { JS_MarkValue(rt, u->rec_box, mark_func); JS_MarkValue(rt, u->params, mark_func); }
 }
 
-UrlRecord *url_record_of(JSValueConst v)
+/* The record's accessor and therefore its capture point: a flow that reaches the record may write it. */
+static UrlObj *url_obj_of(JSValueConst v)
 {
     UrlObj *u = JS_GetOpaque(v, g_url_class);
-    return u ? &u->rec : NULL;
+
+    if (u) cow_capture_host_record(v, u, &URL_OBJ_REC);
+    return u;
+}
+
+/* The record as this flow may change it: a copy in a new box, held by the record from here. */
+static UrlRecord *url_rec_edit(JSContext *ctx, UrlObj *u)
+{
+    UrlRecord *r = malloc(sizeof *r);
+
+    CHECK(r != NULL, "url: OOM copying a URL record for a write");
+    url_record_init(r);
+    CHECK(url_record_copy(r, u->rec), "url: OOM copying a URL record for a write");
+    cow_record_set(ctx, u, &URL_OBJ_REC, &u->rec_box, url_rec_box(ctx, r));
+    u->rec = r;
+    return r;
+}
+
+const UrlRecord *url_record_of(JSValueConst v)
+{
+    UrlObj *u = url_obj_of(v);
+    return u ? u->rec : NULL;
+}
+
+void url_query_assign(JSContext *ctx, JSValueConst url, char *query)
+{
+    UrlObj *u = url_obj_of(url);
+    UrlRecord *r;
+
+    DCHECK(u != NULL, "a URLSearchParams' associated URL stopped being one");
+    r = url_rec_edit(ctx, u);
+    free(r->query);
+    r->query = query;
 }
 
 /* Web IDL §3.7 Interfaces' implementation-check an object, step 3 — "If object does not implement interface,
@@ -1661,11 +1720,11 @@ static bool url_is(JSValueConst v)
     return JS_GetOpaque(v, g_url_class) != NULL;
 }
 
-static UrlRecord *url_of(JSContext *ctx, JSValueConst v)
+static const UrlRecord *url_of(JSContext *ctx, JSValueConst v)
 {
-    UrlObj *u = JS_GetOpaque(v, g_url_class);
+    UrlObj *u = url_obj_of(v);
     if (!u) JS_ThrowTypeError(ctx, "not a URL");
-    return u ? &u->rec : NULL;
+    return u ? u->rec : NULL;
 }
 
 static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
@@ -1681,9 +1740,12 @@ static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
         return obj;
     held = malloc(sizeof *held);
     CHECK(held, "url: OOM holding a URL record");
-    held->rec = *rec;
-    held->params = JS_UNDEFINED;
+    held->rec = malloc(sizeof *held->rec);
+    CHECK(held->rec, "url: OOM holding a URL record");
+    *held->rec = *rec;
     url_record_init(rec);   /* the wrapper owns it now */
+    held->rec_box = url_rec_box(ctx, held->rec);
+    held->params = JS_UNDEFINED;
     JS_SetOpaque(obj, held);
     return obj;
 }
@@ -1693,12 +1755,14 @@ static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
    `u.searchParams === u.searchParams` and a mutation of it is a mutation of the URL. */
 static JSValue js_url_get_params(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    UrlObj *u = JS_GetOpaque(this_val, g_url_class);
+    UrlObj *u = url_obj_of(this_val);
+    JSValue p;
     (void)magic;
     if (!u) return JS_ThrowTypeError(ctx, "not a URL");
     if (JS_IsUndefined(u->params)) {
-        u->params = usp_new(ctx, this_val, u->rec.query, u->rec.query ? strlen(u->rec.query) : 0);
-        if (JS_IsException(u->params)) { u->params = JS_UNDEFINED; return JS_EXCEPTION; }
+        p = usp_new(ctx, this_val, u->rec->query, u->rec->query ? strlen(u->rec->query) : 0);
+        if (JS_IsException(p)) return JS_EXCEPTION;
+        cow_record_set(ctx, u, &URL_OBJ_REC, &u->params, p);
     }
     return JS_DupValue(ctx, u->params);
 }
@@ -1707,9 +1771,9 @@ static JSValue js_url_get_params(JSContext *ctx, JSValueConst this_val, int magi
    re-initialised with it — otherwise `u.search = "?b=2"` would leave `u.searchParams` reporting the old pairs. */
 static void url_params_resync(JSContext *ctx, JSValueConst this_val)
 {
-    UrlObj *u = JS_GetOpaque(this_val, g_url_class);
+    UrlObj *u = url_obj_of(this_val);
     if (!u || JS_IsUndefined(u->params)) return;
-    usp_reset(ctx, u->params, u->rec.query, u->rec.query ? strlen(u->rec.query) : 0);
+    usp_reset(ctx, u->params, u->rec->query, u->rec->query ? strlen(u->rec->query) : 0);
 }
 
 /* §4.4's PER-MEMBER READ, over a bare record. It is public because §4.6.3's HTMLHyperlinkElementUtils —
@@ -1749,7 +1813,7 @@ char *url_member_get(const UrlRecord *u, int magic)
 
 static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    UrlRecord *u = url_of(ctx, this_val);
+    const UrlRecord *u = url_of(ctx, this_val);
     char *s;
     JSValue r;
 
@@ -2170,15 +2234,15 @@ int url_member_set(UrlRecord *u, int magic, const char *v, size_t vlen)
 
 static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    UrlRecord *u = url_of(ctx, this_val);
+    UrlObj *o = url_obj_of(this_val);
     const char *v;
     size_t vlen = 0;
     int rc;
 
-    if (!u) return JS_EXCEPTION;
+    if (!o) return JS_ThrowTypeError(ctx, "not a URL");
     v = JS_ToCStringLen(ctx, &vlen, val);
     if (!v) return JS_EXCEPTION;
-    rc = url_member_set(u, magic, v, vlen);
+    rc = url_member_set(url_rec_edit(ctx, o), magic, v, vlen);
     JS_FreeCString(ctx, v);
     if (rc < 0) return JS_ThrowTypeError(ctx, "the string is not a valid URL");
     if (magic == URL_HREF || magic == URL_SEARCH)
