@@ -14677,6 +14677,11 @@ TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     fold_row(&cc_tt, &cc_why, !!strstr(js, "\"/api/cl-clobbered\""),
              "NOT REACHED: there is no /api/cl-clobbered record, so no world's `window.clCfg` named an element "
              "the banner markup inserted: clobbering is not modelled over an unknown markup write");
+    /* The clobbered arm stands on the banner's query and not on `clCfg` as a free unknown: an absent global
+       read as injected page state forks the same witness without any element having been named. */
+    fold_row(&cc_tt, &cc_why, emitted_record_has(js, "/api/cl-clobbered", LOCATION_SEARCH_SRC),
+             "the clobbered arm's witness assumes nothing about location.search, so `window.clCfg` was forked "
+             "as a free unknown rather than reached through an element the banner inserted");
     const char *cl_why = NULL; int cl_tt = 1;
     fold_row(&cl_tt, &cl_why, has_u,
              "NOT REACHED: no location @S record carries a source rooted in location.search, so `clCfg.url` "
