@@ -17,8 +17,8 @@ size_t c_alloc_live(void);
    running total's chunks (usable plus one header word each), checked here: never negative; on glibc the mmapped
    chunks (usable plus two words) equal `hblkhd` exactly, and the heap half is net of glibc's tcache control block,
    so with its tcache off (GLIBC_TUNABLES=glibc.malloc.tcache_count=0) it is exact. What remains is glibc's
-   tcache-held chunks, or on wasm dlmalloc's segment overhead and the C library's own `emscripten_builtin_*` blocks.
-   -1 under a sanitizer, which keeps no such reading. */
+   tcache-held chunks. -1 under a sanitizer, which keeps no such reading, and in wasm, where dlmalloc's reading is a
+   walk of every chunk. */
 /* The address space the allocator has taken from the system now, free chunks included, O(1): emscripten's dlmalloc
    footprint (which never shrinks), or glibc's main arena as the program break's distance from where it started,
    plus the mmapped chunks (checked against mallinfo2 per census). */

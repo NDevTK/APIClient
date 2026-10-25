@@ -918,6 +918,14 @@ typedef struct JSMemoryUsage {
 } JSMemoryUsage;
 
 JS_EXTERN void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s);
+/* The counts the runtime keeps where it allocates and frees, O(1) to read: the allocator's live blocks and bytes,
+   the JS objects created and not freed, the atoms, and the hashed shapes. JS_ComputeMemoryUsage is the walk;
+   JS_LiveCountsAgree answers whether its object count is the running one, at rest; the other three it copies. */
+typedef struct JSLiveCounts {
+    int64_t malloc_count, malloc_size, objects, atoms, hashed_shapes;
+} JSLiveCounts;
+JS_EXTERN void JS_GetLiveCounts(JSRuntime *rt, JSLiveCounts *out);
+JS_EXTERN int JS_LiveCountsAgree(JSRuntime *rt, const JSMemoryUsage *walk);
 JS_EXTERN void JS_DumpMemoryUsage(FILE *fp, const JSMemoryUsage *s, JSRuntime *rt);
 
 /* atom support */

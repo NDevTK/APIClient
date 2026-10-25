@@ -671,6 +671,9 @@ struct JSRuntime {
     int shape_hash_size;
     int shape_hash_count; /* number of hashed shapes */
     JSShape **shape_hash;
+    /* JS objects created and not yet freed: raised as one joins the GC list (add_gc_object), lowered where
+       free_object takes it off, so a census reads the count without walking the heap (JS_GetLiveCounts). */
+    int64_t js_obj_live;
     void *user_opaque;
     void *libc_opaque;
     JSRuntimeFinalizerState *finalizers;
@@ -10959,6 +10962,7 @@ static void free_object(JSRuntime *rt, JSObject *p)
     p->u.func.var_refs = NULL;
     p->u.func.home_object = NULL;
 
+    rt->js_obj_live--;
     remove_gc_object(rt, &p->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(p) != 0) {
         list_add_tail(&p->header.link, &rt->gc_zero_ref_count_list);
@@ -11128,6 +11132,7 @@ static void add_gc_object(JSRuntime *rt, JSGCObjectHeader *h,
     h->gc_trial = 0;
     list_add_tail(&h->link, &rt->gc_obj_list);
     rt->gc_mut_epoch++;   /* a new object's edges were never subtracted from its children's counts */
+    if (type == JS_GC_OBJ_TYPE_JS_OBJECT) rt->js_obj_live++;
 }
 
 static void remove_gc_object(JSRuntime *rt, JSGCObjectHeader *h)
@@ -11927,6 +11932,29 @@ static void compute_value_size(JSValue val, JSMemoryUsage_helper *hp)
         /* should track JSBigInt usage */
         break;
     }
+}
+
+void JS_GetLiveCounts(JSRuntime *rt, JSLiveCounts *out)
+{
+    out->malloc_count = rt->malloc_state.malloc_count;
+    out->malloc_size = rt->malloc_state.malloc_size;
+    out->objects = rt->js_obj_live;
+    out->atoms = rt->atom_count;
+    out->hashed_shapes = rt->shape_hash_count;
+}
+
+int JS_LiveCountsAgree(JSRuntime *rt, const JSMemoryUsage *walk)
+{
+    struct list_head *el;
+    int64_t dying = 0;
+
+    /* A JS object a collection has queued with no references is still counted live until free_object takes it,
+       and the walk reads gc_obj_list only, so the queued ones are added back. */
+    list_for_each(el, &rt->gc_zero_ref_count_list) {
+        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
+        if (JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_JS_OBJECT) dying++;
+    }
+    return rt->gc_phase == JS_GC_PHASE_NONE && walk->obj_count + dying == rt->js_obj_live;
 }
 
 void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)

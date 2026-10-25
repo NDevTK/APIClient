@@ -2575,8 +2575,8 @@ function censusRefSites(b) {
   return rows;
 }
 /* The @HEAP census's allocator residue (solver/c_alloc.h's c_alloc_census): the allocator's in-use bytes beyond the
-   C heap's running total. A non-negative integer, or null under a sanitizer, which keeps no such reading; the engine
-   asserts the bound itself, so this reader checks only the shape. */
+   C heap's running total. A non-negative integer, or null under a sanitizer and in wasm, which keep no per-census
+   reading; the engine asserts the bound itself, so this reader checks only the shape. */
 function censusResidue(b) {
   const r = b.cResidueBytes;
   if (r === undefined)
@@ -2585,7 +2585,7 @@ function censusResidue(b) {
   if (r !== null && !(Number.isInteger(r) && r >= 0))
     throw new Error(`[build] the @HEAP census's \`cResidueBytes\` is ${JSON.stringify(r)} — it is a byte count ` +
                     "the allocator holds beyond the running total, never negative (c_alloc_census asserts that), " +
-                    "or null under a sanitizer.");
+                    "or null under a sanitizer and in wasm.");
   return r;
 }
 /* THE SHAPE EVERY PER-ARM ROW SHARES, SEPARATED FROM THE IDENTITY NOT ONE OF THEM SHARES. Four of @COLD's
@@ -4272,33 +4272,20 @@ function censusReading(out) {
                             `${site} ${tot}` + (lo === hi ? `` : ` (${lo}..${hi} each)`))
                        .join(", ") +
                      `; ${h.b.childRealmRefsReleased} given back`) +
-               `; ${h.b.trampFrames} heap frame(s), ` +
-               `${h.b.stepMachines} suspended builtin(s), ${h.b.unattributed} B the runtime cannot name`);
+               `; ${h.b.trampFrames} heap frame(s), ${h.b.stepMachines} suspended builtin(s) of ` +
+               `${h.b.mallocBytes} B the runtime holds`);
     /* WHICH KIND GREW, WHICH IS THE COMPARISON result_heap_json'S OWN COMMENT DESCRIBES AND NOTHING PERFORMED.
        "A climbing `allocations` with a flat `objects` is memory no GC object owns — an atom, a string, a
        property table, a bytecode function — and each of those has a different owner and a different place
        where the owner forgot to let go." Every one of those kinds was emitted on every census of every run
        and no reader had ever compared two of them. */
     const top = biggest([["allocations", h.b.allocations - h.a.allocations],
-                         ["atoms", h.b.atoms - h.a.atoms], ["strings", h.b.strings - h.a.strings],
-                         ["objects", h.b.objects - h.a.objects], ["shapes", h.b.shapes - h.a.shapes],
-                         ["props", h.b.props - h.a.props], ["funcs", h.b.funcs - h.a.funcs],
-                         ["funcCode", h.b.funcCode - h.a.funcCode],
-                         ["arrays", h.b.arrays - h.a.arrays],
-                         ["miscParts", h.b.miscParts - h.a.miscParts]]);
+                         ["atoms", h.b.atoms - h.a.atoms],
+                         ["objects", h.b.objects - h.a.objects], ["shapes", h.b.shapes - h.a.shapes]]);
     parts.push(`heap kinds: ${top[1] > 0 ? `${top[0]} grew most (+${top[1]})` : `nothing grew`}` +
                (h.b.allocations > h.a.allocations && h.b.objects <= h.a.objects
                  ? `, and allocations climbed with objects FLAT — memory no GC object owns`
                  : ``));
-    /* AND WHERE THE ATTRIBUTED BYTES ARE, which is the other half of the same sentence: the counts say how
-       many of each kind, and only the SIZE rows say which kind is the memory. `miscBytes` is quickjs's total
-       and is the denominator rather than a row beside them — result_heap_json says why summing it with the
-       others counts the named heap twice. */
-    parts.push(`heap bytes: ${h.b.miscBytes} B attributed, largest ` +
-               shareText([["objBytes", h.b.objBytes], ["propBytes", h.b.propBytes],
-                          ["shapeBytes", h.b.shapeBytes], ["strBytes", h.b.strBytes],
-                          ["atomBytes", h.b.atomBytes], ["funcBytes", h.b.funcBytes],
-                          ["arrayElemBytes", h.b.arrayElemBytes]], h.b.miscBytes));
   }
   if (w)
     parts.push(`swap: ${w.b.installs} switches over ${w.b.entries} delta entries, ${w.b.mean} each and ` +

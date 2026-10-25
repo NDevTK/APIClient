@@ -100,6 +100,12 @@ char *result_wfq_json(void);
  * every row is always present and a missing one is a broken contract with no second reading. Caller frees. */
 char *result_cold_json(void);
 char *result_heap_json(JSContext *ctx);
+#if APICLIENT_DEV
+/* The heap walk the census does not take, for a dev build's last reading: JS_ComputeMemoryUsage's breakdown (the
+   owners `allocations` alone cannot name; `unattributed` is malloc_size less the named bytes), asserted to agree
+   with the running counts result_heap_json reads. O(heap). Caller frees. */
+char *result_heap_walk_json(JSContext *ctx);
+#endif
 char *result_swap_json(void);
 
 /* ---- AND THE ONE FIELD THAT IS NOT A CENSUS, WHICH IS WHY IT IS COMPOSED ELSEWHERE ------------------------

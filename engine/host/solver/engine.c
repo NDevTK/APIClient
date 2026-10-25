@@ -10998,6 +10998,15 @@ static void engine_session_close(void) {
        g_sess_cur NULL). Otherwise flow_registry_free would be handed a flow with its delta applied, leaving its
        writes in the shared baseline with nothing able to unapply them; flow_release asserts it. */
     if (g_sess_cur) { flow_switch_out(g_sess_ctx, g_sess_cur); g_sess_cur = NULL; }
+#if APICLIENT_DEV
+    /* The heap walk the census leaves out, once, at rest: its breakdown printed and the running counts checked. */
+    {
+        char *walk = result_heap_walk_json(g_sess_ctx);
+        CHECK(walk != NULL, "engine: OOM composing the closing heap walk");
+        printf("@HEAPWALK %s\n", walk);
+        free(walk);
+    }
+#endif
     /* And the frontier is no longer for sale: past this line there is no scheduler to page for, and the teardown
        allocates (the result document, the leak walk), so an allocation there must fail as an allocation. */
     reclaim_uninstall(JS_GetRuntime(g_sess_ctx));

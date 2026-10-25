@@ -1663,25 +1663,21 @@ char *result_cold_json(void) {
     return out;
 }
 
-/* What the runtime and the C allocator under it hold: QuickJS's JS_ComputeMemoryUsage walk, the child realms
-   navigable.c built, and mallinfo (see result.h). Rows are split by kind because a climbing `allocations` with
-   a flat `objects` is memory no GC object owns (atom, string, property table, bytecode), each with its own owner.
-   `miscBytes`/`miscParts` are QuickJS's `memory_used_*` bucket: two entries per realm plus every property
-   array, fast-array element vector, var_ref, bound function, C-closure record and module entry. The realm
-   count is navigable.c's. `childRealmsMade` (lifetime) and `childRealmsPeak` (high-water) ride beside the live
+/* What the runtime and the C allocator under it hold, every row O(1): the counts QuickJS keeps where it allocates
+   and frees (JS_GetLiveCounts: its allocator's live blocks and bytes, the JS objects, atoms and hashed shapes), the
+   child realms navigable.c built, and the C allocator's running total (see result.h). A climbing `allocations`
+   with a flat `objects` is memory no JS object owns (atoms, strings, property tables, bytecode); the walk that
+   names those owners is JS_ComputeMemoryUsage, O(heap), read once at the session's close in a dev build
+   (result_heap_walk_json). `childRealmsMade` (lifetime) and `childRealmsPeak` (high-water) ride beside the live
    `childRealms`: `made == peak` within one sample says no realm was reclaimed (HTML §7.5.10 "Destroying
-   documents" step 7's reference drop), `made > peak` says reclamation ran.
-   `unattributed` is malloc_size minus `memory_used_size`, one subtraction: the named rows are already summed
-   into `memory_used_size`, so adding them again would count the named heap twice. `stepMachines` and
-   `trampFrames` decompose it, being the two largest things QuickJS cannot name.
-   Kinds: every row is a gauge (`allocations` is QuickJS's live `malloc_count`, lowered on free) except
+   documents" step 7's reference drop), `made > peak` says reclamation ran. `stepMachines` and `trampFrames` are
+   the two largest things in `mallocBytes` QuickJS cannot name. Kinds: every row is a gauge except
    `childRealmsMade` and the `gc` rows but `gcOwed`, lifetime counts and the only rows that may be differenced,
-   and `childRealmsPeak`, a high-water mark. Sized by composef (solver/compose.h). */
+   and `childRealmsPeak`, a high-water mark. Sized by composef. */
 char *result_heap_json(JSContext *ctx) {
-    JSMemoryUsage mem;
+    JSLiveCounts live;
     JSGCCycleStats gc;
     JSRuntime *rt;
-    long long attributed;
     /* Who holds the child realms, taken in one call beside the three counts it explains (see navigable.h).
        Gauges: the identity holds within one sample and none may be differenced. -1 for min and max is the
        empty set, which a live realm's refcount cannot be. */
@@ -1704,7 +1700,7 @@ char *result_heap_json(JSContext *ctx) {
     DCHECK(ctx != NULL, "the heap census was asked for against no realm — every row of it is a walk of ONE "
                         "runtime, so a census with no runtime to walk is a reading of nothing");
     rt = JS_GetRuntime(ctx);
-    JS_ComputeMemoryUsage(rt, &mem);
+    JS_GetLiveCounts(rt, &live);
     /* The cycle collector's rows (quickjs.h's JSGCCycleStats, engine.h's engine_gc_slices): work, decref steps,
        restarted trials, finished collections, objects freed as cycles, the scheduler's collector slices and their
        thread time on the pricing clock; `gcOwed` is 1 while a collection is owed or standing. */
@@ -1735,32 +1731,22 @@ char *result_heap_json(JSContext *ctx) {
         free(rsites_json);
         rsites_json = closed;
     }
-    attributed = (long long)mem.memory_used_size;
     /* The spliced rows are this function's and die here; the census composef returns is the caller's. */
     heap = composef(
-                 "{\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
-                 "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
-                 "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
+                 "{\"allocations\":%lld,\"mallocBytes\":%lld,\"atoms\":%lld,\"objects\":%lld,"
+                 "\"shapes\":%lld,\"childRealms\":%d,"
                  "\"childRealmsMade\":%d,\"childRealmsPeak\":%d,\"destroyStep9Releases\":%lld,"
                  "\"childRealmRefsMin\":%d,\"childRealmRefsMax\":%d,\"childRealmRefsTotal\":%lld,"
                  "\"childRealmRefsReleased\":%lld,\"childRealmRefSites\":%s,"
-                 "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
-                 "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
-                 "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,"
+                 "\"stepMachines\":%d,\"trampFrames\":%d,"
                  "\"cLiveKiB\":%lld,\"arenaKiB\":%lld,\"cResidueBytes\":%s,"
                  "\"gcWork\":%llu,\"gcSteps\":%llu,\"gcRestarts\":%llu,\"gcCollections\":%llu,"
                  "\"gcFreed\":%llu,\"gcSlices\":%lld,\"gcUs\":%lld,\"gcOwed\":%d}",
-                 (long long)mem.malloc_count, (long long)mem.atom_count, (long long)mem.str_count,
-                 (long long)mem.obj_count, (long long)mem.shape_count, (long long)mem.prop_count,
-                 (long long)mem.js_func_count, (long long)mem.js_func_code_size, (long long)mem.array_count,
-                 (long long)mem.memory_used_size, (long long)mem.memory_used_count,
+                 (long long)live.malloc_count, (long long)live.malloc_size, (long long)live.atoms,
+                 (long long)live.objects, (long long)live.hashed_shapes,
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
                  (long long)window_proxy_destroy_releases(),
                  rmin, rmax, (long long)rtotal, (long long)rreleased, rsites_json,
-                 (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
-                 (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
-                 (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
-                 (long long)mem.malloc_size - attributed,
                  JS_StepMachineCount(rt), JS_TrampFrameCount(rt),
                  (long long)c_alloc_live() / 1024, (long long)ca.arena / 1024, residue,
                  (unsigned long long)gc.work, (unsigned long long)gc.steps, (unsigned long long)gc.restarts,
@@ -1769,6 +1755,32 @@ char *result_heap_json(JSContext *ctx) {
     free(rsites_json);
     return heap;
 }
+
+#if APICLIENT_DEV
+char *result_heap_walk_json(JSContext *ctx) {
+    JSMemoryUsage mem;
+    JSRuntime *rt;
+
+    DCHECK(ctx != NULL, "the heap walk was asked for against no realm");
+    rt = JS_GetRuntime(ctx);
+    JS_ComputeMemoryUsage(rt, &mem);
+    DCHECKF(JS_LiveCountsAgree(rt, &mem),
+            "the runtime's running count of JS objects disagrees with its own heap walk (%lld walked) — an object "
+            "was created or freed past add_gc_object or free_object, so every census's `objects` row is off",
+            (long long)mem.obj_count);
+    return composef("{\"strings\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
+                    "\"miscBytes\":%lld,\"miscParts\":%lld,\"objBytes\":%lld,\"propBytes\":%lld,"
+                    "\"shapeBytes\":%lld,\"strBytes\":%lld,\"atomBytes\":%lld,\"funcBytes\":%lld,"
+                    "\"arrayElemBytes\":%lld,\"unattributed\":%lld}",
+                    (long long)mem.str_count, (long long)mem.prop_count, (long long)mem.js_func_count,
+                    (long long)mem.js_func_code_size, (long long)mem.array_count,
+                    (long long)mem.memory_used_size, (long long)mem.memory_used_count,
+                    (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
+                    (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
+                    (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
+                    (long long)mem.malloc_size - (long long)mem.memory_used_size);
+}
+#endif
 
 /* The composition, and nothing else. Each surface serializes itself — endpoint.c walks its deduped endpoints,
    solve.c its fire-verified sinks — and this only decides that they are one document and what it is called,

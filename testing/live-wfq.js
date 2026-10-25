@@ -416,8 +416,7 @@ function heapComposerKeys() {
    driver attaches to the extension in a real browser and therefore always samples the wasm artifact. On a
    NATIVE run the same row can fall, so this kind statement is about this driver's path and not about the
    field everywhere. */
-const HEAP_GAUGE = ["miscBytes", "objBytes", "propBytes", "shapeBytes", "strBytes", "atomBytes",
-                    "funcBytes", "arrayElemBytes", "unattributed", "cLiveKiB"];
+const HEAP_GAUGE = ["mallocBytes", "cLiveKiB"];
 const HEAP_WASM_MONOTONE = ["arenaKiB"];
 
 function heapScope() {
@@ -434,7 +433,9 @@ function heapScope() {
      state this block exists to end, and the ceiling question is the one a new byte row is most likely to
      be about. The twenty-one rows this filter excludes are counts and histograms (allocations, atoms,
      realm refs, step machines, tramp frames): real rows, a different question, and not this scope's. */
-  const published = [...keys].filter((k) => /(?:Bytes|KiB)$/.test(k) || k === "unattributed");
+  /* `cResidueBytes` is a check's remainder rather than a size held, and null on the wasm artifact this driver
+     samples, so it is not a ceiling row. */
+  const published = [...keys].filter((k) => /(?:Bytes|KiB)$/.test(k) && k !== "cResidueBytes");
   const unread = published.filter((k) => !named.includes(k));
   if (unread.length)
     throw new Error("[live-wfq] result_heap_json publishes byte row(s) no reader here names: " +

@@ -206,16 +206,12 @@ void c_alloc_census(CAllocCensus *out)
 {
     size_t heap = __atomic_load_n(&g_heap_chunks, __ATOMIC_RELAXED);
 #if defined(__EMSCRIPTEN__)
-    /* dlmalloc's classic mallinfo, size_t-wide: `uordblks` is its footprint less its free chunks, so it holds every
-       in-use chunk plus the segment overhead its walk does not visit. */
-    struct mallinfo m = mallinfo();
-
+    /* dlmalloc's mallinfo walks every chunk of the heap, which a census may not cost, so the wasm build states its
+       footprint and no residue. */
     DCHECK(out != NULL, "the allocator census was asked to fill nothing");
-    DCHECKF(heap <= m.uordblks,
-            "the C heap's running total of chunks (%zu) exceeds what dlmalloc holds in use (%zu) — a block was "
-            "counted twice, or freed without being taken off the total", heap, (size_t)m.uordblks);
-    out->arena = m.arena + m.hblkhd;
-    out->residue = (long long)(m.uordblks - heap);
+    (void)heap;
+    out->arena = c_alloc_footprint();
+    out->residue = -1;
 #else
     struct mallinfo2 m = mallinfo2();
     size_t mmapped = __atomic_load_n(&g_mmap_chunks, __ATOMIC_RELAXED);
