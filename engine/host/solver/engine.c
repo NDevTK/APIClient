@@ -5,6 +5,8 @@
 #include "core/clipboard/data_transfer.h"   /* a drop act's drag data store */
 #include "core/events/drag_event.h"        /* a drop act's DragEvent */
 #include "core/file/file_system.h"         /* a drop act's user file */
+#include "core/dom/user_scroll.h"           /* a scroll act's task */
+#include "core/intersection_observer/intersection_observer.h"   /* a scroll act's target */
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/heap.h>   /* emscripten_get_heap_max: the linear memory's ceiling, RAM pressure's limit */
 #else
@@ -5149,6 +5151,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        again. */
     sib->close_req = parent->close_req;
     sib->close_req_none = parent->close_req_none;
+    /* The scroll acts the parent's world has had performed: the arm stands in them. */
+    flow_scroll_acts_copy(sib, parent);
     /* How far the sequence has been run, so the no-replay assert at the compile site holds for an arm, which has
        run what its parent ran; a frameless sibling is the shape that can reach that compile. */
     sib->last_compiled = parent->last_compiled;
@@ -6683,6 +6687,59 @@ static StepUnit engine_orphan_unit(int r) {
     }
     DFAIL("the orphan step reported an outcome it does not have");
     return STEP_UNIT_NONE;
+}
+
+/* Skips a target this flow already scrolled into view whose observer still reports it out of view: the act is
+   one the flow has performed, and repeating it over the target would be the same scroll. */
+typedef struct { JSContext *ctx; const Flow *f; } ScrollSkip;
+static bool scroll_already_done(void *arg, lxb_dom_element_t *t) {
+    const ScrollSkip *k = arg;
+    char *loc = listener_act_target_locator(k->ctx, lxb_dom_interface_node(t)), want[256];
+    bool done = false;
+
+    if (!loc) return true;   /* a target no locator names is one no PoC could tell a person to scroll to */
+    snprintf(want, sizeof want, "\"target\":\"%s\"", loc);
+    for (int i = 0; i < k->f->scroll_n && !done; i++) done = strstr(k->f->scroll_acts[i], want) != NULL;
+    free(loc);
+    return done;
+}
+
+/* A modelled user scroll: the person scrolls an observed target into view (core/dom/user_scroll.h), so the
+ * observer's next Intersection Observer §3.2.10 update sees it intersect. An observer's callback that runs only
+ * once its target intersects is reached only by this act, the same kind of act as a drive of a listener.
+ * This flow, not a sibling, for engine_close_request_fork's reason: the flow has nothing left to run, so the world
+ * in which the person does not scroll adds nothing past here. The act is one frame on this flow, appended to its
+ * scroll acts (which a PoC states) after the drives it has called, and everything past it is forced. A resumed flow
+ * re-performs it when its replay re-reaches this rung, since the target and the observer state are the replay's.
+ * Returns 1 if it installed the scroll as this flow's frame; 0 when no observed target is out of view.
+ * Named residual. Not covered: a target the page scrolls out of view again after this flow scrolled it in, which
+ * scroll_already_done refuses to scroll a second time. Next diff builds: the act keyed by the observer's own
+ * transition (an entry queued after the scroll) rather than by the target's locator. Absence shows as: a second
+ * isIntersecting arm missing from a page whose callback moves its own target away. */
+static int engine_user_scroll(JSContext *ctx, Flow *f) {
+    ScrollSkip skip = { ctx, f };
+    lxb_dom_element_t *target;
+    char *loc, *act;
+    size_t n;
+
+    if (!g_sess_forking) return 0;   /* an @S re-fire and a conformance run send no scroll */
+    DCHECK(flow_running() == f && flow_frame(f) == NULL,
+           "a user scroll was modelled for a flow that is not running, or with a frame live — it is modelled only "
+           "where the running flow has nothing left to run");
+    if (!document_fully_active(ctx)) return 0;
+    target = intersection_observer_target_out_of_view(ctx, scroll_already_done, &skip);
+    if (!target) return 0;
+    loc = listener_act_target_locator(ctx, lxb_dom_interface_node(target));
+    DCHECK(loc != NULL, "a target scroll_already_done admitted has no locator — it refuses exactly those");
+    n = strlen(loc) + 64;
+    act = malloc(n);
+    CHECK(act, "engine: OOM spelling a scroll act");
+    snprintf(act, n, "{\"kind\":\"scroll\",\"target\":\"%s\",\"type\":\"scroll\"}", loc);
+    free(loc);
+    flow_scroll_act_push(f, act, f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0);
+    flow_install_base(f, ctx, user_scroll_flow(ctx, target));
+    flow_mark_forced_arm();
+    return 1;
 }
 
 /* A modelled potential close request: HTML §6.10.1 Close requests' preamble, performed by an agent with no user.
@@ -9359,6 +9416,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                above it, which is all the ordering needs: a resumed drive has built its call several rungs up, and a
                seeded drive is a sibling whose watcher lands in its own delta. See engine_close_request_fork for why
                this flow takes it, what ends it, and why everything past it is forced. */
+            /* A modelled user scroll, above the close request: scrolling is ordinary use of the page and a close
+               request dismisses what is open. See engine_user_scroll. */
+            else if (engine_user_scroll(ctx, f)) {
+                g_step_unit = STEP_UNIT_USER_SCROLL; return 0; }
             else if (engine_close_request_fork(ctx, f)) {
                 g_step_unit = STEP_UNIT_CLOSE_REQUEST; return 0; }
             else {
@@ -10415,13 +10476,13 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
      * STEP_UNIT_RENDERING or STEP_UNIT_TIMER, each of which changes what a zero on `queue-rendering-opportunity`
      * means.
      *
-     * The eleven units at or below the boundary (RENDERING, TIMER, IDLE_PERIOD, ORPHAN_SEED, ORPHAN_ROUTE,
-     * AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED, CLOSE_REQUEST, AWAIT_PEER, FINISHED) are each written at
+     * The twelve units at or below the boundary (RENDERING, TIMER, IDLE_PERIOD, ORPHAN_SEED, ORPHAN_ROUTE,
+     * AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED, USER_SCROLL, CLOSE_REQUEST, AWAIT_PEER, FINISHED) are each written at
      * one site at or below it, so their sum is the dispatches that descended this far, which `g_clock_render_asks`
      * counts at the arm; the third assert below is that agreement. `finished` at zero with the sum at zero says
      * the retirement arm was never asked (a fact about the arms above); with the sum large, it was asked and
      * something below declined.
-     * Named residual. Not covered: the eleven-unit list is written here by hand, not derived from the ladder.
+     * Named residual. Not covered: the twelve-unit list is written here by hand, not derived from the ladder.
      * Next diff builds: a marker on solver/step_unit.h's list naming which side of the boundary each arm is written
      * on, from which the sum is derived. Absence shows as: the boundary-sum assert firing after a rung moves across
      * the clock on purpose, until this list is edited to match. */
@@ -10443,7 +10504,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        the triple's internal adjacency and are blind to anything moving past all three. A unit that descends
        without joining the list reads the sum too small, one that rises without leaving it too large, a unit
        written at a second site above the boundary too large, a rung asked twice per step too small. One sum of
-       eleven rows rather than eleven containments, because the claim is the partition. ORPHAN_RESUME is absent:
+       twelve rows rather than twelve containments, because the claim is the partition. ORPHAN_RESUME is absent:
        engine_orphan_seed returns SEEDED or ROUTED, never RESUMED, so the third outcome of `engine_orphan_unit`
        belongs to the rung above the boundary. */
     {
@@ -10451,10 +10512,11 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
                      g_step_unit_runs[STEP_UNIT_IDLE_PERIOD] + g_step_unit_runs[STEP_UNIT_ORPHAN_SEED] +
                      g_step_unit_runs[STEP_UNIT_ORPHAN_ROUTE] + g_step_unit_runs[STEP_UNIT_AWAIT_FETCH_RECORD] +
                      g_step_unit_runs[STEP_UNIT_AWAIT_OWED_REPLY] + g_step_unit_runs[STEP_UNIT_AWAIT_DECLINED] +
+                     g_step_unit_runs[STEP_UNIT_USER_SCROLL] +
                      g_step_unit_runs[STEP_UNIT_CLOSE_REQUEST] + g_step_unit_runs[STEP_UNIT_AWAIT_PEER] +
                      g_step_unit_runs[STEP_UNIT_FINISHED];
         DCHECKF(below == g_clock_render_asks,
-                "the clock boundary was reached %ld times and the eleven arms at or below it account for %ld — every "
+                "the clock boundary was reached %ld times and the twelve arms at or below it account for %ld — every "
                 "dispatch reaching the rendering rung leaves through one of them, so a unit crossed the boundary, is "
                 "written on both sides of it, or the rung is asked twice per step",
                 g_clock_render_asks, below);

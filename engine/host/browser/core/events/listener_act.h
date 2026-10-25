@@ -3,6 +3,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_EVENTS_LISTENER_ACT_H
 #define ENGINE_HOST_BROWSER_CORE_EVENTS_LISTENER_ACT_H
 
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 
 /* The act that runs `fn` as an event listener in this realm's document, as one step of a PoC envelope's
@@ -19,5 +21,9 @@ char *listener_act_of(JSContext *ctx, JSValueConst fn);
 /* The text control a person types into to run `fn` (the target of its `input` act), borrowed from the node's
    wrapper, or JS_UNDEFINED where `fn`'s act is not typing. */
 JSValueConst listener_act_typed_control(JSContext *ctx, JSValueConst fn);
+
+/* An act's `target` locator for element `n` of this realm's document — `#id` for a unique identifier, otherwise
+   a tag path from the document element — or NULL where neither names it. malloc'd. */
+char *listener_act_target_locator(JSContext *ctx, lxb_dom_node_t *n);
 
 #endif

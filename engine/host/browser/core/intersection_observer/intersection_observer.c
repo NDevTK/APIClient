@@ -1049,6 +1049,49 @@ bool intersection_observer_pending(JSContext *ctx)
     return pending;
 }
 
+lxb_dom_element_t *intersection_observer_target_out_of_view(JSContext *ctx,
+                                                            bool (*skip)(void *arg, lxb_dom_element_t *t),
+                                                            void *arg)
+{
+    JSValue list = io_doc_list(ctx);
+    uint32_t n = io_len(ctx, list), i, k, nt;
+    lxb_dom_element_t *found = NULL;
+
+    for (i = 0; i < n && !found; i++) {
+        JSValue observer = JS_GetPropertyUint32(ctx, list, i);
+        JSValue state = io_state(ctx, observer), targets;
+
+        DCHECK(!JS_IsException(state), "a document's Intersection Observer list holds something that is not "
+                                       "an IntersectionObserver");
+        if (io_root_in_tree(ctx, state)) {
+            targets = JS_GetPropertyUint32(ctx, state, IO_S_TARGETS);
+            nt = io_len(ctx, targets);
+            for (k = 0; k < nt && !found; k++) {
+                JSValue target = JS_GetPropertyUint32(ctx, targets, k);
+                JSValue reg = io_registration(ctx, target, observer);
+                lxb_dom_node_t *t = node_of(target);
+
+                if (JS_IsObject(reg) && io_num_at(ctx, reg, IOR_PREV_THRESHOLD) >= 0.0) {
+                    JSValue v = JS_GetPropertyUint32(ctx, reg, IOR_PREV_INTERSECTING);
+                    bool intersecting = JS_ToBool(ctx, v) > 0;
+
+                    JS_FreeValue(ctx, v);
+                    if (!intersecting && t && element_view_has_box(t) &&
+                        !(skip && skip(arg, lxb_dom_interface_element(t))))
+                        found = lxb_dom_interface_element(t);
+                }
+                JS_FreeValue(ctx, reg);
+                JS_FreeValue(ctx, target);
+            }
+            JS_FreeValue(ctx, targets);
+        }
+        JS_FreeValue(ctx, state);
+        JS_FreeValue(ctx, observer);
+    }
+    JS_FreeValue(ctx, list);
+    return found;
+}
+
 /* ---- §3.2.5 NOTIFY INTERSECTION OBSERVERS ----------------------------------------------------------------- */
 
 #define IO_NOTIFY_STAGES(X) \

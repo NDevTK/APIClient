@@ -185,6 +185,9 @@
     X(ORPHAN_SEED,        "seed-one-orphan-flow")                                 \
     X(ORPHAN_ROUTE,       "hand-a-parked-drive-its-function")                     \
     X(ORPHAN_RESUME,      "resume-a-parked-orphan-drive")                         \
+    /* the person scrolling an observed target into view: a modelled act, as  */ \
+    /* the close request below is (solver/engine.c's engine_user_scroll)       */ \
+    X(USER_SCROLL,        "scroll-a-target-into-view")                            \
     /* AND THE ARRIVAL NOTHING PERFORMED. HTML §6.10.1 Close requests' preamble  */ \
     /* queues a global task for a potential close request, and this agent has no */ \
     /* user to send one — so the arrival is MODELLED, which is a forced          */ \

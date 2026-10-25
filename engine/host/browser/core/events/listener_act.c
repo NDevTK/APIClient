@@ -114,6 +114,16 @@ static char *locator_by_path(lxb_dom_node_t *el)
     return out;
 }
 
+char *listener_act_target_locator(JSContext *ctx, lxb_dom_node_t *n)
+{
+    lxb_dom_document_t *d = document_associated(ctx);
+    char *loc;
+
+    if (d == NULL || n == NULL || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
+    loc = locator_by_id(ctx, n, lxb_dom_interface_node(d));
+    return loc ? loc : locator_by_path(n);
+}
+
 /* The function's own `name` data property where it is a non-empty identifier, read without running an
    accessor; NULL otherwise. malloc'd. */
 static char *handler_name(JSContext *ctx, JSValueConst fn)

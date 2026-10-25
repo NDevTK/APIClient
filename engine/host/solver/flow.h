@@ -317,6 +317,13 @@ typedef struct Flow {
        `typing_pos` is that member's chain position, which names the typed source. */
     int typing_due;
     int typing_pos;
+    /* The scroll acts performed on this flow (the person scrolling a target into view, engine.c's
+       engine_user_scroll), each an envelope step (malloc'd) beside the number of drive members called before
+       it, in performance order. Copied by a fork, owned. A resumed flow re-performs each at the rung its replay
+       re-reaches, so none is cold-tier state. */
+    char **scroll_acts;
+    int   *scroll_at;
+    int    scroll_n;
 
     /* Has this flow's recipe been written to the park document? A per-flow fact because a partial self-park
        writes and releases the lowest-value tail while the engine keeps running. flow_release reads it (a
@@ -405,7 +412,7 @@ typedef struct Flow {
      *   - a branch whose arm the concrete example contradicts (solver/decide.c);
      *   - a request the trusted zone declined, whose failure arm runs the page's `catch` over an outcome nobody
      *     sent (solver/engine.c's flow_decline_fork);
-     *   - a modelled potential close request, an arrival no user performed (solver/engine.c's close-request arm);
+     *   - a modelled close request or user scroll, an act no user performed (solver/engine.c's two arms);
      *   - a witness verification delivering the value a pin chose (solver/concolic.c's concolic_deliver);
      *   - a read the session throws at and the flow reads past (absent.c's unbound identifier, concolic.c's
      *     member read over an undefined or null example).
@@ -1625,6 +1632,9 @@ void  flow_set_orphan_seen(Flow *f, int64_t seen);
    event, where a take hands a body over once per timeline. */
 void  flow_orphan_chain_push(Flow *f, uint64_t hash, char *act, int repeat);
 void  flow_orphan_chain_copy(Flow *dst, const Flow *src, int n);
+/* Append a scroll act (`act` consumed) performed after `at` called drive members; copy `src`'s scroll acts. */
+void  flow_scroll_act_push(Flow *f, char *act, int at);
+void  flow_scroll_acts_copy(Flow *dst, const Flow *src);
 /* A new @H/@S from the running flow: raise reward, reset aging. Answers 1 when an account was paid and 0 on the
    dropped arm (no flow holds the thread). */
 int   flow_credit_emit(double v);

@@ -249,8 +249,8 @@ static Cand *search_of(const char *src, int sink);
 
 /* A fire-verified PoC. The sink is held as its class, because every fact the reproduction envelope states (CSP,
    Trusted Types, what makes the breakout run) is a column of the class row. */
-/* `acts` is the envelope's `acts` array (record_sink), NULL for a fire verified under no engine drive, and
-   `under_act` says the fire was verified under one, so composition can assert the two agree. */
+/* `acts` is the envelope's `acts` array (record_sink), NULL for a fire verified under no engine drive or
+   modelled act, and `under_act` says the fire was verified under one, so composition can assert the two agree. */
 typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
@@ -258,34 +258,44 @@ static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
    at flow completion: a flow owes nobody completion, cold.c drops `cand_fired` on a park, and flow_remove frees
    a sold flow's substitution without passing solve_flow_end. A call outside a candidate flow is the page's own,
    since X9 is a global the bundle can reach, and proves nothing. */
-/* The acts a fire in `f` was verified under, as the envelope's `acts` array in chain order, or NULL when `f` is
-   no drive. `*no_act` is set where a called member of the chain has no act a page user can perform: a browser
+/* The acts a fire in `f` was verified under, as the envelope's `acts` array in performance order (its drives'
+   acts and its scroll acts), or NULL when `f` is neither a drive nor scrolled. `*no_act` is set where a called member of the chain has no act a page user can perform: a browser
    never makes that call, so the fire proves the bytes execute and is not a PoC. Members a resumed drive has not
    built a call for yet are not part of the path the fire ran on. malloc'd. */
+static void acts_append(char *out, size_t *at, const char *act)
+{
+    size_t l = strlen(act);
+
+    if (*at > 1) out[(*at)++] = ',';
+    memcpy(out + *at, act, l);
+    *at += l;
+}
+
 static char *fire_acts(const Flow *f, int *no_act, int *unsolved)
 {
-    int called = f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k;
+    int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k, s = 0;
     size_t n = 3, at = 1;
     char *out;
 
     *no_act = 0;
     *unsolved = 0;
-    if (!f->orphan) return NULL;
-    DCHECK(called > 0, "a fire ran in a drive whose chain has no called member — the mark and the chain are "
-                       "written together at the seed and at the claim");
+    if (!f->orphan && f->scroll_n == 0) return NULL;
+    DCHECK(!f->orphan || called > 0, "a fire ran in a drive whose chain has no called member — the mark and the "
+                                     "chain are written together at the seed and at the claim");
     for (k = 0; k < called; k++) {
         if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
         if (strstr(f->orphan_acts[k], "\"kind\":\"message\"")) *unsolved = 1;
         n += strlen(f->orphan_acts[k]) + 1;
     }
+    for (k = 0; k < f->scroll_n; k++) n += strlen(f->scroll_acts[k]) + 1;
     out = malloc(n);
     CHECK(out, "solve: OOM spelling the acts a PoC was verified under");
     out[0] = '[';
-    for (k = 0; k < called; k++) {
-        size_t l = strlen(f->orphan_acts[k]);
-        if (k) out[at++] = ',';
-        memcpy(out + at, f->orphan_acts[k], l);
-        at += l;
+    /* In performance order: a scroll act performed after `scroll_at` called members stands before member
+       `scroll_at`. */
+    for (k = 0; k <= called; k++) {
+        for (; s < f->scroll_n && f->scroll_at[s] <= k; s++) acts_append(out, &at, f->scroll_acts[s]);
+        if (k < called) acts_append(out, &at, f->orphan_acts[k]);
     }
     out[at++] = ']';
     out[at] = 0;
@@ -314,7 +324,7 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         else free(acts);
         return JS_UNDEFINED;
     }
-    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan);
+    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, f->orphan || f->scroll_n > 0);
     return JS_UNDEFINED;
 }
 

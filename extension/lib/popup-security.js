@@ -1461,7 +1461,8 @@ function _attackerSaid(ran) {
 function _actsSentence(acts) {
   return acts.map(function (a) {
     return (a.kind === "click" ? "click " : a.kind === "input" ? "type into "
-            : a.kind === "drop" ? "drop a file on " : "a `" + a.type + "` event on ")
+            : a.kind === "drop" ? "drop a file on " : a.kind === "scroll" ? "scroll into view "
+            : "a `" + a.type + "` event on ")
          + "`" + a.target + "`";
   }).join(", then ");
 }

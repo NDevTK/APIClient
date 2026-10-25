@@ -69,6 +69,14 @@ void intersection_observer_free(JSRuntime *rt);
  * being queued to deliver. */
 bool intersection_observer_pending(JSContext *ctx);
 
+/* A target a person could scroll into view to change what an observer reports: the first target, in observer
+   then observe() order, of an observer whose root is in the tree, whose last update queued an entry
+   (previousThresholdIndex is not −1) reporting it not intersecting, that has an associated box, and that
+   `skip` (with `arg`) does not refuse. NULL when there is none. READS ONLY, as the predicate above. */
+lxb_dom_element_t *intersection_observer_target_out_of_view(JSContext *ctx,
+                                                            bool (*skip)(void *arg, lxb_dom_element_t *t),
+                                                            void *arg);
+
 /* §3.2.10 "RUN THE UPDATE INTERSECTION OBSERVATIONS STEPS", for HTML §8.1.7.3 update-the-rendering STEP 19 —
  * split into a COUNT and a per-observer step.
  *

@@ -222,6 +222,8 @@ const _PROBE_INJECTORS = {
               : document.querySelector(a.target);
       if (!t) { steps.push({ target: a.target, type: a.type, found: false }); continue; }
       if (a.kind === "click" && typeof t.click === "function") t.click();
+      else if (a.kind === "scroll" && typeof t.scrollIntoView === "function")
+        t.scrollIntoView({ block: "nearest", inline: "nearest" });
       else t.dispatchEvent(new Event(a.type, { bubbles: true, cancelable: true }));
       steps.push({ target: a.target, type: a.type, found: true });
     }

@@ -1063,6 +1063,34 @@ void flow_orphan_chain_copy(Flow *dst, const Flow *src, int n)
     }
 }
 
+void flow_scroll_act_push(Flow *f, char *act, int at)
+{
+    char **acts;
+    int *ats;
+
+    DCHECK(act != NULL && at >= 0 && (f->scroll_n == 0 || f->scroll_at[f->scroll_n - 1] <= at),
+           "a scroll act was recorded with no envelope step, or before one already recorded");
+    acts = realloc(f->scroll_acts, (size_t)(f->scroll_n + 1) * sizeof *acts);
+    CHECK(acts, "engine: OOM recording a scroll act");
+    f->scroll_acts = acts;
+    ats = realloc(f->scroll_at, (size_t)(f->scroll_n + 1) * sizeof *ats);
+    CHECK(ats, "engine: OOM recording a scroll act");
+    f->scroll_at = ats;
+    f->scroll_acts[f->scroll_n] = act;
+    f->scroll_at[f->scroll_n++] = at;
+}
+
+void flow_scroll_acts_copy(Flow *dst, const Flow *src)
+{
+    DCHECK(dst->scroll_n == 0, "an arm's scroll acts were copied over ones it already had");
+    for (int i = 0; i < src->scroll_n; i++) {
+        char *act = strdup(src->scroll_acts[i]);
+
+        CHECK(act, "engine: OOM copying a scroll act");
+        flow_scroll_act_push(dst, act, src->scroll_at[i]);
+    }
+}
+
 void flow_set_orphan_seen(Flow *f, int64_t seen) {
     DCHECK(f != NULL && f->orphan && f->picks == 0 && seen >= 0,
            "a product drive count was written on a flow that is not a just-seeded, never-dispatched drive");
@@ -5720,6 +5748,9 @@ void flow_remove(JSContext *ctx, Flow *f) {
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);
         free(f->orphan_acts);
         free(f->orphan_chain);
+        for (int k = 0; k < f->scroll_n; k++) free(f->scroll_acts[k]);
+        free(f->scroll_acts);
+        free(f->scroll_at);
         free(f->agents);
         JS_FreeValue(ctx, f->orphan_claim_fn);
         /* And its place in the fork tree. Its work is already on the family's account (flow_age_running
