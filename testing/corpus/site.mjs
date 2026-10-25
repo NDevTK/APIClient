@@ -88,6 +88,9 @@ const PROBE = `(() => ({
     run: d._astRun === undefined ? null : d._astRun,
     astError: d._astError ? String(d._astError).slice(0,300) : null,
     sites: (d._astResults || []).flatMap(a => (a.fetchCallSites || []).map(x => (x.method||'?') + ' ' + (x.url||''))),
+    /* The addresses of the same walk whose row states \`razorClass: runtime-only\`, the product's bar. */
+    runtimeOnly: (d._astResults || []).flatMap(a => (a.fetchCallSites || [])
+      .filter(x => x.razorClass === 'runtime-only').map(x => (x.method||'?') + ' ' + (x.url||''))),
     /* THE DOOR AND THE WITNESS CLASS JOINED PER ROW, WHICH IS THE ONE STATEMENT NO MARGINAL CARRIES. The
        census publishes four histograms over this same array and CLAUDE.md's own rule for them is that "a union
        is a statement about per-row MEMBERSHIP and two marginals carry no overlap between them" — so a reader
@@ -1926,6 +1929,8 @@ const row = {
      then stated by the row rather than by this paragraph. */
   siteEndpoints: learnedAddrs,
   distinctEndpoints: learnedAddrs.length,
+  /* The distinct `runtime-only` addresses over the same documents, beside the histogram's count of rows. */
+  runtimeOnlyEndpoints: [...new Set(mine.flatMap(d => d.runtimeOnly))],
   /* WHAT `siteEndpoints` AND `distinctEndpoints` ARE A COUNT OF, STATED BY THE ROW RATHER THAN BY THE
      PARAGRAPH ABOVE THEM. They are the addresses that SURVIVED the engine's asset skip, and the population
      they were drawn FROM is in no field of this document. solver/endpoint.c's `endpoint_json_array` drops
