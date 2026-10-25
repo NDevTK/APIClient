@@ -187,7 +187,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       ,"searched":N[,"deliveryProbed":B][,"sourceEncodes":".."][,"sourceDelivers":".."]
                       [,"delivery":".."][,"deliveryPrefix":"#"][,"deliveryKey":".."][,"precondition":".."]
-                      [,"principalDemand":".."][,"principalGates":[..]][,"principalPins":[..]]}`
+                      [,"principalDemand":".."][,"principalPins":[..]]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"resumedWithdrawn":RW,
                       "reached":M,"turns":T,
                       "substituted":D,"sinkStrings":X,"runwayPerMille":R2,"survived":S,
@@ -195,8 +195,8 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                       [,"deliveryProbed":B],"probes":P,"payloads":[..],
                       "survivedBy":[..],"withdrawn":[..]
                       [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]
-                      [,"deliveryKey":".."][,"precondition":".."][,"principalDemand":".."][,"principalGates":[..]]
-                      [,"principalPins":[..]][,"senderDemand":[..]]}`
+                      [,"deliveryKey":".."][,"precondition":".."][,"principalDemand":".."][,"principalPins":[..]]
+                      [,"senderDemand":[..]]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
    own declaration. There is deliberately no "verified":false — the entry states what was searched, never that
@@ -480,15 +480,12 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     source, and for a `cross-document-message` the post itself is performable by anything
                     holding a handle while the victim's handler reads `event.origin` BEFORE it reads
                     `event.data`. §Attacker-sources decides the pair and this states which half a path is in:
-                      `none`        the path every candidate of this search replays demanded NOTHING of any
-                                    declared principal, so any identity satisfies it — INCLUDING the opaque one
-                                    a sandboxed attacker frame has, which is what makes such a finding
-                                    deliverable with no domain to register and nothing to serve.
-                      `forgeable`   it demanded a shape an attacker CAN hold (`endsWith`/`includes`/
-                                    `startsWith`), which §Attacker-sources SOLVES — and `principalGates` below
-                                    carries which shape. A layer that cannot present a chosen identity says so;
-                                    it never substitutes an opaque one, which would answer NO HIT for a reason
-                                    that is not an engine divergence.
+                      `none`        the path every candidate of this search replays pinned no declared
+                                    principal. Where it tested one without pinning it, the candidates delivered
+                                    origins composed from the path's constants and the fire chose; a fired
+                                    entry's message acts carry that `origin` and who can hold it
+                                    (`originOwned`), and a layer that cannot present it says so rather than
+                                    substituting an opaque one.
                       `unforgeable` it PINNED one, so the sender must be a document at the pinned origin,
                                     which an attacker reaches only through a gadget there; `principalPins`
                                     says which. Reachable only through the second capture door — a candidate
@@ -499,7 +496,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     for a search whose path was never frozen or an artifact built before the field existed (the
                     trusted zone's JS deploys from the tree before this C is built). Read as `none` it would
                     deliver with an opaque identity to origin-gating victims and manufacture no-hit divergences,
-                    so the verdict is stated on every examined entry and a consumer spells all four arms.
+                    so the verdict is stated on every examined entry and a consumer spells all three arms.
      `principalPins` the evidence under an `unforgeable` verdict, present exactly then: one entry per pin the
                     replayed path made, `{"principal":<src>,"equals":<token>,"kind":<report kind>,"loose":B
                     [,"subject":<identity compared>]}`. They conjoin. `subject` is the principal's own `src` for
@@ -511,14 +508,6 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     alternatives, each satisfying its own path, and they are emitted on the parked shape only,
                     since a fired search has a PoC. A delivery needs a document at `equals` that posts the
                     payload to the victim, a gadget; nothing in this record yet names one.
-     `principalGates` the evidence under a `forgeable` verdict, present exactly then (asserted both ways): one
-                    `{"principal":<src>,"predicates":[{"method":..,"arguments":[..],"holds":B}]}` per declared
-                    principal the path tested. They conjoin, since they are one path's demands; an identity
-                    meeting only some would not fire. `predicates` is endpoint.c's grammar verbatim, and
-                    `holds:false` is a fact: a path that proved `origin.startsWith("https://admin.")` false needs
-                    an identity that does not match it. It stays a shape: nothing here picks an origin, and the
-                    layer performing the delivery searches for one and fire-verifies it, stating that an origin
-                    it stamped from this record is engine agreement, with the real browser as the oracle.
    The engine owns this whole vocabulary. A delivery layer switches on these tokens and may say it cannot
    PERFORM one, but it never decides which source uses which — that was a `{hash}|{search}|{pm}|{reply}` table
    in the offscreen matching a display shape this engine has never emitted, which is why live verify could not

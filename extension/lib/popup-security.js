@@ -943,20 +943,11 @@ function renderSecurityPanel() {
       if (item.precondition)   probeObj.precondition = item.precondition;
       if (item.cspBlocks)      probeObj.cspBlocks = item.cspBlocks;
       if (item.trustedTypes)   probeObj.trustedTypes = item.trustedTypes;
-      /* AND WHOSE IDENTITY THE DELIVERY NEEDS — the OTHER half of the engine's delivery declaration, and a
-         different question from `delivery` rather than a detail of one: that says HOW bytes get into the
-         source, and this says whether an attacker can be the one putting them there. solve.h's
-         `principalDemand` is the verdict a delivery layer BRANCHES on (`none`/`forgeable`/`unforgeable`) and
-         `principalGates` is the evidence under `forgeable`.
-         ABSENCE IS CARRIED AS ABSENCE, for the reason stated above about `item.delivery || ""`: `principalDemand`
-         legitimately has no key — an artifact built before the engine stated it, which is the ORDINARY case
-         while this file deploys on WRITE and the engine's C is live only after a build — and solve.h is
-         explicit that an absent verdict may NEVER be read as `none`. Normalising it here would hand the
-         receiver a value the record does not carry, and the receiver's own four-arm split would then perform a
-         delivery with an opaque identity for a finding whose page gates on origin, whose NO HIT §LIVE-VERIFY
-         reads as an engine-fidelity divergence. So the receiver sees the record's real shape. */
+      /* Whose identity the delivery needs: solve.h's `principalDemand` (`none`/`unforgeable`, with its
+         `principalPins`), and for a message act the `origin` the fire composed and who holds it, in `acts`.
+         An absent verdict is carried as absent: solve.h says it is never read as `none`, which would deliver
+         with an opaque identity to a page that gates on origin. */
       if (item.principalDemand) probeObj.principalDemand = item.principalDemand;
-      if (item.principalGates)  probeObj.principalGates = item.principalGates;
       if (item.principalPins)   probeObj.principalPins = item.principalPins;
       if (item.acts)            probeObj.acts = item.acts;
       var probe = JSON.stringify(probeObj);
@@ -1481,10 +1472,24 @@ function _attackerSaid(ran) {
    (HTML §7.1.3 "Cross-origin opener policies"' initial value), so that clause does not fire and step 19 hands
    back the openee's WindowProxy. For the retired sandbox the second conjunct held at every COOP value, so the
    clause fired for every delivery once the manifest went to `same-origin`. */
+/* A message act's sender, for the reader: the origin the fire composed (solve.h's act `origin`) and who holds it
+   (`originOwned`). No live run posts a message, so every message act is engine-fired and live-unverified. */
+function messageOriginClause(a) {
+  DCHECK(a.kind === "message" && ("origin" in a) === ("originOwned" in a),
+         "a message act's origin and its holder disagree — bridge.js docSinkAct admits them only together");
+  if (!("origin" in a)) return "with no sender origin stated (engine-fired, live-unverified)";
+  DCHECK(a.originOwned === "attacker-site" || a.originOwned === "registered-domain",
+         "a message act names a holder bridge.js SINK_ORIGIN_OWNERS does not admit: " + a.originOwned);
+  return "from " + a.origin + (a.originOwned === "registered-domain"
+    ? " (engine-fired, live-unverified: needs a registered domain ending in the constant the page compared the "
+      + "origin with)"
+    : " (engine-fired, live-unverified: a document on the attacker's own site)");
+}
 /* The acts a PoC was verified under (solve.c's `acts`, validated by bridge.js docSinkAct), as the reader's
    steps after the delivery: the finding needs that interaction, which lowers its severity and not its truth. */
 function _actsSentence(acts) {
   return acts.map(function (a) {
+    if (a.kind === "message") return "a message posted to `" + a.target + "` " + messageOriginClause(a);
     return (a.kind === "click" ? "click " : a.kind === "input" ? "type into "
             : a.kind === "drop" ? "drop a file on " : a.kind === "scroll" ? "scroll into view "
             : a.kind === "close-request" ? "send a close request (Escape) to "

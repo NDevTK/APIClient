@@ -54,8 +54,7 @@ function inputActStep(a, where) {
   DCHECK(!!a && typeof a === "object" && typeof a.kind === "string" && typeof a.target === "string",
          "a stored witness act is not {kind, target, …} (" + where + "): " + JSON.stringify(a));
   if (a.kind === "message") {
-    return { text: "a message posted to the window by " + a.route + " route" +
-                   ("origin" in a ? " from " + a.origin : "") +
+    return { text: "a message posted to the window by " + a.route + " route " + messageOriginClause(a) +
                    ("data" in a ? " with data " + JSON.stringify(a.data) : ", its data not composed"),
              inputs: ["postMessage"] };
   }

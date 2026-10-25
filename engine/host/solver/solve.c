@@ -61,28 +61,22 @@ typedef struct {
     int   surv;
 } CandPayload;
 
-/* One principal and the predicates the replayed path made of it (see Cand.pg). The search owns `src` and the
-   rows because both sources are borrowed: the registry name lives while its component holds its claim, and the
-   rows concolic_strpred_read returns live until the running flow's constraint next grows. What a row owns is
-   concolic.c's to say (concolic_pred_copy / concolic_pred_release); this file owns the array and the name. */
-typedef struct { char *src; ConcolicPred *pred; int npred; } PrincipalGate;
-
 /* One sender identity a path reaching this sink pinned: the principal's `src` and the pin (concolic.h's
    ConcolicPrincipalPin), both owned by the search. A list of these is a disjunction over paths when it is a
    search's sender demand (Cand.snd) and a conjunction over one path when it is a verdict's evidence (Cand.pp). */
 typedef struct { char *principal; ConcolicPrincipalPin pin; } SenderPin;
 typedef struct { SenderPin *row; int n; } SenderPins;
 
-/* The verdict on what a search's frozen path demanded of an attacker's principal. It is a separate fact from the
-   demands in `pg`: the rows are the evidence, this is the decision, and a consumer branches on this.
+/* The verdict on what a search's frozen path demanded of an attacker's principal: whether it pinned one (the
+   evidence is `pp`). A test that pins nothing is not stated here: the candidates deliver origins composed from
+   the path's constants (message_compose_origins), the fire decides, and the PoC's acts carry the origin.
    PG_UNEXAMINED is 0, so the Cand compound literal in sink_search leaves a never-frozen path unexamined without
    naming the member. PG_NONE is never spelled by an absence: a trusted-zone reader meeting an artifact built
    before this field existed must read "unstated" and refuse, rather than deliver with an opaque identity to a
    victim that gates on origin and then read the miss as an engine-fidelity divergence. */
 typedef enum {
     PG_UNEXAMINED = 0,   /* no path was ever frozen for this search, so nothing has been asked */
-    PG_NONE,             /* examined: the frozen path demanded nothing of any declared principal */
-    PG_FORGEABLE,        /* examined: it demanded a shape an attacker can hold — `pg` carries which */
+    PG_NONE,             /* examined: the frozen path pinned no declared principal */
     PG_UNFORGEABLE       /* examined: it pinned one, so the sender is a document at that origin — `pp` says which */
 } PrincipalDemand;
 
@@ -238,16 +232,10 @@ typedef struct {
        The blob holds a reference on the frozen segment. record_sink releases it at the fire, which is what
        closes the search (search_seeds), and solve_free releases what remains. */
     void *reinject;
-    /* What that frozen path demanded of an attacker's principal, captured beside the path
-       (cand_learn_principal_gates) because every candidate replays that one path. Not a union across
-       sightings: an identity satisfying a gate on a path no candidate replays gives a PoC that fails for a
-       reason that is not an engine divergence. endpoint.c intersects rows across sightings because @H states
-       what every path obeyed; @S needs what one replayed path demands. Each principal's rows are a flat
-       conjunction. `pg_demand` is the verdict a consumer branches on and is never derived from `npg` here; see
-       PrincipalDemand. */
-    PrincipalGate *pg; int npg; PrincipalDemand pg_demand;
-    /* The pins under a PG_UNFORGEABLE verdict, taken at the same capture, so `pg` and `pp` are the two kinds of
-       evidence one frozen path's verdict can have. Empty under every other verdict. */
+    /* Whether that frozen path pinned an attacker's principal, captured beside the path
+       (cand_learn_principal_gates) because every candidate replays that one path; see PrincipalDemand. */
+    PrincipalDemand pg_demand;
+    /* The pins under a PG_UNFORGEABLE verdict, taken at the same capture. Empty under every other verdict. */
     SenderPins pp;
     /* The senders this search waits on: the pins of every detection whose path pinned a principal, which
        detect_sink records here instead of opening the search on that path. Each entry alone satisfies its own
@@ -273,18 +261,10 @@ static Cand *search_of(const char *src, int sink);
 typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
-/* Whether the running flow's world asked anything of a declared principal (an origin's pin, a forgeable
-   predicate over it, or any branch its bytes reach): the counts of concolic_principal_pins,
-   concolic_principal_decided and concolic_principal_preds. */
-static void principal_seen(void *user, const char *src, const ConcolicPred *pred, int n) {
-    (void)src; (void)pred; (void)n;
-    (*(int *)user)++;
-}
+/* Whether the running flow's world asked anything of a declared principal (an origin's pin, or any branch its
+   bytes reach): the counts of concolic_principal_pins and concolic_principal_decided. */
 static int flow_demands_principal(void) {
-    int n = concolic_principal_pins(NULL, NULL) + concolic_principal_decided();
-
-    concolic_principal_preds(principal_seen, &n);
-    return n;
+    return concolic_principal_pins(NULL, NULL) + concolic_principal_decided();
 }
 
 /* A fire under message acts the run left unknown, every message composed, queued for its verification: the
@@ -726,49 +706,6 @@ static int search_solved(const Cand *e) {
 /* Declared here because add_pending, above the definition, asks whether a search still seeds. */
 static int search_seeds(const Cand *e);
 
-/* Copy and free one PrincipalGate's rows. What a row owns is concolic.c's (concolic_pred_copy /
-   concolic_pred_release); these own the array, the same division endpoint.c's param_pred_copy /
-   param_pred_free make over the same row type. */
-static ConcolicPred *gate_pred_copy(const ConcolicPred *src, int n) {
-    ConcolicPred *out;
-    int i;
-
-    DCHECK(n > 0 && src != NULL,
-           "a principal's predicate rows were copied with no rows to copy — the walk that hands them over "
-           "calls back only where it found some, so an empty set here is a caller that invented one");
-    out = malloc((size_t)n * sizeof *out);
-    CHECK(out, "solve: OOM taking the demands a path made of an attacker's principal off the flow");
-    for (i = 0; i < n; i++) concolic_pred_copy(&out[i], &src[i]);
-    return out;
-}
-
-static void gate_pred_free(ConcolicPred *p, int n) {
-    int i;
-    for (i = 0; i < n; i++) concolic_pred_release(&p[i]);
-    free(p);
-}
-
-/* One principal's demands, called back by concolic_principal_preds once per principal the path tested. It
-   appends, because the demands of one path conjoin. */
-static void cand_gate_row(void *user, const char *src, const ConcolicPred *pred, int n) {
-    Cand *e = (Cand *)user;
-    PrincipalGate *a;
-
-    DCHECK(e != NULL && src != NULL && *src && pred != NULL && n > 0,
-           "a principal's demand arrived for no search, with no principal named, or with no rows — the three "
-           "are one observation written together by the walk, so a call holding some of them describes a "
-           "demand nothing can answer for");
-    a = realloc(e->pg, (size_t)(e->npg + 1) * sizeof *a);
-    CHECK(a, "solve: OOM recording the demands a path made of an attacker's principal — a lost demand reports "
-             "an identity an attacker can hold for a path that demands one they cannot");
-    e->pg = a;
-    e->pg[e->npg].src = strdup(src);
-    CHECK(e->pg[e->npg].src, "solve: OOM naming the principal a path made a demand of");
-    e->pg[e->npg].pred = gate_pred_copy(pred, n);
-    e->pg[e->npg].npred = n;
-    e->npg++;
-}
-
 /* One principal's pins, called back by concolic_principal_pins; appended to `user` unless an equal row is
    already there, so a re-detection of one path adds nothing. */
 static void sender_pin_row(void *user, const char *src, const ConcolicPrincipalPin *pin, int n) {
@@ -840,21 +777,16 @@ static void sender_pins_free(SenderPins *sp) {
    and its evidence, written together while the flow that froze the path exists. */
 static void cand_learn_principal_gates(Cand *e) {
     DCHECK(e != NULL, "the demands of a path were decided for no search");
-    DCHECK(e->pg_demand == PG_UNEXAMINED && e->npg == 0,
+    DCHECK(e->pg_demand == PG_UNEXAMINED,
            "a search's principal demands were decided twice — this runs past the ONE capture's own two "
            "returns, so a second verdict describes a path this search no longer stands on, exactly as a second "
            "recorded length would");
     /* A pinned principal is stated as PG_UNFORGEABLE with its pins rather than left as an empty set. A pinned
        detection never opens a search (detect_sink), but this capture also has the witness door
-       (derive_from_witness, a resumed search's own context probe), which detection never sees. A path's demands
-       conjoin, so reporting only its forgeable ones, or an empty set a consumer cannot tell from "demanded
-       nothing", would state an identity an attacker can hold for a path whose sender must be the pinned one. */
+       (derive_from_witness, a resumed search's own context probe), which detection never sees. Stating it as
+       `none` would offer any sender to a path whose sender must be the pinned one. */
     DCHECK(e->pp.n == 0, "a search's verdict pins were taken before its verdict was decided");
-    if (sender_pins_learn(&e->pp)) { e->pg_demand = PG_UNFORGEABLE; return; }
-    concolic_principal_preds(cand_gate_row, e);
-    /* The walk calls back exactly where it found a demand, so `npg` is now the verdict; deriving it here keeps
-       the enum and the rows from being two producers that can disagree. */
-    e->pg_demand = e->npg ? PG_FORGEABLE : PG_NONE;
+    e->pg_demand = sender_pins_learn(&e->pp) ? PG_UNFORGEABLE : PG_NONE;
 }
 
 /* Take the re-injection path of the flow standing at this search's sink: the one capture, reached from two
@@ -2448,61 +2380,17 @@ static void emit_delivery(JsonBuf *b, JSContext *ctx, const Cand *e, const char 
 
         if (pre) { json_buf_raw(b, ","); json_buf_key(b, "precondition"); json_buf_str(b, pre); }
     }
-    /* What the replayed path demanded of an attacker's principal. `delivery` says how an attacker puts bytes in
-       this source; this says whose identity they must hold while doing it. For a cross-document message the post
-       is performable by anything holding a handle, and the victim's handler reads `event.origin` before
-       `event.data`. The verdict is emitted first and the rows are its evidence (see PrincipalDemand). The rows
-       stay a shape, in endpoint.c's `predicates` grammar: method, arguments, and the arm this run took. Nothing
-       here picks an origin that satisfies them; the delivery layer solves for one and fire-verifies it.
-       `holds:false` is a fact: a path that proved the predicate false demands an identity that fails it. */
+    /* Whether the replayed path pinned an attacker's principal. `delivery` says how an attacker puts bytes in
+       this source; this says whether a sender other than the pinned one can do it (see PrincipalDemand). An
+       origin the attacker can hold is not stated here: the fire composed it, and the PoC's acts carry it. */
     if (e && e->pg_demand != PG_UNEXAMINED) {
         /* The verdict on every examined entry, unconditionally, because its absence must mean "not stated". */
         json_buf_raw(b, ","); json_buf_key(b, "principalDemand");
-        json_buf_str(b, e->pg_demand == PG_NONE       ? "none"
-                      : e->pg_demand == PG_FORGEABLE  ? "forgeable"
-                                                      : "unforgeable");
-        DCHECK(e->pg_demand == PG_FORGEABLE ? e->npg > 0 : e->npg == 0,
-               "a search's principal verdict and its recorded demands disagree — the verdict is DERIVED from "
-               "the walk's own answer at the capture, so `forgeable` with no rows would state that an identity "
-               "is constrained and not say by what, and rows under any other verdict would offer a delivery "
-               "layer a shape to satisfy for a path whose answer is that no shape does");
+        json_buf_str(b, e->pg_demand == PG_NONE ? "none" : "unforgeable");
         DCHECK(e->pg_demand == PG_UNFORGEABLE ? e->pp.n > 0 : e->pp.n == 0,
                "a search's principal verdict and its recorded pins disagree — `unforgeable` is decided by the "
                "pins the capture took, so one without the other names a sender for no path or no sender for one");
         if (e->pp.n) { json_buf_raw(b, ","); json_buf_key(b, "principalPins"); emit_sender_pins(b, &e->pp); }
-    }
-    if (e && e->npg) {
-        json_buf_raw(b, ","); json_buf_key(b, "principalGates"); json_buf_raw(b, "[");
-        for (int g = 0; g < e->npg; g++) {
-            const PrincipalGate *pg = &e->pg[g];
-            if (g) json_buf_raw(b, ",");
-            DCHECK(pg->src != NULL && *pg->src && pg->npred > 0 && pg->pred != NULL,
-                   "a principal gate reached the emission with no principal named or with no rows — the walk "
-                   "that captured it calls back only where it found some, so this row would state that an "
-                   "identity is constrained and then not say by what");
-            json_buf_raw(b, "{"); json_buf_key(b, "principal"); json_buf_str(b, pg->src);
-            json_buf_raw(b, ","); json_buf_key(b, "predicates"); json_buf_raw(b, "[");
-            for (int k = 0; k < pg->npred; k++) {
-                const ConcolicPred *pr = &pg->pred[k];
-                if (k) json_buf_raw(b, ",");
-                json_buf_raw(b, "{"); json_buf_key(b, "method"); json_buf_str(b, pr->method);
-                json_buf_raw(b, ","); json_buf_key(b, "arguments"); json_buf_raw(b, "[");
-                for (int a = 0; a < pr->nargs; a++) {
-                    if (a) json_buf_raw(b, ",");
-                    json_buf_str(b, pr->args[a]);
-                }
-                json_buf_raw(b, "]");
-                DCHECK(pr->holds == 0 || pr->holds == 1,
-                       "a principal gate reached the emission for an arm that is neither taken nor not-taken — "
-                       "the arm IS the fact this record carries, so a third value would be written as one of "
-                       "the two and the delivery layer could not tell which identity to model");
-                json_buf_raw(b, ","); json_buf_key(b, "holds");
-                json_buf_raw(b, pr->holds ? "true" : "false");
-                json_buf_raw(b, "}");
-            }
-            json_buf_raw(b, "]}");
-        }
-        json_buf_raw(b, "]");
     }
 }
 
@@ -2805,13 +2693,6 @@ void solve_free(void) {
         }
         free(g_pending[i].vf);
         free(g_pending[i].dl_tmpl);
-        /* The principal demands: this file owns each name and row array, and the rows' strings are concolic.c's
-           (gate_pred_free routes to concolic_pred_release). */
-        for (int c = 0; c < g_pending[i].npg; c++) {
-            free(g_pending[i].pg[c].src);
-            gate_pred_free(g_pending[i].pg[c].pred, g_pending[i].pg[c].npred);
-        }
-        free(g_pending[i].pg);
         sender_pins_free(&g_pending[i].pp);
         sender_pins_free(&g_pending[i].snd);
         free(g_pending[i].src);

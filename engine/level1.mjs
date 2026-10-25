@@ -1230,11 +1230,10 @@ async function mintDrive(minted, slices) {
     for (const k of scensus) d[k] = 0;
     return d;
   };
-  const gate = { principal: 'event.origin', predicates: [{ method: 'startsWith', arguments: ['https://a.'], holds: true }] };
   const pin = { principal: 'event.origin', equals: 'https://a.test', kind: 'string', loose: false };
   const sinks = [['no sink (the control)', null, null], ['a parked entry with no delivery', {}, null],
                  ['an address delivery', { delivery: 'address', deliveryPrefix: '#', poc: 'X9()' }, null],
-                 ['a forgeable message delivery', { delivery: 'cross-document-message', messageRoutes: ['frame'], principalDemand: 'forgeable', principalGates: [gate] }, null],
+                 ['a message delivery that pinned nothing', { delivery: 'cross-document-message', messageRoutes: ['frame'], principalDemand: 'none' }, null],
                  ['an unforgeable message delivery', { delivery: 'cross-document-message', messageRoutes: ['frame', 'opener'], principalDemand: 'unforgeable', principalPins: [pin] }, null],
                  ['a message delivery with no route list', { delivery: 'cross-document-message' }, 'messageRoutes'],
                  ['a message route outside the vocabulary', { delivery: 'cross-document-message', messageRoutes: ['iframe'] }, 'messageRoutes'],
@@ -1248,11 +1247,8 @@ async function mintDrive(minted, slices) {
                  ['a fired entry with neither a delivery nor a precondition', { poc: 'X9()' }, 'neither a delivery'],
                  ['a third address component', { delivery: 'address', deliveryPrefix: '/' }, 'deliveryPrefix'],
                  ['a verdict outside the vocabulary', { principalDemand: 'maybe' }, 'principalDemand'],
-                 ['forgeable with no gates', { principalDemand: 'forgeable' }, 'principalGates'],
-                 ['gates beside none', { principalDemand: 'none', principalGates: [gate] }, 'principalGates'],
+                 ['the retired forgeable verdict', { principalDemand: 'forgeable' }, 'principalDemand'],
                  ['unforgeable with no pins', { principalDemand: 'unforgeable' }, 'principalPins'],
-                 ['a gate with no predicates', { principalDemand: 'forgeable', principalGates: [{ principal: 'x', predicates: [] }] }, 'principalGates[0]'],
-                 ['a predicate with no arm', { principalDemand: 'forgeable', principalGates: [{ principal: 'x', predicates: [{ method: 'm', arguments: [] }] }] }, 'predicates[0]'],
                  ['a pin with no loose flag', { principalDemand: 'unforgeable', principalPins: [{ principal: 'x', equals: 'y', kind: 'string' }] }, 'principalPins[0]'],
                  ['an empty poc', { poc: '' }, '.poc'],
                  ['a parked search waiting on a sender', { delivery: 'cross-document-message', messageRoutes: [], senderDemand: [pin] }, null],

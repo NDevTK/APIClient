@@ -665,8 +665,8 @@ void        concolic_declare_source(const char *component, const char *src, cons
  * pin as its sender demand (`concolic_principal_pins`) and is never dropped. A forgeable check
  * (endsWith/includes/startsWith) is solved directly and needs nothing here: a prefix or substring predicate
  * PINS NOTHING (concolic_cmp answers OPCMP_NONE for it), so it never reaches this rule and the search
- * proceeds, reached by the pin's own semantics rather than by a test enumerating the string builtins. What the
- * forgeable half does state is its domain, which concolic_strpred_file below records.
+ * proceeds, reached by the pin's own semantics rather than by a test enumerating the string builtins; its
+ * candidates deliver origins composed from the constants the path compared it with (message_compose_origins).
  *
  * IT IS A PROPERTY OF THE SOURCE AND NOT OF THE SINK, which is why it is declared beside the delivery and not
  * asked at the emission: the same fact decides every finding rooted there, and a consumer that re-derived it
@@ -688,7 +688,7 @@ void        concolic_principal_pin_release(ConcolicPrincipalPin *p);
    with that principal's `src` and its pins (borrowed until the constraint next grows), and answers how many
    principals it called back for; `cb` may be NULL to ask only that count. A pin made on a derived spelling is
    filed under the pinned value's root members (concolic_pin_store), so it is found here. 0 for a flow that only
-   tested a principal without pinning it; that flow's demand is `concolic_principal_preds`' forgeable half. */
+   tested a principal without pinning it. */
 int         concolic_principal_pins(void (*cb)(void *user, const char *src, const ConcolicPrincipalPin *pin, int n),
                                     void *user);
 /* THE CLAIM, GIVEN BACK — called from the claimant's own `_free`, once, whatever number of rows it declared,
@@ -1515,52 +1515,6 @@ void        concolic_strpred_file(const char *hole, const char *method, const ch
    grows, `*n` 0 with a NULL return when the flow proved nothing. That zero is a POSITIVE statement (no call
    over this value was branched on along the path that built this request), never a hole a caller may fill. */
 const ConcolicPred *concolic_strpred_read(const char *hole, int *n);
-/* …AND THE SAME READ ASKED OF AN ATTACKER'S PRINCIPAL, WHICH IS §Attacker-sources' FORGEABLE HALF — the twin
- * of `concolic_principal_pins` above and the other arm of the pair: a forgeable check
- * (`endsWith`/`includes`/`startsWith`) is solved for an attacker-registered origin, and an unforgeable `===`
- * parks the finding on a sender at the pinned origin. The pinned arm is `concolic_principal_pins`'; this is the
- * forgeable arm's observation, and it is declared here rather than beside that entry because `ConcolicPred` is
- * typedef'd above and an anonymous-struct typedef has no forward declaration.
- *
- * `cb` IS CALLED ONCE PER DECLARED PRINCIPAL THIS FLOW TESTED, with that principal's `src` and the BORROWED
- * row `concolic_strpred_read` filed under it — and never for a principal the flow left alone, because an
- * absence here is the positive statement that this path made no demand an attacker has to meet. A flow that
- * PINNED one is a different answer and is `concolic_principal_pins`': a pin reaches no recorder here at
- * all, since a pinned source concretizes and the real builtin then runs over real bytes.
- *
- * A WALK AND NOT AN INDEX, for `concolic_principal_pins`' reason exactly: the flow does not know which
- * sources are principals and must not be taught a name for one, and the delivery registry is the one place
- * that does. A CALLBACK AND NOT ONE RETURNED ROW because more than one principal may carry a demand and the
- * demands CONJOIN along one path — a caller handed only the first would compose an identity satisfying one
- * gate and failing another, which is a PoC that does not fire for a reason that is not an engine divergence,
- * and that is the one outcome §LIVE-VERIFY's signal cannot survive.
- *
- * IT HANDS OVER THE PREDICATES AND NEVER A VALUE THAT SATISFIES THEM. §@H forbids inventing `6` for `x > 5`,
- * and inventing `https://x.evil.example` for `endsWith(".evil.example")` is the same invention one source
- * kind over; §@S is where a firing input is SOLVED for, and its emission is working-PoC-only and
- * fire-verified. So what crosses here is what the run OBSERVED, and the search for an identity that meets it
- * belongs to whoever performs the delivery.
- *
- * NAMED RESIDUAL — A DEMAND MADE ON A *DERIVED* SPELLING OF A PRINCIPAL IS NOT REPORTED.
- *   WHAT IS NOT COVERED: `concolic_strpred_file` keys a predicate by the HOLE KEY of the value the call was
- * made ON (the call hook composes `concolic_hole_key(concolic_shape_c(this_val))`), so
- * `event.origin.toLowerCase().endsWith(t)` files its demand under the toLowerCase RESULT's hole and this walk
- * reads the principal's own. `concolic_pin` already has the answer for its own arm and this is the property
- * it does not share: a pin files `ppin` on EVERY principal MEMBER of the pinned value's delivery root, with its
- * own comment stating that a mark written under a joint key would leave `message.origin` unpinned for a flow
- * that pinned a value derived from it.
- *   WHAT THE NEXT DIFF BUILDS: that same second filing on this recorder — `concolic_strpred_file` taking the
- * subject's ROOT beside its hole and filing under each root member as well, which `pred_set_strpred`'s own
- * call site already holds (`c->root` is in hand at the mint, one line from the `subj` it composes), read back
- * here under each declared principal's root.
- *   HOW ITS ABSENCE WOULD SHOW: an @S record whose `delivery` is `cross-document-message` reporting
- * `principalDemand:"none"` — the positive statement that the replayed path demanded nothing of the attacker's
- * identity — on a run whose fork census names a predicate over a value DERIVED from the principal, so the
- * engine demonstrably forked at a gate over an origin while the report says the identity is unconstrained. It
- * is read against the verdict and not against a missing key, because a missing key means something else
- * entirely (solve.h's `principalDemand`: this engine does not state it). */
-void        concolic_principal_preds(void (*cb)(void *user, const char *src, const ConcolicPred *pred, int n),
-                                     void *user);
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
    branch records its outcome under `key` — which decide.c composes from the IDENTITY of the value the branch

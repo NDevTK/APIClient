@@ -2569,36 +2569,6 @@ static int src_principal(const char *p, size_t n)
     return row >= 0 && g_srcs[row].principal;
 }
 
-/* …and what it demanded without pinning (concolic.h has the named residual). The same walk as
- * concolic_principal_pins, as a second function because the answers are different kinds: a pin decides whether
- * a search may open or must wait for a sender, a demand is an observation a report carries. One walk answering
- * both would be decided by the stricter one, since a pinned principal returns before any demand is read.
- * Rows are read through `concolic_strpred_read`, so `strp_key` stays the one speller of that key. */
-void concolic_principal_preds(void (*cb)(void *user, const char *src, const ConcolicPred *pred, int n),
-                              void *user)
-{
-    int i;
-
-    DCHECK(cb != NULL,
-           "the demands a flow made of an attacker's principal were walked with nowhere to hand them — a walk "
-           "that reads the constraint and discards it is the computed-writer-with-no-reader §@S names, in the "
-           "one observation a delivery layer needs to know whose identity it has to model");
-    for (i = 0; i < g_srcs_n; i++) {
-        const ConcolicPred *pr;
-        int n = 0;
-
-        if (!g_srcs[i].principal) continue;
-        /* The declared `src` is the hole key of a source read: the read's display shape is `{<src>}` (asserted
-           at the mint), and a hole key is the shape without braces. Derived spellings are the residual's
-           subject. */
-        pr = concolic_strpred_read(g_srcs[i].src, &n);
-        DCHECK(n == 0 || pr != NULL,
-               "a principal's predicate set reported a COUNT with no row — the two are returned by one line, "
-               "so a count alone would be walked as rows this flow never recorded");
-        if (n > 0) cb(user, g_srcs[i].src, pr, n);
-    }
-}
-
 int concolic_root_delivered_any(const char *root)
 {
     const char *p;

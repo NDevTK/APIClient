@@ -132,11 +132,12 @@ chrome.webRequest.onErrorOccurred.addListener(_wrRelay("onErrorOccurred"), _WR_F
    ordinary tab of this page rather than served from it, so nothing is hosted and nothing but one GET of a
    documentation domain's front page leaves the browser. That page sends no CSP, so the MAIN world can
    evaluate; a page CSP without 'unsafe-eval' would refuse it, and `pocAttackerButton` reports the EvalError.
-   Named residual. Not covered: a `forgeable` principal demand (solve.h's `principalDemand`) states an origin
-   shape a fixed address meets only by coincidence, so `buildLiveDelivery` refuses such deliveries with the
-   shape stated. Next diff builds: a per-session address derived from the session's `principalGates`, plus
-   the person's statement of which origins they control. Absence shows as: a `forgeable` finding answering a
-   `pocWhy` that names a shape, beside `none` findings that arm a Run button. */
+   Named residual. Not covered: a message act's origin (solve.h's act `origin`), which this fixed address meets
+   only by coincidence, so `buildLiveDelivery` states such PoCs as engine-fired, live-unverified. Next diff
+   builds: an attacker page under the trusted zone's provisioned attacker site (engine/trusted.mjs
+   `--attacker-site`) for an `attacker-site` origin; a `registered-domain` origin stays unverified until the
+   person states a domain they hold. Absence shows as: a PoC whose message act is `originOwned:"attacker-site"`
+   answering a `pocWhy` beside address-delivered findings that arm a Run button. */
 const ATTACKER_PAGE_URL = "https://example.com/";
 /* The tabs `attackerPage.open` opened that are still open: the only tabs `scripting.exec` arms. It is this
    worker's memory, so an eviction empties it and an injection after one is refused, never widened. */

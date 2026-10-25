@@ -162,8 +162,7 @@ function docEndpoints(rows) {
    a `referring-address` delivery's attacker page and its referrer policy, and `precondition` labels a root no
    attacker writes
    (a fire-verified entry carries a delivery, a precondition, or both); `principalDemand` is absent
-   (unexamined) or one of three verdicts, with `principalGates` only beside `forgeable` (and on every one) and
-   `principalPins` exactly beside `unforgeable`; `poc` is absent on a parked search and a non-empty string on a
+   (unexamined) or one of two verdicts, with `principalPins` exactly beside `unforgeable`; `poc` is absent on a parked search and a non-empty string on a
    fire-verified one, and `senderDemand` (the senders a parked search waits on, in the principalPins row
    grammar) only on a parked one. `acts` (the user acts a fire was verified under, after the delivery) only on
    a fire-verified entry, and `firedUnderNoAct` (fires verified under a drive no user act performs) only on a
@@ -171,15 +170,7 @@ function docEndpoints(rows) {
 const SINK_DELIVERIES = Object.freeze(["address", "referring-address", "user-file", "cross-document-message",
                                        "user-input", "navigable-name"]);
 const SINK_PRECONDITIONS = Object.freeze(["same-origin", "application-state"]);
-const SINK_DEMANDS = Object.freeze(["none", "forgeable", "unforgeable"]);
-function docSinkGate(g, f) {
-  if (!docIsRecord(g) || !docIsName(g.principal) || !Array.isArray(g.predicates) || g.predicates.length === 0)
-    return f + " is not {principal, predicates: [...]} with a principal and at least one predicate";
-  return docEach(g.predicates, f + ".predicates", (pr, h) =>
-    docIsRecord(pr) && docIsName(pr.method) && Array.isArray(pr.arguments) &&
-    pr.arguments.every((a) => typeof a === "string") && typeof pr.holds === "boolean"
-      ? null : h + " is not {method, arguments: [strings], holds: boolean}");
-}
+const SINK_DEMANDS = Object.freeze(["none", "unforgeable"]);
 function docSinkPin(p, f) {
   return docIsRecord(p) && docIsName(p.principal) && typeof p.equals === "string" && docIsName(p.kind) &&
          typeof p.loose === "boolean" && (!("subject" in p) || typeof p.subject === "string")
@@ -241,15 +232,10 @@ function docSink(e, f) {
     return f + ".precondition " + JSON.stringify(e.precondition) + " is none of " + SINK_PRECONDITIONS.join(", ");
   if ("principalDemand" in e && SINK_DEMANDS.indexOf(e.principalDemand) < 0)
     return f + ".principalDemand " + JSON.stringify(e.principalDemand) + " is none of " + SINK_DEMANDS.join(", ");
-  if (e.principalDemand === "forgeable" ? !("principalGates" in e) : ("principalGates" in e && "principalDemand" in e))
-    return f + " states principalGates on a verdict other than forgeable, or a forgeable verdict without them";
   if (("principalPins" in e) !== (e.principalDemand === "unforgeable"))
     return f + " states principalPins on a verdict other than unforgeable, or an unforgeable verdict without them";
   let why = null;
-  if ("principalGates" in e)
-    why = (Array.isArray(e.principalGates) && e.principalGates.length > 0 ? null : f + ".principalGates is not a non-empty array") ||
-          docEach(e.principalGates, f + ".principalGates", docSinkGate);
-  if (why === null && "principalPins" in e)
+  if ("principalPins" in e)
     why = (Array.isArray(e.principalPins) && e.principalPins.length > 0 ? null : f + ".principalPins is not a non-empty array") ||
           docEach(e.principalPins, f + ".principalPins", docSinkPin);
   if (why === null && "poc" in e && !docIsName(e.poc)) why = f + ".poc is not a non-empty string";
