@@ -1129,6 +1129,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/typedinput.h"
 #include "fixture/sparoute.h"
 #include "fixture/envgate.h"
+#include "fixture/timegate.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1594,6 +1595,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "typedinput", HTML_TYPEDINPUT },
     { "sparoute", HTML_SPAROUTE },
     { "envgate", HTML_ENVGATE },
+    { "timegate", HTML_TIMEGATE },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14814,6 +14816,28 @@ TF_UNIT void probes_envgate(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `timegate` document (fixture/timegate.h): both arms of each gate. A row whose arms differ
+   between two runs of one binary is the host's sample deciding, which only a fork removes. */
+TF_UNIT void probes_timegate(const char *js, Probe *tab, int *n) {
+    int sampled = !!strstr(js, "\"/api/tg-sampled\""), unsampled = !!strstr(js, "\"/api/tg-unsampled\"");
+    int night = !!strstr(js, "\"/api/tg-night\""), day = !!strstr(js, "\"/api/tg-day\"");
+    const char *rn_why = NULL; int rn_tt = 1;
+    fold_row(&rn_tt, &rn_why, sampled || unsampled,
+             "NOT REACHED: neither arm of the Math.random() gate emitted, so the script never ran");
+    fold_row(&rn_tt, &rn_why, sampled && unsampled,
+             "only one arm of the Math.random() gate ran: the host's sample decided the branch instead of forking it");
+    const char *ck_why = NULL; int ck_tt = 1;
+    fold_row(&ck_tt, &ck_why, night || day,
+             "NOT REACHED: neither arm of the clock gate emitted, so the script never ran");
+    fold_row(&ck_tt, &ck_why, night && day,
+             "only one arm of the clock gate ran: the host's clock decided the branch instead of forking it");
+    const Probe rows[] = {
+        { "tg-random-both", rn_tt, "/api/tg-sampled", SESS_EXPLORE, rn_why },
+        { "tg-clock-both", ck_tt, "/api/tg-night", SESS_EXPLORE, ck_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18635,6 +18659,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_typedinput(js, probes, &np);
     probes_sparoute(js, probes, &np);
     probes_envgate(js, probes, &np);
+    probes_timegate(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
