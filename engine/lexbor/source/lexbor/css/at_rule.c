@@ -140,34 +140,6 @@ lxb_css_at_rule_convert_to_undef(lxb_css_parser_t *parser,
 }
 
 lxb_status_t
-lxb_css_at_rule_serialize(const void *style, lxb_css_at_rule_type_t type,
-                          lexbor_serialize_cb_f cb, void *ctx)
-{
-    const lxb_css_entry_at_rule_data_t *data;
-
-    data = lxb_css_at_rule_by_id(type);
-    if (data == NULL) {
-        return LXB_STATUS_ERROR_UNEXPECTED_DATA;
-    }
-
-    return data->serialize(style, cb, ctx);
-}
-
-lxb_status_t
-lxb_css_at_rule_serialize_str(const void *style, lxb_css_at_rule_type_t type,
-                              lexbor_mraw_t *mraw, lexbor_str_t *str)
-{
-    const lxb_css_entry_at_rule_data_t *data;
-
-    data = lxb_css_at_rule_by_id(type);
-    if (data == NULL) {
-        return LXB_STATUS_ERROR_UNEXPECTED_DATA;
-    }
-
-    return lxb_css_serialize_str_handler(style, str, mraw, data->serialize);
-}
-
-lxb_status_t
 lxb_css_at_rule_serialize_name(const void *style, lxb_css_at_rule_type_t type,
                                lexbor_serialize_cb_f cb, void *ctx)
 {
@@ -244,47 +216,6 @@ lxb_css_at_rule__undef_destroy(lxb_css_memory_t *memory,
 }
 
 lxb_status_t
-lxb_css_at_rule__undef_serialize(const void *at, lexbor_serialize_cb_f cb,
-                                 void *ctx)
-{
-    lxb_status_t status;
-    const lxb_css_entry_at_rule_data_t *data;
-    const lxb_css_at_rule__undef_t *undef = at;
-
-    static const lxb_char_t wc_str[] = " ";
-    static const lxb_char_t lb_str[] = "{";
-    static const lxb_char_t rb_str[] = "}";
-    static const lxb_char_t sm_str[] = ";";
-
-    data = lxb_css_at_rule_by_id(undef->type);
-    if (data == NULL) {
-        return LXB_STATUS_ERROR_UNEXPECTED_DATA;
-    }
-
-    if (undef->prelude.data != NULL) {
-        lexbor_serialize_write(cb, wc_str, (sizeof(wc_str) - 1), ctx, status);
-        lexbor_serialize_write(cb, undef->prelude.data, undef->prelude.length,
-                               ctx, status);
-    }
-
-    if (undef->block != NULL) {
-        lexbor_serialize_write(cb, lb_str, (sizeof(lb_str) - 1), ctx, status);
-
-        status = lxb_css_rule_list_serialize(undef->block, cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-
-        lexbor_serialize_write(cb, rb_str, (sizeof(rb_str) - 1), ctx, status);
-    }
-    else {
-        lexbor_serialize_write(cb, sm_str, (sizeof(sm_str) - 1), ctx, status);
-    }
-
-    return LXB_STATUS_OK;
-}
-
-lxb_status_t
 lxb_css_at_rule__undef_serialize_name(const void *at, lexbor_serialize_cb_f cb,
                                       void *ctx)
 {
@@ -323,38 +254,6 @@ lxb_css_at_rule__custom_destroy(lxb_css_memory_t *memory,
 }
 
 lxb_status_t
-lxb_css_at_rule__custom_serialize(const void *at, lexbor_serialize_cb_f cb,
-                                  void *ctx)
-{
-    lxb_status_t status;
-    const lxb_css_at_rule__custom_t *custom = at;
-
-    static const lxb_char_t ws_str[] = " ";
-    static const lxb_char_t lb_str[] = "{";
-    static const lxb_char_t rb_str[] = "}";
-
-
-    if (custom->prelude.data != NULL) {
-        lexbor_serialize_write(cb, ws_str, (sizeof(ws_str) - 1), ctx, status);
-        lexbor_serialize_write(cb, custom->prelude.data, custom->prelude.length,
-                               ctx, status);
-    }
-
-    if (custom->block != NULL) {
-        lexbor_serialize_write(cb, lb_str, (sizeof(lb_str) - 1), ctx, status);
-
-        status = lxb_css_rule_list_serialize(custom->block, cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-
-        lexbor_serialize_write(cb, rb_str, (sizeof(rb_str) - 1), ctx, status);
-    }
-
-    return LXB_STATUS_OK;
-}
-
-lxb_status_t
 lxb_css_at_rule__custom_serialize_name(const void *at, lexbor_serialize_cb_f cb,
                                        void *ctx)
 {
@@ -378,13 +277,6 @@ lxb_css_at_rule_media_destroy(lxb_css_memory_t *memory,
     return lxb_css_at_rule__undef_destroy(memory, style, self_destroy);
 }
 
-lxb_status_t
-lxb_css_at_rule_media_serialize(const void *style, lexbor_serialize_cb_f cb,
-                                void *ctx)
-{
-    return LXB_STATUS_OK;
-}
-
 /* Namespace. */
 
 void *
@@ -399,13 +291,6 @@ lxb_css_at_rule_namespace_destroy(lxb_css_memory_t *memory,
                                   void *style, bool self_destroy)
 {
     return lxb_css_at_rule__undef_destroy(memory, style, self_destroy);
-}
-
-lxb_status_t
-lxb_css_at_rule_namespace_serialize(const void *style, lexbor_serialize_cb_f cb,
-                                    void *ctx)
-{
-    return LXB_STATUS_OK;
 }
 
 /* Font-face. */
@@ -424,26 +309,3 @@ lxb_css_at_rule_font_face_destroy(lxb_css_memory_t *memory,
     return lxb_css_at_rule__undef_destroy(memory, style, self_destroy);
 }
 
-lxb_status_t
-lxb_css_at_rule_font_face_serialize(const void *font_face,
-                                    lexbor_serialize_cb_f cb, void *ctx)
-{
-    lxb_status_t status;
-    const lxb_css_at_rule_font_face_t *ff = font_face;
-
-    static const lxb_char_t lb_str[] = " {";
-    static const lxb_char_t rb_str[] = "}";
-
-    if (ff->block != NULL) {
-        lexbor_serialize_write(cb, lb_str, (sizeof(lb_str) - 1), ctx, status);
-
-        status = lxb_css_rule_list_serialize(ff->block, cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-
-        lexbor_serialize_write(cb, rb_str, (sizeof(rb_str) - 1), ctx, status);
-    }
-
-    return LXB_STATUS_OK;
-}

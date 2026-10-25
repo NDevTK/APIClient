@@ -41,66 +41,6 @@ lxb_css_rule_destroy(lxb_css_rule_t *rule, bool self_destroy)
     return NULL;
 }
 
-lxb_status_t
-lxb_css_rule_serialize(const lxb_css_rule_t *rule,
-                       lexbor_serialize_cb_f cb, void *ctx)
-{
-    switch (rule->type) {
-        case LXB_CSS_RULE_LIST:
-            return lxb_css_rule_list_serialize(lxb_css_rule_list(rule), cb, ctx);
-
-        case LXB_CSS_RULE_AT_RULE:
-            return lxb_css_rule_at_serialize(lxb_css_rule_at(rule), cb, ctx);
-
-        case LXB_CSS_RULE_STYLE:
-            return lxb_css_rule_style_serialize(lxb_css_rule_style(rule),
-                                                cb, ctx);
-        case LXB_CSS_RULE_BAD_STYLE:
-            return lxb_css_rule_bad_style_serialize(lxb_css_rule_bad_style(rule),
-                                                    cb, ctx);
-        case LXB_CSS_RULE_DECLARATION:
-            return lxb_css_rule_declaration_serialize(lxb_css_rule_declaration(rule),
-                                                      cb, ctx);
-        case LXB_CSS_RULE_DECLARATION_LIST:
-            return lxb_css_rule_declaration_list_serialize(lxb_css_rule_declaration_list(rule),
-                                                           cb, ctx);
-        case LXB_CSS_RULE_STYLESHEET:
-        case LXB_CSS_RULE_UNDEF:
-            break;
-    }
-
-    return LXB_STATUS_ERROR_WRONG_ARGS;
-}
-
-lxb_status_t
-lxb_css_rule_serialize_chain(const lxb_css_rule_t *rule,
-                             lexbor_serialize_cb_f cb, void *ctx)
-{
-    lxb_status_t status;
-
-    static const lxb_char_t ws_str[] = "\n";
-
-    status = lxb_css_rule_serialize(rule, cb, ctx);
-    if (status != LXB_STATUS_OK) {
-        return status;
-    }
-
-    rule = rule->next;
-
-    while (rule != NULL) {
-        lexbor_serialize_write(cb, ws_str, (sizeof(ws_str) - 1), ctx, status);
-
-        status = lxb_css_rule_serialize(rule, cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-
-        rule = rule->next;
-    }
-
-    return LXB_STATUS_OK;
-}
-
 lxb_css_rule_list_t *
 lxb_css_rule_list_destroy(lxb_css_rule_list_t *list, bool self_destroy)
 {
@@ -229,42 +169,6 @@ lxb_css_rule_list_destroy(lxb_css_rule_list_t *list, bool self_destroy)
     return list;
 }
 
-lxb_status_t
-lxb_css_rule_list_serialize(const lxb_css_rule_list_t *list,
-                            lexbor_serialize_cb_f cb, void *ctx)
-{
-    lxb_status_t status;
-    lxb_css_rule_t *rule;
-
-    static const lxb_char_t nl_str[] = "\n";
-
-    rule = list->first;
-
-    if (rule == NULL) {
-        return LXB_STATUS_OK;
-    }
-
-    status = lxb_css_rule_serialize(rule, cb, ctx);
-    if (status != LXB_STATUS_OK) {
-        return status;
-    }
-
-    rule = rule->next;
-
-    while (rule != NULL) {
-        lexbor_serialize_write(cb, nl_str, (sizeof(nl_str) - 1), ctx, status);
-
-        status = lxb_css_rule_serialize(rule, cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-
-        rule = rule->next;
-    }
-
-    return LXB_STATUS_OK;
-}
-
 lxb_css_rule_at_t *
 lxb_css_rule_at_destroy(lxb_css_rule_at_t *at, bool self_destroy)
 {
@@ -294,54 +198,6 @@ lxb_css_rule_at_destroy(lxb_css_rule_at_t *at, bool self_destroy)
     return at;
 }
 
-lxb_status_t
-lxb_css_rule_at_serialize(const lxb_css_rule_at_t *at, lexbor_serialize_cb_f cb,
-                          void *ctx)
-{
-    lxb_status_t status;
-    const lxb_css_at_rule__undef_t *undef;
-    const lxb_css_at_rule__custom_t *custom;
-    const lxb_css_entry_at_rule_data_t *data, *undata;
-
-    static const lxb_char_t at_str[] = "@";
-
-    data = lxb_css_at_rule_by_id(at->type);
-    if (data == NULL) {
-        return LXB_STATUS_ERROR_NOT_EXISTS;
-    }
-
-    lexbor_serialize_write(cb, at_str, (sizeof(at_str) - 1), ctx, status);
-
-    if (at->type == LXB_CSS_AT_RULE__UNDEF) {
-        undef = at->u.undef;
-
-        undata = lxb_css_at_rule_by_id(undef->type);
-        if (undata == NULL) {
-            return LXB_STATUS_ERROR_NOT_EXISTS;
-        }
-
-        lexbor_serialize_write(cb, undata->name, undata->length, ctx, status);
-    }
-    else if (at->type == LXB_CSS_AT_RULE__CUSTOM) {
-        custom = at->u.custom;
-
-        lexbor_serialize_write(cb, custom->name.data,
-                               custom->name.length, ctx, status);
-    }
-    else {
-        lexbor_serialize_write(cb, data->name, data->length, ctx, status);
-    }
-
-    return data->serialize(at->u.user, cb, ctx);
-}
-
-lxb_status_t
-lxb_css_rule_at_serialize_name(const lxb_css_rule_at_t *at,
-                               lexbor_serialize_cb_f cb, void *ctx)
-{
-    return lxb_css_at_rule_serialize_name(at->u.user, at->type, cb, ctx);
-}
-
 lxb_css_rule_style_t *
 lxb_css_rule_style_destroy(lxb_css_rule_style_t *style, bool self_destroy)
 {
@@ -362,52 +218,6 @@ lxb_css_rule_style_destroy(lxb_css_rule_style_t *style, bool self_destroy)
     return style;
 }
 
-lxb_status_t
-lxb_css_rule_style_serialize(const lxb_css_rule_style_t *style,
-                             lexbor_serialize_cb_f cb, void *ctx)
-{
-    lxb_status_t status;
-
-    static const lxb_char_t lc_str[] = " {";
-    static const lxb_char_t rc_str[] = "}";
-    static const lxb_char_t cm_str[] = "; ";
-
-    status = lxb_css_selector_serialize_list_chain(style->selector, cb, ctx);
-    if (status != LXB_STATUS_OK) {
-        return status;
-    }
-
-    if (style->declarations != NULL) {
-        lexbor_serialize_write(cb, lc_str, (sizeof(lc_str) - 1), ctx, status);
-
-        status = lxb_css_rule_declaration_list_serialize(style->declarations,
-                                                         cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-
-        if (style->child == NULL) {
-            lexbor_serialize_write(cb, rc_str, (sizeof(rc_str) - 1),
-                                   ctx, status);
-        }
-    }
-
-    if (style->child != NULL && style->child->first != NULL) {
-        lexbor_serialize_write(cb, cm_str, (sizeof(cm_str) - 1), ctx, status);
-
-        status = lxb_css_rule_list_serialize(style->child, cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-    }
-
-    if (style->declarations != NULL) {
-        lexbor_serialize_write(cb, rc_str, (sizeof(rc_str) - 1), ctx, status);
-    }
-
-    return LXB_STATUS_OK;
-}
-
 lxb_css_rule_bad_style_t *
 lxb_css_rule_bad_style_destroy(lxb_css_rule_bad_style_t *bad, bool self_destroy)
 {
@@ -423,35 +233,6 @@ lxb_css_rule_bad_style_destroy(lxb_css_rule_bad_style_t *bad, bool self_destroy)
     }
 
     return bad;
-}
-
-lxb_status_t
-lxb_css_rule_bad_style_serialize(const lxb_css_rule_bad_style_t *bad,
-                                 lexbor_serialize_cb_f cb, void *ctx)
-{
-    lxb_status_t status;
-
-    static const lxb_char_t lc_str[] = "{";
-    static const lxb_char_t rc_str[] = "}";
-
-    if (bad->selectors.data != NULL) {
-        lexbor_serialize_write(cb, bad->selectors.data, bad->selectors.length,
-                               ctx, status);
-    }
-
-    if (bad->declarations != NULL) {
-        lexbor_serialize_write(cb, lc_str, (sizeof(lc_str) - 1), ctx, status);
-
-        status = lxb_css_rule_declaration_list_serialize(bad->declarations,
-                                                         cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-
-        return cb(rc_str, (sizeof(rc_str) - 1), ctx);
-    }
-
-    return LXB_STATUS_OK;
 }
 
 lxb_css_rule_declaration_list_t *
@@ -480,42 +261,6 @@ lxb_css_rule_declaration_list_destroy(lxb_css_rule_declaration_list_t *list,
     list->last = NULL;
 
     return list;
-}
-
-lxb_status_t
-lxb_css_rule_declaration_list_serialize(const lxb_css_rule_declaration_list_t *list,
-                                        lexbor_serialize_cb_f cb, void *ctx)
-{
-    lxb_status_t status;
-    const lxb_css_rule_t *declr;
-
-    static const lxb_char_t sm_str[] = "; ";
-
-    declr = list->first;
-
-    if (declr == NULL) {
-        return LXB_STATUS_OK;
-    }
-
-    status = lxb_css_rule_serialize(declr, cb, ctx);
-    if (status != LXB_STATUS_OK) {
-        return status;
-    }
-
-    declr = declr->next;
-
-    while (declr != NULL) {
-        lexbor_serialize_write(cb, sm_str, (sizeof(sm_str) - 1), ctx, status);
-
-        status = lxb_css_rule_serialize(declr, cb, ctx);
-        if (status != LXB_STATUS_OK) {
-            return status;
-        }
-
-        declr = declr->next;
-    }
-
-    return LXB_STATUS_OK;
 }
 
 lxb_css_rule_declaration_t *

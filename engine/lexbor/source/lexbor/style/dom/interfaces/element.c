@@ -751,7 +751,8 @@ lxb_dom_element_style_serialize_cb(lexbor_avl_t *avl, lexbor_avl_node_t **root,
 
     context->is_first = false;
 
-    return lxb_css_rule_serialize(node->value, context->cb, context->ctx);
+    return lxb_css_rule_declaration_serialize(node->value, context->cb,
+                                              context->ctx);
 }
 
 lxb_status_t

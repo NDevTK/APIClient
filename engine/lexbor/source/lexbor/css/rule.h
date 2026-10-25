@@ -233,53 +233,21 @@ struct lxb_css_rule_declaration {
 LXB_API void *
 lxb_css_rule_destroy(lxb_css_rule_t *node, bool self_destroy);
 
-LXB_API lxb_status_t
-lxb_css_rule_serialize(const lxb_css_rule_t *rule,
-                       lexbor_serialize_cb_f cb, void *ctx);
-
-LXB_API lxb_status_t
-lxb_css_rule_serialize_chain(const lxb_css_rule_t *rule,
-                             lexbor_serialize_cb_f cb, void *ctx);
-
 LXB_API lxb_css_rule_list_t *
 lxb_css_rule_list_destroy(lxb_css_rule_list_t *list, bool self_destroy);
-
-LXB_API lxb_status_t
-lxb_css_rule_list_serialize(const lxb_css_rule_list_t *list,
-                            lexbor_serialize_cb_f cb, void *ctx);
 
 LXB_API lxb_css_rule_at_t *
 lxb_css_rule_at_destroy(lxb_css_rule_at_t *at, bool self_destroy);
 
-LXB_API lxb_status_t
-lxb_css_rule_at_serialize(const lxb_css_rule_at_t *at, lexbor_serialize_cb_f cb,
-                          void *ctx);
-
-LXB_API lxb_status_t
-lxb_css_rule_at_serialize_name(const lxb_css_rule_at_t *at, lexbor_serialize_cb_f cb,
-                               void *ctx);
-
 LXB_API lxb_css_rule_style_t *
 lxb_css_rule_style_destroy(lxb_css_rule_style_t *style, bool self_destroy);
-
-LXB_API lxb_status_t
-lxb_css_rule_style_serialize(const lxb_css_rule_style_t *style,
-                             lexbor_serialize_cb_f cb, void *ctx);
 
 LXB_API lxb_css_rule_bad_style_t *
 lxb_css_rule_bad_style_destroy(lxb_css_rule_bad_style_t *bad, bool self_destroy);
 
-LXB_API lxb_status_t
-lxb_css_rule_bad_style_serialize(const lxb_css_rule_bad_style_t *bad,
-                                 lexbor_serialize_cb_f cb, void *ctx);
-
 LXB_API lxb_css_rule_declaration_list_t *
 lxb_css_rule_declaration_list_destroy(lxb_css_rule_declaration_list_t *list,
                                       bool self_destroy);
-
-LXB_API lxb_status_t
-lxb_css_rule_declaration_list_serialize(const lxb_css_rule_declaration_list_t *list,
-                                        lexbor_serialize_cb_f cb, void *ctx);
 
 LXB_API lxb_css_rule_declaration_t *
 lxb_css_rule_declaration_destroy(lxb_css_rule_declaration_t *declr,

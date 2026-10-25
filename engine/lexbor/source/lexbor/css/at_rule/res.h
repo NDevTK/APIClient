@@ -21,17 +21,17 @@
 static const lxb_css_entry_at_rule_data_t lxb_css_at_rule_data[LXB_CSS_AT_RULE__LAST_ENTRY] = 
 {
     {(lxb_char_t *) "#undef", 6, LXB_CSS_AT_RULE__UNDEF, &lxb_css_at_rule__undef_cb,
-     lxb_css_at_rule__undef_create, lxb_css_at_rule__undef_destroy, lxb_css_at_rule__undef_serialize, (void *) (uintptr_t) LXB_CSS_AT_RULE__UNDEF},
+     lxb_css_at_rule__undef_create, lxb_css_at_rule__undef_destroy, (void *) (uintptr_t) LXB_CSS_AT_RULE__UNDEF},
     {(lxb_char_t *) "#сustom", 7, LXB_CSS_AT_RULE__CUSTOM, &lxb_css_at_rule__custom_cb,
-     lxb_css_at_rule__custom_create, lxb_css_at_rule__custom_destroy, lxb_css_at_rule__custom_serialize, (void *) (uintptr_t) LXB_CSS_AT_RULE__CUSTOM},
+     lxb_css_at_rule__custom_create, lxb_css_at_rule__custom_destroy, (void *) (uintptr_t) LXB_CSS_AT_RULE__CUSTOM},
     {(lxb_char_t *) "font-face", 9, LXB_CSS_AT_RULE_FONT_FACE, &lxb_css_at_rule_font_face_cb,
-     lxb_css_at_rule_font_face_create, lxb_css_at_rule_font_face_destroy, lxb_css_at_rule_font_face_serialize,
+     lxb_css_at_rule_font_face_create, lxb_css_at_rule_font_face_destroy,
      NULL},
     {(lxb_char_t *) "media", 5, LXB_CSS_AT_RULE_MEDIA, &lxb_css_at_rule_media_cb,
-     lxb_css_at_rule_media_create, lxb_css_at_rule_media_destroy, lxb_css_at_rule_media_serialize,
+     lxb_css_at_rule_media_create, lxb_css_at_rule_media_destroy,
      NULL},
     {(lxb_char_t *) "namespace", 9, LXB_CSS_AT_RULE_NAMESPACE, &lxb_css_at_rule_namespace_cb,
-     lxb_css_at_rule_namespace_create, lxb_css_at_rule_namespace_destroy, lxb_css_at_rule_namespace_serialize,
+     lxb_css_at_rule_namespace_create, lxb_css_at_rule_namespace_destroy,
      NULL}
 };
 
