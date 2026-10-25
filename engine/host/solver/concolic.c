@@ -2563,7 +2563,7 @@ const char *concolic_source_attacker_page(const char *root)
 {
     int row = root_declared_row(root);
 
-    return row >= 0 && g_srcs[row].deliver == SRC_DELIVER_REFERRING_ADDRESS ? REFERRER_ATTACKER_PAGE : NULL;
+    return row >= 0 && g_srcs[row].deliver == SRC_DELIVER_REFERRING_ADDRESS ? ATTACKER_PAGE : NULL;
 }
 
 const char *concolic_source_encodes(const char *root)
@@ -2730,13 +2730,13 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     carrier = root_carrier(root);
 
     n = strlen(payload);
-    out = reclaim_malloc(n * 3 + 2 + sizeof REFERRER_ATTACKER_PAGE);
+    out = reclaim_malloc(n * 3 + 2 + sizeof ATTACKER_PAGE);
     CHECK(out != NULL, "concolic: OOM delivering a candidate");
     if (at && at->prefix) out[o++] = at->prefix;
     /* A referrer is the attacker page's whole URL, its address before the payload included. */
     if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS) {
-        memcpy(out, REFERRER_ATTACKER_PAGE, sizeof REFERRER_ATTACKER_PAGE - 1);
-        o = sizeof REFERRER_ATTACKER_PAGE - 1;
+        memcpy(out, ATTACKER_PAGE, sizeof ATTACKER_PAGE - 1);
+        o = sizeof ATTACKER_PAGE - 1;
     }
     for (p = (const unsigned char *)payload; *p; p++) {
         /* A byte outside printable US-ASCII is the mechanism's to answer for, not the row's (root_carrier). */
@@ -2753,7 +2753,7 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     /* Chrome hands a referrer longer than its limit as the attacker page's origin, so such a candidate arrives
        without its payload. */
     if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS && o > REFERRER_CHROME_LIMIT)
-        o = strlen(REFERRER_ATTACKER_PAGE);
+        o = strlen(ATTACKER_PAGE);
     {
         JSValue r = JS_NewStringLen(ctx, out, o);
         free(out);

@@ -751,6 +751,8 @@ static void qjs_init_install(QjsPendingDocument *p)
            moment there is anything to write it on. Without it DOM §4.5 "Interface Document"'s UTF-8 default
            stands for every response. */
         document_set_encoding(g_ctx, root_encoding);
+        /* …and HTML §7.7's input from the same response. */
+        document_state_x_frame_options(g_ctx, np->x_frame_options, np->n_x_frame_options);
         /* §7.4.1.2's request referrer policy of the root's entry: the trusted zone's load of this document
            states none (bridge.js's DOCUMENT_REQUEST_UNSTATED), which is §7.4.2.2's default, the empty string. */
         session_history_set_active_entry_request_referrer_policy(g_ctx, "");
@@ -963,6 +965,7 @@ static void qjs_join_install(QjsPendingDocument *p)
                              /*about_base_url*/ NULL, /*is_iframe_srcdoc*/ false);
         /* §13.2.3.2's answer onto this document, decoded with its own encoding, for qjs_init's reason. */
         document_set_encoding(cctx, joined_encoding);
+        document_state_x_frame_options(cctx, np->x_frame_options, np->n_x_frame_options);
         /* …and its entry's request referrer policy, for the root's reason. */
         session_history_set_active_entry_request_referrer_policy(cctx, "");
         JS_FreeValue(cctx, proxy);

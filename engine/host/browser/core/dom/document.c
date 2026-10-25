@@ -38,6 +38,7 @@
 #include "core/html/html_meta_csp.h"       /* §4.2.5.3's pragma: what one `<meta>` delivers to this container */
 #include "core/html/html_meta_referrer.h"  /* §4.2.5.1's `referrer`: the referrer policy one `<meta>` sets */
 #include "core/url/url.h"                  /* §2.4.3's fallback base URL asks whether an address matches about: */
+#include "core/frame/csp_source_list.h"   /* CSP §6.4.2.1's per-ancestor frame-ancestors match */
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/mutation_observer.h"
@@ -228,6 +229,11 @@ typedef struct Document {
        ("let encoding be el's node document's the encoding"). Per-document state a navigation's response decides,
        written from HTML §13.2.3.2's encoding sniffing over the response's bytes and `Content-Type` charset. */
     int                  encoding;
+    /* HTML §7.7's input (document_state_x_frame_options): the split `X-Frame-Options`, NULL when the response
+       carried none; `xfo_stated` once the creating operation said so. Owned, set once. */
+    char               **xfo;
+    size_t               n_xfo;
+    bool                 xfo_stated;
     /* HTML §4.12.3's two facts that make a Document's appropriate template contents owner document: its associated
        inert template document, and whether it is one ("a Document created by this algorithm"), which ends the
        recursion (an inert document is its own owner). A field, because nothing about an empty Document can be
@@ -1939,6 +1945,74 @@ int document_encoding_of(const lxb_dom_document_t *dom)
  * load), so the loader calls it and nothing reachable from a Document can re-derive it later.
  * It is per flow, through the byte capture, since the encoding is a POD `int` on this
  * record, and the `document` object owns the record's storage for a flow parked in a load. */
+void document_state_x_frame_options(JSContext *ctx, char *const *values, size_t n)
+{
+    Document *d = doc_here(ctx);
+    size_t i;
+
+    DCHECK(!d->xfo_stated, "a Document's X-Frame-Options was stated twice — it is a fact about the one response "
+                           "the Document was created from, stated by the operation that created it");
+    DCHECK((values == NULL) == (n == 0), "a Document's X-Frame-Options was stated with a count that disagrees "
+                                         "with its values — get, decode, and split answers null or a list");
+    if (values) {
+        d->xfo = malloc(n * sizeof *d->xfo);
+        CHECK(d->xfo != NULL, "document: OOM holding X-Frame-Options");
+        for (i = 0; i < n; i++) {
+            d->xfo[i] = strdup(values[i]);
+            CHECK(d->xfo[i] != NULL, "document: OOM holding X-Frame-Options");
+        }
+    }
+    d->n_xfo = n;
+    d->xfo_stated = true;
+}
+
+bool document_embeddable_cross_origin(JSContext *ctx, const UrlRecord *ancestor)
+{
+    Document *d = doc_here(ctx);
+    const CspList *list = policy_container_csp_list(d->policy);
+    bool stated = false, set_deny = false, set_allowall = false, set_sameorigin = false;
+    size_t i, j, distinct = 0;
+
+    DCHECK(d->xfo_stated, "a Document's embeddability was asked before its creating operation stated the "
+                          "response's X-Frame-Options (document_state_x_frame_options)");
+    /* HTML §7.7 steps 2.1-2.2: an enforced frame-ancestors decides, by CSP §6.4.2.1's per-ancestor match, whose
+       step 1 allows a response at a local URL outright. */
+    {
+        UrlRecord own;
+        const char *u = document_url(ctx);
+        bool local;
+
+        url_record_init(&own);
+        local = url_parse(&own, u, strlen(u), NULL) && url_scheme_is_local(own.scheme);
+        url_record_free(&own);
+        if (local) return true;
+    }
+    for (i = 0; i < list->n_policies; i++) {
+        const CspDirective *dir;
+
+        if (!csp_policy_is_enforced(&list->policies[i])) continue;
+        if (!(dir = csp_policy_directive(&list->policies[i], "frame-ancestors"))) continue;
+        stated = true;
+        if (csp_source_list_match_url(dir, ancestor, list->self_origin, 0) != CSP_MATCHES) return false;
+    }
+    if (stated) return true;
+    if (!d->xfo) return true;
+    /* Steps 4-5: the values as a set, ASCII lowercase. */
+    for (i = 0; i < d->n_xfo; i++) {
+        for (j = 0; j < i && strcasecmp(d->xfo[j], d->xfo[i]) != 0; j++) {}
+        if (j < i) continue;
+        distinct++;
+        set_deny |= !strcasecmp(d->xfo[i], "deny");
+        set_allowall |= !strcasecmp(d->xfo[i], "allowall");
+        set_sameorigin |= !strcasecmp(d->xfo[i], "sameorigin");
+    }
+    if (distinct > 1) return !(set_deny || set_allowall || set_sameorigin);   /* steps 6-7 */
+    if (!strcasecmp(d->xfo[0], "deny")) return false;                           /* step 8 */
+    /* Step 9: `sameorigin` against a container document this Document is not same origin with. */
+    if (!strcasecmp(d->xfo[0], "sameorigin")) return false;
+    return true;
+}
+
 void document_set_encoding(JSContext *ctx, int encoding)
 {
     Document *d = doc_here(ctx);
@@ -4273,6 +4347,7 @@ static void doc_rec_release(Document *d)
        no browsing context. */
     permissions_policy_free(d->permissions_policy);
     permissions_policy_free(d->report_only_permissions_policy);
+    header_values_free(d->xfo, d->n_xfo);
     if (d->dom)
         lxb_dom_interface_document(d->dom)->user = NULL;
     free(d);

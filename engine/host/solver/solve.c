@@ -8,6 +8,8 @@
 #include "core/frame/policy_container.h"
 #include "core/html/trusted_types.h"
 #include "core/dom/document.h"
+#include "core/frame/window_proxy.h"  /* the opener policy a message route is judged by */
+#include "core/url/url.h"
 #include "core/dom/node.h"             /* node_next_in, the pre-order successor bounded to a subtree */
 #include "solver/concolic.h"
 #include "solver/decide.h"
@@ -2151,7 +2153,34 @@ static void emit_sender_pins(JsonBuf *b, const SenderPins *sp) {
    matches only declared sources. A root with neither a delivery nor a precondition writes neither; a fired PoC
    always has one (record_sink asserts it), so that silence is a parked search over a source no component
    declares. A missing root is not that fact, which is why it is asserted. The search comes too, for what its path demanded of an attacker's principal. */
-static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const char *delivers, const char *poc) {
+/* The routes by which ATTACKER_PAGE holds a handle to post this Document a message (HTML §9.3.3 "Posting
+   messages"): `frame` when it may present this Document in a child navigable (document_embeddable_cross_origin),
+   `opener` when this Document is a top-level traversable's whose opener policy keeps the handle of the page
+   that opened it — §7.1.3.2 switches the group of a navigation from a cross-origin opener for every value but
+   `unsafe-none`. An empty list is the target's response refusing both, and the PoC is not attacker-deliverable.
+   Named residual: a nested navigable's Document has no obtained opener policy (§7.4.5 obtains it only for a
+   top-level traversable), so `opener` is not stated for it. The next diff obtains every response's opener
+   policy, so a top-level load of its address is judged. Its absence shows as a framed message PoC offering
+   `frame` alone. */
+static void emit_message_routes(JsonBuf *b, JSContext *ctx) {
+    JSValueConst proxy = document_window_proxy(ctx);
+    UrlRecord attacker;
+    bool frame, opener;
+
+    url_record_init(&attacker);
+    CHECK(url_parse(&attacker, ATTACKER_PAGE, strlen(ATTACKER_PAGE), NULL),
+          "solve: the attacker page's own address did not parse");
+    frame = document_embeddable_cross_origin(ctx, &attacker);
+    url_record_free(&attacker);
+    opener = window_proxy_is_top_level(proxy) && window_proxy_opener_policy(proxy) == OPENER_POLICY_UNSAFE_NONE;
+    json_buf_raw(b, ","); json_buf_key(b, "messageRoutes"); json_buf_raw(b, "[");
+    if (frame) json_buf_str(b, "frame");
+    if (opener) { if (frame) json_buf_raw(b, ","); json_buf_str(b, "opener"); }
+    json_buf_raw(b, "]");
+}
+
+static void emit_delivery(JsonBuf *b, JSContext *ctx, const Cand *e, const char *root, const char *delivers,
+                          const char *poc) {
     const char *enc, *kind = NULL;
     char prefix = 0;
 
@@ -2175,6 +2204,7 @@ static void emit_delivery(JsonBuf *b, const Cand *e, const char *root, const cha
     }
     if (concolic_source_delivery(root, &kind, &prefix) && kind) {
         json_buf_raw(b, ","); json_buf_key(b, "delivery"); json_buf_str(b, kind);
+        if (!strcmp(kind, "cross-document-message")) emit_message_routes(b, ctx);
         if (prefix) {
             char p[2] = { prefix, 0 };
             json_buf_raw(b, ","); json_buf_key(b, "deliveryPrefix"); json_buf_str(b, p);
@@ -2330,7 +2360,7 @@ char *solve_json_array(JSContext *ctx) {
             emit_delivery_probed(&b, tw);
             /* And the measured constraint the PoC was built under, which tells anyone reproducing it by hand which
                bytes the browser would have eaten. */
-            emit_delivery(&b, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv), g_sinks[i].poc);
+            emit_delivery(&b, ctx, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv), g_sinks[i].poc);
         }
         /* The acts after the delivery they follow: a fire verified under an engine drive of a listener
            reproduces only when a person performs the act that runs it, so the envelope states each in order. */
@@ -2509,7 +2539,8 @@ char *solve_json_array(JSContext *ctx) {
            attacker would reach the victim if one fires. */
         {
             char dv[64];
-            emit_delivery(&b, &g_pending[i], g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv), NULL);
+            emit_delivery(&b, ctx, &g_pending[i], g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv),
+                          NULL);
         }
         /* `senderDemand`: the senders this parked search waits on, one per pinned path that reached the sink.
            Parked entries only: a fired search has a PoC, and its own path's identity is `principalDemand`. */

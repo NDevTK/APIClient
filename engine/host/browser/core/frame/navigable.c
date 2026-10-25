@@ -927,6 +927,10 @@ typedef struct {
        Interface Document's default ("unless stated otherwise, a document's encoding is the utf-8 encoding"),
        which doc_rec_new already wrote, and there is nothing here to determine. */
     int encoding;
+    /* HTML §7.7's input from this response (Fetch §2.2.2's get, decode, and split of `X-Frame-Options`), NULL
+       when it carried none or there is no response; stated onto the Document beside the encoding. Owned. */
+    char **xfo;
+    size_t n_xfo;
     /* THE DECODED ENTITY, OWNED HERE AND BORROWED BY THE LOAD until it is finished — core/loader/
        document_load.h's contract, and the reason this cannot be freed where the decode happens any more. */
     char *decoded;
@@ -957,6 +961,7 @@ static void nav_create_free(NavCreateWork *w)
     free(w->csp_report_only);
     free(w->permissions_policy); free(w->permissions_policy_report_only);
     free(w->decoded);
+    header_values_free(w->xfo, w->n_xfo);
     free(w);
 }
 
@@ -1074,6 +1079,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
     w->navigates                = navigates;
     w->encoding                 = encoding;
     w->decoded                  = decoded;
+    w->xfo = response_headers ? header_list_get_decode_split(response_headers, "x-frame-options", &w->n_xfo) : NULL;
     /* DOM §4.5's TYPE AND CONTENT TYPE, TAKEN HERE AND CARRIED, for CLAUDE.md's "an operation that becomes a
        work item takes its inputs with it": the pair is a fact about the RESPONSE this create was given, the
        computed type it is read from is the caller's stack record and is freed when that frame returns, and
@@ -1205,6 +1211,7 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
        It is written here rather than before the parse because the Document RECORD is what carries it and the
        record is the realm builder's product — the bytes the parse consumed were already decoded with it. */
     if (w->encoding >= 0) document_set_encoding(cctx, w->encoding);
+    document_state_x_frame_options(cctx, w->xfo, w->n_xfo);
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
         JSContext **g = realloc(g_realms, (size_t)cap * sizeof *g);

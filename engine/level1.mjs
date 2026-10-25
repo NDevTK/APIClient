@@ -1234,8 +1234,10 @@ async function mintDrive(minted, slices) {
   const pin = { principal: 'event.origin', equals: 'https://a.test', kind: 'string', loose: false };
   const sinks = [['no sink (the control)', null, null], ['a parked entry with no delivery', {}, null],
                  ['an address delivery', { delivery: 'address', deliveryPrefix: '#', poc: 'X9()' }, null],
-                 ['a forgeable message delivery', { delivery: 'cross-document-message', principalDemand: 'forgeable', principalGates: [gate] }, null],
-                 ['an unforgeable message delivery', { delivery: 'cross-document-message', principalDemand: 'unforgeable', principalPins: [pin] }, null],
+                 ['a forgeable message delivery', { delivery: 'cross-document-message', messageRoutes: ['frame'], principalDemand: 'forgeable', principalGates: [gate] }, null],
+                 ['an unforgeable message delivery', { delivery: 'cross-document-message', messageRoutes: ['frame', 'opener'], principalDemand: 'unforgeable', principalPins: [pin] }, null],
+                 ['a message delivery with no route list', { delivery: 'cross-document-message' }, 'messageRoutes'],
+                 ['a message route outside the vocabulary', { delivery: 'cross-document-message', messageRoutes: ['iframe'] }, 'messageRoutes'],
                  ['a delivery outside the vocabulary', { delivery: 'email' }, '.delivery'],
                  ['an address with no prefix', { delivery: 'address' }, 'deliveryPrefix'],
                  ['a prefix beside a navigable name', { delivery: 'navigable-name', deliveryPrefix: '#' }, 'deliveryPrefix'],
@@ -1253,7 +1255,7 @@ async function mintDrive(minted, slices) {
                  ['a predicate with no arm', { principalDemand: 'forgeable', principalGates: [{ principal: 'x', predicates: [{ method: 'm', arguments: [] }] }] }, 'predicates[0]'],
                  ['a pin with no loose flag', { principalDemand: 'unforgeable', principalPins: [{ principal: 'x', equals: 'y', kind: 'string' }] }, 'principalPins[0]'],
                  ['an empty poc', { poc: '' }, '.poc'],
-                 ['a parked search waiting on a sender', { delivery: 'cross-document-message', senderDemand: [pin] }, null],
+                 ['a parked search waiting on a sender', { delivery: 'cross-document-message', messageRoutes: [], senderDemand: [pin] }, null],
                  ['a senderDemand row with no equals', { senderDemand: [{ principal: 'event.origin', kind: 'string', loose: false }] }, 'senderDemand[0]'],
                  ['a senderDemand on a fire-verified entry', { poc: 'X9()', senderDemand: [pin] }, 'fire-verified']];
   for (const [label, sink, names] of sinks) {

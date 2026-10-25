@@ -321,6 +321,15 @@ int document_encoding_of(const lxb_dom_document_t *dom);
    its `Content-Type` are the navigation's, not the Document's — so the answer is written here. Per flow, like
    the address. */
 void document_set_encoding(JSContext *ctx, int encoding);
+/* HTML §7.7 "The `X-Frame-Options` header"'s input for this realm's Document, stated once by the creating
+   operation: the response's `X-Frame-Options` as Fetch §2.2.2's get, decode, and split answers it, or NULL for a
+   response that carried none (and for a Document created from no response). Copied. */
+void document_state_x_frame_options(JSContext *ctx, char *const *values, size_t n);
+/* Whether a container document at `ancestor`, an origin this Document is not same origin with, may present this
+   Document in a child navigable: CSP §6.4.2.1 "frame-ancestors Navigation Response Check" for every enforced
+   policy stating `frame-ancestors`, and when none does, HTML §7.7's check a navigation response's adherence to
+   `X-Frame-Options`. */
+bool document_embeddable_cross_origin(JSContext *ctx, const UrlRecord *ancestor);
 /* HTML's SET THE URL — what HTML §7.4.4 "Non-fragment synchronous \"navigations\""'s URL and history update
    steps step 8 performs ("set the URL given document to newURL"), and the only way a Document's address
    changes without a new Document being installed. PER FLOW: the address rides the running flow's COW delta, so

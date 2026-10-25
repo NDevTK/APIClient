@@ -133,6 +133,7 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
        decisions are in core/frame/opener_policy.h, asked by §7.4.5's own arm in core/frame/navigable.c and by
        the hosts that root an agent at a response. */
     opener_policy_obtain(&out->opener, headers, secure_context);
+    out->x_frame_options = header_list_get_decode_split(headers, "x-frame-options", &out->n_x_frame_options);
 }
 
 void navigation_params_free(NavigationParams *p)
@@ -154,6 +155,9 @@ void navigation_params_free(NavigationParams *p)
     p->referrer_policy = NULL;
     embedder_policy_free(&p->embedder);
     opener_policy_free(&p->opener);
+    header_values_free(p->x_frame_options, p->n_x_frame_options);
+    p->x_frame_options = NULL;
+    p->n_x_frame_options = 0;
 }
 
 /* The sources of the first `frame-ancestors` directive in the policy list `csp` (CSP §2.2's serialization: policies

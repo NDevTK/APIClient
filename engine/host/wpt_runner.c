@@ -2844,6 +2844,8 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            default. */
         if (root_encoding >= 0)
             document_set_encoding(ctx, root_encoding);
+        /* …and HTML §7.7's input from the same response. */
+        document_state_x_frame_options(ctx, np.x_frame_options, np.n_x_frame_options);
         JS_FreeValue(ctx, root_proxy);
     }
     navigation_params_free(&np);   /* document_install built its container from it and keeps no pointer */

@@ -78,6 +78,11 @@ void  header_list_delete(HeaderList *l, const char *name);
    `Cross-Origin-Embedder-Policy: require-corp` headers a LIST that an ITEM parse rejects, which is the row
    HTML §7.1.4.1 prints its table for. */
 char *header_list_get(const HeaderList *l, const char *name);
+/* Fetch §2.2.2 "Headers"' get, decode, and split a header name from a header list: NULL when the list has no
+   header with this name, otherwise the values in order, with a quoted string kept whole, count in `*n`. The
+   bytes are not re-encoded (isomorphic decoding maps each byte to one code point). Owned: header_values_free. */
+char **header_list_get_decode_split(const HeaderList *l, const char *name, size_t *n);
+void   header_values_free(char **values, size_t n);
 /* THE VALUE OF THE LAST HEADER WITH THIS NAME, UNJOINED — MIME Sniffing §5.1's "Set supplied-type to the value
    of the last `Content-Type` header associated with the resource", where THE LAST is the whole point: it is a
    DIFFERENT algorithm from Fetch's `get` above and not a shortcut through it. The join makes a string that

@@ -79,6 +79,10 @@ typedef struct {
        and the reserved environment is a secure context. It is an input to §8.1.2.2's obtain-a-similar-origin-
        window-agent and to nothing else. */
     bool         requests_oac;
+    /* HTML §7.7 "The `X-Frame-Options` header"'s input: the response's `X-Frame-Options` as Fetch §2.2.2's get,
+       decode, and split answers it, NULL when it carried none (header_values_free). */
+    char       **x_frame_options;
+    size_t       n_x_frame_options;
 } NavigationParams;
 
 /* Read a response's HEADER LIST into the facts §7.5.1 creates a Document from.

@@ -144,7 +144,8 @@ function docEndpoints(rows) {
 }
 /* One @S entry's delivery facts, as solver/solve.c's emit_delivery writes them (solve.h's field list): `delivery`
    is absent (the source declares none) or one of the mechanism tokens, `deliveryPrefix` is the victim's address
-   component, present exactly on an `address` delivery, `attackerPolicy` (and on a fired entry `attackerPage`) is
+   component, present exactly on an `address` delivery, `messageRoutes` the routes (`frame`, `opener`) a
+   `cross-document-message` delivery may take, empty when the target refuses both, `attackerPolicy` (and on a fired entry `attackerPage`) is
    a `referring-address` delivery's attacker page and its referrer policy, and `precondition` labels a root no
    attacker writes
    (a fire-verified entry carries a delivery, a precondition, or both); `principalDemand` is absent
@@ -197,6 +198,11 @@ function docSink(e, f) {
     return f + " states a deliveryPrefix exactly where its delivery is not `address`";
   if ("deliveryPrefix" in e && e.deliveryPrefix !== "#" && e.deliveryPrefix !== "?")
     return f + ".deliveryPrefix " + JSON.stringify(e.deliveryPrefix) + " is neither # nor ?";
+  if (("messageRoutes" in e) !== (e.delivery === "cross-document-message"))
+    return f + " states messageRoutes exactly where its delivery is not `cross-document-message`";
+  if ("messageRoutes" in e && !(Array.isArray(e.messageRoutes) &&
+                                e.messageRoutes.every((r) => r === "frame" || r === "opener")))
+    return f + ".messageRoutes is not a list of `frame` and `opener`";
   if (("attackerPolicy" in e) !== (e.delivery === "referring-address"))
     return f + " states an attackerPolicy exactly where its delivery is not `referring-address`";
   if ("attackerPolicy" in e && e.attackerPolicy !== "unsafe-url")

@@ -235,6 +235,70 @@ char *header_list_get(const HeaderList *l, const char *name)
     return out;
 }
 
+/* Fetch §2.2.2's collect an HTTP quoted string with extract-value false: the code points from the opening quote
+   through the closing one (or the end), escapes included. `*pos` is at the `"` on entry and past the string on
+   return. */
+static void header_collect_quoted(const char *in, size_t len, size_t *pos, char *out, size_t *o)
+{
+    DCHECK(*pos < len && in[*pos] == '"', "an HTTP quoted string was collected at a position that is no quote");
+    out[(*o)++] = in[(*pos)++];
+    while (*pos < len) {
+        char c = in[(*pos)++];
+
+        out[(*o)++] = c;
+        if (c == '"') return;
+        if (c == '\\' && *pos < len) out[(*o)++] = in[(*pos)++];
+    }
+}
+
+char **header_list_get_decode_split(const HeaderList *l, const char *name, size_t *n)
+{
+    char *value = header_list_get(l, name);
+    char **values = NULL, *tmp;
+    size_t len, pos = 0, o = 0, cap = 0;
+
+    *n = 0;
+    if (!value) return NULL;
+    len = strlen(value);
+    tmp = malloc(len + 1);
+    CHECK(tmp != NULL, "headers: OOM splitting a header value");
+    for (;;) {
+        size_t s, e;
+
+        while (pos < len && value[pos] != '"' && value[pos] != ',') tmp[o++] = value[pos++];
+        if (pos < len && value[pos] == '"') {
+            header_collect_quoted(value, len, &pos, tmp, &o);
+            if (pos < len) continue;
+        }
+        /* Remove all HTTP tab or space from the start and end of temporaryValue. */
+        for (s = 0; s < o && (tmp[s] == ' ' || tmp[s] == '\t'); s++) {}
+        for (e = o; e > s && (tmp[e - 1] == ' ' || tmp[e - 1] == '\t'); e--) {}
+        if (*n == cap) {
+            char **grown = realloc(values, (cap = cap ? cap * 2 : 4) * sizeof *values);
+            CHECK(grown != NULL, "headers: OOM splitting a header value");
+            values = grown;
+        }
+        values[*n] = strndup(tmp + s, e - s);
+        CHECK(values[*n] != NULL, "headers: OOM splitting a header value");
+        (*n)++;
+        o = 0;
+        if (pos >= len) break;
+        DCHECK(value[pos] == ',', "a header value's split stopped at a code point that is not a comma");
+        pos++;
+    }
+    free(tmp);
+    free(value);
+    return values;
+}
+
+void header_values_free(char **values, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) free(values[i]);
+    free(values);
+}
+
 /* THE LAST VALUE, UNJOINED — see headers.h. It is a different question from the join above and not a
    convenience over it: the join produces a string that is a LIST, and the algorithm that wants this one
    (MIME Sniffing §5.1's supplied MIME type detection) compares its answer byte for byte against four literal

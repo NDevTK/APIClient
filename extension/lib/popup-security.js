@@ -72,7 +72,10 @@ function _deliverySentence(item) {
     + "come from solve_json_array (source=" + item.source + ")");
   if (!_DELIVERY[item.delivery])
     return "the engine declares the delivery `" + item.delivery + "`, which this view has no sentence for";
+  if (item.delivery === "cross-document-message" && Array.isArray(item.messageRoutes) && item.messageRoutes.length === 0)
+    return "REFUSED: the target's response forbids both routes to it (framing, and an opener's handle), so no attacker page can post it a message";
   return _DELIVERY[item.delivery](item.deliveryPrefix)
+       + (Array.isArray(item.messageRoutes) ? " — route: " + item.messageRoutes.join(" or ") : "")
        + (item.attackerPage ? " (the attacker serves " + item.attackerPage + " under Referrer-Policy: " + item.attackerPolicy + ")" : "");
 }
 

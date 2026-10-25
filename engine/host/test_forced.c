@@ -33970,6 +33970,8 @@ int main(int argc, char **argv) {
                             stated outright rather than left to a default, for the same reason the row above
                             it is. */
                          /*is_iframe_srcdoc*/ false);
+        /* HTML §7.7's input: no response, so no `X-Frame-Options`. */
+        document_state_x_frame_options(ctx, NULL, 0);
         JS_FreeValue(ctx, root_proxy);
     }
 
