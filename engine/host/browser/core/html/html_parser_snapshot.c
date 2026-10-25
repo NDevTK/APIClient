@@ -9,6 +9,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/html/html_parser_snapshot.h"
+#include "solver/dom_cow.h"   /* the parse declaration a sibling's close released */
 
 /* The fixed part of a snapshot. The open-elements and active-formatting lists (node addresses) and the template
    insertion modes (their records) follow it, in that order. */
@@ -84,6 +85,15 @@ void html_parser_snapshot_restore(JSContext *ctx, lxb_html_parser_t *parser, JSV
        under construction, a split UTF-8 sequence, pending table text) is not restorable; the token and those
        buffers are not copied. The next diff copies the temp buffer and the token with its attributes. Its
        absence shows as this crash: a fork between two writes that split a token. */
+    /* A sibling's §8.4.2 close ran §13.2.7 over this parser (lxb_html_parse_chunk_end): the tree builder
+       popped its open elements, the tokenizer went back to its original tree and the parser to END, and the
+       parse's declaration was released. This arm's stream is still open, so all four are undone first. */
+    if (parser->state != LXB_HTML_PARSER_STATE_PROCESS) {
+        lxb_html_tokenizer_tree_set(tkz, tree);
+        parser->state = LXB_HTML_PARSER_STATE_PROCESS;
+        parser->status = LXB_STATUS_OK;
+        dom_cow_parse_declare(tree, lxb_dom_interface_node(tree->document), DOM_PARSE_ROOT_SHARED);
+    }
     if (!h.between_tokens)
         DFAIL("§8.4.3 document.write(): a fork's arm resumed a script-created parser whose last write ended "
               "mid-token, and only a tokenizer standing between tokens is restorable. Copy the temp buffer, "

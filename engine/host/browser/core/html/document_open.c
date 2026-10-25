@@ -135,34 +135,17 @@ bool document_open_stream_is_ours(JSContext *ctx, JSValueConst doc_obj, lxb_dom_
 {
     bool ours = open_record_read(ctx, doc_obj);
 
-    /* THE TWO-SIDED ASSERTION, AND THE ONE STATE IT REFUSES. This flow's record says whether IT opened the
-       stream; §13.2.3.5's insertion point is a fact about the ONE `lxb_html_parser_t` the document carries,
-       which is not in any delta. They agree for every flow that opened and closed its own stream, and they
-       disagree in exactly one situation: a SIBLING flow opened this document's stream and did not close it.
-       Resolving that to either answer is wrong in a way that cannot be seen afterwards — taking the parser's
-       word makes this flow write into a sibling's tokenizer, over a stack of open elements standing on nodes
-       that flow's step 11 removed IN ITS OWN DELTA; taking the record's makes it re-open a stream the sibling
-       is standing in — so it crashes at the flow that is about to do it, naming the capability that would make
-       the two agree.
-       THAT SITUATION IS THE ORDINARY ONE AND NOT A RACE, which the sentence above is silent about and which
-       decides how much this is worth. §8.4.1 leaves the stream OPEN — §8.4.2's close is the only thing that
-       ends it, and almost no page writes one, so a document that has been written into once carries an open
-       parser for the rest of its life. CLAUDE.md §Every-runtime-job makes each timer callback, each reaction
-       and each queued job its OWN flow, so the second flow to reach §8.4.3 step 9 or §8.4.2 step 3 on that
-       document is not a coincidence of interleaving; it is what the scheduler does next. The shape is three
-       lines and needs no fork and no second document:
-           setTimeout(function () { document.write('<b>x</b>'); }, 0);   // in one inline script
-       and appending `document.close()` to that same callback removes it, which is the discriminator: what the
-       assert is about is a stream left OPEN across a flow boundary, never a write. */
-    DCHECK(ours == html_parse_insertion_point_defined(dom),
-           "§13.2.3.5's insertion point and this flow's §8.4.2 step 3 record DISAGREE about whether an input "
-           "stream is open on this document — which is another flow's script-created parser being visible to "
-           "this one. Lexbor's parser is a single `lxb_html_parser_t` on the Document and its state (the "
-           "tokenizer's cursor, the stack of open elements, the insertion mode) is not captured by the per-flow "
-           "COW delta, so §8.4.1's document open steps are the one operation in this engine whose effect a "
-           "context switch does not carry. What must be built is the capture of that parser state, in "
-           "core/html/html_parse.c beside the tree-construction routing dom_cow_install_tree_construction "
-           "already performs — the tree writes are per flow and the parser that made them is not");
+    /* The record says whether THIS flow opened the stream; §13.2.3.5's insertion point is a fact about the one
+       lxb_html_parser_t the document carries. A flow whose record is open while the parser is closed is a fork
+       arm whose sibling closed the stream: open_stream_make_current reopens it into this arm's own state before
+       anything is written. The other disagreement is not built: a sibling's open stream visible to a flow that
+       never opened one (`setTimeout(function () { document.write('<b>x</b>'); }, 0)` after an unclosed write
+       is the shape, a stream left open across a flow boundary). */
+    DCHECK(ours || !html_parse_insertion_point_defined(dom),
+           "§8.4.2 step 3: another flow's script-created parser is open on this document and this flow never "
+           "opened one. Lexbor's parser is one lxb_html_parser_t; per-arm state exists only for the flows that "
+           "wrote into it (core/html/html_parser_snapshot.h). Build the case of a flow that did not open the "
+           "stream: its own closed state, restored before its §8.4.1 open steps run");
     return ours;
 }
 
@@ -483,6 +466,9 @@ void document_close_input_stream(JSContext *ctx, JSValueConst doc_obj, lxb_dom_d
        becomes a real read in the diff that gives the tokenizer a way to stop. */
     open_stream_make_current(ctx, doc_obj, dom);
     st = html_parse_document_close(lxb_html_interface_document(dom));
+    /* The close changes the parser's state too, so it counts as a write: a sibling arm still holding the
+       stream open sees the parser moved past its last write and restores. */
+    ((lxb_html_parser_t *)dom->parser)->write_epoch++;
     CHECK(st == LXB_STATUS_OK,
           "§8.4.2 step 6's tokenizer run did not complete — the document is left with an input stream that is "
           "neither open nor closed, and every later `document.write` would insert into a parser that will "
