@@ -305,6 +305,10 @@ METRIC(tw_script_parse_bytes_all, "twScriptParseBytesAll", LIFETIME, "byte", PRO
 METRIC(tw_script_parse_spans, "twScriptParseSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_script_parse_bytes, "twScriptParseBytes", LIFETIME, "byte", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_script_parse_us, "twScriptParseUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)
+/* …the pattern bytes regexp compiles consumed, charged at the script parse's rate, and the rests a compile
+   inside a RegExp machine took (quickjs.c's lre_compile_poll). */
+METRIC(tw_regexp_compile_bytes, "twRegexpCompileBytes", LIFETIME, "byte", PROCESS, "qjs/quickjs.c", INT)
+METRIC(tw_regexp_compile_rests, "twRegexpCompileRests", LIFETIME, "rest", PROCESS, "qjs/quickjs.c", INT)
 METRIC(tw_decode_spans, "twDecodeSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_decode_bytes, "twDecodeBytes", LIFETIME, "byte", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_decode_us, "twDecodeUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)

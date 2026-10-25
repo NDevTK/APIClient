@@ -88,7 +88,10 @@ typedef enum {
 
 #define TMP_BUF_SIZE 128
 
-typedef struct {
+struct REParseFrame;
+
+/* The compile, owned by the caller between lre_compile_begin and lre_compile_end. */
+struct REParseState {
     DynBuf byte_code;
     const uint8_t *buf_ptr;
     const uint8_t *buf_end;
@@ -119,7 +122,16 @@ typedef struct {
         char error_msg[TMP_BUF_SIZE];
         char tmp_buf[TMP_BUF_SIZE];
     } u;
-} REParseState;
+    char *pattern;                /* the compile's own NUL-terminated copy of its input; buf_* point into it */
+    const uint8_t *counted_ptr;   /* the input up to here has been charged as host work */
+    bool can_yield;               /* false when the caller cannot park, so the compile is charged but never asks */
+    uint8_t phase;                /* RE_COMPILE_* */
+    /* The Disjunction machine's frame stack while the compile rests between stints; empty otherwise. */
+    struct REParseFrame *pf_st;
+    int pf_sp, pf_size;
+};
+
+enum { RE_COMPILE_PARSE, RE_COMPILE_DONE, RE_COMPILE_FAILED, RE_COMPILE_TAKEN };
 
 typedef struct {
 #ifdef DUMP_REOP
@@ -2208,14 +2220,29 @@ static int re_frame_push(REParseState *s, REParseFrame **pst, int *psp, int *psi
     return 0;
 }
 
-static int re_parse_disjunction(REParseState *s, bool is_backward_dir)
+/* Charge the input consumed since the last charge as host work and, when `ask` and the caller can park, answer
+   whether the compile should give the thread back. The cursor only advances: every production moves buf_ptr
+   forward, and the scans that look elsewhere (re_parse_captures) use cursors of their own. */
+static bool re_parse_poll(REParseState *s, bool ask)
 {
-    REParseFrame *st = NULL, *f = NULL;
-    int sp = 0, st_size = 0, ret = 0;
+    size_t n;
+    DCHECK(s->buf_ptr >= s->counted_ptr, "the regexp parse cursor moved back past input already charged");
+    n = (size_t)(s->buf_ptr - s->counted_ptr);
+    s->counted_ptr = s->buf_ptr;
+    return lre_compile_poll(s->opaque, n, ask && s->can_yield) != 0;
+}
+
+/* One stint of the Disjunction machine: 0 when the Pattern is parsed, -1 on a SyntaxError (s->u.error_msg),
+   LRE_RET_YIELD when the host asked for the thread back, with the frame stack parked on `s`. The question is
+   asked after a Term, so every stint parses at least one and a resume cannot rest without progress. */
+static int re_parse_disjunction(REParseState *s)
+{
+    REParseFrame *st = s->pf_st, *f = NULL;
+    int sp = s->pf_sp, st_size = s->pf_size, ret = 0;
     const uint8_t *p;
     int c, last_atom_start, quant_min, quant_max, last_capture_count;
     int pos, capture_index;
-    bool greedy, is_neg, is_backward_lookahead;
+    bool greedy, is_neg, is_backward_lookahead, is_backward_dir = false;
     bool saved_ignore_case, saved_multi_line, saved_dotall;
     REStringList cr_s, *cr = &cr_s;
     size_t start, term_start, end, term_size;
@@ -2256,6 +2283,11 @@ static int re_parse_disjunction(REParseState *s, bool is_backward_dir)
         saved_dotall = f->saved_dotall;                                         \
     } while (0)
 
+    if (sp > 0) {
+        /* a resume: the frame on top rested at its alternative loop's head */
+        f = &st[sp - 1];
+        goto alt_loop;
+    }
     if (re_frame_push(s, &st, &sp, &st_size, is_backward_dir))
         goto fail;
 
@@ -2295,6 +2327,12 @@ static int re_parse_disjunction(REParseState *s, bool is_backward_dir)
                 end - start);
         memcpy(s->byte_code.buf + start, s->byte_code.buf + end,
                term_size);
+    }
+    if (re_parse_poll(s, true)) {
+        s->pf_st = st;
+        s->pf_sp = sp;
+        s->pf_size = st_size;
+        return LRE_RET_YIELD;
     }
     goto alt_loop;
 
@@ -2882,6 +2920,9 @@ static int re_parse_disjunction(REParseState *s, bool is_backward_dir)
     ret = -1;
  done:
     lre_realloc(s->opaque, st, 0);
+    s->pf_st = NULL;
+    s->pf_sp = 0;
+    s->pf_size = 0;
     return ret;
 #undef RE_ERROR
 #undef RE_DESCEND
@@ -3137,23 +3178,31 @@ static void *lre_bytecode_realloc(void *opaque, void *ptr, size_t size)
     }
 }
 
-/* 'buf' must be a zero terminated UTF-8 string of length buf_len.
-   Return NULL if error and allocate an error message in *perror_msg,
-   otherwise the compiled bytecode and its length in plen.
-*/
-uint8_t *lre_compile(int *plen, char *error_msg, int error_msg_size,
-                     const char *buf, size_t buf_len, int re_flags,
-                     void *opaque)
+/* Begin compiling `buf` (UTF-8, buf_len bytes, not necessarily NUL-terminated) under `re_flags`. The compile
+   copies its input, so the caller's buffer may go as soon as this returns. NULL when out of memory. */
+REParseState *lre_compile_begin(const char *buf, size_t buf_len, int re_flags, bool can_yield, void *opaque)
 {
-    REParseState s_s, *s = &s_s;
-    int register_count;
+    REParseState *s;
     bool is_sticky;
 
+    s = lre_realloc(opaque, NULL, sizeof(*s));
+    if (!s)
+        return NULL;
     memset(s, 0, sizeof(*s));
+    s->pattern = lre_realloc(opaque, NULL, buf_len + 1);
+    if (!s->pattern) {
+        lre_realloc(opaque, s, 0);
+        return NULL;
+    }
+    memcpy(s->pattern, buf, buf_len);
+    s->pattern[buf_len] = '\0';
     s->opaque = opaque;
-    s->buf_ptr = (const uint8_t *)buf;
+    s->can_yield = can_yield;
+    s->phase = RE_COMPILE_PARSE;
+    s->buf_ptr = (const uint8_t *)s->pattern;
     s->buf_end = s->buf_ptr + buf_len;
     s->buf_start = s->buf_ptr;
+    s->counted_ptr = s->buf_ptr;
     s->re_flags = re_flags;
     s->is_unicode = ((re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0);
     is_sticky = ((re_flags & LRE_FLAG_STICKY) != 0);
@@ -3191,31 +3240,24 @@ uint8_t *lre_compile(int *plen, char *error_msg, int error_msg_size,
                        -(REOP_SZ(REOP_goto) + REOP_SZ(REOP_any) + REOP_SZ(REOP_split_goto_first)));
     }
     re_emit_op_idx(s, REOP_save_start, 0);
+    return s;
+}
 
-    if (re_parse_disjunction(s, false)) {
-    error:
-        dbuf_free(&s->byte_code);
-        dbuf_free(&s->group_names);
-        dbuf_free(&s->group_alts);
-        lre_realloc(s->opaque, s->alt_parent, 0);
-        js__pstrcpy(error_msg, error_msg_size, s->u.error_msg);
-        *plen = 0;
-        return NULL;
-    }
+/* The passes after the parse, over the byte code it emitted: the terminal opcodes, the register count, the
+   header and the named-group trailer. 0, or -1 with s->u.error_msg set. */
+static int re_compile_finish(REParseState *s)
+{
+    int register_count;
 
     re_emit_op_idx(s, REOP_save_end, 0);
 
     re_emit_op(s, REOP_match);
 
-    if (*s->buf_ptr != '\0') {
-        re_parse_error(s, "extraneous characters at the end");
-        goto error;
-    }
+    if (*s->buf_ptr != '\0')
+        return re_parse_error(s, "extraneous characters at the end");
 
-    if (dbuf_error(&s->byte_code)) {
-        re_parse_out_of_memory(s);
-        goto error;
-    }
+    if (dbuf_error(&s->byte_code))
+        return re_parse_out_of_memory(s);
 
     register_count = compute_register_count(s->byte_code.buf, s->byte_code.size);
     DCHECK(register_count >= 0, "the regexp register allocator failed, and with REGISTER_COUNT_MAX gone the "
@@ -3238,17 +3280,103 @@ uint8_t *lre_compile(int *plen, char *error_msg, int error_msg_size,
         put_u16(s->byte_code.buf + RE_HEADER_FLAGS,
                 lre_get_flags(s->byte_code.buf) | LRE_FLAG_NAMED_GROUPS);
     }
-    dbuf_free(&s->group_names);
-    dbuf_free(&s->group_alts);
-    lre_realloc(s->opaque, s->alt_parent, 0);
+    if (dbuf_error(&s->byte_code))
+        return re_parse_out_of_memory(s);
 
 #ifdef DUMP_REOP
     lre_dump_bytecode(s->byte_code.buf, s->byte_code.size);
 #endif
+    return 0;
+}
 
-    error_msg[0] = '\0';
+/* Run the compile until it finishes or the host asks for the thread back: 0 compiled (lre_compile_take), -1 a
+   SyntaxError or out of memory (lre_compile_error), LRE_RET_YIELD call again, which continues at the Term it
+   rested after. Named residual. Not covered: a character class, and the finishing passes over the emitted
+   byte code, run to their end inside one stint, and the byte code moves (a backward Term's reversal, the
+   split inserted at each `|`, a quantifier's atom scan) are charged only as the input they parse. Next diff
+   builds: a rest point inside re_parse_nested_class's frame loop and in the finishing passes, charged by the
+   byte code they walk. Absence shows as: a stint whose host CPU is large against the work it charged, on a
+   pattern with a long class or many alternatives. */
+int lre_compile_step(REParseState *s)
+{
+    int ret;
+
+    DCHECK(s->phase == RE_COMPILE_PARSE, "lre_compile_step was called on a compile that already finished");
+    ret = re_parse_disjunction(s);
+    if (ret == LRE_RET_YIELD)
+        return ret;
+    re_parse_poll(s, false);
+    if (ret == 0)
+        ret = re_compile_finish(s);
+    s->phase = ret == 0 ? RE_COMPILE_DONE : RE_COMPILE_FAILED;
+    return ret;
+}
+
+/* The compiled program after lre_compile_step answered 0. The caller owns it and its length is *plen. */
+uint8_t *lre_compile_take(REParseState *s, int *plen)
+{
+    uint8_t *bc;
+
+    DCHECK(s->phase == RE_COMPILE_DONE, "lre_compile_take was called on a compile that did not succeed");
+    bc = s->byte_code.buf;
     *plen = s->byte_code.size;
-    return s->byte_code.buf;
+    memset(&s->byte_code, 0, sizeof(s->byte_code));
+    s->phase = RE_COMPILE_TAKEN;
+    return bc;
+}
+
+/* The SyntaxError's message after lre_compile_step answered -1. Borrowed until lre_compile_end. */
+const char *lre_compile_error(REParseState *s)
+{
+    DCHECK(s->phase == RE_COMPILE_FAILED, "lre_compile_error was called on a compile that did not fail");
+    return s->u.error_msg;
+}
+
+/* Release the compile: safe whether it finished, failed, or rested and was then abandoned. */
+void lre_compile_end(REParseState *s)
+{
+    void *opaque = s->opaque;
+
+    if (s->phase != RE_COMPILE_TAKEN)
+        dbuf_free(&s->byte_code);
+    dbuf_free(&s->group_names);
+    dbuf_free(&s->group_alts);
+    lre_realloc(opaque, s->alt_parent, 0);
+    lre_realloc(opaque, s->pf_st, 0);
+    lre_realloc(opaque, s->pattern, 0);
+    lre_realloc(opaque, s, 0);
+}
+
+/* The compile for a caller that cannot park: charged as host work like any compile, never asked to rest.
+   NULL with the message in error_msg on failure. Named residual. Not covered: a regexp literal compiles
+   inside one production of the script parse, and constraint validation compiles a pattern attribute on its
+   own call, so neither rests inside a long pattern. Next diff builds: the script parse holding the literal's
+   REParseState across its own suspension, and constraint validation's compile as a stage of a machine.
+   Absence shows as: a script parse stint, or a validity check, whose host CPU is large against its work. */
+uint8_t *lre_compile(int *plen, char *error_msg, int error_msg_size,
+                     const char *buf, size_t buf_len, int re_flags,
+                     void *opaque)
+{
+    REParseState *s;
+    uint8_t *bc = NULL;
+    int ret;
+
+    *plen = 0;
+    s = lre_compile_begin(buf, buf_len, re_flags, false, opaque);
+    if (!s) {
+        js__pstrcpy(error_msg, error_msg_size, "out of memory");
+        return NULL;
+    }
+    ret = lre_compile_step(s);
+    DCHECK(ret != LRE_RET_YIELD, "a compile begun with can_yield false rested");
+    if (ret == 0) {
+        bc = lre_compile_take(s, plen);
+        error_msg[0] = '\0';
+    } else {
+        js__pstrcpy(error_msg, error_msg_size, lre_compile_error(s));
+    }
+    lre_compile_end(s);
+    return bc;
 }
 
 static bool is_line_terminator(uint32_t c)

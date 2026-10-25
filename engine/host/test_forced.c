@@ -1156,6 +1156,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/sparoute.h"
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
+#include "fixture/rxcompile.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
@@ -1648,6 +1649,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "sparoute", HTML_SPAROUTE },
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
+    { "rxcompile", HTML_RXCOMPILE },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
@@ -15484,6 +15486,37 @@ TF_UNIT void probes_timegate(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxcompile` document (fixture/rxcompile.h): both compiled programs match, and the compiles
+   were charged and rested, read from the census quickjs.c's lre_compile_poll and step_regexp_compile_run raise. */
+TF_UNIT void probes_rxcompile(const char *js, Probe *tab, int *n) {
+    const char *bytes = strstr(js, "\"twRegexpCompileBytes\":"), *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nbytes = bytes ? strtol(bytes + strlen("\"twRegexpCompileBytes\":"), NULL, 10) : -1;
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *ct_why = NULL; int ct_tt = 1;
+    fold_row(&ct_tt, &ct_why, !!strstr(js, "\"/api/rxc\""),
+             "NOT REACHED: there is no /api/rxc record, so the document aborted before its fetch");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/rxc", "ctor", "true"),
+             "the program `new RegExp` compiled across its rests does not match what its pattern states");
+    const char *cm_why = NULL; int cm_tt = 1;
+    fold_row(&cm_tt, &cm_why, param_value_is(js, "/api/rxc", "cmp", "true"),
+             "the program RegExp.prototype.compile built across its rests does not match what its pattern states");
+    const char *rs_why = NULL; int rs_tt = 1;
+    fold_row(&rs_tt, &rs_why, bytes != NULL && rests != NULL,
+             "the result document carries no `twRegexpCompileBytes`/`twRegexpCompileRests` row from "
+             "solver/metrics/cold.def");
+    fold_row(&rs_tt, &rs_why, nbytes >= 600001,
+             "the two compiles were not charged the 600001 pattern bytes they parsed as host work");
+    fold_row(&rs_tt, &rs_why, nrests >= 2,
+             "a compile several work quanta long took no rest, so it held the thread from its first Term to its "
+             "last");
+    const Probe rows[] = {
+        { "rxc-ctor-match", ct_tt, "/api/rxc", SESS_EXPLORE, ct_why },
+        { "rxc-compile-match", cm_tt, "/api/rxc", SESS_EXPLORE, cm_why, .gate = "rxc-ctor-match" },
+        { "rxc-compile-rests", rs_tt, "/api/rxc", SESS_EXPLORE, rs_why, .gate = "rxc-ctor-match" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `framemsg` document (fixture/framemsg.h). */
 TF_UNIT void probes_framemsg(const char *js, Probe *tab, int *n) {
     char src[192] = "";
@@ -19806,6 +19839,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_sparoute(js, probes, &np);
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);
+    probes_rxcompile(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);

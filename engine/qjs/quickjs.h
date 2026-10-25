@@ -2133,6 +2133,9 @@ JS_EXTERN uint64_t JS_FlowPeekRetiredWork(void);
 JS_EXTERN uint64_t JS_FlowTakeRetiredWork(void);
 /* Source bytes quickjs's script and JSON tokenizers have consumed, over the process (a report). */
 JS_EXTERN uint64_t JS_FlowParseBytesLife(void);
+/* Pattern bytes regexp compiles have consumed, and the rests a resting compile took, over the process (a report). */
+JS_EXTERN uint64_t JS_RegExpCompileBytesLife(void);
+JS_EXTERN uint64_t JS_RegExpCompileRestsLife(void);
 
 /* APIClient TIME-TRAVEL (record/replay) hooks — the RECORD boundary of the COW time-travel executor.
    A flow's live state is (shared baseline ∘ its per-flow COW delta); rewinding a flow reverses that delta,

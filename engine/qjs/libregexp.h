@@ -59,6 +59,18 @@ extern "C" {
    lie about the format. */
 #define LRE_GROUP_NAME_TRAILER_LEN 1
 
+/* ---- One COMPILE, suspendably. -----------------------------------------------------------------------
+   lre_compile_begin copies the pattern into a compile the caller owns, lre_compile_step parses until it
+   finishes or the host asks for the thread back (LRE_RET_YIELD: call again and it continues after the Term it
+   rested at), lre_compile_take hands over the program and lre_compile_error the SyntaxError's message, and
+   lre_compile_end releases the compile in any state. Every byte the parse consumes is charged as host work
+   through lre_compile_poll. lre_compile is the composition for a caller that cannot park. */
+typedef struct REParseState REParseState;
+REParseState *lre_compile_begin(const char *buf, size_t buf_len, int re_flags, bool can_yield, void *opaque);
+int lre_compile_step(REParseState *s);
+uint8_t *lre_compile_take(REParseState *s, int *plen);
+const char *lre_compile_error(REParseState *s);
+void lre_compile_end(REParseState *s);
 uint8_t *lre_compile(int *plen, char *error_msg, int error_msg_size,
                      const char *buf, size_t buf_len, int re_flags,
                      void *opaque);
@@ -155,6 +167,9 @@ int lre_parse_escape(const uint8_t **pp, int allow_utf16);
    back-edge. It REPLACES lre_check_timeout, which was a watchdog — a bound that truncated a match instead of
    parking it. The host answers from its scheduler, and the match resumes exactly where it stopped. */
 int lre_want_yield(void *opaque);
+/* must be provided by the user: charge `bytes` of pattern a compile consumed as host work and, when `ask`,
+   answer non-zero when the compile should give the thread back after the Term it just parsed. */
+int lre_compile_poll(void *opaque, size_t bytes, bool ask);
 void *lre_realloc(void *opaque, void *ptr, size_t size);
 
 /* JS identifier test */

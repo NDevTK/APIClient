@@ -30086,6 +30086,8 @@ typedef struct JSReCtor {
     JSValue bc;              /* a reused compiled bytecode when the source regexp supplies it (owned) */
     JSValue result;          /* DONE (owned) */
     JSValue ntgt;            /* the NewTarget the create uses — the callee itself when called as a function (owned) */
+    void *comp;              /* the compile in flight (REParseState), a cache: shed on fork, begun again */
+    int re_flags;            /* F read into LRE flags, held across the compile's rests */
     uint8_t patIsRe;         /* IsRegExp(pattern) */
     uint8_t haveFlags;       /* the `flags` argument was supplied */
 } JSReCtor;
@@ -34488,6 +34490,11 @@ void JS_FlowRetireWork(uint64_t units) { g_flow_work_retired += units; }
    `counted_ptr` is added. */
 static uint64_t g_flow_parse_bytes;
 uint64_t JS_FlowParseBytesLife(void) { return g_flow_parse_bytes; }
+/* Pattern bytes regexp compiles have consumed, and the rests a compile inside a machine took, over the process:
+   a report for the same census (lre_compile_poll, step_regexp_compile_run). */
+static uint64_t g_regexp_compile_bytes, g_regexp_compile_rests;
+uint64_t JS_RegExpCompileBytesLife(void) { return g_regexp_compile_bytes; }
+uint64_t JS_RegExpCompileRestsLife(void) { return g_regexp_compile_rests; }
 
 /* How many dispatches until the cooperative budget is next asked. A dispatch count cannot be evaded by the
  * page's code shape, so a straight-line, call-free stretch still reaches the budget. The period is the
@@ -105363,23 +105370,20 @@ static void js_regexp_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fu
         mark_func(rt, &p->u.regexp.realm->header);
 }
 
-/* create a string containing the RegExp bytecode */
-static JSValue js_compile_regexp(JSContext *ctx, JSValueConst pattern,
-                                 JSValueConst flags)
+/* 22.2.3.3 RegExpInitialize steps 5-11: `flags` (undefined, or a String) is read into LRE flags, refusing a
+   code unit outside "dgimsuvy" or one given twice with a SyntaxError, and u with v, which 22.2.3.4
+   ParsePattern step 1 refuses. 0, or -1 with the exception pending. */
+static int js_regexp_parse_flags(JSContext *ctx, JSValueConst flags, int *pre_flags)
 {
     const char *str;
     int re_flags, mask;
-    uint8_t *re_bytecode_buf;
     size_t i, len;
-    int re_bytecode_len;
-    JSValue ret;
-    char error_msg[64];
 
     re_flags = 0;
     if (!JS_IsUndefined(flags)) {
         str = JS_ToCStringLen(ctx, &len, flags);
         if (!str)
-            return JS_EXCEPTION;
+            return -1;
         /* XXX: re_flags = LRE_FLAG_OCTAL unless strict mode? */
         for (i = 0; i < len; i++) {
             switch(str[i]) {
@@ -105413,7 +105417,7 @@ static JSValue js_compile_regexp(JSContext *ctx, JSValueConst pattern,
             if ((re_flags & mask) != 0) {
             bad_flags:
                 JS_FreeCString(ctx, str);
-                return JS_ThrowSyntaxError(ctx, "invalid regular expression flags");
+                return (JS_ThrowSyntaxError(ctx, "invalid regular expression flags"), -1);
             }
             re_flags |= mask;
         }
@@ -105422,32 +105426,106 @@ static JSValue js_compile_regexp(JSContext *ctx, JSValueConst pattern,
 
     if (re_flags & LRE_FLAG_UNICODE)
         if (re_flags & LRE_FLAG_UNICODE_SETS)
-            return JS_ThrowSyntaxError(ctx, "invalid regular expression flags");
+            return (JS_ThrowSyntaxError(ctx, "invalid regular expression flags"), -1);
+    *pre_flags = re_flags;
+    return 0;
+}
 
-    /* The v flag implies full Unicode, like u, so the pattern must be
-       UTF-8 (not CESU-8) for both. */
-    str = JS_ToCStringLen2(ctx, &len, pattern,
-                           !(re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)));
+/* Begin compiling the String `pattern` (steps 12-13: under u or v it is read as code points, so it must be
+   UTF-8 rather than CESU-8). NULL with the exception pending. The caller owns the compile. */
+static REParseState *js_regexp_compile_begin(JSContext *ctx, JSValueConst pattern, int re_flags, bool can_yield)
+{
+    const char *str;
+    size_t len;
+    REParseState *c;
+
+    DCHECK(JS_IsString(pattern), "a regexp compile began over a pattern RegExpInitialize step 2 did not coerce");
+    str = JS_ToCStringLen2(ctx, &len, pattern, !(re_flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)));
     if (!str)
-        return JS_EXCEPTION;
-    re_bytecode_buf = lre_compile(&re_bytecode_len, error_msg,
-                                  sizeof(error_msg), str, len, re_flags, ctx);
+        return NULL;
+    c = lre_compile_begin(str, len, re_flags, can_yield, ctx);
     JS_FreeCString(ctx, str);
-    if (!re_bytecode_buf) {
-        JS_ThrowSyntaxError(ctx, "%s", error_msg);
-        return JS_EXCEPTION;
-    }
+    if (!c)
+        JS_ThrowOutOfMemory(ctx);
+    return c;
+}
 
+/* One stint of steps 14-22: 0 with *pbc holding the program as an indirect String, -1 with the SyntaxError
+   pending, or LRE_RET_YIELD. The compile stays the caller's to end on every answer. */
+static int js_regexp_compile_run(JSContext *ctx, REParseState *c, JSValue *pbc)
+{
+    uint8_t *re_bytecode_buf;
+    int re_bytecode_len, r;
+    JSValue ret;
+
+    r = lre_compile_step(c);
+    if (r == LRE_RET_YIELD)
+        return r;
+    if (r < 0)
+        return (JS_ThrowSyntaxError(ctx, "%s", lre_compile_error(c)), -1);
+    re_bytecode_buf = lre_compile_take(c, &re_bytecode_len);
     ret = js_new_string8_len(ctx, (void *)&re_bytecode_buf,
                              sizeof(re_bytecode_buf));
     if (JS_IsException(ret)) {
         js_free(ctx, re_bytecode_buf);
-    } else {
+        return -1;
+    }
+    {
         JSString *p = JS_VALUE_GET_STRING(ret);
         p->kind = JS_STRING_KIND_INDIRECT;
         p->len = re_bytecode_len;
     }
-    return ret;
+    *pbc = ret;
+    return 0;
+}
+
+/* A compile as a stage of a machine. The compile is a cache in *pcomp: a fork or a cold park sheds it and the
+   next entry begins it again from the pattern the machine holds. 0 with *pbc set, -1 thrown, JS_STEP_YIELD to
+   be re-entered. */
+static int step_regexp_compile_run(JSContext *ctx, void **pcomp, JSValueConst pattern, int re_flags,
+                                   JSValue *pbc)
+{
+    int r;
+
+    if (!*pcomp) {
+        *pcomp = js_regexp_compile_begin(ctx, pattern, re_flags, true);
+        if (!*pcomp)
+            return -1;
+    }
+    r = js_regexp_compile_run(ctx, *pcomp, pbc);
+    if (r == LRE_RET_YIELD) {
+        g_regexp_compile_rests++;
+        return JS_STEP_YIELD;
+    }
+    lre_compile_end(*pcomp);
+    *pcomp = NULL;
+    return r;
+}
+
+static void js_regexp_compile_cache_destroy(JSContext *ctx, void *p)
+{
+    (void)ctx;
+    lre_compile_end(p);
+}
+
+/* The whole compile for a caller that cannot park, the script parse's regexp literal (ctx->compile_regexp):
+   flags and pattern are already Strings, so nothing here runs page code. */
+static JSValue js_compile_regexp(JSContext *ctx, JSValueConst pattern,
+                                 JSValueConst flags)
+{
+    REParseState *c;
+    JSValue bc = JS_UNDEFINED;
+    int re_flags, r;
+
+    if (js_regexp_parse_flags(ctx, flags, &re_flags) < 0)
+        return JS_EXCEPTION;
+    c = js_regexp_compile_begin(ctx, pattern, re_flags, false);
+    if (!c)
+        return JS_EXCEPTION;
+    r = js_regexp_compile_run(ctx, c, &bc);
+    DCHECK(r != LRE_RET_YIELD, "a regexp compile begun with can_yield false rested");
+    lre_compile_end(c);
+    return r < 0 ? JS_EXCEPTION : bc;
 }
 
 /* create a RegExp object from a string containing the RegExp bytecode
@@ -105547,10 +105625,12 @@ static int js_is_regexp(JSContext *ctx, JSValueConst obj)
     X(RECTOR_ALLOC,    "22.2.4.1 step 7 -> 22.2.3.2 RegExpAlloc (OrdinaryCreateFromConstructor(newTarget, " \
                        "\"%RegExp.prototype%\"), whose Get(newTarget, \"prototype\") runs here; lastIndex is " \
                        "defined after it)") \
-    X(RECTOR_PATSTR,   "22.2.4.1 step 8 -> 22.2.3.3 RegExpInitialize step 1 (P is ToString(pattern), or the " \
+    X(RECTOR_PATSTR,   "22.2.4.1 step 8 -> 22.2.3.3 RegExpInitialize steps 1-2 (P is ToString(pattern), or the " \
                        "empty String when it is undefined)") \
-    X(RECTOR_FLAGSTR,  "22.2.4.1 step 8 -> 22.2.3.3 RegExpInitialize step 2 (F is ToString(flags)) - and steps " \
-                       "3-12, the parse of P and the compiled matcher")
+    X(RECTOR_FLAGSTR,  "22.2.4.1 step 8 -> 22.2.3.3 RegExpInitialize steps 3-11 (F is ToString(flags), or the " \
+                       "empty String when it is undefined, and its code units are validated)") \
+    X(RECTOR_COMPILE,  "22.2.4.1 step 8 -> 22.2.3.3 RegExpInitialize steps 12-22 (ParsePattern parses P, resting " \
+                       "between Terms, and CompilePattern builds the matcher the object adopts)")
 enum { RECTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_re_ctor_steps[] = { RECTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -105567,6 +105647,7 @@ static int js_re_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
         s->pat = JS_UNDEFINED; s->flg = JS_UNDEFINED; s->obj = JS_UNDEFINED;
         s->bc = JS_UNDEFINED; s->result = JS_UNDEFINED; s->ntgt = JS_UNDEFINED;
+        s->comp = NULL; s->re_flags = 0;
         s->patIsRe = 0;
         s->haveFlags = !JS_IsUndefined(step_arg(&s->hdr, 1));
         /* 22.2.4.1 OVER AN UNKNOWN PATTERN. A pattern this engine was never given cannot be compiled — there is
@@ -105680,22 +105761,32 @@ static int js_re_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         }
         s->hdr.stage = RECTOR_FLAGSTR;
     }
-    /* RegExpInitialize step 2: `? ToString(F)`. js_compile_regexp reads the flags as a C string, so the
-       coercion is hoisted out of it and run here, where it can suspend. */
-    if (!JS_IsUndefined(s->bc)) {
-        JS_FreeValue(ctx, cb_result);
-    } else {
-        if (!JS_IsUndefined(s->flg)) {
-            r = step_tostring_run(ctx, &s->hdr, s->flg, cb_result, &str, out_cb, out_argc);
-            cb_result = JS_UNDEFINED;
-            if (r) return r < 0 ? -1 : r;
-            JS_FreeValue(ctx, s->flg);
-            s->flg = str;
-        } else {
+    if (s->hdr.stage == RECTOR_FLAGSTR) {
+        /* RegExpInitialize steps 3-11: `? ToString(F)`, then the flags are read. A reused matcher needs neither. */
+        if (!JS_IsUndefined(s->bc)) {
             JS_FreeValue(ctx, cb_result);
+        } else {
+            if (!JS_IsUndefined(s->flg)) {
+                r = step_tostring_run(ctx, &s->hdr, s->flg, cb_result, &str, out_cb, out_argc);
+                cb_result = JS_UNDEFINED;
+                if (r) return r < 0 ? -1 : r;
+                JS_FreeValue(ctx, s->flg);
+                s->flg = str;
+            } else {
+                JS_FreeValue(ctx, cb_result);
+            }
+            if (js_regexp_parse_flags(ctx, s->flg, &s->re_flags) < 0)
+                return -1;
         }
-        s->bc = js_compile_regexp(ctx, s->pat, s->flg);
-        if (JS_IsException(s->bc)) { s->bc = JS_UNDEFINED; return -1; }
+        cb_result = JS_UNDEFINED;
+        s->hdr.stage = RECTOR_COMPILE;
+    }
+    DCHECK(s->hdr.stage == RECTOR_COMPILE, "the RegExp machine resumed in an unknown stage");
+    /* steps 12-22: the parse rests between Terms; a re-entry from that rest is delivered undefined */
+    JS_FreeValue(ctx, cb_result);
+    if (JS_IsUndefined(s->bc)) {
+        r = step_regexp_compile_run(ctx, &s->comp, s->pat, s->re_flags, &s->bc);
+        if (r) return r;
     }
     DCHECK(JS_VALUE_GET_TAG(s->bc) == JS_TAG_STRING && JS_VALUE_GET_TAG(s->pat) == JS_TAG_STRING,
            "the RegExp machine reached its initialisation without a compiled source");
@@ -105725,6 +105816,7 @@ static void js_re_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->obj);
     v->val(ctx, &s->bc);
     v->val(ctx, &s->ntgt);
+    v->cache(ctx, &s->comp, js_regexp_compile_cache_destroy);
 }
 
 static JSValue js_re_ctor_fini(JSContext *ctx, void *st, bool take_result)
@@ -105744,20 +105836,24 @@ static JSValue js_re_ctor_fini(JSContext *ctx, void *st, bool take_result)
 typedef struct JSRegExpCompile {
     JSStepHdr hdr;      /* MUST be first */
     JSValue result;     /* owned: the receiver */
-    JSValue pattern;    /* the coerced source, held across the FLAGS coercion (owned) */
+    JSValue pattern;    /* the coerced source, held across the FLAGS coercion and the compile (owned) */
+    void *comp;         /* the compile in flight (REParseState), a cache: shed on fork, begun again */
+    int re_flags;       /* F read into LRE flags, held across the compile's rests */
 } JSRegExpCompile;
 _Static_assert(offsetof(JSRegExpCompile, hdr) == 0, "JSStepHdr must be first in JSRegExpCompile");
 
 /* ONE list expanded twice, so a renumber carries its label with it (JSTrampStepDef.steps). */
 #define RCOMPILE_STAGES(X) \
-    X(RC_ENTRY,   "B.2.4.1 steps 1-4 (O is the this value; RequireInternalSlot(O, [[RegExpMatcher]]); the " \
+    X(RC_ENTRY,   "B.2.4.1 steps 1-3 (O is the this value; RequireInternalSlot(O, [[RegExpMatcher]]); the " \
                   "proposal-regexp-legacy-features guards; P and F from a RegExp pattern's own slots or from " \
                   "the arguments)") \
-    X(RC_PATTERN, "B.2.4.1 step 5 -> 22.2.3.3 RegExpInitialize step 1 (P is ToString(pattern))") \
-    X(RC_FLAGS,   "B.2.4.1 step 5 -> 22.2.3.3 RegExpInitialize step 2 (F is ToString(flags)) - and steps " \
-                  "3-9, the parse of P and the compiled matcher") \
-    X(RC_BUILD,   "B.2.4.1 step 5 -> 22.2.3.3 RegExpInitialize steps 10-12 (the receiver is re-validated, its " \
-                  "slots are rewritten and Set(obj, \"lastIndex\", +0, true) runs)")
+    X(RC_PATTERN, "B.2.4.1 step 4 -> 22.2.3.3 RegExpInitialize steps 1-2 (P is ToString(pattern))") \
+    X(RC_FLAGS,   "B.2.4.1 step 4 -> 22.2.3.3 RegExpInitialize steps 3-11 (F is ToString(flags), or the " \
+                  "empty String when it is undefined, and its code units are validated)") \
+    X(RC_COMPILE, "B.2.4.1 step 4 -> 22.2.3.3 RegExpInitialize steps 12-16 and 19-22 (ParsePattern parses P, " \
+                  "resting between Terms, and CompilePattern builds the matcher)") \
+    X(RC_BUILD,   "B.2.4.1 step 4 -> 22.2.3.3 RegExpInitialize steps 17-18 and 23 (the receiver is re-validated, " \
+                  "its slots are rewritten and Set(obj, \"lastIndex\", +0, true) runs)")
 enum { RCOMPILE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_regexp_compile_steps[] = { RCOMPILE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -105773,6 +105869,7 @@ static int js_regexp_compile_step(JSContext *ctx, void *st, JSValue cb_result, J
     if (m->hdr.stage == RC_ENTRY) {
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
         m->result = JS_UNDEFINED; m->pattern = JS_UNDEFINED;
+        m->comp = NULL; m->re_flags = 0;
         /* every validation the spec performs before either coercion */
         re = js_get_regexp(ctx, this_val, true);
         if (!re) return -1;
@@ -105820,10 +105917,18 @@ static int js_regexp_compile_step(JSContext *ctx, void *st, JSValue cb_result, J
             cb_result = JS_UNDEFINED;
             if (r) return r;
         }
-        /* the coercions are spent; compiling reads the two strings and invokes nothing. */
-        bc = js_compile_regexp(ctx, m->pattern, flags);
+        r = js_regexp_parse_flags(ctx, flags, &m->re_flags);
         JS_FreeValue(ctx, flags);
-        if (JS_IsException(bc)) return -1;
+        if (r < 0) return -1;
+        cb_result = JS_UNDEFINED;
+        m->hdr.stage = RC_COMPILE;
+    }
+    if (m->hdr.stage == RC_COMPILE) {
+        /* the coercions are spent; the compile reads the held string, invokes nothing, and rests between
+           Terms, a re-entry from which is delivered undefined */
+        JS_FreeValue(ctx, cb_result);
+        r = step_regexp_compile_run(ctx, &m->comp, m->pattern, m->re_flags, &bc);
+        if (r) return r;
         m->hdr.stage = RC_BUILD;
     }
 assign:
@@ -105851,6 +105956,7 @@ static void js_regexp_compile_visit(JSContext *ctx, void *st, JSStepVisit *v)
     JSRegExpCompile *m = st;
     v->val(ctx, &m->result);
     v->val(ctx, &m->pattern);
+    v->cache(ctx, &m->comp, js_regexp_compile_cache_destroy);
 }
 
 static JSValue js_regexp_compile_fini(JSContext *ctx, void *st, bool take_result)
@@ -106151,6 +106257,19 @@ int lre_want_yield(void *opaque)
     (void)opaque;
     FLOW_WORK_RETIRE();
     return g_flow_control.preempt != NULL && g_flow_control.preempt(JS_PREEMPT_BACKEDGE);
+}
+
+/* A compile's input is host work in the opcode unit, as the script tokenizer's is (js_parse_count_bytes), and
+   its rest point asks the policy the matcher's back-edge asks. Named residual. Not covered: the price per
+   pattern byte is the script tokenizer's rate, not one read off a census of the regexp parser's own CPU.
+   Next diff builds: a regexp-compile kind beside the script parse in the thread work census, priced from it.
+   Absence shows as: the census's per-unit CPU on regexp-heavy steps drifting from its per-opcode price. */
+int lre_compile_poll(void *opaque, size_t bytes, bool ask)
+{
+    (void)opaque;
+    g_regexp_compile_bytes += bytes;
+    g_flow_work_retired += (uint64_t)bytes * g_flow_control.parse_units_per_byte;
+    return ask && g_flow_control.preempt != NULL && g_flow_control.preempt(JS_PREEMPT_BACKEDGE);
 }
 
 void *lre_realloc(void *opaque, void *ptr, size_t size)
