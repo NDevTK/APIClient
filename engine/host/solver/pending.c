@@ -9,6 +9,7 @@
 #include "check.h"
 #include "core/loader/script_type.h"   /* PEND_SCRIPT_TYPE's "nothing yet": §4.12.1.1's null type */
 
+#include <stdlib.h>
 #include <string.h>
 
 /* THE SESSION'S CONTEXT. Every entry point here takes only the register, because the caller that matters has
@@ -32,6 +33,14 @@ static JSAtom g_len_atom;
 enum { PEND_RV_SYNC = 0, PEND_RV_ASYNC, PEND_RV_CLASSES };
 static JSAtom g_rv_owed_atom[PEND_RV_CLASSES];
 static int    g_atoms_ready;
+
+/* The registers owed at least one rendezvous of either class, so the host's join visits those and no other flow.
+   A register's `rvAt` slot is its index here, -1 when it is owed none; the entries are borrowed, since a register
+   leaves only through pending_free, which takes it out first. Kept by pend_rv_owed_set, the one writer of the
+   counts membership is a predicate over. */
+static JSAtom   g_rv_at_atom;
+static JSValue *g_rv_regs;
+static int      g_rv_n, g_rv_cap;
 
 /* WHAT THE FORK DOES WITH EACH FIELD, from the one list in pending.h. */
 static const int PEND_COPY_MODE[PEND_FIELD_COUNT] = {
@@ -61,6 +70,7 @@ static void pend_atoms(void)
     g_len_atom = JS_NewAtom(pend_ctx(), "length");
     g_rv_owed_atom[PEND_RV_SYNC] = JS_NewAtom(pend_ctx(), "syncOwed");
     g_rv_owed_atom[PEND_RV_ASYNC] = JS_NewAtom(pend_ctx(), "asyncOwed");
+    g_rv_at_atom = JS_NewAtom(pend_ctx(), "rvAt");
     g_atoms_ready = 1;
 }
 
@@ -78,11 +88,17 @@ void pending_free_ctx(JSContext *ctx)
        boundary is a handle into a freed heap that the next session's first reply would write through. Its own
        closing assert is that nothing is left in it — see pending_index_reset. */
     pending_index_reset(ctx);
+    DCHECK(g_rv_n == 0, "registers owed a rendezvous outlived the session's context — every register leaves the "
+                        "owed set at pending_free, so one was dropped without it");
+    free(g_rv_regs);
+    g_rv_regs = NULL;
+    g_rv_n = g_rv_cap = 0;
     if (g_atoms_ready) {
         for (i = 0; i < PEND_FIELD_COUNT; i++) JS_FreeAtom(ctx, g_field[i]);
         JS_FreeAtom(ctx, g_len_atom);
         JS_FreeAtom(ctx, g_rv_owed_atom[PEND_RV_SYNC]);
         JS_FreeAtom(ctx, g_rv_owed_atom[PEND_RV_ASYNC]);
+        JS_FreeAtom(ctx, g_rv_at_atom);
         g_atoms_ready = 0;
     }
     g_ctx = NULL;
@@ -171,13 +187,70 @@ static int pend_rv_owed(JSValueConst reg, int cls)
     return n;
 }
 
+/* A register's index in the owed set, -1 when it is not a member; present from the register's first instant
+   (pend_register_new), so its absence is a register built outside this file. */
+static int pend_rv_at(JSValueConst reg)
+{
+    JSValue v;
+    int at;
+
+    CHECK(JS_GetOwnSlot(pend_ctx(), &v, reg, g_rv_at_atom) > 0 && JS_VALUE_GET_TAG(v) == JS_TAG_INT,
+          "engine: a pending register carries no integer index into the owed set — every register is built in "
+          "solver/pending.c with that slot present, and the host's join would never be shown its rendezvous");
+    at = JS_VALUE_GET_INT(v);
+    return at;
+}
+
+static void pend_rv_at_set(JSValueConst reg, int at)
+{
+    int r;
+
+    cow_engine_write_begin();
+    r = JS_DefinePropertyValue(pend_ctx(), reg, g_rv_at_atom, JS_NewInt32(pend_ctx(), at), JS_PROP_C_W_E);
+    cow_engine_write_end();
+    DCHECK(r >= 0, "a pending register's index into the owed set could not be defined");
+    (void)r;
+}
+
+/* Takes `reg` out of the owed set, moving the last member into its place. */
+static void pend_rv_leave(JSValueConst reg, int at)
+{
+    DCHECK(at >= 0 && at < g_rv_n && JS_VALUE_GET_PTR(g_rv_regs[at]) == JS_VALUE_GET_PTR(reg),
+           "a register's index into the owed set names another member — the slot and the set are written "
+           "together here and nowhere else");
+    g_rv_regs[at] = g_rv_regs[--g_rv_n];
+    if (at < g_rv_n) pend_rv_at_set(g_rv_regs[at], at);
+    pend_rv_at_set(reg, -1);
+}
+
+/* A new register, its two counts zero and its owed-set index -1 from its first instant, so no reader meets a
+   missing slot. */
+static JSValue pend_register_new(void)
+{
+    JSValue reg;
+    int r = 0;
+
+    pend_atoms();
+    reg = JS_NewArray(pend_ctx());
+    CHECK(!JS_IsException(reg), "engine: OOM allocating a flow's pending register");
+    cow_engine_write_begin();
+    r |= JS_DefinePropertyValue(pend_ctx(), reg, g_rv_owed_atom[PEND_RV_SYNC], JS_NewInt32(pend_ctx(), 0),
+                                JS_PROP_C_W_E) < 0;
+    r |= JS_DefinePropertyValue(pend_ctx(), reg, g_rv_owed_atom[PEND_RV_ASYNC], JS_NewInt32(pend_ctx(), 0),
+                                JS_PROP_C_W_E) < 0;
+    r |= JS_DefinePropertyValue(pend_ctx(), reg, g_rv_at_atom, JS_NewInt32(pend_ctx(), -1), JS_PROP_C_W_E) < 0;
+    cow_engine_write_end();
+    CHECK(!r, "engine: OOM defining a new pending register's counts");
+    return reg;
+}
+
 /* …AND EVERY SITE THAT MOVES IT, IN ONE PLACE. Stated as an ABSOLUTE rather than a delta, so a caller cannot
    pass a new value computed from a read this file did not make. Bracketed like every other register write
    (pending.h: no delta may capture this register); the brackets nest, so a caller already inside one pays
-   nothing for this. */
+   nothing for this. The owed set follows the sum of the two counts here. */
 static void pend_rv_owed_set(JSValueConst reg, int cls, int n)
 {
-    int r;
+    int r, at, owed;
 
     DCHECK(cls == PEND_RV_SYNC || cls == PEND_RV_ASYNC, "a rendezvous count was written for no class");
     DCHECK(JS_IsObject(reg), "a synchronous-request count was written onto something that is not a register");
@@ -191,6 +264,27 @@ static void pend_rv_owed_set(JSValueConst reg, int cls, int n)
     DCHECK(r >= 0, "a pending register's synchronous-request count could not be defined — the register is the "
                    "plain Array this file allocated");
     (void)r;
+    at = pend_rv_at(reg);
+    owed = pend_rv_owed(reg, PEND_RV_SYNC) + pend_rv_owed(reg, PEND_RV_ASYNC) > 0;
+    if (owed && at < 0) {
+        if (g_rv_n == g_rv_cap) {
+            JSValue *g = realloc(g_rv_regs, (size_t)(g_rv_cap = g_rv_cap ? g_rv_cap * 2 : 64) * sizeof *g);
+            CHECK(g, "engine: OOM growing the set of registers owed a rendezvous");
+            g_rv_regs = g;
+        }
+        g_rv_regs[g_rv_n] = (JSValue)reg;
+        pend_rv_at_set(reg, g_rv_n++);
+    } else if (!owed && at >= 0) {
+        pend_rv_leave(reg, at);
+    }
+}
+
+int pending_owed_register_count(void) { return g_rv_n; }
+
+JSValueConst pending_owed_register(int i)
+{
+    DCHECK(i >= 0 && i < g_rv_n, "the owed set was read past its members");
+    return g_rv_regs[i];
 }
 
 int pending_count(JSValueConst reg) { return pend_len(reg); }
@@ -333,10 +427,6 @@ static int pend_slot_of(JSValueConst reg, JSValueConst rec)
 
 int pending_blocked(JSValueConst reg) { return pend_rv_owed(reg, PEND_RV_SYNC) > 0; }
 
-int pending_rendezvous_owed(JSValueConst reg)
-{
-    return pend_rv_owed(reg, PEND_RV_SYNC) + pend_rv_owed(reg, PEND_RV_ASYNC) > 0;
-}
 
 /* CAN flow_deliver_one_reply TAKE THIS ENTRY — the one condition the two questions below are made of, written
    once here for the reason `pend_owed` above is: what differs between the callers is whether they want to know
@@ -700,15 +790,9 @@ JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, i
     cow_engine_write_begin();
     if (!JS_IsObject(*reg)) {
         JS_FreeValue(pend_ctx(), *reg);
-        *reg = JS_NewArray(pend_ctx());
-        CHECK(!JS_IsException(*reg), "engine: OOM allocating a flow's pending register");
-        /* AND ITS OWN COUNT OF WHAT BLOCKS ITS FLOW, PRESENT FROM THE ARRAY'S FIRST INSTANT. A register that
-           acquired this slot lazily would answer the per-opcode hook from a MISSING property until something
-           happened to write one, which is a hole a reader fills in rather than a producer stating "none yet"
-           (§Architecture). Zero is the positive statement, and `pend_rv_owed`'s CHECK is what makes the
-           absence a crash instead of an answer. */
-        pend_rv_owed_set(*reg, PEND_RV_SYNC, 0);
-        pend_rv_owed_set(*reg, PEND_RV_ASYNC, 0);
+        /* With its own counts of what blocks its flow present from the array's first instant: a register that
+           acquired them lazily would answer the per-opcode hook from a missing property. */
+        *reg = pend_register_new();
     }
     /* EVERY FIELD, ALWAYS, AND FROM THE ONE LIST — the fork counts them, so a record short of one is a record
        the fork cannot check. This was a hand-written sequence of `pend_put` calls in this file, which is a
@@ -1183,7 +1267,13 @@ void pending_free(JSContext *ctx, JSValue *reg)
            "a register's count of the synchronous requests it is owed disagrees with its own entries at the "
            "release — the count is what the per-opcode preempt hook decides blockedness on, so a flow has been "
            "spinning on an answer that had arrived, or skipped at every pick for an answer it already had");
+    DCHECK(!JS_IsObject(*reg) || (pend_rv_owed(*reg, PEND_RV_SYNC) + pend_rv_owed(*reg, PEND_RV_ASYNC) > 0) ==
+                                     (pend_rv_at(*reg) >= 0),
+           "a register's membership of the owed set disagrees with its counts at the release");
 #endif
+    /* Out of the owed set before the array goes, since the set borrows it: a register sold to the cold tier is
+       released while still owed. */
+    if (JS_IsObject(*reg) && pend_rv_at(*reg) >= 0) pend_rv_leave(*reg, pend_rv_at(*reg));
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(*reg, i);
         pending_index_unref(e);
@@ -1303,9 +1393,10 @@ JSValue pending_fork(JSValueConst reg)
            "a register's count of the synchronous requests it is owed disagrees with its own entries at a fork "
            "— the sibling inherits that count, so a wrong one is about to be copied into a second flow and "
            "both will be blocked or runnable on a number neither of their registers supports");
+    DCHECK((pend_rv_owed(reg, PEND_RV_SYNC) + pend_rv_owed(reg, PEND_RV_ASYNC) > 0) == (pend_rv_at(reg) >= 0),
+           "a register's membership of the owed set disagrees with its counts at a fork");
 #endif
-    out = JS_NewArray(pend_ctx());
-    CHECK(!JS_IsException(out), "engine: OOM inheriting the pending replies at a fork");
+    out = pend_register_new();
     cow_engine_write_begin();
     /* THE COUNT IS INHERITED WHOLE, and O(1) rather than recounted, because the sibling's register names the
        SAME records in the same states at this instant — the arm has not run. What follows in

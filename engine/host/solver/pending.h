@@ -538,10 +538,13 @@ int64_t pending_get_int(JSValueConst e, int field);
  * one predicate; the number is not exported until something asks for it. */
 int  pending_blocked(JSValueConst reg);
 
-/* DOES THIS REGISTER HOLD A RENDEZVOUS THE HOST STILL OWES, blocking or async — a second predicate over the
-   blocking count and its async sibling, counted for the reason above (an unanswered rendezvous of either class
-   is unshared at a fork, so one register names it). engine_host_requests skips a register for which it is 0. */
-int  pending_rendezvous_owed(JSValueConst reg);
+/* The registers holding a rendezvous the host still owes, blocking or async: a set over the blocking count and its
+   async sibling, counted for the reason above (an unanswered rendezvous of either class is unshared at a fork, so
+   one register names it), kept where those counts move. engine_host_requests visits these and no other register.
+   Members are borrowed and in no particular order; the set does not change while a caller reads it without
+   writing a register. */
+int          pending_owed_register_count(void);
+JSValueConst pending_owed_register(int i);
 
 /* IS ANY ENTRY DELIVERABLE — and DELIVERABLE ASKS THE KIND, exactly as pending_blocked one line above does.
    The two predicates read the same register and only one of them was asking what an entry IS, and that

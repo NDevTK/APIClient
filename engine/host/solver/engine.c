@@ -1807,24 +1807,18 @@ const char *engine_host_requests(void) {
     static char *join;
     static size_t cap;
     size_t n_out = 0;
-    Flow *f;
 
     /* One pass with a growing buffer: converting a JS string's text allocates, so a measure-then-write pair
        would convert every record twice. */
     if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the outstanding host requests"); }
     join[0] = 0;
-    /* Named residual. Not covered: the walk visits every live flow to read its register's count of unanswered
-       rendezvous, so a call costs O(members) though it reads entries only where that count is non-zero. Next diff
-       builds: a frontier-level list of the registers whose count is non-zero, linked where pending.c moves it.
-       Absence shows as: host-request asks costing time in proportion to `members` on a frontier none of whose
-       members is blocked. */
-    for (int k = 0; (f = flow_at(k)) != NULL; k++) {
-        /* A register owing no rendezvous lists nothing below: what is listed is an unanswered rendezvous of
-           either class, which is what pending_rendezvous_owed reads. An async one leaves its flow runnable, so
-           the blocking count alone would never show the host an asynchronous send. */
-        if (!pending_rendezvous_owed(f->pending)) continue;
-        for (int i = 0, n = pending_count(f->pending); i < n; i++) {
-            JSValue p = pending_entry(f->pending, i);
+    /* Only the registers owed a rendezvous of either class (pending_owed_register): a register owing none lists
+       nothing below, and an async one leaves its flow runnable, so the blocking count alone would never show the
+       host an asynchronous send. Nothing below writes a register, so the set holds still while it is read. */
+    for (int k = 0; k < pending_owed_register_count(); k++) {
+        JSValueConst reg = pending_owed_register(k);
+        for (int i = 0, n = pending_count(reg); i < n; i++) {
+            JSValue p = pending_entry(reg, i);
             JSValue o;
             const char *s, *asker;
             size_t ol = 0, al;
