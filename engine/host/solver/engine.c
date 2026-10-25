@@ -5059,16 +5059,17 @@ static int engine_world_reaches_fn(WorldId w, JSValueConst fn) {
 /* Generator-state fork stash: clone_deep_flow calls gen_fork for each generator body frame it clones (during
    JS_FlowClone), before engine_fork_finalize has the sibling's delta. Appended here; the finalize drains them onto
    the new sibling's delta and resets. Filled and fully drained within one fork. */
-typedef struct { JSValueConst genobj; void *g0, *g1; } GenForkRec;
+typedef struct { JSValueConst genobj; JSForkRecordKind kind; void *g0, *g1; } GenForkRec;
 static GenForkRec *g_genforks = NULL; static int g_genfork_n = 0, g_genfork_cap = 0;
-void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd) {
+void engine_gen_fork(JSContext *ctx, JSValueConst genobj, JSForkRecordKind kind, void *base_gd, void *cur_gd) {
     (void)ctx;
     if (g_genfork_n >= g_genfork_cap) {
         g_genfork_cap = g_genfork_cap ? g_genfork_cap * 2 : 8;
         g_genforks = realloc(g_genforks, (size_t)g_genfork_cap * sizeof(GenForkRec));
         CHECK(g_genforks, "engine: OOM generator-fork stash");
     }
-    g_genforks[g_genfork_n].genobj = genobj; g_genforks[g_genfork_n].g0 = base_gd; g_genforks[g_genfork_n].g1 = cur_gd;
+    g_genforks[g_genfork_n].genobj = genobj; g_genforks[g_genfork_n].kind = kind;
+    g_genforks[g_genfork_n].g0 = base_gd; g_genforks[g_genfork_n].g1 = cur_gd;
     g_genfork_n++;
 }
 
@@ -5164,7 +5165,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* Generator-state swaps built by clone_deep_flow for this fork, recorded on the sibling's delta so the shared
        generator object resolves to the sibling's own cloned execution state while it runs. */
     for (int i = 0; i < g_genfork_n; i++)
-        cow_delta_add_gendata(ctx, (CowDelta *)sib->delta, g_genforks[i].genobj, g_genforks[i].g0, g_genforks[i].g1);
+        cow_delta_add_gendata(ctx, (CowDelta *)sib->delta, g_genforks[i].genobj, g_genforks[i].kind,
+                              g_genforks[i].g0, g_genforks[i].g1);
     g_genfork_n = 0;
     /* The DOM analog of the heap fork: the parent's live DOM head is frozen into a shared refcounted base
        segment (refcount 2: the parent gets a fresh empty head over it), so the sibling inherits the pre-fork

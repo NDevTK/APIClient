@@ -1687,8 +1687,11 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
 
 /* Record a per-flow generator-state swap (see cow.h). Dedup-REPLACES an existing entry for the same generator
    (a re-fork inside this flow): release the previous clone, adopt the new one, keep the ORIGINAL base pointer. */
-void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, void *base_gd, void *cur_gd) {
-    cow_delta_add_coro(ctx, d, 1, genobj, base_gd, cur_gd);
+void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, JSForkRecordKind kind,
+                           void *base_gd, void *cur_gd) {
+    DCHECK(kind == JS_FORK_RECORD_GENERATOR || kind == JS_FORK_RECORD_ASYNC_GENERATOR,
+           "a fork recorded a coroutine record of no kind the swap knows");
+    cow_delta_add_coro(ctx, d, kind == JS_FORK_RECORD_ASYNC_GENERATOR ? 3 : 1, genobj, base_gd, cur_gd);
 }
 
 /* The generator and async generator producer: one swap entry per object per delta. */

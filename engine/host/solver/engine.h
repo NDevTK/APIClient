@@ -911,10 +911,10 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
  * builds the pair. Returns 1 if a record was marked, 0 if no flow is parked on that id. */
 int engine_host_decline(JSContext *ctx, uint32_t req, const char *reason);
 
-/* Install as JSTimeTravelHooks.gen_fork: a concolic branch inside a synchronously-driven generator body forked
-   the flow, and clone_deep_flow built a per-flow gen_data clone. Stash the swap; engine_fork_finalize drains it
-   onto the new sibling's COW delta (so the shared generator object resolves per-flow). */
-void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
+/* Install as JSTimeTravelHooks.gen_fork: a concolic branch inside a generator or async generator body forked
+   the flow, and clone_deep_flow built a per-flow clone of its record (`kind` says which). Stash the swap;
+   engine_fork_finalize drains it onto the new sibling's COW delta (so the shared object resolves per-flow). */
+void engine_gen_fork(JSContext *ctx, JSValueConst genobj, JSForkRecordKind kind, void *base_gd, void *cur_gd);
 /* Install as JSTimeTravelHooks.timeline: the running flow's world (solver/world.h) packed, or 0 when no flow runs.
    A fork mints a fresh world for each arm, so two readings are equal only inside one timeline since its last fork. */
 uint64_t engine_flow_timeline(void);

@@ -2145,7 +2145,14 @@ JS_EXTERN uint64_t JS_FlowParseBytesLife(void);
    because there is no CURRENT flow to capture into yet (the host routes captures to the running flow's delta). */
 /* The generator-fork hook's type, named because the HOST's COW layer takes it as a parameter: the primitive
    that installs the table does not own this one entry — whoever assembles the sibling flow does. */
-typedef void (*JSTimeTravelGenFork)(JSContext *ctx, JSValueConst genobj, void *base_gd, void *cur_gd);
+/* Which coroutine record a fork cloned: a generator's (JS_GenDataRef/Unref) or an async generator's
+   (JS_AsyncGenDataRef/Unref). */
+typedef enum JSForkRecordKind {
+    JS_FORK_RECORD_GENERATOR,
+    JS_FORK_RECORD_ASYNC_GENERATOR,
+} JSForkRecordKind;
+typedef void (*JSTimeTravelGenFork)(JSContext *ctx, JSValueConst genobj, JSForkRecordKind kind, void *base_gd,
+                                    void *cur_gd);
 
 typedef struct JSTimeTravelHooks {
     void (*prop_write)(JSContext *ctx, JSValueConst obj, JSAtom atom);  /* before writing a shared obj[atom] */
@@ -2163,7 +2170,8 @@ typedef struct JSTimeTravelHooks {
        fresh per-flow gen_data CLONE (cur_gd) of the shared generator object's execution state (base_gd is its
        current, object-owned state). The host records a per-flow gendata swap on the forking sibling's delta so
        genobj->[[GeneratorState]] resolves to cur_gd while the sibling runs and to base_gd otherwise; the sibling
-       delta OWNS cur_gd (JS_GenDataRef/Unref). Only fires for a direct .next() drive (genobj is a generator). */
+       delta OWNS cur_gd (JS_GenDataRef/Unref). An async generator body's record is the same swap, `kind` naming
+       it (JS_AsyncGenDataRef/Unref). */
     JSTimeTravelGenFork gen_fork;
     /* Before a NEW record (key not already present) is added to a shared Set/Map (Set.add / Map.set of a fresh
        key). The host records the KNOWN-NEW add on the current flow's delta so a snapshot-forked sibling stays

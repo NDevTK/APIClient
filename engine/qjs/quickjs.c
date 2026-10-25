@@ -53509,17 +53509,32 @@ static JSGeneratorData *js_generator_data_clone(JSContext *ctx, JSGeneratorData 
     return g1;
 }
 
-/* A TrampFrame's LIVE frame: an async/generator body keeps its state in func_state.frame (NOT the embedded sf) —
-   the same frame-source rule the deep-resume path uses. */
+static JSAsyncGeneratorData *js_async_generator_data_clone(JSContext *ctx, JSAsyncGeneratorData *s, ptrdiff_t live,
+                                                          int cow_ref);
+static void js_async_generator_free(JSRuntime *rt, JSAsyncGeneratorData *s);
+static bool js_async_generator_holds_frame(const JSAsyncGeneratorData *s);
+
+/* The record of an async generator body on the chain — binding its parameters (CONT_AGEN_CREATE) or running a
+   request (CONT_AGEN_DRIVE) — or NULL. Keyed on the kind, which every push writes with the record. */
+static JSAsyncGeneratorData *tramp_agen_data(const TrampFrame *t) {
+    return (t->cont_kind == CONT_AGEN_CREATE || t->cont_kind == CONT_AGEN_DRIVE) ? t->cont_state : NULL;
+}
+/* A TrampFrame's LIVE frame: a coroutine body (async, generator, async generator) keeps its state in its
+   record's func_state.frame, not the embedded sf — the same frame-source rule the deep-resume path uses. */
 static JSStackFrame *tramp_live_sf(TrampFrame *t) {
-    if (t->async_data) return &t->async_data->func_state.frame;
-    if (t->gen_data)   return &t->gen_data->func_state.frame;
+    if (t->async_data)      return &t->async_data->func_state.frame;
+    if (t->gen_data)        return &t->gen_data->func_state.frame;
+    if (tramp_agen_data(t)) return &tramp_agen_data(t)->func_state.frame;
     return &t->sf;
 }
-/* The base of a TrampFrame's local buffer (args..vars..stack), for translating a callee's caller_* pointers. An
-   async/generator frame's buffer is its func_state.frame.arg_buf; a normal frame's is local_buf. */
+/* Whether a TrampFrame's buffer is its coroutine record's rather than its own local_buf. */
+static bool tramp_frame_is_coro(const TrampFrame *t) {
+    return t->async_data || t->gen_data || tramp_agen_data(t);
+}
+/* The base of a TrampFrame's local buffer (args..vars..stack), for translating a callee's caller_* pointers. A
+   coroutine frame's buffer is its func_state.frame.arg_buf; a normal frame's is local_buf. */
 static JSValue *tramp_buf_base(TrampFrame *t) {
-    return (t->async_data || t->gen_data) ? tramp_live_sf(t)->arg_buf : t->local_buf;
+    return tramp_frame_is_coro(t) ? tramp_live_sf(t)->arg_buf : t->local_buf;
 }
 /* The SIZE of that buffer, in JSValue slots — the twin of tramp_buf_base, and the bound every pointer
    translated out of it must respect. A plain frame RECORDED it at birth; an async/generator body's buffer is
@@ -53527,7 +53542,7 @@ static JSValue *tramp_buf_base(TrampFrame *t) {
 static int tramp_buf_slots(TrampFrame *t) {
     JSStackFrame *lsf;
     JSFunctionBytecode *lb;
-    if (!(t->async_data || t->gen_data)) return t->local_slots;
+    if (!tramp_frame_is_coro(t)) return t->local_slots;
     lsf = tramp_live_sf(t);
     lb = JS_VALUE_GET_OBJ(lsf->cur_func)->u.func.function_bytecode;
     return TRAMP_FRAME_SLOTS(lsf->arg_count, lb);
@@ -53835,13 +53850,17 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
         *out_kind = ((JSStepHdr *)st)->outer_kind;
         return ((JSStepHdr *)st)->outer;
     CONT_RECORD_KINDS(CONT_REC_CASE_OUTER_GET)
+    case CONT_AGEN_CREATE: case CONT_AGEN_DRIVE:
+        /* An async generator's record waits on nothing: whoever waits on its body is the frame's own requester
+           (seq_req, agen_cont), which clone_deep_flow's arm for the frame clones. */
+        return NULL;
     case CONT_NONE:
         /* answered above */
         break;
     /* No arm yet: a kind that has never been asked for its requester by a fork. */
-    case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
+    case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
     case CONT_IMPORT: case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
-    case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
+    case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
     case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
     case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
     case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
@@ -54184,19 +54203,6 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
            REFERENCE too or both frames release the same one. */
         if (ct->owns_func)
             ct->sf.cur_func = js_dup(ct->sf.cur_func);
-        /* BOTH async-generator kinds, because BOTH keep their live frame in the JSAsyncGeneratorData rather than
-           in async_data/gen_data — so tramp_live_sf() answers &t->sf for them, and &t->sf is the block
-           tramp_frame_new did not zero. The DRIVE was named here and the CREATE (an `ag()` whose PARAMETERS are
-           still binding on the chain) was not, so a fork inside a default-parameter expression fell through to
-           the bytecode arm below and read a function_bytecode out of uninitialised malloc. free_tramp_chain
-           already refuses the pair for the same reason and points at this DCHECK for the other half of it. */
-        DCHECK(otf->cont_kind != CONT_AGEN_DRIVE && otf->cont_kind != CONT_AGEN_CREATE,
-               "clone_deep_flow: a concolic fork inside an ASYNC GENERATOR frame on the tramp (a running body, or "
-               "params still binding) — the sibling needs its OWN JSAsyncGeneratorData (cloned body frame, fresh "
-               "queue and settlement capability), like the async_data and gen_data arms below; the struct copy "
-               "would share the parent's machine and settle both arms' requests off one queue. That arm is also "
-               "what makes tramp_live_sf answer for these frames, which the caller relink below depends on");
-
         if (otf->cont_kind == CONT_STEP_YIELD) {
             /* AND AN ANCHOR IS ONLY EVER THE TOP. It contributes no JSStackFrame, so a frame BELOW it would take
                the anchor's zeroed sf as its caller — through caller_clone here and through prev_frame with it.
@@ -54267,6 +54273,46 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             if (!nagl) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
             ct->cont_state = nagl;
             ct->local_buf = NULL; ct->b = NULL; ct->local_slots = 0;
+        } else if (tramp_agen_data(otf)) {
+            /* ASYNC GENERATOR body on the chain, binding its parameters (CREATE) or running a request (DRIVE): the
+               sibling gets its OWN record — frame cloned to this frame's live end, queue copied — so the two arms
+               advance and settle independently. A DRIVE's record is its object's, so the clone (cow_ref 1) is
+               recorded on the sibling's delta through the fork hook and installed at every switch-in; a CREATE's
+               is its frame's, as a generator create's is, and becomes its object's original record at the settle. */
+            JSAsyncGeneratorData *ad0 = tramp_agen_data(otf), *ad1;
+            JSStackFrame *agof = &ad0->func_state.frame;
+            bool ag_creating = (otf->cont_kind == CONT_AGEN_CREATE);
+
+            DCHECK(!ag_creating || otf->seq_req_kind == CONT_NONE,
+                   "clone_deep_flow: an async generator create requested by a machine was forked — the struct copy "
+                   "shares that requester between the two creates; give `seq_req` its clone and relink here");
+            DCHECK(ag_creating || (JS_VALUE_GET_TAG(otf->agen_hold) == JS_TAG_OBJECT &&
+                                   JS_VALUE_GET_OBJ(otf->agen_hold)->u.async_generator_data == ad0),
+                   "clone_deep_flow: an async generator drive runs a record its held object does not name — the "
+                   "sibling's swap would install the clone over another record");
+            DCHECK(ag_creating || g_time_travel.gen_fork != NULL,
+                   "clone_deep_flow: an async generator drive was forked with no fork hook to own the clone");
+            ad1 = js_async_generator_data_clone(ctx, ad0, live_end - agof->arg_buf, ag_creating ? 0 : 1);
+            if (!ad1) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
+            ad1->func_state.frame.cur_sp = (i == 0) ? ad1->func_state.frame.arg_buf + (osf->cur_sp - agof->arg_buf)
+                                                    : NULL;
+            ct->cont_state = ad1;
+            ct->async_promise = js_dup(otf->async_promise);   /* a create's function, a drive's settlement promise */
+            ct->local_buf = NULL; ct->b = NULL; ct->local_slots = 0;   /* the record owns the body's buffers */
+            if (!ag_creating) {
+                ct->agen_hold = js_dup(otf->agen_hold);
+                /* the requester the settlement promise is delivered to: the sibling's own copy, and the chain
+                   of records it waits on with it */
+                if (otf->agen_ck != CONT_NONE && otf->agen_cont) {
+                    void *ac = tramp_cont_clone_one(ctx, otf->agen_cont, otf->agen_ck);
+                    if (!ac) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
+                    ct->agen_cont = ac;
+                    if (tramp_cont_relink_outer(ctx, ac, otf->agen_ck) < 0) {
+                        js_free(ctx, oa); js_free(ctx, ca); return NULL;
+                    }
+                }
+                g_time_travel.gen_fork(ctx, otf->agen_hold, JS_FORK_RECORD_ASYNC_GENERATOR, ad0, ad1);
+            }
         } else if (otf->async_data) {
             /* ASYNC body on the chain: clone a FRESH async_data with its OWN return-promise capability. The fork
                also cloned the caller's mid-OP_call (the async call site), so each arm re-derives and awaits ITS
@@ -54403,7 +54449,8 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                 if (!ns) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
                 ct->cont_state = ns;
             }
-            if (!gen_creating && g_time_travel.gen_fork) g_time_travel.gen_fork(ctx, genobj, g0, g1);
+            if (!gen_creating && g_time_travel.gen_fork)
+                g_time_travel.gen_fork(ctx, genobj, JS_FORK_RECORD_GENERATOR, g0, g1);
         } else {
             JSFunctionBytecode *wb = JS_VALUE_GET_OBJ(otf->sf.cur_func)->u.func.function_bytecode;
             /* The clone is the SAME frame, so it gets the SAME buffer — the size the interpreter RECORDED when
@@ -55023,11 +55070,32 @@ static void free_tramp_chain(JSContext *ctx, JSAsyncFunctionState *s)
         TrampFrame *up = t->up;
         JSValue *caller_end = t->caller_sp;   /* …which is the CALLER's live end, read before this frame goes */
         JSStackFrame *lsf = tramp_live_sf(t);
+        JSAsyncGeneratorData *agd = tramp_agen_data(t);
 
-        DCHECK(t->cont_kind != CONT_AGEN_CREATE && t->cont_kind != CONT_AGEN_DRIVE,
-               "free_tramp_chain: an ASYNC GENERATOR body on a parked chain — its frame, its request queue and "
-               "its settlement capability live in the JSAsyncGeneratorData, so it needs its own arm here exactly "
-               "as it needs one in clone_deep_flow, which refuses the same frame for the same reason");
+        if (agd) {
+            /* An async generator body. A CREATE's record is its frame's and goes with it; a DRIVE's is its
+               object's or a delta's, so only the frame inside it is this flow's: the record is completed first
+               (js_async_generator_complete's order, since the teardown can re-enter) and stays with its owner. */
+            if (lsf->cur_sp == NULL)
+                lsf->cur_sp = live_end;
+            if (t->cont_kind == CONT_AGEN_CREATE) {
+                js_async_generator_free(rt, agd);
+                if (t->seq_req_kind != CONT_NONE) {
+                    js_create_requester_abandon(ctx, t->seq_req, t->seq_req_kind);
+                    t->seq_req = NULL; t->seq_req_kind = CONT_NONE;
+                }
+            } else {
+                if (js_async_generator_holds_frame(agd)) {
+                    agd->state = JS_ASYNC_GENERATOR_STATE_COMPLETED;
+                    async_func_free(rt, &agd->func_state);
+                }
+                JS_FreeValue(ctx, t->agen_hold);
+                if (t->agen_ck != CONT_NONE && t->agen_cont)
+                    tramp_cont_free(ctx, t->agen_cont, t->agen_ck);
+                t->agen_cont = NULL; t->agen_ck = CONT_NONE;
+            }
+            t->cont_state = NULL; t->cont_kind = CONT_NONE;
+        }
 
         /* the C continuation FIRST: a machine can own the buffer a frame's arg_buf is a borrowed view of, so
            releasing it after the frame would read a freed view to decide what to free. */
@@ -56112,11 +56180,19 @@ static void js_async_generator_finalizer(JSRuntime *rt, JSValueConst obj)
     }
 }
 
-/* Clone an async generator record: its state, its suspended frame's [0, live) values through clone_susp_frame
-   when the state holds a frame (js_async_generator_free's own test), and every queued request with its owned
-   values — the layout js_async_generator_free releases. The clone is owned by one COW delta (cow_ref 1). NULL
-   on OOM, with nothing left allocated. */
-static JSAsyncGeneratorData *js_async_generator_data_clone(JSContext *ctx, JSAsyncGeneratorData *s)
+/* Whether an async generator record holds a frame: js_async_generator_free's own test. */
+static bool js_async_generator_holds_frame(const JSAsyncGeneratorData *s)
+{
+    return s->state != JS_ASYNC_GENERATOR_STATE_COMPLETED && s->state != JS_ASYNC_GENERATOR_STATE_AWAITING_RETURN;
+}
+
+/* Clone an async generator record: its state, its frame's [0, live) values through clone_susp_frame when the
+   state holds a frame, and every queued request with its owned values — the layout js_async_generator_free
+   releases. `cow_ref` is the clone's owner: 1 for one COW delta, 0 for the chain frame of a body still binding
+   its parameters, which becomes its object's original record. The clone's cur_sp is arg_buf + live. NULL on
+   OOM, with nothing left allocated. */
+static JSAsyncGeneratorData *js_async_generator_data_clone(JSContext *ctx, JSAsyncGeneratorData *s, ptrdiff_t live,
+                                                          int cow_ref)
 {
     JSAsyncGeneratorData *c = js_mallocz(ctx, sizeof(*c));
     struct list_head *el;
@@ -56124,20 +56200,12 @@ static JSAsyncGeneratorData *js_async_generator_data_clone(JSContext *ctx, JSAsy
     if (!c) return NULL;
     c->generator = s->generator;
     c->state = JS_ASYNC_GENERATOR_STATE_COMPLETED;   /* no frame to free until the clone below owns one */
-    c->cow_ref = 1;
+    c->cow_ref = cow_ref;
     c->mint_gen = g_flow_gen;
     init_list_head(&c->queue);
-    if (s->state != JS_ASYNC_GENERATOR_STATE_COMPLETED &&
-        s->state != JS_ASYNC_GENERATOR_STATE_AWAITING_RETURN) {
-        JSStackFrame *sf = &s->func_state.frame;
-        ptrdiff_t live;
-
-        DCHECK(sf->cur_sp != NULL && s->func_state.tramp_top == NULL,
-               "an async generator record cloned while its body runs — the body runs on the chain of the flow "
-               "that isolated the record, and a fork inside it is refused by clone_deep_flow");
-        live = sf->cur_sp - sf->arg_buf;
-        /* the clone's frame is owned by its delta, never by the shared object, so it names no owner (see
-           js_generator_data_clone) */
+    if (js_async_generator_holds_frame(s)) {
+        /* the clone's frame is owned by its delta or its chain frame, never by the shared object, so it names
+           no owner (see js_generator_data_clone) */
         DCHECK(c->func_state.frame.cur_gc_obj == NULL, "a fresh async generator record clone names an owner");
         if (clone_susp_frame(ctx, &c->func_state, &s->func_state, live) < 0) {
             js_free(ctx, c);
@@ -56176,12 +56244,19 @@ static JSAsyncGeneratorData *js_async_generator_resume_isolate(JSContext *ctx, J
                                                               JSAsyncGeneratorData *s)
 {
     JSAsyncGeneratorData *c;
+    ptrdiff_t live = 0;
 
     DCHECK(JS_VALUE_GET_OBJ(agobj)->u.async_generator_data == s,
            "an async generator write was handed a record its object does not name");
     if (!g_time_travel.agen_isolate || s->mint_gen > g_flow_fork_gen)
         return s;
-    c = js_async_generator_data_clone(ctx, s);
+    if (js_async_generator_holds_frame(s)) {
+        DCHECK(s->func_state.frame.cur_sp != NULL && s->func_state.tramp_top == NULL,
+               "an async generator record isolated while its body runs — the body runs on the chain of the flow "
+               "that isolated the record, so its writes are already that flow's");
+        live = s->func_state.frame.cur_sp - s->func_state.frame.arg_buf;
+    }
+    c = js_async_generator_data_clone(ctx, s, live, 1);
     if (unlikely(!c)) {
         JS_ThrowOutOfMemory(ctx);
         return NULL;
@@ -56653,11 +56728,8 @@ static const JSTrampStepDef js_agen_complete_step_def = {
 /* DELETED: js_async_gen_park_resume / _clone / _free, the async generator's own pump park. They existed only
    because js_async_generator_resume_next made the body its OWN flow base and had to park it there; the body's
    resume is now a frame on the running flow's chain (do_agen_resume_tramp), so a back-edge inside it is an
-   ordinary deep park of that whole flow and the flow's own driver owns it. The FORK the clone callback refused
-   is still refused, and by the mechanism the fork now actually reaches: clone_deep_flow's CONT_AGEN_DRIVE
-   DCHECK, which names the same missing capability (a sibling needs its OWN JSAsyncGeneratorData — cloned body
-   frame, fresh queue, fresh settlement capability) at the site a fork inside an async generator body arrives
-   at. free_tramp_chain refuses the same frame for the same reason. */
+   ordinary deep park of that whole flow and the flow's own driver owns it, and a fork inside it is
+   clone_deep_flow's async generator arm. */
 
 /* THE ASYNC-GENERATOR STATE MACHINE, split at the ONE seam that has two ENTRANTS but only one entry: the BODY
    RUN. `pre` decides what the head of the queue needs and delivers the resume input, settling every case that
@@ -115197,9 +115269,8 @@ void JS_FlowNetSiteAhead(const JSValue *flow, JSNetSiteAhead *out)
             net_ahead_frame(net_frame_body(&s->frame), s->frame.cur_pc, out);
         return;
     }
-    /* An anchor has no body (`b` NULL); an async generator's live frame is in its generator data, which
-       tramp_live_sf does not answer for. Below the deepest, each frame is read from its callee's caller
-       record, the pair a deep resume restores. */
+    /* An anchor has no body (`b` NULL), and neither does a coroutine frame, whose body is its record's. Below
+       the deepest, each frame is read from its callee's caller record, the pair a deep resume restores. */
     if (t->b && t->cont_kind != CONT_AGEN_DRIVE && t->cont_kind != CONT_AGEN_CREATE)
         net_ahead_frame(t->b, tramp_live_sf(t)->cur_pc, out);
     for (; t; t = t->up) {

@@ -1157,6 +1157,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparsetext.h"
 #include "fixture/boundpark.h"
 #include "fixture/recordless.h"
+#include "fixture/agenfork.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
@@ -1635,6 +1636,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "boundpark", HTML_BOUNDPARK },
     { "recordless", HTML_RECORDLESS },
+    { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
@@ -15196,6 +15198,26 @@ TF_UNIT void probes_fileparse_text(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `agenfork` document (fixture/agenfork.h). */
+TF_UNIT void probes_agenfork(const char *js, Probe *tab, int *n) {
+    /* Both arms of a branch inside an async generator body on the chain and inside its parameter binding, and
+       the body's own continuation past its first yield in a forked world. */
+    static const char *const arms[] = { "/api/af/body-a", "/api/af/body-b", "/api/af/param-a", "/api/af/param-b",
+                                        "/api/af/after-yield" };
+    const char *af_why = NULL; int af_tt = 1;
+    for (size_t i = 0; i < COUNTOF(arms); i++) {
+        char q[64];
+        snprintf(q, sizeof q, "\"%s\"", arms[i]);
+        fold_row(&af_tt, &af_why, !!strstr(js, q),
+                 "NOT REACHED: an arm of a branch inside an async generator frame has no record, so that fork's "
+                 "async generator record was not copied");
+    }
+    const Probe rows[] = {
+        { "agen-frame-fork", af_tt, "/api/af/body-a", SESS_EXPLORE, af_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `recordless` document (fixture/recordless.h). */
 TF_UNIT void probes_recordless(const char *js, Probe *tab, int *n) {
     /* Both arms of a branch on an unknown inside four recordless callees: each pair is reached only if the
@@ -19085,6 +19107,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_text(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_recordless(js, probes, &np);
+    probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_deepnest(js, probes, &np);
