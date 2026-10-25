@@ -768,11 +768,11 @@ const SPECS = [
   /* TRUSTED TYPES, WHOSE CITATIONS DECIDE A SECURITY ANSWER AND WERE JUDGED BY NOTHING. `solver/solve.c` reads
      this standard to decide whether an `innerHTML` sink throws before a payload can reach it, and CLAUDE.md
      §@S puts Trusted Types beside CSP as the thing that separates a firing breakout from a working exploit —
-     so a wrong number here misleads exactly where it costs most. Verified against the sites: §3.4 "Get
-     Trusted Type compliant string", §3.7 "Get Trusted Type compliant attribute value", §3.8 "Get Trusted Type
+     so a wrong number here misleads exactly where it costs most. Verified against the sites: §3.5 "Get
+     Trusted Type compliant string", §3.9 "Get Trusted Type compliant attribute value", §3.10 "Get Trusted Type
      data for attribute", §4.2 "Integration with Content Security Policy", §2 "Framework", §3 "Algorithms".
      ITS ABBREVIATION IS AN ANCHOR AND IT IS THE ONE THIS TREE WRITES IN THE SOLVER, exactly as `fsa` and
-     `sri` are foreign rows under their four and three letters: `solve.c` writes `TT §3.8`, which classifyAnchor
+     `sri` are foreign rows under their four and three letters: `solve.c` writes `TT §3.5`, which classifyAnchor
      lowercases, and a two-letter tail is admitted here because it is a whole word and this table holds no
      other standard by it. */
   { key: "trustedtypes", label: "Trusted Types", kind: "bikeshed",

@@ -359,9 +359,10 @@ enum { SINK_DERIVE_NONE = 0, SINK_DERIVE_HTML, SINK_DERIVE_JS };
      - url_fire runs a URL's code only for the `javascript:` scheme, when the navigation happens. Where the host
        performs that navigation too (§7.4.2.2 "Beginning navigation" step 16), the marker is reached twice;
        record_sink is keyed on (class, source), so the finding is written once.
-   The Trusted Types column is the spec's: TT §3.8 makes the markup sinks TrustedHTML sinks and eval a
-   TrustedScript sink, and a javascript: navigation is no TT sink, hence -1. A parked candidate's sink rebinds
-   by name in solve_resume_candidate, which hands back this table's own name pointer. */
+   The Trusted Types column is the spec's: each sink hands TT §3.5 "Get Trusted Type compliant string" its
+   expected type, TrustedHTML from the markup sinks and TrustedScript from eval, and a javascript: navigation is
+   no TT sink, hence -1. A parked candidate's sink rebinds by name in solve_resume_candidate, which hands back
+   this table's own name pointer. */
 struct SinkClass {
     const char       *name;      /* the display name a report and a parked entry carry */
     const char      **vectors;   /* the fixed breakouts of a single-context sink, NULL where `derive` builds them */
