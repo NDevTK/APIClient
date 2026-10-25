@@ -16303,6 +16303,9 @@ TF_UNIT void probes_typefacet(const char *js, Probe *tab, int *n) {
              "ECMAScript §13.5.4.1: `typeof +x` over an unknown is not \"number\" on every arm");
     fold_row(&ty_tt, &ty_why, param_value_only(js, "/api/tyfacet", "str", "string"),
              "ECMAScript §13.15.3: `typeof (\"a\" + x)` over an unknown is not \"string\" on every arm");
+    fold_row(&ty_tt, &ty_why, param_value_only(js, "/api/tyfacet", "fu", "0"),
+             "ECMAScript §13.5.3.1: the fused `typeof s === \"undefined\"` or `=== \"function\"` over the Boolean "
+             "`!!__DEV__` is not false on every arm");
     const Probe rows[] = {
         { "typeof-fixed-by-type", ty_tt, "/api/tyfacet", SESS_EXPLORE, ty_why },
     };

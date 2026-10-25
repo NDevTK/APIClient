@@ -4,7 +4,8 @@
    answers a Boolean whatever its operand (§13.5.7), unary plus a Number (§13.5.4.1) and a concatenation with a
    String a String (§13.15.3 step 1.c), so on every arm `typeof !!__DEV__` is "boolean", `typeof +__CFG__` is
    "number" and `typeof ("a" + __CFG__)` is "string", and the Boolean `!!__DEV__` is `true` or `false`. This is
-   the shape of Apollo Client's `__DEV__` invariant. It ends with TF_CANVAS_INK, which test_forced.c defines
+   the shape of Apollo Client's `__DEV__` invariant. `typeof s === "undefined"` and `=== "function"` are the
+   two comparisons quickjs's peephole fuses into one opcode; over that Boolean both are false on every arm. It ends with TF_CANVAS_INK, which test_forced.c defines
    before including it. */
 #ifndef ENGINE_HOST_FIXTURE_TYPEFACET_H
 #define ENGINE_HOST_FIXTURE_TYPEFACET_H
@@ -20,7 +21,8 @@ static const char HTML_TYPEFACET[] =
     "fetch('/api/tyfacet?t=' + typeof s"
     " + '&b=' + (s === true || s === false ? 1 : 0)"
     " + '&n=' + typeof +c"
-    " + '&str=' + typeof ('a' + c));"
+    " + '&str=' + typeof ('a' + c)"
+    " + '&fu=' + (typeof s === 'undefined' || typeof s === 'function' ? 1 : 0));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

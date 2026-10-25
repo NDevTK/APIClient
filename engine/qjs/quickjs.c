@@ -35129,8 +35129,20 @@ static int js_typeof_is_concolic(JSContext *ctx, JSValue *sp, JSAtom expected)
     t = g_concolic.type_of(ctx, sp[-1]);
     if (JS_IsUninitialized(t))
         return 0;
-    pair[0] = t;
     pair[1] = JS_AtomToString(ctx, expected);
+    /* An operand whose type set fixes §13.5.3.1's row is answered by the row, a real string (the hook says so),
+       and the comparison is then the same fact on every arm: there is nothing for the comparison hook to fork. */
+    if (!g_concolic.is(t)) {
+        bool eq = js_strict_eq(ctx, t, pair[1]);
+
+        DCHECK(JS_IsString(t), "the typeof hook answered a fixed row that is not a string");
+        JS_FreeValue(ctx, t);
+        JS_FreeValue(ctx, pair[1]);
+        JS_FreeValue(ctx, sp[-1]);
+        sp[-1] = JS_NewBool(ctx, eq);
+        return 1;
+    }
+    pair[0] = t;
     /* The operand IS concolic (type_of answered), so the comparison hook owns this compare. */
     DCHECK(g_concolic.cmp != NULL, "a concolic typeof result with no comparison hook to decide it");
     /* THE FUSED OPCODE IS A `===`. 13.5.3's `typeof` result is compared by the peephole against a string
