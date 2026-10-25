@@ -1173,6 +1173,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/borrowedkey.h"
 #include "fixture/replyrole.h"
 #include "fixture/storedxss.h"
+#include "fixture/histreload.h"
 #include "fixture/windowname.h"
 #include "fixture/twinread.h"
 #include "fixture/requestsink.h"
@@ -1719,6 +1720,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "storedxss", HTML_STOREDXSS },
     { "storedread", HTML_STOREDREAD },
     { "storedidb", HTML_STOREDIDB },
+    { "histreload", HTML_HISTRELOAD },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
@@ -15808,6 +15810,25 @@ TF_UNIT void probes_flagflow(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `histreload` document (fixture/histreload.h): `history.go(0)` reloads, which the page's
+   `navigate` listener observes as a "reload" navigation, and the member returns to the script that called it. */
+TF_UNIT void probes_histreload(const char *js, Probe *tab, int *n) {
+    const char *hn_why = NULL, *ha_why = NULL;
+    int hn_tt = 1, ha_tt = 1;
+
+    fold_row(&hn_tt, &hn_why, !!strstr(js, "\"/api/hl-navigate\""),
+             "NOT REACHED: there is no /api/hl-navigate record, so no navigate event reached the page's listener");
+    fold_row(&hn_tt, &hn_why, param_value_is(js, "/api/hl-navigate", "type", "reload"),
+             "the navigate event `history.go(0)` fired is not a \"reload\" navigation (HTML §7.2.5 step 4)");
+    fold_row(&ha_tt, &ha_why, !!strstr(js, "\"/api/hl-after\""),
+             "the script that called `history.go(0)` did not continue past it");
+    const Probe rows[] = {
+        { "hl-reload-navigate", hn_tt, "/api/hl-navigate", SESS_EXPLORE, hn_why },
+        { "hl-after", ha_tt, "/api/hl-after", SESS_EXPLORE, ha_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `replyrole` document (fixture/replyrole.h). */
 TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
     /* The control: the served reply reached the page and its viewer arm built its address from the reply. */
@@ -21539,6 +21560,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
     probes_replyrole(js, probes, &np);
+    probes_histreload(js, probes, &np);
     probes_storedxss(js, probes, &np);
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);

@@ -332,8 +332,8 @@ typedef struct {
 void navigable_reload_start(NavigableReloadWork *w);
 void navigable_reload_visit(JSContext *ctx, NavigableReloadWork *w, JSStepVisit *v);
 /* §7.4.3 step 1's values, read at the moment the operation is CREATED. `userInvolvement` is "none" and
-   `navigationAPIState` and `apiMethodTracker` are null — the defaults §7.2.4's `reload()` calls this with, and
-   its only caller — so step 1's "if userInvolvement is not `browser UI`" is taken and step 1.3 leaves
+   `navigationAPIState` and `apiMethodTracker` are null — the defaults §7.2.4's `reload()` and §7.2.5's delta
+   traverse step 4 call this with, its only callers — so step 1's "if userInvolvement is not `browser UI`" is taken and step 1.3 leaves
    destinationNavigationAPIState at the active entry's state. Each becomes a parameter with the caller that
    passes something else, which is §7.2.6.7's `navigation.reload()`. */
 void navigable_reload_begin(JSContext *ctx, NavigableReloadWork *w);

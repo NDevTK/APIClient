@@ -37,9 +37,8 @@
  * still reads the address it was at.
  *
  * `go(0)` IS NOT A TRAVERSAL AT ALL — "if delta is 0, then RELOAD document's node navigable, and return". The
- * reload exists (navigable_reload_*, driven by location.c's `reload()`) and runs the page's `navigate` listeners,
- * so only a step machine can drive it, and this member is a plain C body. It crashes at that step, naming the
- * conversion, rather than doing nothing and letting a page believe it reloaded. */
+ * reload (core/frame/navigable.h's navigable_reload_*) runs the page's `navigate` listeners, so the three
+ * members are one step body that drives it, as location.c's `reload()` does. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +48,7 @@
 #include "core/agent_state.h"
 #include "core/dom/document.h"
 #include "core/frame/history.h"
+#include "core/frame/navigable.h"
 #include "core/frame/navigate_event_fire.h"
 #include "core/frame/session_history.h"
 #include "core/idl_args.h"
@@ -587,18 +587,41 @@ static const IdlStepDecl HPR_DECL = {
  * `go`'s comes from its argument and the other two's are constants of the standard. */
 enum { HIST_TRAVERSE_GO = 0, HIST_TRAVERSE_BACK, HIST_TRAVERSE_FORWARD };
 
-static JSValue js_hist_delta_traverse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                      int magic)
+#define HTR_STAGES(X)                                                                                         \
+    X(HTR_TRAVERSE, "HTML §7.2.5 The History interface's delta traverse steps 1-5 (the fully-active check, "   \
+                    "the delta, and step 5's traversal or step 4's reload of the document's node navigable)") \
+    X(HTR_RELOAD,   "HTML §7.4.3 Reloading and traversing's reload a navigable (its navigate event and "       \
+                    "everything past it, whose own rest points its work record names)")
+enum { IDL_STEP_STAGE_BASE(HTR_STAGES) HTR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const HTR_STEPS[] = { HTR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* The reload's work record is the whole of what the member holds, so its ownership is §7.4.3's. */
+static void hist_traverse_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
+    navigable_reload_visit(ctx, st, v);
+}
+
+static int js_hist_delta_traverse(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                  JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NavigableReloadWork *w = st;
     int32_t delta = 0;
+    int r;
+
+    STEP_DISPATCH(HTR_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(HTR_TRAVERSE);
+    JS_FreeValue(ctx, cb_result);   /* nothing has been asked for yet */
+    *presult = JS_UNDEFINED;
+    navigable_reload_start(w);
 
     /* STEPS 1-2: the Document, and "if document is NOT FULLY ACTIVE, then throw a SecurityError DOMException".
        It is the same opening every member of §7.2.5 has and it is reached through the same door — a THROW and
        not an assert, because a page reaches it deliberately: removing an iframe and then calling
        `frame.contentWindow.history.back()` is a thing the corpus does on purpose. It is FIRST, which is
        observable: `go(0)` on a detached frame is a SecurityError and not a reload. */
-    if (!hist_entry(ctx, this_val)) return JS_EXCEPTION;
-    switch (magic) {
+    if (!hist_entry(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+    switch (idl_step_magic(hdr)) {
     case HIST_TRAVERSE_BACK:    delta = -1; break;
     case HIST_TRAVERSE_FORWARD: delta = +1; break;
     case HIST_TRAVERSE_GO:
@@ -635,11 +658,8 @@ static JSValue js_hist_delta_traverse(JSContext *ctx, JSValueConst this_val, int
                       "allSteps[targetStepIndex] "
                       "does not exist, then abort these steps.\", which is what `back()` at the first entry and "
                       "`forward()` at the last already do and which removes nothing. THREE THINGS ARE MISSING "
-                      "AND THEY ARE ORDERED. (1) THIS MEMBER IS A PLAIN C BODY: it is declared with "
-                      "idl_method_id, so it has no JSStepHdr, and step_fork_run cannot be reached from a C "
-                      "activation — a chain parks and this has nowhere to park. Redeclare the three spellings "
-                      "with idl_method_id_step over one IdlStepBody, which is the same conversion "
-                      "core/timing/timer.c's clearTimeout already carries. (2) THE DECOMPOSITION IS TWO-SIDED, "
+                      "AND THEY ARE ORDERED. (1) THIS MEMBER IS A STEP BODY, so step_fork_run is reachable "
+                      "from it. (2) THE DECOMPOSITION IS TWO-SIDED, "
                       "which no chain in this tree is: §3.2.4.5's `long` is SIGNED, so the entries this "
                       "traversable holds sit at signed offsets either side of the current one and the "
                       "remainder is reached by running off EITHER end — an ascending cursor from 0 exhausts "
@@ -649,44 +669,52 @@ static JSValue js_hist_delta_traverse(JSContext *ctx, JSValueConst this_val, int
                       "true in the same words after the entry list is mutated), so what this member owes is "
                       "the two-sided ENUMERATION and its own remainder, not a new naming scheme. (3) EVERY "
                       "WORLD IT WOULD FORK INTO ALREADY ABORTS, which is why this is a refusal and not a "
-                      "deferral: a delta of 0 reaches the RELOAD crash forty lines below, and every non-zero "
-                      "delta reaches core/frame/session_history.c's realm_awaits on "
+                      "deferral: every non-zero delta reaches core/frame/session_history.c's realm_awaits on "
                       "`Navigation.prototype.onnavigate` — HTML §7.4.6.1 Updating the traversable step 5's "
                       "check if unloading is "
                       "canceled — which FIRES today, because core/frame/navigation.c installs that handler. "
-                      "Build those two first: until one of them exists there is no world for a fork to reach "
-                      "that a known delta does not already reach and abort in");
+                      "Build that first: until it exists the only world a fork reaches that a known delta "
+                      "does not already reach and abort in is the reload of a delta of 0");
             JS_ToInt32(ctx, &delta, argv[0]);
         }
         break;
     default:
         DFAIL("a History traversal member ran with a magic no member of this file declares — the magic IS which "
               "of §7.2.5's three delta-traverse spellings was called");
-        return JS_UNDEFINED;
+        return JS_STEP_DONE;
     }
     /* STEP 3: "if history's relevant global object's navigable's ALLOWED TO PERFORM A NAVIGATION OR HISTORY
        UPDATE returns blocked, then return." The same implementation-defined algorithm §7.2.5's push/replace
        steps evaluate above, with the same answer and for the same reason: HTML §7.3.1 gives its only example as
        "this can return blocked if invoked too many times within a certain timespan", and a rate cap on how often
        a bundle may route is a bound on the exploration. It returns ALLOWED for every navigable here. */
-    /* STEP 4: "if delta is 0, then RELOAD document's node navigable, AND RETURN." The return is the step's and
-       stands on its own — a zero delta never reaches §7.4.3 — so it is written here rather than left to the
-       crash above, which is dev-only. */
+    /* STEP 4: "if delta is 0, then RELOAD document's node navigable, AND RETURN" — created here with §7.4.3's
+       defaults (the ones location.c's `reload()` passes) and driven at the next stage, because the page's
+       `navigate` listeners run between. A zero delta never reaches §7.4.3's traversal. */
     if (delta == 0) {
-        DFAIL("HTML §7.2.5's delta traverse step 4 answers a delta of 0 with a RELOAD of the document's node "
-              "navigable. The reload is built (core/frame/navigable.h's navigable_reload_begin/run, driven by "
-              "core/frame/location.c's `reload()`), and its step 1 fires the page's `navigate` listeners, so "
-              "it can only run from a step machine. This member is declared with idl_method_id, a plain C body: "
-              "redeclare §7.2.5's three spellings with idl_method_id_step over one IdlStepBody and drive a "
-              "NavigableReloadWork from the delta-0 arm, as location.c's js_loc_reload does");
-        return JS_UNDEFINED;
+        navigable_reload_begin(ctx, w);
+        STEP_GOTO(hdr->stage, HTR_RELOAD, NULL);
+        return JS_STEP_YIELD;
     }
     /* STEP 5: "TRAVERSE THE HISTORY BY A DELTA given document's node navigable's traversable navigable, delta,
        and with sourceDocument set to document." It SCHEDULES the traversal — §7.4.3's steps are appended to the
        traversable — so this member returns `undefined` with the page's own `popstate` listener not yet run. */
     session_history_traverse_by_delta(ctx, delta);
-    return JS_UNDEFINED;
+    return JS_STEP_DONE;
+
+    STEP_ARM(HTR_RELOAD);
+    /* §7.4.3, driven; a reload a `navigate` listener cancelled answers 0 as a completed one does, and the
+       member answers undefined either way. */
+    r = navigable_reload_run(ctx, w, cb_result, out_cb, out_argc);
+    if (r != 0) return r;
+    *presult = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl HTR_DECL = {
+    js_hist_delta_traverse, sizeof(NavigableReloadWork), hist_traverse_visit, NULL,
+    "HTML §7.2.5 The History interface's delta traverse", HTR_STEPS
+};
 
 /* ---- the declaration and the per-realm install ------------------------------------------------------------- */
 
@@ -774,10 +802,10 @@ void history_init(JSContext *ctx)
     {
         static const IdlArgType GO_ARGS[] = { IDL_LONG };
 
-        g_id_go = idl_method_id(ctx, GO_ARGS, 1, js_hist_delta_traverse, HIST_TRAVERSE_GO);
+        g_id_go = idl_method_id_step(ctx, GO_ARGS, 1, NULL, 0, &HTR_DECL, HIST_TRAVERSE_GO);
         idl_optional_from(0);
-        g_id_back = idl_method_id(ctx, NULL, 0, js_hist_delta_traverse, HIST_TRAVERSE_BACK);
-        g_id_forward = idl_method_id(ctx, NULL, 0, js_hist_delta_traverse, HIST_TRAVERSE_FORWARD);
+        g_id_back = idl_method_id_step(ctx, NULL, 0, NULL, 0, &HTR_DECL, HIST_TRAVERSE_BACK);
+        g_id_forward = idl_method_id_step(ctx, NULL, 0, NULL, 0, &HTR_DECL, HIST_TRAVERSE_FORWARD);
     }
     /* §7.2.5's `attribute ScrollRestoration scrollRestoration`. The enumeration's value list IS the type, so it
        is declared here beside the member and the setter's body never sees an invalid value. */
