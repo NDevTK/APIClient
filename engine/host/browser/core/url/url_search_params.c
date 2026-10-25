@@ -23,6 +23,7 @@
 #include "core/agent_state.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
+#include "core/idl_name_chain.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
 
@@ -40,7 +41,8 @@ typedef UrlEncodedList UspList;
 
 /* The class opaque. `owner` is the URL wrapper this belongs to, or JS_UNDEFINED — see the file comment.
    `unknown` is the unknown string the constructor parsed, or JS_UNDEFINED: when set, `list` is the parse of its
-   example (empty where it has none) and every read answers a derivation over it (usp_derive).
+   example (empty where it has none); get and has(name) fork over whether it holds the tuple (usp_lookup_answer)
+   and every other read answers a derivation over it (usp_derive).
    THE LIST IS PER-FLOW STATE AND IS NEVER CHANGED IN PLACE. `list` points into `list_box`, a payload whose
    storage the box owns (usp_list_box); a write builds a changed copy in a new box (usp_list_edit), so the
    capture restores a sibling's `list` and `list_box` together and no arm sees another's write. */
@@ -368,23 +370,23 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     }
 #define USP_NAME_IS(i)  (u->list->e[i].nlen == nn && !memcmp(u->list->e[i].name, name, nn))
 #define USP_VALUE_IS(i) (!value || (u->list->e[i].vlen == vn && !memcmp(u->list->e[i].value, value, vn)))
-    /* §6.2: `delete` and `has` take an OPTIONAL value, and its presence changes what they match — `delete(name)`
+    /* §6.2: `delete` takes an OPTIONAL value, and its presence changes what it matches — `delete(name)`
        removes every pair with that name, `delete(name, value)` only the pairs that also have that value. The
        optional-argument rule is what tells the two apart, so undefined must reach here as undefined. */
     if (magic == USP_APPEND || magic == USP_SET ||
-        ((magic == USP_DELETE || magic == USP_HAS) && argc > 1 && !JS_IsUndefined(argv[1]))) {
+        (magic == USP_DELETE && argc > 1 && !JS_IsUndefined(argv[1]))) {
         vhole = concolic_is(argv[1]);
         value = vhole ? concolic_name_cstr(ctx, argv[1]) : JS_ToCStringLen(ctx, &vn, argv[1]);
         if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
         if (vhole) vn = strlen(value);
     }
     /* THE EQUALITY BARRIER. Everything but `append` memcmps the NAME against the stored halves, and
-       `delete`/`has` memcmp the VALUE too — see USP_HOLE_WHY. `set` is in the first group: it compares names
+       `delete` memcmps the VALUE too — see USP_HOLE_WHY. `set` is in the first group: it compares names
        to find the tuple to overwrite, and only its VALUE is free to be a hole. */
     DCHECK(!nhole || magic == USP_APPEND,
            USP_HOLE_WHY("member matched an unknown NAME against the stored names by memcmp"));
     DCHECK(!vhole || magic == USP_APPEND || magic == USP_SET,
-           USP_HOLE_WHY("delete()/has() matched an unknown VALUE against the stored values by memcmp"));
+           USP_HOLE_WHY("delete() matched an unknown VALUE against the stored values by memcmp"));
 
     switch (magic) {
     case USP_APPEND:
@@ -400,19 +402,6 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
         u->list->n = w;
         usp_update(ctx, u);
         break;
-    case USP_GET:
-        r = JS_NULL;   /* §6.2: absent is null, not "" */
-        for (i = 0; i < u->list->n; i++)
-            if (USP_NAME_IS(i)) {
-                /* THE READ-BACK BARRIER — see USP_HOLE_WHY. §6.2 get() hands the page the tuple's VALUE, and a
-                   page branching on what it gets back must branch on the UNKNOWN this list stored the shape
-                   of; a real String here de-taints it and every gate below decides concretely. */
-                DCHECK(!u->list->e[i].vhole,
-                       USP_HOLE_WHY("get() answered with a value that is a hole, as a real String"));
-                r = JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen);
-                break;
-            }
-        break;
     case USP_GETALL: {
         uint32_t k = 0;
         r = JS_NewArray(ctx);
@@ -426,11 +415,6 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
             }
         break;
     }
-    case USP_HAS:
-        r = JS_FALSE;
-        for (i = 0; i < u->list->n; i++)
-            if (USP_NAME_IS(i) && USP_VALUE_IS(i)) { r = JS_TRUE; break; }
-        break;
     default: {
         /* §6.2 set(): the FIRST pair with this name keeps its position and takes the new value, and every
            other pair with that name is removed. Appending after a delete would move it to the end. */
@@ -462,9 +446,8 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     JS_FreeCString(ctx, name);
     if (value) JS_FreeCString(ctx, value);
     if (!JS_IsUndefined(u->unknown) && !JS_IsException(r)) {
-        if (magic == USP_GET || magic == USP_GETALL || magic == USP_HAS)
-            r = usp_derive(ctx, u, magic == USP_GET ? "URLSearchParams.get" : magic == USP_GETALL
-                                       ? "URLSearchParams.getAll" : "URLSearchParams.has", r, argc, argv);
+        if (magic == USP_GETALL)
+            r = usp_derive(ctx, u, "URLSearchParams.getAll", r, argc, argv);
         else
             usp_rederive(ctx, u, magic == USP_APPEND ? "URLSearchParams.append" : magic == USP_DELETE
                                      ? "URLSearchParams.delete" : "URLSearchParams.set", argc, argv);
@@ -473,6 +456,122 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
 #undef USP_NAME_IS
 #undef USP_VALUE_IS
 }
+
+/* The first tuple of `l` whose name is the `nn` bytes at `name` and, where `value` is non-NULL, whose value is
+   the `vn` bytes at `value`; -1 when there is none. */
+static int usp_find(const UspList *l, const char *name, size_t nn, const char *value, size_t vn)
+{
+    int i;
+
+    for (i = 0; i < l->n; i++) {
+        if (l->e[i].nlen != nn || memcmp(l->e[i].name, name, nn)) continue;
+        if (value && (l->e[i].vlen != vn || memcmp(l->e[i].value, value, vn))) continue;
+        return i;
+    }
+    return -1;
+}
+
+/* URL §6.2's get(name) and has(name, value) over a list parsed from an unknown string ask one question of the
+   string: whether its list holds a tuple whose name is `name`. It is asked through the name chain, keyed by the
+   name spelled in §1.3's urlencoded percent-encode set (injective, so a name holding U+0000 keys apart). */
+#define USP_TUPLE_PREDICATE "URL §6.2 URLSearchParams class (this's list holds a tuple whose name is"
+#define USP_LOOKUP_ALGORITHM "URL §6.2 URLSearchParams class the get(name) and has(name, value) method steps"
+#define UL_STAGES(X)                                                                                          \
+    X(UL_LOOKUP, "URL §6.2 URLSearchParams class the get(name) and has(name, value) method steps (a tuple "    \
+                 "whose name is name in this's list)")
+enum { IDL_STEP_STAGE_BASE(UL_STAGES) UL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const UL_STEPS[] = { UL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    IdlNameChainSuppliedKey key;
+} UspLookupState;
+
+static void usp_lookup_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    idl_name_chain_supplied_visit(ctx, &((UspLookupState *)st)->key, v);
+}
+
+/* Over an unknown list, get's found arm answers the tuple's value as an unknown String named by the operation
+   and `name`, with the example's value as its example where the example holds the tuple; its other arm is
+   null. has(name) answers the same question as a boolean. has(name, value) over an unknown list derives, as
+   getAll does. */
+static int usp_lookup_answer(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, UspObj *u, int magic,
+                             int argc, JSValueConst *argv, const char *name, size_t nn, const char *value,
+                             size_t vn, JSValue *presult)
+{
+    int i = usp_find(u->list, name, nn, value, vn), real, rc;
+    JSValue ops[2], ex = JS_UNDEFINED;
+    bool yes = false;
+    char *member;
+
+    if (JS_IsUndefined(u->unknown)) {
+        if (magic == USP_HAS) { *presult = JS_NewBool(ctx, i >= 0); return JS_STEP_DONE; }
+        if (i < 0) { *presult = JS_NULL; return JS_STEP_DONE; }
+        /* THE READ-BACK BARRIER — see USP_HOLE_WHY: a real String here would de-taint the hole it stores. */
+        DCHECK(!u->list->e[i].vhole, USP_HOLE_WHY("get() answered with a value that is a hole, as a real String"));
+        *presult = JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen);
+        return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+    }
+    if (value) {
+        *presult = usp_derive(ctx, u, "URLSearchParams.has", JS_NewBool(ctx, i >= 0), argc, argv);
+        return JS_STEP_DONE;
+    }
+    real = u->unknown_example ? (i >= 0) : JS_OUTCOME_REAL_UNSTATED;
+    member = url_percent_encode(name, nn, URL_SET_URLENCODED);
+    CHECK(member != NULL, "URLSearchParams: OOM spelling a name for its constraint key");
+    rc = idl_name_chain_ask_supplied(ctx, hdr, &s->key, u->unknown, USP_TUPLE_PREDICATE, member, real,
+                                     USP_LOOKUP_ALGORITHM, &yes);
+    free(member);
+    if (rc) return rc;
+    if (magic == USP_HAS) { *presult = JS_NewBool(ctx, yes); return JS_STEP_DONE; }
+    if (!yes) { *presult = JS_NULL; return JS_STEP_DONE; }
+    if (u->unknown_example && i >= 0 && !u->list->e[i].vhole)   /* a hole's bytes are a shape, not an example */
+        ex = JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen);
+    CHECK(!JS_IsException(ex), "URLSearchParams: OOM taking a tuple's example value");
+    ops[0] = u->unknown;
+    ops[1] = argv[0];
+    *presult = concolic_new_derived(ctx, "URLSearchParams.get", ops, 2, ex);
+    DCHECK(!JS_IsUninitialized(*presult), "a URLSearchParams list parsed from an unknown derived no unknown read");
+    concolic_state_string(*presult);   /* §6.2: the found arm's value is a USVString */
+    return JS_STEP_DONE;
+}
+
+static int usp_lookup_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    int magic = idl_step_magic(hdr), rc;
+    UspObj *u;
+    const char *name, *value = NULL;
+    size_t nn = 0, vn = 0;
+    bool with_value;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == UL_LOOKUP, "URL §6.2's get/has resumed into a stage its one step does not have");
+    DCHECK(magic == USP_GET || magic == USP_HAS, "the get/has machine was declared for another §6.2 member");
+    u = usp_of(ctx, hdr->this_val);
+    if (!u) return JS_STEP_ABRUPT;
+    with_value = magic == USP_HAS && idl_arg_given(argc, argv, 1);
+    /* THE EQUALITY BARRIER — see USP_HOLE_WHY: both halves are matched against the stored halves by memcmp. */
+    DCHECK(!concolic_is(argv[0]), USP_HOLE_WHY("get()/has() matched an unknown NAME against the stored names"));
+    DCHECK(!with_value || !concolic_is(argv[1]),
+           USP_HOLE_WHY("has() matched an unknown VALUE against the stored values"));
+    name = JS_ToCStringLen(ctx, &nn, argv[0]);
+    if (!name) return JS_STEP_ABRUPT;
+    if (with_value) {
+        value = JS_ToCStringLen(ctx, &vn, argv[1]);
+        if (!value) { JS_FreeCString(ctx, name); return JS_STEP_ABRUPT; }
+    }
+    rc = usp_lookup_answer(ctx, hdr, st, u, magic, argc, argv, name, nn, value, vn, presult);
+    JS_FreeCString(ctx, name);
+    if (value) JS_FreeCString(ctx, value);
+    return rc;
+}
+
+static const IdlStepDecl USP_LOOKUP_DECL = {
+    usp_lookup_step, sizeof(UspLookupState), usp_lookup_visit, NULL, USP_LOOKUP_ALGORITHM, UL_STEPS
+};
 
 static JSValue js_usp_get_size(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -905,9 +1004,9 @@ void usp_init(JSContext *ctx)
     g_usp_id[USP_APPEND]   = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_APPEND);
     g_usp_id[USP_DELETE]   = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_DELETE);
     idl_optional_from(1);   /* §6.2: `delete(name, optional value)` — undefined is NOT the value "undefined" */
-    g_usp_id[USP_GET]      = idl_method_id(ctx, TWO_STR, 1, js_usp_member, USP_GET);
+    g_usp_id[USP_GET]      = idl_method_id_step(ctx, TWO_STR, 1, NULL, 0, &USP_LOOKUP_DECL, USP_GET);
     g_usp_id[USP_GETALL]   = idl_method_id(ctx, TWO_STR, 1, js_usp_member, USP_GETALL);
-    g_usp_id[USP_HAS]      = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_HAS);
+    g_usp_id[USP_HAS]      = idl_method_id_step(ctx, TWO_STR, 2, NULL, 0, &USP_LOOKUP_DECL, USP_HAS);
     idl_optional_from(1);   /* §6.2: `has(name, optional value)` */
     g_usp_id[USP_SET]      = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_SET);
     g_usp_id[USP_SORT]     = idl_method_id(ctx, TWO_STR, 0, js_usp_member, USP_SORT);
