@@ -1655,40 +1655,76 @@ fail:
    Let unique be options's unique member. Let multiEntry be options's multiEntry member. If keyPath is a
    sequence and multiEntry is true, throw an InvalidAccessError. Let index be a new index in store [with the
    four fields]. Add index to this's index set. Return a new index handle associated with index and this." */
-static JSValue js_os_create_index(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                  int magic)
+typedef struct {
+    uint32_t kp_valid;   /* unknown key path strings this flow decided valid (idb_key_path_valid_run) */
+} OsCiState;
+
+/* The state owns no value: every entry re-derives the store and the transaction. */
+static void os_ci_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
+    (void)ctx; (void)st; (void)v;
+}
+
+#define OSCI_STAGES(X) \
+    X(OSCI_KEYPATH, "Indexed Database §4.5 createIndex() step 7 (keyPath is a valid key path, or a SyntaxError) " \
+                    "- each unknown string of it forks over being valid") \
+    X(OSCI_CREATE, "Indexed Database §4.5 createIndex() steps 8-13 (unique, multiEntry and a sequence, the index, " \
+                   "this's index set, its handle)")
+enum { IDL_STEP_STAGE_BASE(OSCI_STAGES) OSCI_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const OSCI_STEPS[] = { OSCI_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* "The createIndex(name, keyPath, options) method steps are: [the five above] ... If an index named name
+   already exists in store, throw a ConstraintError. If keyPath is not a valid key path, throw a SyntaxError.
+   Let unique be options's unique member. Let multiEntry be options's multiEntry member. If keyPath is a
+   sequence and multiEntry is true, throw an InvalidAccessError. Let index be a new index in store [with the
+   four fields]. Add index to this's index set. Return a new index handle associated with index and this."
+   Steps 1-6 run on every entry: they read state this engine holds, and step 7's forks re-enter. */
+static int os_ci_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    OsCiState *s = st;
     /* `optional IDBIndexParameters options = {}` means the dictionary EXISTS whether or not the page wrote
        one, carrying both members at their declared `= false` — so this reads out of the vector rather than
        out of `argc`, which would be filling a hole the conversion does not leave. */
-    JSValueConst options = argv[2];
+    JSValueConst this_val = hdr->this_val, options = argv[2];
     JSValue store = JS_UNDEFINED, tx = JS_UNDEFINED, set, existing, index, handle;
     const char *name = NULL;
     bool unique, multi_entry;
+    int r = 0;
 
-    (void)argc; (void)magic;
+    (void)argc; (void)out_cb; (void)out_argc;
+    *presult = JS_UNDEFINED;
+    JS_FreeValue(ctx, cb_result);   /* a fork's filler: no stage here waits on a request */
     DCHECK(JS_IsObject(options), "§4.5's createIndex was handed no options dictionary — the IDL writes "
                                  "`optional IDBIndexParameters options = {}`, so the conversion builds one "
                                  "with every member at its default even for `createIndex(n, k)`");
-    if (os_upgrade_check(ctx, this_val, &store, &tx) < 0) return JS_EXCEPTION;      /* STEPS 1-5 */
+    if (os_upgrade_check(ctx, this_val, &store, &tx) < 0) return JS_STEP_ABRUPT;  /* STEPS 1-5 */
     name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) goto fail;
-    existing = idb_index_find(ctx, store, name);                                    /* STEP 6 */
-    if (!JS_IsNull(existing)) {
+    if (hdr->stage == OSCI_KEYPATH) {
+        bool valid = false;
+
+        existing = idb_index_find(ctx, store, name);                                /* STEP 6 */
+        if (!JS_IsNull(existing)) {
+            JS_FreeValue(ctx, existing);
+            JS_ThrowDOMException(ctx, "ConstraintError",
+                                 "an index with that name already exists in the object store");
+            goto fail;
+        }
         JS_FreeValue(ctx, existing);
-        JS_ThrowDOMException(ctx, "ConstraintError",
-                             "an index with that name already exists in the object store");
-        goto fail_name;
+        /* "If keyPath is not a valid key path, throw a SyntaxError." §2.5's two arms over the value §3.2.25's
+           union answered with — a string, or the ENGINE'S own array of strings — each of which may be unknown
+           input. UNLIKE createObjectStore's, this argument is NOT NULLABLE, so there is no null arm: §2.6
+           derives an index's keys from a key path and an index without one is not a state the standard has. */
+        r = idb_key_path_valid_run(ctx, hdr, argv[1], &s->kp_valid, &valid);       /* STEP 7 */
+        if (r) goto out;
+        if (!valid) {
+            JS_ThrowDOMException(ctx, "SyntaxError", "the key path is not a valid key path");
+            goto fail;
+        }
+        hdr->stage = OSCI_CREATE;
     }
-    JS_FreeValue(ctx, existing);
-    /* "If keyPath is not a valid key path, throw a SyntaxError." §2.5's two arms over the value §3.2.25's
-       union answered with — a string, or the ENGINE'S own array of strings. UNLIKE createObjectStore's, this
-       argument is NOT NULLABLE, so there is no null arm: §2.6 derives an index's keys from a key path and an
-       index without one is not a state the standard has. */
-    if (!idb_key_path_value_is_valid(ctx, argv[1])) {                               /* STEP 7 */
-        JS_ThrowDOMException(ctx, "SyntaxError", "the key path is not a valid key path");
-        goto fail_name;
-    }
+    DCHECK(hdr->stage == OSCI_CREATE, "createIndex resumed at a stage it does not have");
     unique = idl_dict_bool(ctx, options, "unique");                                 /* STEP 8 */
     multi_entry = idl_dict_bool(ctx, options, "multiEntry");                        /* STEP 9 */
     /* "If keyPath is a SEQUENCE and multiEntry is true, throw an InvalidAccessError." §2.6's multiEntry flag
@@ -1697,7 +1733,7 @@ static JSValue js_os_create_index(JSContext *ctx, JSValueConst this_val, int arg
     if (JS_IsArray(argv[1]) && multi_entry) {                                       /* STEP 10 */
         JS_ThrowDOMException(ctx, "InvalidAccessError",
                              "a multiEntry index cannot have a sequence key path");
-        goto fail_name;
+        goto fail;
     }
     index = idb_index_create(ctx, tx, store, name, JS_DupValue(ctx, argv[1]), unique, multi_entry); /* STEP 11 */
     /* "Add index to THIS's index set" — the handle's, which is what `indexNames` and `index()` read and what
@@ -1715,18 +1751,23 @@ static JSValue js_os_create_index(JSContext *ctx, JSValueConst this_val, int arg
     idb_index_populate_request(ctx, this_val, tx, store, index);
     handle = os_index_handle_for(ctx, this_val, index);                             /* STEP 13 */
     JS_FreeValue(ctx, index);
-    JS_FreeCString(ctx, name);
-    JS_FreeValue(ctx, store);
-    JS_FreeValue(ctx, tx);
-    return handle;
+    *presult = handle;
+    r = JS_STEP_DONE;
+    goto out;
 
-fail_name:
-    JS_FreeCString(ctx, name);
 fail:
+    r = JS_STEP_ABRUPT;
+out:
+    if (name) JS_FreeCString(ctx, name);
     JS_FreeValue(ctx, store);
     JS_FreeValue(ctx, tx);
-    return JS_EXCEPTION;
+    return r;
 }
+
+static const IdlStepDecl OSCI_DECL = {
+    os_ci_step, sizeof(OsCiState), os_ci_visit, NULL,
+    "Indexed Database §4.5 IDBObjectStore createIndex(name, keyPath, options)", OSCI_STEPS
+};
 
 /* "The deleteIndex(name) method steps are: [the five above] ... Let index be the index named name in STORE if
    one exists, or throw a NotFoundError otherwise. Remove index from THIS's index set. Destroy index."
@@ -1945,9 +1986,9 @@ void idb_object_store_init(JSContext *ctx)
        `= false`, so the body reads values that are there. */
     g_id_index = idl_method_id_step(ctx, INDEX_ARGS, 1, NULL, 0, &OSIX_DECL, 0);
     idl_this_iface(idb_object_store_is, "IDBObjectStore");
-    g_id_create_index = idl_method_id_dict(ctx, CREATE_INDEX_ARGS, 3, INDEX_PARAMETERS,
+    g_id_create_index = idl_method_id_step(ctx, CREATE_INDEX_ARGS, 3, INDEX_PARAMETERS,
                                            (int)(sizeof INDEX_PARAMETERS / sizeof INDEX_PARAMETERS[0]),
-                                           js_os_create_index, 0);
+                                           &OSCI_DECL, 0);
     idl_optional_from(2);                        /* `optional IDBIndexParameters options = {}` */
     idl_this_iface(idb_object_store_is, "IDBObjectStore");
     g_id_delete_index = idl_method_id(ctx, INDEX_ARGS, 1, js_os_delete_index, 0);

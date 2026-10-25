@@ -158,6 +158,76 @@ bool idb_key_path_value_is_valid(JSContext *ctx, JSValueConst path)
     return true;
 }
 
+bool idb_key_path_has_unknown(JSContext *ctx, JSValueConst path)
+{
+    uint32_t i, n;
+
+    if (concolic_is(path)) return true;
+    if (!JS_IsArray(path)) return false;
+    n = idb_key_path_list_len(ctx, path);
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, path, i);
+        bool unknown = concolic_is(e);
+
+        JS_FreeValue(ctx, e);
+        if (unknown) return true;
+    }
+    return false;
+}
+
+/* One string of a key path. An unknown one forks, outcome 0 valid; `real` is §2.5 run on its example. The
+   string is borrowed from the converted argument the machine holds.
+   Named residual. Not covered: the valid arm files no domain over the string (identifiers joined by '.').
+   Next diff: file it as that arm's constraint. How its absence shows: a delivery at this key path composing a
+   value the valid arm's own grammar refuses. */
+static int idb_key_path_string_valid_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, uint32_t *decided,
+                                         uint32_t *seen, bool *pvalid)
+{
+    JSValue ex;
+    int real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
+
+    if (!concolic_is(v)) {
+        *pvalid = idb_key_path_string_is_valid(ctx, v);
+        return 0;
+    }
+    if ((*seen)++ < *decided) {
+        *pvalid = true;
+        return 0;
+    }
+    ex = concolic_example_string(ctx, v);
+    if (JS_IsString(ex))
+        real = idb_key_path_string_is_valid(ctx, ex) ? 0 : 1;
+    JS_FreeValue(ctx, ex);
+    r = step_fork_run(ctx, hdr, v, "Indexed Database §2.5 valid key path", 2, real, &arm);
+    if (r) return r;
+    *pvalid = arm == 0;
+    if (arm == 0) (*decided)++;
+    return 0;
+}
+
+int idb_key_path_valid_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst path, uint32_t *decided, bool *pvalid)
+{
+    uint32_t seen = 0, i, n;
+
+    if (JS_IsString(path) || concolic_is(path))
+        return idb_key_path_string_valid_run(ctx, hdr, path, decided, &seen, pvalid);
+    DCHECK(JS_IsArray(path), "§2.5's validity was asked of a key path that is neither a string, unknown input nor "
+                             "a sequence — §3.2.25's union answers with those, and the IDL null is the caller's");
+    n = idb_key_path_list_len(ctx, path);
+    *pvalid = n > 0;                                   /* a list is valid only when it is non-empty */
+    for (i = 0; i < n && *pvalid; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, path, i);
+        int r;
+
+        DCHECK(JS_IsString(e) || concolic_is(e), "the sequence §3.2.25 built held something that is neither a "
+                                                  "string nor unknown input");
+        r = idb_key_path_string_valid_run(ctx, hdr, e, decided, &seen, pvalid);
+        JS_FreeValue(ctx, e);
+        if (r) return r;
+    }
+    return 0;
+}
+
 /* ---- §7.1's EVALUATE A KEY PATH ON A VALUE ------------------------------------------------------------------ */
 
 /* ONE SEGMENT OF THE PATH against `value`. `ident` is a byte range of the key path string and NOT a C string —
@@ -373,6 +443,8 @@ static bool idb_key_path_evaluate_list(JSContext *ctx, JSValueConst value, JSVal
 static bool idb_key_path_evaluate(JSContext *ctx, JSValueConst value, JSValueConst key_path, JSValue *pout)
 {
     *pout = JS_UNDEFINED;
+    if (idb_key_path_has_unknown(ctx, key_path))
+        return false;   /* the release arm beneath idb_key_path_precondition's DFAIL: the walk's failure */
     if (JS_IsArray(key_path))
         return idb_key_path_evaluate_list(ctx, value, key_path, pout);
     DCHECK(JS_IsString(key_path),
@@ -388,6 +460,13 @@ static bool idb_key_path_evaluate(JSContext *ctx, JSValueConst value, JSValueCon
    §4.4's createObjectStore already reported a SyntaxError for. */
 static void idb_key_path_precondition(JSContext *ctx, JSValueConst key_path)
 {
+    if (idb_key_path_has_unknown(ctx, key_path)) {
+        DFAIL("Indexed Database §7.1 evaluate a key path on a value (or §7.2's injection) was asked to walk a "
+              "key path holding unknown input, which a store or index takes from §2.5's valid world. Build the "
+              "walk over it: its identifiers are unknown, so each step is an unknown member read of the value, "
+              "and the arms where the path names no member reach the walk's failure");
+        return;
+    }
     DCHECK(idb_key_path_value_is_valid(ctx, key_path),
            "§7.1 was asked to walk a key path §2.5 does not accept. Every key path in this engine reaches a "
            "store through §4.4's createObjectStore, which reports an invalid one as a SyntaxError, and the walk "
@@ -561,9 +640,16 @@ static void idb_inject_not_concolic(JSContext *ctx, JSValueConst value)
 bool idb_key_path_can_inject(JSContext *ctx, JSValueConst value, JSValueConst key_path)
 {
     size_t len = 0, i = 0, n = 0;
-    const char *path = idb_inject_path(ctx, key_path, &len), *seg = NULL;
-    JSValue cur = JS_DupValue(ctx, value);
+    const char *path, *seg = NULL;
+    JSValue cur;
     bool answer;
+
+    if (idb_key_path_has_unknown(ctx, key_path)) {
+        idb_key_path_precondition(ctx, key_path);   /* the DFAIL naming the unbuilt walk */
+        return false;                               /* its release arm: nowhere to inject */
+    }
+    path = idb_inject_path(ctx, key_path, &len);
+    cur = JS_DupValue(ctx, value);
 
     /* STEPS 1-3 are the cursor: split, assert non-empty, remove the last item. */
     while (idb_path_next_before_last(path, len, &i, &seg, &n)) {   /* STEP 4 */

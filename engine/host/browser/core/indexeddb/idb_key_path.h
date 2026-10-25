@@ -32,6 +32,17 @@ bool idb_key_path_is_valid(const char *path, size_t len);
  * as `['a', 'b,c']` and is refused for the comma rather than for being nested. */
 bool idb_key_path_value_is_valid(JSContext *ctx, JSValueConst path);
 
+/* Whether `path` is unknown input or a list holding any: such a path's validity is asked through
+   idb_key_path_valid_run, and §7.1's walk over one is unbuilt. */
+bool idb_key_path_has_unknown(JSContext *ctx, JSValueConst path);
+
+/* §2.5's valid key path as a step machine's question, for a path that may hold unknown input: each unknown
+   string forks its valid world and its invalid one. The caller's stage re-runs the whole question on every
+   entry, so `*decided` (on the machine's state, zero before the first ask) counts the unknown strings this flow
+   already decided valid and answers them without a second ask. Returns 0 with *pvalid set, or a step code the
+   caller returns. */
+int idb_key_path_valid_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst path, uint32_t *decided, bool *pvalid);
+
 /* §7.1's THREE ANSWERS THAT ARE NOT AN EXCEPTION: "the result of these steps is a key, invalid, or failure".
  * The three are DISTINCT at §4.5's `add or put`, which spells a different step for each — a key becomes the
  * record's key, `invalid` is a "DataError" DOMException, and `failure` is a "DataError" ONLY for a store with

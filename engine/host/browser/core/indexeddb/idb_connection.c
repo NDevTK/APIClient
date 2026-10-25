@@ -413,46 +413,106 @@ static int conn_upgrade_transaction(JSContext *ctx, JSValueConst c, JSValue *pdb
    autoIncrement be options's autoIncrement member. If autoIncrement is true and keyPath is an empty string or
    any sequence, throw an InvalidAccessError. Let store be a new object store in database ... Return a new
    object store handle associated with store and transaction." */
-static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                           int magic)
+typedef struct {
+    uint32_t kp_valid;   /* unknown key path strings this flow decided valid (idb_key_path_valid_run) */
+} ConnCsState;
+
+/* The state owns no value: every entry re-derives the database, the transaction and the key path. */
+static void conn_cs_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    /* THE OPTIONS ARE READ OUT OF THE VECTOR AND NOT OUT OF `argc`. `optional IDBObjectStoreParameters
-       options = {}` means the dictionary EXISTS whether or not the page wrote one, carrying every member's
-       declared default — so a body that wrote `argc > 1 ? argv[1] : JS_UNDEFINED` would be filling a hole the
-       conversion does not leave, which is the consumer-side default §Offensive-programming names. */
-    JSValueConst options = argv[1];
-    JSValue db = JS_UNDEFINED, tx = JS_UNDEFINED, key_path = JS_UNDEFINED, existing, store, handle;
+    (void)ctx; (void)st; (void)v;
+}
+
+#define CONNCS_STAGES(X) \
+    X(CONNCS_KEYPATH, "Indexed Database §4.4 createObjectStore() step 5 (keyPath is null or a valid key path, or " \
+                      "a SyntaxError) - each unknown string of it forks over being valid") \
+    X(CONNCS_CREATE, "Indexed Database §4.4 createObjectStore() steps 6-10 (no store named name, autoIncrement's " \
+                     "key path neither empty nor a sequence, the store and its handle) - an unknown key path " \
+                     "under autoIncrement forks over being empty")
+enum { IDL_STEP_STAGE_BASE(CONNCS_STAGES) CONNCS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CONNCS_STEPS[] = { CONNCS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* Step 8's "keyPath is an empty string" over unknown input: outcome 0 is non-empty (the store is created),
+   outcome 1 empty (the InvalidAccessError); `real` is the example's length. The key path is borrowed from the
+   converted options the machine holds. Returns 0 with *pempty set, or a step code the caller returns. */
+static int conn_key_path_empty_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst key_path, bool *pempty)
+{
+    JSValue ex = concolic_example_string(ctx, key_path);
+    int real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
+
+    if (JS_IsString(ex)) {
+        size_t len = 0;
+        const char *es = JS_ToCStringLen(ctx, &len, ex);
+
+        CHECK(es != NULL, "IndexedDB: OOM reading an unknown key path's example");
+        real = len == 0 ? 1 : 0;
+        JS_FreeCString(ctx, es);
+    }
+    JS_FreeValue(ctx, ex);
+    r = step_fork_run(ctx, hdr, key_path, "Indexed Database §4.4 createObjectStore() step 8 (keyPath is the "
+                                          "empty string)", 2, real, &arm);
+    if (r) return r;
+    *pempty = arm == 1;
+    return 0;
+}
+
+/* "The createObjectStore(name, options) method steps are: ... let keyPath be options's keyPath member if it is
+   not undefined or null, or null otherwise. If keyPath is not null and is not a valid key path, throw a
+   SyntaxError. If an object store named name already exists in database throw a ConstraintError. Let
+   autoIncrement be options's autoIncrement member. If autoIncrement is true and keyPath is an empty string or
+   any sequence, throw an InvalidAccessError. Let store be a new object store in database ... Return a new
+   object store handle associated with store and transaction." Steps 1-4 run on every entry: they read state
+   this engine holds and the options the conversion built, and the forks below re-enter. */
+static int conn_cs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    ConnCsState *s = st;
+    /* `optional IDBObjectStoreParameters options = {}` means the dictionary exists whether or not the page
+       wrote one, carrying every member's declared default, so it is read out of the vector, not `argc`. */
+    JSValueConst this_val = hdr->this_val, options = argv[1];
+    JSValue db = JS_UNDEFINED, tx = JS_UNDEFINED, key_path, existing, store, handle;
     const char *name = NULL;
     bool auto_increment;
+    int r = 0;
 
-    (void)magic; (void)argc;
+    (void)argc; (void)out_cb; (void)out_argc;
+    *presult = JS_UNDEFINED;
+    JS_FreeValue(ctx, cb_result);   /* a fork's filler: no stage here waits on a request */
     DCHECK(JS_IsObject(options), "§4.4's createObjectStore was handed no options dictionary — the IDL writes "
                                  "`optional IDBObjectStoreParameters options = {}`, so the conversion builds "
                                  "one with every member at its default even for `createObjectStore(name)`");
-    if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
-    if (conn_upgrade_transaction(ctx, this_val, &db, &tx) < 0) return JS_EXCEPTION;
-    name = idb_name_cstr(ctx, argv[0]);
-    if (name == NULL) goto fail;
-
+    if (!conn_brand(ctx, this_val)) return JS_STEP_ABRUPT;
+    if (conn_upgrade_transaction(ctx, this_val, &db, &tx) < 0) return JS_STEP_ABRUPT;
     key_path = idl_dict_get(ctx, options, "keyPath");
     DCHECK(!JS_IsUndefined(key_path), "IDBObjectStoreParameters' `keyPath` is declared with the IDL's own "
                                       "`= null`, so the conversion places it whether or not the page wrote "
                                       "one — an undefined here is the declaration having lost its default");
-    /* "If keyPath is not null and is not a VALID KEY PATH, throw a SyntaxError DOMException." §2.5's two arms
-       are one question asked of core/indexeddb/idb_key.h, over the value §3.2.25's union answered with — the
-       IDL null, a string, or the ENGINE'S own array of strings. A list is valid when it is non-empty and every
-       one of its (already ToString'd) strings is, which is why `[]` is a SyntaxError and `['']` is not. */
-    if (!JS_IsNull(key_path) && !idb_key_path_value_is_valid(ctx, key_path)) {
-        JS_ThrowDOMException(ctx, "SyntaxError", "the key path is not a valid key path");
-        goto fail_name;
-    }
+    if (hdr->stage == CONNCS_KEYPATH) {
+        /* "If keyPath is not null and is not a VALID KEY PATH, throw a SyntaxError DOMException." §2.5's two
+           arms over the value §3.2.25's union answered with — the IDL null, a string, or the ENGINE'S own
+           array of strings — each of which may be unknown input. A list is valid when it is non-empty and
+           every one of its strings is, which is why `[]` is a SyntaxError and `['']` is not. */
+        if (!JS_IsNull(key_path)) {
+            bool valid = false;
 
+            r = idb_key_path_valid_run(ctx, hdr, key_path, &s->kp_valid, &valid);
+            if (r) goto out;
+            if (!valid) {
+                JS_ThrowDOMException(ctx, "SyntaxError", "the key path is not a valid key path");
+                goto fail;
+            }
+        }
+        hdr->stage = CONNCS_CREATE;
+    }
+    DCHECK(hdr->stage == CONNCS_CREATE, "createObjectStore resumed at a stage it does not have");
+    name = idb_name_cstr(ctx, argv[0]);
+    if (name == NULL) goto fail;
     existing = idb_object_store_find(ctx, db, name);
     if (!JS_IsNull(existing)) {
         JS_FreeValue(ctx, existing);
         JS_ThrowDOMException(ctx, "ConstraintError",
                              "an object store with that name already exists in the database");
-        goto fail_name;
+        goto fail;
     }
     JS_FreeValue(ctx, existing);
 
@@ -465,18 +525,21 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
     if (auto_increment && !JS_IsNull(key_path)) {
         bool uninjectable = JS_IsArray(key_path);
 
-        if (!uninjectable) {
+        if (!uninjectable && concolic_is(key_path)) {
+            r = conn_key_path_empty_run(ctx, hdr, key_path, &uninjectable);
+            if (r) goto out;
+        } else if (!uninjectable) {
             size_t len = 0;
-            const char *s = JS_ToCStringLen(ctx, &len, key_path);
+            const char *ks = JS_ToCStringLen(ctx, &len, key_path);
 
-            CHECK(s != NULL, "IndexedDB: §4.4's key path could not be read back as a string");
+            CHECK(ks != NULL, "IndexedDB: §4.4's key path could not be read back as a string");
             uninjectable = len == 0;
-            JS_FreeCString(ctx, s);
+            JS_FreeCString(ctx, ks);
         }
         if (uninjectable) {
             JS_ThrowDOMException(ctx, "InvalidAccessError",
                                  "a key generator cannot be used with an empty key path or a sequence");
-            goto fail_name;
+            goto fail;
         }
     }
 
@@ -499,23 +562,26 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
        for, which is what the add asserts. */
     idb_transaction_handle_add(ctx, tx, handle);
     JS_FreeValue(ctx, store);
-    JS_FreeCString(ctx, name);
-    JS_FreeValue(ctx, db);
-    JS_FreeValue(ctx, tx);
-    return handle;
+    *presult = handle;
+    r = JS_STEP_DONE;
+    goto out;
 
-/* The key path is OWNED from the dictionary read until idb_object_store_create consumes it, so every refusal
-   after that read leaves through the same two labels — `fail_name` once the name has been taken, `fail` before
-   it. It is JS_UNDEFINED at both ends of its life (at the declaration, and again the moment the store record
-   has taken it), which is what lets one free stand for every path. */
-fail_name:
-    JS_FreeCString(ctx, name);
 fail:
+    r = JS_STEP_ABRUPT;
+out:
+    /* Every exit — done, a refusal, a fork — leaves through here. The key path is JS_UNDEFINED once the store
+       record has taken it, so one free stands for every path. */
+    if (name) JS_FreeCString(ctx, name);
     JS_FreeValue(ctx, key_path);
     JS_FreeValue(ctx, db);
     JS_FreeValue(ctx, tx);
-    return JS_EXCEPTION;
+    return r;
 }
+
+static const IdlStepDecl CONNCS_DECL = {
+    conn_cs_step, sizeof(ConnCsState), conn_cs_visit, NULL,
+    "Indexed Database §4.4 IDBDatabase createObjectStore(name, options)", CONNCS_STEPS
+};
 
 /* "The deleteObjectStore(name) method steps are: ... let store be the object store named name in database, or
    throw a NotFoundError if none. Remove store from this's object store set. If there is an object store handle
@@ -954,9 +1020,8 @@ void idb_connection_init(JSContext *ctx)
     idl_optional_from(1);                                 /* `mode` and `options` are both optional */
     idl_arg_enum(1, TX_MODES);                            /* §3.2.18's value list for the `mode` position */
     idl_arg_default(1, IDL_DEFAULT_STRING, "readonly");   /* §3.6 steps 15.4.1 and 16.1's `= "readonly"` */
-    g_id_create_store = idl_method_id_dict(ctx, CREATE_ARGS, 2, CREATE_INIT,
-                                           (int)(sizeof CREATE_INIT / sizeof CREATE_INIT[0]),
-                                           js_conn_create_object_store, 0);
+    g_id_create_store = idl_method_id_step(ctx, CREATE_ARGS, 2, CREATE_INIT,
+                                           (int)(sizeof CREATE_INIT / sizeof CREATE_INIT[0]), &CONNCS_DECL, 0);
     idl_optional_from(1);                      /* `optional IDBObjectStoreParameters options = {}` */
     g_id_delete_store = idl_method_id(ctx, DELETE_ARGS, 1, js_conn_delete_object_store, 0);
     g_ready = 1;
