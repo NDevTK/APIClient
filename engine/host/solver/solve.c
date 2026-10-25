@@ -273,14 +273,15 @@ static Cand *search_of(const char *src, int sink);
 typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
-/* Whether the running flow's world asked anything of a declared principal (an origin's pin or a forgeable
-   predicate over it): the count callbacks of concolic_principal_pins and concolic_principal_preds. */
+/* Whether the running flow's world asked anything of a declared principal (an origin's pin, a forgeable
+   predicate over it, or any branch its bytes reach): the counts of concolic_principal_pins,
+   concolic_principal_decided and concolic_principal_preds. */
 static void principal_seen(void *user, const char *src, const ConcolicPred *pred, int n) {
     (void)src; (void)pred; (void)n;
     (*(int *)user)++;
 }
 static int flow_demands_principal(void) {
-    int n = concolic_principal_pins(NULL, NULL);
+    int n = concolic_principal_pins(NULL, NULL) + concolic_principal_decided();
 
     concolic_principal_preds(principal_seen, &n);
     return n;

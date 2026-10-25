@@ -1675,6 +1675,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     /* Back into the value's terms: everything above recorded facts about the predicate, and the interpreter asked
        about the condition, which for a negation is the complement. The forked bit is about the branch, not its
        reading. */
+    concolic_note_principal_branch(cond);
     arm ^= neg;
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }

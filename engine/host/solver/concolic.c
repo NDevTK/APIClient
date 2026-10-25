@@ -3040,6 +3040,39 @@ int concolic_candidate_at_root(const char *root) {
     return !strcmp(g_cand_at, g_srcs[row].src) && g_cand_delivered;
 }
 
+/* The constraint key under which a flow records that one of its branches was decided over a declared
+   principal (concolic_note_principal_branch). Not a branch identity: concolic_ident_compose's tag keeps it apart
+   from every `branch` key. */
+#define PRINCIPAL_DECIDED_TAG "principal-decided"
+
+void concolic_note_principal_branch(JSValueConst cond) {
+    const char *root = concolic_root_c(cond), *p;
+    size_t n;
+
+    for (int i = 0; root_member(root, i, &p, &n); i++) {
+        if (src_principal(p, n)) {
+            const char *f[1] = { "" };
+            char *key = concolic_ident_compose(PRINCIPAL_DECIDED_TAG, f, 1);
+
+            CHECK(key, "concolic: OOM naming a principal decision");
+            cons_entry(key)->truth = 1;
+            free(key);
+            return;
+        }
+    }
+}
+
+int concolic_principal_decided(void) {
+    const char *f[1] = { "" };
+    char *key = concolic_ident_compose(PRINCIPAL_DECIDED_TAG, f, 1);
+    const Cons *c;
+
+    CHECK(key, "concolic: OOM naming a principal decision");
+    c = cons_lookup(key);
+    free(key);
+    return c && c->truth == 1;
+}
+
 int concolic_candidate_delivered(void) {
     DCHECK(!g_cand_delivered || g_cand_payload != NULL,
            "a flow is recorded as having delivered its @S payload while no substitution is installed — the "
