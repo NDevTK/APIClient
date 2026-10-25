@@ -15862,9 +15862,21 @@ TF_UNIT void probes_bytesimage(const char *js, Probe *tab, int *n) {
     fold_row(&wr_tt, &wr_why, !wother,
              "the gate after the page wrote 1 over the byte forked: the image still described a byte it no "
              "longer holds");
+    int llong = !!strstr(js, "\"/api/bimg/len-long\""), lshort = !!strstr(js, "\"/api/bimg/len-short\"");
+    int fread_ = !!strstr(js, "\"/api/bimg/far-read\""), fthrow = !!strstr(js, "\"/api/bimg/far-range\"");
+    const char *ln_why = NULL; int ln_tt = 1;
+    fold_row(&ln_tt, &ln_why, llong || lshort, "NOT REACHED: neither arm of the byteLength gate emitted");
+    fold_row(&ln_tt, &ln_why, llong && lshort,
+             "only one arm of the byteLength gate ran: the reply's length answered as a concrete number");
+    const char *fr_why = NULL; int fr_tt = 1;
+    fold_row(&fr_tt, &fr_why, fread_ || fthrow, "NOT REACHED: neither arm of the far DataView read emitted");
+    fold_row(&fr_tt, &fr_why, fread_ && fthrow,
+             "only one arm of the far read's in-range test ran: the bounds test used the example's extent");
     const Probe rows[] = {
         { "bytes-image-fork", im_tt, "/api/bimg/lead-brace", SESS_EXPLORE, im_why },
         { "bytes-image-overwrite", wr_tt, "/api/bimg/wrote-one", SESS_EXPLORE, wr_why },
+        { "bytes-length-fork", ln_tt, "/api/bimg/len-long", SESS_EXPLORE, ln_why },
+        { "bytes-bounds-fork", fr_tt, "/api/bimg/far-read", SESS_EXPLORE, fr_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

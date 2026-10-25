@@ -92135,7 +92135,16 @@ static JSValue js_math_clz32(JSContext *ctx, JSValueConst this_val, int argc, JS
 static JSValue js_string_fromCharCode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_string_fromCodePoint(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_Date_UTC(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-static JSValue js_dataview_getValue(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv, int class_id);
+static int js_dv_get_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
+static JSValue js_dv_get_fini(JSContext *ctx, void *st, bool take_result);
+static void js_dv_get_visit(JSContext *ctx, void *st, JSStepVisit *v);
+static const char *const js_dv_get_steps[];
+typedef struct JSDvGet {
+    JSStepHdr hdr;
+    JSValue result;
+    JSValue pred;     /* the in-range test over an unknown view length (owned), held across its fork */
+    double index;     /* getIndex, once ToIndex has produced it */
+} JSDvGet;
 static JSValue js_dataview_setValue(JSContext *ctx, JSValueConst this_obj, int argc, JSValueConst *argv, int class_id);
 static int js_dataview_set_precheck(JSContext *ctx, const JSStepHdr *h);
 static int js_dataview_set_midcheck(JSContext *ctx, JSValueConst *argp, int magic);
@@ -93670,7 +93679,7 @@ static const JSTrampStepDef js_asyncgenfn_ctor_def= DYNFUNC_DEF(JS_FUNC_ASYNC_GE
     "27.7.1.1 AsyncGeneratorFunction ( ...paramArgs, bodyArg ), which is 20.2.1.1.1 CreateDynamicFunction");
 #undef DYNFUNC_DEF
 #define DV_STEPDEF_DEF(N, GALG, SALG) \
-    static const JSTrampStepDef js_dv_get_##N##_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 2), generic_magic, js_dataview_getValue, JS_CLASS_##N##_ARRAY, GALG); \
+    static const JSTrampStepDef js_dv_get_##N##_def = { sizeof(JSDvGet), js_dv_get_step, js_dv_get_fini, JS_CLASS_##N##_ARRAY, .visit = js_dv_get_visit, .algorithm = GALG, .steps = js_dv_get_steps }; \
     static const JSTrampStepDef js_dv_set_##N##_def = PRIMARGS_DEF_PRE(PRIMARGS(0x3, HINT_NUMBER, 3), generic_magic, js_dataview_setValue, JS_CLASS_##N##_ARRAY, js_dataview_set_precheck, js_dataview_set_midcheck, SALG);
 DV_STEPDEF_LIST(DV_STEPDEF_DEF)
 #undef DV_STEPDEF_DEF
@@ -123218,7 +123227,7 @@ void *JS_BufferStateSave(JSContext *ctx, JSValueConst obj)
        and would cost a reference per view on the hot byte-write path. What is left is exactly the field
        js_array_buffer_update_typed_arrays declines to write — a LENGTH-TRACKING DATAVIEW's `ta->length`, which
        that update leaves alone whenever the view's offset lands at or past the buffer's length, so the value
-       it keeps is history rather than a derivation, and js_dataview_getValue's bounds test reads it back. */
+       it keeps is history rather than a derivation, and js_dv_get_step's bounds test reads it back. */
     list_for_each(el, &abuf->array_list) {
         ta = list_entry(el, JSTypedArray, link);
         if (ta->obj->class_id == JS_CLASS_DATAVIEW && ta->track_rab)
@@ -126475,38 +126484,18 @@ static JSValue js_dataview_span_value(JSContext *ctx, JSObject *bufobj, uint32_t
     return r;
 }
 
-static JSValue js_dataview_getValue(JSContext *ctx,
-                                    JSValueConst this_obj,
-                                    int argc, JSValueConst *argv, int class_id)
+/* §25.3.1.5 GetViewValue's last step, GetValueFromBuffer, over `pos` inside the view's stored extent. */
+static JSValue js_dataview_read(JSContext *ctx, JSTypedArray *ta, uint64_t pos, bool littleEndian, int class_id)
 {
-    JSTypedArray *ta;
-    JSArrayBuffer *abuf;
-    bool littleEndian, is_swap;
-    int size;
+    JSArrayBuffer *abuf = ta->buffer->u.array_buffer;
+    bool is_swap = littleEndian ^ !is_be();
+    int size = 1 << typed_array_size_log2(class_id);
     uint8_t *ptr;
     uint32_t v;
-    uint64_t pos;
     JSValue ret = JS_UNDEFINED;
 
-    ta = JS_GetOpaque2(ctx, this_obj, JS_CLASS_DATAVIEW);
-    if (!ta)
-        return JS_EXCEPTION;
-    size = 1 << typed_array_size_log2(class_id);
-    if (JS_ToIndex(ctx, &pos, argv[0]))
-        return JS_EXCEPTION;
-    littleEndian = argc > 1 && JS_ToBool(ctx, argv[1]);
-    is_swap = littleEndian ^ !is_be();
-    abuf = ta->buffer->u.array_buffer;
-    if (abuf->detached)
-        return JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
-    // order matters: this check should come before the next one
-    if ((pos + size) > ta->length)
-        return JS_ThrowRangeError(ctx, "out of bound");
-    // test262 expects a TypeError for this and V8, in its infinite wisdom,
-    // throws a "detached array buffer" exception, but IMO that doesn't make
-    // sense because the buffer is not in fact detached, it's still there
-    if ((int64_t)ta->offset + ta->length > abuf->byte_length)
-        return JS_ThrowTypeError(ctx, "out of bound");
+    DCHECK(!abuf->detached && pos + size <= ta->length && (int64_t)ta->offset + ta->length <= abuf->byte_length,
+           "a DataView read was made outside the extent its bounds tests admitted");
     ptr = abuf->data + ta->offset + pos;
 
     switch(class_id) {
@@ -126587,6 +126576,118 @@ static JSValue js_dataview_getValue(JSContext *ctx,
         abort();
     }
     return js_dataview_span_value(ctx, ta->buffer, ta->offset + (uint32_t)pos, size, littleEndian, class_id, ret);
+}
+
+/* §25.3.1.5 GetViewValue ( view, requestIndex, isLittleEndian, type ), the DataView getters' algorithm, as a
+   machine: ToIndex runs the page's valueOf, and over a view whose length is an unknown the in-range test is a
+   fork whose arms are a value and the RangeError. */
+#define DVGET_STAGES(X) \
+    X(DVGET_ENTRY, "25.3.1.5 GetViewValue: RequireInternalSlot(view, [[DataView]])") \
+    X(DVGET_INDEX, "25.3.1.5 GetViewValue: getIndex is ToIndex(requestIndex)") \
+    X(DVGET_RANGE, "25.3.1.5 GetViewValue: getIndex + elementSize > viewSize throws a RangeError, then " \
+                   "GetValueFromBuffer")
+enum { DVGET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_dv_get_steps[] = { DVGET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_dv_get_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSDvGet *s = st;
+    int class_id = s->hdr.arg, size = 1 << typed_array_size_log2(class_id), r, arm;
+    JSTypedArray *ta;
+    JSArrayBuffer *abuf;
+    bool little;
+
+    if (s->hdr.stage == DVGET_ENTRY) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->result = JS_UNDEFINED;
+        s->pred = JS_UNINITIALIZED;
+        s->index = 0;
+        if (!JS_GetOpaque2(ctx, s->hdr.this_val, JS_CLASS_DATAVIEW))
+            return -1;
+        s->hdr.stage = DVGET_INDEX;
+    }
+    if (s->hdr.stage == DVGET_INDEX) {
+        double d;
+
+        r = step_todouble_run(ctx, &s->hdr, step_arg(&s->hdr, 0), cb_result, &d, out_cb, out_argc);
+        cb_result = JS_UNDEFINED;
+        if (r) return r < 0 ? -1 : r;
+        /* §7.1.22 ToIndex: ToIntegerOrInfinity, then a RangeError outside [0, 2^53 - 1] */
+        d = isnan(d) ? 0 : trunc(d) + 0.0;
+        if (d < 0 || d > MAX_SAFE_INTEGER) {
+            JS_ThrowRangeError(ctx, "invalid array index");
+            return -1;
+        }
+        s->index = d;
+        s->hdr.stage = DVGET_RANGE;
+    }
+    DCHECK(s->hdr.stage == DVGET_RANGE, "a DataView getter resumed in no stage");
+    JS_FreeValue(ctx, cb_result);
+    ta = JS_GetOpaque(s->hdr.this_val, JS_CLASS_DATAVIEW);
+    abuf = ta->buffer->u.array_buffer;
+    DCHECK(s->hdr.argc < 2 || !js_value_is_concolic(step_arg(&s->hdr, 1)),
+           "a DataView getter's littleEndian is unknown input: build its ToBoolean as step_tobool_run's fork");
+    little = s->hdr.argc > 1 && JS_ToBool(ctx, step_arg(&s->hdr, 1));
+    if (abuf->detached) {
+        JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
+        return -1;
+    }
+    if ((int64_t)ta->offset + ta->length > abuf->byte_length) {
+        JS_ThrowTypeError(ctx, "out of bound");
+        return -1;
+    }
+    if (!JS_IsUninitialized(ta->length_unknown)) {
+        if (JS_IsUninitialized(s->pred)) {
+            JSValue sp[2];
+
+            DCHECK(g_concolic.rel != NULL, "a view's length is unknown with no JSConcolicHooks.rel installed");
+            sp[0] = js_float64(s->index + size);
+            sp[1] = js_dup(ta->length_unknown);
+            CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a view's unknown length");
+            s->pred = sp[0];
+        }
+        r = step_tobool_run(ctx, &s->hdr, s->pred, "25.3.1.5 GetViewValue in-range test", &arm);
+        if (r) return r < 0 ? -1 : r;
+        if (!arm) {
+            JS_ThrowRangeError(ctx, "out of bound");
+            return -1;
+        }
+        if (s->index + size > ta->length) {
+            /* in range in this world and past the example's bytes: a value nobody has bytes for */
+            JSValue ops[4];
+
+            ops[0] = abuf->length_unknown;
+            ops[1] = JS_NewInt64(ctx, (int64_t)ta->offset + (int64_t)s->index);
+            ops[2] = js_int32(size);
+            ops[3] = JS_NewBool(ctx, little);
+            DCHECK(!JS_IsUninitialized(abuf->length_unknown),
+                   "a view's length is unknown over a buffer whose length is stated");
+            s->result = g_concolic.derived(ctx, "25.3.1.5 GetViewValue past the example", ops, 4, JS_UNDEFINED);
+            return 0;
+        }
+    } else if (s->index + size > ta->length) {
+        JS_ThrowRangeError(ctx, "out of bound");
+        return -1;
+    }
+    s->result = js_dataview_read(ctx, ta, (uint64_t)s->index, little, class_id);
+    return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
+}
+
+/* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). */
+static void js_dv_get_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSDvGet *s = st;
+    v->val(ctx, &s->result);
+    v->val(ctx, &s->pred);
+}
+
+static JSValue js_dv_get_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSDvGet *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
 }
 
 /* 25.3.4.16 step 4: ToIndex(getIndex) — and its RangeError for a fractional or negative offset — completes

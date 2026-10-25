@@ -469,10 +469,11 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
 
    The length is the unknown's too (JSArrayBuffer.length_unknown): `byteLength` and `length` derive from it,
    with the example's length as their example, so a length gate forks.
-   NAMED RESIDUAL — THE BOUNDS ARE THE EXAMPLE'S. What is not covered: a view's range checks and element reads
-   test the example's extent, so a read past it throws RangeError or answers undefined where a longer sequence
-   was a world. What the next diff builds: those checks forking on the unknown length, the in-range arm reading
-   an element with no example. How its absence shows: a length gate's long arm reaches a read that throws. */
+   A DataView read forks its in-range test on that length (js_dv_get_step).
+   NAMED RESIDUAL — A TYPED ARRAY'S ELEMENT READS TEST THE EXAMPLE'S EXTENT. What is not covered: `by[i]` past
+   the example answers undefined where a longer sequence held a byte. What the next diff builds: the integer-
+   indexed element read forking on the view's unknown length, as the DataView read does. How its absence
+   shows: a loop bounded by an unknown length reads undefined on its long arm. */
 static const char BYTE_READER_IMAGE[] = "the byte sequence whose UTF-8 decode text() reads";
 
 /* The copy, recorded as an image of text()'s unknown when these bytes have one. */

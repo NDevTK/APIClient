@@ -3,6 +3,8 @@
    concrete 1 over that byte through a Uint8Array and gates on it again: the write replaced the byte the image
    recorded, so the second gate is decided by the 1 and takes one arm. The first gate is the positive control
    and the second the negative one, over one buffer.
+   A second reply's length gates a branch (the length is the reply's unknown too), and a DataView read far past its
+   example bytes takes both arms of the in-range test: a value with no example, or the RangeError.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_BYTESIMAGE_H
@@ -20,6 +22,13 @@ static const char HTML_BYTESIMAGE[] =
     "  if (dv.getUint8(0) === 123) fetch('/api/bimg/lead-brace'); else fetch('/api/bimg/lead-other');"
     "  new Uint8Array(ab)[0] = 1;"
     "  if (dv.getUint8(0) === 1) fetch('/api/bimg/wrote-one'); else fetch('/api/bimg/wrote-other');"
+    "})();"
+    "(async function () {"
+    "  var ab = await (await fetch('/api/bimg2')).arrayBuffer();"
+    "  if (ab.byteLength > 1000) fetch('/api/bimg/len-long'); else fetch('/api/bimg/len-short');"
+    "  var dv = new DataView(ab);"
+    "  try { dv.getUint32(4000); fetch('/api/bimg/far-read'); } catch (e) {"
+    "    fetch(e instanceof RangeError ? '/api/bimg/far-range' : '/api/bimg/far-other'); }"
     "})();"
     "</script>"
     TF_CANVAS_INK
