@@ -125975,11 +125975,15 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         JSValue ex = js_concolic_operand(ctx, s->argp[2]);
         double d = 0;
 
-        if (!js_concolic_held(s->argp[2]) || !JS_IsNumber(ex) || JS_ToFloat64(ctx, &d, ex) ||
-            !(d >= 0 && d <= MAX_SAFE_INTEGER && d == trunc(d))) {
+        if (!js_concolic_held(s->argp[2])) {
+            /* no example: the view holds no example bytes, and every element read derives past them */
             JS_FreeValue(ctx, ex);
-            DFAIL("23.2.5.1.5 step 5 ToIndex(length) over unknown input with no index for an example: build "
-                  "the fork over the view's extent this length leaves open");
+            ex = js_int32(0);
+        } else if (!JS_IsNumber(ex) || JS_ToFloat64(ctx, &d, ex) ||
+                   !(d >= 0 && d <= MAX_SAFE_INTEGER && d == trunc(d))) {
+            JS_FreeValue(ctx, ex);
+            DFAIL("23.2.5.1.5 step 5 ToIndex(length) over unknown input whose example is no index: build the "
+                  "fork over the example's own ToIndex outcome");
             return -1;
         }
         s->len_unknown = s->argp[2];
