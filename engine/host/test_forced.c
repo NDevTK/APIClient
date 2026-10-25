@@ -742,6 +742,8 @@ static const TfServed TF_SERVED[] = {
       "fetch('/api/mhdep?w=mhDEP');"
       "export const mhTag = 'mhTAG';"
       "export default { tag: 'mhDEF' };" },
+    /* HTML_REPLYROLE's account reply: a viewer, so the document's admin arm is reachable only by forcing. */
+    { "https://x.test/api/rrme", "application/json", "{\"role\":\"viewer\",\"id\":42,\"org\":\"acme\"}" },
 };
 
 /* …ASKED OF THE ABSOLUTE SERIALIZED ADDRESS, which is what a park carries and what the caller holds by the
@@ -1110,6 +1112,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/weakchain.h"
 #include "fixture/importchain.h"
 #include "fixture/borrowedkey.h"
+#include "fixture/replyrole.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1568,6 +1571,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "weakchain", HTML_WEAKCHAIN },
     { "importchain", HTML_IMPORTCHAIN },
     { "borrowedkey", HTML_BORROWEDKEY },
+    { "replyrole", HTML_REPLYROLE },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14509,6 +14513,48 @@ TF_UNIT void probes_flagflow(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `replyrole` document (fixture/replyrole.h). */
+TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
+    /* The control: the served reply reached the page and its viewer arm built its address from the reply. */
+    const char *rrv_why = NULL; int rrv_tt = 1;
+    fold_row(&rrv_tt, &rrv_why, !!strstr(js, "\"/api/rrviewer\""),
+             "NOT REACHED: there is no /api/rrviewer record at all, so the served reply was never read");
+    fold_row(&rrv_tt, &rrv_why, param_value_is(js, "/api/rrviewer", "uid", "42"),
+             "the viewer arm's `uid` is not the served reply's id 42");
+    /* The admin address exists only on an arm the observed reply contradicts, so it is learned with its
+       computed path segment and both reply-derived query values. */
+    const char *rra_why = NULL; int rra_tt = 1;
+    fold_row(&rra_tt, &rra_why, !!strstr(js, "\"url\":\"/api/rradmin/"),
+             "NOT REACHED: there is no /api/rradmin/ record at all, so `user.role === 'admin'` was not forked "
+             "against the served reply");
+    fold_row(&rra_tt, &rra_why, !!strstr(js, "\"/api/rradmin/audit-log\""),
+             "the admin address does not carry its computed segment `audit-log`");
+    fold_row(&rra_tt, &rra_why, param_value_is(js, "/api/rradmin/audit-log", "uid", "42"),
+             "the admin address's `uid` is not the served reply's id 42");
+    fold_row(&rra_tt, &rra_why, param_value_is(js, "/api/rradmin/audit-log", "org", "ACME"),
+             "the admin address's `org` is not the served reply's org through toUpperCase()");
+    /* Its provenance is forced, and no record of it carries any other grade: the served reply said viewer. */
+    const char *rrf_why = NULL; int rrf_tt = 1;
+    fold_row(&rrf_tt, &rrf_why, !!strstr(js, "\"url\":\"/api/rradmin/"),
+             "NOT REACHED: there is no /api/rradmin/ record to grade");
+    fold_row(&rrf_tt, &rrf_why, emitted_record_graded_has(js, "/api/rradmin/audit-log", "forced", "\"uid\""),
+             "the admin address has no record graded `forced`");
+    fold_row(&rrf_tt, &rrf_why, !emitted_record_graded_has(js, "/api/rradmin/audit-log", "derived", "\"uid\"") &&
+                                !emitted_record_graded_has(js, "/api/rradmin/audit-log", "observed", "\"uid\""),
+             "the admin address carries a non-forced record, so a forced reply was merged into observed data");
+    fold_row(&rrf_tt, &rrf_why, !tf_seen_line("https://x.test/api/rradmin/", PENDING_PINNED_NO, PENDING_PROVENANCE_DERIVED) &&
+                                !tf_seen_line("https://x.test/api/rradmin/", PENDING_PINNED_YES, PENDING_PROVENANCE_DERIVED) &&
+                                !tf_seen_line("https://x.test/api/rradmin/", PENDING_PINNED_NO, PENDING_PROVENANCE_OBSERVED) &&
+                                !tf_seen_line("https://x.test/api/rradmin/", PENDING_PINNED_YES, PENDING_PROVENANCE_OBSERVED),
+             "the zone was shown the admin address with a provenance other than forced");
+    const Probe rows[] = {
+        { "rr-viewer-control", rrv_tt, "/api/rrviewer", SESS_EXPLORE, rrv_why },
+        { "rr-admin-address", rra_tt, "/api/rradmin/", SESS_EXPLORE, rra_why },
+        { "rr-admin-forced", rrf_tt, "'/api/rradmin/'", SESS_EXPLORE, rrf_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18323,6 +18369,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_weakchain(js, probes, &np);
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
+    probes_replyrole(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
