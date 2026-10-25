@@ -321,6 +321,32 @@ static void open_fail(JSContext *ctx, JSValueConst entry, JSValue error)
     entry_enqueue(ctx, g_result_stepid, entry);
 }
 
+/* §2.8.2: "each request must run to completion before the next request is processed." Removes `entry`, the head
+   of its own queue, and starts the next entry's own algorithm, which is the whole of how step 3's wait is
+   discharged rather than waited on. */
+static void entry_dequeue(JSContext *ctx, JSValueConst entry)
+{
+    JSValue q = entry_queue(ctx, entry), head;
+    uint32_t i, n = open_list_len(ctx, q);
+
+    DCHECK(n > 0, "an open request left an empty connection queue");
+    head = JS_GetPropertyUint32(ctx, q, 0);
+    DCHECK(JS_VALUE_GET_PTR(head) == JS_VALUE_GET_PTR(entry),
+           "the open request leaving its connection queue is not its head");
+    JS_FreeValue(ctx, head);
+    for (i = 0; i + 1 < n; i++)
+        JS_DefinePropertyValueUint32(ctx, q, i, JS_GetPropertyUint32(ctx, q, i + 1), JS_PROP_C_W_E);
+    JS_SetPropertyStr(ctx, q, "length", JS_NewUint32(ctx, n - 1));
+    if (n > 1) {
+        JSValue next = JS_GetPropertyUint32(ctx, q, 0);
+
+        /* the next entry's own algorithm (§2.8.1's request type serves both), which entry_start_machine answers */
+        entry_enqueue(ctx, entry_start_machine(ctx, next), next);
+        JS_FreeValue(ctx, next);
+    }
+    JS_FreeValue(ctx, q);
+}
+
 /* ---- the state both machines that fire an event carry ------------------------------------------------------ */
 
 typedef struct {
@@ -359,22 +385,76 @@ static void open_state_start(JSIdbOpenState *s)
     STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
 }
 
+/* Appends to `cands` (holding `k` names) every name whose §2.8.2 queue holds a request, other than `own` and the
+   names already there. Answers the new count. */
+static uint32_t open_add_queued_names(JSContext *ctx, JSValueConst cands, uint32_t k, JSValueConst own)
+{
+    JSPropertyEnum *tab = NULL;
+    uint32_t count = 0, i, j;
+
+    CHECK(JS_GetOwnPropertyNames(ctx, &tab, &count, g_queues, JS_GPN_STRING_MASK) == 0,
+          "IndexedDB: §2.8.2's queues could not be enumerated");
+    for (i = 0; i < count; i++) {
+        JSValue q = JS_GetProperty(ctx, g_queues, tab[i].atom), nm = JS_AtomToString(ctx, tab[i].atom);
+        bool seen = JS_IsStrictEqual(ctx, nm, own);
+
+        for (j = 0; j < k && !seen; j++) {
+            JSValue c = JS_GetPropertyUint32(ctx, cands, j);
+
+            seen = JS_IsStrictEqual(ctx, c, nm);
+            JS_FreeValue(ctx, c);
+        }
+        if (!seen && open_list_len(ctx, q) > 0)
+            JS_DefinePropertyValueUint32(ctx, cands, k++, JS_DupValue(ctx, nm), JS_PROP_C_W_E);
+        JS_FreeValue(ctx, nm);
+        JS_FreeValue(ctx, q);
+    }
+    for (i = 0; i < count; i++)
+        JS_FreeAtom(ctx, tab[i].atom);
+    js_free(ctx, tab);
+    return k;
+}
+
+/* Moves `entry`, the head of its own §2.8.2 queue, to the end of the queue for `name` (steps 1-3 for the name
+   step 4's fork chose): its old queue proceeds as if it had completed, E_NAME becomes `name` and the unknown is
+   resolved. Answers whether it now waits behind earlier requests; false means it is that queue's head. */
+static bool entry_requeue(JSContext *ctx, JSValueConst entry, JSValueConst name)
+{
+    const char *cname;
+    JSValue q;
+    uint32_t n;
+
+    entry_dequeue(ctx, entry);
+    entry_set(ctx, entry, E_NAME, JS_DupValue(ctx, name));
+    entry_set(ctx, entry, E_NAME_UNKNOWN, JS_NULL);
+    cname = JS_ToCString(ctx, name);
+    CHECK(cname != NULL, "IndexedDB: step 4's chosen database name could not be read");
+    q = open_queue(ctx, cname, /*create*/ true);
+    JS_FreeCString(ctx, cname);
+    n = open_list_len(ctx, q);
+    JS_DefinePropertyValueUint32(ctx, q, n, JS_DupValue(ctx, entry), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, q);
+    return n > 0;
+}
+
 /* §5.1 step 4's and §5.3 step 4's "the database named name". Where the name is an unknown (E_NAME_UNKNOWN) the
    database it names depends on it, so the lookup forks over IsStrictlyEqual of the unknown and each name §2.1's
-   set held at the step's first ask, in order; the arm where it equals none takes E_NAME, the name its identity
-   bought. Each equal arm is a predicate over the unknown's domain, which prunes the arms it contradicts.
-   Answers 0 with the name in *pname (owned), a request code, or -1.
-   Named residual. Not covered: an entry whose arm names an existing database stays in its own §2.8.2 queue,
-   so it is not ordered behind that database's earlier requests. Next diff: move it to the chosen name's queue
-   at the fork. How its absence shows: a pending open of the existing name and an equal-arm open run their
-   step 4 in arrival order neither queue states. */
-static int open_find_name(JSContext *ctx, JSIdbOpenState *s, JSValueConst entry, const char *ask, JSValue *pname)
+   set or a non-empty §2.8.2 queue held at the step's first ask, in order (a name a pending request is about to
+   create or delete orders this request as much as an existing database does); the arm where it equals none
+   takes E_NAME, the name its identity bought. Each equal arm is a predicate over the unknown's domain, which prunes the arms it contradicts.
+   An equal arm is a request for that name, so steps 1-3 hold for its queue: the entry leaves its own queue
+   (which proceeds as if it had completed) and joins the end of the chosen name's, with E_NAME set to it.
+   Answers 0 with the name in *pname (owned), a request code, or -1; *requeued is true where the entry now
+   waits behind that queue's earlier requests, whose dequeue starts it again at this step. */
+static int open_find_name(JSContext *ctx, JSIdbOpenState *s, JSValueConst entry, const char *ask, JSValue *pname,
+                          bool *requeued)
 {
     JSValue unknown = entry_get(ctx, entry, E_NAME_UNKNOWN), cands, own;
     uint32_t n;
     int r, arm;
 
     *pname = JS_UNDEFINED;
+    *requeued = false;
     own = entry_get(ctx, entry, E_NAME);
     if (JS_IsNull(unknown)) {
         *pname = own;
@@ -397,6 +477,7 @@ static int open_find_name(JSContext *ctx, JSIdbOpenState *s, JSValueConst entry,
             JS_FreeValue(ctx, db);
         }
         JS_FreeValue(ctx, dbs);
+        k = open_add_queued_names(ctx, cands, k, own);
         entry_set(ctx, entry, E_NAME_CANDS, JS_DupValue(ctx, cands));
     }
     n = open_list_len(ctx, cands);
@@ -421,6 +502,7 @@ static int open_find_name(JSContext *ctx, JSIdbOpenState *s, JSValueConst entry,
         JS_FreeValue(ctx, s->pred);
         s->pred = JS_UNINITIALIZED;
         if (arm) {
+            *requeued = entry_requeue(ctx, entry, nm);
             *pname = nm;
             JS_FreeValue(ctx, cands); JS_FreeValue(ctx, unknown); JS_FreeValue(ctx, own);
             return 0;
@@ -522,9 +604,15 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         {
             JSValue nv;
             const char *name;
+            bool requeued;
 
-            r = open_find_name(ctx, s, entry, "Indexed Database §5.1 step 4 (the database named name)", &nv);
+            r = open_find_name(ctx, s, entry, "Indexed Database §5.1 step 4 (the database named name)", &nv,
+                               &requeued);
             if (r) return r;
+            if (requeued) {
+                JS_FreeValue(ctx, nv);
+                return JS_STEP_DONE;   /* that queue's dequeue starts this entry again */
+            }
             name = JS_ToCString(ctx, nv);
 
             CHECK(name != NULL, "IndexedDB: an §5.1 entry could not report its own database name");
@@ -820,9 +908,15 @@ static int js_idb_delete_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         {
             JSValue nv;
             const char *name;
+            bool requeued;
 
-            r = open_find_name(ctx, s, entry, "Indexed Database §5.3 step 4 (the database named name)", &nv);
+            r = open_find_name(ctx, s, entry, "Indexed Database §5.3 step 4 (the database named name)", &nv,
+                               &requeued);
             if (r) return r;
+            if (requeued) {
+                JS_FreeValue(ctx, nv);
+                return JS_STEP_DONE;   /* that queue's dequeue starts this entry again */
+            }
             name = JS_ToCString(ctx, nv);
 
             CHECK(name != NULL, "IndexedDB: an §5.3 entry could not report its own database name");
@@ -1374,33 +1468,7 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
 
     STEP_ARM(RES_DEQUEUE);
         JS_FreeValue(ctx, cb_result);
-        {
-            /* §2.8.2: "each request must run to completion before the next request is processed." This is that
-               completion, and the next entry's §5.1 starts here — which is the whole of how step 3's wait is
-               discharged rather than waited on. */
-            JSValue q = entry_queue(ctx, entry), head;
-            uint32_t i, n = open_list_len(ctx, q);
-
-            DCHECK(n > 0, "an open request completed with an empty connection queue");
-            head = JS_GetPropertyUint32(ctx, q, 0);
-            DCHECK(JS_VALUE_GET_PTR(head) == JS_VALUE_GET_PTR(entry),
-                   "the open request that completed is not the head of its connection queue");
-            JS_FreeValue(ctx, head);
-            for (i = 0; i + 1 < n; i++)
-                JS_DefinePropertyValueUint32(ctx, q, i, JS_GetPropertyUint32(ctx, q, i + 1), JS_PROP_C_W_E);
-            JS_SetPropertyStr(ctx, q, "length", JS_NewUint32(ctx, n - 1));
-            if (n > 1) {
-                JSValue next = JS_GetPropertyUint32(ctx, q, 0);
-
-                /* THE NEXT ENTRY'S OWN ALGORITHM, not this one's. §2.8.1 Open requests is one request type
-                   "used when opening a connection or deleting a database", so the queue interleaves both and
-                   what a dequeue starts is whatever the next entry IS — asked of entry_start_machine, which
-                   is the only thing that answers it. */
-                entry_enqueue(ctx, entry_start_machine(ctx, next), next);
-                JS_FreeValue(ctx, next);
-            }
-            JS_FreeValue(ctx, q);
-        }
+        entry_dequeue(ctx, entry);   /* this open request has run to completion */
         return JS_STEP_DONE;
 }
 
