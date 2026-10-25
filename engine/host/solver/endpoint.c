@@ -13,6 +13,7 @@
 #include "solver/solve.h"            /* the request class an attacker-chosen host is handed to */
 #include "core/dom/document.h"       /* the base an address prefix is parsed against */
 #include "core/url/url.h"
+#include "core/fetch/fetch.h"         /* Fetch's same-origin test over an unknown address */
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -2069,10 +2070,12 @@ static int door_sends_request(int door) {
     return 0;
 }
 
-/* Do the page's own bytes ahead of the first hole in `url` (a concolic address) decide its scheme and host?
-   They are parsed by URL §4.4 "URL parsing" against the document base; past the authority no later byte can
-   move them (url_prefix_decides_host). */
-static int address_prefix_decides_host(JSContext *ctx, JSValueConst url) {
+/* Can the attacker's bytes in `url` (a concolic address) pick its host? Two facts, both computed: the page's own
+   bytes ahead of the first hole, parsed by URL §4.4 "URL parsing" against the document base, leave the host open
+   (url_prefix_decides_host), and Fetch's same-origin test over the unknown address
+   (fetch_main_same_origin_unknown, the test the reply is decided by) is not true on this path, which a page-side
+   origin check the path took would have made it. */
+static int address_host_open(JSContext *ctx, JSValueConst url) {
     char *disp = url_display(ctx, url);
     unsigned char *hole = concolic_shape_hole_mask(url);
     const char *b = document_base_url(ctx);
@@ -2085,10 +2088,16 @@ static int address_prefix_decides_host(JSContext *ctx, JSValueConst url) {
     url_record_init(&base);
     CHECKF(b && url_parse(&base, b, strlen(b), NULL),
            "endpoint: the document base URL `%s` does not parse — HTML §2.4.1 makes it a URL record", b ? b : "");
-    r = url_prefix_decides_host(url_prefix_state(disp, n, &base));
+    r = !url_prefix_decides_host(url_prefix_state(disp, n, &base));
     url_record_free(&base);
     free(hole);
     free(disp);
+    if (r) {
+        JSValue same = fetch_main_same_origin_unknown(ctx, url, JS_UNDEFINED);
+
+        r = !(JS_IsBool(same) && JS_ToBool(ctx, same));
+        JS_FreeValue(ctx, same);
+    }
     return r;
 }
 
@@ -2258,7 +2267,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        held per hole. Next diff builds: the root of the hole the host's bytes come from. Absence shows as: a
        marked API record whose address begins with an app-state hole the attacker's bytes follow. */
     if (aroot && door_sends_request(door) && concolic_root_delivered_all(aroot) &&
-        !address_prefix_decides_host(ctx, url)) {
+        address_host_open(ctx, url)) {
         const Flow *f = flow_running();
 
         DCHECK(f != NULL, "a request whose host an attacker source decides was composed with no flow running — "

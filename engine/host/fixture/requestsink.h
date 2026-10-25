@@ -1,9 +1,11 @@
 /* THE REQUEST-SINK DOCUMENT: requests whose address, header or body an attacker source roots, one source per
-   request. Three must carry the security-relevant mark: a credentialed fetch to an address the fragment
-   supplies, a same-origin fetch whose path a query value extends, and a POST whose header and body query values
-   supply. Five must stay plain API records: an uncredentialed GET to another origin, an uncredentialed GET whose
-   origin the page pins, a DELETE the page sends only from its own button's click listener, a fetch in a function
-   the page never calls (reached only by a drive), and a credentialed fetch rooted in stored state.
+   request. A credentialed fetch to an address the fragment supplies, and one a button's click listener sends to
+   an address a query value supplies, are request-class findings (the attacker picks the host). A same-origin
+   fetch whose path a query value extends, and a POST whose header and body query values supply, carry the
+   security-relevant mark. Five stay plain API records: an uncredentialed GET to another origin, an
+   uncredentialed GET whose origin the page pins, a DELETE the page sends only from its own button's click
+   listener, a fetch in a function the page never calls (reached only by a drive), and a credentialed fetch
+   rooted in stored state.
    Exploring documents of test_forced.c (its TF_DOCS table); each ends with TF_CANVAS_INK. */
 #ifndef ENGINE_HOST_FIXTURE_REQUESTSINK_H
 #define ENGINE_HOST_FIXTURE_REQUESTSINK_H
@@ -13,7 +15,7 @@
 
 static const char HTML_REQUESTSINK[] =
     "<!doctype html><html><body>"
-    "<button id='rqDel'>Delete</button>"
+    "<button id='rqDel'>Delete</button><button id='rqGoBtn'>Go</button>"
     "<script>"
     "var rqQ = new URLSearchParams(location.search);"
     "var rqTo = location.hash.slice(1);"
@@ -30,6 +32,9 @@ static const char HTML_REQUESTSINK[] =
     "function rqNeverCalled() { fetch('/api/rq-orphan/' + rqQ.get('o')); }"
     "var rqStored = localStorage.getItem('rqk');"
     "if (rqStored !== null) fetch('/api/rq-store?k=' + encodeURIComponent(rqStored));"
+    "document.getElementById('rqGoBtn').addEventListener('click', function () {"
+    "  fetch(rqQ.get('go'), { credentials: 'include' });"
+    "});"
     "document.getElementById('rqDel').addEventListener('click', function () {"
     "  var d = rqQ.get('d');"
     "  if (d !== null) fetch('/api/drafts/' + d, { method: 'DELETE' });"

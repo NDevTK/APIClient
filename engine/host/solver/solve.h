@@ -14,6 +14,7 @@
 #define ENGINE_HOST_SOLVER_SOLVE_H
 
 #include "quickjs.h"
+#include "core/fetch/fetch.h"   /* the request a request-class fire reads */
 struct Flow;
 
 /* Install the X9 fire-marker + init the @S store. Call once at engine init (after the global exists). */
@@ -43,6 +44,8 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg);
    the page handed it and `base` the document base URL it resolves against: detected on an exploring flow, and
    read for the context probe on a candidate run of the request class. */
 void solve_request_sink(JSContext *ctx, JSValueConst url, const char *base);
+/* …and its fire: a candidate run's request leaving the engine (solver/request_observe.h). */
+void solve_request_parked(const FetchRequest *req);
 
 /* …AND THE SAME PAIR OF DECISIONS FOR A HOST ALGORITHM THAT TURNS A STRING INTO CODE ITSELF. Announces `handler`
    at the JS-context sink UNCONDITIONALLY and returns the program TEXT (owned) that algorithm should compile, or

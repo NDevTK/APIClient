@@ -30,6 +30,7 @@
 #include "solver/c_alloc.h"   /* the C heap's running total, RAM pressure's reading */
 #include "solver/solve.h"
 #include "solver/witness_verify.h"
+#include "solver/request_observe.h"
 #include "solver/post_index.h"
 #include "solver/flow.h"
 #include "solver/dyn_body.h"  /* a queued program's source text — one buffer, every timeline that holds it */
@@ -493,8 +494,10 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     sf.url = use_url;
     switch (scheme_fetch(ctx, &sf, JS_UNDEFINED, &reply)) {
     /* §4.3's HTTP(S) scheme row, "Return the result of running HTTP fetch given fetchParams": the one outcome
-       the host is shown. The entry stays outstanding until engine_provide answers it. */
+       the host is shown. The entry stays outstanding until engine_provide answers it. The request leaves the
+       engine here, past §4.1's upgrade and blocking steps, which is the point a request fire reads. */
     case SCHEME_FETCH_NETWORK:
+        request_observe_park(&sf);
         free(up_url);
         return;
     /* §4.3 built the whole response inside this agent. It is the same reply record a host delivers and goes

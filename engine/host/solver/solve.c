@@ -4,6 +4,7 @@
 #include "solver/solve_html.h"
 #include "solver/solve_js.h"
 #include "solver/solve_url.h"
+#include "solver/request_observe.h"
 #include "solver/solve_filter.h"
 #include "core/json_buf.h"
 #include "core/frame/policy_container.h"
@@ -356,17 +357,16 @@ static char *fire_acts(const Flow *f, int *no_act, int *unsolved, char **refused
     return json_buf_take(&b);
 }
 
-static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
-    Flow *f = flow_running();
+/* A candidate's fire was observed (the marker called, or a request class's request leaving): a PoC when every act
+   its path needs is one a person performs, else a refusal the search records. */
+static void fire_observed(Flow *f) {
     int no_act, unsolved;
     char *acts, *refused;
 
-    (void)ctx; (void)t; (void)c; (void)v;
-    if (!f || !f->cand_src) return JS_UNDEFINED;   /* the page's own call — no substitution, nothing proved */
-    DCHECK(f->cand_payload && f->cand_sink,
-           "an @S candidate flow fired the marker holding a source but no payload or no sink class — a finding "
-           "IS that triple, so a flow carrying half of it was assembled somewhere that does not go through the "
-           "seeder or the cold tier's rebuild");
+    DCHECK(f && f->cand_src && f->cand_payload && f->cand_sink,
+           "an @S candidate flow fired holding no source, no payload or no sink class — a finding IS that "
+           "triple, so a flow carrying half of it was assembled somewhere that does not go through the seeder "
+           "or the cold tier's rebuild");
     acts = fire_acts(f, &no_act, &unsolved, &refused);
     if (no_act || unsolved) {
         Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
@@ -376,10 +376,18 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
         else e->fired_unsolved_act++;
         if (!e->refused_acts) { e->refused_acts = acts; e->composition_refused = refused; }
         else { free(acts); free(refused); }
-        return JS_UNDEFINED;
+        return;
     }
     DCHECK(refused == NULL, "a fire recorded as a PoC carries a message composition's refusal");
     record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload, acts, acts != NULL);
+}
+
+static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    Flow *f = flow_running();
+
+    (void)ctx; (void)t; (void)c; (void)v;
+    if (!f || !f->cand_src) return JS_UNDEFINED;   /* the page's own call — no substitution, nothing proved */
+    fire_observed(f);
     return JS_UNDEFINED;
 }
 
@@ -1780,10 +1788,6 @@ void solve_request_sink(JSContext *ctx, JSValueConst url, const char *base) {
         if (!(e = candidate_search(SINK_REQUEST))) return;
         if (!(s = JS_ToCString(ctx, url))) return;
         filter_survived(s);
-        /* Named residual. Not covered: the fire; a breakout that reaches the attacker's host arrives here and is
-           not yet observed leaving. Next diff builds: the request observed at engine.c's pending_park_request,
-           read through the flow's fire target. Absence shows as: a request search with escapes in its payload
-           list and turns past its tried count that never fires. */
         if (strstr(s, SOLVE_URL_LOCATOR)) {
             char *w = solve_url_witness(base, s);
             learn_witness(e, w);
@@ -1794,6 +1798,20 @@ void solve_request_sink(JSContext *ctx, JSValueConst url, const char *base) {
         return;
     }
     detect_sink(url, SINK_REQUEST);
+}
+
+/* The request class's fire oracle: a candidate run's request leaving the engine (solver/request_observe.h) for
+   the attacker's host. Arrival and escape are one observation here, since the host is the context the breakout
+   leaves, and the request leaving is the fire. */
+void solve_request_parked(const FetchRequest *req) {
+    Cand *e;
+
+    if (!is_verifying() || !concolic_candidate_delivered()) return;
+    if (!(e = candidate_search(SINK_REQUEST))) return;   /* another class's search owns this run */
+    if (!request_observed(req, NULL, REQUEST_PIECE_HOST, NULL, SOLVE_URL_ATTACKER_HOST)) return;
+    breakout_arrived(e);
+    escape_reached(e);
+    fire_observed(flow_running());
 }
 
 /* The delivery root of the search a live candidate belongs to, asked by cold.c when it parks the candidate's

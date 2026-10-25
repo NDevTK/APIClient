@@ -15533,8 +15533,10 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     static const char *const plain_at[3] = { "/api/drafts/", "/api/rq-orphan/", "/api/rq-store" };
     const char *mk_why[3] = { NULL, NULL, NULL }, *pr_why[3] = { NULL, NULL, NULL }, *pl_why[3] = { NULL, NULL, NULL };
     int mk_tt[3] = { 1, 1, 1 }, pr_tt[3] = { 1, 1, 1 }, pl_tt[3] = { 1, 1, 1 }, i, seen, marked, plain;
-    const char *to_why = NULL, *tn_why = NULL; int to_tt = 1, tn_tt = 1;
-    char to_src[192] = "";
+    const char *to_why = NULL, *tn_why = NULL, *tf_why = NULL, *go_why = NULL;
+    int to_tt = 1, tn_tt = 1, tf_tt = 1, go_tt = 1;
+    char to_src[192] = "", go_src[192] = "";
+    int has_go = s_rooted_source(js, "request", "[go]", go_src, sizeof go_src);
 
     fold_row(&to_tt, &to_why, s_rooted_source(js, "request", LOCATION_HASH_SRC, to_src, sizeof to_src),
              "NOT REACHED: no request-class record is rooted in the fragment, so the fetch to an address the "
@@ -15542,6 +15544,12 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     fold_row(&tn_tt, &tn_why, !fcs_has(js, "\"addressRoot\":\"" LOCATION_HASH_SRC "\""),
              "an API record carries the fragment as its address root, so a request whose host the attacker picks "
              "was filed as an endpoint of the app");
+    fold_row(&tf_tt, &tf_why, to_src[0] && s_stage(js, "request", to_src) == S_FIRED,
+             "the request whose host the fragment decides was not seen leaving the engine for the attacker's host");
+    fold_row(&go_tt, &go_why, has_go && s_stage(js, "request", go_src) == S_FIRED,
+             "the click-sent request whose host a query value decides did not fire");
+    fold_row(&go_tt, &go_why, has_go && s_field(js, "request", go_src, "\"acts\":"),
+             "the click-sent request's finding lists no act, so its proof omits the click it needs");
     for (i = 0; i < 3; i++) {
         rq_marks(js, marked_at[i], &seen, &marked, &plain);
         fold_row(&mk_tt[i], &mk_why[i], seen > 0, "NOT REACHED: there is no record of this address");
@@ -15558,6 +15566,8 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     const Probe rows[] = {
         { "rq-to-found", to_tt, "rqTo", SESS_EXPLORE, to_why },
         { "rq-to-no-record", tn_tt, "rqTo", SESS_EXPLORE, tn_why, .reach = "rq-to-found" },
+        { "rq-to-fired", tf_tt, "rqTo", SESS_EXPLORE, tf_why },
+        { "rq-go-fired-with-act", go_tt, "rqGoBtn", SESS_EXPLORE, go_why },
         { "rq-id-marked", mk_tt[0], "rqId", SESS_EXPLORE, mk_why[0] },
         { "rq-other-marked", mk_tt[1], "rqH", SESS_EXPLORE, mk_why[1] },
         { "rq-pinned-marked", mk_tt[2], "rqP", SESS_EXPLORE, mk_why[2] },
@@ -16051,9 +16061,10 @@ TF_UNIT void probes_fileparse_fetch(const char *js, Probe *tab, int *n) {
     fold_row(&sp_tt, &sp_why, !!strstr(js, "\"/api/fpf-parsed\""),
              "NOT REACHED: there is no /api/fpf-parsed record, so no arm walked the file format to its body");
     const char *ua_why = NULL; int ua_tt = 1;
-    fold_row(&ua_tt, &ua_why, fcs_has(js, LOCATION_SEARCH_SRC),
-             "no endpoint record's address carries location.search, so the fetch of the file the query names was "
-             "not learned as attacker-steered");
+    { char ua_src[192] = "";
+      fold_row(&ua_tt, &ua_why, s_rooted_source(js, "request", LOCATION_SEARCH_SRC, ua_src, sizeof ua_src),
+               "no request-class record is rooted in location.search, so the fetch of the file the query names "
+               "was not read as a request whose host the attacker decides"); }
     const char *sf_why = NULL; int sf_tt = 1;
     fold_row(&sf_tt, &sf_why, has_seed,
              "NOT REACHED: no eval @S record carries a source rooted in the seed file's reply, so the file's bytes "
@@ -16226,9 +16237,10 @@ TF_UNIT void probes_fileparse_text(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/fpt-parsed-open record, so the unrestricted statement never walked a "
              "text body to its second line");
     const char *ua_why = NULL; int ua_tt = 1;
-    fold_row(&ua_tt, &ua_why, fcs_has(js, "file="),
-             "no endpoint record's address carries the query's `file=`, so the fetch of the file the query names "
-             "was not learned as attacker-steered");
+    { char ua_src[256] = "";
+      fold_row(&ua_tt, &ua_why, s_rooted_source(js, "request", "file=", ua_src, sizeof ua_src),
+               "no request-class record carries the query's `file=`, so the fetch of the file the query names was "
+               "not read as a request whose host the attacker decides"); }
     const char *sq_why = NULL; int sq_tt = 1;
     fold_row(&sq_tt, &sq_why, has_open,
              "NOT REACHED: no eval @S record carries a source rooted in the query's `file=`, so the reply to an "
