@@ -34362,13 +34362,6 @@ TF_UNIT int abi_main(int argc, char **argv)
         }
     }
 
-    /* The attacker's site (solver/concolic.h's concolic_set_attacker_site): the host the person verifying
-       controls, stated by the party that spawned this process; without it the engine's `.test` default stands. */
-    {
-        const char *site = arg_val(argc, argv, "--attacker-site");
-        if (site) concolic_set_attacker_site(site);
-    }
-
     /* NO RESIDUE, STATED. `qjs_begin`'s argument is the parked frontier a previous session left, and the empty
        string is the positive statement that this session continues none. A cross-session resume is a field on
        the record above and a shelf behind it, which is a diff of its own; what must not happen is this entry
@@ -34968,6 +34961,13 @@ static void native_ceiling_arm(void) {
 int main(int argc, char **argv) {
     JSRuntime *rt;
     native_ceiling_arm();
+    /* The attacker's site (solver/concolic.h's concolic_set_attacker_site): the host the person verifying
+       controls, stated by the party that spawned this process, for the ABI arm and a `--doc` run alike;
+       without it the engine's `.test` default stands. */
+    {
+        const char *site = arg_val(argc, argv, "--attacker-site");
+        if (site) concolic_set_attacker_site(site);
+    }
     /* THE ABI ARM IS TAKEN FIRST, BEFORE ANY OF THE FIXTURE'S OWN STATE EXISTS. `qjs_init` roots an agent —
        its runtime, its class registrations, its world namespace and its frontier — and the selftests below
        root a second one under the name "fixture". Two agents in one process is not a smaller version of one;
