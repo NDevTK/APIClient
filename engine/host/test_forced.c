@@ -1329,6 +1329,7 @@ static const char *HTML_COLD =
     "if (cfg.admin) { fetch('/api/cold/admin?a=' + acc); }"                        /* the fork: two arms, two decision chains, and an endpoint per arm */
     " else { fetch('/api/cold/public?a=' + acc); }"
     "eval(\"'\" + state.code + \"'\");"                                            /* the @S sink: candidate sessions, hence 'c' records */
+    "eval(\"'\" + new URLSearchParams(location.search).get('ck') + \"'\");"       /* a keyed root: its 'c' records re-declare the row */
     /* AND CODE THE PAGE SHIPPED AND NEVER CALLED, which is the one member of this frontier whose work a
        decision vector cannot reproduce — a resume re-runs the document, and re-running the document is exactly
        the run that never calls this. So it is what makes the park write an 'o' record and the resume rebuild a
@@ -19480,6 +19481,9 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
        solve.h declares, in order, with the payload anchored to its own `poc` key, so a candidate list cannot
        answer it and neither can another sink's entry. */
     int cold_fired = s_poc(js, "eval", "{state}.code", "';X9()//");
+    /* A keyed-root candidate resumed in the second session is delivered at its parent component, so its fire
+       passes record_sink's one-delivery assert (concolic_candidate_at_root). */
+    int cold_kfired = s_poc(js, "eval", "{location.search}[ck]", "';X9()//");
     const char *nwiso_why = NULL;
  int nwiso_iso = 1;
     fold_row(&nwiso_iso, &nwiso_why, !strstr(js, "\"/api/nwiso/t-sees-f\""),
@@ -19522,6 +19526,7 @@ TF_UNIT void probes_park_resume(const char *js, Probe *tab, int *n) {
         { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
+        { "resumed-keyed-fired", cold_kfired, "state.code", SESS_RESUME },
         /* THE 'o' ARM AT BOTH ENDS. Keyed on the uncalled function itself, because a key is a substring of the
            PROGRAM and this row is a statement about that function and nothing else. */
         { "park-orphan", cold_park_orphan, "coldOrphan", SESS_PARK, .gate = "park-wrote" },

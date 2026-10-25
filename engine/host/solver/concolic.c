@@ -5121,10 +5121,48 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
     return r;
 }
 
+/* The claimant of keyed rows and its URL §5.2 value serializer (concolic_set_tuple_serializer). */
+static const char *g_tuple_component;
+static char *(*g_tuple_serialize)(const char *s, size_t n);
+
+void concolic_set_tuple_serializer(const char *component, char *(*serialize)(const char *s, size_t n))
+{
+    DCHECK(!component == !serialize, "a tuple serializer was registered without its claimant, or the reverse");
+    DCHECK(!component || !g_tuple_component, "a second component registered the URL §5.2 tuple serializer");
+    g_tuple_component = component;
+    g_tuple_serialize = serialize;
+}
+
+void concolic_declare_keyed_source(const char *src, const char *parent, const char *key)
+{
+    int prow = -1, i;
+
+    DCHECK(g_tuple_component && src && parent && key && *key,
+           "a keyed row was declared with no registered claimant, or with no identity, parent or key");
+    for (i = 0; i < g_srcs_n; i++)
+        if (!strcmp(g_srcs[i].src, parent)) { prow = i; break; }
+    DCHECK(prow >= 0 && !g_srcs[prow].key, "a keyed row names a parent that is not a declared component");
+    if (prow < 0 || concolic_source_declared_by(g_tuple_component, src)) return;
+    concolic_declare_source(g_tuple_component, src, "", g_srcs[prow].prefix, g_srcs[prow].deliver);
+    g_srcs[g_srcs_n - 1].key = strdup(key);
+    g_srcs[g_srcs_n - 1].parent = strdup(parent);
+    g_srcs[g_srcs_n - 1].serialize = g_tuple_serialize;
+    CHECK(g_srcs[g_srcs_n - 1].key && g_srcs[g_srcs_n - 1].parent, "concolic: OOM declaring a tuple's key");
+}
+
+int concolic_source_keyed(const char *root, const char **parent, const char **key)
+{
+    int row = root ? root_declared_row(root) : -1;
+
+    if (row < 0 || !g_srcs[row].key) return 0;
+    *parent = g_srcs[row].parent;
+    *key = g_srcs[row].key;
+    return 1;
+}
+
 /* See concolic.h. */
-JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *component, const char *op, JSValueConst list,
-                                      JSValueConst name, const char *key,
-                                      char *(*serialize)(const char *s, size_t n), JSValue example)
+JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *op, JSValueConst list, JSValueConst name,
+                                      const char *key, JSValue example)
 {
     JSValueConst ops[2] = { list, name };
     const char *psrc = concolic_src_c(list), *fields[3];
@@ -5132,9 +5170,8 @@ JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *component, con
     char *src, *ident;
     JSValue r;
 
-    DCHECK(concolic_is(list) && !concolic_is(name) && key != NULL && *key && component != NULL && serialize,
-           "a tuple's value was minted over a list that is not unknown, a name that is, no spelled key or no "
-           "serializer");
+    DCHECK(concolic_is(list) && !concolic_is(name) && key != NULL && *key,
+           "a tuple's value was minted over a list that is not unknown, a name that is, or no spelled key");
     row = root_declared_row(concolic_root_c(list));
     /* Named residual. Not covered: a list parsed from a derivation of a component (`location.hash.slice(1)`), or
        from a carrier other than the query, whose reproduction this row cannot compose. Next diff builds: the
@@ -5144,13 +5181,7 @@ JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *component, con
         g_srcs[row].prefix != '?')
         return concolic_new_derived(ctx, op, ops, 2, example);
     src = shapef("%s[%s]", concolic_shape_c(list), key);
-    if (!concolic_source_declared_by(component, src)) {
-        concolic_declare_source(component, src, "", '?', SRC_DELIVER_ADDRESS);
-        g_srcs[g_srcs_n - 1].key = strdup(key);
-        g_srcs[g_srcs_n - 1].parent = strdup(psrc);
-        g_srcs[g_srcs_n - 1].serialize = serialize;
-        CHECK(g_srcs[g_srcs_n - 1].key && g_srcs[g_srcs_n - 1].parent, "concolic: OOM declaring a tuple's key");
-    }
+    concolic_declare_keyed_source(src, psrc, key);
     for (i = 0; i < 2; i++) fields[i] = ident_of_operand(ctx, ops[i]);
     fields[2] = op;
     ident = concolic_ident_compose("b", fields, 3);

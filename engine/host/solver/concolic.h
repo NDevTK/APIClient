@@ -973,13 +973,20 @@ JSValue     concolic_new_derived(JSContext *ctx, const char *op, const JSValueCo
                                  JSValue example);
 /* The value of the first tuple named `name` in the application/x-www-form-urlencoded list (URL §5.1) parsed from
    the unknown string `list`, as `op` reads it. Where `list` is a declared query's own bytes, the value is its own
-   identity and delivery root, `<list's shape>[key]`, which `component` declares an address row for on first use:
-   the payload rides the query as that tuple's value, `key` being the name's URL §5.2 serialization and
-   `serialize` the claimant's §5.2 value serializer, which a candidate's delivery runs. Otherwise it is
+   identity and delivery root, `<list's shape>[key]`, a keyed row (concolic_declare_keyed_source): the payload
+   rides the query as that tuple's value, `key` being the name's URL §5.2 serialization. Otherwise it is
    concolic_new_derived over (list, name). Operands borrowed, `example` consumed. */
-JSValue     concolic_new_urlencoded_value(JSContext *ctx, const char *component, const char *op, JSValueConst list,
-                                          JSValueConst name, const char *key,
-                                          char *(*serialize)(const char *s, size_t n), JSValue example);
+JSValue     concolic_new_urlencoded_value(JSContext *ctx, const char *op, JSValueConst list, JSValueConst name,
+                                          const char *key, JSValue example);
+/* The component that claims keyed rows and its URL §5.2 tuple-value serializer, which a candidate's delivery
+   runs; registered once per agent, cleared with NULL, NULL at the claimant's release. */
+void        concolic_set_tuple_serializer(const char *component, char *(*serialize)(const char *s, size_t n));
+/* Declare the keyed row `src`: the tuple named `key` (serialized) in the declared component `parent`. A row is a
+   derivation of its root's identity, its parent and its key, so a cold-resumed candidate re-declares it from
+   those before it is installed; declaring an existing row is a no-op. */
+void        concolic_declare_keyed_source(const char *src, const char *parent, const char *key);
+/* Whether `root` is a keyed row, with its parent component and key (borrowed) when it is. */
+int         concolic_source_keyed(const char *root, const char **parent, const char **key);
 /* concolic_new_derived over the elements of the array `list`, which is borrowed. */
 JSValue     concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example);
 struct JSBufferUnknownPiece;

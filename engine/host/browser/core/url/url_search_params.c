@@ -479,7 +479,7 @@ static int usp_find(const UspList *l, const char *name, size_t nn, const char *v
 }
 
 /* URL §5.2 application/x-www-form-urlencoded serializing of one tuple value: the urlencoded percent-encode set.
-   The delivery of a candidate over a query parameter runs it (concolic_new_urlencoded_value). Owned. */
+   The delivery of a candidate over a query parameter runs it (concolic_set_tuple_serializer). Owned. */
 static char *usp_serialize_value(const char *s, size_t n)
 {
     return url_percent_encode(s, n, URL_SET_URLENCODED);
@@ -548,8 +548,7 @@ static int usp_lookup_answer(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, 
         JSValueConst ops[2] = { u->unknown, argv[0] };
         *presult = concolic_new_derived(ctx, "URLSearchParams.get", ops, 2, ex);
     } else {
-        *presult = concolic_new_urlencoded_value(ctx, USP_COMPONENT, "URLSearchParams.get", u->unknown, argv[0],
-                                                 member, usp_serialize_value, ex);
+        *presult = concolic_new_urlencoded_value(ctx, "URLSearchParams.get", u->unknown, argv[0], member, ex);
     }
     free(member);
     concolic_state_string(*presult);   /* §6.2: the found arm's value is a USVString */
@@ -1025,6 +1024,7 @@ void usp_init(JSContext *ctx)
     g_usp_id[USP_DELETE]   = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_DELETE);
     idl_optional_from(1);   /* §6.2: `delete(name, optional value)` — undefined is NOT the value "undefined" */
     g_usp_id[USP_GET]      = idl_method_id_step(ctx, TWO_STR, 1, NULL, 0, &USP_LOOKUP_DECL, USP_GET);
+    concolic_set_tuple_serializer(USP_COMPONENT, usp_serialize_value);
     g_usp_id[USP_GETALL]   = idl_method_id(ctx, TWO_STR, 1, js_usp_member, USP_GETALL);
     g_usp_id[USP_HAS]      = idl_method_id_step(ctx, TWO_STR, 2, NULL, 0, &USP_LOOKUP_DECL, USP_HAS);
     idl_optional_from(1);   /* §6.2: `has(name, optional value)` */
@@ -1117,5 +1117,6 @@ void usp_free(void)
        given it back at all. */
     idl_pair_iter_release(g_usp_pair_handle);
     concolic_undeclare_sources(USP_COMPONENT);   /* the tuple rows usp_lookup_answer declared */
+    concolic_set_tuple_serializer(NULL, NULL);
     agent_state_undo("url_search_params");
 }

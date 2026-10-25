@@ -617,6 +617,20 @@ static void park_rec_cand(const Flow *f, long id)
        be kept in step with. Two characters a byte is the price of never being right about a set of bytes. */
     park_hex(root);
     park_str(",");
+    /* A keyed root's parent component and key, `-,-` for any other root: the resume re-declares the row from
+       them before the candidate is installed (concolic_declare_keyed_source). */
+    {
+        const char *kparent, *kkey;
+
+        if (concolic_source_keyed(root, &kparent, &kkey)) {
+            park_hex(kparent);
+            park_str(",");
+            park_hex(kkey);
+            park_str(",");
+        } else {
+            park_str("-,-,");
+        }
+    }
     /* THE PAYLOAD IS LAST AND STAYS LAST. The 'c' arm reads it to the record's `end` and not to a separator,
        which is what makes it the field a new one goes BEFORE: appended after, its hex would be read as the
        payload's own and every resumed candidate would inject a string no session ever built. */
@@ -2414,6 +2428,33 @@ int cold_resume(JSContext *ctx, const char *recipes)
                    "left of where this reader looks for it. Drop the residue and let the frontier re-seed");
             root = park_unhex(rb, q);
             q = park_comma(q);
+            {
+                const char *pb, *kb;
+                bool keyed;
+
+                for (pb = q; q < end && *q != ','; q++)
+                    ;
+                DCHECK(q < end, "a parked @S candidate has no key field after its root's parent — a residue from "
+                                "a build whose 'c' record carried no keyed-root fields; drop it and re-seed");
+                keyed = !(q - pb == 1 && *pb == '-');
+                q = park_comma(q);
+                for (kb = q; q < end && *q != ','; q++)
+                    ;
+                DCHECK(q < end, "a parked @S candidate has no payload after its root's key — a residue from a "
+                                "build whose 'c' record carried no keyed-root fields; drop it and re-seed");
+                DCHECK(keyed == !(q - kb == 1 && *kb == '-'), "a parked @S candidate names a keyed root's parent "
+                                                              "without its key, or the reverse");
+                /* The row is a derivation of the root's identity, parent and key: declared before the candidate
+                   is installed at its first switch-in, so its delivery is at the parent component. */
+                if (keyed) {
+                    char *kparent = park_unhex(pb, kb - 1), *kkey = park_unhex(kb, q);
+
+                    concolic_declare_keyed_source(root, kparent, kkey);
+                    free(kparent);
+                    free(kkey);
+                }
+                q = park_comma(q);
+            }
             fl->cand_payload = park_unhex(q, end);
             /* THE SINK BINDS BACK TO THE TABLE'S OWN POINTER, and the same call tells the search how these
                bytes arrive, re-registers it as pending-and-tried, and REFUSES the record where the root's
