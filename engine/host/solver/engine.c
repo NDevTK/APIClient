@@ -10774,13 +10774,13 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
      * STEP_UNIT_RENDERING or STEP_UNIT_TIMER, each of which changes what a zero on `queue-rendering-opportunity`
      * means.
      *
-     * The twelve units at or below the boundary (RENDERING, TIMER, IDLE_PERIOD, ORPHAN_SEED, ORPHAN_ROUTE,
-     * AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED, USER_SCROLL, CLOSE_REQUEST, AWAIT_PEER, FINISHED) are each written at
-     * one site at or below it, so their sum is the dispatches that descended this far, which `g_clock_render_asks`
-     * counts at the arm; the third assert below is that agreement. `finished` at zero with the sum at zero says
+     * The thirteen units at or below the boundary (RENDERING, TIMER, IDLE_PERIOD, ORPHAN_SEED, ORPHAN_ROUTE,
+     * AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED, USER_SCROLL, CLOSE_REQUEST, OPEN_AGAIN, AWAIT_PEER,
+     * FINISHED) are each written at one site at or below it, so their sum is the dispatches that descended this
+     * far, which `g_clock_render_asks` counts at the arm; the third assert below is that agreement. `finished` at zero with the sum at zero says
      * the retirement arm was never asked (a fact about the arms above); with the sum large, it was asked and
      * something below declined.
-     * Named residual. Not covered: the twelve-unit list is written here by hand, not derived from the ladder.
+     * Named residual. Not covered: the thirteen-unit list is written here by hand, not derived from the ladder.
      * Next diff builds: a marker on solver/step_unit.h's list naming which side of the boundary each arm is written
      * on, from which the sum is derived. Absence shows as: the boundary-sum assert firing after a rung moves across
      * the clock on purpose, until this list is edited to match. */
@@ -10802,7 +10802,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        the triple's internal adjacency and are blind to anything moving past all three. A unit that descends
        without joining the list reads the sum too small, one that rises without leaving it too large, a unit
        written at a second site above the boundary too large, a rung asked twice per step too small. One sum of
-       twelve rows rather than twelve containments, because the claim is the partition. ORPHAN_RESUME is absent:
+       thirteen rows rather than thirteen containments, because the claim is the partition. ORPHAN_RESUME is absent:
        engine_orphan_seed returns SEEDED or ROUTED, never RESUMED, so the third outcome of `engine_orphan_unit`
        belongs to the rung above the boundary. */
     {
@@ -10811,11 +10811,12 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
                      g_step_unit_runs[STEP_UNIT_ORPHAN_ROUTE] + g_step_unit_runs[STEP_UNIT_AWAIT_FETCH_RECORD] +
                      g_step_unit_runs[STEP_UNIT_AWAIT_OWED_REPLY] + g_step_unit_runs[STEP_UNIT_AWAIT_DECLINED] +
                      g_step_unit_runs[STEP_UNIT_USER_SCROLL] +
-                     g_step_unit_runs[STEP_UNIT_CLOSE_REQUEST] + g_step_unit_runs[STEP_UNIT_AWAIT_PEER] +
+                     g_step_unit_runs[STEP_UNIT_CLOSE_REQUEST] + g_step_unit_runs[STEP_UNIT_OPEN_AGAIN] +
+                     g_step_unit_runs[STEP_UNIT_AWAIT_PEER] +
                      g_step_unit_runs[STEP_UNIT_FINISHED];
         DCHECKF(below == g_clock_render_asks,
-                "the clock boundary was reached %ld times and the twelve arms at or below it account for %ld — every "
-                "dispatch reaching the rendering rung leaves through one of them, so a unit crossed the boundary, is "
+                "the clock boundary was reached %ld times and the thirteen arms at or below it account for %ld — "
+                "every dispatch reaching the rendering rung leaves through one of them, so a unit crossed the boundary, is "
                 "written on both sides of it, or the rung is asked twice per step",
                 g_clock_render_asks, below);
     }
