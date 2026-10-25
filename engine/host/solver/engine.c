@@ -439,11 +439,18 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     pending_set_int(e, PEND_ADDRESS, (int)req->address);
     /* AN ADDRESS WITH NO BYTES IS NOT FETCHABLE, and nothing asks a host for it: its URL is the display shape of
        an unknown, this engine's annotation, never a URL. It is declined here as the trusted zone declines a
-       request it will not make, so flow_decline_fork gives it two arms: one parked on the request, owed by
-       input (a later session whose run has an example grounds the address and fires it), and one taking §5.6's
-       network error (no success arm: flow_decline_success_arm). The record keeps the address as its key and the reason as its account; the
-       join never lists a declined record. */
+       request it will not make, and flow_decline_fork asks §4.1 step 12's same-origin test over the unknown
+       first: both origins keep an arm parked on the request (a later session whose run has an example grounds
+       the address and fires it) and one taking §5.6's network error, and the other origin's arm also explores
+       the success flow_success_arm builds. The test is computed here, in the asking realm, whose base URL and
+       origin it reads. The record keeps the address as its key and the reason as its account; the join never
+       lists a declined record. */
     if (req->address == FETCH_ADDRESS_UNKNOWN) {
+        DCHECK(concolic_is(req->address_value),
+               "a request whose address is unknown reached the park without the unknown it stands for — the "
+               "producer states both from the one value the page passed (core/fetch/fetch.h)");
+        pending_set(e, PEND_ADDRESS_VALUE, JS_DupValue(ctx, req->address_value));
+        pending_set(e, PEND_SAME_ORIGIN, fetch_main_same_origin_unknown(ctx, req->address_value));
         pending_set(e, PEND_DECLINED, JS_NewString(ctx, PENDING_DECLINED_UNADDRESSED));
         g_reply_unaddressed++;
         free(up_url);
@@ -5656,25 +5663,27 @@ static int flow_answer_exhausted(const Flow *f) {
  * arm is a sibling assembled from its own clone of the flow, or `f` itself when its recorded path chose it, and
  * the return says which (1: `f` took the success). Its path is marked forced when the reply is delivered
  * (flow_deliver_one_reply), because a sibling is born with no mark its parent lacks. A `same-origin` request to
- * another origin has no success to explore.
+ * another origin has no success to explore. `cross` is this flow's answer to §4.1 step 12's same-origin test for
+ * an unknown address (flow_unaddressed_same_origin): 1 another origin, whose server the address's author chose,
+ * and 0 this one, whose bytes stay owed to a grounded address and get no arm here; -1 for an address of bytes.
  * Named residual. Not covered: an XMLHttpRequest's declined send, whose answer is a host request's
- * (FLOW_PENDING_HOSTREQ) and has no reply record to be unknown, and a `fetch()` of an address with no bytes.
- * Next diff builds: the same arm through engine_host_answer's record, and a reply record whose URL list is the
- * unknown address. How its absence shows: an address built from `xhr.response` behind a declined send is reached
- * on no flow while the same address behind a declined `fetch()` is. */
+ * (FLOW_PENDING_HOSTREQ) and has no reply record to be unknown. Next diff builds: the same arm through
+ * engine_host_answer's record. How its absence shows: an address built from `xhr.response` behind a declined
+ * send is reached on no flow while the same address behind a declined `fetch()` is. */
 static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int in_job, const char *site,
-                            int taken) {
+                            int taken, int cross) {
     JSValue e = pending_entry(f->pending, i), uv, mv;
     const char *u, *m;
     JSValue reply, se;
     JSValue *clone;
     void *parked, *dblob;
     Flow *sib, *arm_flow;
-    int arm;
+    int arm, unaddressed = pending_get_int(e, PEND_ADDRESS) == FETCH_ADDRESS_UNKNOWN;
 
-    /* An address with no bytes (pending_park_request's own decline) names no URL for a reply to come from, so it
-       keeps the two arms it had. That is the residual above's second gap: its success path is not explored. */
-    if (pending_get_int(e, PEND_ADDRESS) == FETCH_ADDRESS_UNKNOWN) {
+    DCHECK(unaddressed ? (cross == 0 || cross == 1) : cross == -1,
+           "a success arm was asked with a same-origin answer that does not match its address — the test is "
+           "asked over an unknown address only, and every unknown address has one");
+    if (cross == 0) {
         JS_FreeValue(ctx, e);
         return 0;
     }
@@ -5683,7 +5692,14 @@ static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int 
     u = JS_ToCString(ctx, uv);
     m = JS_ToCString(ctx, mv);
     CHECK(u != NULL && m != NULL, "engine: OOM reading a declined fetch's address and mode");
-    reply = fetch_reply_unknown(ctx, u, m);
+    if (unaddressed) {
+        JSValue av = pending_get(e, PEND_ADDRESS_VALUE);
+
+        reply = fetch_reply_unaddressed(ctx, u, m, av);
+        JS_FreeValue(ctx, av);
+    } else {
+        reply = fetch_reply_unknown(ctx, u, m);
+    }
     JS_FreeCString(ctx, u);
     JS_FreeCString(ctx, m);
     JS_FreeValue(ctx, uv);
@@ -5751,7 +5767,8 @@ static int flow_reply_success_fork(JSContext *ctx, Flow *f) {
             (in_job && JS_ParkedFlowsUnforkable(ctx)))
             continue;
         flow_success_arm(ctx, f, i, in_program, in_job,
-                         "(a reply's status was not ok — the arm takes a reply no server sent)", PEND_SUCCESS_TAKEN);
+                         "(a reply's status was not ok — the arm takes a reply no server sent)", PEND_SUCCESS_TAKEN,
+                         /*cross*/ -1);
         /* This flow's own copy, so the register's arm is never forked twice, whichever arm this flow took. */
         pe = pending_unshare(f->pending, i);
         pending_set_int(pe, PEND_SUCCESS_TAKEN, 1);
@@ -5759,6 +5776,49 @@ static int flow_reply_success_fork(JSContext *ctx, Flow *f) {
         return 1;
     }
     return 0;
+}
+
+/* Fetch §4.1 Main fetch step 12's same-origin test for the declined request `e` to an unknown address, asked by
+ * `f` with its continuation cloned onto the sibling (`in_program`/`in_job` as flow_decline_fork read them). The
+ * test is the predicate pending_park_request stored, the one a page's own `new URL(addr, base).origin` comparison
+ * mints, so a page that checked first has decided it and the ask replays that arm. A page that checked some
+ * other way (`addr.startsWith('/')`) asked a different question, and both answers stay: `//host/x` passes that
+ * guard and is another origin. The sibling takes the other answer and re-asks at its first step, where its
+ * recorded arm replays. A session that does not fork takes this origin, whose arms take no reply no server sent.
+ * Returns 1 for same origin. */
+static int flow_unaddressed_same_origin(JSContext *ctx, Flow *f, JSValueConst e, int in_program, int in_job) {
+    JSValue cond = pending_get(e, PEND_SAME_ORIGIN);
+    JSValue *clone;
+    void *parked, *dec, *pins;
+    Flow *sib;
+    int r;
+
+    if (JS_IsBool(cond))
+        return JS_ToBool(ctx, cond);
+    DCHECK(concolic_is(cond), "an unknown address's park stored a same-origin test that is neither a Boolean nor "
+                              "an unknown one — pending_park_request writes fetch_main_same_origin_unknown's "
+                              "answer on every such record");
+    DCHECK(!g_fork_snapshot_owed, "the same-origin ask was made while another snapshot-owning ask was open");
+    g_fork_snapshot_owed = 1;
+    r = solver_decide(ctx, cond, /*nonforking*/ 1);
+    g_fork_snapshot_owed = 0;
+    JS_FreeValue(ctx, cond);
+    DCHECK(r >= 0, "the same-origin ask over an unknown found no running flow's decision state");
+    if (SOLVER_FORKED(r)) {
+        clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
+        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+        CHECK(!in_program || clone != NULL,
+              "engine: a flow parked on an unaddressed request could not be cloned for the other origin's arm");
+        CHECK(!in_job || parked != NULL,
+              "engine: a flow parked on an unaddressed request inside a job could not have its continuation "
+              "cloned");
+        dec = g_fork_dec; g_fork_dec = NULL;
+        pins = g_fork_pins; g_fork_pins = NULL;
+        sib = engine_sibling_assemble(ctx, f, clone, dec, pins, g_fork_marks);
+        DCHECK(sib->parked == NULL, "a freshly assembled arm already holds parked continuations");
+        sib->parked = parked;
+    }
+    return SOLVER_ARM(r);
 }
 
 /* One arm per declined request: the fork a refusal owes. The zone grades each refusal on one axis: would a real
@@ -5783,7 +5843,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
         JSValue e = pending_entry(f->pending, i), se, pe, reason;
         JSValue *clone;
         void *parked, *dblob;
-        int in_program, in_job, kind;
+        int in_program, in_job, kind, cross;
         Flow *sib, *arm_flow;
 
         if (!pending_entry_declined(e) || pending_get_int(e, PEND_DECLINE_TAKEN)) {
@@ -5841,6 +5901,9 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
             JS_FreeValue(ctx, e);
             continue;
         }
+        /* An unknown address's origin first: it decides whether the success arm below exists. */
+        cross = pending_get_int(e, PEND_ADDRESS) != FETCH_ADDRESS_UNKNOWN ? -1
+              : !flow_unaddressed_same_origin(ctx, f, e, in_program, in_job);
         /* The waiting arm is completion 1 of a recorded choice, asked first; a flow whose recorded path chose
            it is that arm, and only a new choice mints it as a sibling. */
         if (decide_completion("(the trusted zone declined this request — the arm waits for the real reply)",
@@ -5881,7 +5944,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
             (kind == FLOW_PENDING_RESOLVE &&
              flow_success_arm(ctx, f, i, in_program, in_job,
                               "(the trusted zone declined this request — the arm takes a reply no server sent)",
-                              PEND_DECLINE_TAKEN))) {
+                              PEND_DECLINE_TAKEN, cross))) {
             JS_FreeValue(ctx, reason);
             JS_FreeValue(ctx, e);
             return 1;

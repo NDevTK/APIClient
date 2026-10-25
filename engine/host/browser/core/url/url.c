@@ -2088,18 +2088,9 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        through to the coercion below and took the document down at the ToString.
        The example is the real parse over the operands' own concretes, through the SAME helper §6.1's statics
        use — one algorithm, one answer, and no second copy of it to drift. */
-    {
-        if (url_any_unknown(argc, argv)) {
-            UrlRecord ex_rec;
-            JSValue real = JS_UNDEFINED;
-            if (url_example_parse(ctx, argv[0], argc, argv, &ex_rec) == 1) {
-                real = url_wrap(ctx, &ex_rec);
-                url_record_free(&ex_rec);
-                if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
-            }
-            *presult = concolic_new_derived(ctx, "URL", argv, url_operand_count(argc), real);
-            return 0;
-        }
+    if (url_any_unknown(argc, argv)) {
+        *presult = url_construct_unknown(ctx, argc, argv);
+        return 0;
     }
     in = JS_ToCStringLen(ctx, &in_len, argv[0]);
     if (!in) return -1;
@@ -2128,6 +2119,22 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     *presult = url_wrap(ctx, &rec);
     url_record_free(&rec);
     return JS_IsException(*presult) ? -1 : 0;
+}
+
+JSValue url_construct_unknown(JSContext *ctx, int argc, JSValueConst *argv)
+{
+    UrlRecord ex_rec;
+    JSValue real = JS_UNDEFINED;
+
+    DCHECK(argc >= 1 && url_any_unknown(argc, argv),
+           "the URL constructor's unknown arm was asked of a call with no unknown operand — a known call is "
+           "parsed, and a derivation over it would name a value the parser can state");
+    if (url_example_parse(ctx, argv[0], argc, argv, &ex_rec) == 1) {
+        real = url_wrap(ctx, &ex_rec);
+        url_record_free(&ex_rec);
+        if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
+    }
+    return concolic_new_derived(ctx, "URL", argv, url_operand_count(argc), real);
 }
 
 static const IdlStepDecl js_url_ctor_decl = {

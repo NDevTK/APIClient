@@ -417,6 +417,11 @@ int pending_driven_compose(int kind, int path_driven);
     /* NO ADDRESS CLASS STATED (core/fetch/fetch.h's FETCH_ADDRESS_UNPLACED): `pending_park_request` writes \
        it with the address, and the join lists only CONCRETE and EXAMPLE */                        \
     X(ADDRESS,    "address",   PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
+    /* …and for an UNKNOWN address, the unknown it stands for and Fetch §4.1 step 12's same-origin test over  \
+       it (core/fetch/fetch.h's fetch_main_same_origin_unknown), which flow_decline_fork asks. Undefined for  \
+       every address that is bytes. */                                                    \
+    X(ADDRESS_VALUE, "addressValue", PEND_SHARE, JS_UNDEFINED)                         \
+    X(SAME_ORIGIN, "sameOrigin", PEND_SHARE, JS_UNDEFINED)                             \
     X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
     X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
     /* the asking document, which every park writes before it is listed; 0 names none */             \

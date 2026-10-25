@@ -175,6 +175,12 @@ const UrlRecord *url_record_of(JSValueConst v);
    serializedQuery": `query` (owned, NULL for null) becomes the query of a copy of `url`'s record, which this
    flow's delta then holds. `url` must be a URL wrapper. */
 void url_query_assign(JSContext *ctx, JSValueConst url, char *query);
+/* §6.1 URL class's `new URL(url, base)` over operands at least one of which is unknown: the unknown derived
+   from both (`URL`, the constructor's own derivation), whose example is the real parse over the operands'
+   examples. `argc` counts the operands the call has (1 or 2); both are borrowed. Fetch's §5.4 step 2 parse of
+   an unknown address composes the same identity, so a page's `new URL(x, base)` and the request's current URL
+   are one value. Owned. */
+JSValue url_construct_unknown(JSContext *ctx, int argc, JSValueConst *argv);
 enum { URL_SET_C0 = 0, URL_SET_FRAGMENT, URL_SET_QUERY, URL_SET_SPECIAL_QUERY, URL_SET_PATH,
        URL_SET_USERINFO, URL_SET_COMPONENT, URL_SET_URLENCODED };
 

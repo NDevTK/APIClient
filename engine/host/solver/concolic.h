@@ -862,6 +862,10 @@ JSConcolicEqOp concolic_cmp_algo(JSValueConst v);
    constraint entries rather than one deciding the other), and it RUNS the comparison on the operands' concrete
    examples to give the result its own. */
 int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op);
+/* §7.2.14 IsStrictlyEqual ( x, y ) for a component whose own algorithm tests an equality a page can also write:
+   the predicate the page's `a === b` mints (concolic_cmp_hook), so the two are one constraint entry. A Boolean
+   when neither operand is unknown. Operands borrowed; owned result. */
+JSValue     concolic_strict_equal(JSContext *ctx, JSValueConst a, JSValueConst b);
 /* JSConcolicHooks.rel for < <= > >= — the ordering twin of cmp, and it composes its operator and BOTH operands
    into the result's identity exactly as the equality hook does. It composed neither, which made every ordering
    over one source ONE predicate: `parseInt(gCS(a).width) < 700` decided `parseInt(gCS(b).width) < 300`. */

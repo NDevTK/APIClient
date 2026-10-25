@@ -4535,6 +4535,20 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     sp[-2] = res;
     return 1;
 }
+JSValue concolic_strict_equal(JSContext *ctx, JSValueConst a, JSValueConst b) {
+    JSValue sp[2];
+    JSValue r;
+
+    sp[0] = JS_DupValue(ctx, a);
+    sp[1] = JS_DupValue(ctx, b);
+    if (concolic_cmp_hook(ctx, sp + 2, 0, JS_CONCOLIC_EQ_STRICT))
+        return sp[0];
+    r = JS_NewBool(ctx, JS_IsStrictEqual(ctx, sp[0], sp[1]));
+    JS_FreeValue(ctx, sp[0]);
+    JS_FreeValue(ctx, sp[1]);
+    return r;
+}
+
 /* Calling an unknown yields an unknown. `document.cookie.indexOf("role=admin")` reads a field off a concolic
    (another concolic) and calls it; a non-callable concolic would throw "not a function" and make every
    statement after the first method call on an unknown string unreachable. The result is concolic because

@@ -1231,13 +1231,43 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     return o;
 }
 
-JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
+/* A reply no server sent, of filtered type `type`, at `url`: no body for JS_UNDEFINED (an opaque reply), an
+   unknown body for a concolic, or the bytes of a String a candidate re-fire substituted. `body` is consumed. */
+static JSValue fetch_reply_forced(JSContext *ctx, const char *url, const char *type, JSValue body)
 {
     const char *list[1] = { url };
+    JSValue o;
+
+    if (JS_IsUndefined(body)) {
+        o = fetch_reply_new(ctx, 200, "", NULL, "", 0, list, 1, "", type);
+    } else if (concolic_is(body)) {
+        o = fetch_reply_new(ctx, 200, "", NULL, "", 0, list, 1, "", type);
+        /* Whatever bytes a server sends, text() makes a String of them. */
+        concolic_mark_json_value(body);
+        CHECK(JS_DefinePropertyValueStr(ctx, o, "unknownBody", body, JS_PROP_C_W_E) >= 0,
+              "fetch: a reply record refused its unknown body");
+    } else {
+        size_t bl = 0;
+        const char *bs;
+
+        DCHECK(JS_IsString(body), "an unknown reply body's source answered neither an unknown nor bytes");
+        bs = JS_ToCStringLen(ctx, &bl, body);
+        CHECK(bs != NULL, "fetch: OOM reading a candidate's reply body");
+        o = fetch_reply_new(ctx, 200, "", NULL, bs, bl, list, 1, "", type);
+        JS_FreeCString(ctx, bs);
+        JS_FreeValue(ctx, body);
+    }
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "unobserved", JS_TRUE, JS_PROP_C_W_E) >= 0,
+          "fetch: a reply record refused its unobserved mark");
+    return o;
+}
+
+JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
+{
     FetchMode m = fetch_mode_of_token(mode);
     UrlRecord u;
     const char *type;
-    JSValue o;
+    JSValue body = JS_UNDEFINED;
     bool same;
 
     url_record_init(&u);
@@ -1250,44 +1280,71 @@ JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
     type = same ? "basic" : m == FETCH_MODE_CORS ? "cors" : m == FETCH_MODE_NO_CORS ? "opaque" : NULL;
     if (!type)
         return JS_UNINITIALIZED;
-    if (!strcmp(type, "opaque")) {
-        o = fetch_reply_new(ctx, 200, "", NULL, "", 0, list, 1, "", type);
-    } else {
+    if (strcmp(type, "opaque") != 0) {
         char *src = reply_source_name(url, strlen(url)), *shape;
         size_t n;
-        JSValue body;
 
         CHECK(src != NULL, "fetch: a declined request's address has no reply source name");
         n = strlen(src) + 3;
         shape = malloc(n);
         CHECK(shape != NULL, "fetch: OOM spelling an unknown reply body's provenance");
         snprintf(shape, n, "{%s}", src);   /* a source's shape is its provenance in braces (concolic.h) */
-        /* The world's: a server states these bytes, and no example: no server was asked. */
+        /* The world's: a server states these bytes, and no example: no server was asked. A candidate re-fire
+           substituting its payload at this source answers those bytes instead. */
         body = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
         free(shape);
         free(src);
-        if (concolic_is(body)) {
-            o = fetch_reply_new(ctx, 200, "", NULL, "", 0, list, 1, "", type);
-            /* Whatever bytes a server sends, text() makes a String of them. */
-            concolic_mark_json_value(body);
-            CHECK(JS_DefinePropertyValueStr(ctx, o, "unknownBody", body, JS_PROP_C_W_E) >= 0,
-                  "fetch: a reply record refused its unknown body");
-        } else {
-            /* A candidate re-fire substituted its payload at this source: those are the body's bytes. */
-            size_t bl = 0;
-            const char *bs;
-
-            DCHECK(JS_IsString(body), "an unknown reply body's source answered neither an unknown nor bytes");
-            bs = JS_ToCStringLen(ctx, &bl, body);
-            CHECK(bs != NULL, "fetch: OOM reading a candidate's reply body");
-            o = fetch_reply_new(ctx, 200, "", NULL, bs, bl, list, 1, "", type);
-            JS_FreeCString(ctx, bs);
-            JS_FreeValue(ctx, body);
-        }
     }
-    CHECK(JS_DefinePropertyValueStr(ctx, o, "unobserved", JS_TRUE, JS_PROP_C_W_E) >= 0,
-          "fetch: a reply record refused its unobserved mark");
-    return o;
+    return fetch_reply_forced(ctx, url, type, body);
+}
+
+JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address)
+{
+    const Origin *self = origin_agent();
+    const char *base = document_base_url(ctx);
+    JSValueConst argv[2];
+    JSValue base_v = JS_UNDEFINED, current, origin, mine, same;
+
+    DCHECK(concolic_is(address), "the same-origin test over an unknown address was asked of a known one — a "
+                                 "known address is parsed and compared (fetch_reply_unknown)");
+    /* §7.1.1 step 1: an opaque origin is same origin only with itself, and a URL's origin is a new one. */
+    if (origin_is_opaque(self))
+        return JS_FALSE;
+    argv[0] = address;
+    if (base) {
+        base_v = JS_NewString(ctx, base);
+        CHECK(!JS_IsException(base_v), "fetch: OOM spelling the document base URL");
+        argv[1] = base_v;
+    }
+    current = url_construct_unknown(ctx, base ? 2 : 1, argv);
+    JS_FreeValue(ctx, base_v);
+    /* The member read the page's `.origin` performs (concolic_exotic_get), so the two are one value. */
+    origin = JS_GetPropertyStr(ctx, current, "origin");
+    JS_FreeValue(ctx, current);
+    CHECK(!JS_IsException(origin), "fetch: reading an unknown URL's origin threw");
+    mine = JS_NewString(ctx, origin_serialized(self));
+    CHECK(!JS_IsException(mine), "fetch: OOM spelling this agent's origin");
+    same = concolic_strict_equal(ctx, origin, mine);
+    JS_FreeValue(ctx, origin);
+    JS_FreeValue(ctx, mine);
+    return same;
+}
+
+JSValue fetch_reply_unaddressed(JSContext *ctx, const char *url, const char *mode, JSValueConst address)
+{
+    FetchMode m = fetch_mode_of_token(mode);
+    JSValueConst operand[1];
+
+    DCHECK(concolic_is(address), "a reply to an unknown address was built for a known one");
+    if (m == FETCH_MODE_SAME_ORIGIN)
+        return JS_UNINITIALIZED;
+    if (m == FETCH_MODE_NO_CORS)
+        return fetch_reply_forced(ctx, url, "opaque", JS_UNDEFINED);
+    DCHECK(m == FETCH_MODE_CORS, "a fetch() reached §4.1 step 12 in a mode §5.4's constructor cannot set — "
+                                 "`navigate` and `websocket` are refused there");
+    operand[0] = address;
+    return fetch_reply_forced(ctx, url, "cors",
+                              concolic_new_derived(ctx, "Response.body", operand, 1, JS_UNDEFINED));
 }
 
 /* One of fetch_reply_unknown's two fields, read as the record's OWN slot: every other record lacks both, and a
@@ -1774,6 +1831,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
             req.referrer = !*m_ref ? "no-referrer" : !strcmp(m_ref, "about:client") ? "client" : m_ref;
             req.referrer_policy = m_refpol;
             req.address = address;
+            req.address_value = url;
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;

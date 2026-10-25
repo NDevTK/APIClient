@@ -265,9 +265,12 @@ typedef struct {
     /* Whether `url` is bytes this request may be sent to (FetchAddressClass above), stated by the producer that
        holds the address value: fetch() and XHR from the value the page passed, every other producer CONCRETE
        because it parks only addresses it resolved from strings (an element whose address is unknown input
-       records the shape on the @H surface and fetches nothing). Last, so the positional initializers in
-       solver/engine.c leave it at `_UNPLACED` and must state it. */
+       records the shape on the @H surface and fetches nothing). Last with the field below, so the positional
+       initializers in solver/engine.c leave it at `_UNPLACED` and must state it. */
     FetchAddressClass address;
+    /* The unknown `url` is the display shape of, read only where `address` is FETCH_ADDRESS_UNKNOWN; fetch()
+       states it from the value the page passed. BORROWED. */
+    JSValueConst address_value;
 } FetchRequest;
 
 /* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to
@@ -494,6 +497,23 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
    which §5.5's `status` and `ok` getters answer from. How its absence shows: a branch over `r.status === 201`
    on this arm takes one side without forking. */
 JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode);
+/* Fetch §4.1 Main fetch step 12's "request's current URL's origin is same origin with request's origin" for a
+   request whose address is `address`, an unknown: the current URL is the API URL parser's parse of it against
+   the document base URL (url_construct_unknown, the identity a page's `new URL(address, base)` composes), and
+   HTML §7.1.1 Origins' same origin between that URL's origin and this agent's tuple origin is the strict
+   equality of their serializations. An unknown boolean, or false for an opaque agent origin, which no URL's
+   origin is same origin with. Owned. */
+JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address);
+/* The reply on the arm where a request to the unknown `address` (display shape `url`) went to another origin
+   (fetch_main_same_origin_unknown answered false), under §4.1 step 12's rows for `mode`: JS_UNINITIALIZED for
+   `same-origin`, whose only completion is the network error; an opaque reply for `no-cors`; for `cors` a cors
+   reply whose body is derived from `address`, because whoever chose the address chose the server and its
+   headers (an exact Access-Control-Allow-Origin and Access-Control-Allow-Credentials: true pass the CORS check
+   in every credentials mode). Marked `unobserved`, like fetch_reply_unknown's.
+   Named residual. Not covered: the URL list holds the address's display shape, which `response.url` cannot
+   parse. Next diff builds: a list item that is the unknown current URL, which the `url` getter answers as a
+   derivation. How its absence shows: a page reading `response.url` on this arm aborts at the parse. */
+JSValue fetch_reply_unaddressed(JSContext *ctx, const char *url, const char *mode, JSValueConst address);
 /* Whether a record is fetch_reply_unknown's, and its unknown body (owned, or JS_UNDEFINED for one of bytes). */
 bool    fetch_reply_unobserved(JSContext *ctx, JSValueConst reply);
 JSValue fetch_reply_unknown_body(JSContext *ctx, JSValueConst reply);
