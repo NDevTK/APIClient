@@ -112,3 +112,30 @@ char *act_list_json(const Flow *f, int *no_act, int *unsolved, char **refused, c
     return json_buf_take(&b);
 }
 
+
+char *act_list_message_deliveries(const Flow *f, const char *inject, const char *payload)
+{
+    int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n;
+    char *out = NULL;
+    size_t o = 0;
+
+    DCHECK(inject && *inject && payload && *payload, "message deliveries were composed with no injection or payload");
+    for (int k = 0; k < called; k++) {
+        char root[96], *data, *why = NULL, *grown;
+        const char *inj = inject;
+        size_t n;
+
+        if (!f->orphan_acts[k] || !strstr(f->orphan_acts[k], "\"kind\":\"message\"")) continue;
+        engine_orphan_message_data_src(f, k, root, sizeof root);
+        if (strcmp(inj, root) && !concolic_member_of_root(inj, root)) inj = "";
+        data = message_compose(root, inj, payload, &why);
+        if (!data) { free(why); free(out); return NULL; }
+        n = o + strlen(root) + strlen(data) + 44;
+        grown = realloc(out, n);
+        CHECK(grown, "act list: OOM composing a chain's message deliveries");
+        out = grown;
+        o += (size_t)snprintf(out + o, n - o, "%zu:%s%zu:%s", strlen(root), root, strlen(data), data);
+        free(data);
+    }
+    return out;
+}

@@ -21,6 +21,10 @@
 #include "solver/novelty.h"   /* what opening a search and proving it are worth against the product */
 #include "solver/compose.h"   /* a sender row's subject, spelled with its presence */
 #include "solver/act_list.h"   /* the acts a fire was verified under */
+
+/* Where a composed message's payload goes until a candidate takes it (Cand.dl_tmpl): a String the injection
+   member's facets admit, alphanumeric so its JSON spelling is itself between quotes. */
+#define MSG_PAYLOAD_SLOT "apiclientmessagepayloadslot"
 #include "check.h"
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
@@ -153,6 +157,10 @@ typedef struct {
        payload and the deliveries' text (flow_deliveries_text), owned; `vf_seeded` is the seeding cursor. */
     struct { char *payload; char *dl; } *vf;
     int nvf, vf_seeded;
+    /* The messages a candidate of this search runs under: the data of every message act on the frozen path,
+       composed from its domain at the capture (act_list_message_deliveries), with MSG_PAYLOAD_SLOT where the
+       payload goes; NULL where the path holds no message act or a composition refused. Owned. */
+    char *dl_tmpl;
     /* The runway position as its two halves, emitted as `runwayWalked`/`runwayOf`, so a best of 3/8000 is not
        rounded to 0 as it is in `replay_pm`. Ratcheted on itself by cross-multiplication (observe_runway), in
        integers. `replay_of` is dec_total() at that sample, not `reinject_len`: for an arm forked off a
@@ -887,6 +895,9 @@ static void cand_learn_path(Cand *e) {
        constraint rows are borrowed from this flow. It runs past the capture's two returns, so a search that
        already holds a path already holds that path's demands. */
     cand_learn_principal_gates(e);
+    /* And the messages the path's acts posted, composed while their domains are this flow's. */
+    if (flow_running() && flow_running()->orphan)
+        e->dl_tmpl = act_list_message_deliveries(flow_running(), e->src, MSG_PAYLOAD_SLOT);
 }
 
 /* A detected sink opens its search: a single-context class states its breakouts, any other class the probes
@@ -1913,8 +1924,10 @@ int solve_seeds_owed(void) {
     return 0;
 }
 
-/* A candidate flow of search `e` carrying `payload`, standing on the path its detection froze. */
-static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload) {
+/* A candidate flow of search `e` carrying `payload`, standing on the path its detection froze, under the
+   deliveries `dl` (flow_deliveries_text's format) or, for NULL, the search's composed messages with the payload
+   in its slot. */
+static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const char *dl) {
     Flow *f;
 
     /* A candidate session runs from the baseline, and is this tool's act from its first park, so it is
@@ -1953,6 +1966,34 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload) {
         f->dec_blob = decide_blob_new((void *)decide_blob_seg(e->reinject));
         f->pin_blob = concolic_pins_blob_empty();
     }
+    if (dl) flow_deliveries_parse(f, dl);
+    else if (e->dl_tmpl) {
+        JsonBuf slot = { 0 }, pay = { 0 };
+        char *qs, *qp;
+
+        flow_deliveries_parse(f, e->dl_tmpl);
+        json_buf_str(&slot, MSG_PAYLOAD_SLOT);
+        json_buf_str(&pay, payload);
+        qs = json_buf_take(&slot);
+        qp = json_buf_take(&pay);
+        CHECK(qs && qp, "solve: OOM spelling a candidate's message payload");
+        for (int i = 0; i < f->cand_dn; i++) {
+            char *at = strstr(f->cand_dval[i], qs), *v;
+            size_t head;
+
+            if (!at) continue;
+            head = (size_t)(at - f->cand_dval[i]);
+            v = malloc(strlen(f->cand_dval[i]) - strlen(qs) + strlen(qp) + 1);
+            CHECK(v, "solve: OOM placing a candidate's payload in its message");
+            memcpy(v, f->cand_dval[i], head);
+            strcpy(v + head, qp);
+            strcat(v, at + strlen(qs));
+            free(f->cand_dval[i]);
+            f->cand_dval[i] = v;
+        }
+        free(qs);
+        free(qp);
+    }
     return f;
 }
 
@@ -1977,7 +2018,7 @@ int solve_seed_candidates(JSContext *ctx) {
                context probe is ASCII alphanumeric, so both are measurements rather than attacks. */
             if (e->pl[e->seeded].kind == CAND_ESCAPE &&
                 !solve_delivered_ok(&e->deliv, e->pl[e->seeded].bytes)) continue;
-            f = seed_on_path(ctx, e, e->pl[e->seeded].bytes);
+            f = seed_on_path(ctx, e, e->pl[e->seeded].bytes, NULL);
             /* The other side of the withdrawal, asserted where the cost is taken: this is where a payload becomes
                a document re-run, so a route into flow creation that skips the check above crashes here instead
                of quietly spending the run. */
@@ -1993,9 +2034,7 @@ int solve_seed_candidates(JSContext *ctx) {
         /* A fire's verification: the same path and payload with the fire's message compositions delivered, so
            its own fire, if it comes, is under messages a sender reproduces. */
         for (; e->vf_seeded < e->nvf; e->vf_seeded++) {
-            Flow *f = seed_on_path(ctx, e, e->vf[e->vf_seeded].payload);
-
-            flow_deliveries_parse(f, e->vf[e->vf_seeded].dl);
+            seed_on_path(ctx, e, e->vf[e->vf_seeded].payload, e->vf[e->vf_seeded].dl);
             added++;
             g_cands_seeded++;
             e->tried++;
@@ -2683,6 +2722,7 @@ void solve_free(void) {
             free(g_pending[i].vf[k].dl);
         }
         free(g_pending[i].vf);
+        free(g_pending[i].dl_tmpl);
         /* The principal demands: this file owns each name and row array, and the rows' strings are concolic.c's
            (gate_pred_free routes to concolic_pred_release). */
         for (int c = 0; c < g_pending[i].npg; c++) {

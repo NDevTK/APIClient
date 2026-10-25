@@ -12,5 +12,10 @@ struct Flow;
    `*dl` (flow_deliveries_text's format, malloc'd, NULL for none) and `*refused` takes the first composition's
    refusal (malloc'd). */
 char *act_list_json(const struct Flow *f, int *no_act, int *unsolved, char **refused, char **dl);
+/* The data of every message act `f`'s chain performed, each composed from its domain (message_compose), with
+   `payload` at `inject` in the message whose data `inject` is or is a member of: the deliveries (in
+   flow_deliveries_text's format, malloc'd) a candidate runs under. NULL where the chain has no message act or a
+   composition refuses. */
+char *act_list_message_deliveries(const struct Flow *f, const char *inject, const char *payload);
 
 #endif
