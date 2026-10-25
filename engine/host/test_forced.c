@@ -1700,11 +1700,11 @@ static int tf_doc_beside(const char *key, const char *other) {
 /* HTML §7.2.6 AND CSP §6.1, in C — the browser half's tests are C tests, and this one has no page to run.
    What it pins is the pair of facts the rest of the platform will build on: what a policy PERMITS, and that a
    child's container is a CLONE whose answers do not move when the parent's would. */
-/* TRUSTED TYPES §4.2.3 AND §3.8, in C, for the same reason the one below is: a parse over a serialized CSP
+/* TRUSTED TYPES §4.2.3 AND §3.10, in C, for the same reason the one below is: a parse over a serialized CSP
    list and a table lookup, neither of which has a page to run. What §4.2.3 pins is the answer every HTML
    sink's step 1 turns on — a document with no policy requires nothing, and one that requires trusted types is
    one on which `el.innerHTML = s` THROWS, so getting either side wrong silently changes what the solver
-   explores on every page that carries a policy. What §3.8 pins is WHICH attributes are sinks at all: get that
+   explores on every page that carries a policy. What §3.10 pins is WHICH attributes are sinks at all: get that
    set too wide and every setAttribute on a policy-carrying page throws, too narrow and the solver reports
    `script.src = attackerUrl` as reachable on a document where the assignment dies. */
 /* css-variables-1 §3 "Using Cascading Variables: the var() notation" — the substitution, over a lookup that is
@@ -1942,7 +1942,7 @@ TF_UNIT void trusted_types_selftest(void)
     CHECK(!trusted_types_required_by("require-trusted-types-for", TRUSTED_TYPE_HTML),
           "a directive with no value requires nothing");
 
-    /* §3.8's four table rows and its event-handler rule. The sink NAME is checked as well as the type: it is
+    /* §3.10's four table rows and its event-handler rule. The sink NAME is checked as well as the type: it is
        what a violation report identifies, and two sinks reporting one name are one sink to whoever reads it. */
     {
         static const char *HTML_NS = "http://www.w3.org/1999/xhtml";
