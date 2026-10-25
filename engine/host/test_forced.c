@@ -1164,6 +1164,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/sparoute.h"
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
+#include "fixture/datenum.h"
 #include "fixture/rxcompile.h"
 #include "fixture/textencunk.h"
 #include "fixture/framemsg.h"
@@ -1664,6 +1665,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "sparoute", HTML_SPAROUTE },
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
+    { "datenum", HTML_DATENUM },
     { "rxcompile", HTML_RXCOMPILE },
     { "textencunk", HTML_TEXTENCUNK },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
@@ -15843,6 +15845,29 @@ TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
+TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
+    const char *pl_why = NULL; int pl_tt = 1;
+    fold_row(&pl_tt, &pl_why, param_value_is(js, "/api/dn-plus", "w", "dnFUTURE") ||
+                              param_value_is(js, "/api/dn-plus", "w", "dnPRESENT"),
+             "NOT REACHED: no /api/dn-plus record, so unary + over the clock's sum did not return");
+    fold_row(&pl_tt, &pl_why, param_value_is(js, "/api/dn-plus", "w", "dnFUTURE") &&
+                              param_value_is(js, "/api/dn-plus", "w", "dnPRESENT"),
+             "only one arm of the gate after unary + ran, so the coercion collapsed the clock's unknown");
+    const char *nm_why = NULL; int nm_tt = 1;
+    fold_row(&nm_tt, &nm_why, param_value_is(js, "/api/dn-number", "w", "dnFUTURE") ||
+                              param_value_is(js, "/api/dn-number", "w", "dnPRESENT"),
+             "NOT REACHED: no /api/dn-number record, so Number() over the clock's difference did not return");
+    fold_row(&nm_tt, &nm_why, param_value_is(js, "/api/dn-number", "w", "dnFUTURE") &&
+                              param_value_is(js, "/api/dn-number", "w", "dnPRESENT"),
+             "only one arm of the gate after Number() ran, so the coercion collapsed the clock's unknown");
+    const Probe rows[] = {
+        { "dn-plus-both", pl_tt, "/api/dn-plus", SESS_EXPLORE, pl_why },
+        { "dn-number-both", nm_tt, "/api/dn-number", SESS_EXPLORE, nm_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `framemsg` document (fixture/framemsg.h). */
 TF_UNIT void probes_framemsg(const char *js, Probe *tab, int *n) {
     char src[192] = "";
@@ -20210,6 +20235,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_sparoute(js, probes, &np);
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);
+    probes_datenum(js, probes, &np);
     probes_rxcompile(js, probes, &np);
     probes_textencunk(js, probes, &np);
     probes_framemsg(js, probes, &np);
