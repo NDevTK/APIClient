@@ -16632,8 +16632,8 @@ static bool js_get_fast_array_element_concrete(JSContext *ctx, JSObject *p, uint
 
 /* §10.4.5.17 TypedArrayGetElement ( O, index ) at an index past the view's stored count: undefined, unless the
    view's length is an unknown (JSTypedArray.length_unknown), where IsValidIntegerIndex holds in the worlds the
-   length is longer. The answer is then an unknown derived from the buffer's unknown at that position, with
-   undefined, the example world's answer, as its example. */
+   length is longer. The answer is then an unknown derived from the buffer's unknown (over stated bytes, the
+   view's length) at that position, with undefined, the example world's answer, as its example. */
 static JSValue js_ta_get_past_example(JSContext *ctx, JSObject *p, uint32_t idx)
 {
     JSTypedArray *ta = p->u.typed_array;
@@ -16643,8 +16643,7 @@ static JSValue js_ta_get_past_example(JSContext *ctx, JSObject *p, uint32_t idx)
 
     if (JS_IsUninitialized(ta->length_unknown) || typed_array_is_oob(p))
         return JS_UNDEFINED;
-    DCHECK(!JS_IsUninitialized(abuf->length_unknown), "a view's length is unknown over a stated buffer length");
-    ops[0] = abuf->length_unknown;
+    ops[0] = JS_IsUninitialized(abuf->length_unknown) ? ta->length_unknown : abuf->length_unknown;
     ops[1] = js_ta_byte_index(ctx, ta, (int64_t)idx << size_log2);
     ops[2] = js_int32(1 << size_log2);
     r = g_concolic.derived(ctx, "10.4.5.17 TypedArrayGetElement past the example", ops, 3, JS_UNDEFINED);
@@ -32689,6 +32688,7 @@ typedef struct JSTAViewPlan {
        in-range arm, so the view may reach past the buffer's example bytes. Set by the caller before planning. */
     bool in_range;
     bool offset_unknown;    /* `offset` is the example of an unknown byteOffset; set by the caller */
+    bool len_unknown;       /* `length` is the example of an unknown newLength; set by the caller */
     int size_log2;
 } JSTAViewPlan;
 
@@ -124990,14 +124990,13 @@ int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPie
     if (JS_IsUninitialized(extent))
         return n;
     /* The window's length is an unknown, so the bytes past its stored example are a run too: the tail, derived
-       from the buffer's unknown at the window's end and over that length, as an element read past the example
-       is. It holds no bytes in the block; they are the example's exactly when the length has an example. */
-    DCHECK(!JS_IsUninitialized(abuf->length_unknown), "a window's length is unknown over a stated buffer length");
+       from the buffer's unknown (or its stated length) at the window's end and over that length, as an element
+       read past the example is. It holds no bytes in the block; they are the example's exactly when the length has an example. */
     pieces = *ppieces;
     g = js_realloc(ctx, pieces, sizeof(*pieces) * (size_t)(n + 1));
     CHECK(g != NULL, "OOM listing the unknown tail of a buffer source");
     pieces = g;
-    ops[0] = abuf->length_unknown;
+    ops[0] = JS_IsUninitialized(abuf->length_unknown) ? js_int32(abuf->byte_length) : abuf->length_unknown;
     ops[1] = ta ? js_ta_byte_index(ctx, ta, (int64_t)(hi - lo)) : JS_NewInt64(ctx, (int64_t)hi);
     ops[2] = extent;
     pieces[n].offset = hi - lo;
@@ -127130,6 +127129,7 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->off_example = 0;
         s->plan.in_range = false;
         s->plan.offset_unknown = false;
+        s->plan.len_unknown = false;
         s->offset = 0;
         for (i = 0; i < 3; i++)
             s->argp[i] = js_dup(step_arg(&s->hdr, i));
@@ -127277,7 +127277,9 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
             return -1;
         }
         s->plan.offset_unknown = off_unknown;
-        if (abuf && !abuf->detached && (!JS_IsUninitialized(abuf->length_unknown) || off_unknown)) {
+        s->plan.len_unknown = !JS_IsUninitialized(s->len_unknown);
+        if (abuf && !abuf->detached &&
+            (!JS_IsUninitialized(abuf->length_unknown) || off_unknown || s->plan.len_unknown)) {
             if (JS_IsUninitialized(s->range_pred)) {
                 JSValue sp[2], off;
 
@@ -127513,8 +127515,8 @@ static int js_ta_view_plan(JSContext *ctx, JSTAViewPlan *pl, int argc, JSValueCo
         if (pl->in_range) {
             /* the caller's fork decided steps 8-9 over the unknown length or offset; the stored bytes and
                `offset` are their examples */
-            DCHECK(!JS_IsUninitialized(abuf->length_unknown) || pl->offset_unknown,
-                   "an in-range plan over a buffer whose length and offset are both stated");
+            DCHECK(!JS_IsUninitialized(abuf->length_unknown) || pl->offset_unknown || pl->len_unknown,
+                   "an in-range plan over a buffer whose length, the offset and the view's length are all stated");
             len_from_buffer = JS_IsUndefined(argv[2]);
             if (len_from_buffer && fixed_length && JS_IsUninitialized(abuf->length_unknown) &&
                 (buf_len & (elem_size - 1)) != 0)
@@ -127568,7 +127570,7 @@ static JSValue js_ta_view_finish(JSContext *ctx, JSValue obj, JSTAViewPlan *pl)
         JS_FreeValue(ctx, obj);
         return JS_ThrowTypeErrorDetachedArrayBuffer(ctx);
     }
-    if (pl->in_range && !JS_IsUninitialized(abuf->length_unknown)) {
+    if (pl->in_range && (!JS_IsUninitialized(abuf->length_unknown) || pl->len_unknown)) {
         /* In range in this world: the view holds the example bytes its window covers, possibly none, and its
            length is an unknown (below, or the constructor's), which every read past those bytes derives from. */
         uint64_t have = offset <= abuf->byte_length ? (abuf->byte_length - offset) >> size_log2 : 0;
