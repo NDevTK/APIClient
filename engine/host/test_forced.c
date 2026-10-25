@@ -1228,6 +1228,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/agenfork.h"
 #include "fixture/msgchain.h"
 #include "fixture/msgorigin.h"
+#include "fixture/libstate.h"
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
 #include "fixture/flagflow.h"
@@ -1774,6 +1775,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
     { "msgorigin", HTML_MSGORIGIN },
+    { "libstate", HTML_LIBSTATE },
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
     { "flagflow", HTML_FLAGFLOW },
@@ -21307,6 +21309,21 @@ static int s_fired_with(const char *js, const char *sink, const char *const *nee
     return 0;
 }
 
+/* The rows of the `libstate` document (fixture/libstate.h): the request built from the served state object is
+   sighted in a world that assumed nothing. */
+TF_UNIT void probes_libstate(const char *js, Probe *tab, int *n) {
+    const char *lo_why = NULL; int lo_tt = 1;
+    fold_row(&lo_tt, &lo_why, !!strstr(js, "\"/api/ls-state\""),
+             "NOT REACHED: there is no /api/ls-state record, so the request built from lsState was never sent");
+    fold_row(&lo_tt, &lo_why, cl_witness_without(js, "/api/ls-state", "\"assumed\":[]", "\"assumed\":[{"),
+             "every sighting of /api/ls-state assumed something: the world the page is served in sends it with "
+             "lsState as served, so a sighting resting on an assumption states one the request does not need");
+    const Probe rows[] = {
+        { "ls-observed-world", lo_tt, "var lsState", SESS_EXPLORE, lo_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring or a bare suffix check
    admits is composed and fires; a dotted suffix, an exact match on another site's origin, or a chain whose
    messages need two different origins never does. */
@@ -21570,6 +21587,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_decoder(js, probes, &np);
     probes_msgchain(js, probes, &np);
     probes_msgorigin(js, probes, &np);
+    probes_libstate(js, probes, &np);
     probes_msgchaincoop(js, probes, &np);
     probes_clickhash(js, probes, &np);
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
