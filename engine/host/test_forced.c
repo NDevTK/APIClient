@@ -14737,6 +14737,26 @@ TF_UNIT void probes_windowname(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* Whether some witness of the record at `url` names `with` and not `without`: one world's assumptions, read
+   inside that witness's own object, so two worlds' facts never combine into one answer. */
+static int cl_witness_without(const char *js, const char *url, const char *with, const char *without)
+{
+    static const char W[] = "{\"verification\":";
+    EmittedRec r[EMITTED_REC_MAX];
+    int n = emitted_records(js, url, r, EMITTED_REC_MAX), i;
+
+    for (i = 0; i < n; i++) {
+        const char *end = r[i].b + r[i].n, *w = memmem(r[i].b, r[i].n, W, sizeof W - 1);
+        while (w) {
+            const char *next = memmem(w + 1, (size_t)(end - w - 1), W, sizeof W - 1), *stop = next ? next : end;
+            size_t len = (size_t)(stop - w);
+            if (memmem(w, len, with, strlen(with)) && !memmem(w, len, without, strlen(without))) return 1;
+            w = next;
+        }
+    }
+    return 0;
+}
+
 /* The rows of the `clobber` document (fixture/clobber.h). */
 TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     char hs[192] = "", us[192] = "";
@@ -14757,10 +14777,12 @@ TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/cl-clobbered record, so no world's `window.clCfg` named an element "
              "the banner markup inserted: clobbering is not modelled over an unknown markup write");
     /* The clobbered arm stands on the banner's query and not on `clCfg` as a free unknown: an absent global
-       read as injected page state forks the same witness without any element having been named. */
-    fold_row(&cc_tt, &cc_why, emitted_record_has(js, "/api/cl-clobbered", LOCATION_SEARCH_SRC),
-             "the clobbered arm's witness assumes nothing about location.search, so `window.clCfg` was forked "
-             "as a free unknown rather than reached through an element the banner inserted");
+       read as injected page state forks the same witness without any element having been named, beside the
+       banner's own decisions or without them. */
+    fold_row(&cc_tt, &cc_why, cl_witness_without(js, "/api/cl-clobbered", LOCATION_SEARCH_SRC,
+                                                 "\"decision\":\"{clCfg}\""),
+             "every witness of the clobbered arm decides `{clCfg}` as a free unknown, so `window.clCfg` was "
+             "forked as absent page state rather than reached through an element the banner inserted");
     const char *cl_why = NULL; int cl_tt = 1;
     fold_row(&cl_tt, &cl_why, has_u,
              "NOT REACHED: no location @S record carries a source rooted in location.search, so `clCfg.url` "
