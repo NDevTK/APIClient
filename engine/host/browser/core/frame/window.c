@@ -1506,6 +1506,7 @@ void window_free(JSRuntime *rt)
        entry in a pool the next agent has not built, read by the first window_install that agent runs. Their
        pre-init value is -1 and not 0, because entry 0 is a real member (see the declarations above). */
     g_id_opener_set = g_id_name_set = g_id_status_set = g_id_named_step = -1;
+    concolic_undeclare_sources("window");   /* the named-access rows the composer's claim declared */
     concolic_set_markup_composer(NULL, NULL);
     g_id_close = g_id_stop = -1;
     /* AND §8.1.4.6's MACHINE, for the reason the five pool entries above are given back and the one
