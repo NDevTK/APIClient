@@ -67,12 +67,12 @@ static const char HTML_STOREDXSS[] =
 
 static const char HTML_STOREDREAD[] =
     "<!doctype html><html><body>"
-    "<div id='srView'></div>"
+    "<div id='rdView'></div>"
     "<script>"
-    "var srNote = localStorage.getItem('srNote');"
-    "if (srNote !== null) {"
-    "  fetch('/api/sr-read');"
-    "  document.getElementById('srView').innerHTML = srNote;"
+    "var rdNote = localStorage.getItem('rdNote');"
+    "if (rdNote !== null) {"
+    "  fetch('/api/rd-read');"
+    "  document.getElementById('rdView').innerHTML = rdNote;"
     "}"
     "</script>"
     TF_CANVAS_INK

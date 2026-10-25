@@ -15915,9 +15915,9 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
     EngineStepUnitRuns sr_runs;
 
     engine_step_unit_runs(&sr_runs);
-    fold_row(&sr_tt, &sr_why, !!strstr(js, "\"/api/sr-read\""),
-             "NOT REACHED: there is no /api/sr-read record, so the arm where localStorage holds srNote never ran");
-    sx_precondition_rows(js, "srNote", &sr_tt, &sr_why, &srp_tt, &srp_why);
+    fold_row(&sr_tt, &sr_why, !!strstr(js, "\"/api/rd-read\""),
+             "NOT REACHED: there is no /api/rd-read record, so the arm where localStorage holds rdNote never ran");
+    sx_precondition_rows(js, "rdNote", &sr_tt, &sr_why, &srp_tt, &srp_why);
     fold_row(&sro_tt, &sro_why, sr_runs.arms[STEP_UNIT_OPEN_AGAIN] == 0,
              "a flow of a page that writes no user-agent-wide state was opened again — the act's precondition "
              "(engine_note_persistent_write) is a write that survives a load, and without one a second load is "
@@ -15935,9 +15935,9 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
         { "sx-theme-saved", ts_tt, "/api/sx-theme-saved", SESS_EXPLORE, ts_why },
         { "sx-theme-shown", tw_tt, "/api/sx-theme-shown", SESS_EXPLORE, tw_why },
         { "sx-theme-poc", tp_tt, "'sxThemeView'", SESS_EXPLORE, tp_why },
-        { "sr-read", sr_tt, "srNote", SESS_EXPLORE, sr_why },
-        { "sr-precondition", srp_tt, "srNote", SESS_EXPLORE, srp_why, .reach = "sr-read" },
-        { "sr-no-open", sro_tt, "srNote", SESS_EXPLORE, sro_why, .reach = "sr-read" },
+        { "rd-read", sr_tt, "rdNote", SESS_EXPLORE, sr_why },
+        { "rd-precondition", srp_tt, "rdNote", SESS_EXPLORE, srp_why, .reach = "rd-read" },
+        { "rd-no-open", sro_tt, "rdNote", SESS_EXPLORE, sro_why, .reach = "rd-read" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
