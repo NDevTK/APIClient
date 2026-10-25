@@ -294,11 +294,13 @@ typedef struct FlowAcct {
     /* The order's index (the flow_ix_* banner). As a bucket (`branch == self`): its node in its family's bucket
        heap, set while it holds a member (`ix_bin`), its node in the family's never-dispatched heap, set while it
        holds a never-dispatched member (`ix_bnin`), the root of its members' treap, and its node in one query's
-       queue. As a family root (`up == NULL`): the roots of its two bucket heaps, its links on the list of families
-       the index holds (`ix_listed`), and the head of its away list (the members `away_n` counts). A root is both. */
-    FlowIxNode ix_b, ix_bn, ix_q;
+       queue, and its node in the family's tail heap (`ix_bm`, set with `ix_bin`), which orders buckets by their
+       smallest member. As a family root (`up == NULL`): the roots of its three bucket heaps, its links on the list
+       of families the index holds (`ix_listed`), and the head of its away list (the members `away_n` counts). A
+       root is both. */
+    FlowIxNode ix_b, ix_bn, ix_bm, ix_q;
     FlowIxTreap *ix_members;
-    FlowIxNode *ix_buckets, *ix_nbuckets;
+    FlowIxNode *ix_buckets, *ix_nbuckets, *ix_mbuckets;
     struct FlowAcct *ix_fprev, *ix_fnext;
     unsigned char ix_bin, ix_bnin, ix_listed;
     Flow *away_head;
@@ -337,8 +339,8 @@ static void acct_unref(FlowAcct *a) {
         if (a->branch == a) g_branch_retired_work += a->sub_work;
         /* And the index holds nothing through it: a bucket leaves its family's heap with its last member, and a
            family leaves the list with its last bucket, both before the departure that drops the last reference. */
-        DCHECK(!a->ix_bin && !a->ix_bnin && !a->ix_members && !a->ix_buckets && !a->ix_nbuckets && !a->ix_listed &&
-               !a->away_head,
+        DCHECK(!a->ix_bin && !a->ix_bnin && !a->ix_members && !a->ix_buckets && !a->ix_nbuckets &&
+               !a->ix_mbuckets && !a->ix_listed && !a->away_head,
                "a fork-tree node was freed while the order's index still links it — flow_remove takes a member out "
                "of the index before acct_depart, so a node reaching its free is no member's bucket or family");
         free(a);
@@ -3823,10 +3825,11 @@ static void ix_t_fold(FlowIxTreap *n, const FlowIxTreap *c) {
     if (c->max > n->max) { n->max = c->max; n->floor = c->floor; }
     else if (c->max == n->max && c->floor < n->floor) n->floor = c->floor;
     if (c->nmax > n->nmax) n->nmax = c->nmax;
+    if (c->min < n->min) n->min = c->min;
 }
 
 static void ix_t_fix(FlowIxTreap *n) {
-    n->max = n->key; n->floor = n->seq; n->nmax = n->nnever > 0 ? n->key : -INFINITY;
+    n->max = n->key; n->min = n->key; n->floor = n->seq; n->nmax = n->nnever > 0 ? n->key : -INFINITY;
     n->lo = n->l ? n->l->lo : n->phase; n->hi = n->r ? n->r->hi : n->phase;
     ix_t_fold(n, n->l); ix_t_fold(n, n->r);
 }
@@ -3893,13 +3896,19 @@ static double ix_coord(const FlowAcct *fam, double off, int carries) {
    flow_order_key over its treap's uncarried maximum, so it bounds every member at every residue its family can
    stand at. */
 static void flow_ix_bucket_sync(FlowAcct *br, FlowAcct *fam) {
-    if (br->ix_bin) { ix_unlink(&fam->ix_buckets, &br->ix_b); br->ix_bin = 0; }
+    if (br->ix_bin) {
+        ix_unlink(&fam->ix_buckets, &br->ix_b); ix_unlink(&fam->ix_mbuckets, &br->ix_bm); br->ix_bin = 0;
+    }
     if (br->ix_bnin) { ix_unlink(&fam->ix_nbuckets, &br->ix_bn); br->ix_bnin = 0; }
     if (br->ix_members) {
         const FlowIxTreap *t = br->ix_members;
         double b = acct_branch_offset(br), x = b + t->max;
         ix_set(&br->ix_b, x, x, t->max, t->floor);
         ix_push(&fam->ix_buckets, &br->ix_b); br->ix_bin = 1;
+        /* And in the tail heap, keyed on the negated bucket-relative half over the treap's smallest key, so the
+           max-heap's order is the ascending order of the bucket's least member. */
+        ix_set(&br->ix_bm, -(b + t->min), -(b + t->min), -(b + t->min), 0);
+        ix_push(&fam->ix_mbuckets, &br->ix_bm);
         if (t->nmax > -INFINITY) {
             ix_set(&br->ix_bn, b + t->nmax, 0.0, 0.0, 0);
             ix_push(&fam->ix_nbuckets, &br->ix_bn); br->ix_bnin = 1;
@@ -4231,6 +4240,109 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
     return 0;
 }
 
+#define IX_MBUCKET(n) ((FlowAcct *)((char *)(n) - offsetof(FlowAcct, ix_bm)))
+
+/* Push a tail-query entry: the max query's nodes, keyed on the negated lower bound `lb`, so the heap pops the
+   smallest bound first. */
+static void ix_mq_push(FlowIxNode **q, FlowIxNode *n, double lb, uint64_t seq, unsigned char kind) {
+    ix_set(n, -lb, -lb, -lb, seq);
+    n->off = 0.0; n->kind = kind;
+    ix_push(q, n);
+}
+
+/* A treap subtree as a tail entry, bounded below by its smallest key at the coordinate its least-carried member
+   could stand at: carried when any member of the subtree may carry (`hi >= from`), since carrying lowers the
+   coordinate, and uncarried only when none can. */
+static void ix_mq_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, double b, int64_t from) {
+    FlowIxNode *e = &IX_TREAP_FLOW(n)->ix_qt;
+    ix_mq_push(q, e, acct_family_coord(IX_TREAP_FLOW(n)->family, n->hi >= from) + (b + n->min), 0, IX_Q_TREE);
+    DCHECK(!ix_above(e, parent), "a treap subtree's lower bound in the order's tail query ranks below the entry it "
+                                 "was opened from — a bucket's tail key or a parent's `min` is stale against its "
+                                 "treap");
+}
+
+/* The indexed minimum: the lowest-weight member not host-owed, `exclude` skipped, best-first over lower bounds.
+   Every entry's key bounds every member below it from below, in flow_order_key's composition over operands no
+   larger than any member's (rounding to nearest is monotone in each), and a member's own entry is its weight
+   exactly, so the first member entry taken is the minimum. The pager's tail (flow_worst); `entries` counts the
+   queue entries taken. Pure: it writes only the queue nodes, which no other query holds at once. */
+static Flow *flow_ix_tail(const Flow *exclude, int64_t *entries, int64_t *weighed) {
+    FlowIxNode *q = NULL;
+    FlowAcct *fam;
+    for (fam = g_ix_fams; fam; fam = fam->ix_fnext) {
+        FlowIxNode *top = fam->ix_mbuckets;
+        DCHECK(top != NULL, "a family on the order's list has an empty tail heap — flow_ix_bucket_sync files a "
+                            "bucket in both heaps under one flag");
+        ix_mq_push(&q, &IX_MBUCKET(top)->ix_q, acct_family_coord(fam, 1) - top->key, 0, IX_Q_BUCKET);
+    }
+    while (q) {
+        FlowIxNode *e = q;
+        q = ix_meld(e->l, e->r);
+        if (q) q->up = NULL;
+        (*entries)++;
+        if (e->kind == IX_Q_SELF) {
+            Flow *m = (Flow *)((char *)e - offsetof(Flow, ix_qs));
+            DCHECKF(-e->key == flow_weight(m),
+                    "the order's tail query keyed a member off its weight (weight %.17g, index %.17g) — the index "
+                    "and flow_order_key compose different expressions, or a writer of the key's operands did not "
+                    "re-key", flow_weight(m), -e->key);
+            return m;
+        }
+        if (e->kind == IX_Q_BUCKET) {
+            FlowAcct *br = (FlowAcct *)((char *)e - offsetof(FlowAcct, ix_q));
+            FlowIxTreap *t = br->ix_members;
+            double b = acct_branch_offset(br);
+            FlowAcct *f = IX_TREAP_FLOW(t)->family;
+            DCHECK(br->ix_bin && t != NULL && br->ix_bm.key == -(b + t->min),
+                   "a bucket in the order's tail heap holds no member, or its key is not its negated offset plus its "
+                   "treap's `min` — flow_ix_bucket_sync files it from both");
+            ix_mq_push_tree(&q, e, t, b, flow_ix_carry_from(f));
+            for (int side = 0; side < 2; side++) {
+                FlowIxNode *c = side ? br->ix_bm.r : br->ix_bm.l;
+                FlowIxNode *ce;
+                if (!c) continue;
+                ce = &IX_MBUCKET(c)->ix_q;
+                ix_mq_push(&q, ce, acct_family_coord(f, 1) - c->key, 0, IX_Q_BUCKET);
+                DCHECK(!ix_above(ce, e), "a tail heap of the order's index lost its order — a child bucket's least "
+                                         "member ranks below its parent's");
+            }
+        } else {
+            Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt)), *m = r;
+            double b = acct_branch_offset(r->acct->branch);
+            int64_t from = flow_ix_carry_from(r->family);
+            /* The class through its oldest member that is not the excluded one. */
+            if (m == exclude) {
+                FlowIxNode *top = r->ix_t.cls, *l = top->l, *rt = top->r;
+                FlowIxNode *n2 = !l ? rt : !rt ? l : (ix_above(l, rt) ? l : rt);
+                m = n2 ? IX_CLASS_FLOW(n2) : NULL;
+            }
+            if (m) {
+                ix_mq_push(&q, &m->ix_qs, acct_family_coord(r->family, r->ix_t.phase >= from) + (b + r->ix_t.key),
+                           m->ix_t.seq, IX_Q_SELF);
+                (*weighed)++;
+                DCHECK(!ix_above(&m->ix_qs, e), "a class's own weight in the order's tail query ranks below its "
+                                                "subtree's bound — a treap `min` is stale");
+            }
+            if (r->ix_t.l) ix_mq_push_tree(&q, e, r->ix_t.l, b, from);
+            if (r->ix_t.r) ix_mq_push_tree(&q, e, r->ix_t.r, b, from);
+        }
+    }
+    return NULL;
+}
+
+/* The lowest-weight member but `exclude`, indexed and host-owed alike, with the work it took. */
+static Flow *flow_tail_of(const Flow *exclude, int64_t *entries, int64_t *weighed) {
+    Flow *tail = flow_ix_tail(exclude, entries, weighed);
+    double tw = tail ? flow_weight(tail) : 0.0;
+    for (Flow *o = g_owed_head; o; o = o->owed_next) {
+        double w;
+        if (o == exclude) continue;
+        w = flow_weight(o); (*weighed)++;
+        if (!tail || w < tw) { tail = o; tw = w; }
+    }
+    return tail;
+}
+
 /* The silence at which a flow is guaranteed to rank below any never-run sibling: the crossing the never-starved
    guarantee claims, computed from the flow's own reward rather than a fixed threshold that would fire falsely on a
    very productive flow. Compared against both halves of the silence, this flow's own and its family's: against the
@@ -4431,12 +4543,11 @@ int64_t flow_scan_weights(FlowScan s) {
     return g_scan_weights[s];
 }
 
-/* The order asked by walking every member: the two questions the index does not hold, flow_best (every member,
-   host-owed or not, for the census and the host's report) and flow_worst (the pager's tail, the minimum, read the
-   other way through the same comparator so the pager has no ranking of its own). The runnable maximum, asked per
-   dispatch, per preempt-hook rescan and per host report, is flow_pick's over the index, with the same
-   comparator and the same tie-break (flow_order_cmp). One WFQ policy, never a second ranking. */
-static Flow *flow_pick_walk(const Flow *exclude, int worst, FlowScan why) {
+/* The order asked by walking every member: the one question the index does not hold, flow_best (every member,
+   host-owed or not, for the census). The runnable maximum, asked per dispatch, per preempt-hook rescan and per
+   host report, is flow_pick's over the index, and the pager's tail is flow_worst's over the index read the other
+   way, with the same comparator, so the pager has no ranking of its own. One WFQ policy, never a second ranking. */
+static Flow *flow_pick_walk(FlowScan why) {
     Flow *best = NULL; double bw = 0.0;
     /* The scan is counted here, not at its return, so every exit counts, including one added later. A CHECK
        rather than a DCHECK, for solver/cold.c's reason at its histogram: the increment is a write in every build,
@@ -4466,7 +4577,6 @@ static Flow *flow_pick_walk(const Flow *exclude, int worst, FlowScan why) {
                "member on exactly one line and loses one on exactly one line, so the two writers of this "
                "relation have come apart, and flow_remove will swap-remove at the handle's slot and drop "
                "whichever member is standing there");
-        if (g_flows[i] == exclude) continue;
         /* Counted where the weight is taken, so the count is what the scan cost. */
         w = flow_weight(g_flows[i]); g_scan_weights[why]++;
         /* And the precondition of every sub-linear order, asked of every member: engine.c's preempt hook holds it
@@ -4526,8 +4636,7 @@ static Flow *flow_pick_walk(const Flow *exclude, int worst, FlowScan why) {
         if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {
             unrun = g_flows[i]; unrun_w = w;
         }
-        if (!best || (worst ? w < bw : w > bw) ||
-            (w == bw && (worst ? flow_order_above(best, g_flows[i]) : flow_order_above(g_flows[i], best)))) {
+        if (!best || w > bw || (w == bw && flow_order_above(g_flows[i], best))) {
             best = g_flows[i]; bw = w;
         }
     }
@@ -4553,7 +4662,7 @@ static Flow *flow_pick_walk(const Flow *exclude, int worst, FlowScan why) {
        derived from that function (flow_silence_us_to_sink), so it is an identity under the formula as it stands
        and fires when an edit breaks the derivation (a clamped or capped aging term, an optimism ceiling no longer
        1, a reward allowed to grow with the work it is weighed against), each the shape a fix for thrash takes. */
-    DCHECK(worst || !best || !unrun ||
+    DCHECK(!best || !unrun ||
            flow_own_silence(best) + acct_family_work(best) < flow_silence_us_to_sink(best, flow_optimism(unrun)),
            "the WFQ re-picked a flow whose own and family silence exceed what its reward is worth while a never-run "
            "flow waited — the aging term is no longer commensurate with the reward (flow_silence_us_to_sink derives "
@@ -4565,7 +4674,7 @@ static Flow *flow_pick_walk(const Flow *exclude, int worst, FlowScan why) {
        quantity a never-run flow does not stand at zero of (work, say, since an arrival once stood at the
        running flow's service), given a range other than 1.0, or made to depend on anything the aging already
        prices; each lets "never starved" stop meaning anything while every other assertion passes. */
-    DCHECK(worst || !best || !unrun || flow_weight(best) >= flow_optimism(unrun),
+    DCHECK(!best || !unrun || flow_weight(best) >= flow_optimism(unrun),
            "the WFQ picked a flow worth less than an untouched member of its frontier — a never-run flow carries its "
            "whole optimism bonus (1.0, or 1/(1 + orphan_seen) for a drive explored elsewhere) and no aging, so the "
            "pick's maximum must be at least that");
@@ -4679,6 +4788,20 @@ int64_t flow_ix_entries(void) { return g_ix_entries; }
 int64_t flow_ix_asks(void) { return g_ix_asks; }
 
 #if APICLIENT_DEV
+/* Is `tail` the lowest-weight member? flow_ix_check's oracle for the pager's tail, a scan independent of the index:
+   it calls flow_weight and nothing else, so the order stays single while the scan is a re-derivation. Ties pass:
+   the tail query may return either of two equal minima. O(members), so it runs per census and never on the
+   reclaim path. */
+static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
+    double tw = flow_weight(tail);
+    int i;
+    for (i = 0; i < g_flows_n; i++) {
+        if (g_flows[i] == exclude || g_flows[i] == tail) continue;
+        if (flow_weight(g_flows[i]) < tw) return 0;
+    }
+    return 1;
+}
+
 /* The index against the frontier it indexes, asked at every census: the eager checks in flow_ix_query see only
    the entries a query takes, and a missed re-key or a stale aggregate is a fact about the entries it prunes. Every
    member is indexed exactly when it is not host-owed, under its fresh key, keyed by the index's composition at
@@ -4739,7 +4862,8 @@ static void flow_ix_check(void) {
                                   t->l->prio <= t->prio)) &&
                        (!t->r || (t->r->up == t && ix_t_before(t, t->r) && t->r->lo >= t->phase &&
                                   t->r->prio <= t->prio)) &&
-                       t->max == fresh.max && t->floor == fresh.floor && t->nmax == fresh.nmax &&
+                       t->max == fresh.max && t->min == fresh.min && t->floor == fresh.floor &&
+                       t->nmax == fresh.nmax &&
                        t->lo == fresh.lo && t->hi == fresh.hi && (t->up != NULL || br->ix_members == t) &&
                        t->cls == x && x->up == NULL,
                        "a class treap of the order's index lost its search order, its heap order, its parent links, "
@@ -4766,6 +4890,15 @@ static void flow_ix_check(void) {
                                          ix_s(nn->l) >= ix_s(nn->r) && nn->s == ix_s(nn->r) + 1)),
                    "a bucket of the order's index stands in its family's never-dispatched heap other than exactly "
                    "while it holds a never-dispatched member, under a key off its offset and `nmax`, or out of order");
+            {
+                const FlowIxNode *mn = &br->ix_bm;
+                DCHECK(mn->key == -(b + tr->min) &&
+                           (!mn->l || (mn->l->up == mn && !ix_above(mn->l, mn))) &&
+                           (!mn->r || (mn->r->up == mn && !ix_above(mn->r, mn))) &&
+                           ix_s(mn->l) >= ix_s(mn->r) && mn->s == ix_s(mn->r) + 1,
+                       "a bucket of the order's index stands in its family's tail heap under a key other than its "
+                       "negated offset plus its treap's `min`, or out of order or leftist shape there");
+            }
         }
     }
     for (const Flow *o = g_owed_head; o; o = o->owed_next) owed--;
@@ -4811,6 +4944,19 @@ static void flow_ix_check(void) {
             DCHECKF(a.best == ex, "the order's index handed a tie away from its seed (index slot %d, seed slot %d)",
                     a.best ? a.best->reg_i : -1, ex->reg_i);
         }
+    }
+    /* And the pager's tail, against a scan: the lowest-weight member, then the lowest but that one, the shape the
+       pager asks with the switched-in flow excluded. Here, per census, rather than on the reclaim path, where a
+       scan per ask would make every eviction O(members). */
+    {
+        int64_t te = 0, tw = 0;
+        const Flow *t1 = flow_tail_of(NULL, &te, &tw), *t2 = t1 ? flow_tail_of(t1, &te, &tw) : NULL;
+        DCHECK(t1 == NULL ? g_flows_n == 0 : flow_is_min_weight(t1, NULL),
+               "the pager's tail is not the lowest-weight member of the frontier — the tail query and the order are "
+               "two readings of one comparator, so a bound or a re-key is wrong");
+        DCHECK(t1 == NULL || (t2 == NULL ? g_flows_n == 1 : (t2 != t1 && flow_is_min_weight(t2, t1))),
+               "the pager's tail with a member excluded is not the lowest-weight of the rest, or is the excluded "
+               "member — the query's class walk passes over the excluded representative to the class's next member");
     }
 }
 #endif
@@ -5805,7 +5951,7 @@ void flow_wfq_census(WfqCensus *out) {
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */
-Flow *flow_best(void) { return flow_pick_walk(NULL, 0, FLOW_SCAN_OTHER); }
+Flow *flow_best(void) { return flow_pick_walk(FLOW_SCAN_OTHER); }
 
 /* Which flow should hold the thread: the dispatch loop's pick, defending the incumbent on a tie. */
 Flow *flow_next_to_run(const Flow *incumbent, FlowScan why) { return flow_pick(incumbent, NULL, why); }
@@ -5814,35 +5960,24 @@ Flow *flow_next_to_run(const Flow *incumbent, FlowScan why) { return flow_pick(i
    hook applies the strict comparison itself; seeded, it would answer `cur` and compare a flow with itself. */
 Flow *flow_rival_of(const Flow *cur) { return flow_pick(NULL, cur, FLOW_SCAN_RIVAL); }
 
-/* Is `tail` the lowest-weight candidate? The assert's own scan, independent of flow_pick_walk, and a function because a
-   DCHECK condition must be side-effect-free and is evaluated only inside the condition, so release never runs it
-   (in dev it is a scan on the reclaim path, reached at the RAM floor). It calls flow_weight and nothing else, so
-   the order stays single while the scan is a re-derivation. Ties pass: flow_pick_walk may return either of two equal
-   minima. */
-static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
-    double tw = flow_weight(tail);
-    int i;
-    for (i = 0; i < g_flows_n; i++) {
-        if (g_flows[i] == exclude || g_flows[i] == tail) continue;
-        if (flow_weight(g_flows[i]) < tw) return 0;
-    }
-    return 1;
-}
 
 Flow *flow_worst(const Flow *exclude) {
-    Flow *tail = flow_pick_walk(exclude, 1, FLOW_SCAN_OTHER);
+    int64_t entries = 0, weighed = 0;
+    Flow *tail;
     /* Every member, runnable or not, which is what eviction is about: a flow waiting on the host cannot use the
        thread, so the pick skips it, but it still occupies RAM and is the cheapest member to page, since its recipe
-       re-issues the request it waits on. The one inversion is `exclude`: the flow switched in cannot be written out
-       (its decision state is live in decide.c, its delta applied), so if it is the lowest the tail outranks it; this
-       corrects itself at the next context switch.
-       The ordering is asserted against a re-derived scan: the tail must be the lowest-weight candidate. A comparison
-       against a head (min against max) cannot fail; what is at risk is the pager acquiring a ranking of its own (a
-       size estimate, an age, a cheapest-to-rebuild score), and a flow_weight that is not a pure function of the
-       flow, which the scan above, asking each weight once, could never notice. */
-    DCHECK(!tail || flow_is_min_weight(tail, exclude),
-           "the flow the pager chose to page out is not the lowest-weight member of the frontier — the tail and the "
-           "head are two readings of one comparator");
+       re-issues the request it waits on. The indexed members answer through the index; the host-owed ones are out
+       of it and are weighed on their list. The one inversion is `exclude`: the flow switched in cannot be written
+       out (its decision state is live in decide.c, its delta applied), so if it is the lowest the tail outranks it;
+       this corrects itself at the next context switch. flow_ix_check asserts the answer against a scan per census.
+       Named residual. Not covered: the host-owed members are weighed one by one, O(host-owed) per ask. Next diff
+       builds: the owed members in a tail structure of their own, re-keyed where their marks move. Absence shows as:
+       `scanOtherWeights` per reclaim rising with the host-owed population on a page whose members wait on the
+       host. */
+    g_scan_runs[FLOW_SCAN_OTHER]++;
+    tail = flow_tail_of(exclude, &entries, &weighed);
+    g_scan_weights[FLOW_SCAN_OTHER] += weighed;
+    g_ix_entries += entries;
     return tail;
 }
 

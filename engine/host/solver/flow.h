@@ -85,12 +85,12 @@ typedef struct FlowIxNode {
    three fitness fields), which weigh the same to the bit; the treap holds one node per class, in search order by
    the tuple and heap order by `prio`, carrying the class's key and, over its subtree, the largest key (`max`), the
    lowest birth sequence among the classes at it (`floor`), the largest key of a class holding a never-dispatched
-   member (`nmax`, -INFINITY when none) and the phase range (`lo`, `hi`). `cls` is the class's members in a heap by
-   birth sequence, `ncls` and `nnever` how many there are and how many were never dispatched; all of these are read
-   off the representative, the class's oldest member, only. */
+   member (`nmax`, -INFINITY when none), the smallest key (`min`) and the phase range (`lo`, `hi`). `cls` is the
+   class's members in a heap by birth sequence, `ncls` and `nnever` how many there are and how many were never
+   dispatched; all of these are read off the representative, the class's oldest member, only. */
 typedef struct FlowIxTreap {
     struct FlowIxTreap *l, *r, *up;
-    double key, max, nmax;
+    double key, max, min, nmax;
     int64_t phase, lo, hi;
     int64_t notch, visits;
     double replay, surv;
@@ -1408,9 +1408,9 @@ void flow_wfq_census(WfqCensus *out);
  *      the native fixture's probe table), so the instrument's cost is visible: compare `scanCensusWeights`
  *      against `scanNextWeights`.
  * A count, not a clock, so loaded runs stay comparable. It counts weight evaluations the ask performed, not a
- * DCHECK's: a walk (`best-and-eviction-tail`'s flow_best and flow_worst, the census) weighs every member it does
- * not exclude, and the order's index (the runnable asks, `next-to-run`, `rival-of-incumbent` and the host's
- * best-weight read) weighs only the members whose bound reaches its answer, so per-ask weighings over `members`
+ * DCHECK's: a walk (`best-and-eviction-tail`'s flow_best, the census) weighs every member, and the order's index
+ * (the runnable asks, `next-to-run`, `rival-of-incumbent`, the host's best-weight read, and flow_worst's tail
+ * query, plus the host-owed members it weighs one by one) weighs only the members whose bound reaches its answer, so per-ask weighings over `members`
  * is that index's narrowing. It decides nothing. */
 #define FLOW_SCANS(X)                                                                     \
     /* the dispatch loop's pick — one per step */                                         \
