@@ -3,7 +3,7 @@
  * CLAUDE.md states the rule and nothing performed it: the fixture's answered-statement count "tracks JOBS
  * RUN, not work done", so two runs' counts are comparable only where their job counts agree, and a
  * comparison whose job counts differ is REFUSED rather than reported as a delta. Doing that by hand means
- * opening two snapshots, finding each stage's own log, taking the terminal `@HWORK` line out of each,
+ * opening two snapshots, finding each stage's own log, taking the terminal `@HEVENTS` line out of each,
  * folding the `@H` tables, and only then deciding whether a difference means anything. It has been done by
  * hand, repeatedly, and §AND-A-MEASUREMENT-CAN-OUTLIVE-ITS-INSTRUMENT is explicit that an instrument whose
  * output anyone quotes is COMMITTED in the same diff as the first quotation of its number. This is that.
@@ -26,11 +26,11 @@
  * who wants the number anyway has it, and what they do not have is a difference presented as a finding.
  *
  * EVERY RECORD IS GATED ON A WORK CURSOR AND NEVER ON THE STAGE'S, WHICH THIS FILE GOT WRONG TWICE AND ITS
- * OWN ARMED RUNS REFUTED BOTH TIMES. `@HWORK` is written immediately before the `@H` table it belongs to, so
+ * OWN ARMED RUNS REFUTED BOTH TIMES. `@HEVENTS` is written immediately before the `@H` table it belongs to, so
  * it pairs WITHIN A LINE with the answered count and is the right gate for that one number. The censuses are
- * sampled on a DIFFERENT cadence, so gating them on `@HWORK` is the cross-sample comparison CLAUDE.md
- * forbids — and it is not a theoretical hazard: measured on the vehicle smoke of two real runs, `@HWORK`
- * reads `workDone 1` on BOTH (the table composed before any flow was ever dispatched) while the terminal
+ * sampled on a DIFFERENT cadence, so gating them on `@HEVENTS` is the cross-sample comparison CLAUDE.md
+ * forbids — and it is not a theoretical hazard: measured on the vehicle smoke of two real runs, `@HEVENTS`
+ * reads `schedEvents 1` on BOTH (the table composed before any flow was ever dispatched) while the terminal
  * `@WFQ` stands at 348 on one and 113 on the other, so a stage-level gate certified a comparison of two runs
  * at two completely different points and reported 80 of 125 keys as differing.
  *
@@ -38,11 +38,11 @@
  * not the same point as pass 5 of another — §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED, over a set
  * whose members are sampling instants the scheduler chose. Measured on the same pair: the native smoke's
  * `@COLD` passed a censusSeq gate at 5 on both and reported 50 differing keys, while the `@WFQ` OF THAT SAME
- * PASS refused at workDone 2130 against 2140. So a sequence number equal on both sides is exactly the shape
+ * PASS refused at schedEvents 2130 against 2140. So a sequence number equal on both sides is exactly the shape
  * that certifies a comparison of two instants.
  *
  * WHAT POSITIONS A PASS IS THE `@WFQ` OF THAT PASS, AND THE RECORDS SAY SO THEMSELVES. One census pass emits
- * `@WFQ`, `@COLD`, `@HEAP` and `@SWAP` under one `censusSeq`, and `@WFQ` is the one that carries `workDone`,
+ * `@WFQ`, `@COLD`, `@HEAP` and `@SWAP` under one `censusSeq`, and `@WFQ` is the one that carries `schedEvents`,
  * so the whole pass's cursor is derived from it rather than assumed. A record whose `censusSeq` names no
  * `@WFQ` pass, or which carries no `censusSeq` at all, CANNOT be positioned: it is compared and said to rest
  * on nothing, which is the honest state and not a gate.
@@ -111,8 +111,8 @@ function records(text, where) {
     try { v = JSON.parse(m[2]); } catch { bad++; continue; }   /* a truncated tail is a real state */
     if (!v || typeof v !== "object" || Array.isArray(v)) continue;
     byMarker.set(m[1], v);
-    if (m[1] === "@WFQ" && typeof v.censusSeq === "number" && typeof v.workDone === "number")
-      cursor.set(v.censusSeq, v.workDone);
+    if (m[1] === "@WFQ" && typeof v.censusSeq === "number" && typeof v.schedEvents === "number")
+      cursor.set(v.censusSeq, v.schedEvents);
   }
   if (bad > 1)
     throw new Error(`gatecmp: ${where} has ${bad} unparseable record line(s) — a killed writer leaves at ` +
@@ -123,7 +123,7 @@ function records(text, where) {
 
 /* WHERE A RECORD STANDS, IN WORK, OR NOTHING. */
 function at(rec, cursor) {
-  if (typeof rec.workDone === "number") return rec.workDone;
+  if (typeof rec.schedEvents === "number") return rec.schedEvents;
   if (typeof rec.censusSeq === "number" && cursor.has(rec.censusSeq)) return cursor.get(rec.censusSeq);
   return null;
 }
@@ -150,14 +150,14 @@ const both = [...A.keys()].filter((n) => B.has(n));
 for (const name of both) {
   const ta = fs.readFileSync(A.get(name), "utf8"), tb = fs.readFileSync(B.get(name), "utf8");
   const ra = records(ta, A.get(name)), rb = records(tb, B.get(name));
-  const wa = ra.byMarker.get("@HWORK"), wb = rb.byMarker.get("@HWORK");
+  const wa = ra.byMarker.get("@HEVENTS"), wb = rb.byMarker.get("@HEVENTS");
   const pa = probeBest(ta, A.get(name)), pb = probeBest(tb, B.get(name));
   const ansA = [...pa.best.values()].filter(Boolean).length, ansB = [...pb.best.values()].filter(Boolean).length;
 
   console.log(`\n── ${name}`);
   if (!wa || !wb) {
     console.log(`   NO WORK LINE on ${!wa ? "A" : ""}${!wa && !wb ? " and " : ""}${!wb ? "B" : ""} — a stage ` +
-                `that printed no @HWORK makes no claim about how much engine work it did, so nothing below ` +
+                `that printed no @HEVENTS makes no claim about how much engine work it did, so nothing below ` +
                 `is comparable and the answered counts are reported bare: ` +
                 `A ${ansA}/${pa.best.size} over ${pa.tables} table(s), B ${ansB}/${pb.best.size} over ` +
                 `${pb.tables}.`);
@@ -165,7 +165,7 @@ for (const name of both) {
   }
   const workSame = JSON.stringify(wa) === JSON.stringify(wb);
   const jobsSame = wa._jobsRun === wb._jobsRun;
-  const quad = (w) => `work ${w.workDone} / ${w._switches} switches / ${w._flows} flows / ${w._jobsRun} jobs`;
+  const quad = (w) => `events ${w.schedEvents} / ${w._switches} switches / ${w._flows} flows / ${w._jobsRun} jobs`;
   console.log(`   A  ${quad(wa)}   answered ${ansA}/${pa.best.size} over ${pa.tables} table(s)`);
   console.log(`   B  ${quad(wb)}   answered ${ansB}/${pb.best.size} over ${pb.tables} table(s)`);
 
@@ -188,17 +188,17 @@ for (const name of both) {
   const markers = [...new Set([...ra.byMarker.keys(), ...rb.byMarker.keys()])].sort();
   const unpositioned = [];
   for (const mk of markers) {
-    if (mk === "@HWORK") continue;
+    if (mk === "@HEVENTS") continue;
     const a = ra.byMarker.get(mk), b = rb.byMarker.get(mk);
     if (!a || !b) { console.log(`   ${mk}: present on ${a ? "A" : "B"} only — UNSCORED`); continue; }
     const pa2 = at(a, ra.cursor), pb2 = at(b, rb.cursor);
     const n = `${Object.keys(a).length} vs ${Object.keys(b).length} key(s)`;
     if (pa2 !== null && pb2 !== null && pa2 !== pb2) {
-      console.log(`   ${mk}: REFUSED — these records stand at workDone ${pa2} and ${pb2}, so they are two ` +
+      console.log(`   ${mk}: REFUSED — these records stand at schedEvents ${pa2} and ${pb2}, so they are two ` +
                   `different points of two runs and no row delta between them is about this revision. ${n}.`);
       continue;
     }
-    const where = pa2 !== null && pb2 !== null ? `at workDone ${pa2}` : "UNPOSITIONED";
+    const where = pa2 !== null && pb2 !== null ? `at schedEvents ${pa2}` : "UNPOSITIONED";
     if (where === "UNPOSITIONED") unpositioned.push(mk);
     const d = diffKeys(a, b);
     if (!d.length) { console.log(`   ${mk}: ${Object.keys(a).length} key(s) ${where}, BYTE-IDENTICAL`); continue; }
@@ -207,7 +207,7 @@ for (const name of both) {
   }
   if (unpositioned.length)
     console.log(`   UNPOSITIONED above (${unpositioned.join(" ")}): no work cursor reaches these — they carry ` +
-                `no workDone and no censusSeq that a @WFQ pass of this run names — so their pairing rests on ` +
+                `no schedEvents and no censusSeq that a @WFQ pass of this run names — so their pairing rests on ` +
                 `nothing and a differing row there may be two instants rather than two revisions.`);
 
   /* THE STATE THAT MADE THE STAGE GATE WRONG, NAMED WHERE IT SHOWS. A probe table composed at a work cursor
@@ -215,8 +215,9 @@ for (const name of both) {
      prose; it is read here off the two numbers rather than inferred from a sample count. */
   const far = [...ra.cursor.values(), ...rb.cursor.values()];
   const reached = far.length ? Math.max(...far) : null;
-  if (reached !== null && reached > 4 * Math.max(wa.workDone, wb.workDone, 1))
-    console.log(`   NOTE: the @H table was composed at workDone ${wa.workDone}/${wb.workDone} while a census ` +
+  if (reached !== null && reached > 4 * Math.max(wa.schedEvents, wb.schedEvents, 1))
+    console.log(`   NOTE: the @H table was composed at schedEvents ${wa.schedEvents}/${wb.schedEvents} while a ` +
+                `census ` +
                 `in the same run reached ${reached} — so the answered count above is a reading of the run's ` +
                 `OPENING and the censuses are a reading of much later, which is why they are gated apart.`);
 }

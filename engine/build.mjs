@@ -821,9 +821,9 @@ function probeFlips(out) {
    the MONOTONE one: how many distinct rows were 1 at ANY sample. It is carried beside the instant reading and
    printed only where the two DIFFER, because a difference is the whole of the information: equal, it is noise
    in the one line everybody reads; unequal, it is a document that stopped saying something it had said. */
-/* HOW FAR THE RUN HAD GOT WHEN EACH TABLE ABOVE WAS COMPOSED — test_forced.c's `@HWORK`, and it is the
+/* HOW FAR THE RUN HAD GOT WHEN EACH TABLE ABOVE WAS COMPOSED — test_forced.c's `@HEVENTS`, and it is the
    number the sentence under `standingText` used to INFER one bit of. `fixture_have_answers` gates the table on
-   `engine_work_done()`, so the quantity that decides WHEN every measurement of a run is taken was itself on no
+   `engine_sched_events()`, so the quantity that decides WHEN every measurement of a run is taken was itself on no
    line of the stream; the producer put it on one, and until this reader existed the only consumer of that line
    was a person.
    PAIRED BY INDEX AND NEVER BY LAST-LINE, which is the same rule the @FORKAT reader states for the @COLD block
@@ -841,15 +841,17 @@ function probeFlips(out) {
    same division of labour the `jobWGap` check below is written for. */
 function probeWork(out) {
   const w = [];
-  for (const m of out.matchAll(/^@HWORK (\{.*\})$/gm)) { try { w.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
+  for (const m of out.matchAll(/^@HEVENTS (\{.*\})$/gm)) {
+    try { w.push(JSON.parse(m[1])); } catch { /* truncated tail */ }
+  }
   if (!w.length) return w;
   const fields = hworkFields();
   for (const r of w) for (const f of fields)
     if (typeof r[f] !== "number")
-      throw new Error(`[build] an @HWORK record has no numeric \`${f}\` — this reader takes its field list ` +
+      throw new Error(`[build] an @HEVENTS record has no numeric \`${f}\` — this reader takes its field list ` +
                       `from test_forced.c's own printf (${fields.join(", ")}), so a row that is absent from ` +
                       `the line is one the producer stopped writing rather than one this file forgot.`);
-  /* THE ONE IDENTITY THAT IS INTERNAL TO THIS LINE, and the fork total that falls out of it. `engine_work_done`
+  /* THE ONE IDENTITY THAT IS INTERNAL TO THIS LINE, and the fork total that falls out of it. `engine_sched_events`
      is forks + flows + jobs + switches (solver/engine.c), and the producer deliberately does NOT restate the
      forks term because @COLD already spells it — so the identity a reader checks spans two lines and two
      CADENCES, which are taken at different instants and cannot be paired. What CAN be checked is the half that
@@ -858,17 +860,18 @@ function probeWork(out) {
      with the probe table and which no other line of this stream carries. */
   for (const r of w) {
     const named = r._switches + r._flows + r._jobsRun;
-    if (!(r.workDone >= named))
-      throw new Error(`[build] an @HWORK record states workDone ${r.workDone} against ${named} in its three ` +
-                      `named counters — solver/engine.c's engine_work_done is those three plus the fork ` +
+    if (!(r.schedEvents >= named))
+      throw new Error(`[build] an @HEVENTS record states schedEvents ${r.schedEvents} against ${named} in its three ` +
+                      `named counters — solver/engine.c's engine_sched_events is those three plus the fork ` +
                       `total, every term of which only climbs, so a total below its own parts is one of the ` +
                       `four having acquired a second writer and every standing derived from this line is ` +
                       `about work nobody did.`);
-    r.forks = r.workDone - named;
+    r.forks = r.schedEvents - named;
   }
   for (let i = 1; i < w.length; i++)
-    if (w[i].workDone < w[i - 1].workDone)
-      throw new Error(`[build] the @HWORK stream fell from ${w[i - 1].workDone} to ${w[i].workDone} — every ` +
+    if (w[i].schedEvents < w[i - 1].schedEvents)
+      throw new Error(`[build] the @HEVENTS stream fell from ${w[i - 1].schedEvents} to ${w[i].schedEvents} — ` +
+                      `every ` +
                       `row of that line is a LIFETIME counter (engine.c refuses to reset the four at a ` +
                       `session boundary), so a fall means one of them is a gauge and every difference taken ` +
                       `across two samples of this stream is arithmetic about nothing. test_forced.c asserts ` +
@@ -884,7 +887,7 @@ function probeStanding(out) {
   for (const r of rows) for (const k of Object.keys(r)) if (r[k]) ever.add(k);
   const work = probeWork(out);
   if (work.length && work.length !== rows.length && work.length !== rows.length + 1)
-    throw new Error(`[build] this run printed ${work.length} @HWORK record(s) against ${rows.length} @H ` +
+    throw new Error(`[build] this run printed ${work.length} @HEVENTS record(s) against ${rows.length} @H ` +
                     `table(s) — test_forced.c's probes_report writes the record on the line immediately ` +
                     `before the table, so the two streams are paired by index and a truncated tail can leave ` +
                     `at most ONE more record than tables. Any other count is an emitter between them that ` +
@@ -906,7 +909,7 @@ function probeStanding(out) {
    IT IS WHAT SEPARATES A SOLVER THAT RAN AND FOUND NOTHING FROM A RUN THAT NEVER STARTED, and those are the
    two readings of an all-zero table. solver/engine.c's `run_scheduler` calls the park hook at the TOP of its
    loop — before `engine_sched_step` has run once — and test_forced.c's `fixture_have_answers` prints on its
-   first call and thereafter only every PROBE_SAMPLE_EVERY units of `engine_work_done`. So ONE table in the
+   first call and thereafter only every PROBE_SAMPLE_EVERY units of `engine_sched_events`. So ONE table in the
    whole output is the table composed BEFORE THE FIRST STEP, and every 0 in it is a statement the run never
    reached rather than one it answered wrongly — which is the opposite reading from the one an all-zero table
    invites, and the one nothing in this file said. Measured: a smoke that aborted on its second scheduler step
@@ -915,11 +918,11 @@ function probeStanding(out) {
    AND IT IS MEASURED NOW RATHER THAN INFERRED — BUT NOT BY THE NUMBER THE PRODUCER OFFERED, and the
    difference is the whole of what this paragraph is worth. The sentence above is a claim about
    `run_scheduler`'s LOOP ORDER, held in a file that cannot check it and decided off the SAMPLE COUNT, which is
-   a proxy for it. test_forced.c now prints `engine_work_done` beside every table (`probeWork`) and its own
-   note names `workDone` 0 as the pre-first-step marker — SO THAT MARKER WAS DERIVED HERE BEFORE IT WAS BUILT
-   ON, and it does not hold. `engine_work_done` is forks + FLOWS CREATED + jobs + switches, and
+   a proxy for it. test_forced.c now prints `engine_sched_events` beside every table (`probeWork`) and its own
+   note names `schedEvents` 0 as the pre-first-step marker — SO THAT MARKER WAS DERIVED HERE BEFORE IT WAS BUILT
+   ON, and it does not hold. `engine_sched_events` is forks + FLOWS CREATED + jobs + switches, and
    `engine_sched_begin` seeds the frontier (flow_add, or cold_resume) BEFORE the loop the hook sits at the top
-   of — so the pre-first-step table is composed at a work total of at least one flow and `workDone === 0` is
+   of — so the pre-first-step table is composed at a work total of at least one flow and `schedEvents === 0` is
    reachable at no table of any run. An arm keyed on it would have been a reading with no state behind it,
    which is the mirror of the defect this whole comment is about.
    THE ROW THAT DOES ANSWER IT IS `_switches`, AND IT ANSWERS WITHOUT A CLAIM ABOUT THE LOOP AT ALL.
@@ -942,24 +945,24 @@ const standingText = (s) =>
                      re-deriving the sample-count proxy the paragraph above retires — a fallback to a reading
                      this file has just called a claim it cannot check would be that claim surviving its own
                      correction. */
-                  ? `, over ${s.samples} @H table(s), NO @HWORK LINE — this artifact predates the progress ` +
+                  ? `, over ${s.samples} @H table(s), NO @HEVENTS LINE — this artifact predates the progress ` +
                     `line, so how far the run had got when that table was composed is not in its output and ` +
                     `neither reading of a 0 row is established here`
                   : s.work._switches === 0
                     ? `, AT A TABLE COMPOSED BEFORE ANY FLOW WAS EVER DISPATCHED — MEASURED, not inferred ` +
-                      `from the sample count: ${s.work.workDone} unit(s) of engine work stand at ${s.work._flows} ` +
+                      `from the sample count: ${s.work.schedEvents} scheduler event(s) stand at ${s.work._flows} ` +
                       `flow(s) created, ${s.work.forks} fork(s), ${s.work._jobsRun} job(s) run and ZERO ` +
                       `context switches, and engine_sched_step raises that last counter beside its only ` +
                       `flow_credit_pick. So every 0 above is a statement this run never REACHED and not one ` +
                       `it answered wrongly, and nothing here is a verdict on the mechanism any row names`
-                    : `, over ${s.samples} @H table(s), the last composed at ${s.work.workDone} units of ` +
-                      `engine work (${s.work.forks} forks, ${s.work._flows} flows, ${s.work._jobsRun} jobs ` +
+                    : `, over ${s.samples} @H table(s), the last composed at ${s.work.schedEvents} scheduler ` +
+                      `events (${s.work.forks} forks, ${s.work._flows} flows, ${s.work._jobsRun} jobs ` +
                       `run, ${s.work._switches} switches)` +
-                      (s.first.workDone === s.work.workDone
+                      (s.first.schedEvents === s.work.schedEvents
                          ? ` — the whole stream stands at that one point, so this run answered what it ` +
-                           `answered without the work clock moving between its tables`
-                         : ` from ${s.first.workDone} at the first, a span of ` +
-                           `${s.work.workDone - s.first.workDone} units` +
+                           `answered without the event count moving between its tables`
+                         : ` from ${s.first.schedEvents} at the first, a span of ` +
+                           `${s.work.schedEvents - s.first.schedEvents} events` +
                            /* AND WORK IS NOT THE ONLY THING A ROW CAN BE WAITING ON, WHICH THIS SENTENCE USED
                               TO ASSUME. Every async continuation in this engine is a JOB, so a statement
                               behind an await, a reaction, a timer or a delivery cannot be answered by ANY
@@ -1052,7 +1055,7 @@ const causeName = (raw) => {
    that "adding a row there is a change in two places on purpose" — and the measurement is that it never was.
    The second place does not get changed. This file already recorded THREE rows found months after they were
    added; at the revision this was written the count was EIGHT — `picksLive`, `picksMax`, `picksLifetime`,
-   `topForgiven`, `scanCensusRuns`, `scanCensusWeights`, `workDone`, and the four of test_forced.c's progress
+   `topForgiven`, `scanCensusRuns`, `scanCensusWeights`, `schedEvents`, and the four of test_forced.c's progress
    line — and THREE of those landed in the hour this function was being written. A required-PRESENCE loop
    cannot notice a row that was never in its list, so every row added over there joins the unchecked half by
    default, is computed on every sample of every run, and is read by nothing.
@@ -1321,10 +1324,10 @@ const abiPointerSignatures = sourceFact(() => {
 });
 const progressEvery = sourceFact(() =>
   hostDefine("solver/engine.c", "ENGINE_PROGRESS_EVERY",
-             "hungCause states its window as an absolute span of engine_work_done and the census cadence is " +
+             "hungCause states its window as an absolute span of engine_sched_events and the census cadence is " +
              "what converts censuses to work units"));
 const hworkFields = sourceFact(() =>
-  censusComposerFields("test_forced.c", 'printf("@HWORK {', '}\\n"',
+  censusComposerFields("test_forced.c", 'printf("@HEVENTS {', '}\\n"',
     "`standingText` states how far a run had got when its probe table was composed, and that is the one " +
     "number deciding which of a 0 row's two readings the WHOLE table has").numeric);
 
@@ -1358,7 +1361,7 @@ const hworkFields = sourceFact(() =>
    will not happen. A frontier that DID hold two members is judged by the two arms below whatever its totals.
    MEASURED, AND IT IS WHY THIS ARM EXISTS RATHER THAN A CAUTION: the only emission of this row anywhere in
    this session's archive reads `unframedPicksLifetime: 1` of `picksLifetime: 1` at `members: 1`, `arrivals:
-   1`, `departures: 0`, `workDone: 2` — a native smoke instance that minted one flow and stepped it once. The
+   1`, `departures: 0`, `schedEvents: 2` — a native smoke instance that minted one flow and stepped it once. The
    arm below would have rendered "Those members ARE dispatched … 100.0% … REFUTED" from it, and solver/flow.c's
    job-split residual is waiting on a reading of this row to separate two readings about a REAL-PAGE frontier
    of hundreds of members. A degenerate instance cannot separate them and must not appear to.
@@ -4984,7 +4987,7 @@ function hungCauseCensus(out) {
     coldPartition(one, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
     return `a WEDGED FRONTIER (this stage printed EXACTLY ONE @COLD census, and solver/engine.c's ` +
            `engine_census_emit makes the first sample unconditional so that this is a POSITIVE statement and ` +
-           `not a hole: the frontier has not moved ${progressEvery()} units of engine_work_done nor minted a ` +
+           `not a hole: the frontier has not moved ${progressEvery()} units of engine_sched_events nor minted a ` +
            `candidate since that sample was taken. live ${one.live}, framed ${one.framed}, blocked ` +
            `${one.blocked}, owed ${one.owed}, finished ${one.finished} (exploration ${one.finishedFlows}, @S ` +
            `candidate MEMBERS ${one.finishedCands}), sold ${one.sold}. There is no SECOND census, so nothing ` +
@@ -5030,7 +5033,7 @@ function hungCauseCensus(out) {
      IT IS A GRANULARITY AND NOT A BOUND (§NO BOUNDS): it truncates nothing, drops no flow, and decides only how
      much of the tail this reader looks at. So it is a POLICY INPUT stated here with its reasoning and PRINTED
      with the verdict, rather than a constant hidden in an expression. The width is in CENSUSES because that is
-     what the stream is made of, and one census is ENGINE_PROGRESS_EVERY units of engine_work_done — read from
+     what the stream is made of, and one census is ENGINE_PROGRESS_EVERY units of engine_sched_events — read from
      engine.c so a retuned cadence cannot leave this sentence quoting a span the engine stopped taking.
      WHY TWENTY: the window has to be longer than one WFQ RE-RANKING PAUSE, which is this function's own
      standing reason for not comparing adjacent samples — a flow outranked and another picked costs a handful of
@@ -5118,7 +5121,7 @@ function hungCauseCensus(out) {
                     `${markRise(lastRetireCand, n, b.finishedCands)} cand, ` +
                     `flip ${markFlip(lastFlip, h.length)}`;
   const span = `over the last ${width} of ${n} censuses — an ABSOLUTE window of ${width * PROGRESS_EVERY} ` +
-               `units of engine_work_done, not a fraction of the run: ` +
+               `units of engine_sched_events, not a fraction of the run: ` +
                `finished ${a.finished}→${b.finished} (exploration ${a.finishedFlows}→${b.finishedFlows}, ` +
                `@S candidate MEMBERS ${a.finishedCands}→${b.finishedCands}), live ${a.live}→${b.live}, ` +
                `sold ${a.sold}→${b.sold} (exploration ${a.soldFlows}→${b.soldFlows}, candidate ` +
@@ -5599,15 +5602,15 @@ function documentRowsText(host, stages) {
 const workRateText = (t, stand) => {
   const pre = `[build]   what that budget bought: `;
   if (stand === null || stand.work === null)
-    return pre + `NOT STATED — this stage printed no @HWORK line, so it makes no claim about how much engine ` +
-                 `work its CPU bought and there is no rate to take. That is an absence, never a zero.\n`;
-  const w = stand.work.workDone;
+    return pre + `NOT STATED — this stage printed no @HEVENTS line, so it makes no claim about how many ` +
+                 `scheduler events its CPU bought and there is no rate to take. That is an absence, never a zero.\n`;
+  const w = stand.work.schedEvents;
   if (t.cpuSeconds === null || !(t.cpuSeconds > 0))
-    return pre + `${w} unit(s) of engine work, but the CPU was ${cpuText(t.cpuSeconds)} — NO RATE: the ` +
+    return pre + `${w} scheduler event(s), but the CPU was ${cpuText(t.cpuSeconds)} — NO RATE: the ` +
                  `denominator is not a positive measured number, and a rate over an unmeasured budget is a ` +
                  `figure about nothing.\n`;
-  return pre + `${w} unit(s) of engine work for ${t.cpuSeconds.toFixed(1)} s of CPU = AT LEAST ` +
-               `${(w / t.cpuSeconds).toFixed(1)} unit(s) per CPU-second — a FLOOR, and the only figure in this ` +
+  return pre + `${w} scheduler event(s) for ${t.cpuSeconds.toFixed(1)} s of CPU = AT LEAST ` +
+               `${(w / t.cpuSeconds).toFixed(1)} event(s) per CPU-second — a FLOOR, and the only figure in this ` +
                `block whose denominator a loaded box cannot move. It says whether the budget was the ` +
                `constraint; the job count in the verdict says what the run achieved.\n`;
 };

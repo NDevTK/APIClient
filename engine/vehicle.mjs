@@ -5,7 +5,7 @@
  *     other reached its final table, since a completed run executed every flow the crashing one could have;
  *   - each statement's value in the final @H table (the one printed after `@RESULT`) and the fixture's own
  *     verdict line: when both runs completed;
- *   - every @H table paired by the `@HWORK` work total it was composed at, and the work retired by a completed
+ *   - every @H table paired by the `@HEVENTS` work total it was composed at, and the work retired by a completed
  *     run: only when both hosts announce the same `@QUANTUM` slice, because slices that end at different points
  *     interleave flows differently and the two runs then take different paths through one document.
  *   node engine/vehicle.mjs --native <bin> --wasm <qjs.js> [--wasm-node <node>] [--cpu <s>] [--jobs <n>]
@@ -43,7 +43,7 @@ export function vehicleReading(out, signal, where) {
   const tables = [];
   let work = null, completed = false, verdict = null, quantum = null, cold = null;
   for (const line of lines) {
-    if (line.startsWith("@HWORK ")) { work = JSON.parse(line.slice(7)).workDone; continue; }
+    if (line.startsWith("@HEVENTS ")) { work = JSON.parse(line.slice("@HEVENTS ".length)).schedEvents; continue; }
     if (line.startsWith("@RESULT ")) {
       completed = true;
       const r = JSON.parse(line.slice(8));

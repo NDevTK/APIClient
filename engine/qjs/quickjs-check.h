@@ -117,7 +117,7 @@ static inline void apiclient_qjs_reason_mark(char *r, int n)
 #else
 /* THE HOST'S BUFFERED STDOUT IS FLUSHED FIRST, AND THAT IS THE WHOLE OF WHY THIS LINE IS NOT JUST AN
    fprintf. This record goes to stderr and unbuffered; every diagnostic the rest of this project emits —
-   `@H`, `@HWORK`, `@RESULT`, `@PAGEERR`, `@COLDPARK`, a fixture's own markers — goes to STDOUT and is
+   `@H`, `@HEVENTS`, `@RESULT`, `@PAGEERR`, `@COLDPARK`, a fixture's own markers — goes to STDOUT and is
    BUFFERED, so an `abort()` here discards whatever the run wrote and had not yet flushed. engine/host's own
    DFAIL has flushed stdout since its record became one `write(2)`; this one had not, so WHICH HALF OF THE
    TREE ABORTS decided whether a run's stdout record survived it. That is not a small asymmetry: it is every

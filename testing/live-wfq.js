@@ -1,7 +1,7 @@
 // The scheduler's own order census, SAMPLED ACROSS A LIVE PAGE'S WINDOW.
 //
 // WHY IT IS A SERIES AND NOT A READING. `solver/result.c` composes `_wfq` and states which of its
-// rows may be differenced: `picksLifetime`, `starvedPicks`, `topForgiven`, `workDone` and the scan
+// rows may be differenced: `picksLifetime`, `starvedPicks`, `topForgiven`, `schedEvents` and the scan
 // counters are LIFETIME COUNTERS; `picksLive`, `picksMax`, `neverPicked`, `neverPickedAtTop` and
 // every `svc*` notch are GAUGES over the members standing NOW and CAN FALL between two samples. A
 // single census therefore cannot answer the question anybody asks of it — "is the tail being
@@ -92,7 +92,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    A ZERO IS READ AGAINST `epochResetsLifetime` FIRST and is three-state like every other absence here: zero
    resets is a run that never emitted, so the pair is SILENT about the design rather than favourable to it,
    and zero rebuild across non-zero resets is the strongest result available. */
-const COUNTERS = ["picksLifetime", "starvedPicks", "starvedPicksIdle", "workDone", "rankChanges",
+const COUNTERS = ["picksLifetime", "starvedPicks", "starvedPicksIdle", "schedEvents", "rankChanges",
                   "topForgiven", "arrivals", "departures",
                   "epochRebuildLifetime", "epochResetsLifetime"];
 /* `epochAwayLive` AND `epochAwayWalk` ARE GAUGES AND THEY ARE A CONSERVATION IDENTITY RATHER THAN TWO
@@ -210,7 +210,7 @@ function branchScope() {
 
    THE KINDS, FROM result.c's OWN TEXT AND NOT FROM THE NAMES. All ten are LIFETIME COUNTS and may be
    differenced: `preemptAsksLifetime` is stated as one outright ("solver/engine.c never resets it, so two
-   censuses carrying one `workDone` give a RATE over the interval between them, and that is the only
+   censuses carrying one `schedEvents` give a RATE over the interval between them, and that is the only
    reading a wall-denominated quantum leaves quotable at all"), and the nine `scan*` rows are the same
    kind by the same argument — they count WALKS AND WEIGHINGS PERFORMED, which nothing takes back. They
    are COUNTS AND NOT CLOCKS on purpose: solver/flow.h's FLOW_SCANS says a duration here "would be a fact
@@ -772,7 +772,7 @@ async function main() {
              OTHERS — the same rule the crowd/minter shares are printed under. result.c also names
              `scanNextWeights / steps` against `members` and `scanRivalRuns` against `forks`; `steps` and
              `forks` are on the @COLD line and the run record, not here, so those two are NOT composed
-             from this document and a reader wanting them joins the two censuses that share a `workDone`.
+             from this document and a reader wanting them joins the two censuses that share a `schedEvents`.
              `scanNextRuns`/`scanNextWeights` are therefore printed RAW beside `members`, which is this
              driver's standing rule: the columns go side by side and the reader does the division knowing
              what is in it. A ZERO DENOMINATOR YIELDS null AND NEVER 0. */

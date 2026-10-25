@@ -10869,7 +10869,7 @@ TF_UNIT void probes_fetchreply(const char *js, Probe *tab, int *n) {
            boundary, and a reader who stops at `floc-iso` never sees the single-world rows below it answering.
            AND ONE CENSUS CANNOT SAY WHETHER THE LOST WORLDS ARE A BUDGET FACT, WHICH IS EXACTLY WHAT
            fork_row_impl's third state refuses to claim. That refusal is honest about ONE reading and the
-           question is a SERIES: score the two sets against `workDone` across several runs and read whether
+           question is a SERIES: score the two sets against `schedEvents` across several runs and read whether
            they move together. No column here can make that comparison about itself, which is why it is named
            rather than left to be inferred from a value.
            RETIREMENT: this record goes when a 0 row's diagnostic carries its own KIND, so a reader scanning
@@ -12850,7 +12850,7 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
              "Its TWO readings are told apart by the record: no /api/xkreach record at all means no flow "
              "reached this statement — check `jobs run` before reading it as a defect, because every record "
              "here is behind an await and settles through sc_resolve's JS_EnqueueCallJob, so a run with zero "
-             "jobs cannot answer it however much `workDone` it reports; a record whose `d` carries `no` means "
+             "jobs cannot answer it however much `schedEvents` it reports; a record whose `d` carries `no` means "
              "generateKey REJECTED and its `n` param names the DOMException");
     /* STEP 2's `raw` ARM, BOTH SUB-STEPS. The length is asked as a COMPARISON so the emitted byte is a literal
        on both paths — a concolic byteLength would show as TWO values of `d` rather than as an absent record,
@@ -19878,7 +19878,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        the same log carries the `@PAGEERR` proving it did, and the terminal table reads 1.
        The total goes after the NAME rather than at the end of the sentence, because a `why` is long and a
        reader looking at a truncated line must still be able to see when it was taken. */
-    work_at = engine_work_done();
+    work_at = engine_sched_events();
     for (i = 0; i < n; i++)
         if (!rows[i].ok && rows[i].why) printf("@H   %s @%ld: %s\n", rows[i].name, work_at, rows[i].why);
     /* AND THE ROWS THIS HOST COULD NOT PUT AT ALL, PARTITIONED FROM THE ROWS IT GOT WRONG — CLAUDE.md's "a
@@ -19899,7 +19899,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        this function writes IS prose under `@H `, two readers that selected on the prefix alone counted its
        pairs as rows, and a separate marker makes the separation structural instead of resting on every
        reader getting one predicate right.
-       `@HWORK` already establishes the convention and this follows it.
+       `@HEVENTS` already establishes the convention and this follows it.
        THE LIST AND NOT A COUNT: the names are what a reader can act on, and a digit beside them is a second
        thing that has to be kept in step with them. */
     {
@@ -19998,7 +19998,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        cost was paid rather than avoided: engine/rowsplit.mjs and engine/smokerows.mjs selected on the `@H `
        prefix alone and read every `name=<digits>` on the line, so this function's own narration was counted
        as rows. They select by the VERDICT now, through engine/probe_rows.mjs, and a separate marker is what
-       keeps that from being the only thing standing between a sentence and a table. `@HWORK` established the
+       keeps that from being the only thing standing between a sentence and a table. `@HEVENTS` established the
        convention.
        BEFORE THE TABLE, NEVER AFTER IT, on this function's own rule: the LAST line of a killed run is its
        verdict, and this file already carries the measurement of what appending sentences under it costs.
@@ -20058,12 +20058,12 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        row's TWO READINGS the WHOLE table has, and it was on no line of this stream.
        A row's 0 is "a statement this run answered wrongly" or "one it never reached", and those send a reader
        to opposite places — the mechanism the row names, or the budget. Per-row the split is what a `why`'s
-       first clause and a ladder's lowest rung are for. WHOLE-TABLE it is one number — and it is NOT `workDone`
+       first clause and a ladder's lowest rung are for. WHOLE-TABLE it is one number — and it is NOT `schedEvents`
        0, which this line named as the pre-first-step marker and which is reachable at NO TABLE OF ANY RUN.
        THE RETIRED ARGUMENT IS CORRECTED RATHER THAN DELETED, because a reader who re-derives it will
        re-introduce it. The marker was read off `run_scheduler`'s LOOP ORDER — the park hook that composes this
        table stands at the TOP of that loop, before `engine_sched_step` has run once — and that half is true
-       and is not enough. `engine_work_done` is forks + FLOWS CREATED + jobs + switches, and
+       and is not enough. `engine_sched_events` is forks + FLOWS CREATED + jobs + switches, and
        `engine_sched_begin` SEEDS THE FRONTIER before the loop is entered at all: it takes exactly one of
        `cold_resume`, which asserts `flows > 0`, or `flow_add`, and both reach flow_new, which is the one site
        that raises the created count. So the pre-first-step table is composed at a work total of at least the
@@ -20077,7 +20077,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        engine/build.mjs's `standingText` keys its before-any-dispatch arm on. A table composed at tens of
        thousands, with switches behind it, is a run that did the work and answered as it did.
        THE QUANTITY IS THIS TABLE'S OWN CADENCE AND WAS PRINTED NOWHERE. `fixture_have_answers` gates on
-       `engine_work_done()` and `run_scheduler` gates its five censuses on the same call, and no line carries
+       `engine_sched_events()` and `run_scheduler` gates its five censuses on the same call, and no line carries
        it — so the number that decides WHEN every measurement of this run is taken was not itself a
        measurement. The consumer INFERRED one bit of it instead, from the number of @H samples, and an
        inference about `run_scheduler`'s loop order held in a file that cannot check it is the claim-by-
@@ -20088,10 +20088,10 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        on exactly the runs whose standing is in question those three are composed and never printed. They are
        spelled the way the document spells them, which is that paragraph's other half: one namespace, one
        spelling, and a reader who learns these names off the document reads them off this line.
-       THE FOURTH TERM IS DELIBERATELY ABSENT. `engine_work_done` is forks + flows + jobs + switches, and the
+       THE FOURTH TERM IS DELIBERATELY ABSENT. `engine_sched_events` is forks + flows + jobs + switches, and the
        forks term is already `forks` on @COLD — restating it here would be a second spelling of a number that
        has one, which is a second contract and the half that goes quietly wrong. So the identity a reader
-       checks this line by spans two lines on purpose: workDone == @COLD's `forks` + _flows + _jobsRun +
+       checks this line by spans two lines on purpose: schedEvents == @COLD's `forks` + _flows + _jobsRun +
        _switches.
        EVERY ONE OF THE FOUR IS A LIFETIME COUNTER, monotone over the process — engine.c says so where it
        refuses to reset them at a session boundary — so two samples of this line MAY be differenced, which is
@@ -20105,7 +20105,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
         WfqCensus hw;
 
         DCHECK(work >= last_work,
-               "the run's own progress clock went BACKWARD between two @H tables — `engine_work_done` is the "
+               "the run's own progress clock went BACKWARD between two @H tables — `engine_sched_events` is the "
                "sum of four counters engine.c refuses to reset at a session boundary, so it is a LIFETIME "
                "counter and cannot decrease. Either one of the four was reset under a host that runs more "
                "than one session in a process, or this line is reading a gauge; both make every difference "
@@ -20127,7 +20127,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
            zero belongs to, and this line is a work stream rather than a census — the other two are already
            on the frontier census for a reader who needs the whole split. Its absence showed as a zero read
            as a starved queue for a run in which nothing was ever rank-eligible.
-           A GAUGE BESIDE LIFETIME COUNTERS, AND THE DCHECK ABOVE IS ABOUT THE OTHERS: `workDone` cannot
+           A GAUGE BESIDE LIFETIME COUNTERS, AND THE DCHECK ABOVE IS ABOUT THE OTHERS: `schedEvents` cannot
            decrease and is asserted so; `jobs_ready` is a reading of the backlog at this instant and MAY
            fall, so it is never differenced across two samples of this stream. */
         flow_wfq_census(&hw);
@@ -20140,7 +20140,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
            it — the first draft of this paragraph quoted both and collapsed the derived span from 81
            characters to 22, silently emptying another component's field contract. Describe them; do not
            write them. */
-        printf("@HWORK {\"workDone\":%ld,\"_switches\":%d,\"_flows\":%ld,\"_jobsRun\":%ld,\"_jobsReady\":%ld}\n",
+        printf("@HEVENTS {\"schedEvents\":%ld,\"_switches\":%d,\"_flows\":%ld,\"_jobsRun\":%ld,\"_jobsReady\":%ld}\n",
                work, engine_switch_count(), flow_created_count(), engine_jobs_run(), hw.jobs_ready);
     }
     printf("@H ");
@@ -20196,7 +20196,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
  *
  * HOW OFTEN IT IS ASKED is a SAMPLING RATE of a MEASUREMENT and not a budget: it decides when the verdict is
  * recomputed, never how much the frontier may explore, and the verdict cannot change without something being
- * emitted. It is the engine's own progress cadence (ENGINE_PROGRESS_EVERY units of engine_work_done), so the @H
+ * emitted. It is the engine's own progress cadence (ENGINE_PROGRESS_EVERY units of engine_sched_events), so the @H
  * stream lands beside the @PROGRESS/@COLD/@HEAP lines it has to be read against — a report at some other rate
  * would be a second cadence to keep in step.
  *
@@ -20211,8 +20211,8 @@ static int fixture_have_answers(void) {
 
     /* Before the sampling gate, so the post leaves at the first consultation after the page asked for it. */
     fixture_route_gadget_post(g_probe_ctx);
-    if (engine_work_done() < next) return 0;
-    next = engine_work_done() + PROBE_SAMPLE_EVERY;
+    if (engine_sched_events() < next) return 0;
+    next = engine_sched_events() + PROBE_SAMPLE_EVERY;
     /* THE RESULT DOCUMENT, RENDERED AT A STEP BOUNDARY WITH NO FLOW SWITCHED IN — which is the position this
        hook is asked at, and is why it may be rendered from the session's realm at all: the flow stamp and the
        COW capture route are both down between two slices, so nothing this builds is attributed to a flow. */
@@ -32881,7 +32881,7 @@ TF_UNIT int abi_main(int argc, char **argv)
                streaming its findings for years and the other not, is the divergence rather than the fix; what
                was missing here was the CALL. A driver that composed its own document, or printed under a
                marker of its own, would be the second spelling this file refuses everywhere else.
-               ON THE CENSUS'S CADENCE AND NOT ON ONE OF THIS FILE'S — `engine_work_done()` units, which is
+               ON THE CENSUS'S CADENCE AND NOT ON ONE OF THIS FILE'S — `engine_sched_events()` units, which is
                §Testing's "work ACTUALLY PERFORMED" rather than the elapsed time bridge.js can afford because
                it is pumping a browser and this host is not. An interval held here would also publish a stream
                whose `@RESULT` and whose five census lines describe two different instants with nothing saying
@@ -33980,7 +33980,7 @@ int main(int argc, char **argv) {
        WHAT THE MOVE DOES NOT ESTABLISH, SAID HERE SO THE NEXT READER DOES NOT READ A 0 AS A DEFECT. The rows
        become READABLE and that is the whole of it; reading them is a separate act. A row behind an `await`, a
        `.then`, a timer or a delivery is answered by a JOB, so it is unanswerable in a run whose `jobs run` is
-       0 HOWEVER much `workDone` that run reports — two different quantities, and the second does not buy the
+       0 HOWEVER much `schedEvents` that run reports — two different quantities, and the second does not buy the
        first. This move adds and removes no row, so `asked` does not move and answered/asked is comparable
        across it, which is what makes a before/after over this commit mean anything at all.
        WHAT THE ARGUMENT BELOW DECIDES. The address is what that Window realm is BUILT at, so it is HTML

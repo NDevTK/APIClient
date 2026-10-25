@@ -177,7 +177,7 @@ import { topLevelFacts } from "./top_level_facts.mjs";
 const SAMPLE_MS = 750;
 
 /* NOT AN `@` STREAM MARKER, AND THAT IS THE WHOLE POINT OF THE NAME CHANGE. Every other `@` token this
-   project prints — @H, @S, @WFQ, @COLD, @SWAP, @HWORK, @QUANTUM, @E, @WHY — is PARSED by something: the
+   project prints — @H, @S, @WFQ, @COLD, @SWAP, @HEVENTS, @QUANTUM, @E, @WHY — is PARSED by something: the
    build's readers, the extension, a census consumer. The prefix is a promise that a machine reads the line.
    `@CENSUSFAIL` made that promise and nothing anywhere matched it, which the record-field audit reports as a
    written marker with no reader — correctly, and permanently, because there was no consumer to build.
@@ -362,7 +362,7 @@ function surface(d, n) {
 
 /* EVERYTHING ELSE THE DOCUMENT CARRIES — THE COMPLEMENT OF `SURFACES`, COMPUTED RATHER THAN WRITTEN DOWN.
  * §Testing: an answered-statement count is quoted beside the work counters or it is not quoted, because a run
- * whose `workDone` is near one did not run. The same rule is what makes a census line readable: `_wfq` at
+ * whose `schedEvents` is near one did not run. The same rule is what makes a census line readable: `_wfq` at
  * `{members: 0}` on a run with no jobs is a frontier that never existed, and on a run with tens of thousands
  * it is a frontier that drained. That is why the columns are published; this is why they are DERIVED.
  *

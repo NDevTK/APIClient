@@ -213,7 +213,7 @@ METRIC(w_top_vis, "wTopVis", GAUGE, "visit", AGENT, "solver/flow.c", INT)
    `nonrewardMax`. `curDeepLive` is the gap's population. Gauges (unlike the monotone
    `deepest`/ `deepestLeft`). `curDeep` and `curDeepLive` repeat `programCursors`' top bucket,
    computed by a different walk over `Flow.script_i`, so they cross-check when both share
-   `workDone`. */
+   `schedEvents`. */
 METRIC(cur_deep, "curDeep", GAUGE, "row", AGENT, "solver/flow.c", INT)
 METRIC(cur_deep_live, "curDeepLive", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(cur_deep_wgap, "curDeepWGap", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
@@ -351,15 +351,16 @@ METRIC(credits_dropped_lifetime, "creditsDroppedLifetime", LIFETIME, "credit", P
 METRIC(credits_paid_value_lifetime, "creditsPaidValueLifetime", LIFETIME, "point", PROCESS, "solver/flow.c", FIXED3)
 /* The novel share of it, the value Level 1 ranks a document by (solver/novelty.h's novelty_landed_value). */
 METRIC(novelty_landed_lifetime, "noveltyLandedLifetime", LIFETIME, "point", PROCESS, "solver/novelty.c", FIXED3)
-/* `workDone` (`engine_work_done()`) dates this census in the clock every other stream of the
-   run is cadenced by (`fixture_have_answers` samples on it, run_scheduler gates censuses on
-   it), so rows of two lines are compared only within one sample: the @H sampler fires every
-   PROBE_SAMPLE_EVERY units from zero, so its first table can be composed at `workDone` 1
-   while @COLD continues to the end. A lifetime counter: `picksLifetime` and
-   `scanCensusWeights` against it are per-unit-of-work rates. `rankChanges` is the hook's
+/* `schedEvents` (`engine_sched_events()`: forks + flows created + jobs run + switches, not engine
+   work, which is @COLD's `stepWork`) dates this census in the cadence every other stream of the
+   run uses (`fixture_have_answers` samples on it, run_scheduler gates censuses on it), so rows of
+   two lines are compared only within one sample: the @H sampler fires every PROBE_SAMPLE_EVERY
+   events from zero, so its first table can be composed at `schedEvents` 1 while @COLD continues
+   to the end. A lifetime counter: `picksLifetime` and `scanCensusWeights` against it are
+   per-event rates; a budget is stated in `stepWork`. `rankChanges` is the hook's
    rescan denominator: `scanRivalRuns / scanNextRuns` is scan work per step, not cadence,
    since a rescan fires on a rank change or an incumbent switch (solver/flow.h). */
-METRIC(work_done, "workDone", LIFETIME, "work", AGENT, "solver/engine.c", INT)
+METRIC(sched_events, "schedEvents", LIFETIME, "event", AGENT, "solver/engine.c", INT)
 METRIC(rank_changes, "rankChanges", LIFETIME, "change", PROCESS, "solver/flow.c", INT)
 /* Request-site reach (solver/net_reach.h; quickjs.h's JS_NetSiteCensus defines a site and
    what it cannot see). Sites are bytecode reads of a door's entry name; `reachSites ==

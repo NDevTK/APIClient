@@ -1380,7 +1380,7 @@ typedef struct {
      * shallower members ahead, which a term must fix. Same points as `never_picked_gap`.
      * Collected from weights the walk already computed, so `scanCensusWeights` is unchanged. Gauges: both may
      * fall, and `deepest`/`deepest_left` (solver/engine.h) are the monotone pair. `cur_deep` and
-     * `cur_deep_live` repeat the top bucket of `programCursors`, a different walk; on one `workDone` they must
+     * `cur_deep_live` repeat the top bucket of `programCursors`, a different walk; on one `schedEvents` they must
      * agree (a reading, not an assert, since nothing guarantees one instant).
      * A report, never a bound; a cursor term in the order would rank the youngest arm highest. */
     int  cur_deep;        /* gauge: the deepest `Flow.script_i` any live member stands at; 0 on an empty walk */

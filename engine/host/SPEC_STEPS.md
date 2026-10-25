@@ -3542,7 +3542,7 @@ emitted earlier and the aging is 1e-6 per scheduler step — so the switch count
 run**, and the stream emitted ONE line while RSS climbed past 2.7 GB. A cadence keyed on a counter
 that stops is a report that goes silent exactly when there is something to report: the same defect
 as a corpus file the collector does not collect, because the output LOOKS complete. Both the cadence
-and the seam verdict now read one `engine_work_done()` — forks + flows + jobs + switches — so they
+and the seam verdict now read one `engine_sched_events()` — forks + flows + jobs + switches — so they
 measure the same quantity and cannot drift.
 
 **Nothing reported what a parked flow costs.** `@SWAP` says what a context SWITCH costs;

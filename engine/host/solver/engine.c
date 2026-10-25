@@ -10682,7 +10682,9 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  * `script` is the current flow's cursor and says nothing about coverage: `script: 1` for ever is either no flow
  * reaching the second <script> or thousands having done so while the flow holding the thread is at its first. */
 
-/* The work this engine has performed: forks taken, flows created, jobs run, context switches. One definition for
+/* The scheduler events this engine has performed: forks taken, flows created, jobs run, context switches. It is not
+ * engine work (retired opcodes plus charged host work, `stepWork`), and a budget is never stated in it. One
+ * definition for
  * three consumers: the seam verdict below measures one step's share of it (being descheduled cannot inflate any of
  * the four, since a thread that is not running performs none of them); the progress stream's cadence keys on it (a
  * cadence keyed on `g_switches` alone goes silent while one flow holds the thread, because nothing outranks it);
@@ -10690,12 +10692,12 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  *
  * The four are not one currency, so this total over a clock measures composition, never a rate: a turn that ends
  * a frame or drains microtasks costs orders of magnitude less than one that runs a program, so a run that mints
- * jobs scores far more work for the same thread time. Read the four addends, which the verdict line and `@HWORK`
+ * jobs scores far more events for the same thread time. Read the four addends, which the verdict line and `@HEVENTS`
  * print separately; the sum is right for a cadence, which wants a quantity that always moves.
  * Named residual. Not covered: what a turn of each kind costs. Next diff builds: a census row per turn kind with
- * its cost. Absence shows as: `workDone` per CPU-second splitting runs at one rlimit into two bands while the
+ * its cost. Absence shows as: `schedEvents` per CPU-second splitting runs at one rlimit into two bands while the
  * count of program turns overlaps between them. */
-long engine_work_done(void) {
+long engine_sched_events(void) {
     return decide_fork_total() + flow_created_count() + g_jobs_run + g_switches;
 }
 
@@ -11785,7 +11787,7 @@ static int engine_sched_slice(void) {
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
             /* The work this step performs, sampled beside the clocks (see the verdict below): forks, flows and jobs
                are things the engine did, which no descheduling can inflate. */
-            long w0 = engine_work_done();
+            long ev0 = engine_sched_events();
             /* And the wall clock, read separately because it measures something else: `now` is the slice's measure
                (CPU where the host has one), while the gap census and the step duration below are wall quantities
                the seam message reports and never decides on. */
@@ -12157,13 +12159,13 @@ static int engine_sched_slice(void) {
                  * past it with no point offered is host work charged by its input in one span with no rest point.
                  * A C stretch that retires and charges nothing (a bare `for(;;);`) is invisible to both, and is
                  * closed by the step-machine conversion rather than by a clock. */
-                long work = engine_work_done() - w0;
+                long events = engine_sched_events() - ev0;
                 if (step_work > ENGINE_SEAMLESS_STEP_WORK && g_preempt_asked == pa0) {
                     DFAILF("%lld units of retired work in one step with no suspend point offered (%ld forks+flows+"
                            "jobs) — this stretch has no suspend/resume seam; unit=%s script_i=%d",
-                           (long long)step_work, work, step_unit_name(g_step_unit), cur ? cur->script_i : -1);
+                           (long long)step_work, events, step_unit_name(g_step_unit), cur ? cur->script_i : -1);
                 }
-                if (work > ENGINE_SEAMLESS_WORK && g_preempt_asked == pa0) {
+                if (events > ENGINE_SEAMLESS_EVENTS && g_preempt_asked == pa0) {
                     /* The two excerpts are the only bounded things here, because their sources (a payload, a script
                        body) are page bytes of any length; everything else is the assert's message, sized by
                        check.h. */
@@ -12209,12 +12211,12 @@ static int engine_sched_slice(void) {
                        line of source text rather than escapes (check.h escapes what it emits regardless). */
                     excerpt(pl_txt, sizeof pl_txt, pl, pl ? strlen(pl) : 0);
                     excerpt(body_txt, sizeof body_txt, bodytxt, bodyn);
-                    DFAILF("%ld units of work (forks+flows+jobs) with no suspend point offered (wall gap %d ms, step "
+                    DFAILF("%ld events (forks+flows+jobs) with no suspend point offered (wall gap %d ms, step "
                            "%d ms; pricing clock %s; points asked=%llu, preempts wanted=%llu fired=%llu; slowest Web "
                            "API member step %s %dms of %dms over %ld steps; wrapper map %ld/%ld; live objects %lld, "
                            "heap %lld KiB) — this stretch has no suspend/resume seam; unit=%s script_i=%d flow=%s "
                            "payload=%s body=%s",
-                           work, (int)gap, (int)spent, quantum_measure(),
+                           events, (int)gap, (int)spent, quantum_measure(),
                            (unsigned long long)(g_preempt_asked - pa0),
                            (unsigned long long)(pq - pq0),
                            (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
@@ -12780,7 +12782,7 @@ void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
  *
  * It runs on the host's own time between two steps, never inside a slice, so with the flow stamp and capture route
  * down it creates no flow's JS value, which makes `result_heap_json`'s runtime walk legal here. The cadence is
- * ENGINE_PROGRESS_EVERY units of engine_work_done() (forks + flows + jobs + switches) or a new candidate, whichever
+ * ENGINE_PROGRESS_EVERY units of engine_sched_events() (forks + flows + jobs + switches) or a new candidate, whichever
  * comes first; a sample is O(frontier members) and prices itself on its own output (`scanCensusWeights` against
  * `scanNextWeights` on the @WFQ line).
  *
@@ -12788,7 +12790,7 @@ void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
  * first round; exactly one is a frontier that has neither moved ENGINE_PROGRESS_EVERY units nor minted a candidate
  * since, a wedged run stated with its numbers; many is a run exploring. Each line carries its sample ordinal, so the
  * state is readable off one line: the greatest ordinal in a log is the series length, and a last line reading 1 is
- * the wedged state. The cadence and the ordinal are statics, because engine_work_done is a lifetime counter not
+ * the wedged state. The cadence and the ordinal are statics, because engine_sched_events is a lifetime counter not
  * reset at a session boundary, and `long`, like that counter. It answers whether it sampled (solver/engine.h),
  * which a line-stream host cannot re-derive without a second copy of the cadence: the result document is composed
  * only when the frontier drains or stalls, which a real page's never does, so test_forced.c's `--abi` arm spends
@@ -12809,9 +12811,9 @@ int engine_census_emit(void)
 
     /* Either enough work has happened to be worth a line, or the search grew: a new candidate changes what the
        rest of the run will cost. */
-    if (engine_work_done() < next && solve_candidate_count() == last_cands)
+    if (engine_sched_events() < next && solve_candidate_count() == last_cands)
         return 0;
-    while (engine_work_done() >= next) next += ENGINE_PROGRESS_EVERY;
+    while (engine_sched_events() >= next) next += ENGINE_PROGRESS_EVERY;
     last_cands = solve_candidate_count();
     /* The sample is numbered before it is composed, so the emissions carry one ordinal and a block's lines join by
        it rather than by arrival order. On its own statement, since an increment is a side effect a DCHECK
@@ -12858,9 +12860,9 @@ int engine_census_emit(void)
          * Each line states its sample ordinal, spliced before the composer's first row. It is no composer's row,
          * because those bytes also go on solver/result.c's document, and an ordinal is a fact about a position in a
          * stream, which a document is not: a composer row would read 0 on a document whose host emits no lines,
-         * one field answering two questions. It is not `workDone` (which result_wfq_json publishes): that says when
+         * one field answering two questions. It is not `schedEvents` (which result_wfq_json publishes): that says when
          * a sample was composed and this which sample it is, and only this is unique, since a new candidate emits a
-         * sample without work advancing; emitting `workDone` here too would put a duplicate key on the @WFQ line.
+         * sample without events advancing; emitting `schedEvents` here too would put a duplicate key on the @WFQ line.
          * The splice steps one byte past the composer's opening brace, so the composer's bytes go out verbatim and
          * the payload stays one object. The comma is conditional because a composer may answer an empty object
          * (result_wfq_json does for an empty frontier), and `,}` would be unparseable, which engine/trusted.mjs

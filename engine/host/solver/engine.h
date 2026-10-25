@@ -256,7 +256,7 @@ void engine_set_park_hook(int (*want_park)(void));
 
 /* Work this engine has performed: forks taken, flows created, jobs run and context switches, a lifetime sum.
    Exported so a host reporting on its run uses the same cadence quantity as the engine's own progress stream. */
-long engine_work_done(void);
+long engine_sched_events(void);
 
 /* How many times the scheduler's preempt policy was asked: suspend points reached, which differs from preempts
    wanted (JS_FlowPreemptStats) and rescans performed (solver/flow.h's `scanRivalRuns`). A lifetime count,
@@ -311,10 +311,10 @@ EngineRivalMiss engine_rival_miss(void);
    past the budget: at most one period, under 2% of the slice. The gate counts down, so it need not be a power
    of two. */
 #define ENGINE_QUANTUM_ASK_EVERY 1024
-/* Dev-build diagnostic margin, in work one step performs (forks + flows created + jobs run): a step that does
-   this much without consulting the preempt hook has no suspend/resume seam on that path. It sits far above an
-   ordinary step's few forks between suspend points. It truncates and drops nothing. */
-#define ENGINE_SEAMLESS_WORK 1000
+/* Dev-build diagnostic margin, in scheduler events one step performs (forks + flows created + jobs run): a step
+   that does this much without consulting the preempt hook has no suspend/resume seam on that path. It sits far
+   above an ordinary step's few forks between suspend points. It truncates and drops nothing. */
+#define ENGINE_SEAMLESS_EVENTS 1000
 /* The same verdict in retired work: 400 slices of the flow's own work in one step with no seam offered. An
    interpreted stretch cannot reach it (the dispatch-counted budget raises within a slice), so what it names is
    host work charged by its input in one span with no rest point. Dev-build only; it truncates and drops nothing. */
@@ -393,7 +393,7 @@ int  engine_sched_step(void);
 
 /* Emit the periodic census for a host whose output is a stream of lines: @SWAP, @COLD, @HEAP, @WFQ, @FORKAT, in
  * that order, from the composers that put the same bytes on the result document. Call it after each step; it
- * decides whether a sample is due (`ENGINE_PROGRESS_EVERY` units of engine_work_done() or a new @S candidate),
+ * decides whether a sample is due (`ENGINE_PROGRESS_EVERY` units of engine_sched_events() or a new @S candidate),
  * because a cadence in work performed belongs to the engine, and an elapsed-time cadence would describe the
  * machine. A host needs it because the result document is built only when the frontier drains or stalls, which
  * a real page may never do; rising or frozen counters tell exploration from one member holding the thread.

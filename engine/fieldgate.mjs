@@ -5981,7 +5981,7 @@ const derivedRead = new Map();   // field name -> the locator that answers for i
   /* MATCHED ON THE MASKED `code`, where a comment is blank and a string literal's own characters are intact —
      so a locator written inside a comment cannot be one, and the literal is read as the bytes the callee gets. */
   const CALL = new RegExp(String.raw`([A-Za-z_$][\w$]*)\s*\(\s*(${LIT})\s*,\s*(${LIT})\s*,\s*(${LIT})`, "g");
-  /* A JS STRING LITERAL'S OWN VALUE, in both spellings, because the one that locates the @HWORK line is single
+  /* A JS STRING LITERAL'S OWN VALUE, in both spellings, because the one that locates the @HEVENTS line is single
      quoted precisely so it can hold the double quote that opens the format. Unreadable is NOT-A-LOCATOR rather
      than a guess: a literal this cannot decode is one whose bytes it cannot look for in the producer either. */
   const unlit = (t) => {
@@ -6021,7 +6021,7 @@ const derivedRead = new Map();   // field name -> the locator that answers for i
     }
   }
   /* A ROW IS ANSWERED BY THE REGION THAT CONTAINS ITS EMISSION, which is the WRITE SITE and never the enclosing
-     body: the @HWORK region is one printf inside a function whose body opens seventy lines above it, so a body
+     body: the @HEVENTS region is one printf inside a function whose body opens seventy lines above it, so a body
      span would have credited that whole function and a body-keyed test would have credited nothing. */
   for (const [n, e] of fields) {
     if (!cEmitted.has(n)) continue;

@@ -7,7 +7,7 @@
  *
  *   node engine/rowsplit.mjs --key _jobsRun --rows fetch,clone-body --control pending,throw <log>...
  *
- * The key is read off the `@HWORK` work line, the rows off the `@H` tables, and each log is bucketed by
+ * The key is read off the `@HEVENTS` work line, the rows off the `@H` tables, and each log is bucketed by
  * whether the key's maximum in that run is above zero.
  *
  * A CONTROL IS REQUIRED AND THE TOOL REFUSES WITHOUT ONE, because the finding this makes is almost always a
@@ -44,13 +44,13 @@ if (!key || !rows.length || !control.length || !paths.length)
     "prints. Name at least one row known to answer, so a reader can tell the two apart.");
 
 const KEYQ = key.replace(/[^\w]/g, "\\$&");
-const KEYRE = new RegExp(`@HWORK \\{[^}]*"${KEYQ}":(-?\\d+)`, "g");
+const KEYRE = new RegExp(`@HEVENTS \\{[^}]*"${KEYQ}":(-?\\d+)`, "g");
 /* THE SAME KEY ON SOME OTHER MARKER — because a key name is only half of a question about this stream and
-   the marker is the other half. `--key` names a field of the @HWORK line, and a caller who hands it a field
+   the marker is the other half. `--key` names a field of the @HEVENTS line, and a caller who hands it a field
    of a DIFFERENT marker gets a run carrying the key on every line and no match here, which read as "a run
    older than the field" and is not: those two take opposite action, one being a corpus to widen and the
-   other a question to re-address. MEASURED, and it is what this file was committed after: `workDone` is on
-   @HWORK and on @WFQ, deliberately — one quantity, one spelling, sampled by two hooks — and an unanchored
+   other a question to re-address. MEASURED, and it is what this file was committed after: `schedEvents` is on
+   @HEVENTS and on @WFQ, deliberately — one quantity, one spelling, sampled by two hooks — and an unanchored
    read of it off a log cost a wrong report. RETIREMENT: this record goes when the key and its marker arrive
    as one argument, so a marker cannot be omitted. */
 const ELSEWHERE = new RegExp(`^(@[A-Z][A-Z0-9_-]*) \\{[^}]*"${KEYQ}":`, "gm");
@@ -64,7 +64,7 @@ for (const p of paths) {
   const seen = [...text.matchAll(KEYRE)].map((m) => Number(m[1]));
   if (!seen.length) {
     noKey++;
-    for (const m of text.matchAll(ELSEWHERE)) if (m[1] !== "@HWORK") otherMarkers.add(m[1]);
+    for (const m of text.matchAll(ELSEWHERE)) if (m[1] !== "@HEVENTS") otherMarkers.add(m[1]);
     continue;
   }
   /* WHICH LINES ARE TABLES IS engine/probe_rows.mjs's QUESTION AND NOT THIS FILE'S. It used to be answered
@@ -83,16 +83,16 @@ for (const p of paths) {
   for (const r of [...rows, ...control]) if (best.get(r) === true) b.ans[r]++;
 }
 
-/* NO @HWORK LINE ANYWHERE CARRIES IT AND ANOTHER MARKER DOES — so the question was addressed to the wrong
+/* NO @HEVENTS LINE ANYWHERE CARRIES IT AND ANOTHER MARKER DOES — so the question was addressed to the wrong
    stream and there is nothing here to read. Refused rather than reported, for the reason probe_rows.mjs's
    row-value check is a throw: this tool promises exit 0 on a READING, and a mis-addressed question is not one. It is
-   narrow on purpose — a key that some logs DO carry on @HWORK is the caller's namespace working, and the
+   narrow on purpose — a key that some logs DO carry on @HEVENTS is the caller's namespace working, and the
    logs without it are then genuinely older, which is the other reading and is left standing. */
 if (buckets.with.n + buckets.without.n === 0 && otherMarkers.size)
-  throw new Error(`no @HWORK line in any of these ${paths.length} log(s) carries \`${key}\`, and ` +
-    `${[...otherMarkers].sort().join(", ")} does — \`--key\` names a field of the @HWORK work line, so this ` +
+  throw new Error(`no @HEVENTS line in any of these ${paths.length} log(s) carries \`${key}\`, and ` +
+    `${[...otherMarkers].sort().join(", ")} does — \`--key\` names a field of the @HEVENTS work line, so this ` +
     `is a question addressed to the wrong marker rather than a corpus older than the field. Those two take ` +
-    `opposite action. Re-ask it of a field @HWORK carries, or read the other marker's line directly.`);
+    `opposite action. Re-ask it of a field @HEVENTS carries, or read the other marker's line directly.`);
 
 console.log(`partitioned ${paths.length} log(s) by \`${key}\` — ${buckets.with.n} with >0, ` +
             `${buckets.without.n} at 0` +
@@ -110,8 +110,8 @@ console.log("  -- control, and the reading below depends on it --");
 for (const r of control) console.log(line(r, ""));
 /* AND WHETHER THERE WAS A CONTRAST AT ALL, WHICH THE CONTROL CANNOT ANSWER. The control says a bucket's zero
    is about the row; it says nothing about whether the two buckets are two populations. A key that cannot be
-   0 puts every log on one side and the partition is then a tautology wearing a table — MEASURED on `workDone`,
-   whose @HWORK value is at least the seed's flows at every table of every run, so `--key workDone` reads
+   0 puts every log on one side and the partition is then a tautology wearing a table — MEASURED on `schedEvents`,
+   whose @HEVENTS value is at least the seed's flows at every table of every run, so `--key schedEvents` reads
    24 with >0 / 0 at 0 and separates nothing. Stated over the OUTPUT rather than as a list of such keys, so it
    covers the next one too. RETIREMENT: this record goes when a key states whether it can be zero. */
 if (buckets.with.n === 0 || buckets.without.n === 0)

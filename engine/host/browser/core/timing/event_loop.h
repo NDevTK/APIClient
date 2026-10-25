@@ -124,7 +124,7 @@ void event_loop_free(JSRuntime *rt);
  *
  * THE UNIT OF WORK IS OPCODES RETIRED BY THE RUNNING FLOW, and the two nearby quantities that are NOT it are
  * worth naming, because each was reached for and each breaks the razor in a different place.
- *   — solver/engine.h's `engine_work_done` is AGENT-GLOBAL: forks taken, flows created, jobs run, context
+ *   — solver/engine.h's `engine_sched_events` is AGENT-GLOBAL: forks taken, flows created, jobs run, context
  *     switches. A flow's clock would move because a SIBLING forked, so the same flow on two schedules reads
  *     two clocks and a resume observes moments its own path never produced.
  *   — the count of times the interpreter's yield POLL was reached is schedule-dependent for a subtler reason:

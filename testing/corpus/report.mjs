@@ -1093,8 +1093,8 @@ const table = [...seen.entries()].map(([id, ms]) => ({
   ep: spread(ms, 'endpoints'), fl: spread(ms, 'flows'), sw: spread(ms, 'switches'),
   /* THE BRANCH/RUN READING AND ITS TWO HALVES, SPREAD LIKE EVERY OTHER COLUMN so a site that answers once
      cannot be read as one that answers the same way twice. `un` is solver/engine.c's `g_units_done` — a
-     COMPLETED unit of work, HTML §8.1.4.4 step 3's boundary — and it is NOT `workDone`, which is
-     `engine_work_done()`'s four-addend composition and which that function's own banner says is a bad
+     COMPLETED unit of work, HTML §8.1.4.4 step 3's boundary — and it is NOT `schedEvents`, which is
+     `engine_sched_events()`'s four-addend composition and which that function's own banner says is a bad
      numerator for anything. Two names, two accessors, two quantities, and this file reads the second.
      READ `fl/un` WITH `un` BESIDE IT AND NEVER ALONE, because the ratio moves for two reasons and only the
      pair says which: a site whose denominator holds while its numerator swings is a document that sometimes
