@@ -2985,9 +2985,9 @@ static bool js_get_fast_array_element(JSContext *ctx, JSObject *p, uint32_t idx,
    and must stay one mechanism: the STORE is 10.4.5.18's arm in JS_CallInternal and the READ is
    js_get_fast_array_element directly above, while the record they share is defined with the buffer code. */
 static bool js_ab_span_get(JSContext *ctx, JSObject *p, uint32_t idx, JSValue *pval);
-static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset, int length,
+static void js_ab_span_set(JSContext *ctx, JSObject *bufobj, uint32_t offset, int length,
                            JSValueConst unknown);
-static void js_ab_span_set_any(JSContext *ctx, JSArrayBuffer *abuf, JSValueConst index,
+static void js_ab_span_set_any(JSContext *ctx, JSObject *bufobj, JSValueConst index,
                                JSValueConst unknown);
 /* the two sides of an element of a view whose [[ByteOffset]] is unknown (JSTypedArray.offset_unknown), defined
    beside js_ab_span_get for the reason the span pair is declared here */
@@ -9498,6 +9498,14 @@ static void cow_capture_bytes(JSContext *ctx, JSObject *p)
            "a byte write on a view with no JSTypedArray record: the buffer it writes into cannot be named, so "
            "the capture would silently record nothing");
     g_time_travel.buf_state(ctx, JS_MKPTR(JS_TAG_OBJECT, p->u.typed_array->buffer));
+}
+/* A span is part of the state the buffer-state blob carries beside the bytes (JS_BufferStateSave copies the
+   list), so recording one mutates a shared buffer as a byte write does and is captured the same way, before
+   the list changes. `bufobj` is the ArrayBuffer object; a write that moves no byte reaches no other capture. */
+static void cow_capture_span(JSContext *ctx, JSObject *bufobj)
+{
+    if (g_time_travel.buf_state)
+        g_time_travel.buf_state(ctx, JS_MKPTR(JS_TAG_OBJECT, bufobj));
 }
 /* THE ONE PLACE A BUFFER'S STORAGE IS DECLARED ABOUT TO MOVE — resize/grow, transfer, detach. `abuf` is the
    ArrayBuffer/SharedArrayBuffer OBJECT, the same name cow_capture_bytes uses, and it raises the SAME hook,
@@ -17755,13 +17763,12 @@ static int JS_SetPropertyValue(JSContext *ctx, JSValueConst this_obj,
     if (unlikely(JS_VALUE_GET_TAG(this_obj) == JS_TAG_OBJECT && js_value_is_concolic(prop)
                  && is_typed_array(JS_VALUE_GET_OBJ(this_obj)->class_id))) {
         JSObject *tap = JS_VALUE_GET_OBJ(this_obj);
-        JSArrayBuffer *abuf = tap->u.typed_array->buffer->u.array_buffer;
 
         /* THE VALUE'S OWN PROVENANCE IS KEPT WHERE IT HAS ONE. `buf[x] = y` with both unknown must answer a
            later read with the VALUE's identity, because that is the source an @S candidate is injected at; a
            concrete `y` leaves nothing to carry, and the read derives from the unknown OFFSET instead, which is
            the honest statement that what is unknown about the element is WHICH BYTE IT IS. */
-        js_ab_span_set_any(ctx, abuf, prop,
+        js_ab_span_set_any(ctx, tap->u.typed_array->buffer, prop,
                            js_value_is_concolic(val) ? val : JS_UNINITIALIZED);
         JS_FreeValue(ctx, prop);
         JS_FreeValue(ctx, val);
@@ -41313,7 +41320,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         /* step 3's byteIndexInBuffer is unknown: a write at an unknown offset, no byte stored */
                         JSValue at = js_ta_byte_index(ctx, ta, (int64_t)idx * width);
 
-                        js_ab_span_set_any(ctx, abuf, at, al->val);
+                        js_ab_span_set_any(ctx, ta->buffer, at, al->val);
                         JS_FreeValue(ctx, at);
                         goto ta_unknown_done;
                     }
@@ -41339,7 +41346,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     } else {
                         JS_FreeValue(ctx, ex);
                     }
-                    js_ab_span_set(ctx, abuf, off, width, al->val);
+                    js_ab_span_set(ctx, ta->buffer, off, width, al->val);
                 ta_unknown_done:
                     /* BOTH SPELLINGS SUCCEED, exactly as the coerced path below: 10.4.5.5 returns true and
                        10.4.5.3 step 1.g returns true. */
@@ -123479,7 +123486,7 @@ static int js_ta_set_at_unknown_offset(JSContext *ctx, JSObject *p, uint32_t idx
         return false;
     if (!typed_array_is_oob(p) && idx < p->u.array.count) {   /* step 3, IsValidIntegerIndex */
         at = js_ta_byte_index(ctx, ta, (int64_t)idx << typed_array_size_log2(p->class_id));
-        js_ab_span_set_any(ctx, ta->buffer->u.array_buffer, at, JS_UNINITIALIZED);
+        js_ab_span_set_any(ctx, ta->buffer, at, JS_UNINITIALIZED);
         JS_FreeValue(ctx, at);
     }
     return true;
@@ -123506,10 +123513,11 @@ static JSArrayBufferSpan *js_ab_span_push(JSRuntime *rt, JSArrayBuffer *abuf)
 
 /* RECORD THAT THIS ELEMENT'S BYTES ARE UNKNOWN EXTERNAL INPUT. Called AFTER the example (where there is one)
    has been written, because the witness is the bytes as they stand once the store is done. */
-static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset, int length,
+static void js_ab_span_set(JSContext *ctx, JSObject *bufobj, uint32_t offset, int length,
                            JSValueConst unknown)
 {
     JSRuntime *rt = ctx->rt;
+    JSArrayBuffer *abuf = bufobj->u.array_buffer;
     JSArrayBufferSpan *s = NULL;
     int i;
 
@@ -123519,6 +123527,7 @@ static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset,
     if (abuf->detached || abuf->data == NULL ||
         (int64_t)offset + length > (int64_t)abuf->byte_length)
         return;   /* 10.4.5.18 step 3 skipped the store, so there is nothing to describe */
+    cow_capture_span(ctx, bufobj);
     for (i = abuf->n_span - 1; i >= 0; i--) {
         if (abuf->span[i].kind == JS_AB_SPAN_AT && abuf->span[i].offset == offset &&
             abuf->span[i].extent == (uint32_t)length) {
@@ -123546,14 +123555,16 @@ static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset,
    IT IS NEVER MERGED WITH AN EXISTING ONE, unlike the AT kind. Two unknown-index writes are two facts about two
    values, and a read covered by both answers with the later — picking the older would be a claim that the
    second write did not happen. */
-static void js_ab_span_set_any(JSContext *ctx, JSArrayBuffer *abuf, JSValueConst index,
+static void js_ab_span_set_any(JSContext *ctx, JSObject *bufobj, JSValueConst index,
                                JSValueConst unknown)
 {
     JSRuntime *rt = ctx->rt;
+    JSArrayBuffer *abuf = bufobj->u.array_buffer;
     JSArrayBufferSpan *s;
 
     if (abuf->detached || abuf->data == NULL || abuf->byte_length <= 0)
         return;
+    cow_capture_span(ctx, bufobj);
     s = js_ab_span_push(rt, abuf);
     s->kind = JS_AB_SPAN_ANY;
     s->offset = 0;
@@ -125946,6 +125957,7 @@ static int js_ta_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 size_t nbytes = (size_t)count << shift, bi;
 
                 DCHECK_TA_WINDOW_STATED(p->u.typed_array, nbytes, "%TypedArray%.prototype.slice's byte copy");
+                cow_capture_bytes(ctx, p1);   /* @@species may answer a view over a buffer siblings share */
                 js_ab_spans_copy(ctx, p1->u.typed_array->buffer->u.array_buffer, p1->u.typed_array->offset,
                                  p->u.typed_array->buffer->u.array_buffer,
                                  p->u.typed_array->offset + (uint32_t)(s->start << shift), (uint32_t)nbytes);
