@@ -19,7 +19,7 @@ struct Flow;
 
 /* Declares the X9 fire marker as a per-realm intrinsic (core/realm.h), so every realm of the agent has it: a
    breakout fires in whichever document's realm its sink ran, a fresh open of the page and a same-origin child
-   included. Called once per agent, after platform_agent_init and before the agent's first realm is built. */
+   included. Called once per agent, before platform_agent_init builds the agent's first realm. */
 void solve_declare_realm_intrinsics(void);
 /* Registers the eval sink's seam and checks the @S tables. Call once at engine init. */
 void solve_init(JSContext *ctx);
