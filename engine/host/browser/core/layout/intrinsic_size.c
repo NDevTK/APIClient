@@ -263,11 +263,21 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
    is unreachable from either, because core/layout/block_flow.h's run ends before one at any depth. */
 typedef enum { IS_CHILD_PLACED = 0, IS_CHILD_TEXT, IS_CHILD_INLINE_BOX, IS_CHILD_NOT_YET } IsChildNext;
 
+/* CSS 2.2 §9.5's floats of one run as its intrinsic sizes see them. Between two forced breaks, the floats at the
+   top of the line sit beside its content and add to its max-content size, left and right; a float that clears a
+   side already holding one of them goes below the line's top, as does every float after it, and those form rows
+   of their own (`rows`, the widest). Min-content takes each float's own (`min`), since no break opportunity is
+   around one. */
+typedef struct {
+    bool  left, right, below;
+    CssPx row, rows, min;
+} IsFloats;
+
 /* css-sizing-3 §5.2's declared-size step, defined with §9.4.1's stack: §9.4.2's walk applies the same steps
    to an atomic inline-level box, and one definition keeps them agreeing. */
 static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured);
 
-static IsChildNext is_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTreeChild c,
+static IsChildNext is_child(TextRunMeasure *m, IsFloats *fl, lxb_dom_element_t *parent, BoxTreeChild c,
                             lxb_dom_node_t **node)
 {
     lxb_dom_node_t *n;
@@ -317,16 +327,26 @@ static IsChildNext is_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
     if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
         css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
         return IS_CHILD_PLACED;
-    if (block_flow_is_floated(el))
-        DFAIL("CSS 2.2 §9.5 \"Floats\" takes this child out of the line, and css-sizing-3 §5.2 \"Intrinsic "
-              "Contributions\" still counts it: CSS 2.2 §10.3.5 \"Floating, non-replaced elements\" computes "
-              "the preferred width \"by formatting the content without breaking lines other than where "
-              "explicit line breaks occur\", and a float shortens the line boxes beside it rather than "
-              "leaving them alone — §9.4.2's own \"line boxes may vary in "
-              "width if available horizontal space is reduced due to floats\". So the contribution is neither "
-              "this walk's sum along the line nor a maximum over it, and there is no arm here that is right by "
-              "default. BUILD the float's contribution beside the line's content, over "
-              "core/layout/float_placement.h's placement");
+    if (block_flow_is_floated(el)) {
+        IntrinsicInlineSizes w;
+        bool cl, cr, clears;
+
+        if (!intrinsic_inline_sizes_ask(el)) return IS_CHILD_NOT_YET;
+        w = intrinsic_inline_contributions(el);
+        clears = block_flow_clear_sides(el, &cl, &cr) && ((cl && fl->left) || (cr && fl->right));
+        fl->min = css_px_max(fl->min, w.min_content);
+        if (!fl->below && !clears) {
+            if (block_flow_float_is_right(el)) fl->right = true;
+            else fl->left = true;
+            text_run_measure_add_float(m, el, w.max_content);
+            return IS_CHILD_PLACED;
+        }
+        fl->row = fl->below && !clears ? css_px_add(fl->row, w.max_content) : w.max_content;
+        fl->rows = css_px_max(fl->rows, fl->row);
+        fl->below = true;
+        text_run_measure_add_float(m, el, css_px(0.0));
+        return IS_CHILD_PLACED;
+    }
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes" makes a replaced element an atomic inline-level box
        whatever its `display` ("a non-replaced element with a `display` value of `inline` generates an inline
        box"), so a replaced `inline-block` is answered here too, once. CSS 2.1 §10.3.10 "'Inline-block', replaced
@@ -347,6 +367,7 @@ static IsChildNext is_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
         switch (phrasing_break_of(el)) {
         case PHRASING_BREAK_FORCED:
             text_run_measure_add_forced_break(m, el);
+            fl->left = fl->right = fl->below = false;
             return IS_CHILD_PLACED;
         case PHRASING_BREAK_OPPORTUNITY:
             DFAIL("HTML §15.3.4 \"Phrasing content\" gives `wbr` the UA declaration `display-outside: "
@@ -431,6 +452,7 @@ typedef struct {
     bool in_text;
     TextRunText text;
     bool collected;   /* the walk ended and the collection is closed */
+    IsFloats floats;
 } IsMeasure;
 
 /* What an entry is about: one run's measurement, or the place of a walk over a container's members that
@@ -628,7 +650,7 @@ static size_t is_collect_step(IsMeasure *k)
     case INLINE_RUN_CHILD:
         break;
     }
-    switch (is_child(m, parent, c, &node)) {
+    switch (is_child(m, &k->floats, parent, c, &node)) {
     case IS_CHILD_NOT_YET:
         return 0;
     case IS_CHILD_PLACED:
@@ -660,6 +682,8 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
         inline_run_walk_begin(&k->walk, el, run);
         k->in_text = false;
         k->collected = false;
+        k->floats.left = k->floats.right = k->floats.below = false;
+        k->floats.row = k->floats.rows = k->floats.min = css_px(0.0);
         h->measuring = true;
     }
     while (!k->collected) {
@@ -685,8 +709,8 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
         if (!layout_job_line_items_left()) return false;
         layout_job_line_items_spend(text_run_measure_finish_step(&k->m));
     }
-    h->sizes.min_content = text_run_measure_min_content(&k->m);
-    h->sizes.max_content = text_run_measure_max_content(&k->m);
+    h->sizes.min_content = css_px_max(text_run_measure_min_content(&k->m), k->floats.min);
+    h->sizes.max_content = css_px_max(text_run_measure_max_content(&k->m), k->floats.rows);
     /* §5.1's answer is two numbers, so the collection is freed once they are read. */
     text_run_measure_release(&k->m);
     h->measuring = false;
@@ -874,7 +898,7 @@ static bool is_float_in_run(lxb_dom_element_t *f, lxb_dom_node_t *prev, lxb_dom_
    next box's max-content contribution adds them when its line boxes are shortened beside them (an anonymous block
    box) or it must not overlap them (`block_flow_avoids_floats`), and it starts the next set, since later floats sit
    below it. Min-content is a maximum over all of them. A float
-   in a run with inline content is the run walk's, which refuses it. Anonymous boxes have zero edges ("the margins
+   in a run with inline content is the run walk's (`IsFloats`). Anonymous boxes have zero edges ("the margins
    will be 0") and `el`'s style. */
 static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
 {

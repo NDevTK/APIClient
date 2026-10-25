@@ -501,7 +501,7 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
        decides which line box it is placed at ("if there is a line box, the outer top of the floated box is aligned
        with the top of the current line box"), so it is collected there, with no size and no break. */
     if (block_flow_is_floated(el)) {
-        text_run_measure_add_float(m, el);
+        text_run_measure_add_float(m, el, css_px(0.0));
         return LB_CHILD_PLACED;
     }
     if (css_display_spells(d, CSS_KEYWORD_CONTENTS)) {

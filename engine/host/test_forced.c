@@ -15255,9 +15255,30 @@ TF_UNIT void probes_floatintrinsic(const char *js, Probe *tab, int *n) {
              " is not 50px wide");
     fold_row(&fi_w_tt, &fi_w_why, param_value_is(js, "/api/floatintrinsic", "q", "80"),
              "css-sizing-3 §5.1: inline-block q (a float beside a flex container) is not 80px wide");
+    const char *fi_r_why = NULL; int fi_r_tt = 1;
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "m", "80"),
+             "css-sizing-3 §5.1: inline-block m (a block-level float, then an atomic inline beside it) is not 80px wide");
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "t1", "80"),
+             "css-sizing-3 §5.1: inline-block t1 (a right float clearing a left one goes below the line) is not 80px wide");
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "t2", "80"),
+             "css-sizing-3 §5.1: inline-block t2 (a left float clearing a left one goes below the line) is not 80px wide");
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "t3", "80"),
+             "css-sizing-3 §5.1: inline-block t3 (a left float clearing a right one goes below the line) is not 80px wide");
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "t4", "90"),
+             "css-sizing-3 §5.1: inline-block t4 (content, a float, a float below the line, content) is not 90px wide");
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "t5", "110"),
+             "css-sizing-3 §5.1: inline-block t5 (two floats on the line with content between) is not 110px wide");
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "t6", "80"),
+             "css-sizing-3 §5.1: inline-block t6 (a float clearing both sides goes below the line) is not 80px wide");
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "t7", "50"),
+             "css-sizing-3 §5.1: inline-block t7 (a float alone) is not 50px wide");
+    fold_row(&fi_r_tt, &fi_r_why, param_value_is(js, "/api/floatintrinsic", "t8", "70"),
+             "css-sizing-3 §5.1: inline-block t8 (a left and a right float on the line) is not 70px wide");
     const Probe rows[] = {
         { "float-intrinsic-width", fi_reached && fi_w_tt, "/api/floatintrinsic", SESS_EXPLORE,
           fi_reached ? fi_w_why : fi_why },
+        { "float-intrinsic-run-width", fi_reached && fi_r_tt, "/api/floatintrinsic", SESS_EXPLORE,
+          fi_reached ? fi_r_why : fi_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

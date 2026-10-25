@@ -332,17 +332,19 @@ void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, 
        boundary collapse to one U+0020. */
 }
 
-void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style)
+void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style, CssPx max_content)
 {
     TextRunItem *it;
 
     DCHECK(m != NULL && style != NULL && !m->finished,
            "a float was added with no accumulator, no element, or to a measurement already closed");
-    /* A zero size under both constraints: the float is beside the line boxes, never on one. It closes no
+    DCHECK(max_content.px >= 0.0, "a float was added with a negative max-content contribution");
+    /* The float is beside the line boxes, never on one: nothing in a min-content segment. It closes no
        collapsible white-space run, as an inline box edge does not. */
     it = tr_append_item(m, TEXT_RUN_ITEM_FLOAT, style);
     it->size[TEXT_RUN_SIZE_MIN_CONTENT] = css_px(0.0);
-    it->size[TEXT_RUN_SIZE_MAX_CONTENT] = css_px(0.0);
+    it->size[TEXT_RUN_SIZE_MAX_CONTENT] = max_content;
+    if (max_content.px != 0.0) m->atomic_sizes_differ = true;
 }
 
 /* HTML §15.3.4's newline, as the one code point [UAX14] needs to decide it. css-text-3 §4 "White Space

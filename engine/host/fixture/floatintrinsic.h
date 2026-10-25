@@ -3,8 +3,10 @@
    shrink-to-fit `inline-block` holds floats and block-level boxes: floats side by side and on both sides, cleared
    by a later float or block, followed by a box that must not overlap them (`overflow: hidden`, a flex container),
    which adds the floats' widths, and by an ordinary block, which does not;
-   a second box after the first, which starts a new set; margins; and a float nested in a child block. Chrome 155.0.8059.84 and Firefox 158.0.1 give every number the rows expect for this markup. It
-   ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   a second box after the first, which starts a new set; margins; and a float nested in a child block. Then floats
+   in a run of inline content (m, t1-t8): beside the line's content at its top, or below it after a float that
+   clears an occupied side. Chrome 155.0.8059.84 and Firefox 158.0.1 give every number the rows expect for this
+   markup. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_FLOATINTRINSIC_H
 #define ENGINE_HOST_FIXTURE_FLOATINTRINSIC_H
 #ifndef TF_CANVAS_INK
@@ -15,7 +17,7 @@ static const char HTML_FLOATINTRINSIC[] =
     "<!doctype html><html>"
     "<body style=\"margin:0\">"
     "<style>body{font:16px monospace}.s{display:inline-block}b{display:block;"
-    "height:5px}.L{float:left;height:5px}.R{float:right;height:5px}</style>"
+    "height:5px}i{display:inline-block;height:5px}.L{float:left;height:5px}.R{float:right;height:5px}</style>"
     "<div><span class=s id=a><div class=L style=\"width:50px\"></div><b style=\"width:30px\"></b>"
     "<b style=\"width:40px\"></b></span></div>"
     "<div><span class=s id=b><div class=L style=\"width:50px\"></div><b style=\"width:30px\"></b>"
@@ -44,11 +46,28 @@ static const char HTML_FLOATINTRINSIC[] =
     "<b style=\"width:30px;overflow:hidden\"></b></span></div>"
     "<div><span class=s id=q><div class=L style=\"width:50px\"></div><div style=\"display:flex;width:30px;"
     "height:5px\"></div></span></div>"
+    "<div><span class=s id=m><div class=L style=\"width:50px\"></div><i style=\"width:30px\"></i></span></div>"
+    "<div><span class=s id=t1><span class=L style=\"width:50px\"></span><span class=R style=\"width:20px;"
+    "clear:left\"></span><i style=\"width:30px\"></i></span></div>"
+    "<div><span class=s id=t2><span class=L style=\"width:50px\"></span><span class=L style=\"width:20px;"
+    "clear:left\"></span><i style=\"width:30px\"></i></span></div>"
+    "<div><span class=s id=t3><span class=R style=\"width:50px\"></span><span class=L style=\"width:20px;"
+    "clear:right\"></span><i style=\"width:30px\"></i></span></div>"
+    "<div><span class=s id=t4><i style=\"width:30px\"></i><span class=L style=\"width:50px\"></span>"
+    "<span class=L style=\"width:20px;clear:left\"></span><i style=\"width:10px\"></i></span></div>"
+    "<div><span class=s id=t5><span class=L style=\"width:50px\"></span><i style=\"width:30px\"></i>"
+    "<span class=L style=\"width:20px\"></span><i style=\"width:10px\"></i></span></div>"
+    "<div><span class=s id=t6><span class=L style=\"width:50px\"></span><span class=R style=\"width:20px;"
+    "clear:both\"></span><i style=\"width:30px\"></i></span></div>"
+    "<div><span class=s id=t7><span class=L style=\"width:50px\"></span></span></div>"
+    "<div><span class=s id=t8><span class=L style=\"width:50px\"></span><span class=R style=\"width:20px\">"
+    "</span></span></div>"
     "<script>"
     "function W(i){return document.getElementById(i).getBoundingClientRect().width;}"
     "var q='a='+W('a')+'&b='+W('b')+'&c='+W('c')+'&d='+W('d')+'&e='+W('e')+'&f='+W('f')+'&g='+W('g')"
     "+'&i='+W('i')+'&j='+W('j')+'&k='+W('k')+'&l='+W('l')+'&n='+W('n')"
-    "+'&o='+W('o')+'&q='+W('q');"
+    "+'&o='+W('o')+'&q='+W('q')+'&m='+W('m')+'&t1='+W('t1')+'&t2='+W('t2')+'&t3='+W('t3')"
+    "+'&t4='+W('t4')+'&t5='+W('t5')+'&t6='+W('t6')+'&t7='+W('t7')+'&t8='+W('t8');"
     "fetch('/api/floatintrinsic?'+q);"
     "</script>"
     TF_CANVAS_INK

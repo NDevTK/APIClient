@@ -277,8 +277,10 @@ void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, Cs
                                  CssPx max_content);
 
 /* Add one float at the current position, `style` being the floated element: the fill places it at the line it
-   falls on (core/layout/line_box.c). */
-void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style);
+   falls on (core/layout/line_box.c). `max_content` is what it adds to its line's max-content size, zero for the
+   fill and for a float below the line's top (core/layout/intrinsic_size.c); it adds nothing to a min-content
+   segment, having no break opportunity around it. */
+void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style, CssPx max_content);
 
 /* Close the collection; nothing may be added afterwards. Each `step` then takes one item or position: the code
    points copied out, [UAX14]'s pass, §5.5's tailoring, and css-sizing-3 §2.1's walk; it answers how many items
