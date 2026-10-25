@@ -188,7 +188,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 ## What the tool produces
 
 - The product's razor is an address, key or value no parse of the served bytes can state because it exists only at run time — the `runtime-only` razor class, read per address. Door classes and `beyond`-a-markup-parse are diagnostics, not the bar. The static baseline is the competitor and should be made as strong as possible.
-- A request is one record in both views: an API emission, and, where an attacker source roots its address, a header or its body, a security finding graded by the same signals egress computes (destination, credential state, URL-carried authority). Its proof is the request observed leaving the engine with the attacker-rooted part.
+- A request is one record in both views: an API emission, and, where an attacker source roots its address, a header or its body, a security finding graded by the same signals egress computes (destination, method, credential state, URL-carried authority) and by the victim acts its delivery needs; interaction lowers the grade, never removes the finding, and an attacker-rooted request that can change or reach nothing is an API record only. Its proof is the request observed leaving the engine with the attacker-rooted part.
 - `netdiff --unused` is a diagnostic, not an optimization target. Target JS-heavy app pages.
 
 ## Security → SECURITY.md
