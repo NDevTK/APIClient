@@ -14579,72 +14579,77 @@ TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `storedxss` document (fixture/storedxss.h). The precondition labels are read as text in the
-   record ("same-origin", "same-site") because the @S record has no precondition field yet; the ordered-acts row
-   reads the storage key the two loads share. */
+/* A stored value read with no attacker write behind it: the write is reached, and its record claims no delivery
+   and is labelled a precondition. The label is read as text because the @S record has no precondition field. */
+static void sx_precondition_rows(const char *js, const char *root, int *reach, const char **reach_why, int *pre,
+                                 const char **pre_why) {
+    char src[192] = "";
+    int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
+
+    fold_row(reach, reach_why, has,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in this stored value, so the read was "
+             "not followed to the write");
+    fold_row(pre, pre_why, has, "NOT REACHED: there is no record of this stored value to read a precondition from");
+    fold_row(pre, pre_why, has && !s_field(js, "innerHTML", src, ",\"delivery\":"),
+             "the record claims a delivery, but no attacker act writes this stored value");
+    fold_row(pre, pre_why, has && s_field(js, "innerHTML", src, "precondition"),
+             "the record is not labelled a precondition");
+}
+
+/* The page's own write path from an address component, read back by a later load: a fired PoC rooted in that
+   component, stating its delivery, and naming the storage key the second load reads. */
+static void sx_write_path_row(const char *js, const char *root, const char *prefix, const char *key, int *tt,
+                              const char **why) {
+    char src[192] = "";
+    int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
+    size_t span = 0;
+    const char *rec = has ? s_record(js, "innerHTML", src, &span) : NULL;
+
+    fold_row(tt, why, has,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in the address component the page "
+             "saved, so the saved value was not followed through storage into the later load's write");
+    fold_row(tt, why, has && s_stage(js, "innerHTML", src) == S_FIRED, "the write-path search did not fire a PoC");
+    fold_row(tt, why, has && s_field(js, "innerHTML", src, prefix), "the PoC does not state its address delivery");
+    fold_row(tt, why, rec && memmem(rec, span, key, strlen(key)) != NULL,
+             "the PoC does not state its second act, the later load that reads the saved value back");
+}
+
+/* The rows of the `storedxss` document (fixture/storedxss.h). */
 TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
-    char ls[192] = "", dr[192] = "", ck[192] = "";
-    int has_ls = s_rooted_source(js, "innerHTML", "sxNote", ls, sizeof ls);
-    int has_dr = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, dr, sizeof dr);
-    int has_ck = s_rooted_source(js, "innerHTML", "document.cookie", ck, sizeof ck);
-    size_t dspan = 0;
-    const char *drec = has_dr ? s_record(js, "innerHTML", dr, &dspan) : NULL;
-    const char *lr_why = NULL; int lr_tt = 1;
+    const char *lr_why = NULL, *ls_why = NULL, *lp_why = NULL, *cr_why = NULL, *cs_why = NULL, *cp_why = NULL;
+    int lr_tt = 1, ls_tt = 1, lp_tt = 1, cr_tt = 1, cs_tt = 1, cp_tt = 1;
+    const char *ds_why = NULL, *dw_why = NULL, *dp_why = NULL, *ts_why = NULL, *tw_why = NULL, *tp_why = NULL;
+    int ds_tt = 1, dw_tt = 1, dp_tt = 1, ts_tt = 1, tw_tt = 1, tp_tt = 1;
+
     fold_row(&lr_tt, &lr_why, !!strstr(js, "\"/api/sx-ls-read\""),
              "NOT REACHED: there is no /api/sx-ls-read record, so the arm where localStorage holds sxNote never ran");
-    const char *ls_why = NULL; int ls_tt = 1;
-    fold_row(&ls_tt, &ls_why, has_ls,
-             "NOT REACHED: no innerHTML @S record carries a source rooted in localStorage's sxNote, so the stored "
-             "value was not followed to the write");
-    const char *lp_why = NULL; int lp_tt = 1;
-    fold_row(&lp_tt, &lp_why, has_ls, "NOT REACHED: there is no sxNote record to read a precondition from");
-    fold_row(&lp_tt, &lp_why, has_ls && !s_field(js, "innerHTML", ls, ",\"delivery\":"),
-             "the sxNote record claims a delivery, but localStorage has no cross-origin write path");
-    fold_row(&lp_tt, &lp_why, has_ls && s_field(js, "innerHTML", ls, "same-origin"),
-             "the sxNote record is not labelled a same-origin precondition");
-    const char *ds_why = NULL; int ds_tt = 1;
-    fold_row(&ds_tt, &ds_why, !!strstr(js, "\"/api/sx-draft-saved\""),
-             "NOT REACHED: there is no /api/sx-draft-saved record, so the load that saves the fragment never ran");
-    const char *dw_why = NULL; int dw_tt = 1;
-    fold_row(&dw_tt, &dw_why, !!strstr(js, "\"/api/sx-draft-shown\""),
-             "NOT REACHED: there is no /api/sx-draft-shown record, so the load that shows sxDraft never ran");
-    const char *dp_why = NULL; int dp_tt = 1;
-    fold_row(&dp_tt, &dp_why, has_dr,
-             "NOT REACHED: no innerHTML @S record carries a source rooted in location.hash, so the fragment the "
-             "page saved was not followed through storage into the later load's write");
-    fold_row(&dp_tt, &dp_why, has_dr && s_stage(js, "innerHTML", dr) == S_FIRED,
-             "the innerHTML <- location.hash search did not fire a PoC");
-    fold_row(&dp_tt, &dp_why, has_dr && s_field(js, "innerHTML", dr, "\"deliveryPrefix\":\"#\""),
-             "the PoC does not state its fragment delivery");
-    fold_row(&dp_tt, &dp_why, drec && memmem(drec, dspan, "sxDraft", 7) != NULL,
-             "the PoC does not state its second act, the later load that reads sxDraft back");
-    const char *cr_why = NULL; int cr_tt = 1;
+    sx_precondition_rows(js, "sxNote", &ls_tt, &ls_why, &lp_tt, &lp_why);
     fold_row(&cr_tt, &cr_why, !!strstr(js, "\"/api/sx-ck-read\""),
              "NOT REACHED: there is no /api/sx-ck-read record, so the arm where the cookie holds sxBanner never ran");
-    const char *cs_why = NULL; int cs_tt = 1;
-    fold_row(&cs_tt, &cs_why, has_ck,
-             "NOT REACHED: no innerHTML @S record carries a source rooted in document.cookie, so the cookie was "
-             "not treated as attacker input at the write");
-    const char *cp_why = NULL; int cp_tt = 1;
-    fold_row(&cp_tt, &cp_why, has_ck && s_stage(js, "innerHTML", ck) == S_FIRED,
-             "the innerHTML <- document.cookie search did not fire a PoC");
-    fold_row(&cp_tt, &cp_why, has_ck && s_field(js, "innerHTML", ck, "\"delivery\":\"plant\""),
-             "the PoC does not state the store step: its record carries no `plant` delivery for the cookie");
-    const char *cq_why = NULL; int cq_tt = 1;
-    fold_row(&cq_tt, &cq_why, has_ck, "NOT REACHED: there is no cookie record to read a precondition from");
-    fold_row(&cq_tt, &cq_why, has_ck && s_field(js, "innerHTML", ck, "same-site"),
-             "the cookie PoC does not state its precondition, a same-site (sibling subdomain) writer");
+    sx_precondition_rows(js, "sxBanner", &cs_tt, &cs_why, &cp_tt, &cp_why);
+    fold_row(&ds_tt, &ds_why, !!strstr(js, "\"/api/sx-draft-saved\""),
+             "NOT REACHED: there is no /api/sx-draft-saved record, so the load that saves the fragment never ran");
+    fold_row(&dw_tt, &dw_why, !!strstr(js, "\"/api/sx-draft-shown\""),
+             "NOT REACHED: there is no /api/sx-draft-shown record, so the load that shows sxDraft never ran");
+    sx_write_path_row(js, LOCATION_HASH_SRC, "\"deliveryPrefix\":\"#\"", "sxDraft", &dp_tt, &dp_why);
+    fold_row(&ts_tt, &ts_why, !!strstr(js, "\"/api/sx-theme-saved\""),
+             "NOT REACHED: there is no /api/sx-theme-saved record, so the load that saves `?theme=` never ran");
+    fold_row(&tw_tt, &tw_why, !!strstr(js, "\"/api/sx-theme-shown\""),
+             "NOT REACHED: there is no /api/sx-theme-shown record, so the load that shows the sxTheme cookie never ran");
+    sx_write_path_row(js, LOCATION_SEARCH_SRC, "\"deliveryPrefix\":\"?\"", "sxTheme", &tp_tt, &tp_why);
     const Probe rows[] = {
         { "sx-ls-read", lr_tt, "/api/sx-ls-read", SESS_EXPLORE, lr_why },
         { "sx-ls-sink", ls_tt, "'sxLs'", SESS_EXPLORE, ls_why },
         { "sx-ls-precondition", lp_tt, "'sxNote'", SESS_EXPLORE, lp_why },
+        { "sx-ck-read", cr_tt, "/api/sx-ck-read", SESS_EXPLORE, cr_why },
+        { "sx-ck-sink", cs_tt, "'sxCk'", SESS_EXPLORE, cs_why },
+        { "sx-ck-precondition", cp_tt, "'sxBanner'", SESS_EXPLORE, cp_why },
         { "sx-draft-saved", ds_tt, "/api/sx-draft-saved", SESS_EXPLORE, ds_why },
         { "sx-draft-shown", dw_tt, "/api/sx-draft-shown", SESS_EXPLORE, dw_why },
         { "sx-draft-poc", dp_tt, "'sxDraftView'", SESS_EXPLORE, dp_why },
-        { "sx-ck-read", cr_tt, "/api/sx-ck-read", SESS_EXPLORE, cr_why },
-        { "sx-ck-sink", cs_tt, "'sxCk'", SESS_EXPLORE, cs_why },
-        { "sx-ck-poc", cp_tt, "'sxBanner='", SESS_EXPLORE, cp_why },
-        { "sx-ck-precondition", cq_tt, "sxAt + 9", SESS_EXPLORE, cq_why },
+        { "sx-theme-saved", ts_tt, "/api/sx-theme-saved", SESS_EXPLORE, ts_why },
+        { "sx-theme-shown", tw_tt, "/api/sx-theme-shown", SESS_EXPLORE, tw_why },
+        { "sx-theme-poc", tp_tt, "'sxThemeView'", SESS_EXPLORE, tp_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
