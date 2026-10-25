@@ -1,7 +1,7 @@
-/* THE WINDOW-NAME DOCUMENT: `window.name` is read on load into a script and into markup. HTML §7.2.2.1 lets
-   whoever navigated this navigable name it, so a page an attacker controls sets the name and then navigates
-   the same navigable here, and the name survives the navigation. The PoC must state that act: the value is in
-   no part of this document's address.
+/* THE WINDOW-NAME DOCUMENT: `window.name` is read on load into a script and into markup. The name (HTML
+   §7.2.2.1 Opening and closing windows) belongs to the navigable, not the document, so another page sets it:
+   an embedder through its iframe's `name` attribute, or an opener that names a window and navigates it here.
+   The PoC must state that act, because the value is in no part of this document's address.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_WINDOWNAME_H
