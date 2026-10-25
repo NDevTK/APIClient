@@ -32,6 +32,7 @@
 #include "core/events/current_event.h"
 #include "core/events/event_target.h"
 #include "core/events/message_port.h"
+#include "core/workers/worker.h"
 #include "core/workers/worker_global_scope.h"
 #include "core/events/report_exception.h"
 #include "core/fetch/fetch.h"
@@ -231,6 +232,7 @@ static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(
 static void d_current_event(JSContext *c, const PlatformAgent *a) { (void)a; current_event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
 static void d_message_port(JSContext *c, const PlatformAgent *a) { (void)a; message_port_init(c); }
+static void d_worker(JSContext *c, const PlatformAgent *a) { (void)a; worker_init(c); }
 static void d_worker_global_scope(JSContext *c, const PlatformAgent *a)
 { (void)a; worker_global_scope_init(c); }
 static void d_xhr(JSContext *c, const PlatformAgent *a) { (void)a; xhr_init(c); }
@@ -490,6 +492,7 @@ static void r_current_event(JSRuntime *rt) { current_event_free(rt); }
 static void r_report_exception(JSRuntime *rt) { report_exception_free(rt); }
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
 static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
+static void r_worker(JSRuntime *rt) { worker_free(rt); }
 static void r_worker_global_scope(JSRuntime *rt) { worker_global_scope_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
 /* HTML §8.1.7's own record and §8.12's map keys. Every `timer` entry is due at a moment on §8.1.7's clock, so
@@ -814,6 +817,8 @@ static const PlatformComponent PLATFORM[] = {
        refuses. Their PLATFORM_WITNESS rows are under `event`. */
     { "report_exception",    d_report_exception,    NULL,        r_report_exception },
     { "message_port",        d_message_port,        NULL,        r_message_port },
+    /* HTML §10.2.6.3's Worker, after the port it posts through and the worker global scope it builds. */
+    { "worker",              d_worker,              NULL,        r_worker },
     /* XHR §3 "Interface XMLHttpRequest" (`XMLHttpRequestEventTarget`, `XMLHttpRequestUpload` and `XMLHttpRequest`,
        `[Exposed=(Window,DedicatedWorker,SharedWorker)]`) and §5 "Interface ProgressEvent"
        (`[Exposed=(Window,Worker)]`): no document half. XHR §5's interface object comes from progress_event.c's own
@@ -1139,6 +1144,7 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "DragEvent",             "event" },
     { "ErrorEvent",            "event" },
     { "MessageChannel",        "message_port" },
+    { "Worker",                "worker" },
     { "XMLHttpRequest",        "xml_http_request" },
     { "FileReader",            "file_reader" },
     { "BroadcastChannel",      "broadcast_channel" },

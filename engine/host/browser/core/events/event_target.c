@@ -1479,7 +1479,7 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onemptied", "emptied", EH_GLOBAL)                                                                         \
     X("onended", "ended", EH_GLOBAL)                                                                             \
     X("onerror", "error", EH_GLOBAL | EH_WINDOW_REFLECTING | EH_XHR | EH_IDB_REQUEST |                           \
-                          EH_IDB_TRANSACTION | EH_FILE_READER | EH_WORKER_GLOBAL_SCOPE)                          \
+                          EH_IDB_TRANSACTION | EH_FILE_READER | EH_WORKER_GLOBAL_SCOPE | EH_ABSTRACT_WORKER)     \
     X("onfocus", "focus", EH_GLOBAL | EH_WINDOW_REFLECTING)                                                      \
     X("onformdata", "formdata", EH_GLOBAL)                                                                       \
     X("oninput", "input", EH_GLOBAL)                                                                             \

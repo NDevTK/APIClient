@@ -1095,6 +1095,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/tokenlist.h"
 #include "fixture/srcdoc.h"
 #include "fixture/messaging.h"
+#include "fixture/worker.h"
 #include "fixture/orphan.h"
 #include "fixture/rejection.h"
 #include "fixture/navigator.h"
@@ -1580,6 +1581,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "tokenlist", HTML_TOKENLIST },
     { "srcdoc", HTML_SRCDOC },
     { "messaging", HTML_MESSAGING },
+    { "worker", HTML_WORKER },
     { "orphan", HTML_ORPHAN },
     { "rejection", HTML_REJECTION },
     { "navigator", HTML_NAVIGATOR },
@@ -12994,6 +12996,45 @@ TF_UNIT void probes_modules(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the `messaging` document. */
+/* The rows of the `worker` document: HTML §10.2.6.3 dedicated workers. Each is read off undriven records, the
+   page's own `onmessage` running on a delivered message rather than an orphan drive of it. */
+TF_UNIT void probes_worker(const char *js, Probe *tab, int *n) {
+    const char *papa_why = NULL, *pdf_why = NULL, *mod_why = NULL, *err_why = NULL;
+    int papa = 1, pdf = 1, mod = 1, err = 1;
+
+    fold_row(&papa, &papa_why, param_undriven_count(js, "/api/wkpapa", "n", "2") > 0,
+             "no undriven /api/wkpapa?n=2: the Worker's message never reached the page. Read in order: the blob "
+             "script's fetch (run a worker's delivery), the worker agent's program (another-agent-resume-program), "
+             "its onmessage on the inside port, and its postMessage back through the outside port");
+    fold_row(&papa, &papa_why, param_undriven_count(js, "/api/wkpapa", "c", "2") > 0 &&
+                               param_undriven_count(js, "/api/wkpapa", "id", "7") > 0,
+             "/api/wkpapa arrived without the parsed cell `2` or the id `7`: the posted object did not survive "
+             "StructuredSerialize in one of the two directions");
+    fold_row(&pdf, &pdf_why, param_undriven_count(js, "/api/wkpdf", "len", "4") > 0 &&
+                             param_undriven_count(js, "/api/wkpdf", "sum", "255") > 0,
+             "no undriven /api/wkpdf?len=4&sum=255: the transferred ArrayBuffer did not reach the worker with its "
+             "four bytes, or the worker's result did not come back");
+    fold_row(&pdf, &pdf_why, param_undriven_count(js, "/api/wkpdf", "det", "true") > 0,
+             "/api/wkpdf reports the page's buffer still attached after postMessage(buf, [buf]) — HTML §2.7.6's "
+             "transfer steps detach the transferred ArrayBuffer");
+    fold_row(&mod, &mod_why, param_undriven_count(js, "/api/wkmod", "v", "s42") > 0,
+             "no undriven /api/wkmod?v=s42: the module worker's root did not run with its static import "
+             "resolved, or its message posted during evaluation never left the disabled outside port");
+    fold_row(&mod, &mod_why, param_undriven_count(js, "/api/wkmod", "v", "a42") > 0,
+             "no undriven /api/wkmod?v=a42: the module worker's dynamic import of its chunk on a message did not "
+             "settle in the worker's realm, or its answer did not come back");
+    fold_row(&err, &err_why, param_undriven_count(js, "/api/wkerr", "v", "fired") > 0,
+             "no /api/wkerr: a worker whose script does not parse fired no `error` at its Worker (run a worker's "
+             "onComplete step 1)");
+    const Probe rows[] = {
+        { "worker-papaparse-shape", papa, "/api/wkpapa", SESS_EXPLORE, papa_why },
+        { "worker-pdfjs-shape", pdf, "/api/wkpdf", SESS_EXPLORE, pdf_why },
+        { "worker-module-imports", mod, "/api/wkmod", SESS_EXPLORE, mod_why },
+        { "worker-script-error", err, "/api/wkerr", SESS_EXPLORE, err_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 TF_UNIT void probes_messaging(const char *js, Probe *tab, int *n) {
     const char *sc_msg_ran_why = NULL;
  int sc_msg_ran = 1;
@@ -19473,6 +19514,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_isolation_operands_sort(js, probes, &np);
     probes_modules(js, probes, &np);
     probes_messaging(js, probes, &np);
+    probes_worker(js, probes, &np);
     probes_xdmulti(js, probes, &np);
     probes_orphan(js, probes, &np);
     probes_min(js, probes, &np);

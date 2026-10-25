@@ -275,7 +275,10 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
           EH_WINDOW_REFLECTING: core/workers/worker_global_scope.c passes
           it alone, at Web IDL §3.7.3 Interface prototype object's not-[Global] arm, because WorkerGlobalScope
           is `[Exposed=Worker]` and is not the [Global] interface — DedicatedWorkerGlobalScope is. */
-       EH_WORKER_GLOBAL_SCOPE = 2097152 };
+       EH_WORKER_GLOBAL_SCOPE = 2097152,
+       /* HTML §10.2.6.1 The AbstractWorker mixin's one handler, `onerror`, which Worker and SharedWorker include;
+          its own bit because neither interface includes GlobalEventHandlers. */
+       EH_ABSTRACT_WORKER = 4194304 };
 /* HTML §6.5 Activation behavior of elements' click() — whose step 4, "Fire a synthetic pointer event named
    click at this element, with the not trusted flag set", IS DOM §2.9 dispatch, so it is the same machine under
    a second entry rather than a second implementation of it. The method's other four steps ride that entry:

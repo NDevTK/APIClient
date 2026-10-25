@@ -72,11 +72,8 @@
  * runtime (core/platform.c), and StructuredSerialize is the only door between two agents' objects. What changes is WHO
  * PROVISIONS THE PEER, and the old premise would have sent the next diff to build a cross-instance transport
  * (a mojom hop, offscreen routing, a second WASM instance) for a peer that never leaves this one.
- * NOTHING HERE CROSSES ANYTHING TODAY. This file builds
- * objects INSIDE one realm and sends nothing anywhere: the two interface objects, the two prototypes and the
- * members installed below are all reachable only from the realm they were minted in. §10.2.1.2's `postMessage` is the
- * member that would cross, and it is a named residual at the bottom of this file for exactly that reason —
- * there is no peer AGENT to post to, and this diff provisions none.
+ * §10.2.1.2's `postMessage` is the one member here that crosses: it posts through the global's inside port,
+ * which run a worker (core/workers/worker.c) entangles with the Worker's outside port in the owner's realm.
  *
  * AND TWO OF THE FOUR NAMES TAKE THE OTHER ARM, WHICH THE RECORD ABOVE DERIVED FOR THE DEDICATED CASE AND LEFT
  * A READER TO GENERALISE. That correction quotes §8.1.2.2's forwarding and then ONE of the two arms it selects
@@ -92,12 +89,12 @@
  * AND passes no outside settings at all — there is no owner agent for it to share a cluster with, which is why
  * the FALSE arm's "Assert: outside settings is not null" is not a step it could ever reach.
  * SO THE FOUR NAMES ARE THREE SUBJECTS AND ONLY ONE OF THEM IS THIS DIRECTORY'S. `Worker` is in-heap and is
- * what the ordered remainder below is about; `SharedWorker` needs a second instance and the
+ * built by core/workers/worker.c; `SharedWorker` needs a second instance and the
  * SharedWorkerGlobalScope interface of HTML §10.2.1.3 "Shared workers and the SharedWorkerGlobalScope
  * interface", which this build has nowhere; `ServiceWorker` and `ServiceWorkerContainer` need a second
  * instance AND are declared outside HTML altogether, by a standard whose own registration model HTML
- * §10.2.4 "Processing model" states no step of — so NO item of the ordered remainder unblocks either of them,
- * however complete it gets. WHICH standard, and why no § of it is written here, is this record's last
+ * §10.2.4 "Processing model" states no step of — so nothing core/workers/worker.c builds unblocks either of
+ * them. WHICH standard, and why no § of it is written here, is this record's last
  * paragraph.
  * THE MEASURED COST OF NOT SAYING SO, because this paragraph exists BECAUSE a reader generalised the arm: a
  * brief scoped all four names as one subject on the strength of the banner above, called them collectively a
@@ -780,212 +777,10 @@ void worker_global_scope_free(JSRuntime *rt)
  *     and the six accessors' getter and setter. Those are facts about what a CALL answers and no
  *     descriptor read can decide one. test_forced.c's exposure_selftest now runs a program in that realm as
  *     a flow, under two schedules, and asserts all seven.
- *     THE ORDERED REMAINDER IS HTML §10.2.4 Processing model's run a worker, IN THAT SECTION'S OWN ORDER, and
- *     it is SIX subproblems rather than one — the sentence above called it ONE, and a later reading of this
- *     list called it FIVE by folding §10.2.4's step 7 into nothing. Both are corrected here. IT IS SEVEN, AND
- *     THE SEVENTH WAS FOUND BY WALKING §10.2.4's OWN LISTS RATHER THAN BY READING THIS ONE: the eighteen-step
- *     onComplete list carries an EVENT LOOP at its step 15 and no item here corresponded to it, so every
- *     count this paragraph records — one, then five, then six — was taken by a reader enumerating what the
- *     previous reader had written down. THE METHOD IS THE FINDING AND IT IS THE CHEAP ONE: a list of what an
- *     algorithm still owes is checked against the ALGORITHM'S OWN STEPS, top-level items counted with list
- *     depth tracked, and never against the last revision of the list.
- *     AND EVERY REFERENCE BELOW CARRIES ITS ENTRY'S NAME BESIDE THE NUMERAL, because a roman numeral here is
- *     an ORDINAL OVER A SET THIS LIST KEEPS GROWING — the insertion that added the event loop renumbered the
- *     `Worker` entry from (vi) to (vii), and every bare "(vi)" elsewhere in this file would have gone on
- *     resolving, silently, to a different subproblem than the one its sentence was written about. A numeral
- *     that travels with a name cannot do that; one that does not is the positional reference CLAUDE.md's
- *     §AND-THE-FORM-THAT-SURVIVES-EVERY-SWEEP names as the claim no grep can ask for.
- *     THE NUMBERING CONVENTION IS STATED ONCE BECAUSE STEP 12 HOLDS THREE LISTS AND A BARE SUB-NUMBER UNDER
- *     IT NAMES NOTHING. Counted with list depth tracked, run a worker is TWELVE top-level steps — step 10,
- *     "If is shared is true:", is ONE step holding five — and step 12 carries a switch on the options type,
- *     then a performFetch list, then an onComplete list of eighteen. Every sub-number below therefore names
- *     its list in the spec's own words.
- *     AND THE ROMAN NUMERALS ARE §10.2.4's ORDER, WHICH IS A DEPENDENCY ORDER AND NOT A LANDING ORDER — STATED
- *     BECAUSE A NUMBERED LIST IS AN INSTRUCTION AND A SENTENCE BENEATH ONE IS NOT. A reader dispatching from
- *     this list starts at (i) because that is where a list starts, and (i) THE AGENT is the member with the
- *     largest blast radius and no page-visible consumer at all. The landing order is not the numerals reversed
- *     either, so it is written out by NAME rather than renumbered: renumbering would make every numeral
- *     elsewhere in this file an ordinal over a set this list keeps growing, which is the defect the paragraph
- *     above exists to prevent.
- *     NO MEMBER BUT (vii) `Worker` HAS A CONSUMER A PAGE CAN REACH, AND THAT IS THE STRUCTURAL FACT THE ORDER
- *     HAS TO BE BUILT AROUND rather than a reason to land (vii) first. CLAUDE.md's rule is to number the member
- *     that HAS a consumer as the first landing; here the only such member is the one §NO-STUBS forbids landing
- *     before the rest exist, because installing the interface object flips a bundle's `if (window.Worker)` guard
- *     TRUE onto a branch nothing can complete. So the consumer that makes each intermediate landing EXERCISED
- *     rather than dead is a FIXTURE DRIVE, which is not a stub by §NO-STUBS' test — the code is correct and
- *     narrower, and a fixture IS a host here, which is the same reading that corrected (4) above. A member
- *     landed with no drive at all is the write-with-no-reader CLAUDE.md
- *     §A-FIELD-A-CONSUMER-DEFAULTS names, and is what this ordering exists to refuse.
- *     THE ORDER, EACH MEMBER WITH THE CALL THAT WILL CONSUME IT:
- *       1. (i) THE AGENT beside its owner — an Agent Record and a realm in the owner's runtime, after the
- *          agent facts core/platform.c's residual names move behind the realm's agent. FIRST because every
- *          later member runs IN that agent; its drive is the fixture's worker agent brought up while the
- *          first is live. NOT THIS DIRECTORY'S.
- *       2. (ii) THE ENVIRONMENT SETTINGS OBJECT's fields that do not read the worker's url, and (iii) THE
- *          SCRIPT FETCH — ONE LANDING, because §10.2.6.2's remaining fields read the url (iii)'s response step
- *          sets, so neither half is coherent alone. Consumer: the one chokepoint, which exists.
- *       3. (iv) RUNNING IT, WITH ITS UNSTATED PREREQUISITE FIRST — naming a realm that is not a Document, in
- *          solver/world and core/dom/document. Consumer: the `engine_queue_` entry that takes a `uint32_t doc`,
- *          which exists; what does not is a handle for a realm with no Document behind it.
- *       4. (vi) THE WORKER'S EVENT LOOP and (v) THE PORT PAIR — ONE LANDING, and the event loop FIRST inside
- *          it, which is the one place this order departs from §10.2.4's: a pair entangled with nothing
- *          servicing either end is a queue whose deliveries never arrive, so the loop is what makes the pair
- *          observable rather than the other way round. Consumer: the MessagePort of HTML §9.4.4 "Message
- *          ports", which exists.
- *       5. (vii) `Worker` — LAST, unchanged, for the reason its own entry gives.
- *     WHAT WOULD MAKE THIS ORDER WRONG, so a reader can refute it rather than inherit it: a member of 2–4 whose
- *     landing is coherent WITHOUT the agent of 1 — which would be true the day a worker realm of the FIRST
- *     agent could hold a flow, since §10.2.4 step 4's agent is what makes it a second one.
- *     RETIREMENT: this record goes when browser/idl_exposure.h's generated rows carry the agent-cluster arm each
- *     [Global] name's agent takes — the same construction the banner at the top of this file names — because a
- *     landing order over these members is then read off the table beside the scope list rather than out of a
- *     paragraph a reader has to find.
- *       (i)   THE AGENT — step 4, "Let agent be the result of obtaining a dedicated/shared worker agent given
- *             outside settings and is shared", whose own second sentence is "Run the rest of these steps in
- *             that agent". IT IS A SECOND AGENT INSIDE THIS INSTANCE and not a peer instance — see the banner
- *             at the top of this file for §8.1.2.2's arm that decides it, and for the one origin (`data:`)
- *             that does cross.
- *             IT IS AN AGENT RECORD AND A REALM IN THE OWNER'S RUNTIME, not a second runtime: ECMA-262 §9.6
- *             Agents defines an agent by its execution contexts and its Agent Record, and a dedicated worker
- *             joins its owner's cluster, the boundary memory may be shared across. So the worker's heap writes
- *             land in the creating flow's COW delta, its tasks are flows on the one frontier, and what crosses
- *             between the two agents is StructuredSerialize output, never a live reference. The platform is
- *             declared once per runtime (core/platform.c's residual states this route), so the agent facts
- *             still held per runtime move behind the realm's agent first, one per diff.
- *             THIS COMPONENT IS NOT ON THAT LIST, which is why (i) cannot land from this directory.
- *       (ii)  THE ENVIRONMENT SETTINGS OBJECT — step 7, "Set up a worker environment settings object with
- *             realm execution context, outside settings, and unsafeWorkerCreationTime, and let inside
- *             settings be the result", which is §10.2.6.2 "Script settings for workers". TWO OF ITS FIELDS
- *             EXIST: core/realm.c writes the null top-level creation URL and the owner's secure-context
- *             answer, both asserted at the one call every realm goes through. The rest do not, and most of
- *             them read the WorkerGlobalScope's own `url`, which (iii) is what sets — so §10.2.6.2's
- *             accessor fields (the API base URL, the origin, the policy container) are legitimately defined
- *             before that url exists, while its ONE COPY is not: it sets creation URL to the url at step 7
- *             and §10.2.4's response step sets inside settings's creation URL again from the response's url,
- *             so an implementation that treats creation URL as an accessor answers the second write early.
- *       (iii) THE SCRIPT FETCH — step 12's classic arm, "Fetch a classic worker script given url, outside
- *             settings, destination, inside settings, and with onComplete and performFetch as defined below"
- *             — one load through the one chokepoint, stating its destination and its credentials mode, with
- *             no second transport and no carve-out. Its response step is what unblocks residual (1): "set
- *             worker global scope's url to response's url".
- *       (iv)  RUNNING IT — step 12's onComplete list, "If script is a classic script, then run the classic
- *             script script" — the source (iii) fetched, as a member of the ONE frontier, which is what
- *             §THERE-IS-NO-GRIND requires of every program this engine runs.
- *             THE CLAUSE THAT STOOD HERE SAID THIS WAS ALREADY THE SHAPE test_forced.c DRIVES, AND THAT WAS A
- *             CLAIM ABOUT THIS TREE RATHER THAN ABOUT THE SPEC — the half of a next-diff clause CLAUDE.md's
- *             §THE-MEASURED-RATE rates as wrong more often than the spec reasoning above it, and the half a
- *             reader EXECUTES rather than checks. It is retired rather than deleted, because the fixture does
- *             run a program in a worker realm and a reader who sees that and stops will re-derive it. What the
- *             fixture drives is `JS_FlowNew` and `JS_FlowResume` in a loop of its own: a quickjs flow, so
- *             preemptible and suspendable, and deliberately NOT a frontier member — it measures one program's
- *             step differential under two yield policies, so it has to own the resume. That is the standalone
- *             drive loop §C-stack bans in PRODUCTION, and a fixture is not production; what it establishes is
- *             that a worker realm can COMPILE and STEP, never that the scheduler can hold what it built.
- *             SO (iv) HAS A PREREQUISITE THE LIST DID NOT STATE — NAMING A REALM THAT IS NOT A DOCUMENT — and
- *             every link of it is one grep. Every production route from SOURCE TEXT to a frontier flow is an
- *             `engine_queue_` entry (solver/engine.c states that every JS_FlowNew in this engine is below one
- *             line of it), and each of those entries names the realm to compile in as a `uint32_t doc` handle,
- *             which solver/engine.h says outright is WHERE THE PROGRAM IS COMPILED. solver/flow.h carries that
- *             handle and refuses a JSContext for it, because a handle survives a park and a realm does not.
- *             and the handle is RESOLVED by core/frame/window_proxy.h's `window_proxy_realm_of_document`, which
- *             scans this agent's live NAVIGABLES and reads the match's own per-flow realm — so the identity this
- *             subproblem has to break is stated twice over: a realm IS a document (core/dom/document.c's own
- *             header), and the only thing that answers a handle is a navigable. A WorkerGlobalScope realm has
- *             NEITHER — no Document, so `document_doc` of one reaches that file's DCHECK about a document member
- *             running in a realm with no Document, and no navigable, so the handle resolves to nothing at all.
- *             THIS READ `world_doc_realm is written from exactly one place, core/dom/document.c's
- *             document_install` AND IS REWRITTEN RATHER THAN DELETED, because the SET it named really was the
- *             one write and a reader who re-derives the blocker from a document-keyed row will look for that row
- *             again: solver/world.c held one `JSContext *` per document and does not, because one slot cannot
- *             answer for two timelines that each materialized a navigable's initial about:blank. The blocker is
- *             unchanged and its coordinate moved.
- *             IT IS NOT THIS DIRECTORY'S, AND IT IS NOT (i)'S EITHER. The handle blocks (iii)'s fetched source
- *             whether the worker realm belongs to a second agent or to the fixture, so it is independent of
- *             the runtime question and lands in solver/world and core/dom/document — which is why (iv) cannot
- *             be read as work this directory unblocks by finishing (i).
- *       (v)   THE PORT PAIR — step 12's onComplete list again, "Let inside port be a new MessagePort object
- *             in inside settings's realm" and "Entangle outside port and inside port". HTML §9.4.4 "Message
- *             ports" exists in this build; what does not is an entanglement whose two ends are in two AGENTS
- *             — which, by (i), is two JSRuntimes of ONE instance rather than two instances.
- *             THAT NUMBER READ §9.2 AND IS REPAIRED RATHER THAN QUIETLY CORRECTED, BECAUSE OF HOW IT WAS FOUND
- *             AND OF WHAT IT COST FIRST. HTML §9.2 is "Server-sent events"; `MessagePort` is declared by §9.4.4
- *             "Message ports", under §9.4 "Channel messaging", which is also where entangle is defined — so the
- *             citation was a REAL section correctly numbered about a different subject, the one axis a
- *             quotation check is blind to by construction, and it carried no title for the title channel to
- *             mismatch. The landing order above cited §9.2 for the same claim before either was fetched, which
- *             is the copy costing more than the original: an unverified number in this file is what the next
- *             reader reaches for, so a wrong one recruits rather than merely misleading. Both were repaired by
- *             one fetch of the chapter's own heading list, which is what settles a number and what reading
- *             either site could not.
- *       (vi)  THE WORKER'S EVENT LOOP — step 12's onComplete list again, step 15 of its eighteen. HTML
- *             §10.2.4 "Processing model": "Event loop: Run the responsible event loop specified by inside
- *             settings until it is destroyed."
- *             THE STANDARD IS NAMED IN FRONT OF THE QUOTATION AND WAS NOT, WHICH COST THIS SITE ITS COVERAGE
- *             THE FIRST TIME PROSE WAS INSERTED ABOVE IT. engine/citegen.mjs anchors a quotation on the
- *             NEAREST PRECEDING citation, and this one carried none of its own — it resolved on (v)'s, nine
- *             lines up — so the §9.2 repair record added to (v) became its anchor, the anchor named no
- *             standard, and the quotation left the compared population for the unjudgeable queue. MEASURED as
- *             a same-path pair over this one file: quotations compared 55 before and 54 after, unjudgeable 0
- *             and then 1, with the file's single finding identical on both sides — so the loss was exactly
- *             this line and nothing else. A quotation resolving on a neighbour is judged only while nobody
- *             writes between them, which is the shielding CLAUDE.md §AN-UN-ANCHORED-CITATION-IS-SHIELDED
- *             names, arriving through an EDIT rather than through an author leaving the standard out.
- *             THIS LIST DID NOT NAME IT, AND THE OMISSION IS THE KIND A READER EXECUTES RATHER THAN READS.
- *             (i)-(v) build an agent, a settings object, a fetched script, ONE RUN of it and an entangled
- *             pair; a lane that lands those five and then the constructor gets a `Worker` whose
- *             `postMessage` reaches a queue nothing services and whose `terminate()` has no loop to stop —
- *             so the list would have read complete at exactly the point the interface stops being a worker
- *             and becomes a shape. The operand was already written down in this file: residual (5)(d) below
- *             names "the WORKER's event loop" as what blocks §10.2.1.2's `close`, and nothing in the list a
- *             lane builds from corresponded to it.
- *             IT IS NOT (i) THE AGENT's RE-KEYING DISCHARGED, which is the reading to refuse because both
- *             items name the same component. That repair gives a second agent its own event-loop STATE —
- *             core/timing/event_loop.c holds `g_rec` and its interned names in file-scope statics declared
- *             through core/agent_state.h, so there is one such record per PROCESS today. RUNNING one is a
- *             different question and it is the SCHEDULER's: whether the ONE WFQ frontier interleaves a
- *             second agent's task queues, which §THERE-IS-NO-GRIND requires be the same attention process
- *             and not a second loop beside it. State is a fact about slots; servicing is a fact about the
- *             frontier, and only the second makes a delivery arrive.
- *       (vii) HTML §10.2.6.3 Dedicated workers and the Worker interface's `Worker`, LAST — "Returns a new
- *             Worker object. scriptURL will be fetched and executed in the background, creating a new global
- *             environment for which worker represents the communication channel". It is last because
- *             installing the interface object before (i)-(vi) exist flips a bundle's `if (window.Worker)`
- *             guard TRUE onto a branch nothing can complete — so the first six are not a decomposition OF
- *             this entry, they are its precondition.
- *             THE `abandons the fallback branch that was working` HALF OF THAT REASON IS THE WEAKER ONE FOR
- *             THIS NAME, and it is corrected rather than deleted because it is what CLAUDE.md §NO-STUBS
- *             states in general and a reader will re-derive it here. MEASURED over a 19-site corpus fetched
- *             2026-09-24T03:30:43Z (735 files, 716 program), engine/absentrank.mjs puts `Worker` at
- *             use=46 thr=40 cgt=3 fb=0 sil=3 — NOT ONE use site is a presence test of this name selecting an
- *             arm that has another arm beside it, so at the occurrence there is no working fallback for an
- *             install to abandon. That is a fact about where the occurrence SITS and never a claim that no
- *             bundle degrades: one site degrades a scope OUT, clerk.tldraw.com opening
- *             `if("undefined"==typeof Worker) return null;` around a `new Worker` the reader scores `caught`.
- *             THE LOAD-BEARING REASON IS §NO-STUBS' SECOND ONE AND IT IS FAR LARGER HERE — "THE LOSS IS NOT
- *             THE ONE LINE, IT IS EVERY ENDPOINT AND EVERY SINK BEHIND THE GUARD" — because a worker's
- *             script is a SEPARATE PROGRAM. Of the 42 `new Worker(` sites in that corpus, 26 name a distinct
- *             `.worker.js` or webpack chunk URL this engine has never fetched. So a constructor with no
- *             §10.2.4 behind it does not merely fail to help: it trades a LOUD ReferenceError at the
- *             construction line — §Offensive-programming's forcing function, and what every one of those 40
- *             unguarded sites raises today — for the SILENT loss of a whole program's endpoint surface,
- *             which is the surface §What-the-tool-produces exists to find.
- *             TO RE-TAKE THOSE FIGURES, because a corpus number is a fact about one hour and about the sites
- *             that answered in it: `NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs`, then
- *             `node engine/absentrank.mjs --corpus <the path it prints> --top 300`.
- *     HOW ITS ABSENCE SHOWS: `Worker` is not a declared name in a Window realm, so a page's `new Worker(u)`
- *     throws ReferenceError on its first line and there is no object for any of this to be a member of.
- *     AND ONE ARM OF HTML §8.1.8.1 Event handlers STAYS UNEXERCISED FOR A THIRD REASON AGAIN, which is worth
- *     separating because all of them look alike from outside. Special error event handling — its
- *     five-argument invocation and its inverted reading of the handler's return value — needs an ErrorEvent
- *     of type `error` whose currentTarget is a worker global HOLDING an `onerror` entry. Both halves of that
- *     are now possible: the entry is installable, and a script DOES run in a worker realm — test_forced.c
- *     drives one there as a flow and assigns `self.onerror` through the accessor. THE REASON THAT USED TO BE
- *     GIVEN — `no script runs in a worker realm yet` — is retired rather than deleted, because a reader who
- *     re-derives it will re-introduce it. What is missing now is the FIRE: HTML §8.1.4.6 Runtime script
- *     errors fires at JS_GetGlobalObject of the realm it is running in, so the algorithm is present and the
- *     CALLER is not — nothing routes a worker-realm flow's uncaught exception into it. So the member is a
- *     necessary step and not a sufficient one, and a report that says the arm is now reachable is
- *     over-claiming by exactly one caller.
+ *     HTML §8.1.8.1 Event handlers' special error event handling is reached on a worker global: a listener's
+ *     uncaught exception in a worker realm enters HTML §8.1.4.6 Runtime script errors, which fires `error` at
+ *     the realm's global, where `self.onerror` is installed. A worker program's own uncaught throw does not
+ *     reach it yet (solver/engine.c's flow_step_agent states that residual).
  *     WHAT IS NOT A RESIDUAL HERE, stated because the reflex is to read it as one: `languagechange`,
  *     `offline` and `online` are dispatched by no algorithm in this build — but nor are they for `Window`,
  *     where the identical three rows have carried EH_WINDOW all along, so installing them on a second
@@ -996,8 +791,8 @@ void worker_global_scope_free(JSRuntime *rt)
  *
  * (5) §10.2.1.2's `name`, `postMessage` and `close` — the three members the interface DECLARES IN ITS OWN IDL
  *     BLOCK, as against the two its MessageEventTarget include brings, which are installed above. NOT
- *     COVERED: none of the three. Three separate things block them and they are not the same size — and (e)
- *     is a FOURTH member of the same §3.8 arm that no reading of §10.2.1.2 can find, because another standard
+ *     COVERED: `name` and `close`; `postMessage` is installed above. Separate things block the two — and (e)
+ *     is a third member of the same §3.8 arm that no reading of §10.2.1.2 can find, because another standard
  *     declares it in a partial:
  *       (a) THE SHARED ONE, WHOSE SCOPE THIS ENTRY GOT WRONG AND WHICH IS WHY `onmessage` LANDED WITHOUT IT.
  *           Web IDL §3.7.6's create an attribute getter step 1.1.2.3 throws "if jsValue does not implement
@@ -1058,34 +853,21 @@ void worker_global_scope_free(JSRuntime *rt)
  *       (b) `name` HAS NO PRODUCER. §10.2.1.1 says "A WorkerGlobalScope object has an associated name (a
  *           string). It is set during creation", and the algorithm that does the setting is HTML §10.2.4
  *           "Processing model"'s run a worker, whose own step is "Set worker global scope's name to
- *           options["name"]" — which this build does not have, so a value here would be invented rather than
- *           computed, which §RUN-DON'T-MATCH forbids.
+ *           options["name"]". core/workers/worker.c's run a worker converts WorkerOptions' `name` and stores it
+ *           nowhere, because the member that would read it is blocked by (a).
  *           THE NUMBER HERE WAS §10.2.6 "Creating workers", WHOSE TITLE IS EXACTLY RIGHT AND WHICH DEFINES NO
  *           SUCH ALGORITHM: §10.2.6.3 Dedicated workers and the Worker interface is where the constructor
  *           CALLS run a worker, and §10.2.4 is where run a worker IS. citegen caught it; a reader who looked
- *           §10.2.6 up would have found a real heading about creating workers and stopped. NEXT DIFF: §10.2.4's
- *           run a worker, which is what states it. ABSENCE SHOWS AS: `self.name`
+ *           §10.2.6 up would have found a real heading about creating workers and stopped. NEXT DIFF: (a), then
+ *           the name stored by run a worker and read by this member. ABSENCE SHOWS AS: `self.name`
  *           is `undefined` where a browser answers the string the `Worker` constructor was given.
- *       (c) `postMessage` HAS NO PEER, AND NOTHING IN THIS DIFF PROVISIONS ONE. §10.2.1.2 defines it as the
- *           port's own postMessage, and the other end of that port is in the OWNER's AGENT. What crosses is
- *           StructuredSerialize output and never a live reference, though both agents share one runtime's
- *           heap (core/platform.c). THE SENTENCE THAT STOOD HERE SAID THE
- *           OTHER END WAS IN THE OWNER'S INSTANCE and told the next diff to provision a SECOND INSTANCE; that
- *           is the same conflation the banner at the top of this file now corrects out of HTML §8.1.2.2, and
- *           it is recorded rather than deleted because a next-diff clause is read once, by someone who has
- *           already decided to do the work, and this one named the wrong transport. NEXT DIFF: the ordered
- *           remainder's (i) and (v) — a host that PROVISIONS THE SECOND AGENT and an entanglement across it —
- *           before §10.2.6.3's `Worker` constructor. Building the member before the peer is what
- *           §A-HOST-THAT-CANNOT-PROVISION-A-SECOND-INSTANCE is about, and that rule is unchanged by the
- *           correction: an unprovisioned peer is an unprovisioned peer whichever boundary it sits behind.
- *           ABSENCE SHOWS AS: `typeof self.postMessage` is `"undefined"`, so a worker
- *           cannot answer its owner at all.
  *       (d) `close` NEEDS A FLAG THAT HAS NOWHERE TO LIVE. §10.2.1.2's "The close() method steps are to close
  *           a worker given this", and close a worker's two steps are to "discard any tasks that have been
  *           added to workerGlobal's relevant agent's event loop's task queues" and to set the closing flag,
  *           which §10.2.2 "The event loop" declares: "Each WorkerGlobalScope object has a closing flag which
- *           must be initially false". Both operands are the WORKER's event loop, which HTML §10.2.4
- *           "Processing model"'s run a worker creates. NEXT DIFF: §10.2.4's run a worker, then this member.
+ *           must be initially false". Both operands are the WORKER's event loop, whose record each agent
+ *           owns (core/agent.h's install column, run for the worker agent run a worker obtains). NEXT DIFF: this
+ *           member, discarding the worker agent's queued tasks and setting the flag on its event loop record.
  *           ABSENCE SHOWS AS: `typeof
  *           self.close` is `"undefined"`.
  *       (e) `onrtctransform` IS THE ONLY MEMBER OF THIS INTERFACE'S OWN SURFACE THAT NO PARAGRAPH IN THIS FILE
@@ -1100,14 +882,12 @@ void worker_global_scope_free(JSRuntime *rt)
  *           CONDITION. That entry's contract is a member whose existence the SPEC makes conditional in prose,
  *           with its `why` being the spec sentence; §6.4 states an IDL block and no condition over this member
  *           at all, so declaring it excluded would assert of a standard something no sentence of it says.
- *           WHAT BLOCKS IT IS A PRODUCER, AND THE PRODUCER SITS BEHIND (4)'s OWN LAST SUBPROBLEM. The one step
+ *           WHAT BLOCKS IT IS A PRODUCER. The one step
  *           in that standard that fires the event is WEBRTC ENCODED TRANSFORM §5.2 "Constructor"'s
  *           "Fire an event named rtctransform using RTCTransformEvent with transformer set to transformer on transformer's relevant global object",
  *           and the constructor it is a step of is §5 "RTCRtpScriptTransform interface"'s `[Exposed=Window]`
- *           one, whose argument is a `Worker` — which is (4)'s ordered remainder (vii) HTML §10.2.6.3's `Worker`,
- *           the member that list orders LAST. So this member is strictly downstream of that entry, hence of
- *           (i)-(vi), and it is the only
- *           one on this arm whose ordering is decided outside HTML.
+ *           one, whose argument is a `Worker` (HTML §10.2.6.3, built in core/workers/worker.c). It is the only
+ *           member on this arm whose ordering is decided outside HTML.
  *           NEXT DIFF: NOT THIS MEMBER, which is the whole content of the entry rather than a deferral inside
  *           it. Installing the handler ahead of its producer is what §NO STUBS and CLAUDE.md's
  *           partially-built-interface rule forbid together: a worker bundle that guards on
@@ -1115,7 +895,7 @@ void worker_global_scope_free(JSRuntime *rt)
  *           in this build can fire, abandoning the branch that works for one that cannot — and §5's
  *           `RTCRtpScriptTransform` and §6's `RTCRtpScriptTransformer` are both outside idlgen's audited set
  *           entirely, so there is nothing for the true branch to reach. The diff that makes that branch
- *           survivable is those two interfaces, after (vii) HTML §10.2.6.3's `Worker`; this member is the LAST of it
+ *           survivable is those two interfaces; this member is the LAST of it
  *           and not the first.
  *           HOW ITS ABSENCE SHOWS: in a worker realm `"onrtctransform" in self` is false where a browser
  *           answers true, and the name stands in engine/idlgen.mjs's ABSENT list for this interface — which is
