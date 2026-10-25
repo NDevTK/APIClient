@@ -1203,6 +1203,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbkeypath.h"
 #include "fixture/idbkpwalk.h"
 #include "fixture/idbkphash.h"
+#include "fixture/idbkpcycle.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1737,6 +1738,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkeypath", HTML_IDBKEYPATH },
     { "idbkpwalk", HTML_IDBKPWALK },
     { "idbkphash", HTML_IDBKPHASH },
+    { "idbkpcycle", HTML_IDBKPCYCLE },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16813,6 +16815,23 @@ TF_UNIT void probes_idbkphash(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, 4);
 }
 
+/* The rows of the `idbkpcycle` document (fixture/idbkpcycle.h): over a cyclic value, the unknown key path's
+   world naming `id` and its world naming no member both run. */
+TF_UNIT void probes_idbkpcycle(const char *js, Probe *tab, int *n) {
+    const char *i_why = NULL; int i_tt = 1;
+    fold_row(&i_tt, &i_why, param_value_is(js, "/api/idbkc-put", "got", "7"),
+             "no /api/idbkc-put?got=7 record: no arm took the key path as the value's `id`");
+    const char *f_why = NULL; int f_tt = 1;
+    fold_row(&f_tt, &f_why, param_value_is(js, "/api/idbkc-put", "got", "DataError-none"),
+             "no /api/idbkc-put?got=DataError-none record: no arm took the key path as naming no member of a "
+             "value whose `self` paths are endless");
+    const Probe rows[] = {
+        { "idbkc-id", i_tt, "/api/idbkc-put", SESS_EXPLORE, i_why },
+        { "idbkc-none", f_tt, "/api/idbkc-put", SESS_EXPLORE, f_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -21228,6 +21247,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkeypath(js, probes, &np);
     probes_idbkpwalk(js, probes, &np);
     probes_idbkphash(js, probes, &np);
+    probes_idbkpcycle(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
