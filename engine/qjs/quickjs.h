@@ -806,6 +806,13 @@ JS_EXTERN int JS_ValueRefCount(JSValueConst v);
  * heap, O(objects × log n); it reads edges and changes nothing. Each object must be a GC object. */
 JS_EXTERN void JS_GCNamedBy(JSRuntime *rt, JSValueConst *objs, int n, int *from_gc);
 
+/* THE CHAIN BY WHICH A REALM IS KEPT — a breadth-first walk over GC edges from every object a reference outside
+ * the graph holds (JS_REF_COUNT above the edges naming it) to `target`'s context, printed with JS_DumpGCObject
+ * from the target back to the root it was reached from. False, printing nothing, when no root reaches it (the
+ * next collection frees it). O(objects log objects); reads edges and changes nothing. A diagnostic for a realm
+ * a census expected to be collectable. */
+JS_EXTERN bool JS_GCDumpRootPath(JSRuntime *rt, JSContext *target);
+
 JS_EXTERN void *JS_GetContextOpaque(JSContext *ctx);
 JS_EXTERN void JS_SetContextOpaque(JSContext *ctx, void *opaque);
 JS_EXTERN JSRuntime *JS_GetRuntime(JSContext *ctx);

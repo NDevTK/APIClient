@@ -5753,6 +5753,82 @@ void JS_GCNamedBy(JSRuntime *rt, JSValueConst *objs, int n, int *from_gc)
     js_free_rt(rt, sorted);
 }
 
+/* JS_GCDumpRootPath's walk state: every GC object sorted by address, and per object its in-graph reference count
+   (pass 1) or the index it was first reached from (pass 2: -2 unreached, -1 a root). One walk per thread. */
+static JSGCObjectHeader **g_rp_objs;
+static int *g_rp_slot, g_rp_n, g_rp_cur, *g_rp_queue, g_rp_qtail;
+static bool g_rp_counting;
+
+static int gc_rp_index(JSGCObjectHeader *gp)
+{
+    JSGCObjectHeader **at = bsearch(&gp, g_rp_objs, (size_t)g_rp_n, sizeof *g_rp_objs, gc_header_cmp);
+    return at ? (int)(at - g_rp_objs) : -1;
+}
+
+static void gc_rp_mark(JSRuntime *rt, JSGCObjectHeader *gp)
+{
+    int i = gc_rp_index(gp);
+    (void)rt;
+    if (i < 0) return;
+    if (g_rp_counting) { g_rp_slot[i]++; return; }
+    if (g_rp_slot[i] != -2) return;
+    g_rp_slot[i] = g_rp_cur;
+    g_rp_queue[g_rp_qtail++] = i;
+}
+
+/* See quickjs.h. */
+bool JS_GCDumpRootPath(JSRuntime *rt, JSContext *target)
+{
+    struct list_head *heads[3] = { &rt->gc_obj_list, &rt->gc_cycle.decref_done, &rt->tmp_obj_list };
+    struct list_head *el;
+    int n = 0, t, qhead = 0, *incount;
+    bool found = false;
+
+    DCHECK(g_rp_objs == NULL, "JS_GCDumpRootPath re-entered: its walk state is one per thread");
+    for (int h = 0; h < 3; h++) list_for_each(el, heads[h]) n++;
+    g_rp_objs = js_malloc_rt(rt, sizeof *g_rp_objs * (size_t)n);
+    incount = js_mallocz_rt(rt, sizeof *incount * (size_t)n);
+    g_rp_queue = js_malloc_rt(rt, sizeof *g_rp_queue * (size_t)n);
+    CHECK(g_rp_objs && incount && g_rp_queue, "JS_GCDumpRootPath could not allocate its tables");
+    g_rp_n = 0;
+    for (int h = 0; h < 3; h++) list_for_each(el, heads[h]) g_rp_objs[g_rp_n++] = list_entry(el, JSGCObjectHeader, link);
+    qsort(g_rp_objs, (size_t)n, sizeof *g_rp_objs, gc_header_cmp);
+    g_rp_slot = incount;
+    g_rp_counting = true;
+    for (int i = 0; i < n; i++) mark_children(rt, g_rp_objs[i], gc_rp_mark);
+    g_rp_counting = false;
+    /* The roots: objects some reference outside the graph holds. Their in-graph counts are consumed here, and
+       the same array becomes the reached-from table. */
+    g_rp_qtail = 0;
+    for (int i = 0; i < n; i++) {
+        bool root = JS_REF_COUNT(g_rp_objs[i]) > incount[i];
+        incount[i] = root ? -1 : -2;
+        if (root) g_rp_queue[g_rp_qtail++] = i;
+    }
+    t = gc_rp_index(&target->header);
+    DCHECK(t >= 0, "JS_GCDumpRootPath's target realm is not a GC object of this runtime");
+    while (qhead < g_rp_qtail && incount[t] == -2) {
+        g_rp_cur = g_rp_queue[qhead++];
+        mark_children(rt, g_rp_objs[g_rp_cur], gc_rp_mark);
+    }
+    if (incount[t] != -2) {
+        found = true;
+        printf("@REALMROOT target first, then each object that names the one above it, ending at a root:\n");
+        for (int i = t; i >= 0; i = incount[i]) {
+            JS_DumpGCObject(rt, g_rp_objs[i]);
+            if (incount[i] == -1)
+                printf("@REALMROOT ^ root: %d reference(s), not all from GC edges\n", JS_REF_COUNT(g_rp_objs[i]));
+        }
+    }
+    js_free_rt(rt, g_rp_queue);
+    js_free_rt(rt, incount);
+    js_free_rt(rt, g_rp_objs);
+    g_rp_objs = NULL;
+    g_rp_queue = NULL;
+    g_rp_slot = NULL;
+    return found;
+}
+
 int JS_ContextRefCount(JSContext *ctx)
 {
     JS_CTX_REFS_CHECK(ctx, JS_REF_COUNT(ctx));

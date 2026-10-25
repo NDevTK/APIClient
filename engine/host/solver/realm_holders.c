@@ -92,6 +92,9 @@ static void holder_visit(const void *seg, JSValueConst v, void *arg) {
 
 /* Whether a census has seen every live realm unheld (realm_holders.h). Lifetime, never reset. */
 static bool g_all_unheld_seen;
+#if APICLIENT_DEV
+static bool g_root_path_dumped;   /* a @REALMROOT chain was printed */
+#endif
 
 bool realm_holders_all_unheld_seen(void) { return g_all_unheld_seen; }
 
@@ -181,6 +184,17 @@ bool realm_holders_census(RealmHolders *out) {
         free(from_gc);
         free(realm_rooted);
     }
+#if APICLIENT_DEV
+    /* The chain that keeps the first unheld realm a root still reaches, printed once per process
+       (JS_GCDumpRootPath's @REALMROOT block): a census that finds a realm no flow names, and a collection that
+       cannot free it, is a holder to name. */
+    if (!w.refused && none > 0 && !g_root_path_dumped)
+        for (int r = 0; r < w.n; r++)
+            if (holders[r] == 0) {
+                g_root_path_dumped = JS_GCDumpRootPath(JS_GetRuntime(navigable_realm_at(r)), navigable_realm_at(r));
+                break;
+            }
+#endif
 out:
     if (w.memo != NULL)
         for (size_t i = 0; i < w.memo_cap; i++) free(w.memo[i].bits);
