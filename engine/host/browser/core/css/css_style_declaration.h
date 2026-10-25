@@ -29,8 +29,8 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
 
 /* The author origin's match for `el` (core/css/css_match_result.h), asked under a resting drive on the entered
    layout job: true when the job's cascade record holds it closed, false when the build spent the drive's
-   allowance and parked its position there, to continue at the next ask. The sheet set is built whole at its
-   first ask. */
+   allowance and parked its position there, to continue at the next ask. The root's sheet set is emitted the
+   same way first. */
 bool cssom_match_ask(lxb_dom_element_t *el);
 
 /* CSS Cascade §7.1's INITIAL VALUE of `name` — the property's own `Initial:` line, out of lexbor's registry and

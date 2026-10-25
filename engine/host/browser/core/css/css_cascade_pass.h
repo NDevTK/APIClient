@@ -61,10 +61,13 @@ bool css_cascade_record_is_held(void);
    chokepoint the validity list above names, beside its assert that no record is held. */
 void css_cascade_input_written(void);
 
-/* The author origin's sheet set for `root` (core/css/css_author_sheets.h). `ask` answers the held set,
-   borrowed, or false; on false the caller builds one and hands it to `hold`, which takes it. */
+/* The author origin's sheet set for `root` (core/css/css_author_sheets.h). `ask` answers the held sealed set,
+   borrowed, or false; on false `*out` is the open set a resting build parked, now the caller's again, or
+   NULL, and the caller builds on and hands the set to `hold` when it is sealed or to `park` when its drive
+   rests first. */
 bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorSheets **out);
 void css_cascade_pass_author_hold(struct CssAuthorSheets *sheets);
+void css_cascade_pass_author_park(struct CssAuthorSheets *sheets);
 
 /* The author origin's match result for `el` under `sheets`, the set its root resolves under. `ask` answers
    the held closed result, borrowed, or false; on false `*out` is the open result a resting build parked, now

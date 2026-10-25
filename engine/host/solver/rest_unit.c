@@ -55,6 +55,12 @@
    cost more. */
 #define REST_UNIT_CASCADE_RULES_N   4096u
 
+/* Rules a resting emission of the author origin writes per rest point, 1024. The floor is the rest's cost: a
+   re-entry re-reads the root's sheet list and the held matches of the ancestors already asked. The ceiling is
+   bound (2): a rule is copied from its stored text, and a conditional group rule evaluates its condition; the
+   drive's work allowance stops an activation whose rules cost more. */
+#define REST_UNIT_CASCADE_EMITS_N   1024u
+
 /* Engine work a resting drive spends per activation, a quarter of the quantum. The ceiling is bound (2) less one
    body's work past the last pick, which the drive cannot interrupt, and the unit's work outside the drive (its
    target's box tests and the reads that follow the last answer); a quarter leaves the other three quarters of
@@ -92,6 +98,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_LAYOUT_LINE_ITEMS: n = REST_UNIT_LAYOUT_LINE_ITEMS_N; break;
     case REST_UNIT_LAYOUT_LINE_METRICS: n = REST_UNIT_LAYOUT_LINE_METRICS_N; break;
     case REST_UNIT_CASCADE_RULES: n = REST_UNIT_CASCADE_RULES_N; break;
+    case REST_UNIT_CASCADE_EMITS: n = REST_UNIT_CASCADE_EMITS_N; break;
     case REST_UNIT_LAYOUT_WORK: n = (size_t)REST_UNIT_LAYOUT_WORK_N; break;
     case REST_UNIT_GC_WORK:     n = REST_UNIT_GC_WORK_N;     break;
     }

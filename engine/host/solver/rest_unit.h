@@ -88,8 +88,13 @@ typedef enum {
        the drive rests. Cost: one selector match, whose compound and attribute tests the sheet chooses; bound
        (2) is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket. */
     REST_UNIT_CASCADE_RULES,
+    /* One rule of a style sheet's rule tree written into the author origin's emission (core/css/css_rule.h's
+       cascade walk) under a resting drive. Past this many the walk parks its frames in the job's cascade record
+       and the drive rests. Cost: one rule's serialization, and a conditional group rule's condition; bound (2)
+       is asserted by the REST_UNIT_LAYOUT_DESCENDANTS bracket. */
+    REST_UNIT_CASCADE_EMITS,
     /* One unit of engine work (opcodes and host charges, core/timing/thread_work.h) a resting drive spends in
-       one activation, beside the five counts above: a body the drive takes, resumed or new, a cascade it
+       one activation, beside the six counts above: a body the drive takes, resumed or new, a cascade it
        reads and a walk step all spend it, so an activation whose work is in no counted item still stops at
        the drive's next pick. Cost: one unit, by definition; bound (2) is asserted by the
        REST_UNIT_LAYOUT_DESCENDANTS bracket. */

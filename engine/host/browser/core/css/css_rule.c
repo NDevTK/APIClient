@@ -24,6 +24,7 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/css/css_cascade_pass.h"   /* the layout job's record a cascade-input write may not land inside */
+#include "core/layout/layout_job.h"   /* the resting drive a sheet's walk takes its rules from */
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_font_family.h"   /* CSS Fonts 4 §6.9.1's `<font-family-name>#` prelude */
 #include "core/css/css_font_feature_values.h"   /* CSS Fonts 4 §12.2's CSSFontFeatureValuesMap */
@@ -4854,32 +4855,84 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
     return true;
 }
 
-/* The rules of `list` and of every rule list under them, in document order, into `e`. A false from any rule
-   abandons the whole sheet, as the style arm's missing-selector case says. */
-static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur)
-{
-    CascadeFrame *top = cascade_frame_new(ctx, JS_DupValue(ctx, list), e, false, cur, NULL, NULL, 0), *f;
-    bool ok = true;
+/* The walk over `list` and every rule list under them, in document order: its emitter and its frame stack, both
+   on the heap, so a walk that rests keeps its place in them. `ok` false is a rule that failed, which abandons
+   the whole sheet, as the style arm's missing-selector case says. */
+struct CssRuleCascadeWalk {
+    CascadeEmit   e;
+    CascadeFrame *top;
+    bool          ok;
+};
 
-    while (top != NULL) {
-        if (ok && top->i < top->n) {
-            JSValue rule = JS_GetPropertyUint32(ctx, top->kids, top->i++);
+CssRuleCascadeWalk *css_rule_cascade_walk_open(JSContext *ctx, JSValueConst list, CssLayerOrder *order)
+{
+    CssRuleCascadeWalk *w = calloc(1, sizeof *w);
+
+    CHECK(w != NULL, "cssom: OOM opening a sheet's walk for the author cascade");
+    DCHECK(order != NULL,
+           "a sheet was flattened for the author cascade with no CSS Cascade 5 §6.4.3 LAYER ORDER to declare "
+           "its layers into. Every `@layer` rule the walk meets declares one, and the order is what "
+           "CSS Cascade 5 §6.1's Layers criterion sorts by — a walk with nowhere to put them would answer every "
+           "layer's rules as if they were unlayered, which inverts the cascade for the whole sheet");
+    w->e.order = order;
+    w->ok = true;
+    w->top = cascade_frame_new(ctx, JS_DupValue(ctx, list), &w->e, false, css_layer_order_root(order), NULL,
+                               NULL, 0);
+    return w;
+}
+
+CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk *w, bool rests,
+                                             CssRuleCascadeSheet *out)
+{
+    CascadeFrame *f;
+
+    DCHECK(w != NULL && out != NULL, "the author cascade's walk was run through nothing or with nowhere to report");
+    while (w->top != NULL) {
+        if (w->ok && w->top->i < w->top->n) {
+            JSValue rule;
             CascadeFrame *descend = NULL;
 
-            ok = cascade_emit_one(ctx, rule, top->e, top->cur, top->nest, &descend);
+            if (rests && !layout_job_emit_take()) return CSS_RULE_CASCADE_PARKED;
+            rule = JS_GetPropertyUint32(ctx, w->top->kids, w->top->i++);
+            w->ok = cascade_emit_one(ctx, rule, w->top->e, w->top->cur, w->top->nest, &descend);
             JS_FreeValue(ctx, rule);
-            DCHECK(ok || descend == NULL, "a rule both failed and asked the author cascade to walk its children");
+            DCHECK(w->ok || descend == NULL, "a rule both failed and asked the author cascade to walk its children");
             if (descend != NULL) {
-                descend->up = top;
-                top = descend;
+                descend->up = w->top;
+                w->top = descend;
             }
             continue;
         }
-        f = top;
-        top = f->up;
+        f = w->top;
+        w->top = f->up;
         cascade_frame_free(ctx, f);
     }
-    return ok;
+    if (!w->ok) return CSS_RULE_CASCADE_FAILED;
+    out->text = w->e.out.s;
+    out->layer = w->e.layer;
+    out->n = w->e.n;
+    w->e.out.s = NULL;
+    w->e.layer = NULL;
+    w->e.n = 0;
+    DCHECK(out->n == 0 || out->text != NULL,
+           "the author cascade emitted rules and no text to hold them — the two are written by one call per "
+           "rule and cannot disagree about whether a rule went in");
+    return CSS_RULE_CASCADE_CLOSED;
+}
+
+void css_rule_cascade_walk_free(JSContext *ctx, CssRuleCascadeWalk *w)
+{
+    CascadeFrame *f;
+
+    DCHECK(w != NULL, "the author cascade's walk was freed through nothing");
+    while (w->top != NULL) {
+        f = w->top;
+        w->top = f->up;
+        cascade_frame_free(ctx, f);
+    }
+    free(w->e.out.s);
+    free(w->e.layer);
+    free(w);
 }
 
 void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s)
@@ -4890,33 +4943,6 @@ void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s)
     s->text = NULL;
     s->layer = NULL;
     s->n = 0;
-}
-
-bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *order,
-                            CssRuleCascadeSheet *out)
-{
-    CascadeEmit e = { { NULL, 0, 0 }, NULL, 0, 0, NULL };
-
-    DCHECK(out != NULL, "the author cascade's view of a sheet was built with nowhere to report it");
-    DCHECK(order != NULL,
-           "a sheet was flattened for the author cascade with no CSS Cascade 5 §6.4.3 LAYER ORDER to declare "
-           "its layers into. Every `@layer` rule the walk meets declares one, and the order is what "
-           "CSS Cascade 5 §6.1's Layers "
-           "criterion sorts by — a walk with nowhere to put them would answer every layer's rules as if they "
-           "were unlayered, which inverts the cascade for the whole sheet");
-    e.order = order;
-    if (!cascade_emit(ctx, list, &e, css_layer_order_root(order))) {
-        free(e.out.s);
-        free(e.layer);
-        return false;
-    }
-    out->text = e.out.s;
-    out->layer = e.layer;
-    out->n = e.n;
-    DCHECK(out->n == 0 || out->text != NULL,
-           "the author cascade emitted rules and no text to hold them — the two are written by one call per "
-           "rule and cannot disagree about whether a rule went in");
-    return true;
 }
 
 /* ---- CSS Properties and Values API 1 §2.1's `@property` half ------------------------------------------------ */

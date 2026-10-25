@@ -3325,20 +3325,23 @@ static void cssd_hint_add(void *ud, const char *longhand, const char *value)
                            value);
 }
 
-/* The author origin's sheet set `el`'s root resolves under, held by the record, built at its first ask.
-   Named residual. Not covered: the set's emission (core/css/css_rule.h's css_rule_cascade_sheet) is a walk
-   over every rule of every sheet, run whole at that ask even under a resting drive. Next diff builds: the
-   emission parking its frame stack in the record under the drive's allowance. Absence shows as: an overrun
-   whose host charges are constraint bytes or rules emitted with no rule tests. */
-static CssAuthorSheets *cssd_author_sheets(lxb_dom_element_t *el)
+/* The author origin's sheet set `el`'s root resolves under, held by the record and built at its first ask.
+   With `rests`, the emission takes each rule from the resting drive's allowance and NULL answers that it
+   parked in the record; without, a parked build is finished here. */
+static CssAuthorSheets *cssd_author_sheets(lxb_dom_element_t *el, bool rests)
 {
     lxb_dom_node_t *root = node_root(lxb_dom_interface_node(el));
     CssAuthorSheets *sheets;
 
-    if (!css_cascade_pass_author_ask(root, &sheets)) {
-        sheets = css_author_sheets_build(root);
-        css_cascade_pass_author_hold(sheets);
+    if (css_cascade_pass_author_ask(root, &sheets)) return sheets;
+    if (sheets == NULL) sheets = css_author_sheets_open(root);
+    if (!css_author_sheets_run(sheets, rests)) {
+        DCHECK(rests, "an author origin emission built with no resting drive stopped before the last sheet — "
+                      "only a resting build takes rules from an allowance");
+        css_cascade_pass_author_park(sheets);
+        return NULL;
     }
+    css_cascade_pass_author_hold(sheets);
     return sheets;
 }
 
@@ -3367,7 +3370,7 @@ static CssCascadedStyle *cssd_cascaded_style_build(lxb_dom_element_t *el)
            "css-logical-1 §4's pairing is the one nested resolution an element's cascade makes, and it runs "
            "after collection; a nested read added inside the collection is what this crash names");
     g_collecting_sheets = true;
-    sheets = cssd_author_sheets(el);
+    sheets = cssd_author_sheets(el, false);
     order = css_author_sheets_order(sheets);
     if (!css_cascade_pass_match_ask(el, sheets, &match)) {
         /* A build a resting ask parked is finished here: this reader cannot rest.
@@ -3405,7 +3408,11 @@ bool cssom_match_ask(lxb_dom_element_t *el)
     DCHECK(el != NULL, "an author match was asked for no element");
     DCHECK(!g_collecting_sheets, "a resting author match was asked inside another element's collection");
     g_collecting_sheets = true;
-    sheets = cssd_author_sheets(el);
+    sheets = cssd_author_sheets(el, true);
+    if (sheets == NULL) {
+        g_collecting_sheets = false;
+        return false;
+    }
     closed = css_cascade_pass_match_ask(el, sheets, &match);
     if (!closed) {
         if (match == NULL) match = css_match_result_create(el, sheets);

@@ -148,20 +148,22 @@ bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorShe
     size_t i;
 
     DCHECK(root != NULL && out != NULL, "an author sheet set was asked for no root or with nowhere to put it");
+    *out = NULL;
     for (i = 0; i < r->author_n; i++) {
         if (css_author_sheets_root(r->author[i]) != root) continue;
         *out = r->author[i];
-        return true;
+        if (css_author_sheets_sealed(*out)) return true;
+        /* A parked build goes back to its builder: the slot is the last one's, moved into this one. */
+        r->author[i] = r->author[--r->author_n];
+        return false;
     }
     return false;
 }
 
-void css_cascade_pass_author_hold(struct CssAuthorSheets *sheets)
+static void cp_author_add(CssCascadeRecord *r, struct CssAuthorSheets *sheets)
 {
-    CssCascadeRecord *r = cp_held();
     size_t i;
 
-    DCHECK(sheets != NULL, "an author sheet set was offered to the record as nothing");
     for (i = 0; i < r->author_n; i++)
         DCHECK(css_author_sheets_root(r->author[i]) != css_author_sheets_root(sheets),
                "a second author sheet set was offered for a root the record already holds one for — its one "
@@ -175,6 +177,22 @@ void css_cascade_pass_author_hold(struct CssAuthorSheets *sheets)
         r->author_cap = cap;
     }
     r->author[r->author_n++] = sheets;
+}
+
+void css_cascade_pass_author_park(struct CssAuthorSheets *sheets)
+{
+    DCHECK(sheets != NULL && !css_author_sheets_sealed(sheets),
+           "an author sheet set was parked as nothing or sealed");
+    cp_author_add(cp_held(), sheets);
+}
+
+void css_cascade_pass_author_hold(struct CssAuthorSheets *sheets)
+{
+    CssCascadeRecord *r = cp_held();
+
+    DCHECK(sheets != NULL && css_author_sheets_sealed(sheets),
+           "an author sheet set was offered to the record as nothing or open");
+    cp_author_add(r, sheets);
 }
 
 static bool cp_sheets_held(const CssCascadeRecord *r, const struct CssAuthorSheets *sheets)

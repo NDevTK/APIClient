@@ -168,8 +168,9 @@ void layout_job_drive_end(LayoutJobDrive *d);
    outermost drive and takes every suspended entry the last activation left as its own; `spent` answers whether
    this activation has laid out its rest_unit_items(REST_UNIT_LAYOUT_BOXES) boxes, examined its
    rest_unit_items(REST_UNIT_LAYOUT_FLOAT_SCAN) elements, taken its rest_unit_items(REST_UNIT_LAYOUT_LINE_ITEMS)
-   line box items, derived its rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS) box metrics or tested its
-   rest_unit_items(REST_UNIT_CASCADE_RULES) style rules; `end` on a resting drive
+   line box items, derived its rest_unit_items(REST_UNIT_LAYOUT_LINE_METRICS) box metrics, tested its
+   rest_unit_items(REST_UNIT_CASCADE_RULES) style rules or emitted its rest_unit_items(REST_UNIT_CASCADE_EMITS)
+   rules; `end` on a resting drive
    leaves suspended entries in place for the next activation and asserts none is computing. */
 void layout_job_drive_begin_resting(LayoutJobDrive *d);
 bool layout_job_drive_spent(const LayoutJobDrive *d);
@@ -227,6 +228,10 @@ bool layout_job_scan_take(void);
    style rule. Asserts a resting drive is innermost; answers false when it has spent its items, and the build
    then parks its position and answers "not yet"; otherwise it takes one rule. */
 bool layout_job_rule_take(void);
+
+/* The same for one rule a resting emission of the author origin (core/css/css_author_sheets.h) is about to
+   write: false when the drive has spent its items, and the walk then parks; otherwise it takes one. */
+bool layout_job_emit_take(void);
 
 /* ---- the open chain, for the kinds that are not stacked in release ------------------------------------- */
 
