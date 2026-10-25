@@ -759,6 +759,11 @@ static const TfServed TF_SERVED[] = {
       "  fetch('/api/fpw-parsed');"
       "  new Function('x', body);"
       "};" },
+    /* HTML_WORKERERROR's dedicated worker throws in its message handler (DOM's inner invoke reports it);
+       HTML_WORKERERROR_CANCEL's throws at its top level (run a classic script step 8 reports it). */
+    { "https://x.test/chunk/weerr.js", "text/javascript",
+      "self.onmessage = function weWorkerOnMessage() { throw new Error('weTHROWN'); };" },
+    { "https://x.test/chunk/wcerr.js", "text/javascript", "throw new Error('wcTHROWN');" },
     /* HTML_LAZYLOAD's chunk, imported once its observed box is visible. */
     { "https://x.test/chunk/lllazy.js", "text/javascript",
       "export function llInit() { fetch('/api/ll-chunk'); }" },
@@ -1207,6 +1212,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbkpcycle.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
+#include "fixture/workererror.h"
 #include "fixture/uspiter.h"
 #include "fixture/fileparsetext.h"
 #include "fixture/requestunk.h"
@@ -1744,6 +1750,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkpcycle", HTML_IDBKPCYCLE },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
+    { "workererror", HTML_WORKERERROR },
+    { "workererror-cancel", HTML_WORKERERROR_CANCEL },
     { "uspiter", HTML_USPITER },
     { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "requestunk", HTML_REQUESTUNK },
@@ -16939,6 +16947,48 @@ TF_UNIT void probes_fileparse_worker(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `workererror` and `workererror-cancel` documents (fixture/workererror.h): HTML §8.1.4.6
+   report an exception steps 7.2 and 5 for a dedicated worker's uncaught throw. Read over the records the page's
+   own control flow made, because orphan driving calls each listener with no event behind it. */
+TF_UNIT void probes_workererror(const char *js, Probe *tab, int *n) {
+    const char *a_why = NULL; int a_tt = 1;
+    fold_row(&a_tt, &a_why, param_undriven_count(js, "/api/we-onerror", "ee", NULL) > 0,
+             "NOT REACHED: no undriven /api/we-onerror record, so step 7.2's task never fired `error` at the Worker");
+    fold_row(&a_tt, &a_why, param_undriven_count(js, "/api/we-onerror", "ee", "true") > 0 &&
+                            param_undriven_count(js, "/api/we-onerror", "can", "true") > 0,
+             "the event at the Worker is not a cancelable ErrorEvent (step 7.2.2)");
+    fold_row(&a_tt, &a_why, param_undriven_count(js, "/api/we-onerror", "msg", "true") > 0 &&
+                            param_undriven_count(js, "/api/we-onerror", "file", "true") > 0 &&
+                            param_undriven_count(js, "/api/we-onerror", "line", "true") > 0,
+             "the event at the Worker does not carry the worker's message, filename and line (errorInfo)");
+    fold_row(&a_tt, &a_why, param_value_only_undriven(js, "/api/we-onerror", "err", "true"),
+             "the event at the Worker carries a non-null `error`: step 7.1 nulls errorInfo[error] before 7.2");
+    const char *c_why = NULL; int c_tt = 1;
+    fold_row(&c_tt, &c_why, param_undriven_count(js, "/api/we-window", "msg", "true") > 0,
+             "NOT REACHED: no undriven /api/we-window?msg=true, so step 7.2.3 did not report the uncancelled "
+             "worker error at the owner's window");
+    fold_row(&c_tt, &c_why, param_value_only_undriven(js, "/api/we-window", "err", "true"),
+             "the owner's window `error` carries a non-null `error`: step 7.2.3 reports with omitError true");
+    fold_row(&c_tt, &c_why, tf_err_listed(js, "pageErrors", "weTHROWN"),
+             "`pageErrors` names no weTHROWN: the owner's report of the uncancelled worker error wrote no console "
+             "line (step 7.3)");
+    const char *b_why = NULL; int b_tt = 1;
+    fold_row(&b_tt, &b_why, param_value_only_undriven(js, "/api/wc-onerror", "canceled", "true"),
+             "NOT REACHED: no undriven /api/wc-onerror?canceled=true, so the Worker's `error` was not fired or "
+             "not cancelable");
+    fold_row(&b_tt, &b_why, param_undriven_count(js, "/api/wc-window", "msg", NULL) == 0,
+             "an undriven /api/wc-window record: the owner's window saw an `error` for a worker error the owner "
+             "cancelled at the Worker (step 7.2.3 runs only when notHandled)");
+    fold_row(&b_tt, &b_why, !tf_err_listed(js, "pageErrors", "wcTHROWN"),
+             "`pageErrors` names wcTHROWN: a console line was written for a worker error the owner cancelled");
+    const Probe rows[] = {
+        { "we-worker-onerror", a_tt, "/api/we-onerror", SESS_EXPLORE, a_why },
+        { "we-owner-report", c_tt, "/api/we-window", SESS_EXPLORE, c_why },
+        { "we-cancel-silent", b_tt, "/api/wc-onerror", SESS_EXPLORE, b_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `uspiter` document (fixture/uspiter.h): walks and mutations over a URLSearchParams whose
    pairs derive from the query. */
 TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
@@ -21310,6 +21360,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkpcycle(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
+    probes_workererror(js, probes, &np);
     probes_uspiter(js, probes, &np);
     probes_fileparse_text(js, probes, &np);
     probes_requestunk(js, probes, &np);
