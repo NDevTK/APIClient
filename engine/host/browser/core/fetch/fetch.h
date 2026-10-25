@@ -6,11 +6,10 @@
 #include "core/fetch/headers.h"
 #include "core/frame/policy_container.h"   /* §2.2.5's two metadata fields ride the request — see below */
 
-/* Install `fetch` on `global`. Every request forced execution reaches funnels one endpoint into the @H
-   surface; the network itself is the trusted bridge's, never this sandbox's. */
-/* §5.1/§5.5/§5.4's agent-wide declarations, including the three components' per-realm prototype entries. */
+/* §5.1/§5.5/§5.4's agent-wide declarations, including the three components' per-realm prototype entries, and
+   §5.6's `fetch` as a per-realm intrinsic of every realm. Every request forced execution reaches funnels one
+   endpoint into the @H surface; the network itself is the trusted bridge's, never this sandbox's. */
 void fetch_init(JSContext *ctx);
-void fetch_install(JSContext *ctx, JSValueConst global);
 /* §5's four interned field names — the agent's, so core/platform.h's release column gives them back. */
 void fetch_free(JSRuntime *rt);
 

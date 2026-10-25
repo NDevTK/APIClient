@@ -6849,23 +6849,11 @@ TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
            `File` are minted four lines apart there, with `File.prototype` chained to `Blob.prototype`, so a
            conversion that carried the first and dropped the second leaves every member answering and only the
            page-visible constructor name gone.
-           `fetch` IS THE DISCRIMINATING ROW AND IT GUARDS THE LARGEST LOSS IN THIS CONVERSION. Fetch §5.6
-           "Fetch methods" declares it on `partial interface mixin WindowOrWorkerGlobalScope`, so it is a
-           MEMBER — Web IDL §3.7.7 "Operations" over a [Global] object's own interface chain — and Web IDL
-           Web IDL §3.8 "Platform objects implementing interfaces" defines no property reference for it
-           anywhere. Its install is the LAST LINE of core/fetch/fetch.c's fetch_install, the same per-document
-           entry the three interface objects above have just left — so the conversion the four commits before
-           this one each describe, in which the per-document thunk and its core/platform.c install entry both
-           go, takes `fetch` out of EVERY realm, Window included. That is `ProgressEvent`'s mistake with a MEMBER in the place of an
-           interface object, and it is worse in its consequence: `fetch` is the one name this whole engine
-           exists to watch a bundle call. Under it this row reads `true` in both arms and fails twice; the six
-           rows above pass. It is also a name IDL_EXPOSURE cannot back up — a member has no row there, so
-           `idl_exposed_in_realm("fetch")` answers TRUE — and browser/idl_exposure.h's IDL_MEMBER_EXPOSURE
-           states (Window, Worker) for it, which is the OTHER thing this row says: a worker realm is owed the
-           member and does not get it, and core/workers/worker_global_scope.c's item (7) already names this
-           component's `fetch` as one of the members it owes. `false` in the worker arm is therefore that
-           known absence and `false` in the Window arm is this table's own realm, exactly as the six
-           `[Exposed=Window]` rows above say those two halves apart.
+           `fetch` is a MEMBER, not an interface: Fetch §5.6 "Fetch methods" declares it on `partial interface
+           mixin WindowOrWorkerGlobalScope`, so Web IDL §3.7.3 places it per realm, on the global or on
+           `WorkerGlobalScope.prototype`, and §3.8 defines no property reference for it. core/fetch/fetch.c's
+           per-realm intrinsic installs it, so it reads `true` in both arms; a conversion that dropped it would
+           take the one name this engine exists to watch a bundle call out of every realm.
            `Body` IS `TextDecoderCommon`'S TEST OVER THIS STANDARD, AND BOTH MOVED FETCH INTERFACES INCLUDE IT.
            Fetch §5.3 "Body mixin" is an `interface mixin`, and Web IDL §3.7.1 "Interface object" is written of
            an interface, so a mixin has no interface object and Web IDL §3.8 step 1's population ("every interface that
@@ -6887,7 +6875,7 @@ TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
            call takes `FileList` out of EVERY realm while `Blob` and `File` go on passing. It reads `true` in
            both arms before this change and after it.
            AT THE PARENT REVISION the six `[Exposed=(Window,Worker)]` rows FAIL in BOTH arms, because no
-           document column has run over either realm. `fetch`, `Body` and `FileList` read the same at the parent as
+           document column has run over either realm. `Body` and `FileList` read the same at the parent as
            here; they are discriminators against a wrong conversion, never calibration rows, and are reported
            as such. Established by READING core/platform.c's two columns and the realms this function builds,
            never by a run — a subagent does not build. */
@@ -6900,21 +6888,18 @@ TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
         { "FileReader",                       true,  true  },  /* File API §6.2 "The FileReader API" */
         /* File API §5 "The FileList Interface" — the `blob` row's third name, and the realm column's already */
         { "FileList",                         true,  true  },
-        /* Fetch §5.6 "Fetch methods"' MEMBER, which stays in the per-document column — no Web IDL §3.8
-           property reference exists for it, and this row is what catches the conversion that removed it */
-        { "fetch",                            false, false },
+        /* Fetch §5.6 "Fetch methods"' MEMBER, a WindowOrWorkerGlobalScope operation installed by a per-realm
+           intrinsic, so both arms read it; it has no Web IDL §3.8 property reference of its own */
+        { "fetch",                            true,  true  },
         /* Fetch §5.3 "Body mixin" — a MIXIN that BOTH `Request` and `Response` include, so no Web IDL §3.8
            property reference exists for it anywhere */
         { "Body",                             false, false },
-        /* HTML §2.7.10 "Structured cloning API"'s MEMBER, WHICH IS `fetch`'S ROW WITH THE MOVE MADE — and the
+        /* HTML §2.7.10 "Structured cloning API"'s MEMBER, WHICH TOOK THE SAME MOVE AS `fetch` — and the
            pair is what makes either of them legible, which is why this row sits here and not with the HTML
            groups above. Both are members HTML §8.2 "The WindowOrWorkerGlobalScope mixin" brings into
            `WorkerGlobalScope` as well as into `Window`; both had their install in core/platform.c's
            per-DOCUMENT column, which a realm whose global implements `DedicatedWorkerGlobalScope` never
-           reaches; and core/workers/worker_global_scope.c's item (7) names both. `fetch` still cannot move —
-           core/fetch/fetch.c resolves a relative input against `document_base_url`, which is HTML §2.4.3
-           "Document base URLs" over a Document a worker realm has none of — and this one can, because §2.7.10's
-           steps read nothing but the value and this realm.
+           reaches. Both now take core/realm.h's per-realm column.
            IT IS A CALIBRATION ROW IN BOTH ARMS AND THE ONLY ONE IN THIS TABLE THAT IS: at the parent revision
            it reads FALSE in BOTH, the Window arm because this fixture's Window realm runs the per-realm column
            alone and the worker arm because no column reached it at all, and it reads TRUE in both here. A

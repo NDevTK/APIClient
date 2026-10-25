@@ -958,12 +958,10 @@ void worker_global_scope_free(JSRuntime *rt)
  *     thunk AND the row's install entry) and not a one-line edit. core/structured_clone.c is the worked
  *     example and HTML §2.7.10 "Structured cloning API"'s `structuredClone` is the first member to take it.
  *     AND THE MOVE IS NOT AVAILABLE TO EVERY MEMBER EITHER, WHICH IS THE SECOND HALF THE SENTENCE HID: it is
- *     available exactly where the member's value is computable in a realm that has no Document. `fetch` is
- *     the one to read before believing any of these are cheap — core/fetch/fetch.c resolves a relative input
- *     against `document_base_url`, which is HTML §2.4.3 "Document base URLs" over a Document a worker realm
- *     has none of, so what it owes is not a column move but §10.2.6.2 "Script settings for workers"' creation
- *     URL, which is the WorkerGlobalScope's own §10.2.1.1 `url` and is the same absent operand entry (1)
- *     names. `origin` is that operand again. `isSecureContext` HAS its operand — core/realm.h answers
+ *     available exactly where the member's value is computable in a realm that has no Document. `fetch` has
+ *     taken the move: its client is the worker's environment record (core/dom/document.c answers the base URL,
+ *     referrer source and policy container for a worker realm) and its receiver resolution has a worker arm.
+ *     `origin` still owes §10.2.6.2 "Script settings for workers"' creation URL as entry (1) names it. `isSecureContext` HAS its operand — core/realm.h answers
  *     §8.1.3.5 "Secure contexts" step 1.2.1 for a worker realm — and its GETTER does not: core/frame/window.c's
  *     resolves a receiver through core/frame/window_proxy.c's navigable and asserts it is this realm's, which
  *     a worker has none of, so that member owes a getter before it owes a column. `crossOriginIsolated` owes

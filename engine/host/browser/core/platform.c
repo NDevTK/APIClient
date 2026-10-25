@@ -611,7 +611,6 @@ static void i_idle_callback(JSContext *c, JSValueConst g, const PlatformDocument
 static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; page_reveal_install(c, g); }
 static void i_media_query_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; media_query_list_install(c, g); }
 static void i_simple_dialogs(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; simple_dialogs_install(c, g); }
-static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; fetch_install(c, g); }
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
 static void i_resize_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; resize_observer_install(c, g); }
@@ -933,13 +932,9 @@ static const PlatformComponent PLATFORM[] = {
     { "request",             d_request,             NULL,        r_request },
     { "response",            d_response,            NULL,        r_response },
     { "headers",             d_headers,             NULL,        r_headers },
-    /* The document half here installs one member and no interface object. §5.6 "Fetch methods" declares `fetch` on
-       `partial interface mixin WindowOrWorkerGlobalScope`: a member, placed by Web IDL §3.7.7 "Operations" over a
-       [Global] object's own interface chain rather than a §3.8 property reference, and browser/idl_exposure.h
-       answers for it from IDL_MEMBER_EXPOSURE, not IDL_EXPOSURE. A worker realm is owed it and does not get it
-       (core/workers/worker_global_scope.c's residual (7) names it). Removing this column would remove the member
-       from every realm, which the PLATFORM_WITNESS row `{ "fetch", "fetch" }` catches. */
-    { "fetch",               d_fetch,               i_fetch,     r_fetch },
+    /* No document half: §5.6's `fetch` is a WindowOrWorkerGlobalScope member, installed by fetch_init's per-realm
+       intrinsic in every realm. The row follows `worker_global_scope`, whose object that install reads. */
+    { "fetch",               d_fetch,               NULL,        r_fetch },
     /* Observable §2.1 "The Subscriber interface" and §2.2 "The Observable interface", both `[Exposed=*]`: no
        document half. observable_install_protos mints both interface objects with §2.3.1 "from()"'s static, which
        is a member of §2.2's interface object. */

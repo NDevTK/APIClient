@@ -47,6 +47,7 @@
 #include "core/fetch/request.h"
 #include "core/dom/abort.h"    /* §5.6 step 4's already-aborted signal, and RequestInit's one interface brand */
 #include "core/idl_args.h"     /* §5.6's IDL, declared rather than hand-rolled — see fetch_init */
+#include "core/realm.h"        /* the realm-kind answer the receiver resolution and the install read */
 #include "solver/reclaim.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
@@ -1948,8 +1949,22 @@ static const char *const js_fetch_steps[] = { FETCH_STAGES(JS_STEP_STAGE_LABEL) 
    code between stages can remove the receiver's iframe. */
 static JSContext *fetch_receiver_realm(JSContext *ctx, JSValueConst this_val)
 {
-    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+    JSValueConst nav;
 
+    if (realm_global_is_worker(ctx)) {
+        /* A worker realm's one global is the only WorkerGlobalScope its code can reach (HTML §8.1.2.1: one
+           realm per worker agent), so §3.7.7's receiver is this realm or not a WorkerGlobalScope at all. Its
+           client is the worker's environment settings object (HTML §10.2.6.2), which document_base_url,
+           document_referrer_source and document_policy answer for this realm. */
+        JSValue g = JS_GetGlobalObject(ctx);
+        bool own = JS_IsUndefined(this_val) || JS_IsNull(this_val) || JS_IsStrictEqual(ctx, this_val, g);
+
+        JS_FreeValue(ctx, g);
+        if (own) return ctx;
+        JS_ThrowTypeError(ctx, "Failed to execute 'fetch' on 'WorkerGlobalScope': Illegal invocation");
+        return NULL;
+    }
+    nav = window_proxy_this_navigable(ctx, this_val);
     if (JS_IsUninitialized(nav)) return NULL;
     switch (window_proxy_document_state(window_proxy_doc(nav))) {
     case WP_DOC_ACTIVE:
@@ -2626,10 +2641,24 @@ static const IdlStepDecl js_fetch_decl = {
 };
 
 
-/* §5.1, §5.5 and §5.4's AGENT-WIDE DECLARATIONS. They were made from inside fetch_install, which runs once per
-   DOCUMENT — so the three components declared their per-realm prototypes into core/realm.h's list AFTER the
-   agent's own realm had already run it, and the first document's Headers had no prototype at all. A
-   declaration belongs at agent init beside every other one; the GLOBAL is still the host's to expose or not. */
+/* Fetch §5.6 "Fetch methods"' member, on the object Web IDL §3.7.3 puts it on, in every realm. It is declared on
+   `partial interface mixin WindowOrWorkerGlobalScope`, so HTML §8.2's two includes make it a `Window` member (the
+   global) and a `WorkerGlobalScope` member (`WorkerGlobalScope.prototype`); idl_global_member_target asks that
+   conditional of browser/idl_exposure.h. Installed through the declaration, so `length` and the argument
+   conversion are Web IDL §3.7.7 Operations' own. */
+static void fetch_install_realm(JSContext *ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx), target;
+
+    DCHECK(g_fetch_stepid >= 0, "fetch was installed into a realm before fetch_init declared it");
+    target = idl_global_member_target(ctx, global, "fetch");
+    idl_install_method(ctx, target, "fetch", g_fetch_stepid);
+    JS_FreeValue(ctx, target);
+    JS_FreeValue(ctx, global);
+}
+
+/* §5.1, §5.5 and §5.4's agent-wide declarations, made at agent init so their per-realm prototypes are in
+   core/realm.h's list before the agent's first realm runs it, and §5.6's per-realm `fetch`. */
 void fetch_init(JSContext *ctx)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -2694,6 +2723,9 @@ void fetch_init(JSContext *ctx)
     agent_state_id("fetch", &g_deliver_stepid, "the reply-delivery machine every parked fetch closes over");
     agent_state_ptr("fetch", &g_fetch_rt, "the runtime §5.4's `url` was interned in");
     agent_state_atom("fetch", &g_atom_url, "§5.4 step 6's `url` attribute name");
+    /* After `worker_global_scope` in core/platform.c's list: the install below reads §3.7.3's object that
+       component builds, and per-realm intrinsics run in declaration order. */
+    realm_declare_intrinsic(fetch_install_realm);
 }
 
 /* §5.4 STEP 6'S ONE FIELD NAME, given back. This component had NO release at all — it was one of the
@@ -2721,37 +2753,3 @@ void fetch_free(JSRuntime *rt)
     g_fetch_rt = NULL;
 }
 
-void fetch_install(JSContext *ctx, JSValueConst global)
-{
-    JSRuntime *rt = JS_GetRuntime(ctx);
-
-    DCHECK(JS_IsObject(global), "the fetch install was handed something that is not the global object");
-    DCHECK(g_fetch_rt == NULL || g_fetch_rt == rt,
-           "fetch was installed into a second runtime — its atoms and step id belong to the first, and one WASM "
-           "instance is one document");
-    DCHECK(g_fetch_stepid >= 0, "fetch was installed into a realm before fetch_init declared it — §5.1's and §5.5's "
-                                "prototypes are per-realm intrinsics, and a component that declares itself from "
-                                "inside a per-DOCUMENT install declares itself after the agent's own realm has "
-                                "already built its list");
-    /* THE THREE INTERFACE OBJECTS ARE NOT PLACED FROM HERE ANY MORE, and this entry is not therefore empty.
-       §5.1 "Headers class", §5.4 "Request class" and §5.5 "Response class" each declare
-       `[Exposed=(Window,Worker)]`, and Web IDL §3.8 "Platform objects implementing interfaces"' `define the
-       global property references` is "To define the global property references on target, given realm realm"
-       whose step 1 is "Let interfaces be a list that contains every interface that is exposed in realm" — a
-       REALM, with no Document in the algorithm. Each of the three is now minted by its own component's
-       per-realm intrinsic beside the prototype it already built there, so a realm this per-DOCUMENT entry
-       never runs over gets all three.
-       WHAT STAYS IS §5.6's MEMBER, AND IT IS A DIFFERENT QUESTION. `fetch` is not an interface object: §5.6
-       "Fetch methods" declares it on `partial interface mixin WindowOrWorkerGlobalScope`, so it is Web IDL
-       §3.7.7 "Operations" over a [Global] object's own interface chain rather than Web IDL §3.8's property
-       reference,
-       and browser/idl_exposure.h states its member row as (Window, Worker) rather than through IDL_EXPOSURE.
-       A worker realm is owed it and does not get it here — core/workers/worker_global_scope.c's item (7)
-       already records that by name, naming this component's `fetch` as one of the members it owes and naming
-       the receiver resolution underneath it as the subproblem — so moving it is that entry's diff and not this
-       one. Deleting this entry along with the three above would take `fetch` out of EVERY realm. */
-    /* Fetch §5.6 "Fetch methods"' member, through the declaration — so its `length` is Web IDL §3.7.7 Operations' own number
-       (min of the first optional position and the declared count, which is 1) rather than one written here,
-       and so the argument conversion a page can observe is the platform's and not this file's. */
-    idl_install_method(ctx, global, "fetch", g_fetch_stepid);
-}
