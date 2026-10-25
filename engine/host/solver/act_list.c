@@ -53,14 +53,17 @@ static void dl_append(char **dl, const char *src, const char *val)
     *dl = grown;
 }
 
-/* The origin message_compose_origin composes for `osrc`, as a JSON String, malloc'd. */
-static char *origin_json(const char *osrc)
+/* Candidate `v` of the origins message_compose_origins composes for `osrc` (the last where there are fewer), as
+   a JSON String, malloc'd; `*n` takes how many there are. */
+static char *origin_json(const char *osrc, int v, int *n)
 {
-    char *origin = message_compose_origin(osrc), *out;
+    char **origins, *out;
     JsonBuf b = { 0 };
 
-    json_buf_str(&b, origin);
-    free(origin);
+    *n = message_compose_origins(osrc, &origins);
+    json_buf_str(&b, origins[v < *n ? v : *n - 1]);
+    for (int i = 0; i < *n; i++) free(origins[i]);
+    free(origins);
     out = json_buf_take(&b);
     CHECK(out, "act list: OOM spelling a composed origin");
     return out;
@@ -94,8 +97,12 @@ static char *message_act(const Flow *f, int k, char **refused, int *unsolved, ch
         CHECK(act, "act list: OOM copying a message act");
         return act;
     }
-    origin = odel ? strdup(odel) : origin_json(osrc);
-    CHECK(origin, "act list: OOM copying a delivered origin");
+    {
+        int no;
+
+        origin = odel ? strdup(odel) : origin_json(osrc, 0, &no);
+        CHECK(origin, "act list: OOM copying a delivered origin");
+    }
     act = act_with_message(f->orphan_acts[k], data, origin);
     if (!ddel) dl_append(dl, root, data);
     if (!odel) dl_append(dl, osrc, origin);
@@ -157,11 +164,17 @@ char *act_list_message_deliveries(const Flow *f, const char *inject, const char 
         if (strcmp(inj, root) && !concolic_member_of_root(inj, root)) inj = "";
         data = message_compose(root, inj, payload, &why);
         if (!data) { free(why); free(out); return NULL; }
-        origin = origin_json(osrc);
         dl_append(&out, root, data);
-        dl_append(&out, osrc, origin);
         free(data);
-        free(origin);
+        /* Each origin candidate under `<origin source>#<v>`: a candidate run takes variant v of every message. */
+        for (int v = 0, no = 1; v < no; v++) {
+            char key[112];
+
+            origin = origin_json(osrc, v, &no);
+            snprintf(key, sizeof key, "%s#%d", osrc, v);
+            dl_append(&out, key, origin);
+            free(origin);
+        }
     }
     return out;
 }

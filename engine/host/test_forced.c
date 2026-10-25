@@ -20791,8 +20791,8 @@ static int s_fired_with(const char *js, const char *sink, const char *const *nee
     return 0;
 }
 
-/* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring check admits is composed
-   and fires; an exact match on another site's origin never does. */
+/* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring or a bare suffix check
+   admits is composed and fires; a dotted suffix or an exact match on another site's origin never does. */
 TF_UNIT void probes_msgorigin(const char *js, Probe *tab, int *n) {
     static const char *const SUB[] = { "\"handler\":\"moSub\"", "trusted.example", "\"kind\":\"show\"" };
     static const char *const EXACT[] = { "\"handler\":\"moExact\"" };
@@ -20808,8 +20808,24 @@ TF_UNIT void probes_msgorigin(const char *js, Probe *tab, int *n) {
     fold_row(&me_tt, &me_why, !s_fired_with(js, "innerHTML", EXACT, 1),
              "a fired innerHTML record states a moExact message: its exact check admits only another site's "
              "origin, which no sender the attacker owns presents");
+    static const char *const SUFFIX[] = { "\"handler\":\"moSuffix\"", "trusted.example", "\"kind\":\"show\"" };
+    static const char *const DOTSUFFIX[] = { "\"handler\":\"moDotSuffix\"" };
+    const char *mf_why = NULL; int mf_tt = 1;
+    fold_row(&mf_tt, &mf_why, !!strstr(js, "\"/api/mo-suffix-entered\""),
+             "NOT REACHED: there is no /api/mo-suffix-entered record, so moSuffix was never driven");
+    fold_row(&mf_tt, &mf_why, s_fired_with(js, "innerHTML", SUFFIX, 3),
+             "no fired innerHTML record states a moSuffix message posted from an origin ending in `trusted.example` "
+             "— a registrable domain of the attacker's own ending in the string was not composed and fired");
+    const char *md_why = NULL; int md_tt = 1;
+    fold_row(&md_tt, &md_why, !!strstr(js, "\"/api/mo-dotsuffix-entered\""),
+             "NOT REACHED: there is no /api/mo-dotsuffix-entered record, so moDotSuffix was never driven");
+    fold_row(&md_tt, &md_why, !s_fired_with(js, "innerHTML", DOTSUFFIX, 1),
+             "a fired innerHTML record states a moDotSuffix message: its check admits only subdomains of another "
+             "site, which no sender the attacker owns presents");
     const Probe rows[] = {
         { "mo-sub-poc", ms_tt, "function moSub", SESS_EXPLORE, ms_why },
+        { "mo-suffix-poc", mf_tt, "function moSuffix", SESS_EXPLORE, mf_why },
+        { "mo-dotsuffix-nopoc", md_tt, "function moDotSuffix", SESS_EXPLORE, md_why },
         { "mo-exact-nopoc", me_tt, "function moExact", SESS_EXPLORE, me_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));

@@ -335,9 +335,11 @@ char *message_compose(const char *root, const char *inject, const char *payload,
     return json_buf_take(&b);
 }
 
-/* One host fragment from a constant the page compared the origin with: the host of an absolute URL, or the
-   constant itself, kept to the characters a host label may hold (lowercased) and trimmed of separators. */
-typedef struct { JsonBuf host; } OriginFrags;
+/* The constants the page compared an origin with, each reduced to a host fragment: the host of an absolute URL,
+   or the constant itself, kept to the characters a host label may hold (lowercased) and trimmed of separators.
+   `dotted` says the constant began with a label separator, so a host ending in it is a subdomain of the site it
+   names. */
+typedef struct { char **frag; int *dotted; int n; } OriginFrags;
 
 static void origin_frag(void *ud, const char *tok)
 {
@@ -345,8 +347,10 @@ static void origin_frag(void *ud, const char *tok)
     const char *p = strstr(tok, "://"), *end;
     char frag[256];
     size_t n = 0;
+    int dotted;
 
     p = p ? p + 3 : tok;
+    dotted = *p == '.';
     end = p + strcspn(p, "/:?#");
     for (; p < end && n < sizeof frag - 1; p++) {
         char ch = (char)(*p >= 'A' && *p <= 'Z' ? *p - 'A' + 'a' : *p);
@@ -358,8 +362,12 @@ static void origin_frag(void *ud, const char *tok)
     p = frag;
     while (*p == '.' || *p == '-') p++;
     if (!*p) return;
-    json_buf_raw(&o->host, p);
-    json_buf_raw(&o->host, ".");
+    o->frag = realloc(o->frag, (size_t)(o->n + 1) * sizeof *o->frag);
+    o->dotted = realloc(o->dotted, (size_t)(o->n + 1) * sizeof *o->dotted);
+    CHECK(o->frag && o->dotted, "message compose: OOM collecting an origin's constants");
+    o->frag[o->n] = strdup(p);
+    CHECK(o->frag[o->n], "message compose: OOM collecting an origin's constants");
+    o->dotted[o->n++] = dotted;
 }
 
 /* The pins the running flow made on the origin, as constants like the call operands. */
@@ -373,23 +381,53 @@ static void origin_pins(void *user, const char *src, const ConcolicPrincipalPin 
     for (int i = 0; i < n; i++) origin_frag(op->o, pin[i].tok);
 }
 
-char *message_compose_origin(const char *origin_src)
+static char *origin_of_host(const char *host)
 {
-    OriginFrags o = { { 0 } };
-    OriginPins op = { origin_src, &o };
-    char *host, *out;
-    size_t n;
+    size_t n = strlen(host) + sizeof "https://";
+    char *out = malloc(n);
 
-    DCHECK(origin_src && *origin_src, "an origin was composed for no source");
-    concolic_principal_tokens_each(origin_src, origin_frag, &o);
-    concolic_principal_pins(origin_pins, &op);
-    json_buf_raw(&o.host, SOLVE_URL_ATTACKER_HOST);
-    host = json_buf_take(&o.host);
-    CHECK(host, "message compose: OOM spelling an origin");
-    n = strlen(host) + sizeof "https://";
-    out = malloc(n);
     CHECK(out, "message compose: OOM spelling an origin");
     snprintf(out, n, "https://%s", host);
-    free(host);
     return out;
+}
+
+int message_compose_origins(const char *origin_src, char ***out)
+{
+    OriginFrags o = { NULL, NULL, 0 };
+    OriginPins op = { origin_src, &o };
+    JsonBuf sub = { 0 };
+    char **c;
+    char *host;
+    int n = 0;
+
+    DCHECK(origin_src && *origin_src && out, "origins were composed for no source");
+    concolic_principal_tokens_each(origin_src, origin_frag, &o);
+    concolic_principal_pins(origin_pins, &op);
+    c = malloc((size_t)(o.n + 1) * sizeof *c);
+    CHECK(c, "message compose: OOM listing an origin's candidates");
+    for (int i = 0; i < o.n; i++) { json_buf_raw(&sub, o.frag[i]); json_buf_raw(&sub, "."); }
+    json_buf_raw(&sub, SOLVE_URL_ATTACKER_HOST);
+    host = json_buf_take(&sub);
+    CHECK(host, "message compose: OOM spelling an origin");
+    c[n++] = origin_of_host(host);
+    free(host);
+    for (int i = 0; i < o.n; i++) {
+        /* A registrable domain of the attacker's own that ends in the constant: a fresh label prefixed to it, a
+           different name and so a different site. A constant that begins with a separator names subdomains of
+           its site, and one with no separator is no domain to end in. */
+        if (!o.dotted[i] && strchr(o.frag[i], '.')) {
+            size_t len = strlen(o.frag[i]) + 2;
+            char *own = malloc(len);
+
+            CHECK(own, "message compose: OOM spelling an origin");
+            snprintf(own, len, "x%s", o.frag[i]);
+            c[n++] = origin_of_host(own);
+            free(own);
+        }
+        free(o.frag[i]);
+    }
+    free(o.frag);
+    free(o.dotted);
+    *out = c;
+    return n;
 }

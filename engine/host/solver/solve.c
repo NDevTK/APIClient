@@ -1925,10 +1925,82 @@ int solve_seeds_owed(void) {
     return 0;
 }
 
+/* One `<n>:<bytes>` field of a deliveries text at `*p`, as a borrowed span; advances past it. The text is this
+   file's own template, so a field that does not parse is a broken writer. */
+static void dl_field(const char **p, const char **at, size_t *n) {
+    char *end;
+    unsigned long len = strtoul(*p, &end, 10);
+
+    CHECK(end != *p && *end == ':' && strlen(end + 1) >= len, "solve: a message template field is malformed");
+    *at = end + 1;
+    *n = len;
+    *p = end + 1 + len;
+}
+
+/* Variant `v` of a search's message template (Cand.dl_tmpl), in flow_deliveries_text's format, malloc'd: each
+   data delivery as written, and of each origin's candidates (`<source>#<k>`) the one numbered `v`, or its last
+   where it has fewer, under the bare source. `*nvar` takes how many variants the template holds. */
+static char *dl_variant(const char *tmpl, int v, int *nvar) {
+    JsonBuf b = { 0 };
+    const char *p, *s, *x;
+    size_t sn, xn;
+    char *out;
+
+    *nvar = 1;
+    for (p = tmpl; *p;) {
+        const char *hash;
+
+        dl_field(&p, &s, &sn);
+        dl_field(&p, &x, &xn);
+        hash = memchr(s, '#', sn);
+        if (hash && atoi(hash + 1) + 1 > *nvar) *nvar = atoi(hash + 1) + 1;
+    }
+    for (p = tmpl; *p;) {
+        const char *hash;
+        char head[48];
+        size_t base;
+        int k, last = 0;
+
+        dl_field(&p, &s, &sn);
+        dl_field(&p, &x, &xn);
+        hash = memchr(s, '#', sn);
+        base = hash ? (size_t)(hash - s) : sn;
+        if (hash) {
+            const char *q, *qs, *qx;
+            size_t qsn, qxn;
+
+            k = atoi(hash + 1);
+            for (q = tmpl; *q;) {
+                dl_field(&q, &qs, &qsn);
+                dl_field(&q, &qx, &qxn);
+                if (qsn > base && !memcmp(qs, s, base) && qs[base] == '#' && atoi(qs + base + 1) > last)
+                    last = atoi(qs + base + 1);
+            }
+            if (k != (v < last ? v : last)) continue;
+        }
+        {
+            char *src = strndup(s, base), *val = strndup(x, xn);
+
+            CHECK(src && val, "solve: OOM choosing a message template's variant");
+            snprintf(head, sizeof head, "%zu:", base);
+            json_buf_raw(&b, head);
+            json_buf_raw(&b, src);
+            snprintf(head, sizeof head, "%zu:", xn);
+            json_buf_raw(&b, head);
+            json_buf_raw(&b, val);
+            free(src);
+            free(val);
+        }
+    }
+    out = json_buf_take(&b);
+    CHECK(out, "solve: OOM choosing a message template's variant");
+    return out;
+}
+
 /* A candidate flow of search `e` carrying `payload`, standing on the path its detection froze, under the
-   deliveries `dl` (flow_deliveries_text's format) or, for NULL, the search's composed messages with the payload
-   in its slot. */
-static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const char *dl) {
+   deliveries `dl` (flow_deliveries_text's format) or, for NULL, variant `v` of the search's composed messages
+   with the payload in its slot. */
+static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const char *dl, int v) {
     Flow *f;
 
     /* A candidate session runs from the baseline, and is this tool's act from its first park, so it is
@@ -1970,9 +2042,12 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
     if (dl) flow_deliveries_parse(f, dl);
     else if (e->dl_tmpl) {
         JsonBuf slot = { 0 }, pay = { 0 };
-        char *qs, *qp;
+        char *qs, *qp, *chosen;
+        int nvar;
 
-        flow_deliveries_parse(f, e->dl_tmpl);
+        chosen = dl_variant(e->dl_tmpl, v, &nvar);
+        flow_deliveries_parse(f, chosen);
+        free(chosen);
         json_buf_str(&slot, MSG_PAYLOAD_SLOT);
         json_buf_str(&pay, payload);
         qs = json_buf_take(&slot);
@@ -2019,7 +2094,16 @@ int solve_seed_candidates(JSContext *ctx) {
                context probe is ASCII alphanumeric, so both are measurements rather than attacks. */
             if (e->pl[e->seeded].kind == CAND_ESCAPE &&
                 !solve_delivered_ok(&e->deliv, e->pl[e->seeded].bytes)) continue;
-            f = seed_on_path(ctx, e, e->pl[e->seeded].bytes, NULL);
+            {
+                int nvar = 1;
+
+                if (e->dl_tmpl) free(dl_variant(e->dl_tmpl, 0, &nvar));
+                /* One run per origin variant: the fire decides which origin a check admits. */
+                for (int v = 0; v < nvar; v++) {
+                    f = seed_on_path(ctx, e, e->pl[e->seeded].bytes, NULL, v);
+                    if (v + 1 < nvar) { added++; g_cands_seeded++; e->tried++; }
+                }
+            }
             /* The other side of the withdrawal, asserted where the cost is taken: this is where a payload becomes
                a document re-run, so a route into flow creation that skips the check above crashes here instead
                of quietly spending the run. */
@@ -2035,7 +2119,7 @@ int solve_seed_candidates(JSContext *ctx) {
         /* A fire's verification: the same path and payload with the fire's message compositions delivered, so
            its own fire, if it comes, is under messages a sender reproduces. */
         for (; e->vf_seeded < e->nvf; e->vf_seeded++) {
-            seed_on_path(ctx, e, e->vf[e->vf_seeded].payload, e->vf[e->vf_seeded].dl);
+            seed_on_path(ctx, e, e->vf[e->vf_seeded].payload, e->vf[e->vf_seeded].dl, 0);
             added++;
             g_cands_seeded++;
             e->tried++;

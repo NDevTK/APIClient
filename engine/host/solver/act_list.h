@@ -14,8 +14,9 @@ struct Flow;
 char *act_list_json(const struct Flow *f, int *no_act, int *unsolved, char **refused, char **dl);
 /* The origin and data of every message act `f`'s chain performed, each composed from its domain
    (message_compose_origin, message_compose), with `payload` at `inject` in the message whose data `inject` is or
-   is a member of: the deliveries (in flow_deliveries_text's format, malloc'd) a candidate runs under. NULL
-   where the chain has no message act or a composition refuses. */
+   is a member of: the deliveries (in flow_deliveries_text's format, malloc'd) a candidate runs under, each origin
+   once per candidate as `<origin source>#<v>` for the variant runs to choose among. NULL where the chain has no
+   message act or a composition refuses. */
 char *act_list_message_deliveries(const struct Flow *f, const char *inject, const char *payload);
 
 #endif
