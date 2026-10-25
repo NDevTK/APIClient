@@ -110,12 +110,13 @@ typedef struct IdbKeyWalk {
     int          after;   /* the CALLER's stage this algorithm hands control back at */
     /* §7.1 over a key path holding unknown input, resolved before this walk begins (idb_key_path.c's
        idb_key_path_resolve_run), riding this record because every caller already embeds and visits it: the
-       value's candidate paths as [path, member] pairs in breadth-first order, the equality held across its
-       fork, and for a list key path the entries resolved so far (all owned). `kp_cand` is the candidate asked
-       next and `kp_item` the list entry; `kp_phase` 0 is "no resolution in flight", as a zeroed state reads. */
+       current level's members as [path, member] pairs, the predicate held across its fork, and for a list key
+       path the entries resolved so far (all owned). `kp_cand` is the member asked about, `kp_sub` which of its
+       two questions, `kp_item` the list entry; `kp_phase` 0 is "no resolution in flight", as a zeroed state
+       reads, 1 the empty-path question and 2 the levels. */
     JSValue      kp_queue, kp_pred, kp_list;
     uint32_t     kp_cand, kp_item;
-    uint8_t      kp_phase;
+    uint8_t      kp_phase, kp_sub;
 } IdbKeyWalk;
 
 /* BEGIN §7.4 over `input` — the WHOLE algorithm and not only its array arm, so a member has one path and never

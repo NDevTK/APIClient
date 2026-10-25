@@ -505,17 +505,19 @@ IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValu
     return idb_key_path_answer(k, key, pkey);
 }
 
-/* The children of one candidate [path, member]: a String member's `length` (§7.1's first arm) and an Object
-   member's own string-keyed properties whose names are identifiers (its "Otherwise" arm reads own properties
-   only, and §2.5 admits no other name). `member` is a StructuredDeserialize output, so the reads run no page
-   code. Appended to `queue` in property order. */
-static void idb_kp_children(JSContext *ctx, JSValue queue, JSValueConst path, JSValueConst member)
+/* The members one level of §7.1's walk can name, as [path, member] pairs: a String member's `length` (§7.1's
+   first arm) and an Object member's own string-keyed properties whose names are identifiers (its "Otherwise"
+   arm reads own properties only, and §2.5 admits no other name). `path` is the level's own path ("" at the
+   value), and `member` is a StructuredDeserialize output, so the reads run no page code. A new Array (owned),
+   in property order. */
+static JSValue idb_kp_children(JSContext *ctx, JSValueConst path, JSValueConst member)
 {
+    JSValue out = JS_NewArray(ctx);
     const char *p = JS_ToCString(ctx, path);
     JSPropertyEnum *keys = NULL;
-    uint32_t count = 0, i;
+    uint32_t count = 0, i, n = 0;
 
-    CHECK(p != NULL, "IndexedDB: OOM reading a candidate key path");
+    CHECK(!JS_IsException(out) && p != NULL, "IndexedDB: OOM listing a key path level's members");
     if (JS_IsString(member)) {
         JSValue pair = JS_NewArray(ctx), len;
         char *joined = malloc(strlen(p) + sizeof ".length");
@@ -526,7 +528,7 @@ static void idb_kp_children(JSContext *ctx, JSValue queue, JSValueConst path, JS
         sprintf(joined, "%s%slength", p, *p ? "." : "");
         JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, joined));
         JS_SetPropertyUint32(ctx, pair, 1, len);
-        JS_SetPropertyUint32(ctx, queue, idb_key_path_list_len(ctx, queue), pair);
+        JS_SetPropertyUint32(ctx, out, n++, pair);
         free(joined);
     } else if (JS_IsObject(member)) {
         CHECK(JS_GetOwnPropertyNames(ctx, &keys, &count, member, JS_GPN_STRING_MASK) == 0,
@@ -543,7 +545,7 @@ static void idb_kp_children(JSContext *ctx, JSValue queue, JSValueConst path, JS
                 sprintf(joined, "%s%s%s", p, *p ? "." : "", k);
                 JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, joined));
                 JS_SetPropertyUint32(ctx, pair, 1, JS_GetProperty(ctx, member, keys[i].atom));
-                JS_SetPropertyUint32(ctx, queue, idb_key_path_list_len(ctx, queue), pair);
+                JS_SetPropertyUint32(ctx, out, n++, pair);
                 free(joined);
             }
             JS_FreeCString(ctx, k);
@@ -552,52 +554,65 @@ static void idb_kp_children(JSContext *ctx, JSValue queue, JSValueConst path, JS
         js_free(ctx, keys);
     }
     JS_FreeCString(ctx, p);
+    return out;
 }
 
-/* ONE UNKNOWN KEY PATH STRING `unknown`, against `value`: the key path names one of value's members, so the
-   worlds are an equality with each candidate path, in breadth-first order from "" (the value itself), and the
-   world past every candidate, where it names no member and §7.1 answers failure. A candidate's children join
-   the queue once the path is known not to be it. *pc receives the resolved path (owned) or JS_NULL for that
-   failure world. Returns 0, or a step code the caller returns.
-   Named residual. Not covered: a value whose members reach a cycle has no last candidate, so its failure world
-   is never reached. Next diff: ask the failure world beside each candidate. How its absence shows: no failure
-   arm over a cyclic value whose key path is unknown. */
+/* ONE UNKNOWN KEY PATH STRING `unknown`, against `value`, one level of §7.1's split at a time: the path is "" or
+   begins with one of the level's members, so the worlds at each level are, per member path c, "the path is c"
+   (it names that member) and "the path begins with c and a full stop" (it names something below it), and the
+   world past the level's last member, where it names no member and §7.1 answers failure. Both questions are
+   the predicates a page's own `===` and `startsWith` mint over the path, so the two are one constraint entry.
+   *pc receives the resolved path (owned) or JS_NULL for the failure world. Returns 0, or a step code the
+   caller returns. */
 static int idb_kp_resolve_one(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst value,
                               JSValueConst unknown, JSValue *pc)
 {
+    static const char *const OP = "Indexed Database §7.1 evaluate a key path on a value (the key path names "
+                                  "this member of value, or a member below it)";
     int r, arm;
 
     if (w->kp_phase == 0) {
-        JSValue pair = JS_NewArray(ctx);
+        JSValue root = JS_NewString(ctx, "");
 
-        JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, ""));
-        JS_SetPropertyUint32(ctx, pair, 1, JS_DupValue(ctx, value));
-        w->kp_queue = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, w->kp_queue, 0, pair);
+        w->kp_queue = idb_kp_children(ctx, root, value);
         w->kp_pred = JS_UNINITIALIZED;
         w->kp_cand = 0;
-        w->kp_phase = 1;
+        w->kp_sub = 0;
+        w->kp_phase = 1;                                   /* "the key path is the empty string" is asked first */
+        JS_FreeValue(ctx, root);
     }
     for (;;) {
-        JSValue pair, path, member;
+        JSValue pair = JS_UNDEFINED, path, member;
 
-        if (w->kp_cand >= idb_key_path_list_len(ctx, w->kp_queue)) {
-            *pc = JS_NULL;
-            break;
+        if (w->kp_phase == 1) {
+            path = JS_NewString(ctx, "");
+        } else {
+            if (w->kp_cand >= idb_key_path_list_len(ctx, w->kp_queue)) {
+                *pc = JS_NULL;                             /* past the level's last member: no member is named */
+                break;
+            }
+            pair = JS_GetPropertyUint32(ctx, w->kp_queue, w->kp_cand);
+            path = JS_GetPropertyUint32(ctx, pair, 0);
         }
-        pair = JS_GetPropertyUint32(ctx, w->kp_queue, w->kp_cand);
-        path = JS_GetPropertyUint32(ctx, pair, 0);
         if (JS_IsUninitialized(w->kp_pred)) {
-            JSValue sp[2];
+            if (w->kp_sub == 0) {
+                w->kp_pred = concolic_strict_equal(ctx, unknown, path);
+            } else {
+                const char *ps = JS_ToCString(ctx, path);
+                char *buf = ps ? malloc(strlen(ps) + 2) : NULL;
+                JSValue dotted;
 
-            sp[0] = JS_DupValue(ctx, unknown);
-            sp[1] = JS_DupValue(ctx, path);
-            CHECK(concolic_cmp_hook(ctx, sp + 2, 0, JS_CONCOLIC_EQ_STRICT),
-                  "IndexedDB: §7.1's equality declined a key path already established as unknown");
-            w->kp_pred = sp[0];
+                CHECK(buf != NULL, "IndexedDB: OOM composing a key path prefix");
+                sprintf(buf, "%s.", ps);
+                JS_FreeCString(ctx, ps);
+                dotted = JS_NewString(ctx, buf);
+                free(buf);
+                CHECK(!JS_IsException(dotted), "IndexedDB: OOM composing a key path prefix");
+                w->kp_pred = concolic_starts_with(ctx, unknown, dotted);
+                JS_FreeValue(ctx, dotted);
+            }
         }
-        r = step_tobool_run(ctx, hdr, w->kp_pred, "Indexed Database §7.1 evaluate a key path on a value (the "
-                            "key path names this member of value)", &arm);
+        r = step_tobool_run(ctx, hdr, w->kp_pred, OP, &arm);
         if (r) {
             JS_FreeValue(ctx, path);
             JS_FreeValue(ctx, pair);
@@ -605,22 +620,34 @@ static int idb_kp_resolve_one(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSV
         }
         JS_FreeValue(ctx, w->kp_pred);
         w->kp_pred = JS_UNINITIALIZED;
-        if (arm) {
+        if (w->kp_sub == 0 && arm) {                       /* the key path is this member's path */
             *pc = path;
             JS_FreeValue(ctx, pair);
             break;
         }
-        member = JS_GetPropertyUint32(ctx, pair, 1);
-        idb_kp_children(ctx, w->kp_queue, path, member);
-        JS_FreeValue(ctx, member);
+        if (w->kp_phase == 1) {                            /* not "": walk the value's own members */
+            w->kp_phase = 2;
+        } else if (w->kp_sub == 0) {
+            w->kp_sub = 1;                                 /* not this member: below it, or a later one */
+        } else if (arm) {                                  /* below this member: its members are the next level */
+            member = JS_GetPropertyUint32(ctx, pair, 1);
+            JS_FreeValue(ctx, w->kp_queue);
+            w->kp_queue = idb_kp_children(ctx, path, member);
+            JS_FreeValue(ctx, member);
+            w->kp_cand = 0;
+            w->kp_sub = 0;
+        } else {
+            w->kp_cand++;
+            w->kp_sub = 0;
+        }
         JS_FreeValue(ctx, path);
         JS_FreeValue(ctx, pair);
-        w->kp_cand++;
     }
     JS_FreeValue(ctx, w->kp_queue);
     w->kp_queue = JS_UNDEFINED;
     w->kp_pred = JS_UNDEFINED;
     w->kp_cand = 0;
+    w->kp_sub = 0;
     w->kp_phase = 0;
     return 0;
 }

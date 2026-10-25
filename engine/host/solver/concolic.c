@@ -4759,6 +4759,42 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     sp[-2] = res;
     return 1;
 }
+static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValueConst this_val,
+                                  int argc, JSValueConst *argv, JSValue example);
+
+JSValue concolic_starts_with(JSContext *ctx, JSValueConst s, JSValueConst prefix)
+{
+    JSValue ex = JS_UNDEFINED, member, r;
+    JSAtom atom;
+
+    DCHECK(concolic_is(s) && JS_IsString(prefix), "a startsWith was minted over an operand that is not unknown, or "
+                                                  "with a prefix that is not a String");
+    if (concolic_example_present(s)) {
+        JSValue e = concolic_example(ctx, s);
+
+        if (JS_IsString(e)) {
+            size_t el = 0, pl = 0;
+            const char *es = JS_ToCStringLen(ctx, &el, e), *ps = JS_ToCStringLen(ctx, &pl, prefix);
+
+            CHECK(es && ps, "concolic: OOM reading a startsWith's operands");
+            ex = JS_NewBool(ctx, pl <= el && !memcmp(es, ps, pl));
+            JS_FreeCString(ctx, es); JS_FreeCString(ctx, ps);
+        }
+        JS_FreeValue(ctx, e);
+        if (concolic_example_state(s) == CONCOLIC_EX_DETERMINED && JS_IsBool(ex))
+            return ex;                                       /* the flow proved the bytes: the answer is theirs */
+    }
+    atom = JS_NewAtom(ctx, "startsWith");
+    CHECK(atom != JS_ATOM_NULL, "concolic: OOM interning `startsWith`");
+    member = concolic_exotic_get(ctx, s, atom, s);
+    JS_FreeAtom(ctx, atom);
+    DCHECK(concolic_is(member), "the member read under a minted startsWith answered a concrete value, so the "
+                                "string it was read off is not the unknown its own example state says it is");
+    r = concolic_call_hook(ctx, member, s, 1, &prefix, ex);
+    JS_FreeValue(ctx, member);
+    return r;
+}
+
 JSValue concolic_strict_equal(JSContext *ctx, JSValueConst a, JSValueConst b) {
     JSValue sp[2];
     JSValue r;

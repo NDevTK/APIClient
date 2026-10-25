@@ -895,6 +895,12 @@ int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcoli
    the predicate the page's `a === b` mints (concolic_cmp_hook), so the two are one constraint entry. A Boolean
    when neither operand is unknown. Operands borrowed; owned result. */
 JSValue     concolic_strict_equal(JSContext *ctx, JSValueConst a, JSValueConst b);
+/* ECMAScript §22.1.3.24 String.prototype.startsWith over the unknown string `s`, for a component whose own
+   algorithm decides the same question over the string's code units (Indexed Database §7.1's split): the value
+   the page's `s.startsWith(prefix)` mints (concolic.c's member read and call), so the two are one constraint
+   entry, with no page code run. Its example is the operation on `s`'s example. Operands borrowed; owned
+   result, a Boolean where `s`'s example is determined. */
+JSValue     concolic_starts_with(JSContext *ctx, JSValueConst s, JSValueConst prefix);
 /* JSConcolicHooks.rel for < <= > >= — the ordering twin of cmp, and it composes its operator and BOTH operands
    into the result's identity exactly as the equality hook does. It composed neither, which made every ordering
    over one source ONE predicate: `parseInt(gCS(a).width) < 700` decided `parseInt(gCS(b).width) < 300`. */
