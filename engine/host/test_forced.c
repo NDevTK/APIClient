@@ -1182,6 +1182,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/mrconsole.h"
 #include "fixture/idbname.h"
 #include "fixture/lockgrant.h"
+#include "fixture/protoset.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1693,6 +1694,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "mrconsole", HTML_MRCONSOLE },
     { "idbname", HTML_IDBNAME },
     { "lockgrant", HTML_LOCKGRANT },
+    { "protoset", HTML_PROTOSET },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16348,6 +16350,22 @@ TF_UNIT void probes_lockgrant(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `protoset` document (fixture/protoset.h): after Object.setPrototypeOf over an unknown record,
+   its prototype is the one written. */
+TF_UNIT void probes_protoset(const char *js, Probe *tab, int *n) {
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, !!strstr(js, "\"/api/pro-set\""),
+             "NOT REACHED: there is no /api/pro-set record, so setPrototypeOf over the unknown record aborted");
+    fold_row(&p_tt, &p_why, param_value_only_undriven(js, "/api/pro-set", "same", "true"),
+             "getPrototypeOf over the record did not answer the prototype the page set on every record");
+    fold_row(&p_tt, &p_why, param_value_only_undriven(js, "/api/pro-set", "inst", "true"),
+             "the record was not an instance of the class whose prototype the page set on it");
+    const Probe rows[] = {
+        { "pro-set", p_tt, "/api/pro-set", SESS_EXPLORE, p_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20625,6 +20643,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_mathrandom(js, probes, &np);
     probes_idbname(js, probes, &np);
     probes_lockgrant(js, probes, &np);
+    probes_protoset(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
