@@ -62,9 +62,9 @@
  *     §9.5.2's `clear` on a box of this stack introduces
  *     CLEARANCE, which §8.3.1 makes non-adjoining and which is measured from the float's bottom outer edge; and
  *     §10.6.7's own rule reaches a floating descendant's bottom margin edge for a container that ESTABLISHES a
- *     formatting context and whose height is `auto`. Those two are refused at their own conditions in
- *     block_flow.c, and the THIRD consequence — §9.4.2's line boxes shortened beside the float — is refused in
- *     core/layout/line_box.c over the CONTEXT rather than here over a child list.
+ *     formatting context and whose height is `auto`. The first is refused in block_flow.c, the second reads
+ *     core/layout/float_placement.h, and the THIRD — §9.4.2's line boxes shortened beside the float — is
+ *     refused in core/layout/line_box.c over the CONTEXT rather than here over a child list.
  *   - A FLEX or GRID container's height is its own spec's, not §10.6.3's walk, and a container whose children
  *     this walk placed would be a wrong number rather than an absent one.
  *   - A TABLE is CLASSIFIED and not measured, and the two halves are deliberately in different places. CSS 2.1
@@ -254,6 +254,14 @@ lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el);
 /* The same search without a drive of its own: false ("not yet") when a resting drive spent its elements
    (core/layout/layout_job.h's layout_job_scan_take), with its place held for the next ask. */
 bool block_flow_context_first_float_ask(lxb_dom_element_t *el, lxb_dom_element_t **out);
+
+/* Every float of that context, in document order: a newly allocated array at `*v` (the caller frees; NULL with
+   `*n` 0 for none). False ("not yet") as above. */
+bool block_flow_context_floats_ask(lxb_dom_element_t *el, lxb_dom_element_t ***v, size_t *n);
+
+/* The box whose block formatting context `el`'s contents are in: `el` itself where it establishes one (CSS 2.2
+   §9.4.1's list), else its nearest ancestor that does, else the root element. */
+lxb_dom_element_t *block_flow_context_root(lxb_dom_element_t *el);
 
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes"' BOX LIST, IN CONTENT ORDER --------------------------------
    A block container's box list is not a partition of its child nodes and the section says so outright: an
@@ -514,6 +522,8 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
    §9.7's computed `float: none` for those. The root is floated like any element: §9.5.1 permits treating
    `float` as `none` on it, and Chrome floats it. Every layout reader of the question asks here. */
 bool block_flow_is_floated(lxb_dom_element_t *el);
+/* Whether floated `f` floats to the right: §9.5.1's `Value:` line is `left | right | none`. */
+bool block_flow_float_is_right(lxb_dom_element_t *f);
 
 /* The distance from `table`'s table wrapper box's top content edge to its table box's top border edge: CSS 2.1
    §17.4's wrapper stack, past the captions §17.4.1's `caption-side: top` puts above the table box. Zero with
@@ -622,5 +632,11 @@ CssPx block_flow_static_child_top(lxb_dom_element_t *el);
    with `*out` unwritten and the question suspended on the current job. `block_flow_static_child_top` is this
    ask inside a drive. */
 bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out);
+
+/* CSS 2.2 §9.5.1's lower bound on float `f`'s outer top from the flow around it: where §9.4.1's stack stands at
+   the float's place in its containing block's content, as a distance from that block's top content edge, with
+   the margins already met resolved and the float's own margin not among them. A float with inline content
+   ahead of it in its run sits on a line box and is refused by name. False ("not yet") as above. */
+bool block_flow_float_top_ask(lxb_dom_element_t *f, CssPx *out);
 
 #endif

@@ -19,6 +19,7 @@
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/float_placement.h"
 #include "core/layout/grid_baseline.h"
 #include "core/layout/grid_track.h"
 #include "core/layout/flow_placement.h"
@@ -164,6 +165,19 @@ bool block_flow_is_floated(lxb_dom_element_t *el)
     return !bf_computed_is(el, "float", "none");
 }
 
+bool block_flow_float_is_right(lxb_dom_element_t *f)
+{
+    bool right;
+    char fbuf[160];
+
+    DCHECKF(block_flow_is_floated(f), "%s: the side of a box that does not float was asked",
+            box_subject(f, fbuf, sizeof fbuf));
+    right = bf_computed_is(f, "float", "right");
+    DCHECKF(right || bf_computed_is(f, "float", "left"), "%s floats and its computed `float` is neither `left` nor "
+            "`right`", box_subject(f, fbuf, sizeof fbuf));
+    return right;
+}
+
 static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
 {
     CssDisplay d;
@@ -175,6 +189,19 @@ static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
        establishes an independent formatting context", which for a block container is a block formatting
        context (css-display-3 §2.2). */
     if (containment_layout(el) || containment_paint(el)) return true;
+    /* css-flexbox-1 §4 "Flex Items": "A flex item establishes an independent formatting context for its
+       contents", and css-grid-1 §6.1 "Grid Item Display" says the same of a grid item. */
+    {
+        lxb_dom_element_t *parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+
+        if (parent != NULL) {
+            CssDisplay pd = css_computed_display(parent);
+
+            if (flex_item_display_is_flex_container(pd) || css_display_spells(pd, CSS_KEYWORD_GRID) ||
+                css_display_spells(pd, CSS_KEYWORD_INLINE_GRID))
+                return true;
+        }
+    }
     d = css_computed_display(el);
     bfc = css_display_spells(d, CSS_KEYWORD_INLINE_BLOCK) || css_display_spells(d, CSS_KEYWORD_FLOW_ROOT) ||
           css_display_spells(d, CSS_KEYWORD_TABLE_CELL) || css_display_spells(d, CSS_KEYWORD_TABLE_CAPTION) ||
@@ -223,6 +250,14 @@ static bool bf_no_collapse_through_edges(lxb_dom_element_t *el)
     return bf_establishes_block_formatting_context(el);
 }
 
+/* Whether `el`'s box is the root of the block formatting context its own contents are in: on §9.4.1's list, or the
+   root element, whose principal box "always establishes an independent formatting context" (css-display-3 §2.8
+   "The Root Element's Principal Box"). */
+static bool bf_is_context_root(lxb_dom_element_t *el)
+{
+    return bf_is_root(lxb_dom_interface_node(el)) || bf_establishes_block_formatting_context(el);
+}
+
 /* ---- CSS 2.2 §9.5 "Floats"' POPULATION FOR ONE BOX — see block_flow.h for the contract ---------------------
    THE BOX WHOSE CONTENTS' BLOCK FORMATTING CONTEXT `el`'s CONTENTS ARE IN. `el` ITSELF IS TESTED FIRST AND
    THAT IS NOT AN OFF-BY-ONE: §9.4.1's list establishes a context "for their contents", so a box on it holds
@@ -239,7 +274,7 @@ static lxb_dom_element_t *bf_context_root(lxb_dom_element_t *el)
     for (;;) {
         lxb_dom_element_t *e = lxb_dom_interface_element(n);
 
-        if (bf_is_root(n) || bf_establishes_block_formatting_context(e)) return e;
+        if (bf_is_context_root(e)) return e;
         DCHECKF(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
                 "%s: CSS 2.2 §9.4.1's walk for the block formatting context this box's contents are in left "
                 "the element tree without reaching a root element, so there is no outermost context for it to "
@@ -261,75 +296,123 @@ static lxb_dom_node_t *bf_scan_next(lxb_dom_node_t *n, bool descend, lxb_dom_nod
     return NULL;
 }
 
-/* §9.5's FLOAT, ANYWHERE IN ONE CONTEXT'S SUBTREE, IN DOCUMENT ORDER — which a pre-order walk IS, and which
-   matters because every one of §9.5.1's nine rules that mentions another box says "earlier in the source
-   document". The walk holds its place in the placement record when a resting drive spends its elements.
-   THE THREE TESTS ARE IN THIS ORDER BECAUSE CSS 2.2 §9.7 IS NOT APPLIED TO THE COMPUTED `float` IN THIS ENGINE:
-   an `position: absolute; float: left` element still reads `left`, so asking POSITION first keeps this walk
-   right whichever way that gap is later closed. A SKIPPED SUBTREE IS SKIPPED WHOLE, which is §10.6.7's own
-   example — "floats inside absolutely positioned descendants or other floats are not [taken into account]" —
-   and why the float test is answered before the establishes-a-context test: a float is both. */
-bool block_flow_context_first_float_ask(lxb_dom_element_t *el, lxb_dom_element_t **out)
+lxb_dom_element_t *block_flow_context_root(lxb_dom_element_t *el)
 {
-    lxb_dom_element_t *root, *f = NULL, *up;
-    lxb_dom_node_t *n, *rn, *fp;
+    DCHECK(el != NULL, "CSS 2.2 §9.4.1's context root was asked of no element");
+    return bf_context_root(el);
+}
+
+/* ONE FACT REACHED TWO WAYS, ASSERTED AGAINST ITSELF. The walk DOWN decides membership by skipping every subtree
+   whose root is on CSS 2.2 §9.4.1 "Block formatting contexts"' list; the walk UP decides it by stopping at the
+   first ancestor on that same list, so a float the search reports must name THIS context when asked from its own
+   side. The float's own box establishes a context, so the question is asked of its PARENT. */
+static void bf_require_float_in_context(lxb_dom_element_t *f, lxb_dom_element_t *root)
+{
+    lxb_dom_node_t *fp = lxb_dom_interface_node(f)->parent;
     char fbuf[160], rbuf[160], ubuf[160];
+    lxb_dom_element_t *up;
 
-    DCHECK(el != NULL && out != NULL,
-           "CSS 2.2 §9.5's population was asked about a formatting context with no box or nowhere to answer");
-    root = bf_context_root(el);
-    if (flow_placement_first_float_peek(root, out)) return true;
-    rn = lxb_dom_interface_node(root);
-    if (!flow_placement_float_scan_peek(root, &n)) n = rn->first_child;
-    while (n != NULL) {
-        bool descend = true;
-
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            lxb_dom_element_t *e = lxb_dom_interface_element(n);
-
-            if (!layout_job_scan_take()) {
-                flow_placement_float_scan_hold(root, n);
-                return false;
-            }
-            /* §9.2 "Controlling box generation": `display: none` generates no box, so there is nothing here for
-               §9.5 to float and nothing under it either. `contents` keeps its children's boxes, and this walk
-               reaches them because it is over the element tree. */
-            if (css_computed_display_is(e, CSS_KEYWORD_NONE) ||
-                css_computed_keyword_is(e, "position", CSS_KEYWORD_ABSOLUTE) ||
-                css_computed_keyword_is(e, "position", CSS_KEYWORD_FIXED)) {
-                descend = false;
-            } else if (block_flow_is_floated(e)) {
-                f = e;
-                break;
-            } else if (bf_establishes_block_formatting_context(e)) {
-                descend = false;
-            }
-        }
-        n = bf_scan_next(n, descend, rn);
-    }
-    flow_placement_first_float_record(root, f);
-    *out = f;
-    if (f == NULL) return true;
-    /* ONE FACT REACHED TWO WAYS, ASSERTED AGAINST ITSELF. The walk DOWN decides membership by skipping every
-       subtree whose root is on CSS 2.2 §9.4.1 "Block formatting contexts"' list; the walk UP decides it by
-       stopping at the first ancestor on that same list, so a float this search reports must name THIS context
-       when asked from its own side. The float's own box establishes a context, so the question is asked of its
-       PARENT: `bf_context_root` answers where a box's CONTENTS sit, and the float sits in its parent's. */
-    fp = lxb_dom_interface_node(f)->parent;
     DCHECKF(fp != NULL && fp->type == LXB_DOM_NODE_TYPE_ELEMENT,
             "%s: CSS 2.2 §9.5's float was found with no element parent, so there is no box whose formatting "
-            "context it participates in. The search starts at a context root and descends through element "
-            "children only, so the float it reports always has one — unless the tree changed under the walk",
-            box_subject(f, fbuf, sizeof fbuf));
+            "context it participates in", box_subject(f, fbuf, sizeof fbuf));
+    if (fp == NULL || fp->type != LXB_DOM_NODE_TYPE_ELEMENT) return;
     up = bf_context_root(lxb_dom_interface_element(fp));
     DCHECKF(up == root,
             "%s: CSS 2.2 §9.4.1's membership was reached two ways and they disagree — the walk DOWN from %s "
             "reported this float as belonging to that context, and the walk UP from its parent stops at %s "
-            "instead. §9.5.1's own scope sentence is what both are reading (\"References to other elements in "
-            "these rules refer only to other elements in the same block formatting context as the float\"), so "
-            "one of the two readings of §9.4.1's list has been changed without the other",
+            "instead (\"References to other elements in these rules refer only to other elements in the same "
+            "block formatting context as the float\")",
             box_subject(f, fbuf, sizeof fbuf), box_subject(root, rbuf, sizeof rbuf),
             box_subject(up, ubuf, sizeof ubuf));
+}
+
+/* §9.5's FLOATS, ANYWHERE IN ONE CONTEXT'S SUBTREE, IN DOCUMENT ORDER — which a pre-order walk IS, and which
+   matters because every one of §9.5.1's nine rules that mentions another box says "earlier in the source
+   document". The walk holds its place in the placement record when a resting drive spends its elements; with no
+   record held it runs to its end in one call, gathering into its own array.
+   POSITION IS ASKED BEFORE `float` because CSS 2.2 §9.7 is not applied to the computed `float` in this engine:
+   an `position: absolute; float: left` element still reads `left`. A SKIPPED SUBTREE IS SKIPPED WHOLE, which is
+   §10.6.7's own example — "floats inside absolutely positioned descendants or other floats are not [taken into
+   account]" — and why the float test is answered before the establishes-a-context test: a float is both. */
+bool block_flow_context_floats_ask(lxb_dom_element_t *el, lxb_dom_element_t ***v, size_t *n)
+{
+    lxb_dom_element_t *root, *const *held;
+    lxb_dom_element_t **local = NULL;
+    size_t held_n, local_n = 0, local_cap = 0;
+    lxb_dom_node_t *nd, *rn;
+    bool recorded = flow_placement_is_held();
+
+    DCHECK(el != NULL && v != NULL && n != NULL,
+           "CSS 2.2 §9.5's population was asked about a formatting context with no box or nowhere to answer");
+    root = bf_context_root(el);
+    rn = lxb_dom_interface_node(root);
+    if (!flow_placement_floats_peek(root, &held, &held_n)) {
+        if (!recorded || !flow_placement_float_scan_peek(root, &nd)) nd = rn->first_child;
+        while (nd != NULL) {
+            bool descend = true;
+
+            if (nd->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+                lxb_dom_element_t *e = lxb_dom_interface_element(nd);
+
+                if (recorded && !layout_job_scan_take()) {
+                    flow_placement_float_scan_hold(root, nd);
+                    return false;
+                }
+                /* §9.2 "Controlling box generation": `display: none` generates no box, so there is nothing
+                   here for §9.5 to float and nothing under it either. `contents` keeps its children's boxes,
+                   and this walk reaches them because it is over the element tree. */
+                if (css_computed_display_is(e, CSS_KEYWORD_NONE) ||
+                    css_computed_keyword_is(e, "position", CSS_KEYWORD_ABSOLUTE) ||
+                    css_computed_keyword_is(e, "position", CSS_KEYWORD_FIXED)) {
+                    descend = false;
+                } else if (block_flow_is_floated(e)) {
+                    bf_require_float_in_context(e, root);
+                    if (recorded) {
+                        flow_placement_floats_append(root, e);
+                    } else {
+                        if (local_n == local_cap) {
+                            size_t cap = local_cap != 0 ? local_cap * 2 : 4;
+                            lxb_dom_element_t **g = realloc(local, cap * sizeof *g);
+
+                            CHECK(g != NULL, "out of memory gathering one block formatting context's floats");
+                            local = g;
+                            local_cap = cap;
+                        }
+                        local[local_n++] = e;
+                    }
+                    descend = false;
+                } else if (bf_establishes_block_formatting_context(e)) {
+                    descend = false;
+                }
+            }
+            nd = bf_scan_next(nd, descend, rn);
+        }
+        if (!recorded) {
+            *v = local;
+            *n = local_n;
+            return true;
+        }
+        flow_placement_floats_close(root);
+        if (!flow_placement_floats_peek(root, &held, &held_n))
+            CHECK_FAIL("a closed float list was not readable back from the placement record that holds it");
+    }
+    *n = held_n;
+    *v = NULL;
+    if (held_n == 0) return true;
+    *v = malloc(held_n * sizeof **v);
+    CHECK(*v != NULL, "out of memory copying one block formatting context's floats");
+    memcpy(*v, held, held_n * sizeof **v);
+    return true;
+}
+
+bool block_flow_context_first_float_ask(lxb_dom_element_t *el, lxb_dom_element_t **out)
+{
+    lxb_dom_element_t **v;
+    size_t n;
+
+    if (!block_flow_context_floats_ask(el, &v, &n)) return false;
+    *out = n > 0 ? v[0] : NULL;
+    free(v);
     return true;
 }
 
@@ -1221,6 +1304,106 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
     return bf_next_block_box(el, after, NULL);
 }
 
+#if APICLIENT_DEV
+/* Whether node `a` precedes node `b` in tree order (DOM §4.2 "Node tree": "preceding ... if A and B are in the
+   same tree and A comes before B in tree order"). An ancestor precedes its descendants. */
+static bool bf_precedes(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
+{
+    const lxb_dom_node_t *x, *y;
+    size_t da = 0, db = 0;
+
+    for (x = a; x->parent != NULL; x = x->parent) da++;
+    for (y = b; y->parent != NULL; y = y->parent) db++;
+    DCHECK(x == y, "tree order was asked of two nodes in different trees");
+    for (; db > da; db--) b = b->parent;
+    if (a == b) return true;
+    for (; da > db; da--) a = a->parent;
+    if (a == b) return false;
+    while (a->parent != b->parent) {
+        a = a->parent;
+        b = b->parent;
+    }
+    for (x = a->next; x != NULL; x = x->next)
+        if (x == b) return true;
+    return false;
+}
+#endif
+
+/* CSS 2.2 §9.5.2 "Controlling flow next to floats: the clear property" over this stack: a box with `clear` set
+   below a float of its context moves down by clearance, which "inhibits margin collapsing and acts as spacing
+   above the margin-top of an element", so every position below it on the stack moves with it. It answers false
+   ("not yet") when the float search held its place for a resting drive.
+   Named residual. Not covered: §9.5.2 considers only floats "earlier in the source document" and not "floats
+   inside the element itself or in other block formatting contexts", so this refuses a box whose only float in
+   the context comes after it, where the clearance is zero and the walk is already right. Next: the clearance
+   itself, the float's bottom outer edge from core/layout/float_placement.h against the box's hypothetical
+   position. How its absence shows: this abort firing for a stack where no float precedes the box with `clear`
+   set. */
+static bool bf_require_no_clearance(lxb_dom_element_t *el)
+{
+#if APICLIENT_DEV
+    lxb_dom_element_t *fl;
+    lxb_dom_node_t *b, *cleared = NULL;
+    char nbuf[160], fbuf[160], ebuf[160], vbuf[64];
+
+    /* The `clear` test comes first because it is false for almost every container, and the float search is a
+       walk of the whole formatting context. §9.5.2 applies to "block-level elements", so the anonymous runs are
+       skipped. */
+    for (b = block_flow_next_block_box(el, NULL); b != NULL; b = block_flow_next_block_box(el, b)) {
+        if (b->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        if (!css_computed_keyword_is(lxb_dom_interface_element(b), "clear", CSS_KEYWORD_NONE)) {
+            cleared = b;
+            break;
+        }
+    }
+    if (cleared == NULL) return true;
+    if (!block_flow_context_first_float_ask(el, &fl)) return false;
+    if (fl == NULL) return true;
+    DFAILF("%s, computed `clear` `%s`, in %s: CSS 2.2 §9.5.2 puts this box's top border edge \"below the bottom "
+           "outer edge\" of an earlier float on its side, and %s floats in this box's formatting context. BUILD "
+           "the clearance over core/layout/float_placement.h's placement",
+           box_subject_node(cleared, nbuf, sizeof nbuf),
+           box_subject_computed(lxb_dom_interface_element(cleared), "clear", vbuf, sizeof vbuf),
+           box_subject(el, ebuf, sizeof ebuf), box_subject(fl, fbuf, sizeof fbuf));
+#else
+    (void) el;
+#endif
+    return true;
+}
+
+/* CSS 2.2 §9.5: "The border box of a table, a block-level replaced element, or an element in the normal flow that
+   establishes a new block formatting context (such as an element with overflow other than visible) must not
+   overlap the margin box of any floats in the same block formatting context as the element itself." Child `ce`
+   of `el`'s stack is refused when it is such a box and a float of the context precedes it. It answers false
+   ("not yet") when the float search held its place for a resting drive.
+   Named residual. Not covered: a float that precedes the box but ends above it, or sits beside it with room to
+   spare, leaves the box where §9.4.1 put it, and this refuses it. Next: the box placed beside or below the
+   floats at its position, from core/layout/float_placement.h. How its absence shows: this abort firing for a
+   box no float shares a vertical position with. */
+static bool bf_require_no_float_beside(lxb_dom_element_t *el, lxb_dom_element_t *ce)
+{
+#if APICLIENT_DEV
+    lxb_dom_element_t **v;
+    size_t n, i;
+    char cbuf[160], fbuf[160];
+
+    if (!bf_establishes_block_formatting_context(ce) && !replaced_element_is(ce)) return true;
+    if (!block_flow_context_floats_ask(el, &v, &n)) return false;
+    for (i = 0; i < n; i++)
+        if (bf_precedes(lxb_dom_interface_node(v[i]), lxb_dom_interface_node(ce)))
+            DFAILF("%s establishes a block formatting context or is a table or a replaced element, and %s floats "
+                   "earlier in the same context: CSS 2.2 §9.5's border box \"must not overlap the margin box of any "
+                   "floats in the same block formatting context\". BUILD its placement beside or below them over "
+                   "core/layout/float_placement.h", box_subject(ce, cbuf, sizeof cbuf),
+                   box_subject(v[i], fbuf, sizeof fbuf));
+    free(v);
+#else
+    (void) el;
+    (void) ce;
+#endif
+    return true;
+}
+
 /* §9.4.1's OWN question about the box list, asked ONCE rather than per run: has the box whose position was
    requested turned out to be INLINE-LEVEL, and therefore inside one of §9.2.1.1's anonymous boxes rather than
    on the stack? The runs partition the container's content, so an inline-level CHILD is in exactly one of them
@@ -1229,124 +1412,6 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
    it "a sibling of those anonymous boxes", so it IS on the stack and the walk below reaches it as an ordinary
    member of the box list. That is a capability this question would have taken away had it been asked over
    ancestry instead of over the child's own level. */
-/* §9.5's FLOAT, REFUSED FOR THE TWO QUANTITIES IT CHANGES RATHER THAN FOR ITS PRESENCE, and each arm names
-   §9.4.1's OWN missing capability rather than another caller's — this is the line a reader of this crash can act on.
-   THE BLANKET REFUSAL THIS REPLACES IS WRITTEN OUT RATHER THAN DELETED, because a reader will re-derive it from
-   the word FLOAT and because another component was relying on it. It fired for every container holding a float
-   CHILD, on the ground that "there is no arm on this stack that is right by default", and it was wrong on BOTH
-   axes at once. TOO WIDE: CSS 2.2 §9.5 "Floats" states this stack's answer outright — "Since a float is not in
-   the flow, non-positioned block boxes created before and after the float box flow vertically as if the float
-   did not exist" — and CSS 2.2 §10.6.3 "Block-level non-replaced elements in normal flow when 'overflow'
-   computes to 'visible'" says the same of the height this walk returns, "Only children in the normal flow are
-   taken into account (i.e., floating boxes and absolutely positioned boxes are ignored, and relatively
-   positioned boxes are considered without their offset)". `bf_content_is_inline` above quotes the first of those and
-   ANSWERS for a container with a float; this refusal read the same sentence and refused anyway, so one file
-   disagreed with itself about one operand. TOO NARROW: it asked about a CHILD LIST where both surviving
-   quantities are scoped to a FORMATTING CONTEXT, which core/layout/line_box.c's own §9.5 residual had already
-   measured — a float in a sibling subtree passed it at every step. That record named this refusal as what had
-   been keeping most of its population away, so removing it ARMS line_box.c's context check rather than widening
-   a gap, and that file's record is rewritten in the same diff.
-   WHAT SURVIVES IS TWO SECTIONS, EACH ASKED OVER ITS OWN POPULATION.
-     - §9.5.2 "Controlling flow next to floats: the 'clear' property": "Values other than 'none' potentially
-       introduce clearance . Clearance inhibits margin collapsing and acts as spacing above the margin-top of an
-       element", and each value requires the box's top border edge "be below the bottom outer edge" of the float.
-       So a box on this stack with `clear` set both MOVES and stops being adjoining, and the distance is measured
-       from a box nothing here can place. `clear` IS A COMPUTED VALUE core/css/css_computed_value.c derives — its
-       `Computed value: as specified` row, with CSS 2.1 §9.5.2's `both` restored to the parser, which CSS Page
-       Floats 3's grammar had dropped — so the PROPERTY is not what is missing and the PLACEMENT is.
-     - §10.6.7 "'Auto' heights for block formatting context roots": "if the element has any floating descendants
-       whose bottom margin edge is below the element's bottom content edge, then the height is increased to
-       include those edges". Its own opening scopes it — "In certain cases (see, e.g., sections 10.6.4 and 10.6.6
-       above), the height of an element that establishes a block formatting context is computed as follows" — so
-       it is asked of `bf_establishes_block_formatting_context` and of an `auto` height, and therefore NOT of the
-       ROOT ELEMENT, which that predicate deliberately excludes (see its banner) and which takes §10.6.3's
-       float-ignoring walk instead.
-   THE THIRD CONSEQUENCE IS NOT REFUSED HERE AND MUST NOT BE, and it is the one a reader will look for: §9.4.2
-   shortens the LINE BOXES beside a float, which moves this container's §10.6.3 case 1 and its baseline. Both
-   reach core/layout/line_box.c, which refuses on the CONTEXT holding a float rather than on a child list, so a
-   check here would report THIS line for that file's gap.
-   IT IS `#if APICLIENT_DEV` for line_box.c's reason at its own context check: the float search is a SUBTREE WALK
-   and it exists only to feed an abort a release build does not have.
-   THE `clear` ARM CARRIES A NAMED RESIDUAL. NOT COVERED: §9.5.2's own two narrowings — "The 'clear' property does
-   not consider floats inside the element itself or in other block formatting contexts", and each of its values
-   is stated over floats "that resulted from elements earlier in the source document" — so this refuses a box
-   whose only candidate float is its own descendant or is later in source order, where a browser computes a
-   clearance of zero and this walk's untouched answer is already right. NEXT DIFF: §9.5.2's clearance itself over
-   §9.5.1's placement, which core/layout/flow_position.c's crash names and which needs the float's bottom outer
-   edge. HOW ITS ABSENCE SHOWS: this abort firing for a container in which no float precedes, in source order and
-   in the same formatting context, any box whose computed `clear` is set. */
-/* It answers false ("not yet") when the float search held its place for a resting drive. */
-static bool bf_require_float_does_not_reach_this_stack(lxb_dom_element_t *el, bool auto_h)
-{
-#if APICLIENT_DEV
-    lxb_dom_element_t *fl;
-    lxb_dom_node_t *b, *cleared = NULL;
-    bool root_height;
-    char nbuf[160], fbuf[160], ebuf[160], vbuf[64];
-
-    /* THE TWO ANTECEDENTS ARE ASKED BEFORE THE FLOAT IS LOOKED FOR, AND THE ORDER IS THE COST RATHER THAN THE
-       LOGIC — both conditions are conjunctions with the float, so either order refuses the same documents.
-       core/layout/block_flow.h prices the float search as a WALK OF THE WHOLE FORMATTING CONTEXT whenever the
-       answer is NULL, and `bf_layout` runs once per box, so paying it unconditionally here would be that walk
-       per box: quadratic in the document, in every DEV build, to prove an absence on the documents that have no
-       float. Both antecedents are cheap and both are FALSE for almost every container — `clear`'s initial value
-       is `none` (CSS 2.2 §9.5.2's own `Initial:` line) and §9.4.1's list holds few boxes — so the walk is
-       reached only where one of the two sections could actually apply. */
-    root_height = auto_h && bf_establishes_block_formatting_context(el);
-    for (b = block_flow_next_block_box(el, NULL); b != NULL; b = block_flow_next_block_box(el, b)) {
-        /* §9.5.2's `Applies to:` line is "block-level elements", so §9.2.1.1's ANONYMOUS block box has no
-           `clear` to read and is not one of these — which is why the walk is over the BOX LIST's element
-           members and the anonymous runs are skipped rather than asked. */
-        if (b->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        if (!css_computed_keyword_is(lxb_dom_interface_element(b), "clear", CSS_KEYWORD_NONE)) {
-            cleared = b;
-            break;
-        }
-    }
-    if (!root_height && cleared == NULL) return true;
-    if (!block_flow_context_first_float_ask(el, &fl)) return false;
-    if (fl == NULL) return true;
-    if (root_height)
-        DFAILF("%s: CSS 2.2 §10.6.7 \"'Auto' heights for block formatting context roots\" increases this container's "
-               "own height to reach a float it holds — \"if the element has any floating descendants whose bottom "
-               "margin edge is below the element's bottom content edge, then the height is increased to include "
-               "those edges\" — and %s is such a descendant in this container's OWN formatting context, which "
-               "is the scope §10.6.7's next sentence states (\"Only floats that participate in this block "
-               "formatting context "
-               "are taken into account\"). The edge it wants is the float's BOTTOM MARGIN EDGE, which needs the "
-               "float "
-               "PLACED: BUILD §9.5.1 \"Positioning the float: the 'float' property\"' placement, which "
-               "core/layout/flow_position.c crashes for and whose own ordering note says what that placement needs "
-               "first. A box that does NOT establish a formatting context does not reach this line and must not — "
-               "§10.6.3's walk ignores floats by its own sentence, so its answer is already right",
-               box_subject(el, nbuf, sizeof nbuf), box_subject(fl, fbuf, sizeof fbuf));
-    /* `cleared` IS NON-NULL HERE BY THE RETURN ABOVE, so this abort is UNCONDITIONAL and is written as one: a
-       `DCHECKF(cleared == NULL, …)` at this line would be a condition no state of the program can satisfy,
-       which is a NON-check with a check's syntax rather than a weak guard. */
-    DFAILF("%s, computed `clear` `%s`, in %s: CSS 2.2 §9.5.2 \"Controlling flow next to floats: the 'clear' "
-           "property\" puts this box BELOW a float on the same stack — each of its three values \"Requires "
-           "that the top border edge of the box be below the bottom outer edge\" of an earlier float — and "
-           "%s is a float in this box's own formatting context. §9.5.2's next sentences are what make this "
-           "§9.4.1's problem and not only this box's: \"Values other than 'none' potentially introduce "
-           "clearance . Clearance inhibits margin collapsing and acts as spacing above the margin-top of an "
-           "element\", and CSS 2.1 §8.3.1 \"Collapsing margins\" agrees from the other end by excepting a "
-           "margin with clearance from its adjoining test — so one such box changes every collapse and every "
-           "offset below it on this stack. The clearance is measured from the float's BOTTOM OUTER EDGE: "
-           "BUILD §9.5.1 \"Positioning the float: the 'float' property\"' placement, which "
-           "core/layout/flow_position.c crashes for. `clear` itself is RECORDED "
-           "(a KEYWORD row of core/css/css_property_id.h and css_shorthand_complete_for, with CSS 2.1 "
-           "§9.5.2's `both` restored to lexbor's parser), so the property is not the blocker",
-           box_subject_node(cleared, nbuf, sizeof nbuf),
-           box_subject_computed(cleared == NULL ? NULL : lxb_dom_interface_element(cleared),
-                                "clear", vbuf, sizeof vbuf),
-           box_subject(el, ebuf, sizeof ebuf), box_subject(fl, fbuf, sizeof fbuf));
-#else
-    (void) el;
-    (void) auto_h;
-#endif
-    return true;
-}
-
 static void bf_require_want_on_the_stack(lxb_dom_element_t *el, lxb_dom_element_t *want)
 {
     lxb_dom_node_t *n;
@@ -1579,6 +1644,76 @@ static bool bf_walk_resume(size_t body, lxb_dom_element_t *el, BfWalk *w, BfBox 
     return true;
 }
 
+/* The top content edge of block container `el` in its context root's frame, once the margins at its top edge are
+   resolved: a context root's own is the frame's origin; another box's top border edge is its entry's base plus the
+   collapse of the entry's run, its own `margin-top` and `inner`, the run of its children's margins that escaped
+   through that edge (CSS 2.1 §8.3.1). */
+static CssPx bf_frame_top(lxb_dom_element_t *el, const FlowBfcEntry *e, BfRun inner)
+{
+    BfRun r;
+
+    if (bf_is_context_root(el)) return css_px(0.0);
+    r.pos = e->run_pos;
+    r.neg = e->run_neg;
+    r = bf_run_merge(bf_run_merge(r, bf_run_of(used_value_px(el, "margin-top"))), inner);
+    return css_px_add(css_px_add(e->base, bf_run_value(r)), bf_content_top_from_border_edge(el));
+}
+
+/* Write child `ce`'s entry before `el`'s walk asks it: while the run still escapes through `el`'s top edge the
+   child's base is `el`'s own and the run carries `el`'s margin and the margins met inside it; after that, the
+   base is `el`'s top content edge plus the running position. */
+static void bf_entry_write(lxb_dom_element_t *el, lxb_dom_element_t *ce, const BfWalk *w, const FlowBfcEntry *e,
+                           bool has_frame, CssPx frame_top)
+{
+    FlowBfcEntry c;
+    char nbuf[160];
+
+    if (w->escaping) {
+        BfRun r;
+
+        r.pos = e->run_pos;
+        r.neg = e->run_neg;
+        r = bf_run_merge(bf_run_merge(r, bf_run_of(used_value_px(el, "margin-top"))), w->run);
+        c.base = e->base;
+        c.run_pos = r.pos;
+        c.run_neg = r.neg;
+    } else {
+        DCHECKF(has_frame, "%s: its walk placed a child with its top margin resolved and no top content edge "
+                "recorded", box_subject(el, nbuf, sizeof nbuf));
+        c.base = css_px_add(frame_top, w->pos);
+        c.run_pos = w->run.pos;
+        c.run_neg = w->run.neg;
+    }
+    flow_placement_bfc_entry_record(ce, c);
+}
+
+/* §10.6.7 "'Auto' heights for block formatting context roots": "if the element has any floating descendants
+   whose bottom margin edge is below the element's bottom content edge, then the height is increased to include
+   those edges. Only floats that participate in this block formatting context are taken into account". `*bottom`
+   is the lowest such edge in `el`'s content-box frame, when `*any`. */
+static bool bf_float_bottom_ask(lxb_dom_element_t *el, CssPx *bottom, bool *any)
+{
+    lxb_dom_element_t **v;
+    size_t n, i;
+
+    *any = false;
+    if (!block_flow_context_floats_ask(el, &v, &n)) return false;
+    for (i = 0; i < n; i++) {
+        FlowFloatBox b;
+        CssPx edge;
+
+        if (!float_placement_ask(v[i], &b)) {
+            free(v);
+            return false;
+        }
+        edge = css_px_add(b.top, b.height);
+        *bottom = *any ? css_px_max(*bottom, edge) : edge;
+        *any = true;
+    }
+    free(v);
+    return true;
+}
+
 /* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container: the body of
    the LAYOUT_Q_BF_WALK question at `body`, which it stages on "not yet" and continues on its next run. It
    answers the box's own reduction and writes what its other readers take from it into flow_placement.h's
@@ -1619,6 +1754,9 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     lxb_dom_element_t **wl = NULL;
     size_t wn = 0;
     BfBox out;
+    bool held = flow_placement_is_held(), has_frame = false, has_float_bottom = false;
+    FlowBfcEntry entry = { css_px(0.0), css_px(0.0), css_px(0.0) };
+    CssPx frame_top = css_px(0.0), float_bottom = css_px(0.0);
     char nbuf[160];
 
     out.top = bf_run_of(used_value_px(el, "margin-top"));
@@ -1653,6 +1791,22 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     if (wrapper) wn = bf_wrapper_boxes(el, &wl);
     /* A resumed walk took its branch on its first run. */
     if (!resumed) w.ifc = !wrapper && bf_content_is_inline(el);
+    /* Where this walk stands in its block formatting context. Its top content edge is known at once when a
+       border, padding or an inline formatting context keeps its children's margins from its own, after the first
+       child it places otherwise, and at the walk's end when it places none: CSS 2.2 §9.5.1 places a float
+       between collapsing margins "as if it had an otherwise empty anonymous block parent taking part in the
+       flow". */
+    if (held) {
+        if (!bf_is_context_root(el) && !flow_placement_bfc_entry_peek(el, &entry))
+            DFAILF("%s: its walk ran before the walk whose stack it is on wrote where its formatting context puts "
+                   "it; `bf_walk` asks that walk first", box_subject(el, nbuf, sizeof nbuf));
+        has_frame = flow_placement_bfc_frame_peek(el, &frame_top);
+        if (!has_frame && (bf_is_context_root(el) || !esc_top || w.ifc)) {
+            frame_top = bf_frame_top(el, &entry, bf_run_empty());
+            flow_placement_bfc_frame_record(el, frame_top);
+            has_frame = true;
+        }
+    }
     if (w.ifc) {
         /* §9.4.2's INLINE FORMATTING CONTEXT. Nothing below this branch applies to it: §8.3.1's adjoining
            margins are stated over boxes that "both belong to in-flow BLOCK-LEVEL boxes participating in the
@@ -1694,6 +1848,8 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             h = line_box_content_height(el, whole, line_box_available_width_derived(),
                                         &any_line_box, &first_baseline, &last_baseline);
         }
+        if (auto_h && bf_is_context_root(el) && !bf_float_bottom_ask(el, &float_bottom, &has_float_bottom))
+            return bf_walk_stage(body, el, &w, &out);
         /* WHICH of the two the caller asked for — this box establishes the ONE inline formatting context here,
            so both of §9.4.2's ends are inside it and the pass is the whole of the choice. */
         out.baseline = pass == BF_BASELINE_FIRST ? first_baseline : last_baseline;
@@ -1706,7 +1862,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
                    "`<number [0,∞]>` / `<length-percentage [0,∞]>` and says outright that \"negative values "
                    "are illegal\" — so a negative maximum is a declaration that should have been dropped by "
                    "css-values-4 §5.1's range restriction reaching the arithmetic");
-            out.content_h = h;
+            out.content_h = has_float_bottom ? css_px_max(h, float_bottom) : h;
             *result = out;
             return true;
         }
@@ -1721,7 +1877,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             out.top = bf_run_merge(out.top, out.bottom);
             out.bottom = out.top;
         }
-        out.content_h = css_px(0.0);
+        out.content_h = has_float_bottom ? css_px_max(css_px(0.0), float_bottom) : css_px(0.0);
         *result = out;
         return true;
     }
@@ -1750,6 +1906,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
         if (wrapper) {
             if (w.wi == wn) break;
             ce = wl[w.wi];
+            if (ce != NULL && held) bf_entry_write(el, ce, &w, &entry, has_frame, frame_top);
             if (ce == NULL) {
                 b = bf_table_box(el);
             } else if (!bf_box(ce, pass, &b)) {
@@ -1794,6 +1951,8 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
             w.at_run = false;
         } else if (w.brk != NULL) {
             ce = lxb_dom_interface_element(w.brk);
+            if (!bf_require_no_float_beside(el, ce)) return bf_walk_stage(body, el, &w, &out);
+            if (held) bf_entry_write(el, ce, &w, &entry, has_frame, frame_top);
             if (!bf_box(ce, pass, &b))
                 return bf_walk_stage(body, el, &w, &out);   /* "not yet": a question beneath was deferred */
             w.prev = w.brk;
@@ -1860,6 +2019,11 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
                therefore begins at the top content edge and the margin contributes nothing. */
             w.esc_run = w.run;
             w.escaping = false;
+            if (held && !has_frame) {
+                frame_top = bf_frame_top(el, &entry, w.esc_run);
+                flow_placement_bfc_frame_record(el, frame_top);
+                has_frame = true;
+            }
         } else {
             w.pos = css_px_add(w.pos, bf_run_value(w.run));
         }
@@ -1934,11 +2098,14 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
         w.placed = true;
     }
     free(wl);
-    /* §9.5.2's and §10.6.7's float refusals, asked once the stack is laid out so that a search a resting drive
-       stops is staged at the loop's end and resumed there. `auto_h` is passed rather than re-read: a second
-       read of §3.2.1's behaves-as-auto would be a second answer to one question. A wrapper's members are the
+    /* §9.5.2's refusal and §10.6.7's float bottoms, asked once the stack is laid out so that a search or a
+       placement a resting drive stops is staged at the loop's end and resumed there. A wrapper's members are the
        table box and captions, each a formatting context root, so no float is on its stack. */
-    if (!wrapper && !bf_require_float_does_not_reach_this_stack(el, auto_h)) return bf_walk_stage(body, el, &w, &out);
+    if (!wrapper && !bf_require_no_clearance(el)) return bf_walk_stage(body, el, &w, &out);
+    if (held && !has_frame) flow_placement_bfc_frame_record(el, bf_frame_top(el, &entry, w.run));
+    if (!wrapper && auto_h && bf_is_context_root(el) &&
+        !bf_float_bottom_ask(el, &float_bottom, &has_float_bottom))
+        return bf_walk_stage(body, el, &w, &out);
 
     if (w.placed) {
         if (esc_top) out.top = bf_run_merge(out.top, w.esc_run);
@@ -1964,6 +2131,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
            Calling this floor "§10.7's min-height running early" was true of the number and wrong about which
            section owns it, and it made the real clamp look already done. */
         out.content_h = css_px_max(w.pos, css_px(0.0));
+        if (has_float_bottom) out.content_h = css_px_max(out.content_h, float_bottom);
         *result = out;
         return true;
     }
@@ -1983,6 +2151,7 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     else if (esc_bottom) out.bottom = bf_run_merge(out.bottom, w.run);
     else                 w.pos = bf_run_value(w.run);
     out.content_h = css_px_max(w.pos, css_px(0.0));
+    if (has_float_bottom) out.content_h = css_px_max(out.content_h, float_bottom);
     *result = out;
     return true;
 }
@@ -2239,6 +2408,34 @@ static bool bf_box(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
    `height` says, and continued where it stopped. Every reader of a container's stack asks here.
    A baseline pass's answer is `el`'s baseline as read from outside `el`, so css-contain-2 §3.3 "Layout
    Containment"'s "the containment box is treated as having no baseline" is applied to it here. */
+/* Asks the walks that write the entries of `el` and of each block container above it in its context that has
+   none, top down, so `el`'s walk finds its own: a box its parent's walk reached has one, and a box asked first
+   (for its height, or for its children's positions) has that walk asked here. Each pass asks the walk of the
+   container of the highest box lacking an entry, which itself has one or is a context root. */
+static bool bf_require_entry(lxb_dom_element_t *el)
+{
+    FlowBfcEntry e;
+    char nbuf[160], cbuf[160];
+
+    if (!flow_placement_is_held()) return true;
+    for (;;) {
+        lxb_dom_element_t *x = el, *top = NULL;
+        BfBox unused;
+
+        while (!bf_is_context_root(x) && !flow_placement_bfc_entry_peek(x, &e)) {
+            top = x;
+            x = used_value_stacking_container(x);
+            DCHECKF(x != NULL, "%s is in no context root's subtree", box_subject(top, nbuf, sizeof nbuf));
+        }
+        if (top == NULL) return true;
+        if (!bf_walk(x, BF_BASELINE_NONE, &unused)) return false;
+        if (!flow_placement_bfc_entry_peek(top, &e))
+            DFAILF("%s: the walk of %s, its containing block, ended without writing where its formatting context "
+                   "puts it, so it is on no stack of that box's", box_subject(top, nbuf, sizeof nbuf),
+                   box_subject(x, cbuf, sizeof cbuf));
+    }
+}
+
 static bool bf_walk(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
 {
     LayoutQuestion q;
@@ -2249,6 +2446,7 @@ static bool bf_walk(lxb_dom_element_t *el, BfBaseline pass, BfBox *out)
         "A container's stack asked, inside itself, for something only its finished stack answers: a child's "
         "position, its own content height or baseline, a run's start or its anonymous boxes. The asking rule "
         "reads its own output; fix it at the rule that re-enters, never by a limit.");
+    if (!bf_require_entry(el)) return false;
     if (!bf_question_ask(q, out)) return false;
     if (pass != BF_BASELINE_NONE && containment_layout(el)) out->has_line_box = false;
     return true;
@@ -2751,7 +2949,10 @@ lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t
     return NULL;
 }
 
-bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
+/* The static top `block_flow_static_child_top_ask` answers, or (`flt`) a float's outer top as §9.5.1 starts
+   it: where §9.4.1's stack stands at the float's place, the margins already met resolved and the float's own
+   not among them (floats' margins do not collapse, §8.3.1). */
+static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
 {
     lxb_dom_element_t *cb;
     lxb_dom_node_t *n, *after;
@@ -2765,8 +2966,9 @@ bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
     n = lxb_dom_interface_node(el);
     cb = block_flow_static_position_containing_block(el);
     /* §10.3.7's Note first, because every other step below is written about a box on §9.4.1's stack and this
-       is what decides whether the hypothetical box is one. */
-    if (!bf_hypothetical_is_block_level(el))
+       is what decides whether the hypothetical box is one. A float has no hypothetical box: it sits where it is
+       in its container's content. */
+    if (!flt && !bf_hypothetical_is_block_level(el))
         DFAILF("%s: CSS 2.1 §10.3.7's hypothetical box — the element \"if its specified `position` value had "
                "been `static` and its specified `float` had been `none`\" — is INLINE-LEVEL, so §9.4.2's line "
                "boxes hold it and not §9.4.1's stack. Its static position is therefore a position ALONG a "
@@ -2802,7 +3004,16 @@ bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
        container's content, has only collapsible white space in front of it. */
     before.after = after;
     before.end = n;
-    if (block_flow_run_generates_box(cb, before))
+    /* A float with box-generating inline content ahead of it in its run is on a line: CSS 2.2 §9.5.1 "if
+       there is a line box, the outer top of the floated box is aligned with the top of the current line box",
+       which is §9.4.2's fill over a run holding the float. */
+    if (flt && block_flow_run_generates_box(cb, before))
+        DFAILF("%s, in %s: a float with inline content ahead of it in its run sits on a line box — CSS 2.2 §9.5's "
+               "\"if there is a line box, the outer top of the floated box is aligned with the top of the current "
+               "line box\" — and §9.5.1's placement then shortens that very line if the float fits beside it. "
+               "BUILD the float's placement inside core/layout/line_box.c's fill, at the line the fill has reached",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
+    if (!flt && block_flow_run_generates_box(cb, before))
         DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1 would break the anonymous "
                "block box this element sits in — \"if a block container box … has a block-level box inside it "
                "…, then we force it to have only block-level boxes inside it\" — because §10.3.7's "
@@ -2836,8 +3047,23 @@ bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
                box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
     run.pos = start.run_pos;
     run.neg = start.run_neg;
-    *out = bf_static_margin_edge(start.pos, run, bf_hypothetical_margin_top(el, cb), start.escaping);
+    *out = bf_static_margin_edge(start.pos, run, flt ? css_px(0.0) : bf_hypothetical_margin_top(el, cb),
+                                 start.escaping);
     return true;
+}
+
+bool block_flow_static_child_top_ask(lxb_dom_element_t *el, CssPx *out)
+{
+    return bf_static_top_ask(el, false, out);
+}
+
+bool block_flow_float_top_ask(lxb_dom_element_t *f, CssPx *out)
+{
+    char nbuf[160];
+
+    DCHECKF(f != NULL && block_flow_is_floated(f), "%s: §9.5.1's starting top was asked of a box that does not "
+            "float", f != NULL ? box_subject(f, nbuf, sizeof nbuf) : "(no element)");
+    return bf_static_top_ask(f, true, out);
 }
 
 CssPx block_flow_static_child_top(lxb_dom_element_t *el)

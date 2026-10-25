@@ -1129,6 +1129,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/contain.h"
 #include "fixture/gridsizing.h"
 #include "fixture/insetpct.h"
+#include "fixture/floatplace.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1608,6 +1609,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "contain", HTML_CONTAIN },
     { "gridsizing", HTML_GRIDSIZING },
     { "insetpct", HTML_INSETPCT },
+    { "floatplace", HTML_FLOATPLACE },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -14492,6 +14494,157 @@ TF_UNIT void probes_insetpct(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `floatplace` document (fixture/floatplace.h). */
+TF_UNIT void probes_floatplace(const char *js, Probe *tab, int *n) {
+    const char *fp_why = NULL; int fp_reached = !!strstr(js, "\"/api/floatplace\"");
+    const char *fp_b_why = NULL; int fp_b_tt = 1;
+    const char *fp_m_why = NULL; int fp_m_tt = 1;
+    const char *fp_n_why = NULL; int fp_n_tt = 1;
+    const char *fp_h_why = NULL; int fp_h_tt = 1;
+
+    fold_row(&fp_reached, &fp_why, fp_reached,
+             "NOT REACHED: there is no /api/floatplace record at all, so the document aborted before its fetch");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f1x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f1y", "0"),
+             "f1 is not at (0, 0) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "b1x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "b1y", "0"),
+             "b1 is not at (0, 0) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f2x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f2y", "30"),
+             "f2 is not at (0, 30) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "b2x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "b2y", "40"),
+             "b2 is not at (0, 40) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f9x", "150") &&
+                                  param_value_is(js, "/api/floatplace", "f9y", "0"),
+             "f9 is not at (150, 0) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f10bx", "50") &&
+                                  param_value_is(js, "/api/floatplace", "f10by", "0"),
+             "f10b is not at (50, 0) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f10cx", "50") &&
+                                  param_value_is(js, "/api/floatplace", "f10cy", "20"),
+             "f10c is not at (50, 20) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f11bx", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f11by", "20"),
+             "f11b is not at (0, 20) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f11cx", "100") &&
+                                  param_value_is(js, "/api/floatplace", "f11cy", "20"),
+             "f11c is not at (100, 20) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f17ax", "80") &&
+                                  param_value_is(js, "/api/floatplace", "f17ay", "0"),
+             "f17a is not at (80, 0) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f17bx", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f17by", "20"),
+             "f17b is not at (0, 20) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f22bx", "100") &&
+                                  param_value_is(js, "/api/floatplace", "f22by", "20"),
+             "f22b is not at (100, 20) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f22cx", "80") &&
+                                  param_value_is(js, "/api/floatplace", "f22cy", "20"),
+             "f22c is not at (80, 20) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f25x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f25y", "10"),
+             "f25 is not at (0, 10) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f31x", "-50") &&
+                                  param_value_is(js, "/api/floatplace", "f31y", "0"),
+             "f31 is not at (-50, 0) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f32x", "-50") &&
+                                  param_value_is(js, "/api/floatplace", "f32y", "30"),
+             "f32 is not at (-50, 30) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f33x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f33y", "30"),
+             "f33 is not at (0, 30) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f34x", "30") &&
+                                  param_value_is(js, "/api/floatplace", "f34y", "0"),
+             "f34 is not at (30, 0) in its container");
+    fold_row(&fp_b_tt, &fp_b_why, param_value_is(js, "/api/floatplace", "f34bx", "30") &&
+                                  param_value_is(js, "/api/floatplace", "f34by", "0"),
+             "f34b is not at (30, 0) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "f13x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f13y", "10"),
+             "f13 is not at (0, 10) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "b13x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "b13y", "30"),
+             "b13 is not at (0, 30) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "f14x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f14y", "20"),
+             "f14 is not at (0, 20) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "b14x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "b14y", "20"),
+             "b14 is not at (0, 20) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "f15x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f15y", "30"),
+             "f15 is not at (0, 30) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "b15x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "b15y", "30"),
+             "b15 is not at (0, 30) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "f27x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f27y", "15"),
+             "f27 is not at (0, 15) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "f28x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f28y", "15"),
+             "f28 is not at (0, 15) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "f29x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f29y", "5"),
+             "f29 is not at (0, 5) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "b29x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "b29y", "5"),
+             "b29 is not at (0, 5) in its container");
+    fold_row(&fp_m_tt, &fp_m_why, param_value_is(js, "/api/floatplace", "f30x", "0") &&
+                                  param_value_is(js, "/api/floatplace", "f30y", "10"),
+             "f30 is not at (0, 10) in its container");
+    fold_row(&fp_n_tt, &fp_n_why, param_value_is(js, "/api/floatplace", "f16ax", "20") &&
+                                  param_value_is(js, "/api/floatplace", "f16ay", "5"),
+             "f16a is not at (20, 5) in its container");
+    fold_row(&fp_n_tt, &fp_n_why, param_value_is(js, "/api/floatplace", "f16bx", "70") &&
+                                  param_value_is(js, "/api/floatplace", "f16by", "5"),
+             "f16b is not at (70, 5) in its container");
+    fold_row(&fp_n_tt, &fp_n_why, param_value_is(js, "/api/floatplace", "f18x", "10") &&
+                                  param_value_is(js, "/api/floatplace", "f18y", "5"),
+             "f18 is not at (10, 5) in its container");
+    fold_row(&fp_n_tt, &fp_n_why, param_value_is(js, "/api/floatplace", "f18bx", "70") &&
+                                  param_value_is(js, "/api/floatplace", "f18by", "3"),
+             "f18b is not at (70, 3) in its container");
+    fold_row(&fp_n_tt, &fp_n_why, param_value_is(js, "/api/floatplace", "f26x", "177") &&
+                                  param_value_is(js, "/api/floatplace", "f26y", "21"),
+             "f26 is not at (177, 21) in its container");
+    fold_row(&fp_n_tt, &fp_n_why, param_value_is(js, "/api/floatplace", "f35x", "12") &&
+                                  param_value_is(js, "/api/floatplace", "f35y", "3"),
+             "f35 is not at (12, 3) in its container");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c1h", "30"),
+             "CSS 2.2 §10.6.7: c1's auto height is not 30px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c8h", "30"),
+             "CSS 2.2 §10.6.7: c8's auto height is not 30px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c13h", "40"),
+             "CSS 2.2 §10.6.7: c13's auto height is not 40px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c14h", "40"),
+             "CSS 2.2 §10.6.7: c14's auto height is not 40px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c16h", "35"),
+             "CSS 2.2 §10.6.7: c16's auto height is not 35px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c18h", "20"),
+             "CSS 2.2 §10.6.7: c18's auto height is not 20px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c22h", "30"),
+             "CSS 2.2 §10.6.7: c22's auto height is not 30px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c25h", "20"),
+             "CSS 2.2 §10.6.7: c25's auto height is not 20px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c26h", "61"),
+             "CSS 2.2 §10.6.7: c26's auto height is not 61px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c27h", "40"),
+             "CSS 2.2 §10.6.7: c27's auto height is not 40px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c30h", "30"),
+             "CSS 2.2 §10.6.7: c30's auto height is not 30px, its lowest float's bottom margin edge or its content");
+    fold_row(&fp_h_tt, &fp_h_why, param_value_is(js, "/api/floatplace", "c33h", "40"),
+             "CSS 2.2 §10.6.7: c33's auto height is not 40px, its lowest float's bottom margin edge or its content");
+    const Probe rows[] = {
+        { "float-beside-and-below", fp_reached && fp_b_tt, "/api/floatplace", SESS_EXPLORE, fp_reached ? fp_b_why : fp_why },
+        { "float-between-collapsing-margins", fp_reached && fp_m_tt, "/api/floatplace", SESS_EXPLORE, fp_reached ? fp_m_why : fp_why },
+        { "float-nested-containing-blocks", fp_reached && fp_n_tt, "/api/floatplace", SESS_EXPLORE, fp_reached ? fp_n_why : fp_why },
+        { "float-context-auto-height", fp_reached && fp_h_tt, "/api/floatplace", SESS_EXPLORE, fp_reached ? fp_h_why : fp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `boundpark` document (fixture/boundpark.h). */
 TF_UNIT void probes_boundpark(const char *js, Probe *tab, int *n) {
     /* One bound body through four callback routes; each failure arm reports its route, the declined send's
@@ -19114,6 +19267,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_contain(js, probes, &np);
     probes_gridsizing(js, probes, &np);
     probes_insetpct(js, probes, &np);
+    probes_floatplace(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
@@ -27566,22 +27720,50 @@ static bool tf_pt_paint(JSContext *ctx, lxb_html_document_t *dom, const char *st
     return ok;
 }
 
+/* Whether marks `a` and `b` are the same ink: their kind, and the glyph's code point and pen or the rectangle. */
+static bool tf_pt_same_mark(const DisplayMark *a, const DisplayMark *b)
+{
+    size_t k;
+
+    if (a->kind != b->kind) return false;
+    if (a->kind == DISPLAY_MARK_GLYPH)
+        return a->glyph.cp == b->glyph.cp && a->glyph.origin_x.px == b->glyph.origin_x.px &&
+               a->glyph.origin_y.px == b->glyph.origin_y.px;
+    for (k = 0; k < 4; k++)
+        if (a->rect[k].px != b->rect[k].px) return false;
+    return true;
+}
+
+/* Where pass `pass`'s paragraph's `n` marks start in `dl`: the paragraph is one in-flow block appended last to the
+   body, so its marks are one run inserted into the base list `base` (the same document without it), before the
+   marks CSS 2.1 §E.2 paints after step 7 (positioned descendants, step 8 on). The marks before and after the run
+   are the base list's, in order. */
+static size_t tf_pt_locate(const DisplayList *base, const DisplayList *dl, size_t n, const char *pass)
+{
+    size_t k = 0, i;
+
+    CHECKF(dl->n == base->n + n,
+           "CSS 2.1 §E.2 \"Painting order\" laid %zu marks over pass %s where the same document with no paragraph "
+           "in it laid %zu; this file derives the paragraph's %zu out of css-text-3 §4.1.1 \"Phase I: Collapsing "
+           "and Transformation\"", dl->n, pass, base->n, n);
+    while (k < base->n && tf_pt_same_mark(&dl->v[k], &base->v[k])) k++;
+    for (i = k; i < base->n; i++)
+        CHECKF(tf_pt_same_mark(&dl->v[i + n], &base->v[i]),
+               "mark %zu of pass %s is not the base list's mark %zu: the paragraph's marks are not one run inserted "
+               "into the base list", i + n, pass, i);
+    return k;
+}
+
 /* ONE PASS's marks, held to the code points, the em, the colour and the PEN ADVANCES css-text-3 §4.1.1 left
    for them. `unit` is each glyph's distance from its own line box's start edge in the face's design units and
-   `line` is which line box it is on; both are this file's derivation and neither is read back off the engine. */
+   `line` is which line box it is on; both are this file's derivation and neither is read back off the engine.
+   The marks are `dl`'s from `base`, located by `tf_pt_locate`. */
 static void tf_pt_run(const DisplayList *dl, size_t base, size_t n, const uint32_t *cp,
                       const int *unit, const unsigned char *line, const char *pass)
 {
     size_t i, first[2];
     unsigned char seen = 0;
 
-    CHECKF(dl->n == base + n,
-           "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 laid %zu marks over pass %s where the SAME document "
-           "with no paragraph in it laid %zu. This file derives %zu of them, in the banner above, out of "
-           "css-text-3 §4.1.1 \"Phase I: Collapsing and Transformation\"'s four steps; the difference between "
-           "the two lists is the whole of what this paragraph added, and step 7's own \"in tree order\" over "
-           "a paragraph appended LAST is what puts those marks at the end",
-           dl->n, pass, base, n);
     first[0] = first[1] = base;
     for (i = 0; i < n; i++) {
         const DisplayMark *m = &dl->v[base + i];
@@ -27668,7 +27850,7 @@ TF_UNIT void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
     static const unsigned char LINE_TWO[] = { 0, 0, 0, 0, 0, 0, 1, 1 };
     DisplayList dlbase, dla, dlb, dlc, dld;
     unsigned obase = 0, oa = 0, ob = 0, oc = 0, od = 0, dlines = 1;
-    size_t nbase, i;
+    size_t nbase, ka, kb, kc, kd, i;
     bool ok;
 
     ok  = tf_pt_paint(ctx, dom, NULL, NULL, &dlbase, &obase);
@@ -27705,10 +27887,14 @@ TF_UNIT void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
            "HTML §15.3.3 \"Flow content\" makes a `p` block-level, so two is a derivation and not a floor",
            obase, oa, ob, oc, od, obase + 2u);
 
-    tf_pt_run(&dla, nbase, 7, CP_ONE, UNIT_ONE, LINE_ONE, "A");
-    tf_pt_run(&dlb, nbase, 7, CP_ONE, UNIT_ONE, LINE_ONE, "B");
-    tf_pt_run(&dlc, nbase, 7, CP_ONE, UNIT_ONE, LINE_ONE, "C");
-    tf_pt_run(&dld, nbase, 8, CP_TWO, UNIT_TWO, LINE_TWO, "D");
+    ka = tf_pt_locate(&dlbase, &dla, 7, "A");
+    kb = tf_pt_locate(&dlbase, &dlb, 7, "B");
+    kc = tf_pt_locate(&dlbase, &dlc, 7, "C");
+    kd = tf_pt_locate(&dlbase, &dld, 8, "D");
+    tf_pt_run(&dla, ka, 7, CP_ONE, UNIT_ONE, LINE_ONE, "A");
+    tf_pt_run(&dlb, kb, 7, CP_ONE, UNIT_ONE, LINE_ONE, "B");
+    tf_pt_run(&dlc, kc, 7, CP_ONE, UNIT_ONE, LINE_ONE, "C");
+    tf_pt_run(&dld, kd, 8, CP_TWO, UNIT_TWO, LINE_TWO, "D");
 
     /* CSS 2 §8.1 "Box dimensions"' NESTING, AS THE ONLY THING THAT MOVED. Pass B differs from pass A in a
        `padding-left` and a `padding-top` and in nothing else, and a `width: auto` block box's BORDER box does
@@ -27718,19 +27904,19 @@ TF_UNIT void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
        would keep the other: §8.1 nests the content box inside the padding box inside the border box, and the
        entry adds the leading border and the leading padding on EACH axis out of two different reads. */
     for (i = 0; i < 7; i++) {
-        CHECKF(dlb.v[nbase + i].glyph.origin_x.px - dla.v[nbase + i].glyph.origin_x.px == 12.0,
+        CHECKF(dlb.v[kb + i].glyph.origin_x.px - dla.v[ka + i].glyph.origin_x.px == 12.0,
                "glyph %zu moved %g CSS pixels along the inline axis when the paragraph gained `padding-left: "
                "12px`. CSS 2 §8.1 \"Box dimensions\" puts the content box inside the padding box, so the pen "
                "of CSS 2.1 §E.2's step 7.2.1 is the border box's corner moved inward by the leading border "
                "and the leading padding — a zero here is `bp_content_box_origin` handing back a BORDER box "
                "corner, and any other number is a third term nobody declared",
-               i, dlb.v[nbase + i].glyph.origin_x.px - dla.v[nbase + i].glyph.origin_x.px);
-        CHECKF(dlb.v[nbase + i].glyph.origin_y.px - dla.v[nbase + i].glyph.origin_y.px == 5.0,
+               i, dlb.v[kb + i].glyph.origin_x.px - dla.v[ka + i].glyph.origin_x.px);
+        CHECKF(dlb.v[kb + i].glyph.origin_y.px - dla.v[ka + i].glyph.origin_y.px == 5.0,
                "glyph %zu moved %g CSS pixels down the block axis when the paragraph gained `padding-top: "
                "5px`. It is the same §8.1 nesting one axis over, read out of `padding-top` and the leading "
                "border width rather than out of `padding-left` — a composition that added the inline term "
                "twice passes the assertion above and fails this one",
-               i, dlb.v[nbase + i].glyph.origin_y.px - dla.v[nbase + i].glyph.origin_y.px);
+               i, dlb.v[kb + i].glyph.origin_y.px - dla.v[ka + i].glyph.origin_y.px);
     }
 
     /* CSS 2.2 §10.8.1 "Leading and half-leading"'s HALF-LEADING, AS THE ONLY THING THAT MOVED — and the
@@ -27739,15 +27925,15 @@ TF_UNIT void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
        `line-height` by 20 moves the baseline down by exactly HALF of that and moves the line box's TOP, which
        is the content box's own top on the first line, by nothing at all. */
     for (i = 0; i < 7; i++) {
-        CHECKF(dlc.v[nbase + i].glyph.origin_y.px - dla.v[nbase + i].glyph.origin_y.px == 10.0,
+        CHECKF(dlc.v[kc + i].glyph.origin_y.px - dla.v[ka + i].glyph.origin_y.px == 10.0,
                "glyph %zu moved %g CSS pixels down the block axis when the paragraph's declared `line-height` "
                "grew from 40px to 60px. CSS 2.2 §10.8.1 \"Leading and half-leading\" puts the baseline `A + "
                "L/2` below the line box's top with `L = 'line-height' - AD`, so a 20px taller line moves it by "
                "TEN — a ZERO is `origin_y` being the line box's TOP EDGE rather than its baseline, which is "
                "the one thing core/layout/line_box.h says a reader is most likely to take it for, and TWENTY "
                "is the whole leading having been put on one side",
-               i, dlc.v[nbase + i].glyph.origin_y.px - dla.v[nbase + i].glyph.origin_y.px);
-        CHECKF(dlc.v[nbase + i].glyph.origin_x.px == dla.v[nbase + i].glyph.origin_x.px,
+               i, dlc.v[kc + i].glyph.origin_y.px - dla.v[ka + i].glyph.origin_y.px);
+        CHECKF(dlc.v[kc + i].glyph.origin_x.px == dla.v[ka + i].glyph.origin_x.px,
                "glyph %zu moved along the INLINE axis when only the paragraph's `line-height` changed. "
                "css-inline-3 §5.1 \"Line Spacing: the line-height property\" states a block-axis length and "
                "core/layout/text_run.c's sum reads none of it, so a movement here is the two axes sharing a "
@@ -27757,15 +27943,15 @@ TF_UNIT void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
     /* AND CSS 2.2 §9.4.2's SECOND LINE BOX — the one shape that runs `line_box_glyphs`' own stack more than
        once. §9.4.2 stacks line boxes with "no vertical separation (except as specified elsewhere)", so the
        second baseline is exactly one used `line-height` below the first. */
-    CHECKF(dld.v[nbase + 6].glyph.origin_y.px - dld.v[nbase].glyph.origin_y.px == 40.0,
+    CHECKF(dld.v[kd + 6].glyph.origin_y.px - dld.v[kd].glyph.origin_y.px == 40.0,
            "the second line box's baseline sits %g CSS pixels below the first where the paragraph declares "
            "`line-height: 40px`. CSS 2.2 §9.4.2 \"Inline formatting contexts\" stacks line boxes with \"no "
            "vertical separation (except as specified elsewhere)\" and CSS 2.2 §10.8.1 makes each one exactly "
            "its own `line-height` tall with the baseline at the same offset inside it — so a ZERO is the "
            "stack in core/layout/line_box.c never advancing and putting both lines on one baseline",
-           dld.v[nbase + 6].glyph.origin_y.px - dld.v[nbase].glyph.origin_y.px);
+           dld.v[kd + 6].glyph.origin_y.px - dld.v[kd].glyph.origin_y.px);
     for (i = 1; i < 8; i++)
-        if (dld.v[nbase + i].glyph.origin_y.px != dld.v[nbase + i - 1].glyph.origin_y.px) dlines++;
+        if (dld.v[kd + i].glyph.origin_y.px != dld.v[kd + i - 1].glyph.origin_y.px) dlines++;
     CHECKF(dlines == 2u,
            "CSS 2.2 §9.4.2's distribution put `\"Hi Bo Hi\"` on %u line boxes at a content width of 100 CSS "
            "pixels, where the widest prefix that fits is `\"Hi Bo \"` at 84.65625 and the whole run is "
@@ -28837,7 +29023,7 @@ TF_UNIT void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *
     static const char TF_IB_INNER_BG[] = "background-color:#0000ff";
     DisplayList base, styled, plain, nested;
     unsigned obase = 0, styled_offers = 0, plain_offers = 0, nested_offers = 0;
-    size_t nbase, i;
+    size_t nbase, ks, kp, kn, i;
     size_t styled_glyphs = 0, plain_glyphs = 0;
     size_t styled_fills = 0, plain_fills = 0, styled_fill_at = 0;
     const DisplayMark *fill, *outer, *inner;
@@ -28866,11 +29052,13 @@ TF_UNIT void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *
            "write, or the previous pass's paragraph still standing in the tree",
            styled.n, plain.n, nbase);
 
-    for (i = nbase; i < styled.n; i++) {
+    ks = tf_pt_locate(&base, &styled, 7u, "styled");
+    kp = tf_pt_locate(&base, &plain, 6u, "plain");
+    for (i = ks; i < ks + 7u; i++) {
         if (styled.v[i].kind == DISPLAY_MARK_GLYPH) styled_glyphs++;
-        if (styled.v[i].kind == DISPLAY_MARK_FILL_RECT) { styled_fills++; styled_fill_at = i - nbase; }
+        if (styled.v[i].kind == DISPLAY_MARK_FILL_RECT) { styled_fills++; styled_fill_at = i - ks; }
     }
-    for (i = nbase; i < plain.n; i++) {
+    for (i = kp; i < kp + 6u; i++) {
         if (plain.v[i].kind == DISPLAY_MARK_GLYPH) plain_glyphs++;
         if (plain.v[i].kind == DISPLAY_MARK_FILL_RECT) plain_fills++;
     }
@@ -28917,8 +29105,8 @@ TF_UNIT void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *
            styled_fills, plain_fills);
 
     /* 3. THE POSITION IN THE SEQUENCE, which is the whole content of a per-box enumeration and is what no
-       revision offering the block once could produce. The index is the paragraph's OWN — this list begins
-       with the document's existing ink, and `nbase` is what the base paint above measured it at. */
+       revision offering the block once could produce. The index is the paragraph's own, counted from where
+       `tf_pt_locate` found its run among the document's existing ink. */
     CHECKF(styled_fill_at == 2u,
            "CSS 2.1 §E.2's step 7.2.1 put the `span`'s background at index %zu of the paragraph's own run, "
            "where the markup derives TWO. §E.2 enumerates the boxes in a line box in tree order and gives "
@@ -28927,7 +29115,7 @@ TF_UNIT void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *
            "background laid before every character of the block, which is what a painter that took ONE offer "
            "for the whole block produces and which lays a later box's ink over an earlier box's text",
            styled_fill_at);
-    fill = &styled.v[nbase + 2];
+    fill = &styled.v[ks + 2];
     CHECKF(fill->color.space == CSS_COLOR_SPACE_SRGB && fill->color.a == 1.0 &&
            fill->color.c[0] == 0.0 && fill->color.c[1] == 1.0 && fill->color.c[2] == 1.0,
            "CSS 2.1 §E.2's step 7.2.1 item 1 laid a fill whose colour is (%g, %g, %g) and not the one the "
@@ -28963,12 +29151,13 @@ TF_UNIT void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *
        position by position rather than by counting kinds, because what this paragraph is for is the ORDER: an
        enumeration that visited the two boxes without descending would put both fills before the glyph of
        `b`, and one that descended without laying the outer box's marks first would put BLUE before RED. */
-    CHECKF(nested.n == nbase + 7u && nested.v[nbase + 0].kind == DISPLAY_MARK_GLYPH &&
-           nested.v[nbase + 1].kind == DISPLAY_MARK_FILL_RECT &&
-           nested.v[nbase + 2].kind == DISPLAY_MARK_GLYPH &&
-           nested.v[nbase + 3].kind == DISPLAY_MARK_FILL_RECT &&
-           nested.v[nbase + 4].kind == DISPLAY_MARK_GLYPH &&
-           nested.v[nbase + 5].kind == DISPLAY_MARK_GLYPH && nested.v[nbase + 6].kind == DISPLAY_MARK_GLYPH,
+    kn = tf_pt_locate(&base, &nested, 7u, "nested");
+    CHECKF(nested.n == nbase + 7u && nested.v[kn + 0].kind == DISPLAY_MARK_GLYPH &&
+           nested.v[kn + 1].kind == DISPLAY_MARK_FILL_RECT &&
+           nested.v[kn + 2].kind == DISPLAY_MARK_GLYPH &&
+           nested.v[kn + 3].kind == DISPLAY_MARK_FILL_RECT &&
+           nested.v[kn + 4].kind == DISPLAY_MARK_GLYPH &&
+           nested.v[kn + 5].kind == DISPLAY_MARK_GLYPH && nested.v[kn + 6].kind == DISPLAY_MARK_GLYPH,
            "CSS 2.1 §E.2's step 7.2.1 laid %zu marks over a document holding %zu without this paragraph and "
            "`a<span>b<em>c</em>d</span>e` with it, where the section derives SEVEN in the order glyph, fill, "
            "glyph, fill, glyph, glyph, glyph. Its item 4 enumerates \"all the element's in-flow, "
@@ -28978,8 +29167,8 @@ TF_UNIT void box_paint_inline_box_selftest(JSContext *ctx, lxb_html_document_t *
            "runs of text. TWO ADJACENT FILLS AT THE FRONT is an enumeration that laid the boxes and then the "
            "characters, which cannot place a nested box at all",
            nested.n, nbase);
-    outer = &nested.v[nbase + 1];
-    inner = &nested.v[nbase + 3];
+    outer = &nested.v[kn + 1];
+    inner = &nested.v[kn + 3];
     CHECKF(outer->color.c[0] == 1.0 && outer->color.c[1] == 0.0 && outer->color.c[2] == 0.0 &&
            inner->color.c[0] == 0.0 && inner->color.c[1] == 0.0 && inner->color.c[2] == 1.0,
            "CSS 2.1 §E.2's step 7.2.1 laid the two nested backgrounds in the wrong order — the `span` "

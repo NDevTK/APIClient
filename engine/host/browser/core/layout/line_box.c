@@ -498,7 +498,9 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
               "available horizontal space is reduced due to floats\", and §9.5's own rule shortens the line "
               "boxes beside a float rather than moving them. A float in this formatting context therefore "
               "makes the number of line boxes a function of the float's own width and height, which is the "
-              "measurement this component exists to avoid needing. BUILD §9.5.1's float placement");
+              "measurement this component exists to avoid needing. BUILD the float's placement at the line this "
+              "fill has reached (§9.5: \"if there is a line box, the outer top of the floated box is aligned "
+              "with the top of the current line box\") over core/layout/float_placement.h");
     d = css_computed_display(el);
     if (css_display_spells(d, CSS_KEYWORD_NONE)) { return LB_CHILD_PLACED; }
     if (css_display_spells(d, CSS_KEYWORD_CONTENTS)) {
@@ -887,10 +889,11 @@ static void lb_collect_end(LbCollect *k, lxb_dom_element_t *style, BlockFlowRun 
        box is next to one ("a line box is next to a float when there exists a vertical position that satisfies
        all of these four conditions: (a) at or below the top of the line box, (b) at or above the bottom of the
        line box, (c) below the top margin edge of the float, and (d) above the bottom margin edge of the
-       float"), which needs a placed float. Next: §9.5's shortening, that test plus "if a shortened line box is
-       too small to contain any content, then the line box is shifted downward (and its width recomputed) until
-       either some content fits or there are no more floats present", over the placement
-       core/layout/flow_position.c's §9.5.1 crash names; `LineBoxAvailableWidth` becomes per line box. How its
+       float"). Next: §9.5's shortening, that test plus "if a shortened line box is too small to contain any
+       content, then the line box is shifted downward (and its width recomputed) until either some content fits
+       or there are no more floats present", over core/layout/float_placement.h's placement and the line boxes'
+       position in the context root's frame (core/layout/flow_placement.h's entry); `LineBoxAvailableWidth`
+       becomes per line box. How its
        absence shows: this abort firing for a context in which no line box and no float share a vertical
        position. */
     /* An `#if APICLIENT_DEV` block rather than a bare `DCHECKF`, because naming the float needs a local, and a
@@ -909,9 +912,9 @@ static void lb_collect_end(LbCollect *k, lxb_dom_element_t *style, BlockFlowRun 
                 "horizontal space is reduced due to floats\". The width this fill would use is the containing "
                 "block's, which is the right number only where no float is next to any of these lines — and "
                 "which line boxes those are is §9.5's own four-condition test over the float's MARGIN BOX, so "
-                "the answer needs the float PLACED. BUILD §9.5's shortening: core/layout/flow_position.c "
-                "crashes for §9.5.1 \"Positioning the float: the 'float' property\"' placement, and this is "
-                "the consumer that turns that placement into a width. UNTIL THEN THE ABORT IS THE ANSWER — "
+                "the answer needs the float PLACED. BUILD §9.5's shortening over core/layout/float_placement.h's "
+                "placement of §9.5.1 \"Positioning the float: the 'float' property\": this is the consumer "
+                "that turns that placement into a width. UNTIL THEN THE ABORT IS THE ANSWER — "
                 "the alternative is the containing block's width reported for a line box that is not that "
                 "wide, which no gate here can tell from a measurement",
                 box_subject(style, sbuf, sizeof sbuf), box_subject(fl, fbuf, sizeof fbuf));

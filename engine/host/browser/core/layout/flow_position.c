@@ -19,6 +19,7 @@
 #include "core/layout/flex_position.h"
 #include "core/layout/grid_track.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/float_placement.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
@@ -36,24 +37,9 @@
    say which box had no rule. A `__FILE__`/`__LINE__` threaded from callers would arrive through a few
    forwarding functions and still not name it. Every remedy names a computed `display`, `position`, `float` or
    `writing-mode`, so the message names the element and that value via core/layout/box_subject.h (which must
-   be total; see there). Messages use `box_subject_computed`, not `fp_computed_is` (whose DCHECK would replace
-   the reported defect), and never ask `replaced_element_of` (which aborts for several element kinds). The
+   be total; see there). Messages use `box_subject_computed`, whose read cannot abort in place of the reported
+   defect, and never ask `replaced_element_of` (which aborts for several element kinds). The
    containing-block assert names a node (`box_subject_node`), since its question is the element's parent. */
-static bool fp_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    char *v = css_computed_value(el, name);
-    char nbuf[160];
-    bool same;
-
-    DCHECKF(v != NULL,
-            "%s, property `%s`: "
-            "the cascade produced no computed value for a property this engine models — every one of "
-            "them is in lexbor's registry with an initial value, so the last layer always answers",
-            box_subject(el, nbuf, sizeof nbuf), name);
-    same = strcmp(v, kw) == 0;
-    free(v);
-    return same;
-}
 
 /* §9.4.1's two rules are stated in physical axes ("laid out one after the other, vertically"; "each box's left
    outer edge touches the left edge of the containing block"), those of `horizontal-tb` only. css-writing-modes-4
@@ -126,6 +112,12 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
     if (!used_value_containing_block_is_rtl(el)) return used_value_px(el, "margin-left");
     return css_px_sub(css_px_sub(cb_width, used_value_px(el, "margin-right")),
                       used_value_border_edge_px(el, false));
+}
+
+CssPx flow_block_inline_offset(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL, "a block's inline offset was asked for no element");
+    return fp_left_offset(el, used_value_containing_block_width(el));
 }
 
 /* CSS 2 §8.1's edges between a box's border, padding and content boxes on the leading side of one axis are
@@ -835,6 +827,33 @@ static bool fp_origin_agrees(lxb_dom_element_t *el, const lxb_dom_element_t *cb,
     return fp_same_example(x, rec.x) && fp_same_example(y, rec.y);
 }
 
+/* CSS 2.2 §9.5.1's placement of float `el` (core/layout/float_placement.h), which is in its context root's
+   content-box frame, moved to that root's content-box origin. §9.4.3's relative translation shifts a box "once
+   [it] has been laid out according to the normal flow or floated", so the translations of the boxes between the
+   root and the float move it too; the root's own is in its origin, and the float's is added by the caller. */
+static bool fp_float_origin(lxb_dom_element_t *el, FlowPoint *out)
+{
+    lxb_dom_node_t *n, *parent = lxb_dom_interface_node(el)->parent;
+    lxb_dom_element_t *root;
+    FlowFloatBox b;
+    FlowPoint o;
+    char nbuf[160];
+
+    DCHECKF(parent != NULL && parent->type == LXB_DOM_NODE_TYPE_ELEMENT, "%s floats with no element parent",
+            box_subject(el, nbuf, sizeof nbuf));
+    root = block_flow_context_root(lxb_dom_interface_element(parent));
+    if (!float_placement_ask(el, &b) || !flow_border_box_origin_ask(root, &o)) return false;
+    out->x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(root, false)),
+                        css_px_add(b.left, used_value_px(el, "margin-left")));
+    out->y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(root, true)),
+                        css_px_add(b.top, used_value_px(el, "margin-top")));
+    for (n = parent; n != lxb_dom_interface_node(root); n = n->parent) {
+        out->x = css_px_add(out->x, fp_relative_offset(lxb_dom_interface_element(n), false));
+        out->y = css_px_add(out->y, fp_relative_offset(lxb_dom_interface_element(n), true));
+    }
+    return true;
+}
+
 /* CSS 2 §8.1 "Box dimensions"' border box, placed through §10.1's cases. `*cb_out` is the containing block for
    §10.1's second case and stays NULL for every other arm, which is all the record needs to know about how a
    point was produced (core/layout/flow_placement.h). Answers false ("not yet") when the second case's climb
@@ -866,52 +885,16 @@ static bool fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_el
        as possible, a right-floating box as far to the right as possible", so its outer edges are the ICB's. */
     if (block_flow_is_floated(el) && fp_is_root(n)) {
         p.y = used_value_px(el, "margin-top");
-        if (fp_computed_is(el, "float", "left")) {
+        if (!block_flow_float_is_right(el)) {
             p.x = used_value_px(el, "margin-left");
         } else {
-            DCHECKF(fp_computed_is(el, "float", "right"),
-                    "%s, computed `float` `%s`: CSS 2 §9.5.1's `Value:` line is `left | right | none`",
-                    box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "float", vbuf, sizeof vbuf));
             p.x = css_px_sub(css_px_sub(fp_icb_width(el), used_value_px(el, "margin-right")),
                              used_value_border_edge_px(el, false));
         }
         *out = p;
         return true;
     }
-    if (block_flow_is_floated(el))
-        DFAILF("%s, computed `float` `%s`: "
-              "CSS 2 §9.5 'Floats' positions a FLOATING box, and §9.4.1's rule does not: a float is shifted to "
-              "the left or right edge of its containing block and then down past any earlier float it would "
-              "overlap, under §9.5.1's nine constraints. Its own used width is a SHRINK-TO-FIT (§10.3.5) and "
-              "core/layout/used_value.c COMPUTES ONE NOW, over core/layout/intrinsic_size.h's measurement of "
-              "the box's content — so the extent is no longer the blocker and the POSITION is the whole of what "
-              "is left. BUILD §9.5.1's nine constraints over the line boxes the float interacts with. "
-              "THAT CLAUSE IS TRUE ABOUT THE EXTENT AND INCOMPLETE ABOUT THE POSITION, AND THE CORRECTION IS "
-              "WRITTEN HERE BECAUSE A LANE DISPATCHED AT IT WILL OTHERWISE RE-DERIVE IT: §9.5.1's rules 4, 5 "
-              "and 6 are a LOWER BOUND on the float's outer top stated over boxes it does not own — its "
-              "containing block's top, \"the outer top of any block or floated box generated by an element "
-              "earlier in the source document\", and \"the top of any line-box containing a box generated by an "
-              "element earlier in the source document\" — so the whole of what this placement needs first is "
-              "WHERE §9.4.1's AND §9.4.2's FLOW STANDS AT THE FLOAT'S OWN PLACE, which CSS 2.2 §9.5 "
-              "\"Floats\" states in its own words as \"if there is a line box, the outer top of the floated box "
-              "is aligned with the top of the current line box\". ONE OF THE TWO ROUTES TO THAT NUMBER NOW "
-              "ANSWERS, WHICH IS WHAT THE ORDERING NOTE THAT STOOD HERE WAS FOR AND IS RECORDED RATHER THAN "
-              "DELETED BECAUSE A READER WILL RE-DERIVE THE OLD STATE. It said EVERY route refused — a container "
-              "with inline content in core/layout/line_box.c and one with a block-level box on its stack in "
-              "core/layout/block_flow.c — and therefore that §9.5.1's placement was not the next member of the "
-              "decomposition, since a diff building it would land code no run could execute. THE BLOCK-LEVEL "
-              "HALF OF THAT IS SPENT: core/layout/block_flow.c no longer refuses §9.4.1's stack for a container "
-              "holding a float, because CSS 2.2 §9.5 says the stack is unchanged by one (\"non-positioned block "
-              "boxes created before and after the float box flow vertically as if the float did not exist\"), so "
-              "§9.4.1's positions and §10.6.3's height are ANSWERED beside a float and §9.5.1's rules 4, 5 and 6 "
-              "have the lower bound they are stated over. WHAT IS STILL REFUSED IS THE LINE-BOX HALF and it is "
-              "refused in TWO places in that one file, not one: `lb_child` for a float inside the run, and a "
-              "CONTEXT check for every other float that reaches these lines. So the remaining order is §9.5's "
-              "shortening BEFORE §9.5.1's placement for a float whose containing block has inline content, and "
-              "§9.5.1 FIRST for one whose containing block holds only block-level boxes — two entry points rather "
-              "than one blocked chain. RETIREMENT: this paragraph goes when a float's own flow position is "
-              "ANSWERED rather than refused, since the ordering it corrects is then visible in the tree",
-              box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "float", vbuf, sizeof vbuf));
+    if (block_flow_is_floated(el)) return fp_float_origin(el, out);
     fp_require_horizontal_tb(el);
     /* §9.4's two normal-flow contexts are alternatives chosen by level, so a box on a line leaves through
        §9.4.2 here, like floats and out-of-flow boxes above. */

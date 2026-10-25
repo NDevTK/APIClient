@@ -325,8 +325,8 @@ static IsChildNext is_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
               "leaving them alone — §9.4.2's own \"line boxes may vary in "
               "width if available horizontal space is reduced due to floats\". So the contribution is neither "
               "this walk's sum along the line nor a maximum over it, and there is no arm here that is right by "
-              "default. BUILD §9.5.1's float placement, which core/layout/line_box.c and "
-              "core/layout/flow_position.c both name as the same absent capability");
+              "default. BUILD the float's contribution beside the line's content, over "
+              "core/layout/float_placement.h's placement");
     /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes" makes a replaced element an atomic inline-level box
        whatever its `display` ("a non-replaced element with a `display` value of `inline` generates an inline
        box"), so a replaced `inline-block` is answered here too, once. CSS 2.1 §10.3.10 "'Inline-block', replaced

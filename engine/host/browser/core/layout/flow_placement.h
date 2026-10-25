@@ -132,10 +132,36 @@ bool flow_placement_run_peek(const lxb_dom_element_t *container, const lxb_dom_e
 void flow_placement_table_box_record(const lxb_dom_element_t *table, CssPx top);
 bool flow_placement_table_box_peek(const lxb_dom_element_t *table, CssPx *out);
 
-/* CSS 2.2 §9.5's first float in the block formatting context `root` establishes, NULL for none, as
-   block_flow_context_first_float finds it; keyed by the context root. */
-void flow_placement_first_float_record(const lxb_dom_element_t *root, lxb_dom_element_t *f);
-bool flow_placement_first_float_peek(const lxb_dom_element_t *root, lxb_dom_element_t **out);
+/* CSS 2.2 §9.5's floats in the block formatting context `root` establishes, in document order, as
+   block_flow_context_floats_ask gathers them; keyed by the context root. The list is appended while the search
+   runs and closed when it ends; a peek answers only a closed list, which the record owns. */
+void flow_placement_floats_append(const lxb_dom_element_t *root, lxb_dom_element_t *f);
+void flow_placement_floats_close(const lxb_dom_element_t *root);
+bool flow_placement_floats_peek(const lxb_dom_element_t *root, lxb_dom_element_t *const **v, size_t *n);
+
+/* CSS 2.2 §9.5.1's placement of one float: its MARGIN box in its context root's content-box frame (x from that
+   box's left content edge, y from its top content edge), and which side it floats to. */
+typedef struct {
+    CssPx left, top, width, height;
+    bool  right;
+} FlowFloatBox;
+void flow_placement_float_box_record(const lxb_dom_element_t *f, FlowFloatBox b);
+bool flow_placement_float_box_peek(const lxb_dom_element_t *f, FlowFloatBox *out);
+
+/* Where a box's block formatting context puts it, written by its parent's walk before the box is asked, so the
+   box's own walk can place its contents against the context while that parent walk is still open. In the context
+   root's content-box frame, the box's top border edge is `base` plus CSS 2.1 §8.3.1's collapse of the run
+   `run_pos`/`run_neg` (the margins met and not yet resolved) with the box's own top run. */
+typedef struct {
+    CssPx base, run_pos, run_neg;
+} FlowBfcEntry;
+void flow_placement_bfc_entry_record(const lxb_dom_element_t *el, FlowBfcEntry e);
+bool flow_placement_bfc_entry_peek(const lxb_dom_element_t *el, FlowBfcEntry *out);
+/* A block container's top content edge in its context root's content-box frame, recorded by its own walk once
+   its top margin is resolved; a context root's own is zero. */
+void flow_placement_bfc_frame_record(const lxb_dom_element_t *el, CssPx top);
+bool flow_placement_bfc_frame_peek(const lxb_dom_element_t *el, CssPx *top);
+
 /* The node that search examines next, held when a resting drive stopped it, so the next ask continues there. */
 void flow_placement_float_scan_hold(const lxb_dom_element_t *root, lxb_dom_node_t *next);
 bool flow_placement_float_scan_peek(const lxb_dom_element_t *root, lxb_dom_node_t **out);

@@ -45,15 +45,22 @@ typedef struct {
     FlowRunStart             run_first, run_after;
     /* CSS 2.1 §17.4's table box on this table element's wrapper stack. */
     CssPx                    table_box_top;
-    /* CSS 2.2 §9.5's first float in the context this box establishes, NULL for none, and the node that
-       search examines next while it is stopped. */
-    lxb_dom_element_t       *first_float;
+    /* CSS 2.2 §9.5's floats in the context this box establishes, in document order (owned), closed by
+       `has_floats`, and the node that search examines next while it is stopped. */
+    lxb_dom_element_t      **floats;
+    size_t                   floats_n, floats_cap;
     lxb_dom_node_t          *float_scan;
+    /* §9.5.1's margin box of this float, in its context root's content-box frame. */
+    FlowFloatBox             float_box;
+    /* Where this box's block formatting context puts it, and its top content edge there (flow_placement.h). */
+    FlowBfcEntry             bfc_entry;
+    CssPx                    bfc_top;
     bool                     has_top;
     bool                     has_origin;
     bool                     has_cb_width;
     bool                     has_anon;
-    bool                     has_run_first, has_run_after, has_table_box, has_first_float, has_float_scan;
+    bool                     has_run_first, has_run_after, has_table_box, has_floats, has_float_scan;
+    bool                     has_float_box, has_bfc_entry, has_bfc_frame;
 } FpEntry;
 
 /* One table slot: the key, and the entry held out of line. An entry carries several concolic lengths, each
@@ -175,6 +182,7 @@ void flow_placement_record_release(FlowPlacementRecord *r)
     for (i = 0; i < r->cap; i++) {
         if (r->tab[i].el == NULL) continue;
         free(r->tab[i].e->anon);
+        free(r->tab[i].e->floats);
         free(r->tab[i].e);
     }
     free(r->tab);
@@ -426,28 +434,121 @@ void flow_placement_table_box_record(const lxb_dom_element_t *table, CssPx top)
     e->has_table_box = true;
 }
 
-void flow_placement_first_float_record(const lxb_dom_element_t *root, lxb_dom_element_t *f)
+void flow_placement_floats_append(const lxb_dom_element_t *root, lxb_dom_element_t *f)
 {
     FpEntry *e;
 
-    DCHECK(root != NULL, "a context's first float was recorded for no context root");
+    DCHECK(root != NULL && f != NULL, "a context's float was recorded for no context root or no float");
     e = fp_entry_for_write(root);
     if (e == NULL) return;
-    DCHECK(!e->has_first_float || e->first_float == f,
-           "one block formatting context reported two different first floats in one job; the search reads "
-           "only the tree and the cascade");
-    e->first_float = f;
-    e->has_first_float = true;
+    DCHECK(!e->has_floats, "a float was appended to a context whose list was already closed");
+    if (e->floats_n == e->floats_cap) {
+        size_t cap = e->floats_cap != 0 ? e->floats_cap * 2 : 4;
+        lxb_dom_element_t **v = realloc(e->floats, cap * sizeof *v);
+
+        CHECK(v != NULL, "out of memory recording one block formatting context's floats");
+        e->floats = v;
+        e->floats_cap = cap;
+    }
+    e->floats[e->floats_n++] = f;
 }
 
-bool flow_placement_first_float_peek(const lxb_dom_element_t *root, lxb_dom_element_t **out)
+void flow_placement_floats_close(const lxb_dom_element_t *root)
+{
+    FpEntry *e;
+
+    DCHECK(root != NULL, "a context's float list was closed for no context root");
+    e = fp_entry_for_write(root);
+    if (e == NULL) return;
+    e->has_floats = true;
+}
+
+bool flow_placement_floats_peek(const lxb_dom_element_t *root, lxb_dom_element_t *const **v, size_t *n)
 {
     const FpEntry *e;
 
-    DCHECK(root != NULL && out != NULL, "a context's first float was asked for no root or with nowhere to put it");
+    DCHECK(root != NULL && v != NULL && n != NULL, "a context's floats were asked for no root or nowhere");
     e = fp_entry_peek(root);
-    if (e == NULL || !e->has_first_float) return false;
-    *out = e->first_float;
+    if (e == NULL || !e->has_floats) return false;
+    *v = e->floats;
+    *n = e->floats_n;
+    return true;
+}
+
+void flow_placement_float_box_record(const lxb_dom_element_t *f, FlowFloatBox b)
+{
+    FpEntry *e;
+
+    DCHECK(f != NULL, "a float's placement was recorded for no float");
+    e = fp_entry_for_write(f);
+    if (e == NULL) return;
+    DCHECK(!e->has_float_box || (fp_same_example(e->float_box.left, b.left) &&
+                                 fp_same_example(e->float_box.top, b.top)),
+           "one float was placed at two positions in one job; §9.5.1 reads only earlier boxes");
+    e->float_box = b;
+    e->has_float_box = true;
+}
+
+bool flow_placement_float_box_peek(const lxb_dom_element_t *f, FlowFloatBox *out)
+{
+    const FpEntry *e;
+
+    DCHECK(f != NULL && out != NULL, "a float's placement was asked for no float or with nowhere to put it");
+    e = fp_entry_peek(f);
+    if (e == NULL || !e->has_float_box) return false;
+    *out = e->float_box;
+    return true;
+}
+
+void flow_placement_bfc_entry_record(const lxb_dom_element_t *el, FlowBfcEntry b)
+{
+    FpEntry *e;
+
+    DCHECK(el != NULL, "a box's place in its formatting context was recorded for no box");
+    e = fp_entry_for_write(el);
+    if (e == NULL) return;
+    DCHECKF(!e->has_bfc_entry || (fp_same_example(e->bfc_entry.base, b.base) &&
+                                  fp_same_example(e->bfc_entry.run_pos, b.run_pos) &&
+                                  fp_same_example(e->bfc_entry.run_neg, b.run_neg)),
+            "one box was put at two places in its formatting context in one job: base %g then %g",
+            e->bfc_entry.base.px, b.base.px);
+    e->bfc_entry = b;
+    e->has_bfc_entry = true;
+}
+
+bool flow_placement_bfc_entry_peek(const lxb_dom_element_t *el, FlowBfcEntry *out)
+{
+    const FpEntry *e;
+
+    DCHECK(el != NULL && out != NULL, "a box's place in its formatting context was asked for no box or nowhere");
+    e = fp_entry_peek(el);
+    if (e == NULL || !e->has_bfc_entry) return false;
+    *out = e->bfc_entry;
+    return true;
+}
+
+void flow_placement_bfc_frame_record(const lxb_dom_element_t *el, CssPx top)
+{
+    FpEntry *e;
+
+    DCHECK(el != NULL, "a box's content edge in its formatting context was recorded for no box");
+    e = fp_entry_for_write(el);
+    if (e == NULL) return;
+    DCHECKF(!e->has_bfc_frame || fp_same_example(e->bfc_top, top),
+            "one box's top content edge was put at two places in its formatting context in one job: %g then %g",
+            e->bfc_top.px, top.px);
+    e->bfc_top = top;
+    e->has_bfc_frame = true;
+}
+
+bool flow_placement_bfc_frame_peek(const lxb_dom_element_t *el, CssPx *top)
+{
+    const FpEntry *e;
+
+    DCHECK(el != NULL && top != NULL, "a box's content edge in its formatting context was asked for no box or nowhere");
+    e = fp_entry_peek(el);
+    if (e == NULL || !e->has_bfc_frame) return false;
+    *top = e->bfc_top;
     return true;
 }
 
@@ -459,7 +560,7 @@ void flow_placement_float_scan_hold(const lxb_dom_element_t *root, lxb_dom_node_
     e = fp_entry_for_write(root);
     CHECK(e != NULL, "a float search stopped with no placement record to hold its place; it stops only under a "
                      "resting drive, whose job holds one");
-    DCHECK(!e->has_first_float, "a float search held its place after its context's answer was recorded");
+    DCHECK(!e->has_floats, "a float search held its place after its context's answer was recorded");
     e->float_scan = next;
     e->has_float_scan = true;
 }

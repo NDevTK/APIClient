@@ -65,6 +65,10 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el);
    `flow_border_box_origin` is this ask inside a drive that computes what it deferred. */
 bool flow_border_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out);
 
+/* CSS 2.2 §9.4.1's horizontal rule for in-flow block-level `el`: the distance from its containing block's left
+   content edge to its left border edge, over that block's used width and `direction`. */
+CssPx flow_block_inline_offset(lxb_dom_element_t *el);
+
 /* The top-left corner of `el`'s padding box: the border box origin moved inward by CSS 2 §8.1 "Box dimensions"'
    leading border on each axis. Derived from `flow_border_box_origin`, so unplaceable boxes crash there first.
    CSSOM View §2 "Terminology"'s scrolling area ("the element's top padding edge", core/layout/scrolling_area.h)
