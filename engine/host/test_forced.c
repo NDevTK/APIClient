@@ -1139,6 +1139,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
 #include "fixture/fileparsefetch.h"
+#include "fixture/fileparsedrop.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1612,6 +1613,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
     { "fileparse-fetch", HTML_FILEPARSE_FETCH },
+    { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14999,6 +15001,40 @@ TF_UNIT void probes_fileparse_fetch(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fileparse-drop` document (fixture/fileparsedrop.h). Reach and taint, and the PoC's act; a
+   dropped file's source is core/file/file_system.c's `file:NAME`, whose delivery is `user-file`. */
+TF_UNIT void probes_fileparse_drop(const char *js, Probe *tab, int *n) {
+    char src[192] = "";
+    int has = s_rooted_source(js, "eval", "file:", src, sizeof src);
+    size_t span = 0;
+    const char *rec = has ? s_record(js, "eval", src, &span) : NULL;
+    const char *dd_why = NULL; int dd_tt = 1;
+    fold_row(&dd_tt, &dd_why, !!strstr(js, "\"/api/fpd-drop\""),
+             "NOT REACHED: there is no /api/fpd-drop record, so the drop handler was never driven");
+    const char *dr_why = NULL; int dr_tt = 1;
+    fold_row(&dr_tt, &dr_why, !!strstr(js, "\"/api/fpd-read\""),
+             "NOT REACHED: there is no /api/fpd-read record, so the dropped file's arrayBuffer() never settled with "
+             "bytes");
+    fold_row(&dr_tt, &dr_why, !!strstr(js, "\"/api/fpd-parsed\""),
+             "the dropped bytes were read but the walk never reached the format's body");
+    const char *ds_why = NULL; int ds_tt = 1;
+    fold_row(&ds_tt, &ds_why, has,
+             "NOT REACHED: no eval @S record carries a source rooted in a user file, so the dropped file's bytes "
+             "did not reach new Function as attacker input");
+    fold_row(&ds_tt, &ds_why, has && s_field(js, "eval", src, "\"delivery\":\"user-file\""),
+             "the record does not state the user-file delivery its source declares");
+    const char *dp_why = NULL; int dp_tt = 1;
+    fold_row(&dp_tt, &dp_why, rec && memmem(rec, span, "drop", 4) != NULL,
+             "the record does not name the drop, the act that delivers the file");
+    const Probe rows[] = {
+        { "fpd-drop-driven", dd_tt, "/api/fpd-drop", SESS_EXPLORE, dd_why },
+        { "fpd-bytes-read", dr_tt, "/api/fpd-read", SESS_EXPLORE, dr_why },
+        { "fpd-sink-file", ds_tt, "function fpdParse", SESS_EXPLORE, ds_why },
+        { "fpd-poc-drop", dp_tt, "function fpdOnDrop", SESS_EXPLORE, dp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18862,6 +18898,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);
     probes_fileparse_fetch(js, probes, &np);
+    probes_fileparse_drop(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
