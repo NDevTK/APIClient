@@ -19297,10 +19297,13 @@ TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
        therefore which spellings of an exit the source can carry. A build that fires BOTH has stopped applying
        the source's transform (the data state's only exit is `<`); a build that fires NEITHER has a derivation
        that stops at the first spelling, which is the defect this fixture was added for. */
-    DCHECK(!(st_lpark == S_FIRED),
-           "the markup sink fed the RAW fragment produced a fire-verified PoC — §13.2.5.1's data state is left "
-           "only through `<`, which the fragment percent-encode set holds, so a PoC there means a candidate "
-           "was delivered without the source's own transform being applied to it");
+    /* The `location.hash` search's one value also reaches lhAttr through `.slice(1)` (its own witness there),
+       so it can fire at that write with the attribute escape s-attr fires with. What it cannot do is fire at
+       lhHost, whose data state is left only through `<`, which the fragment percent-encode set holds. */
+    DCHECK(st_lpark != S_FIRED || s_poc(ss, "innerHTML", LOCATION_HASH_SRC, "'//src='x'//onerror='X9()'//x9pad='"),
+           "the markup search over the raw fragment fired with something other than the attribute escape its "
+           "lhAttr witness derives — lhHost's §13.2.5.1 data state is left only through `<`, which the fragment "
+           "percent-encode set holds, so such a PoC means a candidate skipped the source's own transform");
     const Probe rows[] = {
         { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE, jsonfork_why },
         { "s-eval", s_eval, "state.code", SESS_EXPLORE },
