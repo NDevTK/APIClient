@@ -1211,6 +1211,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbkpwalk.h"
 #include "fixture/idbkphash.h"
 #include "fixture/idbkpcycle.h"
+#include "fixture/idbkpinject.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/workererror.h"
@@ -1750,6 +1751,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkpwalk", HTML_IDBKPWALK },
     { "idbkphash", HTML_IDBKPHASH },
     { "idbkpcycle", HTML_IDBKPCYCLE },
+    { "idbkpinject", HTML_IDBKPINJECT },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "workererror", HTML_WORKERERROR },
@@ -16894,6 +16896,33 @@ TF_UNIT void probes_idbkpcycle(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbkpinject` document (fixture/idbkpinject.h): §7.2 over an unknown key path injects the
+   generated key where the page's own walk of the path finds it, and refuses a path through a String member. */
+TF_UNIT void probes_idbkpinject(const char *js, Probe *tab, int *n) {
+    const char *i_why = NULL; int i_tt = 1;
+    fold_row(&i_tt, &i_why, param_value_is(js, "/api/idbki-put", "got", "found-1"),
+             "no /api/idbki-put?got=found-1 record: no arm injected the generated key 1 where the page's walk of "
+             "the key path over the stored record finds it");
+    const char *f_why = NULL; int f_tt = 1;
+    fold_row(&f_tt, &f_why, param_value_is(js, "/api/idbki-put", "got", "DataError"),
+             "no /api/idbki-put?got=DataError record: no arm took the key path through the String member `s`, "
+             "where §7.2's check answers false");
+    const char *d_why = NULL; int d_tt = 1;
+    fold_row(&d_tt, &d_why, param_value_is(js, "/api/idbki-deep", "got", "found-a-under"),
+             "no /api/idbki-deep?got=found-a-under record: no arm injected the generated key under the member `a` "
+             "where the page's walk finds it with `path.split('.')[0]` reading \"a\"");
+    fold_row(&d_tt, &d_why, !param_value_is(js, "/api/idbki-deep", "got", "found-other-under") &&
+                            !param_value_is(js, "/api/idbki-deep", "got", "miss-other-under"),
+             "a /api/idbki-deep record has the key injected under `a` while the page's `path.split('.')[0]` is "
+             "not \"a\": the injection's decided \"begins with a.\" left the split's first element unpinned");
+    const Probe rows[] = {
+        { "idbki-inject", i_tt, "/api/idbki-put", SESS_EXPLORE, i_why },
+        { "idbki-false", f_tt, "/api/idbki-put", SESS_EXPLORE, f_why },
+        { "idbki-deep", d_tt, "/api/idbki-deep", SESS_EXPLORE, d_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -21388,6 +21417,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkpwalk(js, probes, &np);
     probes_idbkphash(js, probes, &np);
     probes_idbkpcycle(js, probes, &np);
+    probes_idbkpinject(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_workererror(js, probes, &np);
