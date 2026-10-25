@@ -23,6 +23,8 @@ void concolic_init(JSContext *ctx);
    substitution. The value CLASS is deliberately not among them and the release says why at the line that
    checks it. */
 void concolic_free(void);
+/* test_forced.c's @BOUND: two spellings differing past their bound keep two shapes and two identities. */
+void concolic_bound_selftest(void);
 
 /* WHOSE UNKNOWN A ROOT IS — the fourth fact a provenance holds, and a different question from all three
  * above it. `concolic_src_c` names WHERE A CANDIDATE IS INJECTED, `concolic_root_c` names WHICH COMPONENT

@@ -1148,6 +1148,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/contchain.h"
 #include "fixture/weakchain.h"
 #include "fixture/gcchurn.h"
+#include "fixture/forkkey.h"
 #include "fixture/importchain.h"
 #include "fixture/borrowedkey.h"
 #include "fixture/replyrole.h"
@@ -1644,6 +1645,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "contchain", HTML_CONTCHAIN },
     { "weakchain", HTML_WEAKCHAIN },
     { "gcchurn", HTML_GCCHURN },
+    { "forkkey", HTML_FORKKEY },
     { "importchain", HTML_IMPORTCHAIN },
     { "borrowedkey", HTML_BORROWEDKEY },
     { "replyrole", HTML_REPLYROLE },
@@ -14412,6 +14414,24 @@ TF_UNIT void probes_gcchurn(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `forkkey` document (fixture/forkkey.h). */
+TF_UNIT void probes_forkkey(const char *js, Probe *tab, int *n) {
+    /* The arm that consumed 40 times is reached, and the result document stays small: an identity derived from
+       itself 40 times is bounded rather than spelled. */
+    const char *fk_why = NULL; int fk_tt = 1;
+    fold_row(&fk_tt, &fk_why, !!strstr(js, "\"/api/forkkey\""),
+             "NOT REACHED: there is no /api/forkkey record at all");
+    fold_row(&fk_tt, &fk_why, param_value_is(js, "/api/forkkey", "n", "40"),
+             "no arm consumed the source 40 times");
+    fold_row(&fk_tt, &fk_why, strlen(js) < ((size_t)1 << 20),
+             "the result document grew past 1 MiB: an identity is spelling its derivation, which doubles with "
+             "each iteration of the loop");
+    const Probe rows[] = {
+        { "self-derived-identity-bounded", fk_tt, "/api/forkkey", SESS_EXPLORE, fk_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `importchain` document (fixture/importchain.h). */
 TF_UNIT void probes_importchain(const char *js, Probe *tab, int *n) {
     /* A 20000-module import chain loads, links and evaluates, and the first module reads the last one's depth
@@ -20037,6 +20057,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_contchain(js, probes, &np);
     probes_weakchain(js, probes, &np);
     probes_gcchurn(js, probes, &np);
+    probes_forkkey(js, probes, &np);
     probes_importchain(js, probes, &np);
     probes_borrowedkey(js, probes, &np);
     probes_replyrole(js, probes, &np);
@@ -33780,6 +33801,7 @@ int main(int argc, char **argv) {
     secure_hash_selftest();
     hmac_selftest();
     gc_cycle_step_selftest();
+    concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
        and on nothing they compute, so its failure is its own — but it shares their tier, and a
        primitive's row must be reported at the primitive rather than at the §14 method that will

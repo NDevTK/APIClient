@@ -12,6 +12,7 @@
 #include "solver/metrics.h"   /* the attacker-source mint raises `_sourceReads` */
 #include "core/timing/thread_work.h"   /* a constraint probe is priced by the bytes it hashes */
 #include "core/timing/hr_time.h"       /* the current time the engine asks for (`.clock`) */
+#include "core/crypto/secure_hash.h"   /* a long identity is the digest of its spelling */
 #include "check.h"
 #include <stdarg.h>
 #include <stdlib.h>
@@ -290,7 +291,12 @@ const char *concolic_lit_report_name(ConcolicLit k)
  *     member is often a property name, which a page may spell with any byte.
  *   - the length is measured and written by the same snprintf, so no buffer can truncate; a truncated key is
  *     two predicates under one name.
- * An absent member makes the whole composition absent (see the struct above). */
+ * An absent member makes the whole composition absent (see the struct above).
+ * A spelling longer than CONCOLIC_IDENT_SPELL_MAX is replaced by its digest (ident_digest), so every identity is
+ * bounded: a member is itself a composition, and a loop that derives a value from itself twice per iteration
+ * (`src = src.substring(re.exec(src)[0].length)`) would otherwise double its identity at every iteration. */
+#define CONCOLIC_IDENT_SPELL_MAX 256
+
 static size_t ident_field_len(const char *f)
 {
     char pre[24];
@@ -308,6 +314,36 @@ static size_t ident_field_put(char *out, size_t at, const char *f)
     memcpy(out + at, pre, (size_t)w);
     memcpy(out + at + (size_t)w, f, l);
     return at + (size_t)w + l;
+}
+
+/* The identity of a spelling too long to keep: the composition `#` over the first 128 bits of the spelling's
+   SHA-256, in hex. No other composition uses the tag, so a digest never equals a spelled identity, and two
+   spellings share one only by a 128-bit collision. It is a function of the spelling alone, so it is the same on
+   the minting flow, on a cold-tier resume and in the next session. Takes ownership of `spelled`. */
+static char *ident_digest(char *spelled, size_t len)
+{
+    static const char HEX[] = "0123456789abcdef";
+    uint8_t d[SECURE_HASH_MAX_DIGEST];
+    char hex[33];
+    const char *f[1];
+    SecureHash h;
+    char *out;
+    int i;
+
+    secure_hash_init(&h, SECURE_HASH_SHA256);
+    secure_hash_update(&h, (const uint8_t *)spelled, len);
+    secure_hash_finish(&h, d, sizeof d);
+    free(spelled);
+    for (i = 0; i < 16; i++) {
+        hex[2 * i] = HEX[d[i] >> 4];
+        hex[2 * i + 1] = HEX[d[i] & 15];
+    }
+    hex[32] = '\0';
+    f[0] = hex;
+    out = concolic_ident_compose("#", f, 1);
+    DCHECK(out != NULL && strlen(out) <= CONCOLIC_IDENT_SPELL_MAX,
+           "an identity's digest was itself longer than the bound it replaces a spelling under");
+    return out;
 }
 
 char *concolic_ident_compose(const char *tag, const char *const *fields, int n)
@@ -331,6 +367,8 @@ char *concolic_ident_compose(const char *tag, const char *const *fields, int n)
     for (i = 0; i < n; i++) at = ident_field_put(out, at, fields[i]);
     out[at] = '\0';
     DCHECK(at == len, "an identity was composed to a different length than it was measured for");
+    if (len > CONCOLIC_IDENT_SPELL_MAX)
+        return ident_digest(out, len);
     return out;
 }
 
@@ -6248,8 +6286,72 @@ void concolic_free(void)
            "reaches its record through this id, and the collection before it marks each example through it");
 }
 
-static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, const char *root,
-                              unsigned root_whose, char *ident, JSValue example)
+/* The longest display shape (and shape-spelled provenance) a value keeps in full. A derived shape is composed over
+   its operands' shapes, so a value derived from itself twice per iteration doubles it as an identity spelling
+   would (concolic_ident_compose); past this length the shape is its first bytes, cut on a UTF-8 boundary, then
+   `…#` and the first 128 bits of the whole spelling's SHA-256. The head keeps the root's hole readable, and the
+   digest keeps two different spellings two different names, as an unknown name must be. A function of the
+   spelling alone, so it is the same in every flow and session. Caller frees. */
+#define CONCOLIC_SHAPE_SPELL_MAX 1024
+static char *shape_bounded(const char *spelled)
+{
+    static const char HEX[] = "0123456789abcdef";
+    size_t len = strlen(spelled), head = CONCOLIC_SHAPE_SPELL_MAX - 40;
+    uint8_t d[SECURE_HASH_MAX_DIGEST];
+    SecureHash h;
+    char *out;
+    int i;
+
+    if (len <= CONCOLIC_SHAPE_SPELL_MAX)
+        return strdup(spelled);
+    while (head > 0 && ((unsigned char)spelled[head] & 0xC0) == 0x80)
+        head--;
+    secure_hash_init(&h, SECURE_HASH_SHA256);
+    secure_hash_update(&h, (const uint8_t *)spelled, len);
+    secure_hash_finish(&h, d, sizeof d);
+    out = reclaim_malloc(head + 4 + 32 + 1);
+    if (!out) return NULL;
+    memcpy(out, spelled, head);
+    memcpy(out + head, "\xe2\x80\xa6#", 4);   /* U+2026 HORIZONTAL ELLIPSIS, then the digest */
+    for (i = 0; i < 16; i++) {
+        out[head + 4 + 2 * i] = HEX[d[i] >> 4];
+        out[head + 4 + 2 * i + 1] = HEX[d[i] & 15];
+    }
+    out[head + 4 + 32] = '\0';
+    return out;
+}
+
+/* @BOUND, the negative control on both bounds: two spellings that share their first 2000 bytes and differ only
+   after them must keep two names. Each composition is bounded at its own level over members already bounded, so
+   a bounded name is a hash over the operator and its members' bounded names and the full spelling of a
+   self-derived value is never built. */
+void concolic_bound_selftest(void)
+{
+    char a[2101], b[2101];
+    const char *fa[1] = { a }, *fb[1] = { b };
+    char *sa, *sb, *ia, *ib;
+
+    memset(a, 'x', 2100); memset(b, 'x', 2100);
+    a[2099] = 'A'; b[2099] = 'B';
+    a[2100] = b[2100] = '\0';
+    sa = shape_bounded(a); sb = shape_bounded(b);
+    ia = concolic_ident_compose("t", fa, 1); ib = concolic_ident_compose("t", fb, 1);
+    CHECK(sa && sb && ia && ib, "concolic: OOM in the bound selftest");
+    printf("@BOUND {\"shapeLen\":%zu,\"shapesDiffer\":%d,\"identLen\":%zu,\"identsDiffer\":%d}\n",
+           strlen(sa), strcmp(sa, sb) != 0, strlen(ia), strcmp(ia, ib) != 0);
+    CHECK(strlen(sa) <= CONCOLIC_SHAPE_SPELL_MAX && strlen(sb) <= CONCOLIC_SHAPE_SPELL_MAX,
+          "a bounded display shape is longer than its bound");
+    CHECK(memcmp(sa, a, 900) == 0, "a bounded display shape lost the head of its spelling");
+    CHECK(strcmp(sa, sb) != 0, "two display shapes that differ past their kept head were bounded to one name");
+    CHECK(strcmp(ia, ib) != 0, "two identities that differ past the bound were digested to one key");
+    free(sa); free(sb); free(ia); free(ib);
+}
+
+/* `whole`: the shape is a string concatenation's, display(a)++display(b), whose hole spans index its bytes and
+   which key_name spells as a property key, so it is kept whole; it grows only as the concatenated string itself
+   does. Every other shape is bounded by shape_bounded. */
+static JSValue concolic_alloc_shaped(JSContext *ctx, const char *shape, const char *src, const char *root,
+                                     unsigned root_whose, char *ident, JSValue example, bool whole)
 {
     JSValue obj;
     Concolic *c;
@@ -6287,14 +6389,14 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
                                 "collapses a branch to a concrete arm and deletes everything behind the other");
     c = reclaim_calloc(1, sizeof *c);
     CHECK(c, "concolic_new: OOM allocating value state — a dropped concolic corrupts the flow's domain");
-    c->shape = strdup(shape ? shape : "{}");
+    c->shape = whole ? strdup(shape) : shape_bounded(shape ? shape : "{}");
     CHECK(c->shape, "concolic: OOM copying a display shape");
-    c->src = src ? strdup(src) : NULL;
+    c->src = src ? shape_bounded(src) : NULL;
     CHECK(!src || c->src, "concolic: OOM copying a source's provenance");
     /* A value whose injection identity is its own display shape names itself by it: a member read, a call
        result, a `typeof`. A source read names itself under a src that is not its shape (pin_src_names_self);
        a derivation that inherited an operand's src does not. */
-    c->src_own = (signed char)(src != NULL && !strcmp(src, c->shape));
+    c->src_own = (signed char)(c->src != NULL && !strcmp(c->src, c->shape));
     c->root = root ? strdup(root) : NULL;
     CHECK(!root || c->root, "concolic: OOM copying a value's delivery root");
     c->root_whose = root_whose;   /* one fact with the root above — see the field and the assert */
@@ -6314,8 +6416,23 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     return obj;
 }
 
+static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, const char *root,
+                              unsigned root_whose, char *ident, JSValue example)
+{
+    return concolic_alloc_shaped(ctx, shape, src, root, root_whose, ident, example, false);
+}
+
+static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const char *src, const char *root,
+                                       unsigned root_whose, char *ident, JSValue example, bool whole);
+
 static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, const char *root,
                                 unsigned root_whose, char *ident, JSValue example)
+{
+    return concolic_derived_shaped(ctx, shape, src, root, root_whose, ident, example, false);
+}
+
+static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const char *src, const char *root,
+                                       unsigned root_whose, char *ident, JSValue example, bool whole)
 {
     /* A candidate run substitutes one source with a breakout. Checked here, at the one place every source mint
        goes through, so a source installed as a plain property value (location.hash, document.cookie) is
@@ -6327,7 +6444,7 @@ static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *s
         free(ident);
         return concolic_deliver(ctx, src, root, g_cand_bytes);
     }
-    return concolic_alloc(ctx, shape, src, root, root_whose, ident, example);
+    return concolic_alloc_shaped(ctx, shape, src, root, root_whose, ident, example, whole);
 }
 
 /* A source read, the root of every identity. Its identity is its provenance, because nothing derived it. A
@@ -6851,8 +6968,8 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     }
     if (got == 1) { free(ident); ident = aff_ident(af); }
 
-    JSValue result = concolic_derived(ctx, shape, src, root, derived_root_whose(ops, 2), ident, example);
-                                                              /* consumes example and ident */
+    JSValue result = concolic_derived_shaped(ctx, shape, src, root, derived_root_whose(ops, 2), ident, example,
+                                             string_arm);   /* consumes example and ident */
     if (af) aff_attach(result, af);
     if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
     /* §13.15.3 answers a String, a Number or a BigInt; the numeric arm is a Number unless both operands may be
