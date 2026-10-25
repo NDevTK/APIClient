@@ -25,8 +25,11 @@ void idb_open_free(JSRuntime *rt);
  * `has_version` is the difference between `open(name)` and `open(name, v)` — §5.1 step 5 is stated over
  * "version is undefined", and collapsing the two would make `open(name)` on a database at version 7 an upgrade
  * to 1 and then a VersionError. OWNED. */
-JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool has_version);
+JSValue idb_open_request(JSContext *ctx, const char *name, JSValueConst name_unknown, double version,
+                         bool has_version);
 
+/* `name_unknown` (both entries) is the page's name where it is an unknown, `name` then being the bytes
+   idb_name_cstr named it by, and JS_NULL where the name is stated; §5.1 and §5.3 step 4 fork over it. */
 /* §4.3's `deleteDatabase(name)` — everything after its own two synchronous steps, which are the storage key
  * and nothing else (there is no version, so there is no TypeError and no coercion of the page's).
  *
@@ -35,6 +38,6 @@ JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool 
  * new IDBOpenDBRequest object for request". It is filed in the SAME §2.8.2 connection queue for `name` as an
  * open is, which is what makes `deleteDatabase(n)` immediately followed by `open(n, 1)` an ordering rather
  * than a race, and it starts §5.3 when the queue's head is now this request. OWNED. */
-JSValue idb_delete_request(JSContext *ctx, const char *name);
+JSValue idb_delete_request(JSContext *ctx, const char *name, JSValueConst name_unknown);
 
 #endif

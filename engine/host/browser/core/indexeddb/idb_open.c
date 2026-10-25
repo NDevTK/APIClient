@@ -70,6 +70,7 @@
 #include "core/indexeddb/idb_request.h"
 #include "core/indexeddb/idb_transaction.h"
 #include "core/indexeddb/idb_version_change_event.h"
+#include "solver/concolic.h"
 
 /* §5.1's AND §5.3's OWN LOCALS, on the record that carries them across the algorithm's hand-offs. */
 #define E_REQUEST      "request"          /* §2.8.1's open request */
@@ -83,6 +84,8 @@
    was run through the wrong algorithm, which is what entry_enqueue's pairing assertion makes unreachable. */
 #define E_KIND         "kind"
 #define E_NAME         "name"             /* the database name, which is also this entry's queue */
+#define E_NAME_UNKNOWN "nameUnknown"      /* the page's name where it is an unknown, else JS_NULL */
+#define E_NAME_CANDS   "nameCandidates"   /* §2.1's names step 4 forks over, snapshotted at its first ask */
 #define E_VERSION      "version"          /* §5.1's `version` once step 5 has decided it */
 #define E_HAS_VERSION  "hasVersion"       /* whether §4.3's caller gave one — step 5 branches on it */
 #define E_DB           "db"               /* §5.1 step 4's `db`, JS_NULL until step 6 */
@@ -327,6 +330,8 @@ typedef struct {
     JSValue     ev;       /* the event in flight (owned) */
     EventFireCb cb;       /* the dispatch request's operand buffer */
     uint8_t     did_throw;/* §4.2 step 7's legacyOutputDidListenersThrowFlag, which §5.7 step 10.6 reads */
+    JSValue     pred;     /* step 4's equality over an unknown name, held across its fork (owned) */
+    uint32_t    cand;     /* which of E_NAME_CANDS that fork asks next */
 } JSIdbOpenState;
 
 static void js_idb_open_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -335,6 +340,7 @@ static void js_idb_open_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int i;
 
     v->val(ctx, &s->ev);
+    v->val(ctx, &s->pred);
     STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
 
@@ -348,7 +354,83 @@ static void open_state_start(JSIdbOpenState *s)
         return;
     s->started = 1;
     s->ev = JS_UNDEFINED;
+    s->pred = JS_UNINITIALIZED;
+    s->cand = 0;
     STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
+}
+
+/* §5.1 step 4's and §5.3 step 4's "the database named name". Where the name is an unknown (E_NAME_UNKNOWN) the
+   database it names depends on it, so the lookup forks over IsStrictlyEqual of the unknown and each name §2.1's
+   set held at the step's first ask, in order; the arm where it equals none takes E_NAME, the name its identity
+   bought. Each equal arm is a predicate over the unknown's domain, which prunes the arms it contradicts.
+   Answers 0 with the name in *pname (owned), a request code, or -1.
+   Named residual. Not covered: an entry whose arm names an existing database stays in its own §2.8.2 queue,
+   so it is not ordered behind that database's earlier requests. Next diff: move it to the chosen name's queue
+   at the fork. How its absence shows: a pending open of the existing name and an equal-arm open run their
+   step 4 in arrival order neither queue states. */
+static int open_find_name(JSContext *ctx, JSIdbOpenState *s, JSValueConst entry, const char *ask, JSValue *pname)
+{
+    JSValue unknown = entry_get(ctx, entry, E_NAME_UNKNOWN), cands, own;
+    uint32_t n;
+    int r, arm;
+
+    *pname = JS_UNDEFINED;
+    own = entry_get(ctx, entry, E_NAME);
+    if (JS_IsNull(unknown)) {
+        *pname = own;
+        return 0;
+    }
+    cands = entry_get(ctx, entry, E_NAME_CANDS);
+    if (JS_IsNull(cands)) {
+        JSValue dbs = idb_database_list(ctx);
+        uint32_t i, k = 0, m = open_list_len(ctx, dbs);
+
+        JS_FreeValue(ctx, cands);
+        cands = JS_NewArray(ctx);
+        CHECK(!JS_IsException(cands), "IndexedDB: step 4's candidate names could not be allocated");
+        for (i = 0; i < m; i++) {
+            JSValue db = JS_GetPropertyUint32(ctx, dbs, i), nm = idb_database_name(ctx, db);
+
+            if (!JS_IsStrictEqual(ctx, nm, own))   /* the fresh arm is the identity's own name */
+                JS_DefinePropertyValueUint32(ctx, cands, k++, JS_DupValue(ctx, nm), JS_PROP_C_W_E);
+            JS_FreeValue(ctx, nm);
+            JS_FreeValue(ctx, db);
+        }
+        JS_FreeValue(ctx, dbs);
+        entry_set(ctx, entry, E_NAME_CANDS, JS_DupValue(ctx, cands));
+    }
+    n = open_list_len(ctx, cands);
+    for (; s->cand < n; s->cand++) {
+        JSValue nm = JS_GetPropertyUint32(ctx, cands, s->cand);
+
+        if (JS_IsUninitialized(s->pred)) {
+            JSValue sp[2];
+
+            sp[0] = JS_DupValue(ctx, unknown);
+            sp[1] = JS_DupValue(ctx, nm);
+            CHECK(concolic_cmp_hook(ctx, sp + 2, 0, JS_CONCOLIC_EQ_STRICT),
+                  "IndexedDB: step 4's equality declined a name already established as unknown");
+            s->pred = sp[0];
+        }
+        r = step_tobool_run(ctx, &s->hdr, s->pred, ask, &arm);
+        if (r) {
+            JS_FreeValue(ctx, nm);
+            JS_FreeValue(ctx, cands); JS_FreeValue(ctx, unknown); JS_FreeValue(ctx, own);
+            return r;
+        }
+        JS_FreeValue(ctx, s->pred);
+        s->pred = JS_UNINITIALIZED;
+        if (arm) {
+            *pname = nm;
+            JS_FreeValue(ctx, cands); JS_FreeValue(ctx, unknown); JS_FreeValue(ctx, own);
+            return 0;
+        }
+        JS_FreeValue(ctx, nm);
+    }
+    JS_FreeValue(ctx, cands);
+    JS_FreeValue(ctx, unknown);
+    *pname = own;
+    return 0;
 }
 
 /* ---- §5.1's OPEN A DATABASE CONNECTION, steps 4 through 10.6 ---------------------------------------------- */
@@ -438,8 +520,12 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         DCHECK(entry_kind(ctx, entry) == IDB_REQ_OPEN,
                "§5.1's machine ran for an entry that is not an open request");
         {
-            JSValue nv = entry_get(ctx, entry, E_NAME);
-            const char *name = JS_ToCString(ctx, nv);
+            JSValue nv;
+            const char *name;
+
+            r = open_find_name(ctx, s, entry, "Indexed Database §5.1 step 4 (the database named name)", &nv);
+            if (r) return r;
+            name = JS_ToCString(ctx, nv);
 
             CHECK(name != NULL, "IndexedDB: an §5.1 entry could not report its own database name");
             /* Step 4: "Let db be the database named name in storageKey, or null otherwise." */
@@ -732,8 +818,12 @@ static int js_idb_delete_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         DCHECK(entry_kind(ctx, entry) == IDB_REQ_DELETE,
                "§5.3's machine ran for an entry that is not a delete request");
         {
-            JSValue nv = entry_get(ctx, entry, E_NAME);
-            const char *name = JS_ToCString(ctx, nv);
+            JSValue nv;
+            const char *name;
+
+            r = open_find_name(ctx, s, entry, "Indexed Database §5.3 step 4 (the database named name)", &nv);
+            if (r) return r;
+            name = JS_ToCString(ctx, nv);
 
             CHECK(name != NULL, "IndexedDB: an §5.3 entry could not report its own database name");
             /* Step 4: "Let db be the database named name in storageKey, if one exists. Otherwise, return 0
@@ -1330,8 +1420,8 @@ static const JSTrampStepDef js_idb_result_def = {
    step 3 has anything to start there is an entry to ask — and a `stepid` argument here would be a SECOND
    answer to a question entry_start_machine already answers, which is exactly how the dequeue came to answer
    it wrong. Returns the REQUEST, owned; the member hands it straight back to the page. */
-static JSValue open_request_enqueue(JSContext *ctx, const char *name, int kind, double version,
-                                    bool has_version)
+static JSValue open_request_enqueue(JSContext *ctx, const char *name, JSValueConst name_unknown, int kind,
+                                    double version, bool has_version)
 {
     JSValue req, entry, q;
     uint32_t n;
@@ -1343,6 +1433,10 @@ static JSValue open_request_enqueue(JSContext *ctx, const char *name, int kind, 
     entry_set(ctx, entry, E_KIND, JS_NewInt32(ctx, kind));
     entry_set(ctx, entry, E_REQUEST, JS_DupValue(ctx, req));
     entry_set(ctx, entry, E_NAME, JS_NewString(ctx, name));
+    DCHECK(JS_IsNull(name_unknown) || concolic_is(name_unknown),
+           "§4.3 handed §2.8.1's request a name that is neither stated (JS_NULL) nor unknown");
+    entry_set(ctx, entry, E_NAME_UNKNOWN, JS_DupValue(ctx, name_unknown));
+    entry_set(ctx, entry, E_NAME_CANDS, JS_NULL);
     entry_set(ctx, entry, E_VERSION, JS_NewFloat64(ctx, has_version ? version : 0));
     entry_set(ctx, entry, E_HAS_VERSION, JS_NewBool(ctx, has_version));
     entry_set(ctx, entry, E_DB, JS_NULL);
@@ -1371,22 +1465,23 @@ static JSValue open_request_enqueue(JSContext *ctx, const char *name, int kind, 
     return req;   /* "Return a new IDBOpenDBRequest object for request." */
 }
 
-JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool has_version)
+JSValue idb_open_request(JSContext *ctx, const char *name, JSValueConst name_unknown, double version,
+                         bool has_version)
 {
     DCHECK(name != NULL, "§4.3's open was given no database name");
     DCHECK(!has_version || version >= 1, "§4.3's open reached §5.1 with a zero version — §4.3's open(name, "
                                          "version) method steps begin \"If version is 0 (zero), throw a "
                                          "TypeError.\", reported by the member before this");
-    return open_request_enqueue(ctx, name, IDB_REQ_OPEN, version, has_version);
+    return open_request_enqueue(ctx, name, name_unknown, IDB_REQ_OPEN, version, has_version);
 }
 
-JSValue idb_delete_request(JSContext *ctx, const char *name)
+JSValue idb_delete_request(JSContext *ctx, const char *name, JSValueConst name_unknown)
 {
     DCHECK(name != NULL, "§4.3's deleteDatabase was given no database name");
     /* §5.3 takes NO version — the algorithm's `version` is its own step 10, read off the database it is about
        to delete — so the entry's requested version is absent and E_HAS_VERSION is false. §5.1's step 5 is the
        only reader of that pair and it is not on any path a delete takes. */
-    return open_request_enqueue(ctx, name, IDB_REQ_DELETE, 0, /*has_version*/ false);
+    return open_request_enqueue(ctx, name, name_unknown, IDB_REQ_DELETE, 0, /*has_version*/ false);
 }
 
 void idb_open_init(JSContext *ctx)

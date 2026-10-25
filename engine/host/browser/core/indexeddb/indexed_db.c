@@ -265,7 +265,7 @@ static JSValue js_idb_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
                                     "a document with an opaque origin has no storage key");
     name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) return JS_EXCEPTION;
-    req = idb_open_request(ctx, name, version, has_version);
+    req = idb_open_request(ctx, name, concolic_is(argv[0]) ? argv[0] : JS_NULL, version, has_version);
     JS_FreeCString(ctx, name);
     return req;
 }
@@ -273,10 +273,12 @@ static JSValue js_idb_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 /* An unknown name is spent as a property key is (concolic_key_name_hook): a real string named by the unknown's
    identity, so two requests through one value reach one database, store or index and two values never share
    one, while a stated name converts as the DOMString it is.
-   Named residual. Not covered: the worlds where the unknown name equals a name the set already holds. Next
-   diff: fork the set lookup (a database named name, an object store or index named name) over the set's names
-   plus a fresh one, at the step that asks it. How its absence shows: a page that opens a database by a stated
-   name and later deletes it through an unknown name still holds it in every world. */
+   A database name's lookup forks over the set's names where §5.1 and §5.3 step 4 ask it (idb_open.c's
+   open_find_name, which the request carries the unknown to).
+   Named residual. Not covered: the worlds where an unknown object store or index name equals one the set
+   already holds. Next diff: fork those lookups (objectStore, the transaction scope, index) the same way. How
+   its absence shows: a page that creates a store by a stated name and reads it through an unknown name sees
+   NotFoundError in every world. */
 const char *idb_name_cstr(JSContext *ctx, JSValueConst v)
 {
     JSValue atom;
@@ -314,7 +316,7 @@ static JSValue js_idb_delete_database(JSContext *ctx, JSValueConst this_val, int
                                     "a document with an opaque origin has no storage key");
     name = idb_name_cstr(ctx, argv[0]);
     if (name == NULL) return JS_EXCEPTION;
-    req = idb_delete_request(ctx, name);
+    req = idb_delete_request(ctx, name, concolic_is(argv[0]) ? argv[0] : JS_NULL);
     JS_FreeCString(ctx, name);
     return req;
 }
