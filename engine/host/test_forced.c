@@ -16127,8 +16127,13 @@ TF_UNIT void probes_fileparse_sub(const char *js, Probe *tab, int *n) {
     fold_row(&sq_tt, &sq_why, has_query,
              "no eval @S record carries a source rooted in location.search, so the subarray of the reply to the "
              "address the attacker names stopped at that reply's example extent");
+    const char *st_why = NULL; int st_tt = 1;
+    fold_row(&st_tt, &st_why, !!strstr(js, "\"/api/fpu-tail\""),
+             "NOT REACHED: there is no /api/fpu-tail record, so no arm built the view at the reply's unknown tail "
+             "offset with byteOffset 6 and its first element the body's");
     const Probe rows[] = {
         { "fpu-parsed", sp_tt, "/api/fpu-parsed", SESS_EXPLORE, sp_why },
+        { "fpu-tail", st_tt, "/api/fpu-tail", SESS_EXPLORE, st_why, .gate = "fpu-parsed" },
         { "fpu-sink-file", sf_tt, "function fpuParse", SESS_EXPLORE, sf_why, .gate = "fpu-parsed" },
         { "fpu-sink-query", sq_tt, ".subarray(6, 6 + len)", SESS_EXPLORE, sq_why, .gate = "fpu-parsed" },
     };

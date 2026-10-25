@@ -1842,7 +1842,22 @@ typedef struct JSTypedArray {
        unknown buffer length or took it from an unknown argument, with the stored count as its example;
        JS_UNINITIALIZED otherwise. One counted reference, fixed at construction. */
     JSValue length_unknown;
+    /* The unknown that [[ByteOffset]] is, when the %TypedArray% constructor took it from unknown input, with
+       `offset` as its example window's position (0 where it has no example); JS_UNINITIALIZED otherwise. One
+       counted reference, fixed at construction, never on a DataView or over a resizable buffer. Named residual:
+       a reader that takes the window's bytes without asking for their unknowns (a bulk walk of u.array.u.ptr,
+       an embedder's JS_GetArrayBufferView without JS_BufferSourceUnknowns) gets the example window as concrete
+       bytes, as it gets an image span's; the next diff routes those walks through js_get_fast_array_element;
+       its absence shows as a gate on such a walk's result over this view that never forks. */
+    JSValue offset_unknown;
 } JSTypedArray;
+
+/* A read of `nbytes` of view `ta`'s window through the [[ByteOffset]] slot: wrong when the offset is unknown,
+   since which bytes the window holds is unknown. A macro so the crash names the reader. */
+#define DCHECK_TA_WINDOW_STATED(ta, nbytes, reader) \
+    DCHECK(JS_IsUninitialized((ta)->offset_unknown) || (nbytes) == 0, \
+           reader " read a view whose [[ByteOffset]] is unknown as its example window: build it as reads at an " \
+           "unknown byteIndexInBuffer, as 10.4.5.17 TypedArrayGetElement's are")
 
 /* How a flow base COMPLETES — an explicit frame-KIND on the base, dispatched at ONE point, mirroring
    TimeTravelJS's tt_frame_kind. Without it, completion was inferred from the base's bytecode (b->func_kind),
@@ -2974,6 +2989,11 @@ static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset,
                            JSValueConst unknown);
 static void js_ab_span_set_any(JSContext *ctx, JSArrayBuffer *abuf, JSValueConst index,
                                JSValueConst unknown);
+/* the two sides of an element of a view whose [[ByteOffset]] is unknown (JSTypedArray.offset_unknown), defined
+   beside js_ab_span_get for the reason the span pair is declared here */
+static JSValue js_ta_byte_index(JSContext *ctx, const JSTypedArray *ta, int64_t rel);
+static JSValue js_ta_get_at_unknown_offset(JSContext *ctx, JSObject *p, uint32_t idx);
+static int js_ta_set_at_unknown_offset(JSContext *ctx, JSObject *p, uint32_t idx, JSValue val);
 static void js_ab_spans_free(JSRuntime *rt, JSArrayBuffer *abuf);
 static bool js_get_fast_array(JSContext *ctx, JSValue obj,
                               const JSValue **arrpp, uint32_t *countp);
@@ -9469,6 +9489,9 @@ static bool js_tonumeric_eager(JSValueConst v)
  * deliberate: the detach is itself an uncaptured shared mutation, and the restore is where that aborts by name. */
 static void cow_capture_bytes(JSContext *ctx, JSObject *p)
 {
+    if (p->u.typed_array && !JS_IsUninitialized(p->u.typed_array->offset_unknown))
+        DFAIL("a raw byte write through a view whose [[ByteOffset]] is unknown: build it as writes at an unknown "
+              "byteIndexInBuffer (js_ab_span_set_any), as 10.4.5.18's element store over that view is");
     if (!g_time_travel.buf_state)
         return;
     DCHECK(p->u.typed_array != NULL,
@@ -16614,10 +16637,11 @@ static JSValue js_ta_get_past_example(JSContext *ctx, JSObject *p, uint32_t idx)
         return JS_UNDEFINED;
     DCHECK(!JS_IsUninitialized(abuf->length_unknown), "a view's length is unknown over a stated buffer length");
     ops[0] = abuf->length_unknown;
-    ops[1] = JS_NewInt64(ctx, (int64_t)ta->offset + ((int64_t)idx << size_log2));
+    ops[1] = js_ta_byte_index(ctx, ta, (int64_t)idx << size_log2);
     ops[2] = js_int32(1 << size_log2);
     r = g_concolic.derived(ctx, "10.4.5.17 TypedArrayGetElement past the example", ops, 3, JS_UNDEFINED);
     DCHECK(!JS_IsUninitialized(r), "a read past an unknown view length derived no unknown");
+    JS_FreeValue(ctx, ops[1]);
     return r;
 }
 
@@ -16638,10 +16662,14 @@ static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,
        explored, with nothing anywhere to say so. That is strictly worse than the abort this replaces.
        THE COST FOR AN ORDINARY BUFFER IS THE LOAD OF A ZERO. n_span is 0 for every buffer no flow has stored an
        unknown into, which is nearly all of them, so the branch below is predictable and the scan never runs. */
-    if (unlikely(is_typed_array(p->class_id)) && idx < p->u.array.count &&
-        unlikely(p->u.typed_array->buffer->u.array_buffer->n_span != 0) &&
-        js_ab_span_get(ctx, p, idx, pval))
-        return true;
+    if (unlikely(is_typed_array(p->class_id)) && idx < p->u.array.count) {
+        if (unlikely(!JS_IsUninitialized(p->u.typed_array->offset_unknown))) {
+            *pval = js_ta_get_at_unknown_offset(ctx, p, idx);
+            return true;
+        }
+        if (unlikely(p->u.typed_array->buffer->u.array_buffer->n_span != 0) && js_ab_span_get(ctx, p, idx, pval))
+            return true;
+    }
     return js_get_fast_array_element_concrete(ctx, p, idx, pval);
 }
 
@@ -17757,8 +17785,11 @@ static int JS_SetPropertyValue(JSContext *ctx, JSValueConst this_obj,
            set_fast_array_element captures rather than its seven writers; and BEFORE the coercions, because a
            capture whose store never lands puts back bytes that never changed while a coercion that runs the
            page's valueOf can reach a store this has not yet seen. */
-        if (is_typed_array(p->class_id))
+        if (is_typed_array(p->class_id)) {
+            if (unlikely(!JS_IsUninitialized(p->u.typed_array->offset_unknown)))
+                return js_ta_set_at_unknown_offset(ctx, p, idx, val);
             cow_capture_bytes(ctx, p);
+        }
         switch(p->class_id) {
         case JS_CLASS_ARRAY:
             if (unlikely(idx >= (uint32_t)p->u.array.count)) {
@@ -32647,9 +32678,10 @@ typedef struct JSTAViewPlan {
     uint64_t len, offset;
     bool track_rab;
     bool len_from_buffer;   /* InitializeTypedArrayFromArrayBuffer steps 8-9: `length` was undefined */
-    /* The caller decided steps 8-10's range test over a buffer whose length is an unknown and holds this world's
+    /* The caller decided steps 8-9's range test over an unknown buffer length or byteOffset and holds this world's
        in-range arm, so the view may reach past the buffer's example bytes. Set by the caller before planning. */
     bool in_range;
+    bool offset_unknown;    /* `offset` is the example of an unknown byteOffset; set by the caller */
     int size_log2;
 } JSTAViewPlan;
 
@@ -32665,7 +32697,13 @@ typedef struct JSTACtor {
     uint8_t is_copy;   /* the TYPED-ARRAY source form: no plan, and the tail copies instead of viewing */
     JSValue len_unknown; /* step 5's `length` when it is unknown and argp[2] holds its example (owned), or
                             JS_UNINITIALIZED; the view built takes it as its length */
-    JSValue range_pred;  /* steps 8-10's range test over an unknown buffer length, held across its fork (owned) */
+    JSValue range_pred;  /* steps 8-9's range test over an unknown buffer length or offset, held across its fork
+                            (owned) */
+    JSValue off_unknown; /* step 2's offset when it is unknown and `offset` holds its example (owned), or
+                            JS_UNINITIALIZED; the view built takes it as its [[ByteOffset]] */
+    JSValue off_pred;    /* the step 2 or 3 test TAC_OFFSET_FORK holds across its fork (owned) */
+    uint8_t off_fork;    /* which of those tests TAC_OFFSET_FORK asks next */
+    uint8_t off_example; /* off_unknown's example is an aligned index, and `offset` holds it */
 } JSTACtor;
 
 typedef struct JSIterZip {
@@ -41271,6 +41309,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     if (typed_array_is_immutable(tap) || typed_array_is_oob(tap) ||
                         idx >= (uint32_t)tap->u.array.count)
                         goto ta_unknown_done;
+                    if (!JS_IsUninitialized(ta->offset_unknown)) {
+                        /* step 3's byteIndexInBuffer is unknown: a write at an unknown offset, no byte stored */
+                        JSValue at = js_ta_byte_index(ctx, ta, (int64_t)idx * width);
+
+                        js_ab_span_set_any(ctx, abuf, at, al->val);
+                        JS_FreeValue(ctx, at);
+                        goto ta_unknown_done;
+                    }
                     off = ta->offset + idx * (uint32_t)width;
                     ex = g_concolic.example(ctx, al->val);
                     if (!JS_IsUndefined(ex)) {
@@ -79737,6 +79783,7 @@ static JSValue js_dataview_new(JSContext *ctx, JSValueConst buffer, uint32_t off
     ta->length = len;
     ta->track_rab = false;
     ta->length_unknown = JS_UNINITIALIZED;   /* both bounds are stated */
+    ta->offset_unknown = JS_UNINITIALIZED;
     list_add_tail(&ta->link, &abuf->array_list);
     p->u.typed_array = ta;
     return obj;
@@ -79753,6 +79800,7 @@ static int JS_WriteTypedArray(BCWriterState *s, JSValueConst obj)
        u.array.count; a DataView's counts BYTES and lives on the JSTypedArray record, because a DataView has no
        element type to count in. Writing one and reading it as the other is a view of the wrong length. */
     bc_put_leb128(s, p->class_id == JS_CLASS_DATAVIEW ? ta->length : p->u.array.count);
+    DCHECK_TA_WINDOW_STATED(ta, 1, "the structured serialization of a typed array");
     bc_put_leb128(s, ta->offset);
     if (bcw_push(s, bcw_val(JS_MKPTR(JS_TAG_OBJECT, ta->buffer), false)))
         return -1;
@@ -90416,49 +90464,45 @@ static JSValue js_ab_slice_fini(JSContext *ctx, void *st, bool take_result)
 /* 7.3.22 SpeciesConstructor's two reads are stages of their own because each is the page's code; the CONSTRUCT
    is a third. The bounds share one stage with an `i` cursor, for the reason the coercion prologue's do. */
 #define TASUB_STAGES(X) \
-    X(TASUB_VALIDATE, "23.2.3.30 steps 1-3 (O has [[TypedArrayName]]; buffer is O.[[ViewedArrayBuffer]]; srcLength)") \
-    X(TASUB_BOUNDS,   "23.2.3.30 steps 4-16 (start and end are ToIntegerOrInfinity; the argumentsList)") \
-    X(TASUB_RANGE,    "23.2.3.30 steps 6-8 over an unknown srcLength (startIndex is begin where begin <= srcLength)") \
-    X(TASUB_CTOR,     "23.2.3.30 step 17 via 7.3.22 step 1 (C is Get(O, \"constructor\"))") \
-    X(TASUB_SPECIES,  "23.2.3.30 step 17 via 7.3.22 step 4 (S is Get(C, @@species))") \
-    X(TASUB_NEW,      "23.2.3.30 step 17 (TypedArraySpeciesCreate's Construct(ctor, argumentsList))")
+    X(TASUB_VALIDATE, "23.2.3.30 steps 1-7 (obj has [[TypedArrayName]]; buffer is obj.[[ViewedArrayBuffer]]; srcLength)") \
+    X(TASUB_BOUNDS,   "23.2.3.30 steps 8-15 (startIndex and endIndex are ToClampedIndex; the argumentsList)") \
+    X(TASUB_RANGE,    "23.2.3.30 steps 8-14 over an unknown srcLength, bound or sourceByteOffset (a known begin forks)") \
+    X(TASUB_CTOR,     "23.2.3.30 step 15 via 7.3.22 step 1 (C is Get(O, \"constructor\"))") \
+    X(TASUB_SPECIES,  "23.2.3.30 step 15 via 7.3.22 step 4 (S is Get(C, @@species))") \
+    X(TASUB_NEW,      "23.2.3.30 step 15 (TypedArraySpeciesCreate's Construct(ctor, argumentsList))")
 enum { TASUB_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_ta_subarray_steps[] = { TASUB_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* §23.2.3.30 steps 4-16 where srcLength or a bound is unknown. srcLength is the view's unknown length; a known
-   begin is startIndex on the arm where begin <= srcLength, which the fork asks, and newLength is derived from the
-   end bound (or srcLength) and startIndex with the real clamp over the examples as its example. The routed
-   %TypedArray% constructor then builds the view over that unknown count. 0, a request code, or -1. */
+/* §23.2.3.30 steps 8-14 where sourceLength, a bound or sourceByteOffset is unknown. A known begin of at least 0
+   over an unknown sourceLength forks `begin <= sourceLength`, so startIndex is begin on that arm and sourceLength
+   on the other; every other unknown startIndex, and endIndex, beginByteOffset and newLength, is derived with the
+   real clamp over the examples as its example. The routed %TypedArray% constructor then builds the view over
+   them. 0, a request code, or -1. */
 static int js_ta_subarray_bounds_unknown(JSContext *ctx, JSTASubarray *s, JSValue cb_result)
 {
     JSObject *p = get_typed_array(ctx, s->hdr.this_val);
     JSTypedArray *ta;
-    JSValue src_len, final_v, ops[2], ex;
-    int64_t rel = 0, len_ex = 0, final_ex = 0;
+    JSValue src_len, start_v, final_v, ops[3], ex;
+    int64_t rel = 0, len_ex = 0, start_ex = 0, final_ex = 0;
     int shift, arm, r;
-    bool have;
+    bool have, off_have;
 
     JS_FreeValue(ctx, cb_result);
     if (!p) return -1;
     ta = p->u.typed_array;
     shift = typed_array_size_log2(p->class_id);
-    if (js_value_is_concolic(s->prim[0])) {
-        DFAIL("23.2.3.30 step 8 over an unknown begin: its byteOffset is unknown, so build the %TypedArray% "
-              "constructor's view at an unknown byteOffset first");
-        return -1;
-    }
     src_len = JS_IsUninitialized(ta->length_unknown) ? js_int64(s->len) : js_dup(ta->length_unknown);
     ex = js_value_is_concolic(src_len) ? js_concolic_operand(ctx, src_len) : js_dup(src_len);
     have = JS_IsNumber(ex) && JS_ToInt64Sat(ctx, &len_ex, ex) == 0;
     JS_FreeValue(ctx, ex);
-    if (JS_ToInt64Sat(ctx, &rel, s->prim[0])) { JS_FreeValue(ctx, src_len); return -1; }
-    if (js_value_is_concolic(src_len)) {
-        if (rel < 0) {
-            JS_FreeValue(ctx, src_len);
-            DFAIL("23.2.3.30 step 6 with a negative begin over an unknown srcLength: startIndex is srcLength + "
-                  "begin, an unknown byteOffset — build the %TypedArray% constructor's view at one first");
-            return -1;
-        }
+    if (!js_value_is_concolic(s->prim[0]) && JS_ToInt64Sat(ctx, &rel, s->prim[0])) {
+        JS_FreeValue(ctx, src_len);
+        return -1;
+    }
+    if (!js_value_is_concolic(s->prim[0]) && !js_value_is_concolic(src_len)) {
+        start_ex = rel < 0 ? max_int64(s->len + rel, 0) : min_int64(rel, s->len);
+        start_v = js_int64(start_ex);
+    } else if (!js_value_is_concolic(s->prim[0]) && rel >= 0) {
         if (JS_IsUninitialized(s->pred)) {
             JSValue sp[2];
 
@@ -90467,16 +90511,20 @@ static int js_ta_subarray_bounds_unknown(JSContext *ctx, JSTASubarray *s, JSValu
             CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a view's unknown length");
             s->pred = sp[0];
         }
-        r = step_tobool_run(ctx, &s->hdr, s->pred, "23.2.3.30 steps 6-8 begin within srcLength", &arm);
+        r = step_tobool_run(ctx, &s->hdr, s->pred, "23.2.3.30 step 8 begin within srcLength", &arm);
         if (r) { JS_FreeValue(ctx, src_len); return r; }
-        if (!arm) {
-            JS_FreeValue(ctx, src_len);
-            DFAIL("23.2.3.30 step 8 with begin past an unknown srcLength: startIndex is that unknown, so build the "
-                  "%TypedArray% constructor's view at an unknown byteOffset first");
-            return -1;
-        }
+        start_ex = arm ? rel : len_ex;
+        start_v = arm ? js_int64(rel) : js_dup(src_len);
     } else {
-        rel = rel < 0 ? max_int64(s->len + rel, 0) : min_int64(rel, s->len);
+        ex = js_value_is_concolic(s->prim[0]) ? js_concolic_operand(ctx, s->prim[0]) : js_dup(s->prim[0]);
+        have = have && (!js_value_is_concolic(s->prim[0]) || JS_IsNumber(ex)) &&
+               JS_ToInt64Clamp(ctx, &start_ex, ex, 0, len_ex, len_ex) == 0;
+        JS_FreeValue(ctx, ex);
+        ops[0] = s->prim[0];
+        ops[1] = src_len;
+        start_v = g_concolic.derived(ctx, "23.2.3.30 step 8 (startIndex is ToClampedIndex(start, srcLength))", ops,
+                                     2, have ? js_int64(start_ex) : JS_UNDEFINED);
+        DCHECK(!JS_IsUninitialized(start_v), "an unknown begin or srcLength derived no unknown startIndex");
     }
     if (JS_IsUndefined(step_arg(&s->hdr, 1))) {
         final_v = js_dup(src_len);
@@ -90488,24 +90536,35 @@ static int js_ta_subarray_bounds_unknown(JSContext *ctx, JSTASubarray *s, JSValu
         JS_FreeValue(ctx, ex);
         ops[0] = s->prim[1];
         ops[1] = src_len;
-        final_v = g_concolic.derived(ctx, "23.2.3.30 step 11 (endIndex is the clamped relative end)", ops, 2,
+        final_v = g_concolic.derived(ctx, "23.2.3.30 step 13 (endIndex is ToClampedIndex(end, srcLength))", ops, 2,
                                      have ? js_int64(final_ex) : JS_UNDEFINED);
         if (JS_IsUninitialized(final_v))
             final_v = js_int64(final_ex);
     }
     ops[0] = final_v;
-    ops[1] = JS_NewInt64(ctx, rel);
-    s->cargs[3] = g_concolic.derived(ctx, "23.2.3.30 step 15 (newLength is max(endIndex - startIndex, 0))", ops, 2,
-                                     have ? js_int64(max_int64(final_ex - rel, 0)) : JS_UNDEFINED);
+    ops[1] = start_v;
+    s->cargs[3] = g_concolic.derived(ctx, "23.2.3.30 step 14 (newLength is max(endIndex - startIndex, 0))", ops, 2,
+                                     have ? js_int64(max_int64(final_ex - start_ex, 0)) : JS_UNDEFINED);
     if (JS_IsUninitialized(s->cargs[3]))
-        s->cargs[3] = js_int64(max_int64(final_ex - rel, 0));
+        s->cargs[3] = js_int64(max_int64(final_ex - start_ex, 0));
+    /* step 10 reads the [[ByteOffset]] slot, which the view holds as an unknown where it was built from one */
+    off_have = JS_IsUninitialized(ta->offset_unknown) || js_concolic_held(ta->offset_unknown);
+    ops[0] = JS_IsUninitialized(ta->offset_unknown) ? JS_NewInt64(ctx, (int64_t)ta->offset) : ta->offset_unknown;
+    ops[1] = start_v;
+    ops[2] = js_int32(shift);
+    s->cargs[2] = g_concolic.derived(ctx, "23.2.3.30 step 11 (beginByteOffset is sourceByteOffset + startIndex * "
+                                     "elementSize)", ops, 3, have && off_have
+                                     ? JS_NewInt64(ctx, (int64_t)ta->offset + (start_ex << shift)) : JS_UNDEFINED);
+    if (JS_IsUninitialized(s->cargs[2]))
+        s->cargs[2] = JS_NewInt64(ctx, (int64_t)ta->offset + (start_ex << shift));
+    JS_FreeValue(ctx, start_v);
     JS_FreeValue(ctx, final_v);
     JS_FreeValue(ctx, src_len);
     s->buffer = js_typed_array_get_buffer(ctx, s->hdr.this_val);
     if (JS_IsException(s->buffer)) { s->buffer = JS_UNDEFINED; return -1; }
     s->cargs[1] = js_dup(s->buffer);
-    s->cargs[2] = JS_NewInt64(ctx, (int64_t)ta->offset + (rel << shift));
-    s->nargs = 3;
+    /* step 12: a length-tracking source with no `end` passes « buffer, beginByteOffset » */
+    s->nargs = (ta->track_rab && JS_IsUndefined(step_arg(&s->hdr, 1))) ? 2 : 3;
     return 0;
 }
 
@@ -90544,7 +90603,7 @@ static int js_ta_subarray_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         bool unknown_end = !JS_IsUndefined(step_arg(&s->hdr, 1)) && js_value_is_concolic(s->prim[1]);
 
         if (p && (!JS_IsUninitialized(p->u.typed_array->length_unknown) || js_value_is_concolic(s->prim[0]) ||
-                  unknown_end)) {
+                  unknown_end || !JS_IsUninitialized(p->u.typed_array->offset_unknown))) {
             JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
             s->hdr.stage = TASUB_RANGE;
         }
@@ -90609,9 +90668,10 @@ static int js_ta_subarray_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         /* issued from the tail of whichever stage decided the constructor, for the reason slice's is: a stage
            between them is entered and left inside one step() call, so it rests at no step. */
         JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
-        if (JS_IsUndefined(s->ctor) && js_value_is_concolic(s->cargs[3]))
-            DFAIL("23.2.3.30 step 17 with no species constructor over an unknown newLength: build the class "
-                  "constructor's unknown length, as the routed %TypedArray% constructor's TAC_RANGE does");
+        if (JS_IsUndefined(s->ctor) && (js_value_is_concolic(s->cargs[3]) || js_value_is_concolic(s->cargs[2])))
+            DFAIL("23.2.3.30 step 15 with no species constructor over an unknown newLength or beginByteOffset: "
+                  "route the class constructor through js_ta_ctor_step, whose TAC_OFFSET_FORK and TAC_RANGE build "
+                  "those");
         if (JS_IsUndefined(s->ctor)) {
             /* no species: create by CLASS, which constructs nothing of the page's */
             s->result = js_typed_array_constructor(ctx, JS_UNDEFINED, s->nargs,
@@ -123346,6 +123406,85 @@ static bool js_ab_span_get(JSContext *ctx, JSObject *p, uint32_t idx, JSValue *p
     return false;
 }
 
+/* 10.4.5.17 TypedArrayGetElement step 4's byteIndexInBuffer for the position `rel` bytes into the view's window:
+   a Number where [[ByteOffset]] is stated, else an unknown derived from that offset, whose example is the
+   example window's position where the offset has one. Owned. */
+static JSValue js_ta_byte_index(JSContext *ctx, const JSTypedArray *ta, int64_t rel)
+{
+    JSValue ops[2], r;
+
+    if (JS_IsUninitialized(ta->offset_unknown))
+        return JS_NewInt64(ctx, (int64_t)ta->offset + rel);
+    ops[0] = ta->offset_unknown;
+    ops[1] = JS_NewInt64(ctx, rel);
+    r = g_concolic.derived(ctx, "10.4.5.17 TypedArrayGetElement step 4 (byteIndexInBuffer is index * elementSize "
+                                "+ offset)", ops, 2, js_concolic_held(ta->offset_unknown)
+                           ? JS_NewInt64(ctx, (int64_t)ta->offset + rel) : JS_UNDEFINED);
+    DCHECK(!JS_IsUninitialized(r), "a view's unknown byteOffset derived no unknown byteIndexInBuffer");
+    return r;
+}
+
+/* 10.4.5.17 TypedArrayGetElement steps 2-6 where [[ByteOffset]] is an unknown: byteIndexInBuffer is one, so the
+   element is an unknown derived from it and from the unknown the bytes at the example window are, if any, with
+   that element as its example where the offset has one. `idx` is below the view's stored count. */
+static JSValue js_ta_get_at_unknown_offset(JSContext *ctx, JSObject *p, uint32_t idx)
+{
+    JSTypedArray *ta = p->u.typed_array;
+    int size_log2 = typed_array_size_log2(p->class_id);
+    JSValue at = JS_UNDEFINED, ops[3], ex, r;
+    int n = 2;
+    bool got;
+
+    DCHECK(!JS_IsUninitialized(ta->offset_unknown) && idx < p->u.array.count,
+           "an element read at an unknown byteOffset was asked of a stated offset or past the stored count");
+    got = (ta->buffer->u.array_buffer->n_span != 0 && js_ab_span_get(ctx, p, idx, &at)) ||
+          js_get_fast_array_element_concrete(ctx, p, idx, &at);
+    DCHECK(got, "an element below a view's stored count has no value at its example window");
+    ops[0] = js_ta_byte_index(ctx, ta, (int64_t)idx << size_log2);
+    ops[1] = js_int32(1 << size_log2);
+    if (js_value_is_concolic(at)) {
+        ops[n++] = at;
+        ex = js_concolic_held(at) ? js_concolic_operand(ctx, at) : JS_UNDEFINED;
+    } else {
+        ex = js_dup(at);
+    }
+    if (!js_concolic_held(ta->offset_unknown)) {
+        JS_FreeValue(ctx, ex);
+        ex = JS_UNDEFINED;
+    }
+    r = g_concolic.derived(ctx, "10.4.5.17 TypedArrayGetElement step 6 (GetValueFromBuffer at byteIndexInBuffer)",
+                           ops, n, ex);
+    DCHECK(!JS_IsUninitialized(r), "an element read at an unknown byteIndexInBuffer derived no unknown");
+    JS_FreeValue(ctx, ops[0]);
+    JS_FreeValue(ctx, at);
+    return r;
+}
+
+/* 10.4.5.18 TypedArraySetElement where [[ByteOffset]] is an unknown: steps 1-2 coerce, and step 3's store lands
+   at an unknown byteIndexInBuffer, a write at an unknown offset (js_ab_span_set_any) that puts no byte in the
+   block. Takes `val`; answers as JS_SetPropertyValue's typed-array arms do. */
+static int js_ta_set_at_unknown_offset(JSContext *ctx, JSObject *p, uint32_t idx, JSValue val)
+{
+    JSTypedArray *ta = p->u.typed_array;
+    JSValue num, at;
+
+    if (p->class_id == JS_CLASS_BIG_INT64_ARRAY || p->class_id == JS_CLASS_BIG_UINT64_ARRAY)
+        num = JS_ToBigIntFree(ctx, val);
+    else
+        num = JS_ToNumberFree(ctx, val);
+    if (JS_IsException(num))
+        return -1;
+    JS_FreeValue(ctx, num);
+    if (typed_array_is_immutable(p))
+        return false;
+    if (!typed_array_is_oob(p) && idx < p->u.array.count) {   /* step 3, IsValidIntegerIndex */
+        at = js_ta_byte_index(ctx, ta, (int64_t)idx << typed_array_size_log2(p->class_id));
+        js_ab_span_set_any(ctx, ta->buffer->u.array_buffer, at, JS_UNINITIALIZED);
+        JS_FreeValue(ctx, at);
+    }
+    return true;
+}
+
 /* GROW THE LIST BY ONE AND HAND BACK THE NEW ENTRY. A LOST SPAN IS A SILENT DE-TAINT, which is why OOM here is
    fatal rather than a return code: dropping the record leaves an example byte in the block with nothing to say
    it is an example, so the next read hands the page a concrete number where it had unknown input and every arm
@@ -124555,6 +124694,8 @@ static JSValue js_typed_array_get_byteOffset(JSContext *ctx, JSValueConst this_v
     if (typed_array_is_oob(p))
         return js_int32(0);
     ta = p->u.typed_array;
+    if (!JS_IsUninitialized(ta->offset_unknown))
+        return js_dup(ta->offset_unknown);   /* §23.2.3.4 step 7 */
     return js_uint32(ta->offset);
 }
 
@@ -124719,11 +124860,48 @@ static int js_ab_unknown_pieces(JSContext *ctx, const JSArrayBuffer *abuf, JSObj
     return n;
 }
 
+/* A window of `len` bytes whose [[ByteOffset]] is unknown: which bytes of the buffer it holds is unknown, so the
+   whole window is one run, derived from its unknown start and from the `n` pieces its example window had (taken
+   and freed), whose block bytes are its example where the offset and every such piece have one. Answers 1. */
+static int js_ta_window_at_unknown_offset(JSContext *ctx, const JSTypedArray *ta, uint32_t len,
+                                          JSBufferUnknownPiece **ppieces, int n)
+{
+    JSBufferUnknownPiece *pieces = *ppieces, *g;
+    JSValue *ops;
+    bool example = js_concolic_held(ta->offset_unknown);
+    int i;
+
+    ops = js_malloc(ctx, sizeof(*ops) * (size_t)(n + 2));
+    CHECK(ops != NULL, "OOM listing the window of a buffer source at an unknown byteOffset");
+    ops[0] = js_ta_byte_index(ctx, ta, 0);
+    ops[1] = js_uint32(len);
+    for (i = 0; i < n; i++) {
+        ops[i + 2] = pieces[i].unknown;
+        example = example && pieces[i].example;
+    }
+    g = js_realloc(ctx, pieces, sizeof(*pieces));
+    CHECK(g != NULL, "OOM listing the window of a buffer source at an unknown byteOffset");
+    g[0].unknown = g_concolic.derived(ctx, "the bytes of a buffer source at an unknown byteOffset", ops, n + 2,
+                                      JS_UNDEFINED);
+    DCHECK(!JS_IsUninitialized(g[0].unknown), "a window at an unknown byteOffset derived no unknown");
+    for (i = 0; i < n + 2; i++)
+        JS_FreeValue(ctx, ops[i]);
+    js_free(ctx, ops);
+    g[0].offset = 0;
+    g[0].length = len;
+    g[0].codec = NULL;
+    g[0].image_pos = 0;
+    g[0].example = example;
+    *ppieces = g;
+    return 1;
+}
+
 /* see quickjs-step.h */
 int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPiece **ppieces)
 {
     JSArrayBuffer *abuf = js_buffer_source_buffer(obj);
     JSObject *p = JS_VALUE_GET_OBJ(obj), *bufobj = p;
+    JSTypedArray *ta = NULL;
     JSBufferUnknownPiece *pieces, *g;
     JSValue extent, ops[3], ex;
     uint32_t lo = 0, hi;
@@ -124741,12 +124919,15 @@ int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPie
         DCHECK(p->class_id == JS_CLASS_DATAVIEW ? !dataview_is_oob(p) : !typed_array_is_oob(p),
                "a buffer source's unknown bytes were asked of an out-of-bounds view — Web IDL §3.2.26's copy "
                "reads no window for one, so the caller has already answered it");
-        bufobj = p->u.typed_array->buffer;
-        lo = p->u.typed_array->offset;
+        ta = p->u.typed_array;
+        bufobj = ta->buffer;
+        lo = ta->offset;
         hi = lo + (uint32_t)js_buffer_view_byte_length(p);
-        extent = js_dup(p->u.typed_array->length_unknown);
+        extent = js_dup(ta->length_unknown);
     }
     n = abuf->data == NULL ? 0 : js_ab_unknown_pieces(ctx, abuf, bufobj, lo, hi, ppieces);
+    if (ta && !JS_IsUninitialized(ta->offset_unknown) && hi > lo)
+        n = js_ta_window_at_unknown_offset(ctx, ta, hi - lo, ppieces, n);
     if (JS_IsUninitialized(extent))
         return n;
     /* The window's length is an unknown, so the bytes past its stored example are a run too: the tail, derived
@@ -124758,7 +124939,7 @@ int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPie
     CHECK(g != NULL, "OOM listing the unknown tail of a buffer source");
     pieces = g;
     ops[0] = abuf->length_unknown;
-    ops[1] = JS_NewInt64(ctx, (int64_t)hi);
+    ops[1] = ta ? js_ta_byte_index(ctx, ta, (int64_t)(hi - lo)) : JS_NewInt64(ctx, (int64_t)hi);
     ops[2] = extent;
     pieces[n].offset = hi - lo;
     pieces[n].length = 0;
@@ -124767,6 +124948,7 @@ int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPie
     pieces[n].unknown = g_concolic.derived(ctx, "the bytes of a buffer source past its example", ops, 3,
                                            JS_UNDEFINED);
     DCHECK(!JS_IsUninitialized(pieces[n].unknown), "a buffer source's unknown tail derived no unknown");
+    JS_FreeValue(ctx, ops[1]);
     ex = js_concolic_operand(ctx, extent);
     pieces[n].example = js_concolic_held(extent) && JS_IsNumber(ex);
     JS_FreeValue(ctx, ex);
@@ -124962,6 +125144,7 @@ static int js_typed_array_set_ta(JSContext *ctx,
             /* the DESTINATION's bytes only: the source is read. The element-by-element tail below needs no
                capture of its own — it stores through JS_SetPropertyUint32, which is routed. */
             cow_capture_bytes(ctx, p);
+            DCHECK_TA_WINDOW_STATED(src_ta, src_len, "%TypedArray%.prototype.set's byte copy");
             js_ab_spans_copy(ctx, dest_abuf, dest_ta->offset + (uint32_t)(offset << shift),
                              src_abuf, src_ta->offset, (uint32_t)(src_len << shift));
             memmove(dest_abuf->data + dest_ta->offset + (offset << shift),
@@ -125052,6 +125235,7 @@ static JSValue js_typed_array_with_build(JSContext *ctx, JSValueConst this_val, 
     if (copy_len > 0) {
         ta = p->u.typed_array;
         src_abuf = ta->buffer->u.array_buffer;
+        DCHECK_TA_WINDOW_STATED(ta, copy_len, "%TypedArray%.prototype.with's copy");
         js_ab_spans_copy(ctx, abuf, 0, src_abuf, ta->offset, (uint32_t)((size_t)copy_len << size_log2));
         memcpy(abuf->data, src_abuf->data + ta->offset,
                (size_t)copy_len << size_log2);
@@ -125761,6 +125945,7 @@ static int js_ta_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 const uint8_t *src = p->u.array.u.uint8_ptr + (s->start << shift);
                 size_t nbytes = (size_t)count << shift, bi;
 
+                DCHECK_TA_WINDOW_STATED(p->u.typed_array, nbytes, "%TypedArray%.prototype.slice's byte copy");
                 js_ab_spans_copy(ctx, p1->u.typed_array->buffer->u.array_buffer, p1->u.typed_array->offset,
                                  p->u.typed_array->buffer->u.array_buffer,
                                  p->u.typed_array->offset + (uint32_t)(s->start << shift), (uint32_t)nbytes);
@@ -126470,6 +126655,7 @@ static int typed_array_init(JSContext *ctx, JSValue obj, JSValue buffer,
     ta->length = len << size_log2;
     ta->track_rab = track_rab;
     ta->length_unknown = JS_UNINITIALIZED;   /* a caller whose len is an unknown's example sets it */
+    ta->offset_unknown = JS_UNINITIALIZED;   /* a caller whose offset is an unknown's example sets it */
     list_add_tail(&ta->link, &abuf->array_list);
     p->u.typed_array = ta;
     p->u.array.count = len;
@@ -126560,6 +126746,7 @@ static JSValue js_ta_copy_finish(JSContext *ctx, JSValue obj, JSValueConst src_o
         goto fail;
     if (p->class_id == classid) {
         /* same type: copy the content */
+        DCHECK_TA_WINDOW_STATED(ta, abuf->byte_length, "InitializeTypedArrayFromTypedArray's byte copy");
         js_ab_spans_copy(ctx, abuf, 0, src_abuf, ta->offset, (uint32_t)abuf->byte_length);
         memcpy(abuf->data, src_abuf->data + ta->offset, abuf->byte_length);
     } else {
@@ -126610,12 +126797,82 @@ static JSValue js_ta_view_finish(JSContext *ctx, JSValue obj, JSTAViewPlan *pl);
 #define TACTOR_STAGES(X) \
     X(TAC_START,       "23.2.5.1 steps 1-6.a (NewTarget is not undefined; firstArgument)") \
     X(TAC_PROTO_EARLY, "23.2.5.1 step 6.b.i via 23.2.5.1.1 step 1 (proto is GetPrototypeFromConstructor(newTarget))") \
-    X(TAC_OFFSET,      "23.2.5.1.5 step 2 (offset is ToIndex(byteOffset))") \
-    X(TAC_LENGTH,      "23.2.5.1.5 step 5 (newLength is ToIndex(length))") \
-    X(TAC_RANGE,       "23.2.5.1.5 steps 8-10 over a buffer whose length is unknown (the range test forks)") \
+    X(TAC_OFFSET,      "23.2.5.1.3 step 2 (offset is ToIndex(byteOffset))") \
+    X(TAC_OFFSET_FORK, "23.2.5.1.3 steps 2-3 over an unknown offset (ToIndex's interval and the alignment fork)") \
+    X(TAC_LENGTH,      "23.2.5.1.3 step 5.a (newLength is ToIndex(length))") \
+    X(TAC_RANGE,       "23.2.5.1.3 steps 8-9 over an unknown buffer length or offset (the range test forks)") \
     X(TAC_PROTO,       "23.2.5.1 steps 5 and 6.c.iii via 23.2.5.1.1 (AllocateTypedArray, then the initialization)")
 enum { TACTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_ta_ctor_steps[] = { TACTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* 23.2.5.1.3 step 2 over unknown input: offset is an unknown derived from byteOffset under 7.1.24 ToIndex, whose
+   example, where `with_example` holds, is §7.1.5 ToIntegerOrInfinity run on byteOffset's example when that runs
+   no page code. `offset` holds the example where it is an aligned index (off_example), else 0. */
+static void js_ta_ctor_offset_unknown(JSContext *ctx, JSTACtor *s, bool with_example)
+{
+    int size_log2 = typed_array_size_log2(s->hdr.arg);
+    JSValue ex = JS_UNDEFINED, v;
+    double d = 0;
+
+    s->offset = 0;
+    s->off_example = 0;
+    if (with_example && js_concolic_held(s->argp[1])) {
+        int tag;
+
+        v = js_concolic_operand(ctx, s->argp[1]);
+        tag = JS_VALUE_GET_NORM_TAG(v);
+        if ((JS_IsNumber(v) || tag == JS_TAG_STRING || tag == JS_TAG_BOOL || tag == JS_TAG_NULL ||
+             tag == JS_TAG_UNDEFINED) && JS_ToFloat64(ctx, &d, v) == 0) {
+            d = isnan(d) ? 0 : trunc(d) + 0.0;
+            ex = js_float64(d);
+            if (d >= 0 && d <= MAX_SAFE_INTEGER && ((uint64_t)d & (((uint64_t)1 << size_log2) - 1)) == 0) {
+                s->offset = (uint64_t)d;
+                s->off_example = 1;
+            }
+        }
+        JS_FreeValue(ctx, v);
+    }
+    JS_FreeValue(ctx, s->off_unknown);
+    s->off_unknown = g_concolic.derived(ctx, "7.1.24 ToIndex ( arg ) step 1 (int is ToIntegerOrInfinity(arg))",
+                                        (JSValueConst *)&s->argp[1], 1, ex);
+    DCHECK(!JS_IsUninitialized(s->off_unknown), "an unknown byteOffset derived no unknown offset");
+}
+
+static void js_ta_ctor_take_offset(JSContext *ctx, JSTACtor *s, JSObject *p);
+
+/* The predicate TAC_OFFSET_FORK asks at s->off_fork: 7.1.24 step 2's two bounds on the unknown offset, then
+   23.2.5.1.3 step 3's alignment, spelled as a remainder at most 0 since the offset is at least 0 by then. Owned. */
+static JSValue js_ta_ctor_offset_test(JSContext *ctx, JSTACtor *s, int size_log2)
+{
+    JSValue sp[2], ops[2], v, ex;
+    double d = 0;
+
+    switch (s->off_fork) {
+    case 0:
+        sp[0] = js_int32(0);
+        sp[1] = js_dup(s->off_unknown);
+        break;
+    case 1:
+        sp[0] = js_dup(s->off_unknown);
+        sp[1] = js_float64(MAX_SAFE_INTEGER);
+        break;
+    default:
+        DCHECK(s->off_fork == 2 && size_log2 > 0, "TAC_OFFSET_FORK asked a test past its alignment test");
+        ops[0] = s->off_unknown;
+        ops[1] = js_int32(1 << size_log2);
+        v = js_concolic_held(s->off_unknown) ? js_concolic_operand(ctx, s->off_unknown) : JS_UNDEFINED;
+        ex = JS_IsNumber(v) && JS_ToFloat64(ctx, &d, v) == 0 && isfinite(d)
+             ? js_float64(fmod(d, (double)(1 << size_log2))) : JS_UNDEFINED;
+        JS_FreeValue(ctx, v);
+        sp[0] = g_concolic.derived(ctx, "23.2.5.1.3 step 3 (offset modulo elementSize)", ops, 2, ex);
+        DCHECK(!JS_IsUninitialized(sp[0]), "an unknown offset derived no unknown remainder");
+        sp[1] = js_int32(0);
+        break;
+    }
+    DCHECK(g_concolic.rel != NULL, "an offset is unknown with no JSConcolicHooks.rel installed");
+    CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined an unknown byteOffset");
+    return sp[0];
+}
 
 static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -126638,7 +126895,12 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->proto = JS_UNDEFINED;
         s->len_unknown = JS_UNINITIALIZED;
         s->range_pred = JS_UNINITIALIZED;
+        s->off_unknown = JS_UNINITIALIZED;
+        s->off_pred = JS_UNINITIALIZED;
+        s->off_fork = 0;
+        s->off_example = 0;
         s->plan.in_range = false;
+        s->plan.offset_unknown = false;
         s->offset = 0;
         for (i = 0; i < 3; i++)
             s->argp[i] = js_dup(step_arg(&s->hdr, i));
@@ -126681,10 +126943,9 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->argp[1] = prim;                   /* the primitive REPLACES the operand the body reads */
     have_offset:
         if (js_value_is_concolic(s->argp[1])) {
-            DFAIL("23.2.5.1.5 step 2 ToIndex(byteOffset) over unknown input: build a view whose byteOffset is "
-                  "that unknown, at its example, as the length below is; completing the constructor as one "
-                  "unknown value would break the view's brand and invent a TypeError downstream");
-            return -1;
+            js_ta_ctor_offset_unknown(ctx, s, true);
+            s->hdr.stage = TAC_OFFSET_FORK;
+            STEP_JUMP(TAC_OFFSET_FORK);
         }
         s->hdr.stage = TAC_LENGTH;
         /* Steps 2-3 HERE, not in the plan: the alignment RangeError is ordered before step 5's ToIndex(length),
@@ -126692,6 +126953,37 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            the length is a stage of its own rather than a second bit in one mask. */
         if (ta_view_offset(ctx, s->argp[1], typed_array_size_log2(s->hdr.arg), &s->offset) < 0)
             return -1;
+        goto length_prim;
+    }
+    STEP_ARM(TAC_OFFSET_FORK);
+    {
+        /* Step 2's interval test and step 3's alignment test are predicates over the unknown offset, so each
+           forks and its failing arm throws step 2's or step 3's RangeError, before step 5 coerces anything. */
+        int size_log2 = typed_array_size_log2(s->hdr.arg), arm;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        while (s->off_fork < (size_log2 ? 3 : 2)) {
+            static const char *const asks[3] = {
+                "7.1.24 ToIndex step 2 (int is at least 0)", "7.1.24 ToIndex step 2 (int is at most 2**53 - 1)",
+                "23.2.5.1.3 step 3 (offset modulo elementSize is 0)" };
+
+            if (JS_IsUninitialized(s->off_pred))
+                s->off_pred = js_ta_ctor_offset_test(ctx, s, size_log2);
+            r = step_tobool_run(ctx, &s->hdr, s->off_pred, asks[s->off_fork], &arm);
+            if (r) return r < 0 ? -1 : r;
+            JS_FreeValue(ctx, s->off_pred);
+            s->off_pred = JS_UNINITIALIZED;
+            if (!arm) {
+                JS_ThrowRangeError(ctx, "invalid offset");
+                return -1;
+            }
+            s->off_fork++;
+        }
+        if (!s->off_example && js_concolic_held(s->off_unknown))
+            js_ta_ctor_offset_unknown(ctx, s, false);   /* this arm contradicts the example: the view has none */
+        s->hdr.stage = TAC_LENGTH;
+    length_prim:
         if (JS_IsUndefined(s->argp[2]) || JS_VALUE_GET_TAG(s->argp[2]) != JS_TAG_OBJECT)
             goto have_length;
         r = step_toprim_run(ctx, &s->hdr, s->argp[2], HINT_NUMBER, JS_UNDEFINED, &cb_result, out_cb, out_argc);
@@ -126707,7 +126999,7 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->argp[2] = prim;
     }
  have_length:
-    /* 23.2.5.1.5 step 5 ToIndex(length) over unknown input: the view is built at the length's example and the
+    /* 23.2.5.1.3 step 5.a ToIndex(length) over unknown input: the view is built at the length's example and the
        unknown becomes its [[ArrayLength]], so its elements stay the buffer's indexed bytes. The plan's range
        check runs on the example. */
     if (!s->is_copy && JS_VALUE_GET_TAG(s->argp[0]) == JS_TAG_OBJECT && js_value_is_concolic(s->argp[2]) &&
@@ -126722,7 +127014,7 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         } else if (!JS_IsNumber(ex) || JS_ToFloat64(ctx, &d, ex) ||
                    !(d >= 0 && d <= MAX_SAFE_INTEGER && d == trunc(d))) {
             JS_FreeValue(ctx, ex);
-            DFAIL("23.2.5.1.5 step 5 ToIndex(length) over unknown input whose example is no index: build the "
+            DFAIL("23.2.5.1.3 step 5.a ToIndex(length) over unknown input whose example is no index: build the "
                   "fork over the example's own ToIndex outcome");
             return -1;
         }
@@ -126740,50 +127032,71 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     cb_result = JS_UNDEFINED;
     STEP_ARM(TAC_RANGE);
     {
-        /* Steps 8-10's RangeError over a buffer whose length is an unknown: a predicate over that length, so both
-           arms run, and the in-range arm builds its view even where it reaches past the example bytes. */
+        /* Steps 8-9's RangeError over an unknown buffer length or offset: a predicate over them, so both arms run,
+           and the in-range arm builds its view even where it reaches past the example bytes. */
         JSObject *bp = !s->is_copy && JS_VALUE_GET_TAG(s->argp[0]) == JS_TAG_OBJECT
                        ? JS_VALUE_GET_OBJ(s->argp[0]) : NULL;
         JSArrayBuffer *abuf = bp && bp->class_id == JS_CLASS_ARRAY_BUFFER ? bp->u.array_buffer : NULL;
-        int arm;
+        bool off_unknown = !JS_IsUninitialized(s->off_unknown);
+        int size_log2 = typed_array_size_log2(s->hdr.arg), arm;
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        if (abuf && !abuf->detached && !JS_IsUninitialized(abuf->length_unknown)) {
+        if (off_unknown && (!abuf || array_buffer_is_resizable(abuf))) {
+            DFAIL("23.2.5.1.3 over a SharedArrayBuffer or a resizable buffer at an unknown offset: build the "
+                  "length-tracking window and Atomics' reads over that offset");
+            return -1;
+        }
+        s->plan.offset_unknown = off_unknown;
+        if (abuf && !abuf->detached && (!JS_IsUninitialized(abuf->length_unknown) || off_unknown)) {
             if (JS_IsUninitialized(s->range_pred)) {
-                int size_log2 = typed_array_size_log2(s->hdr.arg);
-                JSValue sp[2];
+                JSValue sp[2], off;
 
+                off = off_unknown ? js_dup(s->off_unknown) : JS_NewInt64(ctx, (int64_t)s->offset);
                 if (JS_IsUndefined(s->argp[2])) {
-                    sp[0] = JS_NewInt64(ctx, (int64_t)s->offset);
-                } else if (!JS_IsUninitialized(s->len_unknown)) {
-                    JSValue ops[3];
-
-                    ops[0] = s->len_unknown;
-                    ops[1] = JS_NewInt64(ctx, (int64_t)s->offset);
-                    ops[2] = js_int32(size_log2);
-                    sp[0] = g_concolic.derived(ctx, "23.2.5.1.5 step 10.b offset + newByteLength", ops, 3,
-                                               JS_UNDEFINED);
-                    DCHECK(!JS_IsUninitialized(sp[0]), "a view's unknown length derived no byte extent");
+                    sp[0] = off;
                 } else {
-                    uint64_t len;
+                    JSValue ops[3];
+                    uint64_t len = 0;
 
-                    if (JS_ToIndex(ctx, &len, s->argp[2])) return -1;   /* a primitive: invokes nothing */
-                    sp[0] = JS_NewInt64(ctx, (int64_t)(s->offset + (len << size_log2)));
+                    if (JS_IsUninitialized(s->len_unknown) && JS_ToIndex(ctx, &len, s->argp[2])) {
+                        JS_FreeValue(ctx, off);
+                        return -1;                       /* a primitive: invokes nothing */
+                    }
+                    ops[0] = JS_IsUninitialized(s->len_unknown) ? JS_NewInt64(ctx, (int64_t)len) : s->len_unknown;
+                    ops[1] = off;
+                    ops[2] = js_int32(size_log2);
+                    sp[0] = off_unknown || !JS_IsUninitialized(s->len_unknown)
+                        ? g_concolic.derived(ctx, "23.2.5.1.3 step 9.b.ii offset + newByteLength", ops, 3,
+                                             JS_IsUninitialized(s->len_unknown) && s->off_example
+                                             ? JS_NewInt64(ctx, (int64_t)(s->offset + (len << size_log2)))
+                                             : JS_UNDEFINED)
+                        : JS_NewInt64(ctx, (int64_t)(s->offset + (len << size_log2)));
+                    DCHECK(!JS_IsUninitialized(sp[0]), "a view's unknown length or offset derived no byte extent");
+                    JS_FreeValue(ctx, off);
                 }
-                sp[1] = js_ab_length_derive(ctx, abuf, "25.1.6.1 get ArrayBuffer.prototype.byteLength", 0, 0,
+                sp[1] = JS_IsUninitialized(abuf->length_unknown) ? JS_NewInt64(ctx, abuf->byte_length)
+                      : js_ab_length_derive(ctx, abuf, "25.1.6.1 get ArrayBuffer.prototype.byteLength", 0, 0,
                                             abuf->byte_length);
                 DCHECK(g_concolic.rel != NULL, "a buffer's length is unknown with no JSConcolicHooks.rel installed");
-                CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a buffer's unknown length");
+                CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a view's unknown range");
                 s->range_pred = sp[0];
             }
-            r = step_tobool_run(ctx, &s->hdr, s->range_pred, "23.2.5.1.5 steps 8-10 range test", &arm);
+            r = step_tobool_run(ctx, &s->hdr, s->range_pred, "23.2.5.1.3 steps 8-9 range test", &arm);
             if (r) return r < 0 ? -1 : r;
             if (!arm) {
                 JS_ThrowRangeError(ctx, "invalid length");
                 return -1;
             }
             s->plan.in_range = true;
+            if (s->off_example && JS_IsUninitialized(abuf->length_unknown)) {
+                /* over stated bytes this arm bounds the offset; where its example breaks the bound, it has none */
+                uint64_t len = 0;
+
+                if (!JS_IsUndefined(s->argp[2]) && JS_ToIndex(ctx, &len, s->argp[2])) return -1;
+                if (s->offset + (len << size_log2) > (uint64_t)abuf->byte_length)
+                    js_ta_ctor_offset_unknown(ctx, s, false);
+            }
         }
         s->hdr.stage = TAC_PROTO;
     }
@@ -126823,7 +127136,7 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                 uint64_t want = 0;
 
                 if (JS_ToIndex(ctx, &want, s->argp[2]) == 0 && JS_VALUE_GET_OBJ(s->result)->u.array.count < want)
-                    DFAIL("23.2.5.1.5 step 10 over a buffer whose length is unknown: a stated length reaches past "
+                    DFAIL("23.2.5.1.3 step 9.b.ii over a buffer whose length is unknown: a stated length reaches past "
                           "the buffer's example bytes — build a view whose stated length holds and whose bytes "
                           "past the example derive as a read past an unknown length does");
             }
@@ -126834,9 +127147,36 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                 nta->length_unknown = s->len_unknown;
                 s->len_unknown = JS_UNINITIALIZED;
             }
+            if (!JS_IsException(s->result) && !JS_IsUninitialized(s->off_unknown))
+                js_ta_ctor_take_offset(ctx, s, JS_VALUE_GET_OBJ(s->result));
         }
     }
     return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
+}
+
+/* 23.2.5.1.3 steps 9.a.ii and 11 for a view `p` built at the example of an unknown offset: [[ByteOffset]] is that
+   unknown, and a length taken from the buffer (step 9.a.ii's bufferByteLength - offset) is an unknown derived
+   from it, with the stored count as its example where the offset has one. */
+static void js_ta_ctor_take_offset(JSContext *ctx, JSTACtor *s, JSObject *p)
+{
+    JSTypedArray *ta = p->u.typed_array;
+    JSArrayBuffer *abuf = ta->buffer->u.array_buffer;
+    JSValue ops[3];
+
+    DCHECK(JS_IsUninitialized(ta->offset_unknown) && (uint64_t)ta->offset == s->offset,
+           "a view built at an unknown offset's example was given another offset");
+    if (s->plan.len_from_buffer) {
+        ops[0] = JS_IsUninitialized(abuf->length_unknown) ? js_int32(abuf->byte_length) : abuf->length_unknown;
+        ops[1] = s->off_unknown;
+        ops[2] = js_int32(typed_array_size_log2(p->class_id));
+        JS_FreeValue(ctx, ta->length_unknown);
+        ta->length_unknown = g_concolic.derived(ctx, "23.2.5.1.3 step 9.a.ii (newByteLength is bufferByteLength - "
+                                                "offset)", ops, 3, s->off_example ? js_int32(p->u.array.count)
+                                                : JS_UNDEFINED);
+        DCHECK(!JS_IsUninitialized(ta->length_unknown), "a window over an unknown offset derived no length");
+    }
+    ta->offset_unknown = s->off_unknown;
+    s->off_unknown = JS_UNINITIALIZED;
 }
 
 /* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). The three operands with their coerced primitives in place, the
@@ -126852,6 +127192,8 @@ static void js_ta_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     for (i = 0; i < 3; i++) v->val(ctx, &s->argp[i]);
     v->val(ctx, &s->len_unknown);
     v->val(ctx, &s->range_pred);
+    v->val(ctx, &s->off_unknown);
+    v->val(ctx, &s->off_pred);
     if (s->planned) v->val(ctx, &s->plan.buffer);
 }
 
@@ -126889,6 +127231,8 @@ _Static_assert(JS_TYPED_ARRAY_COUNT == 12,
    and never reach the length at all. */
 static int ta_view_offset(JSContext *ctx, JSValueConst byte_offset, int size_log2, uint64_t *poffset)
 {
+    DCHECK(!js_value_is_concolic(byte_offset), "a view's unknown byteOffset reached the stated-offset conversion: "
+                                               "js_ta_ctor_step's TAC_OFFSET_FORK owns it");
     if (JS_ToIndex(ctx, poffset, byte_offset))
         return -1;
     if ((*poffset & (((uint64_t)1 << size_log2) - 1)) != 0) {
@@ -126938,9 +127282,14 @@ static int js_ta_view_plan(JSContext *ctx, JSTAViewPlan *pl, int argc, JSValueCo
         }
         buf_len = abuf->byte_length;                            /* step 7 */
         if (pl->in_range) {
-            /* the caller's fork decided steps 8-10 over the unknown length; the stored bytes are its example */
-            DCHECK(!JS_IsUninitialized(abuf->length_unknown), "an in-range plan over a buffer whose length is stated");
+            /* the caller's fork decided steps 8-9 over the unknown length or offset; the stored bytes and
+               `offset` are their examples */
+            DCHECK(!JS_IsUninitialized(abuf->length_unknown) || pl->offset_unknown,
+                   "an in-range plan over a buffer whose length and offset are both stated");
             len_from_buffer = JS_IsUndefined(argv[2]);
+            if (len_from_buffer && fixed_length && JS_IsUninitialized(abuf->length_unknown) &&
+                (buf_len & (elem_size - 1)) != 0)
+                goto invalid_length;                            /* step 9.a.i over a stated length */
             if (len_from_buffer)
                 len = offset <= buf_len ? (buf_len - offset) >> size_log2 : 0;
         } else if (JS_IsUndefined(argv[2])) {
@@ -126954,7 +127303,7 @@ static int js_ta_view_plan(JSContext *ctx, JSTAViewPlan *pl, int argc, JSValueCo
                 goto invalid_length;
             len = (buf_len - offset) >> size_log2;
         } else {
-            if ((offset + (len << size_log2)) > buf_len) {       /* step 10.b */
+            if ((offset + (len << size_log2)) > buf_len) {       /* step 9.b.ii */
             invalid_length:
                 JS_ThrowRangeError(ctx, "invalid length");
                 return -1;
@@ -127075,6 +127424,7 @@ static void js_typed_array_finalizer(JSRuntime *rt, JSValueConst val)
         }
         JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, ta->buffer));
         JS_FreeValueRT(rt, ta->length_unknown);
+        JS_FreeValueRT(rt, ta->offset_unknown);
         js_free_rt(rt, ta);
     }
 }
@@ -127087,6 +127437,7 @@ static void js_typed_array_mark(JSRuntime *rt, JSValueConst val,
     if (ta) {
         JS_MarkValue(rt, JS_MKPTR(JS_TAG_OBJECT, ta->buffer), mark_func);
         JS_MarkValue(rt, ta->length_unknown, mark_func);
+        JS_MarkValue(rt, ta->offset_unknown, mark_func);
     }
 }
 
@@ -127193,6 +127544,7 @@ static int js_dataview_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JS
         ? js_ab_length_derive(ctx, abuf, "25.3.2.1 DataView ( buffer [ , byteOffset [ , byteLength ] ] ) step 8.a",
                               s->offset, 0, s->len)
         : JS_UNINITIALIZED;
+    ta->offset_unknown = JS_UNINITIALIZED;
     list_add_tail(&ta->link, &abuf->array_list);
     p->u.typed_array = ta;
     return 0;
@@ -127846,6 +128198,7 @@ static JSObject *js_atomics_get_buf(JSContext *ctx,
         JS_ThrowRangeError(ctx, "out-of-bound access");
         return NULL;
     }
+    DCHECK_TA_WINDOW_STATED(ta, 1, "an Atomics operation");
     if (pabuf)
         *pabuf = abuf;
     *pindex = idx;

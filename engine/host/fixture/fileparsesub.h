@@ -2,7 +2,9 @@
    fetches the file its query names (falling back to TF_SERVED's `/files/fpseed.bin`), checks the magic and
    version through a DataView, and decodes the body from `new Uint8Array(buf).subarray(6, 6 + len)` (ECMAScript
    §23.2.3.30 %TypedArray%.prototype.subarray) into `new Function`. The seed's sink is rooted in the seed's
-   reply, and the query's in location.search. Each witness fetch carries a constant.
+   reply, and the query's in location.search. It also views the body as the buffer's tail, `new Uint8Array(buf,
+   buf.byteLength - len, len)` (§23.2.5.1.3, a byteOffset computed from the reply's unknown length), and
+   witnesses the arm whose byteOffset is 6. Each witness fetch carries a constant.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_FILEPARSESUB_H
@@ -19,6 +21,8 @@ static const char HTML_FILEPARSE_SUB[] =
     "  if (dv.getUint32(0) !== 0x46505831 || dv.getUint8(4) !== 1) { fetch('/api/fpu-badmagic'); return null; }"
     "  var len = dv.getUint8(5);"
     "  var body = new TextDecoder().decode(new Uint8Array(buf).subarray(6, 6 + len));"
+    "  var tail = new Uint8Array(buf, buf.byteLength - len, len);"
+    "  if (tail.byteOffset === 6 && tail[0] === new Uint8Array(buf)[6]) fetch('/api/fpu-tail');"
     "  fetch('/api/fpu-parsed');"
     "  return new Function('x', body);"
     "}"
