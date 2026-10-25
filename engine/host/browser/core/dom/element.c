@@ -1214,6 +1214,71 @@ static JSValue js_el_attr_op(JSContext *ctx, JSValueConst this_val, int argc, JS
     return r;
 }
 
+/* §4.9 toggleAttribute(qualifiedName, force) as the page calls it: a step machine, because step 1 ("If
+ * qualifiedName is not a valid attribute local name, then throw an InvalidCharacterError") has both completions
+ * over an unknown name and forks there, the valid arm toggling the attribute named by the unknown's shape as
+ * setAttribute's does. A known name is validated, then toggled by js_el_attr_op's shared lookup (magic 2). */
+#define TOG_ALGORITHM "DOM §4.9 Interface Element toggleAttribute(qualifiedName, force)"
+#define TOG_STAGES(X) X(TOG_TOGGLE, TOG_ALGORITHM " (steps 1-5)")
+enum { IDL_STEP_STAGE_BASE(TOG_STAGES) TOG_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TOG_STEPS[] = { TOG_STAGES(JS_STEP_STAGE_LABEL) NULL };
+#define TOG_NAME_OP "DOM §4.9 toggleAttribute step 1 (qualifiedName is a valid attribute local name)"
+
+typedef struct { int unused; } TogState;   /* the fork's request lives on the header; nothing is owned here */
+static void tog_visit(JSContext *ctx, void *state, JSStepVisit *v) { (void)ctx; (void)state; (void)v; }
+
+static int js_el_toggle_attribute_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc,
+                                       JSValueConst *argv, JSValue cb_result, JSValue *presult,
+                                       JSValue **out_cb, int *out_argc)
+{
+    JSValue r;
+
+    (void)state; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == TOG_TOGGLE, "toggleAttribute resumed into a stage its declaration does not have");
+    DCHECK(argc >= 1, "toggleAttribute reached its body without its required qualifiedName");
+    if (concolic_is(argv[0])) {
+        JSValue ex = concolic_example(ctx, argv[0]);
+        int real = JS_IsString(ex) ? el_name_real(ctx, ex, dom_valid_attribute_local_name)
+                                   : JS_OUTCOME_REAL_UNSTATED;
+        int rc, arm = 0;
+
+        JS_FreeValue(ctx, ex);
+        rc = step_fork_run(ctx, hdr, argv[0], TOG_NAME_OP, 2, real, &arm);
+        if (rc)
+            return rc;
+        DCHECKF(arm == 0 || arm == 1, "toggleAttribute's step 1 fork answered completion %d", arm);
+        if (arm == 1) {
+            JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                 "toggleAttribute was given a name that is not a valid attribute local name");
+            return JS_STEP_ABRUPT;
+        }
+    } else {
+        size_t len = 0;
+        const char *b = JS_ToCStringLen(ctx, &len, argv[0]);   /* the declaration converted it */
+        bool ok;
+
+        if (!b) return JS_STEP_ABRUPT;
+        ok = dom_valid_attribute_local_name(b, len);                   /* step 1 */
+        JS_FreeCString(ctx, b);
+        if (!ok) {
+            JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                 "toggleAttribute was given a name that is not a valid attribute local name");
+            return JS_STEP_ABRUPT;
+        }
+    }
+    r = js_el_attr_op(ctx, hdr->this_val, argc, argv, 2);
+    if (JS_IsException(r))
+        return JS_STEP_ABRUPT;
+    *presult = r;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl TOG_DECL = {
+    js_el_toggle_attribute_step, sizeof(TogState), tog_visit, NULL, TOG_ALGORITHM, TOG_STEPS, 0, NULL
+};
+
 /* §4.9's (NAMESPACE, LOCAL NAME) KEY SPACE — `getAttributeNS`, `hasAttributeNS`, `getAttributeNodeNS` and
    `removeAttributeNS`, which are the SAME lookup with four different answers. One body because the thing that
    is easy to get wrong is the KEY, not the answer: each of the four begins "if namespace is the empty string,
@@ -3278,7 +3343,7 @@ void element_init(JSContext *ctx)
     g_id_get_attr_node = idl_method_id(ctx, IDL_1STR, 1, js_el_get_attribute_node, 0);
     g_id_remove_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 0);
     g_id_has_attr = idl_method_id(ctx, IDL_1STR, 1, js_el_attr_op, 1);
-    g_id_toggle_attr = idl_method_id(ctx, TOGGLE, 2, js_el_attr_op, 2);
+    g_id_toggle_attr = idl_method_id_step(ctx, TOGGLE, 2, NULL, 0, &TOG_DECL, 0);
     idl_optional_from(1);   /* §4.9: `toggleAttribute(qualifiedName, optional force)` */
     {
         /* ELEMENT TIMING's `partial interface Element` is one member and that member is a whole reflection:

@@ -3,7 +3,7 @@
    name, so the page's try/catch reaches three fetches: the element, InvalidCharacterError and NamespaceError.
    createElement over the same name has §4.5 step 1's two: the element and InvalidCharacterError; setAttribute has
    §4.9 step 1's two and setAttributeNS §1.4's three, as do createAttribute and createAttributeNS;
-   createProcessingInstruction over the name as its target has §4.13 step 1's two.
+   createProcessingInstruction over the name as its target has §4.13 step 1's two, toggleAttribute §4.9 step 1's.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_QNAMEFORK_H
@@ -58,6 +58,12 @@ static const char HTML_QNAMEFORK[] =
     "  fetch('/api/piname?arm=pi');"
     "} catch (e) {"
     "  fetch('/api/piname?arm=' + e.name);"
+    "}"
+    "try {"
+    "  anEl.toggleAttribute(qnName);"
+    "  fetch('/api/tgname?arm=toggled');"
+    "} catch (e) {"
+    "  fetch('/api/tgname?arm=' + e.name);"
     "}"
     "</script>"
     TF_CANVAS_INK

@@ -14453,6 +14453,12 @@ TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
              "the arm in which the local name is valid did not create an element");
     fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/lname", "arm", "InvalidCharacterError"),
              "the arm in which the local name is not valid did not throw InvalidCharacterError");
+    /* toggleAttribute over an unknown name reaches §4.9 step 1's two completions. */
+    const char *tg_why = NULL; int tg_tt = 1;
+    fold_row(&tg_tt, &tg_why, param_value_is(js, "/api/tgname", "arm", "toggled"),
+             "toggleAttribute's arm in which the name is valid did not toggle");
+    fold_row(&tg_tt, &tg_why, param_value_is(js, "/api/tgname", "arm", "InvalidCharacterError"),
+             "toggleAttribute's arm in which the name is not valid did not throw InvalidCharacterError");
     /* createProcessingInstruction over an unknown target reaches §4.13 step 1's two completions. */
     const char *pi_why = NULL; int pi_tt = 1;
     fold_row(&pi_tt, &pi_why, param_value_is(js, "/api/piname", "arm", "pi"),
@@ -14489,6 +14495,7 @@ TF_UNIT void probes_qnamefork(const char *js, Probe *tab, int *n) {
         { "unknown-attribute-name-forks", an_tt, "/api/aname", SESS_EXPLORE, an_why },
         { "unknown-attribute-factory-name-forks", ca_tt, "/api/caname", SESS_EXPLORE, ca_why },
         { "unknown-pi-target-forks", pi_tt, "/api/piname", SESS_EXPLORE, pi_why },
+        { "unknown-toggle-name-forks", tg_tt, "/api/tgname", SESS_EXPLORE, tg_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
