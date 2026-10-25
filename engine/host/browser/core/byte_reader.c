@@ -344,10 +344,10 @@ void byte_reader_install(JSContext *ctx, JSValueConst proto, int handle)
  * The sibling move of JSON.stringify to ECMAScript §25.5.4 "JSON.stringify ( value [ , replacer [ , space ] ] )"
  * is recorded in the engine at its own machine.
  *
- * THE OTHER READERS DO NOT ASK, and that is a fact about their VALUES rather than an omission. `arrayBuffer()`,
+ * THE OTHER READERS DO NOT WRAP, and that is a fact about their VALUES rather than an omission. `arrayBuffer()`,
  * `bytes()` and `blob()` answer with a CONTAINER over the same bytes, not with the content: the page writes
  * `new Uint8Array(await r.arrayBuffer())`, and a concolic in the container's place breaks the construction
- * instead of describing it. `formData()`'s entries are values the page reads, and they are a separate reader's
+ * instead of describing it. The first two record their bytes as an image of this value instead. `formData()`'s entries are values the page reads, and they are a separate reader's
  * to state when its parser is taught to carry them — recorded here rather than silently included, because a
  * wrap applied to a container is a defect and an unasked question is a gap.
  *
@@ -461,38 +461,42 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
    handing out the object's storage would let one flow mutate a reply another is still reading, and a detach
    would leave that flow reading freed memory.
 
-   AND NEITHER OF THESE TWO CALLS byte_reader_content, WHICH IS THE ONE ASYMMETRY IN THIS TABLE AND WAS
-   UNSTATED. `text` and `json` hand their value through the provenance door and these hand back the raw
-   container, so ONE byte sequence answers a page as unknown through two readers and as concrete through
-   the other two. That is not an oversight and the `(void)recv` is not laziness: the solver's unknown is a
-   callable exotic whose [[Get]] answers every name before the prototype chain is walked, so wrapping an
-   ArrayBuffer in one would make `ab instanceof ArrayBuffer` and every typed-array operation over it answer
-   about the wrapper instead of the buffer — a Web IDL §3.2 brand this reader would be breaking to carry a
-   taint. The wrap is right for a STRING and a parsed RECORD, whose members a page reads by name, and wrong
-   for a container a page reads by index and brand.
+   THE CONTAINER IS NOT WRAPPED: the solver's unknown is a callable exotic whose [[Get]] answers every name
+   before the prototype chain is walked, so a wrapped ArrayBuffer would answer `instanceof` and every typed-array
+   operation about the wrapper, breaking the Web IDL §3.2 brand. Instead its ELEMENTS are the unknown: the copy
+   records that its bytes are the byte sequence behind text()'s unknown (the same source, minted by the same
+   door), so `by[0]` and a DataView read derive from it while the brand stays the buffer's.
 
-   NAMED RESIDUAL — THE BYTES' UNKNOWN-NESS IS LOST AT THE CONTAINER BOUNDARY.
-   WHAT IS NOT COVERED: a reply read as a container carries no provenance at all, so `ab.byteLength`,
-   `by.length` and `by[0]` are CONCRETE and a page's branch on any of them is DECIDED where the identical
-   bytes through `text()` or `json()` FORK. §Solver-half forbids collapsing a modelable value to
-   bare-concrete for exactly this reason — it deletes the fork and every arm behind it — and this is that
-   collapse, arriving at a container rather than at a scalar.
-   WHAT THE NEXT DIFF BUILDS: NOT a wrapped container, which the paragraph above rules out. It is a buffer
-   whose ELEMENTS are the unknown — the triple riding the storage the brand still describes — so `by[0]` is
-   unknown while `by instanceof Uint8Array` stays true. That is a change to what a byte sequence IS in this
-   engine and not a change to this table, which is why it is named here rather than attempted.
-   HOW ITS ABSENCE WOULD SHOW: a page that gates on a reply's length or leading byte takes exactly one arm,
-   with no sibling and nothing anywhere to say a world was lost. The fixture already asks it — the
-   `body-bytes` row asserts `len`, `n` and `b0` off one reply read two ways — so a run in which that row
-   answers while a byte-gated arm is still missing is this residual firing rather than being retired. */
+   NAMED RESIDUAL — THE LENGTH IS CONCRETE. What is not covered: `byteLength` and `length` answer the example's
+   length, and a sequence with no example bytes is a zero-length buffer, so a length gate is decided and a read
+   past the example throws RangeError where a longer sequence was a world. What the next diff builds: a length
+   that is unknown with the example as its value, in the buffer's state, with the bounds tests of the views
+   forking on it. How its absence shows: a page gating on a reply's or file's length takes one arm. */
+static const char BYTE_READER_IMAGE[] = "the byte sequence whose UTF-8 decode text() reads";
+
+/* The copy, recorded as an image of text()'s unknown when these bytes have one. */
+static JSValue byte_reader_image(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len, bool view)
+{
+    JSValue body = byte_reader_text(ctx, recv, bytes, len), r;
+
+    if (JS_IsException(body))
+        return body;
+    if (!concolic_is(body))
+        r = view ? JS_NewUint8ArrayCopy(ctx, (const uint8_t *)bytes, len)
+                 : JS_NewArrayBufferCopy(ctx, (const uint8_t *)bytes, len);
+    else
+        r = view ? JS_NewUint8ArrayImage(ctx, (const uint8_t *)bytes, len, body, BYTE_READER_IMAGE)
+                 : JS_NewArrayBufferImage(ctx, (const uint8_t *)bytes, len, body, BYTE_READER_IMAGE);
+    JS_FreeValue(ctx, body);
+    return r;
+}
+
 JSValue byte_reader_array_buffer(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    (void)recv;
-    return JS_NewArrayBufferCopy(ctx, (const uint8_t *)bytes, len);
+    return byte_reader_image(ctx, recv, bytes, len, false);
 }
 
 JSValue byte_reader_bytes(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    (void)recv;
-    return JS_NewUint8ArrayCopy(ctx, (const uint8_t *)bytes, len);
+    return byte_reader_image(ctx, recv, bytes, len, true);
 }

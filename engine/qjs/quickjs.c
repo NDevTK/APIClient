@@ -123768,28 +123768,18 @@ static const JSArrayBufferSpan *js_ab_span_owner(const JSArrayBuffer *abuf, uint
     return NULL;
 }
 
-/* see quickjs-step.h */
-int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPiece **ppieces)
+/* The unknown pieces of bytes [lo, hi) of `abuf` (whose object is `bufobj`), each run of bytes one span still
+   describes, with offsets relative to `lo`; *ppieces is owned by the caller (JS_FreeBufferUnknowns). */
+static int js_ab_unknown_pieces(JSContext *ctx, const JSArrayBuffer *abuf, JSObject *bufobj, uint32_t lo,
+                                uint32_t hi, JSBufferUnknownPiece **ppieces)
 {
-    JSArrayBuffer *abuf = js_buffer_source_buffer(obj);
-    JSObject *p = JS_VALUE_GET_OBJ(obj), *bufobj = p;
     JSBufferUnknownPiece *pieces = NULL;
-    uint32_t lo = 0, hi, b, e;
+    uint32_t b, e;
     int n = 0, cap = 0;
 
     *ppieces = NULL;
     if (abuf->n_span == 0 || abuf->detached || abuf->data == NULL)
         return 0;
-    if (p->class_id == JS_CLASS_ARRAY_BUFFER || p->class_id == JS_CLASS_SHARED_ARRAY_BUFFER) {
-        hi = (uint32_t)abuf->byte_length;
-    } else {
-        DCHECK(p->class_id == JS_CLASS_DATAVIEW ? !dataview_is_oob(p) : !typed_array_is_oob(p),
-               "a buffer source's unknown bytes were asked of an out-of-bounds view — Web IDL §3.2.26's copy "
-               "reads no window for one, so the caller has already answered it");
-        bufobj = p->u.typed_array->buffer;
-        lo = p->u.typed_array->offset;
-        hi = lo + (uint32_t)js_buffer_view_byte_length(p);
-    }
     for (b = lo; b < hi; b = e) {
         const JSArrayBufferSpan *s = js_ab_span_owner(abuf, b);
         JSBufferUnknownPiece *u;
@@ -123833,6 +123823,29 @@ int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPie
     }
     *ppieces = pieces;
     return n;
+}
+
+/* see quickjs-step.h */
+int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPiece **ppieces)
+{
+    JSArrayBuffer *abuf = js_buffer_source_buffer(obj);
+    JSObject *p = JS_VALUE_GET_OBJ(obj), *bufobj = p;
+    uint32_t lo = 0, hi;
+
+    *ppieces = NULL;
+    if (abuf->n_span == 0 || abuf->detached || abuf->data == NULL)
+        return 0;
+    if (p->class_id == JS_CLASS_ARRAY_BUFFER || p->class_id == JS_CLASS_SHARED_ARRAY_BUFFER) {
+        hi = (uint32_t)abuf->byte_length;
+    } else {
+        DCHECK(p->class_id == JS_CLASS_DATAVIEW ? !dataview_is_oob(p) : !typed_array_is_oob(p),
+               "a buffer source's unknown bytes were asked of an out-of-bounds view — Web IDL §3.2.26's copy "
+               "reads no window for one, so the caller has already answered it");
+        bufobj = p->u.typed_array->buffer;
+        lo = p->u.typed_array->offset;
+        hi = lo + (uint32_t)js_buffer_view_byte_length(p);
+    }
+    return js_ab_unknown_pieces(ctx, abuf, bufobj, lo, hi, ppieces);
 }
 
 void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *pieces, int n)
@@ -126212,6 +126225,48 @@ static JSValue js_dataview_get_byteOffset(JSContext *ctx, JSValueConst this_val)
     return js_uint32(ta->offset);
 }
 
+/* The element type names of ECMAScript §25.3.1.5 GetViewValue ( view, requestIndex, isLittleEndian, type )'s
+   `type` (Table 71, The TypedArray Constructors), in class order from Uint8ClampedArray. */
+static const char *const js_view_type_names[JS_TYPED_ARRAY_COUNT] = {
+    "uint8clamped", "int8", "uint8", "int16", "uint16", "int32", "uint32", "bigint64", "biguint64", "float16",
+    "float32", "float64",
+};
+
+/* GetViewValue over bytes a span still describes: the value is unknown, derived from each piece's unknown at
+   its position and width and from the byte order, with the value the block's bytes give (`real`, consumed) as
+   its example. A window no span describes answers `real` itself. */
+static JSValue js_dataview_span_value(JSContext *ctx, JSObject *bufobj, uint32_t start, int size,
+                                      bool little_endian, int class_id, JSValue real)
+{
+    JSBufferUnknownPiece *pc;
+    JSValue *ops, r;
+    char op[80];
+    int n, i, k = 0;
+
+    n = js_ab_unknown_pieces(ctx, bufobj->u.array_buffer, bufobj, start, start + (uint32_t)size, &pc);
+    if (n == 0)
+        return real;
+    DCHECK(g_concolic.derived != NULL,
+           "a buffer holds a span over unknown input with no JSConcolicHooks.derived installed — only an installed "
+           "concolic class mints the unknowns a span records");
+    ops = js_malloc(ctx, sizeof(JSValue) * (size_t)(4 * n + 1));
+    CHECK(ops != NULL, "OOM deriving a DataView read over unknown bytes — dropping it would hand the page the "
+                       "example as a concrete number");
+    for (i = 0; i < n; i++) {
+        ops[k++] = pc[i].unknown;
+        ops[k++] = js_int32((int32_t)pc[i].offset);
+        ops[k++] = JS_NewInt64(ctx, pc[i].codec ? (int64_t)pc[i].image_pos : (int64_t)start + pc[i].offset);
+        ops[k++] = js_int32((int32_t)pc[i].length);
+    }
+    ops[k++] = JS_NewBool(ctx, little_endian);
+    snprintf(op, sizeof op, "25.3.1.5 GetViewValue %s", js_view_type_names[class_id - JS_CLASS_UINT8C_ARRAY]);
+    r = g_concolic.derived(ctx, op, ops, k, real);
+    DCHECK(!JS_IsUninitialized(r), "a DataView read over a span derived no unknown — every span records one");
+    js_free(ctx, ops);
+    JS_FreeBufferUnknowns(ctx, pc, n);
+    return r;
+}
+
 static JSValue js_dataview_getValue(JSContext *ctx,
                                     JSValueConst this_obj,
                                     int argc, JSValueConst *argv, int class_id)
@@ -126223,6 +126278,7 @@ static JSValue js_dataview_getValue(JSContext *ctx,
     uint8_t *ptr;
     uint32_t v;
     uint64_t pos;
+    JSValue ret = JS_UNDEFINED;
 
     ta = JS_GetOpaque2(ctx, this_obj, JS_CLASS_DATAVIEW);
     if (!ta)
@@ -126247,36 +126303,36 @@ static JSValue js_dataview_getValue(JSContext *ctx,
 
     switch(class_id) {
     case JS_CLASS_INT8_ARRAY:
-        return js_int32(*(int8_t *)ptr);
+        ret = js_int32(*(int8_t *)ptr); break;
     case JS_CLASS_UINT8_ARRAY:
-        return js_int32(*(uint8_t *)ptr);
+        ret = js_int32(*(uint8_t *)ptr); break;
     case JS_CLASS_INT16_ARRAY:
         v = get_u16(ptr);
         if (is_swap)
             v = bswap16(v);
-        return js_int32((int16_t)v);
+        ret = js_int32((int16_t)v); break;
     case JS_CLASS_UINT16_ARRAY:
         v = get_u16(ptr);
         if (is_swap)
             v = bswap16(v);
-        return js_int32(v);
+        ret = js_int32(v); break;
     case JS_CLASS_INT32_ARRAY:
         v = get_u32(ptr);
         if (is_swap)
             v = bswap32(v);
-        return js_int32(v);
+        ret = js_int32(v); break;
     case JS_CLASS_UINT32_ARRAY:
         v = get_u32(ptr);
         if (is_swap)
             v = bswap32(v);
-        return js_uint32(v);
+        ret = js_uint32(v); break;
     case JS_CLASS_BIG_INT64_ARRAY:
         {
             uint64_t v;
             v = get_u64(ptr);
             if (is_swap)
                 v = bswap64(v);
-            return JS_NewBigInt64(ctx, v);
+            ret = JS_NewBigInt64(ctx, v); break;
         }
         break;
     case JS_CLASS_BIG_UINT64_ARRAY:
@@ -126285,7 +126341,7 @@ static JSValue js_dataview_getValue(JSContext *ctx,
             v = get_u64(ptr);
             if (is_swap)
                 v = bswap64(v);
-            return JS_NewBigUint64(ctx, v);
+            ret = JS_NewBigUint64(ctx, v); break;
         }
         break;
     case JS_CLASS_FLOAT16_ARRAY:
@@ -126294,7 +126350,7 @@ static JSValue js_dataview_getValue(JSContext *ctx,
             v = get_u16(ptr);
             if (is_swap)
                 v = bswap16(v);
-            return js_float64(fromfp16(v));
+            ret = js_float64(fromfp16(v)); break;
         }
     case JS_CLASS_FLOAT32_ARRAY:
         {
@@ -126306,7 +126362,7 @@ static JSValue js_dataview_getValue(JSContext *ctx,
             if (is_swap)
                 v = bswap32(v);
             u.i = v;
-            return js_float64(u.f);
+            ret = js_float64(u.f); break;
         }
     case JS_CLASS_FLOAT64_ARRAY:
         {
@@ -126317,12 +126373,12 @@ static JSValue js_dataview_getValue(JSContext *ctx,
             u.i = get_u64(ptr);
             if (is_swap)
                 u.i = bswap64(u.i);
-            return js_float64(u.f);
+            ret = js_float64(u.f); break;
         }
     default:
         abort();
     }
-    return JS_EXCEPTION; // pacify compiler
+    return js_dataview_span_value(ctx, ta->buffer, ta->offset + (uint32_t)pos, size, littleEndian, class_id, ret);
 }
 
 /* 25.3.4.16 step 4: ToIndex(getIndex) — and its RangeError for a fractional or negative offset — completes
@@ -126526,6 +126582,21 @@ JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JS
     js_ab_span_set_image(ctx, JS_VALUE_GET_OBJ(arr)->u.typed_array->buffer->u.array_buffer, 0, (uint32_t)len,
                          unknown, 0, codec);
     return arr;
+}
+
+/* see quickjs-step.h */
+JSValue JS_NewArrayBufferImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
+                               const char *codec)
+{
+    JSValue ab = JS_NewArrayBufferCopy(ctx, buf, len);
+
+    DCHECK(js_value_is_concolic(unknown), "a codec image was recorded over a value that is not unknown input — "
+                                          "a known operand's output is ordinary bytes");
+    DCHECK(codec != NULL, "a codec image names no codec, which is half the identity of every byte in it");
+    if (JS_IsException(ab) || len == 0)
+        return ab;
+    js_ab_span_set_image(ctx, JS_VALUE_GET_OBJ(ab)->u.array_buffer, 0, (uint32_t)len, unknown, 0, codec);
+    return ab;
 }
 
 JSValue JS_NewUint8ArrayCopy(JSContext *ctx, const uint8_t *buf, size_t len)

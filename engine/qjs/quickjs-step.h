@@ -1256,6 +1256,9 @@ JS_EXTERN void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *piece
    computed from), so each element reads as an unknown derived from it. `codec` is a static string. */
 JS_EXTERN JSValue JS_NewUint8ArrayImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
                                         const char *codec);
+/* The same for an ArrayBuffer: its bytes read through any view as unknowns derived from `unknown`. */
+JS_EXTERN JSValue JS_NewArrayBufferImage(JSContext *ctx, const uint8_t *buf, size_t len, JSValueConst unknown,
+                                         const char *codec);
 
 /* %IteratorPrototype%. Web IDL §3.7.9.2 Iterator prototype object states that the ITERATOR PROTOTYPE OBJECT of
    an `iterable<>` interface has it as its [[Prototype]] ("The [[Prototype]] internal slot of an iterator
