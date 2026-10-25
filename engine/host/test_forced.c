@@ -1143,6 +1143,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/floatintrinsic.h"
 #include "fixture/flexwrap.h"
 #include "fixture/valignmiddle.h"
+#include "fixture/scrollicb.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1665,6 +1666,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "floatintrinsic", HTML_FLOATINTRINSIC },
     { "flexwrap", HTML_FLEXWRAP },
     { "valignmiddle", HTML_VALIGNMIDDLE },
+    { "scrollicb", HTML_SCROLLICB },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15256,6 +15258,42 @@ TF_UNIT void probes_shortening(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `scrollicb` document (fixture/scrollicb.h). */
+TF_UNIT void probes_scrollicb(const char *js, Probe *tab, int *n) {
+    const char *si_why = NULL; int si_tt = !!strstr(js, "\"/api/scrollicb\"");
+
+    fold_row(&si_tt, &si_why, si_tt,
+             "NOT REACHED: there is no /api/scrollicb record at all, so the document aborted before its fetch");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s1w", "100"),
+             "CSSOM VIEW §2: an `overflow: scroll` element's scrollWidth counts an inset box laid out in the initial containing block");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s1h", "50"),
+             "CSSOM VIEW §2: that element's scrollHeight is not its 50px padding box");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s2w", "100"),
+             "CSSOM VIEW §2: a nested box laid out in the initial containing block widens the element's scrolling area");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s2h", "50"),
+             "CSSOM VIEW §2: a nested box laid out in the initial containing block below the element deepens its scrolling area");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s3w", "100"),
+             "CSSOM VIEW §2: a box at its static position in the initial containing block widens the element's scrolling area");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s3h", "50"),
+             "CSSOM VIEW §2: that element's scrollHeight is not its 50px padding box");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s4w", "100"),
+             "CSSOM VIEW §2: a visually hidden absolute `h1` laid out in the initial containing block widens an `overflow: hidden` element's scrolling area");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s4h", "50"),
+             "CSSOM VIEW §2: that element's scrollHeight is not its 50px padding box");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s5w", "100"),
+             "CSSOM VIEW §2: a `position: fixed` box widens the element's scrolling area");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s5h", "50"),
+             "CSSOM VIEW §2: a `position: fixed` box deepens the element's scrolling area");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s6w", "100"),
+             "CSSOM VIEW §2: a `position: fixed` box at its static position widens the element's scrolling area");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/scrollicb", "s6h", "50"),
+             "CSSOM VIEW §2: that element's scrollHeight is not its 50px padding box");
+    const Probe rows[] = {
+        { "scrolling-area-icb-excluded", si_tt, "/api/scrollicb", SESS_EXPLORE, si_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `valignmiddle` document (fixture/valignmiddle.h). */
 TF_UNIT void probes_valignmiddle(const char *js, Probe *tab, int *n) {
     const char *vm_why = NULL; int vm_tt = !!strstr(js, "\"/api/valignmiddle\"");
@@ -20889,6 +20927,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_floatintrinsic(js, probes, &np);
     probes_flexwrap(js, probes, &np);
     probes_valignmiddle(js, probes, &np);
+    probes_scrollicb(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
@@ -31190,18 +31229,20 @@ static bool tf_bb_paint_box(JSContext *ctx, lxb_html_document_t *dom, DisplayLis
     return ok;
 }
 
-/* THE MARKS OF ONE KIND CARRYING ONE COLOUR, from `from` to the end of the list. The colour is the key
+/* THE MARKS OF ONE KIND CARRYING ONE COLOUR, over the whole list. The whole list and not the part past the
+   base list's length, because CSS 2.1 §E.2 "Painting order" lays a positioned descendant's marks at step 8,
+   after every in-flow paragraph's step 7, so an appended paragraph's marks are not a suffix of the list when
+   the document holds a positioned box that lays any. The colour is the key
    because core/paint/display_list.h's `DisplayMark` carries NO element — which is a deliberate statement of
    that header's and not a gap — so a count keyed on anything else would be this file re-deriving which box a
    mark came off. Every component compared is 0 or 1, which CSS Color 4 §5.2 "The RGB Hexadecimal Notations:
    #RRGGBB" makes exact in binary for the three `#RRGGBB` literals above, so these are equalities and not
    tolerances. */
-static size_t tf_bb_count(const DisplayList *dl, size_t from, DisplayMarkKind kind,
-                          double r, double g, double b)
+static size_t tf_bb_count(const DisplayList *dl, DisplayMarkKind kind, double r, double g, double b)
 {
     size_t i, n = 0;
 
-    for (i = from; i < dl->n; i++)
+    for (i = 0; i < dl->n; i++)
         if (dl->v[i].kind == kind && dl->v[i].color.space == CSS_COLOR_SPACE_SRGB &&
             dl->v[i].color.a == 1.0 && dl->v[i].color.c[0] == r && dl->v[i].color.c[1] == g &&
             dl->v[i].color.c[2] == b) n++;
@@ -31225,15 +31266,15 @@ TF_UNIT void box_paint_inline_break_selftest(JSContext *ctx, lxb_html_document_t
     text_ok = tf_bb_paint_text(ctx, dom, &text, &text_offers);
     box_ok = tf_bb_paint_box(ctx, dom, &box, &box_offers);
 
-    base_cyan = tf_bb_count(&base, 0, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
-    base_yellow = tf_bb_count(&base, 0, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
-    base_red = tf_bb_count(&base, 0, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
-    text_cyan = tf_bb_count(&text, nbase, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
-    text_yellow = tf_bb_count(&text, nbase, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
-    text_red = tf_bb_count(&text, nbase, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
-    box_cyan = tf_bb_count(&box, nbase, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
-    box_yellow = tf_bb_count(&box, nbase, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
-    box_red = tf_bb_count(&box, nbase, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
+    base_cyan = tf_bb_count(&base, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
+    base_yellow = tf_bb_count(&base, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
+    base_red = tf_bb_count(&base, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
+    text_cyan = tf_bb_count(&text, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
+    text_yellow = tf_bb_count(&text, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
+    text_red = tf_bb_count(&text, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
+    box_cyan = tf_bb_count(&box, DISPLAY_MARK_GLYPH, 0.0, 1.0, 1.0);
+    box_yellow = tf_bb_count(&box, DISPLAY_MARK_GLYPH, 1.0, 1.0, 0.0);
+    box_red = tf_bb_count(&box, DISPLAY_MARK_FILL_RECT, 1.0, 0.0, 0.0);
 
     /* 0. THE NEGATIVE CONTROL, TAKEN WITH THE PROBE THAT ANSWERS NON-ZERO BELOW — and taken over the WHOLE
        base list rather than past any offset, which is what makes it a statement about the document and not
@@ -31315,8 +31356,8 @@ TF_UNIT void box_paint_inline_break_selftest(JSContext *ctx, lxb_html_document_t
     CHECKF(text.n == nbase + 6u && box.n == nbase + 4u,
            "CSS 2.1 §E.2's walk laid %zu and %zu marks over two paragraphs this file appended to a document "
            "that laid %zu with neither of them in it, where this file derives SIX and FOUR. Each paragraph is "
-           "the body's LAST child, so §E.2's step 7 \"in tree order\" puts its content step last and the "
-           "difference between the lists is the whole of what it added. A mark this row has not accounted "
+           "the body's last child and no other box gains or loses a mark, so the difference between the "
+           "lists' lengths is the whole of what it added. A mark this row has not accounted "
            "for is one laid for an element this file did not write, or the previous pass's paragraph still "
            "standing in the tree",
            text.n, box.n, nbase);
