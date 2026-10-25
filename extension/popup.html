@@ -126,6 +126,7 @@
 
     <nav>
       <button class="tab active" data-panel="endpoints">Endpoints</button>
+      <button class="tab" data-panel="inputs">Inputs</button>
       <button class="tab" data-panel="response">Requests</button>
       <button class="tab" data-panel="send">Send</button>
       <button class="tab" data-panel="security">Vulns</button>
@@ -136,6 +137,11 @@
     <!-- Endpoints Panel: the learned API surface, rendered by lib/popup-endpoints.js. -->
     <section id="panel-endpoints" class="panel active">
       <div id="endpoints-body"></div>
+    </section>
+
+    <!-- Inputs Panel: the same surface regrouped by the input each request rests on, lib/popup-inputs.js. -->
+    <section id="panel-inputs" class="panel">
+      <div id="inputs-body"></div>
     </section>
 
     <!-- Security Panel -->
@@ -388,6 +394,9 @@
     <script src="lib/popup-send.js"></script>
     <script src="lib/popup-discovery.js"></script>
     <script src="lib/popup-endpoints.js"></script>
+    <!-- lib/callsite-url.js holds the one reading of the engine's hole grammar the Inputs panel names inputs by. -->
+    <script src="lib/callsite-url.js"></script>
+    <script src="lib/popup-inputs.js"></script>
     <!-- The popup is a bridge EDGE (it renders the engine's result), so per CLAUDE.md §Architecture it gets
          the same DCHECK mechanism the offscreen has: a malformed/drifted engine record crashes LOUD where it
          is read, instead of a card quietly rendering less than it claims. check.js is loaded at the TOP of

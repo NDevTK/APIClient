@@ -1348,6 +1348,7 @@ async function populateTabFilter() {
 
 function render() {
   renderEndpointsPanel();
+  renderInputsPanel();
   renderDeepStatus();
   renderDataPanel();
   renderSecurityPanel();

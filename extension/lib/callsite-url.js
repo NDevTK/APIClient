@@ -35,7 +35,18 @@ var _AST_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.\-]*:/;
    mints; it read `{orphan3.arg0…}` — the ordinal that the cross-session name retired — which is a shape no
    producer writes, i.e. exactly the criticism this paragraph levels at `${` and `(dynamic)` two comments up. */
 function astAddressHasHole(s) {
-  return typeof s === "string" && /\{[^{}]*\}/.test(s);
+  return astHoleNames(s).length > 0;
+}
+
+/* THE NAMES OF A SHAPE'S HOLES, in order, in the same grammar: each `{name}` span, `name` free of braces. In
+   a display shape (a witness decision, a pin subject, a query value) a span is a source read, since a source's
+   shape is its provenance in braces (solver/concolic.h); in an address template it is path_scan's whole
+   segment. `{}` answers the empty name, the engine's unnameable hole. A non-string has none. */
+function astHoleNames(s) {
+  var out = [], re = /\{([^{}]*)\}/g, m;
+  if (typeof s !== "string") return out;
+  while ((m = re.exec(s)) !== null) out.push(m[1]);
+  return out;
 }
 
 /* A HOLE'S NAME IS NOT URL SYNTAX, AND THE ONLY WAY TO SAY THAT TO A URL PARSER IS TO PERCENT-ENCODE IT.
