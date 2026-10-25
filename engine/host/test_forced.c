@@ -1114,6 +1114,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/borrowedkey.h"
 #include "fixture/replyrole.h"
 #include "fixture/storedxss.h"
+#include "fixture/windowname.h"
 #include "fixture/boundpark.h"
 #include "fixture/msgchain.h"
 #include "fixture/clickhash.h"
@@ -1574,6 +1575,7 @@ static const struct { const char *name; const char *src; } TF_DOCS[] = {
     { "borrowedkey", HTML_BORROWEDKEY },
     { "replyrole", HTML_REPLYROLE },
     { "storedxss", HTML_STOREDXSS },
+    { "windowname", HTML_WINDOWNAME },
     { "boundpark", HTML_BOUNDPARK },
     { "msgchain", HTML_MSGCHAIN },
     { "clickhash", HTML_CLICKHASH },
@@ -14600,6 +14602,44 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `windowname` document (fixture/windowname.h): per sink, the write is reached tainted by
+   `window.name`, and the fired PoC states a delivery for it that is not this document's address. */
+TF_UNIT void probes_windowname(const char *js, Probe *tab, int *n) {
+    static const char *const sinks[2] = { "eval", "innerHTML" };
+    char src[2][192] = { "", "" };
+    int has[2], i;
+    const char *src_why[2] = { NULL, NULL }, *poc_why[2] = { NULL, NULL };
+    int src_tt[2] = { 1, 1 }, poc_tt[2] = { 1, 1 };
+    const char *wn_why = NULL; int wn_tt = 1;
+
+    fold_row(&wn_tt, &wn_why, !!strstr(js, "\"/api/wn-named\""),
+             "NOT REACHED: there is no /api/wn-named record, so the arm where window.name is non-empty never ran");
+    for (i = 0; i < 2; i++) {
+        has[i] = s_rooted_source(js, sinks[i], "window.name", src[i], sizeof src[i]);
+        fold_row(&src_tt[i], &src_why[i], has[i],
+                 i == 0 ? "NOT REACHED: no eval @S record carries a source rooted in window.name, so the name was "
+                          "not treated as attacker input at the script sink"
+                        : "NOT REACHED: no innerHTML @S record carries a source rooted in window.name, so the name "
+                          "was not treated as attacker input at the markup sink");
+        fold_row(&poc_tt[i], &poc_why[i], has[i] && s_stage(js, sinks[i], src[i]) == S_FIRED,
+                 i == 0 ? "the eval <- window.name search did not fire a PoC"
+                        : "the innerHTML <- window.name search did not fire a PoC");
+        fold_row(&poc_tt[i], &poc_why[i], has[i] && s_field(js, sinks[i], src[i], ",\"delivery\":\""),
+                 "the PoC states no delivery, so it cannot say that an attacker page sets window.name and then "
+                 "navigates the same navigable here");
+        fold_row(&poc_tt[i], &poc_why[i], !(has[i] && s_field(js, sinks[i], src[i], "\"delivery\":\"address\"")),
+                 "the PoC states an address delivery, but window.name is in no part of this document's address");
+    }
+    const Probe rows[] = {
+        { "wn-named", wn_tt, "/api/wn-named", SESS_EXPLORE, wn_why },
+        { "wn-eval-source", src_tt[0], "var wnTheme", SESS_EXPLORE, src_why[0] },
+        { "wn-html-source", src_tt[1], "'wnOut'", SESS_EXPLORE, src_why[1] },
+        { "wn-eval-poc", poc_tt[0], "wnTheme = ", SESS_EXPLORE, poc_why[0] },
+        { "wn-html-poc", poc_tt[1], "'<p>' + wnName", SESS_EXPLORE, poc_why[1] },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -18416,6 +18456,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_borrowedkey(js, probes, &np);
     probes_replyrole(js, probes, &np);
     probes_storedxss(js, probes, &np);
+    probes_windowname(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
