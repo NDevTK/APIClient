@@ -597,10 +597,10 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
  * — and installs the SENDING world's segment, which is the same answer for a document whose state is baseline.
  * What both owe is the same one thing: the world installed must be one in which the receiving document's
  * listeners exist, and neither this function nor any local check can decide that. */
-/* The attacker sources one routed delivery mints (see window_message.h): `message.data:<id>` and
-   `message.origin:<id>`, where <id> is FNV-1a 64 over the routed record's text, so every timeline admitting the
-   record, a cold resume rebuilding it and a later session all name the same delivery the same way, and two
-   deliveries never share a pin. Declared on first sight and given back with this component's claims.
+/* The attacker sources one routed delivery mints (see window_message.h): `message.data:<id>` with <id> FNV-1a 64
+   over the routed record's text, so every timeline admitting the record, a cold resume rebuilding it and a later
+   session all name the same delivery the same way, and two deliveries never share a data pin; and
+   `message.origin:<id>` with <id> over the sending document's name, so every message it posts shares one. Declared on first sight and given back with this component's claims.
    The encode set is empty: §9.3.3 step 7 hands the message to StructuredSerializeWithTransfer and step 8.4
    takes it back through StructuredDeserializeWithTransfer, neither of which transforms a string. The origin is
    a principal and the data is not: the attacker writes `data` and merely owns `origin` (§9.3.2.1 "Authors",
@@ -619,16 +619,18 @@ void window_message_record_id(const char *record, char out[17])
     snprintf(out, 17, "%016llx", (unsigned long long)h);
 }
 
-void window_message_delivery_sources(const char *record, char *data_src, char *origin_src, size_t cap)
+void window_message_delivery_sources(const char *record, const char *sender, char *data_src, char *origin_src,
+                                     size_t cap)
 {
-    char id[17];
+    char id[17], sid[17];
     int nd, no;
 
-    DCHECK(record != NULL && *record && data_src != NULL && origin_src != NULL,
-           "a routed delivery's sources were named from no record or into no room");
+    DCHECK(record != NULL && *record && sender != NULL && *sender && data_src != NULL && origin_src != NULL,
+           "a routed delivery's sources were named from no record, no sender or into no room");
     window_message_record_id(record, id);
+    window_message_record_id(sender, sid);
     nd = snprintf(data_src, cap, MESSAGE_DATA_SRC ":%s", id);
-    no = snprintf(origin_src, cap, MESSAGE_ORIGIN_SRC ":%s", id);
+    no = snprintf(origin_src, cap, MESSAGE_ORIGIN_SRC ":%s", sid);
     CHECK(nd > 0 && (size_t)nd < cap && no > 0 && (size_t)no < cap,
           "window message: a delivery's source names did not fit their room");
     if (!concolic_source_declared_by(WM_COMPONENT, data_src))
@@ -713,7 +715,7 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
         char dsrc[64], osrc[64], oshape[68];
         JSValue org;
 
-        window_message_delivery_sources(record, dsrc, osrc, sizeof dsrc);
+        window_message_delivery_sources(record, sender_doc, dsrc, osrc, sizeof dsrc);
         snprintf(oshape, sizeof oshape, "{%s}", osrc);
         org = concolic_source_wrap(ctx, oshape, osrc, JS_NewString(ctx, sender_origin));
         JS_SetPropertyUint32(ctx, entry, PQ_DATA_SRC, JS_NewString(ctx, dsrc));

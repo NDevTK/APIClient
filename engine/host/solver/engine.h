@@ -100,7 +100,8 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
 void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
 /* The attacker sources naming the `data` and `origin` of the message chain member `k` of drive `f` delivers (a
    member whose act is a `message` act), as engine_orphan_call minted them: `message.data:<id>` and
-   `message.origin:<id>`, each written into a room of `cap` bytes. */
+   `message.origin:<id>`, each written into a room of `cap` bytes. Every member's origin is the attacker
+   document's one source. */
 void engine_orphan_message_sources(const struct Flow *f, int k, char *data, char *origin, size_t cap);
 /* Queue a `javascript:` URL's script source as the program HTML §7.4.2.3.2's evaluate-a-javascript:-URL runs.
    It may fail to compile: "create a classic script" with a syntax error yields an abrupt completion and a

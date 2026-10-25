@@ -16,17 +16,22 @@
    go wrong — and a literal typed out five times is how it would. */
 #define WM_COMPONENT "window_message"
 
-/* The stems of this component's attacker sources, spelled once. Each routed delivery is two sources of its own,
-   `<stem>:<16 hex digits>`, because two messages are two attacker inputs and a pin on one must not decide the
-   other; a source's display shape is its name in braces, which solver/concolic.c asserts at the mint. A
+/* The stems of this component's attacker sources, spelled once, each named `<stem>:<16 hex digits>`. A routed
+   delivery's data is a source of its own, because two messages are two attacker inputs and a pin on one must
+   not decide the other. Its origin is its sending document's (HTML §9.3.3 Posting messages, the window post
+   message steps' step 8.2: "Let origin be incumbentSettings's origin"), so every message one document posts
+   reads one origin source. A source's display shape is its name in braces, which solver/concolic.c asserts at
+   the mint. A
    consumer uses these stems and never a literal of its own. They are `message.*` and not `postMessage.*`
    because the receiver reads them: a handler holds a §9.1 MessageEvent and branches on `event.data` and
    `event.origin`.
-   window_message_delivery_sources names the pair for `record` (a routed record's whole text) into
-   `data_src`/`origin_src` and declares both rows, the origin as a principal, on first sight. */
+   window_message_delivery_sources names the pair for `record` (a routed record's whole text) posted by
+   `sender` (the sending document's name) into `data_src`/`origin_src` and declares both rows, the origin as a
+   principal, on first sight. */
 #define MESSAGE_DATA_SRC     "message.data"
 #define MESSAGE_ORIGIN_SRC   "message.origin"
-void window_message_delivery_sources(const char *record, char *data_src, char *origin_src, size_t cap);
+void window_message_delivery_sources(const char *record, const char *sender, char *data_src, char *origin_src,
+                                     size_t cap);
 /* A routed record's identity: FNV-1a 64 over its whole text, as 16 hex digits and a NUL. The receiver names a
    delivery's sources by it and the sender its routed-post index record (solver/post_index.h). */
 void window_message_record_id(const char *record, char out[17]);

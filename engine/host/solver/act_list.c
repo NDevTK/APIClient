@@ -187,7 +187,14 @@ char *act_list_message_deliveries(const Flow *f, const char *inject, const char 
         if (!data) { free(why); free(out); return NULL; }
         dl_append(&out, root, data);
         free(data);
-        /* Each origin candidate under `<origin source>#<v>`: a candidate run takes variant v of every message. */
+        /* Each origin candidate under `<origin source>#<v>`, once per source: the messages one window posts share
+           its origin source, and a candidate run delivers variant v of it to all of them. */
+        if (out) {
+            char first[112];
+
+            snprintf(first, sizeof first, "%zu:%s#0", strlen(osrc) + 2, osrc);
+            if (strstr(out, first)) continue;
+        }
         for (int v = 0, no = 1; v < no; v++) {
             char key[112];
 
