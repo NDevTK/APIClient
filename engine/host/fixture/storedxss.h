@@ -1,6 +1,12 @@
-/* THE STORED-XSS DOCUMENT: two values a previous visit stored are read on load and written to innerHTML, one
-   from localStorage and one from a cookie. Neither is in this document's address, so a reproduction must first
-   store the value and then load the page: the PoC states the store step before the load.
+/* THE STORED-XSS DOCUMENT: values a previous load stored are read on load and written to innerHTML.
+   - localStorage is a same-origin store with no cross-origin write path, so a bare read of `sxNote` into
+     markup is a same-origin precondition and not an attacker PoC: the sink is reached, and no fired PoC may
+     claim a delivery for it.
+   - The page's own write path makes it one: a load carrying a fragment saves it as `sxDraft`, and a later load
+     shows `sxDraft`. The attacker source is the fragment, so the PoC is two ordered acts: visit with the
+     fragment, then load the page again.
+   - A cookie can be set by a sibling subdomain, so the cookie arm is an attacker PoC whose delivery is planted
+     and states that precondition.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_STOREDXSS_H
@@ -11,12 +17,22 @@
 
 static const char HTML_STOREDXSS[] =
     "<!doctype html><html><body>"
-    "<div id='sxLs'></div><div id='sxCk'></div>"
+    "<div id='sxLs'></div><div id='sxDraftView'></div><div id='sxCk'></div>"
     "<script>"
     "var sxNote = localStorage.getItem('sxNote');"
     "if (sxNote !== null) {"
     "  fetch('/api/sx-ls-read');"
     "  document.getElementById('sxLs').innerHTML = sxNote;"
+    "}"
+    "</script>"
+    "<script>"
+    "var sxDraft = localStorage.getItem('sxDraft');"
+    "if (sxDraft !== null) {"
+    "  fetch('/api/sx-draft-shown');"
+    "  document.getElementById('sxDraftView').innerHTML = sxDraft;"
+    "} else if (location.hash.length > 1) {"
+    "  localStorage.setItem('sxDraft', decodeURIComponent(location.hash.slice(1)));"
+    "  fetch('/api/sx-draft-saved');"
     "}"
     "</script>"
     "<script>"

@@ -14577,26 +14577,45 @@ TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `storedxss` document (fixture/storedxss.h). Each store gives three rows: the stored arm
-   ran, its write was reached tainted by that store, and the fired PoC states the store step (a `plant`
-   delivery, which concolic.h's registry declares for a value an attacker puts into the victim's own state
-   before the load). */
+/* The rows of the `storedxss` document (fixture/storedxss.h). The precondition labels are read as text in the
+   record ("same-origin", "same-site") because the @S record has no precondition field yet; the ordered-acts row
+   reads the storage key the two loads share. */
 TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
-    char ls[192] = "", ck[192] = "";
-    int has_ls = s_rooted_source(js, "innerHTML", "localStorage", ls, sizeof ls);
+    char ls[192] = "", dr[192] = "", ck[192] = "";
+    int has_ls = s_rooted_source(js, "innerHTML", "sxNote", ls, sizeof ls);
+    int has_dr = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, dr, sizeof dr);
     int has_ck = s_rooted_source(js, "innerHTML", "document.cookie", ck, sizeof ck);
+    size_t dspan = 0;
+    const char *drec = has_dr ? s_record(js, "innerHTML", dr, &dspan) : NULL;
     const char *lr_why = NULL; int lr_tt = 1;
     fold_row(&lr_tt, &lr_why, !!strstr(js, "\"/api/sx-ls-read\""),
-             "NOT REACHED: there is no /api/sx-ls-read record, so the arm where localStorage holds the key never ran");
+             "NOT REACHED: there is no /api/sx-ls-read record, so the arm where localStorage holds sxNote never ran");
     const char *ls_why = NULL; int ls_tt = 1;
     fold_row(&ls_tt, &ls_why, has_ls,
-             "NOT REACHED: no innerHTML @S record carries a source rooted in localStorage, so the stored value "
-             "was not treated as attacker input at the write");
+             "NOT REACHED: no innerHTML @S record carries a source rooted in localStorage's sxNote, so the stored "
+             "value was not followed to the write");
     const char *lp_why = NULL; int lp_tt = 1;
-    fold_row(&lp_tt, &lp_why, has_ls && s_stage(js, "innerHTML", ls) == S_FIRED,
-             "the innerHTML <- localStorage search did not fire a PoC");
-    fold_row(&lp_tt, &lp_why, has_ls && s_field(js, "innerHTML", ls, "\"delivery\":\"plant\""),
-             "the PoC does not state the store step: its record carries no `plant` delivery for localStorage");
+    fold_row(&lp_tt, &lp_why, has_ls, "NOT REACHED: there is no sxNote record to read a precondition from");
+    fold_row(&lp_tt, &lp_why, has_ls && !s_field(js, "innerHTML", ls, ",\"delivery\":"),
+             "the sxNote record claims a delivery, but localStorage has no cross-origin write path");
+    fold_row(&lp_tt, &lp_why, has_ls && s_field(js, "innerHTML", ls, "same-origin"),
+             "the sxNote record is not labelled a same-origin precondition");
+    const char *ds_why = NULL; int ds_tt = 1;
+    fold_row(&ds_tt, &ds_why, !!strstr(js, "\"/api/sx-draft-saved\""),
+             "NOT REACHED: there is no /api/sx-draft-saved record, so the load that saves the fragment never ran");
+    const char *dw_why = NULL; int dw_tt = 1;
+    fold_row(&dw_tt, &dw_why, !!strstr(js, "\"/api/sx-draft-shown\""),
+             "NOT REACHED: there is no /api/sx-draft-shown record, so the load that shows sxDraft never ran");
+    const char *dp_why = NULL; int dp_tt = 1;
+    fold_row(&dp_tt, &dp_why, has_dr,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in location.hash, so the fragment the "
+             "page saved was not followed through storage into the later load's write");
+    fold_row(&dp_tt, &dp_why, has_dr && s_stage(js, "innerHTML", dr) == S_FIRED,
+             "the innerHTML <- location.hash search did not fire a PoC");
+    fold_row(&dp_tt, &dp_why, has_dr && s_field(js, "innerHTML", dr, "\"deliveryPrefix\":\"#\""),
+             "the PoC does not state its fragment delivery");
+    fold_row(&dp_tt, &dp_why, drec && memmem(drec, dspan, "sxDraft", 7) != NULL,
+             "the PoC does not state its second act, the later load that reads sxDraft back");
     const char *cr_why = NULL; int cr_tt = 1;
     fold_row(&cr_tt, &cr_why, !!strstr(js, "\"/api/sx-ck-read\""),
              "NOT REACHED: there is no /api/sx-ck-read record, so the arm where the cookie holds sxBanner never ran");
@@ -14609,13 +14628,21 @@ TF_UNIT void probes_storedxss(const char *js, Probe *tab, int *n) {
              "the innerHTML <- document.cookie search did not fire a PoC");
     fold_row(&cp_tt, &cp_why, has_ck && s_field(js, "innerHTML", ck, "\"delivery\":\"plant\""),
              "the PoC does not state the store step: its record carries no `plant` delivery for the cookie");
+    const char *cq_why = NULL; int cq_tt = 1;
+    fold_row(&cq_tt, &cq_why, has_ck, "NOT REACHED: there is no cookie record to read a precondition from");
+    fold_row(&cq_tt, &cq_why, has_ck && s_field(js, "innerHTML", ck, "same-site"),
+             "the cookie PoC does not state its precondition, a same-site (sibling subdomain) writer");
     const Probe rows[] = {
         { "sx-ls-read", lr_tt, "/api/sx-ls-read", SESS_EXPLORE, lr_why },
         { "sx-ls-sink", ls_tt, "'sxLs'", SESS_EXPLORE, ls_why },
-        { "sx-ls-poc", lp_tt, "'sxNote'", SESS_EXPLORE, lp_why },
+        { "sx-ls-precondition", lp_tt, "'sxNote'", SESS_EXPLORE, lp_why },
+        { "sx-draft-saved", ds_tt, "/api/sx-draft-saved", SESS_EXPLORE, ds_why },
+        { "sx-draft-shown", dw_tt, "/api/sx-draft-shown", SESS_EXPLORE, dw_why },
+        { "sx-draft-poc", dp_tt, "'sxDraftView'", SESS_EXPLORE, dp_why },
         { "sx-ck-read", cr_tt, "/api/sx-ck-read", SESS_EXPLORE, cr_why },
         { "sx-ck-sink", cs_tt, "'sxCk'", SESS_EXPLORE, cs_why },
         { "sx-ck-poc", cp_tt, "'sxBanner='", SESS_EXPLORE, cp_why },
+        { "sx-ck-precondition", cq_tt, "sxAt + 9", SESS_EXPLORE, cq_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
