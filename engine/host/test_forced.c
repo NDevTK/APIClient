@@ -1183,6 +1183,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbname.h"
 #include "fixture/lockgrant.h"
 #include "fixture/protoset.h"
+#include "fixture/idbnamefork.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/uspiter.h"
@@ -1695,6 +1696,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbname", HTML_IDBNAME },
     { "lockgrant", HTML_LOCKGRANT },
     { "protoset", HTML_PROTOSET },
+    { "idbnamefork", HTML_IDBNAMEFORK },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "uspiter", HTML_USPITER },
@@ -16366,6 +16368,24 @@ TF_UNIT void probes_protoset(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbnamefork` document (fixture/idbnamefork.h): open(unknown) after a stated database exists
+   runs both of §5.1 step 4's worlds, the existing database's (no upgrade, its one store) and a fresh one's. */
+TF_UNIT void probes_idbnamefork(const char *js, Probe *tab, int *n) {
+    const char *e_why = NULL; int e_tt = 1;
+    fold_row(&e_tt, &e_why, param_value_is(js, "/api/idbf-open", "arm", "0-1"),
+             "no /api/idbf-open?arm=0-1 record: no arm took the unknown name as the existing database's, which "
+             "opens at its version with its store and fires no upgradeneeded");
+    const char *f_why = NULL; int f_tt = 1;
+    fold_row(&f_tt, &f_why, param_value_is(js, "/api/idbf-open", "arm", "1-0"),
+             "no /api/idbf-open?arm=1-0 record: no arm took the unknown name as a fresh database, which fires "
+             "upgradeneeded and holds no store");
+    const Probe rows[] = {
+        { "idbf-equal", e_tt, "/api/idbf-open", SESS_EXPLORE, e_why },
+        { "idbf-fresh", f_tt, "/api/idbf-open", SESS_EXPLORE, f_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -20644,6 +20664,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbname(js, probes, &np);
     probes_lockgrant(js, probes, &np);
     probes_protoset(js, probes, &np);
+    probes_idbnamefork(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_uspiter(js, probes, &np);
