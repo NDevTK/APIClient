@@ -778,8 +778,8 @@ static int conn_tx_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
 
 scope:
     /* Steps 3 and 4, together, because step 4 asks its question of every string step 3 collected and the
-       records are what step 7 wants anyway. A string, or an unknown that crossed the union as itself, is one
-       name; otherwise the engine's own array of them. */
+       records are what step 7 wants anyway. A string, or an unknown on the string arm §3.2.25 forked, is one
+       name; the sequence arm is the engine's own Array, whose elements may be unknown names. */
     db = idb_connection_database(ctx, this_val);
     if (JS_IsString(names) || concolic_is(names)) {
         count = 1;

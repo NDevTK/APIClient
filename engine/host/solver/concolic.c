@@ -4529,6 +4529,13 @@ void concolic_state_string(JSValueConst v) { concolic_type_state(v, CTY_STRING);
 
 int concolic_type_is_string(JSValueConst v) { return concolic_is(v) && cty_of_operand(v) == CTY_STRING; }
 
+unsigned concolic_operand_types(JSValueConst v)
+{
+    DCHECK(concolic_is(v), "an unknown's type set was asked of a value that is not unknown input — a concrete "
+                           "value's type is its tag, which the caller reads itself");
+    return tyf_of_cty(cty_of_operand(v));
+}
+
 JSValue concolic_example_string(JSContext *ctx, JSValueConst v) {
     JSValue ex, s;
 

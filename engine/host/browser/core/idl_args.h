@@ -455,6 +455,11 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        since the numeric fallback always names the shorter entry; one entry allocates transparent black from
        `sw`/`sh`, the other takes the page's buffer. */
     case IDL_ULONG_OR_IMAGE_DATA_ARRAY:
+    /* `(DOMString or sequence<DOMString>)`: step 11.2's sequence arm builds a list whose length and elements a
+       body reads (a transaction's scope, a key path), the string arm one name, and the nullable spelling's
+       step 2 the IDL null. Asked at both boundaries by idl_union_seq_unknown, over the arms the facet admits. */
+    case IDL_DOMSTRING_OR_SEQUENCE:
+    case IDL_DOMSTRING_OR_SEQUENCE_NULLABLE:
         return IDL_CONCOLIC_FORKS;
     /* The string, numeric and nullable-primitive conversions coerce, so opacity must survive them. */
     case IDL_DOMSTRING:
@@ -493,8 +498,6 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     case IDL_SEQUENCE_BLOBPART:
     /* Unions whose arms all place the value itself or convert it to a string or number: the body decides,
        as the arm block's comment in idl_args.c states. */
-    case IDL_DOMSTRING_OR_SEQUENCE:
-    case IDL_DOMSTRING_OR_SEQUENCE_NULLABLE:
     case IDL_DOUBLE_OR_SEQUENCE:
     case IDL_UNSIGNED_LONG_OR_SEQUENCE:
     case IDL_STRING_UNLESS_CALLABLE:
@@ -696,6 +699,9 @@ typedef struct {
     IterCursor seq;
     JSValue    seq_list;
     uint32_t   seq_n;
+    /* The length §7.3.18 LengthOfArrayLike answered for an unknown's sequence arm, once stated; the elements
+       are then read by index (idl_args.c's idl_union_seq_unknown). */
+    int64_t    seq_len;
     /* 0 = not started, 1 = pull the next element, 2 = convert the one just pulled. Not started is a phase,
        not a null list, because a zeroed JSValue is the integer 0 (JS_TAG_INT is 0), not JS_UNDEFINED. */
     uint8_t    seq_phase;

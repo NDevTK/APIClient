@@ -27689,8 +27689,8 @@ static int step_getlen_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSAto
     }
 }
 
-static int step_length_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSValue in, int64_t *plen,
-                           JSValue **out_cb, int *out_argc)
+int step_length_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSValue in, int64_t *plen,
+                    JSValue **out_cb, int *out_argc)
 {
     return step_getlen_run(ctx, h, obj, JS_ATOM_length, in, plen, out_cb, out_argc);
 }

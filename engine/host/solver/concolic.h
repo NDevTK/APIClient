@@ -237,6 +237,9 @@ void        concolic_state_string(JSValueConst v);
 /* Whether `v` is an unknown whose stated type set is exactly String, so a runtime type test over it (a
    §3.2.25 union arm) has one answer in every world. Side-effect-free. */
 int         concolic_type_is_string(JSValueConst v);
+/* The CONCOLIC_TYF_* types the unknown `v` may take in the running flow: its stated type set narrowed by its
+   type facet, CONCOLIC_TYF_ALL for one neither states. Side-effect-free; asserts `v` is a concolic. */
+unsigned    concolic_operand_types(JSValueConst v);
 
 /* WHY THAT ANSWER IS NOT ENOUGH, AND WHAT THE READ BELOW IS FOR. `concolic_example` spends JS_UNDEFINED on
  * FOUR distinct facts, and its callers each wrote down their own account of which one they were acting on

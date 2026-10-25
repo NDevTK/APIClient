@@ -999,6 +999,13 @@ static inline JSValueConst step_arg(const JSStepHdr *h, int i)
 JS_EXTERN int step_getprop_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSAtom atom, JSValue in,
                                JSValue *pout, JSValue **out_cb, int *out_argc);
 
+/* ECMAScript §7.3.18 LengthOfArrayLike ( obj ) as a request: `? ToLength(? Get(obj, "length"))`, both halves
+   the page's code. A read answering with unknown external input is a chain of outcome forks, one per position
+   ("LengthOfArrayLike>n"), so each length is its own world. Returns JS_STEP_REQUEST or JS_STEP_FORK (the
+   caller returns it), 0 once *plen is set, or -1. Its cursor is the header's `len_phase`. */
+JS_EXTERN int step_length_run(JSContext *ctx, JSStepHdr *h, JSValueConst obj, JSValue in, int64_t *plen,
+                              JSValue **out_cb, int *out_argc);
+
 /* A KEYED WRITE AS A REQUEST, in 7.3.4 Set ( O, P, V, Throw )'s Throw-FALSE form: `O.[[Set]](key, value, O)`
    with the boolean it answers DISCARDED. The read above is one half of what a browser component needs of a
    property; this is the other, and it runs the page's code for the same reasons — the target may be an

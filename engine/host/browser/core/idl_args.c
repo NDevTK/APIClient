@@ -1963,7 +1963,7 @@ static int idl_member_length_of(const IdlMember *m)
 /* THE ARM PHASES of a position whose §3.2.25 union is decided by `? GetMethod(V, %Symbol.iterator%)` — see
    idl_union_seq_arm below, which is where they are explained. They are declared HERE because a level starts
    holding one and the level machinery stands before that function. */
-enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
+enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE, IDL_UNI_UNKNOWN_SEQUENCE, IDL_UNI_NULL };
 
 /* ---- ONE LEVEL OF §3.2.17: STARTED, VISITED, CLEARED ------------------------------------------------------
  *
@@ -2012,6 +2012,7 @@ static int idl_level_start(JSContext *ctx, IdlDictLevel *l, JSValueConst src,
     l->mv        = JS_UNDEFINED;
     l->seq_list  = JS_UNDEFINED;
     l->seq_n     = 0;
+    l->seq_len   = 0;
     l->seq_phase = 0;
     l->uni_phase = IDL_UNI_ASK;
     iter_cursor_init(&l->seq);
@@ -2355,6 +2356,132 @@ static int idl_union_seq_arm(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, ui
        names the FLAT arm rather than a string one — the phase is "there was no @@iterator", which is the same
        fact for every caller of this shape, and §3.6's flat arm is a DICTIONARY rather than a string at all. */
     *pout = (*phase == IDL_UNI_SEQUENCE) ? seq_arm : flat_arm;
+    return 0;
+}
+
+/* §3.2.25 Union types over `(DOMString or sequence<DOMString>)`, and its nullable spelling, for unknown external
+   input, whose arm is a type test the input does not answer. Step 2's IDL null, step 11.2's sequence (an Object
+   whose GetMethod(V, %Symbol.iterator%) is not undefined) and step 15's string are each a world where the
+   value's type set admits it, so the arms its type facet leaves are forked, outcome 0 the string arm; a String
+   takes the string arm with no ask. The sequence arm is §3.2.21.1 over §23.1.5.2.1 %ArrayIteratorPrototype%.next
+   steps 9-14: §7.3.18 LengthOfArrayLike's per-position chain, then Get(V, index), so each element keeps its path.
+   Named residual. Not covered: an unknown standing for app state whose iterator is the page's own (a Set, a
+   generator) is iterated as an Array. Next diff: fork the @@iterator member's worlds at its read. How its
+   absence shows: such a value's elements carry index paths no read of the page names.
+   *pv receives the IDL value (owned): `v` itself on the string arm, since a DOMString crosses unknown input,
+   null, or the built Array. Returns >0 (the caller returns it), 0, or -1 with a throw live. */
+static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, uint8_t *phase, JSValueConst v,
+                                 bool nullable, JSValue *pin, JSValue *pv, JSValue **out_cb, int *out_argc)
+{
+    DCHECK(concolic_is(v), "the unknown arm of a string-or-sequence union was asked of a value that is not "
+                           "unknown input — a concrete value answers §3.2.25's type tests through idl_union_seq_arm");
+    if (*phase == IDL_UNI_ASK) {
+        const unsigned objs = CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION;
+        const unsigned nullish = nullable ? CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED : 0;
+        unsigned ty = concolic_operand_types(v);
+        uint8_t arms[3];
+        int n = 0, ex_arm = -1, real = JS_OUTCOME_REAL_UNSTATED, arm = 0;
+
+        if ((ty & objs) || (ty & ~objs & ~nullish)) arms[n++] = IDL_UNI_STRING;
+        if (ty & objs) arms[n++] = IDL_UNI_UNKNOWN_SEQUENCE;
+        if (ty & nullish) arms[n++] = IDL_UNI_NULL;
+        DCHECK(n > 0, "an unknown reached a string-or-sequence union with a type facet that admits no type — "
+                      "the flow that excluded every type is infeasible and should have been pruned there");
+        if (concolic_example_present(v)) {
+            JSValue ex = concolic_example(ctx, v);
+
+            /* An Object example other than an Array is unstated: its @@iterator is its own [[Get]]. */
+            ex_arm = (nullable && (JS_IsNull(ex) || JS_IsUndefined(ex))) ? IDL_UNI_NULL
+                   : JS_IsArray(ex) ? IDL_UNI_UNKNOWN_SEQUENCE : JS_IsObject(ex) ? -1 : IDL_UNI_STRING;
+            JS_FreeValue(ctx, ex);
+        }
+        for (int i = 0; i < n; i++)
+            if (arms[i] == ex_arm) real = i;
+        DCHECK(ex_arm < 0 || real >= 0,
+               "an unknown's held example takes a §3.2.25 arm its own type facet excludes — the example and the "
+               "facet are two readings of one value in one flow");
+        if (n == 1) {
+            *phase = arms[0];
+        } else {
+            static const char *const OPS[2][2] = {
+                { NULL, "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, null" },
+                { "§3.2.25 (DOMString or sequence<DOMString>) arm: string, sequence",
+                  "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, sequence, null" },
+            };
+            const char *op = OPS[!!(ty & objs)][!!(ty & nullish)];
+            int r;
+
+            DCHECK(op != NULL, "a forked string-or-sequence arm set has neither a sequence nor a null arm");
+            /* The outstanding answer is released here: the sibling's snapshot is taken at this return. */
+            JS_FreeValue(ctx, *pin);
+            *pin = JS_UNDEFINED;
+            r = step_fork_run(ctx, hdr, v, op, n, real, &arm);
+            if (r) return r;
+            *phase = arms[arm];
+        }
+        if (*phase == IDL_UNI_UNKNOWN_SEQUENCE) {
+            DCHECK(w->seq_phase == 0, "the union's sequence arm was chosen while a sequence was already in flight "
+                                      "on this machine — one argument is converted at a time");
+            w->seq_list = JS_NewArray(ctx);
+            if (JS_IsException(w->seq_list)) {
+                w->seq_list = JS_UNDEFINED;
+                return -1;
+            }
+            w->seq_n = 0;
+            w->seq_len = 0;
+        }
+    }
+    if (*phase == IDL_UNI_STRING) {
+        *pv = JS_DupValue(ctx, v);
+        return 0;
+    }
+    if (*phase == IDL_UNI_NULL) {
+        *pv = JS_NULL;
+        return 0;
+    }
+    DCHECK(*phase == IDL_UNI_UNKNOWN_SEQUENCE,
+           "an unknown's string-or-sequence union resumed at an arm idl_union_seq_unknown does not choose");
+    if (w->seq_phase == 0) {
+        int64_t len = 0;
+        int r = step_length_run(ctx, hdr, v, *pin, &len, out_cb, out_argc);
+
+        *pin = JS_UNDEFINED;
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        w->seq_len = len;
+        w->seq_phase = 1;
+    }
+    while ((int64_t)w->seq_n < w->seq_len) {
+        JSAtom key = JS_NewAtomUInt32(ctx, w->seq_n);
+        JSValue e = JS_UNDEFINED;
+        int r;
+
+        CHECK(key != JS_ATOM_NULL, "OOM interning a sequence index");
+        r = step_getprop_run(ctx, hdr, v, key, *pin, &e, out_cb, out_argc);
+        JS_FreeAtom(ctx, key);
+        *pin = JS_UNDEFINED;
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        /* §3.2.10 DOMString over the element: an unknown crosses as itself, and a member read of an unknown
+           answers an unknown or a pinned primitive, whose ToString runs no page code. */
+        if (!concolic_is(e)) {
+            JSValue str;
+
+            DCHECK(!JS_IsObject(e), "a member read of unknown input answered an Object that is not unknown input "
+                                    "— its ToString would be the page's code, which this synchronous arm cannot run");
+            str = JS_ToString(ctx, e);
+            JS_FreeValue(ctx, e);
+            if (JS_IsException(str)) return -1;
+            e = str;
+        }
+        CHECK(w->seq_n < UINT32_MAX, "an IDL sequence outgrew the Array that represents it");
+        JS_SetPropertyUint32(ctx, w->seq_list, w->seq_n++, e);
+    }
+    *pv = w->seq_list;
+    w->seq_list = JS_UNDEFINED;
+    w->seq_n = 0;
+    w->seq_len = 0;
+    w->seq_phase = 0;
     return 0;
 }
 
@@ -2917,23 +3044,19 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            types because the third world is decided one question earlier and by a different question. */
         if (mt != IDL_ANY && concolic_is(w->mv) && idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS)
             mt = IDL_ANY;
-        /* AND THE ONLY FORKS THIS LOOP PERFORMS ARE §3.2.3's AND §3.2.18's, ASSERTED WHERE THE UNCROSSING
-           HAPPENS. Every OTHER type that answers FORKS resolves at an ARGUMENT position, where the value is a
-           position's and not a member's — the §3.2.25 unions (the two `(dictionary or boolean)` rows and `(DOMString or D)`) and
-           the §3.6 overload splits (the USVString one and the `sequence<object>` one, whose entries are
-           chosen between at an argument INDEX a member does not have at all). A member declared any of them
-           would fall past every arm below and be PLACED UNCONVERTED, which is silent both ways it can go
-           wrong (crossed, it is placed unconverted too). The condition above is what makes this reachable at
-           all, so the two are one statement. AND THE LIST IN THIS SENTENCE IS NOT WHAT THE ASSERT READS: it
-           asks idl_concolic_rule, so a row added to that function is a row this assert covers on the day it
-           lands, and the enumeration here is a reader's map rather than a second copy. */
+        /* The forks this loop performs are §3.2.3's, §3.2.18's and the string-or-sequence union's, asserted
+           where the uncrossing happens. Every other type that answers FORKS resolves at an argument position:
+           the other §3.2.25 unions and the §3.6 overload splits, whose entries are chosen at an argument index
+           a member does not have. A member declared one would fall past every arm below and be placed
+           unconverted. The assert asks idl_concolic_rule, so a row added there is covered the day it lands. */
         DCHECK(!concolic_is(w->mv) || idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS ||
-               mt == IDL_BOOLEAN || mt == IDL_BOOLEAN_NO_DEFAULT || mt == IDL_ENUM,
+               mt == IDL_BOOLEAN || mt == IDL_BOOLEAN_NO_DEFAULT || mt == IDL_ENUM ||
+               mt == IDL_DOMSTRING_OR_SEQUENCE || mt == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE,
                "a dictionary member declared a type whose conversion FORKS over unknown external input, and "
-               "this member loop has an arm for two of those — Web IDL §3.2.3 boolean and §3.2.18's "
-               "enumeration. Every other type that answers FORKS is resolved at an ARGUMENT position by the "
-               "conversion above, not here, so a member declared one reaches no arm and is placed "
-               "unconverted. Give the type its arm in this loop, beside those two");
+               "this member loop has an arm for three of those — Web IDL §3.2.3 boolean, §3.2.18's "
+               "enumeration and §3.2.25's string-or-sequence union. Every other type that answers FORKS is "
+               "resolved at an ARGUMENT position by the conversion above, not here, so a member declared one "
+               "reaches no arm and is placed unconverted. Give the type its arm in this loop, beside those");
         /* §3.2.20 Nullable types — T? OVER A NUMERIC INNER TYPE, rewritten BEFORE the arms rather than tested
            inside the numeric one, which is how the ARGUMENT boundary spells `DOMString?` and `USVString?` one
            block over. Two rewrites, and each is a step of §3.2.20 rather than a convenience:
@@ -2964,6 +3087,16 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                 (JS_IsNull(w->mv) || JS_IsUndefined(w->mv))) {
                 JS_FreeValue(ctx, w->mv);
                 w->mv = JS_NULL;
+                mt = IDL_ANY;
+            } else if (concolic_is(w->mv)) {
+                JSValue v = JS_UNDEFINED;
+
+                r = idl_union_seq_unknown(ctx, hdr, w, &w->uni_phase, w->mv,
+                                          mt == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE, &in, &v, out_cb, out_argc);
+                if (r > 0) return r;   /* parked on this member's arm fork, length chain or element read */
+                if (r < 0) return -1;
+                JS_FreeValue(ctx, w->mv);
+                w->mv = v;
                 mt = IDL_ANY;
             } else {
                 r = idl_union_seq_arm(ctx, hdr, w, &w->uni_phase, w->mv, &in, &mt,
@@ -4982,14 +5115,29 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            type or bigint" — a clause this union names no entry for. Its sibling copy in
            this file (idl_union_seq_arm's own banner) had step 11.2 against "the flat clause below it" and was
            right; two statements of one sentence are diffed against each other before either is diffed against
-           the spec. Resolved AFTER the concolic pass-through
-           above for the same reason the two unions before it are: unknown external input IS an object, and
-           asking it for @@iterator would read a property off an attacker's value. */
+           the spec. Unknown external input is not asked for @@iterator, which would read a property off an
+           attacker's value and answer from the solver's carrier: idl_union_seq_unknown forks its arms. */
         if (t == IDL_DOMSTRING_OR_SEQUENCE || t == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE) {
             if (t == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE && (JS_IsNull(a) || JS_IsUndefined(a))) {
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
                 *slot = JS_NULL;
+                goto placed;
+            }
+            if (concolic_is(a)) {
+                JSValue v = JS_UNDEFINED;
+
+                DCHECK(idl_concolic_rule(t) == IDL_CONCOLIC_FORKS,
+                       "this conversion forked §3.2.25's arm for a type idl_args.h does not declare as one it "
+                       "forks — the site and the rule are the two halves of one statement");
+                r = idl_union_seq_unknown(ctx, &s->hdr, &s->dw.lvl, &s->dw.lvl.uni_phase, a,
+                                          t == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE, &cb_result, &v, out_cb, out_argc);
+                if (r > 0) return r;
+                if (r < 0) return JS_STEP_ABRUPT;
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                JS_FreeValue(ctx, *slot);
+                *slot = v;
                 goto placed;
             }
             r = idl_union_seq_arm(ctx, &s->hdr, &s->dw.lvl, &s->dw.lvl.uni_phase, a, &cb_result, &t,
@@ -5108,10 +5256,11 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     DFAIL("§3.6 step 12.10 selected the `sequence<object>` entry for UNKNOWN EXTERNAL INPUT "
                           "and Web IDL §3.2.21 Sequences — sequence<T> has no answer over one: its step 2 "
                           "GetMethod is another unknown and §3.2.21.1 Creating a sequence from an iterable "
-                          "repeats to an unknown length. Build §3.2.21 over unknown input AT THIS "
-                          "CONVERSION — the element cursor already parks, so what is missing is what the "
-                          "protocol answers when the ITERABLE is unknown. Until it exists this world is the "
-                          "page's TypeError, which is what a release build answers");
+                          "repeats to an unknown length. idl_union_seq_unknown builds that list for a string "
+                          "element (a LengthOfArrayLike chain, then index reads); what this entry still needs is "
+                          "§3.2.13 object's own per-element fork, an Object or its TypeError, over each read. "
+                          "Until it exists this world is the page's TypeError, which is what a release build "
+                          "answers");
                     JS_ThrowTypeError(ctx, "a sequence cannot yet be built from unknown external input");
                     return JS_STEP_ABRUPT;
                 }
