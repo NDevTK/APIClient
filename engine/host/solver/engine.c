@@ -2102,10 +2102,11 @@ static void engine_retract_span(JSContext *ctx, Flow *only)
     int seen_n = 0, seen_cap = 0, i, k;
     Flow *f;
 
-    for (i = 0; (f = flow_at(i)) != NULL; i++) {
+    /* `only` is visited alone rather than found by a walk: the pager hands back one member per sale, and a walk of
+       the registry to reach it would make every sale O(members). */
+    for (i = 0; (f = only ? (i == 0 ? only : NULL) : flow_at(i)) != NULL; i++) {
         int n, held = 0;
 
-        if (only && f != only) continue;
         /* The flow may not be the one holding the thread. Both callers switch out first (the park before it
            walks, the pager by construction); asserted because a switched-in flow could still run its program to
            completion against a row whose token was just returned to the zone. */
