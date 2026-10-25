@@ -1714,11 +1714,18 @@ const char *cold_park_json(void)
     /* THE TRANSPORT, RENDERED FROM THE RECORDS. Each ';' becomes `","` (+2 bytes), and the whole is wrapped in
        `["` … `"]` (+4) with a NUL — a bound, not a guess, so the write below cannot run past its buffer.
        Idempotent because it is a pure function of the records: result.c asks once to size its own buffer and
-       once to fill it, and the two must be the same bytes or it truncates the document. */
-    need = g_park_len + 2 * (size_t)g_park_recs + 8;
-    g_park_json = realloc(g_park_json, need);
-    CHECK(g_park_json, "the cold tier could not render the park document for the host to store — the residue "
-                       "exists and every flow in it would be dropped at the boundary that was to save it");
+       once to fill it, and the two must be the same bytes or it truncates the document.
+       A census render at rest, not the sale's own output (park_reserve), so a refusal sells through
+       engine_reclaim_at_rest and asks again. A sale parks one more record, so the bound is re-read per ask. */
+    for (;;) {
+        char *grown;
+        need = g_park_len + 2 * (size_t)g_park_recs + 8;
+        grown = realloc(g_park_json, need);
+        if (grown) { g_park_json = grown; break; }
+        CHECK(engine_reclaim_at_rest(),
+              "the cold tier could not render the park document for the host to store, with nothing left to sell — "
+              "the residue exists and every flow in it would be dropped at the boundary that was to save it");
+    }
     o = g_park_json;
     *o++ = '['; *o++ = '"';
     cold_park_write(park_json_sink, &o);
