@@ -158,4 +158,14 @@ bool media_query_length_px(JSContext *ctx, double n, const char *unit, size_t un
 JSValue media_query_matches_value(JSContext *ctx, const MediaQuerySet *set);
 bool    media_query_matches_now(JSContext *ctx, const MediaQuerySet *set);
 
+/* `media_query_matches_now`'s answers in one realm over one span in which no page code runs, keyed by the query
+   list's serialization, the text its answer's identity is minted over: the first ask of each list goes through
+   that read, and a repeat is answered from here. A memo lives for one C activation and is never parked, copied
+   into a fork or kept across a rest; each ask asserts the running flow's cascade input generation is the one
+   it was opened under. */
+typedef struct MediaQueryMemo MediaQueryMemo;
+MediaQueryMemo *media_query_memo_open(JSContext *ctx);
+bool media_query_matches_memo(MediaQueryMemo *memo, const MediaQuerySet *set);
+void media_query_memo_close(MediaQueryMemo *memo);
+
 #endif

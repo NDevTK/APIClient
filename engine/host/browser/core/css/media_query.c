@@ -26,6 +26,7 @@
 #include "solver/compose.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
+#include "solver/flow.h"   /* the cascade input generation a memo is valid under */
 
 /* ---- three-valued logic — MQ4 §3.1 -------------------------------------------------------------------------
    Kleene's, which is what the spec's own table is. `unknown` is a real third answer and not a stand-in for
@@ -1774,4 +1775,92 @@ bool media_query_matches_now(JSContext *ctx, const MediaQuerySet *set)
     }
     JS_FreeValue(ctx, v);
     return r;
+}
+
+struct MediaQueryMemo {
+    JSContext  *ctx;
+    const Flow *flow;     /* the running flow and its cascade input generation at the open */
+    uint64_t    writes;
+    char      **key;      /* owned, `cap` slots, NULL for empty: a power-of-two open-addressed table */
+    bool       *val;
+    size_t      used, cap;
+};
+
+MediaQueryMemo *media_query_memo_open(JSContext *ctx)
+{
+    MediaQueryMemo *m = calloc(1, sizeof *m);
+
+    CHECK(m != NULL, "media queries: OOM opening a memo of answers");
+    DCHECK(ctx != NULL, "a media query memo was opened in no realm");
+    m->ctx = ctx;
+    m->flow = flow_running_cascade_writes(&m->writes);
+    return m;
+}
+
+/* FNV-1a over the serialization; the slot holding `key` or the first empty one. */
+static size_t mq_memo_probe(char *const *tab, size_t cap, const char *key)
+{
+    uint32_t h = 2166136261u;
+    const char *p;
+    size_t i;
+
+    for (p = key; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+    i = (size_t)h & (cap - 1);
+    while (tab[i] != NULL && strcmp(tab[i], key) != 0) i = (i + 1) & (cap - 1);
+    return i;
+}
+
+bool media_query_matches_memo(MediaQueryMemo *m, const MediaQuerySet *set)
+{
+    uint64_t writes;
+    const Flow *flow = flow_running_cascade_writes(&writes);
+    char *key;
+    size_t i;
+    bool r;
+
+    DCHECK(m != NULL && set != NULL, "a media query memo was asked through nothing or about no query list");
+    DCHECK(flow == m->flow && writes == m->writes,
+           "a media query memo was asked after a cascade input moved or under another flow — it lives for one C "
+           "activation in which no page code runs, so its holder kept it across a rest");
+    key = media_query_serialize(set);
+    CHECK(key != NULL, "media queries: OOM keying a memo of answers");
+    if (m->used * 2 >= m->cap) {
+        size_t cap = m->cap ? m->cap * 2 : 16, j;
+        char **k = calloc(cap, sizeof *k);
+        bool *v = calloc(cap, sizeof *v);
+
+        CHECK(k != NULL && v != NULL, "media queries: OOM growing a memo of answers");
+        for (j = 0; j < m->cap; j++) {
+            if (m->key[j] == NULL) continue;
+            i = mq_memo_probe(k, cap, m->key[j]);
+            k[i] = m->key[j];
+            v[i] = m->val[j];
+        }
+        free(m->key);
+        free(m->val);
+        m->key = k;
+        m->val = v;
+        m->cap = cap;
+    }
+    i = mq_memo_probe(m->key, m->cap, key);
+    if (m->key[i] != NULL) {
+        free(key);
+        return m->val[i];
+    }
+    r = media_query_matches_now(m->ctx, set);
+    m->key[i] = key;
+    m->val[i] = r;
+    m->used++;
+    return r;
+}
+
+void media_query_memo_close(MediaQueryMemo *m)
+{
+    size_t i;
+
+    DCHECK(m != NULL, "a media query memo was closed through nothing");
+    for (i = 0; i < m->cap; i++) free(m->key[i]);
+    free(m->key);
+    free(m->val);
+    free(m);
 }

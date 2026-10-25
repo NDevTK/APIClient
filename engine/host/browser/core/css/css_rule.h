@@ -382,12 +382,14 @@ void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s);
    the walk's life). `run` continues it: with `rests`, each rule is taken from the resting drive's allowance
    (layout_job_emit_take) and the walk parks where one is refused, its frames held in the walk; CLOSED fills
    `*out` (owned by the caller); FAILED is the stored text that could not be read back, with an exception
-   pending on `ctx`. `free` releases a walk in any state. */
+   pending on `ctx`. A `@media` rule's condition is answered through `memo`, which the caller opens for one run
+   and closes before any rest (core/css/media_query.h). `free` releases a walk in any state. */
+struct MediaQueryMemo;
 typedef struct CssRuleCascadeWalk CssRuleCascadeWalk;
 typedef enum { CSS_RULE_CASCADE_PARKED, CSS_RULE_CASCADE_CLOSED, CSS_RULE_CASCADE_FAILED } CssRuleCascadeStep;
 CssRuleCascadeWalk *css_rule_cascade_walk_open(JSContext *ctx, JSValueConst list, CssLayerOrder *order);
 CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk *w, bool rests,
-                                             CssRuleCascadeSheet *out);
+                                             struct MediaQueryMemo *memo, CssRuleCascadeSheet *out);
 void css_rule_cascade_walk_free(JSContext *ctx, CssRuleCascadeWalk *w);
 
 /* CSS Properties and Values API 1 §2.1's `@property` half over one rule list, in document order among the rules

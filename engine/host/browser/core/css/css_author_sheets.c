@@ -10,6 +10,7 @@
 #include "quickjs.h"
 #include "core/css/css_author_sheets.h"
 #include "core/css/css_layer_order.h"
+#include "core/css/media_query.h"   /* the memo of `@media` answers one run's emission reads */
 #include "core/css/css_rule.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -66,10 +67,13 @@ CssAuthorSheets *css_author_sheets_open(lxb_dom_node_t *root)
 bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
 {
     JSContext *ctx = cas_realm(s);
+    MediaQueryMemo *memo;
     JSValue sheets;
     uint32_t ns = 0;
 
     DCHECK(!s->sealed, "the author origin's sheet set was built on after it was sealed");
+    /* The `@media` answers this run reads, shed at its return so none is kept across a rest. */
+    memo = media_query_memo_open(ctx);
     sheets = style_sheet_list_of(ctx, s->root);
     if (JS_IsArray(sheets)) {
         JSValue len = JS_GetPropertyStr(ctx, sheets, "length");
@@ -100,8 +104,9 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
             JS_FreeValue(ctx, rules);
             JS_FreeValue(ctx, sheet);
         }
-        step = css_rule_cascade_walk_run(ctx, s->walk, rests, &view);
+        step = css_rule_cascade_walk_run(ctx, s->walk, rests, memo, &view);
         if (step == CSS_RULE_CASCADE_PARKED) {
+            media_query_memo_close(memo);
             JS_FreeValue(ctx, sheets);
             return false;
         }
@@ -112,6 +117,7 @@ bool css_author_sheets_run(CssAuthorSheets *s, bool rests)
         if (view.text == NULL) { css_rule_cascade_sheet_free(&view); continue; }
         cas_push(s, s->at, view);
     }
+    media_query_memo_close(memo);
     JS_FreeValue(ctx, sheets);
     css_layer_order_seal(s->order);
     s->sealed = true;

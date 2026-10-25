@@ -4452,6 +4452,10 @@ typedef struct {
     CssLayerOrder       *order;
 } CascadeEmit;
 
+/* The memo of `@media` answers the walk's current run reads (core/css/media_query.h): set for the run's length
+   and cleared at every return, so it is never kept across a rest. */
+static MediaQueryMemo *g_emit_memo;
+
 /* Record which cascade layer the rule just written into `e->out` belongs to. NULL is CSSOM §6.4's non-style rules —
    see the header for why the caller reads that as a statement rather than as a hole. */
 static void cascade_emit_mark(CascadeEmit *e, const CssLayerNode *layer)
@@ -4554,7 +4558,10 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
     if (!r) return false;
     if (r->type == RULE_TYPE_MEDIA) {
         MediaQuerySet *set = media_list_query_set(ctx, r->media);
-        bool applies = media_query_matches_now(ctx, set);
+        bool applies;
+
+        DCHECK(g_emit_memo != NULL, "a sheet's `@media` rule was emitted outside a walk's run");
+        applies = media_query_matches_memo(g_emit_memo, set);
 
         media_query_free(set);
         /* CSS Cascade 5 §6.4.3 "Layer Ordering": "Layers that are defined inside of a conditional group rule
@@ -4882,17 +4889,23 @@ CssRuleCascadeWalk *css_rule_cascade_walk_open(JSContext *ctx, JSValueConst list
 }
 
 CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk *w, bool rests,
-                                             CssRuleCascadeSheet *out)
+                                             MediaQueryMemo *memo, CssRuleCascadeSheet *out)
 {
     CascadeFrame *f;
 
-    DCHECK(w != NULL && out != NULL, "the author cascade's walk was run through nothing or with nowhere to report");
+    DCHECK(w != NULL && out != NULL && memo != NULL,
+           "the author cascade's walk was run through nothing, with no memo or with nowhere to report");
+    DCHECK(g_emit_memo == NULL, "a sheet's walk was run inside another walk's run");
+    g_emit_memo = memo;
     while (w->top != NULL) {
         if (w->ok && w->top->i < w->top->n) {
             JSValue rule;
             CascadeFrame *descend = NULL;
 
-            if (rests && !layout_job_emit_take()) return CSS_RULE_CASCADE_PARKED;
+            if (rests && !layout_job_emit_take()) {
+                g_emit_memo = NULL;
+                return CSS_RULE_CASCADE_PARKED;
+            }
             rule = JS_GetPropertyUint32(ctx, w->top->kids, w->top->i++);
             w->ok = cascade_emit_one(ctx, rule, w->top->e, w->top->cur, w->top->nest, &descend);
             JS_FreeValue(ctx, rule);
@@ -4907,6 +4920,7 @@ CssRuleCascadeStep css_rule_cascade_walk_run(JSContext *ctx, CssRuleCascadeWalk 
         w->top = f->up;
         cascade_frame_free(ctx, f);
     }
+    g_emit_memo = NULL;
     if (!w->ok) return CSS_RULE_CASCADE_FAILED;
     out->text = w->e.out.s;
     out->layer = w->e.layer;
