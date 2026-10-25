@@ -103,7 +103,8 @@ static void open_stream_record_write(JSContext *ctx, JSValueConst doc_obj, lxb_h
 
 /* The script-created parser is one lxb_html_parser_t, not in any delta. Its write_epoch counts writes and this
    flow's record holds the count at its own last write, so the two differ exactly when a sibling arm of a fork
-   has written since; this arm then puts back the state its last write left before it writes. */
+   has written since; this arm then puts back the state its last write left before it writes. So the live
+   parser is only a cache of whichever arm wrote last, and no arm touches it without passing through here. */
 static void open_stream_make_current(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_t *dom)
 {
     lxb_html_parser_t *parser = (lxb_html_parser_t *)dom->parser;
