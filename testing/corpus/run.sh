@@ -273,7 +273,7 @@ for _row in "${SITE_ROWS[@]}"; do
   # a lane paid for: an unresolvable import, a browser that never started, a 360s timeout and a mid-drive
   # abort all rendered as the same string, and the one that had actually happened was readable nowhere.
   DRV=$CORP/logs/$LABEL-$id.driver
-  R=$(cd "$CORP" && timeout 360 node site.mjs "$id" "$url" "$LABEL" 2>&1 | tee "$DRV" | grep '^ROW ' | head -1)
+  R=$(cd "$CORP" && timeout "${SITE_TIMEOUT:-360}" node site.mjs "$id" "$url" "$LABEL" 2>&1 | tee "$DRV" | grep '^ROW ' | head -1)
   if [ -z "$R" ]; then
     # THE LAST LINE IS CARRIED INTO THE ROW, which is what makes the fatal actionable without opening the file
     # — and the file is named in it either way, because a last line is a sample and not the account.

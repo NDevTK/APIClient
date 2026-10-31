@@ -29,6 +29,15 @@ import { absentPair } from '../absent_census.js';
 
 const id = process.argv[2], url = process.argv[3], pass = process.argv[4] || '';
 const DWELL = Number(process.env.DWELL || 40000);
+/* A site's budget in engine work, when WORK is set: the dwell ends once a run of the site's origin reports
+   `_cold.stepWork` (retired opcodes plus charged host work, which bridge.js relays on every engine-log row) at
+   or past WORK, or once every such run has stopped. stepWork is a lifetime counter per engine instance, so
+   the site's figure is the largest any run reports, a floor on the site's work when it spans instances.
+   BACKSTOP_MS is a wall-clock backstop with its own signal (`dwellEndedBy: 'backstop'`), never the budget.
+   Without WORK the dwell is DWELL ms of wall time. */
+const WORK = process.env.WORK ? Number(process.env.WORK) : null;
+const BACKSTOP_MS = Number(process.env.BACKSTOP_MS || 3600000);
+if (WORK !== null && !(WORK > 0)) throw new Error('WORK must be a positive amount of engine work, got ' + process.env.WORK);
 const CDP = Number(process.env.CDP || 9451);
 const OUT = new URL('./logs/', import.meta.url);
 const LOG_NAME = (pass ? pass + '-' : '') + id + '.log';
@@ -585,7 +594,32 @@ try {
    a build that started mid-row is visible rather than averaged away. */
 const loadBefore = loadavg();
 const dwellAt = Date.now();
-await new Promise(r => setTimeout(r, DWELL));
+let dwellEndedBy = 'dwell', workPolls = 0;
+const siteOrigin = (() => { try { return new URL(finalUrl).origin; } catch { return ''; } })();
+/* The largest `_cold.stepWork` any run of this origin reports, and whether one is still running. */
+const workNow = () => off.evaluate((o) => {
+  const rows = (self._engineLog || []).filter(r => typeof r.url === 'string' && r.url.startsWith(o));
+  let work = null, running = 0;
+  for (const r of rows) {
+    if (r.cold && typeof r.cold.stepWork === 'number') work = Math.max(work === null ? 0 : work, r.cold.stepWork);
+    if (r.run === 'partial') running++;
+  }
+  return { work, rows: rows.length, running };
+}, siteOrigin).catch(() => null);
+if (WORK === null) {
+  await new Promise(r => setTimeout(r, DWELL));
+} else {
+  for (;;) {
+    const w = await workNow();
+    workPolls++;
+    if (w && w.work !== null && w.work >= WORK) { dwellEndedBy = 'work'; break; }
+    if (w && w.rows > 0 && w.running === 0) { dwellEndedBy = 'stopped'; break; }
+    if (Date.now() - dwellAt >= BACKSTOP_MS) { dwellEndedBy = 'backstop'; break; }
+    await new Promise(r => setTimeout(r, 5000));
+  }
+}
+const stepWorkReached = await workNow().then(w => (w ? w.work : null));
+const dwellElapsedMs = Date.now() - dwellAt;
 const loadAfter = loadavg();
 
 const cur = await off.evaluate(new Function('return (' + PROBE + ');'))
@@ -1307,7 +1341,10 @@ const bootSpanRow = () => {
 };
 const row = {
   id, url, finalUrl, status, nav, artifact, measuredAt: new Date().toISOString(),
-  dwellMs: DWELL, cores: cpus().length, loadBefore, loadAfter,
+  dwellMs: WORK === null ? DWELL : dwellElapsedMs, cores: cpus().length, loadBefore, loadAfter,
+  /* The budget the dwell ran to, how it ended ('dwell', 'work', 'stopped' or 'backstop'), and the largest
+     `_cold.stepWork` a run of this origin reported when the dwell ended (null when no run reported one). */
+  workBudget: WORK, dwellEndedBy, stepWorkReached, workPolls,
   runsTotal: runs.length,
   runsMine: myRuns.length,
   crashedRuns: runs.filter(r => r.run === 'crashed').length,
