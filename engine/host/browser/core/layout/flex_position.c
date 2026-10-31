@@ -64,11 +64,11 @@ static FpMain fp_main_terms(lxb_dom_element_t *container, const FlexLineMember *
     return t;
 }
 
-/* css-align-3 §4.1 "Positional Alignment: the center, start, end, self-start, self-end, flex-start, flex-end,
-   left, and right keywords"' `justify-content` position `v` on §9.5's main axis, as the share of the free space
-   before the first item: 0 at main-start, 1 at main-end. `start` and `end` are the container's own edges in the
-   main axis and `left` and `right` physical ones, which in a `column` container "behaves as start" because the
-   axis "is not parallel with either left↔right axis". */
+/* css-align-3 §4.1 "Positional Alignment: the center, start, end, self-start, self-end, flow-start, flow-end,
+   flex-start, flex-end, left, and right keywords"' `justify-content` position `v` on §9.5's main axis, as the
+   share of the free space before the first item: 0 at main-start, 1 at main-end. `start` and `end` are the
+   container's own edges in the main axis and `left` and `right` physical ones, which in a `column` container
+   "behaves as start" because the axis "is not parallel with either left↔right axis". */
 static double fp_main_share(lxb_dom_element_t *container, CssKeyword v, FpAxes a)
 {
     bool start_is_main_start = !css_computed_keyword_is(container, "flex-direction", CSS_KEYWORD_ROW_REVERSE) &&
@@ -138,9 +138,9 @@ static CssPx fp_main_offset(lxb_dom_element_t *container, const lxb_dom_node_t *
         free_space = css_px(0.0);
     }
     /* Step 2, over css-align-3 §5.1's `justify-content`. A distribution that cannot distribute takes
-       css-align-3 §4.3's fallback, `safe flex-start` or `safe center`, and css-align-3 §4.4's `safe` aligns an
-       overflowing subject "as if the alignment mode were flex-start": with no positive free space all three
-       lead with nothing. */
+       css-align-3 §4.3's fallback, `safe flow-start` or `safe center`, and css-align-3 §4.4's `safe` aligns an
+       overflowing subject "as if the alignment mode were flow-start", the main-start side here: with no
+       positive free space all three lead with nothing. */
     jc = css_computed_align(container, "justify-content");
     switch (jc.value) {
     /* css-align-3 §5.1.3 "Flex Containers": `normal` "behaves as stretch", and `stretch` "behaves as
@@ -270,7 +270,8 @@ static CssPx fp_cross_offset(lxb_dom_element_t *container, lxb_dom_element_t *it
                box_subject(item, nbuf, sizeof nbuf), css_keyword_name(align.value));
         break;
     }
-    /* css-align-3 §4.4's `safe`: an overflowing subject is aligned "as if the alignment mode were flex-start". */
+    /* css-align-3 §4.4's `safe`: an overflowing subject is aligned "as if the alignment mode were flow-start",
+       the cross-start side here. */
     if (align.overflow == CSS_KEYWORD_SAFE && diff.px < 0.0) share = 0.0;
     return css_px_add(css_px_scale(diff, share), mt);
 }
@@ -483,7 +484,8 @@ void flex_position_anonymous_box(lxb_dom_element_t *container, const lxb_dom_nod
         share = fp_anonymous_cross_share(container, align);
     }
     diff = css_px_sub(line, cross);
-    /* css-align-3 §4.4's `safe`: an overflowing subject is aligned "as if the alignment mode were flex-start". */
+    /* css-align-3 §4.4's `safe`: an overflowing subject is aligned "as if the alignment mode were flow-start",
+       the cross-start side here. */
     if (align.overflow == CSS_KEYWORD_SAFE && diff.px < 0.0) share = 0.0;
     *h = cross;
     *y = fp_physical(a.cross_start, css_px_add(start, css_px_scale(diff, share)), cross,

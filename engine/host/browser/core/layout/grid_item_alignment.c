@@ -38,13 +38,13 @@ bool grid_item_self_alignment_offset_ask(lxb_dom_element_t *container, lxb_dom_e
 
     if (!css_computed_keyword_is(container, "writing-mode", CSS_KEYWORD_HORIZONTAL_TB))
         DFAILF("%s is a grid item of a container whose `writing-mode` is not `horizontal-tb`; css-grid-1 §10.3 "
-               "and §10.4 align in that mode's flow-relative axes. BUILD the vertical-mode grid",
+               "and css-grid-1 §10.4 align in that mode's flow-relative axes. BUILD the vertical-mode grid",
                box_subject(item, buf, sizeof buf));
     switch (a.value) {
     /* css-align-3 §6.1.5 "Grid Items": `normal` "Sizes as either stretch (typical non-replaced elements) or
-       start (typical replaced elements) ... The resulting box is then start-aligned"; `stretch` "falls back to
-       flow-start generally"; `flex-start` is "A legacy value alias for flow-start", which outside a flex or
-       grid lanes container "behaves as start", the edge §4.1's `start` is "flush with". A stretched box has no
+       start (typical replaced elements) ... The resulting box is then start-aligned"; §6.1's `stretch` "falls
+       back to flow-start generally"; css-align-3 §4.1's `flex-start` is "A legacy value alias for
+       flow-start", which outside a flex or grid lanes container "behaves as start". A stretched box has no
        free space, so the share it takes moves nothing. */
     case CSS_KEYWORD_NORMAL:
     case CSS_KEYWORD_STRETCH:
@@ -59,7 +59,7 @@ bool grid_item_self_alignment_offset_ask(lxb_dom_element_t *container, lxb_dom_e
     case CSS_KEYWORD_CENTER:
         share = 0.5;
         break;
-    /* §4.1: the "line-left or physical left edge", which in a horizontal-tb container is the physical one. */
+    /* css-align-3 §4.1: the "line-left or physical left edge", the physical one in a horizontal-tb container. */
     case CSS_KEYWORD_LEFT:
     case CSS_KEYWORD_RIGHT:
         DCHECKF(!vertical, "`align-self: %s` is outside css-align-3 §6.2's grammar", css_keyword_name(a.value));
