@@ -1071,9 +1071,9 @@ struct JSContext {
 
     struct list_head loaded_modules; /* list of JSModuleDef.link */
 
-    /* if NULL, RegExp compilation is not supported */
-    JSValue (*compile_regexp)(JSContext *ctx, JSValueConst pattern,
-                              JSValueConst flags);
+    /* If NULL, RegExp compilation is not supported. Begins the compile of a literal's pattern under its flags,
+       resting between Terms when `can_yield`; NULL with the exception pending. The caller owns the compile. */
+    REParseState *(*compile_regexp)(JSContext *ctx, JSValueConst pattern, JSValueConst flags, bool can_yield);
     /* `caller_sf` IS THE OTHER HALF OF `scope_idx`, and both are meaningful only for a DIRECT eval: 13.3.6.1
        evaluates the program in the CALLER's variable environment, so the algorithm needs the caller's frame —
        its bytecode for the strictness, its var_refs for the closure. It is a PARAMETER rather than a read of
@@ -2840,8 +2840,9 @@ static int JS_ToBigInt64FreeAt(JSContext *ctx, int64_t *pres, JSValue val,
 static JSValue JS_ToPropertyKeyInternal(JSContext *ctx, JSValueConst val,
                                         int flags, const char *file, int line);
 static JSValue js_new_string8_len(JSContext *ctx, const char *buf, int len);
-static JSValue js_compile_regexp(JSContext *ctx, JSValueConst pattern,
-                                 JSValueConst flags);
+static REParseState *js_compile_regexp(JSContext *ctx, JSValueConst pattern, JSValueConst flags,
+                                       bool can_yield);
+static int js_regexp_compile_run(JSContext *ctx, REParseState *c, JSValue *pbc);
 static JSValue js_regexp_constructor_internal(JSContext *ctx, JSValueConst ctor,
                                               JSValue pattern, JSValue bc);
 /* Forward because JS_FreeRuntime's leak report runs a trial to learn which leaked objects are rooted from outside
@@ -57988,6 +57989,11 @@ typedef struct JSParseState {
        the crank. That is the arrangement JSFlowControlHooks.budget already names — "a NULL budget is a host
        that declines this edge" — and not a second implementation to fall back to. */
     bool pd_can_yield;
+    /* THE REGEXP LITERAL'S COMPILE, held across the suspensions it rests at (owned; NULL outside the literal's
+       production), and the rest it owes: a compile that rested has already asked the policy, so the parse's
+       next poll hands the thread back without asking again. */
+    REParseState *pd_re;
+    bool pd_rest_owed;
     /* HOW MANY PRODUCTION STEPS UNTIL THE COOPERATIVE BUDGET IS NEXT ASKED. The parse is the one span in this
        engine with no raise source at all: quickjs.h declares four kinds and the first three are raised from
        the INTERPRETER's dispatch, which a parse never reaches, so a parse raised nothing and polled nothing
@@ -60949,7 +60955,7 @@ enum {
     PDS_POSTFIX, PDS_PFX_PAREN, PDS_PFX_NEW, PDS_PFX_IMPORT1, PDS_PFX_IMPORT2,
     PDS_PFX_ARG, PDS_PFX_SPREAD_ELL, PDS_PFX_SPREAD_ITEM, PDS_PFX_INDEX,
     PDS_UNA_POSTFIX,
-    PDS_ARR, PDS_ARR_E1, PDS_ARR_E2, PDS_ARR_SPREAD, PDS_ARR_E3, PDS_PFX_ARRAY,
+    PDS_ARR, PDS_ARR_E1, PDS_ARR_E2, PDS_ARR_SPREAD, PDS_ARR_E3, PDS_PFX_ARRAY, PDS_PFX_REGEXP,
     PDS_OBJ, PDS_OBJ_SPREAD, PDS_OBJ_VALUE, PDS_PFX_OBJECT,
     PDS_PROPNAME, PDS_PN_COMPUTED, PDS_OBJ_KEY,
     PDS_TEMPLATE, PDS_TPL_SUB, PDS_PFX_TEMPLATE, PDS_PFX_TAGGED,
@@ -62205,6 +62211,11 @@ static void js_parse_descent_abandon(JSContext *ctx, JSParseState *s)
     }
     JS_FreeAtom(ctx, s->pd_name);
     s->pd_name = JS_ATOM_NULL;
+    if (s->pd_re) {
+        lre_compile_end(s->pd_re);
+        s->pd_re = NULL;
+    }
+    s->pd_rest_owed = false;
     pd_release(ctx, s);
     s->pd_suspended = false;
 }
@@ -62433,6 +62444,7 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     case PDS_ARR_SPREAD:      goto arr_spread_done;
     case PDS_ARR_E3:          goto arr_e3_done;
     case PDS_PFX_ARRAY:       goto pfx_array_done;
+    case PDS_PFX_REGEXP:      goto pfx_regexp_step;
     case PDS_OBJ:             goto obj_entry;
     case PDS_OBJ_SPREAD:      goto obj_spread_done;
     case PDS_OBJ_VALUE:       goto obj_value_done;
@@ -63382,34 +63394,36 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     case '/':
         s->buf_ptr--;
     parse_regexp:
+        if (!s->ctx->compile_regexp)
+            PD_RET_ERR(s, "RegExp are not supported");
+        /* the previous token is '/' or '/=', so no need to free */
+        if (js_parse_regexp(s))
+            PD_RET(-1);
+        if (emit_push_const(s, s->token.u.regexp.body, 0))
+            PD_RET(-1);
+        DCHECK(s->pd_re == NULL, "a regexp literal's compile began while another literal's was still held");
+        /* The literal's compile is a stint of this production per dispatch: it rests where the policy asks
+           and resumes here with the token, which no other production has touched, still the literal's. */
+        s->pd_re = s->ctx->compile_regexp(s->ctx, s->token.u.regexp.body, s->token.u.regexp.flags,
+                                          s->pd_can_yield);
+        if (!s->pd_re)
+            goto pfx_regexp_failed;
+ pfx_regexp_step:
         {
-            JSValue str;
-            int emit_r, backtrace_flags;
-            if (!s->ctx->compile_regexp)
-                PD_RET_ERR(s, "RegExp are not supported");
-            /* the previous token is '/' or '/=', so no need to free */
-            if (js_parse_regexp(s))
-                PD_RET(-1);
-            emit_r = emit_push_const(s, s->token.u.regexp.body, 0);
-            /* Named residual. Not covered: the literal's pattern compiles to its end inside this one
-               production, charged but never resting, though the script parse around it can park. Next diff
-               builds: a production state holding the literal's REParseState across the drive's suspension,
-               asked through js_parse_want_yield. Absence shows as: a script parse stint whose host CPU is
-               large against its work, on a script with a long regexp literal. */
-            str = s->ctx->compile_regexp(s->ctx, s->token.u.regexp.body,
-                                         s->token.u.regexp.flags);
-            if (JS_IsException(str)) {
-                /* add the line number info */
-                backtrace_flags = 0;
-                if (s->cur_func && s->cur_func->backtrace_barrier)
-                    backtrace_flags = JS_BACKTRACE_FLAG_SINGLE_LEVEL;
-                build_backtrace(s->ctx, s->ctx->rt->current_exception, JS_UNDEFINED,
-                                s->filename,
-                                s->token.line_num,
-                                s->token.col_num,
-                                backtrace_flags, NULL);
-                PD_RET(-1);
+            JSValue str = JS_UNDEFINED;
+            int r = js_regexp_compile_run(s->ctx, s->pd_re, &str), emit_r;
+
+            if (r == LRE_RET_YIELD) {
+                DCHECK(s->pd_can_yield, "a regexp literal's compile rested in a parse that cannot hand back");
+                g_regexp_compile_rests++;
+                s->pd_rest_owed = true;
+                f->state = PDS_PFX_REGEXP;
+                goto dispatch;
             }
+            lre_compile_end(s->pd_re);
+            s->pd_re = NULL;
+            if (r < 0)
+                goto pfx_regexp_failed;
             emit_r = emit_push_const(s, str, 0);
             JS_FreeValue(s->ctx, str);
             if (emit_r)
@@ -63420,8 +63434,21 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
             emit_op(s, OP_regexp);
             if (next_token(s))
                 PD_RET(-1);
+            goto pfx_after_switch;
         }
-        break;
+ pfx_regexp_failed:
+        {
+            /* add the line number info */
+            int backtrace_flags = 0;
+            if (s->cur_func && s->cur_func->backtrace_barrier)
+                backtrace_flags = JS_BACKTRACE_FLAG_SINGLE_LEVEL;
+            build_backtrace(s->ctx, s->ctx->rt->current_exception, JS_UNDEFINED,
+                            s->filename,
+                            s->token.line_num,
+                            s->token.col_num,
+                            backtrace_flags, NULL);
+            PD_RET(-1);
+        }
     case '(':
         PD_CALL(PDS_PAREN, 0, 0, 0, PDS_PFX_PAREN);
  pfx_paren_done:
@@ -68177,6 +68204,8 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
     s->pd_ret = -1;
  leave:
     DCHECK(s->pd_sp == s->pd_base, "the descent returned at a depth that is not its own pd_base");
+    DCHECK(s->pd_sp != 0 || s->pd_re == NULL,
+           "the descent drained holding a regexp literal's compile — the literal's production ends it");
     if (s->pd_sp == 0)
         pd_release(ctx, s);   /* the whole descent drained — the parse owns nothing until the next one */
     return s->pd_ret;
@@ -68209,6 +68238,10 @@ static bool js_parse_want_yield(JSParseState *s)
     int ykind;
     if (!s->pd_can_yield)
         return false;
+    if (s->pd_rest_owed) {
+        s->pd_rest_owed = false;
+        return true;
+    }
     if (g_flow_control.budget != NULL && g_flow_control.budget_period > 0) {
         if (--s->pd_budget_ctr <= 0) {
             s->pd_budget_ctr = (int32_t)g_flow_control.budget_period;
@@ -106521,24 +106554,15 @@ static void js_regexp_compile_cache_destroy(JSContext *ctx, void *p)
     lre_compile_end(p);
 }
 
-/* The whole compile for a caller that cannot park, the script parse's regexp literal (ctx->compile_regexp):
-   flags and pattern are already Strings, so nothing here runs page code. */
-static JSValue js_compile_regexp(JSContext *ctx, JSValueConst pattern,
-                                 JSValueConst flags)
+/* The script parse's regexp literal (ctx->compile_regexp): flags and pattern are already Strings, so nothing
+   here runs page code. The parse steps the compile with js_regexp_compile_run and ends it. */
+static REParseState *js_compile_regexp(JSContext *ctx, JSValueConst pattern, JSValueConst flags, bool can_yield)
 {
-    REParseState *c;
-    JSValue bc = JS_UNDEFINED;
-    int re_flags, r;
+    int re_flags;
 
     if (js_regexp_parse_flags(ctx, flags, &re_flags) < 0)
-        return JS_EXCEPTION;
-    c = js_regexp_compile_begin(ctx, pattern, re_flags, false);
-    if (!c)
-        return JS_EXCEPTION;
-    r = js_regexp_compile_run(ctx, c, &bc);
-    DCHECK(r != LRE_RET_YIELD, "a regexp compile begun with can_yield false rested");
-    lre_compile_end(c);
-    return r < 0 ? JS_EXCEPTION : bc;
+        return NULL;
+    return js_regexp_compile_begin(ctx, pattern, re_flags, can_yield);
 }
 
 /* create a RegExp object from a string containing the RegExp bytecode
