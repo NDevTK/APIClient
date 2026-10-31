@@ -1292,6 +1292,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbkpinject.h"
 #include "fixture/fpakey.h"
 #include "fixture/uspreckey.h"
+#include "fixture/msglang.h"
 #include "fixture/fpaselect.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
@@ -1875,6 +1876,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkpinject", HTML_IDBKPINJECT },
     { "fpakey", HTML_FPAKEY },
     { "uspreckey", HTML_USPRECKEY },
+    { "msglang", HTML_MSGLANG },
     { "fpaselect", HTML_FPASELECT },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
@@ -18005,6 +18007,28 @@ TF_UNIT void probes_uspreckey(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `msglang` document (fixture/msglang.h): the innerHTML <- message.data search fires, under a
+   composed message whose suffix member is a String *validate a suffix* accepts. */
+TF_UNIT void probes_msglang(const char *js, Probe *tab, int *n) {
+    char src[192] = "";
+    int has = s_rooted_source(js, "innerHTML", MESSAGE_DATA_SRC, src, sizeof src);
+    const char *ms_why = NULL; int ms_tt = 1;
+    fold_row(&ms_tt, &ms_why, has,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in message.data, so the picker's "
+             "SecurityError arm never rendered");
+    const char *mp_why = NULL; int mp_tt = 1;
+    fold_row(&mp_tt, &mp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the innerHTML <- message.data search did not fire: the composed message's suffix was not one "
+             "*validate a suffix* accepts, so the re-fire took the TypeError arm");
+    fold_row(&mp_tt, &mp_why, has && s_field(js, "innerHTML", src, "\"s\":\".txt\""),
+             "the fired message does not carry the valid-suffix language's member as its `s`");
+    const Probe rows[] = {
+        { "ml-sink", ms_tt, "'mlOut'", SESS_EXPLORE, ms_why },
+        { "ml-poc", mp_tt, "d.s", SESS_EXPLORE, mp_why, .gate = "ml-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fpaselect` document (fixture/fpaselect.h): the prompt's filter over the record's unknown suffix
    takes the world where it equals the saved file's `.txt`, which the page then reads back, and the world where
    no key or suffix admits the file. */
@@ -22737,6 +22761,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkpinject(js, probes, &np);
     probes_fpakey(js, probes, &np);
     probes_uspreckey(js, probes, &np);
+    probes_msglang(js, probes, &np);
     probes_fpaselect(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
