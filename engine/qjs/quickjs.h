@@ -1031,12 +1031,16 @@ typedef struct JSClassExoticMethods {
        the safe direction — it asserts rather than runs. Web IDL's indexed property getter is the first kind
        by construction: an index lookup has no accessors in it. */
     bool get_own_property_no_user_code;
-    /* A [[GetOwnProperty]] whose answer for `prop` asks a question of unknown input, which only a step machine can
-       fork over: the function a [[Get]] or [[HasProperty]] reaching this object calls instead, as
-       f(obj, key, receiver, op) with op 0 for [[Get]] and 1 for [[HasProperty]], answering the operation from this
-       object on; JS_UNDEFINED where the key asks no such question and get_own_property answers it. Owned. It runs
-       no page code, and it is asked by the read opcodes and the keyed entry, never by a C walk. */
+    /* A [[GetOwnProperty]] whose answer for `prop` must rest or fork (a walk charged as work, a question of unknown
+       input): the function a [[Get]], [[HasProperty]] or [[GetOwnProperty]] reaching this object calls instead,
+       as f(obj, key, receiver, op) with op 0 for [[Get]], 1 for [[HasProperty]] and 2 for [[GetOwnProperty]],
+       answering the property's value (true for op 1), or undefined (false) for a miss; JS_UNDEFINED where the key
+       asks no such question and get_own_property answers it. Owned. It runs no page code, and it is asked by the
+       read opcodes and the keyed entry after the object's own slots missed, never by a C walk. */
     JSValue (*get_own_property_step)(JSContext *ctx, JSValueConst obj, JSAtom prop);
+    /* The JS_PROP_ C/W/E of the data descriptor op 2's hit is answered with (Web IDL §3.9.1's named-property
+       descriptor). */
+    int get_own_property_step_flags;
     /* Whether an ordinary lookup walk run from C (OrdinaryGet, OrdinarySetWithOwnDescriptor, OrdinaryHasProperty)
        takes its next link from get_prototype above. A class declares it when its answer is a link whose chain
        ends, as HTML §7.2.3.1's (the Window's own prototype, or null) does. A class whose answer is a fresh value

@@ -1,8 +1,8 @@
 /* HTML §3.1.7 "DOM tree accessors" — "The Document interface supports named properties" — and the Web IDL §3.9
  * internal methods of a legacy platform object. §3.1.1 "The Document object" declares `[LegacyOverrideBuiltIns]
  * partial interface Document`, so a named property shadows an interface member (`<img name=getElementById>`).
- * Answers come from the running flow's tree in tree order, attributes read at the walk; a [[Get]] or
- * [[HasProperty]] walks as a step machine (dn_step) resting at every element, charged THREAD_WORK_DOM_WALK.
+ * Answers come from the running flow's tree in tree order, attributes read at the walk; a [[Get]], [[HasProperty]]
+ * or [[GetOwnProperty]] walks as a step machine (dn_step) over the shared resting walk (core/dom/named_walk.h).
  * Named residual: not covered — an index; every `document.x` walks the tree. Next diff builds Blink's named-item
  * map at Lexbor's own tree insertion and removal primitives, which the parser, §8.4.3's document.write feed and
  * the DOM API all call (dom_cow's chokepoints miss the first two), updated as Element::insertedInto/removedFrom
@@ -19,11 +19,11 @@
 #include "core/dom/collections.h"
 #include "core/dom/document.h"
 #include "core/dom/document_named.h"
+#include "core/dom/named_walk.h"
 #include "core/dom/node.h"
 #include "core/html/html_iframe.h"
 #include "core/idl_args.h"
 #include "core/agent_state.h"
-#include "core/timing/thread_work.h"
 #include "quickjs-step.h"
 
 enum { DN_NONE = 0, DN_EMBED, DN_FORM, DN_IFRAME, DN_IMG, DN_OBJECT };
@@ -76,16 +76,10 @@ bool document_named_element_is(lxb_dom_element_t *el, const char *name, size_t n
     return t == DN_OBJECT || (nv && nl > 0);    /* an object by its id; an img by its id with a non-empty name */
 }
 
-/* The next element after `n` in tree order within the document tree rooted at `root`. */
-static lxb_dom_node_t *dn_next(lxb_dom_node_t *n, lxb_dom_node_t *root)
+static bool dn_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n)
 {
-    do {
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n != root && !n->next) n = n->parent;
-        if (n == root) return NULL;
-        n = n->next;
-    } while (n->type != LXB_DOM_NODE_TYPE_ELEMENT);
-    return n;
+    (void)ctx;
+    return document_named_element_is(el, name, n);
 }
 
 /* The Document node a Document wrapper stands for. */
@@ -106,7 +100,7 @@ static int dn_count(lxb_dom_node_t *doc, const char *name, size_t n, lxb_dom_nod
     int c = 0;
 
     *first = NULL;
-    for (lxb_dom_node_t *e = dn_next(doc, doc); e && c < 2; e = dn_next(e, doc))
+    for (lxb_dom_node_t *e = named_walk_successor(doc, doc); e && c < 2; e = named_walk_successor(e, doc))
         if (document_named_element_is(lxb_dom_interface_element(e), name, n)) {
             if (!c) *first = e;
             c++;
@@ -163,25 +157,19 @@ enum { IDL_STEP_STAGE_BASE(DN_STAGES) DN_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DN_STEPS[] = { DN_STAGES(JS_STEP_STAGE_LABEL) NULL };
 static int g_id_dn_step = -1;
 
-/* The walk's resume point: the element last visited, and what it has found. Nodes, no values. */
-typedef struct {
-    lxb_dom_node_t *cursor, *first;
-    int count;
-    uint8_t started;
-} DnWalk;
-
 static void dn_walk_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     (void)ctx; (void)st; (void)v;
 }
 
-/* f(obj, key, receiver, op), op 0 for [[Get]] and 1 for [[HasProperty]]: one element per entry, then the
-   named property's value (or true), or undefined (false) for a miss, on which quickjs walks on to the prototype
-   with the operation's receiver. */
+/* f(obj, key, receiver, op), op 0 for [[Get]], 1 for [[HasProperty]] and 2 for [[GetOwnProperty]]: one element
+   per entry, then the named property's value (true for op 1), or undefined (false) for a miss. quickjs builds op
+   2's descriptor from the class's get_own_property_step_flags, and walks a [[Get]] or [[HasProperty]] miss on to
+   the prototype with the operation's receiver. */
 static int dn_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv, JSValue cb_result,
                    JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    DnWalk *s = st;
+    NamedWalk *s = st;
     lxb_dom_node_t *doc;
     const char *name;
     size_t n;
@@ -193,27 +181,19 @@ static int dn_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     DCHECK(hdr->stage == DN_WALK && argc == 4 && JS_IsString(argv[1]) && JS_VALUE_GET_TAG(argv[3]) == JS_TAG_INT,
            "the Document named-access step was called with a shape the keyed entry does not issue");
     op = JS_VALUE_GET_INT(argv[3]);
-    DCHECK(op == 0 || op == 1, "the Document named-access step was asked neither [[Get]] nor [[HasProperty]]");
+    DCHECK(op == 0 || op == 1 || op == 2,
+           "the Document named-access step was asked neither [[Get]], [[HasProperty]] nor [[GetOwnProperty]]");
     doc = dn_document(argv[0]);
     name = JS_ToCStringLen(ctx, &n, argv[1]);
     if (!name) return JS_STEP_ABRUPT;
-    if (!s->started) { s->cursor = doc; s->started = 1; }
-    s->cursor = dn_next(s->cursor, doc);
-    if (s->cursor) {
-        thread_work_charge(THREAD_WORK_DOM_WALK, 1);
-        if (document_named_element_is(lxb_dom_interface_element(s->cursor), name, n)) {
-            if (!s->count) s->first = s->cursor;
-            s->count++;
-        }
-        if (s->count < 2) { JS_FreeCString(ctx, name); return JS_STEP_YIELD; }
-    }
+    if (named_walk_next(ctx, s, doc, dn_is, name, n)) { JS_FreeCString(ctx, name); return JS_STEP_YIELD; }
     if (op == 1) *presult = JS_NewBool(ctx, s->count > 0);
     else *presult = dn_value_of(ctx, argv[0], name, s->first, s->count);
     JS_FreeCString(ctx, name);
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl DN_DECL = { dn_step, sizeof(DnWalk), dn_walk_visit, NULL, DN_ALGORITHM, DN_STEPS };
+static const IdlStepDecl DN_DECL = { dn_step, sizeof(NamedWalk), dn_walk_visit, NULL, DN_ALGORITHM, DN_STEPS };
 
 /* JSClassExoticMethods.get_own_property_step: the walk for a String key, JS_UNDEFINED for a Symbol. Owned. */
 static JSValue dn_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
@@ -243,9 +223,10 @@ void document_named_free(void)
     agent_state_reached("document");
 }
 
-/* Web IDL §3.9.1 [[GetOwnProperty]], reached by quickjs after the object's own properties missed, which is the
-   visibility algorithm's step 2; the Document's [LegacyOverrideBuiltIns] is its step 3. LegacyPlatformObject-
-   GetOwnProperty's descriptor: no named property setter, so not writable; enumerable and configurable. */
+/* Web IDL §3.9.1 [[GetOwnProperty]] for a C walk, reached by quickjs after the object's own properties missed,
+   which is the visibility algorithm's step 2; the Document's [LegacyOverrideBuiltIns] is its step 3.
+   LegacyPlatformObjectGetOwnProperty's descriptor: no named property setter, so not writable; enumerable and
+   configurable, the step's get_own_property_step_flags. */
 static int dn_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
 {
     const char *name;
@@ -290,7 +271,7 @@ static int dn_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, J
 
     *ptab = NULL;
     *plen = 0;
-    for (lxb_dom_node_t *e = dn_next(doc, doc); e; e = dn_next(e, doc)) {
+    for (lxb_dom_node_t *e = named_walk_successor(doc, doc); e; e = named_walk_successor(e, doc)) {
         lxb_dom_element_t *el = lxb_dom_interface_element(e);
         static const char *const LOCAL[2] = { "id", "name" };
 
@@ -364,15 +345,17 @@ static int dn_prevent_extensions(JSContext *ctx, JSValueConst obj)
     return 0;
 }
 
-/* Named residuals. Not covered: (1) a C walk — a [[Set]]'s lookup, an enumeration, getOwnPropertyDescriptor —
-   runs dn_get_own's walk to completion; next diff routes GP_GETOWNPROP to the step, as Window's residual states
-   for its own; absence shows as such an operation's host time growing with the tree, uncharged. (2) A Document
+/* Named residuals. Not covered: (1) a C walk — OrdinarySet's [[GetOwnProperty]] in JS_SetPropertyInternal2,
+   the [[OwnPropertyKeys]], [[DefineOwnProperty]] and [[Delete]] hooks — runs to completion uncharged; next diff
+   routes the keyed entry's GP_SET to the step and deletes dn_get_own's walk; absence shows as such an operation's
+   host time growing with the tree while twDomWalkInput does not. (2) A Document
    holding a region of unknown markup (core/dom/unknown_markup.h) answers from the example's tree; next diff forks
    dn_step over the region as window.c's win_named_step does, with markup composed for §3.1.7's element types;
    absence shows as a `document.x` read after a sanitized innerHTML of attacker markup making no @S record. */
 static const JSClassExoticMethods DOCUMENT_NAMED_EXOTIC = {
     .get_own_property = dn_get_own,
     .get_own_property_step = dn_get_own_step,
+    .get_own_property_step_flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE,
     .get_own_property_names = dn_own_names,
     .define_own_property = dn_define_own,
     .delete_property = dn_delete,

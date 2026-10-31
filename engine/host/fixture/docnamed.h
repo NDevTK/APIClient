@@ -4,7 +4,8 @@
    div being no named element. Two elements sharing a name answer a two-member HTMLCollection; an object is named
    by its id, an img by its id only beside a non-empty name; `location`, unforgeable, is a non-configurable own
    property of the instance and absent from the prototype, so it is never shadowed; a named property is not deleted
-   and is an own key.
+   and is an own key. Both named getters answer [[GetOwnProperty]] with Web IDL §3.9.1's descriptor (the Window's
+   unenumerable and writable), and a bare global name reaches the Window's.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_DOCNAMED_H
@@ -32,8 +33,14 @@ static const char HTML_DOCNAMED[] =
     "var dnLocOwn = !!dnLocD && !dnLocD.configurable && !('location' in Document.prototype);"
     "var dnDel = delete document.dnDup;"
     "var dnKey = Object.keys(document).indexOf('dnDup') >= 0;"
+    "var dnD = Object.getOwnPropertyDescriptor(document, 'dnObj');"
+    "var dnDesc = !!dnD && dnD.enumerable && dnD.configurable && !dnD.writable && dnD.value instanceof HTMLObjectElement;"
+    "var wnD = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Window.prototype), 'dnObj');"
+    "var wnDesc = !!wnD && !wnD.enumerable && wnD.configurable && wnD.writable && wnD.value instanceof HTMLObjectElement;"
+    "var wnGlobal = typeof getElementById === 'object' && typeof dnNoSuchName === 'undefined';"
     "fetch('/api/docnamed?ov=' + dnOv + '&qs=' + dnQs + '&coll=' + dnColl + '&obj=' + dnObj + '&bare=' + dnBare +"
-    "      '&img=' + dnImg + '&loc=' + dnLoc + '&locown=' + dnLocOwn + '&del=' + dnDel + '&key=' + dnKey);"
+    "      '&img=' + dnImg + '&loc=' + dnLoc + '&locown=' + dnLocOwn + '&del=' + dnDel + '&key=' + dnKey +"
+    "      '&desc=' + dnDesc + '&wdesc=' + wnDesc + '&wglobal=' + wnGlobal);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

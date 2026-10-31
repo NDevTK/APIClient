@@ -16472,6 +16472,9 @@ TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
           "location is not a non-configurable own property of the Document, or is still on Document.prototype" },
         { "dn-no-delete", "del", "false", "true", "a named property with no deleter was deleted" },
         { "dn-own-key", "key", "true", "false", "a supported property name is not an own key" },
+        { "dn-desc", "desc", "true", "false", "a Document named property's descriptor is not §3.9.1's" },
+        { "wn-desc", "wdesc", "true", "false", "a Window named property's descriptor is not §3.9.1's, unenumerable" },
+        { "wn-global", "wglobal", "true", "false", "a bare global name did not reach the Window's named access" },
     };
     Probe rows[sizeof R / sizeof R[0]];
     for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {

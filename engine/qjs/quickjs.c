@@ -32035,8 +32035,11 @@ static inline JSObject *tramp_proto_keyed_read(JSContext *ctx, JSValueConst obj,
     JSObject *p = tramp_walk_base(ctx, obj, atom);
     if (!p) return NULL;
     for (;;) {
-        if (p->class_id == JS_CLASS_PROXY || tramp_step_exotic(ctx, p, atom)) return p;
+        /* an own slot answers before the class's hook, the order JS_GetOwnPropertyInternal2 keeps: a legacy
+           platform object's unforgeable member is an own slot its named getter must not shadow */
+        if (p->class_id == JS_CLASS_PROXY) return p;
         if (find_own_property1(p, atom)) return NULL;
+        if (tramp_step_exotic(ctx, p, atom)) return p;
         if (!tramp_walk_continues(ctx, p, atom)) return NULL;
         p = js_walk_proto(ctx, p);
         if (!p) return NULL;
@@ -42329,8 +42332,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             accessor = gp_op == GP_GET
                                        ? tramp_accessor_getter(ctx, JS_MKPTR(JS_TAG_OBJECT, po), gp_atom)
                                        : tramp_accessor_setter(ctx, JS_MKPTR(JS_TAG_OBJECT, po), gp_atom);
-                    } else if (gp_op == GP_HAS && tramp_step_exotic(ctx, po, gp_atom)) {
-                        step_gop = true;   /* §10.1.7.1 OrdinaryHasProperty step 1's [[GetOwnProperty]] forks */
+                    } else if ((gp_op == GP_HAS || gp_op == GP_GETOWNPROP) && !find_own_property1(po, gp_atom) &&
+                               tramp_step_exotic(ctx, po, gp_atom)) {
+                        /* §10.1.7.1 OrdinaryHasProperty step 1's [[GetOwnProperty]], or the internal method
+                           itself, answered by the class's step */
+                        step_gop = true;
                     }
                 } else if (gp_op == GP_GET || gp_op == GP_SET) {
                     /* a PRIMITIVE base. 10.1.8.1 walks the primitive's INTRINSIC prototype, and a page can put an
@@ -42879,11 +42885,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         gp->nargs = 3;
                     }
                     if (step_gop) {
-                        /* f(obj, key, receiver, op): op 0 is [[Get]], 1 is [[HasProperty]] */
+                        /* f(obj, key, receiver, op): op 0 is [[Get]], 1 [[HasProperty]], 2 [[GetOwnProperty]] */
                         JS_FreeValue(ctx, gp->cb[2]);
                         gp->cb[2] = js_dup(gp->cb[0]);
-                        if (gp_op == GP_HAS) gp->cb[4] = JS_UNDEFINED;
-                        gp->cb[5] = js_int32(gp_op == GP_GET ? 0 : 1);
+                        if (gp_op != GP_GET) gp->cb[4] = JS_UNDEFINED;
+                        gp->cb[5] = js_int32(gp_op == GP_GET ? 0 : gp_op == GP_HAS ? 1 : 2);
                         gp->nargs = 4;
                     }
                 }
@@ -46990,11 +46996,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            answer, and a miss walks on to the object's prototype with the operation's own operands
                            and receiver (§10.1.8.1 OrdinaryGet step 2, §10.1.7.1 OrdinaryHasProperty step 4). */
                         JSTrapGet *tg = gouter;
-                        bool ghit = tg->op == GP_GET ? !JS_IsUndefined(ret_val) : JS_ToBool(ctx, ret_val);
+                        bool ghit = tg->op == GP_HAS ? JS_ToBool(ctx, ret_val) : !JS_IsUndefined(ret_val);
                         JSObject *gproto = js_walk_proto(ctx, JS_VALUE_GET_OBJ(tg->obj));
 
-                        DCHECK(tg->op == GP_GET || tg->op == GP_HAS, "a step [[GetOwnProperty]] answered an "
-                               "operation other than [[Get]] or [[HasProperty]]");
+                        DCHECK(tg->op == GP_GET || tg->op == GP_HAS || tg->op == GP_GETOWNPROP,
+                               "a step [[GetOwnProperty]] answered an operation other than [[Get]], "
+                               "[[HasProperty]] or [[GetOwnProperty]]");
                         js_getprop_free(ctx, gp);
                         tg->gop_step = 0;
                         gp_obj = tg->obj; gp_atom = tg->atom; gp_op = tg->op; gp_val = tg->val;
@@ -47002,6 +47009,27 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         gp_getter = tg->getter; gp_setter = tg->setter; gp_dflags = tg->dflags;
                         gp_outer = tg->outer; gp_outer_kind = tg->outer_kind;
                         gp_trapst = tg;
+                        if (tg->op == GP_GETOWNPROP) {
+                            /* the internal method does not walk: a hit is the class's data descriptor over the
+                               value, moved into the requester's record or built into an object, as the C arm's */
+                            if (ghit) {
+                                JSPropertyDescriptor gd;
+                                gd.flags = rt->class_array[JS_VALUE_GET_OBJ(tg->obj)->class_id].exotic
+                                               ->get_own_property_step_flags;
+                                DCHECK(!(gd.flags & ~JS_PROP_C_W_E),
+                                       "a step [[GetOwnProperty]] class declared descriptor flags beyond C/W/E");
+                                gd.value = ret_val; gd.getter = JS_UNDEFINED; gd.setter = JS_UNDEFINED;
+                                if (gp_desc_out) {
+                                    gp_desc_out->flags = gd.flags; gp_desc_out->value = gd.value;
+                                    gp_desc_out->getter = JS_UNDEFINED; gp_desc_out->setter = JS_UNDEFINED;
+                                    ret_val = JS_UNDEFINED;
+                                } else {
+                                    ret_val = js_desc_to_object(ctx, &gd);
+                                    if (unlikely(JS_IsException(ret_val))) goto getprop_throw;
+                                }
+                            }
+                            goto do_getprop_complete;
+                        }
                         if (ghit || !gproto) {
                             if (tg->op == GP_HAS) { JS_FreeValue(ctx, ret_val); ret_val = js_bool(ghit); }
                             goto do_getprop_complete;

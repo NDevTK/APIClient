@@ -198,6 +198,34 @@ static bool coll_ns_matches(const CollQuery *q, const lxb_dom_node_t *c)
     return url && len == q->nslen && memcmp(url, q->ns, len) == 0;
 }
 
+/* HTML §7.2.2.3 "Named access on the Window object"' named elements, two rules: any element whose ID is the name,
+   and `embed`/`form`/`img`/`object` whose `name` attribute is (a `<div name=x>` is not one, a `<div id=x>` is).
+   The first rule is over DOM §4.9's ID ("elements whose ID is name"), never the `id` content attribute, so it is
+   element_id_bytes: `setAttributeNS(ns, "id", "x")` gives no ID and `id=""` none either.
+   Named residual. Not covered: the `name` half diverges three ways — it also takes `iframe` (an approximation of
+   the document-tree child navigable target name set, a rule over a navigable's target name), it does not test
+   the "non-empty name content attribute" clause, and it reads the qualified name where the key is (null
+   namespace, `name`). Next diff builds the name half as its own predicate over (null namespace, `name`), with
+   the navigable set split out of the element list. Absence shows as `window[n]` answering an element for a
+   document whose only `n`-named thing is an `iframe` with no content navigable, or a namespaced or empty
+   `name` attribute. */
+bool collections_window_named_is(lxb_dom_element_t *el, const char *name, size_t nlen)
+{
+    size_t vl = 0, qn = 0;
+    const lxb_char_t *v = element_id_bytes(el, &vl);
+    const lxb_char_t *q;
+    if (v && vl == nlen && memcmp(v, name, nlen) == 0) return true;
+    q = lxb_dom_element_qualified_name(el, &qn);
+    if (!q) return false;
+    if (!((qn == 5 && memcmp(q, "embed", 5) == 0) || (qn == 4 && memcmp(q, "form", 4) == 0) ||
+          (qn == 3 && memcmp(q, "img", 3) == 0)   || (qn == 6 && memcmp(q, "object", 6) == 0) ||
+          (qn == 6 && memcmp(q, "iframe", 6) == 0)))
+        return false;
+    vl = 0;
+    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"name", 4, &vl);
+    return v && vl == nlen && memcmp(v, name, nlen) == 0;
+}
+
 static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
 {
     const char *name = qy ? qy->name : NULL;
@@ -233,44 +261,7 @@ static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
     }
     if (kind == COLL_BY_CLASS)
         return coll_has_all_classes(lxb_dom_interface_element((lxb_dom_node_t *)c), name, nlen);
-    if (kind == COLL_NAMED) {
-        /* HTML §7.2.2.3 "Named access on the Window object"' NAMED ELEMENTS, which is two rules and not one:
-           any HTML element whose `id` is the
-           name, and `embed`/`form`/`img`/`object` whose `name` attribute is. The tag restriction is on the
-           `name` half only — a `<div name=x>` is not a named element, a `<div id=x>` is.
-           AND THE FIRST RULE IS OVER DOM §4.9'S ID, WHICH §7.2.2.3 KEYS ON BY NAME AND NOT ON THE `id`
-           CONTENT ATTRIBUTE: its named objects are "elements whose ID is name and that are in a document tree
-           with window's associated Document as their root", and its supported property names are "the ID of
-           all elements that have an ID and are in a document tree with window's associated Document as their
-           root". The phrase "id content attribute" does not occur in HTML at all. So this half is
-           element_id_bytes and not a qualified-name read: a `setAttributeNS(ns, "id", "x")` gives the element
-           no ID, so `window.x` must not reach it, and §4.9's unset step keeps `id=""` out of the set for the
-           same reason §7.2.2.3's own name half excludes a non-empty-name requirement's complement.
-           NAMED RESIDUAL — THE `name` HALF IS UNTOUCHED AND DIVERGES THREE WAYS. WHAT IS NOT COVERED:
-           §7.2.2.3's list is `embed`, `form`, `img`, `object` and this one also takes `iframe` (an
-           approximation of the document-tree child navigable target name set, which is a different rule over a
-           navigable's TARGET NAME); its supported-property-names clause says "non-empty name content
-           attribute" and no emptiness is tested here; and "a name attribute" is §4.9's three-part definition,
-           so the `name` read below is a qualified-name read where the key is (null namespace, `name`). WHAT
-           THE NEXT DIFF BUILDS: §7.2.2.3's name half as its own predicate over (null namespace, `name`) with
-           the navigable set split out of the element list. HOW ITS ABSENCE WOULD SHOW, as an observation:
-           `window[n]` answering an element for a document whose only `n`-named thing is an `iframe` with no
-           content navigable, or whose `name` attribute is namespaced or empty. */
-        lxb_dom_element_t *el = (lxb_dom_element_t *)c;
-        size_t vl = 0, qn = 0;
-        const lxb_char_t *v = element_id_bytes(el, &vl);
-        const lxb_char_t *q;
-        if (v && vl == nlen && memcmp(v, name, nlen) == 0) return true;
-        q = lxb_dom_element_qualified_name(el, &qn);
-        if (!q) return false;
-        if (!((qn == 5 && memcmp(q, "embed", 5) == 0) || (qn == 4 && memcmp(q, "form", 4) == 0) ||
-              (qn == 3 && memcmp(q, "img", 3) == 0)   || (qn == 6 && memcmp(q, "object", 6) == 0) ||
-              (qn == 6 && memcmp(q, "iframe", 6) == 0)))
-            return false;
-        vl = 0;
-        v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"name", 4, &vl);
-        return v && vl == nlen && memcmp(v, name, nlen) == 0;
-    }
+    if (kind == COLL_NAMED) return collections_window_named_is((lxb_dom_element_t *)c, name, nlen);
     if (kind == COLL_BY_ELEM_NAME) {
         /* HTML §3.1.7 "DOM tree accessors"' getElementsByName, verbatim: "return a live NodeList containing
            all the HTML elements in that document that have a name attribute whose value is identical to the

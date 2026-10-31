@@ -64,6 +64,9 @@ JSValue collections_by_tag_ns(JSContext *ctx, JSValueConst owner, const char *ns
    string, arriving through a shell glob instead — and it is why `clang -fsyntax-only` is owed to a
    citation diff exactly as it is to a logic one. It was caught by that check on the first run. */
 JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name);
+/* Whether `el` is one of HTML §7.2.2.3's named elements with the name `name` (`nlen` bytes): the filter of the
+   collection above, which the Window's resting named walk (core/dom/named_walk.h) asks per element. */
+bool collections_window_named_is(lxb_dom_element_t *el, const char *name, size_t nlen);
 /* HTML §3.1.7 "DOM tree accessors"' value of a named property shared by several elements: "an HTMLCollection
    rooted at the Document node, whose filter matches only named elements with the name name". */
 JSValue collections_document_named(JSContext *ctx, JSValueConst owner, const char *name);
