@@ -166,7 +166,8 @@ function docEndpoints(rows) {
    fire-verified one, and `senderDemand` (the senders a parked search waits on, in the principalPins row
    grammar) only on a parked one. `acts` (the user acts a fire was verified under, after the delivery) only on
    a fire-verified entry, and `firedUnderNoAct` (fires verified under a drive no user act performs) only on a
-   parked one. These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
+   parked one. `originCandidates` lists each message origin source with the origins its candidate runs deliver.
+   These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
 const SINK_DELIVERIES = Object.freeze(["address", "referring-address", "user-file", "cross-document-message",
                                        "user-input", "navigable-name"]);
 const SINK_PRECONDITIONS = Object.freeze(["same-origin", "application-state"]);
@@ -258,6 +259,11 @@ function docSink(e, f) {
              : f + ".firedUnderNoAct is not a positive integer");
   if (why === null && "poc" in e && !("delivery" in e) && !("precondition" in e))
     why = f + " is a fire-verified entry with neither a delivery nor a precondition";
+  if (why === null && "originCandidates" in e)
+    why = Array.isArray(e.originCandidates) && e.originCandidates.length > 0 &&
+          e.originCandidates.every((c) => docIsRecord(c) && docIsName(c.source) && Array.isArray(c.origins) &&
+            c.origins.length > 0 && c.origins.every((o) => typeof o === "string" && /^https?:\/\/[^/]+$/.test(o)))
+      ? null : f + ".originCandidates is not [{source, origins: [origin, ...]}, ...]";
   if (why === null && "senderDemand" in e)
     why = ("poc" in e ? f + " states a senderDemand on a fire-verified entry, which only a parked search carries" : null) ||
           (Array.isArray(e.senderDemand) && e.senderDemand.length > 0 ? null : f + ".senderDemand is not a non-empty array") ||

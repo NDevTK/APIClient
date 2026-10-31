@@ -2285,6 +2285,53 @@ static const char *cand_delivers(const Cand *e, char *buf, size_t n) {
    is the constraint its PoC was built under, so it carries the count too. Absent for a search with no delivery
    probe (cand_has_delivery_probe). A measured set implies a probe that arrived, because observe_delivery counts
    the arrival before it looks for a token. */
+/* `originCandidates`: each origin source of a search's message template (Cand.dl_tmpl) with the origins its
+   candidate runs deliver, in variant order, as `[{"source":..,"origins":[..]}]`. The template writes one source's
+   keys `#0`..`#n-1` in a row (act_list_message_deliveries), asserted here. Nothing for a template whose messages
+   carry no composed origin. */
+static void emit_origin_candidates(JsonBuf *b, const char *tmpl) {
+    const char *p, *s, *x, *open = NULL;
+    size_t sn, xn, open_n = 0;
+    int next = 0;
+
+    for (p = tmpl; *p;) {
+        const char *hash;
+        size_t base;
+        int k;
+
+        dl_field(&p, &s, &sn);
+        dl_field(&p, &x, &xn);
+        hash = memchr(s, '#', sn);
+        if (!hash) continue;
+        base = (size_t)(hash - s);
+        k = dl_key_variant(s, sn, hash);
+        if (k == 0) {
+            char *src = strndup(s, base);
+
+            CHECK(src, "solve: OOM naming an origin source's candidates");
+            json_buf_raw(b, open ? "]}," : ",");
+            if (!open) { json_buf_key(b, "originCandidates"); json_buf_raw(b, "["); }
+            json_buf_raw(b, "{"); json_buf_key(b, "source"); json_buf_str(b, src);
+            json_buf_raw(b, ","); json_buf_key(b, "origins"); json_buf_raw(b, "[");
+            free(src);
+            open = s; open_n = base;
+        } else {
+            DCHECK(open && open_n == base && !memcmp(open, s, base) && k == next,
+                   "a message template's origin keys for one source are not written as #0..#n-1 in a row");
+            json_buf_raw(b, ",");
+        }
+        {
+            char *val = strndup(x, xn);
+
+            CHECK(val, "solve: OOM copying an origin candidate");
+            json_buf_raw(b, val);
+            free(val);
+        }
+        next = k + 1;
+    }
+    if (open) json_buf_raw(b, "]}]");
+}
+
 static void emit_delivery_probed(JsonBuf *b, const Cand *e) {
     char t[32];
     int has = cand_has_delivery_probe(e);
@@ -2410,6 +2457,7 @@ static void emit_delivery(JsonBuf *b, JSContext *ctx, const Cand *e, const char 
                "pins the capture took, so one without the other names a sender for no path or no sender for one");
         if (e->pp.n) { json_buf_raw(b, ","); json_buf_key(b, "principalPins"); emit_sender_pins(b, &e->pp); }
     }
+    if (e && e->dl_tmpl) emit_origin_candidates(b, e->dl_tmpl);
 }
 
 /* Every detected sink is reported: the fire-verified PoCs, and every search that has not solved, as a parked
