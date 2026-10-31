@@ -506,7 +506,7 @@ static bool cs_delete_cookie(JSContext *ctx, const UrlRecord *url, const char *n
 /* §3.1 get and §3.2 getAll, whose only differences are step 5's empty-options rejection and what they settle
  * with. Both reach §7.1 "Query cookies", whose step 1 is RFC 6265bis-22 §5.8.3 with the cookie-string discarded — which
  * is why the jar hands back the intermediate cookie-list and this body never sees a cookie-string at all. */
-static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static JSValue cs_query_steps(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValueConst arg = argc > 0 ? argv[0] : JS_UNDEFINED;
     bool by_string;
@@ -675,7 +675,7 @@ static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSVa
  * has a tuple at arity 1 only and `set(USVString name, USVString value)` at arity 2 only — so there is no step
  * 12 here and no value is ever consulted to choose. `argc` is min(maxarg, args), so a three-argument call is the
  * two-string entry with its third argument ignored, exactly as §3.6 step 3 says. */
-static JSValue js_cs_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static JSValue cs_set_steps(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue m[8];
     UrlRecord uri;
@@ -813,7 +813,7 @@ static JSValue js_cs_set(JSContext *ctx, JSValueConst this_val, int argc, JSValu
  *
  * STEPS 1 TO 4 ARE §3.1's AND §3.2's, ASKED THE SAME WAY. The opaque test is of the AGENT's principal, which is
  * what an instance is keyed by, and the creation URL is this realm's document address. */
-static JSValue js_cs_delete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static JSValue cs_delete_steps(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValueConst arg = argc > 0 ? argv[0] : JS_UNDEFINED;
     bool by_string;
@@ -1028,6 +1028,41 @@ static void cs_install_realm(JSContext *ctx)
 
     idl_install_accessor_exposed(ctx, global, "cookieStore", cs_get_cookie_store, 0, -1, IDL_SECURE_CONTEXT);
     JS_FreeValue(ctx, global);
+}
+
+
+/* Each member's method steps settle the promise §3.1-§3.4 return ("Let p be a new promise", resolved in
+   parallel). The work completes within the call (see the file header), so the member answers that promise
+   already resolved with the steps' value; its reactions still run as jobs. An abrupt completion is the
+   declaration's rejection (idl_returns_promise). `v` is consumed. */
+static JSValue cs_settled(JSContext *ctx, JSValue v)
+{
+    JSValue funcs[2], p;
+
+    if (JS_IsException(v)) return v;
+    p = JS_NewPromiseCapability(ctx, funcs);
+    CHECK(!JS_IsException(p), "Cookie Store API: a member's promise could not be allocated");
+    if (JS_CallAsFlow(ctx, funcs[0], v) < 0)
+        JS_FreeValue(ctx, JS_GetException(ctx));
+    JS_FreeValue(ctx, funcs[0]);
+    JS_FreeValue(ctx, funcs[1]);
+    JS_FreeValue(ctx, v);
+    return p;
+}
+
+static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    return cs_settled(ctx, cs_query_steps(ctx, this_val, argc, argv, magic));
+}
+
+static JSValue js_cs_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    return cs_settled(ctx, cs_set_steps(ctx, this_val, argc, argv, magic));
+}
+
+static JSValue js_cs_delete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    return cs_settled(ctx, cs_delete_steps(ctx, this_val, argc, argv, magic));
 }
 
 void cookie_store_init(JSContext *ctx)
