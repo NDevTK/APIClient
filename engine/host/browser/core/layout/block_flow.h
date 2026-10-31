@@ -521,6 +521,9 @@ bool block_flow_table_box_top_ask(lxb_dom_element_t *table, CssPx *out);
    The wrapper has the initial border and padding, so this is also its border-box height. `table` must
    generate a table wrapper box (asserted). */
 CssPx block_flow_table_wrapper_height(lxb_dom_element_t *table);
+/* The same height without a drive of its own: false ("not yet") when the wrapper's walk deferred a question,
+   with `*out` unwritten. */
+bool block_flow_table_wrapper_height_ask(lxb_dom_element_t *table, CssPx *out);
 
 /* The same enumeration without a drive of its own: false ("not yet") when the walk deferred a contribution,
    with nothing stored; true with the boxes at `*out` (the caller's to free) and their number at `*count`. */

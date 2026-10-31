@@ -4761,6 +4761,16 @@ static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
 
     for (x = el; x != NULL; x = uv_cb(x).element)
         if (!used_value_width_ask(x)) return false;
+    /* A grid area's height is its rows' (used_value_containing_block_height): a grid item's auto height
+       stretches over it and a percentage resolves against it, so it is asked before either is read — except
+       while those rows are being sized, where it is no basis and that entry answers without it. */
+    if (vertical && uv_cb(el).box == UV_CB_GRID_AREA && !layout_job_grid_rows_sizing(uv_cb(el).element)) {
+        CssPx w;
+
+        if (!grid_item_area_extents_ask(uv_cb(el).element, el, &w, &h)) return false;
+    }
+    /* A block's auto height is its content's, and a grid item's automatic minimum reads the same content
+       height (css-grid-1 §6.6's content size suggestion), so both ask it. */
     if (vertical && uv_box_kind(el) != UV_BOX_INLINE && used_value_height_behaves_as_auto(el))
         return block_flow_auto_height_ask(el, &h);
     return true;
@@ -4771,6 +4781,14 @@ bool used_value_padding_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *ou
     DCHECK(el != NULL && out != NULL, "a padding edge's extent was asked for with no element or no answer");
     if (!uv_operands_ask(el, vertical)) return false;
     *out = used_value_padding_edge_px(el, vertical);
+    return true;
+}
+
+bool used_value_border_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *out)
+{
+    DCHECK(el != NULL && out != NULL, "a border edge's extent was asked for with no element or no answer");
+    if (!uv_operands_ask(el, vertical)) return false;
+    *out = used_value_border_edge_px(el, vertical);
     return true;
 }
 

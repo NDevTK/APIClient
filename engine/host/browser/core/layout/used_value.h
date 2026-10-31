@@ -138,6 +138,10 @@ bool used_value_padding_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *ou
    border area's position is core/layout/flow_position.h's. */
 CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical);
 
+/* The entry above asked under a step machine's resting drive, as `used_value_padding_edge_ask` asks its own:
+   false ("not yet") with `*out` unwritten when an operand was deferred. */
+bool used_value_border_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *out);
+
 /* CSS 2.1 §8.1 "Box dimensions"' one edge between a box's border box and its padding box on the axis's
    leading side, as a used value: `border-left-width` for `vertical` false, `border-top-width` for true. It is
    an entry because the computed value is not always the used one: CSS 2.1 §17.6.1 The separated borders model

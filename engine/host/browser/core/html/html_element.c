@@ -1165,6 +1165,8 @@ void html_element_init(JSContext *ctx)
     dom_string_map_init(ctx);
     g_dataset_key = JS_NewAtom(ctx, "__datasetSlot");
     CHECK(g_dataset_key != JS_ATOM_NULL, "the dataset slot key could not be interned");
+    /* CSSOM VIEW §7's `partial interface HTMLElement`, whose getters are installed per realm below. */
+    html_element_view_init(ctx);
     g_html_ready = 1;
     /* HTML §8.1.8.1's determine the target of an event handler, whose step 1 asks which element type this is —
        this file's table is what knows. Claimed per AGENT beside the element resolver below, and given back at
@@ -1654,6 +1656,7 @@ void html_element_free(JSRuntime *rt)
     form_submission_attributes_free();   /* §4.10.19.6's two, likewise */
     autofill_free();   /* §4.10.19.7's one, likewise */
     global_attributes_free();
+    html_element_view_free();   /* §7's getter ids, likewise */
     declarative_shadow_free();
     html_form_free(rt);
     html_dialog_free(rt);

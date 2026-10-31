@@ -3419,19 +3419,28 @@ CssPx block_flow_table_box_top(lxb_dom_element_t *table)
     return top;
 }
 
-CssPx block_flow_table_wrapper_height(lxb_dom_element_t *table)
+bool block_flow_table_wrapper_height_ask(lxb_dom_element_t *table, CssPx *out)
 {
     bool wrapper = table_wrapper_generates(css_computed_display(table));
     char nbuf[160];
-    LayoutJobDrive d;
     BfBox w;
 
     DCHECKF(wrapper, "%s: a table wrapper box's height was asked of an element that generates none",
             box_subject(table, nbuf, sizeof nbuf));
+    if (!bf_walk(table, BF_BASELINE_NONE, &w)) return false;
+    *out = w.content_h;
+    return true;
+}
+
+CssPx block_flow_table_wrapper_height(lxb_dom_element_t *table)
+{
+    LayoutJobDrive d;
+    CssPx h;
+
     layout_job_drive_begin(&d);
-    while (!bf_walk(table, BF_BASELINE_NONE, &w)) (void)block_flow_drive_deferred(&d);
+    while (!block_flow_table_wrapper_height_ask(table, &h)) (void)block_flow_drive_deferred(&d);
     layout_job_drive_end(&d);
-    return w.content_h;
+    return h;
 }
 
 size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)

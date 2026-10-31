@@ -15800,6 +15800,9 @@ TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
         { "w3", "300", "CSSOM VIEW §6's scrollTo step 8: the root did not scroll the viewport to 300" },
         { "f1", "0", "HTML §6.6.6 focus() step 4: focus({preventScroll: true}) scrolled the viewport" },
         { "f2", "moved", "HTML §6.6.6 focus() step 4: focus() did not scroll a below-the-fold element into view" },
+        { "ot", "2300", "CSSOM VIEW §7: the offsetTop of a block after 2300px of blocks is not 2300" },
+        { "oh", "0", "CSSOM VIEW §7: an empty block's offsetHeight is not 0" },
+        { "lt", "648", "CSSOM VIEW §7: the last of #sa2's 300 2px blocks is not at offsetTop 648" },
     };
     const char *rests = strstr(js, "\"_layoutScrollAreaRests\":");
     long nrests = rests ? strtol(rests + strlen("\"_layoutScrollAreaRests\":"), NULL, 10) : -1;

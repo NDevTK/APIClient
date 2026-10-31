@@ -108,9 +108,10 @@
    because its answers are: a child navigable's initial containing block is 300 CSS pixels wide and the
    top-level traversable's is 1280, every used value below
    bottoms out in one of them, and a C member runs in the realm that DEFINED it.
-   THERE IS NO `_init` BESIDE IT, and that is a statement rather than an omission: §7 declares six readonly
-   attributes and no operation and no setter, so there is nothing to declare once per agent — the accessor
-   install carries the whole member. */
+   The five getters are step machines declared once per agent by `html_element_view_init`, before this runs,
+   and released by `html_element_view_free` with the agent's member pool. */
+void html_element_view_init(JSContext *ctx);
 void html_element_view_install(JSContext *ctx, JSValueConst proto);
+void html_element_view_free(void);
 
 #endif

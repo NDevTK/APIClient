@@ -23,7 +23,9 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/containment.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/used_value.h"
+#include "solver/rest_unit.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* THE MEMBERS. §7 declares six and this file answers five; `scrollParent` is absent for the reason the header
@@ -78,7 +80,7 @@ static void hev_target_of_element(lxb_dom_element_t *el, HevTarget *t)
    because `Object.getOwnPropertyDescriptor(HTMLElement.prototype,'offsetWidth').get.call(svgEl)` is a
    TypeError in every user agent while `svgEl.offsetWidth` is `undefined`, and a page that feature-detects by
    applying the getter tells the throw apart from both. Every clause of that is still true and the INTERFACE is
-   what the five installs now state: core/idl_args.h's idl_install_accessor_this, naming
+   what the five declarations now state: core/idl_args.h's idl_this_iface, naming
    core/html/html_element.h's own `html_element_is`, so Web IDL §3.7 Interfaces' implementation-check step 3 is
    performed at one place for all five. §6's members on Element.prototype brand with `element_is` in
    core/dom/element_view.c, which is the same split written as two declarations rather than as two bodies.
@@ -500,58 +502,198 @@ static JSValue hev_offset_extent(JSContext *ctx, const HevTarget *t, bool vertic
 
 /* ---- the members and the per-realm install --------------------------------------------------------------- */
 
-/* `hev_member_name` STOOD HERE AND HAD EXACTLY ONE CALLER: the brand check's TypeError, which named the
-   member it refused. §3.7.6's refusal is performed from the declaration now and names the member out of the
-   identifier the install passed, so nothing here has a member name to produce. It is DELETED rather than left
-   standing, because a function with no caller is a claim nobody checks; the unknown-magic crash it also
-   carried is not lost, being the same DFAIL js_hev_get's own switch ends with. */
-
-static JSValue js_hev_get(JSContext *ctx, JSValueConst this_val, int magic)
+/* The layout `member` reads, asked under the caller's resting drive on its entered job: true once
+   `hev_member` below computes nothing that drive would defer, false ("not yet") with the question suspended.
+   The asks are the ones each member's steps reach, in their order: `offsetParent` reads computed values only;
+   `offsetTop`/`offsetLeft` the element's border-box origin and its offset parent's; `offsetWidth`/`offsetHeight`
+   the line fragments of an inline box, a table wrapper's height, or the border edge. */
+static bool hev_member_ask(const HevTarget *t, HtmlElementViewMember member)
 {
-    HevTarget t;
+    lxb_dom_element_t *el = lxb_dom_interface_element(t->node), *op;
+    bool vertical = member == HEV_OFFSET_TOP || member == HEV_OFFSET_HEIGHT;
+    FlowPoint o;
+    FlowRect *frags = NULL;
+    size_t n;
+    CssPx px;
+    bool ok;
+
+    switch (member) {
+    case HEV_OFFSET_PARENT:
+        return true;
+    case HEV_OFFSET_TOP:
+    case HEV_OFFSET_LEFT:
+        if (t->is_body || !t->has_box) return true;
+        if (!flow_border_box_origin_ask(el, &o)) return false;
+        op = hev_offset_parent(t);
+        return op == NULL || flow_border_box_origin_ask(op, &o);
+    case HEV_OFFSET_WIDTH:
+    case HEV_OFFSET_HEIGHT:
+        if (!t->has_box) return true;
+        switch (element_view_fragment_kind(el)) {
+        case ELEMENT_VIEW_FRAGMENTS_LINE_BOXES:
+            ok = flow_inline_fragment_rects_ask(el, &frags, &n);
+            free(frags);
+            return ok;
+        case ELEMENT_VIEW_FRAGMENTS_TABLE:
+            return vertical ? block_flow_table_wrapper_height_ask(el, &px)
+                            : used_value_border_edge_ask(el, false, &px);
+        case ELEMENT_VIEW_FRAGMENTS_ONE:
+            return used_value_border_edge_ask(el, vertical, &px);
+        }
+        DFAIL("§7's offsetWidth/offsetHeight was asked over a fragment kind core/dom/element_view.h does not "
+              "declare");
+        return true;
+    }
+    DFAIL("a CSSOM VIEW §7 member was asked with a magic no member of this file declares");
+    return true;
+}
+
+/* The member's answer, on the job its asks answered on. */
+static JSValue hev_member(JSContext *ctx, const HevTarget *t, HtmlElementViewMember member)
+{
     lxb_dom_element_t *op;
 
-    hev_target(this_val, &t);
-    /* THE CHAIN CHECK RUNS FOR EVERY MEMBER, INCLUDING THE TWO THAT DO NOT WALK — BUT NOT WITH THE SAME
-       QUESTION, WHICH IS THE WHOLE OF WHAT THE ARGUMENT BELOW DECIDES. `offsetWidth` reads no ancestor, and
-       CSS Viewport §4 still makes its UNSCALED value a function of every flat-tree ancestor's `zoom`, so the
-       chain IS an operand of it and the shadow half is what makes this chain the right one to have asked.
-       What is NOT an operand of it is css-position-3 §2.1's positioning containing block: §7 names it in
-       `offsetParent`'s steps and in neither of the extents', so those two ask HEV_CHAIN_EXTENT and the chain
-       decides for itself whether §2.1 is consulted anywhere on it. */
-    hev_require_readable_chain(t.rctx, t.node,
-                               (magic == HEV_OFFSET_WIDTH || magic == HEV_OFFSET_HEIGHT)
-                                   ? HEV_CHAIN_EXTENT : HEV_CHAIN_POSITIONING);
-    switch ((HtmlElementViewMember)magic) {
+    switch (member) {
     case HEV_OFFSET_PARENT:
-        op = hev_offset_parent(&t);
+        op = hev_offset_parent(t);
         /* `readonly attribute Element? offsetParent` — the wrapper is minted in the ELEMENT's relevant realm,
            which for an element is the realm of its node document, so `iframe.contentDocument.body.offsetParent`
            read through the PARENT's HTMLElement.prototype is an instance of the CHILD's Element. */
-        return op ? node_wrap(t.rctx, lxb_dom_interface_node(op)) : JS_NULL;
-    case HEV_OFFSET_TOP:    return hev_offset_position(ctx, &t, true);
-    case HEV_OFFSET_LEFT:   return hev_offset_position(ctx, &t, false);
-    case HEV_OFFSET_WIDTH:  return hev_offset_extent(ctx, &t, false);
-    case HEV_OFFSET_HEIGHT: return hev_offset_extent(ctx, &t, true);
+        return op ? node_wrap(t->rctx, lxb_dom_interface_node(op)) : JS_NULL;
+    case HEV_OFFSET_TOP:    return hev_offset_position(ctx, t, true);
+    case HEV_OFFSET_LEFT:   return hev_offset_position(ctx, t, false);
+    case HEV_OFFSET_WIDTH:  return hev_offset_extent(ctx, t, false);
+    case HEV_OFFSET_HEIGHT: return hev_offset_extent(ctx, t, true);
     }
     DFAIL("a CSSOM VIEW §7 member was read with a magic no member of this file declares");
     return JS_UNDEFINED;
 }
 
+/* §7's five members as one step machine owning a layout job, as core/dom/element_view.c's EV_CLIENT_STEP: the
+   box tests' author matches (the element's and its ancestors', which the offsetParent walk and the chain check
+   read too) are asked under a resting drive, then the member's layout (`hev_member_ask`), each activation one
+   rest unit; the member is answered on the same job once both are. A selector the cascade cannot decide forks
+   the flow (layout_job_fork). */
+#define HEV_STAGES(X) \
+    X(HEV_MEASURE, "CSSOM VIEW §7 \"Extensions to the HTMLElement Interface\" offsetParent / offsetTop / " \
+                   "offsetLeft / offsetWidth / offsetHeight (the box tests and the member's layout under a " \
+                   "resting drive, then the member on the same job)")
+enum { IDL_STEP_STAGE_BASE(HEV_STAGES) HEV_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const HEV_STEPS[] = { HEV_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL before the first activation */
+} HevState;
+
+static void hev_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    HevState *s = st;
+
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
+}
+
+static int js_hev_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    HevState *s = st;
+    HtmlElementViewMember member = (HtmlElementViewMember)idl_step_magic(hdr);
+    lxb_dom_element_t *el = element_of_value(hdr->this_val);
+    bool matched, done = false;
+    LayoutJobDrive d;
+    HevTarget t;
+    int rc;
+
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(HEV_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(HEV_MEASURE);
+    DCHECK(el != NULL, "a CSSOM VIEW §7 member reached its body on a receiver that is not an element — each of "
+                       "the five states html_element_is at its declaration");
+    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    matched = element_view_box_tests_ask(lxb_dom_interface_node(el));
+    DCHECK(matched || layout_job_drive_spent(&d),
+           "a CSSOM VIEW §7 member's box tests parked an author match with the drive's allowance unspent, so its "
+           "next activation would ask the same thing over the same state for ever");
+    if (matched) {
+        hev_target(hdr->this_val, &t);
+        /* THE CHAIN CHECK RUNS FOR EVERY MEMBER, BUT NOT WITH THE SAME QUESTION. `offsetWidth` reads no
+           ancestor, yet CSS Viewport §4 makes its unscaled value a function of every flat-tree ancestor's
+           `zoom`, so the chain is an operand of it and the shadow half is what makes this chain the right one.
+           css-position-3 §2.1's positioning containing block is named in `offsetParent`'s steps and in neither
+           extent's, so those two ask HEV_CHAIN_EXTENT. */
+        hev_require_readable_chain(t.rctx, t.node,
+                                   (member == HEV_OFFSET_WIDTH || member == HEV_OFFSET_HEIGHT)
+                                       ? HEV_CHAIN_EXTENT : HEV_CHAIN_POSITIONING);
+        while (block_flow_drive_deferred(&d)) {
+            if (hev_member_ask(&t, member)) {
+                done = true;
+                break;
+            }
+            DCHECK(layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+                   "a CSSOM VIEW §7 member's layout answered \"not yet\" with no question suspended and no "
+                   "allowance spent, so its next activation would ask the same thing over the same state for ever");
+        }
+        if (done) *presult = hev_member(ctx, &t, member);
+    }
+    layout_job_drive_end(&d);
+    layout_job_leave(s->job);
+    rest_unit_end();
+    if (layout_job_declined(s->job)) {
+        if (done) JS_FreeValue(ctx, *presult);
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
+    if (!done) {
+        layout_job_rested(s->job);
+        return JS_STEP_YIELD;
+    }
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl HEV_STEP = {
+    js_hev_step, sizeof(HevState), hev_visit, NULL,
+    "CSSOM VIEW §7 \"Extensions to the HTMLElement Interface\" offsetParent / offsetTop / offsetLeft / "
+    "offsetWidth / offsetHeight",
+    HEV_STEPS
+};
+
+static int g_id_hev[HEV_OFFSET_HEIGHT + 1] = { -1, -1, -1, -1, -1 };
+
+void html_element_view_init(JSContext *ctx)
+{
+    int m;
+
+    DCHECK(g_id_hev[HEV_OFFSET_PARENT] < 0,
+           "html_element_view_init ran twice — §7's getters are declared once per agent");
+    /* WEB IDL §3.7.6 "Attributes"' RECEIVER TEST, stated with each declaration and performed before the step
+       runs. §7's members are a `partial interface HTMLElement`, so the predicate is core/html/html_element.h's
+       own `html_element_is` — an element in the HTML namespace, which is what makes `svgEl.offsetWidth`
+       `undefined` and `HTMLElement.prototype`'s getter applied to it a TypeError. */
+    for (m = HEV_OFFSET_PARENT; m <= HEV_OFFSET_HEIGHT; m++) {
+        g_id_hev[m] = idl_getter_id_step(ctx, &HEV_STEP, m);
+        idl_this_iface(html_element_is, "HTMLElement");
+    }
+}
+
 void html_element_view_install(JSContext *ctx, JSValueConst proto)
 {
-    /* WEB IDL §3.7.6 "Attributes"' RECEIVER TEST, STATED HERE AND PERFORMED BEFORE js_hev_get RUNS. §7's
-       members are a `partial interface HTMLElement`, so the interface is HTMLElement and the predicate is
-       core/html/html_element.h's own `html_element_is` — an ELEMENT node in the HTML namespace, which is what
-       makes `svgEl.offsetWidth` `undefined` and `HTMLElement.prototype`'s getter applied to it a TypeError. */
-    idl_install_accessor_this(ctx, proto, "offsetParent", js_hev_get, HEV_OFFSET_PARENT, -1,
-                              html_element_is, "HTMLElement");
-    idl_install_accessor_this(ctx, proto, "offsetTop",    js_hev_get, HEV_OFFSET_TOP,    -1,
-                              html_element_is, "HTMLElement");
-    idl_install_accessor_this(ctx, proto, "offsetLeft",   js_hev_get, HEV_OFFSET_LEFT,   -1,
-                              html_element_is, "HTMLElement");
-    idl_install_accessor_this(ctx, proto, "offsetWidth",  js_hev_get, HEV_OFFSET_WIDTH,  -1,
-                              html_element_is, "HTMLElement");
-    idl_install_accessor_this(ctx, proto, "offsetHeight", js_hev_get, HEV_OFFSET_HEIGHT, -1,
-                              html_element_is, "HTMLElement");
+    DCHECK(g_id_hev[HEV_OFFSET_PARENT] >= 0,
+           "§7's members were installed in a realm before html_element_view_init declared them");
+    idl_install_accessor_step(ctx, proto, "offsetParent", g_id_hev[HEV_OFFSET_PARENT], -1);
+    idl_install_accessor_step(ctx, proto, "offsetTop",    g_id_hev[HEV_OFFSET_TOP],    -1);
+    idl_install_accessor_step(ctx, proto, "offsetLeft",   g_id_hev[HEV_OFFSET_LEFT],   -1);
+    idl_install_accessor_step(ctx, proto, "offsetWidth",  g_id_hev[HEV_OFFSET_WIDTH],  -1);
+    idl_install_accessor_step(ctx, proto, "offsetHeight", g_id_hev[HEV_OFFSET_HEIGHT], -1);
+}
+
+void html_element_view_free(void)
+{
+    /* The member ids are the agent's, and the pool they live in goes with the runtime. */
+    for (int m = HEV_OFFSET_PARENT; m <= HEV_OFFSET_HEIGHT; m++) g_id_hev[m] = -1;
 }
