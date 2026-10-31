@@ -1280,6 +1280,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/msgorigin.h"
 #include "fixture/libstate.h"
 #include "fixture/mixedroot.h"
+#include "fixture/msghost.h"
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
 #include "fixture/flagflow.h"
@@ -1849,6 +1850,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "msgorigin", HTML_MSGORIGIN },
     { "libstate", HTML_LIBSTATE },
     { "mixedroot", HTML_MIXEDROOT },
+    { "msghost", HTML_MSGHOST },
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
     { "flagflow", HTML_FLAGFLOW },
@@ -21956,6 +21958,51 @@ TF_UNIT void probes_mixedroot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* Whether the @S record of `sink` searched at a source ending in `member` (a `.member` path off message data)
+   states exactly `origins` as its candidate list, read within that record's own object. */
+static int s_member_candidates(const char *js, const char *sink, const char *member, const char *origins)
+{
+    char head[64], tail[96];
+    const char *at;
+
+    snprintf(head, sizeof head, "{\"sink\":\"%s\"", sink);
+    snprintf(tail, sizeof tail, "}.%s\"", member);
+    for (at = strstr(js, head); at; at = strstr(at + 1, head)) {
+        const char *next = strstr(at + 1, "{\"sink\":"), *end = next ? next : at + strlen(at);
+        size_t len = (size_t)(end - at);
+
+        if (memmem(at, len, tail, strlen(tail)) && memmem(at, len, origins, strlen(origins))) return 1;
+    }
+    return 0;
+}
+
+/* The rows of the `msghost` document (fixture/msghost.h): a constant that is no host spells no label of a
+   composed origin, so each listener's search delivers the attacker's site alone. */
+TF_UNIT void probes_msghost(const char *js, Probe *tab, int *n) {
+    static const char *const MEMBER[] = { "atMarkup", "hashMarkup", "portMarkup", "dotsMarkup" };
+    static const char *const ROW[] = { "mh-at-refused", "mh-hash-refused", "mh-port-refused", "mh-dots-refused" };
+    static const char *const FN[] = { "function mhAt", "function mhHash", "function mhPort", "function mhDots" };
+    char only[160], sink_src[64];
+    int tt[4];
+    const char *why[4];
+    Probe rows[4];
+
+    snprintf(only, sizeof only, "\"origins\":[\"https://%s\"]", concolic_attacker_site());
+    for (int i = 0; i < 4; i++) {
+        tt[i] = 1; why[i] = NULL;
+        snprintf(sink_src, sizeof sink_src, "}.%s\"", MEMBER[i]);
+        fold_row(&tt[i], &why[i], !!strstr(js, sink_src),
+                 "NOT REACHED: no @S record searches this listener's markup member, so its write was never "
+                 "detected");
+        fold_row(&tt[i], &why[i], s_member_candidates(js, "innerHTML", MEMBER[i], only),
+                 "the listener's search does not deliver the attacker's site alone: a label was composed from a "
+                 "constant that is no host (it carries `@`, `#`, `:` or an empty label), a host the page's own "
+                 "check never named");
+        rows[i] = (Probe){ ROW[i], tt[i], FN[i], SESS_EXPLORE, why[i] };
+    }
+    probes_append(tab, n, rows, 4);
+}
+
 /* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring or a bare suffix check
    admits is composed and fires; a dotted suffix, an exact match on another site's origin, or a chain whose
    messages need two different origins never does. */
@@ -22240,6 +22287,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_msgorigin(js, probes, &np);
     probes_libstate(js, probes, &np);
     probes_mixedroot(js, probes, &np);
+    probes_msghost(js, probes, &np);
     probes_msgchaincoop(js, probes, &np);
     probes_clickhash(js, probes, &np);
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
