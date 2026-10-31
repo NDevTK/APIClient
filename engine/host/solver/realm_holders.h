@@ -11,10 +11,11 @@
  * sharing it, so the collection after the last such member is sold is the one that can free it.
  *
  * Per live realm (core/frame/navigable.h), counts the frontier members whose delta (head and frozen chain,
- * cow_delta_objects) owns a reference to its global, its WindowProxy (unless destroyed) or its Document object;
- * for the realms no delta names, counts the references to those handles from outside the GC graph (JS_GCNamedBy),
- * which root a realm against every collection. Other objects of a realm, suspended frames, jobs, foreign world
- * segments and the pre-fork baseline are not read, so `unheld` is an upper bound on what the next collection
+ * cow_delta_objects) owns a reference to its global, its WindowProxy (unless destroyed), its Document object or an
+ * object whose prototype chain reaches its Object.prototype; for the realms no delta names, counts the references
+ * to those handles from outside the GC graph (JS_GCNamedBy), which root a realm against every collection. A
+ * null-prototype object of a realm, suspended frames, jobs, foreign world segments and the pre-fork baseline are
+ * not read, so `unheld` is an upper bound on what the next collection
  * frees. Gauges at one instant, each shared segment walked once. A refused allocation at the RAM floor answers
  * false. */
 typedef struct {

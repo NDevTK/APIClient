@@ -80,9 +80,25 @@ static bool holder_enter(const void *seg, void *arg) {
     return true;
 }
 
+/* The realm an object names: one of its handles, or the first realm whose Object.prototype is on the object's
+   prototype chain, read through the stored links (JS_GetPrototypeSlot), which run no page code. -1 for none. */
+static int realm_of_object(const HolderWalk *w, JSValueConst v) {
+    JSContext *ctx = navigable_realm_at(0);
+    JSValue p = JS_DupValue(ctx, v);
+    int r = -1;
+
+    while (JS_IsObject(p) && (r = realm_of_global(w, JS_VALUE_GET_PTR(p))) < 0) {
+        JSValue next = JS_GetPrototypeSlot(ctx, p);
+        JS_FreeValue(ctx, p);
+        p = next;
+    }
+    JS_FreeValue(ctx, p);
+    return r;
+}
+
 static void holder_visit(const void *seg, JSValueConst v, void *arg) {
     HolderWalk *w = arg;
-    int r = realm_of_global(w, JS_VALUE_GET_PTR(v));
+    int r = realm_of_object(w, v);
     if (r < 0) return;
     DCHECK(seg == NULL || seg == w->cur_seg,
            "the delta walk visited a frozen segment's value without entering that segment first, so its realm "
@@ -113,7 +129,7 @@ bool realm_holders_census(RealmHolders *out) {
         return true;
     }
     w.words = (w.n + 63) / 64;
-    w.globals = malloc((size_t)w.n * 3 * sizeof *w.globals);
+    w.globals = malloc((size_t)w.n * 4 * sizeof *w.globals);
     holders = calloc((size_t)w.n, sizeof *holders);
     cow_chain_stats(&segs, &entries);
     for (w.memo_cap = 16; w.memo_cap < (size_t)segs * 2 + 1; w.memo_cap *= 2) {}
@@ -125,8 +141,9 @@ bool realm_holders_census(RealmHolders *out) {
         JSContext *realm = navigable_realm_at(i);
         JSValue g = JS_GetGlobalObject(realm);
         JSValueConst proxy = document_window_proxy(realm);
-        JSValueConst handles[3] = { g, proxy, document_object(realm) };
-        for (int h = 0; h < 3; h++) {
+        JSValue objproto = JS_GetClassProto(realm, JS_CLASS_OBJECT);
+        JSValueConst handles[4] = { g, proxy, document_object(realm), objproto };
+        for (int h = 0; h < 4; h++) {
             if (!JS_IsObject(handles[h])) continue;   /* a realm with no browsing context has no proxy */
             /* A destroyed navigable's proxy names its realm no longer (window_proxy_set_destroyed releases both
                the Window and the realm borrow), so holding it is not holding the realm. */
@@ -135,7 +152,8 @@ bool realm_holders_census(RealmHolders *out) {
             w.globals[w.n_globals].realm = i;
             w.n_globals++;
         }
-        JS_FreeValue(realm, g);   /* the realm holds its own global; the pointer is good while the realm is */
+        JS_FreeValue(realm, g);   /* the realm holds its own global and its protos; the pointers are good while */
+        JS_FreeValue(realm, objproto);   /* the realm is */
     }
     qsort(w.globals, (size_t)w.n_globals, sizeof *w.globals, global_cmp);
 
