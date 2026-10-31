@@ -249,6 +249,32 @@ static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const c
     return true;
 }
 
+/* css-flexbox-1 §4.5's transferred size suggestion of `el` on the main axis: "If the item has a preferred aspect
+   ratio and its preferred cross size is definite, then the transferred size suggestion is that size (clamped
+   by its minimum and maximum cross sizes if they are definite), converted through the aspect ratio". The
+   cross sizes asked are declared `<length>`s, definite by css-sizing-3 §2 ("a <length>"); a percentage or a
+   stretched size, §9.8's cases, is refused in `fl_fill`. False where the suggestion does not exist. It is
+   also §9.2's arm B, "calculated from its used cross size and the flex item's aspect ratio". */
+static bool fl_transferred_main(lxb_dom_element_t *el, bool vertical, CssPx *out)
+{
+    IntrinsicAxis ax = vertical ? INTRINSIC_AXIS_HORIZONTAL : INTRINSIC_AXIS_VERTICAL;
+    ReplacedElement rep;
+    CssPx cross, v;
+
+    if (el == NULL) return false;
+    rep = replaced_element_of(el);
+    if (!rep.replaced || !rep.has_ratio) return false;
+    if (!intrinsic_declared_sizing_px(el, ax, vertical ? "width" : "height", CSS_KEYWORD_AUTO, &cross))
+        return false;
+    if (intrinsic_declared_sizing_px(el, ax, vertical ? "max-width" : "max-height", CSS_KEYWORD_NONE, &v))
+        cross = css_px_min(cross, v);
+    if (intrinsic_declared_sizing_px(el, ax, vertical ? "min-width" : "min-height", CSS_KEYWORD_AUTO, &v))
+        cross = css_px_max(cross, v);
+    /* The ratio is width / height (core/layout/replaced_element.h). */
+    *out = vertical ? css_px_scale(cross, 1.0 / rep.ratio) : css_px_scale(cross, rep.ratio);
+    return true;
+}
+
 /* css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items"' used value of a main-axis automatic minimum size,
    which css-sizing-3 §3.2 hands to this module ("Unless otherwise defined by the relevant layout module,
    however, it resolves to a used value of 0"). §4.5: "the used value of a main axis automatic minimum size on a
@@ -256,10 +282,10 @@ static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const c
    scroll containers the automatic minimum size is zero, as usual." The gate is css-overflow-3 §3.1's
    membership ("The visible and clip values are known as the non-scrollable values") over the main axis's own
    longhand (`overflow-y` for a `column` container).
-   The non-replaced arm is the one reached (the replaced one is refused in `fl_fill`): "Use the larger of the
-   content size suggestion and the transferred size suggestion (if one exists), capped by the specified size
-   suggestion (if one exists)", "clamped by the maximum main size if it's definite"; with no aspect ratio the
-   transferred suggestion does not exist.
+   For a replaced item: "Use the smaller of the content size suggestion and the transferred size suggestion
+   (if one exists), capped by the specified size suggestion (if one exists)"; for any other, "the larger",
+   which with no aspect ratio is the content size suggestion alone. Either is "clamped by the maximum main
+   size if it's definite".
    §9.9.3 "Flex Item Intrinsic Size Contributions" must not read this: WPT's flex-container-min-content-001.html
    (rows with `flex: 0 1 0.2ch` over 1ch content, and rows 14 and 15) expects §9.9.3's clamp without a §4.5
    floor, which core/layout/flex_intrinsic_size.c records at its step four. */
@@ -274,6 +300,7 @@ static CssPx fl_automatic_minimum_main(lxb_dom_element_t *el, CssPx inner_main, 
     if (!css_computed_keyword_is(el, prop.overflow, CSS_KEYWORD_VISIBLE) &&
         !css_computed_keyword_is(el, prop.overflow, CSS_KEYWORD_CLIP))
         return css_px(0.0);
+    if (fl_transferred_main(el, vertical, &v)) out = css_px_min(out, v);
     /* "capped by the specified size suggestion (if one exists)", whose own definition is "If the item's
        preferred main size is definite and not automatic, then the specified size suggestion is that size." */
     if (fl_declared_main_px(el, inner_main, prop.size, CSS_KEYWORD_AUTO, vertical, &v)) out = css_px_min(out, v);
@@ -285,6 +312,8 @@ static CssPx fl_automatic_minimum_main(lxb_dom_element_t *el, CssPx inner_main, 
 /* The two arms of §9.2 "Line Length Determination"' step 3 this component reaches:
      - arm A, "If the item has a definite used flex basis, that's the flex base size" (shared with
        core/layout/flex_intrinsic_size.c);
+     - arm B, for a used flex basis of content with a preferred aspect ratio and a definite cross size
+       (`fl_transferred_main`);
      - arm E, "Otherwise, size the item into the available space using its used flex basis in place of its main
        size, treating a value of content as max-content", for a container with a determined main size.
    flex_intrinsic_size.c takes arm C instead ("the flex container is being sized under a min-content or
@@ -303,10 +332,13 @@ static CssPx fl_flex_base_size(lxb_dom_element_t *el, CssPx inner_main, FlMainSi
     if (el == NULL) return measured.max_content;
     basis = css_computed_length(el, "flex-basis");
     if (basis.kind == CSS_LENGTH_KEYWORD) {
-        if (basis.keyword == CSS_KEYWORD_CONTENT) return measured.max_content;
         /* §7.1's `auto` reads "the main size property", the one the axis names (`fl_main_props`). */
-        if (basis.keyword == CSS_KEYWORD_AUTO) {
-            if (fl_declared_main_px(el, inner_main, prop.size, CSS_KEYWORD_AUTO, vertical, &v)) return v;
+        if (basis.keyword == CSS_KEYWORD_AUTO &&
+            fl_declared_main_px(el, inner_main, prop.size, CSS_KEYWORD_AUTO, vertical, &v))
+            return v;
+        /* A used flex basis of content. */
+        if (basis.keyword == CSS_KEYWORD_CONTENT || basis.keyword == CSS_KEYWORD_AUTO) {
+            if (fl_transferred_main(el, vertical, &v)) return v;
             return measured.max_content;
         }
     }
@@ -340,48 +372,15 @@ static void fl_fill(FlItem *it, CssPx inner_main, FlMainSizes measured, bool ver
     if (it->el != NULL) {
         ReplacedElement rep = replaced_element_of(it->el);
 
-        /* css-flexbox-1 §9.2's arm B ("If the flex item has … a preferred aspect ratio, a used flex basis of
-           content, and a definite cross size, then the flex base size is calculated from its used cross size
-           and the flex item's aspect ratio") and §4.5's transferred size suggestion ("If the item has a
-           preferred aspect ratio and its preferred cross size is definite, then the transferred size
-           suggestion is that size … converted through the aspect ratio") both need a ratio and a definite
-           cross size, and are refused together.
-           With an `auto` cross size neither applies, and §4.5's replaced arm ("Use the smaller of the content
-           size suggestion and the transferred size suggestion (if one exists)") equals the non-replaced arm,
-           so such an item is not refused. The ratio exists (core/layout/replaced_element.h); what is missing is
-           css-flexbox-1 §9.8 "Definite and Indefinite Sizes"' cross-axis definiteness test (not
-           `flex_cross_size_used_item_cross`, which answers indefinite sizes too). */
-        /* The declaration tested is on the cross axis: `width` for a `column` container, `height` for a `row`
-           one. */
+        /* §9.2's arm B and §4.5's transferred size suggestion are built for a cross size that is a declared
+           `<length>` (`fl_transferred_main`). Any other declared cross size needs css-flexbox-1 §9.8
+           "Definite and Indefinite Sizes"' cross-axis definiteness test. */
         if (rep.replaced && rep.has_ratio &&
-            !css_computed_length_is(it->el, vertical ? "width" : "height", CSS_KEYWORD_AUTO))
-            DFAILF("%s: this REPLACED flex item has a preferred aspect ratio and a declared cross size, so "
-                   "css-flexbox-1 §9.2 \"Line Length Determination\"' arm B is its flex base size and §4.5 "
-                   "\"Automatic Minimum Size of Flex Items\"' TRANSFERRED SIZE SUGGESTION is part of its "
-                   "automatic minimum — and neither is built. Both are stated over the same two facts: \"If "
-                   "the flex item has … a preferred aspect ratio, a used flex basis of content, and a definite "
-                   "cross size, then the flex base size is calculated from its used cross size and the flex "
-                   "item's aspect ratio\", and \"If the item has a preferred aspect ratio and its preferred "
-                   "cross size is definite, then the transferred size suggestion is that size (clamped by its "
-                   "minimum and maximum cross sizes if they are definite), converted through the aspect "
-                   "ratio\". THE RATIO IS NOT WHAT IS MISSING — core/layout/replaced_element.h answers "
-                   "css-images-3 §4.1 \"Object-Sizing Terminology\"'s natural aspect ratio for this element "
-                   "already. WHAT IS MISSING IS NOT THE USED CROSS SIZE EITHER, WHICH IS THE THIRD REMEDY "
-                   "THIS ARM HAS HAD AND THE SECOND TO BE RETIRED — each was correct when written and each is "
-                   "left here because a reader re-derives them in the same order. The first said to build "
-                   "§9.4 whole; its steps 7 and 8 are built (core/layout/flex_cross_size.h) and "
-                   "core/layout/block_flow.c CALLS them. The second said to build §9.4's STEP 11, and that is "
-                   "built too (`flex_cross_size_used_item_cross`). WHAT BOTH SENTENCES ASKED FOR IS A USED "
-                   "SIZE AND WHAT THESE TWO RULES ASK FOR IS A DEFINITE ONE, which is a different question "
-                   "that css-flexbox-1 §9.8 \"Definite and Indefinite Sizes\" owns: step 11 answers for an "
-                   "INDEFINITE cross size as readily as for a definite one — its second arm is the item's "
-                   "hypothetical cross size — so calling it here would turn this arm's own `definite cross "
-                   "size` condition into a test that is always true and would run §9.2's arm B on every "
-                   "replaced item with a "
-                   "ratio. BUILD §9.8's DEFINITENESS TEST FOR THE CROSS AXIS, whose own sentences are the "
-                   "algorithm (\"If a single-line flex container has a definite cross size, the automatic "
-                   "preferred outer cross size of any stretched flex items is the flex container's inner "
-                   "cross size … and is considered definite\"), and then both rules become a call",
+            !css_computed_length_is(it->el, vertical ? "width" : "height", CSS_KEYWORD_AUTO) &&
+            css_computed_length(it->el, vertical ? "width" : "height").kind != CSS_LENGTH_ABSOLUTE)
+            DFAILF("%s: this replaced flex item has a preferred aspect ratio and a declared cross size that is "
+                   "not a `<length>`, whose definiteness css-flexbox-1 §9.2's arm B and §4.5's transferred size "
+                   "suggestion both ask. BUILD css-flexbox-1 §9.8's definiteness test for the cross axis",
                    box_subject(it->el, nbuf, sizeof nbuf));
         it->grow = flex_item_flexibility_factor(it->el, "flex-grow");
         it->shrink = flex_item_flexibility_factor(it->el, "flex-shrink");

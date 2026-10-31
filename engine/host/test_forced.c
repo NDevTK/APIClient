@@ -1186,6 +1186,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/svgattr.h"
 #include "fixture/gridalign.h"
 #include "fixture/svgreplaced.h"
+#include "fixture/flexreplaced.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1734,6 +1735,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "svgattr", HTML_SVGATTR },
     { "gridalign", HTML_GRIDALIGN },
     { "svgreplaced", HTML_SVGREPLACED },
+    { "flexreplaced", HTML_FLEXREPLACED },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15637,6 +15639,29 @@ TF_UNIT void probes_svgreplaced(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexreplaced` document (fixture/flexreplaced.h): each svg's border box, WxH; Chrome
+   155.0.8059.84 and Firefox 158.0.1 give every value they expect. */
+TF_UNIT void probes_flexreplaced(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "f1", "15x15", "css-flexbox-1 §9.2 arm A: the sized icon is not its declared 1em x 1em" },
+        { "f2", "40x20", "css-flexbox-1 §9.2 arm B: the base size is not the cross size through the ratio" },
+        { "f3", "30x20", "css-flexbox-1 §4.5: the item does not shrink to its 30px row" },
+        { "f4", "40x20", "css-flexbox-1 §9.2 arm B: a column's base size is not the width through the ratio" },
+        { "f5", "30x20", "css-flexbox-1 §4.5: the specified size suggestion does not cap the minimum" },
+    };
+    const char *fr_why = NULL; int fr_tt = !!strstr(js, "\"/api/flexreplaced\"");
+    unsigned i;
+
+    fold_row(&fr_tt, &fr_why, fr_tt,
+             "NOT REACHED: there is no /api/flexreplaced record at all, so the document aborted before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&fr_tt, &fr_why, param_value_is(js, "/api/flexreplaced", ROWS[i].key, ROWS[i].want), ROWS[i].why);
+    const Probe rows[] = {
+        { "flex-replaced-item", fr_tt, "/api/flexreplaced", SESS_EXPLORE, fr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21759,6 +21784,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_svgattr(js, probes, &np);
     probes_gridalign(js, probes, &np);
     probes_svgreplaced(js, probes, &np);
+    probes_flexreplaced(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
