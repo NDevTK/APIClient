@@ -1241,6 +1241,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbscopeown.h"
 #include "fixture/fparecjson.h"
 #include "fixture/idbkeypath.h"
+#include "fixture/idbkplang.h"
 #include "fixture/idbkpwalk.h"
 #include "fixture/idbkphash.h"
 #include "fixture/idbkpcycle.h"
@@ -1793,6 +1794,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbscopeown", HTML_IDBSCOPEOWN },
     { "fparecjson", HTML_FPARECJSON },
     { "idbkeypath", HTML_IDBKEYPATH },
+    { "idbkplang", HTML_IDBKPLANG },
     { "idbkpwalk", HTML_IDBKPWALK },
     { "idbkphash", HTML_IDBKPHASH },
     { "idbkpcycle", HTML_IDBKPCYCLE },
@@ -17100,6 +17102,29 @@ TF_UNIT void probes_fparecjson(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `idbkplang` document (fixture/idbkplang.h): each world of §2.5's fork keeps the equality its
+   answer admits and prunes the holding arm of the one it excludes. */
+TF_UNIT void probes_idbkplang(const char *js, Probe *tab, int *n) {
+    const char *v_why = NULL; int v_tt = 1;
+    fold_row(&v_tt, &v_why, param_value_is(js, "/api/idbkl-eq", "got", "ok-ab"),
+             "no /api/idbkl-eq?got=ok-ab record: the valid world never held the key path equal to \"a.b\"");
+    fold_row(&v_tt, &v_why, !param_value_is(js, "/api/idbkl-eq", "got", "ok-dots"),
+             "a /api/idbkl-eq?got=ok-dots record: the valid world held the key path equal to \"a..b\", which "
+             "§2.5 refuses");
+    const char *i_why = NULL; int i_tt = 1;
+    fold_row(&i_tt, &i_why, param_value_is(js, "/api/idbkl-eq", "got", "SyntaxError-dots"),
+             "no /api/idbkl-eq?got=SyntaxError-dots record: the SyntaxError world never held the key path equal "
+             "to \"a..b\"");
+    fold_row(&i_tt, &i_why, !param_value_is(js, "/api/idbkl-eq", "got", "SyntaxError-ab"),
+             "a /api/idbkl-eq?got=SyntaxError-ab record: the SyntaxError world held the key path equal to "
+             "\"a.b\", which §2.5 admits");
+    const Probe rows[] = {
+        { "idbkl-valid", v_tt, "/api/idbkl-eq", SESS_EXPLORE, v_why },
+        { "idbkl-invalid", i_tt, "/api/idbkl-eq", SESS_EXPLORE, i_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `idbkeypath` document (fixture/idbkeypath.h): key paths read from a JSON reply run §2.5's
    valid world and its SyntaxError world at createObjectStore and createIndex, and §4.4 step 8's
    InvalidAccessError world beside the created store under autoIncrement. */
@@ -21807,6 +21832,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbscopeown(js, probes, &np);
     probes_fparecjson(js, probes, &np);
     probes_idbkeypath(js, probes, &np);
+    probes_idbkplang(js, probes, &np);
     probes_idbkpwalk(js, probes, &np);
     probes_idbkphash(js, probes, &np);
     probes_idbkpcycle(js, probes, &np);
