@@ -20574,12 +20574,13 @@ TF_UNIT void probes_platform(const char *js, Probe *tab, int *n) {
        message carries the record text before the first one, so the statement is named. */
     {
         static char wrongat[320];
-        const char *w = strstr(js, "wrong"), *from = w;
+        const char *w = strstr(js, "wrong"), *api = w, *at = w;
 
-        while (from && from > js && w - from < 240 && memcmp(from, "/api/", 5) != 0) from--;
+        while (api && api > js && memcmp(api, "\"/api/", 6) != 0) api--;
+        while (at && at > js && w - at < 40) at--;
         if (w)
-            snprintf(wrongat, sizeof wrongat, "some statement of the platform document recorded its `wrong` "
-                     "token, or a §4.13.3 refusal its `-wrongreason`: …%.*s", (int)(w - from + 12), from);
+            snprintf(wrongat, sizeof wrongat, "a statement recorded `wrong` (or `-wrongreason`) under %.40s: "
+                     "…%.60s", api, at);
         fold_row(&platalgo_tt, &platalgo_why, w == NULL, wrongat);
     }
     /* §4.13: the async reaction's loop ran to its END across the preempts, not to some suspended partial. */
