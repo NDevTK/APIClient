@@ -1,5 +1,6 @@
 /* THE PIECE-SLICE DOCUMENT: a string concatenated from an unknown the page's own state supplies (the cookie
-   string) and an attacker source (the fragment), then sliced back apart. A slice inside the fragment's piece
+   string) and an attacker source (the fragment, decoded, since the fragment percent-encodes markup's bytes),
+   then sliced back apart. A slice inside the fragment's piece
    is the fragment's own derivation, so its sink write is an attacker PoC delivered through `#`; a slice across
    both pieces depends on both and stays labelled with the cookie's precondition. The fragment is set first so
    the source's example places its piece.
@@ -18,7 +19,7 @@ static const char HTML_PIECESLICE[] =
     "<div id='psView'></div><div id='psCross'></div>"
     "<script>"
     "history.replaceState(null, '', '#seed');"
-    "var psMix = document.cookie + '|' + location.hash.slice(1);"
+    "var psMix = document.cookie + '|' + decodeURIComponent(location.hash.slice(1));"
     "document.getElementById('psView').innerHTML = psMix.slice(psMix.indexOf('|') + 1);"
     "document.getElementById('psCross').innerHTML = psMix.slice(0);"
     "</script>"
