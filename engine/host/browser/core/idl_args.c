@@ -2423,6 +2423,11 @@ static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w
             r = step_fork_run(ctx, hdr, v, op, n, real, &arm);
             if (r) return r;
             *phase = arms[arm];
+            /* The arm is a fact about the value's type: a sequence is an Object, null is null or undefined,
+               and beside a null arm the string arm is neither. */
+            if (*phase == IDL_UNI_UNKNOWN_SEQUENCE) concolic_type_facet_file(v, objs);
+            else if (*phase == IDL_UNI_NULL) concolic_type_facet_file(v, nullish);
+            else if (nullish) concolic_type_facet_file(v, CONCOLIC_TYF_ALL & ~nullish);
         }
         if (*phase == IDL_UNI_UNKNOWN_SEQUENCE) {
             DCHECK(w->seq_phase == 0, "the union's sequence arm was chosen while a sequence was already in flight "

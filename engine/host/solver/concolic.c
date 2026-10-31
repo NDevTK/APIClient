@@ -3950,6 +3950,15 @@ static unsigned tyf_callable_member(JSContext *ctx, const char *name)
     return t;
 }
 
+void concolic_type_facet_file(JSValueConst v, unsigned admitted)
+{
+    const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL && admitted != 0 && !(admitted & ~CONCOLIC_TYF_ALL),
+           "a type facet was filed on a value that is not unknown input, or with an empty or foreign type set");
+    if (c->src_own == 1 && c->src) type_facet_narrow(c->src, admitted);
+}
+
 void concolic_ordering_facet(JSValueConst cond, int holds)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;

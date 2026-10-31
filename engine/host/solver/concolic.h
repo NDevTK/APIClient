@@ -1187,6 +1187,9 @@ void        concolic_lang_file(JSValueConst v, ConcolicLangFn in, int member);
    arm admits a Symbol and a holding one no Undefined (§7.2.12 IsLessThan ( x, y, leftFirst )). A call through a
    member read narrows the parent at the call itself (concolic.c's tyf_callable_member). */
 void        concolic_ordering_facet(JSValueConst cond, int holds);
+/* A component's own fork over an unknown's type (Web IDL §3.2.25's arms) narrows its type facet on the arm the
+   flow took to `admitted` (CONCOLIC_TYF_* bits), where the value owns its src. */
+void        concolic_type_facet_file(JSValueConst v, unsigned admitted);
 int         concolic_cmp_is_typeof(JSValueConst cond);
 unsigned    concolic_types(const char *src);
 /* A DECLARED ROOT'S MEMBER STRUCTURE, as the member reads this session minted: every read under `root` with its
