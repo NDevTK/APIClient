@@ -144,10 +144,15 @@ static bool sa_is_non_replaced_inline(lxb_dom_element_t *el)
     return css_computed_display_is(el, CSS_KEYWORD_INLINE) && !replaced_element_of(el).replaced;
 }
 
-/* ONE DESCENDANT'S CONTRIBUTION — the margin edge §2's table names on the ENDING side of this axis. A margin
-   edge is CSS 2 §8.1's outermost edge, so it is the placed BORDER box's origin moved outward by the margin on
-   that side. Where the ENDING edge is at the higher coordinate that is the far border edge plus the
-   trailing margin, and where it is at the lower one it is the origin less the leading margin.
+/* ONE DESCENDANT'S CONTRIBUTION on the ENDING side of this axis. css-overflow-3 §3.3 "Calculating the
+   Scrollable Overflow Area" folds in "the border boxes of all boxes for which it is the containing block" and
+   "the margin areas of grid item and flex item boxes", and lets a UA "additionally include the margin areas of
+   other boxes", which Chrome and Firefox do. So the contribution is the union of the placed border box and its
+   margin area: the far border edge moved outward by the margin on that side when the margin is positive, and
+   the border edge itself when it is negative (CSS 2.1 §10.3.3's over-constrained right margin).
+   Spec-versus-spec note: CSSOM VIEW §2's scrolling area table states "the … margin edge of all of the element's
+   descendants' boxes", which would put an over-constrained block's edge inside its border box; css-overflow-3
+   owns scrollable overflow, which §2 restates, and this walk follows it throughout, its exclusions included.
    IT IS ONE ORIGIN AND ONE EXTENT, SO IT IS ASKED ONLY OF A BOX THAT HAS BOTH — see `sa_is_non_replaced_inline`
    above and `sa_inline_box_edge` below for the box that has neither. */
 static CssPx sa_edge_from_origin(lxb_dom_element_t *d, FlowPoint o, bool vertical, bool ending_at_hi)
@@ -155,22 +160,30 @@ static CssPx sa_edge_from_origin(lxb_dom_element_t *d, FlowPoint o, bool vertica
     CssPx origin = vertical ? o.y : o.x;
 
     if (!ending_at_hi)
-        return css_px_sub(origin, used_value_px(d, vertical ? "margin-top" : "margin-left"));
+        return css_px_sub(origin,
+                          css_px_max(used_value_px(d, vertical ? "margin-top" : "margin-left"), css_px(0.0)));
     return css_px_add(css_px_add(origin, used_value_border_edge_px(d, vertical)),
-                      used_value_px(d, vertical ? "margin-bottom" : "margin-right"));
+                      css_px_max(used_value_px(d, vertical ? "margin-bottom" : "margin-right"), css_px(0.0)));
 }
 
 /* The same edge with its origin asked without a drive: false ("not yet") leaves `*out` unwritten and the
    deferred question suspended on the current job (core/layout/flow_position.h). The width's intrinsic
    operands are asked first: an absolutely positioned box's origin solves for an offset over its width, and
    the far edge reads the width itself. */
-static bool sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi, CssPx *out)
+static bool sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending_at_hi, CssPx *out,
+                               bool *contributes)
 {
     FlowPoint o;
+    CssPx w, h;
 
     if (!used_value_width_ask(d)) return false;
     if (!flow_border_box_origin_ask(d, &o)) return false;
-    *out = sa_edge_from_origin(d, o, vertical, ending_at_hi);
+    /* §3.3: "Border boxes with zero area do not affect the scrollable overflow area." Both extents are asked so
+       the other axis's operands are answered under the resting drive before the border edges are read.
+       Cross-engine note: Chrome and Firefox both count a zero-height block 500px wide. */
+    if (!used_value_padding_edge_ask(d, false, &w) || !used_value_padding_edge_ask(d, true, &h)) return false;
+    *contributes = used_value_border_edge_px(d, false).px > 0.0 && used_value_border_edge_px(d, true).px > 0.0;
+    if (*contributes) *out = sa_edge_from_origin(d, o, vertical, ending_at_hi);
     return true;
 }
 
@@ -438,11 +451,13 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                    inline box and everything else, asked here because §9.4.2 gives the first a SET of
                    border areas and no `width` or `height` to size one with. */
                 CssPx e;
-                bool ready = sa_is_non_replaced_inline(d) ? sa_inline_box_edge(d, w->vertical, w->ending_at_hi, &e)
-                                                          : sa_descendant_edge(d, w->vertical, w->ending_at_hi, &e);
+                bool contributes = true;
+                bool ready = sa_is_non_replaced_inline(d)
+                                 ? sa_inline_box_edge(d, w->vertical, w->ending_at_hi, &e)
+                                 : sa_descendant_edge(d, w->vertical, w->ending_at_hi, &e, &contributes);
 
                 if (!ready) return false;
-                w->best = w->ending_at_hi ? css_px_max(w->best, e) : css_px_min(w->best, e);
+                if (contributes) w->best = w->ending_at_hi ? css_px_max(w->best, e) : css_px_min(w->best, e);
                 w->stage = SA_STAGE_CONTEXT;
                 return true;
             }
@@ -772,6 +787,12 @@ bool scrolling_area_walk_step(ScrollingAreaWalk *w)
     return sa_walk_fold(w);
 }
 
+/* Named residual: css-overflow-3 §3.3's "Additional padding added to the scrollable overflow rectangle as
+   necessary to enable scroll positions that satisfy the requirements of both place-content: start and
+   place-content: end alignment" is not added, so in-flow content reaching the padding edge is not followed by
+   the box's own end padding. The next diff keeps the in-flow and floated boxes' extreme apart from the
+   out-of-flow ones' and adds the end padding to the first. Its absence shows as a padded scroll container's
+   scrollWidth or scrollHeight below a browser's by that padding when its content overflows. */
 CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
 {
     CssPx lo = w->lo, hi = w->hi;

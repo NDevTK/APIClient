@@ -15751,6 +15751,11 @@ TF_UNIT void probes_imgpending(const char *js, Probe *tab, int *n) {
 TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
     static const struct { const char *key, *want, *why; } ROWS[] = {
         { "sh", "210", "CSSOM VIEW §2: the deep subtree's scrolling area is not 200 paddings over a 10px leaf" },
+        { "sw", "500", "css-overflow-3 §3.3: the over-constrained leaf's border box does not reach 500" },
+        { "m3", "130", "css-overflow-3 §3.3: a block's trailing margin area is not in its container's area" },
+        { "m4", "250", "css-overflow-3 §3.3: an inline-block's right margin area is not in its container's area" },
+        { "m5", "250", "css-overflow-3 §3.3: a flex item's margin area is not in its container's area" },
+        { "m6", "200", "css-overflow-3 §3.3: a grid item's margin area does not end at its 200px track" },
         { "ch", "50", "CSSOM VIEW §6: the clipped box's clientHeight is not its 50px padding edge" },
         { "lh", "600", "CSSOM VIEW §2: the wide subtree's scrolling area is not 300 blocks of 2px" },
         { "lw", "100", "CSSOM VIEW §2: the wide subtree's scrolling area is wider than its box" },
