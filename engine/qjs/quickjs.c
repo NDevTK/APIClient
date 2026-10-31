@@ -117186,15 +117186,21 @@ int JS_FlowSiteHash(JSContext *ctx, JSValue *flow, uint64_t *out)
     return flow_chain_site_hash(ctx->rt, (JSAsyncFunctionState *)flow, out);
 }
 
-/* The last continuation parked is the one the step stopped in: the pump appends, and a step's preempt is its
-   last park. */
-int JS_ParkedFlowsSiteHash(JSContext *ctx, uint64_t *out)
+/* The continuation the pump resumes next, the head of the FIFO JS_ResumeParkedFlow takes from: the code the
+   flow's next quantum runs from. */
+int JS_ParkedFlowsSiteHash(JSRuntime *rt, uint64_t *out, JSContext **realm)
 {
-    DCHECK(out != NULL, "a parked flow's site was asked with nowhere to put it");
-    if (list_empty(&ctx->rt->parked_flows))
+    JSAsyncFunctionState *head;
+
+    DCHECK(out != NULL && realm != NULL, "a parked flow's site was asked with nowhere to put it");
+    *realm = NULL;
+    if (list_empty(&rt->parked_flows))
         return 0;
-    return flow_chain_site_hash(ctx->rt, list_entry(ctx->rt->parked_flows.prev, JSAsyncFunctionState, park_link),
-                                out);
+    head = list_entry(rt->parked_flows.next, JSAsyncFunctionState, park_link);
+    DCHECK(head->park_fn != NULL && head->park_ctx != NULL,
+           "the parked queue's head holds no parked continuation — flow_park writes the record with the link");
+    *realm = head->park_ctx;
+    return flow_chain_site_hash(rt, head, out);
 }
 
 /* ── AN INTRINSIC'S NAME ──────────────────────────────────────────────────────────────────────────────────────

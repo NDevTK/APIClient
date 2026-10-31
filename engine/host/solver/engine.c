@@ -12452,9 +12452,21 @@ static int engine_sched_slice(void) {
                the chain it suspended: the next quantum serves that code, not the last fork's. */
             if (r != FLOW_STEP_DONE && !unit_ended) {
                 uint64_t site;
-                if (flow_frame(cur) ? JS_FlowSiteHash(ctx, (JSValue *)flow_frame(cur), &site)
-                                    : JS_ParkedFlowsSiteHash(ctx, &site))
-                    flow_stand_at(cur, FLOW_SITE_CODE, site);
+                int named;
+                if (flow_frame(cur)) {
+                    named = JS_FlowSiteHash(ctx, (JSValue *)flow_frame(cur), &site);
+                } else {
+                    JSContext *park_realm;
+                    named = JS_ParkedFlowsSiteHash(JS_GetRuntime(ctx), &site, &park_realm);
+                    /* The runtime holds the switched-in agent's parks alone (JS_PutParkedFlows asserts it empty at
+                       the switch-in), so the head is this flow's, parked by its selected agent. */
+                    DCHECK(park_realm == NULL ||
+                               JS_GetRealmAgent(park_realm) == flow_agent_running(cur)->agent,
+                           "the parked continuation this flow is stood at was parked by another agent — the runtime "
+                           "holds only the switched-in agent's parks, so a stranger's is a switch that left its set "
+                           "behind, and the site would be another timeline's code");
+                }
+                if (named) flow_stand_at(cur, FLOW_SITE_CODE, site);
             }
 #if APICLIENT_DEV
             /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, the UCB bonus that
