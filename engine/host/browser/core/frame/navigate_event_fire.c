@@ -24,6 +24,8 @@
 #include "core/frame/navigation.h"
 #include "core/frame/navigation_abort.h"
 #include "core/frame/navigation_destination.h"
+#include "core/frame/window_proxy.h"
+#include "core/html/user_activation.h"
 #include "core/realm.h"
 #include "core/structured_clone.h"
 #include "core/url/url.h"
@@ -69,6 +71,7 @@ void navigate_event_fire_work_start(NavigateEventFireWork *w)
     w->navigation_type = NULL;
     w->same_document = false;
     w->url = w->classic = w->destination = w->event = w->nav_state = JS_UNDEFINED;
+    w->entry = JS_NULL;
     navigation_abort_work_start(&w->abort);
     STEP_CB_FOREACH(w->cb, k) w->cb[k] = JS_UNDEFINED;
 }
@@ -82,6 +85,7 @@ void navigate_event_fire_work_visit(JSContext *ctx, NavigateEventFireWork *w, JS
     v->val(ctx, &w->destination);
     v->val(ctx, &w->event);
     v->val(ctx, &w->nav_state);
+    v->val(ctx, &w->entry);
     navigation_abort_work_visit(ctx, &w->abort, v);
     STEP_CB_FOREACH(w->cb, k) v->val(ctx, &w->cb[k]);
 }
@@ -98,7 +102,9 @@ void navigate_event_fire_work_release(JSContext *ctx, NavigateEventFireWork *w)
     JS_FreeValue(ctx, w->destination);
     JS_FreeValue(ctx, w->event);
     JS_FreeValue(ctx, w->nav_state);
+    JS_FreeValue(ctx, w->entry);
     w->url = w->classic = w->destination = w->event = w->nav_state = JS_UNDEFINED;
+    w->entry = JS_NULL;
     navigation_abort_work_release(ctx, &w->abort);
     STEP_CB_FOREACH(w->cb, k) {
         JS_FreeValue(ctx, w->cb[k]);
@@ -161,6 +167,32 @@ void navigate_event_fire_push_replace_reload_begin(JSContext *ctx, NavigateEvent
            "entry's navigation API state as a serialized state and core/frame/session_history.c carries one as "
            "an ArrayBuffer, so a live value here is a caller that skipped StructuredSerializeForStorage");
     w->nav_state = JS_DupValue(ctx, navigation_api_state);
+}
+
+void navigate_event_fire_traverse_begin(JSContext *ctx, NavigateEventFireWork *w, const char *destination_url,
+                                        JSValueConst destination_entry, JSValueConst navigation_api_state,
+                                        bool is_same_document)
+{
+    DCHECK(w->stage == NEF_ABORT && JS_IsUndefined(w->url),
+           "§7.2.6.10.4's fire-a-traverse-navigate-event was created over a work record already carrying one");
+    DCHECK(destination_url != NULL && *destination_url,
+           "§7.2.6.10.4's fire-a-traverse-navigate-event was given no destinationSHE URL");
+    DCHECK(JS_IsNull(destination_entry) || JS_IsArrayBuffer(navigation_api_state),
+           "§7.2.6.10.4's fire-a-traverse-navigate-event was given a destinationNHE without destinationSHE's "
+           "serialized navigation API state, which becomes the destination's state");
+    w->navigation_type = "traverse";
+    w->same_document = is_same_document;
+    w->url = JS_NewString(ctx, destination_url);
+    CHECK(!JS_IsException(w->url), "navigate event: the destination URL could not be allocated");
+    /* Wrapper steps 1-2: the event, with its classic history API state null. */
+    w->classic = JS_NULL;
+    /* Wrapper steps 4-5: destination's entry and state are destinationNHE and destinationSHE's navigation API
+       state when that NHE exists; otherwise null and StructuredSerializeForStorage(null), which NEF_PREPARE
+       performs for JS_UNDEFINED. */
+    w->entry = JS_DupValue(ctx, destination_entry);
+    w->nav_state = JS_IsNull(destination_entry) ? JS_UNDEFINED : JS_DupValue(ctx, navigation_api_state);
+    /* No abort loop: the wrapper goes straight to the inner algorithm. */
+    w->stage = NEF_PREPARE;
 }
 
 /* §7.2.6.10.4's inner algorithm step 20's four-conjunct hashChange test, over the two URLs it names: step 19's
@@ -247,7 +279,7 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
     StructuredData d, classic_bytes;
     const StructuredData *classic = NULL;
     const char *url;
-    bool not_canceled = true, can_intercept, hash_change;
+    bool not_canceled = true, can_intercept, hash_change, cancelable;
     int r;
 
     DCHECK(pcontinue != NULL, "§7.2.6.10.4's inner algorithm was driven with nowhere to put its answer — its "
@@ -284,7 +316,7 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
        note's reason for existing (a `navigateerror` handler that detached the Document) is what the step 4
        test below answers anyway.
        THE WRAPPER'S STEP 4: "if document is NOT FULLY ACTIVE, then return FALSE." */
-    if (!document_fully_active(ctx)) {
+    if (strcmp(w->navigation_type, "traverse") != 0 && !document_fully_active(ctx)) {
         *pcontinue = false;
         return 0;
     }
@@ -294,8 +326,8 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
        one of §7.2.6.10.4's initializations happens before anything can observe the object, and an event
        visible between two of them would be an event whose `type` is not yet "navigate".
        THE WRAPPER'S STEPS 7-11 build the destination, and every one of the four fields is a value this
-       operation was CREATED with — the URL and the same-document flag are the caller's, the entry is null
-       (only fire-a-traverse-navigate-event sets one), and the state is either the caller's own
+       operation was CREATED with — the URL and the same-document flag are the caller's, the entry is the
+       traverse wrapper's destinationNHE or null, and the state is either the caller's own
        navigationAPIState or, when it named none, the wrapper's declared default. THE DEFAULT IS PERFORMED
        HERE RATHER THAN SUBSTITUTED FOR AN ABSENT FIELD: `nav_state` is JS_UNDEFINED exactly when the caller
        said "the default", which is the positive statement StructuredSerializeForStorage(null), and the
@@ -313,7 +345,7 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
     }
     url = JS_ToCString(ctx, w->url);
     CHECK(url != NULL, "navigate event: the destination URL could not be read back");
-    w->destination = navigation_destination_new(ctx, url, JS_NULL, state, w->same_document);
+    w->destination = navigation_destination_new(ctx, url, w->entry, state, w->same_document);
     CHECK(!JS_IsException(w->destination), "navigate event: the NavigationDestination could not be allocated");
 
     /* INNER STEP 1: "if navigation has entries and events disabled, then … return TRUE." Its three asserts are
@@ -327,8 +359,8 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
         return 0;
     }
     /* INNER STEPS 2, 3 AND 4 are the API METHOD TRACKER's, and there is none: step 2 asserts the ongoing one is
-       null, step 3 looks the destination's entry's key up in the upcoming traverse trackers (and the entry is
-       null here, which is the same fact one step round), and step 4 adopts whatever it found. §7.2.6.7's
+       null, step 3 looks a traverse destination's entry's key up in the upcoming traverse trackers, which are
+       empty because nothing that makes one is built, and step 4 adopts whatever it found. §7.2.6.7's
        `navigate`, `reload`, `traverseTo`, `back` and `forward` are the only algorithms that make a tracker, and
        none of them is built (core/frame/navigation.h).
        INNER STEPS 5 AND 6 — the navigable and the document — are this realm's.
@@ -338,17 +370,14 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
        second time here — two derivations of one rule is where the second one goes wrong. */
     can_intercept = history_document_can_have_url_rewritten(ctx, url) &&
                     (w->same_document || strcmp(w->navigation_type, "traverse") != 0);
-    /* INNER STEP 8's traverseCanBeCanceled has exactly one reader, step 9, and step 9 reads it only when
-       navigationType IS "traverse" — its other disjunct is true for every other type. So the value is not
-       computed here: its third conjunct is "navigation's relevant global object has HISTORY-ACTION ACTIVATION",
-       which is HTML §6.6's user activation state, and this build has no producer for it. It arrives with
-       fire-a-traverse-navigate-event, which is the only wrapper that can pass a "traverse".
+    /* INNER STEP 8: traverseCanBeCanceled is true if "navigable is a top-level traversable; destination's is
+       same document is true; and either userInvolvement is not 'browser UI', or navigation's relevant global
+       object has history-action activation". userInvolvement is "none" for every caller here (navigate_event_
+       fire.h), so the third conjunct holds without asking the activation.
        INNER STEP 9: "if either navigationType is not 'traverse' or traverseCanBeCanceled is true, then
        initialize event's cancelable to TRUE." */
-    DCHECK(strcmp(w->navigation_type, "traverse") != 0,
-           "§7.2.6.10.4's inner algorithm reached step 9 with a \"traverse\" — its cancelable is then step 8's "
-           "traverseCanBeCanceled, whose third conjunct is history-action activation and which this build "
-           "cannot compute. Build both with fire-a-traverse-navigate-event");
+    cancelable = strcmp(w->navigation_type, "traverse") != 0 ||
+                 (window_proxy_is_top_level(document_window_proxy(ctx)) && w->same_document);
     /* INNER STEP 19: "let currentURL be document's URL", and INNER STEP 20's four-conjunct hashChange. */
     hash_change = nef_hash_change(ctx, w->classic, url, w->same_document);
     JS_FreeCString(ctx, url);
@@ -378,7 +407,7 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
         classic = &classic_bytes;
     }
     w->event = navigate_event_new_to_fire(ctx, w->navigation_type, w->destination, can_intercept,
-                                          /*cancelable*/ true, /*user_initiated*/ false, hash_change, signal,
+                                          cancelable, /*user_initiated*/ false, hash_change, signal,
                                           /*source_element*/ JS_NULL, classic);
     JS_FreeValue(ctx, signal);
     if (JS_IsException(w->event)) {
@@ -427,9 +456,9 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
        activation for a "traverse" (there are none here, per step 9's assertion), and its second is the abort. */
     if (!not_canceled) {
         /* STEP 28.1: "if navigationType is 'traverse', then CONSUME HISTORY-ACTION USER ACTIVATION given
-           navigation's relevant global object." There are none here, per step 9's assertion above, and it
-           arrives with fire-a-traverse-navigate-event and HTML §6.6's user activation state together.
-           STEP 28.2: "if event's abort controller's signal is NOT ABORTED, then abort the ongoing navigation
+           navigation's relevant global object." */
+        if (!strcmp(w->navigation_type, "traverse")) user_activation_consume_history_action(ctx);
+        /* STEP 28.2: "if event's abort controller's signal is NOT ABORTED, then abort the ongoing navigation
            given navigation." The signal IS already aborted when a `navigate` listener aborted this very
            navigation itself — a router that calls `preventDefault()` after something else already superseded
            the navigation — and the standard's test is what stops this aborting it twice. */

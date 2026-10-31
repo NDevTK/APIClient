@@ -75,6 +75,9 @@ typedef struct {
        rather than reading a field nobody wrote. */
     JSValue     nav_state;
     JSValue     destination;     /* §7.2.6.10.3's, built at step 7 of the wrapper (owned) */
+    /* The destination's entry: the traverse wrapper's destinationNHE, or JS_NULL (owned); the
+       push/replace/reload wrapper sets it null. */
+    JSValue     entry;
     JSValue     event;           /* the NavigateEvent, held across the dispatch (owned) */
     /* §7.2.6.8's ABORT, which this algorithm performs at TWO of its steps — the wrapper's step 2 (as the loop)
        and inner step 28.2 (as the single abort). ONE record for both, because the two are steps of the same
@@ -117,6 +120,17 @@ void navigate_event_fire_push_replace_reload_begin(JSContext *ctx, NavigateEvent
                                                    const char *navigation_type, const char *destination_url,
                                                    bool is_same_document, const StructuredData *classic_state,
                                                    JSValueConst navigation_api_state);
+
+/* §7.2.6.10.4's FIRE A TRAVERSE NAVIGATE EVENT, at the moment the operation is created, for the same reason as
+ * the wrapper above. `destination_url` is destinationSHE's URL, serialized; COPIED. `destination_entry` is the
+ * destinationNHE the caller found (core/frame/navigation.h's navigation_entry_of) or JS_NULL, and
+ * `navigation_api_state` destinationSHE's navigation API state (an ArrayBuffer), used only with a non-null
+ * entry; both BORROWED. `is_same_document` is whether destinationSHE's document is this one. userInvolvement
+ * is the wrapper's default "none": §7.4.3's traversal is reached from a script's history.back(), not the
+ * browser UI. This wrapper has no abort loop, so the machine starts at the inner algorithm. */
+void navigate_event_fire_traverse_begin(JSContext *ctx, NavigateEventFireWork *w, const char *destination_url,
+                                        JSValueConst destination_entry, JSValueConst navigation_api_state,
+                                        bool is_same_document);
 
 /* THE ALGORITHM, DRIVEN. JS_STEP_CALL or JS_STEP_YIELD = return it (it has parked on the page's `navigate`
    listeners, or at one of its own rest points), 0 = it has ANSWERED and `*pcontinue` holds §7.2.6.10.4's

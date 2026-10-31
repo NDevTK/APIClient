@@ -96,6 +96,9 @@ void    navigation_set_ongoing_navigate_event(JSContext *ctx, JSValueConst ev);
    the index of the NavigationHistoryEntry whose session history entry is `she`, or −1 when the list holds
    none. It is what §7.2.6.5's `index` returns and what §7.2.6.4 sets the current entry index from. */
 int64_t navigation_entry_index_of(JSContext *ctx, JSValueConst she);
+/* The NavigationHistoryEntry in THIS realm's Navigation's entry list whose session history entry is `she`, or
+   JS_NULL when the list holds none — §7.2.6.10.4's fire-a-traverse-navigate-event's destinationNHE. Owned. */
+JSValue navigation_entry_of(JSContext *ctx, JSValueConst she);
 
 /* §7.2.6.4's INITIALIZE THE NAVIGATION API ENTRIES FOR A NEW DOCUMENT, given the list of session history
    entries §7.4.1.4's get-session-history-entries-for-the-navigation-API produced and the entry the document is

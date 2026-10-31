@@ -215,6 +215,18 @@ int64_t navigation_entry_index_of(JSContext *ctx, JSValueConst she)
     return found;
 }
 
+JSValue navigation_entry_of(JSContext *ctx, JSValueConst she)
+{
+    int64_t i = navigation_entry_index_of(ctx, she);
+    JSValue list, nhe;
+
+    if (i < 0) return JS_NULL;
+    list = nav_entry_list(ctx);
+    nhe = JS_GetPropertyUint32(ctx, list, (uint32_t)i);
+    JS_FreeValue(ctx, list);
+    return nhe;
+}
+
 /* ---- §7.2.6.4's INITIALIZE THE NAVIGATION API ENTRIES FOR A NEW DOCUMENT ---------------------------------- */
 
 void navigation_initialize_entries(JSContext *ctx, JSValueConst new_shes, JSValueConst initial_she)
@@ -471,10 +483,9 @@ fire_dispose:
        an assertion rather than as an `if`, which would be this same invariant softened into a silent skip of
        the commit handler steps. */
     DCHECK(navigate_event_is(ctx, w->navigate_event),
-           "§7.2.6.4 reached step 14 with NO ongoing navigate event — a same-document navigation got here "
-           "without one being fired, and the only path in this build that can is a TRAVERSAL: "
-           "core/frame/session_history.c's §7.4.6.1 step 5 still has to fire a TRAVERSE navigate event, and "
-           "the assertion naming that work is at that site, which is reached first");
+           "§7.2.6.4 reached step 14 with NO ongoing navigate event — every same-document navigation fires one "
+           "before its entries update (a push or replace through fire-a-push/replace/reload-navigate-event, a "
+           "traversal through §7.4.6.1 step 5's fire-a-traverse-navigate-event), so one got here without it");
     navigate_event_intercept_commit(ctx, w->navigate_event);
     JS_FreeValue(ctx, in);
     return 0;

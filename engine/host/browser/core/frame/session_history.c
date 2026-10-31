@@ -703,6 +703,9 @@ bool session_history_is_fragment_navigation(JSContext *ctx, const char *url)
 #define SH_APPLY_STAGES(X)                                                                              \
     X(SH_APPLY_STEP,     "HTML §7.4.3 traverse the history by a delta steps 4.1-4.5 (get all used "      \
                          "history steps, resolve the delta, apply the traverse history step)")           \
+    X(SH_APPLY_NAVIGATE, "HTML §7.4.6.1 apply the history step step 5 (check if unloading is canceled: "  \
+                         "fire a traverse navigate event at the traversable's active window's "           \
+                         "navigation API)")                                                               \
     X(SH_APPLY_NAV,      "HTML §7.4.6.2 update document for history step application step 6.4.2 (update " \
                          "the navigation API entries for a same-document navigation: currententrychange, " \
                          "then dispose at each disposed entry)")                                          \
@@ -827,6 +830,12 @@ static int sh_update_document_for_history_step(JSContext *ctx, SessionHistoryApp
     int r;
 
     STEP_DISPATCH(SH_APPLY_STAGES, a->stage, SH_APPLY_ALGORITHM, JS_STEP_ABRUPT);
+
+    /* The traversal machine rests at SH_APPLY_NAVIGATE on its own header, before this record is begun. */
+    STEP_ARM(SH_APPLY_NAVIGATE);
+    DFAIL("§7.4.6.1's apply record was entered at step 5's navigate event stage, which only the traversal "
+          "machine's header rests at, before sh_apply_history_step_begin starts this record");
+    return JS_STEP_ABRUPT;
 
     STEP_ARM(SH_APPLY_STEP);
     rec = sh_record(ctx);
@@ -1098,6 +1107,12 @@ static int sh_apply_history_step_finish(JSContext *ctx, SessionHistoryApply *a, 
        does not name — so neither is written here: quickjs-step.h's STEP_DISPATCH generates the arms from
        SH_APPLY_STAGES, and a fourth stage added to that list does not compile until it has a body. */
     STEP_DISPATCH(SH_APPLY_STAGES, a->stage, SH_APPLY_ALGORITHM, JS_STEP_ABRUPT);
+
+    /* The traversal machine rests at SH_APPLY_NAVIGATE on its own header, before this record is begun. */
+    STEP_ARM(SH_APPLY_NAVIGATE);
+    DFAIL("§7.4.6.1's apply record was entered at step 5's navigate event stage, which only the traversal "
+          "machine's header rests at, before sh_apply_history_step_begin starts this record");
+    return JS_STEP_ABRUPT;
 
     STEP_ARM(SH_APPLY_STEP);
     {
@@ -2014,6 +2029,9 @@ int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *
 typedef struct {
     JSStepHdr           hdr;   /* FIRST — the driver writes the def and the operand bounds through it */
     SessionHistoryApply apply;
+    /* §7.4.6.1 step 5's traverse navigate event, and the step it asks about, held across its dispatch. */
+    NavigateEventFireWork fire;
+    uint32_t            target;
 } SHTraverseState;
 
 static void js_sh_traverse_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -2028,6 +2046,7 @@ static void js_sh_traverse_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->apply.fire_cb, k)
         v->val(ctx, &s->apply.fire_cb[k]);
     navigation_update_work_visit(ctx, &s->apply.nav, v);
+    navigate_event_fire_work_visit(ctx, &s->fire, v);
 }
 
 static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -2035,6 +2054,7 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     SHTraverseState *s = st;
     uint32_t target = 0;
     int32_t delta = 0;
+    bool proceed = false;
     int r;
 
     STEP_DISPATCH(SH_APPLY_STAGES, s->hdr.stage, SH_APPLY_ALGORITHM, JS_STEP_ABRUPT);
@@ -2055,42 +2075,44 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             JS_FreeValue(ctx, cb_result);
             return JS_STEP_DONE;
         }
-        /* STEP 4.5: "APPLY THE TRAVERSE HISTORY STEP allSteps[targetStepIndex] to traversable" — which is
-           §7.4.6.1's apply-the-history-step "given TRUE, sourceSnapshotParams, initiatorToCheck,
-           userInvolvement, and \"traverse\"". THAT FIRST ARGUMENT IS `checkForCancelation`, and this is the
-           only entry point in this file that passes it true — apply-the-push/replace-history-step passes false
-           and says why ("those checks are done earlier in the navigation algorithm").
-           SO §7.4.6.1 STEP 5 BELONGS HERE, and it is the step that fires the TRAVERSE NAVIGATE EVENT for a
-           top-level traversable: check-if-unloading-is-canceled's own branch is "if traversable was given",
-           which is satisfied whatever navigablesCrossingDocuments holds, so a same-document `history.back()`
-           reaches it. A FALSE answer is "canceled-by-navigate" and the traversal must not apply at all.
-           THE DISPATCH IS A REST POINT, so building it adds a stage to SH_APPLY_STAGES ahead of SH_APPLY_STEP
-           and this call moves behind it. The INNER navigate event firing algorithm now exists — it is
-           core/frame/navigate_event_fire.c, and §7.2.5's pushState drives it — so what is missing here is the
-           TRAVERSE WRAPPER and this site's stage, which is what the assertion says. It probes `onnavigate`
-           because that is the observable of a navigate event being fired at all, and this file's traversal is
-           now the one navigation in the build that fires none. */
-        realm_awaits(ctx, "Navigation.prototype.onnavigate",
-                     "HTML §7.4.6.1 step 5 CHECKS IF UNLOADING IS CANCELED before it applies a traverse history "
-                     "step, and this build fires the navigate event everywhere ELSE: a `history.pushState()` "
-                     "asks the page's `navigate` listeners and a `history.back()` does not, which is the "
-                     "inconsistency this fires on. Write §7.2.6.10.4's FIRE A TRAVERSE NAVIGATE EVENT beside "
-                     "the push/replace/reload wrapper in core/frame/navigate_event_fire.c: it takes the entry "
-                     "sh_target_history_entry resolved for `target` and builds a NavigationDestination over "
-                     "that entry's URL, over its NavigationHistoryEntry (navigation_entry_index_of finds it in "
-                     "the Navigation's entry list, and a destination whose entry is non-null is what makes the "
-                     "inner algorithm's step 3 reachable — the upcoming traverse API method trackers, which "
-                     "arrive with §7.2.6.7's traverseTo), over its navigation API state, and with is-same-"
-                     "document set from whether the entry's document is this one. The inner algorithm then "
-                     "needs the two things only a \"traverse\" reaches: step 8's traverseCanBeCanceled, whose "
-                     "third conjunct is HTML §6.6's HISTORY-ACTION ACTIVATION, and step 28's consume-history-"
-                     "action-user-activation. A FALSE answer is \"canceled-by-navigate\": return JS_STEP_DONE "
-                     "without calling sh_apply_history_step_begin at all, so a traversal a listener canceled "
-                     "leaves the traversable's current step where it was. THE STAGE IS THE OTHER HALF — the "
-                     "dispatch is a rest point, and SH_APPLY_STAGES is dispatched over by three functions, so "
-                     "the new stage needs an arm in each of them");
-        sh_apply_history_step_begin(ctx, &s->apply, target, "traverse");
+        /* STEP 4.5: "APPLY THE TRAVERSE HISTORY STEP allSteps[targetStepIndex] to traversable" — §7.4.6.1's
+           apply-the-history-step "given TRUE, sourceSnapshotParams, initiatorToCheck, userInvolvement, and
+           \"traverse\"". The first argument is checkForCancelation, so its step 5 runs: check if unloading is
+           canceled, whose branch for a given traversable "fire[s] a traverse navigate event at navigation given
+           targetEntry and userInvolvementForNavigateEvent", and a false answer is "canceled-by-navigate", which
+           applies nothing. The entry's document is this one: this machine traverses same-document entries only
+           (sh_apply_history_step_begin asserts it). */
+        {
+            JSValue entries = sh_entries(ctx), she = sh_target_history_entry(ctx, entries, target);
+            JSValue url = JS_GetPropertyStr(ctx, she, SH_E_URL);
+            JSValue state = JS_GetPropertyStr(ctx, she, SH_E_NAV_STATE);
+            JSValue nhe = navigation_entry_of(ctx, she);
+            const char *u = JS_ToCString(ctx, url);
+
+            CHECK(u != NULL, "a session history entry's URL could not be read for its traverse navigate event");
+            navigate_event_fire_work_start(&s->fire);
+            navigate_event_fire_traverse_begin(ctx, &s->fire, u, nhe, state, /*is_same_document*/ true);
+            JS_FreeCString(ctx, u);
+            JS_FreeValue(ctx, nhe);
+            JS_FreeValue(ctx, state);
+            JS_FreeValue(ctx, url);
+            JS_FreeValue(ctx, she);
+            JS_FreeValue(ctx, entries);
+        }
+        s->target = target;
+        JS_FreeValue(ctx, cb_result);
+        STEP_GOTO(s->hdr.stage, SH_APPLY_NAVIGATE, NULL);
+        return JS_STEP_YIELD;
     }
+
+    STEP_ARM(SH_APPLY_NAVIGATE);
+    r = navigate_event_fire_run(ctx, &s->fire, cb_result, out_cb, out_argc, &proceed);
+    if (r) return r;   /* parked on the page's `navigate` listeners, at a rest point of its own, or thrown */
+    navigate_event_fire_work_release(ctx, &s->fire);
+    /* §7.4.6.1 step 5's "canceled-by-navigate": the traversable's current step stays where it was. */
+    if (!proceed) return JS_STEP_DONE;
+    cb_result = JS_UNDEFINED;   /* the dispatch's answer was consumed by the inner algorithm */
+    sh_apply_history_step_begin(ctx, &s->apply, s->target, "traverse");
     /* THE SAME SHARED TAIL AS THE HALF IT DRIVES, for the same reason: §7.4.6.1's second half owns all three
        stages, so a resume at either of the later two re-enters it and nothing above runs again. */
     STEP_ARM(SH_APPLY_NAV);
