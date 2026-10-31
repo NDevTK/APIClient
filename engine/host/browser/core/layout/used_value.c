@@ -3194,7 +3194,9 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
        §8.12), and Chrome and Firefox both take the suggestion; the equation answers the border box under
        `border-box`, so the content extent is recovered from it. */
     if (h_auto && rep->has_ratio) {
-        lxb_dom_element_t *cb = used_value_containing_block(el);
+        /* A grid item's containing block is its grid area (css-grid-1 §3.3), whose inline size column sizing
+           has fixed before the item is laid out; it has no element to ask. */
+        lxb_dom_element_t *cb = uv_grid_item_container(el) != NULL ? NULL : used_value_containing_block(el);
         UvSurround s;
         UvBox box;
         CssPx w;

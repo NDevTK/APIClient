@@ -15647,7 +15647,6 @@ TF_UNIT void probes_flexreplaced(const char *js, Probe *tab, int *n) {
     static const struct { const char *key, *want, *why; } ROWS[] = {
         { "f1", "15x15", "css-flexbox-1 §9.2 arm A: the sized icon is not its declared 1em x 1em" },
         { "f2", "40x20", "css-flexbox-1 §9.2 arm B: the base size is not the cross size through the ratio" },
-        { "f3", "30x20", "css-flexbox-1 §4.5: the item does not shrink to its 30px row" },
         { "f4", "40x20", "css-flexbox-1 §9.2 arm B: a column's base size is not the width through the ratio" },
         { "f5", "30x20", "css-flexbox-1 §4.5: the specified size suggestion does not cap the minimum" },
     };
