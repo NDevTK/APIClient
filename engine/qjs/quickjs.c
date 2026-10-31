@@ -2685,7 +2685,7 @@ enum {   /* the STEPDEF_* ids used at the registration sites */
     STEPDEF_OBJ_TOSTRING, STEPDEF_OBJ_TOLOCALESTRING,
     STEPDEF_DECODE_URI, STEPDEF_DECODE_URI_COMPONENT,
     STEPDEF_ENCODE_URI, STEPDEF_ENCODE_URI_COMPONENT,
-    STEPDEF_GLOBAL_ESCAPE, STEPDEF_GLOBAL_UNESCAPE, STEPDEF_ATOB, STEPDEF_BTOA, STEPDEF_DATE_PARSE,
+    STEPDEF_GLOBAL_ESCAPE, STEPDEF_GLOBAL_UNESCAPE, STEPDEF_ATOB, STEPDEF_BTOA, STEPDEF_DATE_PARSE, STEPDEF_ERROR_CAPTURE,
     STEPDEF_INSTANCEOF, STEPDEF_ORDINARY_HAS_INSTANCE,
     STEPDEF_TA_SORT, STEPDEF_TA_TOSORTED, STEPDEF_STR_LOCALECOMPARE,
     /* ONE id per setter, because a coerce-then-compute definition carries the body's magic AND the mask of
@@ -87971,28 +87971,75 @@ static JSValue js_error_set_prepareStackTrace(JSContext *ctx, JSValueConst this_
     return JS_UNDEFINED;
 }
 
-static JSValue js_error_capture_stack_trace(JSContext *ctx, JSValueConst this_val,
-                                            int argc, JSValueConst *argv)
+/* proposal-error-capturestacktrace §20.5.2.1 Error.captureStackTrace ( O [ , limit ] ), under its data-property
+   strategy. Steps 1-3 build the string and run none of the page's code; the define is DefinePropertyOrThrow on
+   the page's O, which on a Proxy is the `defineProperty` trap, so it is a DEFINE request. */
+typedef struct JSErrCapture {
+    JSStepHdr hdr;
+    JSValue result;       /* DONE (owned) */
+    JSValue cb[2];        /* [O, string] for the DEFINE request (owned) */
+} JSErrCapture;
+#define ERRCAP_STAGES(X) \
+    X(ERRCAP_BUILD,  "proposal-error-capturestacktrace §20.5.2.1 steps 1-5 (O is an Object; the stack string; " \
+                     "the realm's strategy, which is data-property here)") \
+    X(ERRCAP_DEFINE, "proposal-error-capturestacktrace §20.5.2.1 step 6 (DefinePropertyOrThrow(O, \"stack\", " \
+                     "{ [[Value]]: string, [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }))")
+enum { ERRCAP_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_error_capture_steps[] = { ERRCAP_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_error_capture_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
-    JSValueConst v = argv[0];
-    if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT)
-        return JS_ThrowTypeErrorNotAnObject(ctx);
-    JSValue stack;
-    build_backtrace(ctx, v, argv[1], NULL, 0, 0,
-                    JS_BACKTRACE_FLAG_SKIP_FIRST_LEVEL | JS_BACKTRACE_FLAG_FILTER_FUNC, &stack);
-    if (JS_IsUndefined(stack))
-        return JS_UNDEFINED;               /* a capture was already in progress; there is nothing to install */
-    /* THE TARGET IS THE PAGE'S, so this is the real [[DefineOwnProperty]] — an own data property shadowing the
-       accessor, on an object that may be a Proxy or may already hold a non-configurable `stack`. */
-    if (JS_DefinePropertyValue(ctx, v, JS_ATOM_stack, stack,
-                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
-        return JS_EXCEPTION;
-    return JS_UNDEFINED;
+    JSErrCapture *s = st;
+
+    if (s->hdr.stage == ERRCAP_BUILD) {
+        JSValueConst v = step_arg(&s->hdr, 0);
+        JSValue stack;
+
+        JS_FreeValue(ctx, cb_result);
+        s->result = JS_UNDEFINED;
+        s->cb[0] = JS_UNDEFINED; s->cb[1] = JS_UNDEFINED;
+        if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT) {
+            JS_ThrowTypeErrorNotAnObject(ctx);
+            return -1;
+        }
+        build_backtrace(ctx, v, step_arg(&s->hdr, 1), NULL, 0, 0,
+                        JS_BACKTRACE_FLAG_SKIP_FIRST_LEVEL | JS_BACKTRACE_FLAG_FILTER_FUNC, &stack);
+        if (JS_IsUndefined(stack))
+            return 0;                      /* a capture was already in progress; there is nothing to install */
+        s->cb[0] = js_dup(v);
+        s->cb[1] = stack;
+        s->hdr.desc_flags = JS_PROP_THROW | JS_PROP_DEFINE_PROPERTY
+                          | JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE
+                          | JS_PROP_HAS_ENUMERABLE | JS_PROP_HAS_CONFIGURABLE | JS_PROP_CONFIGURABLE;
+        s->hdr.stage = ERRCAP_DEFINE;
+        *out_cb = s->cb; *out_argc = (int)JS_ATOM_stack;
+        return 10;   /* DEFINE */
+    }
+    DCHECK(s->hdr.stage == ERRCAP_DEFINE, "Error.captureStackTrace resumed in no stage");
+    if (JS_IsException(cb_result)) return -1;
+    JS_FreeValue(ctx, cb_result);
+    return 0;
+}
+
+static void js_error_capture_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSErrCapture *s = st;
+    v->val(ctx, &s->result);
+    v->val(ctx, &s->cb[0]);
+    v->val(ctx, &s->cb[1]);
+}
+
+static JSValue js_error_capture_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSErrCapture *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
 }
 
 static const JSCFunctionListEntry js_error_funcs[] = {
     JS_CFUNC_DEF("isError", 1, js_error_isError ),
-    JS_CFUNC_DEF("captureStackTrace", 2, js_error_capture_stack_trace),
+    JS_CFUNC_STEP_DEF("captureStackTrace", 2, STEPDEF_ERROR_CAPTURE ),
     JS_CGETSET_DEF("stackTraceLimit", js_error_get_stackTraceLimit, js_error_set_stackTraceLimit ),
     JS_CGETSET_DEF("prepareStackTrace", js_error_get_prepareStackTrace, js_error_set_prepareStackTrace ),
 };
@@ -94492,6 +94539,10 @@ static JSValue js_btoa(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 static const JSTrampStepDef js_btoa_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_btoa, 0, "HTML §8.3 Base64 utility methods btoa(data)");
 /* "This function applies the ToString operator to its argument", which is the page's toString. */
 static const JSTrampStepDef js_date_parse_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_Date_parse, 0, "21.4.3.2 Date.parse ( string )");
+static const JSTrampStepDef js_error_capture_def = { sizeof(JSErrCapture), js_error_capture_step, js_error_capture_fini, 0,
+                        .visit = js_error_capture_visit,
+                        .algorithm = "proposal-error-capturestacktrace §20.5.2.1 Error.captureStackTrace ( O [ , limit ] )",
+                        .steps = js_error_capture_steps };
 static JSValue js_date_setTime(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static int js_date_this_precheck(JSContext *ctx, const JSStepHdr *h);
 static int js_date_set_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
@@ -96904,6 +96955,7 @@ static const JSTrampStepDef *const js_tramp_step_defs[STEPDEF_COUNT] = {
     [STEPDEF_ATOB]            = &js_atob_def,
     [STEPDEF_BTOA]            = &js_btoa_def,
     [STEPDEF_DATE_PARSE]      = &js_date_parse_def,
+    [STEPDEF_ERROR_CAPTURE]   = &js_error_capture_def,
     [STEPDEF_ISNAN]           = &js_isNaN_def,
     [STEPDEF_ISFINITE]        = &js_isFinite_def,
     [STEPDEF_ARRAY_REDUCE]  = &js_array_reduce_def,  [STEPDEF_ARRAY_REDUCE_RIGHT] = &js_array_reduceR_def,
