@@ -7756,9 +7756,7 @@ static JSValue example_number_add(JSContext *ctx, JSValueConst exa, JSValueConst
    computed, so `concolic(5) + 3` gives 8, not "53". Steps 1.a and 1.b are not performed here (js_add_slow
    calls this before any coercion); the assert inside names the trampoline that owes them. The concolic result
    is the same either way: provenance, shape and identity, and a later branch still forks. */
-/* The UTF-16 code units the UTF-8 `s` (`n` bytes, as JS_ToCStringLen writes a String) spells: a four-byte
-   sequence is a surrogate pair, every other lead byte one unit. */
-static uint32_t units_of_utf8(const char *s, size_t n)
+uint32_t concolic_utf8_units(const char *s, size_t n)
 {
     uint32_t u = 0;
 
@@ -7779,7 +7777,7 @@ static uint32_t example_units(JSContext *ctx, JSValueConst ex)
     uint32_t u;
 
     CHECK(t != NULL, "concolic: an example's string form could not be read");
-    u = units_of_utf8(t, n);
+    u = concolic_utf8_units(t, n);
     JS_FreeCString(ctx, t);
     return u;
 }

@@ -189,7 +189,23 @@ static JSValue js_doc_metadata(JSContext *ctx, JSValueConst this_val, int magic)
         }
         str = cookie_jar_cookie_string(ctx, &uri);
         url_record_free(&uri);
-        return concolic_source_wrap(ctx, "{document.cookie}", "document.cookie", str);
+        /* The source is the jar's unknown remainder, the cookies no write of this path set, with no example
+           bytes; the cookies the jar holds follow it as themselves, so a value set from an attacker source is
+           that source's piece of the string the page parses. */
+        {
+            JSValue rest = concolic_source_wrap(ctx, "{document.cookie}", "document.cookie",
+                                                JS_NewStringLen(ctx, "", 0));
+            size_t n = 1;
+
+            if (JS_IsString(str)) {
+                const char *t = JS_ToCStringLen(ctx, &n, str);
+
+                CHECK(t != NULL, "document.cookie: the cookie string could not be read back");
+                JS_FreeCString(ctx, t);
+            }
+            if (n == 0) { JS_FreeValue(ctx, str); return rest; }
+            return concolic_string_concat(ctx, rest, str);
+        }
     }
     case DM_LAST_MODIFIED:
         return dm_last_modified(ctx);
@@ -209,9 +225,6 @@ static JSValue js_doc_set_cookie(JSContext *ctx, JSValueConst this_val, JSValueC
 {
     lxb_dom_document_t *dom = dm_receiver(ctx, this_val);
     UrlRecord uri;
-    const char *s;
-    size_t len = 0;
-    bool owned = false;
 
     (void)magic;
     if (!dom) return JS_EXCEPTION;
@@ -223,25 +236,12 @@ static JSValue js_doc_set_cookie(JSContext *ctx, JSValueConst this_val, JSValueC
         url_record_free(&uri);
         return JS_ThrowDOMException(ctx, "SecurityError", "a document with an opaque origin has no cookies");
     }
-    if (concolic_is(val)) {
-        /* UNKNOWN EXTERNAL INPUT has no bytes. The SHAPE is what the store carries, exactly as a Text node
-           carries it for `textContent =`: the jar is an EXAMPLE store, so what it holds for an unknown value is
-           the unknown's own display, never a fabricated concrete cookie. */
-        s = concolic_shape_c(val);
-        if (!s) s = "";
-        len = strlen(s);
-    } else {
-        DCHECK(JS_IsString(val), "document.cookie= reached the body unconverted — the IDL declaration is what "
-                                 "converts it, and running the page's toString from here is the "
-                                 "drive-to-completion the flow machinery exists to avoid");
-        s = JS_ToCStringLen(ctx, &len, val);
-        if (!s) { url_record_free(&uri); return JS_EXCEPTION; }
-        owned = true;
-    }
+    DCHECK(JS_IsString(val) || concolic_is(val),
+           "document.cookie= reached the body unconverted — the IDL declaration is what converts it, and running "
+           "the page's toString from here is the drive-to-completion the flow machinery exists to avoid");
     /* "act as it would when receiving a set-cookie-string for the document's URL via a 'non-HTTP' API". */
-    cookie_jar_receive(ctx, &uri, s, len);
+    cookie_jar_receive(ctx, &uri, val);
     url_record_free(&uri);
-    if (owned) JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
 

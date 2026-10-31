@@ -96,11 +96,15 @@
 #include "core/url/public_suffix.h"
 #include "core/url/url.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
+#include "solver/concolic.h"   /* a value keeps the provenance of the string it was set from */
 #include "solver/reclaim.h"
 
 /* ---- the agent's store ------------------------------------------------------------------------------------ */
 
-static JSValue    g_jar;      /* key -> entry, both strings; see the header comment for the encoding */
+/* key -> entry. The key is cj_key's string. The entry is a pair: [0] cj_entry's string (the flags, the expiry
+   and the value's bytes, which every test below reads) and [1] the value as the JS string it was set from, so
+   a value cut from an unknown keeps its provenance into the cookie-string (cj_entry_value). */
+static JSValue    g_jar;
 static JSRuntime *g_rt;
 static int        g_ready;
 /* Cookie Store API §7.4 "Process changes"' pending change set, and §2.2 "Cookie store"'s one claimant — see
@@ -135,7 +139,10 @@ static JSValueConst cj_jar(void)
  * The classification, the three conditions and why the producer is in this file are all in cookie_jar.h. */
 
 /* ONE member of §7.4's change set — « key, entry, type », this store's own two codec strings plus the
-   classification. THE TWO STRINGS ARE THE RECORD'S OWN COPY AND NOT A LOOKUP: a DELETED change names a cookie
+   classification.
+   Named residual. Not covered: a change carries its value's bytes, not the JS string it was set from, so a
+   `change` event's value cut from an unknown is a concrete string. Next diff builds: the entry pair on the
+   record. Absence shows as: a `cookiechange` listener's write of a changed value forking nothing. THE TWO STRINGS ARE THE RECORD'S OWN COPY AND NOT A LOOKUP: a DELETED change names a cookie
    that is no longer in the store, so a filter resolving the key against the jar would find nothing to read for
    exactly the half §2.2's second condition produces. */
 static void cj_record_change(JSContext *ctx, const char *key, size_t klen,
@@ -449,6 +456,38 @@ static void cj_entry_parse(const char *e, size_t elen, bool *secure, bool *host_
     *vlen = (size_t)(end - p);
 }
 
+/* A jar entry: the pair of cj_entry's string (`text`, `tlen` bytes) and `value` (consumed). Owned. */
+static JSValue cj_entry_pair(JSContext *ctx, const char *text, size_t tlen, JSValue value)
+{
+    JSValue pair = JS_NewArray(ctx), t = JS_NewStringLen(ctx, text, tlen);
+
+    CHECK(!JS_IsException(pair) && !JS_IsException(t), "OOM building a cookie store entry");
+    CHECK(JS_DefinePropertyValueUint32(ctx, pair, 0, t, JS_PROP_C_W_E) >= 0 &&
+          JS_DefinePropertyValueUint32(ctx, pair, 1, value, JS_PROP_C_W_E) >= 0,
+          "a cookie store entry refused its own text and value");
+    return pair;
+}
+
+/* An entry's cj_entry string (JS_FreeCString it) and, where `value` is not NULL, its value (owned). The entry is
+   this store's own write, so a pair of any other shape is the two halves of one codec disagreeing. */
+static const char *cj_entry_text(JSContext *ctx, JSValueConst entry, size_t *tlen, JSValue *value)
+{
+    JSValue t;
+    const char *e;
+
+    DCHECK(JS_IsArray(entry), "a cookie store entry is not the [text, value] pair cj_entry_pair writes");
+    t = JS_GetPropertyUint32(ctx, entry, 0);
+    e = JS_ToCStringLen(ctx, tlen, t);
+    JS_FreeValue(ctx, t);
+    CHECK(e != NULL, "a stored cookie could not be read as a string");
+    if (value) {
+        *value = JS_GetPropertyUint32(ctx, entry, 1);
+        DCHECK(JS_IsString(*value) || concolic_is(*value),
+               "a cookie store entry's value is neither a string nor an unknown — cj_store writes one or the other");
+    }
+    return e;
+}
+
 /* ---- §5.1.1's PARSE A COOKIE-DATE --------------------------------------------------------------------------- */
 
 /* RFC 6265 §4.1.1's OWS, which §5.2 step 4 strips from both the name and the value. */
@@ -666,10 +705,15 @@ static void cj_parse_attrs(const char *attrs, size_t attrs_len, CookieJarAttribu
    Splitting the two is the other standard's own seam and not a refactor for its convenience; the argument for
    it, and what routing around it would manufacture, are at cookie_jar_store's declaration in cookie_jar.h. */
 static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
-                     const char *value, size_t value_len, const CookieJarAttributes *attrs, bool http_api);
+                     const char *value, size_t value_len, JSValue value_js, const CookieJarAttributes *attrs,
+                     bool http_api);
 
-static void cj_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len, bool http_api)
+/* `sc` is the set-cookie-string as the page's value (a String or an unknown) for a "non-HTTP" API, JS_UNDEFINED
+   for a response's field; `s` is its bytes, which are its example's where `s_is_example`. */
+static void cj_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len, bool http_api,
+                       JSValueConst sc, bool s_is_example)
 {
+    JSValue value_js;
     const char *nv = s, *attrs = NULL, *name, *value, *eq;
     size_t nvlen = len, attrs_len = 0, name_len, value_len;
     const char *semi = memchr(s, ';', len);
@@ -694,21 +738,64 @@ static void cj_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size
 
     memset(&a, 0, sizeof a);
     cj_parse_attrs(attrs, attrs_len, &a);
+    /* The value as a JS string: its bytes, or, cut from an unknown, the unknown's own piece where the value's
+       units lie inside one (concolic_piece_slice), else a derivation of the whole set-cookie-string. */
+    if (!concolic_is(sc)) {
+        value_js = JS_NewStringLen(ctx, value, value_len);
+        CHECK(!JS_IsException(value_js), "OOM holding a cookie's value");
+    } else {
+        JSValue ex = s_is_example ? JS_NewStringLen(ctx, value, value_len) : JS_UNDEFINED;
+        uint32_t from = concolic_utf8_units(s, (size_t)(value - s));
+        uint32_t to = from + concolic_utf8_units(value, value_len);
+
+        CHECK(!JS_IsException(ex), "OOM holding a cookie's value");
+        value_js = s_is_example ? concolic_piece_slice(ctx, sc, from, to, JS_DupValue(ctx, ex)) : JS_UNINITIALIZED;
+        if (JS_IsUninitialized(value_js))
+            value_js = concolic_new_derived(ctx, "RFC 6265bis-22 §5.6 cookie-value", &sc, 1, ex);
+        else
+            JS_FreeValue(ctx, ex);
+    }
     /* §5.2 step 6 has read the whole of the unparsed-attributes; every step from here is §5.3's. `name` and
        `value` still point into the caller's string, which outlives this call, and so do `a.domain` and
        `a.path` — which is the borrowing cookie_jar.h states and the reason this is not a tail call by
        accident but by contract. */
-    cj_store(ctx, uri, name, name_len, value, value_len, &a, http_api);
+    cj_store(ctx, uri, name, name_len, value, value_len, value_js, &a, http_api);
 }
 
-void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len)
+void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, JSValueConst set_cookie)
 {
-    cj_receive(ctx, uri, s, len, false);
+    JSValue ex = JS_UNDEFINED;
+    const char *s;
+    size_t len = 0;
+    bool is_example = false;
+
+    if (concolic_is(set_cookie)) {
+        /* An unknown's bytes are its example where this flow holds one; with none, its display, as a Text node
+           holds for `textContent =`: never a fabricated concrete cookie. */
+        if (concolic_example_present(set_cookie)) ex = concolic_example(ctx, set_cookie);
+        is_example = JS_IsString(ex);
+        if (is_example) {
+            s = JS_ToCStringLen(ctx, &len, ex);
+        } else {
+            const char *sh = concolic_shape_c(set_cookie);
+            JSValue t = JS_NewString(ctx, sh ? sh : "");
+
+            s = JS_ToCStringLen(ctx, &len, t);
+            JS_FreeValue(ctx, t);
+        }
+    } else {
+        DCHECK(JS_IsString(set_cookie), "document.cookie= reached the jar unconverted");
+        s = JS_ToCStringLen(ctx, &len, set_cookie);
+    }
+    CHECK(s != NULL, "OOM reading a set-cookie-string");
+    cj_receive(ctx, uri, s, len, false, set_cookie, is_example);
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, ex);
 }
 
 void cookie_jar_receive_http(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len)
 {
-    cj_receive(ctx, uri, s, len, true);
+    cj_receive(ctx, uri, s, len, true, JS_UNDEFINED, false);
 }
 
 void cookie_jar_receive_http_pairs(JSContext *ctx, JSValueConst list)
@@ -747,12 +834,29 @@ void cookie_jar_receive_http_pairs(JSContext *ctx, JSValueConst list)
 void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
                       const char *value, size_t value_len, const CookieJarAttributes *attrs)
 {
-    cj_store(ctx, uri, name, name_len, value, value_len, attrs, false);
+    JSValue v = JS_NewStringLen(ctx, value, value_len);
+
+    CHECK(!JS_IsException(v), "OOM holding a cookie's value");
+    cj_store(ctx, uri, name, name_len, value, value_len, v, attrs, false);
 }
 
-/* §5.3 for one cookie, from an HTTP API (`http_api`, a response's Set-Cookie) or a "non-HTTP" one. */
+static void cj_store_cookie(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
+                            const char *value, size_t value_len, JSValueConst value_js,
+                            const CookieJarAttributes *attrs, bool http_api);
+
+/* §5.3 for one cookie, from an HTTP API (`http_api`, a response's Set-Cookie) or a "non-HTTP" one. `value_js`
+   (consumed) is the value as the JS string it was set from; `value` is its bytes. */
 static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
-                     const char *value, size_t value_len, const CookieJarAttributes *attrs, bool http_api)
+                     const char *value, size_t value_len, JSValue value_js, const CookieJarAttributes *attrs,
+                     bool http_api)
+{
+    cj_store_cookie(ctx, uri, name, name_len, value, value_len, value_js, attrs, http_api);
+    JS_FreeValue(ctx, value_js);
+}
+
+static void cj_store_cookie(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
+                            const char *value, size_t value_len, JSValueConst value_js,
+                            const CookieJarAttributes *attrs, bool http_api)
 {
     size_t dlen = 0, plen, klen, hostlen;
     char *host, *dom = NULL, *path = NULL, *key;
@@ -844,14 +948,13 @@ static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, siz
         bool old_http_only = false;
 
         CHECK(!JS_IsException(old), "a stored cookie could not be read back");
-        if (JS_IsString(old)) {
+        if (!JS_IsUndefined(old)) {
             size_t olen = 0;
-            const char *oe = JS_ToCStringLen(ctx, &olen, old);
+            const char *oe = cj_entry_text(ctx, old, &olen, NULL);
             bool osec, ohost, oexp;
             const char *ov;
             size_t ovlen;
 
-            CHECK(oe != NULL, "a stored cookie could not be read as a string");
             cj_entry_parse(oe, olen, &osec, &ohost, &old_http_only, &oexp, &ov, &ovlen);
             JS_FreeCString(ctx, oe);
         }
@@ -882,9 +985,8 @@ static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, siz
         if (immediately_evicted) {
             JS_DeleteProperty(ctx, jar, atom, 0);
         } else {
-            JSValue v = JS_NewStringLen(ctx, entry, elen);
+            JSValue v = cj_entry_pair(ctx, entry, elen, JS_DupValue(ctx, value_js));
 
-            CHECK(!JS_IsException(v), "document.cookie: a cookie store entry could not be allocated");
             /* An ordinary property write on the agent's one jar — which is exactly why the store is a JS object:
                the heap COW captures it, so the arm that set this cookie is the only arm that reads it back. */
             CHECK(JS_SetProperty(ctx, jar, atom, v) >= 0,
@@ -930,6 +1032,7 @@ typedef struct {
     const char *key, *entry;      /* OWNED — JS_FreeCString */
     const char *name;  size_t nlen;
     const char *value; size_t vlen;
+    JSValue     val;              /* OWNED — the value as the JS string it was set from */
     size_t      plen;             /* §5.4 step 2's sort key: the cookie-path's length */
 } CjHit;
 
@@ -981,10 +1084,12 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
         size_t nlen, dlen, plen, vlen;
         bool secure, host_only, http_only, expired, keep;
 
+        JSValue val;
+
         CHECK(!JS_IsException(v), "a stored cookie could not be read back");
-        e = JS_ToCStringLen(ctx, &elen, v);
+        e = cj_entry_text(ctx, v, &elen, &val);
         JS_FreeValue(ctx, v);
-        CHECK(k != NULL && e != NULL, "a stored cookie could not be read as a string");
+        CHECK(k != NULL, "a stored cookie's key could not be read as a string");
         cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &path, &plen);
         cj_entry_parse(e, elen, &secure, &host_only, &http_only, &expired, &value, &vlen);
         /* Every read of this store is a "non-HTTP" API's, so §5.4 step 1's fourth bullet excludes an HttpOnly
@@ -1006,10 +1111,12 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
         if (!keep) {
             JS_FreeCString(ctx, k);
             JS_FreeCString(ctx, e);
+            JS_FreeValue(ctx, val);
             continue;
         }
         hits[nhit].key = k;
         hits[nhit].entry = e;
+        hits[nhit].val = val;
         hits[nhit].name = name;   hits[nhit].nlen = nlen;
         hits[nhit].value = value; hits[nhit].vlen = vlen;
         hits[nhit].plen = plen;
@@ -1049,6 +1156,7 @@ static void cj_hits_free(JSContext *ctx, CjHit *hits, uint32_t nhit)
     for (i = 0; i < nhit; i++) {
         JS_FreeCString(ctx, hits[i].key);
         JS_FreeCString(ctx, hits[i].entry);
+        JS_FreeValue(ctx, hits[i].val);
     }
     free(hits);
 }
@@ -1057,27 +1165,28 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
 {
     uint32_t nhit = 0, i;
     CjHit *hits = cj_collect(ctx, uri, &nhit);
-    char *acc = NULL;
-    size_t acc_len = 0;
-    JSValue out;
+    JSValue out = JS_NewStringLen(ctx, "", 0);
 
-    /* STEP 4: `name=value`, joined by "; ". */
+    CHECK(!JS_IsException(out), "document.cookie: the cookie string could not be allocated");
+    /* RFC 6265bis-22 §5.8.3 "Retrieval Algorithm" step 6: each cookie's name and "=" (the store holds no empty
+       name: §5.6 ignores one), its value, and "; " before every cookie but the first. Joined as strings, so a
+       value set from an unknown stays that unknown's piece of the result. */
     for (i = 0; i < nhit; i++) {
-        size_t add = (i ? 2 : 0) + hits[i].nlen + 1 + hits[i].vlen;
-        char *grown = lexbor_realloc(acc, acc_len + add + 1);
+        size_t plen = (i ? 2 : 0) + hits[i].nlen + 1;
+        char *pre = lexbor_malloc(plen + 1);
+        JSValue p;
 
-        CHECK(grown != NULL, "document.cookie: OOM building the cookie string");
-        acc = grown;
-        if (i) { memcpy(acc + acc_len, "; ", 2); acc_len += 2; }
-        memcpy(acc + acc_len, hits[i].name, hits[i].nlen); acc_len += hits[i].nlen;
-        acc[acc_len++] = '=';
-        memcpy(acc + acc_len, hits[i].value, hits[i].vlen); acc_len += hits[i].vlen;
-        acc[acc_len] = 0;
+        CHECK(pre != NULL, "document.cookie: OOM building the cookie string");
+        memcpy(pre, "; ", i ? 2 : 0);
+        memcpy(pre + (i ? 2 : 0), hits[i].name, hits[i].nlen);
+        pre[plen - 1] = '=';
+        p = JS_NewStringLen(ctx, pre, plen);
+        free(pre);
+        CHECK(!JS_IsException(p), "document.cookie: OOM building the cookie string");
+        out = concolic_string_concat(ctx, out, p);
+        out = concolic_string_concat(ctx, out, JS_DupValue(ctx, hits[i].val));
     }
     cj_hits_free(ctx, hits, nhit);
-    out = JS_NewStringLen(ctx, acc ? acc : "", acc_len);
-    free(acc);
-    CHECK(!JS_IsException(out), "document.cookie: the cookie string could not be allocated");
     return out;
 }
 
@@ -1094,12 +1203,13 @@ JSValue cookie_jar_cookie_list(JSContext *ctx, const UrlRecord *uri)
 
         CHECK(!JS_IsException(pair), "OOM building a cookie-list entry");
         name = JS_NewStringLen(ctx, hits[i].name, hits[i].nlen);
-        value = JS_NewStringLen(ctx, hits[i].value, hits[i].vlen);
+        value = JS_DupValue(ctx, hits[i].val);
         CHECK(!JS_IsException(name) && !JS_IsException(value),
               "OOM building a cookie-list entry's name and value");
         /* §5.3's stored fields, decoded where the standard that reads them decodes: Cookie Store API §7.1's
            "create a CookieListItem" runs UTF-8 decode without BOM on each of the two, and JS_NewStringLen is
-           that decode. The other five stored fields are deliberately not here — see cookie_jar.h. */
+           that decode; the value is the JS string it was set from, which that decode of its bytes is. The
+           other five stored fields are deliberately not here — see cookie_jar.h. */
         CHECK(JS_DefinePropertyValueUint32(ctx, pair, 0, name, JS_PROP_C_W_E) >= 0 &&
               JS_DefinePropertyValueUint32(ctx, pair, 1, value, JS_PROP_C_W_E) >= 0,
               "a cookie-list entry refused its own name and value");

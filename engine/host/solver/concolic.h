@@ -540,6 +540,9 @@ JSValue     concolic_string_concat(JSContext *ctx, JSValue a, JSValue b);
    piece, else §22.1.3.22 String.prototype.slice's derivation of it with `example` (consumed) as its example.
    JS_UNINITIALIZED where `s` records no pieces or the range is empty or crosses one. */
 JSValue     concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example);
+/* The UTF-16 code units the UTF-8 `s` (`n` bytes, as JS_ToCStringLen writes a String) spells: the unit a piece's
+   offsets count in. A four-byte sequence is a surrogate pair, every other lead byte one unit. */
+uint32_t    concolic_utf8_units(const char *s, size_t n);
 /* Propagation through a CONCATENATION — installed as JSConcolicHooks.add (JS_SetConcolicHooks). `op` names
    which spec algorithm the caller is performing, because 13.15.3's `+` has a numeric arm and 22.1.3.5's
    String.prototype.concat does not; see JSConcolicAddOp in quickjs.h. */

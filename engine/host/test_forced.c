@@ -1783,6 +1783,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "storedidb", HTML_STOREDIDB },
     { "histreload", HTML_HISTRELOAD },
     { "pieceslice", HTML_PIECESLICE },
+    { "cookieconst", HTML_COOKIECONST },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
@@ -16125,7 +16126,21 @@ TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
     fold_row(&pc_tt, &pc_why, chas, "NOT REACHED: no innerHTML @S record's source is rooted in the cookie string");
     fold_row(&pc_tt, &pc_why, chas && s_field(js, "innerHTML", csrc, "\"precondition\""),
              "the slice across both pieces is not labelled with the cookie's precondition");
+    /* `cookieconst`: a constant-set cookie read back carries no attacker root. */
+    const char *cr_why = NULL, *cn_why = NULL;
+    int cr_tt = 1, cn_tt = 1;
+    char ksrc[192] = "";
+    int khas = s_rooted_source(js, "innerHTML", "document.cookie", ksrc, sizeof ksrc);
+
+    fold_row(&cr_tt, &cr_why, !!strstr(js, "\"/api/cc-read\""),
+             "NOT REACHED: there is no /api/cc-read record, so the constant-set cookie was not read back");
+    fold_row(&cn_tt, &cn_why, khas, "NOT REACHED: no innerHTML @S record's source is rooted in the cookie string");
+    fold_row(&cn_tt, &cn_why, !s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src) &&
+                              !s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, src, sizeof src),
+             "a constant-set cookie read back reached innerHTML rooted in an attacker source");
     const Probe rows[] = {
+        { "cc-read", cr_tt, "/api/cc-read", SESS_EXPLORE, cr_why },
+        { "cc-no-attacker-root", cn_tt, "'ccView'", SESS_EXPLORE, cn_why },
         { "ps-piece-poc", pp_tt, "'psView'", SESS_EXPLORE, pp_why },
         { "ps-cross-precondition", pc_tt, "'psCross'", SESS_EXPLORE, pc_why },
     };

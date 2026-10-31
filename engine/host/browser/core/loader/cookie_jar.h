@@ -53,8 +53,9 @@ void cookie_jar_free(void);
    "act as it would when receiving a set-cookie-string for the document's URL via a non-HTTP API". `uri` is the
    REQUEST-URI: its host is §5.1.2's canonicalized request-host, its path is what §5.1.4's default-path is
    computed from, and its scheme is what §5.2.5's Secure attribute is measured against. A set-cookie-string the
-   standard says to ignore leaves the store untouched. */
-void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *set_cookie, size_t len);
+   standard says to ignore leaves the store untouched. `set_cookie` is the page's value, a String or an unknown
+   (borrowed): its bytes are its example where one is held, and the stored value is the JS string cut from it. */
+void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, JSValueConst set_cookie);
 
 /* §5.3 "RECEIVE A COOKIE" from `uri` for an HTTP API — a response's Set-Cookie field, which Fetch §4.7
    "HTTP-network fetch" stores when its request included credentials. The same parse and store as
@@ -141,7 +142,7 @@ char *cookie_jar_default_path(const UrlRecord *uri);
 
 /* §5.4's COOKIE-STRING for `uri` for a "non-HTTP" API — the cookies of this store that domain-match, path-match
    and pass the secure-only test, sorted by §5.4 step 2 and serialized `name=value` joined by "; ".
-   Returns an OWNED JS string. */
+   Returns an OWNED JS string, an unknown where a value was set from one (concolic_string_concat). */
 JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri);
 
 /* §5.4's COOKIE-LIST for `uri` — steps 1 and 2 alone, which is the half Cookie Store API §7.1 "Query cookies"
