@@ -101,6 +101,19 @@ static void c_alloc_span_refused(size_t n)
 }
 
 #if !defined(__EMSCRIPTEN__)
+/* glibc's mmap threshold, fixed before the first allocation. glibc otherwise raises it to the size of each mmapped
+   chunk freed (up to 32 MiB), after which large blocks live in the main arena, whose freed space is not returned to
+   the address space. Under an address-space limit the pager sells flows to fund a later large block, so a freed
+   large block must give its address space back: at the fixed threshold it is unmapped on free. Fixing it also fixes
+   the trim threshold at its default, so the arena's freed top is returned too. */
+#define C_ALLOC_MMAP_THRESHOLD (128 * 1024)
+__attribute__((constructor)) static void c_alloc_configure(void)
+{
+    CHECK(mallopt(M_MMAP_THRESHOLD, C_ALLOC_MMAP_THRESHOLD) == 1,
+          "the allocator refused a fixed mmap threshold — freed large blocks would stay in the arena and no sale "
+          "could return address space under a limit");
+}
+
 /* glibc's chunk header: the size word before the block, whose bit 1 marks a chunk mmapped on its own. A heap chunk
    is its usable size plus one word, an mmapped one its usable size plus two (malloc/malloc.c's musable). */
 static int c_alloc_mmapped(const void *p) { return (((const size_t *)p)[-1] & 2) != 0; }
