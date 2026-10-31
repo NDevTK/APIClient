@@ -304,13 +304,13 @@ typedef struct FlowAcct {
    a decision point (quickjs's JS_RunningSiteHash: the body's cross-session locator, which folds the bundle's
    content digest, plus the opcode offset), FLOW_SITE_DRIVE a driven body (its orphan hash). `seen` is the members'
    `orphan_seen`, part of the identity so the denominator is one number per site. */
-/* Named residual. Not covered: a code site's service is split between the `seen` classes standing at it; a member
-   preempted inside a quantum stands at its last fork's site rather than at the opcode it parked at; and the ledger
-   is not parked, so a cold-resumed member stands at its family's keyless site at zero service. Next diff builds:
-   the ledger keyed by code site alone with `seen` beside it, the parked opcode named from the flow's parked
-   continuation (a quickjs reader over JS_TakeParkedFlows' set), and the ledger in the cold tier's family record.
-   Absence shows as: two drives of one body at one in-body decision splitting `served`, a member that runs many
-   quanta without forking charging a site it left long ago, and a resumed session re-serving sites from zero. */
+/* A member stands where it last decided (the fork) or where its turn last suspended it (engine.c's step, through
+   quickjs's JS_FlowSiteHash), so a quantum's service is charged to the code that quantum ran from.
+   Named residual. Not covered: a code site's service is split between the `seen` classes standing at it; and the
+   ledger is not parked, so a cold-resumed member stands at its family's keyless site at zero service. Next diff
+   builds: the ledger keyed by code site alone with `seen` beside it, and the ledger in the cold tier's family
+   record. Absence shows as: two drives of one body at one in-body decision splitting `served`, and a resumed session
+   re-serving sites from zero. */
 struct FlowSite {
     FlowAcct *fam;              /* the family root whose ledger holds it; never NULL */
     struct FlowSite *hnext;     /* its chain in `fam->sites` */

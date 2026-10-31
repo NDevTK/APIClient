@@ -117154,6 +117154,49 @@ int JS_RunningSiteHash(JSContext *ctx, uint64_t *out)
     return 0;
 }
 
+/* A suspended activation's site, JS_RunningSiteHash's walk over the chain the preempt stashed: innermost first
+   (`tramp_top`, then each caller), each frame read where it lives (tramp_live_sf), and the base frame last. */
+static int flow_chain_site_hash(JSRuntime *rt, JSAsyncFunctionState *s, uint64_t *out)
+{
+    TrampFrame *t;
+    JSFunctionBytecode *b;
+
+    for (t = (TrampFrame *)s->tramp_top; t; t = t->up) {
+        JSStackFrame *sf = tramp_live_sf(t);
+        if (sf->is_call_root)
+            continue;
+        b = JS_GetFunctionBytecode(sf->cur_func);
+        if (b == NULL)
+            continue;
+        *out = orphan_hash_u32(orphan_hash_body(rt, b), js_frame_pc_pos(sf, b));
+        return 1;
+    }
+    if (s->frame.is_call_root || s->frame.cur_pc == NULL)
+        return 0;
+    b = JS_GetFunctionBytecode(s->frame.cur_func);
+    if (b == NULL)
+        return 0;
+    *out = orphan_hash_u32(orphan_hash_body(rt, b), js_frame_pc_pos(&s->frame, b));
+    return 1;
+}
+
+int JS_FlowSiteHash(JSContext *ctx, JSValue *flow, uint64_t *out)
+{
+    DCHECK(flow != NULL && out != NULL, "a suspended flow's site was asked of no flow or with nowhere to put it");
+    return flow_chain_site_hash(ctx->rt, (JSAsyncFunctionState *)flow, out);
+}
+
+/* The last continuation parked is the one the step stopped in: the pump appends, and a step's preempt is its
+   last park. */
+int JS_ParkedFlowsSiteHash(JSContext *ctx, uint64_t *out)
+{
+    DCHECK(out != NULL, "a parked flow's site was asked with nowhere to put it");
+    if (list_empty(&ctx->rt->parked_flows))
+        return 0;
+    return flow_chain_site_hash(ctx->rt, list_entry(ctx->rt->parked_flows.prev, JSAsyncFunctionState, park_link),
+                                out);
+}
+
 /* ── AN INTRINSIC'S NAME ──────────────────────────────────────────────────────────────────────────────────────
  *
  * THE SECOND OF THE TWO NAME SOURCES A VALUE CAN HAVE, and the one that needs no per-object state at all. An

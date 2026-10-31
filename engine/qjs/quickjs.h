@@ -3284,6 +3284,11 @@ JS_EXTERN uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn);
    offset, never a pc2line resolution, which makes it reproducible within a BUILD and not across two of them.
    See the definition's named residual for what that costs and what replaces it. */
 JS_EXTERN int JS_RunningSiteHash(JSContext *ctx, uint64_t *out);
+/* The same name for a flow that is not running: the site its suspended chain stands at, the innermost bytecode
+   frame of the activation `flow` (a JS_FlowClone currency), or of the runtime's last parked continuation. Answers
+   0 where no page frame stands in it. */
+JS_EXTERN int JS_FlowSiteHash(JSContext *ctx, JSValue *flow, uint64_t *out);
+JS_EXTERN int JS_ParkedFlowsSiteHash(JSContext *ctx, uint64_t *out);
 /* The request-site census, a measurement of reach and never an order or a result. A site is an OP_get_var in
    final bytecode whose spelling `JSConcolicHooks.global_named` or `.global_member_named` claimed as a door's
    entry (`fetch`, `window.fetch`), so dead code holds none. It cannot see a member door (`navigator.sendBeacon`,

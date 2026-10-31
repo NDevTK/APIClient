@@ -12447,6 +12447,15 @@ static int engine_sched_slice(void) {
             g_step_us += now - t0;
             g_step_work += step_work;
             flow_age_running(step_work);
+            /* The service just charged was the site the flow stood at while it ran. A turn that ended inside a
+               program or a job leaves it standing at the opcode it parked at (solver/flow.c's FlowSite), read off
+               the chain it suspended: the next quantum serves that code, not the last fork's. */
+            if (r != FLOW_STEP_DONE && !unit_ended) {
+                uint64_t site;
+                if (flow_frame(cur) ? JS_FlowSiteHash(ctx, (JSValue *)flow_frame(cur), &site)
+                                    : JS_ParkedFlowsSiteHash(ctx, &site))
+                    flow_stand_at(cur, FLOW_SITE_CODE, site);
+            }
 #if APICLIENT_DEV
             /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, the UCB bonus that
                keeps a never-served site from starving, is a floor on the weight flow_pick returns; flow_pick_walk's
