@@ -1232,6 +1232,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxcompile.h"
 #include "fixture/b64coerce.h"
 #include "fixture/dateparsecoerce.h"
+#include "fixture/capstackproxy.h"
 #include "fixture/rxliteral.h"
 #include "fixture/rxinsert.h"
 #include "fixture/rxtimer.h"
@@ -1808,6 +1809,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "rxcompile", HTML_RXCOMPILE },
     { "b64coerce", HTML_B64COERCE },
     { "dateparsecoerce", HTML_DATEPARSECOERCE },
+    { "capstackproxy", HTML_CAPSTACKPROXY },
     { "rxliteral", HTML_RXLITERAL },
     { "rxinsert", HTML_RXINSERT },
     { "rxtimer", HTML_RXTIMER },
@@ -17149,6 +17151,19 @@ TF_UNIT void probes_dateparsecoerce(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `capstackproxy` document (fixture/capstackproxy.h): Error.captureStackTrace's define ran the
+   page's trap once and installed a non-enumerable string. */
+TF_UNIT void probes_capstackproxy(const char *js, Probe *tab, int *n) {
+    const char *d_why = NULL; int d_tt = 1;
+    fold_row(&d_tt, &d_why, param_value_is(js, "/api/csp-define", "got", "3-string-false"),
+             "no /api/csp-define?got=3-string-false record: Error.captureStackTrace's define did not run the "
+             "page's defineProperty trap once and install a non-enumerable string");
+    const Probe rows[] = {
+        { "csp-define", d_tt, "/api/csp-define", SESS_EXPLORE, d_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22513,6 +22528,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxcompile(js, probes, &np);
     probes_b64coerce(js, probes, &np);
     probes_dateparsecoerce(js, probes, &np);
+    probes_capstackproxy(js, probes, &np);
     probes_rxliteral(js, probes, &np);
     probes_rxinsert(js, probes, &np);
     probes_rxtimer(js, probes, &np);
