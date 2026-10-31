@@ -399,6 +399,11 @@ void      cow_set_ctx(JSContext *ctx);
 void      cow_engine_write_begin(void);
 void      cow_engine_write_end(void);
 
+/* The capture census over composing classes (JS_ClassComposesOwnProperty): rows by class id, `rows()` of them;
+   a row's class name, or NULL for an id never captured, with its lifetime entry count in `*n`. */
+uint32_t    cow_composing_capture_rows(void);
+const char *cow_composing_capture_row(uint32_t i, long *n);
+
 /* Install as JSTimeTravelHooks.async_fork: record the per-flow swap of a shared suspended ASYNC activation. The
    engine cloned it because resuming CONSUMES it; this makes the clone what this flow's resolve/reject closure
    names, leaving the original as the baseline every other arm still finds. */

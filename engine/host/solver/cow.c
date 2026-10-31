@@ -870,6 +870,46 @@ static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
     }
 }
 
+/* The slots captured on an object whose class composes [[GetOwnProperty]], per class id, named when first seen:
+   lifetime counts of entries, read by cow_composing_capture_rows. */
+typedef struct { char *name; long n; } CowComposingRow;
+static CowComposingRow *g_composing;
+static uint32_t g_composing_cap;
+
+static void cow_composing_note(JSContext *ctx, JSValueConst obj)
+{
+    JSClassID id = JS_GetClassID(obj);
+
+    if (id >= g_composing_cap) {
+        uint32_t cap = id + 16;
+        CowComposingRow *t = realloc(g_composing, sizeof *t * cap);
+
+        CHECK(t != NULL, "cow: OOM growing the composing-class capture census");
+        memset(t + g_composing_cap, 0, sizeof *t * (cap - g_composing_cap));
+        g_composing = t;
+        g_composing_cap = cap;
+    }
+    if (!g_composing[id].name) {
+        JSAtom a = JS_GetClassName(JS_GetRuntime(ctx), id);
+        const char *s = JS_AtomToCString(ctx, a);
+
+        CHECK(s != NULL, "cow: OOM naming a composing class");
+        g_composing[id].name = strdup(s);
+        CHECK(g_composing[id].name != NULL, "cow: OOM naming a composing class");
+        JS_FreeCString(ctx, s);
+    }
+    g_composing[id].n++;
+}
+
+const char *cow_composing_capture_row(uint32_t i, long *n)
+{
+    if (i >= g_composing_cap || !g_composing[i].name) return NULL;
+    *n = g_composing[i].n;
+    return g_composing[i].name;
+}
+
+uint32_t cow_composing_capture_rows(void) { return g_composing_cap; }
+
 void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
@@ -878,6 +918,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
        object (flow_gen 0) and any object that existed at the fork (flow_gen <= fork_gen) IS shared and captured. */
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
     if (cow_hash_find(d, cow_key_slot(obj, atom)) >= 0) return;   /* capture each slot ONCE (O(1)) */
+    if (JS_ClassComposesOwnProperty(ctx, obj)) cow_composing_note(ctx, obj);
 
     cow_capture_begin();
     JSPropertyDescriptor base;

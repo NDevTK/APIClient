@@ -931,6 +931,39 @@ static char *cow_site_hist_json(void) {
     return out;
 }
 
+/* The slots captured on objects whose class composes [[GetOwnProperty]], by class name (cow.h's census): which
+   of those classes a flow wrote while shared, the population whose baseline JS_GetOwnSlotDesc reads past the
+   hook. `{}` is no such capture. Class names are this engine's identifiers, unescaped, as the DCHECK states.
+   NULL on allocation failure. */
+static char *cow_composing_json(void) {
+    uint32_t rows = cow_composing_capture_rows(), i;
+    size_t n = 3, len = 0;
+    char *out;
+    long c;
+
+    for (i = 0; i < rows; i++) {
+        const char *name = cow_composing_capture_row(i, &c);
+        if (name) n += strlen(name) + 26;
+    }
+    out = json_buf_block(n);
+    if (!out) return NULL;
+    out[len++] = '{';
+    for (i = 0; i < rows; i++) {
+        const char *name = cow_composing_capture_row(i, &c);
+        int w;
+
+        if (!name) continue;
+        DCHECKF(strcspn(name, "\"\\") == strlen(name), "a composing class is named `%s`, carrying a quote", name);
+        if (len > 1) out[len++] = ',';
+        w = snprintf(out + len, n - len, "\"%s\":%ld", name, c);
+        DCHECKF(w > 0 && (size_t)w < n - len, "the composing-class census overran its counted size at `%s`", name);
+        len += (size_t)w;
+    }
+    out[len++] = '}';
+    out[len] = 0;
+    return out;
+}
+
 /* What a context switch costs and what the two chains still hold, rendered from cow.c's and dom_cow.c's own
    stats (see result.h); it decides nothing. Rows are grouped below at their format lines.
    `installs`/`entries`/`worst`/`mean` are the cost of a switch: lifetime counts `installs` and `entries`
@@ -945,7 +978,7 @@ char *result_swap_json(void) {
     long roa = 0, rog = 0, ros = 0, rod = 0;
     RenderingCensus rc;
     char asks[COW_STATE_KINDS_JSON_MAX], made[COW_STATE_KINDS_JSON_MAX];
-    char *sites, *out;
+    char *sites, *composing, *out;
 
     cow_swap_stats(&sc, &st, &sm);
     cow_coro_swap_stats(&gc, &gm, &ac, &am, &agc, &agm);
@@ -959,6 +992,8 @@ char *result_swap_json(void) {
     cow_state_hist_json(made, sizeof made, 1, "cowStateMade");
     sites = cow_site_hist_json();
     if (!sites) return NULL;   /* this census is absent — composef's own arm for the same failure */
+    composing = cow_composing_json();
+    if (!composing) { free(sites); return NULL; }
     out = composef(
                  "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
                  /* Retention, which the cost rows are blind to: gauges of the live frozen chains
@@ -1020,14 +1055,17 @@ char *result_swap_json(void) {
                     is asserted in cow.c. `cowHostRecAsksBySite` splits the `hostRec` asks per component site, a
                     per-site lifetime count summing to `cowStateAsks.hostRec`, asserted over the counters in
                     cow.c's `cow_host_rec_sites` and over the rendered rows by engine/build.mjs's @SWAP reader. */
-                 "\"cowStateAsks\":%s,\"cowStateMade\":%s,\"cowHostRecAsksBySite\":%s}",
+                 "\"cowStateAsks\":%s,\"cowStateMade\":%s,\"cowHostRecAsksBySite\":%s,"
+                 /* Slots captured on a composing class's object, by class: cow_composing_json. */
+                 "\"cowComposingCaptures\":%s}",
                  sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de,
                  dw, dsi, du, dn, df, dr, dss, roa, rog, ros, rod,
                  rc.declines[RENDERING_DECLINE_NO_OPPORTUNITY], rc.declines[RENDERING_DECLINE_FRAME_AHEAD],
                  rc.declines[RENDERING_DECLINE_TIMER_FIRST], rc.declines[RENDERING_DECLINE_REPLY_OWED],
                  rc.step1_no_navigable, rc.step1_hidden, rc.step1_render_blocked, rc.step1_no_work,
-                 gc, gm, ac, am, agc, agm, asks, made, sites);
+                 gc, gm, ac, am, agc, agm, asks, made, sites, composing);
     free(sites);
+    free(composing);
     return out;
 }
 

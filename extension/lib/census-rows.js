@@ -16,6 +16,6 @@ const CENSUS_ROWS = Object.freeze({
   }),
   _swap: Object.freeze({
     numeric: Object.freeze(["installs","entries","worst","mean","heapSegs","heapSegEntries","domSegs","domSegEntries","domWrites","domWritesSited","domWritesUnsited","domSites","domSiteFolds","domSiteRepeats","domSiteSetsSeen","renderingOpportunityAsks","renderingOpportunities","renderingOpportunitiesSited","renderingDigests","renderingDeclinedNoOpportunity","renderingDeclinedFrameAhead","renderingDeclinedTimerFirst","renderingDeclinedReplyOwed","renderingStep1NoNavigable","renderingStep1Hidden","renderingStep1RenderBlocked","renderingStep1NoWork","coroSwapGenCalls","coroSwapGenMade","coroSwapAsyncCalls","coroSwapAsyncMade","coroSwapAgenCalls","coroSwapAgenMade"]),
-    object: Object.freeze(["cowStateAsks","cowStateMade","cowHostRecAsksBySite"]),
+    object: Object.freeze(["cowStateAsks","cowStateMade","cowHostRecAsksBySite","cowComposingCaptures"]),
   }),
 });

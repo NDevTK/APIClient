@@ -1637,6 +1637,9 @@ JS_EXTERN int JS_GetOwnPropertyNames(JSContext *ctx, JSPropertyEnum **ptab,
    [[GetOwnProperty]] hook is never asked: what it composes (a named or indexed property) is not storage.
    1 = own property (*pd owned), 0 = absent, -1 = threw. */
 JS_EXTERN int JS_GetOwnSlotDesc(JSContext *ctx, JSPropertyDescriptor *pd, JSValueConst obj, JSAtom prop);
+/* Whether `obj`'s class composes [[GetOwnProperty]] in an exotic hook (a Proxy's trap excepted): the population
+   whose hook the read above never asks. */
+JS_EXTERN bool JS_ClassComposesOwnProperty(JSContext *ctx, JSValueConst obj);
 /* Its VALUE projection, for a component reading a slot IT created (an idl_slots record, a listener map, a key
    path's next step). An accessor is refused on this side — a component's own internal slot is one nothing else
    can define, so an accessor there says the read landed on an object that is not the one it named.

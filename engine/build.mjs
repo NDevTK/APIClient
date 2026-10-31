@@ -3888,7 +3888,7 @@ const heapFields = sourceFact(() => censusRowSet(
   "from the composer rather than from a list beside it"));
 const swapFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_swap_json(void)", "\n}\n",
-  ["cowStateAsks", "cowStateMade", "cowHostRecAsksBySite"],
+  ["cowStateAsks", "cowStateMade", "cowHostRecAsksBySite", "cowComposingCaptures"],
   "the @SWAP reader states which rows it requires of the delta-swap census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 function lastTwo(out, marker, fields, composer) {

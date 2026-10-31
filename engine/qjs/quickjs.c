@@ -16156,6 +16156,18 @@ int JS_GetOwnPropertyNoUserCode(JSContext *ctx, JSPropertyDescriptor *desc,
    FUNCTION OBJECTS, exactly as [[GetOwnProperty]] hands them to `Object.getOwnPropertyDescriptor`, and neither
    is called here or at the restore.
    1 = own property (*pd owned: flags, and value XOR getter/setter), 0 = absent, -1 = threw. */
+bool JS_ClassComposesOwnProperty(JSContext *ctx, JSValueConst obj)
+{
+    JSObject *p;
+    const JSClassExoticMethods *em;
+
+    if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT) return false;
+    p = JS_VALUE_GET_OBJ(obj);
+    if (!p->is_exotic || p->fast_array || p->class_id == JS_CLASS_PROXY) return false;
+    em = ctx->rt->class_array[p->class_id].exotic;
+    return em && em->get_own_property;
+}
+
 int JS_GetOwnSlotDesc(JSContext *ctx, JSPropertyDescriptor *pd, JSValueConst obj, JSAtom prop)
 {
     JSObject *p;

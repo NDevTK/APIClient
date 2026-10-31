@@ -349,7 +349,7 @@ METRIC(tw_layout_line_input, "twLayoutLineInput", LIFETIME, "item", PROCESS, "co
 METRIC(tw_selector_match_spans, "twSelectorMatchSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_selector_match_bytes, "twSelectorMatchTests", LIFETIME, "rule", PROCESS, "core/timing/thread_work.c", INT)
 METRIC(tw_selector_match_us, "twSelectorMatchUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)
-/* …and the elements a named-property lookup visited (core/dom/document_named.c), its charged input: within one
+/* …and the elements the named getters' resting walk visited (core/dom/named_walk.c), its charged input: within one
    run, the lookup's share of `twChargedUnits`. */
 METRIC(tw_dom_walk_input, "twDomWalkInput", LIFETIME, "element", PROCESS, "core/timing/thread_work.c", INT)
 /* …and which arm each overrunning turn was in: `stepUnitRuns` restricted to `sliceOverruns`'
