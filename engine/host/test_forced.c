@@ -20573,14 +20573,13 @@ TF_UNIT void probes_platform(const char *js, Probe *tab, int *n) {
     /* The whole-document negative over this document's `wrong` tokens, as node-algo's is over its own; the
        message carries the record text before the first one, so the statement is named. */
     {
-        static char wrongat[320];
-        const char *w = strstr(js, "wrong"), *api = w, *at = w;
+        static char wrongat[1400];
+        const char *w = strstr(js, "wrong"), *api = w;
 
         while (api && api > js && memcmp(api, "\"/api/", 6) != 0) api--;
-        while (at && at > js && w - at < 40) at--;
         if (w)
-            snprintf(wrongat, sizeof wrongat, "a statement recorded `wrong` (or `-wrongreason`) under %.40s: "
-                     "…%.60s", api, at);
+            snprintf(wrongat, sizeof wrongat, "a statement recorded `wrong` (or `-wrongreason`), in the record "
+                     "%.*s", (int)(w - api + 12 < 1300 ? w - api + 12 : 1300), api);
         fold_row(&platalgo_tt, &platalgo_why, w == NULL, wrongat);
     }
     /* §4.13: the async reaction's loop ran to its END across the preempts, not to some suspended partial. */
