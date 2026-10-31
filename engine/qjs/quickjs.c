@@ -584,6 +584,12 @@ struct JSRuntime {
     JSMemoryReclaimFunc *mem_reclaim;
     void *mem_reclaim_opaque;
     bool in_mem_reclaim;
+    /* The last refusal's reading (JS_ReclaimMemory): the embedder answered that it is not the floor, so the failure is
+       its caller's to handle or the program's to see. */
+    bool mem_reclaim_not_floor;
+    /* The allocation just refused met the floor with an embedder installed: JS_ThrowOutOfMemory refuses to show it
+       to the program. Cleared at every allocation's entry. */
+    bool mem_refused_at_floor;
 
     JSPromiseHook *promise_hook;
     void *promise_hook_opaque;
@@ -3491,7 +3497,11 @@ int JS_ReclaimMemory(JSRuntime *rt, size_t wanted)
     if (!rt->mem_reclaim || rt->in_mem_reclaim || rt->gc_phase != JS_GC_PHASE_NONE || rt->in_free)
         return 0;
     rt->in_mem_reclaim = true;
-    freed = rt->mem_reclaim(rt, rt->mem_reclaim_opaque, wanted) != 0;
+    {
+        int r = rt->mem_reclaim(rt, rt->mem_reclaim_opaque, wanted);
+        rt->mem_reclaim_not_floor = r < 0;
+        freed = r > 0;
+    }
     rt->in_mem_reclaim = false;
     return freed;
 }
@@ -3514,6 +3524,7 @@ void *js_calloc_rt(JSRuntime *rt, size_t count, size_t size)
         if (unlikely(count != (count * size) / size))
             return NULL;
 
+    rt->mem_refused_at_floor = false;
     s = &rt->malloc_state;
     /* THE REFUSAL IS A LOOP, NOT A RETURN. Both ways this allocation can be refused — the runtime's own budget
        and the backing allocator saying no — go through the same edge, and the loop ends when the embedder
@@ -3526,8 +3537,10 @@ void *js_calloc_rt(JSRuntime *rt, size_t count, size_t size)
             if (likely(ptr != NULL))
                 break;
         }
-        if (!JS_ReclaimMemory(rt, count * size))
+        if (!JS_ReclaimMemory(rt, count * size)) {
+            rt->mem_refused_at_floor = rt->mem_reclaim != NULL && !rt->mem_reclaim_not_floor;
             return NULL;
+        }
     }
 
     s->malloc_count++;
@@ -3544,6 +3557,7 @@ void *js_malloc_rt(JSRuntime *rt, size_t size)
     if (unlikely(size == 0))
         return NULL;
 
+    rt->mem_refused_at_floor = false;
     s = &rt->malloc_state;
     for (;;) {   /* the refusal edge — see js_calloc_rt */
         /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
@@ -3552,8 +3566,10 @@ void *js_malloc_rt(JSRuntime *rt, size_t size)
             if (likely(ptr != NULL))
                 break;
         }
-        if (!JS_ReclaimMemory(rt, size))
+        if (!JS_ReclaimMemory(rt, size)) {
+            rt->mem_refused_at_floor = rt->mem_reclaim != NULL && !rt->mem_reclaim_not_floor;
             return NULL;
+        }
     }
 
     s->malloc_count++;
@@ -3593,6 +3609,7 @@ void *js_realloc_rt(JSRuntime *rt, void *ptr, size_t size)
         js_free_rt(rt, ptr);
         return NULL;
     }
+    rt->mem_refused_at_floor = false;
     old_size = js_arena_usable_size(rt, ptr);
     s = &rt->malloc_state;
     for (;;) {   /* the refusal edge — see js_calloc_rt. js_arena_realloc leaves `ptr` intact when it refuses,
@@ -3603,8 +3620,10 @@ void *js_realloc_rt(JSRuntime *rt, void *ptr, size_t size)
             np = js_arena_realloc(rt, ptr, size);
             if (likely(np != NULL)) { ptr = np; break; }
         }
-        if (!JS_ReclaimMemory(rt, size))
+        if (!JS_ReclaimMemory(rt, size)) {
+            rt->mem_refused_at_floor = rt->mem_reclaim != NULL && !rt->mem_reclaim_not_floor;
             return NULL;
+        }
     }
 
     s->malloc_size += js_arena_usable_size(rt, ptr) - old_size;
@@ -13765,6 +13784,11 @@ static int JS_ThrowTypeErrorReadOnly(JSContext *ctx, int flags, JSAtom atom)
    as JS_ThrowError2 does when construction itself fails. */
 JSValue JS_ThrowOutOfMemory(JSContext *ctx)
 {
+    /* A request the embedder could not fund with a frontier behind it is the physical floor, not a fact about the
+       program: thrown, it would run the page's catch arms in a world no browser produces. */
+    CHECK(!ctx->rt->mem_refused_at_floor,
+          "an allocation the embedder could not fund reached the program as an out-of-memory throw — a refusal at the "
+          "floor, or one asked where no sale may run, is fatal; only a request no memory could hold is the program's");
     return JS_Throw(ctx, JS_IsUndefined(ctx->oom_error) ? JS_NULL : js_dup(ctx->oom_error));
 }
 

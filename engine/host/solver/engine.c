@@ -11280,6 +11280,8 @@ static void engine_park_frontier(JSContext *ctx, Flow *cur)
  * legal, outside which an allocation fails as an allocation. */
 static int g_reclaim_allowed;
 
+/* How deep the scheduler is inside a step's armed region (engine_sched_slice), 0 between steps. */
+static int g_in_step;
 static int engine_reclaim_set(int v) { int prev = g_reclaim_allowed; g_reclaim_allowed = v; return prev; }
 
 /* The flow being switched in, while its delta is applied: not yet the running flow (flow_set_running comes after
@@ -11355,9 +11357,13 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     /* The ask is counted before it is judged: a refusal counted only where it is honoured would report the same 0
        as no pressure. */
     g_reclaim_asks++;
+    /* Not the floor, answered negative (quickjs.h's JSMemoryReclaimFunc): a request past the instance's whole limit,
+       which no sale could fund, and an ask between steps, whose caller sells at rest and composes again. */
+    if (g_ram_limit != 0 && (uint64_t)wanted > g_ram_limit) return -1;
     if (!g_reclaim_allowed) {
         g_reclaim_unarmed++;
-        return 0;
+        /* Inside a step with the safepoint closed, no caller recovers: that refusal is the floor. */
+        return g_in_step ? 0 : -1;
     }
     /* The hook is installed with the session and removed with it, so reaching here without one is a reclaim
        against a frontier that is gone. */
@@ -12160,6 +12166,7 @@ static int engine_sched_slice(void) {
                flow's own. Restored rather than cleared, because the step can reach this loop again through a
                nested driver. */
             int prev_reclaim = engine_reclaim_set(1);
+            g_in_step++;
             /* The scheduler's pick is behind this line (solve_seed_candidates, flow_next_to_run, the context switch,
                solve_flow_begin), and the flow is switched in but has executed nothing. `detail` is the switch count:
                a stray completion with it unchanged is the seeding or the pick, one with it just incremented is the
@@ -12300,6 +12307,7 @@ static int engine_sched_slice(void) {
                into this flow's delta and queues its task on this flow, so its allocations may sell the tail like
                the step's. Nothing since flow_step holds a position in the frontier, and the sale never takes the
                running flow. */
+            g_in_step--;
             engine_reclaim_set(prev_reclaim);
             /* The charge, billed to the flow that ran: `flow_age_running` bills whoever the registry says is
                running, which is the flow this step advanced only while nothing since the switch-in changed it
