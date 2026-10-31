@@ -1246,6 +1246,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/dateparsecoerce.h"
 #include "fixture/capstackproxy.h"
 #include "fixture/rxmodule.h"
+#include "fixture/rxmodstatic.h"
 #include "fixture/rxliteral.h"
 #include "fixture/rxinsert.h"
 #include "fixture/rxtimer.h"
@@ -1824,6 +1825,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "dateparsecoerce", HTML_DATEPARSECOERCE },
     { "capstackproxy", HTML_CAPSTACKPROXY },
     { "rxmodule", HTML_RXMODULE },
+    { "rxmodstatic", HTML_RXMODSTATIC },
     { "rxliteral", HTML_RXLITERAL },
     { "rxinsert", HTML_RXINSERT },
     { "rxtimer", HTML_RXTIMER },
@@ -17202,6 +17204,30 @@ TF_UNIT void probes_rxmodule(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxmodstatic` document (fixture/rxmodstatic.h): the statically imported module's literal
+   program matches, and its compile rested inside the module source's parse. The document runs no RegExp
+   constructor or compile, so every rest it counts is the literal's. */
+TF_UNIT void probes_rxmodstatic(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, !!strstr(js, "\"/api/rxs\""),
+             "NOT REACHED: there is no /api/rxs record, so the module script never ran");
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/rxs", "m", "true"),
+             "the module compiled from the fetched source does not export the matcher's true answer");
+    const char *r_why = NULL; int r_tt = 1;
+    fold_row(&r_tt, &r_why, rests != NULL,
+             "the result document carries no `twRegexpCompileRests` row from solver/metrics/cold.def");
+    fold_row(&r_tt, &r_why, nrests >= 1,
+             "the imported module source's parse took no rest inside its literal, so it ran without a slot to "
+             "hand the thread back through");
+    const Probe rows[] = {
+        { "rxs-match", m_tt, "/api/rxs", SESS_EXPLORE, m_why },
+        { "rxs-rests", r_tt, "/api/rxs", SESS_EXPLORE, r_why, .gate = "rxs-match" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22568,6 +22594,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_dateparsecoerce(js, probes, &np);
     probes_capstackproxy(js, probes, &np);
     probes_rxmodule(js, probes, &np);
+    probes_rxmodstatic(js, probes, &np);
     probes_rxliteral(js, probes, &np);
     probes_rxinsert(js, probes, &np);
     probes_rxtimer(js, probes, &np);
