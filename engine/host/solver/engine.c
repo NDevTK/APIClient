@@ -9041,28 +9041,51 @@ static int flow_step_agent(JSContext *ctx, Flow *f) {
     if (JS_HasParkedFlow(rt)) {
         g_step_unit = STEP_UNIT_AGENT_RESUME_PARKED;
         JS_ResumeParkedFlow(rt, &cv);
-    } else if (!JS_IsUndefined(a->module)) {
+    } else if (!JS_IsUndefined(a->program) && a->program_module) {
         /* A module worker's root: "run the module script", evaluated in the agent's realm on its own turn. The
-           evaluation promise settles through the module bodies' own continuations. */
-        JSValue m = a->module, url_v = JS_GetPropertyUint32(a->realm, m, 0), src_v = JS_GetPropertyUint32(a->realm, m, 1);
-        const char *url = JS_ToCString(a->realm, url_v);
-        size_t src_n = 0;
-        const char *src = JS_ToCStringLen(a->realm, &src_n, src_v);
+           evaluation promise settles through the module bodies' own continuations. Its parse rests where the
+           scheduler asks: the program stays on the agent and the next turn continues it. */
+        FlowAgentCompile *c = flow_agent_compile_of(a);
         JSValue ev = JS_UNDEFINED;
+        int r;
 
         g_step_unit = STEP_UNIT_AGENT_EVAL_MODULE;
-        a->module = JS_UNDEFINED;
-        CHECK(url && src, "engine: OOM reading a module worker's program");
-        program_ran = JS_FlowEvalModule(a->realm, src, src_n, url, JS_EVAL_TYPE_MODULE, &ev, NULL) > 0;
+        r = JS_FlowEvalModule(a->realm, c->src, c->n, c->url, JS_EVAL_TYPE_MODULE, &ev, &c->carrier);
         a = flow_agent_running(f);   /* the evaluation may have added an agent, moving the list */
+        if (r == 0)
+            return 0;
+        program_ran = r > 0;
         if (!program_ran) JS_FreeValue(a->realm, JS_GetException(a->realm));
-        JS_FreeCString(a->realm, url);
-        JS_FreeCString(a->realm, src);
-        JS_FreeValue(a->realm, url_v);
-        JS_FreeValue(a->realm, src_v);
-        JS_FreeValue(a->realm, m);
+        flow_agent_compile_drop(a);
+        JS_FreeValue(a->realm, a->program);
+        a->program = JS_UNDEFINED;
         evaluation = ev;
         program_done = 1;
+    } else if (!JS_IsUndefined(a->program)) {
+        /* A classic worker's script: HTML §8.1.4.2 "creating a classic script" on the agent's own turn, its parse
+           resting where the scheduler asks. A parse error is a script whose error to rethrow is set, which
+           onComplete treats as a null script, through the program-done hook as a module's is. */
+        FlowAgentCompile *c = flow_agent_compile_of(a);
+        JSValue fn = JS_UNDEFINED;
+        int r;
+
+        g_step_unit = STEP_UNIT_AGENT_COMPILE_PROGRAM;
+        r = JS_FlowCompileStep(a->realm, c->src, c->n, c->url, 0, &fn, &c->carrier);
+        if (r == 0)
+            return 0;
+        flow_agent_compile_drop(a);
+        JS_FreeValue(a->realm, a->program);
+        a->program = JS_UNDEFINED;
+        if (r < 0) {
+            JS_FreeValue(a->realm, JS_GetException(a->realm));
+            program_ran = 0;
+            program_done = 1;
+        } else {
+            a->frame = JS_FlowInstantiate(a->realm, fn);
+            JS_FreeValue(a->realm, fn);
+            CHECK(a->frame != NULL, "engine: a classic worker's program frame could not be built");
+            return 0;   /* the program runs on the agent's next turns, through the frame arm */
+        }
     } else if (a->frame) {
         int r;
 

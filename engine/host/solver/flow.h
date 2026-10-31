@@ -150,9 +150,13 @@ typedef struct FlowAgent {
     JSContext *realm;
     /* Engine work retired while this agent was selected, which flow_select_agent charges it. */
     uint64_t work;
-    /* A module worker's program not yet evaluated: [url, source text] (HTML §10.2.4 run a worker step 13's module
-       worker script graph's root), evaluated when the agent is next selected; JS_UNDEFINED otherwise. Owned. */
-    JSValue module;
+    /* A worker's program not yet run: [url, source text] (HTML §10.2.4 run a worker: the classic script, or the
+       module worker script graph's root when `program_module`), compiled when the agent is next selected;
+       JS_UNDEFINED otherwise. Owned. `program_compile` is its parse in flight across the rests it takes (a
+       FlowAgentCompile, a cache over `program`: a fork sheds it, flow_agent_compile_drop releases it). */
+    JSValue program;
+    uint8_t program_module;
+    void *program_compile;
     /* `frame` is HTML §8.1.4.4 run a classic script step 8's report of the program's abrupt completion rather
        than the program; the program's steps after it run when the report ends. */
     uint8_t reporting;
@@ -738,6 +742,15 @@ int flow_select_other_agent(JSContext *ctx, Flow *f);
 int flow_agent_add(Flow *f, JSAgentRecord *agent, JSContext *realm);
 /* The entry of `f`'s agent list for `agent`, which must be one of the flow's. */
 FlowAgent *flow_agent_of(Flow *f, JSAgentRecord *agent);
+/* An agent's program parse in flight: the UTF-8 it borrows for its whole length and the parked carrier. */
+typedef struct {
+    void *carrier;
+    const char *src, *url;
+    size_t n;
+} FlowAgentCompile;
+/* The agent's compile record, made from `program` on first use. */
+FlowAgentCompile *flow_agent_compile_of(FlowAgent *a);
+void flow_agent_compile_drop(FlowAgent *a);
 /* Gives a forked arm its parent's agent list: every agent the parent was not running gets a clone of its base and
    of its parks, and the arm selects the agent the parent was running, whose base and parks the fork's caller
    clones. The arm's own first agent is its root realm's, the parent's first. */

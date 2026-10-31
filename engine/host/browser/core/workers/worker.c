@@ -295,7 +295,7 @@ static JSValue worker_script_deliver(JSContext *ctx, JSValueConst this_val, int 
     WorkerData *w = worker_of(worker);
     JSContext *wctx;
     bool ok, module = magic == 1;
-    JSValue *frame = NULL, program = JS_UNDEFINED;
+    JSValue program = JS_UNDEFINED;
 
     (void)this_val;
     DCHECK(w != NULL && w->realm != NULL, "a worker script was delivered to something that is not a constructed Worker");
@@ -323,22 +323,12 @@ static JSValue worker_script_deliver(JSContext *ctx, JSValueConst this_val, int 
 
         JS_FreeValue(ctx, body);
         CHECK(src != NULL, "§10.2.4: OOM decoding a worker's script");
-        if (module) {
-            /* The module script is created and run on the worker agent's own turn (flow_step_agent), where a
-               parse error takes onComplete's null-script arm through the program-done hook. */
-            program = JS_NewArray(wctx);
-            CHECK(!JS_IsException(program), "§10.2.4: a module worker's program could not be held");
-            JS_SetPropertyUint32(wctx, program, 0, JS_NewString(wctx, w->url));
-            JS_SetPropertyUint32(wctx, program, 1, JS_NewStringLen(wctx, src, src_n));
-        } else {
-            /* "Creating a classic script": a parse error is a script whose error to rethrow is non-null, which
-               onComplete treats as a null script. */
-            frame = JS_FlowNew(wctx, src, src_n, w->url, JS_EVAL_TYPE_GLOBAL);
-            if (!frame) {
-                JS_FreeValue(wctx, JS_GetException(wctx));
-                ok = false;
-            }
-        }
+        /* The script, classic or module, is created and run on the worker agent's own turn (flow_step_agent), where
+           its parse can rest and a parse error takes onComplete's null-script arm through the program-done hook. */
+        program = JS_NewArray(wctx);
+        CHECK(!JS_IsException(program), "§10.2.4: a worker's program could not be held");
+        JS_SetPropertyUint32(wctx, program, 0, JS_NewString(wctx, w->url));
+        JS_SetPropertyUint32(wctx, program, 1, JS_NewStringLen(wctx, src, src_n));
         free(src);
     }
     if (!ok) {
@@ -353,10 +343,10 @@ static JSValue worker_script_deliver(JSContext *ctx, JSValueConst this_val, int 
         /* Step 10: run the script — as the worker agent's program, which the scheduler runs when it selects
            that agent (solver/engine.c's flow_step_agent). */
         a = flow_agent_of(flow_running(), JS_GetRealmAgent(wctx));
-        DCHECK(a->frame == NULL && JS_IsUndefined(a->module),
+        DCHECK(a->frame == NULL && JS_IsUndefined(a->program),
                "a worker's script was installed over a program its agent already runs");
-        if (module) a->module = program;
-        else a->frame = frame;
+        a->program = program;
+        a->program_module = module;
     }
     return JS_UNDEFINED;
 }

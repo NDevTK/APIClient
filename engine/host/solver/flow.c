@@ -798,7 +798,7 @@ static int flow_agent_runnable_off(const Flow *f, int i)
 
     DCHECK(i != f->cur_agent, "the off-runtime runnable test was asked of the selected agent, whose parks are in "
                               "the runtime");
-    return a->frame != NULL || a->parked != NULL || !JS_IsUndefined(a->module) || job_queue_len(a->jobs) > 0;
+    return a->frame != NULL || a->parked != NULL || !JS_IsUndefined(a->program) || job_queue_len(a->jobs) > 0;
 }
 
 /* The selected agent's parks go onto its own slot and agent `i`'s into the runtime. */
@@ -834,7 +834,7 @@ void flow_select_agent(JSContext *ctx, Flow *f)
     for (int i = 1; i < f->n_agents; i++) {
         int runnable = i == f->cur_agent
                      ? (f->agents[i].frame != NULL || JS_HasParkedFlow(JS_GetRuntime(ctx)) ||
-                        !JS_IsUndefined(f->agents[i].module) || job_queue_len(f->agents[i].jobs) > 0)
+                        !JS_IsUndefined(f->agents[i].program) || job_queue_len(f->agents[i].jobs) > 0)
                      : flow_agent_runnable_off(f, i);
 
         if (runnable && f->agents[i].work < f->agents[best].work) best = i;
@@ -874,9 +874,45 @@ int flow_agent_add(Flow *f, JSAgentRecord *agent, JSContext *realm)
     a->parked = NULL;
     a->realm = JS_DupContext(realm);   /* each flow running the agent holds its realm; released with the flow */
     a->work = 0;
-    a->module = JS_UNDEFINED;
+    a->program = JS_UNDEFINED;
+    a->program_module = 0;
+    a->program_compile = NULL;
     a->reporting = 0;
     return f->n_agents++;
+}
+
+FlowAgentCompile *flow_agent_compile_of(FlowAgent *a)
+{
+    FlowAgentCompile *c = a->program_compile;
+
+    DCHECK(!JS_IsUndefined(a->program) && a->realm != NULL, "a compile was asked of an agent with no program");
+    if (!c) {
+        JSValue url_v = JS_GetPropertyUint32(a->realm, a->program, 0);
+        JSValue src_v = JS_GetPropertyUint32(a->realm, a->program, 1);
+
+        c = calloc(1, sizeof *c);
+        CHECK(c != NULL, "flow: OOM allocating an agent's program compile");
+        c->url = JS_ToCString(a->realm, url_v);
+        c->src = JS_ToCStringLen(a->realm, &c->n, src_v);
+        JS_FreeValue(a->realm, url_v);
+        JS_FreeValue(a->realm, src_v);
+        CHECK(c->url && c->src, "flow: OOM reading an agent's program");
+        a->program_compile = c;
+    }
+    return c;
+}
+
+void flow_agent_compile_drop(FlowAgent *a)
+{
+    FlowAgentCompile *c = a->program_compile;
+
+    if (!c)
+        return;
+    JS_FlowCompileDrop(a->realm, &c->carrier);
+    JS_FreeCString(a->realm, c->url);
+    JS_FreeCString(a->realm, c->src);
+    free(c);
+    a->program_compile = NULL;
 }
 
 FlowAgent *flow_agent_of(Flow *f, JSAgentRecord *agent)
@@ -902,7 +938,8 @@ void flow_agents_fork(JSContext *ctx, Flow *sib, const Flow *parent)
         FlowAgent *sa = &sib->agents[i];
 
         sa->work = pa->work;
-        sa->module = JS_DupValue(ctx, pa->module);
+        sa->program = JS_DupValue(ctx, pa->program);   /* its parse, a cache, is shed: the arm parses again */
+        sa->program_module = pa->program_module;
         sa->reporting = pa->reporting;   /* the running agent's frame too: the caller's clone is this frame */
         if (i == parent->cur_agent) continue;   /* the caller clones the running agent's base and parks */
         if (pa->frame) {
@@ -2317,8 +2354,9 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
     /* And the references this flow holds on its other agents' realms (flow_agent_add), after their bases and an
        unevaluated module program. */
     for (int i = 1; i < f->n_agents; i++) {
-        JS_FreeValue(ctx, f->agents[i].module);
-        f->agents[i].module = JS_UNDEFINED;
+        flow_agent_compile_drop(&f->agents[i]);
+        JS_FreeValue(ctx, f->agents[i].program);
+        f->agents[i].program = JS_UNDEFINED;
         if (f->agents[i].realm) { JS_FreeContext(f->agents[i].realm); f->agents[i].realm = NULL; }
     }
     /* The replies it was still owed: the register is one JS value, so its resolve capabilities, reply values and
@@ -2559,7 +2597,9 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->agents[0].parked = NULL;
     f->agents[0].realm = NULL;          /* the window agent's rows each name their own realm */
     f->agents[0].work = 0;
-    f->agents[0].module = JS_UNDEFINED;
+    f->agents[0].program = JS_UNDEFINED;
+    f->agents[0].program_module = 0;
+    f->agents[0].program_compile = NULL;
     f->n_agents = 1;
     f->cur_agent = 0;
     /* And it is born owing the host an image if the host asked for every world (@PERWORLD). Marked at the one
