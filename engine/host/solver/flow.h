@@ -62,7 +62,9 @@ typedef struct FlowSite FlowSite;
    the member's code site has received in its family and `pull_work` the quantum it is counted in
    (ENGINE_QUANTUM_WORK).
    `visits` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
-   member could take the thread. */
+   member could take the thread. `unit` is where its next quantum resumes, a literal no term reads: "program" (a
+   suspended program frame), "parked" (a parked job continuation), "checkpoint" (a microtask owed), "between" (a
+   unit ended, the next not begun), or "running" (the switched-in member, whose parks are the runtime's). */
 typedef struct {
     int present;
     double reward;
@@ -74,6 +76,7 @@ typedef struct {
     int64_t assumed;      /* flow_assumed */
     double assume_cost;   /* FLOW_ASSUMPTION_COST, which each assumption is priced at */
     int host_owed, running;
+    const char *unit;
 } FlowWeightOperands;
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
