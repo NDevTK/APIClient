@@ -583,7 +583,19 @@ static void fixture_route_gadget_post(JSContext *ctx);
  * silence, so a row can tell "no arm ran this program" from "an arm ran it with no element" — two facts that
  * an absent param cannot separate. */
 typedef struct { const char *at; const char *type; const char *body; } TfServed;
+/* rxmod.js's regexp literal: 327680 pattern characters by macro repetition (see fixture/rxmodule.h). */
+#define RXM_A16 "aaaaaaaaaaaaaaaa"
+#define RXM_A256 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 \
+                 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16
+#define RXM_A4096 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 \
+                  RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256
+#define RXM_A65536 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 \
+                   RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096
 static const TfServed TF_SERVED[] = {
+    { "https://x.test/chunk/rxmod.js", "text/javascript",
+      "var rxmR = /" RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 "b/;"
+      "export var m = rxmR.test('a'.repeat(327680) + 'b') && !rxmR.test('a'.repeat(327680))"
+      " && rxmR.source.length === 327681;" },
     { "https://x.test/chunk/replyprog.js", "text/javascript",  "fetch('/api/progran');" },
     { "https://x.test/chunk/xsrow.js",     "text/javascript",  "fetch('/api/xsrow?n=' + window.__xsn);" },
     { "https://x.test/chunk/replyctl.js",  "application/json", "fetch('/api/ctlran');" },
@@ -1233,6 +1245,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/b64coerce.h"
 #include "fixture/dateparsecoerce.h"
 #include "fixture/capstackproxy.h"
+#include "fixture/rxmodule.h"
 #include "fixture/rxliteral.h"
 #include "fixture/rxinsert.h"
 #include "fixture/rxtimer.h"
@@ -1810,6 +1823,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "b64coerce", HTML_B64COERCE },
     { "dateparsecoerce", HTML_DATEPARSECOERCE },
     { "capstackproxy", HTML_CAPSTACKPROXY },
+    { "rxmodule", HTML_RXMODULE },
     { "rxliteral", HTML_RXLITERAL },
     { "rxinsert", HTML_RXINSERT },
     { "rxtimer", HTML_RXTIMER },
@@ -17164,6 +17178,30 @@ TF_UNIT void probes_capstackproxy(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxmodule` document (fixture/rxmodule.h): the imported module's literal program matches, and
+   its compile rested inside the module source's parse. The document runs no RegExp constructor or compile, so
+   every rest it counts is the literal's. */
+TF_UNIT void probes_rxmodule(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, !!strstr(js, "\"/api/rxm\""),
+             "NOT REACHED: there is no /api/rxm record, so the dynamic import never settled");
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/rxm", "m", "true"),
+             "the module compiled from the fetched source does not export the matcher's true answer");
+    const char *r_why = NULL; int r_tt = 1;
+    fold_row(&r_tt, &r_why, rests != NULL,
+             "the result document carries no `twRegexpCompileRests` row from solver/metrics/cold.def");
+    fold_row(&r_tt, &r_why, nrests >= 1,
+             "the module source's parse took no rest inside its literal, so it ran without a slot to hand the "
+             "thread back through");
+    const Probe rows[] = {
+        { "rxm-match", m_tt, "/api/rxm", SESS_EXPLORE, m_why },
+        { "rxm-rests", r_tt, "/api/rxm", SESS_EXPLORE, r_why, .gate = "rxm-match" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22529,6 +22567,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_b64coerce(js, probes, &np);
     probes_dateparsecoerce(js, probes, &np);
     probes_capstackproxy(js, probes, &np);
+    probes_rxmodule(js, probes, &np);
     probes_rxliteral(js, probes, &np);
     probes_rxinsert(js, probes, &np);
     probes_rxtimer(js, probes, &np);
