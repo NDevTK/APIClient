@@ -9823,7 +9823,7 @@ static int param_value_only_undriven(const char *js, const char *url, const char
  * carries unescaped quotes, and json_buf_str escapes every quote inside a value, so no `poc` this search ever
  * derives can spell it. The edge was wrong about WHERE a record ends, not about what a value may say. */
 static const char *s_record(const char *js, const char *sink, const char *src, size_t *span) {
-    char pat[192];
+    char pat[1024];
     const char *e, *end;
     int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\"", sink, src);
 
@@ -9946,10 +9946,12 @@ static int s_arraylen(const char *js, const char *sink, const char *src, const c
 enum { S_UNSEEN = 0, S_SEEN, S_SEEDED, S_RAN, S_ARRIVED, S_ESCAPED, S_FIRED };
 static int s_stage(const char *js, const char *sink, const char *src) {
     static const char PARKED[] = ",\"search\":\"parked\",\"tried\":";
-    char pat[192];
+    char pat[1024];
     const char *e;
+    int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\"", sink, src);
 
-    snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\"", sink, src);
+    CHECK(k > 0 && (size_t)k < sizeof pat,
+          "an @S stage pattern did not fit its buffer — a truncated pattern matches inside a longer source");
     e = strstr(js, pat);
     if (!e) {
         DCHECK(strstr(js, "\"securitySinks\":[") != NULL,
@@ -10303,7 +10305,7 @@ static int s_kept_undeliverable(const char *js, const char *sink, const char *sr
 }
 
 static int s_poc(const char *js, const char *sink, const char *src, const char *poc) {
-    char pat[384];
+    char pat[1024];
     int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\",\"poc\":\"%s", sink, src, poc);
 
     CHECK(k > 0 && (size_t)k < sizeof pat,
@@ -10324,14 +10326,15 @@ static int s_stage_prefix(const char *js, const char *sink, const char *prefix, 
     snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s", sink, prefix);
     while ((e = strstr(e, pat)) != NULL) {
         const char *b = e + strlen(pat) - strlen(prefix), *q;
-        char one[192];
+        char one[1024];
         int st;
 
         /* The source as the document spells it, to its closing quote: a `\"` inside is part of it. */
         for (q = b; *q && *q != '"'; q++)
             if (*q == '\\' && q[1]) q++;
         if (!*q) break;
-        if ((size_t)(q - b) < sizeof one) {
+        CHECK((size_t)(q - b) < sizeof one, "an @S source under a stage prefix is longer than the walk's buffer");
+        {
             memcpy(one, b, (size_t)(q - b));
             one[q - b] = 0;
             st = s_stage(js, sink, one);
@@ -16023,7 +16026,9 @@ static int s_rooted_source(const char *js, const char *sink, const char *root, c
         for (q = b; *q && *q != '"'; q++)
             if (*q == '\\' && q[1]) q++;
         CHECK(*q == '"', "an @S record's source string is not terminated");
-        if ((size_t)(q - b) < cap && memmem(b, (size_t)(q - b), root, strlen(root))) {
+        if (memmem(b, (size_t)(q - b), root, strlen(root))) {
+            CHECK((size_t)(q - b) < cap, "an @S record rooted where the row asks has a source longer than the row's "
+                                        "buffer — skipping it would read as NOT REACHED; size the buffer");
             memcpy(out, b, (size_t)(q - b));
             out[q - b] = 0;
             return 1;
@@ -16048,7 +16053,7 @@ static int cl_witness_without(const char *js, const char *url, const char *with,
 
 /* The rows of the `flagflow` document (fixture/flagflow.h). */
 TF_UNIT void probes_flagflow(const char *js, Probe *tab, int *n) {
-    char src[192] = "";
+    char src[1024] = "";
     int has_src = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src);
     int st = has_src ? s_stage(js, "innerHTML", src) : S_UNSEEN;
     const char *fa_why = NULL; int fa_tt = 1;
@@ -16119,7 +16124,7 @@ TF_UNIT void probes_histreload(const char *js, Probe *tab, int *n) {
 TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
     const char *pp_why = NULL, *pc_why = NULL;
     int pp_tt = 1, pc_tt = 1;
-    char src[192] = "", csrc[192] = "";
+    char src[1024] = "", csrc[1024] = "";
     int has = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src);
     int chas = s_rooted_source(js, "innerHTML", "document.cookie", csrc, sizeof csrc);
 
@@ -16132,7 +16137,7 @@ TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
     fold_row(&pp_tt, &pp_why, has && !s_field(js, "innerHTML", src, "\"precondition\""),
              "the fragment's slice is labelled with a precondition, so the cookie's piece reached its root");
     /* `psSplit`: the split element inside the fragment's piece is the fragment's own derivation, `.slice(2)`. */
-    char ssrc[512];
+    char ssrc[1024];
     const char *sp_why = NULL;
     int sp_tt = 1;
     int shas = s_rooted_source(js, "innerHTML", "slice(2)", ssrc, sizeof ssrc);
@@ -16191,7 +16196,7 @@ TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
    gate's facets composed. */
 static void ig_row(const char *js, const char *root, const char *head, int *tt, const char **why)
 {
-    char src[384];
+    char src[1024];
     int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
 
     fold_row(tt, why, has, "NOT REACHED: no innerHTML @S record is rooted in the gated component");
@@ -16213,7 +16218,7 @@ TF_UNIT void probes_indexgate(const char *js, Probe *tab, int *n) {
     /* Two more spellings of the occurring set, one row each, and the exact index. */
     const char *nl_why = NULL, *nm_why = NULL, *e3_why = NULL, *n3_why = NULL;
     int nl_tt = 1, nm_tt = 1, e3_tt = 1, n3_tt = 1;
-    char nsrc[384];
+    char nsrc[1024];
     int nhas;
 
     ig_row(js, LOCATION_SEARCH_SRC, "q=", &nl_tt, &nl_why);
@@ -16283,7 +16288,7 @@ TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
    and is labelled a precondition. The label is read as text because the @S record has no precondition field. */
 static void sx_precondition_rows(const char *js, const char *root, int *reach, const char **reach_why, int *pre,
                                  const char **pre_why) {
-    char src[192] = "";
+    char src[1024] = "";
     int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
 
     fold_row(reach, reach_why, has,
@@ -16302,7 +16307,7 @@ static void sx_precondition_rows(const char *js, const char *root, int *reach, c
 static void sx_write_path_row(const char *js, const char *root, const char *prefix, int *tt, const char **why) {
     static const char open_act[] =
         "{\"kind\":\"open\",\"target\":\"address\",\"type\":\"open\",\"activation\":\"attacker-page\"}";
-    char src[192] = "";
+    char src[1024] = "";
     int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
     size_t span = 0;
     const char *rec = has ? s_record(js, "innerHTML", src, &span) : NULL;
@@ -16395,7 +16400,7 @@ TF_UNIT void probes_twinread(const char *js, Probe *tab, int *n) {
     int tr_tt[2] = { 1, 1 }, tw_tt[2] = { 1, 1 }, on_tt[2] = { 1, 1 }, i;
 
     for (i = 0; i < 2; i++) {
-        char src[192] = "";
+        char src[1024] = "";
         int has = s_rooted_source(js, "eval", roots[i], src, sizeof src);
         int st = has ? s_stage(js, "eval", src) : S_UNSEEN;
 
@@ -16450,7 +16455,7 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     int mk_tt[3] = { 1, 1, 1 }, pr_tt[3] = { 1, 1, 1 }, pl_tt[3] = { 1, 1, 1 }, i, seen, marked, plain;
     const char *to_why = NULL, *tn_why = NULL, *tf_why = NULL, *go_why = NULL;
     int to_tt = 1, tn_tt = 1, tf_tt = 1, go_tt = 1;
-    char to_src[192] = "", go_src[192] = "";
+    char to_src[1024] = "", go_src[1024] = "";
     int has_go = s_rooted_source(js, "request", "[go]", go_src, sizeof go_src);
 
     fold_row(&to_tt, &to_why, s_rooted_source(js, "request", LOCATION_HASH_SRC, to_src, sizeof to_src),
@@ -16500,7 +16505,7 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
    `window.name`, and the fired PoC states a delivery for it that is not this document's address. */
 TF_UNIT void probes_windowname(const char *js, Probe *tab, int *n) {
     static const char *const sinks[2] = { "eval", "innerHTML" };
-    char src[2][192] = { "", "" };
+    char src[2][1024] = { "", "" };
     int has[2], i;
     const char *src_why[2] = { NULL, NULL }, *poc_why[2] = { NULL, NULL };
     int src_tt[2] = { 1, 1 }, poc_tt[2] = { 1, 1 };
@@ -16556,7 +16561,7 @@ static int cl_witness_without(const char *js, const char *url, const char *with,
 
 /* The rows of the `clobber` document (fixture/clobber.h). */
 TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
-    char hs[192] = "", us[192] = "";
+    char hs[1024] = "", us[1024] = "";
     int has_h = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, hs, sizeof hs);
     int has_u = s_rooted_source(js, "location", LOCATION_SEARCH_SRC, us, sizeof us);
     size_t span = 0;
@@ -16604,7 +16609,7 @@ TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
 /* The rows of the `typedinput` document (fixture/typedinput.h). The document has one markup write, so its
    record is located by sink alone and its source is whatever the run says the field's value is. */
 TF_UNIT void probes_typedinput(const char *js, Probe *tab, int *n) {
-    char src[192] = "";
+    char src[1024] = "";
     int has = s_rooted_source(js, "innerHTML", "", src, sizeof src);
     size_t span = 0;
     const char *rec = has ? s_record(js, "innerHTML", src, &span) : NULL;
@@ -16705,7 +16710,7 @@ TF_UNIT void probes_typeoffacet(const char *js, Probe *tab, int *n) {
 /* The rows of the `sparoute` document (fixture/sparoute.h); the chunk's witnesses are in TF_SERVED's body,
    so those rows are keyed by the document's own import of it. */
 TF_UNIT void probes_sparoute(const char *js, Probe *tab, int *n) {
-    char src[192] = "";
+    char src[1024] = "";
     int has = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, src, sizeof src);
     size_t span = 0;
     const char *rec = has ? s_record(js, "innerHTML", src, &span) : NULL;
@@ -17012,7 +17017,7 @@ TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
 
 /* The rows of the `framemsg` document (fixture/framemsg.h). */
 TF_UNIT void probes_framemsg(const char *js, Probe *tab, int *n) {
-    char src[192] = "";
+    char src[1024] = "";
     int has = s_rooted_source(js, "innerHTML", MESSAGE_DATA_SRC, src, sizeof src);
     size_t span = 0;
     const char *rec = has ? s_record(js, "innerHTML", src, &span) : NULL;
@@ -17080,7 +17085,7 @@ TF_UNIT void probes_lazyload(const char *js, Probe *tab, int *n) {
 /* The rows of the `ttsink` document (fixture/ttsink.h). Each negative row is a statement only while the
    positive row it names reads 1: an unreached write fires nothing either. */
 TF_UNIT void probes_ttsink(const char *js, Probe *tab, int *n) {
-    char safe[192] = "", raw[192] = "";
+    char safe[1024] = "", raw[1024] = "";
     int has_safe = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, safe, sizeof safe);
     int has_raw = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, raw, sizeof raw);
     const char *ss_why = NULL; int ss_tt = 1;
@@ -17119,14 +17124,14 @@ static int fcs_has(const char *js, const char *needle) {
 
 /* The rows of the `fileparse-fetch` document (fixture/fileparsefetch.h). Reach and taint only. */
 TF_UNIT void probes_fileparse_fetch(const char *js, Probe *tab, int *n) {
-    char seed[192] = "", query[192] = "";
+    char seed[1024] = "", query[1024] = "";
     int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
     int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
     const char *sp_why = NULL; int sp_tt = 1;
     fold_row(&sp_tt, &sp_why, !!strstr(js, "\"/api/fpf-parsed\""),
              "NOT REACHED: there is no /api/fpf-parsed record, so no arm walked the file format to its body");
     const char *ua_why = NULL; int ua_tt = 1;
-    { char ua_src[192] = "";
+    { char ua_src[1024] = "";
       fold_row(&ua_tt, &ua_why, s_rooted_source(js, "request", LOCATION_SEARCH_SRC, ua_src, sizeof ua_src),
                "no request-class record is rooted in location.search, so the fetch of the file the query names "
                "was not read as a request whose host the attacker decides"); }
@@ -17151,7 +17156,7 @@ TF_UNIT void probes_fileparse_fetch(const char *js, Probe *tab, int *n) {
 /* The rows of the `fileparse-slice` document (fixture/fileparseslice.h): the decoded slice reaches new Function
    rooted in the seed's reply and, on the query's arm, in location.search. */
 TF_UNIT void probes_fileparse_slice(const char *js, Probe *tab, int *n) {
-    char seed[192] = "", query[192] = "";
+    char seed[1024] = "", query[1024] = "";
     int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
     int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
     const char *sp_why = NULL; int sp_tt = 1;
@@ -17176,7 +17181,7 @@ TF_UNIT void probes_fileparse_slice(const char *js, Probe *tab, int *n) {
 /* The rows of the `fileparse-sub` document (fixture/fileparsesub.h): the decoded subarray reaches new Function
    rooted in the seed's reply and, on the query's arm, in location.search. */
 TF_UNIT void probes_fileparse_sub(const char *js, Probe *tab, int *n) {
-    char seed[192] = "", query[192] = "";
+    char seed[1024] = "", query[1024] = "";
     int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
     int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
     const char *sp_why = NULL; int sp_tt = 1;
@@ -17207,7 +17212,7 @@ TF_UNIT void probes_fileparse_sub(const char *js, Probe *tab, int *n) {
    Function rooted in the seed's reply and in location.search, its byte past the seed's length is unknown, and a
    4-byte target fits on the arm where the reply is that short. */
 TF_UNIT void probes_fileparse_set(const char *js, Probe *tab, int *n) {
-    char seed[192] = "", query[192] = "";
+    char seed[1024] = "", query[1024] = "";
     int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
     int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
     const char *p_why = NULL; int p_tt = 1;
@@ -17667,7 +17672,7 @@ TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
 /* The rows of the `fileparse-drop` document (fixture/fileparsedrop.h). Reach and taint, and the PoC's act; a
    dropped file's source is core/file/file_system.c's `file:NAME`, whose delivery is `user-file`. */
 TF_UNIT void probes_fileparse_drop(const char *js, Probe *tab, int *n) {
-    char src[192] = "";
+    char src[1024] = "";
     int has = s_rooted_source(js, "eval", "file:", src, sizeof src);
     size_t span = 0;
     const char *rec = has ? s_record(js, "eval", src, &span) : NULL;
@@ -17701,7 +17706,7 @@ TF_UNIT void probes_fileparse_drop(const char *js, Probe *tab, int *n) {
 /* The rows of the `fileparse-worker` document (fixture/fileparseworker.h); the worker's witnesses are in
    TF_SERVED's body, so those rows are keyed by the document's own construction of it. Reach and taint only. */
 TF_UNIT void probes_fileparse_worker(const char *js, Probe *tab, int *n) {
-    char seed[192] = "", query[192] = "";
+    char seed[1024] = "", query[1024] = "";
     int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
     int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
     const char *wp_why = NULL; int wp_tt = 1;
@@ -17736,7 +17741,7 @@ TF_UNIT void probes_fileparse_worker(const char *js, Probe *tab, int *n) {
 /* The rows of the `fileparse-worker-copy` document (fixture/fileparseworker.h): the same file posted without a
    transfer list, so the bytes are copied and their provenance must cross with the copy. */
 TF_UNIT void probes_fileparse_worker_copy(const char *js, Probe *tab, int *n) {
-    char seed[192] = "", query[192] = "";
+    char seed[1024] = "", query[1024] = "";
     int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
     int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
     const char *cp_why = NULL; int cp_tt = 1;
@@ -17803,7 +17808,7 @@ TF_UNIT void probes_workererror(const char *js, Probe *tab, int *n) {
 /* The rows of the `uspiter` document (fixture/uspiter.h): walks and mutations over a URLSearchParams whose
    pairs derive from the query. */
 TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
-    char src[192] = "";
+    char src[1024] = "";
     int has = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, src, sizeof src);
     const char *ik_why = NULL; int ik_tt = 1;
     fold_row(&ik_tt, &ik_why, !!strstr(js, "\"/api/uspi-key\""),
@@ -17860,7 +17865,7 @@ TF_UNIT void probes_uspiter(const char *js, Probe *tab, int *n) {
 /* The rows of the `fileparse-text` document (fixture/fileparsetext.h). Reach and taint only; the two
    statements' sources are told apart by the query parameter each composes (`file=` and `doc=`). */
 TF_UNIT void probes_fileparse_text(const char *js, Probe *tab, int *n) {
-    char open_src[256] = "", pinned_src[256] = "";
+    char open_src[1024] = "", pinned_src[1024] = "";
     int has_open = s_rooted_source(js, "eval", "file=", open_src, sizeof open_src);
     int has_pinned = s_rooted_source(js, "eval", "doc=", pinned_src, sizeof pinned_src);
     const char *so_why = NULL; int so_tt = 1;
@@ -17868,7 +17873,7 @@ TF_UNIT void probes_fileparse_text(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/fpt-parsed-open record, so the unrestricted statement never walked a "
              "text body to its second line");
     const char *ua_why = NULL; int ua_tt = 1;
-    { char ua_src[256] = "";
+    { char ua_src[1024] = "";
       fold_row(&ua_tt, &ua_why, s_rooted_source(js, "request", "file=", ua_src, sizeof ua_src),
                "no request-class record carries the query's `file=`, so the fetch of the file the query names was "
                "not read as a request whose host the attacker decides"); }
@@ -17902,7 +17907,7 @@ TF_UNIT void probes_fileparse_text(const char *js, Probe *tab, int *n) {
 /* The rows of the `requestunk` document (fixture/requestunk.h): the wrapped request to the address the query
    names reaches new Function as attacker input, and the same-origin-pinned one does not. */
 TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
-    char open_src[256] = "", pinned_src[256] = "";
+    char open_src[1024] = "", pinned_src[1024] = "";
     int has_open = s_rooted_source(js, "eval", "src=", open_src, sizeof open_src);
     int has_pinned = s_rooted_source(js, "eval", "page=", pinned_src, sizeof pinned_src);
     const char *bt_why = NULL; int bt_tt = 1;
@@ -18037,7 +18042,7 @@ TF_UNIT void probes_joincompose(const char *js, Probe *tab, int *n) {
 
 /* The rows of the `dynfuncsink` document (fixture/dynfuncsink.h). */
 TF_UNIT void probes_dynfuncsink(const char *js, Probe *tab, int *n) {
-    char hsrc[192] = "", qsrc[192] = "";
+    char hsrc[1024] = "", qsrc[1024] = "";
     int ev = s_rooted_source(js, "eval", LOCATION_HASH_SRC, hsrc, sizeof hsrc);
     int fn = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, qsrc, sizeof qsrc);
     const Probe rows[] = {
