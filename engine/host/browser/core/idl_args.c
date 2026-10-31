@@ -3038,29 +3038,15 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            undefined so the body can tell absence from false (see idl_args.h). */
         if (JS_IsUndefined(w->mv) && mt != IDL_BOOLEAN)
             mt = IDL_ANY;
-        /* The same boundary rule the arguments follow, AND NOW ASKED THE SAME WAY. idl_args.h's
-           idl_concolic_rule is the ONE statement of what a declared type does with unknown external input;
-           this reads it instead of restating it, exactly as the argument path's pass-through does, because a
-           hand-maintained mirror of a hand-maintained list is the defect that rule exists to prevent.
-           A TYPE WHOSE CONVERSION *IS* THE FORK IS NOT CROSSED, WHICH IS THE WHOLE OF THIS CONDITION. Web IDL
-           §3.2.3 boolean's one step is ECMAScript §7.1.2 ToBoolean ( arg ), whose last step is "Return true",
-           and a concolic wears an ordinary Object — so a crossed boolean member is not an unconverted value
-           the body still holds, it is a value every `JS_ToBool` in every body answers `true` for. Crossing
-           MOVED that collapse into the reader; it never removed it. The boolean arm below asks the BRANCH
-           seam instead, so both worlds run and `if (cfg.on)` and a member taking `cfg.on` are ONE gate with
-           one constraint entry — the same answer the argument boundary already gives one type over.
-           EVERY OTHER RULE IS UNCHANGED: CROSSES and UNASKED both reach IDL_ANY exactly as they did, so a
-           DOMString member still carries its bytes to the body and a dictionary member is still a bag of
-           reads.
-           AND THE CONDITION IS THE BARE RULE AGAIN, WHICH IT WAS NOT. A no-default boolean read off an
-           UNKNOWN source was excepted here and crossed, because §3.2.3's two arms cannot say "absent" and
-           that member's absent world is its own — and the exception was the honest answer only while step
-           4.1.4's presence question went unasked. It is asked above now, before this line is reached, so a
-           member that arrives here is one whose presence this flow has DECIDED: the absent arm turned `mv`
-           into `undefined` and the rewrite two paragraphs up already sent it to IDL_ANY, and the present arm
-           is exactly the value §3.2.3 was always right to fork over. Two arms are complete for both boolean
-           types because the third world is decided one question earlier and by a different question. */
-        if (mt != IDL_ANY && concolic_is(w->mv) && idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS)
+        /* The boundary rule the arguments follow, read from idl_concolic_rule: unknown input crosses as itself
+           unless the type's conversion is a fork over it (§3.2.3 boolean, §3.2.18, the string-or-sequence
+           union), whose arm below asks it, so `if (cfg.on)` and a member taking `cfg.on` are one gate. A record
+           is not crossed either: its body reads the converted pair list, and §3.2.23's own reads over an
+           unknown ask its key set themselves (step_ownkeys_run's fork), exactly as at an argument position. A
+           crossed DOMString member carries its bytes to the body, and a crossed dictionary member is read with
+           ordinary gets. A member reaching here is present: step 4.1.4's question was asked above. */
+        if (mt != IDL_ANY && concolic_is(w->mv) && idl_concolic_rule(mt) != IDL_CONCOLIC_FORKS &&
+            !idl_type_pushes_record(mt))
             mt = IDL_ANY;
         /* The forks this loop performs are §3.2.3's, §3.2.18's and the string-or-sequence union's, asserted
            where the uncrossing happens. Every other type that answers FORKS resolves at an argument position:
