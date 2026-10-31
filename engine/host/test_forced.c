@@ -21977,30 +21977,37 @@ static int s_member_candidates(const char *js, const char *sink, const char *mem
 }
 
 /* The rows of the `msghost` document (fixture/msghost.h): a constant that is no host spells no label of a
-   composed origin, so each listener's search delivers the attacker's site alone. */
+   composed origin, so each of the first four listeners' searches delivers the attacker's site alone; the IPv4
+   constant's labels join the site, and no candidate is a name the URL parser reads as an address. */
 TF_UNIT void probes_msghost(const char *js, Probe *tab, int *n) {
-    static const char *const MEMBER[] = { "atMarkup", "hashMarkup", "portMarkup", "dotsMarkup" };
-    static const char *const ROW[] = { "mh-at-refused", "mh-hash-refused", "mh-port-refused", "mh-dots-refused" };
-    static const char *const FN[] = { "function mhAt", "function mhHash", "function mhPort", "function mhDots" };
+    static const char *const MEMBER[] = { "atMarkup", "hashMarkup", "portMarkup", "dotsMarkup", "ipMarkup" };
+    static const char *const ROW[] = { "mh-at-refused", "mh-hash-refused", "mh-port-refused", "mh-dots-refused",
+                                       "mh-ip-domain" };
+    static const char *const FN[] = { "function mhAt", "function mhHash", "function mhPort", "function mhDots",
+                                      "function mhIp" };
+    static const char *const LABELS[] = { "", "", "", "", "10.0.0.1." };
+    enum { N = 5 };
     char only[160], sink_src[64];
-    int tt[4];
-    const char *why[4];
-    Probe rows[4];
+    int tt[N];
+    const char *why[N];
+    Probe rows[N];
 
-    snprintf(only, sizeof only, "\"origins\":[\"https://%s\"]", concolic_attacker_site());
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < N; i++) {
         tt[i] = 1; why[i] = NULL;
+        snprintf(only, sizeof only, "\"origins\":[\"https://%s%s\"]", LABELS[i], concolic_attacker_site());
         snprintf(sink_src, sizeof sink_src, "}.%s\"", MEMBER[i]);
         fold_row(&tt[i], &why[i], !!strstr(js, sink_src),
                  "NOT REACHED: no @S record searches this listener's markup member, so its write was never "
                  "detected");
         fold_row(&tt[i], &why[i], s_member_candidates(js, "innerHTML", MEMBER[i], only),
-                 "the listener's search does not deliver the attacker's site alone: a label was composed from a "
-                 "constant that is no host (it carries `@`, `#`, `:` or an empty label), a host the page's own "
-                 "check never named");
+                 i < 4 ? "the listener's search does not deliver the attacker's site alone: a label was composed "
+                         "from a constant that is no host (it carries `@`, `#`, `:` or an empty label), a host the "
+                         "page's own check never named"
+                       : "the IPv4 listener's search does not deliver exactly the address's labels under the "
+                         "attacker's site: a candidate the URL parser reads as an address, or none, was composed");
         rows[i] = (Probe){ ROW[i], tt[i], FN[i], SESS_EXPLORE, why[i] };
     }
-    probes_append(tab, n, rows, 4);
+    probes_append(tab, n, rows, N);
 }
 
 /* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring or a bare suffix check
