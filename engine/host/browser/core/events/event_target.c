@@ -2425,7 +2425,7 @@ static int handler_compile_run(JSContext *ctx, EhCompile *c, uint8_t *cphase, JS
         /* Every body that reaches the compile has passed step 3.7, and the headed source's soundness rests
            on it (see handler_source): the element arm's `with`-headed shape cannot carry the end-of-input
            pin, so a body 3.7 never accepted could close the wrapper and run as program source. */
-        DCHECKF(JS_VALUE_GET_PTR(c->accepted) == JS_VALUE_GET_PTR(h),
+        DCHECKF(JS_IsObject(c->accepted) && JS_VALUE_GET_PTR(c->accepted) == JS_VALUE_GET_PTR(h),
                 "§8.1.8.1 step 3.9 is compiling record %p, and step 3.7's probe last accepted %p",
                 JS_VALUE_GET_PTR(h), JS_IsObject(c->accepted) ? JS_VALUE_GET_PTR(c->accepted) : NULL);
         JS_FreeValue(ctx, c->accepted);
