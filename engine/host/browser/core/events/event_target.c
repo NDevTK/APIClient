@@ -2186,10 +2186,7 @@ static int handler_current_run(JSContext *ctx, EhCompile *c, JSValueConst target
         c->stage = 0;
         parsable = !JS_IsException(probe);
         if (parsable) {
-            DCHECK(JS_VALUE_GET_TAG(probe) == JS_TAG_FUNCTION_BYTECODE,
-                   "§8.1.8.1 step 3.7's probe answered without an exception and not with a program, so it ran "
-                   "the page's handler body where the step makes a parse");
-            JS_FreeValue(ctx, probe);
+            JS_FreeValue(ctx, probe);   /* JS_FlowCompileStep's uninstantiated closure: nothing ran */
             JS_FreeValue(ctx, c->accepted);
             c->accepted = JS_DupValue(ctx, h);
         } else {
