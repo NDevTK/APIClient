@@ -981,7 +981,7 @@ static int js_loc_set(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
        so a resume here runs none of the member's own steps again. A navigation a `navigate` listener CANCELED
        answers 0 exactly as a completed one does, and the member returns undefined either way: §7.2.4's setters
        have no return value and §7.4.2.3.3 step 5's return is not an error. */
-    r = session_history_fragment_nav_run(ctx, w, cb_result, out_cb, out_argc);
+    r = session_history_fragment_nav_run(ctx, hdr, w, cb_result, out_cb, out_argc);
     if (r != 0) return r;
     /* SET ON THE ENTRY THAT FINISHES, not once in the head: `presult` is an out-parameter of EACH entry, so a
        member that wrote it before it parked would leave the resumed entry's answer as whatever the driver's
@@ -1056,7 +1056,7 @@ static int js_loc_assign_replace(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     return JS_STEP_YIELD;
 
     STEP_ARM(LOC_NAV_FRAGMENT);
-    r = session_history_fragment_nav_run(ctx, w, cb_result, out_cb, out_argc);
+    r = session_history_fragment_nav_run(ctx, hdr, w, cb_result, out_cb, out_argc);
     if (r != 0) return r;
     /* SET ON THE ENTRY THAT FINISHES, not once in the head: `presult` is an out-parameter of EACH entry, so a
        member that wrote it before it parked would leave the resumed entry's answer as whatever the driver's

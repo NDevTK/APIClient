@@ -18,6 +18,8 @@
 #include "core/frame/navigation.h"
 #include "core/frame/session_history.h"
 #include "core/frame/viewport.h"
+#include "core/layout/layout_job.h"   /* §7.4.6.5's restore measures the viewport on a job */
+#include "core/dom/perform_scroll.h"   /* ScrollRequest */
 #include "core/frame/window_proxy.h"
 #include "core/realm.h"
 #include "core/structured_clone.h"
@@ -34,10 +36,8 @@ static JSClassID g_slot = JS_INVALID_CLASS_ID;
  * fields are named by these atoms and by nothing else, so a field the code reads and no builder writes is one
  * assertion away rather than a silent `undefined`.
  *
- * THE FIELDS THIS ENGINE DOES NOT HOLD ARE NAMED WHERE THEY ARE NOT HELD, not omitted. §7.4.1.1 also gives an
- * entry a SCROLL POSITION DATA and a PERSISTED USER STATE, which §7.4.6.5's save/restore are the only writers
- * and readers of. A traversal reaches those two, and reaches them through sh_persisted_state, which asserts
- * that the scroll position data it would save is every region's origin.
+ * §7.4.1.1's SCROLL POSITION DATA is held (SH_E_SCROLLDATA); its PERSISTED USER STATE is optional and not held.
+ * §7.4.6.5's save and restore are the only writer and reader of the first.
  *
  * THE NAVIGATION API'S THREE FIELDS ARE HELD, and they are §7.4.1.1's own rather than §7.2.6's: an entry has a
  * navigation API STATE (serialized, initially StructuredSerializeForStorage(UNDEFINED) — not null, which is
@@ -64,6 +64,8 @@ static JSClassID g_slot = JS_INVALID_CLASS_ID;
    different fact and is what a `symbols` from the pair entry carries. */
 #define SH_E_CLASSIC_SYM "classicStateSymbols"
 #define SH_E_SCROLL  "scrollRestoration"
+/* §7.4.1.1's scroll position data: null for none, or {x, y}, the viewport's position when it was saved. */
+#define SH_E_SCROLLDATA "scrollPositionData"
 #define SH_E_NAV_STATE "navigationState" /* §7.2.6's serialized state — an ArrayBuffer, never a live value */
 /* ITS SYMBOL TABLE, for the same reason SH_E_CLASSIC_SYM has one and under the same three-state spelling:
    JS_UNDEFINED means the bytes came from the plain serializer and there is no table, an EMPTY ARRAY means the
@@ -344,6 +346,7 @@ static JSValue sh_entry_new(JSContext *ctx, const char *url, JSValue doc_state, 
     JS_SetPropertyStr(ctx, e, SH_E_NAV_KEY, sh_mint_uuid(ctx));
     JS_SetPropertyStr(ctx, e, SH_E_NAV_ID, sh_mint_uuid(ctx));
     JS_SetPropertyStr(ctx, e, SH_E_SCROLL, JS_NewString(ctx, scroll));
+    JS_SetPropertyStr(ctx, e, SH_E_SCROLLDATA, JS_NULL);
     return e;
 }
 
@@ -711,7 +714,12 @@ bool session_history_is_fragment_navigation(JSContext *ctx, const char *url)
                          "then dispose at each disposed entry)")                                          \
     X(SH_APPLY_POPSTATE, "HTML §7.4.6.2 update document for history step application step 6.4.3 (fire "  \
                          "an event named popstate at the document's relevant global object, using "      \
-                         "PopStateEvent)")
+                         "PopStateEvent)")                                                                \
+    X(SH_APPLY_RESTORE_OPEN, "HTML §7.4.6.2 step 6.4.4 (restore persisted state given entry: §7.4.6.5's "  \
+                         "restore scroll position data, the viewport's box opened on a layout job)")      \
+    X(SH_APPLY_RESTORE_AREA, "HTML §7.4.6.2 step 6.4.4 (restore scroll position data: CSSOM VIEW §4 "      \
+                         "scroll() steps 7-13 over the viewport scrolling area measured under a resting " \
+                         "drive)")
 enum { SH_APPLY_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const SH_APPLY_STEPS[] = { SH_APPLY_STAGES(JS_STEP_STAGE_LABEL) NULL };
 /* ONE NAME FOR THE ALGORITHM THESE STAGES ARE STEPS OF. Three functions dispatch on this one stage list — the
@@ -743,32 +751,77 @@ static void sh_apply_free(JSContext *ctx, SessionHistoryApply *a)
         a->fire_cb[k] = JS_UNDEFINED;
     }
     navigation_update_work_release(ctx, &a->nav);
+    if (a->restore_job) layout_job_free(a->restore_job);
+    a->restore_job = NULL;
 }
 
-/* §7.4.6.5's SAVE PERSISTED STATE TO a session history entry, and its twin RESTORE PERSISTED STATE FROM one.
- * Both are about state a rendering holds: "set the scroll position data of entry to contain the scroll
- * positions for all of entry's document's restorable scrollable regions", and then an optional clause for "any
- * state that the user agent wishes to persist, such as the values of form fields", which stays optional.
- * No entry holds scroll position data, which is exact while every restorable scrollable region is at its
- * origin: a document starts there, an element's box cannot be moved (core/dom/perform_scroll.c refuses it), and
- * the viewport's position is the one this realm stores (core/frame/viewport.h). So the assert is over that
- * stored position: it fires on a traversal after a scroll left the viewport elsewhere, which is exactly when
- * the data this skips would differ from the origin a document starts at. */
-static void sh_persisted_state(JSContext *ctx)
+/* The slots of a record a machine hosts, for that machine's visit: the traversal's and §7.4.2.3.3's. */
+static void sh_apply_visit(JSContext *ctx, SessionHistoryApply *a, JSStepVisit *v)
 {
-    double x = viewport_window_scroll(ctx, false), y = viewport_window_scroll(ctx, true);
+    int k;
 
-    DCHECKF(x == 0.0 && y == 0.0,
-            "HTML §7.4.6.5 \"Persisted history entry state\"'s save persisted state — \"set the scroll position "
-            "data of entry to contain the scroll positions for all of entry's document's restorable scrollable "
-            "regions\" — carries a session history entry's scroll position data across a traversal, and this "
-            "document's viewport is scrolled to (%g, %g), so the data a traversal would drop is not the origin. "
-            "Build it: an entry gains a scroll position data field, activate-history-entry writes the outgoing "
-            "entry's from the document's restorable scrollable regions, and §7.4.6.2 \"Updating the document\"'s "
-            "update document for history step application restores the incoming entry's where it says "
-            "\"Restore persisted state given entry\" — twice, once on each arm of its same-document branch — "
-            "with the \"auto\" condition inside §7.4.6.5's restore-persisted-state and not at either call site",
-            x, y);
+    v->val(ctx, &a->target_entry);
+    v->val(ctx, &a->displayed_entry);
+    v->val(ctx, &a->old_url);
+    v->val(ctx, &a->popstate);
+    STEP_CB_FOREACH(a->fire_cb, k)
+        v->val(ctx, &a->fire_cb[k]);
+    navigation_update_work_visit(ctx, &a->nav, v);
+    v->tree(ctx, (void **)&a->restore_job, NULL, 0, &layout_job_step_ops);
+}
+
+/* HTML §7.4.6.5 "Persisted history entry state"'s save persisted state to a session history entry: "set the
+ * scroll position data of entry to contain the scroll positions for all of entry's document's restorable
+ * scrollable regions" (its viewport, and its scrollable regions other than navigable containers). The optional
+ * persisted user state is not held. A realm with no viewport has no region to save, so the entry keeps none.
+ * Named residual. Not covered: element scrollable regions; core/dom/perform_scroll.c refuses to move an
+ * element's box, so each sits at its origin. Next diff builds: their positions in the data, keyed by element,
+ * when element scrolling lands. Absence shows as: an element scrolled before a traversal back at its origin. */
+static void sh_save_persisted_state(JSContext *ctx, JSValueConst entry)
+{
+    JSValue data;
+
+    if (!viewport_exists(ctx)) return;
+    data = JS_NewObjectProto(ctx, JS_NULL);
+    CHECK(!JS_IsException(data), "session history: §7.4.6.5's scroll position data could not be allocated");
+    JS_SetPropertyStr(ctx, data, "x", JS_NewFloat64(ctx, viewport_window_scroll(ctx, false)));
+    JS_SetPropertyStr(ctx, data, "y", JS_NewFloat64(ctx, viewport_window_scroll(ctx, true)));
+    JS_SetPropertyStr(ctx, entry, SH_E_SCROLLDATA, data);
+}
+
+/* §7.4.6.5's restore persisted state from a session history entry, up to the scroll itself: whether there is a
+ * position to restore, written into `a` for the two restore stages. "If entry's scroll restoration mode is
+ * 'auto', and [the] navigation API's suppress normal scroll restoration during ongoing navigation is false" —
+ * that flag is false here in every world: its one true-writer is commit-a-navigate-event's "traverse" arm,
+ * reached only through intercept(), which navigate_event_fire.c asserts is not installed. Restore scroll
+ * position data's "has been scrolled by the user" is never set: nothing in this engine is a user scrolling a
+ * document (no victim act scrolls). */
+static bool sh_restore_persisted_state_begin(JSContext *ctx, SessionHistoryApply *a)
+{
+    JSValue mode = JS_GetPropertyStr(ctx, a->target_entry, SH_E_SCROLL);
+    JSValue data = JS_GetPropertyStr(ctx, a->target_entry, SH_E_SCROLLDATA);
+    const char *m = JS_ToCString(ctx, mode);
+    bool restore;
+
+    CHECK(m != NULL, "session history: an entry's scroll restoration mode could not be read");
+    DCHECK(JS_IsNull(data) || JS_IsObject(data),
+           "a session history entry's scroll position data is neither null nor the {x, y} record "
+           "sh_save_persisted_state writes — every entry is built with null");
+    restore = !strcmp(m, "auto") && JS_IsObject(data) && viewport_exists(ctx);
+    if (restore) {
+        JSValue x = JS_GetPropertyStr(ctx, data, "x"), y = JS_GetPropertyStr(ctx, data, "y");
+
+        DCHECK(JS_IsNumber(x) && JS_IsNumber(y), "§7.4.6.5's scroll position data holds a position that is not "
+                                                 "the two numbers the save wrote");
+        JS_ToFloat64(ctx, &a->restore_x, x);
+        JS_ToFloat64(ctx, &a->restore_y, y);
+        DCHECK(a->restore_job == NULL, "§7.4.6.5's restore began with a layout job still held from another");
+        a->restore_job = layout_job_new(LAYOUT_JOB_STEP);
+    }
+    JS_FreeCString(ctx, m);
+    JS_FreeValue(ctx, mode);
+    JS_FreeValue(ctx, data);
+    return restore;
 }
 
 /* §7.4.6.1's ACTIVATE HISTORY ENTRY for this navigable — reached only when update-only is false, which is only
@@ -791,7 +844,12 @@ static void sh_activate_history_entry(JSContext *ctx, JSValueConst entry)
     JSValue rec;
     const char *url;
 
-    sh_persisted_state(ctx);   /* "save persisted state to the navigable's active session history entry" */
+    {
+        JSValue active = sh_active_entry(ctx);
+
+        sh_save_persisted_state(ctx, active);   /* "save persisted state to the navigable's active session history entry" */
+        JS_FreeValue(ctx, active);
+    }
     /* "Assert: newDocument's is initial about:blank is false, i.e., we never traverse back to the initial
        about:blank Document because it always gets replaced when we navigate away from it." */
     DCHECK(!sh_is_initial_about_blank(ctx),
@@ -822,11 +880,11 @@ static void sh_activate_history_entry(JSContext *ctx, JSValueConst entry)
  * "navigationType is 'reload' or previousEntryForActivation's document is not document" — which is evaluated
  * here and is false for both callers, because neither a push/replace nor a same-document traversal changes the
  * document. */
-static int sh_update_document_for_history_step(JSContext *ctx, SessionHistoryApply *a, JSValue in,
+static int sh_update_document_for_history_step(JSContext *ctx, JSStepHdr *hdr, SessionHistoryApply *a, JSValue in,
                                                JSValue **out_cb, int *out_argc)
 {
     JSValue rec, latest, global;
-    bool documents_entry_changed;
+    bool documents_entry_changed, more;
     int r;
 
     STEP_DISPATCH(SH_APPLY_STAGES, a->stage, SH_APPLY_ALGORITHM, JS_STEP_ABRUPT);
@@ -937,8 +995,52 @@ static int sh_update_document_for_history_step(JSContext *ctx, SessionHistoryApp
     if (r > 0) return r;
     JS_FreeValue(ctx, a->popstate);
     a->popstate = JS_UNDEFINED;
-    /* STEP 6.4.4. */
-    sh_persisted_state(ctx);   /* "restore persisted state given entry" */
+    /* STEP 6.4.4: "restore persisted state given entry". The restore is a scroll of the viewport, which CSSOM
+       VIEW §4's steps 7 and 8 clamp into the scrolling area as laid out now, so it measures the viewport on a
+       layout job across two stages, as window.scrollTo does (core/frame/viewport.c). */
+    if (!sh_restore_persisted_state_begin(ctx, a)) goto hashchange;
+    STEP_GOTO(a->stage, SH_APPLY_RESTORE_OPEN, &a->nav.phase, &a->fire_phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(SH_APPLY_RESTORE_OPEN);
+    JS_FreeValue(ctx, in);
+    DCHECKF(hdr != NULL && a->restore_job != NULL,
+            "§7.4.6.2 step 6.4.4's restore was reached with no machine header (%p) or no layout job (%p) — only a "
+            "hosted machine reaches it, and sh_restore_persisted_state_begin made the job",
+            (void *)hdr, (void *)a->restore_job);
+    r = layout_job_fork(ctx, hdr, a->restore_job);
+    if (r) return r;
+    layout_job_enter(a->restore_job);
+    element_scrolling_measure_viewport(&a->restore_m, ctx);
+    layout_job_leave(a->restore_job);
+    if (layout_job_declined(a->restore_job)) {
+        r = layout_job_fork(ctx, hdr, a->restore_job);
+        return r ? r : JS_STEP_YIELD;
+    }
+    STEP_GOTO(a->stage, SH_APPLY_RESTORE_AREA, &a->nav.phase, &a->fire_phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(SH_APPLY_RESTORE_AREA);
+    JS_FreeValue(ctx, in);
+    r = layout_job_fork(ctx, hdr, a->restore_job);
+    if (r) return r;
+    layout_job_enter(a->restore_job);
+    more = element_scrolling_measure_next(&a->restore_m);
+    if (!more)
+        viewport_scroll_measured(&a->restore_m, scroll_request_px(a->restore_x), scroll_request_px(a->restore_y),
+                                 "auto");
+    layout_job_leave(a->restore_job);
+    if (layout_job_declined(a->restore_job)) {
+        r = layout_job_fork(ctx, hdr, a->restore_job);
+        return r ? r : JS_STEP_YIELD;
+    }
+    if (more) {
+        layout_job_rested(a->restore_job);
+        return JS_STEP_YIELD;
+    }
+    layout_job_free(a->restore_job);
+    a->restore_job = NULL;
+hashchange:
     /* STEP 6.4.5: "if oldURL's fragment is not equal to entry's URL's fragment, then QUEUE A GLOBAL TASK on the
        DOM MANIPULATION task source … to fire an event named hashchange … using HashChangeEvent, with the oldURL
        attribute initialized to the serialization of oldURL and the newURL attribute initialized to the
@@ -998,6 +1100,7 @@ static void sh_apply_history_step_begin(JSContext *ctx, SessionHistoryApply *a, 
     a->fire_phase = 0;
     STEP_CB_FOREACH(a->fire_cb, k) a->fire_cb[k] = JS_UNDEFINED;
     navigation_update_work_start(&a->nav);
+    a->restore_job = NULL;
     a->begin_step = rec_uint(ctx, trec, SH_R_STEP);
 
     /* STEP 2: "let targetStep be the result of GETTING THE USED STEP given traversable and step" — the greatest
@@ -1092,7 +1195,8 @@ static void sh_apply_history_step_begin(JSContext *ctx, SessionHistoryApply *a, 
 
 /* ---- §7.4.6.1's APPLY THE HISTORY STEP, second half -------------------------------------------------------- */
 
-static int sh_apply_history_step_finish(JSContext *ctx, SessionHistoryApply *a, JSValue in, JSValue **out_cb, int *out_argc)
+static int sh_apply_history_step_finish(JSContext *ctx, JSStepHdr *hdr, SessionHistoryApply *a, JSValue in,
+                                        JSValue **out_cb, int *out_argc)
 {
     JSValue trec;
     int r;
@@ -1147,7 +1251,9 @@ static int sh_apply_history_step_finish(JSContext *ctx, SessionHistoryApply *a, 
        point is crossed by falling into it. */
     STEP_ARM(SH_APPLY_NAV);
     STEP_ARM(SH_APPLY_POPSTATE);
-    r = sh_update_document_for_history_step(ctx, a, in, out_cb, out_argc);
+    STEP_ARM(SH_APPLY_RESTORE_OPEN);
+    STEP_ARM(SH_APPLY_RESTORE_AREA);
+    r = sh_update_document_for_history_step(ctx, hdr, a, in, out_cb, out_argc);
     /* JS_STEP_CALL to park on the dispatch, JS_STEP_ABRUPT if the event could not be minted — either way the
        algorithm has not reached its last step, and only 0 means it has. A `> 0` test here would swallow the
        throw AND run the trailing step on a half-applied history step. */
@@ -1185,7 +1291,20 @@ static void sh_apply_push_replace_history_step(JSContext *ctx, uint32_t target_s
            "§7.4.6.1's apply-the-push/replace-history-step took the CHANGING exit — §7.4.4 step 10 sets the "
            "navigable's active session history entry to the new entry before §7.4.2.3.3's finalize reaches "
            "here, so the update-only test holds unless a second writer moved it");
-    r = sh_apply_history_step_finish(ctx, &a, JS_UNDEFINED, &cb, &cb_argc);
+    /* §7.4.6.2 step 2's documentsEntryChanged is false here, so its step 6.4.4 restore (the only stage that
+       needs a machine header) is not reached and no header is passed. */
+    {
+        JSValue rec = sh_record(ctx), latest = JS_GetPropertyStr(ctx, rec, SH_R_LATEST);
+
+        DCHECKF(JS_VALUE_GET_PTR(latest) == JS_VALUE_GET_PTR(a.target_entry),
+                "§7.4.6.1's apply-the-push/replace-history-step reaches §7.4.6.2 with the document's latest entry "
+                "(%s) not its target entry (%s), so documentsEntryChanged is true and step 6.4.4's restore would run "
+                "with no machine to rest in — §7.4.4's URL and history update steps make the new entry the latest",
+                JS_IsObject(latest) ? sh_entry_url(ctx, latest) : "none", sh_entry_url(ctx, a.target_entry));
+        JS_FreeValue(ctx, latest);
+        JS_FreeValue(ctx, rec);
+    }
+    r = sh_apply_history_step_finish(ctx, NULL, &a, JS_UNDEFINED, &cb, &cb_argc);
     DCHECK(r == 0,
            "§7.4.6.1's apply-the-push/replace-history-step PARKED — the update-only exit reached §7.4.6.2's "
            "popstate dispatch, which runs the page's listeners, and this entry point is a plain C algorithm "
@@ -1730,22 +1849,16 @@ void session_history_fragment_nav_start(SessionHistoryFragmentNav *w)
     w->apply.navigation_type = NULL;
     w->apply.target_step = w->apply.begin_step = w->apply.length = w->apply.index = 0;
     navigation_update_work_start(&w->apply.nav);
+    w->apply.restore_job = NULL;
 }
 
 void session_history_fragment_nav_visit(JSContext *ctx, SessionHistoryFragmentNav *w, JSStepVisit *v)
 {
-    int k;
-
     v->val(ctx, &w->url);
     v->val(ctx, &w->history_entry);
     v->val(ctx, &w->to_replace);
     navigate_event_fire_work_visit(ctx, &w->fire, v);
-    v->val(ctx, &w->apply.target_entry);
-    v->val(ctx, &w->apply.displayed_entry);
-    v->val(ctx, &w->apply.old_url);
-    v->val(ctx, &w->apply.popstate);
-    STEP_CB_FOREACH(w->apply.fire_cb, k) v->val(ctx, &w->apply.fire_cb[k]);
-    navigation_update_work_visit(ctx, &w->apply.nav, v);
+    sh_apply_visit(ctx, &w->apply, v);
 }
 
 void session_history_fragment_nav_begin(JSContext *ctx, SessionHistoryFragmentNav *w, const char *url,
@@ -1777,7 +1890,7 @@ void session_history_fragment_nav_begin(JSContext *ctx, SessionHistoryFragmentNa
     w->history_handling = history_handling;
 }
 
-int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *w, JSValue in,
+int session_history_fragment_nav_run(JSContext *ctx, JSStepHdr *hdr, SessionHistoryFragmentNav *w, JSValue in,
                                      JSValue **out_cb, int *out_argc)
 {
     JSValue rec, active;
@@ -1956,7 +2069,7 @@ int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *
        source to fire `hashchange`. A router that listens for both therefore sees popstate inside its own
        assignment and hashchange in a later task — which is observable, is what every browser does, and is why
        neither may be turned into the other here. */
-    r = sh_update_document_for_history_step(ctx, &w->apply, in, out_cb, out_argc);
+    r = sh_update_document_for_history_step(ctx, hdr, &w->apply, in, out_cb, out_argc);
     if (r != 0) return r;
     STEP_GOTO(w->stage, SHFRAG_TAIL, &w->fire.phase, &w->fire.abort.phase, &w->fire.abort.sig.phase,
               &w->apply.nav.phase, &w->apply.fire_phase, NULL);
@@ -2037,15 +2150,8 @@ typedef struct {
 static void js_sh_traverse_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     SHTraverseState *s = st;
-    int k;
 
-    v->val(ctx, &s->apply.target_entry);
-    v->val(ctx, &s->apply.displayed_entry);
-    v->val(ctx, &s->apply.old_url);
-    v->val(ctx, &s->apply.popstate);
-    STEP_CB_FOREACH(s->apply.fire_cb, k)
-        v->val(ctx, &s->apply.fire_cb[k]);
-    navigation_update_work_visit(ctx, &s->apply.nav, v);
+    sh_apply_visit(ctx, &s->apply, v);
     navigate_event_fire_work_visit(ctx, &s->fire, v);
 }
 
@@ -2117,7 +2223,9 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
        stages, so a resume at either of the later two re-enters it and nothing above runs again. */
     STEP_ARM(SH_APPLY_NAV);
     STEP_ARM(SH_APPLY_POPSTATE);
-    r = sh_apply_history_step_finish(ctx, &s->apply, cb_result, out_cb, out_argc);
+    STEP_ARM(SH_APPLY_RESTORE_OPEN);
+    STEP_ARM(SH_APPLY_RESTORE_AREA);
+    r = sh_apply_history_step_finish(ctx, &s->hdr, &s->apply, cb_result, out_cb, out_argc);
     /* THE MACHINE'S REST POINT IS THE ALGORITHM'S — one declaration (SH_APPLY_STAGES), copied rather than
        restated, so a parked traversal names the spec step it is parked at and cannot name a different one from
        the algorithm that parked it. */

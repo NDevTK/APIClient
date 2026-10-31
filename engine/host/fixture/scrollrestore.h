@@ -7,10 +7,12 @@
    `popstate`, a save at push time the text has no step for (docs/claude-record.md).
    `scrollclamp` saves 1500, then shrinks the document to fit the viewport before going back: the restored 1500
    lies outside the document's scrolling area now, and Chrome 155.0.8059.84 lands at 0 (r2=0).
-   This engine holds no scroll position data yet, and core/frame/session_history.c asserts, wherever it saves or
-   restores persisted state, that the viewport is at its origin: `scrollrestore` is at 900 there, so the assert
-   fires until the data is built; `scrollclamp` is back at 0 before it goes back, so the assert holds, which is
-   its negative control. Each ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   Under the text neither of those two restores anything: each goes back to an entry no activation saved.
+   `scrollfwd` restores. It goes back (saving 900 into the pushed entry), scrolls to 200 in that popstate and goes
+   forward: forward saves 200 into the first entry and, after the second popstate (p=200), restores the pushed
+   entry's 900 (r3=900). `scrollfwdclamp` is the same with the document shrunk to 100px inside the second popstate,
+   so the restore, measured after it, clamps 900 into an empty scrolling area (r4=0) while p is still 200.
+   Each ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLRESTORE_H
 #define ENGINE_HOST_FIXTURE_SCROLLRESTORE_H
 #ifndef TF_CANVAS_INK

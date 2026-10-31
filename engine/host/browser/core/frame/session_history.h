@@ -60,6 +60,7 @@
 #include "core/frame/navigate_event_fire.h" /* §7.4.2.3.3 step 4's push/replace/reload navigate event */
 #include "core/frame/navigation.h"      /* NavigationUpdateWork — §7.4.4 step 11 is a request */
 #include "core/structured_clone.h"
+#include "core/dom/element_scrolling.h"   /* ElementScrollingMeasure — §7.4.6.5's restore measures the viewport */
 
 /* Declared once per AGENT: the per-realm record slot and the realm intrinsic that builds it. */
 void session_history_init(JSContext *ctx);
@@ -167,6 +168,12 @@ typedef struct {
        the two are different dispatches at different targets and the algorithm runs one strictly before the
        other — a shared phase would resume the navigation API's walk into the popstate's answer. */
     NavigationUpdateWork nav;
+    /* §7.4.6.2 step 6.4.4's restore of the entry's scroll position data: the saved viewport position, and the
+       viewport's box measured on a layout job (owned through the hosting machine's visit; NULL outside the two
+       restore stages) so CSSOM VIEW §4's scroll() steps 7-13 clamp it into the scrolling area as it is now. */
+    struct LayoutJob      *restore_job;
+    double                 restore_x, restore_y;
+    ElementScrollingMeasure restore_m;
 } SessionHistoryApply;
 
 /* ---- HTML §7.4.2.2's SAME-DOCUMENT TEST, AND §7.4.2.3.3's NAVIGATE TO A FRAGMENT -------------------------------
@@ -238,7 +245,9 @@ void session_history_fragment_nav_start(SessionHistoryFragmentNav *w);
 void session_history_fragment_nav_visit(JSContext *ctx, SessionHistoryFragmentNav *w, JSStepVisit *v);
 void session_history_fragment_nav_begin(JSContext *ctx, SessionHistoryFragmentNav *w, const char *url,
                                         const char *history_handling);
-int  session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *w, JSValue in,
+/* `hdr` is the header of the machine hosting `w`: step 14's restore of scroll position data forks a layout job's
+   arm there. */
+int  session_history_fragment_nav_run(JSContext *ctx, JSStepHdr *hdr, SessionHistoryFragmentNav *w, JSValue in,
                                       JSValue **out_cb, int *out_argc);
 
 /* HTML §7.4.3's TRAVERSE THE HISTORY BY A DELTA, given this realm's navigable's traversable and an integer.
