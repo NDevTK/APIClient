@@ -263,7 +263,8 @@ static Cand *search_of(const char *src, int sink);
    Trusted Types, what makes the breakout run) is a column of the class row. */
 /* `acts` is the envelope's `acts` array (record_sink), NULL for a fire verified under no engine drive or
    modelled act, and `under_act` says the fire was verified under one, so composition can assert the two agree. */
-typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; } Finding;   /* verified PoCs only */
+/* `pre` is the precondition the fired run proved its bytes rest on (record_sink), owned; NULL where none. */
+typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; char *pre; } Finding;
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
 /* Whether the running flow's world asked anything of a declared principal (an origin's pin, or any branch its
@@ -926,6 +927,24 @@ static void add_pending(const char *src, const char *root, int sink) {
            "what lets the release that clears this path go on being the closure");
 }
 
+/* The precondition a fire proves its bytes rest on, owned, NULL for none: a fact of the fired run, never of the
+   detection that opened the search. A verification sink parses only a String with no unknown in it (each sink
+   entry returns on a concolic argument), so the firing string holds the page's bytes and the candidate's; the
+   candidate's are a precondition's exactly where they were delivered at the root's own identity rather than at
+   a declared attacker source (concolic_candidate_at_root). Named residual: not covered — a sink string that
+   carries the candidate's bytes beside a precondition's piece, which the sinks skip as unreached; next diff —
+   parse such a string and label it from its pieces' owners; absence shows as a search parked with
+   `sinkStrings` 0 whose candidate run concatenates the payload with stored state. */
+static char *fired_precondition(const char *root) {
+    const char *pre = concolic_candidate_at_root(root) ? NULL : concolic_source_precondition(root);
+    char *out;
+
+    if (!pre) return NULL;
+    out = reclaim_strdup(pre);
+    CHECK(out != NULL, "solve: OOM recording a fired PoC's precondition");
+    return out;
+}
+
 static void record_sink(int cls, const char *source, const char *poc, char *acts, int under_act) {
     /* A finding is a pending search that solved, so the two lists are one list in two states: the parked emit
        subtracts findings by (class, source), and a finding with no pending twin would report as both fired and
@@ -982,6 +1001,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
         .root = reclaim_strdup(twin->root),
         .acts = acts,
         .under_act = under_act,
+        .pre = fired_precondition(twin->root),
     };
     /* A half-stored finding is a corrupt one, not a lost one: `solved` strcmps the source, and solve_json_array
        writes the PoC and the root straight into the report. */
@@ -2433,7 +2453,7 @@ static void emit_message_routes(JsonBuf *b, JSContext *ctx) {
 }
 
 static void emit_delivery(JsonBuf *b, JSContext *ctx, const Cand *e, const char *root, const char *delivers,
-                          const char *poc) {
+                          const char *poc, const char *pre) {
     const char *enc, *kind = NULL;
     char prefix = 0;
 
@@ -2485,13 +2505,9 @@ static void emit_delivery(JsonBuf *b, JSContext *ctx, const Cand *e, const char 
             }
         }
     }
-    /* A member of the root that no attacker writes from outside the victim's own state: the finding is a sink
-       reached under this precondition, not an attacker PoC, and the report labels it so. */
-    {
-        const char *pre = concolic_source_precondition(root);
-
-        if (pre) { json_buf_raw(b, ","); json_buf_key(b, "precondition"); json_buf_str(b, pre); }
-    }
+    /* The state no attacker writes from outside the victim's own that the finding rests on: a sink reached under
+       this precondition, not an attacker PoC, and the report labels it so. */
+    if (pre) { json_buf_raw(b, ","); json_buf_key(b, "precondition"); json_buf_str(b, pre); }
     /* Whether the replayed path pinned an attacker's principal. `delivery` says how an attacker puts bytes in
        this source; this says whether a sender other than the pinned one can do it (see PrincipalDemand). An
        origin the attacker can hold is not stated here: the fire composed it, and the PoC's acts carry it. */
@@ -2574,7 +2590,8 @@ char *solve_json_array(JSContext *ctx) {
             emit_delivery_probed(&b, tw);
             /* And the measured constraint the PoC was built under, which tells anyone reproducing it by hand which
                bytes the browser would have eaten. */
-            emit_delivery(&b, ctx, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv), g_sinks[i].poc);
+            emit_delivery(&b, ctx, tw, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv), g_sinks[i].poc,
+                          g_sinks[i].pre);
         }
         /* The acts after the delivery they follow: a fire verified under an engine drive of a listener
            reproduces only when a person performs the act that runs it, so the envelope states each in order. */
@@ -2754,7 +2771,7 @@ char *solve_json_array(JSContext *ctx) {
         {
             char dv[64];
             emit_delivery(&b, ctx, &g_pending[i], g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv),
-                          NULL);
+                          NULL, concolic_source_precondition(g_pending[i].root));
         }
         /* `senderDemand`: the senders this parked search waits on, one per pinned path that reached the sink.
            Parked entries only: a fired search has a PoC, and its own path's identity is `principalDemand`. */
@@ -2813,6 +2830,6 @@ void solve_free(void) {
         free(g_pending[i].root);
     }
     free(g_pending); g_pending = NULL; g_pending_n = g_pending_cap = 0;
-    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].root); free(g_sinks[i].poc); free(g_sinks[i].acts); }
+    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].root); free(g_sinks[i].poc); free(g_sinks[i].acts); free(g_sinks[i].pre); }
     free(g_sinks); g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
 }

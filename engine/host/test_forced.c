@@ -16349,6 +16349,8 @@ static void sx_write_path_row(const char *js, const char *root, const char *pref
     fold_row(tt, why, rec && memmem(rec, span, open_act, sizeof open_act - 1) != NULL,
              "the PoC does not state its second act, the attacker opening the address again so a second load "
              "reads the saved value back");
+    fold_row(tt, why, rec && !memmem(rec, span, "\"precondition\"", 14),
+             "the fired PoC is labelled a precondition, though its chain reaches the address through the open act");
 }
 
 /* The rows of the `storedxss` document (fixture/storedxss.h). */
