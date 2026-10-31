@@ -2685,7 +2685,7 @@ enum {   /* the STEPDEF_* ids used at the registration sites */
     STEPDEF_OBJ_TOSTRING, STEPDEF_OBJ_TOLOCALESTRING,
     STEPDEF_DECODE_URI, STEPDEF_DECODE_URI_COMPONENT,
     STEPDEF_ENCODE_URI, STEPDEF_ENCODE_URI_COMPONENT,
-    STEPDEF_GLOBAL_ESCAPE, STEPDEF_GLOBAL_UNESCAPE,
+    STEPDEF_GLOBAL_ESCAPE, STEPDEF_GLOBAL_UNESCAPE, STEPDEF_ATOB,
     STEPDEF_INSTANCEOF, STEPDEF_ORDINARY_HAS_INSTANCE,
     STEPDEF_TA_SORT, STEPDEF_TA_TOSORTED, STEPDEF_STR_LOCALECOMPARE,
     /* ONE id per setter, because a coerce-then-compute definition carries the body's magic AND the mask of
@@ -94484,6 +94484,10 @@ static const JSTrampStepDef js_encodeURI_def      = PRIMARGS_DEF(PRIMARGS(0x1, H
 static const JSTrampStepDef js_encodeURIComp_def  = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic_magic, js_global_encodeURI, 1, "19.2.6.4 encodeURIComponent ( uriComponent )");
 static const JSTrampStepDef js_global_escape_def  = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_global_escape, 0, "B.2.1.1 escape ( string )");
 static const JSTrampStepDef js_global_unescape_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_global_unescape, 0, "B.2.1.2 unescape ( string )");
+/* HTML §8.3 Base64 utility methods: `data` is a DOMString, whose Web IDL conversion is ToString — the page's
+   toString or @@toPrimitive — so it is coerced before the body runs. */
+static JSValue js_atob(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+static const JSTrampStepDef js_atob_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_atob, 0, "HTML §8.3 Base64 utility methods atob(data)");
 static JSValue js_date_setTime(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static int js_date_this_precheck(JSContext *ctx, const JSStepHdr *h);
 static int js_date_set_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
@@ -96893,6 +96897,7 @@ static const JSTrampStepDef *const js_tramp_step_defs[STEPDEF_COUNT] = {
     [STEPDEF_ENCODE_URI_COMPONENT] = &js_encodeURIComp_def,
     [STEPDEF_GLOBAL_ESCAPE]   = &js_global_escape_def,
     [STEPDEF_GLOBAL_UNESCAPE] = &js_global_unescape_def,
+    [STEPDEF_ATOB]            = &js_atob_def,
     [STEPDEF_ISNAN]           = &js_isNaN_def,
     [STEPDEF_ISFINITE]        = &js_isFinite_def,
     [STEPDEF_ARRAY_REDUCE]  = &js_array_reduce_def,  [STEPDEF_ARRAY_REDUCE_RIGHT] = &js_array_reduceR_def,
@@ -131443,6 +131448,8 @@ static JSValue js_atob(JSContext *ctx, JSValueConst this_val,
             return js_concolic_derive(ctx, argv[0], "atob", real);
         }
     }
+    DCHECK(argc < 1 || JS_VALUE_GET_TAG(argv[0]) != JS_TAG_OBJECT,
+           "atob's body was handed an object — its machine coerces `data` to a primitive before the body runs");
     val = JS_ToString(ctx, argv[0]);
     if (unlikely(JS_IsException(val)))
         return JS_EXCEPTION;
@@ -131512,7 +131519,7 @@ fail:
 
 static const JSCFunctionListEntry js_base64_funcs[] = {
     JS_CFUNC_DEF("btoa", 1, js_btoa),
-    JS_CFUNC_DEF("atob", 1, js_atob),
+    JS_CFUNC_STEP_DEF("atob", 1, STEPDEF_ATOB ),
 };
 
 
