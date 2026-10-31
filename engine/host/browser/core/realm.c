@@ -862,8 +862,9 @@ JSContext *realm_next_environment(JSContext *ctx, JSContext *prev)
         names = JS_GetClassProto(r, g_global_names_slot);
         built = !JS_IsNull(names);
         JS_FreeValue(r, names);
-        /* §8.1.7.3's "whose responsible event loop is this event loop", asked in the running timeline: a realm a
-           sibling flow built is in the runtime but is no environment of this one. */
+        /* HTML §8.1.7.3 Processing model's microtask checkpoint: "whose responsible event loop is this event
+           loop", asked in the running timeline. A realm a sibling flow built is in the runtime but is no
+           environment of this one. */
         if (built && realm_of_running_timeline(r)) return r;
     }
     return NULL;
