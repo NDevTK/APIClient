@@ -13,6 +13,7 @@
 #include "core/timing/thread_work.h"   /* a constraint probe is priced by the bytes it hashes */
 #include "core/timing/hr_time.h"       /* the current time the engine asks for (`.clock`) */
 #include "core/crypto/secure_hash.h"   /* a long identity is the digest of its spelling */
+#include "core/url/url.h"              /* a host name is the domain the URL parser reads it as */
 #include "check.h"
 #include <stdarg.h>
 #include <stdlib.h>
@@ -2771,12 +2772,30 @@ int concolic_host_ldh(const char *h, size_t n)
     return label > 0 && h[n - 1] != '-';
 }
 
+int concolic_host_domain(const char *h)
+{
+    size_t n = strlen(h), m = n + sizeof "https:///";
+    char *in;
+    UrlRecord u;
+    int ok;
+
+    if (!concolic_host_ldh(h, n)) return 0;
+    in = reclaim_malloc(m);
+    CHECK(in, "concolic: OOM spelling a host to parse");
+    snprintf(in, m, "https://%s/", h);
+    url_record_init(&u);
+    ok = url_parse(&u, in, strlen(in), NULL) && u.host.kind == URL_HOST_DOMAIN && !strcmp(u.host.domain, h);
+    url_record_free(&u);
+    free(in);
+    return ok;
+}
+
 void concolic_set_attacker_site(const char *host)
 {
     size_t n = host ? strlen(host) : 0;
 
-    CHECK(n < sizeof g_attacker_site && concolic_host_ldh(host, n) && strchr(host, '.'),
-          "concolic: the attacker site is not a lowercase host name of at least two labels");
+    CHECK(n < sizeof g_attacker_site && host && concolic_host_domain(host) && strchr(host, '.'),
+          "concolic: the attacker site is not a lowercase domain of at least two labels");
     memcpy(g_attacker_site, host, n + 1);
     snprintf(g_attacker_page, sizeof g_attacker_page, "https://%s/", host);
 }

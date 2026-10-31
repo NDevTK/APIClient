@@ -374,8 +374,8 @@ static void origin_pins(void *user, const char *src, const ConcolicPrincipalPin 
 }
 
 /* The origin `https://<host>` built by the URL parser (WHATWG URL §4.4 basic URL parser) from a host that
-   passed concolic_host_ldh, its serialization taken from the parsed record: such a host parses to itself, so the
-   parsed domain equal to `host` is asserted. Malloc'd. */
+   passed concolic_host_domain, its serialization taken from the parsed record: such a host parses to itself, so
+   the parsed domain equal to `host` is asserted. Malloc'd. */
 static char *origin_of_host(const char *host)
 {
     size_t n = strlen(host) + sizeof "https:///";
@@ -384,7 +384,7 @@ static char *origin_of_host(const char *host)
     bool ok;
 
     CHECK(in, "message compose: OOM spelling an origin");
-    DCHECK(concolic_host_ldh(host, strlen(host)), "an origin was composed over a host of invalid labels");
+    DCHECK(concolic_host_domain(host), "an origin was composed over a name that is no domain");
     snprintf(in, n, "https://%s/", host);
     url_record_init(&u);
     ok = url_parse(&u, in, strlen(in), NULL);
@@ -418,7 +418,7 @@ int message_compose_origins(const char *origin_src, char ***out)
     host = json_buf_take(&sub);
     CHECK(host, "message compose: OOM spelling an origin");
     /* Every constant under the site, or the site alone where that name is too long to be a host. */
-    c[n++] = origin_of_host(concolic_host_ldh(host, strlen(host)) ? host : concolic_attacker_site());
+    c[n++] = origin_of_host(concolic_host_domain(host) ? host : concolic_attacker_site());
     free(host);
     for (int i = 0; i < o.n; i++) {
         /* A registrable domain of the attacker's own that ends in the constant: a fresh label prefixed to it, a
@@ -430,7 +430,7 @@ int message_compose_origins(const char *origin_src, char ***out)
 
             CHECK(own, "message compose: OOM spelling an origin");
             snprintf(own, len, "x%s", o.frag[i]);
-            if (concolic_host_ldh(own, strlen(own))) c[n++] = origin_of_host(own);
+            if (concolic_host_domain(own)) c[n++] = origin_of_host(own);
             free(own);
         }
         free(o.frag[i]);

@@ -730,6 +730,10 @@ void        concolic_set_attacker_site(const char *host);
    63 and the name at most 255 octets on the wire (RFC 1035 §2.3.4 Size limits), so 253 characters spelled. A
    string that is anything else spells no host label: no userinfo, port, path, fragment or empty label passes. */
 int         concolic_host_ldh(const char *h, size_t n);
+/* Whether the NUL-terminated `h` is such a host and the URL parser (URL §4.4 basic URL parser) reads it as that
+   same domain: a name whose last label ends in a number (URL §3.5 Host parsing's ends in a number checker) is
+   parsed as an IPv4 address instead, and is no domain an origin can be composed over. */
+int         concolic_host_domain(const char *h);
 const char *concolic_attacker_site(void);
 const char *concolic_attacker_page(void);
 #define REFERRER_ATTACKER_POLICY "unsafe-url"
