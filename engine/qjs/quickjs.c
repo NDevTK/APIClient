@@ -27316,6 +27316,8 @@ static int step_coerce_unknown(JSContext *ctx, JSStepHdr *h, JSValueConst v, uin
         *ex = e;
         return 0;
     }
+    /* No example: there is no value to run the machine on, and running it on an invented one would call page
+       code with it, so the machine stops here. */
     DCHECK(!h->def->answers_unknown || JS_IsUninitialized(h->unknown_operand),
            "a machine that answers unknown input itself met a second one before taking the first off its header");
     /* An earlier operand's example has been run on, and this operand has none, so the completion has no
