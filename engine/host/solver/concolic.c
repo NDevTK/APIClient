@@ -4742,6 +4742,12 @@ static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int c
             CHECK(eq >= 0, "concolic ==: 7.2.13 IsLooselyEqual refused two operands that carry no object");
         }
         out = JS_NewBool(ctx, eq ^ (is_neq ? 1 : 0));
+    } else if (hava && havb && op != JS_CONCOLIC_EQ_LOOSE &&
+               (JS_IsObject(exa) != JS_IsObject(exb) || JS_IsSymbol(exa) != JS_IsSymbol(exb))) {
+        /* §7.2.14 IsStrictlyEqual ( x, y ) and §7.2.10 SameValueZero ( x, y ) step 1: "If SameType(x, y) is
+           false, return false." An Object or a Symbol against a value of another type is answered by type alone,
+           with no identity compared and no code run. */
+        out = JS_NewBool(ctx, is_neq ? 1 : 0);
     }
     JS_FreeValue(ctx, exa);
     JS_FreeValue(ctx, exb);
