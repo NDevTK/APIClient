@@ -18024,7 +18024,7 @@ TF_UNIT void probes_msglang(const char *js, Probe *tab, int *n) {
              "the fired message does not carry the valid-suffix language's member as its `s`");
     const Probe rows[] = {
         { "ml-sink", ms_tt, "'mlOut'", SESS_EXPLORE, ms_why },
-        { "ml-poc", mp_tt, "d.s", SESS_EXPLORE, mp_why, .gate = "ml-sink" },
+        { "ml-poc", mp_tt, "function mlOnMessage", SESS_EXPLORE, mp_why, .gate = "ml-sink" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
