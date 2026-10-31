@@ -149,6 +149,15 @@ typedef struct FlowAgent {
     uint8_t reporting;
 } FlowAgent;
 
+/* Every field and handle cold_park_flow reads off a flow, as its pointers and counts, zero-filled before
+   assignment so two compare with memcmp. flow_release_bulk records it, and the write asserts the flow still reads
+   so, which keeps a release moved ahead of the write from handing it freed state. */
+typedef struct {
+    const void *dec_blob, *perform_q, *deliver_q, *deliver_world_q, *fn, *agents, *dyn_token;
+    const void *cand_src, *cand_payload, *cand_dsrc, *cand_dval, *orphan_chain, *family, *acct;
+    int n_agents, dyn_n, cand_dn, orphan_chain_n;
+} FlowParkReads;
+
 typedef struct Flow {
     /* This flow's slot in the frontier's array, so locating a member is a load rather than a walk. It names a
        slot, never a rank: the array is in arrival order and the order is by weight, so no term of flow_weight
@@ -360,8 +369,16 @@ typedef struct Flow {
        cold_park_flow sets it and refuses a flow that already carries it. */
     int paged;
     /* Has flow_release_bulk run? Set once, by the pager's sale before it writes the recipe; flow_release then
-       releases only the remainder. */
+       releases only the remainder. The flow is then out of the order's index and the host-owed list, so no query
+       sells it twice. */
     int bulk_released;
+    /* The next flow on the pager's owed-record list (engine.c): sold for its bulk while another record was being
+       written, its own record still to write. */
+    struct Flow *sale_next;
+#if APICLIENT_DEV
+    /* What cold_park_flow reads, as flow_release_bulk found it (flow_park_reads_unchanged). */
+    FlowParkReads bulk_reads;
+#endif
     /* Is this flow a timeline that does not exist: one waiting at a cross-instance read no peer timeline will
        answer (engine.c's FLOW_STEP_RETIRED arm sets it)? Its work items belong to no timeline, so flow_release
        frees them as it frees a paged flow's. */
@@ -1798,9 +1815,13 @@ void  flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch);
  * flow_remove asserts it did. */
 void  flow_release(JSContext *ctx, Flow *f);
 /* The first half of flow_release, run alone by the pager before cold_park_flow: everything the park write does not
-   read (cold.c's ColdParkReads names what it does), so a sale gives its memory back before the record it writes
-   needs any. flow_release then frees the remainder. Asserts the flow is not switched in and not released twice. */
+   read (FlowParkReads names what it does), so a sale gives its memory back before the record it writes needs any.
+   It also takes the flow out of the order's index or the host-owed list. flow_release then frees the remainder.
+   Asserts the flow is not switched in and not released twice. */
 void  flow_release_bulk(JSContext *ctx, Flow *f);
+/* Does `f` read, for cold_park_flow, as it did when its bulk was released? Defined in dev builds, where the
+   snapshot is kept; named only inside DCHECK conditions. */
+int flow_park_reads_unchanged(const Flow *f);
 
 /* Remove + free a flow whose state has already been released. Asserts what flow_release owes it. */
 void  flow_remove(JSContext *ctx, Flow *f);

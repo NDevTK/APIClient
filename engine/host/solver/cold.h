@@ -612,16 +612,6 @@ void cold_census_release(ColdCensus *out);
  * the fixture's second spawn re-states them). A stored entry short of one is a document that resumes into an
  * environment its flows never ran in — the header list was the one that was missing. */
 
-/* Every field and handle cold_park_flow reads off a flow, as its pointers and counts: the caller snapshots it
-   before releasing the flow's bulk (flow_release_bulk) and the write asserts it unchanged, so a release moved ahead
-   of the write cannot hand it freed state. Zero-filled before assignment, so it compares with memcmp. */
-typedef struct {
-    const void *dec_blob, *perform_q, *deliver_q, *deliver_world_q, *fn, *agents, *dyn_token;
-    const void *cand_src, *cand_payload, *cand_dsrc, *cand_dval, *orphan_chain, *family, *acct;
-    int n_agents, dyn_n, cand_dn, orphan_chain_n;
-} ColdParkReads;
-ColdParkReads cold_park_reads(const Flow *f);
-
 /* WRITE ONE FLOW'S RECIPE INTO THE PARK DOCUMENT — the primitive, and the unit a PARTIAL self-park is made of
    (§scheduler: "an engine self-parks its residue to the IDB cold tier under pressure"). The flow must be one
    the scheduler is not switched into, for the same reason flow_release demands it: its decision state is live
@@ -629,9 +619,9 @@ ColdParkReads cold_park_reads(const Flow *f);
    the flow `paged`, which is what lets flow_release let go of a parked continuation, and refuses to write the
    same flow twice — the host stores ONE value per bundle, so a flow named twice comes back as two flows on one
    path. Writing it does NOT remove it: the caller decides whether this flow's RAM comes back now
-   (flow_release) or with the instance. `taken` is cold_park_reads(f) from before any release of the flow's bulk,
-   asserted equal to the flow as written. */
-void cold_park_flow(Flow *f, const ColdParkReads *taken);
+   (flow_release) or with the instance. A flow whose bulk went first (flow_release_bulk) is asserted to read as it
+   did before that release. */
+void cold_park_flow(Flow *f);
 
 /* WRITE THE WHOLE FRONTIER OUT — the loop over the primitive above, and nothing else. That is the Level-1
    eviction §scheduler describes: the host ranks DOCUMENTS' engines, asks the lowest-value one to give up its

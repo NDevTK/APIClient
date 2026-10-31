@@ -579,6 +579,7 @@ static void frontier_rank_changed(void);
    members never dispatched, which flow_credit_pick moves. */
 static void flow_ix_insert(Flow *f);
 static void flow_ix_remove(Flow *f);
+static void flow_owed_unlink(Flow *f);
 static void flow_ix_rekey(Flow *f);
 static void flow_ix_first_pick(Flow *f);
 static void flow_ix_site_sync(FlowSite *st);
@@ -2177,6 +2178,38 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            "is the one thing the WFQ may never let it do");
 }
 
+#if APICLIENT_DEV
+static FlowParkReads flow_park_reads(const Flow *f) {
+    FlowParkReads r;
+
+    memset(&r, 0, sizeof r);
+    r.dec_blob = f->dec_blob;
+    r.perform_q = JS_VALUE_GET_PTR(f->perform_q);
+    r.deliver_q = JS_VALUE_GET_PTR(f->deliver_q);
+    r.deliver_world_q = JS_VALUE_GET_PTR(f->deliver_world_q);
+    r.fn = JS_VALUE_GET_PTR(f->fn);
+    r.agents = f->agents;
+    r.n_agents = f->n_agents;
+    r.dyn_token = f->dyn_token;
+    r.dyn_n = f->dyn_n;
+    r.cand_src = f->cand_src;
+    r.cand_payload = f->cand_payload;
+    r.cand_dsrc = f->cand_dsrc;
+    r.cand_dval = f->cand_dval;
+    r.cand_dn = f->cand_dn;
+    r.orphan_chain = f->orphan_chain;
+    r.orphan_chain_n = f->orphan_chain_n;
+    r.family = f->family;
+    r.acct = f->acct;
+    return r;
+}
+
+int flow_park_reads_unchanged(const Flow *f) {
+    FlowParkReads now = flow_park_reads(f);
+    return memcmp(&now, &f->bulk_reads, sizeof now) == 0;
+}
+#endif
+
 /* The part of a release the park write does not read (flow.h): the compile, the continuations and frames, the
    other agents' realms, the owed replies, the heap delta and the DOM head and base, and the pin blob. The pager
    runs it before cold_park_flow so the memory a sale gives back funds the record it writes. */
@@ -2185,6 +2218,12 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
            "the running flow was released — its heap delta, document writes and decision state are live rather than "
            "parked");
     DCHECK(!f->bulk_released, "a flow's bulk was released twice — the second walk would free its delta again");
+#if APICLIENT_DEV
+    f->bulk_reads = flow_park_reads(f);
+#endif
+    /* Out of every query first, so a sale that funds this one's record cannot pick it again. */
+    if (f->ix_in) flow_ix_remove(f);
+    else          flow_owed_unlink(f);
     /* And the parked continuations are released here, because the flow owns them: every park takes a reference that
        only the resume gives back. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn), so this calls one
        function over the set. `paged` does not excuse it: flow_release's work-item assert is about a dropped item, while
@@ -6189,7 +6228,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         /* And out of the order: the index if it is runnable, the host-owed list if it is not, the two exactly
            partitioning the members. Before acct_depart, which clears the bucket and family the index reads. */
         if (f->ix_in) flow_ix_remove(f);
-        else          flow_owed_unlink(f);
+        else if (!f->bulk_released) flow_owed_unlink(f);   /* a sold flow left both at flow_release_bulk */
         f->at->members--;
         f->at = NULL;
         acct_depart(f);

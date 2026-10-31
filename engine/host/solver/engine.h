@@ -452,6 +452,10 @@ void engine_request_park(void);
    closed. The caller holds no position in the frontier. Returns 1 if a flow was sold, so the caller retries, and 0
    at the floor or with no session, where its own CHECK is the answer. */
 int engine_reclaim_at_rest(void);
+/* For a park block refused while a sale writes its record: sell the frontier's next tail for its bulk only
+   (flow_release_bulk), its record owed and written after the current one. Returns 1 if a flow gave its bulk back, 0
+   outside a sale or with no sellable member left, the floor. */
+int engine_park_fund(void);
 /* RAM pressure, the scheduler's policy for when the cold tail relocates: at rest between two steps, while the
    instance's live bytes (solver/c_alloc.h's c_alloc_live) stand above `share` permille of its known limit, the lowest-value
    flow is sold to the cold tier. The limit is the wasm build's maximum linear memory or the native process's

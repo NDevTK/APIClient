@@ -11189,6 +11189,66 @@ static int engine_reclaim_set(int v) { int prev = g_reclaim_allowed; g_reclaim_a
    the apply), and the one member a sale may not take, since its chain is half-installed in the heap. */
 static const Flow *g_reclaim_keep;
 
+/* The pager's owed records: flows sold for their bulk (engine_park_fund) while another flow's record was being
+   written, each written after it, newest first. Live only inside one sale (`g_sale_open`). */
+static Flow *g_sale_owed;
+static long g_sale_owed_n;
+static int g_sale_open;
+
+/* The first half of a sale: the flow leaves every query and gives back what its record does not read. */
+static void engine_sale_release(Flow *tail) {
+    /* The debt leaves with the flow, as two debts counted by kind (see g_paged_owed): a synchronous request is
+       answered by id at a call site and a fetch reply is paired by (method, url), so a register counted whole
+       would hand the fetch side a credit belonging to the request side and excuse the next reply the host
+       mispairs. The reply side counts what is still owed, since the two doors differ in arity (pending.h,
+       pending_owed_replies): the reply door answers a request once and drops it from the join when it carries a
+       value, so an answered entry sold here was already delivered, and crediting it would quiet qjs_provide's
+       pairing assert. The request door answers one id once per peer timeline, so an answered HOSTREQ entry still
+       awaits answers and stays counted. */
+    g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
+    g_paged_owed += pending_owed_replies(tail->pending);
+    /* The debt that leaves by being given back: a recipe cannot carry a rendezvous token (engine.h: it is the
+       zone's name, has no generation, and does not outlive the zone's session), so the question is returned rather
+       than parked. Per flow, because this is a partial park: the instance keeps running and the operation is
+       attached to every other timeline, so the notice belongs to the last holder leaving. Selling one of many
+       holders costs the peer one timeline's answer, as a timeline that never existed would; the rest still answer
+       under the zone's token. */
+    engine_retract_flow(g_sess_ctx, tail);
+    flow_job_retract_external(g_sess_ctx, tail);
+    flow_withdraw_async_sends(g_sess_ctx, tail);
+    flow_release_bulk(g_sess_ctx, tail);
+}
+
+/* The second half: the record, funded by the bulk already given back, then the rest of the flow. */
+static void engine_sale_write(Flow *tail) {
+    /* Which population is leaving, read before flow_release frees the label: `cand_src` is the whole question
+       (solver/engine.h). Per member, as at the retirement arm (engine.h). */
+    const int was_cand = tail->cand_src != NULL;
+    cold_park_flow(tail);
+    flow_release(g_sess_ctx, tail);
+    g_flows_sold++;
+    if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++;
+}
+
+int engine_park_fund(void) {
+    Flow *t;
+    if (!g_sale_open) return 0;   /* a park outside a sale (the whole-frontier park) has no bulk to sell for it */
+    t = flow_worst(g_reclaim_keep ? g_reclaim_keep : flow_running());
+    if (!t) {
+        /* The floor is reached only with no sellable bulk left: every member but the excluded one has given its
+           bulk back, as the record being written or as an owed one. */
+        DCHECKF(flow_count() <= g_sale_owed_n + 1 + (g_reclaim_keep || flow_running() ? 1 : 0),
+                "the park document met the floor with %ld members and only %ld owed records — a member still "
+                "holds bulk that no query offered for sale", (long)flow_count(), g_sale_owed_n);
+        return 0;
+    }
+    engine_sale_release(t);
+    t->sale_next = g_sale_owed;
+    g_sale_owed = t;
+    g_sale_owed_n++;
+    return 1;
+}
+
 static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     Flow *tail;
 
@@ -11244,36 +11304,19 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        head and the nodes it created, and walks the shared heap and document chains down only as far as the segments
        this flow held the last reference on. A tail flow's dying prefix cannot be a segment the running flow stands on
        (a shared segment has a second reference), so the release moves nothing in the live heap or document. */
-    /* The debt leaves with the flow, as two debts counted by kind (see g_paged_owed): a synchronous request is
-       answered by id at a call site and a fetch reply is paired by (method, url), so a register counted whole
-       would hand the fetch side a credit belonging to the request side and excuse the next reply the host
-       mispairs. The reply side counts what is still owed, since the two doors differ in arity (pending.h,
-       pending_owed_replies): the reply door answers a request once and drops it from the join when it carries a
-       value, so an answered entry sold here was already delivered, and crediting it would quiet qjs_provide's
-       pairing assert. The request door answers one id once per peer timeline, so an answered HOSTREQ entry still
-       awaits answers and stays counted. */
-    g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
-    g_paged_owed += pending_owed_replies(tail->pending);
-    /* The debt that leaves by being given back: a recipe cannot carry a rendezvous token (engine.h: it is the
-       zone's name, has no generation, and does not outlive the zone's session), so the question is returned rather
-       than parked. Per flow, because this is a partial park: the instance keeps running and the operation is
-       attached to every other timeline, so the notice belongs to the last holder leaving. Selling one of many
-       holders costs the peer one timeline's answer, as a timeline that never existed would; the rest still answer
-       under the zone's token. */
-    /* Which population is leaving, read before the release frees the label: `cand_src` is the whole question
-       (solver/engine.h) and flow_release frees it, so a read beside the counter would read freed memory. Per
-       member, as at the retirement arm (engine.h). */
-    { const int was_cand = tail->cand_src != NULL;
-      engine_retract_flow(g_sess_ctx, tail);
-      flow_job_retract_external(g_sess_ctx, tail);
-      flow_withdraw_async_sends(g_sess_ctx, tail);
-      /* Free before write: the bulk the record does not read goes first, so the memory it held funds the record. */
-      ColdParkReads taken = cold_park_reads(tail);
-      flow_release_bulk(g_sess_ctx, tail);
-      cold_park_flow(tail, &taken);
-      flow_release(g_sess_ctx, tail);
-      g_flows_sold++;
-      if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++; }
+    g_sale_open = 1;
+    engine_sale_release(tail);
+    engine_sale_write(tail);
+    /* And the records of the flows this one's record sold for their bulk, each of which may sell more. */
+    while (g_sale_owed) {
+        Flow *o = g_sale_owed;
+        g_sale_owed = o->sale_next;
+        o->sale_next = NULL;
+        g_sale_owed_n--;
+        engine_sale_write(o);
+    }
+    DCHECK(g_sale_owed_n == 0, "the pager's owed-record count disagrees with its list once the list is empty");
+    g_sale_open = 0;
     return 1;
 }
 

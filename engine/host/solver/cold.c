@@ -377,16 +377,15 @@ static uint64_t park_fnv(uint64_t h, const char *s, size_t n) {
    once to fill it) — so this is idempotent by construction: the same records render the same bytes. */
 static char *g_park_json;
 
-/* The next block. Plain malloc, never the reclaim edge: this runs inside a sale, whose own bulk release funds it.
-   Named residual. Not covered: a record whose blocks need more memory than its own flow's bulk gave back (a
-   never-run arm with a small delta and a long unwritten chain segment). Next diff: the sale releases further tails'
-   bulk into a list of owed records before it writes, so the floor is a frontier with no bulk left. Absence shows as
-   this CHECK firing while the census's `members` is above one. */
+/* The next block. Plain malloc, never the reclaim edge: this runs inside a sale, funded by the bulk the sale gave
+   back, and a refusal sells further tails for their bulk (engine_park_fund) until the block fits or no member has
+   bulk left, the floor. */
 static ParkBlock *park_block_new(void)
 {
-    ParkBlock *b = malloc(sizeof *b);
-    CHECK(b, "the cold tier could not extend its own park document after the sale released the flow's bulk — the "
-             "record being written would be lost with the flow it describes");
+    ParkBlock *b;
+    while (!(b = malloc(sizeof *b)))
+        CHECK(engine_park_fund(), "the cold tier could not extend its own park document with no member's bulk left "
+                                  "to sell — the record being written would be lost with the flow it describes");
     b->next = NULL; b->len = 0;
     return b;
 }
@@ -1326,48 +1325,19 @@ void cold_park_preview(ColdPreview *out)
             g_preview_census.asks_with_commits, g_preview_census.asks_after_commit, rows_now);
 }
 
-ColdParkReads cold_park_reads(const Flow *f)
-{
-    ColdParkReads r;
-
-    memset(&r, 0, sizeof r);
-    r.dec_blob = f->dec_blob;
-    r.perform_q = JS_VALUE_GET_PTR(f->perform_q);
-    r.deliver_q = JS_VALUE_GET_PTR(f->deliver_q);
-    r.deliver_world_q = JS_VALUE_GET_PTR(f->deliver_world_q);
-    r.fn = JS_VALUE_GET_PTR(f->fn);
-    r.agents = f->agents;
-    r.n_agents = f->n_agents;
-    r.dyn_token = f->dyn_token;
-    r.dyn_n = f->dyn_n;
-    r.cand_src = f->cand_src;
-    r.cand_payload = f->cand_payload;
-    r.cand_dsrc = f->cand_dsrc;
-    r.cand_dval = f->cand_dval;
-    r.cand_dn = f->cand_dn;
-    r.orphan_chain = f->orphan_chain;
-    r.orphan_chain_n = f->orphan_chain_n;
-    r.family = f->family;
-    r.acct = f->acct;
-    return r;
-}
-
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */
-void cold_park_flow(Flow *f, const ColdParkReads *taken)
+void cold_park_flow(Flow *f)
 {
     const void *seg;
     long id;
     char rec[64];
 
-    DCHECK(f != NULL && taken != NULL, "the cold tier was asked to write the recipe of no flow at all");
-    /* What the write reads is what it was before the caller's release of the bulk: a field moved into
+    DCHECK(f != NULL, "the cold tier was asked to write the recipe of no flow at all");
+    /* What the write reads is what it was before the flow's bulk was released: a field moved into
        flow_release_bulk would read here as freed (NULL, undefined) and the record would describe a different flow. */
-    {
-        ColdParkReads now = cold_park_reads(f);
-        DCHECK(memcmp(&now, taken, sizeof now) == 0,
-               "a field the park write reads changed between the caller's snapshot and the write — flow_release_bulk "
-               "freed something cold_park_flow reads, so move that release after the write");
-    }
+    DCHECK(!f->bulk_released || flow_park_reads_unchanged(f),
+           "a field the park write reads changed when the flow's bulk was released — flow_release_bulk freed "
+           "something cold_park_flow reads, so move that release after the write");
     /* THE NAMESPACE THE RESIDUE RESUMES INTO IS THE FIRST THING IN IT. Before any segment ordinal and before
        any flow, because both are read back in one forward pass and a flow rebuilt before the generation is
        installed mints under the ended session's names. */
@@ -1643,9 +1613,8 @@ void cold_park(void)
         }
     }
     for (i = 0; (f = flow_at(i)) != NULL; i++) {
-        ColdParkReads taken = cold_park_reads(f);
         if (park_flow_deep(f)) deep_written++;
-        cold_park_flow(f, &taken);
+        cold_park_flow(f);
     }
 #if APICLIENT_DEV
     park_twins_check();
