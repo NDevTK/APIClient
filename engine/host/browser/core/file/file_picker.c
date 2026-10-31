@@ -308,84 +308,228 @@ suffixes:
     return 0;
 }
 
-/* File System Access §3.2.1's *process accept types* step 2.2 — "Let filter be these steps, given a filename (a string) and a
-   type (a MIME type)" — asked of ONE candidate file. `accept` is the record's pair list, which is the map the
-   spec's closure captures.
-   THE SPEC SHADOWS ITS OWN VARIABLE HERE and the shadowing is a defect in the text rather than a rule to
-   copy: step 2.2's inner steps say `type["accept"]` while `type` is also the filter's own MIME-type
-   parameter. The captured FilePickerAcceptType is what carries an `accept`, so that is what the map comes
-   from, and the parameter is the candidate's type. Every implementation reads it that way; written literally
-   the algorithm has no meaning.
-   Step 2.2.2.2 is missing its "If" in the fetched text ("parsedType's essence is type's essence, return
-   true") — the same editorial slip one step down, read as the condition its siblings are. */
-static bool picker_filter_matches(JSContext *ctx, JSValueConst accept, const char *filename,
-                                  const MimeType *type)
+/* One run of the prompt's selection (§3.3 step 7.6's filtering) over the unknown accept keys and suffixes it
+   meets. Each question is an equality the filter's step decides, asked through the branch seam so a page's own
+   `k === "text/plain"` is the same constraint entry. The run re-starts from the first candidate on every entry
+   of its stage, so `arms` (the machine's) records every answer in question order and replays them; `held`
+   (this run's, owned) is each unknown's literal once an equality held, which decides its later questions.
+   `pending` is the machine's slot for the predicate a parked question is waiting on. */
+typedef struct {
+    JSStepHdr *hdr;
+    JSValue    arms;
+    JSValue   *pending;
+    uint32_t   q;
+    JSValue    held;
+} PickerSel;
+
+#define PICKER_FILTER_OP "File System Access §3.2.1 process accept types step 2.2 (the filter, given a filename " \
+                         "and a type)"
+
+static uint32_t picker_list_len(JSContext *ctx, JSValueConst list)
 {
-    uint32_t n = 0, i;
-    JSValue lv = JS_GetPropertyStr(ctx, accept, "length");
-    bool hit = false;
+    uint32_t n = 0;
+    JSValue lv = JS_GetPropertyStr(ctx, list, "length");
 
     JS_ToUint32(ctx, &n, lv);
     JS_FreeValue(ctx, lv);
-    for (i = 0; i < n && !hit; i++) {                                 /* step 2.2.1 */
+    return n;
+}
+
+/* Whether the unknown `subject`'s value is `lit`, as `compared` (`subject` itself, or a value derived from it)
+   decides it: answered from `held`, replayed from `arms`, or asked. Returns 0 with *holds set, or the step
+   code of the ask, on which the run is abandoned and the stage re-enters. */
+static int picker_sel_equal(JSContext *ctx, PickerSel *sel, JSValueConst subject, JSValueConst compared,
+                            const char *lit, bool *holds)
+{
+    uint32_t i, n = picker_list_len(ctx, sel->held), na = picker_list_len(ctx, sel->arms);
+    int arm = 0;
+
+    for (i = 0; i < n; i += 2) {
+        JSValue k = JS_GetPropertyUint32(ctx, sel->held, i);
+        bool same = JS_IsSameValue(ctx, k, subject);
+
+        JS_FreeValue(ctx, k);
+        if (same) {
+            JSValue v = JS_GetPropertyUint32(ctx, sel->held, i + 1);
+            const char *h = JS_ToCString(ctx, v);
+
+            CHECK(h != NULL, "file picker: OOM reading a decided literal");
+            *holds = !strcmp(h, lit);
+            JS_FreeCString(ctx, h);
+            JS_FreeValue(ctx, v);
+            return 0;
+        }
+    }
+    if (sel->q < na) {
+        JSValue a = JS_GetPropertyUint32(ctx, sel->arms, sel->q);
+
+        arm = JS_ToBool(ctx, a);
+        JS_FreeValue(ctx, a);
+    } else {
+        JSValue l = JS_NewString(ctx, lit), pred;
+
+        DCHECK(sel->q == na, "the selection met more questions than it recorded answers for, with none parked");
+        pred = concolic_strict_equal(ctx, compared, l);
+        JS_FreeValue(ctx, l);
+        if (JS_IsBool(pred)) {
+            arm = JS_ToBool(ctx, pred);
+            JS_FreeValue(ctx, pred);
+        } else {
+            int r;
+
+            DCHECK(JS_IsUndefined(*sel->pending), "a selection question was asked with another still parked");
+            *sel->pending = pred;
+            r = step_tobool_run(ctx, sel->hdr, pred, PICKER_FILTER_OP, &arm);
+            DCHECK(r != 0, "an unknown equality was answered without a fork ask — the stage that re-enters "
+                           "consumes the answer, so this one would be recorded twice");
+            return r;
+        }
+        JS_SetPropertyUint32(ctx, sel->arms, na, JS_NewBool(ctx, arm));
+    }
+    sel->q++;
+    if (arm) {
+        JS_SetPropertyUint32(ctx, sel->held, n, JS_DupValue(ctx, subject));
+        JS_SetPropertyUint32(ctx, sel->held, n + 1, JS_NewString(ctx, lit));
+    }
+    *holds = arm;
+    return 0;
+}
+
+/* Step 2.2.2's three tests over an unknown key in the world step 2.1 decided it a parameterless MIME type: its
+   essence is the all-types wildcard, is `type`'s type with a "*" subtype, or is `type`'s essence. The essence is derived from the
+   key, its example the parse run on the key's example. Returns 0 or a step code. */
+static int picker_unknown_key_hit(JSContext *ctx, PickerSel *sel, JSValueConst key, const MimeType *type,
+                                  bool *hit)
+{
+    static const char *const OP = "File System Access §3.2.1 process accept types step 2.2.2 (parsedType's "
+                                  "essence)";
+    JSValue ex = concolic_example_string(ctx, key), example = JS_UNDEFINED, essence;
+    int r = 0;
+
+    if (JS_IsString(ex)) {
+        size_t len = 0;
+        const char *ks = JS_ToCStringLen(ctx, &len, ex);
+        MimeType m;
+
+        CHECK(ks != NULL, "file picker: OOM reading an unknown accept key's example");
+        mime_type_init(&m);
+        if (mime_type_parse(&m, ks, len)) {
+            char *e = mime_type_essence(&m);
+
+            CHECK(e != NULL, "file picker: OOM composing an accept key example's essence");
+            example = JS_NewString(ctx, e);
+            free(e);
+        }
+        mime_type_free(&m);
+        JS_FreeCString(ctx, ks);
+    }
+    JS_FreeValue(ctx, ex);
+    essence = concolic_new_derived(ctx, OP, &key, 1, example);
+    r = picker_sel_equal(ctx, sel, key, essence, "*/*", hit);                       /* step 2.2.2.1.1 */
+    if (!r && !*hit && type) {
+        size_t tl = strlen(type->type);
+        char *star = malloc(tl + 3);
+
+        CHECK(star != NULL, "file picker: OOM composing a type's wildcard");
+        memcpy(star, type->type, tl);
+        memcpy(star + tl, "/*", 3);
+        r = picker_sel_equal(ctx, sel, key, essence, star, hit);                    /* step 2.2.2.1.2 */
+        free(star);
+    }
+    if (!r && !*hit && type) {
+        char *te = mime_type_essence(type);
+
+        CHECK(te != NULL, "file picker: OOM composing a candidate type's essence");
+        r = picker_sel_equal(ctx, sel, key, essence, te, hit);                      /* step 2.2.2.2 */
+        free(te);
+    }
+    JS_FreeValue(ctx, essence);
+    return r;
+}
+
+/* Step 2.2.2.4's "filename ends with suffix" over an unknown suffix in the world *validate a suffix* decided
+   valid: it holds exactly when the suffix is one of the filename's tails that are valid suffixes, asked
+   shortest first. Returns 0 or a step code. */
+static int picker_unknown_suffix_hit(JSContext *ctx, PickerSel *sel, JSValueConst suffix, const char *filename,
+                                     bool *hit)
+{
+    size_t fl = filename ? strlen(filename) : 0, sl;
+    int r = 0;
+
+    *hit = false;
+    for (sl = 1; sl <= fl && !r && !*hit; sl++) {
+        const char *tail = filename + fl - sl;
+
+        if (!picker_suffix_refusal(tail, sl))
+            r = picker_sel_equal(ctx, sel, suffix, suffix, tail, hit);
+    }
+    return r;
+}
+
+/* File System Access §3.2.1's *process accept types* step 2.2 — "Let filter be these steps, given a filename (a
+   string) and a type (a MIME type)" — asked of ONE candidate file. `accept` is the record's pair list, which is
+   the map the spec's closure captures. Returns 0 with *phit set, or a step code (an unknown's question).
+   The spec's step 2.2 says `type["accept"]` while `type` is also the filter's own MIME-type parameter: the
+   captured FilePickerAcceptType carries the map and the parameter is the candidate's type, as every
+   implementation reads it. Step 2.2.2.2 is missing its "If" in the fetched text and reads as its siblings do. */
+static int picker_filter_matches(JSContext *ctx, PickerSel *sel, JSValueConst accept, const char *filename,
+                                 const MimeType *type, bool *phit)
+{
+    uint32_t n = picker_list_len(ctx, accept), i;
+    bool hit = false;
+    int r = 0;
+
+    for (i = 0; i < n && !hit && !r; i++) {                           /* step 2.2.1 */
         JSValue pair = JS_GetPropertyUint32(ctx, accept, i);
         JSValue key = JS_GetPropertyUint32(ctx, pair, 0);
         JSValue suffixes = JS_GetPropertyUint32(ctx, pair, 1);
-        size_t klen = 0;
-        const char *ks;
-        MimeType m;
 
-        if (concolic_is(key))
-            DFAIL("File System Access §3.2.1 process accept types step 2.2.2 parsed an `accept` key that is "
-                  "unknown input, inside the prompt's filter. Build it as forked worlds over the candidate's type "
-                  "(the key's essence is the type's, its type with a `*` subtype, `*/*`, or none of them), in a "
-                  "step machine the prompt's selection can park in");
-        ks = concolic_is(key) ? NULL : JS_ToCStringLen(ctx, &klen, key);   /* release: no MIME arm matches */
-        mime_type_init(&m);
-        if (ks && mime_type_parse(&m, ks, klen)) {                    /* step 2.2.2 */
-            if (!strcmp(m.subtype, "*")) {                            /* step 2.2.2.1 */
+        if (concolic_is(key)) {
+            r = picker_unknown_key_hit(ctx, sel, key, type, &hit);
+        } else {
+            size_t klen = 0;
+            const char *ks = JS_ToCStringLen(ctx, &klen, key);
+            MimeType m;
+            bool parsed;
+
+            CHECK(ks != NULL, "file picker: OOM reading an accept key");
+            mime_type_init(&m);
+            parsed = mime_type_parse(&m, ks, klen);
+            DCHECK(parsed, "an accept key step 2.1 admitted does not parse in step 2.2.2");
+            if (parsed && !strcmp(m.subtype, "*")) {                  /* step 2.2.2.1 */
                 if (!strcmp(m.type, "*")) hit = true;                 /* step 2.2.2.1.1 */
                 else if (type && !strcmp(m.type, type->type)) hit = true;   /* step 2.2.2.1.2 */
             }
-            if (!hit && type) {                                       /* step 2.2.2.2 */
+            if (parsed && !hit && type) {                             /* step 2.2.2.2 */
                 char *a = mime_type_essence(&m), *b = mime_type_essence(type);
 
-                if (a && b && !strcmp(a, b)) hit = true;
+                CHECK(a && b, "file picker: OOM composing a MIME essence");
+                hit = !strcmp(a, b);
                 free(a);
                 free(b);
             }
+            mime_type_free(&m);
+            JS_FreeCString(ctx, ks);
         }
-        mime_type_free(&m);
-        if (ks) JS_FreeCString(ctx, ks);
-        if (!hit) {
+        if (!hit && !r) {
             /* steps 2.2.2.3 and 2.2.2.4 — a lone string is treated as a one-element list, so the two arms
                share the tail rather than spelling `ends with` twice. */
-            uint32_t sn = 1, k;
             bool one = !JS_IsArray(suffixes);
+            uint32_t sn = one ? 1 : picker_list_len(ctx, suffixes), k;
 
-            if (!one) {
-                JSValue slv = JS_GetPropertyStr(ctx, suffixes, "length");
-                JS_ToUint32(ctx, &sn, slv);
-                JS_FreeValue(ctx, slv);
-            }
-            for (k = 0; k < sn && !hit; k++) {
+            for (k = 0; k < sn && !hit && !r; k++) {
                 JSValue sv = one ? JS_DupValue(ctx, suffixes) : JS_GetPropertyUint32(ctx, suffixes, k);
-                size_t sl = 0;
-                const char *sx;
-                size_t fl = filename ? strlen(filename) : 0;
 
                 if (concolic_is(sv)) {
-                    DFAIL("File System Access §3.2.1 process accept types steps 2.2.2.3-2.2.2.4 asked whether a "
-                          "filename ends with a suffix that is unknown input. Build it as a forked predicate over the "
-                          "suffix (a match and a miss), keyed as the page's own endsWith is, in a step machine "
-                          "the prompt's selection can park in");
-                    JS_FreeValue(ctx, sv);
-                    continue;
-                }
-                sx = JS_ToCStringLen(ctx, &sl, sv);
+                    r = picker_unknown_suffix_hit(ctx, sel, sv, filename, &hit);
+                } else {
+                    size_t sl = 0, fl = filename ? strlen(filename) : 0;
+                    const char *sx = JS_ToCStringLen(ctx, &sl, sv);
 
-                if (sx && sl <= fl && !memcmp(filename + fl - sl, sx, sl)) hit = true;
-                if (sx) JS_FreeCString(ctx, sx);
+                    CHECK(sx != NULL, "file picker: OOM reading a suffix");
+                    if (sl <= fl && !memcmp(filename + fl - sl, sx, sl)) hit = true;
+                    JS_FreeCString(ctx, sx);
+                }
                 JS_FreeValue(ctx, sv);
             }
         }
@@ -393,37 +537,40 @@ static bool picker_filter_matches(JSContext *ctx, JSValueConst accept, const cha
         JS_FreeValue(ctx, key);
         JS_FreeValue(ctx, pair);
     }
-    return hit;                                                       /* step 2.2.3 */
+    *phit = hit;                                                      /* step 2.2.3 */
+    return r;
 }
 
 /* THE ACCEPTS OPTIONS, ASKED OF ONE CANDIDATE — the union described in this section's banner. An option whose
    filter is the all-files one (step 3's "an algorithm that returns true") is stored as JS_NULL, so a list
    holding it admits everything without the matcher being asked. `type` is NULL for a directory, which has no
-   MIME type; a suffix can still match one, which is what a real picker does with a folder named `x.app`. */
-static bool picker_accepts_admits(JSContext *ctx, JSValueConst accepts, const char *filename, const char *type_str)
+   MIME type; a suffix can still match one, which is what a real picker does with a folder named `x.app`.
+   Returns 0 with *phit set, or a step code. */
+static int picker_accepts_admits(JSContext *ctx, PickerSel *sel, JSValueConst accepts, const char *filename,
+                                 const char *type_str, bool *phit)
 {
-    uint32_t n = 0, i;
-    JSValue lv;
+    uint32_t n, i;
     MimeType m;
     bool have_type = false, hit = false;
+    int r = 0;
 
-    if (JS_IsUndefined(accepts) || JS_IsNull(accepts)) return true;
-    lv = JS_GetPropertyStr(ctx, accepts, "length");
-    JS_ToUint32(ctx, &n, lv);
-    JS_FreeValue(ctx, lv);
+    *phit = true;
+    if (JS_IsUndefined(accepts) || JS_IsNull(accepts)) return 0;
+    n = picker_list_len(ctx, accepts);
     mime_type_init(&m);
     if (type_str && *type_str) have_type = mime_type_parse(&m, type_str, strlen(type_str));
-    for (i = 0; i < n && !hit; i++) {
+    for (i = 0; i < n && !hit && !r; i++) {
         JSValue opt = JS_GetPropertyUint32(ctx, accepts, i);
         JSValue filter = JS_GetPropertyUint32(ctx, opt, 1);
 
         if (JS_IsNull(filter)) hit = true;
-        else hit = picker_filter_matches(ctx, filter, filename, have_type ? &m : NULL);
+        else r = picker_filter_matches(ctx, sel, filter, filename, have_type ? &m : NULL, &hit);
         JS_FreeValue(ctx, filter);
         JS_FreeValue(ctx, opt);
     }
     mime_type_free(&m);
-    return hit;
+    *phit = hit;
+    return r;
 }
 
 /* File System Access §3.2.1's *process accept types*, all five steps.
@@ -709,30 +856,33 @@ static void picker_remember(JSContext *ctx, JSValueConst id_v, JSValueConst entr
  * "Let entries be a list of file entries representing the selected files or directories." The list this agent
  * offers is the starting directory's children of the kind the factory selects, filtered by the accepts options
  * — which with no `types` admits everything — and bounded by `multiple` exactly as §4.10.5.1.17 bounds a file
- * control's. `*ppath` takes the picked entry's PATH (owned) for the LAST entry, which is what §3.3 step 7.10
- * remembers a directory from. Returns the list of handles (owned array), empty when nothing is selectable. */
-static JSValue picker_select(JSContext *ctx, JSValueConst start_path, JSValueConst accepts,
-                             int magic, bool multiple, JSValue *ppath)
+ * control's. `*pout` takes the list of handles (owned array), empty when nothing is selectable, and `*ppath` the
+ * picked entry's PATH (owned) for the LAST entry, which is what §3.3 step 7.10 remembers a directory from.
+ * Returns 0, or the step code of an unknown's question, with nothing taken. */
+static int picker_select(JSContext *ctx, PickerSel *sel, JSValueConst start_path, JSValueConst accepts,
+                         int magic, bool multiple, JSValue *pout, JSValue *ppath)
 {
     JSValue out = JS_NewArray(ctx);
     const char **items;
-    int n = picker_path_c(ctx, start_path, &items), i, count;
+    int n = picker_path_c(ctx, start_path, &items), i, count, r = 0;
     JSValue dir = file_system_locate(ctx, items[0], items, n);
     bool want_directory = (magic == M_DIRECTORY);
     uint32_t taken = 0;
 
     CHECK(!JS_IsException(out), "file picker: a selection list could not be allocated");
     *ppath = JS_UNDEFINED;
+    *pout = JS_UNDEFINED;
     if (JS_IsNull(dir) || !file_system_is_directory(dir)) {
         /* The starting directory is not there — a WellKnownDirectory this device does not hold, or a remembered
            path whose directory another flow removed. Nothing is selectable, which is the same answer a real
            prompt gives a user looking at an empty folder. */
         JS_FreeValue(ctx, dir);
         picker_path_c_free(ctx, items, n);
-        return out;
+        *pout = out;
+        return 0;
     }
     count = file_system_child_count(ctx, dir);
-    for (i = 0; i < count && (multiple || taken == 0); i++) {
+    for (i = 0; i < count && (multiple || taken == 0) && !r; i++) {
         JSValue name_v = JS_UNDEFINED;
         JSValue child = file_system_child_at(ctx, dir, i, &name_v);
         const char *name, *type;
@@ -754,7 +904,8 @@ static JSValue picker_select(JSContext *ctx, JSValueConst start_path, JSValueCon
            options step 2 built. A DIRECTORY still asks, because File System Access §3.2.1's filter takes a
            filename and a suffix can match one — what a
            directory has no answer for is the MIME half, which is why its `type` is NULL rather than "". */
-        ok = picker_accepts_admits(ctx, accepts, name, type);
+        r = picker_accepts_admits(ctx, sel, accepts, name, type, &ok);
+        if (r) ok = false;
         child_path = lexbor_malloc(sizeof *child_path * (size_t)(n + 1));
         CHECK(child_path != NULL, "file picker: OOM building a selected entry's locator path");
         for (k = 0; k < n; k++) child_path[k] = items[k];
@@ -776,31 +927,39 @@ static JSValue picker_select(JSContext *ctx, JSValueConst start_path, JSValueCon
     }
     JS_FreeValue(ctx, dir);
     picker_path_c_free(ctx, items, n);
+    if (r) {
+        JS_FreeValue(ctx, out);
+        JS_FreeValue(ctx, *ppath);
+        *ppath = JS_UNDEFINED;
+        return r;
+    }
     DCHECK(multiple || taken <= 1, "a file picker selected more than one entry for a call whose `multiple` is "
                                    "false — File System Access §3.3 step 7.5 allows no more than one file "
                                    "selected in that case");
-    return out;
+    *pout = out;
+    return 0;
 }
 
 /* §3.4's SELECTION, which is the one that may CREATE. "Let entry be a file entry representing the selected
    file ... Set entry's binary data to an empty byte sequence." A save picker's user either picks a file that
    is there or types a name, and the only name this engine can know is the one the PAGE suggested — so a
    suggestion is taken when there is one, and otherwise an existing file is. `suggested` is the sanitized name
-   or NULL. Returns the handle (owned) and its path in `*ppath`, or JS_UNINITIALIZED when nothing is
-   selectable. */
-static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, JSValueConst accepts,
-                                  const char *suggested, JSValue *ppath)
+   or NULL. `*phandle` takes the handle (owned) and `*ppath` its path, or JS_UNINITIALIZED when nothing is
+   selectable. Returns 0, or the step code of an unknown's question, with nothing selected or created. */
+static int picker_select_save(JSContext *ctx, PickerSel *sel, JSValueConst start_path, JSValueConst accepts,
+                              const char *suggested, JSValue *phandle, JSValue *ppath)
 {
     const char **items;
-    int n = picker_path_c(ctx, start_path, &items);
+    int n = picker_path_c(ctx, start_path, &items), r = 0;
     JSValue dir = file_system_locate(ctx, items[0], items, n);
     JSValue handle = JS_UNINITIALIZED;
 
     *ppath = JS_UNDEFINED;
+    *phandle = handle;
     if (JS_IsNull(dir) || !file_system_is_directory(dir)) {
         JS_FreeValue(ctx, dir);
         picker_path_c_free(ctx, items, n);
-        return handle;
+        return 0;
     }
     if (suggested) {
         JSValue entry = file_system_child(ctx, dir, suggested);
@@ -820,7 +979,7 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, JSVal
             free((void *)path);
             JS_FreeValue(ctx, dir);
             picker_path_c_free(ctx, items, n);
-            return handle;
+            return 0;
         }
         /* "Set entry's binary data to an empty byte sequence" — which is the whole of what makes a save picker
            different from an open picker over an existing file, and it happens whether the entry was created
@@ -832,9 +991,10 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, JSVal
         handle = fs_handle_new(ctx, /*directory*/ false, items[0], path, n + 1);
         free((void *)path);
     } else {
-        JSValue list = picker_select(ctx, start_path, accepts, M_OPEN, /*multiple*/ false, ppath);
-        JSValue first = JS_GetPropertyUint32(ctx, list, 0);
+        JSValue list, first;
 
+        r = picker_select(ctx, sel, start_path, accepts, M_OPEN, /*multiple*/ false, &list, ppath);
+        first = r ? JS_UNDEFINED : JS_GetPropertyUint32(ctx, list, 0);
         JS_FreeValue(ctx, list);
         if (JS_IsUndefined(first)) {
             JS_FreeValue(ctx, first);
@@ -855,7 +1015,8 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, JSVal
     }
     JS_FreeValue(ctx, dir);
     picker_path_c_free(ctx, items, n);
-    return handle;
+    *phandle = handle;
+    return r;
 }
 
 /* ---- the machine ------------------------------------------------------------------------------------------ */
@@ -931,6 +1092,8 @@ typedef struct {
     JSValue picked;
     JSValue cb[3];
     uint32_t sfx_valid;   /* unknown accept keys and suffixes this flow decided valid (PickerAsk) */
+    JSValue sel_arms;     /* the selection's answers in question order (PickerSel), owned */
+    JSValue sel_pred;     /* the predicate a parked selection question waits on, owned */
 } PickerState;
 
 static void fpk_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -950,6 +1113,8 @@ static void fpk_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->suggested);
     v->val(ctx, &s->dismissed);
     v->val(ctx, &s->picked);
+    v->val(ctx, &s->sel_arms);
+    v->val(ctx, &s->sel_pred);
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
@@ -1017,7 +1182,7 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         cb_result = JS_UNDEFINED;
         s->promise = s->funcs[0] = s->funcs[1] = s->value = JS_UNDEFINED;
         s->start_path = s->id = s->suggested = s->dismissed = s->picked = JS_UNDEFINED;
-        s->accepts = JS_UNDEFINED;
+        s->accepts = s->sel_arms = s->sel_pred = JS_UNDEFINED;
         s->sfx_valid = 0;
         s->cphase = s->ua_phase = s->reject = 0;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
@@ -1177,9 +1342,26 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
 
     case FPK_SELECT: {
         JSValue result = JS_UNDEFINED;
+        PickerSel sel;
         bool empty;
 
         JS_FreeValue(ctx, cb_result);
+        if (JS_IsUndefined(s->sel_arms)) {
+            s->sel_arms = JS_NewArray(ctx);
+            CHECK(!JS_IsException(s->sel_arms), "file picker: OOM allocating the selection's answers");
+        }
+        if (!JS_IsUndefined(s->sel_pred)) {
+            /* The answer to the question the last run parked on, recorded where the run will replay it. */
+            int arm = 0;
+
+            rc = step_tobool_run(ctx, hdr, s->sel_pred, PICKER_FILTER_OP, &arm);
+            if (rc) return rc;
+            JS_SetPropertyUint32(ctx, s->sel_arms, picker_list_len(ctx, s->sel_arms), JS_NewBool(ctx, arm));
+            JS_FreeValue(ctx, s->sel_pred);
+            s->sel_pred = JS_UNDEFINED;
+        }
+        sel = (PickerSel){ hdr, s->sel_arms, &s->sel_pred, 0, JS_NewArray(ctx) };
+        CHECK(!JS_IsException(sel.held), "file picker: OOM allocating the selection's decided literals");
         /* STEPS 7.5-7.9. "If entry is deemed too sensitive or dangerous to be exposed to this website by the
            user agent" is a judgement this user agent makes for no entry: everything on this device was put
            there by the host through core/file/file_system.c's one edge, or written by the page itself, so
@@ -1188,19 +1370,20 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         if (magic == M_SAVE) {
             const char *sug = JS_IsString(s->suggested) ? JS_ToCString(ctx, s->suggested) : NULL;
 
-            result = picker_select_save(ctx, s->start_path, s->accepts, sug, &s->picked);
+            rc = picker_select_save(ctx, &sel, s->start_path, s->accepts, sug, &result, &s->picked);
             if (sug) JS_FreeCString(ctx, sug);
+            JS_FreeValue(ctx, sel.held);
+            if (rc) return rc;   /* an unknown's question; the stage re-runs the selection */
             empty = JS_IsUninitialized(result);
             if (empty) result = JS_UNDEFINED;
         } else {
             bool multiple = (magic == M_OPEN && idl_dict_bool(ctx, options, "multiple"));
-            JSValue list = picker_select(ctx, s->start_path, s->accepts, magic, multiple, &s->picked);
-            JSValue len_v = JS_GetPropertyStr(ctx, list, "length");
-            uint32_t n = 0;
+            JSValue list;
 
-            JS_ToUint32(ctx, &n, len_v);
-            JS_FreeValue(ctx, len_v);
-            empty = (n == 0);
+            rc = picker_select(ctx, &sel, s->start_path, s->accepts, magic, multiple, &list, &s->picked);
+            JS_FreeValue(ctx, sel.held);
+            if (rc) return rc;   /* an unknown's question; the stage re-runs the selection */
+            empty = picker_list_len(ctx, list) == 0;
             if (magic == M_DIRECTORY) {
                 /* §3.5 resolves with ONE FileSystemDirectoryHandle rather than with a list. */
                 result = empty ? JS_UNDEFINED : JS_GetPropertyUint32(ctx, list, 0);
