@@ -775,6 +775,9 @@ typedef struct JSStackFrame {
        callers, reaction_call_flow_init), because a frame whose owner nobody recorded is
        indistinguishable from one that has none. */
     struct JSGCObjectHeader *cur_gc_obj;
+    /* A DIRECT EVAL STANDING IN THIS FRAME across a rest of its parse (JSEvalHold, owned; NULL otherwise). OP_eval
+       re-executes on the resume and finds it here. */
+    struct JSEvalHold *eval_hold;
 } JSStackFrame;
 
 typedef enum {
@@ -9608,6 +9611,13 @@ static JSValue js_eval_program_source(JSContext *ctx, JSValueConst src)
     return text;
 }
 
+/* The coverage restated for a parse begun again from source js_eval_program_source answered and announced
+   earlier on the same path (a hold or a step header carrying it across a fork that shed the parse). */
+static void js_eval_sink_rearm(void)
+{
+    g_eval_sink_announced = true;
+}
+
 /* 7.1.1 ToPrimitive is defined over ORDINARY objects. A CONCOLIC operand is not one: it is the solver's value
    class standing for unknown external input, and its coercion belongs to the concolic hooks — opacity SURVIVES
    coercion so the operand keeps forking control flow instead of collapsing. Routing one into the walk reads
@@ -10616,6 +10626,7 @@ static JSValue js_call_c_function_data(JSContext *ctx, JSValueConst func_obj,
     sf->is_constructor = (flags & JS_CALL_FLAG_CONSTRUCTOR) != 0;
     sf->is_call_root = false;
     sf->step_func = sf->step_this = JS_UNDEFINED;
+    sf->eval_hold = NULL;
     /* A C ACTIVATION HAS NO BYTECODE, SO IT HAS NO LOCALS, NO VAR-REF ARRAY AND NO OWNER — written as the
        absence it is, because this frame is a C-stack local and an unwritten field here is not zero. See
        get_captured_cell, whose bound DCHECK is what makes a frame that reaches it anyway say so. */
@@ -10807,6 +10818,7 @@ static JSValue js_call_c_closure(JSContext *ctx, JSValueConst func_obj,
     sf->is_constructor = (flags & JS_CALL_FLAG_CONSTRUCTOR) != 0;
     sf->is_call_root = false;
     sf->step_func = sf->step_this = JS_UNDEFINED;
+    sf->eval_hold = NULL;
     /* A C ACTIVATION HAS NO BYTECODE, SO IT HAS NO LOCALS, NO VAR-REF ARRAY AND NO OWNER — written as the
        absence it is, because this frame is a C-stack local and an unwritten field here is not zero. See
        get_captured_cell, whose bound DCHECK is what makes a frame that reaches it anyway say so. */
@@ -27553,6 +27565,7 @@ static int step_program_run(JSContext *ctx, JSStepHdr *h, JSContext *realm, JSVa
                 return -1;
             }
             h->prog_compile = pc;
+            js_eval_sink_rearm();   /* a parse begun again after a fork that shed it; see js_eval_sink_rearm */
             /* NO CALLER FRAME, and that is what INDIRECT means: 19.2.1.1 evaluates in the GLOBAL environment,
                so there is no caller scope to take — the `-1` scope_idx beside it says the same thing. */
             g_eval_compile_slot = &pc->ec;
@@ -28709,6 +28722,7 @@ static JSValue js_call_c_function(JSContext *ctx, JSValueConst func_obj,
     sf->is_constructor = (flags & JS_CALL_FLAG_CONSTRUCTOR) != 0;
     sf->is_call_root = false;
     sf->step_func = sf->step_this = JS_UNDEFINED;
+    sf->eval_hold = NULL;
     /* A C ACTIVATION HAS NO BYTECODE, SO IT HAS NO LOCALS, NO VAR-REF ARRAY AND NO OWNER — written as the
        absence it is, because this frame is a C-stack local and an unwritten field here is not zero. See
        get_captured_cell, whose bound DCHECK is what makes a frame that reaches it anyway say so. */
@@ -29121,6 +29135,7 @@ static TrampFrame *tramp_frame_new(JSRuntime *rt)
            It is written HERE, at the one point every heap frame is born, and not at the nine pushes: a per-site
            assignment is a line each new call opcode must remember, and this defect is what forgetting it costs. */
         tf->sf.cur_gc_obj = NULL;
+        tf->sf.eval_hold = NULL;   /* the embedded frame holds no direct eval, for cur_gc_obj's reason */
         g_tramp_frames_live++;
     }
     return tf;
@@ -31783,36 +31798,136 @@ static JSObject *tramp_exotic_accessor(JSContext *ctx, const JSPropertyDescripto
    site, so there is one body-entry question and not one per spelling.
    JS_UNINITIALIZED = step 2 took the non-string arm, so the OPERAND is the completion, unevaluated. What is
    left to each opcode is only its own operand shape and the cleanup that follows from it. */
+/* A DIRECT EVAL'S STATE ACROSS A REST OF ITS PARSE, held on the frame executing OP_eval (JSStackFrame.eval_hold)
+   while the opcode waits to re-execute. Split by what can be re-derived:
+   - `operand` and `text` are §19.2.1.1 PerformEval's prefix up to the parse: the argument and the source
+     js_eval_program_source answered for it (the @S announcement, and §19.2.1.2 HostEnsureCanCompileStrings's
+     place). Re-running that prefix repeats a host act, so a fork COPIES them and the re-execution skips it.
+   - `parse` is the parse in flight (JSProgCompile), a cache over `text`: a fork SHEDS it and the sibling parses
+     again from `text`. */
+typedef struct JSEvalHold {
+    JSValue operand, text;   /* owned */
+    JSProgCompile *parse;
+} JSEvalHold;
+
+/* The fork's copy: the prefix's answer, taken a second time, and no parse. NULL for NULL. */
+static JSEvalHold *js_eval_hold_clone(JSContext *ctx, const JSEvalHold *eh)
+{
+    JSEvalHold *c;
+
+    if (!eh)
+        return NULL;
+    c = js_mallocz(ctx, sizeof *c);
+    CHECK(c != NULL, "out of memory copying a direct eval's checked source onto a forked frame");
+    c->operand = js_dup(eh->operand);
+    c->text = js_dup(eh->text);
+    return c;
+}
+
+/* The parse alone, released; the hold keeps the checked source. */
+static void js_eval_hold_shed(JSEvalHold *eh)
+{
+    JSProgCompile *pc = eh->parse;
+
+    if (pc) {
+        js_eval_compile_drop(pc->realm, &pc->ec);
+        JS_FreeCString(pc->realm, pc->str);
+        js_free(pc->realm, pc);
+        eh->parse = NULL;
+    }
+}
+
+/* Releases a frame's hold; a no-op where it holds none. */
+static void js_eval_hold_free(JSRuntime *rt, JSStackFrame *sf)
+{
+    JSEvalHold *eh = sf->eval_hold;
+
+    if (!eh)
+        return;
+    js_eval_hold_shed(eh);
+    JS_FreeValueRT(rt, eh->operand);
+    JS_FreeValueRT(rt, eh->text);
+    js_free_rt(rt, eh);
+    sf->eval_hold = NULL;
+}
+
 /* `caller_sf` IS THE CALLER'S OWN FRAME, handed over by the opcode that is executing it, and it is the pair of
    `scope_idx`: the compiler records WHICH scope and the frame is the one that HAS it. It is a parameter and not
-   a read of rt->current_stack_frame for the reason §C-stack gives — every call on this engine trampolines onto
-   the HEAP stack, so "the current C activation" is not the caller and agreeing with it is a coincidence, not a
-   contract. Asserted here at the ORIGIN, where the answer is known, rather than three frames down in
-   19.2.1.1 where a NULL can only be reported. */
-static JSValue eval_direct_closure(JSContext *ctx, JSStackFrame *caller_sf, JSValueConst src, int scope_idx)
+   a read of rt->current_stack_frame because every call on this engine trampolines onto the heap stack.
+   0 with *pclo the closure, or JS_UNINITIALIZED for step 2's non-string arm (the OPERAND is the completion);
+   1 when the parse rested, with the hold on `caller_sf` and the opcode to re-execute on the resume; -1 thrown. */
+static int eval_direct_closure(JSContext *ctx, JSStackFrame *caller_sf, JSValueConst src, int scope_idx,
+                               JSValue *pclo)
 {
+    JSEvalHold *eh;
+    JSProgCompile *pc;
     JSValue clo, text;
-    const char *str;
-    size_t len;
 
     DCHECK(caller_sf != NULL,
            "a direct eval was compiled without the frame of the body that is running it — this function is "
            "reached only from OP_eval and OP_apply_eval, both of which are executing a bytecode body and hold "
            "that frame in a register, so there is no shape of this call that legitimately has none");
-    text = js_eval_program_source(ctx, src);
-    if (JS_IsUninitialized(text))
-        return JS_UNINITIALIZED;
-    str = JS_ToCStringLen(ctx, &len, text);
-    JS_FreeValue(ctx, text);
-    if (unlikely(!str))
-        return JS_EXCEPTION;
-    clo = JS_EvalInternal(ctx, JS_UNDEFINED, str, len, JS_EVAL_SCRIPT_NAME, 1,
-                          JS_EVAL_TYPE_DIRECT | JS_EVAL_FLAG_TRAMP_CLOSURE, scope_idx, caller_sf);
-    JS_FreeCString(ctx, str);
+    *pclo = JS_UNDEFINED;
+    eh = caller_sf->eval_hold;
+    if (!eh) {
+        text = js_eval_program_source(ctx, src);
+        if (JS_IsUninitialized(text)) {
+            *pclo = JS_UNINITIALIZED;
+            return 0;
+        }
+        eh = js_mallocz(ctx, sizeof *eh);
+        if (!eh) {
+            JS_FreeValue(ctx, text);
+            g_eval_sink_announced = false;   /* the announced source compiles nowhere */
+            return -1;
+        }
+        eh->operand = js_dup(src);
+        eh->text = text;
+        caller_sf->eval_hold = eh;
+    } else {
+        DCHECKF(js_same_value(ctx, eh->operand, src),
+                "a direct eval re-executed over an operand that is not the one its held source was checked from "
+                "(held tag %d, on the stack tag %d) — the re-execution would parse the held, stale text",
+                (int)JS_VALUE_GET_TAG(eh->operand), (int)JS_VALUE_GET_TAG(src));
+    }
+    pc = eh->parse;
+    if (!pc) {
+        JSEvalCompile **outer = g_eval_compile_slot;
+
+        pc = js_mallocz(ctx, sizeof *pc);
+        if (!pc)
+            goto fail;
+        pc->realm = ctx;
+        pc->str = JS_ToCStringLen(ctx, &pc->len, eh->text);
+        if (!pc->str) {
+            js_free(ctx, pc);
+            goto fail;
+        }
+        eh->parse = pc;
+        /* The source was announced when the hold took it; a parse begun again from it after a fork is the
+           same program, so the coverage the compile asserts is restated rather than re-announced. */
+        js_eval_sink_rearm();
+        g_eval_compile_slot = &pc->ec;
+        clo = JS_EvalInternal(ctx, JS_UNDEFINED, pc->str, pc->len, JS_EVAL_SCRIPT_NAME, 1,
+                              JS_EVAL_TYPE_DIRECT | JS_EVAL_FLAG_TRAMP_CLOSURE, scope_idx, caller_sf);
+        g_eval_compile_slot = outer;
+    } else {
+        DCHECK(pc->ec != NULL && pc->realm == ctx,
+               "a direct eval's parse resumed with nothing parked, or in another realm than it began in");
+        clo = js_eval_compile_continue(ctx, &pc->ec);
+    }
+    if (JS_VALUE_GET_TAG(clo) == JS_TAG_UNINITIALIZED)
+        return 1;
+    js_eval_hold_free(ctx->rt, caller_sf);
     if (unlikely(JS_IsException(clo)))
-        return clo;
+        return -1;
     DCHECK(tramp_body_is_plain(clo), "direct eval closure is not a trampolinable bytecode function");
-    return clo;
+    *pclo = clo;
+    return 0;
+ fail:
+    g_eval_sink_announced = false;   /* the announced source compiles nowhere */
+    js_eval_hold_free(ctx->rt, caller_sf);
+    return -1;
 }
 
 /* The object an ordinary property walk STARTS at. For an OBJECT it is the object; for a PRIMITIVE base
@@ -36493,6 +36608,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->cur_pc = NULL;
     sf->is_call_root = false;
     sf->step_func = sf->step_this = JS_UNDEFINED;
+    sf->eval_hold = NULL;
     sf->this_val = this_obj;
     sf->prev_frame = rt->current_stack_frame;
     rt->current_stack_frame = sf;
@@ -37179,6 +37295,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 nsf->is_strict_mode = nb->is_strict_mode;
                 nsf->is_call_root = false;
                 nsf->step_func = nsf->step_this = JS_UNDEFINED;
+                nsf->eval_hold = NULL;
                 /* An OWNED invocation list is released a few lines below, and on the bound/spread path it is the
                    SOLE owner of the callee — call_argv points into it and call_argv[-1] IS nfunc. Every other
                    call shape leaves the callee on the caller's operand stack, which owns it for the whole call.
@@ -38138,6 +38255,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 nsf->is_strict_mode = nb->is_strict_mode;
                 nsf->is_call_root = false;
                 nsf->step_func = nsf->step_this = JS_UNDEFINED;
+                nsf->eval_hold = NULL;
                 ntf->owns_func = 0;   /* the constructor stays on the caller's stack for the whole construct */
                 nsf->cur_func = unsafe_unconst(nfunc);
                 nsf->arg_count = eff_argc;
@@ -38354,6 +38472,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 nsf->is_strict_mode = nb->is_strict_mode;
                 nsf->is_call_root = false;
                 nsf->step_func = nsf->step_this = JS_UNDEFINED;
+                nsf->eval_hold = NULL;
                 ntf->owns_func = 0;   /* atab holds the ARGUMENTS; the callee is the caller's own operand */
                 nsf->cur_func = unsafe_unconst(nfunc);
                 narg_buf = nlb;
@@ -47679,6 +47798,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             }
             BREAK;
 
+        eval_rest:
+            /* A DIRECT EVAL'S PARSE RESTED. Its own poll asked the policy, so the park is owed here and not asked
+               again; `pc` names the eval opcode, which the resume re-executes over the hold on `sf`. */
+            if (unlikely(gen_state == NULL || gen_state != g_flow_base_gen))
+                DFAIL("a direct eval's parse rested in an activation that is not the flow base — route its caller "
+                      "onto the tramp chain, as the dispatch poll's own preempt requires");
+            goto do_preempt;
+
         do_preempt:
             /* Park this flow for the scheduler. Save the CURRENT (deepest) frame's resume point; then either
                unwind the base (shallow) or stash the heap-frame chain (deep). */
@@ -47816,8 +47943,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         obj = JS_UNDEFINED;
                     /* 19.2.1.1 is eval_direct_closure's, INCLUDING step 2 — this opcode no longer asks whether
                        the source is a String, it declares its operand shape and cleans up after it. */
-                    JSValue eclo = eval_direct_closure(ctx, sf, obj, scope_idx);
-                    if (unlikely(JS_IsException(eclo))) goto exception;
+                    JSValue eclo;
+                    int er = eval_direct_closure(ctx, sf, obj, scope_idx, &eclo);
+                    if (er > 0) {
+                        pc -= 5;   /* the opcode and its two u16 operands: the resume re-executes OP_eval */
+                        goto eval_rest;
+                    }
+                    if (unlikely(er < 0)) goto exception;
                     if (!JS_IsUninitialized(eclo)) {
                         /* reshape [eval, args..] -> the plain-call shape [closure] with 0 args */
                         for (i = -1; i < call_argc; i++) JS_FreeValue(ctx, call_argv[i]);
@@ -47895,8 +48027,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        CLOSURE and ran it on the tramp: one operation answering differently by how it was
                        written, which is exactly what this file forbids. Same ROUTE, same CALL, and now the same
                        decision — what is left here is this opcode's own operand shape and its cleanup. */
-                    JSValue eclo = eval_direct_closure(ctx, sf, obj, scope_idx);
-                    if (unlikely(JS_IsException(eclo))) { free_arg_list(ctx, tab, len); goto exception; }
+                    JSValue eclo;
+                    int er = eval_direct_closure(ctx, sf, obj, scope_idx, &eclo);
+                    if (er > 0) {
+                        free_arg_list(ctx, tab, len);   /* rebuilt from the operand stack on the re-execution */
+                        pc -= 3;   /* the opcode and its u16 operand: the resume re-executes OP_apply_eval */
+                        goto eval_rest;
+                    }
+                    if (unlikely(er < 0)) { free_arg_list(ctx, tab, len); goto exception; }
                     /* `obj` points INTO tab, so the completion is taken before the list is freed. */
                     ret_val = JS_IsUninitialized(eclo) ? js_dup(obj) : eclo;
                     free_arg_list(ctx, tab, len);
@@ -53204,6 +53342,7 @@ static __exception int async_func_init(JSContext *ctx, JSAsyncFunctionState *s,
     sf->is_constructor = false;
     sf->is_call_root = false;
     sf->step_func = sf->step_this = JS_UNDEFINED;
+    sf->eval_hold = NULL;
     sf->cur_pc = b->byte_code_buf;
     arg_buf_len = max_int(b->arg_count, argc);
     /* This frame hosts the flow BASE and every generator/async body, so its operands are reshaped by the same
@@ -53370,6 +53509,7 @@ static void async_func_free(JSRuntime *rt, JSAsyncFunctionState *s)
            "an async/generator base was freed while a parked continuation still names it — the pump's queue "
            "holds a link into this allocation, and the work that continuation was is dropped with it");
     sf = &s->frame;
+    js_eval_hold_free(rt, sf);
 
     if (sf->arg_buf) {
         /* close the closure variables. */
@@ -54083,6 +54223,7 @@ static int clone_susp_frame(JSContext *ctx, JSAsyncFunctionState *cs, JSAsyncFun
            "hold an OWNED reference, released by every coroutine teardown, and this clone must then take it "
            "the way it takes the receiver two lines down");
     cf->step_func = cf->step_this = JS_UNDEFINED;
+    cf->eval_hold = js_eval_hold_clone(ctx, of->eval_hold);
     cs->this_val = js_dup(os->this_val);   /* the ONE reference, owned by the state … */
     cf->this_val = cs->this_val;           /* … and borrowed by the frame, exactly as async_func_init does */
     return 0;
@@ -54806,6 +54947,8 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
         if (!ct) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }   /* OOM: partial leak on the abort path */
         ca[i] = ct;
         *ct = *otf;   /* scalars + BORROWED values (cur_func/this_val/new_target stay borrowed); fix pointers below */
+        /* A direct eval's hold is not borrowed: the copy takes the checked source and sheds the parse. */
+        ct->sf.eval_hold = js_eval_hold_clone(ctx, otf->sf.eval_hold);
         /* ...except an OWNED callee: the struct copy duplicates the FLAG, so the clone must duplicate the
            REFERENCE too or both frames release the same one. */
         if (ct->owns_func)
@@ -55679,6 +55822,8 @@ static void free_tramp_chain(JSContext *ctx, JSAsyncFunctionState *s)
         JSStackFrame *lsf = tramp_live_sf(t);
         JSAsyncGeneratorData *agd = tramp_agen_data(t);
 
+        if (lsf == &t->sf)
+            js_eval_hold_free(rt, &t->sf);   /* a coroutine's frame is released with its state */
         if (agd) {
             /* An async generator body. A CREATE's record is its frame's and goes with it; a DRIVE's is its
                object's or a delta's, so only the frame inside it is this flow's: the record is completed first
@@ -116310,6 +116455,7 @@ static int reaction_call_flow_init(JSContext *ctx, JSAsyncFunctionState *fs, JSV
        would hand the next mint a pointer to nothing. See JSStackFrame.cur_gc_obj. */
     sf->cur_gc_obj = NULL;
     sf->step_func = sf->step_this = JS_UNDEFINED;
+    sf->eval_hold = NULL;
     sf->this_val = JS_UNDEFINED;
     sf->cur_func = js_dup(handler);
     sf->cur_pc = NULL;
