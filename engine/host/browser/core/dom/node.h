@@ -22,6 +22,9 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n);
 JSValueConst node_wrap_peek(const lxb_dom_node_t *n);
 /* The Lexbor node behind any wrapper, or NULL if `v` is not one. */
 lxb_dom_node_t *node_of(JSValueConst v);
+/* The class node_wrap builds a Document's wrapper with, which implements Node's brand; from document_init. */
+void node_set_document_class(JSClassID cls);
+void node_document_class_free(void);
 /* §4.7: A ShadowRoot IS a DocumentFragment. Lexbor gives a shadow root its own node type — which is what makes
    "is this a shadow root" answerable with no realm in hand — so every rule the standard states over a
    DocumentFragment asks THIS rather than comparing the type, and a rule about the shadow root itself asks

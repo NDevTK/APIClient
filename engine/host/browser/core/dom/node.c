@@ -268,9 +268,30 @@ static void node_wrap_grow(void)
 
 JSClassID node_class_id(void) { return g_node_class; }
 
+/* A Document's wrapper class (node_set_document_class): its own, because a Document is a legacy platform object
+   whose internal methods no other node has. */
+static JSClassID g_doc_wrap_class;
+
+void node_set_document_class(JSClassID cls)
+{
+    DCHECK(cls != 0 && g_doc_wrap_class == 0, "the Document wrapper class was set twice, or to nothing");
+    g_doc_wrap_class = cls;
+    idl_iface_implements(cls, g_node_class);
+    agent_state_class("document", &g_doc_wrap_class, "the Document wrapper class node_wrap builds documents with");
+}
+
+void node_document_class_free(void)
+{
+    g_doc_wrap_class = 0;
+    idl_iface_implements_reset();
+    agent_state_reached("document");
+}
+
 lxb_dom_node_t *node_of(JSValueConst v)
 {
-    return JS_GetOpaque(v, g_node_class);
+    JSClassID c = JS_GetClassID(v);
+
+    return JS_GetOpaque(v, c != 0 && c == g_doc_wrap_class ? c : g_node_class);
 }
 
 /* §4.7: A ShadowRoot IS A DocumentFragment. Lexbor gives a shadow root its own node type — which is what makes
@@ -5346,7 +5367,10 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
            prototype is resolved OUTSIDE it for that reason and not for tidiness. */
         gen = JS_FlowGen();
         JS_SetFlowGen(0);
-        obj = JS_NewObjectProtoClass(ctx, proto, g_node_class);
+        DCHECK(n->type != LXB_DOM_NODE_TYPE_DOCUMENT || g_doc_wrap_class != 0,
+               "a Document was wrapped before document_init set its wrapper class");
+        obj = JS_NewObjectProtoClass(ctx, proto, n->type == LXB_DOM_NODE_TYPE_DOCUMENT ? g_doc_wrap_class
+                                                                                         : g_node_class);
         DCHECK(JS_FlowGen() == 0,
                "the flow generation MOVED inside node_wrap's baseline bracket — restoring the saved number "
                "would put back a value below the live one, and the stamp is the monotonic counter every "

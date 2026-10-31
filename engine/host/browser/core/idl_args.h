@@ -989,6 +989,10 @@ void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str);
 /* Declare the class an IDL_INTERFACE / IDL_STRING_UNLESS_IFACE position brands against. Applies to the member
    the last declaration made, and composes with every declaration form. */
 void idl_iface_brand(JSClassID iface);
+/* Objects of class `cls` implement the interface `brand` brands: a Document wrapper, whose class carries the
+   Document's own internal methods, is a Node. Agent-lifetime; idl_iface_implements_reset clears it at release. */
+void idl_iface_implements(JSClassID cls, JSClassID brand);
+void idl_iface_implements_reset(void);
 
 /* Narrow an IDL_INTERFACE position past what a class can express: every DOM node wrapper is one class, so a
    class says "a Node" but not "an HTMLElement" (`setValidity(flags, msg, anchor)` must refuse a

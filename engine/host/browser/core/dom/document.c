@@ -4295,6 +4295,7 @@ void document_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_document_class);
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
+    node_set_document_class(g_document_class);   /* the wrappers carry the class, and with it its internal methods */
     {
         /* DOM §4.5's `[Exposed=Window] interface XMLDocument : Document {};`, its per-realm prototype slot. It does
            not claim the document node type (node_claim_type asserts one claimant per type), since the record, not
@@ -5248,6 +5249,7 @@ void document_agent_free(JSRuntime *rt)
     /* The sub-components document_init declares, in the reverse of that order, by platform_agent_free's rule: a
        component declared after another may hold what that one minted. document_fragment, shadow_root and slot are
        declared only by document_init, so only this releases them. */
+    document_named_free();
     fullscreen_free(rt);
     unknown_markup_free();
     autofocus_free();
@@ -5264,6 +5266,7 @@ void document_agent_free(JSRuntime *rt)
     document_domain_free();
     document_write_free(rt);
     document_metadata_free();
+    node_document_class_free();
     DCHECK(JS_GetContextMarkHook(rt) == document_realm_mark,
            "§gc's realm-mark hook was given back at the Document component's agent release — it must NOT be, "
            "and this is where that is checked. The records it reports outlive this call (a child navigable's is "

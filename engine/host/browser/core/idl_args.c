@@ -103,10 +103,34 @@ static int64_t idl_int_convert(double x, int width, bool is_signed, bool clamp)
    JS_NewObjectProtoClass stamps the class id at the mint, nothing in the language can forge one, and
    JS_GetClassID answers JS_INVALID_CLASS_ID for a non-object — which is the whole of what a brand needs. The
    supplementary narrowing a class cannot express stays where it was, in idl_iface_narrow. */
+/* Classes whose objects implement a brand class's interface besides that class's own (idl_iface_implements). */
+static struct { JSClassID cls, brand; } g_implements[4];
+static int g_implements_n;
+
+void idl_iface_implements(JSClassID cls, JSClassID brand)
+{
+    DCHECK(cls != 0 && brand != 0 && cls != brand, "a class was said to implement a brand with no class, or itself");
+    CHECK(g_implements_n < (int)(sizeof g_implements / sizeof g_implements[0]),
+          "more classes implement another class's brand than the table holds");
+    g_implements[g_implements_n].cls = cls;
+    g_implements[g_implements_n].brand = brand;
+    g_implements_n++;
+}
+
+void idl_iface_implements_reset(void)
+{
+    g_implements_n = 0;
+}
+
 static bool idl_is_iface(JSValueConst v, JSClassID iface)
 {
+    JSClassID c = JS_GetClassID(v);
+
     DCHECK(iface != 0, "an interface brand test was made with no class to brand against");
-    return JS_GetClassID(v) == iface;
+    if (c == iface) return true;
+    for (int i = 0; i < g_implements_n; i++)
+        if (g_implements[i].cls == c && g_implements[i].brand == iface) return true;
+    return false;
 }
 
 static bool idl_is_integer(IdlArgType t)

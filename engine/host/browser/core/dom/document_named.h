@@ -19,5 +19,6 @@ bool document_named_element_is(lxb_dom_element_t *el, const char *name, size_t n
 const JSClassExoticMethods *document_named_exotic(void);
 /* Declares the named-access step member; the agent's, from document_init. */
 void document_named_init(JSContext *ctx);
+void document_named_free(void);
 
 #endif

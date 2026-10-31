@@ -236,6 +236,12 @@ void document_named_init(JSContext *ctx)
     agent_state_id("document", &g_id_dn_step, "HTML §3.1.7 the Document's named-access step declaration");
 }
 
+void document_named_free(void)
+{
+    g_id_dn_step = -1;
+    agent_state_reached("document");
+}
+
 /* Web IDL §3.9.1 [[GetOwnProperty]], reached by quickjs after the object's own properties missed, which is the
    visibility algorithm's step 2; the Document's [LegacyOverrideBuiltIns] is its step 3. LegacyPlatformObject-
    GetOwnProperty's descriptor: no named property setter, so not writable; enumerable and configurable. */
