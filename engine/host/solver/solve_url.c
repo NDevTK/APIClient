@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "solver/reclaim.h"
 
 char *solve_url_witness(const char *base, const char *input)
 {
@@ -16,7 +17,7 @@ char *solve_url_witness(const char *base, const char *input)
     DCHECK(base && *base && input, "a request witness was composed with no base or no input");
     bn = strlen(base);
     in = strlen(input);
-    w = malloc(bn + in + 24);
+    w = reclaim_malloc(bn + in + 24);
     CHECK(w, "solve_url: OOM composing a request witness");
     k = snprintf(w, 24, "%zu:", bn);
     memcpy(w + k, base, bn);

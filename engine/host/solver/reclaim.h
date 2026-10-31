@@ -92,10 +92,13 @@
  * they return is freed by plain free() and a converted site's free needs no edit at all. A refusal is the only
  * thing this file adds; ownership is untouched. */
 /* The browser half reaches the edge through lexbor_malloc, lexbor_calloc and lexbor_realloc, the library allocator
-   reclaim_install routes here, and through reclaim_strdup and reclaim_strndup for its string copies, so an
-   allocation sized by page input refuses by selling rather than by its CHECK. A fixed-size allocation and a free
-   path keep the C library: the first cannot be what reaches the floor first often enough to matter, and a sale in
-   the second would re-enter the release walking it. */
+   reclaim_install routes here, and through reclaim_strdup and reclaim_strndup for its string copies; the solver's
+   fresh allocations call reclaim_* directly. A free path keeps the C library, since a sale there would re-enter the
+   release walking it, and so does the park document's block, which engine_park_fund funds instead.
+   Named residual. Not covered: the solver's realloc sites other than world_doc_intern's, whose buffer may belong to
+   a flow a sale releases, or to a registry a sale grows (world.c's dead-world list). Next diff converts them file by
+   file, each after checking its pointer belongs to the running flow or to a registry no sale writes. Absence shows
+   as an OOM CHECK at a solver realloc while the census's `members` is above one. */
 void *reclaim_malloc(size_t size);
 void *reclaim_realloc(void *ptr, size_t size);
 void *reclaim_calloc(size_t num, size_t size);

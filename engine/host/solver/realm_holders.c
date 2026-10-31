@@ -10,6 +10,7 @@
 #include "core/frame/navigable.h"
 #include "core/dom/document.h"
 #include "core/frame/window_proxy.h"
+#include "solver/reclaim.h"
 
 /* One frozen segment's answer: the realms whose Window its entries name, as a bitset over the census's realm
    order. Segments are shared by families, so each is walked once per census and its bits are ORed into every
@@ -68,7 +69,7 @@ static bool holder_enter(const void *seg, void *arg) {
         for (int i = 0; i < w->words; i++) w->acc[i] |= m->bits[i];
         return false;
     }
-    m->bits = calloc((size_t)w->words, sizeof *m->bits);
+    m->bits = reclaim_calloc((size_t)w->words, sizeof *m->bits);
     if (m->bits == NULL) {
         /* Refused: the census answers absent (see realm_holders.h), so the rest of this walk records nothing. */
         w->refused = true;
@@ -129,12 +130,12 @@ bool realm_holders_census(RealmHolders *out) {
         return true;
     }
     w.words = (w.n + 63) / 64;
-    w.globals = malloc((size_t)w.n * 4 * sizeof *w.globals);
-    holders = calloc((size_t)w.n, sizeof *holders);
+    w.globals = reclaim_malloc((size_t)w.n * 4 * sizeof *w.globals);
+    holders = reclaim_calloc((size_t)w.n, sizeof *holders);
     cow_chain_stats(&segs, &entries);
     for (w.memo_cap = 16; w.memo_cap < (size_t)segs * 2 + 1; w.memo_cap *= 2) {}
-    w.memo = calloc(w.memo_cap, sizeof *w.memo);
-    w.acc = calloc((size_t)w.words, sizeof *w.acc);
+    w.memo = reclaim_calloc(w.memo_cap, sizeof *w.memo);
+    w.acc = reclaim_calloc((size_t)w.words, sizeof *w.acc);
     if (!w.globals || !holders || !w.memo || !w.acc) w.refused = true;
     if (w.refused) goto out;
     for (int i = 0; i < w.n; i++) {
@@ -176,9 +177,9 @@ bool realm_holders_census(RealmHolders *out) {
     /* The unheld realms' handles: how many of their references come from outside the GC graph. With no delta
        naming the realm, such a reference is a C record or a host static rooting it, which no collection frees. */
     if (!w.refused && none > 0) {
-        JSValue *objs = malloc((size_t)w.n_globals * sizeof *objs);
-        int *from_gc = malloc((size_t)w.n_globals * sizeof *from_gc), k = 0;
-        bool *realm_rooted = calloc((size_t)w.n, sizeof *realm_rooted);
+        JSValue *objs = reclaim_malloc((size_t)w.n_globals * sizeof *objs);
+        int *from_gc = reclaim_malloc((size_t)w.n_globals * sizeof *from_gc), k = 0;
+        bool *realm_rooted = reclaim_calloc((size_t)w.n, sizeof *realm_rooted);
         if (objs == NULL || from_gc == NULL || realm_rooted == NULL) {
             w.refused = true;
         } else {

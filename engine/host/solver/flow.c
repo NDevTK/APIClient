@@ -384,7 +384,7 @@ static FlowSite *flow_site_of(FlowAcct *fam, int kind, uint64_t key, int64_t see
     }
     if (fam->sites_n + 1 > fam->sites_cap) {
         size_t cap = fam->sites_cap ? fam->sites_cap * 2 : 8;
-        FlowSite **t = calloc(cap, sizeof *t);
+        FlowSite **t = reclaim_calloc(cap, sizeof *t);
         CHECK(t, "flow: OOM growing a family's code-site ledger");
         for (size_t j = 0; j < fam->sites_cap; j++) {
             FlowSite *n = fam->sites[j];
@@ -398,7 +398,7 @@ static FlowSite *flow_site_of(FlowAcct *fam, int kind, uint64_t key, int64_t see
         free(fam->sites);
         fam->sites = t; fam->sites_cap = cap;
     }
-    st = calloc(1, sizeof *st);
+    st = reclaim_calloc(1, sizeof *st);
     CHECK(st, "flow: OOM minting a code site in a family's ledger");
     st->fam = fam; st->kind = kind; st->key = key; st->seen = seen;
     flow_site_reprice(st);
@@ -919,7 +919,7 @@ Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
 
 int flow_cow_entries_naming(JSValueConst v)
 {
-    void **ds = malloc(sizeof *ds * (size_t)(g_flows_n + 1));
+    void **ds = reclaim_malloc(sizeof *ds * (size_t)(g_flows_n + 1));
     int i, n = 0, r;
 
     CHECK(ds != NULL, "flow: OOM listing the frontier's deltas");
@@ -1300,7 +1300,7 @@ void flow_orphan_chain_copy(Flow *dst, const Flow *src, int n)
     DCHECK(dst->orphan_chain_n == 0 && n >= 0 && n <= src->orphan_chain_n,
            "an arm's chain of drives was copied over one it already had, or from past its parent's");
     for (int i = 0; i < n; i++) {
-        char *act = src->orphan_acts[i] ? strdup(src->orphan_acts[i]) : NULL;
+        char *act = src->orphan_acts[i] ? reclaim_strdup(src->orphan_acts[i]) : NULL;
 
         CHECK(act || !src->orphan_acts[i], "engine: OOM copying a drive's act");
         flow_orphan_chain_push(dst, src->orphan_chain[i], act, 1);
@@ -1336,8 +1336,8 @@ void flow_delivery_add(Flow *f, const char *src, const char *val)
     v = realloc(f->cand_dval, (size_t)(f->cand_dn + 1) * sizeof *v);
     CHECK(v, "flow: OOM growing a candidate's deliveries");
     f->cand_dval = v;
-    f->cand_dsrc[f->cand_dn] = strdup(src);
-    f->cand_dval[f->cand_dn] = strdup(val);
+    f->cand_dsrc[f->cand_dn] = reclaim_strdup(src);
+    f->cand_dval[f->cand_dn] = reclaim_strdup(val);
     CHECK(f->cand_dsrc[f->cand_dn] && f->cand_dval[f->cand_dn], "flow: OOM copying a delivery");
     f->cand_dn++;
 }
@@ -1361,7 +1361,7 @@ char *flow_deliveries_text(const Flow *f)
 
     if (f->cand_dn == 0) return NULL;
     for (int i = 0; i < f->cand_dn; i++) n += strlen(f->cand_dsrc[i]) + strlen(f->cand_dval[i]) + 42;
-    out = malloc(n);
+    out = reclaim_malloc(n);
     CHECK(out, "flow: OOM spelling a candidate's deliveries");
     for (int i = 0; i < f->cand_dn; i++)
         o += (size_t)snprintf(out + o, n - o, "%zu:%s%zu:%s", strlen(f->cand_dsrc[i]), f->cand_dsrc[i],
@@ -1378,7 +1378,7 @@ static char *delivery_field(const char **p)
 
     CHECK(end != *p && *end == ':' && strlen(end + 1) >= n,
           "flow: a parked delivery field is not one this engine wrote");
-    out = malloc(n + 1);
+    out = reclaim_malloc(n + 1);
     CHECK(out, "flow: OOM reading a parked delivery");
     memcpy(out, end + 1, n);
     out[n] = 0;
@@ -1416,13 +1416,13 @@ void flow_user_acts_copy(Flow *dst, const Flow *src)
     DCHECK(dst->user_acts_n == 0 && dst->scroll_asked_n == 0,
            "an arm's scroll acts were copied over ones it already had");
     for (int i = 0; i < src->user_acts_n; i++) {
-        char *act = strdup(src->user_acts[i]);
+        char *act = reclaim_strdup(src->user_acts[i]);
 
         CHECK(act, "engine: OOM copying a scroll act");
         flow_user_act_push(dst, act, src->user_act_at[i]);
     }
     for (int i = 0; i < src->scroll_asked_n; i++) {
-        char *loc = strdup(src->scroll_asked[i]);
+        char *loc = reclaim_strdup(src->scroll_asked[i]);
 
         CHECK(loc, "engine: OOM copying a scroll question");
         flow_scroll_asked_push(dst, loc);
@@ -3348,7 +3348,7 @@ JSValue flow_job_run(JSContext *ctx, JSValueConst entry) {
            "a job record names a callee this session never saw — the table is append-only and an ordinal is "
            "minted at the push, so an ordinal past its end is a record from another session");
     if (argc > (int)(sizeof stack / sizeof *stack)) {
-        args = malloc(sizeof(*args) * (size_t)argc);
+        args = reclaim_malloc(sizeof(*args) * (size_t)argc);
         CHECK(args != NULL, "flow: OOM building a queued job's argument vector — the job is on the frontier "
                             "and the WFQ may never drop a work item");
     }

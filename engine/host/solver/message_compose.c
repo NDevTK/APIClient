@@ -19,6 +19,7 @@
 #include "core/json_buf.h"
 #include "solver/concolic.h"
 #include "solver/message_compose.h"
+#include "solver/reclaim.h"
 
 typedef struct { const char *src, *ident; const char *const *path; int n; } Node;
 typedef struct { Node *v; int n, cap; } Nodes;
@@ -48,7 +49,7 @@ static void refuse(Compose *c, const char *why, const char *at)
 
     if (c->why) return;
     n = strlen(why) + strlen(at) + 4;
-    c->why = malloc(n);
+    c->why = reclaim_malloc(n);
     CHECK(c->why, "message compose: OOM stating a refusal");
     snprintf(c->why, n, "%s: %s", why, at);
 }
@@ -126,7 +127,7 @@ static char *pred_string(const Rows *r, const char *src, int truth, const char *
                 json_buf_raw(&b, r->pred[i].args[0]);
     if (truth == 1 && !b.n) json_buf_raw(&b, "x");
     s = json_buf_take(&b);
-    if (!s) { s = strdup(""); CHECK(s, "message compose: OOM spelling a string"); }
+    if (!s) { s = reclaim_strdup(""); CHECK(s, "message compose: OOM spelling a string"); }
     for (int i = 0; i < r->npred && !*why; i++) {
         int ok = pred_satisfied(&r->pred[i], s);
         if (ok < 0) *why = "a call predicate this composition does not run";
@@ -364,7 +365,7 @@ static void origin_frag(void *ud, const char *tok)
     o->frag = realloc(o->frag, (size_t)(o->n + 1) * sizeof *o->frag);
     o->dotted = realloc(o->dotted, (size_t)(o->n + 1) * sizeof *o->dotted);
     CHECK(o->frag && o->dotted, "message compose: OOM collecting an origin's constants");
-    o->frag[o->n] = strdup(p);
+    o->frag[o->n] = reclaim_strdup(p);
     CHECK(o->frag[o->n], "message compose: OOM collecting an origin's constants");
     o->dotted[o->n++] = dotted;
 }
@@ -383,7 +384,7 @@ static void origin_pins(void *user, const char *src, const ConcolicPrincipalPin 
 static char *origin_of_host(const char *host)
 {
     size_t n = strlen(host) + sizeof "https://";
-    char *out = malloc(n);
+    char *out = reclaim_malloc(n);
 
     CHECK(out, "message compose: OOM spelling an origin");
     snprintf(out, n, "https://%s", host);
@@ -402,7 +403,7 @@ int message_compose_origins(const char *origin_src, char ***out)
     DCHECK(origin_src && *origin_src && out, "origins were composed for no source");
     concolic_principal_tokens_each(origin_src, origin_frag, &o);
     concolic_principal_pins(origin_pins, &op);
-    c = malloc((size_t)(o.n + 1) * sizeof *c);
+    c = reclaim_malloc((size_t)(o.n + 1) * sizeof *c);
     CHECK(c, "message compose: OOM listing an origin's candidates");
     for (int i = 0; i < o.n; i++) { json_buf_raw(&sub, o.frag[i]); json_buf_raw(&sub, "."); }
     json_buf_raw(&sub, concolic_attacker_site());
@@ -416,7 +417,7 @@ int message_compose_origins(const char *origin_src, char ***out)
            its site, and one with no separator is no domain to end in. */
         if (!o.dotted[i] && strchr(o.frag[i], '.')) {
             size_t len = strlen(o.frag[i]) + 2;
-            char *own = malloc(len);
+            char *own = reclaim_malloc(len);
 
             CHECK(own, "message compose: OOM spelling an origin");
             snprintf(own, len, "x%s", o.frag[i]);

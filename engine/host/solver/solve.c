@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include "core/dom/node_interface.h"   /* dom_document_create, where a Document is made */
 #include "core/html/html_parse.h"      /* html_parse_document, which owns the tokens it produces */
+#include "solver/reclaim.h"
 
 enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2, SINK_REQUEST = 3 };   /* sink classes, each with its own breakouts and fire oracle */
 
@@ -277,7 +278,7 @@ static void queue_verification(Cand *e, const char *payload, char *dl) {
     grown = realloc(e->vf, (size_t)(e->nvf + 1) * sizeof *e->vf);
     CHECK(grown, "solve: OOM queueing a fire's verification");
     e->vf = grown;
-    e->vf[e->nvf].payload = strdup(payload);
+    e->vf[e->nvf].payload = reclaim_strdup(payload);
     CHECK(e->vf[e->nvf].payload, "solve: OOM queueing a fire's verification");
     e->vf[e->nvf++].dl = dl;
 }
@@ -426,7 +427,7 @@ static char *bytes_probe(const char *encodes) {
            "then no byte whose arrival is in question, and the probe would be a document re-run measuring "
            "nothing");
     n = strlen(encodes);
-    s = malloc(n * (tl + 2) + 1);
+    s = reclaim_malloc(n * (tl + 2) + 1);
     CHECK(s != NULL, "solve: OOM building the @S byte-delivery probe");
     for (i = 0; i < n; i++) {
         memcpy(s + o, SOLVE_BYTES_LOCATOR, tl); o += tl;
@@ -564,7 +565,7 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        caller, candidate_search, asserts that it created nothing. */
     e = &g_pending[g_pending_n++];
     *e = (Cand){
-        .src = strdup(src),
+        .src = reclaim_strdup(src),
         .sink = sink,
         /* No run has been observed yet: -1 rather than 0, as in FilterObs, because 0 is a real offset. */
         .surv_at = -1, .surv_out = -1,
@@ -617,7 +618,7 @@ static void push_breakout(Cand *e, const char *payload, int kind) {
     }
     /* Born whole, for sink_search's reason: `pl` is realloc'd and never zeroed. `surv` has blank 0, so the
        literal names only what this call computes. */
-    e->pl[e->npl] = (CandPayload){ .bytes = strdup(payload), .kind = kind };
+    e->pl[e->npl] = (CandPayload){ .bytes = reclaim_strdup(payload), .kind = kind };
     CHECK(e->pl[e->npl].bytes, "solve: OOM recording a breakout for a sink search");
     e->npl++;
 }
@@ -680,7 +681,7 @@ static int cand_arrival_is_attack(const Cand *e, const Flow *f) {
    value composed from two attacker sources. */
 static void cand_learn_root(Cand *e, const char *root) {
     DCHECK(e && root, "a sink search was told how its bytes arrive by nothing, or was told nothing");
-    if (!e->root) { e->root = strdup(root); CHECK(e->root, "solve: OOM recording a sink's delivery root"); }
+    if (!e->root) { e->root = reclaim_strdup(root); CHECK(e->root, "solve: OOM recording a sink's delivery root"); }
     else DCHECK(!strcmp(e->root, root),
            "one sink search has been handed two different delivery ROOTS for one injection identity — the root "
            "is a SET a derivation UNIONS rather than replaces, so one injection identity CAN name a value that "
@@ -728,7 +729,7 @@ static void sender_pin_row(void *user, const char *src, const ConcolicPrincipalP
         a = realloc(sp->row, (size_t)(sp->n + 1) * sizeof *a);
         CHECK(a, "solve: OOM recording the sender a path reaching a sink demands");
         sp->row = a;
-        a[sp->n].principal = strdup(src);
+        a[sp->n].principal = reclaim_strdup(src);
         CHECK(a[sp->n].principal, "solve: OOM naming the principal a path pinned");
         concolic_principal_pin_copy(&a[sp->n].pin, q);
         sp->n++;
@@ -956,9 +957,9 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
        NULL, so the literal names only what is computed. */
     *f = (Finding){
         .cls = cls,
-        .source = strdup(source ? source : "?"),
+        .source = reclaim_strdup(source ? source : "?"),
         .poc = concolic_candidate_poc(twin->root, poc),   /* the markup a named-access chain composed */
-        .root = strdup(twin->root),
+        .root = reclaim_strdup(twin->root),
         .acts = acts,
         .under_act = under_act,
     };
@@ -1116,7 +1117,7 @@ static void learn_witness(Cand *e, const char *out) {
         e->wit = realloc(e->wit, (size_t)e->witcap * sizeof(char *));
         CHECK(e->wit, "solve: OOM recording a sink search's context witness");
     }
-    e->wit[e->nwit] = strdup(out);
+    e->wit[e->nwit] = reclaim_strdup(out);
     CHECK(e->wit[e->nwit], "solve: OOM recording a sink search's context witness");
     e->nwit++;
 }
@@ -1926,7 +1927,7 @@ static char *dl_variant(const char *tmpl, int v, int *nvar) {
             if (k != (v < last ? v : last)) continue;
         }
         {
-            char *src = strndup(s, base), *val = strndup(x, xn);
+            char *src = reclaim_strndup(s, base), *val = reclaim_strndup(x, xn);
 
             CHECK(src && val, "solve: OOM choosing a message template's variant");
             snprintf(head, sizeof head, "%zu:", base);
@@ -1953,8 +1954,8 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
     /* A candidate session runs from the baseline, and is this tool's act from its first park, so it is
        named before its seed grades the document's program loads. */
     f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
-    f->cand_src     = strdup(e->src);
-    f->cand_payload = strdup(payload);
+    f->cand_src     = reclaim_strdup(e->src);
+    f->cand_payload = reclaim_strdup(payload);
     fire_target_sink_set(&f->fire, sink_name(e->sink));
     CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
     flow_seed(f);
@@ -2006,7 +2007,7 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
 
             if (!at) continue;
             head = (size_t)(at - f->cand_dval[i]);
-            v = malloc(strlen(f->cand_dval[i]) - strlen(qs) + strlen(qp) + 1);
+            v = reclaim_malloc(strlen(f->cand_dval[i]) - strlen(qs) + strlen(qp) + 1);
             CHECK(v, "solve: OOM placing a candidate's payload in its message");
             memcpy(v, f->cand_dval[i], head);
             strcpy(v + head, qp);
@@ -2428,7 +2429,7 @@ static void emit_delivery(JsonBuf *b, JSContext *ctx, const Cand *e, const char 
         if (page) {
             json_buf_raw(b, ","); json_buf_key(b, "attackerPolicy"); json_buf_str(b, REFERRER_ATTACKER_POLICY);
             if (poc) {
-                char *url = malloc(strlen(page) + strlen(poc) + 1);
+                char *url = reclaim_malloc(strlen(page) + strlen(poc) + 1);
 
                 CHECK(url != NULL, "solve: OOM spelling a referrer PoC's attacker page");
                 strcpy(url, page);

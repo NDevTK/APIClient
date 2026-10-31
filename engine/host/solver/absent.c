@@ -206,6 +206,7 @@
 #include "browser/language_names.h"
 #include "browser/obsolete_names.h"
 #include "browser/platform_names.h"
+#include "solver/reclaim.h"
 
 #define PLATFORM_NAMES_N ((int)(sizeof(PLATFORM_NAMES) / sizeof(PLATFORM_NAMES[0])))
 #define LANGUAGE_NAMES_N ((int)(sizeof(LANGUAGE_NAMES) / sizeof(LANGUAGE_NAMES[0])))
@@ -1127,7 +1128,7 @@ char *absent_json(void)
         len = absent_emitf(out, cap, len, "}");
         if (pass == 0) {
             cap = len + 1;
-            out = (char *)malloc(cap);
+            out = (char *)reclaim_malloc(cap);
             if (!out) return NULL;
         }
     }
@@ -1183,7 +1184,7 @@ static void assumed_record(const char *src)
 
     if (2 * (g_assumed_n + 1) > g_assumed_cap) {
         size_t cap = g_assumed_cap ? 2 * g_assumed_cap : 64;
-        char **tab = calloc(cap, sizeof *tab);
+        char **tab = reclaim_calloc(cap, sizeof *tab);
         CHECK(tab != NULL, "absent: OOM growing the set of injected-state sources");
         for (i = 0; i < g_assumed_cap; i++)
             if (g_assumed[i]) tab[assumed_slot(tab, cap, g_assumed[i], strlen(g_assumed[i]))] = g_assumed[i];
@@ -1193,7 +1194,7 @@ static void assumed_record(const char *src)
     }
     i = assumed_slot(g_assumed, g_assumed_cap, src, n);
     if (g_assumed[i]) return;
-    g_assumed[i] = strdup(src);
+    g_assumed[i] = reclaim_strdup(src);
     CHECK(g_assumed[i] != NULL, "absent: OOM recording an injected-state source");
     g_assumed_n++;
 }
@@ -1330,7 +1331,7 @@ static char *ns_join(const char *base, JSAtom name, const char *key)
 {
     static const char *const root = "window";
     size_t len = (base ? strlen(base) : strlen(root)) + strlen(key) + 3;
-    char *out = (char *)malloc(len);
+    char *out = (char *)reclaim_malloc(len);
 
     CHECK(out != NULL, "absent: OOM composing a path in the document's injected-state namespace — the "
                        "alternative to failing here is a member reported under a name no document published, "

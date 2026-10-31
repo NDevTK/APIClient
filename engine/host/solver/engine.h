@@ -1155,6 +1155,7 @@ typedef struct {
     long sold_flows;        /* …the exploration flows among them */
     long pressure_sold;     /* …those sold by RAM pressure at rest (engine_set_ram_share), `<= sold`, asserted */
     long pressure_collects; /* cycle collections RAM pressure owed before a sale */
+    long park_funded;       /* flows sold for their bulk to fund another's park record, `<= sold` */
     long rest_compositions; /* compositions between steps (engine_note_rest_composition) */
     long rest_compose_attempts;     /* …the attempts they took, `>= rest_compositions` */
     long rest_compose_attempts_max; /* …and the most one composition took */

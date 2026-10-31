@@ -6,6 +6,7 @@
 #include "check.h"
 #include "core/json_buf.h"
 #include "solver/post_index.h"
+#include "solver/reclaim.h"
 
 typedef struct { char *id; char *json; } PostIndexRecord;
 
@@ -62,7 +63,7 @@ void post_index_record(const PostIndexHead *h, const PostIndexSymbol *syms, size
         g_posts = a;
         g_posts_cap = c;
     }
-    g_posts[g_posts_n].id = strdup(h->id);
+    g_posts[g_posts_n].id = reclaim_strdup(h->id);
     g_posts[g_posts_n].json = json_buf_take(&b);
     CHECK(g_posts[g_posts_n].id != NULL && g_posts[g_posts_n].json != NULL,
           "post index: OOM keeping a routed post's record");

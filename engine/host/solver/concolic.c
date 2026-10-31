@@ -227,16 +227,16 @@ static void ident_list_free(char **args, int n) {
 
 void concolic_pred_copy(ConcolicPred *dst, const ConcolicPred *src) {
     int k;
-    dst->method = strdup(src->method);
+    dst->method = reclaim_strdup(src->method);
     CHECK(dst->method, "concolic: OOM copying the method a flow's own gate called");
     dst->nargs = src->nargs;
     dst->holds = src->holds;
     dst->args = NULL;
     if (!src->nargs) return;
-    dst->args = malloc((size_t)src->nargs * sizeof(char *));
+    dst->args = reclaim_malloc((size_t)src->nargs * sizeof(char *));
     CHECK(dst->args, "concolic: OOM copying a gate's argument list");
     for (k = 0; k < src->nargs; k++) {
-        dst->args[k] = strdup(src->args[k]);
+        dst->args[k] = reclaim_strdup(src->args[k]);
         CHECK(dst->args[k], "concolic: OOM copying an argument a flow's own gate passed");
     }
 }
@@ -260,7 +260,7 @@ int concolic_looseeq_same(const ConcolicLooseEq *p, ConcolicLit kind, const char
 
 void concolic_looseeq_copy(ConcolicLooseEq *dst, const ConcolicLooseEq *src) {
     dst->kind = src->kind;
-    dst->tok = strdup(src->tok);
+    dst->tok = reclaim_strdup(src->tok);
     CHECK(dst->tok, "concolic: OOM copying the operand a flow's own loose equality held against");
 }
 
@@ -515,7 +515,7 @@ static char *literal_tok(JSContext *ctx, JSValueConst v, ConcolicLit *pkind)
     if (kind == CONCOLIC_LIT_NONE) return NULL;
     s = JS_ToCString(ctx, v);
     if (!s) return NULL;
-    r = strdup(s);
+    r = reclaim_strdup(s);
     CHECK(r, "concolic: OOM spelling a concrete operand");
     JS_FreeCString(ctx, s);
     return r;
@@ -539,7 +539,7 @@ static char *intrinsic_name(JSContext *ctx, JSValueConst v)
            "an intrinsic's name did not fit the buffer quickjs.h's own bound sizes for it — the two are tied "
            "by a _Static_assert there, so this fires only if that bound was widened past this buffer, and a "
            "TRUNCATED name is two intrinsics under one constraint key and one property atom");
-    r = strdup(buf);
+    r = reclaim_strdup(buf);
     CHECK(r, "concolic: OOM copying an intrinsic's name");
     return r;
 }
@@ -572,7 +572,7 @@ static char *registry_key(JSContext *ctx, JSValueConst v)
         JS_FreeCString(ctx, s);
         return NULL;
     }
-    r = strdup(s);
+    r = reclaim_strdup(s);
     CHECK(r, "concolic: OOM copying a registered symbol's key");
     JS_FreeCString(ctx, s);
     return r;
@@ -601,7 +601,7 @@ static char *creation_name(JSContext *ctx, JSValueConst v)
            "an assert at the composition there, so this fires only if that bound was widened past this "
            "buffer, and a TRUNCATED name is two page-created values under one constraint key and one "
            "property atom");
-    r = strdup(buf);
+    r = reclaim_strdup(buf);
     CHECK(r, "concolic: OOM copying a creation name");
     return r;
 }
@@ -865,7 +865,7 @@ static void bound_side_copy(BoundSide *d, const BoundSide *s) {
     *d = *s;
     d->txt = NULL;
     if (s->present) {
-        d->txt = strdup(s->txt);
+        d->txt = reclaim_strdup(s->txt);
         CHECK(d->txt, "concolic: OOM copying an inherited bound's spelling");
     }
 }
@@ -1020,8 +1020,8 @@ static Cons *cons_entry(const char *key) {
         CHECK(np, "concolic: OOM path constraint");
         g_pins = np; g_pins_cap = nc;   /* published after the ask — see cons_hash_rebuild */
     }
-    g_pins[g_pins_n].key = strdup(key); CHECK(g_pins[g_pins_n].key, "concolic: OOM constraint key");
-    g_pins[g_pins_n].val = (below && below->val) ? strdup(below->val) : NULL;
+    g_pins[g_pins_n].key = reclaim_strdup(key); CHECK(g_pins[g_pins_n].key, "concolic: OOM constraint key");
+    g_pins[g_pins_n].val = (below && below->val) ? reclaim_strdup(below->val) : NULL;
     CHECK(!(below && below->val) || g_pins[g_pins_n].val, "concolic: OOM copying an inherited pin value");
     /* The kind with the bytes, under the same condition: a copy-up without it would hand the sibling a spelling
        pin_mint reads back as CONCOLIC_LIT_NONE, which it refuses. */
@@ -1031,17 +1031,17 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].nexcl = 0;
     if (below && below->nexcl) {
         int k;
-        g_pins[g_pins_n].excl = malloc((size_t)below->nexcl * sizeof(char *));
+        g_pins[g_pins_n].excl = reclaim_malloc((size_t)below->nexcl * sizeof(char *));
         CHECK(g_pins[g_pins_n].excl, "concolic: OOM copying an inherited exclusion set");
         for (k = 0; k < below->nexcl; k++) {
-            g_pins[g_pins_n].excl[k] = strdup(below->excl[k]);
+            g_pins[g_pins_n].excl[k] = reclaim_strdup(below->excl[k]);
             CHECK(g_pins[g_pins_n].excl[k], "concolic: OOM copying an inherited excluded value");
         }
         g_pins[g_pins_n].nexcl = below->nexcl;
     }
     g_pins[g_pins_n].bnd = NULL;
     if (below && below->bnd) {
-        Bound *nb = malloc(sizeof *nb);
+        Bound *nb = reclaim_malloc(sizeof *nb);
         CHECK(nb, "concolic: OOM copying an inherited bound");
         bound_side_copy(&nb->lo, &below->bnd->lo);
         bound_side_copy(&nb->hi, &below->bnd->hi);
@@ -1051,7 +1051,7 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].npred = 0;
     if (below && below->npred) {
         int k;
-        g_pins[g_pins_n].pred = malloc((size_t)below->npred * sizeof(ConcolicPred));
+        g_pins[g_pins_n].pred = reclaim_malloc((size_t)below->npred * sizeof(ConcolicPred));
         CHECK(g_pins[g_pins_n].pred, "concolic: OOM copying an inherited call-predicate set");
         for (k = 0; k < below->npred; k++)
             concolic_pred_copy(&g_pins[g_pins_n].pred[k], &below->pred[k]);
@@ -1061,7 +1061,7 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].nleq = 0;
     if (below && below->nleq) {
         int k;
-        g_pins[g_pins_n].leq = malloc((size_t)below->nleq * sizeof(ConcolicLooseEq));
+        g_pins[g_pins_n].leq = reclaim_malloc((size_t)below->nleq * sizeof(ConcolicLooseEq));
         CHECK(g_pins[g_pins_n].leq, "concolic: OOM copying an inherited loose-equality set");
         for (k = 0; k < below->nleq; k++)
             concolic_looseeq_copy(&g_pins[g_pins_n].leq[k], &below->leq[k]);
@@ -1071,7 +1071,7 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].nppin = 0;
     if (below && below->nppin) {
         int k;
-        g_pins[g_pins_n].ppin = malloc((size_t)below->nppin * sizeof(ConcolicPrincipalPin));
+        g_pins[g_pins_n].ppin = reclaim_malloc((size_t)below->nppin * sizeof(ConcolicPrincipalPin));
         CHECK(g_pins[g_pins_n].ppin, "concolic: OOM copying an inherited principal pin set");
         for (k = 0; k < below->nppin; k++)
             concolic_principal_pin_copy(&g_pins[g_pins_n].ppin[k], &below->ppin[k]);
@@ -1081,17 +1081,17 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].nptok = 0;
     if (below && below->nptok) {
         int k;
-        g_pins[g_pins_n].ptok = malloc((size_t)below->nptok * sizeof(char *));
+        g_pins[g_pins_n].ptok = reclaim_malloc((size_t)below->nptok * sizeof(char *));
         CHECK(g_pins[g_pins_n].ptok, "concolic: OOM copying an inherited principal operand set");
         for (k = 0; k < below->nptok; k++) {
-            g_pins[g_pins_n].ptok[k] = strdup(below->ptok[k]);
+            g_pins[g_pins_n].ptok[k] = reclaim_strdup(below->ptok[k]);
             CHECK(g_pins[g_pins_n].ptok[k], "concolic: OOM copying an inherited principal operand");
         }
         g_pins[g_pins_n].nptok = below->nptok;
     }
     g_pins[g_pins_n].truth = below ? below->truth : -1;
     g_pins[g_pins_n].ex_contra = below ? below->ex_contra : 0;
-    g_pins[g_pins_n].adec = (below && below->adec) ? strdup(below->adec) : NULL;
+    g_pins[g_pins_n].adec = (below && below->adec) ? reclaim_strdup(below->adec) : NULL;
     CHECK(!(below && below->adec) || g_pins[g_pins_n].adec, "concolic: OOM copying an inherited assumed decision");
     g_pins[g_pins_n].adec_what = below ? below->adec_what : (signed char)CONCOLIC_DECISION_NONE;
     g_pins[g_pins_n].adec_arm = below ? below->adec_arm : 0;
@@ -1115,9 +1115,9 @@ static int src_principal(const char *p, size_t n);
 void concolic_principal_pin_copy(ConcolicPrincipalPin *dst, const ConcolicPrincipalPin *src) {
     DCHECK(src->tok != NULL && src->kind != (signed char)CONCOLIC_LIT_NONE,
            "a principal pin with no operand was copied — the store writes one only where the operand is spelled");
-    dst->tok = strdup(src->tok);
+    dst->tok = reclaim_strdup(src->tok);
     CHECK(dst->tok, "concolic: OOM copying the origin a flow pinned a principal to");
-    dst->subject = src->subject ? strdup(src->subject) : NULL;
+    dst->subject = src->subject ? reclaim_strdup(src->subject) : NULL;
     CHECK(!src->subject || dst->subject, "concolic: OOM copying the identity a principal pin compared");
     dst->kind = src->kind;
     dst->loose = src->loose;
@@ -1145,8 +1145,8 @@ static void principal_pin_add(const char *member, const char *subject, ConcolicL
     a = reclaim_realloc(c->ppin, (size_t)(c->nppin + 1) * sizeof *a);
     CHECK(a, "concolic: OOM recording a pin on an attacker's principal");
     c->ppin = a;
-    a[c->nppin].tok = strdup(tok);
-    a[c->nppin].subject = subject ? strdup(subject) : NULL;
+    a[c->nppin].tok = reclaim_strdup(tok);
+    a[c->nppin].subject = subject ? reclaim_strdup(subject) : NULL;
     CHECK(a[c->nppin].tok && (!subject || a[c->nppin].subject),
           "concolic: OOM recording a pin on an attacker's principal");
     a[c->nppin].kind = (signed char)kind;
@@ -1204,7 +1204,7 @@ int concolic_pin_store(const char *src, const char *root, ConcolicLit kind, cons
     /* §7.2.10 SameValueZero ( x, y ) has §7.2.14's step 1 and differs only over NaN, so it determines too. */
     if ((algo == JS_CONCOLIC_EQ_STRICT || algo == JS_CONCOLIC_EQ_SAME_VALUE_ZERO) && src) {   /* NULL: the demand alone */
         c = cons_entry(src);
-        free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
+        free(c->val); c->val = reclaim_strdup(val); CHECK(c->val, "concolic: OOM pin value");
         c->valkind = (signed char)kind;
         g_pin_any = 1;   /* the one write of a pin value, so the one place the latch can be raised */
         wrote = 1;
@@ -1243,7 +1243,7 @@ char *concolic_hole_key(const char *shape) {
     size_t i, n = 0;
 
     if (!shape || !strchr(shape, '{')) return NULL;
-    r = malloc(strlen(shape) + 1);
+    r = reclaim_malloc(strlen(shape) + 1);
     CHECK(r, "concolic: OOM naming the hole a domain is a fact about");
     for (i = 0; shape[i]; i++) if (shape[i] != '{' && shape[i] != '}') r[n++] = shape[i];
     r[n] = 0;
@@ -1284,7 +1284,7 @@ void concolic_exclude(const char *hole, const char *tok) {
     a = realloc(c->excl, (size_t)(c->nexcl + 1) * sizeof(char *));
     CHECK(a, "concolic: OOM recording a value this flow proved its input is not");
     c->excl = a;
-    c->excl[c->nexcl] = strdup(tok);
+    c->excl[c->nexcl] = reclaim_strdup(tok);
     CHECK(c->excl[c->nexcl], "concolic: OOM copying a value this flow proved its input is not");
     c->nexcl++;
 }
@@ -1398,7 +1398,7 @@ static void bound_side_narrow(BoundSide *s, int is_lower, double num, int inclus
     }
     s->num = num;
     s->inclusive = (signed char)(inclusive ? 1 : 0);
-    s->txt = strdup(txt);
+    s->txt = reclaim_strdup(txt);
     CHECK(s->txt, "concolic: OOM copying the spelling of a bound a flow observed");
     s->present = 1;
 }
@@ -1424,7 +1424,7 @@ void concolic_bound(const char *hole, RelOp rel, double num, const char *txt) {
     c = cons_entry(key);
     free(key);
     if (!c->bnd) {
-        c->bnd = calloc(1, sizeof *c->bnd);
+        c->bnd = reclaim_calloc(1, sizeof *c->bnd);
         CHECK(c->bnd, "concolic: OOM recording the interval a flow narrowed its input to");
     }
     if (rel == REL_GT || rel == REL_GE)
@@ -1819,7 +1819,7 @@ static int aff_lin(const AffOperand *a, double ka, const AffOperand *b, double k
         double k = (cmp <= 0 ? ka * a->form->k[i++] : 0.0) + (cmp >= 0 ? kb * b->form->k[j++] : 0.0);
 
         if (k == 0.0) continue;
-        r->term[n] = strdup(t);
+        r->term[n] = reclaim_strdup(t);
         CHECK(r->term[n], "concolic: OOM copying an affine term");
         r->k[n++] = k;
         bound += fabs(k) * AFF_TERM_MAX;
@@ -2137,7 +2137,7 @@ void concolic_note_assumed_branch(const char *key, const char *shape, int arm, i
                 "a branch noted assumed under `%s` was noted again for a different decision", key);
         return;   /* `if (p)` and `if (!p)` are one decision; the first spelling states it */
     }
-    c->adec = strdup(shape);
+    c->adec = reclaim_strdup(shape);
     CHECK(c->adec, "concolic: OOM recording an assumed decision");
     c->adec_what = (signed char)CONCOLIC_DECISION_BRANCH;
     c->adec_arm = arm;
@@ -2482,8 +2482,8 @@ void concolic_declare_source(const char *component, const char *src, const char 
         g_srcs = a; g_srcs_cap = c;
     }
     g_srcs[g_srcs_n].component = component;
-    g_srcs[g_srcs_n].src = strdup(src);
-    g_srcs[g_srcs_n].encode = strdup(encode ? encode : "");
+    g_srcs[g_srcs_n].src = reclaim_strdup(src);
+    g_srcs[g_srcs_n].encode = reclaim_strdup(encode ? encode : "");
     g_srcs[g_srcs_n].prefix = prefix;
     g_srcs[g_srcs_n].deliver = deliver;
     /* A source the attacker writes, which nearly every source is. The exception says so with its own call
@@ -2682,7 +2682,7 @@ void concolic_declare_source_precondition(const char *component, const char *src
         g_pres = a; g_pres_cap = c;
     }
     g_pres[g_pres_n].component = component;
-    g_pres[g_pres_n].src = strdup(src);
+    g_pres[g_pres_n].src = reclaim_strdup(src);
     g_pres[g_pres_n].kind = kind;
     CHECK(g_pres[g_pres_n].src != NULL, "concolic: OOM declaring a precondition source");
     g_pres_n++;
@@ -2965,7 +2965,7 @@ static char *row_transform(int row, const char *bytes)
 
         CHECK(v != NULL, "concolic: OOM serializing a candidate as a tuple's value");
         n = strlen(g_srcs[row].key) + strlen(v) + 2;
-        out = malloc(n);
+        out = reclaim_malloc(n);
         CHECK(out != NULL, "concolic: OOM composing a candidate's tuple");
         snprintf(out, n, "%s=%s", g_srcs[row].key, v);
         free(v);
@@ -2996,7 +2996,7 @@ static int row_chain_walk(const char *root, char **bytes, int stop_at_key)
 
 char *concolic_candidate_poc(const char *root, const char *payload)
 {
-    char *bytes = strdup(payload);
+    char *bytes = reclaim_strdup(payload);
 
     CHECK(bytes != NULL, "concolic: OOM composing a PoC");
     row_chain_walk(root, &bytes, 1);
@@ -3011,19 +3011,19 @@ void concolic_set_candidate(const char *src, const char *root, const char *paylo
     g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = NULL;
     DCHECK(!!src == !!payload, "an @S substitution was installed with an identity and no payload, or the reverse");
     if (src) {
-        g_cand_src = strdup(src);
-        g_cand_payload = strdup(payload);
+        g_cand_src = reclaim_strdup(src);
+        g_cand_payload = reclaim_strdup(payload);
         CHECK(g_cand_src && g_cand_payload, "concolic: OOM installing an @S candidate");
         /* One delivery per source per world: the payload enters at the root's declared base source read,
            through each derived row's transform on the way (a tuple, URL §5.2; markup for a named access), so
            every read of that source answers it and every derivation re-runs on it. A root no component
            declares (a precondition, or a witness verification, which passes no root) substitutes at the
            identity. A path the composer refuses delivers nothing, and the candidate cannot fire. */
-        g_cand_bytes = strdup(payload);
+        g_cand_bytes = reclaim_strdup(payload);
         CHECK(g_cand_bytes != NULL, "concolic: OOM installing an @S candidate's delivery");
         row = row_chain_walk(root, &g_cand_bytes, 0);
         if (g_cand_bytes) {
-            g_cand_at = strdup(row >= 0 ? g_srcs[row].src : src);
+            g_cand_at = reclaim_strdup(row >= 0 ? g_srcs[row].src : src);
             CHECK(g_cand_at != NULL, "concolic: OOM installing an @S candidate's delivery");
         }
     }
@@ -3045,8 +3045,8 @@ void concolic_set_deliveries(char *const *srcs, char *const *vals, int n) {
     DCHECK(n == (f ? f->cand_dn : 0) && (n == 0 || g_cand_src),
            "the installed deliveries are not the running flow's, or ride no candidate");
     if (n == 0) return;
-    g_dl_src = malloc((size_t)n * sizeof *g_dl_src);
-    g_dl_val = malloc((size_t)n * sizeof *g_dl_val);
+    g_dl_src = reclaim_malloc((size_t)n * sizeof *g_dl_src);
+    g_dl_val = reclaim_malloc((size_t)n * sizeof *g_dl_val);
     CHECK(g_dl_src && g_dl_val, "concolic: OOM installing a candidate's deliveries");
     for (int i = 0; i < n; i++) {
         int row = src_row(srcs[i], strlen(srcs[i]));
@@ -3055,8 +3055,8 @@ void concolic_set_deliveries(char *const *srcs, char *const *vals, int n) {
                "a further delivery names a source twice, or a source that is not a cross-document message's: "
                "only a message's data and origin are delivered this way");
         (void)row;
-        g_dl_src[i] = strdup(srcs[i]);
-        g_dl_val[i] = strdup(vals[i]);
+        g_dl_src[i] = reclaim_strdup(srcs[i]);
+        g_dl_val[i] = reclaim_strdup(vals[i]);
         CHECK(g_dl_src[i] && g_dl_val[i], "concolic: OOM installing a candidate's delivery");
         g_dl_n = i + 1;
     }
@@ -3116,7 +3116,7 @@ static void principal_tokens_note(JSContext *ctx, JSValueConst recv, int argc, J
         char *member;
 
         if (!src_principal(p, n)) continue;
-        member = strndup(p, n);
+        member = reclaim_strndup(p, n);
         CHECK(member, "concolic: OOM naming a principal's operand set");
         for (int a = 0; a < argc; a++) {
             const char *tok;
@@ -3133,7 +3133,7 @@ static void principal_tokens_note(JSContext *ctx, JSValueConst recv, int argc, J
 
                 CHECK(grown, "concolic: OOM recording a principal's operand");
                 c->ptok = grown;
-                c->ptok[c->nptok] = strdup(tok);
+                c->ptok[c->nptok] = reclaim_strdup(tok);
                 CHECK(c->ptok[c->nptok], "concolic: OOM recording a principal's operand");
                 c->nptok++;
             }
@@ -3513,7 +3513,7 @@ static void member_ix_put(int row)
 static void member_ix_grow(void)
 {
     int nc = g_members_ix_cap ? g_members_ix_cap * 2 : 64;
-    int *ix = malloc((size_t)nc * sizeof *ix);
+    int *ix = reclaim_malloc((size_t)nc * sizeof *ix);
 
     CHECK(ix, "concolic: OOM growing the member structure index");
     for (int i = 0; i < nc; i++) ix[i] = -1;
@@ -3534,13 +3534,16 @@ static int member_row_add(const char *src, const char *ident, const char *root, 
         g_members = g; g_members_cap = nc;
     }
     r = &g_members[g_members_n];
-    r->src = strdup(src);
-    r->ident = ident ? strdup(ident) : NULL;
-    r->root = strdup(root);
+    r->src = reclaim_strdup(src);
+    r->ident = ident ? reclaim_strdup(ident) : NULL;
+    r->root = reclaim_strdup(root);
     r->n = n;
-    r->path = n ? malloc((size_t)n * sizeof *r->path) : NULL;
+    r->path = n ? reclaim_malloc((size_t)n * sizeof *r->path) : NULL;
     CHECK(r->src && r->root && (!ident || r->ident) && (!n || r->path), "concolic: OOM filing a member's structure");
-    for (int i = 0; i < n; i++) { r->path[i] = strdup(path[i]); CHECK(r->path[i], "concolic: OOM filing a member path"); }
+    for (int i = 0; i < n; i++) {
+        r->path[i] = reclaim_strdup(path[i]);
+        CHECK(r->path[i], "concolic: OOM filing a member path");
+    }
     g_members_n++;
     if (g_members_n * 2 > g_members_ix_cap) member_ix_grow();
     else member_ix_put(g_members_n - 1);
@@ -3562,7 +3565,7 @@ static void member_row_file(const Concolic *c, const char *src, const char *iden
     if (p < 0) return;
     {
         int n = g_members[p].n + 1;
-        const char **path = malloc((size_t)n * sizeof *path);
+        const char **path = reclaim_malloc((size_t)n * sizeof *path);
 
         CHECK(path, "concolic: OOM composing a member path");
         for (int i = 0; i < n - 1; i++) path[i] = g_members[p].path[i];
@@ -3720,10 +3723,10 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
                    "a member read was given a second property name — a value is read under ONE name, so a "
                    "second write is two reads wearing one value and the call over it would report whichever "
                    "of the two landed last");
-            rc->member = strdup(name);
+            rc->member = reclaim_strdup(name);
             CHECK(rc->member, "concolic: OOM recording the name a member read went through");
             if (c->src_own == 1 && c->src) {
-                rc->facet_src = strdup(c->src);
+                rc->facet_src = reclaim_strdup(c->src);
                 CHECK(rc->facet_src, "concolic: OOM naming a member read's parent");
             }
             JS_FreeCString(ctx, name);
@@ -4120,11 +4123,11 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     c = JS_GetOpaque(r, g_concolic_class);
     DCHECK(c != NULL, "a comparison result was minted as something that is not a concolic value");
     c->cmp_op = eq_kind;
-    c->cmp_tok = tok ? strdup(tok) : NULL;
+    c->cmp_tok = tok ? reclaim_strdup(tok) : NULL;
     CHECK(!tok || c->cmp_tok, "concolic: OOM recording the value an equality pins to");
     c->cmp_kind = (signed char)tok_kind;
     c->cmp_algo = (signed char)algo;   /* what the arm may conclude; written with `cmp_op` */
-    c->cmp_subj = subj ? strdup(subj) : NULL;
+    c->cmp_subj = subj ? reclaim_strdup(subj) : NULL;
     CHECK(!subj || c->cmp_subj, "concolic: OOM recording the hole an equality is a fact about");
     concolic_type_state(r, CTY_BOOLEAN);   /* §7.2.13, §7.2.14 and §7.2.12 IsLessThan each answer a Boolean */
     return r;
@@ -4146,7 +4149,7 @@ static void pred_set_subject_ident(JSValueConst pred, const char *ident) {
     DCHECK(c->cmp_subj_ident == NULL,
            "a comparison result was given a second subject identity — a predicate is about ONE unknown "
            "operand, so a second write is two values wearing one predicate");
-    c->cmp_subj_ident = strdup(ident);
+    c->cmp_subj_ident = reclaim_strdup(ident);
     CHECK(c->cmp_subj_ident, "concolic: OOM recording the value an equality is a fact about");
 }
 
@@ -4159,7 +4162,7 @@ static void pred_set_order_subject(JSValueConst pred, const char *ident) {
     DCHECK(c != NULL && c->cmp_op == OPCMP_NONE,
            "an ordering's operand identity was stamped on something that is not an ordering result");
     DCHECK(c->cmp_subj_ident == NULL, "an ordering was given a second subject identity");
-    c->cmp_subj_ident = strdup(ident);
+    c->cmp_subj_ident = reclaim_strdup(ident);
     CHECK(c->cmp_subj_ident, "concolic: OOM recording the value an ordering is a fact about");
 }
 
@@ -4178,9 +4181,9 @@ static void pred_set_bound(JSValueConst pred, RelOp rel, const char *tok, double
                                   "over one pair, so a second write is two facts wearing one identity");
     c->rel_op = rel;
     c->rel_num = num;
-    c->rel_tok = strdup(tok);
+    c->rel_tok = reclaim_strdup(tok);
     CHECK(c->rel_tok, "concolic: OOM recording the literal an ordering bounds a value by");
-    c->rel_subj = strdup(subj);
+    c->rel_subj = reclaim_strdup(subj);
     CHECK(c->rel_subj, "concolic: OOM recording the hole an ordering is a fact about");
 }
 
@@ -4201,11 +4204,11 @@ static void pred_set_strpred(JSValueConst v, const char *method, char **args, in
     DCHECK(c->sp_meth == NULL,
            "a call result was given a second call predicate — a call is one method over one receiver, so a "
            "second write is two predicates wearing one identity");
-    c->sp_meth = strdup(method);
+    c->sp_meth = reclaim_strdup(method);
     CHECK(c->sp_meth, "concolic: OOM recording the method a gate called on an unknown");
     c->sp_args = args;   /* consume */
     c->sp_nargs = nargs;
-    c->sp_subj = strdup(subj);
+    c->sp_subj = reclaim_strdup(subj);
     CHECK(c->sp_subj, "concolic: OOM recording the hole a call predicate is a fact about");
 }
 
@@ -4239,36 +4242,60 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
            "conjunction (`!(p ∧ q)` is a disjunction of two negations), so a parent conjunction would flatten "
            "this value's members into its own set and compose the key of a proposition nothing here states");
     d->cmp_op = s->cmp_op;
-    if (s->cmp_tok)        { d->cmp_tok        = strdup(s->cmp_tok);        CHECK(d->cmp_tok,        "concolic: OOM carrying an equality's token through a negation"); }
+    if (s->cmp_tok) {
+        d->cmp_tok = reclaim_strdup(s->cmp_tok);
+        CHECK(d->cmp_tok, "concolic: OOM carrying an equality's token through a negation");
+    }
     d->cmp_kind = s->cmp_kind;   /* the token's other half, carried with it */
     d->cmp_src_own = s->cmp_src_own;   /* …and where its determination may be filed */
     d->cmp_algo = s->cmp_algo;   /* …and what the arm may conclude: `!(x == L)` is `x == L` read the other way
                                     round, so dropping it would make a `==` look like a predicate with no
                                     algorithm. */
-    if (s->cmp_subj)       { d->cmp_subj       = strdup(s->cmp_subj);       CHECK(d->cmp_subj,       "concolic: OOM carrying an equality's hole through a negation"); }
-    if (s->cmp_subj_ident) { d->cmp_subj_ident = strdup(s->cmp_subj_ident); CHECK(d->cmp_subj_ident, "concolic: OOM carrying an equality's subject identity through a negation"); }
-    if (s->cmp_typeof_of)  { d->cmp_typeof_of  = strdup(s->cmp_typeof_of);  CHECK(d->cmp_typeof_of,  "concolic: OOM carrying a typeof equality's operand through a negation"); }
+    if (s->cmp_subj) {
+        d->cmp_subj = reclaim_strdup(s->cmp_subj);
+        CHECK(d->cmp_subj, "concolic: OOM carrying an equality's hole through a negation");
+    }
+    if (s->cmp_subj_ident) {
+        d->cmp_subj_ident = reclaim_strdup(s->cmp_subj_ident);
+        CHECK(d->cmp_subj_ident, "concolic: OOM carrying an equality's subject identity through a negation");
+    }
+    if (s->cmp_typeof_of) {
+        d->cmp_typeof_of = reclaim_strdup(s->cmp_typeof_of);
+        CHECK(d->cmp_typeof_of, "concolic: OOM carrying a typeof equality's operand through a negation");
+    }
     d->cmp_typeof = s->cmp_typeof;
     d->cmp_subj_types = s->cmp_subj_types;
     d->rel_op  = s->rel_op;
     d->rel_num = s->rel_num;
     if (s->rel_op != REL_NONE && s->facet_src) {
-        d->facet_src = strdup(s->facet_src);
+        d->facet_src = reclaim_strdup(s->facet_src);
         CHECK(d->facet_src, "concolic: OOM carrying an ordering's subject through a negation");
     }
-    if (s->rel_tok)  { d->rel_tok  = strdup(s->rel_tok);  CHECK(d->rel_tok,  "concolic: OOM carrying an ordering's token through a negation"); }
-    if (s->rel_subj) { d->rel_subj = strdup(s->rel_subj); CHECK(d->rel_subj, "concolic: OOM carrying an ordering's hole through a negation"); }
-    if (s->sp_meth)  { d->sp_meth  = strdup(s->sp_meth);  CHECK(d->sp_meth,  "concolic: OOM carrying a call predicate's method through a negation"); }
-    if (s->sp_subj)  { d->sp_subj  = strdup(s->sp_subj);  CHECK(d->sp_subj,  "concolic: OOM carrying a call predicate's hole through a negation"); }
+    if (s->rel_tok) {
+        d->rel_tok = reclaim_strdup(s->rel_tok);
+        CHECK(d->rel_tok, "concolic: OOM carrying an ordering's token through a negation");
+    }
+    if (s->rel_subj) {
+        d->rel_subj = reclaim_strdup(s->rel_subj);
+        CHECK(d->rel_subj, "concolic: OOM carrying an ordering's hole through a negation");
+    }
+    if (s->sp_meth) {
+        d->sp_meth = reclaim_strdup(s->sp_meth);
+        CHECK(d->sp_meth, "concolic: OOM carrying a call predicate's method through a negation");
+    }
+    if (s->sp_subj) {
+        d->sp_subj = reclaim_strdup(s->sp_subj);
+        CHECK(d->sp_subj, "concolic: OOM carrying a call predicate's hole through a negation");
+    }
     d->sp_nargs = s->sp_nargs;
     if (s->sp_nargs) {
         DCHECK(s->sp_args != NULL,
                "a call predicate carries an argument COUNT with no list — the mint writes both or neither, so "
                "the negation is about to read a list its own operand does not have");
-        d->sp_args = malloc((size_t)s->sp_nargs * sizeof(char *));
+        d->sp_args = reclaim_malloc((size_t)s->sp_nargs * sizeof(char *));
         CHECK(d->sp_args, "concolic: OOM carrying a gate's argument list through a negation");
         for (k = 0; k < s->sp_nargs; k++) {
-            d->sp_args[k] = strdup(s->sp_args[k]);
+            d->sp_args[k] = reclaim_strdup(s->sp_args[k]);
             CHECK(d->sp_args[k], "concolic: OOM carrying an argument a gate passed through a negation");
         }
     }
@@ -4468,7 +4495,7 @@ JSValue concolic_new_conj(JSContext *ctx, JSValueConst a, JSValueConst b)
     c->conj = reclaim_malloc((size_t)n * sizeof *c->conj);
     CHECK(c->conj, "concolic: OOM recording the conjuncts a predicate is the conjunction of");
     for (i = 0; i < n; i++) {
-        c->conj[i] = strdup(sorted[i]);
+        c->conj[i] = reclaim_strdup(sorted[i]);
         CHECK(c->conj[i], "concolic: OOM copying a conjunct's identity");
     }
     c->conj_n = n;
@@ -4763,7 +4790,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
         if (rc) rc->cmp_typeof = oc->is_typeof;
         pred_set_subject_types(res, oc->is_typeof ? oc->typeof_types : tyf_of_cty(oc->ty));
         if (oc->typeof_of && rc) {
-            rc->cmp_typeof_of = strdup(oc->typeof_of);
+            rc->cmp_typeof_of = reclaim_strdup(oc->typeof_of);
             CHECK(rc->cmp_typeof_of, "concolic: OOM naming a typeof equality's operand");
         }
     }
@@ -5143,7 +5170,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
                     concolic_src_c(opq)) {
                     Concolic *rc = JS_GetOpaque(res, g_concolic_class);
 
-                    rc->facet_src = strdup(concolic_src_c(opq));
+                    rc->facet_src = reclaim_strdup(concolic_src_c(opq));
                     CHECK(rc->facet_src, "concolic: OOM naming an ordering's subject");
                 }
                 free(txt);
@@ -5445,8 +5472,8 @@ static void str_of_record(JSValueConst r, JSValueConst u)
     DCHECK(rc->str_of == NULL && rc->str_of_shape == NULL,
            "a value was recorded as the string form of a second unknown — str_of is written once, at the mint");
     DCHECK(!uc->str_of || uc->str_of_shape, "a string form recorded an identity without the shape naming its slot");
-    rc->str_of = strdup(of);
-    rc->str_of_shape = strdup(sh ? sh : "{}");
+    rc->str_of = reclaim_strdup(of);
+    rc->str_of_shape = reclaim_strdup(sh ? sh : "{}");
     CHECK(rc->str_of && rc->str_of_shape, "concolic: OOM recording which value a string form is the string of");
 }
 
@@ -5531,7 +5558,7 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
        over the result keeps both arms. */
     bkey = concolic_branch_ident_c(v);
     if (bkey) {
-        rc->br_key = strdup(bkey);
+        rc->br_key = reclaim_strdup(bkey);
         CHECK(rc->br_key, "concolic: OOM recording the predicate a negation is the complement of");
         rc->br_neg = (signed char)(concolic_branch_neg(v) ^ negate);
     }
@@ -5579,8 +5606,8 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
        at one source read. */
     root = derived_root_join(operands, n);
 
-    parts = malloc((size_t)n * sizeof *parts);
-    fields = malloc(((size_t)n + 1) * sizeof *fields);
+    parts = reclaim_malloc((size_t)n * sizeof *parts);
+    fields = reclaim_malloc(((size_t)n + 1) * sizeof *fields);
     CHECK(parts != NULL && fields != NULL, "concolic: OOM composing a derivation over several operands");
     for (i = 0; i < n; i++) {
         parts[i] = derived_operand_shape(ctx, operands[i]);
@@ -5637,8 +5664,8 @@ void concolic_declare_keyed_source(const char *src, const char *parent, const ch
     DCHECK(prow >= 0 && !g_srcs[prow].key, "a keyed row names a parent that is not a declared component");
     if (prow < 0 || concolic_source_declared_by(g_tuple_component, src)) return;
     concolic_declare_source(g_tuple_component, src, "", g_srcs[prow].prefix, g_srcs[prow].deliver);
-    g_srcs[g_srcs_n - 1].key = strdup(key);
-    g_srcs[g_srcs_n - 1].parent = strdup(parent);
+    g_srcs[g_srcs_n - 1].key = reclaim_strdup(key);
+    g_srcs[g_srcs_n - 1].parent = reclaim_strdup(parent);
     g_srcs[g_srcs_n - 1].serialize = g_tuple_serialize;
     CHECK(g_srcs[g_srcs_n - 1].key && g_srcs[g_srcs_n - 1].parent, "concolic: OOM declaring a tuple's key");
 }
@@ -5661,8 +5688,8 @@ void concolic_declare_named_source(const char *src, const char *parent, const ch
     DCHECK(prow >= 0 && !g_srcs[prow].path, "a named-access row names a parent that is not a markup row");
     if (prow < 0 || concolic_source_declared_by(g_markup_component, src)) return;
     concolic_declare_source(g_markup_component, src, "", g_srcs[prow].prefix, g_srcs[prow].deliver);
-    g_srcs[g_srcs_n - 1].parent = strdup(parent);
-    g_srcs[g_srcs_n - 1].path = strdup(path);
+    g_srcs[g_srcs_n - 1].parent = reclaim_strdup(parent);
+    g_srcs[g_srcs_n - 1].path = reclaim_strdup(path);
     CHECK(g_srcs[g_srcs_n - 1].parent && g_srcs[g_srcs_n - 1].path, "concolic: OOM declaring a named-access row");
 }
 
@@ -5672,7 +5699,7 @@ static char *row_segment(const char *name)
 {
     static const char HEX[] = "0123456789ABCDEF";
     size_t n = strlen(name), o = 0, i;
-    char *out = malloc(n * 3 + 1);
+    char *out = reclaim_malloc(n * 3 + 1);
 
     CHECK(out != NULL, "concolic: OOM spelling a row segment");
     for (i = 0; i < n; i++) {
@@ -5707,7 +5734,7 @@ char *concolic_source_chain(const char *root)
 
 void concolic_declare_source_chain(const char *chain)
 {
-    char *copy = strdup(chain), *rec[64];
+    char *copy = reclaim_strdup(chain), *rec[64];
     int n = 0, i;
 
     CHECK(copy != NULL, "concolic: OOM re-declaring a row chain");
@@ -6015,16 +6042,16 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
         g_keynames = nv; g_keynames_cap = nc;
     }
     e = &g_keynames[g_keynames_n];
-    e->atom = strdup(atom);
+    e->atom = reclaim_strdup(atom);
     CHECK(e->atom, "concolic: OOM copying the name spent on an unknown key");
-    e->shape = strdup(shape);
+    e->shape = reclaim_strdup(shape);
     CHECK(e->shape, "concolic: OOM copying an unknown key's display shape");
-    e->src   = src   ? strdup(src)   : NULL;
+    e->src   = src   ? reclaim_strdup(src)   : NULL;
     CHECK(!src   || e->src,   "concolic: OOM copying an unknown key's provenance");
-    e->root  = root  ? strdup(root)  : NULL;
+    e->root  = root  ? reclaim_strdup(root)  : NULL;
     CHECK(!root  || e->root,  "concolic: OOM copying an unknown key's delivery root");
     e->root_whose = root_whose;   /* one fact with the root above — see the column */
-    e->ident = ident ? strdup(ident) : NULL;
+    e->ident = ident ? reclaim_strdup(ident) : NULL;
     CHECK(!ident || e->ident, "concolic: OOM copying an unknown key's identity");
     g_keynames_n++;
     if (g_keynames_hash_cap < g_keynames_n * 2) keyname_hash_rebuild();
@@ -6107,7 +6134,7 @@ JSValue concolic_key_value_hook(JSContext *ctx, JSValueConst name)
     i = keyname_find(s);
     JS_FreeCString(ctx, s);
     if (i < 0) return JS_UNINITIALIZED;
-    ident = g_keynames[i].ident ? strdup(g_keynames[i].ident) : NULL;
+    ident = g_keynames[i].ident ? reclaim_strdup(g_keynames[i].ident) : NULL;
     CHECK(!g_keynames[i].ident || ident, "concolic: OOM re-minting an unknown key's identity");
     /* Through concolic_derived, not concolic_alloc, because that is the door every source mint goes through:
        a name restored while a substitution is installed for its source delivers the payload as the original
@@ -6243,7 +6270,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
         if (rc) rc->is_typeof = 1;
         if (rc) rc->typeof_types = (unsigned short)tyf_of_cty(oc->ty);
         if (rc && oc->src_own == 1 && oc->src) {
-            rc->typeof_of = strdup(oc->src);
+            rc->typeof_of = reclaim_strdup(oc->src);
             CHECK(rc->typeof_of, "concolic: OOM naming a typeof result's operand");
         }
     }
@@ -6993,7 +7020,7 @@ static char *shape_bounded(const char *spelled)
     int i;
 
     if (len <= CONCOLIC_SHAPE_SPELL_MAX)
-        return strdup(spelled);
+        return reclaim_strdup(spelled);
     while (head > 0 && ((unsigned char)spelled[head] & 0xC0) == 0x80)
         head--;
     secure_hash_init(&h, SECURE_HASH_SHA256);
@@ -7079,7 +7106,7 @@ static JSValue concolic_alloc_shaped(JSContext *ctx, const char *shape, const ch
                                 "collapses a branch to a concrete arm and deletes everything behind the other");
     c = reclaim_calloc(1, sizeof *c);
     CHECK(c, "concolic_new: OOM allocating value state — a dropped concolic corrupts the flow's domain");
-    c->shape = whole ? strdup(shape) : shape_bounded(shape ? shape : "{}");
+    c->shape = whole ? reclaim_strdup(shape) : shape_bounded(shape ? shape : "{}");
     CHECK(c->shape, "concolic: OOM copying a display shape");
     c->src = src ? shape_bounded(src) : NULL;
     CHECK(!src || c->src, "concolic: OOM copying a source's provenance");
@@ -7087,7 +7114,7 @@ static JSValue concolic_alloc_shaped(JSContext *ctx, const char *shape, const ch
        result, a `typeof`. A source read names itself under a src that is not its shape (pin_src_names_self);
        a derivation that inherited an operand's src does not. */
     c->src_own = (signed char)(c->src != NULL && !strcmp(c->src, c->shape));
-    c->root = root ? strdup(root) : NULL;
+    c->root = root ? reclaim_strdup(root) : NULL;
     CHECK(!root || c->root, "concolic: OOM copying a value's delivery root");
     c->root_whose = root_whose;   /* one fact with the root above — see the field and the assert */
     c->ident = ident;       /* consume — NULL means this engine cannot spell the value; see the struct */
@@ -7439,7 +7466,7 @@ void concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example) {
 
 static char *cstr_dup(JSContext *ctx, JSValueConst v) {   /* concrete operand -> its string form (heap copy) */
     const char *s = JS_ToCString(ctx, v);
-    char *r = strdup(s ? s : "");
+    char *r = reclaim_strdup(s ? s : "");
     if (s) JS_FreeCString(ctx, s);
     return r;
 }
@@ -7562,7 +7589,7 @@ unsigned char *concolic_shape_hole_mask(JSValueConst v)
 
     if (!c) return NULL;
     n = strlen(c->shape);
-    m = calloc(n + 1, 1);
+    m = reclaim_calloc(n + 1, 1);
     CHECK(m, "concolic: OOM marking which bytes of a shape spell an unknown");
     if (!c->hole_span) { memset(m, 1, n); return m; }
     for (i = 0; i < c->hole_n; i++) {
@@ -7585,8 +7612,8 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     if (!ca && !cb) return 0;
 
     /* The operands as a concatenation renders them: a String operand's own bytes, unquoted. */
-    char *sha = ca ? strdup(concolic_shape_c(a) ? concolic_shape_c(a) : "{}") : cstr_dup(ctx, a);
-    char *shb = cb ? strdup(concolic_shape_c(b) ? concolic_shape_c(b) : "{}") : cstr_dup(ctx, b);
+    char *sha = ca ? reclaim_strdup(concolic_shape_c(a) ? concolic_shape_c(a) : "{}") : cstr_dup(ctx, a);
+    char *shb = cb ? reclaim_strdup(concolic_shape_c(b) ? concolic_shape_c(b) : "{}") : cstr_dup(ctx, b);
     CHECK(sha && shb, "concolic +: OOM shape");
     char *shape;
     const char *src = ca ? concolic_src_c(a) : concolic_src_c(b);
@@ -8046,7 +8073,7 @@ JSValue concolic_source_wrap_joint_affine(JSContext *ctx, const char *const *sha
     af->term = reclaim_malloc(sizeof *af->term);
     af->k = reclaim_malloc(sizeof *af->k);
     CHECK(af->term && af->k, "concolic: OOM recording an affine term");
-    af->term[0] = strdup(term);
+    af->term[0] = reclaim_strdup(term);
     CHECK(af->term[0], "concolic: OOM copying an affine term");
     af->k[0] = 1.0;
     af->c = c;

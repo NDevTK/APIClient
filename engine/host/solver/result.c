@@ -42,6 +42,7 @@
 #include "core/timing/event_loop.h"   /* whether the clock's licence was wanted and refused — see event_loop_advance_census */
 #include "core/rendering/rendering.h"   /* why §8.1.7.3's in-parallel half declined — the `renderingDeclined*` rows */
 #include "core/timing/thread_work.h"   /* the thread work that clock does not see — see the `tw*` rows */
+#include "solver/reclaim.h"
 
 /* The page's own uncaught errors, deduped (see result.h). The message is the page's own and is not interpreted.
    The dedupe key is the pair (message, HTML §8.1.4.6 "Runtime script errors" throw site), so two scripts raising
@@ -109,8 +110,8 @@ static void explored_add(const char *msg, const char *filename) {
         g_expl = a;
         g_expl_cap = c;
     }
-    g_expl[g_expl_n].msg = strdup(msg);
-    g_expl[g_expl_n].at = strdup(filename);
+    g_expl[g_expl_n].msg = reclaim_strdup(msg);
+    g_expl[g_expl_n].at = reclaim_strdup(filename);
     if (g_expl[g_expl_n].msg && g_expl[g_expl_n].at) { g_expl_n++; return; }
     /* Half a pair is worse than none — it would match on the half that allocated — so it is discarded. */
     free(g_expl[g_expl_n].msg); free(g_expl[g_expl_n].at);
@@ -185,8 +186,8 @@ void result_page_error(const char *msg, const char *filename) {
         g_errs = a;
         g_errs_cap = c;
     }
-    g_errs[g_errs_n].msg = strdup(msg);
-    g_errs[g_errs_n].at = strdup(filename);
+    g_errs[g_errs_n].msg = reclaim_strdup(msg);
+    g_errs[g_errs_n].at = reclaim_strdup(filename);
     g_errs[g_errs_n].standing = 1;
     g_errs[g_errs_n].retracted = 0;
     g_errs[g_errs_n].unforced = !forced;
@@ -519,7 +520,7 @@ static char *errs_json_array(ErrsArray which) {
         errs_raw(&b, &cap, &len, "\"");
     }
     errs_raw(&b, &cap, &len, "]");
-    return b ? b : strdup("[]");
+    return b ? b : reclaim_strdup("[]");
 }
 
 /* Every composer below is sized by what it writes: solver/compose.h's `composef` measures and allocates, so no
@@ -1539,6 +1540,8 @@ char *result_cold_json(void) {
     DCHECK(e.rest_compose_attempts >= e.rest_compositions,
            "the census counted fewer composition attempts than compositions — every composition is one attempt "
            "or more");
+    DCHECK(e.park_funded <= e.sold, "the census counted more flows sold to fund a park record than flows sold");
+    METRIC_SET(park_funded, e.park_funded);
     METRIC_SET(rest_compositions, e.rest_compositions);
     METRIC_SET(rest_compose_attempts, e.rest_compose_attempts);
     METRIC_SET(rest_compose_attempts_max, e.rest_compose_attempts_max);

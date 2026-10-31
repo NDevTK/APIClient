@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "solver/reclaim.h"
 
 /* Where the value landed in the request. A reviewer replays a path param by substituting it into the address, a
    query param by appending it and a body param by encoding it into the payload, so the location is half of what a
@@ -264,8 +265,8 @@ static void wit_add(Witness *w, WitWhat what, const char *subject, const char *v
     }
     x = &w->e[w->n++];
     x->what = what;
-    x->subject = strdup(subject);
-    x->value = value ? strdup(value) : NULL;
+    x->subject = reclaim_strdup(subject);
+    x->value = value ? reclaim_strdup(value) : NULL;
     CHECK(x->subject && (!value || x->value), "endpoint: OOM recording a sighting's witness");
     x->kind = kind;
     x->taken = taken;
@@ -315,7 +316,7 @@ static Witness witness_now(void) {
         int no_act, unsolved;
         char *refused, *dl, *acts = act_list_json(flow_running(), &no_act, &unsolved, &refused, &dl);
 
-        w.acts = no_act ? strdup("null") : acts ? acts : strdup("[]");
+        w.acts = no_act ? reclaim_strdup("null") : acts ? acts : reclaim_strdup("[]");
         CHECK(w.acts, "endpoint: OOM recording a sighting's acts");
         if (no_act) free(acts);
         free(refused);
@@ -406,7 +407,7 @@ static void witness_json(JsonBuf *b, const Endpoint *e) {
 /* The witness's identity as text: each entry's fields composed, then the entries, with concolic_ident_compose's
    length-prefixed encoding, so two witnesses share a canon exactly when witness_same says they are one. */
 static char *witness_canon(const Witness *w) {
-    const char **ents = malloc((size_t)(w->n ? w->n : 1) * sizeof *ents);
+    const char **ents = reclaim_malloc((size_t)(w->n ? w->n : 1) * sizeof *ents);
     char *out;
 
     CHECK(ents, "endpoint: OOM spelling a witness");
@@ -422,7 +423,7 @@ static char *witness_canon(const Witness *w) {
     }
     ents = realloc(ents, (size_t)(w->n + 1) * sizeof *ents);
     CHECK(ents, "endpoint: OOM spelling a witness");
-    ents[w->n] = strdup(w->acts ? w->acts : "");
+    ents[w->n] = reclaim_strdup(w->acts ? w->acts : "");
     CHECK(ents[w->n], "endpoint: OOM spelling a witness's acts");
     out = concolic_ident_compose("w", ents, w->n + 1);
     CHECK(out, "endpoint: OOM spelling a witness");
@@ -463,7 +464,7 @@ static char *witness_payload(const Witness *w, const char **src) {
         return NULL;
     if (w->e[0].value[0] != prefix || !w->e[0].value[1]) return NULL;
     *src = w->e[0].subject;
-    return strdup(w->e[0].value + 1);
+    return reclaim_strdup(w->e[0].value + 1);
 }
 
 /* Files a sighting's witness on its record, taking ownership: a witness the record already holds is the same
@@ -534,7 +535,7 @@ static int endpoint_merge_headers(Endpoint *e, const EndpointHeader *hdrs, int n
             found = 1;
             if (header_is_shape(e->hdrs[j].value) && !header_is_shape(v)) {
                 free(e->hdrs[j].value);
-                e->hdrs[j].value = strdup(v);
+                e->hdrs[j].value = reclaim_strdup(v);
                 CHECK(e->hdrs[j].value, "endpoint: OOM refining a header value");
             }
             break;
@@ -545,8 +546,8 @@ static int endpoint_merge_headers(Endpoint *e, const EndpointHeader *hdrs, int n
             e->hdrs = realloc(e->hdrs, (size_t)e->hcap * sizeof(EpHeader));
             CHECK(e->hdrs, "endpoint: OOM growing an endpoint's headers");
         }
-        e->hdrs[e->nh].name = strdup(n);
-        e->hdrs[e->nh].value = strdup(v);
+        e->hdrs[e->nh].name = reclaim_strdup(n);
+        e->hdrs[e->nh].value = reclaim_strdup(v);
         CHECK(e->hdrs[e->nh].name && e->hdrs[e->nh].value, "endpoint: OOM copying a header");
         e->nh++;
         gained++;
@@ -763,10 +764,10 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
                           "minted with one, so this value lost its domain somewhere between its source and "
                           "this record, and the endpoint would be emitted as a literal address with no hole "
                           "in it and nothing to say a param went missing");
-        return strdup(s);
+        return reclaim_strdup(s);
     }
     const char *s = JS_ToCString(ctx, url);
-    char *r = strdup(s ? s : "?");
+    char *r = reclaim_strdup(s ? s : "?");
     if (s) JS_FreeCString(ctx, s);
     return r;
 }
@@ -849,7 +850,7 @@ static ConcolicPred *param_pred_copy(const ConcolicPred *src, int n) {
     int i;
 
     if (n <= 0) return NULL;
-    out = malloc((size_t)n * sizeof(ConcolicPred));
+    out = reclaim_malloc((size_t)n * sizeof(ConcolicPred));
     CHECK(out, "endpoint: OOM taking a param's observed call predicates off the flow");
     for (i = 0; i < n; i++) concolic_pred_copy(&out[i], &src[i]);
     return out;
@@ -868,7 +869,7 @@ static ConcolicLooseEq *param_leq_copy(const ConcolicLooseEq *src, int n) {
     int i;
 
     if (n <= 0) return NULL;
-    out = malloc((size_t)n * sizeof(ConcolicLooseEq));
+    out = reclaim_malloc((size_t)n * sizeof(ConcolicLooseEq));
     CHECK(out, "endpoint: OOM taking a param's observed loose equalities off the flow");
     for (i = 0; i < n; i++) concolic_looseeq_copy(&out[i], &src[i]);
     return out;
@@ -917,9 +918,9 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
            "a path param was minted with no hole key — path_scan mints one only for a braced segment and passes its "
            "brace-stripped name as the key, so this is a producer that mints path params without naming the hole");
     if (b->n >= b->cap) { b->cap = b->cap ? b->cap * 2 : 8; b->e = realloc(b->e, (size_t)b->cap * sizeof(KV)); CHECK(b->e, "endpoint: OOM params"); }
-    b->e[b->n].name = malloc(nlen + 1); CHECK(b->e[b->n].name, "endpoint: OOM param name");
+    b->e[b->n].name = reclaim_malloc(nlen + 1); CHECK(b->e[b->n].name, "endpoint: OOM param name");
     memcpy(b->e[b->n].name, name, nlen); b->e[b->n].name[nlen] = 0;
-    b->e[b->n].val = malloc(vlen + 1); CHECK(b->e[b->n].val, "endpoint: OOM param value");
+    b->e[b->n].val = reclaim_malloc(vlen + 1); CHECK(b->e[b->n].val, "endpoint: OOM param value");
     if (vlen) memcpy(b->e[b->n].val, val, vlen);
     b->e[b->n].val[vlen] = 0;
     b->e[b->n].loc = loc;
@@ -937,10 +938,10 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
         int nex = 0, k;
         const char *const *ex = concolic_excluded(hole, &nex);
         if (nex > 0) {
-            b->e[b->n].excl = malloc((size_t)nex * sizeof(char *));
+            b->e[b->n].excl = reclaim_malloc((size_t)nex * sizeof(char *));
             CHECK(b->e[b->n].excl, "endpoint: OOM taking a param's observed domain off the flow");
             for (k = 0; k < nex; k++) {
-                b->e[b->n].excl[k] = strdup(ex[k]);
+                b->e[b->n].excl[k] = reclaim_strdup(ex[k]);
                 CHECK(b->e[b->n].excl[k], "endpoint: OOM copying a value a flow proved a param is not");
             }
             b->e[b->n].nexcl = nex;
@@ -957,11 +958,11 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
             b->e[b->n].bnd.lo = cb.lo;         b->e[b->n].bnd.hi = cb.hi;
             b->e[b->n].bnd.lo_incl = cb.lo_incl; b->e[b->n].bnd.hi_incl = cb.hi_incl;
             if (cb.has_lo) {
-                b->e[b->n].bnd.lo_txt = strdup(cb.lo_txt);
+                b->e[b->n].bnd.lo_txt = reclaim_strdup(cb.lo_txt);
                 CHECK(b->e[b->n].bnd.lo_txt, "endpoint: OOM copying the bound a flow proved a param obeys");
             }
             if (cb.has_hi) {
-                b->e[b->n].bnd.hi_txt = strdup(cb.hi_txt);
+                b->e[b->n].bnd.hi_txt = reclaim_strdup(cb.hi_txt);
                 CHECK(b->e[b->n].bnd.hi_txt, "endpoint: OOM copying the bound a flow proved a param obeys");
             }
         }
@@ -1079,7 +1080,7 @@ static Pair *kv_split(const char *s, const unsigned char *hm, int *n_out) {
     Pair *v;
 
     while ((p = kv_pair_next(s, hm, p, &nm, &nn, &vl, &vn)) != NULL) n++;
-    v = malloc((size_t)(n ? n : 1) * sizeof *v);
+    v = reclaim_malloc((size_t)(n ? n : 1) * sizeof *v);
     CHECK(v, "endpoint: OOM splitting an address half into query pairs");
     p = s;
     while ((next = kv_pair_next(s, hm, p, &nm, &nn, &vl, &vn)) != NULL) {
@@ -1152,7 +1153,7 @@ static int *query_align(const char *shape, const unsigned char *shm, const char 
     Pair *E = kv_split(ex, NULL, &m);
     /* ways[i][j]: how many readings match the shape's pairs from `i` onward against the example's from `j`
        onward, saturated at two. Filled backwards so each row reads only the row below it. */
-    unsigned char *w = calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
+    unsigned char *w = reclaim_calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
     int *span = NULL;
 
     CHECK(w, "endpoint: OOM aligning a request's query against the concrete URL a flow computed");
@@ -1175,7 +1176,7 @@ static int *query_align(const char *shape, const unsigned char *shm, const char 
         }
     }
     if (w[0] == 1) {
-        span = malloc((size_t)(n ? n : 1) * sizeof *span);
+        span = reclaim_malloc((size_t)(n ? n : 1) * sizeof *span);
         CHECK(span, "endpoint: OOM recording how many example pairs each hole of a query stands over");
         j = 0;
         for (i = 0; i < n; i++) {
@@ -1259,7 +1260,7 @@ static void kv_pairs(KvBuf *b, const char *text, const unsigned char *thm, const
             i++;
         }
         if (!nn) continue;   /* `&&` / a leading `=`: no name, so no param — see kv_add's assert */
-        shapeval = malloc(vn + 1);
+        shapeval = reclaim_malloc(vn + 1);
         CHECK(shapeval, "endpoint: OOM copying a query value's display form");
         if (vn) memcpy(shapeval, vl, vn);
         shapeval[vn] = 0;
@@ -1285,7 +1286,7 @@ static void kv_pairs(KvBuf *b, const char *text, const unsigned char *thm, const
 static char *url_path_of(const char *disp) {
     const char *q = strchr(disp, '?');
     size_t plen = q ? (size_t)(q - disp) : strlen(disp);
-    char *path = malloc(plen + 1); CHECK(path, "endpoint: OOM path"); memcpy(path, disp, plen); path[plen] = 0;
+    char *path = reclaim_malloc(plen + 1); CHECK(path, "endpoint: OOM path"); memcpy(path, disp, plen); path[plen] = 0;
     return path;
 }
 
@@ -1310,7 +1311,7 @@ static char *url_example(JSContext *ctx, JSValueConst url) {
            "wrapper or a symbol here means the propagation lost the address");
     s = JS_ToCString(ctx, ex);
     CHECK(s, "endpoint: OOM rendering the concrete URL a flow computed");
-    r = strdup(s);
+    r = reclaim_strdup(s);
     CHECK(r, "endpoint: OOM copying the concrete URL a flow computed");
     JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, ex);
@@ -1337,7 +1338,7 @@ static Seg *seg_split(const char *s, const unsigned char *hm, int *n_out) {
     Seg *v;
 
     for (e = seg_next_sep(s, hm, s); e; e = seg_next_sep(s, hm, e + 1)) n++;
-    v = malloc((size_t)n * sizeof *v);
+    v = reclaim_malloc((size_t)n * sizeof *v);
     CHECK(v, "endpoint: OOM splitting an address into segments");
     for (;;) {
         e = seg_next_sep(s, hm, p);
@@ -1395,7 +1396,7 @@ static int *path_align(const char *shape, const unsigned char *shm, const char *
     Seg *E = seg_split(ex, NULL, &m);
     /* ways[i][j]: how many readings match the shape's segments from `i` onward against the example's from `j`
        onward, saturated at two. Filled backwards so each row reads only the row below it. */
-    unsigned char *w = calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
+    unsigned char *w = reclaim_calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
     int *span = NULL;
 
     CHECK(w, "endpoint: OOM aligning a request's shape against the concrete URL a flow computed");
@@ -1416,7 +1417,7 @@ static int *path_align(const char *shape, const unsigned char *shm, const char *
         }
     }
     if (w[0] == 1) {
-        span = malloc((size_t)n * sizeof *span);
+        span = reclaim_malloc((size_t)n * sizeof *span);
         CHECK(span, "endpoint: OOM recording how many example segments each hole of an address stands over");
         j = 0;
         for (i = 0; i < n; i++) {
@@ -1505,7 +1506,7 @@ static char *path_scan(KvBuf *out, const char *shape, const unsigned char *shm, 
                    "shape's last one did not cover — `path_align` proved the spans sum to the example's own "
                    "segment count, so these two walks disagreeing is that proof and this walk having parted");
         }
-        seg = malloc(an + 1); CHECK(seg, "endpoint: OOM copying a path segment");
+        seg = reclaim_malloc(an + 1); CHECK(seg, "endpoint: OOM copying a path segment");
         memcpy(seg, a, an); seg[an] = 0;
         /* The name is the hole key on this path, so it is spelled by the one speller: the emission rests on this
            string being byte-identical to the one solver/decide.c filed the domain under. It answers NULL for the
@@ -1562,7 +1563,7 @@ static char *body_field_text(JSContext *ctx, JSValueConst v) {
        conversion runs no page code and fails only on allocation: a CHECK, since a compiled-out assert would hand
        `strdup` a NULL in release. */
     CHECK(s, "endpoint: OOM rendering a JSON request body's field value");
-    r = strdup(s);
+    r = reclaim_strdup(s);
     CHECK(r, "endpoint: OOM copying a JSON request body's field value");
     JS_FreeCString(ctx, s);
     return r;
@@ -1637,7 +1638,7 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
         return out->n - before;
     }
 
-    text = malloc(body->len + 1); CHECK(text, "endpoint: OOM request body");
+    text = reclaim_malloc(body->len + 1); CHECK(text, "endpoint: OOM request body");
     memcpy(text, body->bytes, body->len); text[body->len] = 0;
 
     /* `text/plain;charset=UTF-8` is an undeclared body, not one declared as text: Fetch §5.2 "BodyInit unions" gives
@@ -1732,7 +1733,7 @@ static char *body_b64_encode(const char *bytes, size_t len) {
 
     if (!bytes || len == 0) return NULL;
     cap = JS_Base64EncodedSize(len) + 1;
-    b64 = malloc(cap);
+    b64 = reclaim_malloc(cap);
     CHECK(b64 != NULL, "endpoint: OOM base64-encoding a request body this engine has no field reader for");
     n = JS_Base64Encode(b64, cap, (const uint8_t *)bytes, len);
     CHECK(n > 0, "endpoint: the base64 buffer was sized wrong for a request body");
@@ -1802,7 +1803,7 @@ static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
            which it holds. A MIME is attached only if there is one; §5.2's string arm gives an unknown body
            `text/plain;charset=UTF-8`, which the page never chose, so it is reported as what it is, and the page's
            own declared type, where set, is what a reviewer wants. */
-        e->body_shape = malloc(body->len + 1);
+        e->body_shape = reclaim_malloc(body->len + 1);
         CHECK(e->body_shape, "endpoint: OOM recording the display shape of an unknown request body");
         memcpy(e->body_shape, body->bytes, body->len);
         e->body_shape[body->len] = 0;
@@ -1815,7 +1816,7 @@ static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
         e->body_b64 = body_bytes_b64(body);
     }
     if ((e->body_b64 || e->body_shape || e->body_example_b64) && body->mime) {
-        e->body_mime = strdup(body->mime);
+        e->body_mime = reclaim_strdup(body->mime);
         CHECK(e->body_mime, "endpoint: OOM recording a request body's content type");
     }
 }
@@ -1827,10 +1828,10 @@ static void param_set_excl(Param *p, char *const *ex, int n) {
            "an endpoint param's exclusion set was seeded twice — the first sighting takes the set and every later "
            "one intersects it, so a second seed would discard a narrowing another path made");
     if (n <= 0) return;
-    p->excl = malloc((size_t)n * sizeof(char *));
+    p->excl = reclaim_malloc((size_t)n * sizeof(char *));
     CHECK(p->excl, "endpoint: OOM recording what a flow proved a param is not");
     for (i = 0; i < n; i++) {
-        p->excl[i] = strdup(ex[i]);
+        p->excl[i] = reclaim_strdup(ex[i]);
         CHECK(p->excl[i], "endpoint: OOM copying a value a flow proved a param is not");
     }
     p->nexcl = n;
@@ -1858,8 +1859,14 @@ static void param_set_bound(ParamBound *d, const ParamBound *s) {
            "it, so a second seed would discard a bound another path had already widened");
     *d = *s;
     d->lo_txt = d->hi_txt = NULL;
-    if (s->has_lo) { d->lo_txt = strdup(s->lo_txt); CHECK(d->lo_txt, "endpoint: OOM recording a param's lower bound"); }
-    if (s->has_hi) { d->hi_txt = strdup(s->hi_txt); CHECK(d->hi_txt, "endpoint: OOM recording a param's upper bound"); }
+    if (s->has_lo) {
+        d->lo_txt = reclaim_strdup(s->lo_txt);
+        CHECK(d->lo_txt, "endpoint: OOM recording a param's lower bound");
+    }
+    if (s->has_hi) {
+        d->hi_txt = reclaim_strdup(s->hi_txt);
+        CHECK(d->hi_txt, "endpoint: OOM recording a param's upper bound");
+    }
 }
 
 /* And every later one widens it to the interval hull: a bound the record still carries is one every observed path
@@ -1873,13 +1880,13 @@ static void param_widen_bound(ParamBound *d, const ParamBound *s) {
     else if (d->has_lo && (s->lo < d->lo || (s->lo == d->lo && s->lo_incl && !d->lo_incl))) {
         free(d->lo_txt);
         d->lo = s->lo; d->lo_incl = s->lo_incl;
-        d->lo_txt = strdup(s->lo_txt); CHECK(d->lo_txt, "endpoint: OOM widening a param's lower bound");
+        d->lo_txt = reclaim_strdup(s->lo_txt); CHECK(d->lo_txt, "endpoint: OOM widening a param's lower bound");
     }
     if (!s->has_hi) { free(d->hi_txt); d->hi_txt = NULL; d->has_hi = 0; }
     else if (d->has_hi && (s->hi > d->hi || (s->hi == d->hi && s->hi_incl && !d->hi_incl))) {
         free(d->hi_txt);
         d->hi = s->hi; d->hi_incl = s->hi_incl;
-        d->hi_txt = strdup(s->hi_txt); CHECK(d->hi_txt, "endpoint: OOM widening a param's upper bound");
+        d->hi_txt = reclaim_strdup(s->hi_txt); CHECK(d->hi_txt, "endpoint: OOM widening a param's upper bound");
     }
 }
 
@@ -1937,7 +1944,7 @@ static void param_add_val(Param *p, const char *v) {   /* merge a validValue (de
     if (!v || !v[0]) return;
     for (int i = 0; i < p->nvals; i++) if (!strcmp(p->vals[i], v)) return;
     if (p->nvals >= p->vcap) { p->vcap = p->vcap ? p->vcap * 2 : 4; p->vals = realloc(p->vals, (size_t)p->vcap * sizeof(char *)); CHECK(p->vals, "endpoint: OOM vals"); }
-    p->vals[p->nvals++] = strdup(v);
+    p->vals[p->nvals++] = reclaim_strdup(v);
 }
 
 /* An endpoint's identity is (method, path, provenance, param set); the same identity merges param values. A param's
@@ -1963,7 +1970,7 @@ static int same_identity(Endpoint *e, const char *method, const char *path, int 
    address resolved against its realm's base URL, here and in `same_identity` at once. Absence shows as: one
    record, paid once, where documents at two paths of one origin each request a different resource. */
 static NoveltyId endpoint_identity(const char *method, const char *path, int prov, int driven, const KvBuf *kv) {
-    const char **f = malloc((size_t)(4 + 2 * kv->n) * sizeof *f);
+    const char **f = reclaim_malloc((size_t)(4 + 2 * kv->n) * sizeof *f);
     NoveltyId id;
     int n = 0;
     CHECK(f, "endpoint: OOM spelling an endpoint's identity");
@@ -2001,17 +2008,17 @@ static char *address_scan(JSContext *ctx, JSValueConst url, KvBuf *kvb, char **d
     /* The shape's own `/`, `?` and `&` are the page's bytes only: a hole this engine spelled (an operator, a joint's
        separator, a member path) is one unknown and no syntax, so the split reads the hole mask. Every byte of a
        concrete address is the page's, so its mask is all page. */
-    unsigned char *dhm = concolic_is(url) ? concolic_shape_hole_mask(url) : calloc(strlen(disp) + 1, 1);
+    unsigned char *dhm = concolic_is(url) ? concolic_shape_hole_mask(url) : reclaim_calloc(strlen(disp) + 1, 1);
     const char *dq = disp;
     while (*dq && !(*dq == '?' && kv_is_page(disp, dhm, dq))) dq++;
-    char *shape_path = strndup(disp, (size_t)(dq - disp));
+    char *shape_path = reclaim_strndup(disp, (size_t)(dq - disp));
     /* URL §4.4 "URL parsing" path state ends the path at the first U+003F (?). Where the shape has a page `?`, the
        example's path is cut at its own first one. Where it has none, every `?` of the example is a byte some hole
        computed, so the example is aligned whole and the hole standing over that `?` carries the query after it.
        Named residual. Not covered: a hole ahead of a page `?` whose value holds a `?` is read as ending at it.
        Next diff: the example's cut taken from the aligned run of that hole rather than from its first `?`. How
        its absence shows: a path param whose example stops at a `?` its computed value carries on past. */
-    char *expath = !ex ? NULL : *dq ? url_path_of(ex) : strdup(ex);
+    char *expath = !ex ? NULL : *dq ? url_path_of(ex) : reclaim_strdup(ex);
     CHECK(dhm && shape_path && (!ex || expath), "endpoint: OOM copying an address's path half");
     char *path = path_scan(kvb, shape_path, dhm, expath);
     { const char *eq = ex ? strchr(ex, '?') : NULL;
@@ -2031,7 +2038,7 @@ static void endpoint_disp_add(Endpoint *e, const char *disp) {
         e->disps = realloc(e->disps, (size_t)e->dispcap * sizeof *e->disps);
         CHECK(e->disps, "endpoint: OOM filing an address's display spelling");
     }
-    e->disps[e->ndisp] = strdup(disp);
+    e->disps[e->ndisp] = reclaim_strdup(disp);
     CHECK(e->disps[e->ndisp], "endpoint: OOM filing an address's display spelling");
     e->ndisp++;
 }
@@ -2058,7 +2065,7 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
                 CHECK(nv, "endpoint: OOM recording a verified witness");
                 g_verified = nv; g_verified_cap = nc;
             }
-            g_verified[g_verified_n] = strdup(key);
+            g_verified[g_verified_n] = reclaim_strdup(key);
             CHECK(g_verified[g_verified_n], "endpoint: OOM recording a verified witness");
             g_verified_n++;
         }
@@ -2128,7 +2135,7 @@ static void endpoint_mark_attacker_rooted(Endpoint *e, const char *root) {
     DCHECK(e->atk_addr_root == NULL && root != NULL,
            "a record was marked attacker-rooted twice, or with no root — the mark is raised once, by the first "
            "sighting that carries one");
-    e->atk_addr_root = strdup(root);
+    e->atk_addr_root = reclaim_strdup(root);
     CHECK(e->atk_addr_root, "endpoint: OOM copying the root that marks a record security-relevant");
 }
 
@@ -2266,7 +2273,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        one whose bytes entered through nothing minted as a source; `addr_class` tells them apart (see the struct). */
     char *aroot = NULL;
     { const char *r = concolic_root_c(url);
-      if (r) { aroot = strdup(r);
+      if (r) { aroot = reclaim_strdup(r);
                CHECK(aroot, "endpoint: OOM copying an address's delivery root — the record would carry a "
                             "class derived from a provenance it cannot name, and this surface's own reader "
                             "would report the address as one this engine attributed to nothing"); } }
@@ -2389,7 +2396,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     if (g_eps_n >= g_eps_cap) { g_eps_cap = g_eps_cap ? g_eps_cap * 2 : 16; g_eps = realloc(g_eps, (size_t)g_eps_cap * sizeof(Endpoint)); CHECK(g_eps, "endpoint: OOM surface"); }
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
-    e->method = strdup(method); e->path = strdup(path); e->prov = prov; e->driven = driven;
+    e->method = reclaim_strdup(method); e->path = reclaim_strdup(path); e->prov = prov; e->driven = driven;
     e->id = nid;
     endpoint_disp_add(e, disp);
     /* Whether any program had started when this record was born, read at the mint, the instant the fact is about;
@@ -2418,9 +2425,9 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
            "a program started between an endpoint ask reaching the @H surface and that ask minting its record — the "
            "ask census and the record's `pre_program` flag must grade one sighting on the same side of the boundary");
     g_ask_minted++;
-    if (kvb.n) { e->params = calloc((size_t)kvb.n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
+    if (kvb.n) { e->params = reclaim_calloc((size_t)kvb.n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
     for (int j = 0; j < kvb.n; j++) {
-        e->params[e->np].name = strdup(kvb.e[j].name);
+        e->params[e->np].name = reclaim_strdup(kvb.e[j].name);
         e->params[e->np].loc = kvb.e[j].loc;
         param_add_val(&e->params[e->np], kvb.e[j].val);
         param_set_excl(&e->params[e->np], kvb.e[j].excl, kvb.e[j].nexcl);
@@ -2599,7 +2606,7 @@ static void edge_declare(EndpointEdge *e, const char *who, const char *entry,
                 "would merge two populations", who);
         return;
     }
-    e->died = (long *)calloc((size_t)n, sizeof *e->died);
+    e->died = (long *)reclaim_calloc((size_t)n, sizeof *e->died);
     /* Allocation, so a CHECK: OOM is fatal in release too, and the alternative is a partition arm every teardown
        writes through as NULL. */
     CHECKF(e->died != NULL, "the %s edge census could not allocate its per-stage partition", who);

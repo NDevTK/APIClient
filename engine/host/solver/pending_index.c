@@ -5,6 +5,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "solver/reclaim.h"
 
 /* A RECORD THIS INDEX IS TRACKING. `namers` is how many REGISTERS name it, which is the one fact neither the
    record nor the register carries: a fork shares the record, so the record cannot say how many arms hold it and
@@ -202,7 +203,7 @@ static uint32_t pend_hash_ptr(JSValueConst rec)
 static void pend_rec_grow(void)
 {
     uint32_t nb = g_rec_buckets ? g_rec_buckets * 2 : 64, i;
-    PendIndexMember **tab = calloc(nb, sizeof *tab);
+    PendIndexMember **tab = reclaim_calloc(nb, sizeof *tab);
     CHECK(tab != NULL, "engine: OOM growing the frontier's outstanding-request index");
     for (i = 0; i < g_rec_buckets; i++) {
         PendIndexMember *m = g_by_rec[i];
@@ -222,7 +223,7 @@ static void pend_rec_grow(void)
 static void pend_pair_grow(void)
 {
     uint32_t nb = g_pair_buckets ? g_pair_buckets * 2 : 64, i;
-    PendIndexNode **tab = calloc(nb, sizeof *tab);
+    PendIndexNode **tab = reclaim_calloc(nb, sizeof *tab);
     CHECK(tab != NULL, "engine: OOM growing the frontier's outstanding-request index");
     for (i = 0; i < g_pair_buckets; i++) {
         PendIndexNode *n = g_by_pair[i];
@@ -300,7 +301,7 @@ void pending_index_track(JSValueConst rec)
            "second one is a record built outside pending_push or a pointer the runtime has already reused for "
            "an object this index never let go of");
     if (g_rec_n >= g_rec_buckets) pend_rec_grow();
-    m = calloc(1, sizeof *m);
+    m = reclaim_calloc(1, sizeof *m);
     CHECK(m != NULL, "engine: OOM tracking a pending record — an untracked outstanding request is one the host "
                      "is never shown, and the flow parked on it waits for the rest of the session");
     m->rec = JS_DupValue(pending_ctx(), rec);
@@ -369,13 +370,13 @@ void pending_index_key(JSValueConst rec, const PendRequestKey *k)
         if (pend_node_is(n, h, k)) break;
     if (!n) {
         if (g_pair_n >= g_pair_buckets) pend_pair_grow();
-        n = calloc(1, sizeof *n);
+        n = reclaim_calloc(1, sizeof *n);
         CHECK(n != NULL, "engine: OOM recording an outstanding request");
-        n->method = strdup(k->method);
-        n->mode = strdup(k->mode);
-        n->referrer_policy = strdup(k->referrer_policy);
-        n->referrer = strdup(k->referrer);
-        n->url = strdup(k->url);
+        n->method = reclaim_strdup(k->method);
+        n->mode = reclaim_strdup(k->mode);
+        n->referrer_policy = reclaim_strdup(k->referrer_policy);
+        n->referrer = reclaim_strdup(k->referrer);
+        n->url = reclaim_strdup(k->url);
         CHECK(n->method && n->mode && n->referrer_policy && n->referrer && n->url,
               "engine: OOM recording an outstanding request's identity");
         n->hash = h;

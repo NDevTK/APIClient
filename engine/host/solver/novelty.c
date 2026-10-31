@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "solver/reclaim.h"
 
 static const char *const novelty_kind_token[NOVELTY_KIND_N] = {
 #define NOVELTY_KIND_TOKEN(id, token, counted) [id] = token,
@@ -56,7 +57,7 @@ static void set_grow(void) {
     NoveltySlot *old = g_slots;
     size_t ocap = g_cap, i;
     g_cap = g_cap ? g_cap * 2 : 1024;
-    g_slots = calloc(g_cap, sizeof *g_slots);
+    g_slots = reclaim_calloc(g_cap, sizeof *g_slots);
     CHECK(g_slots, "novelty: OOM growing the identity set — a dropped set pays every known emission again");
     for (i = 0; i < ocap; i++) if (old[i].flags) *slot_find(old[i].id) = old[i];
     free(old);
@@ -79,7 +80,7 @@ void novelty_set_scope(const char *scope) {
     DCHECK(!g_scope || !strcmp(g_scope, scope),
            "an instance's novelty scope changed within one agent — every identity filed so far names the old one");
     if (g_scope) return;
-    g_scope = strdup(scope);
+    g_scope = reclaim_strdup(scope);
     CHECK(g_scope, "novelty: OOM copying the scope");
 }
 

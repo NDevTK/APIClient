@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "check.h"        /* CHECK — dropping a taint shadow on OOM would silently corrupt @S isolation */
 #include "solver/attr_shadow.h"
+#include "solver/reclaim.h"
 
 typedef struct { const void *owner; int kind; char *ns; char *name; JSValue opaque; } AttrShadow;
 static AttrShadow *g_attr_shadow = NULL; static int g_attr_shadow_n = 0, g_attr_shadow_cap = 0;
@@ -40,9 +41,9 @@ void attr_shadow_set(JSContext *ctx, const void *owner, int kind, const char *ns
     if (g_attr_shadow_n >= g_attr_shadow_cap) { int nc = g_attr_shadow_cap ? g_attr_shadow_cap * 2 : 16;
         AttrShadow *n = realloc(g_attr_shadow, (size_t)nc * sizeof(AttrShadow)); CHECK(n, "attr-shadow-oom: realloc failed — silently dropping a taint shadow corrupts @S isolation"); g_attr_shadow = n; g_attr_shadow_cap = nc; }
     g_attr_shadow[g_attr_shadow_n].owner = owner; g_attr_shadow[g_attr_shadow_n].kind = kind;
-    g_attr_shadow[g_attr_shadow_n].ns = ns ? strdup(ns) : NULL;
+    g_attr_shadow[g_attr_shadow_n].ns = ns ? reclaim_strdup(ns) : NULL;
     CHECK(!ns || g_attr_shadow[g_attr_shadow_n].ns, "attr-shadow-oom: a namespace key could not be copied");
-    g_attr_shadow[g_attr_shadow_n].name = strdup(name);
+    g_attr_shadow[g_attr_shadow_n].name = reclaim_strdup(name);
     CHECK(g_attr_shadow[g_attr_shadow_n].name, "attr-shadow-oom: a slot name could not be copied");
     g_attr_shadow[g_attr_shadow_n].opaque = JS_DupValue(ctx, opaque); g_attr_shadow_n++;
 }

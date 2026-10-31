@@ -6,6 +6,7 @@
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
+#include "solver/reclaim.h"
 
 #define VFY_TAG "witness-verify"
 
@@ -34,7 +35,7 @@ static char *key_field(const char **p, const char *key) {
 
     CHECKF(end != *p && *end == ':' && strlen(end + 1) >= n,
            "witness_verify: `%s` is not a verification key this file composed", key);
-    out = malloc(n + 1);
+    out = reclaim_malloc(n + 1);
     CHECK(out, "witness_verify: OOM splitting a verification key");
     memcpy(out, end + 1, n);
     out[n] = 0;
@@ -71,9 +72,9 @@ static Verify *append(const char *key, const char *src, const char *payload) {
         g_vfy = nv; g_vfy_cap = nc;
     }
     v = &g_vfy[g_vfy_n++];
-    v->key = strdup(key);
-    v->src = src ? strdup(src) : NULL;
-    v->payload = payload ? strdup(payload) : NULL;
+    v->key = reclaim_strdup(key);
+    v->src = src ? reclaim_strdup(src) : NULL;
+    v->payload = payload ? reclaim_strdup(payload) : NULL;
     v->seeded = 0;
     CHECK(v->key && (!src || v->src) && (!payload || v->payload), "witness_verify: OOM queueing a verification");
     return v;
@@ -105,8 +106,8 @@ int witness_verify_seed(JSContext *ctx) {
            source substituted. No recorded path is installed, because the claim under test is that the value
            alone reaches the request; a path would carry the assumptions being checked. */
         f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
-        f->cand_src = strdup(v->src);
-        f->cand_payload = strdup(v->payload);
+        f->cand_src = reclaim_strdup(v->src);
+        f->cand_payload = reclaim_strdup(v->payload);
         CHECK(f->cand_src && f->cand_payload, "witness_verify: OOM minting a verification flow");
         fire_target_request(&f->fire, v->key);
         flow_seed(f);   /* named first: its seed's parks are this tool's act */

@@ -11,6 +11,7 @@
 #include <string.h>
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 #include "core/html/html_parse.h"      /* …and the ONE place one is parsed, which owns the tokens it produces */
+#include "solver/reclaim.h"
 
 /* THE ELIDE TOKEN MUST BE THE LOCATOR'S LENGTH, because renaming the other occurrences is how each occurrence
    is measured in its own state and the rename must not move a single byte offset. Checked by the compiler
@@ -282,7 +283,7 @@ static int emit_one(SolveHtmlEmit emit, void *user, int *n, const SolveDelivered
    the unquoted one (§13.2.5.38), so it is still in the value afterwards. */
 static char *splice(const char *s, size_t at, const char *ins, size_t *plen) {
     size_t n = strlen(s), m = strlen(ins);
-    char *out = malloc(n + m + 1);
+    char *out = reclaim_malloc(n + m + 1);
 
     CHECK(out != NULL, "solve_html: OOM splicing an attribute-state discrimination probe");
     memcpy(out, s, at);
@@ -687,7 +688,7 @@ int solve_html_breakouts(const char *output, const SolveDelivered *d, const Solv
     olen = strlen(output);
     for (p = output; (p = strstr(p, SOLVE_HTML_LOCATOR)) != NULL; p += loclen) {
         size_t off = (size_t)(p - output);
-        char *w = malloc(olen + 1), *q;
+        char *w = reclaim_malloc(olen + 1), *q;
 
         CHECK(w != NULL, "solve_html: OOM building the witness for one locator occurrence");
         memcpy(w, output, olen + 1);

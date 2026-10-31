@@ -201,6 +201,9 @@ METRIC(paged_floor, "pagedFloor", LIFETIME, "ask", PROCESS, "solver/engine.c", I
 METRIC(pressure_sold, "pressureSold", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 /* …and the cycle collections RAM pressure owed before a sale: a sold flow's cycles are freed only by one. */
 METRIC(pressure_collects, "pressureCollects", LIFETIME, "collection", PROCESS, "solver/engine.c", INT)
+/* …and the flows sold only for their bulk because another flow's park record could not be funded by its own,
+   each record written after the one it funded (engine_park_fund). */
+METRIC(park_funded, "parkFunded", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 /* …and the result compositions between steps, the attempts they took (a refused attempt sells at rest until its
    measured ask fits, then composes again), and the most attempts one composition took. */
 METRIC(rest_compositions, "restCompositions", LIFETIME, "composition", PROCESS, "solver/engine.c", INT)

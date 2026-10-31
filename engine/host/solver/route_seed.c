@@ -11,6 +11,7 @@
 #include "solver/flow.h"     /* …and that there IS a path here at all, which is this file's own invariant */
 #include "solver/world.h"    /* the declaring document's world name */
 #include "core/dom/document.h"   /* …and which document of this realm that is */
+#include "solver/reclaim.h"
 
 void route_seed_declare(JSContext *ctx, const char *previous, const char *address)
 {
@@ -75,7 +76,7 @@ void route_seed_declare(JSContext *ctx, const char *previous, const char *addres
            "stopped doing so, and the trusted zone would read the tail of this address as the provenance token "
            "its firing decision is made on");
     n = strlen(ROUTE_SEED_NOTICE) + strlen(address) + strlen(prov) + strlen(drv) + strlen(pin) + strlen(issuer) + 6;
-    op = malloc(n);
+    op = reclaim_malloc(n);
     CHECK(op != NULL, "route seed: OOM building the notice that declares a page of this application");
     snprintf(op, n, "%s\t%s\t%s\t%s\t%s\t%s", ROUTE_SEED_NOTICE, address, prov, drv, pin, issuer);
     engine_host_notify(ctx, op);

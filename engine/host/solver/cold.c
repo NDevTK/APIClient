@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "solver/reclaim.h"
 
 /* THE WALK IS OVER THE FRONTIER, not over an allocator. Every row below is asked of the component that owns
    that part of a snapshot, because that is the only place the size is known without restating a private
@@ -269,7 +270,7 @@ void cold_census(ColdCensus *out)
        another's is a break — is a second rule they would each have to hold about a shape they cannot tell
        apart from the outside. */
     if (out->program_cursor_n == 0) {
-        out->program_cursors = calloc(1, sizeof *out->program_cursors);
+        out->program_cursors = reclaim_calloc(1, sizeof *out->program_cursors);
         CHECK(out->program_cursors != NULL,
               "the frontier's program-cursor histogram could not be given its one row for an EMPTY frontier — "
               "the row exists so that `{}` never reaches a reader that refuses one, so failing to allocate it "
@@ -288,7 +289,7 @@ void cold_census(ColdCensus *out)
        frontier states its distances — and it is the bucket the identity below ties to `out_of_programs`, which
        is 0 on an empty frontier, so the pair agrees there rather than having one half absent. */
     if (out->programs_ahead_n == 0) {
-        out->programs_ahead = calloc(1, sizeof *out->programs_ahead);
+        out->programs_ahead = reclaim_calloc(1, sizeof *out->programs_ahead);
         CHECK(out->programs_ahead != NULL,
               "the frontier's remaining-rows histogram could not be given its one row for an EMPTY frontier — "
               "the row exists so that `{}` never reaches a reader that refuses one, so failing to allocate it "
@@ -515,7 +516,7 @@ static char *park_unhex(const char *p, const char *end)
            "a hex field of the park document is empty or has an odd number of digits — it was truncated on the "
            "way out or split on the way back. Half an @S breakout substitutes nothing while still reporting as "
            "a candidate that was tried; half a routed record is a message that decodes to bytes no peer sent");
-    out = malloc(n / 2 + 1);
+    out = reclaim_malloc(n / 2 + 1);
     CHECK(out, "the cold tier could not rebuild a parked candidate's text");
     for (i = 0; i < n; i += 2) {
         int hi = park_hexval(p[i]), lo = park_hexval(p[i + 1]);
@@ -1000,7 +1001,7 @@ static char *park_rows_text(const Flow *f)
 {
     JSContext *qctx = pending_ctx();
     int n = flow_world_commits(f), q = flow_deliver_pending(f), k;
-    char **rows = n ? calloc((size_t)n, sizeof *rows) : NULL;
+    char **rows = n ? reclaim_calloc((size_t)n, sizeof *rows) : NULL;
     char *out = NULL;
     size_t len = 0;
 
@@ -2145,9 +2146,9 @@ int cold_resume(JSContext *ctx, const char *recipes)
             DCHECK(n > 0,
                    "a park document holds a decision segment with no arms — the chain never freezes an empty "
                    "head, so every flow standing on this one would replay its path one decision short");
-            arms = malloc((size_t)n);
+            arms = reclaim_malloc((size_t)n);
             CHECK(arms, "the cold tier could not rebuild a parked decision segment's arms");
-            keys = malloc((size_t)n * sizeof *keys);
+            keys = reclaim_malloc((size_t)n * sizeof *keys);
             CHECK(keys, "the cold tier could not rebuild the questions a parked decision segment's arms answer");
             for (k = 0; k < n; k++) {
                 const char *slot = q + (size_t)k * 9;

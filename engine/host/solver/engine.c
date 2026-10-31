@@ -1839,7 +1839,10 @@ const char *engine_host_requests(void) {
 
     /* One pass with a growing buffer: converting a JS string's text allocates, so a measure-then-write pair
        would convert every record twice. */
-    if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the outstanding host requests"); }
+    if (!join) {
+        cap = 256; join = reclaim_malloc(cap);
+        CHECK(join, "engine: OOM joining the outstanding host requests");
+    }
     join[0] = 0;
     /* Only the registers owed a rendezvous of either class (pending_owed_register): a register owing none lists
        nothing below, and an async one leaves its flow runnable, so the blocking count alone would never show the
@@ -1956,7 +1959,7 @@ char *engine_notice_build(const char *op, const char *const *fields, size_t nfie
                "a host notice field contains a newline, the record separator");
         len += 1 + strlen(fields[i]);   /* the TAB that precedes this field, then the field itself */
     }
-    rec = malloc(len + 1);
+    rec = reclaim_malloc(len + 1);
     CHECK(rec != NULL, "engine: OOM building a host notice — a dropped notice is a document the host never "
                        "provisions, so every read through it parks its flow forever");
     at = strlen(op);
@@ -1984,7 +1987,7 @@ void engine_notify_worlds_gone(JSContext *ctx, const char *const *names, int n)
         /* "world.gone" + TAB + the name + NUL. Sized from the name for world_gone_push's reason: a document
            name nests one component per navigable depth, so a constant here is a cap on the frame tree. */
         size_t cap = strlen(names[i]) + 12;
-        char *rec = malloc(cap);
+        char *rec = reclaim_malloc(cap);
         CHECK(rec != NULL, "engine: OOM announcing a world's death — a peer never told holds that world's "
                            "segment for the rest of its process, and cannot park while it does");
         snprintf(rec, cap, "world.gone\t%s", names[i]);
@@ -2003,7 +2006,7 @@ void engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int
     DCHECK(n == 0 || vectors != NULL, "the worlds a park carries were announced by a list that is not there");
     for (i = 0; i < n; i++) {
         size_t cap = strlen(vectors[i]) + 14;   /* "world.parked" + TAB + the vector + NUL */
-        char *rec = malloc(cap);
+        char *rec = reclaim_malloc(cap);
         CHECK(rec != NULL, "engine: OOM announcing a foreign segment this park carries — the zone never told "
                            "holds no death for that world while this document is cold, so the instance that "
                            "resumes rebuilds a segment for a timeline that has ended and keeps it forever");
@@ -2074,7 +2077,7 @@ static void perform_token_spent(JSContext *ctx, const char *token)
     DCHECK(token != NULL && *token, "a rendezvous was spent with no token");
     if (perform_token_held(ctx, token)) return;
     cap = strlen(token) + 20;   /* "remoteop.exhausted" + TAB + the token + NUL */
-    rec = malloc(cap);
+    rec = reclaim_malloc(cap);
     CHECK(rec != NULL, "engine: OOM announcing that every timeline answered a cross-agent operation");
     snprintf(rec, cap, "remoteop.exhausted\t%s", token);
     engine_host_notify(ctx, rec);
@@ -2097,7 +2100,7 @@ static void retract_seen_add(char ***seen, int *n, int *cap, const char *token)
         *seen = g;
         *cap = c;
     }
-    (*seen)[*n] = strdup(token);
+    (*seen)[*n] = reclaim_strdup(token);
     CHECK((*seen)[*n] != NULL, "engine: OOM naming an operation a park hands back");
     (*n)++;
 }
@@ -2183,7 +2186,7 @@ static void engine_retract_span(JSContext *ctx, Flow *only)
            is a member that stays and will answer under this token. */
         if (!perform_token_held(ctx, seen[k])) {
             size_t cap = strlen(seen[k]) + 20;   /* "remoteop.retracted" + TAB + the token + NUL */
-            char *rec = malloc(cap);
+            char *rec = reclaim_malloc(cap);
 
             CHECK(rec != NULL, "engine: OOM announcing an operation a park hands back");
             snprintf(rec, cap, "remoteop.retracted\t%s", seen[k]);
@@ -2252,7 +2255,7 @@ static char *record_worlds_dup(const char *record) {
     worlds++;
     tail = strchr(worlds, '\t');
     DCHECK(tail != NULL, "a routed record carried nothing after its transport fields");
-    out = malloc((size_t)(tail - worlds) + 1);
+    out = reclaim_malloc((size_t)(tail - worlds) + 1);
     CHECK(out != NULL, "engine: OOM reading a routed record's world vector");
     memcpy(out, worlds, (size_t)(tail - worlds));
     out[tail - worlds] = 0;
@@ -2498,7 +2501,7 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     /* Every routed record's first three fields are the transport's: the target document (which instance), the
        sending flow's world (whose timeline) and its path marks (engine_record_head). The rest belongs to the
        component the op names, so a second op is routed without a second router. */
-    dup = strdup(record);
+    dup = reclaim_strdup(record);
     CHECK(dup != NULL, "engine: OOM routing a record");
     doc = strchr(dup, '\t');
     DCHECK(doc != NULL, "a routed record named no target document — the trusted zone routes on that field, so a "
@@ -2938,7 +2941,7 @@ static void routed_rec_arrived(const char *record) {
             g_routed_recs = g; g_routed_recs_cap = cap;
         }
         r = &g_routed_recs[g_routed_recs_n++];
-        r->record = strdup(record);
+        r->record = reclaim_strdup(record);
         CHECK(r->record != NULL, "engine: OOM naming a routed record in the delivery ledger");
         r->routed = r->admitted = 0;
     }
@@ -3011,7 +3014,7 @@ char *engine_record_head(const char *op, const char *doc, const Flow *f)
     world_serialize(f->world, world, sizeof world);
     flow_marks_token(f, marks, sizeof marks);
     cap = strlen(op) + strlen(doc) + strlen(world) + strlen(marks) + 4;
-    out = malloc(cap);
+    out = reclaim_malloc(cap);
     CHECK(out != NULL, "engine: OOM composing a cross-instance record's head");
     snprintf(out, cap, "%s\t%s\t%s\t%s", op, doc, world, marks);
     return out;
@@ -3140,7 +3143,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     CHECK(record != NULL && origin != NULL,
           "engine: OOM reading a routed delivery off its queue — a record that cannot be read is a peer's "
           "message this document never receives");
-    dup = strdup(record);
+    dup = reclaim_strdup(record);
     CHECK(dup != NULL, "engine: OOM splitting a routed delivery's transport fields");
     doc = strchr(dup, '\t');    *doc++ = 0;
     worlds = strchr(doc, '\t'); *worlds++ = 0;
@@ -3355,7 +3358,7 @@ char *engine_flow_addressee(JSContext *ctx, Flow *f, const char *doc_name)
             (void)anc;
             if (!strcmp(world_doc_name(w.doc), doc_name)) {
                 if (best == NULL) {
-                    best = strdup(c);
+                    best = reclaim_strdup(c);
                     CHECK(best != NULL, "engine: OOM naming the peer timeline a cross-instance operation is "
                                         "addressed to");
                 } else {
@@ -3369,7 +3372,7 @@ char *engine_flow_addressee(JSContext *ctx, Flow *f, const char *doc_name)
                        the candidate speaks for a strictly narrower subtree. SAME and ANCESTOR keep the
                        incumbent. */
                     if (rel == WORLD_REL_DESCENDANT) {
-                        char *d = strdup(c);
+                        char *d = reclaim_strdup(c);
                         CHECK(d != NULL, "engine: OOM naming the peer timeline a cross-instance operation is "
                                          "addressed to");
                         free(best);
@@ -3473,7 +3476,7 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
                "a cross-agent operation arrived with an empty addressee field — the grammar spells the unaddressed "
                "case as the ENGINE_ADDRESSEE_NONE token (solver/engine.h), so the two ends of the wire disagree");
         if (strcmp(addr, ENGINE_ADDRESSEE_NONE) != 0) {
-            addressee = strdup(addr);
+            addressee = reclaim_strdup(addr);
             CHECK(addressee != NULL, "engine: OOM copying the timeline a peer addressed a cross-agent operation to — "
                                      "without it every timeline here would perform the operation, including ones the "
                                      "peer refuses to hear from");
@@ -3747,8 +3750,8 @@ const char *engine_pending_fetches(void) {
     long listed = 0;
     PendIndexNode *node;
 
-    if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the pending requests"); }
-    if (!askers) { acap = 64; askers = malloc(acap); CHECK(askers, "engine: OOM joining a request's askers"); }
+    if (!join) { cap = 256; join = reclaim_malloc(cap); CHECK(join, "engine: OOM joining the pending requests"); }
+    if (!askers) { acap = 64; askers = reclaim_malloc(acap); CHECK(askers, "engine: OOM joining a request's askers"); }
     join[0] = 0;
     for (node = pending_index_first(); node; node = pending_index_next(node)) {
         int n_mem = pending_index_node_count(node);
@@ -4680,7 +4683,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                        "an external document script's row holds an address containing U+0000 — the URL body is read "
                        "as a NUL-terminated string, so the row was filled by something other than "
                        "engine_queue_docscript_url or the seed");
-                f->dyn_url[di] = strdup(dyn_body_text(f->dyn[di]));
+                f->dyn_url[di] = reclaim_strdup(dyn_body_text(f->dyn[di]));
                 CHECK(f->dyn_url[di], "engine: OOM keeping an external script's address as its base URL");
                 dyn_body_unref(f->dyn[di]);
                 f->dyn[di] = nb;
@@ -5227,8 +5230,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
                "a candidate session forked holding only part of its substitution — the source, the payload and "
                "exactly one of a sink class or a witness verification key are one identity, and the arm would "
                "inject nothing or be unable to say what it was trying");
-        sib->cand_src = strdup(parent->cand_src);
-        sib->cand_payload = strdup(parent->cand_payload);
+        sib->cand_src = reclaim_strdup(parent->cand_src);
+        sib->cand_payload = reclaim_strdup(parent->cand_payload);
         CHECK(sib->cand_src && sib->cand_payload, "engine: OOM forking an @S candidate session's substitution");
         fire_target_copy(&sib->fire, &parent->fire);
         flow_deliveries_copy(sib, parent);
@@ -5282,44 +5285,45 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        an answer of its own (engine_host_answer records the extras). The token and the document asked are on the
        program's row (`dyn_token`, `dyn_doc`, flow.h), so the queue copy below carries them. */
     if (parent->dyn_n) {              /* inherit the lazy chunks loaded up to the branch */
-        sib->dyn = malloc((size_t)parent->dyn_n * sizeof(DynBody *)); CHECK(sib->dyn, "engine: OOM fork dyn");
+        sib->dyn = reclaim_malloc((size_t)parent->dyn_n * sizeof(DynBody *)); CHECK(sib->dyn, "engine: OOM fork dyn");
         /* The table's columns come with the bodies; a column added to the queue is an obligation at every clone,
            free and finish site. The kinds, so an inherited dead breakout is not re-armed as a page script. */
-        sib->dyn_cand = malloc((size_t)parent->dyn_n); CHECK(sib->dyn_cand, "engine: OOM fork dyn flags");
+        sib->dyn_cand = reclaim_malloc((size_t)parent->dyn_n); CHECK(sib->dyn_cand, "engine: OOM fork dyn flags");
         /* Which of §8.1.4.4 Calling scripts' two algorithms runs each, so a module row is not handed to the
            classic entry on one arm. */
-        sib->dyn_type = malloc((size_t)parent->dyn_n); CHECK(sib->dyn_type, "engine: OOM fork dyn script types");
+        sib->dyn_type = reclaim_malloc((size_t)parent->dyn_n);
+        CHECK(sib->dyn_type, "engine: OOM fork dyn script types");
         /* The address each program's bytes came from: §8.1.4.2's created-script base URL and a module row's
            module map key. */
-        sib->dyn_url = malloc((size_t)parent->dyn_n * sizeof(char *));
+        sib->dyn_url = reclaim_malloc((size_t)parent->dyn_n * sizeof(char *));
         CHECK(sib->dyn_url, "engine: OOM fork dyn script addresses");
         /* The `script` element each row is the program of (§4.12.1.1's "execute the script element" switches on
            el; §3.1.7 `currentScript`). Copied, not duplicated: the element is the same node in the same tree,
            reachable through the DOM base segment the parent's fork froze. */
-        sib->dyn_el = malloc((size_t)parent->dyn_n * sizeof(lxb_dom_element_t *));
+        sib->dyn_el = reclaim_malloc((size_t)parent->dyn_n * sizeof(lxb_dom_element_t *));
         CHECK(sib->dyn_el, "engine: OOM fork dyn script elements");
         /* The document each row belongs to, so a child navigable's script is not compiled in the session's
            realm. */
-        sib->dyn_doc = malloc((size_t)parent->dyn_n * sizeof(uint32_t));
+        sib->dyn_doc = reclaim_malloc((size_t)parent->dyn_n * sizeof(uint32_t));
         CHECK(sib->dyn_doc, "engine: OOM fork dyn documents");
         /* Each row's name, copied, never re-minted: a register entry outstanding at the fork is shared by both
            arms (solver/pending.h) and names its row, so a fresh name would leave it resolving to nothing in one
            arm. */
-        sib->dyn_id = malloc((size_t)parent->dyn_n * sizeof(uint64_t));
+        sib->dyn_id = reclaim_malloc((size_t)parent->dyn_n * sizeof(uint64_t));
         CHECK(sib->dyn_id, "engine: OOM fork dyn row names");
         /* When each row became runnable, copied for the name's reason: an inherited row arrived when the
            parent's did, and a fresh stamp would let an arm change its place in the arrival order by being forked.
            The re-mint belongs to readiness, owned by flow_deliver_one_reply. */
-        sib->dyn_run = malloc((size_t)parent->dyn_n * sizeof(uint64_t));
+        sib->dyn_run = reclaim_malloc((size_t)parent->dyn_n * sizeof(uint64_t));
         CHECK(sib->dyn_run, "engine: OOM fork dyn row arrival stamps");
         /* The rendezvous token of any row still owing an answer: the arm answers the same peer under the same
            token. */
-        sib->dyn_token = malloc((size_t)parent->dyn_n * sizeof(char *));
+        sib->dyn_token = reclaim_malloc((size_t)parent->dyn_n * sizeof(char *));
         CHECK(sib->dyn_token, "engine: OOM fork dyn tokens");
         /* Whether each row is a task or the synchronous tail of the program that caused it: the arm inherits the
            parent's cursor and owed microtask checkpoint, so an inherited row must keep its order against that
            checkpoint. */
-        sib->dyn_pos = malloc((size_t)parent->dyn_n);
+        sib->dyn_pos = reclaim_malloc((size_t)parent->dyn_n);
         CHECK(sib->dyn_pos, "engine: OOM fork dyn positions");
         /* The ten arrays are one table with one length, allocated, grown and freed together, so a missing column
            is asserted rather than defaulted: a zero kind is DYN_PAGE_SCRIPT, a real kind, and would compile a
@@ -5346,12 +5350,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
             sib->dyn_pos[i] = parent->dyn_pos[i];
             sib->dyn_url[i] = NULL;
             if (parent->dyn_url[i]) {
-                sib->dyn_url[i] = strdup(parent->dyn_url[i]);
+                sib->dyn_url[i] = reclaim_strdup(parent->dyn_url[i]);
                 CHECK(sib->dyn_url[i], "engine: OOM forking an external script's address");
             }
             sib->dyn_token[i] = NULL;
             if (parent->dyn_token[i]) {
-                sib->dyn_token[i] = strdup(parent->dyn_token[i]);
+                sib->dyn_token[i] = reclaim_strdup(parent->dyn_token[i]);
                 CHECK(sib->dyn_token[i], "engine: OOM forking a cross-agent operation's rendezvous token");
             }
         }
@@ -6421,7 +6425,7 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
            "built it, so its environment is state this flow's delta never captured; the take and the route both "
            "filter by the closure's timeline");
     if (argc > 0) {
-        args = (JSValue *)malloc((size_t)argc * sizeof(JSValue));
+        args = (JSValue *)reclaim_malloc((size_t)argc * sizeof(JSValue));
         CHECK(args, "engine: OOM minting a driven orphan's arguments");
     }
     /* What every value bound here must be: something that decides no branch the run did not prove. concolic.h
@@ -6842,7 +6846,7 @@ static int engine_user_scroll(JSContext *ctx, Flow *f) {
     loc = listener_act_target_locator(ctx, lxb_dom_interface_node(target));
     DCHECK(loc != NULL, "a target scroll_already_asked admitted has no locator — it refuses exactly those");
     n = strlen(loc) + 64;
-    act = malloc(n);
+    act = reclaim_malloc(n);
     CHECK(act, "engine: OOM spelling a scroll act");
     snprintf(act, n, "{\"kind\":\"scroll\",\"target\":\"%s\",\"type\":\"scroll\"}", loc);
     flow_scroll_asked_push(f, loc);   /* before the fork, so both arms stand in the answer */
@@ -6913,7 +6917,7 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
     flow_install_base(f, ctx, close_request_flow(ctx, document));
     f->close_req = 1;
     {
-        char *act = strdup("{\"kind\":\"close-request\",\"target\":\"document\",\"type\":\"close-request\"}");
+        char *act = reclaim_strdup("{\"kind\":\"close-request\",\"target\":\"document\",\"type\":\"close-request\"}");
 
         CHECK(act, "engine: OOM spelling a close-request act");
         flow_user_act_push(f, act, f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0);
@@ -7171,7 +7175,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     f->dyn_cand[at] = (unsigned char)kind;
     f->dyn_type[at] = (unsigned char)stype;
     f->dyn_url[at] = NULL;
-    if (url) { f->dyn_url[at] = strdup(url); CHECK(f->dyn_url[at], "engine: OOM queued script address"); }
+    if (url) { f->dyn_url[at] = reclaim_strdup(url); CHECK(f->dyn_url[at], "engine: OOM queued script address"); }
     /* The element is borrowed, not copied. */
     f->dyn_el[at] = el;
     f->dyn_doc[at] = doc;
@@ -7860,7 +7864,7 @@ static void flow_perform(JSContext *ctx, Flow *f)
                                "was asked)");
         deliver_commit_taken(ctx, f, remote_op_worlds(op), arm);
         deliver_take_marks(f, marks);
-        own = strdup(token);
+        own = reclaim_strdup(token);
         /* The program is read before the row is made, because reading it sets the operation's operands on the
            answering realm's global (remote_op.c). Its length is its `strlen`: remote_op_program answers one of this
            engine's fixed programs, not page text. */
@@ -7955,7 +7959,7 @@ static void perform_answer_notify(JSContext *ctx, JSContext *ectx, Flow *f, cons
     /* The answering timeline's marks, which the asking arm takes with the answer (engine_host_take). */
     flow_marks_token(f, marks, sizeof marks);
     cap = strlen(token) + strlen(world) + strlen(marks) + strlen(enc) + 24;
-    rec = malloc(cap);
+    rec = reclaim_malloc(cap);
     CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
                        "asking flow on a question nothing will answer again");
     /* The world sits before the completion because the completion is the remainder: a value grammar may contain a
@@ -11194,6 +11198,7 @@ static const Flow *g_reclaim_keep;
 static Flow *g_sale_owed;
 static long g_sale_owed_n;
 static int g_sale_open;
+static long g_park_funded;   /* lifetime: flows sold for their bulk to fund another's record (engine_park_fund) */
 
 /* The first half of a sale: the flow leaves every query and gives back what its record does not read. */
 static void engine_sale_release(Flow *tail) {
@@ -11243,6 +11248,7 @@ int engine_park_fund(void) {
         return 0;
     }
     engine_sale_release(t);
+    g_park_funded++;
     t->sale_next = g_sale_owed;
     g_sale_owed = t;
     g_sale_owed_n++;
@@ -11454,7 +11460,7 @@ int engine_headroom_at_rest(size_t bytes) {
     for (;;) {
         void *p;
         if (bytes == 0) return 1;
-        p = malloc(bytes);
+        p = reclaim_malloc(bytes);
         if (p) { free(p); return 1; }
         if (!engine_reclaim_at_rest()) return 0;   /* the floor: the composition's own CHECK answers */
     }
@@ -11529,7 +11535,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     DCHECK(g_root_scripts == NULL && g_root_n == 0,
            "a session opened while the previous root script table was still allocated — engine_session_close is the "
            "one place it is freed");
-    g_root_scripts = n ? (RootScript *)calloc((size_t)n, sizeof(RootScript)) : NULL;
+    g_root_scripts = n ? (RootScript *)reclaim_calloc((size_t)n, sizeof(RootScript)) : NULL;
     CHECK(n == 0 || g_root_scripts != NULL,
           "engine: OOM building the root document's script table — every flow of this document is seeded from "
           "it, so without it the document's own bundle would silently not run in any timeline");
@@ -11752,7 +11758,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
        `<script src=app.js>` in a document at `/app/child.html` is `/app/app.js`. `cctx`, the joined document's
        realm, is what the parse is asked of; the session's root realm would fetch a joined document's bundle from
        another document's directory. One row shape, one seeding function, one set of asserts. */
-    rows = n ? (RootScript *)calloc((size_t)n, sizeof(RootScript)) : NULL;
+    rows = n ? (RootScript *)reclaim_calloc((size_t)n, sizeof(RootScript)) : NULL;
     CHECK(n == 0 || rows != NULL,
           "engine: OOM building a joined document's script table — without it the document is parsed, given a "
           "realm and never executes a line, which is indistinguishable from a document that had no scripts");
@@ -12931,6 +12937,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->paged_floor        = g_reclaim_floor;
     out->pressure_sold      = g_pressure_sold;
     out->pressure_collects  = g_pressure_collects;
+    out->park_funded        = g_park_funded;
     out->rest_compositions  = g_rest_compositions;
     out->rest_compose_attempts = g_rest_compose_attempts;
     out->rest_compose_attempts_max = g_rest_compose_attempts_max;
@@ -13266,7 +13273,7 @@ void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *ty
     ScriptSchedule *sched = NULL;
 
     if (n > 0 && els) {
-        sched = (ScriptSchedule *)calloc((size_t)n, sizeof *sched);
+        sched = (ScriptSchedule *)reclaim_calloc((size_t)n, sizeof *sched);
         CHECK(sched != NULL, "engine: OOM deriving the schedule column for engine_run's inventory");
         for (int i = 0; i < n; i++)
             sched[i] = els[i] ? script_block_schedule(els[i], types[i], /*parser_inserted*/true,

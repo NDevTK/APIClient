@@ -409,7 +409,7 @@ static void dom_claim_rehash(void)
     if (bits == 0) bits = 9;                                            /* 512 slots for the first claim */
     else if ((g_dom_claim_live + 1) * 4 > ((size_t)1 << bits) * 3) bits++;
     cap = (size_t)1 << bits;
-    tab = calloc(cap, sizeof *tab);
+    tab = reclaim_calloc(cap, sizeof *tab);
     CHECK(tab != NULL, "dom-cow-oom: the DOM creation-claim index could not be grown — the assert that keeps "
                        "one node from being claimed twice, and so destroyed twice, cannot be answered");
     for (i = 0; i < g_dom_claim_cap; i++) {
@@ -963,9 +963,9 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
     u.kind = 0; u.slot = ATTR_SLOT_ATTRIBUTE; u.el = el; u.had = a ? 1 : 0;
     u.attr = a; u.attr_next = a ? a->next : NULL;   /* the node, and the index it sat at */
     u.sh_owner = el;
-    u.name = strdup(local);
+    u.name = reclaim_strdup(local);
     CHECK(u.name, "dom-cow-oom: attr local-name strdup failed");
-    if (ns) { u.ns = strdup(ns); CHECK(u.ns, "dom-cow-oom: attr namespace strdup failed"); }
+    if (ns) { u.ns = reclaim_strdup(ns); CHECK(u.ns, "dom-cow-oom: attr namespace strdup failed"); }
     if (prefix) {
         u.prefix = reclaim_malloc(pl + 1);
         CHECK(u.prefix, "dom-cow-oom: attr prefix copy failed");
@@ -984,7 +984,7 @@ static void dom_prop_taint_capture(lxb_dom_element_t *el, const char *name) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u);
     dom_capture_begin();
-    u.kind = 0; u.slot = ATTR_SLOT_PROPERTY; u.el = el; u.sh_owner = el; u.name = strdup(name); u.had = 0;
+    u.kind = 0; u.slot = ATTR_SLOT_PROPERTY; u.el = el; u.sh_owner = el; u.name = reclaim_strdup(name); u.had = 0;
     CHECK(u.name, "dom-cow-oom: property name strdup failed");
     u.sh_old = shadow_snapshot(el, ATTR_SLOT_PROPERTY, NULL, name, &u.sh_had);
     u.sh_cur = JS_UNDEFINED;
@@ -1096,8 +1096,8 @@ static void dom_attr_node_value_capture(lxb_dom_attr_t *a, const AttrIdent *id) 
        piece of state and a restore that put one back without the other hands a sink either clean bytes that
        are attacker input or a stale provenance on a value that never had it. */
     u.slot = ATTR_SLOT_ATTRIBUTE; u.sh_owner = a;
-    if (id->ns) { u.ns = strdup(id->ns); CHECK(u.ns, "dom-cow-oom: detached attr namespace strdup failed"); }
-    u.name = strdup(id->local);
+    if (id->ns) { u.ns = reclaim_strdup(id->ns); CHECK(u.ns, "dom-cow-oom: detached attr namespace strdup failed"); }
+    u.name = reclaim_strdup(id->local);
     CHECK(u.name, "dom-cow-oom: detached attr local-name strdup failed");
     u.sh_old = shadow_snapshot(a, ATTR_SLOT_ATTRIBUTE, id->ns, id->local, &u.sh_had);
     dom_undo_push(u);

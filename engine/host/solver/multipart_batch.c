@@ -7,6 +7,7 @@
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
+#include "solver/reclaim.h"
 
 /* ── the two spans this file walks ───────────────────────────────────────────────────────────────────────
  *
@@ -67,9 +68,9 @@ static void eh_add(EhBuf *b, const char *name, size_t nn, const char *val, size_
         b->e = realloc(b->e, (size_t)b->cap * sizeof(*b->e));
         CHECK(b->e, "multipart_batch: OOM collecting a sub-request's headers");
     }
-    n2 = malloc(nn + 1); CHECK(n2, "multipart_batch: OOM copying a sub-request header name");
+    n2 = reclaim_malloc(nn + 1); CHECK(n2, "multipart_batch: OOM copying a sub-request header name");
     memcpy(n2, name, nn); n2[nn] = 0;
-    v2 = malloc(vn + 1); CHECK(v2, "multipart_batch: OOM copying a sub-request header value");
+    v2 = reclaim_malloc(vn + 1); CHECK(v2, "multipart_batch: OOM copying a sub-request header value");
     memcpy(v2, val, vn); v2[vn] = 0;
     b->e[b->n].name = n2;
     b->e[b->n].value = v2;
@@ -170,9 +171,9 @@ static void learn_request_message(JSContext *ctx, const char *p, const char *end
         q = lnl + 1;
     }
 
-    method = malloc(m_n + 1); CHECK(method, "multipart_batch: OOM copying a sub-request method");
+    method = reclaim_malloc(m_n + 1); CHECK(method, "multipart_batch: OOM copying a sub-request method");
     memcpy(method, p, m_n); method[m_n] = 0;
-    target = malloc(t_n + 1); CHECK(target, "multipart_batch: OOM copying a sub-request target");
+    target = reclaim_malloc(t_n + 1); CHECK(target, "multipart_batch: OOM copying a sub-request target");
     memcpy(target, tgt, t_n); target[t_n] = 0;
 
     uv = JS_NewString(ctx, target);
@@ -231,7 +232,7 @@ void multipart_batch_learn(JSContext *ctx, const HeaderList *hdrs, JSValueConst 
     if (!ct && JS_IsString(body_mime)) {
         const char *bm = JS_ToCString(ctx, body_mime);
         if (bm) {
-            ct = strdup(bm);
+            ct = reclaim_strdup(bm);
             CHECK(ct, "multipart_batch: OOM reading a request body's own Content-Type");
             JS_FreeCString(ctx, bm);
         }
@@ -256,7 +257,7 @@ void multipart_batch_learn(JSContext *ctx, const HeaderList *hdrs, JSValueConst 
     if (bnd_n == 0 || bnd_n > 70) { mime_type_free(&ct_rec); return; }
 
     db_n = bnd_n + 2;
-    db = malloc(db_n + 1);
+    db = reclaim_malloc(db_n + 1);
     CHECK(db, "multipart_batch: OOM building a multipart dash-boundary");
     db[0] = '-'; db[1] = '-';
     memcpy(db + 2, bnd, bnd_n);

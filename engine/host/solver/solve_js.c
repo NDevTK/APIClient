@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "solver/reclaim.h"
 
 /* THE §12 STATE the attacker's bytes are in. Named after the grammar's own productions because the escape is
    that production's exit — the names ARE the derivation, not documentation of it.
@@ -973,7 +974,7 @@ static Hole state_at(const char *s, size_t mark) {
 static char *substitute(const char *output, size_t off, const char *ins, size_t ins_n, const char *mark,
                         size_t *at) {
     size_t loclen = sizeof SOLVE_JS_LOCATOR - 1, n = strlen(output), mn = strlen(mark);
-    char *t = malloc(n - loclen + ins_n + mn + 1);
+    char *t = reclaim_malloc(n - loclen + ins_n + mn + 1);
 
     CHECK(t != NULL, "solve_js: OOM substituting a payload into an eval witness");
     memcpy(t, output, off);

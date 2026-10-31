@@ -8,6 +8,7 @@
 
 #include "check.h"
 #include "solver/fire_target.h"
+#include "solver/reclaim.h"
 
 /* The one shape check every accessor and transition runs: each kind holds exactly its own field. */
 static void fire_target_check(const FireTarget *t)
@@ -32,7 +33,7 @@ void fire_target_request(FireTarget *t, const char *key)
 {
     fire_target_check(t);
     DCHECK(t->kind == FIRE_NONE && key && *key, "a request target was set over another target or with no key");
-    t->key = strdup(key);
+    t->key = reclaim_strdup(key);
     CHECK(t->key, "fire target: OOM copying a verification key");
     t->kind = FIRE_REQUEST;
 }

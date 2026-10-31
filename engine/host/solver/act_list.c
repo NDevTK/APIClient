@@ -10,6 +10,7 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/message_compose.h"   /* a message act's candidate data, from its domain */
+#include "solver/reclaim.h"
 
 static void acts_append(JsonBuf *b, int *first, const char *act)
 {
@@ -41,7 +42,7 @@ static char *act_with_message(const char *act, const char *data, const char *ori
 {
     JsonBuf b = { 0 };
     size_t l = strlen(act);
-    char *body = malloc(l);
+    char *body = reclaim_malloc(l);
 
     DCHECK(l > 2 && act[l - 1] == '}', "a message act is not an object");
     CHECK(body, "act list: OOM composing a message act");
@@ -110,18 +111,18 @@ static char *message_act(const Flow *f, int k, char **refused, int *unsolved, ch
     /* The payload rides this message only where the search's injection is this message's data or one of its
        members; every other message of the chain carries what its own domain admits. */
     if (*inject && strcmp(inject, root) && !concolic_member_of_root(inject, root)) inject = "";
-    data = ddel ? strdup(ddel) : message_compose(root, inject, payload, &why);
+    data = ddel ? reclaim_strdup(ddel) : message_compose(root, inject, payload, &why);
     if (!data) {
         if (!*refused) *refused = why;
         else free(why);
-        act = strdup(f->orphan_acts[k]);
+        act = reclaim_strdup(f->orphan_acts[k]);
         CHECK(act, "act list: OOM copying a message act");
         return act;
     }
     {
         int no;
 
-        origin = odel ? strdup(odel) : origin_json(osrc, 0, &no);
+        origin = odel ? reclaim_strdup(odel) : origin_json(osrc, 0, &no);
         CHECK(origin, "act list: OOM copying a delivered origin");
     }
     act = act_with_message(f->orphan_acts[k], data, origin);

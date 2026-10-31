@@ -535,7 +535,7 @@ static void ss_admit(ForkRow *rows, int cap, const char *key)
 
     for (i = 0; i < cap; i++) {
         if (!rows[i].key) {                 /* never claimed: this row starts exact and stays exact */
-            rows[i].key = strdup(key);
+            rows[i].key = reclaim_strdup(key);
             CHECK(rows[i].key, "decide: OOM recording which predicate is growing the frontier");
             rows[i].n = 1;
             rows[i].err = 0;
@@ -552,7 +552,7 @@ static void ss_admit(ForkRow *rows, int cap, const char *key)
            "a fork census eviction displaced a row that is not the lightest — Space-Saving bounds a row's error "
            "by the count of the row it displaced, so displacing anything heavier makes every floor this table "
            "publishes larger than the algorithm can prove and the census overstates a site");
-    name = strdup(key);
+    name = reclaim_strdup(key);
     CHECK(name, "decide: OOM recording which predicate is growing the frontier");
     free(rows[light].key);
     rows[light].key = name;
@@ -574,7 +574,7 @@ static void fork_mech_count(const char *key)
         CHECK(p, "decide: OOM recording which mechanism is growing the frontier");
         g_fork_mech = p; g_fork_mech_cap = nc;
     }
-    g_fork_mech[g_fork_mech_n].key = strdup(key);
+    g_fork_mech[g_fork_mech_n].key = reclaim_strdup(key);
     CHECK(g_fork_mech[g_fork_mech_n].key, "decide: OOM recording which mechanism is growing the frontier");
     g_fork_mech[g_fork_mech_n].n = 1;
     g_fork_mech_n++;

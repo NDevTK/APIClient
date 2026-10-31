@@ -6,6 +6,7 @@
 #include "solver/world.h"
 #include "solver/decide.h"   /* decide_history_name: what a minted document name is identified by */
 #include "solver/flow.h"     /* flow_running: which timeline, if any, is creating */
+#include "solver/reclaim.h"
 
 /* A LOCALLY MINTED WORLD and the fork edge that produced it. Kept as a flat array indexed by serial-1, because
    serials are dense and monotonic: a world's parent is one load, and the ancestry walk is a pointer chase over
@@ -90,14 +91,14 @@ uint32_t world_doc_intern(const char *name)
         if (!strcmp(g_docs[i].name, name)) return i + 1;
     if (g_docs_n == g_docs_cap) {
         uint32_t cap = g_docs_cap ? g_docs_cap * 2 : 8;
-        DocEntry *g = realloc(g_docs, cap * sizeof *g);
+        DocEntry *g = reclaim_realloc(g_docs, cap * sizeof *g);
         CHECK(g != NULL, "world registry: OOM recording a document name — a document whose name is lost can "
                          "never be routed to, so every read through it would park its flow forever");
         g_docs = g;
         g_docs_cap = cap;
     }
     memset(&g_docs[g_docs_n], 0, sizeof g_docs[g_docs_n]);
-    g_docs[g_docs_n].name = strdup(name);
+    g_docs[g_docs_n].name = reclaim_strdup(name);
     CHECK(g_docs[g_docs_n].name != NULL, "world registry: OOM recording a document name");
     return ++g_docs_n;
 }
@@ -226,7 +227,7 @@ uint32_t world_mint_doc(uint32_t parent)
         CHECK(ordinal > 0, "world registry: the baseline's creation ordinal wrapped — the next name collides");
     }
     cap = strlen(self) + 30;
-    buf = malloc(cap);
+    buf = reclaim_malloc(cap);
     CHECK(buf != NULL, "world registry: OOM minting a document name — a document that cannot be named can "
                        "never be routed to, so every read through it would park its flow forever");
     snprintf(buf, cap, "%s.%d-%016llx", self, ordinal, (unsigned long long)history);
@@ -593,7 +594,7 @@ static char *world_vector_alloc(WorldId w, const WorldId *anc, int n_anc)
     char *s;
 
     for (i = 0; i < n_anc; i++) cap += strlen(world_doc_name(anc[i].doc)) + 24;
-    s = malloc(cap);
+    s = reclaim_malloc(cap);
     CHECK(s != NULL, "world registry: OOM naming a foreign segment — a segment whose NAME is lost cannot cross "
                      "the cold tier, so the instance holding it can never park and the peer flow's state in "
                      "this document is stranded here for the rest of the process");
@@ -619,7 +620,7 @@ int world_serialize(WorldId w, char *dst, size_t cap)
 char *world_name(WorldId w)
 {
     size_t cap = strlen(world_doc_name(w.doc)) + 23;
-    char  *s   = malloc(cap);
+    char  *s   = reclaim_malloc(cap);
 
     CHECK(s != NULL, "world registry: OOM naming a world — the name is how a reader says WHICH timeline an "
                      "artifact is of, and an artifact that cannot say so is one nothing downstream can "
@@ -649,7 +650,7 @@ static int world_parse_into(const char *s, WorldId *out, WorldId **buf_p, int *c
     DCHECK(s != NULL && *s, "a world vector was parsed from nothing — the answer would be true in no timeline");
     DCHECK(out != NULL && ancestry != NULL, "a world vector was parsed into no world");
     *out = WORLD_NONE;
-    dup = strdup(s);
+    dup = reclaim_strdup(s);
     CHECK(dup != NULL, "world: OOM parsing a world vector");
     q = dup;
     while (q && *q) {
@@ -841,7 +842,7 @@ char *world_vec_fork_point(const char *vec)
     /* SIZED FROM THE VECTOR, which is always enough and needs no arithmetic about name components: the field
        this writes is one of the fields that vector is made of. */
     cap = strlen(vec) + 1;
-    dst = malloc(cap);
+    dst = reclaim_malloc(cap);
     CHECK(dst != NULL, "world registry: OOM naming the branch a sending timeline came through — without it a "
                        "receiver cannot tell whether it has already taken a side at that branch");
     /* NEAREST FIRST IS THE ANCESTRY'S ORDER (world_ancestry), so the first field IS the branch this world came
@@ -1020,7 +1021,7 @@ static void world_gone_push(WorldId w)
        world_name_write's own CHECK is what makes that arithmetic checkable rather than eyeballed. */
     const char *dn = world_doc_name(w.doc);
     size_t cap = strlen(dn) + 23;
-    char *s = malloc(cap);
+    char *s = reclaim_malloc(cap);
 
     CHECK(s != NULL, "world registry: OOM naming a world that has died — a death no peer is told about is a "
                      "segment that instance holds for the rest of its process, for a flow that is gone");

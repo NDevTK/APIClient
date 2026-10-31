@@ -6,6 +6,7 @@
 
 #include "check.h"
 #include "solver/dyn_body.h"
+#include "solver/reclaim.h"
 
 struct DynBody {
     long   refs;   /* holders; the text is freed with the last one */
@@ -46,7 +47,7 @@ static long g_dyn_body_parses;
    here whose value depends on which entry was used, so it is the one field this helper may not choose. */
 static DynBody *dyn_body_wrap(char *text, size_t len, int own_decode)
 {
-    DynBody *b = (DynBody *)malloc(sizeof(DynBody));
+    DynBody *b = (DynBody *)reclaim_malloc(sizeof(DynBody));
 
     if (!b) { free(text); return NULL; }
     b->refs = 1;
@@ -72,7 +73,7 @@ DynBody *dyn_body_new(const char *text, size_t len)
     DCHECK(text != NULL,
            "a program was queued with no source text — every row of a flow's sequence is a program or the "
            "ADDRESS of one, and both are strings, so a NULL here is a caller that has neither");
-    copy = (char *)malloc(len + 1);
+    copy = (char *)reclaim_malloc(len + 1);
     if (!copy) return NULL;
     memcpy(copy, text, len);
     /* THE GUARD, WRITTEN HERE AND NOT COPIED FROM THE SOURCE. `text` is `len` bytes and this call makes no
@@ -307,7 +308,7 @@ void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int fla
        refusing a program's NAME is not a dropped flow, and aborting the instance over a memo would trade a
        recomputation for the whole document's findings. */
     if (name != NULL) {
-        own = strdup(name);
+        own = reclaim_strdup(name);
         if (own == NULL) return;
     }
     b->parse = JS_DupValue(realm, fn);
