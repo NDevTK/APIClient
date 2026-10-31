@@ -1291,6 +1291,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbkpcycle.h"
 #include "fixture/idbkpinject.h"
 #include "fixture/fpakey.h"
+#include "fixture/uspreckey.h"
 #include "fixture/fpaselect.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
@@ -1873,6 +1874,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkpcycle", HTML_IDBKPCYCLE },
     { "idbkpinject", HTML_IDBKPINJECT },
     { "fpakey", HTML_FPAKEY },
+    { "uspreckey", HTML_USPRECKEY },
     { "fpaselect", HTML_FPASELECT },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
@@ -17986,6 +17988,23 @@ TF_UNIT void probes_fpakey(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `uspreckey` document (fixture/uspreckey.h): the record's unknown key reached URL §6.2's list as
+   the unknown, so the serialization's comparison takes the world where it holds as well as the one where not. */
+TF_UNIT void probes_uspreckey(const char *js, Probe *tab, int *n) {
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, param_value_is(js, "/api/usk", "eq", "true"),
+             "no /api/usk?eq=true record: the record's key reached the list as concrete bytes, so the "
+             "serialization could never equal \"admin=v\"");
+    const char *o_why = NULL; int o_tt = 1;
+    fold_row(&o_tt, &o_why, param_value_is(js, "/api/usk", "eq", "false"),
+             "NOT REACHED: no /api/usk?eq=false record, so the message listener never built the list");
+    const Probe rows[] = {
+        { "usk-other", o_tt, "/api/usk", SESS_EXPLORE, o_why },
+        { "usk-pin", p_tt, "/api/usk", SESS_EXPLORE, p_why, .gate = "usk-other" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fpaselect` document (fixture/fpaselect.h): the prompt's filter over the record's unknown suffix
    takes the world where it equals the saved file's `.txt`, which the page then reads back, and the world where
    no key or suffix admits the file. */
@@ -22717,6 +22736,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkpcycle(js, probes, &np);
     probes_idbkpinject(js, probes, &np);
     probes_fpakey(js, probes, &np);
+    probes_uspreckey(js, probes, &np);
     probes_fpaselect(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
