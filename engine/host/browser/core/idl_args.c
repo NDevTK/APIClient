@@ -4095,6 +4095,13 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->result = promise;
         rr = JS_STEP_DONE;
     }
+    /* The normal completion of a member whose return type is a promise type is that promise: §3.7.7 converts
+       R, the method steps' promise, and nothing here wraps a bare value. */
+    DCHECKF(rr != JS_STEP_DONE || s->hdr.arg < 0 || s->hdr.arg >= g_n || !idl_member(s->hdr.arg)->returns_promise ||
+            JS_PromiseState(ctx, s->result) != JS_PROMISE_NOT_A_PROMISE,
+            "%s declares a promise return type and its method steps completed with a value that is no promise — "
+            "the steps must create the promise they settle, as Cookie Store's cs_settled does",
+            idl_member(s->hdr.arg)->name ? idl_member(s->hdr.arg)->name : "(unnamed member)");
 #if APICLIENT_DEV
     {
         int64_t d = idl_now_ms() - t0;
