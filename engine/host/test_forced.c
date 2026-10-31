@@ -5546,7 +5546,9 @@ TF_UNIT void concat_keyed_selftest(JSContext *ctx)
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
-#if APICLIENT_DEV
+/* Native only: the witness's answer is an abort read from a forked child, and the vehicle has no process to
+   fork. The DCHECK it arms is the same source in both builds. */
+#if APICLIENT_DEV && !defined(__EMSCRIPTEN__)
 /* The nested-entry witness: a C function this selftest alone registers, which calls JS_Call on the page's
    callback from inside its own activation, is the shape JS_CallInternal's nested-entry DCHECK refuses. */
 static bool g_tf_nest_leaf_ran;
@@ -36025,7 +36027,7 @@ int main(int argc, char **argv) {
     flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 5, and the fork's copy-on-nothing */
     sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
     concat_keyed_selftest(ctx);     /* §23.1.3.2's keyed walk rests per request, declaring no yield of its own */
-#if APICLIENT_DEV
+#if APICLIENT_DEV && !defined(__EMSCRIPTEN__)
     nested_entry_selftest(ctx);     /* a C activation entering the engine is named; the leaf dispatch is not */
 #endif
     endpoint_init();
