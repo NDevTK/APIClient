@@ -144,8 +144,11 @@ static bool gt_row_contribution_ask(lxb_dom_element_t *item, CssPx *out)
         DFAILF("%s is a grid item with an `auto` block-axis margin, which css-grid-1 §10.2 \"Aligning with auto "
                "margins\" resolves over its grid area. BUILD that alignment",
                box_subject(item, buf, sizeof buf));
-    if (replaced_element_of(item).replaced)
-        DFAILF("%s is a replaced grid item, whose row contribution is css-sizing-3 §5.1's natural size. BUILD it",
+    /* A replaced item with a declared block size contributes that size like any box; only an `auto` one reads
+       its natural size. */
+    if (replaced_element_of(item).replaced && used_value_height_behaves_as_auto(item))
+        DFAILF("%s is a replaced grid item with an `auto` block size, whose row contribution is css-sizing-3 "
+               "§5.1's natural size under css-grid-1 §6.2. BUILD it",
                box_subject(item, buf, sizeof buf));
     /* The one ask that can stop: the item's own content-based block size, held once answered. */
     if (used_value_height_behaves_as_auto(item) && !block_flow_auto_height_ask(item, &unused)) return false;

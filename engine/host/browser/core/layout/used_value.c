@@ -3195,6 +3195,8 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
        `border-box`, so the content extent is recovered from it. */
     if (h_auto && rep->has_ratio) {
         lxb_dom_element_t *cb = used_value_containing_block(el);
+        UvSurround s;
+        UvBox box;
         CssPx w;
         char nbuf[160];
 
@@ -3203,9 +3205,21 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
                    "in a containing block whose width is content-based, where CSS 2.1 §10.3.2's suggestion "
                    "does not apply. BUILD css-sizing-3 §5.1's intrinsic size for that object",
                    box_subject(el, nbuf, sizeof nbuf));
-        w = uv_block_auto_width(el, css_computed_length(el, "width"), uv_box_kind(el));
-        if (!uv_is_border_box(el)) return w;
-        return css_px_sub(w, uv_surround_total(uv_surround(el, false)));
+        box = uv_box_kind(el);
+        /* A block-level box takes the equation with §9.5's float avoidance; any other solves the same equation
+           with its own section's margins, which an inline box's §10.3.2 states without a width. */
+        if (uv_margin_reads_width(box)) {
+            w = uv_block_auto_width(el, css_computed_length(el, "width"), box);
+            if (!uv_is_border_box(el)) return w;
+            return css_px_sub(w, uv_surround_total(uv_surround(el, false)));
+        }
+        s = uv_surround(el, false);
+        w = css_px_add(uv_margin(el, "margin-left", "margin-right", css_computed_length(el, "margin-left"), box,
+                                 NULL),
+                       uv_margin(el, "margin-right", "margin-left", css_computed_length(el, "margin-right"), box,
+                                 NULL));
+        return css_px_max(css_px_sub(css_px_sub(used_value_containing_block_width(el), uv_surround_total(s)), w),
+                          css_px(0.0));
     }
     /* "Otherwise, if 'width' has a computed value of 'auto', and the element has an intrinsic width, then that
        intrinsic width is the used value of 'width'." */
