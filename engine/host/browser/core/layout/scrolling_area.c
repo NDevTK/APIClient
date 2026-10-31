@@ -792,11 +792,13 @@ CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
     return css_px_sub(hi, lo);
 }
 
-/* NAMED RESIDUAL. Not covered: every caller of these two but CSSOM VIEW §6.1's scroll a target into view
-   (core/dom/element_scrolling.c) drives the walk to completion in one activation, so a flow reading
-   `scrollWidth` or scrolling a viewport cannot rest inside the document walk. Next: those members as step
-   machines stepping the walk, as `scrollIntoView` does. How its absence shows: a flow's slice overrun in
-   `scrollWidth`/`scrollHeight` or §4's `scroll()` on a large document, with `_layoutJobRests` flat. */
+/* NAMED RESIDUAL. Not covered: the callers of these two — CSSOM VIEW §6's has-overflow test and the viewport
+   `scrollWidth`/`scrollHeight` read, §6.1's scrolling-box opening, and core/frame/viewport.c — drive the walk
+   to completion in one activation, so a flow scrolling an element or reading the viewport's area cannot rest
+   inside the document walk; §6.1's scroll into view and an element's `scrollWidth`/`scrollHeight` step the
+   cursor instead. Next: those callers stepping the cursor, after which these two are deleted. How its absence
+   shows: a flow's slice overrun in §4's `scroll()` or a viewport read on a large document, with
+   `_layoutJobRests` flat. */
 /* Each walk runs inside one drive, so the current job holds its memo and records across every descendant:
    without a driven job entered, the synchronous job holds them only while a drive is open. A step that answers
    "not yet" is retried after the drive computes what it deferred. */

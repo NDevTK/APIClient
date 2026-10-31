@@ -1004,13 +1004,15 @@ static const IdlStepDecl EV_SCROLL_INTO_VIEW_STEP = {
 
 /* ---- §6's `scrollWidth` and `scrollHeight` --------------------------------------------------------------- */
 
-static JSValue ev_scroll_extent(JSContext *ctx, const EvTarget *t, bool vertical)
+/* Steps 2 to 6, which answer before the element's own scrolling area: true with `*out` when one of them
+   does, false when step 7 is reached and the caller walks §2's scrolling area. */
+static bool ev_scroll_extent_early(JSContext *ctx, const EvTarget *t, bool vertical, JSValue *out)
 {
     bool presented;
     double vp, area;
 
     /* step 2 */
-    if (!t->dctx) return ev_long(ctx, 0.0);
+    if (!t->dctx) { *out = ev_long(ctx, 0.0); return true; }
     /* step 3: "the width of the viewport EXCLUDING the width of the scroll bar, if any, or zero if there is no
        viewport". This user agent renders no scroll bar — there is nothing to overflow the one box in the model
        — so the exclusion removes nothing and the answer is the viewport. */
@@ -1023,24 +1025,29 @@ static JSValue ev_scroll_extent(JSContext *ctx, const EvTarget *t, bool vertical
        navigable, computed rather than shrugged at. */
     area = !presented ? 0.0 : (vertical ? viewport_scrolling_area_height(t->dctx)
                                         : viewport_scrolling_area_width(t->dctx));
-    if (t->is_root && !t->quirks)
-        return presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
+    if (t->is_root && !t->quirks) {
+        *out = presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
                          : ev_long(ctx, 0.0);
+        return true;
+    }
     /* Step 5's condition is PER AXIS — "not potentially scrollable in the x axis" for `scrollWidth` and "in the
        y axis" for `scrollHeight` — which is why it is asked with this member's own axis and not with the
        at-least-one-axis form the scroll-position steps use. */
-    if (t->is_body && t->quirks && !ev_potentially_scrollable(t, vertical))
-        return presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
+    if (t->is_body && t->quirks && !ev_potentially_scrollable(t, vertical)) {
+        *out = presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
                          : ev_long(ctx, 0.0);
+        return true;
+    }
     /* step 6 */
-    if (!t->has_box) return ev_long(ctx, 0.0);
+    if (!t->has_box) { *out = ev_long(ctx, 0.0); return true; }
     /* Step 7 — "return the width of the element's scrolling area", which is §2's own term and is
        core/layout/scrolling_area.h's: a right-most POSITION over this element's padding edge and every one of
        its descendants' margin edges, and NOT the padding edge's extent `clientWidth` above reports. The two
        differ exactly when the element's content overflows it, which is the state a page asks this member
-       about. The extent is a length like `clientWidth`'s and takes the same conversion, so a box whose chain
-       bottoms out in the initial containing block reports a `long` carrying the viewport's domain. */
-    return ev_length_long(ctx, scrolling_area_extent_px(lxb_dom_interface_element(t->node), vertical));
+       about. EV_VIEW_STEP walks it under a resting drive and converts the extent as `clientWidth`'s is, so a
+       box whose chain bottoms out in the initial containing block reports a `long` carrying the viewport's
+       domain. */
+    return false;
 }
 
 /* ---- §6's `clientWidth`, `clientHeight`, `clientTop` and `clientLeft` ------------------------------------- */
@@ -1769,8 +1776,11 @@ static JSValue ev_get_member(JSContext *ctx, const EvTarget *t, ElementViewMembe
     switch (member) {
     case EV_SCROLL_TOP:     return ev_scroll_position(ctx, t, true);
     case EV_SCROLL_LEFT:    return ev_scroll_position(ctx, t, false);
-    case EV_SCROLL_HEIGHT:  return ev_scroll_extent(ctx, t, true);
-    case EV_SCROLL_WIDTH:   return ev_scroll_extent(ctx, t, false);
+    case EV_SCROLL_HEIGHT:
+    case EV_SCROLL_WIDTH:
+        DFAIL("CSSOM VIEW §6's `scrollWidth`/`scrollHeight` reached the plain getter; EV_VIEW_STEP answers them, "
+              "walking step 7's scrolling area in its own stage");
+        break;
     case EV_CLIENT_HEIGHT:
     case EV_CLIENT_WIDTH:
         DFAIL("CSSOM VIEW §6's `clientWidth`/`clientHeight` reached the plain getter; they are step machines "
@@ -1789,21 +1799,25 @@ static JSValue ev_get_member(JSContext *ctx, const EvTarget *t, ElementViewMembe
    ancestors under a resting drive, so a page-sized sheet rests between rules and a selector the cascade cannot
    decide forks the flow (layout_job_fork); the member then runs on the same job, whose cascade record holds
    those matches for every element and property it asks.
-   Named residual. Not covered: the member's own layout (§2's scrolling area over the descendants, a scroll
-   position) runs to completion after the box tests, so a descendant's style it reads is matched with no
-   resting drive, cannot keep a fork and does not rest. Next diff: those walks asking their styles and
-   questions under the resting drive, as `clientWidth`'s padding edge is asked. Absence shows as:
-   selector_match_node's abort for a build with no resting drive under one of these six members, or a rest
-   unit overrun inside one. */
+   `scrollWidth`/`scrollHeight`'s step 7 walks §2's scrolling area over the descendants in a stage of its own,
+   one rest unit per activation under a resting drive, so a deep or wide subtree rests inside the walk.
+   Named residual. Not covered: the other members' own layout (a scroll position, and the viewport's scrolling
+   area steps 4 and 5 read) runs to completion after the box tests, so a descendant's style it reads is matched
+   with no resting drive, cannot keep a fork and does not rest. Next diff: the viewport's walk in the same
+   stage, then `scrollTop`/`scrollLeft`. Absence shows as: selector_match_node's abort for a build with no
+   resting drive under one of those members, or a rest unit overrun inside one. */
 #define EV_VIEW_STAGES(X) \
     X(EV_VIEW_MEASURE, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollTop / scrollLeft / " \
                        "scrollWidth / scrollHeight / clientTop / clientLeft (the box tests under a resting " \
-                       "drive, then the member on the same job)")
+                       "drive, then the member on the same job)") \
+    X(EV_VIEW_AREA, "CSSOM VIEW §6 scrollWidth / scrollHeight step 7: CSSOM VIEW §2's scrolling area walked " \
+                    "under a resting drive")
 enum { IDL_STEP_STAGE_BASE(EV_VIEW_STAGES) EV_VIEW_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const EV_VIEW_STEPS[] = { EV_VIEW_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL before the first activation */
+    LayoutJob         *job;    /* owned, declared through layout_job_step_ops; NULL before the first activation */
+    ScrollingAreaWalk  area;   /* EV_VIEW_AREA's cursor; its nodes are the running flow's, shared by address */
 } EvViewState;
 
 static void ev_view_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1820,7 +1834,7 @@ static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     lxb_dom_element_t *el = element_of_value(hdr->this_val);
     LayoutJobDrive d;
     EvTarget t;
-    bool matched;
+    bool matched, area = false;
     int rc;
 
     (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
@@ -1843,8 +1857,15 @@ static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     layout_job_drive_end(&d);
     rest_unit_end();
     if (matched) {
+        ElementViewMember m = (ElementViewMember)idl_step_magic(hdr);
+
         ev_target(hdr->this_val, &t);
-        *presult = ev_get_member(ctx, &t, (ElementViewMember)idl_step_magic(hdr));
+        if (m != EV_SCROLL_WIDTH && m != EV_SCROLL_HEIGHT)
+            *presult = ev_get_member(ctx, &t, m);
+        else if (!ev_scroll_extent_early(ctx, &t, m == EV_SCROLL_HEIGHT, presult)) {
+            scrolling_area_walk_element(&s->area, lxb_dom_interface_element(t.node), m == EV_SCROLL_HEIGHT);
+            area = true;
+        }
     }
     layout_job_leave(s->job);
     if (layout_job_declined(s->job)) {
@@ -1854,6 +1875,42 @@ static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     if (!matched) {
         layout_job_rested(s->job);
         return JS_STEP_YIELD;
+    }
+    if (!area) return JS_STEP_DONE;
+    METRIC_ADD(scroll_area_asks, 1);
+    hdr->stage = EV_VIEW_AREA;
+
+    STEP_ARM(EV_VIEW_AREA);
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
+    {
+        size_t k = 0, n = rest_unit_items(REST_UNIT_LAYOUT_DESCENDANTS);
+        bool done;
+
+        /* The walk's drive, as core/dom/element_scrolling.c's into-view walk steps it: a node whose origin
+           answers "not yet" leaves its questions suspended, and each activation computes them first, up to the
+           drive's boxes, then retries the node. */
+        rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+        layout_job_enter(s->job);
+        layout_job_drive_begin_resting(&d);
+        while (k < n && !scrolling_area_walk_done(&s->area) && block_flow_drive_deferred(&d)) {
+            if (scrolling_area_walk_step(&s->area)) k++;
+            else if (layout_job_drive_spent(&d)) break;
+        }
+        layout_job_drive_end(&d);
+        rest_unit_end();
+        done = scrolling_area_walk_done(&s->area);
+        if (done) *presult = ev_length_long(ctx, scrolling_area_walk_extent(&s->area));
+        layout_job_leave(s->job);
+        if (layout_job_declined(s->job)) {
+            rc = layout_job_fork(ctx, hdr, s->job);
+            return rc ? rc : JS_STEP_YIELD;
+        }
+        if (!done) {
+            layout_job_rested(s->job);
+            METRIC_ADD(scroll_area_rests, 1);
+            return JS_STEP_YIELD;
+        }
     }
     return JS_STEP_DONE;
 }

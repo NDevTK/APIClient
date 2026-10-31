@@ -1196,6 +1196,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/flexreplaced.h"
 #include "fixture/gridreplaced.h"
 #include "fixture/imgpending.h"
+#include "fixture/scrollarea.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1754,6 +1755,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "flexreplaced", HTML_FLEXREPLACED },
     { "gridreplaced", HTML_GRIDREPLACED },
     { "imgpending", HTML_IMGPENDING },
+    { "scrollarea", HTML_SCROLLAREA },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15733,6 +15735,39 @@ TF_UNIT void probes_imgpending(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `scrollarea` document (fixture/scrollarea.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give
+   every value they expect. The rest is read from the counter element_view.c raises where EV_VIEW_STEP yields
+   inside the walk. */
+TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "sh", "210", "CSSOM VIEW §2: the deep subtree's scrolling area is not 200 paddings over a 10px leaf" },
+        { "sw", "500", "CSSOM VIEW §2: the deep subtree's scrolling area is not the 500px leaf wide" },
+        { "ch", "50", "CSSOM VIEW §6: the clipped box's clientHeight is not its 50px padding edge" },
+        { "lh", "600", "CSSOM VIEW §2: the wide subtree's scrolling area is not 300 blocks of 2px" },
+        { "lw", "100", "CSSOM VIEW §2: the wide subtree's scrolling area is wider than its box" },
+    };
+    const char *rests = strstr(js, "\"_layoutScrollAreaRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"_layoutScrollAreaRests\":"), NULL, 10) : -1;
+    const char *sa_why = NULL; int sa_tt = !!strstr(js, "\"/api/scrollarea\"");
+    const char *sar_why = NULL; int sar_tt = 1;
+    unsigned i;
+
+    fold_row(&sa_tt, &sa_why, sa_tt,
+             "NOT REACHED: there is no /api/scrollarea record at all, so the document aborted before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&sa_tt, &sa_why, param_value_is(js, "/api/scrollarea", ROWS[i].key, ROWS[i].want), ROWS[i].why);
+    fold_row(&sar_tt, &sar_why, rests != NULL,
+             "the result document carries no `_layoutScrollAreaRests` row from solver/metrics/layout.def");
+    fold_row(&sar_tt, &sar_why, nrests >= 1,
+             "CSSOM VIEW §6's `scrollHeight` over a walk wider than one activation took no rest, so the scrolling "
+             "area ran to completion instead of yielding inside the walk");
+    const Probe rows[] = {
+        { "scroll-area-extent", sa_tt, "/api/scrollarea", SESS_EXPLORE, sa_why },
+        { "scroll-area-rests", sar_tt, "/api/scrollarea", SESS_EXPLORE, sar_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -22037,6 +22072,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_flexreplaced(js, probes, &np);
     probes_gridreplaced(js, probes, &np);
     probes_imgpending(js, probes, &np);
+    probes_scrollarea(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
