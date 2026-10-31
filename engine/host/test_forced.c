@@ -16595,7 +16595,7 @@ TF_UNIT void probes_rxliteral(const char *js, Probe *tab, int *n) {
     long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
     const char *m_why = NULL; int m_tt = 1;
     fold_row(&m_tt, &m_why, !!strstr(js, "\"/api/rxl\""),
-             "NOT REACHED: there is no /api/rxl record, so the inserted script never ran to its fetch");
+             "NOT REACHED: there is no /api/rxl record, so the script never ran to its fetch");
     fold_row(&m_tt, &m_why, param_value_is(js, "/api/rxl", "m", "true"),
              "the program the parse compiled from the literal across its rests does not match what its pattern "
              "states");
