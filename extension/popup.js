@@ -1150,6 +1150,7 @@ async function renderEgressPolicy(act) {
          (r.subjectRefusal === null || typeof r.subjectRefusal === "string") &&
          (r.refused === null || typeof r.refused === "string") &&
          Array.isArray(r.signals) && Array.isArray(r.defaults) && Array.isArray(r.legacyDropped) &&
+         Array.isArray(r.unnamed) &&
          (r.vector === null || (r.vector !== null && typeof r.vector === "object")),
          "the egress command answered without the table now in force — this row is the only place a person " +
          "can see or change which signals this tool may fetch data under, and a partial answer would render " +
@@ -1161,7 +1162,9 @@ async function renderEgressPolicy(act) {
   const status = document.getElementById("egress-status");
   const allowed = r.origins.indexOf(r.subject) >= 0;
   originEl.textContent = r.subject === "" ? "(no origin)" : r.subject;
-  btn.disabled = r.subjectUsable !== null || allowed;
+  /* An origin whose grant permits no value of some gating row (a signal added since it was stored) is allowed
+     again by the same click, which widens every row. */
+  btn.disabled = r.subjectUsable !== null || (allowed && r.unnamed.length === 0);
   /* WHAT THE PERSON IS TOLD, AND IT IS THE POLICY'S OWN ANSWER RATHER THAN THIS SURFACE'S GUESS AT IT.
      `subjectRefusal` is what `safeFetchFiringRefusal` — the SAME function the chokepoint refuses requests
      with — answers for a forced data request at this origin right now. So the sentence below changes because
@@ -1183,6 +1186,8 @@ async function renderEgressPolicy(act) {
        person is told WHICH ROW below holds it rather than that something did, and the row is right there. */
     msg = "refused on " + r.subjectRefusal + " — the row named there is the one holding it; this app's own "
         + "scripts, modules and lazy chunks load at every setting";
+  if (allowed && r.unnamed.length > 0)
+    msg = "needs re-permitting for: " + r.unnamed.join(", ") + " (added since this grant was stored, or unticked) — " + msg;
   if (r.refused) msg = "not permitted (" + r.refused + ") — " + msg;
   if (r.persistError) msg = "NOT SAVED for the next session (" + r.persistError + ") — " + msg;
   status.textContent = msg;

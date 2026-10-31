@@ -60,6 +60,11 @@
       <button id="btn-attacker-site" type="button" class="btn-small">Check and save</button>
       <button id="btn-attacker-site-clear" type="button" class="btn-small">Clear</button>
       <span id="attacker-site-status" class="attacker-site-status"></span>
+      <span class="attacker-site-hint">Every name under the site must resolve to your server, and the server must
+        issue a certificate for each name it is asked for (per-name, on-demand certificates): a composed origin
+        can be several labels deep, and a wildcard certificate's * covers only one label. The page it serves
+        must allow eval (no CSP without 'unsafe-eval') and must not send Cross-Origin-Opener-Policy:
+        same-origin.</span>
     </div>
 
     <!-- This extension's own third-party-cookie setting (lib/request-identity.js), separate from the browser's,

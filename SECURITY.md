@@ -605,7 +605,12 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
   answered from the empty table. `_firingRefusal` DCHECKs that the table was stated.
 - A stored grant from the earlier single-switch control (an array of origins) is dropped, not read as
   "everything", and the popup names the dropped origins (`legacyDropped`). A signal a stored grant does not
-  name is not permitted, so adding a signal narrows every existing grant.
+  name is not permitted, so adding a signal narrows every existing grant. The popup shows such an origin as
+  needing re-permitting for each gating signal it permits no value of (`safeFetchEgressUnnamed`), and its
+  one-click allow stays enabled until it does.
+- Signals added since grants were first stored, each narrowing every grant stored before it: `reaches`
+  (`attacker-site`, `another-party`), with the attacker-site setting. A grant stored before it refuses
+  `reaches=another-party` until the person permits it again.
 - The native host states its table synchronously, and `--explore <origin>` in `engine/trusted.mjs` is
   `safeFetchWiden`.
 

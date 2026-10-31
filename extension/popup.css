@@ -1912,6 +1912,10 @@ details summary:hover {
   opacity: 0.75;
   flex: 1 1 100%;
 }
+.attacker-site .attacker-site-hint {
+  opacity: 0.6;
+  flex: 1 1 100%;
+}
 
 /* The stored-page-cache setting (popup.html §ONE SETTING SURVIVES). It sits in the header rather than a
    settings panel because there is no settings panel: the two controls that made one were deleted for being

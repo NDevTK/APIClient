@@ -1260,6 +1260,18 @@ function safeFetchUnwiden(origin) {
   if (_EXPLORED[origin] && Object.keys(_EXPLORED[origin]).length === 0) delete _EXPLORED[origin];
   return had;
 }
+/* The gating signals an origin with any grant permits no value of: a signal added after its grant was stored
+   (which a stored grant does not name, so it narrows), or one the person unticked entirely. Either way every
+   request there is refused at that row, and the surface says it needs permitting again. */
+function safeFetchEgressUnnamed(origin) {
+  CHECK(_EXPLORED_STATED, "an origin's unnamed signals were read before this host stated its table");
+  var e = _EXPLORED[origin], out = [], i;
+  if (!e || !Object.keys(e).some(function (name) { return !_isSiteSetting(name); })) return out;
+  for (i = 0; i < _SIGNALS.length; i++)
+    if (_SIGNALS[i].gates && !(e[_SIGNALS[i].name] && Object.keys(e[_SIGNALS[i].name]).length > 0))
+      out.push(_SIGNALS[i].name);
+  return out;
+}
 /* The permitted origins, for a caller that asserts their absence where its own reasoning relies on it. */
 function safeFetchWidenedOrigins() {
   CHECK(_EXPLORED_STATED,
@@ -2643,6 +2655,7 @@ if (typeof self !== "undefined") {
   self.fetchForbiddenRequestHeader = fetchForbiddenRequestHeader;
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
   self.safeFetchWiden = safeFetchWiden;
+  self.safeFetchEgressUnnamed = safeFetchEgressUnnamed;
   self.safeFetchUnwiden = safeFetchUnwiden;
   self.safeFetchPermit = safeFetchPermit;
   self.safeFetchEgressStated = safeFetchEgressStated;

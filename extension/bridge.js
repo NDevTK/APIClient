@@ -7534,6 +7534,8 @@ self.astDispatch = async function astDispatch(msg) {
         vector: _subjectUsable === null ? self.safeFetchSignalVector(_probe) : null,
         defaults: self.safeFetchDefaultArms(),
         legacyDropped: _egressLegacyDropped,
+        /* The gating rows this origin's grant permits nothing of, which a signal added since narrowed. */
+        unnamed: _subjectUsable === null ? self.safeFetchEgressUnnamed(msg.subject) : [],
         refused, changed, persistError: _persistError } };
     }
     if (msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + msg.type };

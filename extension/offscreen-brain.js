@@ -2302,7 +2302,10 @@ function _recordProbeDelivery(seedUrl, facts) {
 /* A top-level document at the delivered address is the delivery only when the attacker tab opened it: the
    browser's `openerTabId` for its tab, so a tab of the same page the person already had open is not latched. */
 async function _latchIfAttackerOpened(ses, facts, browserStated) {
-  const tab = await swRpc("tabs.get", facts.tabId);
+  /* A tab closed before the browser answers holds no delivered document. */
+  let tab;
+  try { tab = await swRpc("tabs.get", facts.tabId); }
+  catch (e) { RETHROW_FATAL(e); return; }
   if (ses.delivered || ses.replaced.indexOf(facts.documentId) >= 0) return;
   if (typeof ses.attackerTabId !== "number" || tab.openerTabId !== ses.attackerTabId) return;
   _latchProbeDelivery(ses, facts, browserStated);
