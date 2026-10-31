@@ -24657,6 +24657,12 @@ static JSValue js_enum_key_value(JSContext *ctx, JSAtom atom)
     return name;
 }
 
+/* The same speller for a host enumeration that hands a property name to an algorithm as a value. */
+JSValue JS_EnumKeyValue(JSContext *ctx, JSAtom atom)
+{
+    return js_enum_key_value(ctx, atom);
+}
+
 /* Write 14.7.5.10.2.1's answer into the two slots OP_for_in_next grows the stack by. Both the "yielded a key" and
    the "exhausted" endings go through here so the shape cannot drift between them. */
 static void js_for_in_deliver(JSContext *ctx, JSValue *sp, JSAtom prop)

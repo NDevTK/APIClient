@@ -2561,8 +2561,8 @@ static int idl_rec_map_set(JSContext *ctx, JSValue list, uint32_t *pn, JSValue k
 
         if (JS_IsException(pair)) { JS_FreeValue(ctx, key); JS_FreeValue(ctx, value); return -1; }
         k = JS_GetPropertyUint32(ctx, pair, 0);
-        /* Both are Strings by now — §3.2.12 has already run on each — so this is a byte comparison and not
-           the page's `valueOf`. JS_IsSameValue is exact for two Strings. */
+        /* Each is a String §3.2.12 has already run on, or an unknown that crossed, so this is a byte comparison
+           or an identity and never the page's `valueOf`. Distinct unknowns are distinct own members. */
         same = JS_IsSameValue(ctx, k, key);
         JS_FreeValue(ctx, k);
         if (same) {
@@ -2696,8 +2696,14 @@ static int idl_conv_rec_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlC
                 /* THE KEY IS CONVERTED HERE AND NOT AT `key_ok`, WHICH ONLY REFUSED A SYMBOL. §3.2.12's
                    replacement is what makes two ES keys converge, and the map set below is what step 4.2.4
                    then does with that — so the two must be one step apart and in this order. */
-                JSValue key = JS_ToScalarValueString(ctx, JS_DupValue(ctx, f->rec.name));
+                JSValue key = JS_DupValue(ctx, f->rec.key);
 
+                /* An unknown key crosses as itself, as idl_concolic_rule answers for USVString elsewhere, so the
+                   body asks its own questions of it. Named residual. Not covered: two unknown keys whose values
+                   differ only in a lone surrogate converge to one entry in a real browser, and stay two here.
+                   Next diff: the map set below asks that equality of the two unknowns as a fork. How its absence
+                   shows: a record over two unknown members never reaches a one-entry body world. */
+                if (!concolic_is(key)) key = JS_ToScalarValueString(ctx, key);
                 if (JS_IsException(key)) { JS_FreeValue(ctx, str); return -1; }
                 if (idl_rec_map_set(ctx, f->list, &f->n, key, str) < 0) return -1;
             }

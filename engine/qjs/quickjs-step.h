@@ -1215,6 +1215,9 @@ JS_EXTERN JSAtom JS_WellKnownSymbolAtom(JSWellKnownSymbol which);
    USVStrings, and wpt asserts the replacement directly. `str` is OWNED; a string with no unpaired surrogate is
    returned unchanged, so the common case allocates nothing. */
 JS_EXTERN JSValue JS_ToScalarValueString(JSContext *ctx, JSValue str);
+/* A property name handed back to the program as a value: the unknown a slot was named for when the concolic
+   host minted the name for one, the name itself otherwise. Returns an owned value, or JS_EXCEPTION. */
+JS_EXTERN JSValue JS_EnumKeyValue(JSContext *ctx, JSAtom atom);
 
 /* A DIAGNOSTIC string for a value, built WITHOUT invoking the page's `toString`. JS_ToCString does invoke it,
    and at a C entry there is no flow to run it on — which since the coercion methods became step machines is
