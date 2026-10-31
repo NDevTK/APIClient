@@ -5,8 +5,10 @@
 
 #include <lexbor/dom/dom.h>
 #include <lexbor/html/html.h>
+#include <lexbor/css/syntax/tokenizer.h>
 
 #include "check.h"
+#include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"       /* §2.6.1's `unsigned long` model — §4.12.5's bitmap reads one */
@@ -227,6 +229,79 @@ static JSContext *rep_scripting_realm(lxb_dom_node_t *n)
 }
 
 /* HTML §15.4's classification and css-images-3 §4.1's natural dimensions, before css-contain-2 §3.1. */
+/* SVG 2 §8.6 "The ‘viewBox’ attribute"'s value, `[<min-x>,? <min-y>,? <width>,? <height>]` over `<number>`, as
+   §4.2 "Attribute syntax" parses it; false for an absent or unparsable one, and for "a negative value for
+   <width> or <height>", which "invalidates the ‘viewBox’ attribute". */
+static bool rep_svg_viewbox(lxb_dom_element_t *el, double *w, double *h)
+{
+    const lxb_char_t *v;
+    size_t vlen = 0;
+    lxb_css_syntax_tokenizer_t *tkz;
+    lxb_css_syntax_token_t *t;
+    double num[4];
+    unsigned n = 0;
+    bool ok = true, comma = false;
+
+    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"viewBox", 7, &vlen);
+    if (v == NULL) return false;
+    tkz = lxb_css_syntax_tokenizer_create();
+    CHECK(tkz != NULL, "layout: OOM tokenizing an svg's viewBox");
+    if (lxb_css_syntax_tokenizer_init(tkz) != LXB_STATUS_OK) {
+        lxb_css_syntax_tokenizer_destroy(tkz);
+        return false;
+    }
+    lxb_css_syntax_tokenizer_buffer_set(tkz, v, vlen);
+    for (;;) {
+        t = lxb_css_syntax_token(tkz);
+        if (t == NULL) { ok = false; break; }
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
+        if (t->type == LXB_CSS_SYNTAX_TOKEN_NUMBER && n < 4) {
+            num[n++] = lxb_css_syntax_token_number(t)->num;
+            comma = false;
+        } else if (t->type == LXB_CSS_SYNTAX_TOKEN_COMMA && n > 0 && n < 4 && !comma) {
+            comma = true;
+        } else if (t->type != LXB_CSS_SYNTAX_TOKEN_WHITESPACE) {
+            ok = false;
+        }
+        lxb_css_syntax_token_consume(tkz);
+        if (!ok) break;
+    }
+    lxb_css_syntax_tokenizer_destroy(tkz);
+    if (!ok || n != 4 || comma || !(num[2] >= 0.0) || !(num[3] >= 0.0)) return false;
+    *w = num[2];
+    *h = num[3];
+    return true;
+}
+
+/* SVG 2 §8.12 "Intrinsic sizing properties of SVG content": an outermost `svg` laid out by CSS is sized by
+   css-images-3's Default Sizing Algorithm, so it is a replaced element. "The intrinsic dimensions must also be
+   determined from the width and height sizing properties ... 'auto' and percentage lengths must not be used",
+   so a natural dimension is a computed `width` or `height` that is a length alone. Its intrinsic aspect ratio
+   is "width / height" when both "are absolute values", otherwise the viewBox's; an SVG View is active only in
+   an SVG document reached through a fragment, which an inline `svg` is not. */
+static ReplacedElement rep_svg(lxb_dom_element_t *el)
+{
+    CssLength w = css_computed_length(el, "width"), h = css_computed_length(el, "height");
+    ReplacedElement r = rep_bare();
+    double vw = 0.0, vh = 0.0;
+
+    if (w.kind == CSS_LENGTH_ABSOLUTE) { r.has_width = true; r.width = w.px; }
+    if (h.kind == CSS_LENGTH_ABSOLUTE) { r.has_height = true; r.height = h.px; }
+    if (r.has_width && r.has_height) {
+        r.has_ratio = r.width.px > 0.0 && r.height.px > 0.0;
+        r.ratio = r.has_ratio ? r.width.px / r.height.px : 0.0;
+    } else if (rep_svg_viewbox(el, &vw, &vh)) {
+        /* css-images-3 §4.1: a degenerate ratio, "at least one part being zero or infinity", is no ratio. */
+        r.has_ratio = vw > 0.0 && vh > 0.0 && isfinite(vw) && isfinite(vh);
+        r.ratio = r.has_ratio ? vw / vh : 0.0;
+    }
+    DCHECK(!r.has_width || r.width.px >= 0.0, "an svg's natural width is negative; css-sizing-3 §3.2's `width` "
+                                              "grammar is non-negative");
+    DCHECK(!r.has_height || r.height.px >= 0.0, "an svg's natural height is negative; css-sizing-3 §3.2's "
+                                                "`height` grammar is non-negative");
+    return r;
+}
+
 static ReplacedElement rep_classify(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n;
@@ -234,6 +309,19 @@ static ReplacedElement rep_classify(lxb_dom_element_t *el)
 
     DCHECK(el != NULL, "HTML §15.4's replaced-element question was asked about no element");
     n = lxb_dom_interface_node(el);
+    /* The outermost `svg` — one whose parent is not itself an SVG element — has CSS box layout (css-display-3
+       Appendix B's "svg whose parent is an HTML element, as well as document root elements"); every other SVG
+       element is laid out by SVG, not by CSS. */
+    if (n->ns == LXB_NS_SVG) {
+        size_t len = 0;
+        const lxb_char_t *name = lxb_dom_element_local_name(el, &len);
+        const lxb_dom_node_t *p = n->parent;
+
+        if (len == 3 && memcmp(name, "svg", 3) == 0 &&
+            !(p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && p->ns == LXB_NS_SVG))
+            return rep_svg(el);
+        return rep_not();
+    }
     /* HTML §15.4 "Replaced elements", first sentence: "The following elements can be replaced elements: audio,
        canvas, embed, iframe, img, input, object, and video." Every other element is not one; a `<select>` is a
        §15.5 "Widgets" box with its own sizing rule. */

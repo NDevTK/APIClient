@@ -565,9 +565,9 @@ static bool bp_replaced_canvas(BpState *st, lxb_dom_element_t *el)
  * the CALL that had no right to be made.
  *
  * THE TAIL IS A GUARD AND NOT A GAP. The set of elements that reach here is core/layout/replaced_element.c's
- * `replaced_element_of`, which is a closed list of HTML TAGS THIS ENGINE ENUMERATES — an `audio`, an `object`
+ * `replaced_element_of`, a closed list of HTML tags plus the outermost `svg` — an `audio`, an `object`
  * and every `input` but §4.10.5.1.19's image button answer `rep_not` there, and that file's image-button arm
- * is an always-fatal CHECK of its own — so the five arms above are total at this revision and a sixth is that
+ * is an always-fatal CHECK of its own — so the six arms above are total at this revision and a seventh is that
  * component gaining a row. The crash therefore names THAT file, because the remedy is an arm here written
  * against whatever sentence made the new element replaced.
  *
@@ -576,7 +576,7 @@ static bool bp_replaced_canvas(BpState *st, lxb_dom_element_t *el)
  * the walk and keeps the prefix, and an image nobody fetched is not that — it is a box that contributed no
  * ink, exactly as a `background-color: transparent` does.
  *
- * NAMED RESIDUAL — THREE OF THE FIVE REPLACED ELEMENTS CONTRIBUTE NO INK, FOR THREE DIFFERENT REASONS.
+ * NAMED RESIDUAL — FOUR OF THE SIX REPLACED ELEMENTS CONTRIBUTE NO INK (`svg`: no SVG painter), AS FOLLOWS.
  * WHAT IS NOT COVERED: an `iframe`'s replaced content is its child navigable's own rendering, which is a
  * SURFACE composed from a SECOND document's display list and is the one thing in this paragraph that
  * core/paint/display_list.h genuinely has no kind for. A `video`'s is HTML §15.4.1's "When a video element
@@ -612,9 +612,16 @@ static bool bp_replaced_content(BpState *st, lxb_dom_element_t *el)
         bp_decline(st, BOX_PAINT_DECLINE_UNBUILT_REPLACED);
         return true;
     }
+    /* An outermost `svg` (SVG 2 §8.12): its content is SVG's own rendering model, which this engine does not
+       paint, so it declines for the same reason the three above do. */
+    if (n->ns == LXB_NS_SVG) {
+        bp_decline(st, BOX_PAINT_DECLINE_UNBUILT_REPLACED);
+        return true;
+    }
     DFAIL("CSS 2.1 §E.2 \"Painting order\"'s \"the replaced content, atomically\" was offered for an element "
           "this painter has no arm for. The arms here are the closed list core/layout/replaced_element.c's "
-          "`replaced_element_of` answers `replaced` for — `img`, `canvas`, `iframe`, `video` and `embed` — so "
+          "`replaced_element_of` answers `replaced` for — `img`, `canvas`, `iframe`, `video`, `embed` and the "
+          "outermost `svg` — so "
           "reaching this line means THAT file gained a row and this one did not. BUILD the arm here, against "
           "the sentence that made the new element replaced: HTML §15.4.1 \"Embedded content\" states one per "
           "element and names what each one's contents ARE, which is the operand the arm needs");

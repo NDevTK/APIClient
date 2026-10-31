@@ -3187,21 +3187,26 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
         return css_px_scale(uv_content_size(el, true, uv_surround(el, true)), rep->ratio);
     }
     /* "If 'height' and 'width' both have computed values of 'auto' and the element has an intrinsic ratio but
-       no intrinsic height or width, then the used value of 'width' is UNDEFINED IN CSS 2.1." */
-    if (h_auto && rep->has_ratio)
-        DFAIL("CSS 2.1 §10.3.2 \"Inline, replaced elements\" reached the one arm it declines to define: both "
-              "`width` and `height` compute to `auto` and the element has an INTRINSIC RATIO but neither an "
-              "intrinsic width nor an intrinsic height — a scalable SVG image is the object css-images-3 §4.1 "
-              "\"Object-Sizing Terminology\" names for this. The spec's words are \"the used value of 'width' "
-              "is undefined in CSS 2.1\", followed by a SUGGESTION and not a rule: \"however, it is suggested "
-              "that, if the containing block's width does not itself depend on the replaced element's width, "
-              "then the used value of 'width' is calculated from the constraint equation used for block-level, "
-              "non-replaced elements in normal flow\". That equation is `uv_block_auto_width` above and it "
-              "would run today. It is NOT written here because nothing in this build can produce an object "
-              "with a ratio and no sizes — there is no image decoder and no SVG document sizing — so the arm "
-              "would be a choice among several UAs' answers with no way to exercise it, which is the plausible "
-              "datum CLAUDE.md refuses. BUILD the object that has this shape first (an SVG image with a "
-              "`viewBox` and no `width`/`height`), then write the suggestion beside a test that fires");
+       no intrinsic height or width, then the used value of 'width' is undefined in CSS 2.1. However, it is
+       suggested that, if the containing block's width does not itself depend on the replaced element's width,
+       then the used value of 'width' is calculated from the constraint equation used for block-level,
+       non-replaced elements in normal flow." An outermost `svg` with only a `viewBox` is that object (SVG 2
+       §8.12), and Chrome and Firefox both take the suggestion; the equation answers the border box under
+       `border-box`, so the content extent is recovered from it. */
+    if (h_auto && rep->has_ratio) {
+        lxb_dom_element_t *cb = used_value_containing_block(el);
+        CssPx w;
+        char nbuf[160];
+
+        if (cb != NULL && !used_value_width_is_definite(cb))
+            DFAILF("%s is a replaced element with an intrinsic ratio and no intrinsic size, both sizes `auto`, "
+                   "in a containing block whose width is content-based, where CSS 2.1 §10.3.2's suggestion "
+                   "does not apply. BUILD css-sizing-3 §5.1's intrinsic size for that object",
+                   box_subject(el, nbuf, sizeof nbuf));
+        w = uv_block_auto_width(el, css_computed_length(el, "width"), uv_box_kind(el));
+        if (!uv_is_border_box(el)) return w;
+        return css_px_sub(w, uv_surround_total(uv_surround(el, false)));
+    }
     /* "Otherwise, if 'width' has a computed value of 'auto', and the element has an intrinsic width, then that
        intrinsic width is the used value of 'width'." */
     if (rep->has_width) return rep->width;

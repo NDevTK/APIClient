@@ -1185,6 +1185,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/calctree.h"
 #include "fixture/svgattr.h"
 #include "fixture/gridalign.h"
+#include "fixture/svgreplaced.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1732,6 +1733,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "calctree", HTML_CALCTREE },
     { "svgattr", HTML_SVGATTR },
     { "gridalign", HTML_GRIDALIGN },
+    { "svgreplaced", HTML_SVGREPLACED },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15609,6 +15611,32 @@ TF_UNIT void probes_gridalign(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `svgreplaced` document (fixture/svgreplaced.h): each svg's border box, WxH; Chrome
+   155.0.8059.84 and Firefox 158.0.1 give every value they expect. */
+TF_UNIT void probes_svgreplaced(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "r1", "300x150", "CSS 2.1 §10.3.2: an svg with no natural size or ratio is not 300 x 150" },
+        { "r2", "200x100", "CSS 2.1 §10.3.2: a viewBox-only inline svg does not take the suggested block width" },
+        { "r3", "200x100", "CSS 2.1 §10.3.2: a viewBox-only block svg does not take the suggested block width" },
+        { "r4", "40x20", "SVG 2 §8.12: a width and a viewBox do not give the height by the viewBox's ratio" },
+        { "r5", "100x50", "SVG 2 §8.12: a percentage width is taken as a natural size" },
+        { "r6", "60x30", "SVG 2 §8.12: a height and a viewBox do not give the width by the viewBox's ratio" },
+        { "r7", "30x150", "CSS 2.1 §10.6.2: an author width with no ratio is not 150 tall" },
+        { "r8", "300x150", "SVG 2 §8.6: a viewBox with a negative size is not invalid" },
+    };
+    const char *sr_why = NULL; int sr_tt = !!strstr(js, "\"/api/svgreplaced\"");
+    unsigned i;
+
+    fold_row(&sr_tt, &sr_why, sr_tt,
+             "NOT REACHED: there is no /api/svgreplaced record at all, so the document aborted before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&sr_tt, &sr_why, param_value_is(js, "/api/svgreplaced", ROWS[i].key, ROWS[i].want), ROWS[i].why);
+    const Probe rows[] = {
+        { "svg-replaced-element", sr_tt, "/api/svgreplaced", SESS_EXPLORE, sr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21730,6 +21758,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_calctree(js, probes, &np);
     probes_svgattr(js, probes, &np);
     probes_gridalign(js, probes, &np);
+    probes_svgreplaced(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
