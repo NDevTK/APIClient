@@ -9754,6 +9754,33 @@ static int param_value_only(const char *js, const char *url, const char *pname, 
     return mine > 0 && mine == param_value_count(js, url, pname);
 }
 
+/* The values of one param of one statement that are not `val`, spelled into `buf` (at most `cap` bytes,
+   comma-separated, truncated), for a row's reason to name what arrived in the expected value's place. Answers
+   how many there were. */
+static int param_values_other(const char *js, const char *url, const char *pname, const char *val,
+                              char *buf, size_t cap)
+{
+    EmittedRec r[EMITTED_REC_MAX];
+    const char *v, *b;
+    size_t n, m = strlen(val), at = 0;
+    int cnt = emitted_records(js, url, r, EMITTED_REC_MAX), i, k = 0;
+
+    DCHECK(cap > 0, "a value list was asked into no buffer");
+    buf[0] = '\0';
+    for (i = 0; i < cnt; i++)
+        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; ) {
+            if (n == m && memcmp(b, val, m) == 0) continue;
+            if (at + n + 2 < cap) {
+                if (at) buf[at++] = ',';
+                memcpy(buf + at, b, n);
+                at += n;
+                buf[at] = '\0';
+            }
+            k++;
+        }
+    return k;
+}
+
 /* How many of one param's values are `val` (every value for NULL) over the records of requests the page's own
    control flow made (`"driven":false`), the reader for a row about WHEN the event loop ran a handler. A driven
    record is the handler called by orphan driving with no event behind it, so its value states what the
@@ -13846,16 +13873,32 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
  int flowjar_tt = 1;
     fold_row(&flowjar_tt, &flowjar_why, !!strstr(js, "\"/api/cookieload\""),
              "NOT REACHED: no /api/cookieload record, so the arm that opens /cookieload never ran its Document");
-    /* The value is recorded as the page sent it, encodeURIComponent'd. */
-    fold_row(&flowjar_tt, &flowjar_why, param_value_is(js, "/api/cookieload", "c", "flowc%3D1"),
-             "the loaded Document's document.cookie is not `flowc=1`: the answer's Set-Cookie was not received into "
-             "the agent's jar (core/frame/navigable.c's cookie_jar_receive_http_pairs), or the HttpOnly `hoc` was "
-             "read by a non-HTTP API, or the root's Path=/p `rootc` was");
+    /* The value is recorded as the page sent it, encodeURIComponent'd. Every record must carry it: each flow
+       that loads /cookieload reads its own response's cookie, so one other value is a flow whose jar did not
+       receive it or received another flow's, and the reason names what it read. */
+    static char flowjar_other[512], flowjar_msg[768];
+    if (param_values_other(js, "/api/cookieload", "c", "flowc%3D1", flowjar_other, sizeof flowjar_other)) {
+        snprintf(flowjar_msg, sizeof flowjar_msg,
+                 "a loaded /cookieload Document's document.cookie is not `flowc=1` (it read `%s`): that flow's "
+                 "answer's Set-Cookie was not received into its jar (core/frame/navigable.c's "
+                 "cookie_jar_receive_http_pairs) or another flow's was, the HttpOnly `hoc` was read by a "
+                 "non-HTTP API, or the root's Path=/p `rootc` was", flowjar_other);
+        fold_row(&flowjar_tt, &flowjar_why, 0, flowjar_msg);
+    }
+    fold_row(&flowjar_tt, &flowjar_why, param_value_only(js, "/api/cookieload", "c", "flowc%3D1"),
+             "no loaded /cookieload Document's document.cookie is `flowc=1`");
     fold_row(&flowjar_tt, &flowjar_why, !!strstr(js, "\"/api/cookiesib\""),
              "NOT REACHED: no /api/cookiesib record, so the sibling arm's read is unscored");
-    fold_row(&flowjar_tt, &flowjar_why, param_value_is(js, "/api/cookiesib", "c", "rootc%3D1"),
-             "the sibling arm's document.cookie is not the root's `rootc=1` alone — a cookie only the other arm's "
-             "navigation set leaked out of that flow's COW delta, or the root's own field is missing");
+    static char cookiesib_other[512], cookiesib_msg[768];
+    if (param_values_other(js, "/api/cookiesib", "c", "rootc%3D1", cookiesib_other, sizeof cookiesib_other)) {
+        snprintf(cookiesib_msg, sizeof cookiesib_msg,
+                 "the sibling arm's document.cookie is not the root's `rootc=1` alone (it read `%s`) — a cookie only "
+                 "the other arm's navigation set leaked out of that flow's COW delta, or the root's own field is "
+                 "missing", cookiesib_other);
+        fold_row(&flowjar_tt, &flowjar_why, 0, cookiesib_msg);
+    }
+    fold_row(&flowjar_tt, &flowjar_why, param_value_only(js, "/api/cookiesib", "c", "rootc%3D1"),
+             "no sibling arm's document.cookie is the root's `rootc=1`");
     /* The root document's own response's Set-Cookie is in the jar before its first script runs. */
     const char *rootjar_why = NULL; int rootjar_tt = 1;
     fold_row(&rootjar_tt, &rootjar_why, !!strstr(js, "\"/api/rootjar\""),
