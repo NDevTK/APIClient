@@ -1246,6 +1246,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbkpcycle.h"
 #include "fixture/idbkpinject.h"
 #include "fixture/fpakey.h"
+#include "fixture/fpaselect.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/workererror.h"
@@ -1797,6 +1798,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkpcycle", HTML_IDBKPCYCLE },
     { "idbkpinject", HTML_IDBKPINJECT },
     { "fpakey", HTML_FPAKEY },
+    { "fpaselect", HTML_FPASELECT },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "fileparse-worker-copy", HTML_FILEPARSE_WORKER_COPY },
@@ -17231,6 +17233,25 @@ TF_UNIT void probes_fpakey(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fpaselect` document (fixture/fpaselect.h): the prompt's filter over the record's unknown suffix
+   takes the world where it equals the saved file's `.txt`, which the page then reads back, and the world where
+   no key or suffix admits the file. */
+TF_UNIT void probes_fpaselect(const char *js, Probe *tab, int *n) {
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, param_value_is(js, "/api/fps-pick", "got", "picked-a.txt-.txt-1"),
+             "no /api/fps-pick?got=picked-a.txt-.txt-1 record: no arm admitted a.txt by the record's unknown "
+             "suffix with the page's own read of that suffix answering \".txt\"");
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/fps-pick", "got", "AbortError-none-1"),
+             "no /api/fps-pick?got=AbortError-none-1 record: no arm had the record's unknown key and suffix admit "
+             "nothing, leaving the prompt empty");
+    const Probe rows[] = {
+        { "fps-suffix-pin", p_tt, "/api/fps-pick", SESS_EXPLORE, p_why },
+        { "fps-none", m_tt, "/api/fps-pick", SESS_EXPLORE, m_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -21791,6 +21812,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkpcycle(js, probes, &np);
     probes_idbkpinject(js, probes, &np);
     probes_fpakey(js, probes, &np);
+    probes_fpaselect(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_fileparse_worker_copy(js, probes, &np);
