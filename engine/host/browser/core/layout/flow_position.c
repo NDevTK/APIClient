@@ -614,7 +614,7 @@ static void fp_require_placeable(lxb_dom_element_t *el)
  * `margin-left: auto` and no declared `left` sitting at the leading content edge, where a browser centres it. */
 
 /* `flow_padding_box_origin` without a drive: false ("not yet") as `flow_border_box_origin_ask` answers it. */
-static bool fp_padding_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
+bool flow_padding_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
 {
     FlowPoint p;
 
@@ -678,7 +678,7 @@ static bool fp_abs_cb_leading_ask(lxb_dom_element_t *el, bool vertical, bool for
                "case with no ancestor. The tag and the element are written together out of one walk, so a "
                "NULL here is that walk having produced a case it has no box for",
                box_subject(el, nbuf, sizeof nbuf));
-        if (!fp_padding_box_origin_ask(anc, &o)) return false;
+        if (!flow_padding_box_origin_ask(anc, &o)) return false;
         *out = vertical ? o.y : o.x;
         return true;
     }
@@ -1109,7 +1109,7 @@ FlowPoint flow_padding_box_origin(lxb_dom_element_t *el)
     FlowPoint p;
 
     layout_job_drive_begin(&d);
-    while (!fp_padding_box_origin_ask(el, &p)) (void)block_flow_drive_deferred(&d);
+    while (!flow_padding_box_origin_ask(el, &p)) (void)block_flow_drive_deferred(&d);
     layout_job_drive_end(&d);
     return p;
 }

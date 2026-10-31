@@ -75,6 +75,11 @@ CssPx flow_block_inline_offset(lxb_dom_element_t *el);
    and css-overflow-3 §2.3 "Scrolling Overflow"'s scrollport ("coincide with its padding box") both need it. */
 FlowPoint flow_padding_box_origin(lxb_dom_element_t *el);
 
+/* The same corner without a drive of its own: false ("not yet") when a question it asked was deferred, with
+   `*out` unwritten and the question suspended on the current job. `flow_padding_box_origin` is this ask
+   inside a drive that computes what it deferred. */
+bool flow_padding_box_origin_ask(lxb_dom_element_t *el, FlowPoint *out);
+
 /* The top-left corner of `table`'s TABLE box's border box. `flow_border_box_origin(table)` is its table wrapper
    box's, which CSS 2.1 §17.4 "Tables in the visual formatting model" gives the element's margins; the table box
    has the element's border and padding, starts at the wrapper's content edge and sits below the captions

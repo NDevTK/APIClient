@@ -355,9 +355,12 @@ static void es_area_begin(ElementScrollingMeasure *m)
     else                   scrolling_area_walk_viewport(&m->area, m->doc, m->box.extent[m->axis], vertical);
 }
 
-void element_scrolling_measure_element(ElementScrollingMeasure *m, lxb_dom_element_t *el)
+bool element_scrolling_measure_element_ask(ElementScrollingMeasure *m, lxb_dom_element_t *el)
 {
     JSContext *dctx;
+    FlowPoint o;
+    CssPx px;
+    int a;
 
     DCHECK(el != NULL, "§6.1's scrolling box of an element was opened with no element");
     dctx = document_active_realm_of(lxb_dom_interface_node(el->node.owner_document));
@@ -365,10 +368,15 @@ void element_scrolling_measure_element(ElementScrollingMeasure *m, lxb_dom_eleme
            "§6.1's scrolling box of an element was opened for an element whose node document is no navigable's "
            "ACTIVE document — §6's own steps 3 to 6 return before step 10 for exactly that document, so the "
            "caller's order has come apart");
+    /* The box's layout, asked first, so the open below reads answered values. */
+    if (!flow_padding_box_origin_ask(el, &o)) return false;
+    for (a = ES_X; a <= ES_Y; a++)
+        if (!used_value_padding_edge_ask(el, a == ES_Y, &px)) return false;
     es_box_open_element(el, dctx, &m->box);
     m->doc = lxb_dom_interface_node(el->node.owner_document);
     m->axis = ES_X;
     es_area_begin(m);
+    return true;
 }
 
 void element_scrolling_measure_viewport(ElementScrollingMeasure *m, JSContext *dctx)

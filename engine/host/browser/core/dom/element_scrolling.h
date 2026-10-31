@@ -96,8 +96,9 @@ typedef struct {
 } ElementScrollingMeasure;
 
 /* Open `el`'s associated scrolling box, which css-overflow-3 §3.1's scroll-container question has answered
-   yes for, in the active document of a navigable. */
-void element_scrolling_measure_element(ElementScrollingMeasure *m, lxb_dom_element_t *el);
+   yes for, in the active document of a navigable, under the caller's resting drive: false ("not yet") with the
+   box's own layout question suspended on the current job, and the open repeated once it is answered. */
+bool element_scrolling_measure_element_ask(ElementScrollingMeasure *m, lxb_dom_element_t *el);
 /* Open the viewport of the document `dctx` presents, which has one (§4's step 4 has not aborted). */
 void element_scrolling_measure_viewport(ElementScrollingMeasure *m, JSContext *dctx);
 /* One rest unit of the walk; false once both axes are measured. */

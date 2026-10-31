@@ -711,7 +711,7 @@ static int js_ev_scroll_to_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     {
         lxb_dom_element_t *el = element_of_value(hdr->this_val);
         EvScrollToArm arm = EV_SCROLL_TO_RESOLVED;
-        bool matched, measures = false;
+        bool matched, measures = false, opened = false;
         EvTarget t;
 
         DCHECK(el != NULL, "a CSSOM VIEW §6 scroll member reached its body on a receiver that is not an Element "
@@ -727,8 +727,9 @@ static int js_ev_scroll_to_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         DCHECK(matched || layout_job_drive_spent(&d),
                "a CSSOM VIEW §6 scroll member's box tests parked an author match with the drive's allowance "
                "unspent, so its next activation would ask the same thing over the same state for ever");
-        layout_job_drive_end(&d);
-        rest_unit_end();
+        /* Steps 1 to 10 run inside the same drive, so the computed values they read are the job's held
+           record's; a scrolling box whose layout defers parks the open, and the next activation repeats these
+           steps, which read and write nothing but this state. */
         if (matched) {
             ev_target(hdr->this_val, &t);
             if (kind == EV_SCROLL_SET_TOP || kind == EV_SCROLL_SET_LEFT) {
@@ -745,15 +746,22 @@ static int js_ev_scroll_to_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 if (measures) element_scrolling_measure_viewport(&s->m, t.dctx);
             } else {
                 measures = arm == EV_SCROLL_TO_ELEMENT && t.has_box && scroll_container_is(el);
-                if (measures) element_scrolling_measure_element(&s->m, el);
+                while (measures && !opened && block_flow_drive_deferred(&d)) {
+                    opened = element_scrolling_measure_element_ask(&s->m, el);
+                    DCHECK(opened || layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+                           "a scrolling box's open answered \"not yet\" with no question suspended and no "
+                           "allowance spent, so its next activation would ask the same thing for ever");
+                }
             }
         }
+        layout_job_drive_end(&d);
+        rest_unit_end();
         layout_job_leave(s->job);
         if (layout_job_declined(s->job)) {
             rc = layout_job_fork(ctx, hdr, s->job);
             return rc ? rc : JS_STEP_YIELD;
         }
-        if (!matched) {
+        if (!matched || (measures && arm == EV_SCROLL_TO_ELEMENT && !opened)) {
             layout_job_rested(s->job);
             return JS_STEP_YIELD;
         }
