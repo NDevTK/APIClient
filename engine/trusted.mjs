@@ -460,12 +460,13 @@ async function main() {
     }
     /* `--attacker-site <host>`: the site the person verifying controls, forwarded to every child: the host a
        request breakout reaches and a composed message origin sits under, so a live verify can serve it. Absent,
-       the engine's `attacker.test` stands. */
+       the engine's `attacker.test` stands. It is refused by the extension's own parse (lib/attacker-site.js). */
     if (process.argv[i] === '--attacker-site') {
       const v = process.argv[++i];
-      if (v === undefined || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(v)) {
-        console.error('[trusted] `--attacker-site` takes a lowercase host name the person controls, such as ' +
-                      'attacker.example.org.');
+      const refusal = ZONE.attackerSiteRefusal(v === undefined ? '' : v);
+      if (refusal !== null) {
+        console.error('[trusted] `--attacker-site` takes a lowercase domain of two or more labels the person ' +
+                      'controls, such as attacker.example.org; ' + JSON.stringify(v) + ' is refused: ' + refusal);
         process.exit(2);
       }
       attackerSite = v;

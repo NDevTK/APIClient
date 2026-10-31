@@ -435,6 +435,21 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       return;
     }
 
+    /* The attacker's site a live verify opens pages under, read and set (with its one check send) through the one
+       entry into the host. The relay forwards exactly the fields the command has. */
+    case "ATTACKER_SITE": {
+      DCHECK(Object.keys(msg).every((k) => ["type", "initiator", "site"].indexOf(k) >= 0),
+             "the attacker-site message carries a field this relay does not forward");
+      const reply = await self.astDispatch({ type: "AST_ATTACKER_SITE", initiator: msg.initiator, site: msg.site });
+      DCHECK(reply && reply.success === true && reply.result &&
+             (reply.result.record === null || self.attackerSiteRecordIs(reply.result.record)) &&
+             (reply.result.refusal === null || typeof reply.result.refusal === "string") &&
+             (reply.result.persistError === null || typeof reply.result.persistError === "string"),
+             "the host answered the attacker-site command without the record now in force");
+      sendResponse(reply.result);
+      return;
+    }
+
     /* The frame's CSP verdict on the request the Send panel will send, asked of the engine instance holding
        that document through the host's one entry. It informs the person and refuses nothing: the send is their
        explicit act. */

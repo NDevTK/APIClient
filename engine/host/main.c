@@ -1161,6 +1161,18 @@ QJS_EXPORT void qjs_set_arrival(const char *arrival)
     engine_set_arrival(engine_arrival_of_token(arrival));
 }
 
+/* The attacker's site the person configured in the trusted zone (solver/concolic.h's
+   concolic_set_attacker_site), stated after qjs_init and before qjs_begin like the arrival: every origin a
+   cross-document-message search composes, and every attacker page a delivery names, is under it. The zone
+   states it only for a host it has parsed as letter-digit-hyphen labels; the C entry CHECKs the same. */
+QJS_EXPORT void qjs_set_attacker_site(const char *site)
+{
+    DCHECK(g_ctx != NULL, "qjs_set_attacker_site ran before qjs_init built the context");
+    DCHECK(!g_begun, "the attacker's site was stated after the frontier was seeded — a search may already "
+                     "have composed its origins under the previous site");
+    concolic_set_attacker_site(site);
+}
+
 /* Set-Cookie fields of responses the trusted zone fetched for documents of this agent's origin, as a JSON array
    of [URL, field] pairs, received into the agent's jar (cookie_jar_receive_http_pairs) on the host's time, so
    every timeline reads them. The zone hands an instance its root document's fields after qjs_init and before

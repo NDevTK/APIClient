@@ -1895,6 +1895,24 @@ details summary:hover {
   opacity: 0.75;
 }
 
+/* The attacker's site setting (popup.html). Its status wraps, since it lists each requirement the site fails. */
+.attacker-site {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.attacker-site input {
+  width: 16em;
+}
+.attacker-site .attacker-site-status {
+  opacity: 0.75;
+  flex: 1 1 100%;
+}
+
 /* The stored-page-cache setting (popup.html §ONE SETTING SURVIVES). It sits in the header rather than a
    settings panel because there is no settings panel: the two controls that made one were deleted for being
    knobs on WORK, and one knob on STORAGE does not re-earn a panel. */

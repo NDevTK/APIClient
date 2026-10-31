@@ -108,7 +108,26 @@ chrome.webRequest.onSendHeaders.addListener((d) => {
     CHECK(after[n] === expect[n], "the request " + d.method + " " + d.url + " carries " + n + ": " +
           JSON.stringify(after[n]) + " where its own headers and its rule make " + JSON.stringify(expect[n]));
 }, _WIRE_FILTER, ["requestHeaders", "extraHeaders"]);
-chrome.webRequest.onErrorOccurred.addListener((d) => { _wireBefore.delete(d.requestId); }, _WIRE_FILTER);
+chrome.webRequest.onErrorOccurred.addListener((d) => {
+  _wireBefore.delete(d.requestId);
+  _wireSettleLifecycle(d, d.error);
+}, _WIRE_FILTER);
+/* A send's webRequest lifecycle, which ends in exactly one of onCompleted and onErrorOccurred once
+   onBeforeRequest has reported it: bound here by the send's fragment nonce, so a send whose fetch rejects can
+   answer the browser's own reason for the network error (`net::ERR_NAME_NOT_RESOLVED`, a certificate error)
+   once that end arrives, whichever of the two the platform delivers first. */
+chrome.webRequest.onBeforeRequest.addListener((d) => {
+  if (d.tabId !== chrome.tabs.TAB_ID_NONE || d.initiator !== _WIRE_ORIGIN) return;
+  const nonce = _wireNonceOf(d.url);
+  const rec = nonce === null ? undefined : _wireBySend.get(nonce);
+  if (rec !== undefined && rec.lifecycle === null) rec.lifecycle = d.requestId;
+}, _WIRE_FILTER);
+chrome.webRequest.onCompleted.addListener((d) => { _wireSettleLifecycle(d, null); }, _WIRE_FILTER);
+function _wireSettleLifecycle(d, netError) {
+  const nonce = _wireNonceOf(d.url);
+  const rec = nonce === null ? undefined : _wireBySend.get(nonce);
+  if (rec !== undefined && rec.lifecycle === d.requestId) rec.resolveEnded(netError);
+}
 
 chrome.webRequest.onBeforeRedirect.addListener((d) => {
   const rec = _wireByRequest.get(d.requestId);
@@ -164,7 +183,8 @@ async function _wireSend(port, m, signal) {
   const data = m.href.startsWith("data:");
   const nonce = _wireNonce();
   const url = data ? m.href : m.href + "#t=" + (m.scope === null ? "" : m.scope + ".") + nonce;
-  const rec = { url, scope: m.scope, ruleId: m.rule, nonce, requestId: null };
+  const rec = { url, scope: m.scope, ruleId: m.rule, nonce, requestId: null, lifecycle: null };
+  rec.ended = new Promise((resolve) => { rec.resolveEnded = resolve; });
   rec.redirect = new Promise((resolve) => { rec.resolveRedirect = resolve; });
   rec.setCookie = new Promise((resolve) => { rec.resolveSetCookie = resolve; });
   if (!data) _wireBySend.set(nonce, rec);
@@ -184,8 +204,13 @@ async function _wireSend(port, m, signal) {
     if (m.init.body !== null)
       init.body = m.init.body.text !== undefined ? m.init.body.text : _wireBytes(m.init.body.b64);
     let resp;
+    /* A rejection's reason is the browser's, read from the lifecycle's end where webRequest reported the send's
+       start, and null where it never did (a send refused before the network, with no event to wait for). */
     try { resp = await fetch(url, init); }
-    catch (e) { post({ error: String((e && e.message) || e) }); return; }
+    catch (e) {
+      post({ error: String((e && e.message) || e), netError: rec.lifecycle === null ? null : await rec.ended });
+      return;
+    }
     if (resp.type === "opaqueredirect") {
       const r = await rec.redirect;
       const reason = /^HTTP\/\S+ \d{3} ?(.*)$/.exec(r.statusLine);
@@ -208,7 +233,7 @@ async function _wireSend(port, m, signal) {
     }
     post({ end: true });
   } catch (e) {
-    post({ error: String((e && e.message) || e) });
+    post({ error: String((e && e.message) || e), netError: null });
   } finally {
     _wireBySend.delete(nonce);
     if (rec.requestId !== null) _wireByRequest.delete(rec.requestId);

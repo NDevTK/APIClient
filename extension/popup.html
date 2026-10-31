@@ -51,6 +51,17 @@
       <span id="frontier-share-status" class="frontier-share-status"></span>
     </div>
 
+    <!-- The attacker's site a live verify opens its attacker pages under (lib/attacker-site.js): a domain whose
+         every subdomain resolves to a server the person runs, with a certificate for each. Applying it sends one
+         check request there and shows the requirements it does not meet. -->
+    <div class="attacker-site">
+      <label for="attacker-site-host">Attacker site</label>
+      <input id="attacker-site-host" type="text" spellcheck="false" placeholder="attacker.example.org" />
+      <button id="btn-attacker-site" type="button" class="btn-small">Check and save</button>
+      <button id="btn-attacker-site-clear" type="button" class="btn-small">Clear</button>
+      <span id="attacker-site-status" class="attacker-site-status"></span>
+    </div>
+
     <!-- This extension's own third-party-cookie setting (lib/request-identity.js), separate from the browser's,
          which the extension does not read. -->
     <div class="third-party-cookies">

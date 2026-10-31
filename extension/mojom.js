@@ -778,6 +778,15 @@
         params: [ARRIVAL],
         reply: [WORKING_SET] },
 
+      /* The attacker's site the person configured (main.c's qjs_set_attacker_site), stated in the same window
+         as the arrival and for the same reason: every origin a message search composes is under it. */
+      { ordinal: 33, name: "SetAttackerSite",
+        params: [
+          { name: "site", type: "string", retained: false,
+            why: "a host of at least two lowercase letter-digit-hyphen labels, which the zone parsed out of the " +
+                 "person's configuration (lib/attacker-site.js) and the engine CHECKs again" }],
+        reply: [WORKING_SET] },
+
       /* Set-Cookie fields for this instance's jar (main.c's qjs_receive_cookies): every pair of a response the
          zone fetched whose URL has this cluster's origin, crossing after `Init` and before `Begin` for the
          root, and before `Join` for a joined document. */

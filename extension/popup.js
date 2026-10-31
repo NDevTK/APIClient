@@ -356,6 +356,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   renderFrontierShare();
 
+  /* The attacker's site: sent only on a click, as typed, and re-rendered from the answer. */
+  document.getElementById("btn-attacker-site").addEventListener("click", async () => {
+    await renderAttackerSite(document.getElementById("attacker-site-host").value);
+  });
+  document.getElementById("btn-attacker-site-clear").addEventListener("click", async () => {
+    await renderAttackerSite(null);
+  });
+  renderAttackerSite();
+
   /* This extension's third-party-cookie setting: sent only on a change, and re-rendered from the answer. */
   document.getElementById("third-party-cookies").addEventListener("change", async (ev) => {
     await renderThirdPartyCookies({ allowed: !!ev.target.checked });
@@ -1061,6 +1070,26 @@ async function renderFrontierShare(bytes) {
     "; " + r.shed + " shed, " + r.rederived + " fetched back, " + r.stranded + " could not be" +
     (r.crashed > 0 ? "; " + r.crashed + " stopped because resuming it crashed this engine" : "") +
     (r.persistError ? "; NOT SAVED for the next session (" + r.persistError + ")" : "");
+}
+
+/* The attacker's site as the host holds it: no `site` reads it, a string sets it (the host parses it and runs its
+   one check send), and null clears it. What is rendered is the record now in force, with a refusal of what was
+   typed beside it; nothing is defaulted, since every field is the host's on every reply. */
+async function renderAttackerSite(site) {
+  const r = await chrome.runtime.sendMessage(site === undefined ? { type: "ATTACKER_SITE" }
+    : { type: "ATTACKER_SITE", initiator: "user-initiated", site });
+  DCHECK(r && "record" in r && (r.refusal === null || typeof r.refusal === "string") &&
+         (r.persistError === null || typeof r.persistError === "string"),
+         "the attacker-site command answered without the record now in force");
+  const rec = r.record;
+  if (r.refusal === null) document.getElementById("attacker-site-host").value = rec === null ? "" : rec.site;
+  document.getElementById("attacker-site-status").textContent =
+    (r.refusal !== null ? JSON.stringify(site) + " is not a site (" + r.refusal + "). " : "") +
+    (rec === null ? "None set: a message PoC whose origin is under the attacker's site is not live-verified."
+     : rec.failing.length === 0 ? rec.site + " meets every requirement a live verify needs."
+     : rec.site + " is saved but does not meet: " +
+       rec.failing.map((f) => f.requirement + " (" + f.why + ")").join("; ") + ".") +
+    (r.persistError ? " NOT SAVED for the next session (" + r.persistError + ")." : "");
 }
 
 /* This extension's third-party-cookie setting and the exception for the shown document's site, as the host

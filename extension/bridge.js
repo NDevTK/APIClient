@@ -1254,6 +1254,16 @@ const _thirdPartyCookiesReady = (async () => {
   self.identityThirdPartyCookiesStated(self.identityThirdPartyCookiesRestored(await frontierPref("thirdPartyCookies")));
 })();
 self.identityThirdPartyCookiesStating(_thirdPartyCookiesReady);
+/* The attacker's site the person configured and its check (lib/attacker-site.js), kept in the `prefs` store and
+   restored once at load; an instance is stated the site at boot after this lands. Only the AST_ATTACKER_SITE arm
+   below changes it. The stored value is this zone's own write, so an unreadable one is corruption. */
+const _attackerSiteReady = (async () => {
+  const stored = await frontierPref("attackerSite");
+  DCHECK(stored === null || self.attackerSiteRecordIs(stored),
+         "the stored attacker site " + JSON.stringify(stored) + " is not a checked site — this zone is its only " +
+         "writer");
+  self.attackerSiteStated(stored !== null && self.attackerSiteRecordIs(stored) ? stored : null);
+})();
 /* The write-back, taken off the table rather than off the message that changed it, so a grant the chokepoint
    refused is never persisted. */
 function egressPolicyPersist() {
@@ -3540,6 +3550,11 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   eng.records.set(eng.docId, rootDoc);
   eng.openers.set(eng.docId, { opener: docRecordNavigableIdentity(openerNavigable), refused: false });
   await rend.renderer.setArrival({ arrival: msg.arrival });
+  /* And the attacker's site the person configured, in the same window: every origin the instance's message
+     searches compose is under it. Unconfigured, the engine's `attacker.test` stands, a name no victim lists. */
+  await _attackerSiteReady;
+  if (self.attackerSiteNow() !== null)
+    await rend.renderer.setAttackerSite({ site: self.attackerSiteNow().site });
   /* And the Set-Cookie fields the zone holds for this cluster, the root document's own response's among them,
      in the same window: the jar has them before the root's first script runs. */
   await zoneOpenJar(eng);
@@ -7321,11 +7336,12 @@ self.astDispatch = async function astDispatch(msg) {
        is a property of the rest of this function; it is the memoized read started at load, so it costs a
        microtask. */
     await egressPolicyReady();
-    /* Six types; any other is an unbuilt capability, so it aborts rather than reporting a false success to a
+    /* Seven types; any other is an unbuilt capability, so it aborts rather than reporting a false success to a
        caller that will not look. */
     DCHECK(!!msg && (msg.type === "AST_ANALYZE" || msg.type === "AST_CLEAR" ||
                      msg.type === "AST_FRONTIER_SHARE" || msg.type === "AST_EGRESS_POLICY" ||
-                     msg.type === "AST_REQUEST_POLICY" || msg.type === "AST_THIRD_PARTY_COOKIES"),
+                     msg.type === "AST_REQUEST_POLICY" || msg.type === "AST_THIRD_PARTY_COOKIES" ||
+                     msg.type === "AST_ATTACKER_SITE"),
            "the trusted zone dispatched a type this bridge does not answer: `" + (msg && msg.type) + "` — " +
            "every edge into the engine is built here, so an unanswered type is a capability that was asked " +
            "for and never made, not an option the caller may proceed without");
@@ -7366,6 +7382,28 @@ self.astDispatch = async function astDispatch(msg) {
                                         defaultAllowed: THIRD_PARTY_COOKIES_DEFAULT, site: _site,
                                         exception: _site === null ? null
                                           : self.safeFetchSiteSetting(_site, "third-party-cookies") } };
+    }
+    /* The attacker's site: read, or set by the person with its one check send, answered with the record now in
+       force. A site the parse refuses is answered with the refusal and changes nothing; a parsed one is checked
+       (safeFetchAttackerSiteCheck) and stored with the requirements it fails, so a person who serves only part
+       of what a live verify needs is told which part. `site: null` clears it. A change is the person's act. */
+    if (msg.type === "AST_ATTACKER_SITE") {
+      await _attackerSiteReady;
+      let _refusal = null, _persistError = null;
+      if (msg.site !== undefined) {
+        CHECK(msg.initiator === PAGE_CONTEXT_USER_INITIATED,
+              "the attacker site was asked to change by " + JSON.stringify(msg.initiator) + " — only the person, " +
+              "in the popup, changes it");
+        _refusal = msg.site === null ? null : self.attackerSiteRefusal(msg.site);
+        if (_refusal === null) {
+          const record = msg.site === null ? null
+            : { site: msg.site, failing: await self.safeFetchAttackerSiteCheck(msg.site) };
+          self.attackerSiteStated(record);
+          _persistError = await prefWriteOutcome(frontierPrefPut("attackerSite", record));
+        }
+      }
+      return { success: true, result: { record: self.attackerSiteNow(), refusal: _refusal,
+                                        persistError: _persistError } };
     }
     /* The one setting this surface carries: how much of the person's disk the frontier's stored documents may
        occupy. It is a knob on storage, never on work (an instance count or a throttle would be a bound): every

@@ -134,10 +134,12 @@ function _wireRelaySend(href, init, held) {
       clearInterval(ping);
       if (held !== null) held.release();
     }
-    function fail(why) {
+    function fail(why, netError) {
       if (settled) return;
       settle();
       var e = new TypeError("wire: " + why);
+      /* The browser's reason for a network error before the head (wire.js), or null where it stated none. */
+      e.netError = netError === undefined ? null : netError;
       if (!headSeen) reject(e); else if (stream) stream.error(e);
     }
     port.onDisconnect.addListener(function () {
@@ -183,8 +185,9 @@ function _wireRelaySend(href, init, held) {
         port.disconnect();
         return;
       }
-      DCHECK(typeof m.error === "string", "the wire answered " + JSON.stringify(m) + ", none of its four messages");
-      fail(m.error);
+      DCHECK(typeof m.error === "string" && (m.netError === null || typeof m.netError === "string"),
+             "the wire answered " + JSON.stringify(m) + ", none of its four messages");
+      fail(m.error, m.netError);
       port.disconnect();
     });
     port.postMessage({ href: href, scope: held === null ? null : held.scope, rule: held === null ? null : held.ruleId,
@@ -2582,6 +2585,28 @@ async function safeFetchOperator(url, opts) {
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: bytes,
            urlList: _exposedUrlList(urlList), computedType: "", refusal: null };
 }
+/* The person's configuration check of an attacker site (lib/attacker-site.js): one GET of a fresh name under the
+   site, with no cookies, no Origin or Referer a document would send, and no redirect followed, answered with the
+   requirements it fails. It is the person's act at the popup's setting, so no firing decision applies; its one
+   destination is the site they typed, parsed before anything is sent. The body is not read. */
+async function safeFetchAttackerSiteCheck(site) {
+  CHECK(attackerSiteRefusal(site) === null,
+        "the attacker site check was asked of " + JSON.stringify(site) + ", which the setting's own parse refuses");
+  var resp;
+  try {
+    resp = await _wire(attackerSiteProbeUrl(site), { method: "GET", headers: [], credentials: "omit",
+                                                     redirect: "manual" });
+  } catch (e) {
+    RETHROW_FATAL(e);
+    DCHECK("netError" in e, "the wire rejected the attacker site check without stating the browser's reason or " +
+                            "its absence — _wireRelaySend states one on every failure");
+    return attackerSiteRequirements({ error: String((e && e.message) || e), netError: e.netError });
+  }
+  var headers = {};
+  resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
+  if (resp.body) await resp.body.cancel();
+  return attackerSiteRequirements({ status: resp.status, headers: headers });
+}
 /* The chokepoint and the policy that decides whether it fires, installed together so no host holds half the
    contract. `engine/trusted.mjs` runs this file in a vm context and reads them off it; `ast-worker.html`
    loads it into the offscreen document before `bridge.js`.
@@ -2598,6 +2623,7 @@ async function safeFetchOperator(url, opts) {
    and fires on its own, and never overrules an operator's explicit act (`safeFetchOperator`). */
 if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
+  self.safeFetchAttackerSiteCheck = safeFetchAttackerSiteCheck;
   self.safeFetchOperator = safeFetchOperator;
   self.safeFetchSchemeData = safeFetchSchemeData;
   self.safeFetchDocumentAddressSpace = safeFetchDocumentAddressSpace;
