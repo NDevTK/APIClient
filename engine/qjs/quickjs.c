@@ -2685,7 +2685,7 @@ enum {   /* the STEPDEF_* ids used at the registration sites */
     STEPDEF_OBJ_TOSTRING, STEPDEF_OBJ_TOLOCALESTRING,
     STEPDEF_DECODE_URI, STEPDEF_DECODE_URI_COMPONENT,
     STEPDEF_ENCODE_URI, STEPDEF_ENCODE_URI_COMPONENT,
-    STEPDEF_GLOBAL_ESCAPE, STEPDEF_GLOBAL_UNESCAPE, STEPDEF_ATOB, STEPDEF_BTOA,
+    STEPDEF_GLOBAL_ESCAPE, STEPDEF_GLOBAL_UNESCAPE, STEPDEF_ATOB, STEPDEF_BTOA, STEPDEF_DATE_PARSE,
     STEPDEF_INSTANCEOF, STEPDEF_ORDINARY_HAS_INSTANCE,
     STEPDEF_TA_SORT, STEPDEF_TA_TOSORTED, STEPDEF_STR_LOCALECOMPARE,
     /* ONE id per setter, because a coerce-then-compute definition carries the body's magic AND the mask of
@@ -94490,6 +94490,8 @@ static JSValue js_atob(JSContext *ctx, JSValueConst this_val, int argc, JSValueC
 static const JSTrampStepDef js_atob_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_atob, 0, "HTML §8.3 Base64 utility methods atob(data)");
 static JSValue js_btoa(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static const JSTrampStepDef js_btoa_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_btoa, 0, "HTML §8.3 Base64 utility methods btoa(data)");
+/* "This function applies the ToString operator to its argument", which is the page's toString. */
+static const JSTrampStepDef js_date_parse_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_STRING, 1), generic, js_Date_parse, 0, "21.4.3.2 Date.parse ( string )");
 static JSValue js_date_setTime(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static int js_date_this_precheck(JSContext *ctx, const JSStepHdr *h);
 static int js_date_set_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
@@ -96901,6 +96903,7 @@ static const JSTrampStepDef *const js_tramp_step_defs[STEPDEF_COUNT] = {
     [STEPDEF_GLOBAL_UNESCAPE] = &js_global_unescape_def,
     [STEPDEF_ATOB]            = &js_atob_def,
     [STEPDEF_BTOA]            = &js_btoa_def,
+    [STEPDEF_DATE_PARSE]      = &js_date_parse_def,
     [STEPDEF_ISNAN]           = &js_isNaN_def,
     [STEPDEF_ISFINITE]        = &js_isFinite_def,
     [STEPDEF_ARRAY_REDUCE]  = &js_array_reduce_def,  [STEPDEF_ARRAY_REDUCE_RIGHT] = &js_array_reduceR_def,
@@ -122771,6 +122774,9 @@ static JSValue js_Date_parse(JSContext *ctx, JSValueConst this_val,
             return js_concolic_derive(ctx, argv[0], "Date.parse", real);
         }
     }
+    DCHECK(argc < 1 || JS_VALUE_GET_TAG(argv[0]) != JS_TAG_OBJECT,
+           "Date.parse's body was handed an object — its machine and the Date constructor's step 4.c.i both "
+           "make the argument primitive before the body runs");
     s = JS_ToString(ctx, argv[0]);
     if (JS_IsException(s))
         return JS_EXCEPTION;
@@ -122882,7 +122888,7 @@ static JSValue js_date_setTime(JSContext *ctx, JSValueConst this_val,
 
 static const JSCFunctionListEntry js_date_funcs[] = {
     JS_CFUNC_DEF("now", 0, js_Date_now ),
-    JS_CFUNC_DEF("parse", 1, js_Date_parse ),
+    JS_CFUNC_STEP_DEF("parse", 1, STEPDEF_DATE_PARSE ),
     JS_CFUNC_STEP_DEF("UTC", 7, STEPDEF_DATE_UTC ),
 };
 
