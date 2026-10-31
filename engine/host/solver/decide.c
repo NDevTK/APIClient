@@ -1552,7 +1552,10 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     /* The arm the compared value's type facet leaves an equality, in the predicate's terms (-1 when both). */
     refined = tok && op != OPCMP_NONE ? concolic_equality_outcome(ctx, cond) : -1;
     /* A branch on the String itself (`s || d`, `if (s)`) is §7.1.2 ToBoolean over it, which its length facet
-       can leave one arm. A String carries no polarity: only a ToBoolean result does. */
+       can leave one arm. A String carries no polarity: only a ToBoolean result does.
+       Named residual. Not covered: `s.length` ordered against a constant, the same fact. Next diff builds: the
+       length derivation carries the facet as its lower end and the ordering arm below refines from it. Absence
+       shows as: a length test over a concatenated unknown forking an arm the concatenation contradicts. */
     if (op == OPCMP_NONE && concolic_string_nonempty(cond)) {
         DCHECK(neg == 0, "a String-typed branch condition carries a negation's polarity — only a ToBoolean result "
                          "does, and that is a Boolean");
