@@ -3401,16 +3401,6 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createTreeWalker", g_id_create_walker);
     idl_install_method(ctx, proto, "createRange", g_id_create_range);
     idl_install_method(ctx, proto, "createEvent", g_id_create_event);
-    /* §3.1.1 "The Document object"'s `[PutForwards=href, LegacyUnforgeable] readonly attribute Location? location`,
-       with the forwarding half (Web IDL §3.7.6, as on §7.2.2's `location`), so `document.location = url` ends in the
-       `href` setter's navigation.
-       Named residual. Not covered: §3.4.10 [LegacyUnforgeable] puts the attribute on every implementing object,
-       non-configurable; this is on the interface prototype object and configurable. Next diff builds: the
-       per-instance unforgeable install for a Document, as idl_install_accessor_unforgeable does for §7.2.2's
-       `location` on the global, with a hook at document creation (a Document is built per navigation). How its
-       absence shows: `Object.getOwnPropertyDescriptor(document, "location")` answers undefined where a browser
-       answers a non-configurable accessor, and `delete Document.prototype.location` succeeds. */
-    idl_install_accessor(ctx, proto, "location", js_doc_location, 0, g_id_location_set);
     /* §3.1.1's tree entry points and §4.5's per-document strings, accessors because each is a lookup in the tree as
        it is and a fact about the receiver. */
     idl_install_accessor(ctx, proto, "documentElement", js_doc_tree, 0, -1);
@@ -4178,6 +4168,8 @@ uint32_t document_doc(JSContext *ctx) { return doc_here(ctx)->doc; }
    its policy container. A realm value holding an object of an internal class whose opaque is the record. */
 
 static JSClassID g_env_slot = JS_INVALID_CLASS_ID, g_env_class;
+/* Web IDL §3.7.1 "Interface object"'s [[Unforgeables]] of Document, per realm. */
+static JSClassID g_unforgeables_slot = JS_INVALID_CLASS_ID;
 
 static void worker_env_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -4312,6 +4304,7 @@ void document_init(JSContext *ctx)
     /* §7.5.9's page showing, the readiness's twin (written by "the end" and by unloading), declared beside it. */
     g_showing_slot = realm_value_declare(ctx, "HTML §7.5.9 page showing");
     g_env_slot = realm_value_declare(ctx, "a dedicated worker realm's environment record");
+    g_unforgeables_slot = realm_value_declare(ctx, "Web IDL §3.7.1 Document's [[Unforgeables]]");
     {
         JSClassDef ed = { "WorkerEnvironment", .finalizer = worker_env_finalizer };
         JS_NewClassID(JS_GetRuntime(ctx), &g_env_class);
@@ -4371,6 +4364,7 @@ void document_init(JSContext *ctx)
     agent_state_class("document", &g_document_class, "§4.5's interface prototype slot and brand");
     agent_state_class("document", &g_xml_document_class, "DOM §4.5's XMLDocument interface prototype slot");
     agent_state_realm_slot("document", &g_env_slot, "a dedicated worker realm's environment record");
+    agent_state_realm_slot("document", &g_unforgeables_slot, "the per-realm slot Document's [[Unforgeables]] lives in");
     agent_state_class("document", &g_env_class, "a dedicated worker realm's environment record class");
     agent_state_realm_slot("document", &g_ready_slot,
                            "the per-realm slot §3.1.5's current document readiness lives in");
@@ -4391,6 +4385,18 @@ void document_install_proto(JSContext *ctx)
     CHECK(!JS_IsException(proto), "Document.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "Document");
     document_install_members(ctx, proto);
+    {
+        /* Web IDL §3.7.1 "Interface object": "Let unforgeables be OrdinaryObjectCreate(null)", then the
+           unforgeable regular attributes of Document on it. §3.1.1 "The Document object"'s `[PutForwards=href,
+           LegacyUnforgeable] readonly attribute Location? location` is the one; its forwarding half is Web IDL
+           §3.7.6's, as on §7.2.2's `location`, so `document.location = url` ends in the `href` setter. Built
+           with the realm, so the function objects are baseline and every Document of this realm shares them. */
+        JSValue unforgeables = JS_NewObjectProto(ctx, JS_NULL);
+
+        CHECK(!JS_IsException(unforgeables), "Document's [[Unforgeables]] could not be allocated");
+        idl_install_accessor_unforgeable(ctx, unforgeables, "location", js_doc_location, 0, g_id_location_set);
+        realm_value_set(ctx, g_unforgeables_slot, unforgeables);
+    }
     /* §3.1.1's IDL includes GlobalEventHandlers and adds onreadystatechange / onvisibilitychange. */
     event_target_install_handlers(ctx, proto, EH_GLOBAL | EH_DOCUMENT);
     idl_members_excluded(ctx, proto, "Document", TOUCH_EXCLUDED,
@@ -4849,6 +4855,54 @@ JSValue document_interface_proto(JSContext *ctx, const lxb_dom_document_t *dom)
     if (document_interface_of(dom) == DOCUMENT_IFACE_XML_DOCUMENT)
         return xml_document_proto(ctx);
     return node_type_proto(ctx, LXB_DOM_NODE_TYPE_DOCUMENT);
+}
+
+void document_define_unforgeables(JSContext *rctx, JSValueConst instance)
+{
+    JSValue unforgeables = realm_value_get(rctx, g_unforgeables_slot);
+    JSPropertyEnum *keys;
+    uint32_t n, i;
+
+    DCHECK(JS_GetClassID(instance) == g_document_class,
+           "Document's unforgeable members were defined on an object that is not a Document wrapper");
+    /* §3.8's internally-create steps: "Let keys be ! unforgeables.[[OwnPropertyKeys]]()", and for each, "Perform
+       ! DefinePropertyOrThrow(instance, key, descriptor)". The object is never exposed to user code, so its own
+       slots are its answers. */
+    CHECK(JS_GetOwnPropertyNames(rctx, &keys, &n, unforgeables, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) == 0,
+          "OOM listing Document's [[Unforgeables]]");
+    for (i = 0; i < n; i++) {
+        JSPropertyDescriptor d;
+        int got = JS_GetOwnSlotDesc(rctx, &d, unforgeables, keys[i].atom);
+
+        CHECK(got == 1, "a key Document's [[Unforgeables]] listed has no own slot");
+        CHECK(JS_DefineProperty(rctx, instance, keys[i].atom, d.value, d.getter, d.setter,
+                                d.flags | JS_PROP_HAS_CONFIGURABLE | JS_PROP_HAS_ENUMERABLE |
+                                    ((d.flags & JS_PROP_GETSET) ? JS_PROP_HAS_GET | JS_PROP_HAS_SET
+                                                                : JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE) |
+                                    JS_PROP_THROW) == 1,
+              "DefinePropertyOrThrow of an unforgeable member on a fresh Document wrapper failed");
+        JS_FreeValue(rctx, d.value);
+        JS_FreeValue(rctx, d.getter);
+        JS_FreeValue(rctx, d.setter);
+    }
+    JS_FreePropertyEnum(rctx, keys, n);
+    JS_FreeValue(rctx, unforgeables);
+}
+
+bool document_unforgeable_name(JSContext *rctx, JSAtom prop)
+{
+    JSValue unforgeables = realm_value_get(rctx, g_unforgeables_slot);
+    JSPropertyDescriptor d;
+    int got = JS_GetOwnSlotDesc(rctx, &d, unforgeables, prop);
+
+    CHECK(got >= 0, "OOM reading Document's [[Unforgeables]]");
+    if (got == 1) {
+        JS_FreeValue(rctx, d.value);
+        JS_FreeValue(rctx, d.getter);
+        JS_FreeValue(rctx, d.setter);
+    }
+    JS_FreeValue(rctx, unforgeables);
+    return got == 1;
 }
 
 /* DOM §4.9 "Interface Element"'s create an element with the HTML namespace named (see document.h for the four

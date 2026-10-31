@@ -507,6 +507,13 @@ DocumentInterface document_interface_of(const lxb_dom_document_t *dom);
    prototype read. */
 JSValue document_interface_proto(JSContext *ctx, const lxb_dom_document_t *dom);
 
+/* Web IDL §3.8 "Platform objects implementing interfaces"' internally-create steps over Document's
+   [[Unforgeables]]: defines each of `rctx`'s Document unforgeable members on `instance`, a Document wrapper in
+   that realm that no code has seen yet. Every instance of a realm shares the members' function objects. */
+void document_define_unforgeables(JSContext *rctx, JSValueConst instance);
+/* Web IDL §3.9's "unforgeable property name": whether `prop` names an unforgeable member of Document in `rctx`. */
+bool document_unforgeable_name(JSContext *rctx, JSAtom prop);
+
 /* DOM §4.9 "Interface Element"'s "CREATE AN ELEMENT" WITH THE HTML NAMESPACE NAMED — the shape four standards
    sentences spell out in full rather than deriving: HTML §8.5.5 "The outerHTML property" setter step 5 ("set
    parent to the result of creating an element given this's node document, "body", and the HTML namespace"),

@@ -17,6 +17,7 @@
 #include "quickjs.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/collections.h"
+#include "core/dom/document.h"
 #include "core/dom/document_named.h"
 #include "core/dom/node.h"
 #include "core/html/html_iframe.h"
@@ -319,17 +320,6 @@ static int dn_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, J
     return 0;
 }
 
-/* HTML §3.1.1's one unforgeable member: `[PutForwards=href, LegacyUnforgeable] readonly attribute Location?
-   location`. */
-static bool dn_unforgeable(JSContext *ctx, JSAtom prop)
-{
-    const char *s = JS_AtomToCString(ctx, prop);
-    bool u = s && strcmp(s, "location") == 0;
-
-    JS_FreeCString(ctx, s);
-    return u;
-}
-
 /* Web IDL §3.9.3 [[DefineOwnProperty]] step 2: a String that is a supported property name and not unforgeable,
    on an object with [LegacyOverrideBuiltIns] and no named property setter, is refused (step 2.2.1); anything else
    is OrdinaryDefineOwnProperty (step 3). */
@@ -342,7 +332,8 @@ static int dn_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueC
     bool supported = false;
 
     if (dn_string_name(ctx, prop, &name, &n)) {
-        supported = !dn_unforgeable(ctx, prop) && dn_count(dn_document(obj), name, n, &first) > 0;
+        supported = !document_unforgeable_name(document_realm_of(dn_document(obj)), prop) &&
+                    dn_count(dn_document(obj), name, n, &first) > 0;
         JS_FreeCString(ctx, name);
     }
     if (supported)

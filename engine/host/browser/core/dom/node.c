@@ -44,6 +44,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/dom_cow.h"
+#include "solver/cow.h"
 #include "solver/concolic.h"
 #include "solver/attr_shadow.h"
 #include "core/agent_state.h"
@@ -5419,6 +5420,14 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
         g_wraps[slot].at = rw->n;
         rw->nodes[rw->n++] = n;
         g_wrap_n++;
+    }
+    /* Web IDL §3.8's internally-create steps define the interface's unforgeable members on the new instance. They
+       are part of its birth, as the baseline-born wrapper is: captured as a flow's write, a sibling's switch-in
+       would delete them from the one wrapper every flow shares. */
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
+        cow_engine_write_begin();
+        document_define_unforgeables(rctx, obj);
+        cow_engine_write_end();
     }
     return obj;
 }

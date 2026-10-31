@@ -16468,6 +16468,8 @@ TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
         { "dn-img-bare-none", "bare", "undefined", "object", "an img with an id and no name was named by its id" },
         { "dn-img-id", "img", "true", "false", "an img with an id beside a non-empty name is not named by its id" },
         { "dn-location", "loc", "string", "undefined", "an img named location shadowed the unforgeable location" },
+        { "dn-location-own", "locown", "true", "false",
+          "location is not a non-configurable own property of the Document, or is still on Document.prototype" },
         { "dn-no-delete", "del", "false", "true", "a named property with no deleter was deleted" },
         { "dn-own-key", "key", "true", "false", "a supported property name is not an own key" },
     };
