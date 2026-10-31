@@ -210,19 +210,12 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    flow reaching the same sink without the demand still opens it. An array for the same reason the @H surface
    is one — result.h owns the document.
 
-   "HOW FAR THE SEARCH GOT" IS TWO NUMBERS AND USED TO BE ONE THAT COULD NOT SAY IT. `tried` is raised where a
-   candidate is SEEDED, so it is fixed the instant the flow is created; `reached` is raised where a BREAKOUT's
-   own bytes ARRIVE at this sink. A search reporting `tried:5,reached:0` has five flows queued somewhere in the
-   middle of a document nobody has explored far enough, and one reporting `tried:5,reached:5` had every
-   breakout delivered and broke out of nothing — opposite verdicts, needing opposite work, which the single
-   number reported identically.
-   `reached` IS A REPORT COUNTER AND NOT THE WFQ's CROSSING, and it used to be both. Every arrival raises it,
-   including one by a spelling `withdrawn` marks — those bytes really did turn up at the sink, the marker
-   survived and the escape did not, and hiding that would make the number a claim about viability rather than
-   a count of arrivals. What is NOT paid for such an arrival is the LEDGER rung: it is a distance to FIRING,
-   and a candidate the search has measured cannot arrive intact has travelled none of it, so paying it there
-   spent the one-time crossing on an arm and left nothing for the spelling that can fire. The two questions are
-   separate state inside solve.c for that reason.
+   How far the search got is two numbers. `tried` is raised where a candidate is seeded; `reached` where a
+   breakout's own bytes arrive at this sink. `tried:5,reached:0` is five flows not yet explored far enough;
+   `tried:5,reached:5` is every breakout delivered and none breaking out: opposite verdicts, opposite work.
+   `reached` is a report counter, not the WFQ's crossing. Every arrival raises it, including a spelling
+   `withdrawn` marks (its bytes did arrive). The ledger rung is a distance to firing, so it is not paid for an
+   arrival the search has measured cannot fire; solve.c keeps the two as separate state.
    `reached` COUNTS BREAKOUTS AND NOT CONTEXT PROBES, and the distinction is the whole value of the field: a
    probe carries an inert locator and cannot fire by construction, so counting its arrival makes `reached:1`
    mean either "the probe got here and the breakout has not run" or "the breakout got here and failed" — the
