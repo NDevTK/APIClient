@@ -18176,20 +18176,20 @@ TF_UNIT void probes_reflectint(const char *js, Probe *tab, int *n) {
 /* The rows of the `uspunion` document (fixture/uspunion.h): URL §6.2's init union over unknown reply fields runs
    the arm each field's example takes, and get() reads its pair back. */
 TF_UNIT void probes_uspunion(const char *js, Probe *tab, int *n) {
-    const char *uu_why = NULL;
-    int uu_tt = 1;
-    fold_row(&uu_tt, &uu_why, !!strstr(js, "\"/api/uspq\"") && !!strstr(js, "\"/api/uspo\"") &&
-                              !!strstr(js, "\"/api/uspl\""),
+    const char *uu_why = NULL, *ur_why = NULL;
+    int uu_tt = 1, ur_tt = 1;
+    fold_row(&uu_tt, &uu_why, !!strstr(js, "\"/api/uspq\"") && !!strstr(js, "\"/api/uspl\""),
              "NOT REACHED: a URLSearchParams built from an unknown reply field sent no record, so the init union "
              "aborted or a world threw");
     fold_row(&uu_tt, &uu_why, param_value_is(js, "/api/uspq", "v", "1"),
              "the string arm over `\"a=1\"` did not read `a` back as 1");
-    fold_row(&uu_tt, &uu_why, param_value_is(js, "/api/uspo", "v", "2"),
-             "the record arm over `{\"b\":\"2\"}` did not read `b` back as 2");
     fold_row(&uu_tt, &uu_why, param_value_is(js, "/api/uspl", "v", "3"),
              "the sequence arm over `[[\"c\",\"3\"]]` did not read `c` back as 3");
+    fold_row(&ur_tt, &ur_why, param_value_is(js, "/api/uspo", "v", "2"),
+             "NOT REACHED or wrong: the record arm over `{\"b\":\"2\"}` did not read `b` back as 2");
     const Probe rows[] = {
         { "usp-init-union-unknown", uu_tt, "/api/uspq", SESS_EXPLORE, uu_why },
+        { "usp-init-union-record", ur_tt, "/api/uspo", SESS_EXPLORE, ur_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
