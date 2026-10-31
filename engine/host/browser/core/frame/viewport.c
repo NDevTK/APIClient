@@ -18,7 +18,6 @@
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
 #include "core/layout/layout_job.h"
-#include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -595,47 +594,6 @@ double viewport_window_scroll(JSContext *ctx, bool vertical)
     if (!viewport_exists(ctx)) return 0.0;
     return vertical ? viewport_scroll_y(ctx) : viewport_scroll_x(ctx);
 }
-
-/* THE DOCUMENT NODE THIS REALM IS PRESENTING, or NULL where it is presenting none — the one operand both of
-   §2's viewport answers are asked of, and it is reached through the DOCUMENT ELEMENT rather than named directly
-   because "is there a document element" is the question the empty-set derivation below turns on. NULL is a
-   POSITIVE answer here and not a hole: the extreme is over the ICB's edge alone, and the caller that can say so
-   says so. */
-static lxb_dom_node_t *vp_document_node(JSContext *ctx)
-{
-    lxb_dom_node_t *root = document_root_node(ctx);
-
-    if (root == NULL) return NULL;
-    DCHECK(root->owner_document != NULL,
-           "this realm's document element has no owner document, so neither of CSSOM VIEW §2's two answers "
-           "about this viewport has a tree to be taken over — not the extreme over \"all of the viewport's "
-           "descendants' boxes\", and not the OVERFLOW DIRECTIONS, which css-writing-modes-4 §8 \"The Principal "
-           "Writing Mode\" states over the document's root element. A parsed root element belongs to the "
-           "document that parsed it — the two have come apart");
-    return lxb_dom_interface_node(root->owner_document);
-}
-
-/* §2's SCROLLING AREA OF A VIEWPORT — the initial containing block's edges extended, on the ENDING side of each
-   axis, by "the … margin edge of all of the viewport's descendants' boxes". §2's table is
-   core/layout/scrolling_area.h's, both columns of it, and this is the VIEWPORT column's one caller: this file
-   owns what the ICB IS (CSS 2.2 §10.1 "Definition of 'containing block'" gives it "the dimensions of the
-   viewport") and owns nothing about where a box was placed, so it hands the ICB extent in and the table answers.
-   THE DOCUMENT ELEMENT IS WHERE THE EXTREME OVER THE EMPTY SET IS DECIDED, and it is a derivation rather than a
-   guard. §2's ending edge is an extreme over the ICB's own edge AND the descendants' margin edges; a realm
-   presenting no document has no descendant box for the second operand, so the extreme is over the first alone
-   and the area IS the ICB. That is why `element_scrolling.h`'s perform-a-scroll capability can ask this of a
-   realm with no viewport and get a false comparison rather than a crash — the answer is right, not absent. */
-static double vp_scrolling_area(JSContext *ctx, bool vertical)
-{
-    CssPx icb = vertical ? viewport_icb_height(ctx) : viewport_icb_width(ctx);
-    lxb_dom_node_t *doc = vp_document_node(ctx);
-
-    if (doc == NULL) return icb.px;
-    return scrolling_area_viewport_extent_px(doc, icb, vertical).px;
-}
-
-double viewport_scrolling_area_width(JSContext *ctx)  { return vp_scrolling_area(ctx, false); }
-double viewport_scrolling_area_height(JSContext *ctx) { return vp_scrolling_area(ctx, true); }
 
 /* CSSOM VIEW §4 "Extensions to the Window Interface"' scroll() steps 7 to 13, as the internal algorithm §2
    requires a caller to invoke — see viewport.h. The numbers are the thirteen top-level steps of the edition

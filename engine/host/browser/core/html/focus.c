@@ -75,6 +75,8 @@
 #include "core/html/html_iframe.h"
 #include "core/html/integer_microsyntax.h"
 #include "core/html/user_activation.h"
+#include "core/layout/layout_job.h"
+#include "solver/rest_unit.h"
 
 /* §6.6.2's FOCUSABLE AREAS AND THE OBJECTS §6.6.4 PASSES AROUND BESIDE THEM. A focus target is not always a
    focusable area — the focusing steps take an element that is not one, or a navigable — and a focus CHAIN holds
@@ -921,7 +923,11 @@ static JSValue js_has_focus(JSContext *ctx, JSValueConst this_val, int argc, JSV
     X(FOC_FOCUS,    "HTML §6.6.4 focus update steps steps 4.1-4.4 (one new-chain entry in reverse order: " \
                     "designate the focused area of the document, then fire a focus event named `focus`)") \
     X(FOC_FOCUSIN,  "UI Events §3.3.2's focus event order (`focusin` follows `focus`, bubbling, at the same " \
-                    "target with the same related target)")
+                    "target with the same related target)") \
+    X(FOC_SCROLL,   "HTML §6.6.6 focus(options) step 4 (this element's box tests under a resting drive, then " \
+                    "CSSOM VIEW §6.1 scroll a target into view begun with \"center\", \"center\")") \
+    X(FOC_SCROLL_BOX, "HTML §6.6.6 focus(options) step 4: CSSOM VIEW §6.1 \"Element Scrolling Members\" step " \
+                      "2, one unit of its ancestor walk")
 enum { IDL_STEP_STAGE_BASE(FOCUS_STAGES) FOCUS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FOCUS_STEPS[] = { FOCUS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -954,6 +960,9 @@ typedef struct {
        follows it. event_target.h names the type for exactly that reason: a caller that writes the number
        cannot be anything but an argument behind the algorithm. */
     EventFireCb cb;
+    bool     scroll;                 /* focus(options) step 4 runs: the entry is focus() and preventScroll is false */
+    LayoutJob *job;                  /* step 4's layout job, owned through layout_job_step_ops; NULL before it */
+    ElementScrollingIntoView walk;   /* step 4's ancestor walk; DOM nodes, which a fork shares by address */
 } FocusState;
 
 static void focus_state_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -967,6 +976,7 @@ static void focus_state_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->new_chain);
     v->val(ctx, &s->ev);
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
 }
 
 /* Every owned field in place before the first thing that can fail — the failure path tears this state down
@@ -981,6 +991,8 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
     s->old_n = s->new_n = s->i = s->j = 0;
     s->fphase = 0;
     s->ua_phase = 0;
+    s->scroll = false;
+    s->job = NULL;
     STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
     s->old_chain = JS_NewArray(ctx);
     s->new_chain = JS_NewArray(ctx);
@@ -1185,47 +1197,18 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                    "the focus machine was declared with a magic that is none of its entry points — every "
                    "algorithm that enters §6.6.4 declares one here, and a new one arrives with the branch that "
                    "sets up its focus target");
-            /* §6.6.6's focus(options) step 1. Steps 3 and 4 are decided in this arm, where the OPTIONS are, and
-               both are answered rather than deferred:
-                 step 3's "indicate focus" is the focus ring — a user-agent presentation with no scriptable
-                   result, which is the one shape §NO STUBS permits as a documented no-effect;
-                 step 4's "scroll a target into view" needs a scrolling box that can be somewhere other than
-                   the origin, and whether one CAN is a question about SLACK — asserted below, the way
-                   rendering.c asserts its own unwritten steps. THE SENTENCE THAT STOOD HERE SAID NO BOX IN
-                   THIS BUILD CAN BE, AND THAT THE DAY CSSOM VIEW §3.1 "Scrolling"'s PERFORM A SCROLL ARRIVES
-                   THIS FIRES. §3.1 has arrived (core/dom/perform_scroll.h) and it did NOT make the assert
-                   below fire: the predicate was never about §3.1's existence but about whether §2's scrolling
-                   area exceeds the box, which is what decides whether any clamp in this standard has anywhere
-                   to land. Where it does not, step 4 provably moves nothing and not running it is right; where
-                   it does, step 4 is missing and the assert says so.
-               STEP 4's ASSERT ASKED FOR THE NAME `scrollTo` ON THE GLOBAL, with its own [[GetOwnProperty]]
-                   rather than `realm_awaits`, and the name was never the capability: a member is not a
-                   capability, and installing §4's `scrollTo` on the Window would have satisfied the test while
-                   the engine could still only put a box at its origin — a probe reporting a capability as
-                   PRESENT, which is worse than no probe. The question now goes to the component that owns §3.1
-                   (core/dom/element_scrolling.h), and it is asked of THIS'S NODE DOCUMENT rather than of the
-                   running realm, for the same reason step 1's allow focus steps are: §6.1's scroll a target
-                   into view walks out of the element to ITS document's viewport. That is why it sits below the
-                   `doc` resolution rather than above it. */
+            /* §6.6.6's focus(options). Steps 3 and 4 are decided in this arm, where the options are: step 3's
+               "indicate focus" is the focus ring, a user-agent presentation with no scriptable result, and step
+               4's "if options["preventScroll"] is false, then scroll a target into view given this, "auto",
+               "center", and "center"" runs in FOC_SCROLL once the focusing steps end, whichever of their exits
+               they take. Step 1's refusal returns before it. */
+            s->scroll = !idl_dict_bool(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, "preventScroll");
             /* Step 1's allow focus steps are given THIS'S NODE DOCUMENT, not the running realm's — an element
                adopted into another same-origin document is focused under that document's policy. A document
                with no browsing context has neither the feature nor an activation, so its elements are not
                focusable through this member at all. */
             doc = n->owner_document ? document_active_realm_of(lxb_dom_interface_node(n->owner_document)) : NULL;
             if (!doc) return 0;
-            DCHECK(!element_scrolling_box_can_move(doc) ||
-                   idl_dict_bool(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, "preventScroll"),
-                   "HTML §6.6.6 \"Focus management APIs\" focus() step 4 — \"if options[\"preventScroll\"] is "
-                   "false, then scroll a target into view given this, \"auto\", \"center\", and \"center\"\" — "
-                   "must be written here: §2's scrolling area of a box in this element's document EXCEEDS that "
-                   "box, so CSSOM VIEW §3.1 \"Scrolling\"'s perform a scroll — which is built "
-                   "(core/dom/perform_scroll.h) — has somewhere to put it. The algorithm step 4 calls is "
-                   "already exported "
-                   "as a cursor (core/dom/element_scrolling.h's element_scrolling_into_view_begin/_next), so "
-                   "what is missing is a stage of this machine AFTER §6.6.4's focusing steps that drives it one "
-                   "scrolling box per re-entry inside a layout job, as core/dom/element_view.c's "
-                   "`scrollIntoView` does, with `scrollIntoView`'s own step 7 — the target has an associated "
-                   "box — asked first");
             s->allow_win = JS_DupValue(ctx, document_window_proxy(doc));
             STEP_GOTO(hdr->stage, FOC_ALLOW, &s->fphase, &s->ua_phase, NULL);
             continue;
@@ -1338,7 +1321,8 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 s->target = v;
                 s->kind = (uint8_t)k;
                 /* Step 2: no fallback target is passed by either member, so a null area ends the algorithm. */
-                if (k == FA_NONE) return 0;
+                if (k == FA_NONE) { if (!s->scroll) return 0; STEP_GOTO(hdr->stage, FOC_SCROLL, &s->fphase,
+                                                                      &s->ua_phase, NULL); continue; }
             }
             /* Step 3: a navigable container that is a focusable area still focuses its content navigable's
                active document, which is what makes `iframe.focus()` focus the frame's document. */
@@ -1350,14 +1334,18 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                     s->kind = FA_DOCUMENT;
                 }
             }
-            if ((s->kind == FA_ELEMENT || s->kind == FA_VIEWPORT) && node_is_inert(ctx, node_of(s->target)))
-                return 0;                                                               /* step 4 */
+            if ((s->kind == FA_ELEMENT || s->kind == FA_VIEWPORT) && node_is_inert(ctx, node_of(s->target))) {
+                if (!s->scroll) return 0;                                               /* step 4 */
+                STEP_GOTO(hdr->stage, FOC_SCROLL, &s->fphase, &s->ua_phase, NULL);
+                continue;
+            }
             currently_focused_area(ctx, &fk, &focused);                                 /* step 5 */
             {
                 bool already = fk == (int)s->kind && JS_IsObject(focused) &&
                                JS_VALUE_GET_PTR(focused) == JS_VALUE_GET_PTR(s->target);
                 JS_FreeValue(ctx, focused);
-                if (already) return 0;
+                if (already && !s->scroll) return 0;
+                if (already) { STEP_GOTO(hdr->stage, FOC_SCROLL, &s->fphase, &s->ua_phase, NULL); continue; }
             }
             STEP_GOTO(hdr->stage, FOC_CHAINS, &s->fphase, &s->ua_phase, NULL);
             continue;
@@ -1454,7 +1442,11 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             JSValue entry;
             int kind;
 
-            if (s->j >= s->new_n) return 0;   /* the focus update steps are finished */
+            if (s->j >= s->new_n) {   /* the focus update steps are finished */
+                if (!s->scroll) return 0;
+                STEP_GOTO(hdr->stage, FOC_SCROLL, &s->fphase, &s->ua_phase, NULL);
+                continue;
+            }
             at = s->new_n - 1 - s->j;
             entry = chain_value(ctx, s->new_chain, at);
             kind = chain_kind(ctx, s->new_chain, at);
@@ -1508,6 +1500,66 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             if (focus) { STEP_GOTO(hdr->stage, FOC_FOCUSIN, &s->fphase, &s->ua_phase, NULL); continue; }
             s->j++;
             continue;
+        }
+
+        case FOC_SCROLL: {
+            /* focus(options) step 4's target is this, not the focusable area the focusing steps settled on.
+               As `scrollIntoView`'s step 7, an element with no associated box is not scrolled to. */
+            lxb_dom_node_t *n = node_of(hdr->this_val);
+            LayoutJobDrive d;
+            bool matched, has_box = false;
+
+            DCHECK(magic == FOCUS_EL_FOCUS && s->fphase == 0 && JS_IsUndefined(s->ev),
+                   "focus(options) step 4 was reached from an entry point that is not focus(), or with a focus "
+                   "event still in flight");
+            if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+            /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+            r = layout_job_fork(ctx, hdr, s->job);
+            if (r) return r;
+            rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+            layout_job_enter(s->job);
+            layout_job_drive_begin_resting(&d);
+            matched = element_view_box_tests_ask(n);
+            DCHECK(matched || layout_job_drive_spent(&d),
+                   "focus() step 4's box tests parked an author match with the drive's allowance unspent, so the "
+                   "next activation would ask the same thing over the same state for ever");
+            layout_job_drive_end(&d);
+            rest_unit_end();
+            if (matched) has_box = element_view_has_box(n);
+            if (has_box)
+                element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(n), SCROLL_LOGICAL_CENTER,
+                                                  SCROLL_LOGICAL_CENTER, NULL);
+            layout_job_leave(s->job);
+            if (layout_job_declined(s->job)) {
+                r = layout_job_fork(ctx, hdr, s->job);
+                return r ? r : JS_STEP_YIELD;
+            }
+            if (!matched) {
+                layout_job_rested(s->job);
+                return JS_STEP_YIELD;
+            }
+            if (!has_box) return 0;
+            STEP_GOTO(hdr->stage, FOC_SCROLL_BOX, &s->fphase, &s->ua_phase, NULL);
+            continue;
+        }
+
+        case FOC_SCROLL_BOX: {
+            bool more;
+
+            r = layout_job_fork(ctx, hdr, s->job);
+            if (r) return r;
+            layout_job_enter(s->job);
+            more = element_scrolling_into_view_next(&s->walk, "auto");
+            layout_job_leave(s->job);
+            if (layout_job_declined(s->job)) {
+                r = layout_job_fork(ctx, hdr, s->job);
+                return r ? r : JS_STEP_YIELD;
+            }
+            if (more) {
+                layout_job_rested(s->job);
+                return JS_STEP_YIELD;
+            }
+            return 0;
         }
 
         default:

@@ -6,7 +6,8 @@
    a block, an inline-block, a flex item and a grid item in a 200px track. #sa7's 400 blocks of 5px make the
    root's `scrollHeight` (step 4, the viewport's area) 2300. The setter and scroll members measure #sa2 for steps
    10 and 11, landing where it is; #sa7 has no scrolling box, so step 10 terminates; the root's setter, §4's
-   window members and the root's scrollTo() move the viewport to 100, 200, 250 and 300. Chrome 155.0.8059.84
+   window members and the root's scrollTo() move the viewport to 100, 200, 250 and 300. HTML §6.6.6's focus()
+   step 4 scrolls #fb, 2000px down, into view, and preventScroll keeps #fa's focus() at 0. Chrome 155.0.8059.84
    and Firefox 158.0.1 give every value expected. Cross-engine notes, left out: both count a zero-height block
    500px wide, where §3.3 says "Border boxes with zero area do not affect the scrollable overflow area"; both add
    §3.3's end padding (a 10px-padded box over a 300 x 200 child is 320 x 220), not built here. It ends with
@@ -31,6 +32,8 @@ static const char HTML_SCROLLAREA[] =
     "<div id=sa6 style=\"height:50px;width:100px;overflow:hidden;display:grid;grid-template-columns:200px\">"
     "<div style=\"margin-right:40px;height:10px\"></div></div>"
     "<div id=sa7></div>"
+    "<input id=fa style=\"position:absolute;top:1900px;left:0;width:50px;height:10px;border:0;padding:0\">"
+    "<input id=fb style=\"position:absolute;top:2000px;left:0;width:50px;height:10px;border:0;padding:0\">"
     "<script>"
     "var p=document.getElementById('sa1'),i,d;"
     "for(i=0;i<200;i++){d=document.createElement('div');d.style.paddingTop='1px';p.appendChild(d);p=d;}"
@@ -45,11 +48,14 @@ static const char HTML_SCROLLAREA[] =
     "document.documentElement.scrollTop=100;var rt=document.documentElement.scrollTop;"
     "scrollTo(0,200);var w1=scrollY;scrollBy({top:50});var w2=scrollY;"
     "document.documentElement.scrollTo(0,300);var w3=scrollY;"
+    "scrollTo(0,0);E('fa').focus({preventScroll:true});var f1=scrollY;"
+    "E('fb').focus();var f2=scrollY>1500?'moved':'still';"
     "fetch('/api/scrollarea?sh='+a.scrollHeight+'&sw='+a.scrollWidth+'&ch='+a.clientHeight"
     "+'&m3='+E('sa3').scrollHeight+'&m4='+E('sa4').scrollWidth+'&m5='+E('sa5').scrollWidth"
     "+'&m6='+E('sa6').scrollWidth"
     "+'&lh='+b.scrollHeight+'&lw='+b.scrollWidth+'&rh='+document.documentElement.scrollHeight"
-    "+'&rt='+rt+'&nt='+E('sa7').scrollTop+'&w1='+w1+'&w2='+w2+'&w3='+w3);"
+    "+'&rt='+rt+'&nt='+E('sa7').scrollTop+'&w1='+w1+'&w2='+w2+'&w3='+w3"
+    "+'&f1='+f1+'&f2='+f2);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

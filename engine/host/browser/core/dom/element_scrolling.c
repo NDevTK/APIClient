@@ -345,8 +345,8 @@ static bool es_into_view_visit(ElementScrollingIntoView *w, const EsBox *b, cons
     return false;
 }
 
-/* Begin the descendant walk of the open box's scrolling area on `m->axis`. The viewport's row is the one
-   core/frame/viewport.c's `viewport_scrolling_area_*` asks, over the same initial containing block. */
+/* Begin the descendant walk of the open box's scrolling area on `m->axis`; the viewport's row walks over its
+   initial containing block, the box's extent. */
 static void es_area_begin(ElementScrollingMeasure *m)
 {
     bool vertical = m->axis == ES_Y;
@@ -519,25 +519,3 @@ bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *b
     return true;
 }
 
-/* CSSOM VIEW §3.1 "Scrolling"'s PERFORM A SCROLL, ASKED AS A CAPABILITY — see element_scrolling.h for the
- * three readers, for why this is a component's answer rather than a `realm_awaits` over a name on the global,
- * and for the derivation each half rests on. */
-bool element_scrolling_box_can_move(JSContext *ctx)
-{
-    DCHECK(ctx != NULL,
-           "CSSOM VIEW §3.1's perform-a-scroll capability was asked without a realm — the viewport half is a "
-           "fact about the viewport THIS realm's document is presented in, and core/frame/viewport.h answers "
-           "for the realm it is passed and never for a remembered one");
-    /* The viewport half is a question about slack: each of §4's steps 7 and 8 has two arms and both collapse
-       onto the origin exactly when the scrolling area equals the viewport, so then no algorithm can put the
-       box anywhere else, and otherwise §3.1 can. It needs no overflow direction (element_scrolling.h).
-       Where there is no viewport, core/frame/viewport.h answers both extents from the same modelled geometry
-       and the comparison is false, which is right: a document nothing presents has no box to move. */
-    if (viewport_scrolling_area_width(ctx)  > viewport_width(ctx))  return true;
-    if (viewport_scrolling_area_height(ctx) > viewport_height(ctx)) return true;
-    /* The element half: an element that reaches a real perform a scroll aborts in core/dom/perform_scroll.c
-       for want of a place to put the position, so every element is at the origin core/dom/element_view.c's
-       `scrollTop` getter step 8 derives. Giving an element a scroll position turns this line into a walk of
-       the document's scroll containers. */
-    return false;
-}

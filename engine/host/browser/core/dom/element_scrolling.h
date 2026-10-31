@@ -146,23 +146,4 @@ void element_scrolling_into_view_begin(ElementScrollingIntoView *w, lxb_dom_elem
                                        lxb_dom_element_t *container);
 bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *behavior);
 
-/* Can a scrolling box in this realm's document be at a position other than the one this engine derives:
- * CSSOM VIEW §3.1 "Scrolling"'s perform a scroll ("when a user agent is to perform a scroll of a scrolling box
- * box, to a given position position"), asked as a capability of the component that owns the algorithm. Its
- * readers are steps that carry or restore what a scroll produces: HTML §6.6.6 "Focus management APIs"'
- * `focus()` step 4 and HTML §7.4.6.5 "Persisted history entry state"'s scroll position data.
- *
- * It is not `realm_awaits(ctx, "scrollTo", …)`: whether a member is installed on the global says nothing about
- * whether the algorithm can move a box, and an internal algorithm has no name there to probe (core/realm.h;
- * core/timing/hr_time.c's `crossOriginIsolated` is the same case). */
-
-/* Both halves are derived, neither is a flag. The viewport half compares the two extents §4's `scroll()`
- * steps 7 and 8 clamp between: max(0, min(v, slack)) and min(0, max(v, -slack)) both land on the origin at
- * slack 0 and both reach past it at any larger slack, so the comparison needs no overflow direction. It is an
- * upper bound by design: it says a box could be elsewhere, so a reader's assert fires when the possibility
- * arrives. The element half follows from core/dom/perform_scroll.c's instant scroll, which DFAILs for an
- * element's box, so every element is at the origin core/dom/element_view.c's `scrollTop` getter step 8
- * derives; the diff that removes that DFAIL turns this half into a walk of the document's scroll containers. */
-bool element_scrolling_box_can_move(JSContext *ctx);
-
 #endif

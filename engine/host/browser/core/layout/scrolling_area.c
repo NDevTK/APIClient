@@ -19,7 +19,6 @@
 #include "core/layout/flex_line.h"
 #include "core/layout/flex_position.h"
 #include "core/layout/flow_position.h"
-#include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/scrolling_area.h"
@@ -813,25 +812,3 @@ CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
     return css_px_sub(hi, lo);
 }
 
-/* NAMED RESIDUAL. Not covered: this drive's caller — core/dom/element_scrolling.c's perform-a-scroll capability
-   behind two asserts in focus() and session history — re-walks the viewport's scrolling area to completion in
-   dev builds, where every scroll algorithm steps the cursor. Next: those asserts read the stored viewport
-   position, and focus()'s scroll into view is built, after which this drive is deleted. How its absence shows:
-   a dev build's work count above a release build's on a focus() or a traversal. */
-/* The walk runs inside one drive, so the current job holds its memo and records across every descendant:
-   without a driven job entered, the synchronous job holds them only while a drive is open. A step that answers
-   "not yet" is retried after the drive computes what it deferred. */
-CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical)
-{
-    ScrollingAreaWalk w;
-    LayoutJobDrive d;
-    CssPx extent;
-
-    layout_job_drive_begin(&d);
-    scrolling_area_walk_viewport(&w, doc, icb_extent, vertical);
-    while (!scrolling_area_walk_done(&w))
-        if (!scrolling_area_walk_step(&w)) (void)block_flow_drive_deferred(&d);
-    extent = scrolling_area_walk_extent(&w);
-    layout_job_drive_end(&d);
-    return extent;
-}

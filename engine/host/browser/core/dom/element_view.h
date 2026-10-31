@@ -218,6 +218,11 @@ void element_view_free(void);
    a wider answer than a laying-out browser's. `n` must be an element. */
 bool element_view_has_box(const lxb_dom_node_t *n);
 
+/* The author matches element_view_has_box reads for `n` (an element), asked under the caller's resting drive
+   on its entered layout job: false when a build parked, and the caller's step rests and asks again; true once
+   element_view_has_box answers on that job without matching anything. */
+bool element_view_box_tests_ask(const lxb_dom_node_t *n);
+
 /* css-display-3 §2.5 "Box Generation: the none and contents keywords"' OTHER HALF — whether ANY box is
    generated anywhere in `n`'s subtree, `n`'s own included. §2.5 states its two keywords apart and the
    difference is exactly a subtree: `none` is "the element and its descendants generate no boxes or text

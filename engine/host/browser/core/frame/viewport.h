@@ -246,15 +246,6 @@ void viewport_set_scroll_position(JSContext *ctx, double x, double y, const Elem
    wrong; it had two already. */
 double viewport_window_scroll(JSContext *ctx, bool vertical);
 
-/* CSSOM VIEW §2's SCROLLING AREA OF THIS REALM'S VIEWPORT — the ICB extended by the boxes of all of the
-   viewport's descendants, computed by core/layout/scrolling_area.h's viewport walk: this file owns only what
-   the ICB is (CSS 2.2 §10.1 gives it "the dimensions of the viewport") and hands that in. The walk runs to
-   completion here.
-   §4's `scroll()` and §6's `scrollWidth`/`scrollHeight` step the same walk under a resting drive instead.
-   Exported because core/dom/element_scrolling.c asks whether the viewport has overflow. */
-double viewport_scrolling_area_width(JSContext *ctx);
-double viewport_scrolling_area_height(JSContext *ctx);
-
 /* CSSOM VIEW §4's `scroll()` steps 7 to 13 over this realm's viewport, measured in `m` — the internal
    algorithm §2 says a member "said to call another method or attribute" invokes, so a page overriding
    `window.scroll` cannot change what `el.scrollTop = 10` on the root element does. Steps 1 to 6 are the

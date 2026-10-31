@@ -88,27 +88,16 @@
    matters. */
 bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool vertical);
 
-/* THE WIDTH (`vertical` false) OR HEIGHT of the scrolling area of the VIEWPORT `doc` is presented in — §2's
-   other column, the same walk over the same margin edges with the two differences the header above states.
-   `icb_extent` IS THIS AXIS OF THE INITIAL CONTAINING BLOCK, passed in rather than read: CSS 2.2 §10.1 gives the
-   ICB "the dimensions of the viewport", which is core/frame/viewport.h's fact and not a layout one, and it
-   arrives as a `CssPx` so the environment fact every descendant's coordinate already carries is the one the
-   extreme is taken against. THE CALLER HAS ESTABLISHED THAT `doc` HAS A DOCUMENT ELEMENT, which is what makes a
-   viewport's descendants exist to be walked; a realm presenting no document has no scrolling area at all and
-   that is the caller's own answer over the empty set, not a value this component invents.
-   THE RESULT IS AT LEAST `icb_extent` for §2's own reason — the ICB's edge is one of the operands of the
-   extreme — which is the invariant CSSOM VIEW §6's `scrollWidth`/`scrollHeight` max() and §4's `scroll()` clamp
-   both rest on, and it is asserted here rather than at either of them. */
-CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical);
-
 /* Both columns as a cursor over the descendant walk, for a step machine that rests inside it: `walk_*`
    computes everything before the walk, each `step` folds one descendant node or answers false ("not yet": the
    node's origin deferred a question, which is suspended on the current job for the caller's drive, and the
    cursor still names the node), and `extent` answers once `done`. The element's row needs an element with an
-   associated box (core/dom/element_view.h's one predicate, §6's own step 6); the viewport's row has the
-   preconditions of the entry above, which is this cursor driven to completion. Every box this component cannot
-   place or measure crashes in the component that owns that half; there is no fallback extent. The cursor holds
-   DOM nodes of the running flow, which a fork shares by address, and lengths. */
+   associated box (core/dom/element_view.h's one predicate, §6's own step 6). The viewport's row needs a `doc`
+   with a document element, and takes `icb_extent`, this axis of the initial containing block, from
+   core/frame/viewport.h (CSS 2.2 §10.1 gives it "the dimensions of the viewport"); its extent is at least that,
+   since the ICB's edge is an operand of §2's extreme. Every box this component cannot place or measure crashes
+   in the component that owns that half; there is no fallback extent. The cursor holds DOM nodes of the running
+   flow, which a fork shares by address, and lengths. */
 typedef struct {
     lxb_dom_element_t *root;            /* the walk root: the element, or the viewport's document element */
     lxb_dom_element_t *exclude_under;   /* the element for its own row; NULL for the viewport's */

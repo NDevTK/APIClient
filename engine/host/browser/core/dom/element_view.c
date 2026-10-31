@@ -291,7 +291,7 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
    under the resting drive on the entered job, so a page-sized sheet rests between rules rather than inside one
    box test. False when a build parked; the step rests and asks again. A node in no presented document reads
    no `display`, so nothing is asked for it. */
-static bool ev_box_tests_ask(const lxb_dom_node_t *n)
+bool element_view_box_tests_ask(const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *a;
 
@@ -723,7 +723,7 @@ static int js_ev_scroll_to_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
         layout_job_enter(s->job);
         layout_job_drive_begin_resting(&d);
-        matched = ev_box_tests_ask(lxb_dom_interface_node(el));
+        matched = element_view_box_tests_ask(lxb_dom_interface_node(el));
         DCHECK(matched || layout_job_drive_spent(&d),
                "a CSSOM VIEW §6 scroll member's box tests parked an author match with the drive's allowance "
                "unspent, so its next activation would ask the same thing over the same state for ever");
@@ -983,7 +983,7 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
         rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
         layout_job_enter(s->job);
         layout_job_drive_begin_resting(&d);
-        matched = ev_box_tests_ask(lxb_dom_interface_node(element_of_value(hdr->this_val)));
+        matched = element_view_box_tests_ask(lxb_dom_interface_node(element_of_value(hdr->this_val)));
         DCHECK(matched || layout_job_drive_spent(&d),
                "CSSOM VIEW §6's `scrollIntoView` box tests parked an author match with the drive's allowance "
                "unspent, so the next activation would ask the same thing over the same state for ever");
@@ -1119,7 +1119,7 @@ static bool ev_client_extent_direct(JSContext *ctx, const EvTarget *t, bool vert
 }
 
 /* Every step is the step machine's, asked under a resting drive on the job the state owns: step 1's box test
-   reads the author matches of the element and its ancestors, which rest between rules (ev_box_tests_ask), and
+   reads the author matches of the element and its ancestors, which rest between rules (element_view_box_tests_ask), and
    step 3's padding edge is laid out with its questions suspended across rests, as `scrollIntoView` does. */
 #define EV_CLIENT_STAGES(X) \
     X(EV_CLIENT_MEASURE, "CSSOM VIEW §6 \"Extensions to the Element Interface\" clientWidth / clientHeight " \
@@ -1164,7 +1164,7 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
     layout_job_drive_begin_resting(&d);
-    if (!ev_box_tests_ask(lxb_dom_interface_node(el))) {
+    if (!element_view_box_tests_ask(lxb_dom_interface_node(el))) {
         DCHECK(layout_job_drive_spent(&d),
                "CSSOM VIEW §6's client extent's box tests parked an author match with the drive's allowance "
                "unspent, so its next activation would ask the same thing over the same state for ever");
@@ -1753,7 +1753,7 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
     layout_job_drive_begin_resting(&d);
-    matched = ev_box_tests_ask(lxb_dom_interface_node(element_of_value(hdr->this_val)));
+    matched = element_view_box_tests_ask(lxb_dom_interface_node(element_of_value(hdr->this_val)));
     DCHECK(matched || layout_job_drive_spent(&d),
            "CSSOM VIEW §6's client rectangles' box tests parked an author match with the drive's allowance "
            "unspent, so the next activation would ask the same thing over the same state for ever");
@@ -1876,7 +1876,7 @@ static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
     layout_job_drive_begin_resting(&d);
-    matched = ev_box_tests_ask(lxb_dom_interface_node(el));
+    matched = element_view_box_tests_ask(lxb_dom_interface_node(el));
     DCHECK(matched || layout_job_drive_spent(&d),
            "a CSSOM VIEW §6 member's box tests parked an author match with the drive's allowance unspent, so its "
            "next activation would ask the same thing over the same state for ever");
