@@ -53,6 +53,7 @@
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
 #include "core/encoding/encoding.h"   /* DOM §4.5's encoding is an id in Encoding §4.2's registry, asked of it by name */
+#include "core/dom/document_named.h"   /* the named properties every Document wrapper carries */
 #include "core/dom/document.h"
 #include "core/dom/document_current_script.h"
 #include "core/dom/document_domain.h"
@@ -4282,7 +4283,9 @@ void document_replace_selection(JSContext *ctx, JSValueConst doc)
    Document again for a second realm, which the pool's seal catches. */
 void document_init(JSContext *ctx)
 {
-    JSClassDef d = { "Document" };
+    /* A Document supports named properties (HTML §3.1.7), so every wrapper is a Web IDL §3.9 legacy platform
+       object; the XMLDocument class below holds only a prototype slot, and its wrappers are this class's. */
+    JSClassDef d = { "Document", .exotic = document_named_exotic() };
 
     DCHECK(g_document_rt == NULL,
            "document_init ran twice — §4.5's interface, its fifteen member declarations and the ten "

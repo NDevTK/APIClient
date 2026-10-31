@@ -1236,6 +1236,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/histreload.h"
 #include "fixture/pieceslice.h"
 #include "fixture/indexgate.h"
+#include "fixture/docnamed.h"
 #include "fixture/windowname.h"
 #include "fixture/twinread.h"
 #include "fixture/requestsink.h"
@@ -1824,6 +1825,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "indexgatefar", HTML_INDEXGATEFAR },
     { "indexgatespell", HTML_INDEXGATESPELL },
     { "indexgatepos", HTML_INDEXGATEPOS },
+    { "docnamed", HTML_DOCNAMED },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
@@ -16455,6 +16457,33 @@ TF_UNIT void probes_indexgate(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `docnamed` document (fixture/docnamed.h): each reads one concrete answer of the Document's
+   named getter, and reads the opposite answer absent too. */
+TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *param, *want, *other, *what; } R[] = {
+        { "dn-override", "ov", "true", "false", "an img named getElementById does not shadow the Document member" },
+        { "dn-div-none", "qs", "function", "object", "a div's name shadowed a Document member: a div is no named element" },
+        { "dn-collection", "coll", "2", "-1", "two elements sharing a name did not answer a two-member HTMLCollection" },
+        { "dn-object-id", "obj", "true", "false", "an object element is not named by its id" },
+        { "dn-img-bare-none", "bare", "undefined", "object", "an img with an id and no name was named by its id" },
+        { "dn-img-id", "img", "true", "false", "an img with an id beside a non-empty name is not named by its id" },
+        { "dn-location", "loc", "string", "undefined", "an img named location shadowed the unforgeable location" },
+        { "dn-no-delete", "del", "false", "true", "a named property with no deleter was deleted" },
+        { "dn-own-key", "key", "true", "false", "a supported property name is not an own key" },
+    };
+    Probe rows[sizeof R / sizeof R[0]];
+    for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {
+        const char *why = NULL;
+        int tt = 1;
+
+        fold_row(&tt, &why, !!strstr(js, "\"/api/dn\""), "NOT REACHED: there is no /api/dn record");
+        fold_row(&tt, &why, param_value_is(js, "/api/dn", R[i].param, R[i].want) &&
+                            !param_value_is(js, "/api/dn", R[i].param, R[i].other), R[i].what);
+        rows[i] = (Probe){ R[i].row, tt, "/api/dn", SESS_EXPLORE, why };
+    }
+    probes_append(tab, n, rows, (int)(sizeof R / sizeof R[0]));
+}
+
 /* The rows of the `replyrole` document (fixture/replyrole.h). */
 TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
     /* The control: the served reply reached the page and its viewer arm built its address from the reply. */
@@ -22731,6 +22760,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_histreload(js, probes, &np);
     probes_pieceslice(js, probes, &np);
     probes_indexgate(js, probes, &np);
+    probes_docnamed(js, probes, &np);
     probes_storedxss(js, probes, &np);
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);

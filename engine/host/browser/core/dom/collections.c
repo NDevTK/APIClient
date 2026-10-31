@@ -42,6 +42,7 @@
 #include "core/idl_indexed.h"
 #include "core/dom/node.h"
 #include "core/dom/collections.h"
+#include "core/dom/document_named.h"   /* §3.1.7's named element, the document-named kind's filter */
 #include "core/dom/element.h"   /* element_id_bytes — DOM §4.9's ID, which both named lookups below are over */
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
@@ -64,12 +65,12 @@ static int     g_ready;
    take. The two child kinds walk the owner's child list; the two by-name kinds walk its whole subtree, which is
    what makes getElementsByTagName's result track a page that inserts a matching element anywhere under it. */
 enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_TAG_NS, COLL_BY_CLASS,
-       COLL_LINKS, COLL_NAMED, COLL_BY_ELEM_NAME };
+       COLL_LINKS, COLL_NAMED, COLL_BY_ELEM_NAME, COLL_DOC_NAMED };
 
 static bool coll_is_descendant(int kind)
 {
     return kind == COLL_BY_TAG || kind == COLL_BY_TAG_NS || kind == COLL_BY_CLASS ||
-           kind == COLL_LINKS || kind == COLL_NAMED || kind == COLL_BY_ELEM_NAME;
+           kind == COLL_LINKS || kind == COLL_NAMED || kind == COLL_BY_ELEM_NAME || kind == COLL_DOC_NAMED;
 }
 
 /* WHICH KINDS ARE §4.2.10.2 HTMLCollectionS, stated POSITIVELY — the traversal and the interface are two
@@ -82,7 +83,7 @@ static bool coll_is_descendant(int kind)
 static bool coll_is_htmlcollection(int kind)
 {
     return kind == COLL_CHILDREN || kind == COLL_BY_TAG || kind == COLL_BY_TAG_NS ||
-           kind == COLL_BY_CLASS || kind == COLL_LINKS || kind == COLL_NAMED;
+           kind == COLL_BY_CLASS || kind == COLL_LINKS || kind == COLL_NAMED || kind == COLL_DOC_NAMED;
 }
 
 static JSValue coll_slots(JSContext *ctx, JSValueConst v)
@@ -301,6 +302,7 @@ static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
         if (!q || !((qn == 1 && q[0] == 'a') || (qn == 4 && memcmp(q, "area", 4) == 0))) return false;
         return lxb_dom_element_has_attribute((lxb_dom_element_t *)c, (const lxb_char_t *)"href", 4);
     }
+    if (kind == COLL_DOC_NAMED) return document_named_element_is((lxb_dom_element_t *)c, name, nlen);
     return true;
 }
 
@@ -787,6 +789,12 @@ JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name)
 {
     DCHECK(g_ready, "a named collection was built before collections_init ran");
     return coll_new_hc(ctx, COLL_NAMED, owner, name, NULL);
+}
+
+JSValue collections_document_named(JSContext *ctx, JSValueConst owner, const char *name)
+{
+    DCHECK(g_ready, "a document-named collection was built before collections_init ran");
+    return coll_new_hc(ctx, COLL_DOC_NAMED, owner, name, NULL);
 }
 
 JSValue collections_links(JSContext *ctx, JSValueConst owner)
