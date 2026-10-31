@@ -249,6 +249,10 @@ CssPx used_value_default_replaced_size(bool vertical);
    §9.2 from inside a css-sizing-3 §5.1 walk. */
 CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedElement *rep);
 
+/* CSS 2.1 §10.6.2's used `height` of the replaced element `el` with a computed `height` of `auto`, as a
+   content-box extent: its natural height, its used width through its ratio, or 150px. */
+CssPx used_value_replaced_auto_height_px(lxb_dom_element_t *el, const ReplacedElement *rep);
+
 /* CSS 2.1 §10.1's containing block as an element: the box whose content edge is the rectangle §10.3's
    percentages and `auto`s are stated against. NULL exactly where the answer is the initial containing block,
    which is no element's box: the first case (the root element's) and the fourth case's last sentence, "If

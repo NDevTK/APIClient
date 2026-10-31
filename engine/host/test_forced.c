@@ -1187,6 +1187,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/gridalign.h"
 #include "fixture/svgreplaced.h"
 #include "fixture/flexreplaced.h"
+#include "fixture/gridreplaced.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1736,6 +1737,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "gridalign", HTML_GRIDALIGN },
     { "svgreplaced", HTML_SVGREPLACED },
     { "flexreplaced", HTML_FLEXREPLACED },
+    { "gridreplaced", HTML_GRIDREPLACED },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15662,6 +15664,30 @@ TF_UNIT void probes_flexreplaced(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gridreplaced` document (fixture/gridreplaced.h): each svg's border box and offset,
+   WxH@X_Y; Chrome 155.0.8059.84 and Firefox 158.0.1 give every value they expect. */
+TF_UNIT void probes_gridreplaced(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "q1", "100x50@0_0", "css-grid-1 §6.2: a centred viewBox-only item is not the block rules' 100 x 50" },
+        { "q2", "100x50@0_0", "css-grid-1 §6.2: a start-aligned viewBox-only item is not its natural 100 x 50" },
+        { "q3", "100x50@0_0", "css-grid-1 §6.2: `normal` with a ratio is not sized by the block-level rules" },
+        { "q4", "40x20@0_0", "css-grid-1 §6.2: a width and a ratio do not give the natural height" },
+        { "q5", "60x30@20_0", "css-grid-1 §6.2: a height and a ratio do not give the width, centred" },
+        { "q6", "100x80@0_0", "css-grid-1 §6.2: `stretch` does not fill the 80px row" },
+    };
+    const char *gr_why = NULL; int gr_tt = !!strstr(js, "\"/api/gridreplaced\"");
+    unsigned i;
+
+    fold_row(&gr_tt, &gr_why, gr_tt,
+             "NOT REACHED: there is no /api/gridreplaced record at all, so the document aborted before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&gr_tt, &gr_why, param_value_is(js, "/api/gridreplaced", ROWS[i].key, ROWS[i].want), ROWS[i].why);
+    const Probe rows[] = {
+        { "grid-replaced-item", gr_tt, "/api/gridreplaced", SESS_EXPLORE, gr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21785,6 +21811,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_gridalign(js, probes, &np);
     probes_svgreplaced(js, probes, &np);
     probes_flexreplaced(js, probes, &np);
+    probes_gridreplaced(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

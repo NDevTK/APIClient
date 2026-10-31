@@ -3234,9 +3234,7 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
    positioned, replaced elements" adds the fifth by reference ("the used value of 'height' is determined as for
    inline replaced elements"), so every replaced box this engine can classify is covered by this one function.
    ITS SECOND ARM READS THE USED WIDTH AS A CONTENT EXTENT, for the reason `used_value_replaced_auto_width_px`
-   states. THIS ONE IS NOT EXPORTED AND ITS SIBLING IS, which is not an oversight: css-sizing-3 §5.1 defines
-   the INLINE pair this engine computes, so the only caller outside §10.3's own dispatch asks for a width. The
-   day a block-axis intrinsic size exists it asks for this function by the same argument. */
+   states. It is exported for a grid row's contribution, css-sizing-3 §5.1's block-axis size of the item. */
 static CssPx uv_replaced_height(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
     bool w_auto = css_computed_length_is(el, "width", CSS_KEYWORD_AUTO);
@@ -3262,6 +3260,12 @@ static CssPx uv_replaced_height(lxb_dom_element_t *el, const ReplacedElement *re
     return used_value_default_replaced_size(true);
 }
 
+CssPx used_value_replaced_auto_height_px(lxb_dom_element_t *el, const ReplacedElement *rep)
+{
+    DCHECK(rep != NULL && rep->replaced, "a replaced element's auto height was asked of a box that is not one");
+    return uv_replaced_height(el, rep);
+}
+
 /* THE REPLACED-ELEMENT SIZE, WHICH IS ONE ALGORITHM FOR FIVE BOX TYPES — the shape §10.3 does not have anywhere
    else. §10.3.4 "Block-level, replaced elements in normal flow" ("the used value of 'width' is determined as
    for inline replaced elements. Then the rules for non-replaced block-level elements are applied to determine
@@ -3275,6 +3279,31 @@ static CssPx uv_replaced_height(lxb_dom_element_t *el, const ReplacedElement *re
    replaces the ordinary three steps for exactly the subject this function computes. Its antecedent is tested
    in `uv_require_no_ratio_table`, one level up, because it is a fact about BOTH axes at once and this function
    sees one; a `canvas` under a declared limit satisfies it and aborts there, for the reason stated there. */
+static CssPx uv_grid_item_auto_height(lxb_dom_element_t *el);
+static CssPx uv_grid_item_auto_width(lxb_dom_element_t *el, UvBox box);
+
+/* css-grid-1 §6.2 "Grid Item Sizing" for a replaced grid item's `auto` size on one axis: `stretch` takes "the
+   stretch-fit size", and so does `normal` when "the grid item has no preferred aspect ratio, and no natural
+   size in the relevant axis"; otherwise `normal` is "sized consistent with the size calculation rules for
+   block-level elements", and every other value is the table's "Use natural size" — CSS 2.1 §10.3.2's and
+   §10.6.2's replaced rules either way. True with `*out` for the stretch-fit arm. */
+static bool uv_grid_replaced_stretch(lxb_dom_element_t *el, const ReplacedElement *rep, UvBox box, bool vertical,
+                                     CssPx *out)
+{
+    lxb_dom_element_t *container = uv_grid_item_container(el);
+    CssAlign self = css_computed_align(el, vertical ? "align-self" : "justify-self");
+    bool natural = vertical ? rep->has_height : rep->has_width;
+
+    if (self.value == CSS_KEYWORD_AUTO) {
+        self = css_computed_align(container, vertical ? "align-items" : "justify-items");
+        if (self.value == CSS_KEYWORD_LEGACY && !self.legacy) self.value = CSS_KEYWORD_NORMAL;
+    }
+    if (self.value != CSS_KEYWORD_STRETCH && !(self.value == CSS_KEYWORD_NORMAL && !rep->has_ratio && !natural))
+        return false;
+    *out = vertical ? uv_grid_item_auto_height(el) : uv_grid_item_auto_width(el, box);
+    return true;
+}
+
 static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep, UvBox box, bool vertical)
 {
     CssPx content;
@@ -3295,8 +3324,10 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
               "element's own natural dimensions is their question to answer and not this section's. CSS 2.1 §17.2 "
               "The CSS table model is the sentence that puts this element here at all: \"Replaced elements with these "
               "'display' values are treated as their given display types during layout\"");
-    if (box == UV_BOX_ITEM)
-        DFAIL("a REPLACED element that is a FLEX or GRID ITEM, whose used main and cross sizes come from its "
+    if (box == UV_BOX_ITEM && uv_grid_item_container(el) != NULL) {
+        if (uv_grid_replaced_stretch(el, rep, box, vertical, &content)) return content;
+    } else if (box == UV_BOX_ITEM)
+        DFAIL("a REPLACED element that is a FLEX ITEM, whose used main and cross sizes come from its "
               "container's algorithm. css-flexbox-1 §9.2 \"Line Length Determination\" makes a declared size "
               "the FLEX BASE SIZE, and for an `auto` one it makes the item's natural size its content "
               "contribution; §9.7 \"Resolving Flexible Lengths\" then flexes that base against the "

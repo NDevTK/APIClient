@@ -123,6 +123,7 @@ static CssPx gt_minimum_contribution(lxb_dom_element_t *item, IntrinsicInlineSiz
 static bool gt_row_contribution_ask(lxb_dom_element_t *item, CssPx *out)
 {
     static const char *const SIZES[] = { "height", "min-height", "max-height" };
+    ReplacedElement rep;
     CssPx content, unused;
     char buf[160];
     size_t i;
@@ -144,15 +145,17 @@ static bool gt_row_contribution_ask(lxb_dom_element_t *item, CssPx *out)
         DFAILF("%s is a grid item with an `auto` block-axis margin, which css-grid-1 §10.2 \"Aligning with auto "
                "margins\" resolves over its grid area. BUILD that alignment",
                box_subject(item, buf, sizeof buf));
-    /* A replaced item with a declared block size contributes that size like any box; only an `auto` one reads
-       its natural size. */
-    if (replaced_element_of(item).replaced && used_value_height_behaves_as_auto(item))
-        DFAILF("%s is a replaced grid item with an `auto` block size, whose row contribution is css-sizing-3 "
-               "§5.1's natural size under css-grid-1 §6.2. BUILD it",
-               box_subject(item, buf, sizeof buf));
-    /* The one ask that can stop: the item's own content-based block size, held once answered. */
-    if (used_value_height_behaves_as_auto(item) && !block_flow_auto_height_ask(item, &unused)) return false;
-    content = used_value_block_level_content_px(item, true);
+    /* A replaced item with a declared block size contributes that size like any box; an `auto` one
+       contributes css-sizing-3 §5.1's block size of a replaced element, CSS 2.1 §10.6.2's height at its used
+       column width. */
+    rep = replaced_element_of(item);
+    if (rep.replaced && used_value_height_behaves_as_auto(item)) {
+        content = used_value_replaced_auto_height_px(item, &rep);
+    } else {
+        /* The one ask that can stop: the item's own content-based block size, held once answered. */
+        if (used_value_height_behaves_as_auto(item) && !block_flow_auto_height_ask(item, &unused)) return false;
+        content = used_value_block_level_content_px(item, true);
+    }
     *out = css_px_add(used_value_border_edge_from_content_px(item, content, true),
                       css_px_add(used_value_px(item, "margin-top"), used_value_px(item, "margin-bottom")));
     return true;
