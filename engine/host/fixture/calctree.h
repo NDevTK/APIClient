@@ -7,9 +7,12 @@
    The specified and computed serializations (§10.13 "Serialization") are compared in the page against the
    strings Chrome 155.0.8059.84 and Firefox 158.0.1 both give, and so is each specified `width` in SPEC: a
    relative unit keeps its own term, absolute units fold into px, terms sort by unit, a number distributes over
-   a Sum, and a non-finite term is written as a keyword times one unit. The two engines differ on a function
-   of one relative unit (`min(1em, 2em)`: Chrome keeps it, Firefox and §10.10.1's text compute `calc(1em)`),
-   which is left out. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   a Sum, and a non-finite term is written as a keyword times one unit. Cross-engine notes, left out of SPEC
+   and answered here as the editors' drafts read: Chrome keeps a function of one relative unit
+   (`min(1em, 2em)`) where Firefox and §10.10.1's text compute `calc(1em)`; Chrome writes `calc(-0px + 1em)`
+   as `calc(1em + 0px)` and Firefox as `calc(1em - 0px)`; both browsers round a number to six significant
+   digits (`calc(1Q + 1MM)` is `calc(4.72441px)`) where CSSOM §6.7.2 rounds "to not produce more than 6
+   decimals". It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_CALCTREE_H
 #define ENGINE_HOST_FIXTURE_CALCTREE_H
 #ifndef TF_CANVAS_INK
