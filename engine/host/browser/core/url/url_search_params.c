@@ -479,7 +479,10 @@ static int usp_find(const UspList *l, const char *name, size_t nn, const char *v
     int i;
 
     for (i = 0; i < l->n; i++) {
+        DCHECK(!l->e[i].nhole, USP_HOLE_WHY("lookup compared a stored NAME that is a hole against real bytes"));
         if (l->e[i].nlen != nn || memcmp(l->e[i].name, name, nn)) continue;
+        DCHECK(!value || !l->e[i].vhole,
+               USP_HOLE_WHY("has() compared a stored VALUE that is a hole against real bytes"));
         if (value && (l->e[i].vlen != vn || memcmp(l->e[i].value, value, vn))) continue;
         return i;
     }
