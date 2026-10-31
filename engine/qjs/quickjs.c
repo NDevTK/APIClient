@@ -7953,8 +7953,9 @@ JSValue JS_NewStringUTF16(JSContext *ctx, const uint16_t *buf, size_t len)
    letting the ToString below carry it to a boundary that owes C a real JSString: every caller either holds an
    atom's string (js_get_function_name, js_method_set_properties, js_function_toString, js_symbol_toString,
    js_str_ctor_step's Symbol arm, js_func_bind_step, JS_ToObjectString and js_object_tostring_step's builtin
-   tag) or took its operand through step_tostring_run, which answers unknown input with JS_STEP_UNKNOWN and
-   collapses the whole machine (js_error_tostring_step, js_re_split_step, sj_open_container). */
+   tag) or took its operand through step_tostring_run, which runs unknown input's example through the machine
+   and derives its completion, or collapses the machine where there is no example (js_error_tostring_step,
+   js_re_split_step, sj_open_container). */
 static JSValue JS_ConcatString3(JSContext *ctx, const char *str1,
                                 JSValue str2, const char *str3)
 {
@@ -21302,8 +21303,8 @@ static JSValue JS_ToNumberHintFree(JSContext *ctx, JSValue val,
                          "family, 13.9 Bitwise Shift Operators and 13.12 Binary Bitwise Operators — and every "
                          "BUILTIN that coerces an argument through the step sub-sequences answers too "
                          "(step_toint64_run / _todouble_run / _tolength_run / _toint32_run / _toint32sat_run / "
-                         "_tofloat64_run all return JS_STEP_UNKNOWN, and the driver completes the machine with "
-                         "the derived unknown). So an arrival here is NEITHER. It is a C BODY doing its own "
+                         "_tofloat64_run all run the operand's example or return JS_STEP_UNKNOWN, and the driver "
+                         "completes the machine with the derived unknown). So an arrival here is NEITHER. It is a C BODY doing its own "
                          "conversion: a coerce-then-compute builtin's GENERIC body, which the declaration hands "
                          "operands 7.1.1 has made primitive and which then performs the declared family's "
                          "7.1.4 / 7.1.19 itself with a JS_ToInt32 / JS_ToFloat64 / JS_ToString of its own — "
@@ -22158,7 +22159,7 @@ static JSValue JS_ToStringInternal(JSContext *ctx, JSValueConst val,
                     snprintf(why, sizeof why,
                              "ToString over UNKNOWN EXTERNAL INPUT `%.240s`, from a C site that is NOT a step "
                              "machine's coercion AND NOT A BYTE CONSUMER. step_tostring_run answers §7.1.19 "
-                             "ToString ( arg ) over unknown input with a derived concolic (JS_STEP_UNKNOWN), "
+                             "ToString ( arg ) over unknown input with a derived concolic (step_coerce_unknown), "
                              "and a JS_ToCString / JS_ToCStringLen / JS_ToCStringLenUTF16 on this value dies "
                              "one frame earlier in js_force_tostring, which names the consuming file:line. "
                              "What is left is the JS_ToString / JS_ToPropertyKey / JS_ValueToAtom at %s:%d, "
@@ -27276,12 +27277,20 @@ int step_tobool_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, const char *op
    declared beside step_tostring_run alone, which was true only while that was the whole sub-sequence. */
 enum { STR_PH_START = 0, STR_PH_PRIM };
 
-/* A COERCION OVER UNKNOWN EXTERNAL INPUT, PARKED FOR THE DRIVER — see JS_STEP_UNKNOWN for the spec argument
-   and for what the driver then does with it. `v` is BORROWED; the header takes its own reference, because the
-   caller's may be a value the caller is about to release. `phase` is the SUB-SEQUENCE'S OWN cursor, reset
-   because the coercion is over either way — passed in rather than picked here, since ToString and the numeric
-   family keep separate cursors on the header and one function must not reset the other's.
-   BOTH FAMILIES, because the argument is the same one in both directions. §7.1.19 ToString ( arg ) steps 9-12
+/* A COERCION OVER UNKNOWN EXTERNAL INPUT — see JS_STEP_UNKNOWN for the spec argument and for what the driver
+   then does with it. `v` is BORROWED; the header takes its own reference, because the caller's may be a value
+   the caller is about to release. `phase` is the SUB-SEQUENCE'S OWN cursor, reset because this coercion of `v`
+   is over either way — passed in rather than picked here, since ToString and the numeric family keep separate
+   cursors on the header and one function must not reset the other's.
+   Where `v` carries an example and the machine does not answer unknown input itself, `*ex` takes the example
+   (owned) and 0 is returned: the caller runs the same coercion over it, and the machine runs on. The first
+   such operand stays on the header for the driver's derivation. Otherwise the operand is parked and
+   JS_STEP_UNKNOWN returned, with `*ex` undefined. */
+/* Named residual. Not covered: a second unknown operand of one machine contributes its example to the result
+   but not its root, since the derivation names the first. Next diff: the header holds the operand list and the
+   driver derives over all of them (concolic_new_derived takes several). How its absence shows: a finding over a
+   builtin's result whose root names one of two unknown arguments the page passed. */
+/* BOTH FAMILIES, because the argument is the same one in both directions. §7.1.19 ToString ( arg ) steps 9-12
    and §7.1.4 ToNumber ( arg ) steps 7-10 have the identical shape — assert the remaining case is an Object,
    §7.1.1 ToPrimitive with the family's hint, assert the result is not an Object, recurse — and §7.1.1 over a
    concolic returns it unchanged, so both recursions are a coercion of an unknown whose result is an unknown of
@@ -27289,16 +27298,46 @@ enum { STR_PH_START = 0, STR_PH_PRIM };
    ToIntegerOrInfinity, §7.1.22 ToLength, §7.1.8 ToInt32) carried its unknown to a conversion boundary that owes
    C a real double and aborts there: `Array.prototype.slice.call(a, {orphan.arg3})` ended a whole document on a
    real page, and a crashed instance's findings are discarded. */
-static int step_coerce_unknown(JSStepHdr *h, JSValueConst v, uint8_t *phase)
+static int step_coerce_unknown(JSContext *ctx, JSStepHdr *h, JSValueConst v, uint8_t *phase, JSValue *ex)
 {
-    DCHECK(JS_IsUninitialized(h->unknown_operand),
-           "a second coercion over unknown input on a machine that is already standing on one — the operand "
-           "is taken by the driver before anything else runs, so two of them means a step returned "
-           "JS_STEP_UNKNOWN to something that did not place its completion");
+    JSValue e = h->def->answers_unknown ? JS_UNDEFINED : js_concolic_operand(ctx, v);
+
+    *phase = 0;                    /* STR_PH_START / NUM_PH_START — this coercion of `v` is over either way */
+    *ex = JS_UNDEFINED;
+    DCHECK(!JS_IsUninitialized(e), "a coercion reported unknown input for an operand that is not unknown");
+    if (!JS_IsUndefined(e)) {
+        DCHECK(!(g_concolic.is && g_concolic.is(e)),
+               "an unknown's example is itself unknown input — an example rides the concrete value the "
+               "interpreter produced, so a producer attached a derivation where a datum belongs");
+        if (JS_IsUninitialized(h->unknown_operand)) {
+            h->unknown_operand = js_dup(v);
+            h->unknown_stage = h->stage;
+        }
+        *ex = e;
+        return 0;
+    }
+    DCHECK(!h->def->answers_unknown || JS_IsUninitialized(h->unknown_operand),
+           "a machine that answers unknown input itself met a second one before taking the first off its header");
+    /* An earlier operand's example has been run on, and this operand has none, so the completion has no
+       example either: it is derived from this one (the residual above names the other's root). */
+    JS_FreeValue(ctx, h->unknown_operand);
     h->unknown_operand = js_dup(v);
-    *phase = 0;                    /* STR_PH_START / NUM_PH_START — the sub-sequence is done either way */
+    h->unknown_stage = h->stage;
     return JS_STEP_UNKNOWN;
 }
+
+/* A sub-sequence's coercion of unknown `v` (borrowed; `owned`, a value the caller holds, is released here):
+   return what step_coerce_unknown reports, or run the sub-sequence `self` again over the example. `self` is
+   the sub-sequence this expands in, and `out` its result pointer. */
+#define STEP_COERCE_UNKNOWN(self, ctx, h, v, owned, phase, out, out_cb, out_argc) do {  \
+        JSValue ex_;                                                                     \
+        int r_ = step_coerce_unknown((ctx), (h), (v), (phase), &ex_);                    \
+        JS_FreeValue((ctx), (owned));                                                    \
+        if (r_) return r_;                                                               \
+        r_ = self((ctx), (h), ex_, JS_UNDEFINED, (out), (out_cb), (out_argc));           \
+        JS_FreeValue((ctx), ex_);                                                        \
+        return r_;                                                                       \
+    } while (0)
 
 /* ToString on a value that may run user code. The object case is a TOPRIMITIVE step; whatever comes back is a
    primitive, so the ToString that finishes it runs nothing. 0 = *pout is the string, 5 = the caller must return
@@ -27318,7 +27357,7 @@ int step_tostring_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
            "build it in the operator" that boundary's abort names, and it is built at the ONE sub-sequence every
            builtin's ToString goes through rather than at the sixty call sites that reach it. */
         if (unlikely(g_concolic.is && g_concolic.is(v)))
-            return step_coerce_unknown(h, v, &h->str_phase);
+            STEP_COERCE_UNKNOWN(step_tostring_run, ctx, h, v, JS_UNDEFINED, &h->str_phase, pout, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
                    "a coercion is already in flight on this machine's header");
@@ -27338,63 +27377,54 @@ int step_tostring_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
        ANSWERED with unknown external input — `{ valueOf() { return location.hash } }`. §7.1.19 step 11 asserts
        the primitive is not an Object, and a concolic satisfies that assertion about the PAGE's value while
        failing it about the carrier, so this is the same case arriving one hop later. */
-    if (unlikely(g_concolic.is && g_concolic.is(in))) {
-        int r = step_coerce_unknown(h, in, &h->str_phase);
-        JS_FreeValue(ctx, in);
-        return r;
-    }
+    if (unlikely(g_concolic.is && g_concolic.is(in)))
+        STEP_COERCE_UNKNOWN(step_tostring_run, ctx, h, in, in, &h->str_phase, pout, out_cb, out_argc);
     *pout = JS_ToStringFree(ctx, in);
     return JS_IsException(*pout) ? -1 : 0;
 }
 
-/* THE COMPLETION A MACHINE THAT REPORTED JS_STEP_UNKNOWN GETS, derived from the operand it parked and named by
- * the ALGORITHM and the SPEC STEP it was coercing at — read out and cleared here, so the teardown that runs
- * next finds nothing left to give back.
+/* THE COMPLETION OF A MACHINE THAT MET UNKNOWN INPUT: derived from `v` (consumed), the operand the driver took
+ * off the machine's header, and named by the ALGORITHM of `def` and the SPEC STEP `stage` it was coercing at.
+ * `real` (consumed) is the machine's own completion over the operand's example, which becomes the derivation's
+ * example; JS_UNDEFINED where the operand had none and the machine stopped there.
  *
  * THE NAME IS BOTH HALVES BECAUSE THE IDENTITY IS WHAT THE PATH CONSTRAINT IS KEYED BY. `def->algorithm` alone
  * would give `x.replace(x, x)`'s search coercion and its replacement coercion ONE identity, and decide.c would
- * then let a branch over the first decide a branch over the second — the silent arm-pruning §Solver-half calls
- * out, in the one direction no gate can see. A stage NAMES ONE SPEC STEP (JSTrampStepDef.steps), which is
- * exactly "which of this algorithm's coercions this is", and it is the label rather than the index because the
- * label is what survives a build whose stages moved. */
-static JSValue js_step_unknown_result(JSContext *ctx, JSStepHdr *h)
+ * then let a branch over the first decide a branch over the second. A stage NAMES ONE SPEC STEP
+ * (JSTrampStepDef.steps), and it is the label rather than the index because the label is what survives a build
+ * whose stages moved. */
+static JSValue js_step_unknown_result(JSContext *ctx, const JSTrampStepDef *def, uint16_t stage, JSValue v,
+                                      JSValue real)
 {
-    JSValue v = h->unknown_operand, r;
+    JSValue r;
     const char *label;
     char *op;
     size_t n;
     int nstages = 0;
 
-    h->unknown_operand = JS_UNINITIALIZED;
     DCHECK(g_concolic.is && g_concolic.is(v),
            "a step machine's completion was derived from something that is not unknown external input — the "
-           "operand JS_STEP_UNKNOWN names is not on the header the DRIVER is stepping, which is what happens "
-           "when a machine FORWARDS its step to another machine's own header and does not move it across");
-    /* ALWAYS FATAL, not a DCHECK: the pair IS this value's identity, and a derivation that cannot spell one is
-       one decide.c keys under whatever it shares a name with — an arm pruned by a predicate that is not the
-       predicate it was recorded for. That is data integrity rather than a dev-only invariant, and the walk
-       below would dereference the missing list anyway. */
-    CHECK(h->def->algorithm != NULL && h->def->steps != NULL,
-          "a step machine whose ToString was over unknown input declares no algorithm or no steps — the pair "
+           "operand step_coerce_unknown records is not on the header the DRIVER is stepping, which is what "
+           "happens when a machine FORWARDS its step to another machine's own header and does not move it across");
+    /* ALWAYS FATAL: the pair IS this value's identity, and a derivation that cannot spell one is keyed by
+       decide.c under whatever it shares a name with. */
+    CHECK(def->algorithm != NULL && def->steps != NULL,
+          "a step machine whose coercion was over unknown input declares no algorithm or no steps — the pair "
           "IS the derived value's identity, and a value that cannot be spelled cannot be told apart from "
           "this algorithm's other coercions");
-    /* WALKED TO THE TERMINATOR rather than indexed: a stage past the declared list is step_stage_check's own
-       diagnosis, and reading past the array to say so would be a worse fault than the one being reported. */
-    while (h->def->steps[nstages]) nstages++;
-    DCHECK((int)h->stage < nstages,
+    while (def->steps[nstages]) nstages++;
+    DCHECK((int)stage < nstages,
            "a step machine coerced unknown input at a stage its algorithm does not declare — the stage label "
            "is half the derived value's identity, so there is no name to give this coercion");
-    label = (int)h->stage < nstages ? h->def->steps[h->stage] : "(an undeclared stage)";
-    /* SIZED FROM THE TWO STRINGS, never a fixed buffer. A stage label is PROSE — the longest declared in this
-       tree is 470 bytes — and a truncated name is two coercions sharing one identity, which prunes an arm
-       nothing contradicts. There is no correct shorter answer, so the composition is allocated to fit and the
-       only failure left is the allocator's. */
-    n = strlen(h->def->algorithm) + 3 + strlen(label) + 1;
+    label = (int)stage < nstages ? def->steps[stage] : "(an undeclared stage)";
+    /* Sized from the two strings: a stage label is prose, and a truncated name is two coercions sharing one
+       identity. */
+    n = strlen(def->algorithm) + 3 + strlen(label) + 1;
     op = js_malloc(ctx, n);
     CHECK(op != NULL, "out of memory naming a derived unknown — a dropped concolic collapses a branch to a "
                       "concrete arm and deletes everything behind the other");
-    snprintf(op, n, "%s @ %s", h->def->algorithm, label);
-    r = js_concolic_derive(ctx, v, op, JS_UNDEFINED);
+    snprintf(op, n, "%s @ %s", def->algorithm, label);
+    r = js_concolic_derive(ctx, v, op, real);
     js_free(ctx, op);   /* the derivation COPIES what it keeps (its shape and its identity are its own) */
     DCHECK(!JS_IsUninitialized(r),
            "the concolic derivation declined an operand this engine had already recognised as unknown input — "
@@ -27554,8 +27584,7 @@ int step_toprimitive_number_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JS
     /* §7.1.1 over unknown external input returns it unchanged, so the coercion is the unknown's — see
        step_coerce_unknown. */
     if (h->num_phase == NUM_PH_START && unlikely(g_concolic.is && g_concolic.is(v))) {
-        JS_FreeValue(ctx, in);
-        return step_coerce_unknown(h, v, &h->num_phase);
+        STEP_COERCE_UNKNOWN(step_toprimitive_number_run, ctx, h, v, in, &h->num_phase, pout, out_cb, out_argc);
     }
     return step_toprim_run(ctx, h, v, HINT_NUMBER, in, pout, out_cb, out_argc);
 }
@@ -27567,7 +27596,7 @@ int step_toint64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, i
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
         if (unlikely(g_concolic.is && g_concolic.is(v)))
-            return step_coerce_unknown(h, v, &h->num_phase);
+            STEP_COERCE_UNKNOWN(step_toint64_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
                    "a coercion is already in flight on this machine's header");
@@ -27583,11 +27612,8 @@ int step_toint64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, i
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in))) {
-        int r = step_coerce_unknown(h, in, &h->num_phase);
-        JS_FreeValue(ctx, in);
-        return r;
-    }
+    if (unlikely(g_concolic.is && g_concolic.is(in)))
+        STEP_COERCE_UNKNOWN(step_toint64_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToInt64SatFree(ctx, pres, in);
 }
 
@@ -27603,7 +27629,7 @@ int step_todouble_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
         if (unlikely(g_concolic.is && g_concolic.is(v)))
-            return step_coerce_unknown(h, v, &h->num_phase);
+            STEP_COERCE_UNKNOWN(step_todouble_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
                    "a coercion is already in flight on this machine's header");
@@ -27619,11 +27645,8 @@ int step_todouble_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, 
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in))) {
-        int r = step_coerce_unknown(h, in, &h->num_phase);
-        JS_FreeValue(ctx, in);
-        return r;
-    }
+    if (unlikely(g_concolic.is && g_concolic.is(in)))
+        STEP_COERCE_UNKNOWN(step_todouble_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToFloat64Free(ctx, pres, in);
 }
 
@@ -27723,7 +27746,7 @@ static int step_tolength_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVal
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
         if (unlikely(g_concolic.is && g_concolic.is(v)))
-            return step_coerce_unknown(h, v, &h->num_phase);
+            STEP_COERCE_UNKNOWN(step_tolength_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
                    "a coercion is already in flight on this machine's header");
@@ -27739,11 +27762,8 @@ static int step_tolength_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVal
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in))) {
-        int r = step_coerce_unknown(h, in, &h->num_phase);
-        JS_FreeValue(ctx, in);
-        return r;
-    }
+    if (unlikely(g_concolic.is && g_concolic.is(in)))
+        STEP_COERCE_UNKNOWN(step_tolength_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToLengthFree(ctx, pres, in);
 }
 
@@ -27757,7 +27777,7 @@ static int step_toint32_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValu
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
         if (unlikely(g_concolic.is && g_concolic.is(v)))
-            return step_coerce_unknown(h, v, &h->num_phase);
+            STEP_COERCE_UNKNOWN(step_toint32_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
                    "a coercion is already in flight on this machine's header");
@@ -27773,11 +27793,8 @@ static int step_toint32_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValu
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in))) {
-        int r = step_coerce_unknown(h, in, &h->num_phase);
-        JS_FreeValue(ctx, in);
-        return r;
-    }
+    if (unlikely(g_concolic.is && g_concolic.is(in)))
+        STEP_COERCE_UNKNOWN(step_toint32_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToInt32Free(ctx, pres, in);
 }
 
@@ -27793,7 +27810,7 @@ static int step_toint32sat_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSV
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
         if (unlikely(g_concolic.is && g_concolic.is(v)))
-            return step_coerce_unknown(h, v, &h->num_phase);
+            STEP_COERCE_UNKNOWN(step_toint32sat_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
                    "a coercion is already in flight on this machine's header");
@@ -27809,11 +27826,8 @@ static int step_toint32sat_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSV
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in))) {
-        int r = step_coerce_unknown(h, in, &h->num_phase);
-        JS_FreeValue(ctx, in);
-        return r;
-    }
+    if (unlikely(g_concolic.is && g_concolic.is(in)))
+        STEP_COERCE_UNKNOWN(step_toint32sat_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     { int r = JS_ToInt32Sat(ctx, pres, in); JS_FreeValue(ctx, in); return r; }
 }
 
@@ -27824,7 +27838,7 @@ static int step_tofloat64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVa
         JS_FreeValue(ctx, in);
         /* §7.1.4 steps 7-10 over unknown external input — see step_coerce_unknown. */
         if (unlikely(g_concolic.is && g_concolic.is(v)))
-            return step_coerce_unknown(h, v, &h->num_phase);
+            STEP_COERCE_UNKNOWN(step_tofloat64_run, ctx, h, v, JS_UNDEFINED, &h->num_phase, pres, out_cb, out_argc);
         if (JS_VALUE_GET_TAG(v) == JS_TAG_OBJECT) {
             DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
                    "a coercion is already in flight on this machine's header");
@@ -27840,11 +27854,8 @@ static int step_tofloat64_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVa
     h->coerce = JS_UNDEFINED;
     h->num_phase = NUM_PH_START;
     /* …and the other way in: the page's own valueOf ANSWERED with unknown external input. */
-    if (unlikely(g_concolic.is && g_concolic.is(in))) {
-        int r = step_coerce_unknown(h, in, &h->num_phase);
-        JS_FreeValue(ctx, in);
-        return r;
-    }
+    if (unlikely(g_concolic.is && g_concolic.is(in)))
+        STEP_COERCE_UNKNOWN(step_tofloat64_run, ctx, h, in, in, &h->num_phase, pres, out_cb, out_argc);
     return JS_ToFloat64Free(ctx, pres, in);
 }
 
@@ -27915,13 +27926,10 @@ static JSValue tramp_step_state_free_1(JSContext *ctx, void *st, bool take_resul
     DCHECK(h->delegate == NULL,
            "a machine reached the one-machine teardown still owning a delegate — the chain is taken by "
            "tramp_step_state_free, and an inner machine freed from here would leak its own");
-    /* THE UNKNOWN OPERAND IS TAKEN BEFORE THE TEARDOWN, ALWAYS — the driver derives the machine's completion
-       from it and clears it, and only then frees the state. One reaching here would be a reference nothing
-       gave back, and it would mean a machine returned JS_STEP_UNKNOWN to something that is not the driver. */
-    DCHECK(JS_IsUninitialized(h->unknown_operand),
-           "a step machine was torn down still holding the operand its ToString reported as unknown — the "
-           "driver takes that operand at the one place a machine's completion is placed, so a machine still "
-           "holding one returned JS_STEP_UNKNOWN through a path that is not the step driver");
+    /* A normal completion's unknown operand was taken by the driver; one still here belongs to a machine that
+       threw or was abandoned after running on over the operand's example, and is released with the state. */
+    JS_FreeValue(ctx, h->unknown_operand);
+    h->unknown_operand = JS_UNINITIALIZED;
     if (!take_result && h->coercing && h->def->onerror)
         h->def->onerror(ctx, h->this_val, h->def->body_magic);   /* BEFORE the receiver is released */
 
@@ -28471,19 +28479,11 @@ static void *tramp_step_state_clone(JSContext *ctx, const void *src)
        `delegate` STAYS refused, and it is a different fact rather than the other half of one: the field is live
        only between the machine's `return 17` and the driver's adoption two statements later, with no request,
        no opcode and no suspension in between — so a fork that sees one means something suspended where nothing
-       can, exactly as `unknown_operand` below does. */
+       can. */
     DCHECK(o->delegate == NULL,
            "deep-fork of a step machine still owning a DELEGATE it has not handed over — the field is live only "
            "across the `return 17` that names it, so a fork reaching it means something suspended between the "
            "machine's return and the driver's adoption");
-    /* AND NOT WHILE IT IS STANDING ON AN UNKNOWN OPERAND. `unknown_operand` is deliberately absent from every
-       machine's `visit` (see JSStepHdr) because it is set only across the return that names it, with nothing
-       between it and the driver that could fork; the memcpy below would hand the sibling a reference nobody
-       took, so the claim is asserted here rather than paid for with a dup in every clone. */
-    DCHECK(JS_IsUninitialized(o->unknown_operand),
-           "deep-fork of a step machine standing on the operand its ToString reported as unknown — that "
-           "operand is live only between the machine's return and the driver's placement of its completion, "
-           "so a fork reaching it means something suspended in between");
     /* AND WHETHER THIS STATE MAY BE FORKED AT ALL — see JSTrampStepDef.unforkable. Asked HERE, at the one
        consumer the answer is about, rather than inside the machine's `visit`, which three consumers now drive.
        The machine's own sentence is what aborts, so the report names the object with no halves. */
@@ -28520,9 +28520,11 @@ static void *tramp_step_state_clone(JSContext *ctx, const void *src)
     h->park_exc = js_dup(h->park_exc);
     /* THE OWN-KEY-SET PREDICATE, TAKEN A SECOND TIME. This is the one header value that is live ACROSS a
        fork by design — the sibling resumes at the very ask it was forked from, and step_tobool_run reads the
-       operand off the header there — so it is dup'd rather than asserted absent the way unknown_operand is.
-       UNINITIALIZED is not refcounted, so the no-question case needs no test. */
+       operand off the header there — so it is dup'd, as unknown_operand is below. UNINITIALIZED is not
+       refcounted, so the no-question case needs no test. */
     h->keys_pred = js_dup(h->keys_pred);
+    /* The unknown operand a machine runs on over the example of, held across the fork like keys_pred. */
+    h->unknown_operand = js_dup(h->unknown_operand);
     o->def->visit(ctx, h, (JSStepVisit *)&js_step_visit_dup);   /* the machine's own owned fields, taken a second time */
     return h;
 }
@@ -34381,10 +34383,9 @@ typedef struct JSJsonStr {
        an unknown is taken here and the whole JSON text becomes an unknown String derived from it. One operand
        and not a list: §22.1.2.1 String.fromCharCode already sets the rule for a result built out of several
        possibly-unknown parts — derive from the first, keep every part's bytes in the EXAMPLE.
-       IT IS VISITED, unlike JSStepHdr's `unknown_operand`, and the difference is lifetime: that field is live
-       only across the return that names it, while this one is live for the whole walk and therefore across
-       every suspension, park and fork the walk has. A field a fork does not dup is a reference the sibling
-       never took. */
+       It is live for the whole walk and therefore across every suspension, park and fork the walk has, so it
+       is VISITED (the header's own `unknown_operand` is dup'd by the header's clone instead). A field a fork
+       does not dup is a reference the sibling never took. */
     JSValue unknown;
     /* ...AND WHETHER THE TEXT IS STILL A VALUE THE PAGE COMPUTES. An unknown with no example serializes to
        nothing at all (§25.5.4.2 step 12's undefined drops the member), so the text is then a string the page
@@ -39333,13 +39334,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     DCHECK(JS_HasException(ctx), "a step machine reported ABRUPT and left no completion value behind");
                     goto exception;
                 }
-                /* DONE, and the SAME PLACEMENT for a completion this engine was never given the inputs to
-                   compute (JS_STEP_UNKNOWN). Which VALUE the machine completes with differs; where that value
-                   goes does not, and the fifteen continuation kinds below are exactly what "where it goes"
-                   means — a second arm restating them would be the delivery written twice. The machine's own
-                   result is DISCARDED on the unknown path: it is whatever partial thing the algorithm had
-                   built out of a string nobody has, and an unknown that carries a prefix the page never
-                   computed is the value Array.prototype.join's own site already refuses to keep. */
+                /* DONE, and the SAME PLACEMENT for a completion over unknown input (a recorded operand, or
+                   JS_STEP_UNKNOWN). Which VALUE the machine completes with differs; where that value goes does
+                   not, and the fifteen continuation kinds below are exactly what "where it goes" means. Over a
+                   recorded operand the machine's own result, computed over the operand's example, becomes the
+                   derivation's example; on JS_STEP_UNKNOWN it is DISCARDED, being whatever partial thing the
+                   algorithm had built out of a string nobody has. */
                 if (st == 0 || st == JS_STEP_UNKNOWN) {
                     /* EVERY field must be read BEFORE the free: fini owns the allocation, and `h` IS `stt`, so
                        reading orig_cfirst/orig_cargc/orig_is_tail afterwards was a use-after-free — the operand
@@ -39348,12 +39348,22 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     void *souter = h->outer; uint8_t souter_kind = h->outer_kind;
                     int cfirst = h->orig_cfirst, cargc = h->orig_cargc, foff = h->outer_forof;
                     uint8_t itail = h->orig_is_tail, idiscard = h->discard_result;
-                    JSValue unk = (st == JS_STEP_UNKNOWN) ? js_step_unknown_result(ctx, h) : JS_UNINITIALIZED;
-                    JSValue r = tramp_step_state_free(ctx, stt, true);
+                    /* The operand a coercion met as unknown input, taken off the header before the free; the
+                       completion is derived from it with the machine's own result as its example. */
+                    JSValue unk = h->unknown_operand;
+                    const JSTrampStepDef *udef = h->def;
+                    uint16_t ustage = h->unknown_stage;
+                    JSValue r;
+
+                    DCHECK(st == 0 || !JS_IsUninitialized(unk),
+                           "a machine completed as unknown with no operand recorded on its header");
+                    h->unknown_operand = JS_UNINITIALIZED;
+                    r = tramp_step_state_free(ctx, stt, true);
                     JSValue *cargv;
                     /* take_result is TRUE above because this is a NORMAL completion, not an abrupt one: nothing
                        threw, so the definition's `onerror` (IfAbruptCloseIterator and its kin) must not run. */
-                    if (st == JS_STEP_UNKNOWN) { JS_FreeValue(ctx, r); r = unk; }
+                    if (st == JS_STEP_UNKNOWN) { JS_FreeValue(ctx, r); r = JS_UNDEFINED; }
+                    if (!JS_IsUninitialized(unk)) r = js_step_unknown_result(ctx, udef, ustage, unk, r);
                     if (souter_kind == CONT_FOROF_NEXT) {
                         /* the machine WAS a for-of .next(). Its operands are dropped and its result enters the
                            loop's protocol exactly where a returned heap frame's does. */
@@ -86287,9 +86297,9 @@ static int js_primargs_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        ToPrimitive over a concolic is the IDENTITY — the value is primitive in the page and wears an Object only
        as the solver's carrier — so the loop above hands one straight through, and every f_f builtin then asked
        that boundary for a real double and aborted the whole instance: `Math.floor({orphan0.arg0}.size)` is two
-       lines of a real bundle and one @WHY for the document. step_tofloat64_run reports JS_STEP_UNKNOWN instead,
-       and this machine's completion becomes the unknown derived under the DEFINITION'S OWN algorithm — which is
-       why PRIMARGS_DEF_FULL takes one.
+       lines of a real bundle and one @WHY for the document. step_tofloat64_run converts the operand's example
+       instead (or reports JS_STEP_UNKNOWN without one), and this machine's completion becomes the unknown
+       derived under the DEFINITION'S OWN algorithm — which is why PRIMARGS_DEF_FULL takes one.
        On anything else the sub-sequence invokes nothing and can only throw (a Symbol, a BigInt), and it cannot
        ask for a ToPrimitive: every declared argument is already primitive here, and a REQUEST would be re-entered
        above as an argument coercion's answer and overwrite the wrong slot. */
@@ -90319,45 +90329,15 @@ static const char *const js_date_ctor_steps[] = { DATECTOR_STAGES(JS_STEP_STAGE_
    nothing else to leave behind. */
 #define DATECTOR_CURSORS  &s->hdr.num_phase, &s->hdr.get_phase, NULL
 
-/* A NAMED RESIDUAL OVER BOTH COERCING ARMS — step 4.c.iii and steps 5.b-5.h. The code is CORRECT for what it
-   does and NARROWER than the spec, so there is nothing here to crash on: both arms answer UNKNOWN EXTERNAL
-   INPUT by reporting JS_STEP_UNKNOWN from the coercion sub-sequence, and the driver derives this machine's
-   whole completion from the operand under this definition's algorithm and the coercing stage's label.
-   WHAT IS NOT COVERED: that derived time value carries NO EXAMPLE, even where the operand it came from has
-   one. This is a property of the shared derivation and not of this machine — js_step_unknown_result composes
-   the name and then derives with `real` = JS_UNDEFINED, which every step machine in this engine shares — so
-   `new Date(u * 1000)` with a concrete example behind `u` yields an unknown whose provenance and domain are
-   right and whose concrete date nobody has, where the real operation could have computed one.
-   WHAT THE NEXT DIFF BUILDS: this machine answering at its own site instead of reporting upward. It TAKES the
-   parked operand off the header, as the sort's order question does (sort_take_unknown), and derives with
-   js_concolic_derive over that operand
-   whose `real` is the time value these steps actually compute from the operand's own example — which is what
-   21.4.3.2 Date.parse ( string ) already does one algorithm over, running the real parse on the example so
-   the derived value carries the number it really produced. For the multi-argument shape that is one
-   derivation over the WHOLE date and not one per field, and it exists only when every unknown field has an
-   example, so the honest arm when one does not is the derivation this code already gets.
-   HOW ITS ABSENCE WOULD SHOW: in the emitted surface, a record whose date-derived segment carries a source
-   identity and a shape and no concrete value, taken from a run whose operand for that date did carry an
-   example — which is the difference between an endpoint a reader can replay and one they can only describe.
-   WHAT IT IS NOT: a lost arm. Nothing here retires a world — the derived value keeps `src` and `root`, so a
-   branch over the date still forks and an @S candidate still injects at the source that fed it.
-
-   AND A SECOND RESIDUAL OVER THE MULTI-ARGUMENT ARM ALONE, which is ALSO correct-and-narrower rather than
-   wrong. WHAT IS NOT COVERED: an unknown at an EARLIER field skips the LATER fields' coercions, which a page
-   can observe — `new Date(u, { valueOf() { … } })` runs that valueOf in a browser and does not here, because
-   the sub-sequence reports the first unknown it meets and this arm returns it. That is not a property of this
-   machine: it is what EVERY coerce-then-compute builtin in this engine does with a loop of coercions, the
-   generic PRIMARGS body included, because step_coerce_unknown parks ONE operand and asserts that a second
-   coercion over unknown input on the same machine is a machine that returned JS_STEP_UNKNOWN to something
-   which did not place its completion.
-   WHAT THE NEXT DIFF BUILDS: it is the SHARED mechanism and not a Date arm, or this machine becomes the one
-   that does it right while every sibling does not — a second spelling of one answer. The sub-sequence needs a
-   way to say `unknown, and CARRY ON`: the caller TAKES `JSStepHdr.unknown_operand` into a field its own
-   `visit` covers — a move rather than a dup, which is how a machine that forwards a step already carries that
-   field across to another header — keeps coercing, and derives once at the end over the operand it kept. Nothing in the coercion sub-sequences offers that today.
-   HOW ITS ABSENCE WOULD SHOW: a document in which a request composed inside a later argument's `valueOf` is
-   absent from the surface while the date built around it is present — the coercion that would have issued it
-   never ran, so nothing anywhere names it. */
+/* Both coercing arms, step 4.c.iii and steps 5.b-5.h, take UNKNOWN EXTERNAL INPUT through the coercion
+   sub-sequence: an operand with an example is converted over it and the machine runs on, so every later field
+   is still coerced (and its valueOf still runs), and the driver derives the whole completion from the operand
+   with the time value these steps computed as its example (step_coerce_unknown).
+   Named residual. Not covered: an operand with no example stops the machine at that field, so a later field's
+   coercion does not run. Next diff: nothing in this machine; an operand with no example has no value to
+   coerce, and the derivation is its honest result. How its absence shows: a document in which a request
+   composed inside a later argument's `valueOf` is absent while the date built around an exampleless field is
+   present. */
 static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSDateCtor *s = st;
@@ -90464,10 +90444,10 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                ToPrimitive ( input [ , preferredType ] ) over UNKNOWN EXTERNAL INPUT is the IDENTITY, so
                step_toprim_run above hands a concolic straight back and the boundary — which owes C a real
                double and says so — is where `new Date({orphan.arg0} * 1000)` ended a whole document, and an
-               aborted instance's findings are discarded. step_tofloat64_run reports JS_STEP_UNKNOWN and the
-               driver completes this machine with the unknown derived under this definition's algorithm and
-               this stage's label, so a later branch over the date still forks and an @S candidate still
-               injects at the source that fed it.
+               aborted instance's findings are discarded. step_tofloat64_run converts the operand's example
+               (or reports JS_STEP_UNKNOWN without one) and the driver completes this machine with the unknown
+               derived under this definition's algorithm and this stage's label, so a later branch over the date
+               still forks and an @S candidate still injects at the source that fed it.
                AND STEP 4.c.ii's `If v is a String` IS NOT FORKED FOR ONE, which is what makes that answer
                WHOLE rather than a narrowing. A concolic is not a JS_TAG_STRING, so an unknown takes this arm
                — and the arm above would have produced an unknown Number too, being 21.4.3.2's parse of a
@@ -90505,10 +90485,10 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
        hand-decomposed pair was step_toprim_run followed by a JS_ToFloat64Free written here, and 7.1.1
        ToPrimitive ( input [ , preferredType ] ) over UNKNOWN EXTERNAL INPUT is the IDENTITY — so the pair
        handed a concolic to the conversion boundary that owes C a real double, and `new Date(u.getFullYear(),
-       m, 1)` over an unknown `u` aborted a whole document. step_tofloat64_run reports JS_STEP_UNKNOWN and
-       the driver completes this machine with the unknown derived under this definition's algorithm and this
-       stage's label: an unknown FIELD makes the whole date unknown, which is what JS_STEP_UNKNOWN states for
-       every value-producing algorithm and the same rule Array.prototype.join writes by hand. */
+       m, 1)` over an unknown `u` aborted a whole document. step_tofloat64_run converts the operand's example
+       (or reports JS_STEP_UNKNOWN without one) and the driver completes this machine with the unknown derived
+       under this definition's algorithm and this stage's label: an unknown FIELD makes the whole date unknown,
+       with the date the examples compute as its example. */
     while (s->i < s->n) {
         double a;
         r = step_tofloat64_run(ctx, &s->hdr, step_arg(&s->hdr, s->i), cb_result, &a, out_cb, out_argc);
@@ -93336,18 +93316,22 @@ static const char *const js_ta_sort_steps[];
 static const char *const js_ta_toSorted_steps[];
 static const JSTrampStepDef js_ta_sort_def       = { sizeof(JSTASort), js_ta_sort_vstep, js_ta_sort_vfini, 0, .visit = js_ta_sort_visit,
                                                    .algorithm = "23.2.3.29 %TypedArray%.prototype.sort",
-                                                   .steps = js_ta_sort_steps };
+                                                   .steps = js_ta_sort_steps,
+                                                   .answers_unknown = 1 };
 static const JSTrampStepDef js_ta_toSorted_def   = { sizeof(JSTASort), js_ta_sort_vstep, js_ta_sort_vfini, 1, .visit = js_ta_sort_visit,
                                                    .algorithm = "23.2.3.33 %TypedArray%.prototype.toSorted",
-                                                   .steps = js_ta_toSorted_steps };
+                                                   .steps = js_ta_toSorted_steps,
+                                                   .answers_unknown = 1 };
 static const char *const js_array_sort_steps[];
 static const char *const js_array_toSorted_steps[];
 static const JSTrampStepDef js_array_sort_def    = { sizeof(JSArraySort), js_array_sort_vstep, js_array_sort_vfini, 0, .visit = js_array_sort_visit,
                                                     .algorithm = "23.1.3.30 Array.prototype.sort",
-                                                    .steps = js_array_sort_steps };
+                                                    .steps = js_array_sort_steps,
+                                                   .answers_unknown = 1 };
 static const JSTrampStepDef js_array_toSorted_def = { sizeof(JSArraySort), js_array_sort_vstep, js_array_sort_vfini, 1, .visit = js_array_sort_visit,
                                                     .algorithm = "23.1.3.34 Array.prototype.toSorted",
-                                                    .steps = js_array_toSorted_steps };
+                                                    .steps = js_array_toSorted_steps,
+                                                   .answers_unknown = 1 };
 /* Declared where the machine is; the definition names it here. */
 static const char *const js_json_parse_steps[];
 static const JSTrampStepDef js_json_parse_def    = { sizeof(JSJsonReviver), js_json_parse_vstep, js_json_parse_vfini, 0, .visit = js_json_reviver_visit,
@@ -94394,8 +94378,8 @@ static const JSTrampStepDef js_ta_fromlike_def = { sizeof(JSTAFromLike), js_ta_f
                         .steps = js_ta_fromlike_steps };
 static const char *const js_primargs_steps[];
 /* `algo` IS THE BUILTIN'S OWN ALGORITHM AND THERE IS NO SHARED DEFAULT, because this machine can now COMPLETE
-   an algorithm rather than only coerce for it: a declared argument that is unknown external input ends the
-   coercion with JS_STEP_UNKNOWN, and js_step_unknown_result names the derived value by (algorithm, stage
+   an algorithm rather than only coerce for it: the completion over a declared argument that is unknown
+   external input is derived from it, and js_step_unknown_result names the derived value by (algorithm, stage
    label). One shared string there would give sixty builtins ONE identity, which is decide.c keying
    `Math.floor(x)`'s branch and `String.fromCharCode(x)`'s branch to the same predicate — an arm pruned by a
    question nobody asked. The STAGE half stays shared and stays right: what this machine performs is 7.1.1 over
@@ -105163,16 +105147,22 @@ static int js_str_replace_vstep(JSContext *ctx, void *st, JSValue cb_result, JSV
             /* FORWARDING PUTS THE DRIVER'S HEADER AND THE STEPPED MACHINE'S HEADER OUT OF STEP, which is the
                limitation quickjs-step.h already states about this one call: the inner's requests are answered
                through cb_result and survive it, but anything the inner records ON ITS OWN HEADER lands where
-               the driver — which is stepping the OUTER — will not look. JS_STEP_UNKNOWN's operand is exactly
-               that, so it is MOVED here, at the one site that forwards. The identity the derivation then
-               composes is the OUTER's algorithm and the OUTER's stage, which is the honest name for it:
-               22.1.3.19 is the algorithm the page called and 22.2.6.11 is a sub-operation of it. */
+               the driver — which is stepping the OUTER — will not look. The unknown operand a coercion records
+               is exactly that, so it is MOVED here, at the one site that forwards, under the rule
+               step_coerce_unknown keeps on one header: the first operand stays unless the inner stopped on one
+               with no example. The identity the derivation then composes is the OUTER's algorithm and the
+               OUTER's stage, which is the honest name for it: 22.1.3.19 is the algorithm the page called and
+               22.2.6.11 is a sub-operation of it. */
             JSStepHdr *ih = s->inner;
             int r = ih->def->step(ctx, ih, cb_result, out_cb, out_argc);
-            if (r == JS_STEP_UNKNOWN) {
-                DCHECK(JS_IsUninitialized(s->hdr.unknown_operand),
-                       "str.replace forwarded to its delegate while already standing on an unknown operand");
-                s->hdr.unknown_operand = ih->unknown_operand;
+            if (!JS_IsUninitialized(ih->unknown_operand)) {
+                if (JS_IsUninitialized(s->hdr.unknown_operand) || r == JS_STEP_UNKNOWN) {
+                    JS_FreeValue(ctx, s->hdr.unknown_operand);
+                    s->hdr.unknown_operand = ih->unknown_operand;
+                    s->hdr.unknown_stage = s->hdr.stage;
+                } else {
+                    JS_FreeValue(ctx, ih->unknown_operand);
+                }
                 ih->unknown_operand = JS_UNINITIALIZED;
             }
             return r;
@@ -105498,8 +105488,8 @@ static JSValue js_string_case_body(JSContext *ctx, JSValueConst strv, int to_low
 
 /* return (-1, NULL) if exception, otherwise (len, buf) */
 /* THE OPERAND IS ALREADY A COERCED STRING. Its one caller is js_str_recv_step's normalize arm, whose receiver
-   came from step_thisstring_run — §7.1.19 over unknown external input answers there with JS_STEP_UNKNOWN and
-   the driver completes the WHOLE machine with a derived concolic, so the body never runs for one. 22.1.3.12
+   came from step_thisstring_run — §7.1.19 over unknown external input converts the operand's example there
+   (or stops the machine where there is none), so the body only ever sees a String. 22.1.3.12
    localeCompare reads its two operands the same way and does not reach here at all. Asserted rather than left
    as a reachability argument, because the argument is about the caller and the crash would be here. */
 static int JS_ToUTF32String(JSContext *ctx, uint32_t **pbuf, JSValue val1)

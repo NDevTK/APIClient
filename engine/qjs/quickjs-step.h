@@ -397,6 +397,11 @@ typedef struct JSTrampStepDef {
        the standard fixes it (String.prototype.slice's every return step returns a String). 0 = not declared: a
        call's result over unknown input then carries no type. Read through JS_FunctionResultTypes. */
     unsigned result_types;
+    /* Whether this machine answers a coercion over unknown external input at its own site: its sub-sequence
+       reports JS_STEP_UNKNOWN with the operand parked on the header, and the machine takes it (a sort's order
+       question). 0 for every other machine, whose coercions run over the operand's example and whose
+       completion the driver derives from the operand (step_coerce_unknown). */
+    uint8_t answers_unknown;
 } JSTrampStepDef;
 
 /* The result_types a built-in function object's definition declares, or 0 for any other value (a page
@@ -620,13 +625,13 @@ typedef struct JSStepHdr {
        one per suspension point. Every coercing prologue needs exactly this, so it lives in the header rather
        than being re-declared (and mis-declared) in each state. */
     JSValue coerce;
-    /* THE OPERAND WHOSE COERCION IS OVER UNKNOWN EXTERNAL INPUT — see JS_STEP_UNKNOWN. OWNED, and it lives for
-       exactly as long as the return that names it: the machine parks the operand here, returns
-       JS_STEP_UNKNOWN, and the driver takes it at the one place a machine's completion is placed, with no
-       opcode, no request and no suspension in between. So it is NOT in any machine's `visit` and must not be —
-       nothing can fork or park while it is set, which tramp_step_state_clone and tramp_step_state_free_1 both
-       ASSERT rather than trust. JS_UNINITIALIZED = this machine is not standing on one. */
+    /* The first operand a coercion of this machine met as unknown external input (step_coerce_unknown), and the
+       stage it was met at, which names the derivation. Owned. Where the operand carries an example the machine
+       runs on over the example and holds this across its suspensions, so a fork dups it and the teardown
+       releases it; the driver takes it when it places the completion and derives the completion from it.
+       JS_UNINITIALIZED = this machine has met none. */
     JSValue unknown_operand;
+    uint16_t unknown_stage;
     /* THE UNKNOWN-LENGTH CHAIN's cursor and its operation string — see step_length_unknown. A length read that
        produced unknown external input is answered by a chain of per-position outcome forks, and the machine
        SUSPENDS at every one of them (the sibling's snapshot is taken at the ask), so neither the position nor
@@ -965,13 +970,13 @@ JS_EXTERN JSValueConst JS_StepClosureDataOf(JSContext *ctx, JSValueConst fn, int
  * says so), so the answer is given where the spec performs the coercion, which for every builtin that can run
  * the page's `toString` is this one shared sub-sequence.
  *
- * WHAT THE DRIVER DOES WITH IT: the machine's whole completion becomes a concolic DERIVED from the operand,
- * named by the algorithm and the spec step it was coercing at. That is the generalisation of a rule this file
- * already wrote by hand at Array.prototype.join — "an unknown element makes the whole join unknown", the
- * concrete prefix subsumed rather than kept, because a partial string is a value the page never computes and
- * the source identity is what a later sink solves for. Every value-producing algorithm has that shape: a
- * result computed out of a string nobody has is a result nobody has, and it keeps `src` and `root` so a branch
- * over it still forks and an @S candidate still injects at the source that fed it.
+ * It is reported only where the operand carries no example or the machine answers unknown input itself
+ * (JSTrampStepDef.answers_unknown). Otherwise the coercion runs over the operand's example and the machine
+ * runs on (step_coerce_unknown), because an example propagates by the engine running the real operation on it.
+ * Either way the driver completes the machine with a concolic DERIVED from the operand, named by the algorithm
+ * and the spec step it was coercing at, keeping `src` and `root` so a branch over it still forks and an @S
+ * candidate still injects at the source that fed it. Its example is the machine's real result over the
+ * example, or none where the operand had none: a result computed out of a string nobody has is one nobody has.
  *
  * A MACHINE WITH A MORE PRECISE ANSWER STATES IT AT ITS OWN SITE, and several already do — String.prototype.
  * concat folds an unknown piece through the `+` hook so the known literals survive, the Error constructor
@@ -1063,8 +1068,8 @@ JS_EXTERN int step_todouble_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JS
 
 /* §7.1.1 ToPrimitive ( input, number ) as a request, delivering the primitive itself: ECMA-402 §16.5.15
    ToIntlMathematicalValue inspects whether it is a BigInt or a String before converting it. Returns
-   JS_STEP_REQUEST-family codes as step_todouble_run does, JS_STEP_UNKNOWN over unknown input, 0 once *pout
-   is set (owned), or -1. */
+   JS_STEP_REQUEST-family codes as step_todouble_run does, JS_STEP_UNKNOWN over unknown input with no example
+   (an example is converted instead, as step_tostring_run does), 0 once *pout is set (owned), or -1. */
 JS_EXTERN int step_toprimitive_number_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, JSValue *pout,
                                          JSValue **out_cb, int *out_argc);
 
@@ -1485,10 +1490,10 @@ JS_EXTERN int step_tobool_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, cons
    honest move was JS_ToCString from C, which in this engine does not quietly misbehave — it reaches
    JS_ToPrimitiveFree's DFAIL and aborts, naming the site — but aborting is where a capability is missing, not
    where it is built. Returns JS_STEP_REQUEST (the caller returns it), 0 once *pout is set, or -1.
-   …OR JS_STEP_UNKNOWN, when the value being coerced is UNKNOWN EXTERNAL INPUT and §7.1.19 ToString ( arg )
-   therefore has no String to produce. Nothing is written to *pout on that path; the caller returns the code
-   like any other positive one — which every call site already does, because that is what parking on a request
-   has always meant — and the driver completes the machine with the derived unknown. See JS_STEP_UNKNOWN. */
+   Over UNKNOWN EXTERNAL INPUT it converts the operand's example and records the operand on the header, or,
+   where there is no example, returns JS_STEP_UNKNOWN with nothing written to *pout; the caller returns the code
+   like any other positive one and the driver completes the machine with the derived unknown. See
+   JS_STEP_UNKNOWN. */
 JS_EXTERN int step_tostring_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSValue in, JSValue *pout,
                                 JSValue **out_cb, int *out_argc);
 
