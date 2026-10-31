@@ -1629,7 +1629,8 @@ JS_EXTERN int JS_GetOwnPropertyNames(JSContext *ctx, JSPropertyEnum **ptab,
    NOT [[GetOwnProperty]] — it asserts that no Proxy is reachable, because a delta is swapped by the scheduler
    and a trap would run the page's code mid-context-switch. An ACCESSOR is answered rather than refused: the
    getter and setter are handed over as function OBJECTS, exactly as they are handed to
-   Object.getOwnPropertyDescriptor, and neither is ever called by the read or by the restore.
+   Object.getOwnPropertyDescriptor, and neither is ever called by the read or by the restore. A class's exotic
+   [[GetOwnProperty]] hook is never asked: what it composes (a named or indexed property) is not storage.
    1 = own property (*pd owned), 0 = absent, -1 = threw. */
 JS_EXTERN int JS_GetOwnSlotDesc(JSContext *ctx, JSPropertyDescriptor *pd, JSValueConst obj, JSAtom prop);
 /* Its VALUE projection, for a component reading a slot IT created (an idl_slots record, a listener map, a key

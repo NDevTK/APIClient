@@ -7010,37 +7010,16 @@ static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
  * each read mints afresh, so both are set; only [[Enumerable]] comes from the example. A concolic has no Proxy
  * handler; it maintains §6.1.7.3 directly, as required of implementation-provided exotic objects. */
 
-/* Answer from real slots only (see concolic.h). A plain static: the host is one agent per instance and nothing
-   here is entered from a second thread. */
-static int g_slots_only;
-
-void concolic_slots_only_begin(void)
-{
-    DCHECK(!g_slots_only,
-           "a slots-only read nested inside another — the mode is entered around ONE lookup that runs no page "
-           "code and can therefore not suspend, so a second entry is a caller holding it across work");
-    g_slots_only = 1;
-}
-
-void concolic_slots_only_end(void)
-{
-    DCHECK(g_slots_only, "a slots-only read was ended without having been begun");
-    g_slots_only = 0;
-}
-
-/* Whether `obj` carries a real own slot for `atom`, the ordinary layer under this class's own surface. The mode
-   makes the question answerable: with the exotic hook armed, QuickJS's [[GetOwnProperty]] answers 1 for both a
-   shape slot and an example member. Runs in every build: the unknown-member materialisation and the
-   disjointness assert both ask it. */
+/* Whether `obj` carries a real own slot for `atom`, the ordinary layer under this class's own surface:
+   JS_GetOwnSlotDesc reads storage and never this class's hook, which answers for an example member too. Runs
+   in every build: the unknown-member materialisation and the disjointness assert both ask it. */
 static int concolic_has_own_slot(JSContext *ctx, JSValueConst obj, JSAtom atom)
 {
-    int r;
+    JSPropertyDescriptor d;
+    int r = JS_GetOwnSlotDesc(ctx, &d, obj, atom);
 
-    concolic_slots_only_begin();
-    r = JS_GetOwnPropertyNoUserCode(ctx, NULL, obj, atom);
-    concolic_slots_only_end();
-    DCHECK(r >= 0, "a slots-only own-property lookup threw — this class's hook answers 0 under the mode and a "
-                   "shape lookup has no other completion");
+    DCHECK(r >= 0, "a slot read on a concolic record threw — a shape lookup has no completion but OOM");
+    if (r > 0) { JS_FreeValue(ctx, d.value); JS_FreeValue(ctx, d.getter); JS_FreeValue(ctx, d.setter); }
     return r > 0;
 }
 
@@ -7053,9 +7032,6 @@ static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, J
     int eflags;
 
     if (!c)
-        return 0;
-    /* The delta reads storage, and this class has none for its members (see concolic.h). */
-    if (g_slots_only)
         return 0;
     if (!example_slot(ctx, c->example, atom, &ev, &eflags))
         return 0;
@@ -7678,15 +7654,6 @@ static JSValue concolic_alloc_shaped(JSContext *ctx, const char *shape, const ch
     Concolic *c;
 
     DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
-    /* Nothing is minted inside a slots-only span, asserted at the one mint every concolic goes through.
-       concolic_slots_only_begin brackets the COW delta's baseline read and read-back, so a value minted there
-       would be recorded as what a slot held and written back by the unapply as a real own slot, shadowing this
-       class's [[Get]] for every sibling flow. The delta reads through JS_GetOwnSlotDesc, which runs no page code,
-       so no hook is reachable from it; this is where a route that changed that would be caught. */
-    DCHECK(!g_slots_only,
-           "a concolic value was minted inside the COW delta's slots-only span — the delta records what a SLOT "
-           "held, so a value synthesised during that read is put BACK by the unapply as a real own slot and "
-           "shadows this class's [[Get]] for every sibling flow");
     /* `src` and `root` are present together or absent together: a value with a provenance is a source read
        (its own root) or derived from something that had one. A `src` with no `root` would be a report naming a
        source and stating that no navigation delivers it. */

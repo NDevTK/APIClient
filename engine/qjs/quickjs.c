@@ -16073,7 +16073,11 @@ retry:
                     return true;
                 }
             }
-        } else {
+        } else if (!as_slot) {
+            /* A class's [[GetOwnProperty]] hook composes its answer at the query (a named or indexed property,
+               a string's index, an example's member) over storage that is not this object's shape, so a slot
+               read never asks it: a composed descriptor recorded as a slot would be written back as a real
+               own property, shadowing the hook. delete_property's `as_slot` draws the same line. */
             const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
             if (em && em->get_own_property) {
                 if (flags_only) {
@@ -16175,18 +16179,6 @@ int JS_GetOwnSlotDesc(JSContext *ctx, JSPropertyDescriptor *pd, JSValueConst obj
            "a COW delta is capturing a typed-array element as a property SLOT: its storage is the buffer's "
            "BYTES, which no JSValue round-trips (a NaN payload normalises), so route this capture through "
            "cow_capture_bytes");
-    /* AND THE DECLARATION EVERY OTHER C-SIDE OWN-PROPERTY READ DEMANDS, which this one had never asked for.
-       It reaches em->get_own_property for any exotic class below, and it does so from inside a write hook and
-       from inside a context switch — strictly harder ground than JS_GetOwnPropertyNoUserCode's callers stand
-       on, and the only thing that had been keeping it safe was that every exotic class in this engine happens
-       to declare the flag. The first one that did not would have run the page's code with no flow base and
-       nothing to say so. */
-    DCHECK(!p->is_exotic || !ctx->rt->class_array[p->class_id].exotic ||
-           !ctx->rt->class_array[p->class_id].exotic->get_own_property ||
-           ctx->rt->class_array[p->class_id].exotic->get_own_property_no_user_code,
-           "a COW slot read reached an exotic [[GetOwnProperty]] hook whose class has not declared it free of "
-           "the page's code — a capture runs inside a write hook and a swap runs between two flows, so there "
-           "is no flow base to run one on; declare get_own_property_no_user_code where that hook is defined");
     has = JS_GetOwnPropertyInternal2(ctx, pd, p, prop, NULL, /*as_slot*/true);
     /* WHAT IS LEFT OF -1 IS AN ALLOCATION, and the caller has nowhere to put one. The non-object case returned
        above; the Proxy and typed-array cases are refused above; and the TDZ ReferenceError is the OPERATION's,
