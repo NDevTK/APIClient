@@ -79,14 +79,12 @@ static size_t gt_item_index(lxb_dom_element_t *container, lxb_dom_element_t *ite
    where §6.6's track conditions hold (`gt_auto_minimum_applies`); elsewhere the automatic minimum is zero. */
 static CssPx gt_content_size_suggestion(lxb_dom_element_t *item)
 {
+    ReplacedElement rep = replaced_element_of(item);
     CssPx m, mx;
-    char buf[160];
 
-    if (replaced_element_of(item).replaced)
-        DFAILF("%s is a replaced grid item with an automatic minimum width. css-grid-1 §6.6's content-based "
-               "minimum size takes its transferred size suggestion. BUILD that suggestion",
-               box_subject(item, buf, sizeof buf));
-    m = intrinsic_inline_sizes(item).min_content;
+    /* A replaced item's is its transferred size suggestion, else its content size suggestion (used_value.h). */
+    if (rep.replaced) m = used_value_replaced_content_based_minimum(item, &rep, false);
+    else m = intrinsic_inline_sizes(item).min_content;
     if (intrinsic_declared_sizing_px(item, INTRINSIC_AXIS_HORIZONTAL, "max-width", CSS_KEYWORD_NONE, &mx))
         m = css_px_min(m, mx);
     return m;

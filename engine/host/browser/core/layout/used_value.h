@@ -253,6 +253,11 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
    content-box extent: its natural height, its used width through its ratio, or 150px. */
 CssPx used_value_replaced_auto_height_px(lxb_dom_element_t *el, const ReplacedElement *rep);
 
+/* css-grid-1 §6.6's content-based minimum of the replaced grid item `el` on one axis when it has no specified
+   size suggestion: "its transferred size suggestion if that exists and the element is replaced, else its
+   content size suggestion", as a content-box extent. The caller clamps by the maximum size. */
+CssPx used_value_replaced_content_based_minimum(lxb_dom_element_t *el, const ReplacedElement *rep, bool vertical);
+
 /* CSS 2.1 §10.1's containing block as an element: the box whose content edge is the rectangle §10.3's
    percentages and `auto`s are stated against. NULL exactly where the answer is the initial containing block,
    which is no element's box: the first case (the root element's) and the fourth case's last sentence, "If

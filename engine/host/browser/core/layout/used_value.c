@@ -2253,7 +2253,13 @@ static CssPx uv_grid_item_automatic_min(lxb_dom_element_t *el, lxb_dom_element_t
             DFAILF("%s is a grid item with an intrinsic `%s` keyword, whose css-grid-1 §6.6 specified size "
                    "suggestion is not built. BUILD css-sizing-3 §3.2's keyword as a definite preferred size",
                    box_subject(el, buf, sizeof buf), vertical ? "height" : "width");
-        m = vertical ? used_value_block_level_content_px(el, true) : grid_item_content_size_suggestion_inline(grid, el);
+        {
+            ReplacedElement rep = replaced_element_of(el);
+
+            if (rep.replaced) m = used_value_replaced_content_based_minimum(el, &rep, vertical);
+            else if (vertical) m = used_value_block_level_content_px(el, true);
+            else m = grid_item_content_size_suggestion_inline(grid, el);
+        }
         if (uv_is_border_box(el)) m = css_px_add(m, uv_surround_total(uv_surround(el, vertical)));
         return m;
     }
@@ -3266,6 +3272,38 @@ CssPx used_value_replaced_auto_height_px(lxb_dom_element_t *el, const ReplacedEl
 {
     DCHECK(rep != NULL && rep->replaced, "a replaced element's auto height was asked of a box that is not one");
     return uv_replaced_height(el, rep);
+}
+
+CssPx used_value_replaced_content_based_minimum(lxb_dom_element_t *el, const ReplacedElement *rep, bool vertical)
+{
+    IntrinsicAxis other = vertical ? INTRINSIC_AXIS_HORIZONTAL : INTRINSIC_AXIS_VERTICAL;
+    const char *size = vertical ? "width" : "height";
+    const char *min = vertical ? "min-width" : "min-height", *max = vertical ? "max-width" : "max-height";
+    double through = rep->has_ratio ? (vertical ? 1.0 / rep->ratio : rep->ratio) : 0.0;
+    CssPx m, v;
+
+    DCHECK(rep != NULL && rep->replaced, "§6.6's replaced arm was asked of a box that is not replaced");
+    /* "If the item has a preferred aspect ratio and its preferred size in the opposite axis is definite, then
+       the transferred size suggestion is that size (clamped by the opposite-axis minimum and maximum sizes if
+       they are definite), converted through the aspect ratio." A declared <length> is definite (css-sizing-3
+       §2). */
+    if (rep->has_ratio && intrinsic_declared_sizing_px(el, other, size, CSS_KEYWORD_AUTO, &m)) {
+        if (intrinsic_declared_sizing_px(el, other, max, CSS_KEYWORD_NONE, &v)) m = css_px_min(m, v);
+        if (intrinsic_declared_sizing_px(el, other, min, CSS_KEYWORD_AUTO, &v)) m = css_px_max(m, v);
+        return css_px_scale(m, through);
+    }
+    /* The content size suggestion, "the min-content size in the relevant axis": css-sizing-3 §5.1 gives a
+       replaced element without natural sizes and with a ratio zero ("For the min-content size, use zero"),
+       and any other one CSS 2.1 §10.3.2's or §10.6.2's size. */
+    if (!rep->has_width && !rep->has_height && rep->has_ratio) m = css_px(0.0);
+    else m = vertical ? uv_replaced_height(el, rep) : used_value_replaced_auto_width_px(el, rep);
+    /* "clamped, if it has a preferred aspect ratio, by any definite opposite-axis minimum and maximum sizes
+       converted through the aspect ratio". */
+    if (rep->has_ratio && intrinsic_declared_sizing_px(el, other, max, CSS_KEYWORD_NONE, &v))
+        m = css_px_min(m, css_px_scale(v, through));
+    if (rep->has_ratio && intrinsic_declared_sizing_px(el, other, min, CSS_KEYWORD_AUTO, &v))
+        m = css_px_max(m, css_px_scale(v, through));
+    return m;
 }
 
 /* THE REPLACED-ELEMENT SIZE, WHICH IS ONE ALGORITHM FOR FIVE BOX TYPES — the shape §10.3 does not have anywhere
