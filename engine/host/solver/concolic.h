@@ -537,8 +537,9 @@ JSValue concolic_source_wrap_joint_affine(JSContext *ctx, const char *const *sha
    owns which units (the pieces concolic_piece_slice reads). Owned. */
 JSValue     concolic_string_concat(JSContext *ctx, JSValue a, JSValue b);
 /* The units `[from, to)` of `s`'s example when they lie inside one piece: the piece's unknown itself for the whole
-   piece, else §22.1.3.22 String.prototype.slice's derivation of it with `example` (consumed) as its example.
-   JS_UNINITIALIZED where `s` records no pieces or the range is empty or crosses one. */
+   piece, else §22.1.3.22 String.prototype.slice's derivation of it with `example` (consumed) as its example; and
+   `example` itself, the page's own bytes, when the range meets no piece. JS_UNINITIALIZED where `s` records no
+   pieces or the range is empty or crosses a piece's edge. */
 JSValue     concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example);
 /* The UTF-16 code units the UTF-8 `s` (`n` bytes, as JS_ToCStringLen writes a String) spells: the unit a piece's
    offsets count in. A four-byte sequence is a surrogate pair, every other lead byte one unit. */

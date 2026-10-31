@@ -4,8 +4,7 @@
    both pieces depends on both and stays labelled with the cookie's precondition. The fragment is set first so
    the source's example places its piece.
    `cookieconst` is the jar's negative: a cookie the page sets from a constant reads back out of document.cookie
-   as the page's own bytes, so its sink write is rooted in the cookie string's unknown remainder alone and in
-   no attacker source.
+   as the page's own bytes, so its sink write carries no unknown and no @S record is made of it.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_PIECESLICE_H

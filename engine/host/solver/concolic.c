@@ -7834,6 +7834,7 @@ static void pieces_concat(JSContext *ctx, JSValueConst r, JSValueConst a, uint32
 JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(s, g_concolic_class) : NULL;
+    int touched = 0;
 
     if (!c || !c->piece || to <= from) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
     for (int i = 0; i < c->piece_n; i++) {
@@ -7841,6 +7842,7 @@ JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint
         JSValueConst ops[3];
         JSValue r;
 
+        touched |= from < p->offset + p->length && p->offset < to;
         if (from < p->offset || to > p->offset + p->length) continue;
         DCHECK(p->offset <= from && to <= p->offset + p->length,
                "a slice was answered by a piece its range does not lie inside");
@@ -7855,6 +7857,8 @@ JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint
         if (concolic_is(r)) concolic_type_state(r, CTY_STRING);
         return r;
     }
+    /* Units no piece owns are the page's own bytes, so a range of them alone is those bytes. */
+    if (!touched && JS_IsString(example)) return example;
     JS_FreeValue(ctx, example);
     return JS_UNINITIALIZED;
 }
