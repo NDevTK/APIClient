@@ -15871,16 +15871,17 @@ TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `scrollrestore` and `scrollclamp` documents (fixture/scrollrestore.h), read off Chrome
-   155.0.8059.84. */
+/* The rows of the `scrollrestore` and `scrollclamp` documents (fixture/scrollrestore.h): HTML §7.4.6.5 as the
+   text states it. `scroll-restore` departs from Chrome 155.0.8059.84 (400), which saves at push time. */
 TF_UNIT void probes_scrollrestore(const char *js, Probe *tab, int *n) {
     const char *sr_why = NULL; int sr_tt = !!strstr(js, "\"/api/scrollrestore\"");
     const char *sc_why = NULL; int sc_tt = !!strstr(js, "\"/api/scrollclamp\"");
 
     fold_row(&sr_tt, &sr_why, sr_tt,
              "NOT REACHED: there is no /api/scrollrestore record at all, so the document aborted before its fetch");
-    fold_row(&sr_tt, &sr_why, param_value_is(js, "/api/scrollrestore", "r1", "400"),
-             "HTML §7.4.6.5: going back did not restore the first entry's scroll position, 400");
+    fold_row(&sr_tt, &sr_why, param_value_only(js, "/api/scrollrestore", "r1", "900"),
+             "HTML §7.4.6.1/§7.4.6.5: going back changed the scroll position, 900, though the first entry was left "
+             "by pushState and so was never saved to (save persisted state runs only in activate history entry)");
     fold_row(&sc_tt, &sc_why, sc_tt,
              "NOT REACHED: there is no /api/scrollclamp record at all, so the document aborted before its fetch");
     fold_row(&sc_tt, &sc_why, param_value_is(js, "/api/scrollclamp", "r2", "0"),

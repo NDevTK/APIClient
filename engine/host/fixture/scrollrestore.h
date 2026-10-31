@@ -1,8 +1,10 @@
 /* THE SCROLL RESTORATION DOCUMENTS: HTML §7.4.6.5 "Persisted history entry state" over a same-document
    traversal. One of test_forced.c's exploring documents each (its TF_DOCS table).
-   `scrollrestore` scrolls the viewport to 400, pushes an entry, scrolls to 900 and goes back: save persisted
-   state records 900 for the pushed entry, and restore persisted state puts the first entry's 400 back, which
-   Chrome 155.0.8059.84 reads after `popstate` (r1=400; scrollY at `popstate` itself is still 900).
+   `scrollrestore` scrolls the viewport to 400, pushes an entry, scrolls to 900 and goes back. The text saves
+   persisted state only in §7.4.6.1's activate history entry, to the outgoing active entry: going back saves 900
+   into the pushed entry, and the first entry, left by `pushState` rather than by an activation, holds no scroll
+   position data, so nothing is restored and the row reads r1=900. Chrome 155.0.8059.84 reads 400 after
+   `popstate`, a save at push time the text has no step for (docs/claude-record.md).
    `scrollclamp` saves 1500, then shrinks the document to fit the viewport before going back: the restored 1500
    lies outside the document's scrolling area now, and Chrome 155.0.8059.84 lands at 0 (r2=0).
    This engine holds no scroll position data yet, and core/frame/session_history.c asserts, wherever it saves or
