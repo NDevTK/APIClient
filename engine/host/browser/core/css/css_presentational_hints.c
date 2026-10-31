@@ -1,4 +1,5 @@
 /* The author presentational hint origin — see css_presentational_hints.h for why it is an origin. */
+#include <math.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,12 +9,15 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_presentational_hints.h"
+#include "core/css/css_length.h"     /* CSSOM §6.7.2's number, for an SVG presentation attribute's user units */
 #include "core/css/css_shorthand.h"   /* a hint declares the property HTML writes, which may be a shorthand */
+#include "core/css/css_style_declaration.h"   /* a property's grammar and initial value */
 #include "core/dom/document.h"
 #include "core/dom/node.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/enumerated_attribute.h"   /* the ASCII match HTML §15.3.8's rules are stated over */
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
+#include <lexbor/css/syntax/tokenizer.h>
 
 /* THE DECLARATION `property: value`, handed to `sink` as the longhands it sets. The property is the one
    HTML's rendering section writes, which is routinely a shorthand, and the cascade is over longhands only, so
@@ -488,6 +492,97 @@ static void hint_page_margins(lxb_dom_element_t *el, CssHintSink sink, void *ud)
     }
 }
 
+/* Whether `value` is one CSS `<number>` token, with whitespace and comments around it, and that number. */
+static bool svg_lone_number(const char *value, double *n)
+{
+    lxb_css_syntax_tokenizer_t *tkz = lxb_css_syntax_tokenizer_create();
+    lxb_css_syntax_token_t *t;
+    bool seen = false, ok = true;
+
+    CHECK(tkz != NULL, "css: OOM tokenizing an SVG presentation attribute");
+    if (lxb_css_syntax_tokenizer_init(tkz) != LXB_STATUS_OK) {
+        lxb_css_syntax_tokenizer_destroy(tkz);
+        return false;
+    }
+    lxb_css_syntax_tokenizer_buffer_set(tkz, (const lxb_char_t *)value, strlen(value));
+    for (;;) {
+        t = lxb_css_syntax_token(tkz);
+        if (t == NULL) { ok = false; break; }
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
+        if (t->type == LXB_CSS_SYNTAX_TOKEN_NUMBER && !seen) {
+            *n = lxb_css_syntax_token_number(t)->num;
+            seen = true;
+        } else if (t->type != LXB_CSS_SYNTAX_TOKEN_WHITESPACE) {
+            ok = false;
+        }
+        lxb_css_syntax_token_consume(tkz);
+        if (!ok) break;
+    }
+    lxb_css_syntax_tokenizer_destroy(tkz);
+    return ok && seen;
+}
+
+/* SVG 2 §4.2 "Attribute syntax"'s parse of a presentation attribute for property `name`: the property's grammar
+   with `[<length-percentage> | <number>]` in place of `<length-percentage>`, a unitless number being that many
+   px (§8.3 "The initial viewport": "assumed to be equivalent to the same number of "px" units"), and a value
+   that fails to parse "assumed to have been specified as the given initial value". OWNED. */
+static char *svg_presentation_value(const char *name, const char *value)
+{
+    char *v = cssom_parse_a_css_value(name, value);
+    double n;
+
+    if (v != NULL) return v;
+    if (svg_lone_number(value, &n) && n == n && !isinf(n)) {
+        char *px = css_length_serialize_number(n, "px");
+
+        /* The property's own range ("[0,∞]" for a size) applies to the number as to the length it stands for. */
+        v = cssom_parse_a_css_value(name, px);
+        free(px);
+        if (v != NULL) return v;
+    }
+    v = cssom_initial_value(name);
+    DCHECKF(v != NULL, "SVG 2 §4.2 takes an unparsable `%s` presentation attribute as the property's initial "
+                       "value, and the registry has none for it", name);
+    return v;
+}
+
+/* SVG 2 §6.6 "Presentation attributes"' rows for `width` and `height`, which "only have equivalent
+   presentation attributes on designated elements": ‘foreignObject’, ‘image’, ‘rect’, ‘svg’, ‘symbol’ and
+   ‘use’. A presentation attribute is one that will "contribute to the author level of the cascade ... and have
+   specificity 0", which is this origin.
+   Named residual: SVG 2 §6.6's other rows (`x`, `y`, `cx`, `cy`, `r`, `rx`, `ry`, `d`, `fill`, `transform`
+   and the rest of its property table) are not mapped. The next diff maps them through svg_presentation_value
+   once a consumer reads the property (SVG painting). Their absence shows as getComputedStyle of an SVG
+   element answering a property's initial value where a browser answers the attribute's. */
+static void hint_svg_size(lxb_dom_element_t *el, const char *tag, size_t taglen, CssHintSink sink, void *ud)
+{
+    static const char *const TAGS[] = { "foreignObject", "image", "rect", "svg", "symbol", "use", NULL };
+    static const char *const NAMES[] = { "width", "height" };
+    const char *const *t;
+    unsigned i;
+
+    for (t = TAGS; *t != NULL; t++)
+        if (strlen(*t) == taglen && memcmp(*t, tag, taglen) == 0) break;
+    if (*t == NULL) return;
+    for (i = 0; i < 2; i++) {
+        lxb_dom_attr_t *a = lxb_dom_element_attr_by_name(el, (const lxb_char_t *)NAMES[i], strlen(NAMES[i]));
+        const lxb_char_t *v;
+        size_t vlen = 0;
+        char *text, *value;
+
+        if (a == NULL) continue;
+        v = lxb_dom_attr_value(a, &vlen);
+        text = lexbor_malloc(vlen + 1);
+        CHECK(text != NULL, "css: OOM copying an SVG presentation attribute");
+        if (vlen != 0) memcpy(text, v, vlen);
+        text[vlen] = '\0';
+        value = svg_presentation_value(NAMES[i], text);
+        sink(ud, NAMES[i], value);
+        free(value);
+        free(text);
+    }
+}
+
 void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, void *ud)
 {
     lxb_dom_node_t *node = lxb_dom_interface_node(el);
@@ -503,6 +598,12 @@ void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, v
        attribute, where a foreign element only ever meets a type-name UA rule by its own local name. §15.4.3's
        two dimension paragraphs name HTML elements outright ("an img element", "embed, iframe, object, and
        video elements"), so the same line governs them. */
+    if (node->ns == LXB_NS_SVG) {
+        tag = lxb_dom_element_local_name(el, &taglen);
+        DCHECK(tag != NULL, "an SVG element has no local name");
+        hint_svg_size(el, (const char *)tag, taglen, sink, ud);
+        return;
+    }
     if (node->ns != LXB_NS_HTML) return;
     tag = lxb_dom_element_local_name(el, &taglen);
     if (tag == NULL) return;

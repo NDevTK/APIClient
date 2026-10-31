@@ -1183,6 +1183,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/scrollflex.h"
 #include "fixture/gridtemplate.h"
 #include "fixture/calctree.h"
+#include "fixture/svgattr.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1728,6 +1729,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "scrollflex", HTML_SCROLLFLEX },
     { "gridtemplate", HTML_GRIDTEMPLATE },
     { "calctree", HTML_CALCTREE },
+    { "svgattr", HTML_SVGATTR },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15545,6 +15547,35 @@ TF_UNIT void probes_calctree(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `svgattr` document (fixture/svgattr.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give every
+   value they expect. */
+TF_UNIT void probes_svgattr(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "s1", "100x50", "SVG 2 §4.2: a unitless `width`/`height` is not that many px" },
+        { "s2", "15x30", "SVG 2 §6.6: an `em` presentation attribute does not size the svg" },
+        { "s3", "100x10", "SVG 2 §6.6: a percentage `width` does not resolve against the containing block" },
+        { "s4", "10x7", "SVG 2 §4.2: a comment or whitespace around the token refuses the attribute" },
+        { "s5", "15x10", "SVG 2 §4.2: a math function or an exponent refuses the attribute" },
+        { "s6", "30x10", "SVG 2 §6.6: an author `style` does not win over the presentation attribute" },
+        { "g1", "15x15", "SVG 2 §6.6: the grid-item icon is not its 1em x 1em" },
+        { "g6", "30x20", "SVG 2 §6.6: the grid item in an 80px row is not its 30 x 20" },
+        { "g6t", "30", "css-grid-1 §6.2: the 20px item is not centred in its 80px row" },
+        { "c1", "100px", "CSSOM §9: the resolved `width` is not the attribute's 100px" },
+        { "st", "ok", "SVG 2 §6.6: the attribute reached the element's own `style` declarations" },
+    };
+    const char *sa_why = NULL; int sa_tt = !!strstr(js, "\"/api/svgattr\"");
+    unsigned i;
+
+    fold_row(&sa_tt, &sa_why, sa_tt,
+             "NOT REACHED: there is no /api/svgattr record at all, so the document aborted before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&sa_tt, &sa_why, param_value_is(js, "/api/svgattr", ROWS[i].key, ROWS[i].want), ROWS[i].why);
+    const Probe rows[] = {
+        { "svg-presentation-attributes", sa_tt, "/api/svgattr", SESS_EXPLORE, sa_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21664,6 +21695,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_scrollflex(js, probes, &np);
     probes_gridtemplate(js, probes, &np);
     probes_calctree(js, probes, &np);
+    probes_svgattr(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
