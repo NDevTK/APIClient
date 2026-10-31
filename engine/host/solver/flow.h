@@ -311,6 +311,10 @@ typedef struct Flow {
        the rebuild reads them back into it. 0 and NULL for a flow that is not a drive. */
     uint64_t *orphan_chain;
     int orphan_chain_n;
+    /* Beside each member, the document of the path it was called in: how many fresh opens of the page
+       (attacker acts, flow_document_ordinal) preceded its call. A replay hands a member its body only in that
+       document, since the same locator names a body in every load of the page. Parallel to `orphan_chain`. */
+    int *orphan_chain_doc;
     /* Beside each chain member, the user act that runs its body as a listener (core/events/listener_act.h's
        envelope step, malloc'd), or NULL where no act a page user can perform calls it, or where a resumed drive
        has not yet built that member's call. A fire verified under the chain states these acts; one verified
@@ -1704,9 +1708,11 @@ void  flow_stand_at(Flow *f, int kind, uint64_t key);
    engine.c's rank assertions snapshot it. */
 int64_t flow_optimism_den(const Flow *f);
 /* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */
-/* Takes `act` (may be NULL). `repeat` admits a body the chain already holds: a listener driven again is the next
-   event, where a take hands a body over once per timeline. */
-void  flow_orphan_chain_push(Flow *f, uint64_t hash, char *act, int repeat);
+/* Takes `act` (may be NULL); `doc` is the member's document ordinal. `repeat` admits a body the chain already holds:
+   a listener driven again is the next event, where a take hands a body over once per timeline. */
+void  flow_orphan_chain_push(Flow *f, uint64_t hash, char *act, int doc, int repeat);
+/* Which load of the page `f` stands in: the number of fresh opens of its address (attacker acts) on its path. */
+int   flow_document_ordinal(const Flow *f);
 void  flow_orphan_chain_copy(Flow *dst, const Flow *src, int n);
 /* Append a modelled user act (`act` consumed) performed after `at` called drive members; copy `src`'s acts. */
 void  flow_user_act_push(Flow *f, char *act, int at);

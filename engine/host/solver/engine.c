@@ -6290,6 +6290,9 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
                "a flow holds an open orphan claim past the end of its chain of drives — `orphan_want` clears when "
                "the last member's call is built");
         if (fl->orphan_chain[fl->orphan_claim_at] != hash) continue;
+        /* …in the load of the page the member was called in: every load builds a body of that locator, and the
+           replay re-performs each fresh open, so the claimant's own count says which load it stands in now. */
+        if (fl->orphan_chain_doc[fl->orphan_claim_at] != flow_document_ordinal(fl)) continue;
         /* A claimant in another timeline than the one that built this closure cannot reach it; a compile of the
            same bytes in the claimant's own timeline is the body it waits for. */
         if (!engine_world_reaches_fn(fl->world, fn)) continue;
@@ -6646,7 +6649,7 @@ static int engine_orphan_redrive(JSContext *ctx, Flow *f) {
     sib->orphan_hash = hash;
     sib->typing_due = act_is_typing(act);
     sib->typing_pos = called;
-    flow_orphan_chain_push(sib, hash, act, 1);
+    flow_orphan_chain_push(sib, hash, act, flow_document_ordinal(sib), 1);
     sib->orphan_claim_at = sib->orphan_chain_n;
     {
         char loc[17];
@@ -6788,7 +6791,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
            "exactly those");
     sib->typing_due = act_is_typing(act);
     sib->typing_pos = 0;
-    flow_orphan_chain_push(sib, hash, act, 0);
+    flow_orphan_chain_push(sib, hash, act, flow_document_ordinal(sib), 0);
     sib->orphan_claim_at = sib->orphan_chain_n;
     /* And how much of this body the product had already explored, read at the seed: the drive's key is the
        body's locator (solver/novelty.h's NOVELTY_DRIVE), which is its script's content and its position there,

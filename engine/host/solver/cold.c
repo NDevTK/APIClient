@@ -672,30 +672,18 @@ static void park_rec_world(const char *vector)
     park_hex(vector);
 }
 
-/* A DRIVEN ORPHAN'S FUNCTION — the one thing about such a flow that a decision vector cannot reproduce, written
- * immediately AFTER the 'f' or 'c' record of the flow it belongs to and bound to it by POSITION, exactly as an
- * unmade delivery is.
+/* A driven orphan's function: the one thing about such a flow a decision vector cannot reproduce, written right
+ * after the 'f' or 'c' record of the flow it belongs to and bound to it by position, as an unmade delivery is. It
+ * is a field and not a record kind because being a drive is a fact about an exploration flow or a candidate
+ * session, which a drive inside a candidate session is both of ('c' then 'o').
  *
- * WHY IT IS NOT A RECORD KIND, which is the shape this looks like it should be. Being a driven orphan is not an
- * ALTERNATIVE to being an exploration flow or an @S candidate session — it is a fact ABOUT one. An orphan drive
- * forked inside a candidate session carries both identities at once (engine_sibling_assemble copies each), so a
- * third arm of park_kind_of's choice would have had to pick one of two things the engine legitimately holds
- * together, and whichever it picked the other would be silently gone. A field bound by position composes: an
- * orphan drive of an ordinary flow is 'f' then 'o', an orphan drive inside a candidate session is 'c' then 'o',
- * and the reader binds each to the flow it last rebuilt.
+ * The locator is JS_OrphanHash: the script's content and the body's position in it, stable across sessions
+ * because the same bytes compile the same way (a heap reference or a take's index is not). The position keeps
+ * it one member's name where a minified bundle repeats a body's text.
  *
- * WHAT THE LOCATOR IS AND WHY IT IS NOT A POSITION. Neither name a session already has survives it: the
- * function object is a live heap reference, and the index of the take that produced it is a fact about one heap
- * at one instant. quickjs's JS_OrphanHash composes what the BUNDLE determines instead — the script's content
- * and the body's position in it — which is stable across sessions for the reason the whole tier rests on: the
- * same bytes compile the same way. The position is what keeps it a member's name: a minified bundle repeats
- * `function(e){return e.default}` dozens of times, and a hash of a body's text alone would name the set.
- *
- * SIXTEEN LOWER-CASE HEX DIGITS, FIXED WIDTH AND SEPARATOR-FREE — the same self-delimiting property that makes
- * a decision slot nine characters, and for the same reason: the field is the whole record, so a reader that
- * finds a different width is holding a document another writer produced and refuses it rather than reading a
- * short name as a valid one. Written like park_rec_cand's text fields and not through park_rec, whose charset
- * is the digit grammar and does not admit the hex letters 'a' through 'd'. */
+ * Grammar: sixteen lower-case hex digits, fixed width so a reader refuses a short name, written outside
+ * park_rec, whose charset has no 'a' to 'd'; then ',' and the member's document ordinal in decimal through
+ * park_rec (flow.h's `orphan_chain_doc`). */
 /* A locator's spelling: sixteen lower-case hex digits, most significant first, NUL-terminated. */
 static void park_orphan_hex(uint64_t hash, char out[17])
 {
@@ -725,10 +713,15 @@ static void park_rec_orphan(const Flow *f)
         DCHECK(f->orphan_chain[k] != 0,
                "a driven orphan was parked with a chain member naming no body — the resumed drive would wait for "
                "a function that is never handed to it");
+        char doc[16];
+
         park_orphan_hex(f->orphan_chain[k], rec);
+        snprintf(doc, sizeof doc, "%d", f->orphan_chain_doc[k]);
         park_open_rec();
         park_str("o");
         park_str(rec);
+        park_str(",");
+        park_rec(doc);   /* the load of the page the member was called in (flow.h's `orphan_chain_doc`) */
         g_parked_census.orphans++;   /* per record, since the next record's open checks the census */
     }
 }
@@ -1061,6 +1054,8 @@ static int park_recipe_cmp(const void *pa, const void *pb)
     if (a->orphan_chain_n != b->orphan_chain_n) return a->orphan_chain_n < b->orphan_chain_n ? -1 : 1;
     if (a->orphan_chain_n) {
         int c = memcmp(a->orphan_chain, b->orphan_chain, (size_t)a->orphan_chain_n * sizeof *a->orphan_chain);
+        if (c) return c;
+        c = memcmp(a->orphan_chain_doc, b->orphan_chain_doc, (size_t)a->orphan_chain_n * sizeof *a->orphan_chain_doc);
         if (c) return c;
     }
     return ca < cb ? -1 : ca > cb;
@@ -2321,10 +2316,16 @@ int cold_resume(JSContext *ctx, const char *recipes)
                    "a park document holds an orphan locator before any flow — an 'o' record belongs to the flow "
                    "written immediately before it, so one at the head of the document names nothing and would "
                    "attach a drive to whichever flow happened to come next");
-            DCHECK(end - q == 16,
-                   "a parked orphan locator is not sixteen hex digits — the name is fixed width and is the "
-                   "whole record precisely so a short one cannot be read as a valid name, so this document was "
-                   "not written by this engine's park");
+            long doc = -1;
+
+            DCHECK(end - q > 17 && q[16] == ',',
+                   "a parked orphan locator is not sixteen hex digits and a document ordinal — the name is fixed "
+                   "width so a short one cannot be read as a valid name, so this document was not written by "
+                   "this engine's park");
+            for (d = 17; d < end - q; d++) {
+                DCHECK(q[d] >= '0' && q[d] <= '9', "a parked orphan member's document ordinal is not a number");
+                doc = (doc < 0 ? 0 : doc * 10) + (q[d] - '0');
+            }
             for (d = 0; d < 16; d++) {
                 int hv = park_hexval(q[d]);
                 DCHECK(hv >= 0,
@@ -2346,7 +2347,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
             last_flow->orphan_want = 1;
             last_flow->orphan_claim_at = 0;
             /* The act is read when the member's call is built; a repeated body is a listener driven again. */
-            flow_orphan_chain_push(last_flow, hash, NULL, 1);
+            flow_orphan_chain_push(last_flow, hash, NULL, (int)doc, 1);
             g_resumed.orphans++;
         } else if (kind == 'v') {
             /* A WITNESS VERIFICATION COMES BACK AS ITS SUBSTITUTION, ITS KEY AND ITS PATH — park_rec_vfy's
