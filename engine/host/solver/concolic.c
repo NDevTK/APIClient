@@ -2613,6 +2613,33 @@ static int src_principal(const char *p, size_t n)
     return row >= 0 && g_srcs[row].principal;
 }
 
+/* Whether a member slice names a declared precondition source (the g_pres rows), matched as src_row matches. */
+static int pre_row(const char *p, size_t n)
+{
+    for (int j = 0; j < g_pres_n; j++)
+        if (!strncmp(g_pres[j].src, p, n) && g_pres[j].src[n] == '\0') return j;
+    return -1;
+}
+
+int concolic_root_declared_each(const char *root, void (*cb)(void *ud, const char *p, size_t n), void *ud)
+{
+    const char *p;
+    size_t n;
+    int found = 0;
+
+    DCHECK(cb != NULL, "a root's declared members were walked with nowhere to hand them");
+    for (int i = 0; root_member(root, i, &p, &n); i++)
+        if (src_row(p, n) >= 0 || pre_row(p, n) >= 0) { found++; cb(ud, p, n); }
+    return found;
+}
+
+int concolic_src_within(const char *src, const char *p, size_t n)
+{
+    DCHECK(src != NULL && p != NULL && n > 0, "an injection identity was matched against no member");
+    if (strlen(src) == n && !strncmp(src, p, n)) return 1;
+    return src[0] == '{' && !strncmp(src + 1, p, n) && src[n + 1] == '}';
+}
+
 int concolic_root_delivered_any(const char *root)
 {
     const char *p;

@@ -1013,6 +1013,41 @@ static void park_on_sender(const char *src, const char *root, int sink) {
     DCHECK(e->snd.n > 0, "a detection behind a pinned principal recorded no sender for its search");
 }
 
+/* The searches one detection opens. Ordinarily one, at the value's injection identity with its root. But a
+   derivation takes its first operand's identity, so a value whose first operand is an environment unknown (a
+   random value, a browser fact) joined with a declared source carries an identity no party writes: a candidate
+   injected there lands nowhere. When the identity belongs to no member of the root that declares a source and
+   some member does, each declaring member is searched at its own identity with itself as the root, so each
+   search states its own envelope. `pinned`: the path pinned a principal, so the detection parks on a sender. */
+typedef struct { const char *src; int owns, cls, pinned; } DetectIds;
+
+static void detect_id_owned(void *ud, const char *p, size_t n) {
+    DetectIds *d = ud;
+    if (concolic_src_within(d->src, p, n)) d->owns = 1;
+}
+
+static void detect_open_member(void *ud, const char *p, size_t n) {
+    DetectIds *d = ud;
+    char *m = strndup(p, n);
+
+    CHECK(m, "solve: OOM naming a declared member's search");
+    if (d->pinned) park_on_sender(m, m, d->cls);
+    else           add_pending(m, m, d->cls);
+    free(m);
+}
+
+static void detect_open_searches(const char *src, const char *root, int cls, int pinned) {
+    DetectIds d = { src, 0, cls, pinned };
+    int declared = concolic_root_declared_each(root, detect_id_owned, &d);
+
+    if (declared == 0 || d.owns) {
+        if (pinned) park_on_sender(src, root, cls);
+        else        add_pending(src, root, cls);
+        return;
+    }
+    concolic_root_declared_each(root, detect_open_member, &d);
+}
+
 /* Detection: the tail the three sink classes share, and the last point at which the value that carried the
    attacker's bytes exists. The search is keyed by the value's injection identity, derived ones included,
    because that is where a substitution has to land; how the bytes arrived is asked with the value's root,
@@ -1058,10 +1093,10 @@ static void detect_sink(JSValueConst arg, int cls) {
        must be able to be that path. Counted, because it is a decision rather than an absence. */
     if (concolic_principal_pins(NULL, NULL)) {
         METRIC_ADD(sink_needs_sender, 1);
-        park_on_sender(src ? src : (shape ? shape : "?"), root, cls);
+        detect_open_searches(src ? src : (shape ? shape : "?"), root, cls, 1);
         return;
     }
-    add_pending(src ? src : (shape ? shape : "?"), root, cls);
+    detect_open_searches(src ? src : (shape ? shape : "?"), root, cls, 0);
 }
 
 /* Does this search still seed? The re-injection path is the answer: a search holds one from the moment a flow

@@ -765,6 +765,12 @@ int         concolic_source_delivery(const char *root, const char **kind, char *
    asks to learn whether an attacker source roots it at all, so two declaring members answer 1 rather than
    crashing as concolic_source_delivery does, which must name one member's envelope. */
 int         concolic_root_delivered_any(const char *root);
+/* Calls `cb` with each member of `root` that names a declared source (a delivery, a precondition or a principal),
+   as a slice of `root`, in root order; answers how many. 0 for NULL. */
+int         concolic_root_declared_each(const char *root, void (*cb)(void *ud, const char *p, size_t n), void *ud);
+/* Whether injection identity `src` is the source the member slice `p`/`n` names, or a hole over it (an identity
+   spelled `{member}` followed by its path). */
+int         concolic_src_within(const char *src, const char *p, size_t n);
 /* …and is every member such a source? 0 for NULL, never vacuously 1: an address all of whose bytes an attacker
    delivers, where a member from app state means the app chose that part. */
 int         concolic_root_delivered_all(const char *root);
