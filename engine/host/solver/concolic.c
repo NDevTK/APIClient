@@ -199,9 +199,11 @@ typedef struct {
        runs take, here in UTF-16 code units), each owned by the operand whose example spells it. Written at a
        string concatenation whose operands' examples are both held, and on no other value; units in no piece
        are the page's own. A slice whose range lies inside one piece answers that piece's derivation
-       (concolic_piece_slice). Owned, the unknowns with it. */
+       (concolic_piece_slice). `piece_known` says the table was written, so a concatenation whose units no
+       unknown owns (`piece_n` 0) is told from a value that records none. Owned, the unknowns with it. */
     JSUnknownPiece *piece;
     int piece_n;
+    uint8_t piece_known;
     /* ECMAScript §6.1 ECMAScript Language Types: the set of types this value takes in every world, as CTY_*
        bits. Stated only by a mint whose algorithm fixes its result's type (concolic_type_state), and asserted
        there against the example; 0 is unstated, never "no type", so a value no mint typed stays unknown-typed. */
@@ -7788,7 +7790,7 @@ static void pieces_append(JSContext *ctx, JSValueConst v, uint32_t off, uint32_t
                           int *n)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
-    int add = !c ? 0 : c->piece ? c->piece_n : units ? 1 : 0;
+    int add = !c ? 0 : c->piece_known ? c->piece_n : units ? 1 : 0;
     JSUnknownPiece *g;
 
     if (!add) return;
@@ -7800,7 +7802,7 @@ static void pieces_append(JSContext *ctx, JSValueConst v, uint32_t off, uint32_t
 
         memset(pc, 0, sizeof *pc);
         pc->example = true;
-        if (c->piece) {
+        if (c->piece_known) {
             DCHECK(c->piece[i].offset + c->piece[i].length <= units,
                    "an operand's piece ends past its own example — pieces are runs of the value's example");
             pc->offset = off + c->piece[i].offset;
@@ -7824,11 +7826,12 @@ static void pieces_concat(JSContext *ctx, JSValueConst r, JSValueConst a, uint32
     int n = 0;
 
     if (!c) return;
-    DCHECK(c->piece == NULL, "a concatenation's pieces were recorded twice");
+    DCHECK(!c->piece_known, "a concatenation's pieces were recorded twice");
     pieces_append(ctx, a, 0, ua, &pc, &n);
     pieces_append(ctx, b, ua, ub, &pc, &n);
     c->piece = pc;
     c->piece_n = n;
+    c->piece_known = 1;
 }
 
 JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example)
@@ -7836,7 +7839,7 @@ JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint
     const Concolic *c = g_concolic_class ? JS_GetOpaque(s, g_concolic_class) : NULL;
     int touched = 0;
 
-    if (!c || !c->piece || to <= from) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
+    if (!c || !c->piece_known || to <= from) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
     for (int i = 0; i < c->piece_n; i++) {
         const JSUnknownPiece *p = &c->piece[i];
         JSValueConst ops[3];
