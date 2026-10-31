@@ -649,6 +649,11 @@ typedef struct JSStepHdr {
        so the two sub-sequences are in flight in the same stage and sharing a phase would answer one at the
        other's call site. */
     uint8_t keys_phase;
+    /* THE PROGRAM SUB-SEQUENCE'S PARSE (step_program_run): the source text as a String (owned; JS_UNDEFINED
+       when no parse is held) and the parse in flight, a cache over it that a fork sheds and the teardown drops,
+       so the sibling parses again from the String. */
+    JSValue prog_src;
+    void *prog_compile;
     /* THE OWN-KEY-SET PREDICATE, held across the fork that asks it — see step_ownkeys_run. An enumeration of a
        record standing for unknown external input that carries no example forks over whether the record holds an
        own member at all, and step_tobool_run's operand must live somewhere the SIBLING'S SNAPSHOT CARRIES: the

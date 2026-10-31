@@ -25824,6 +25824,7 @@ static void *tramp_step_state_new(JSContext *ctx, const JSTrampStepDef *sd, JSVa
        unknown operand" has to be a value no operand can be. UNINITIALIZED is the same answer ctor_ntgt gives
        for the same question one line up. */
     h->unknown_operand = JS_UNINITIALIZED;
+    h->prog_src = JS_UNDEFINED;
     /* WHAT THE DRIVER OWES A PARKED MACHINE — absent until it parks, and absent is not a value a delivery can
        be, for the reason one line up: js_mallocz reads as the INTEGER 0, and 0 is a perfectly ordinary answer
        to a keyed read. */
@@ -27471,10 +27472,38 @@ static int step_topropkey_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVa
    `(function anonymous(…){…})` source — so it is a shared sub-sequence rather than a stage each of them
    re-spells. The receiver is the GLOBAL OBJECT: an indirect eval's program is global scope whatever the code's
    strictness, so a `"use strict"` prologue must still see the global and not undefined.
-     0 = *pout is the program's value, 3 = the caller must return that step code, -1 = threw. */
-enum { PROG_PH_START = 0, PROG_PH_RAN };
+     0 = *pout is the program's value, 3 or JS_STEP_YIELD (the parse rested) = the caller must return that step
+   code, -1 = threw. */
+enum { PROG_PH_START = 0, PROG_PH_RAN, PROG_PH_PARSE };
 
 static inline bool tramp_body_is_plain(JSValueConst func);
+typedef struct JSEvalCompile JSEvalCompile;
+static JSValue js_eval_compile_continue(JSContext *ctx, JSEvalCompile **slot);
+static void js_eval_compile_drop(JSContext *ctx, JSEvalCompile **slot);
+static _Thread_local JSEvalCompile **g_eval_compile_slot;
+
+/* The program's parse in flight and the UTF-8 it borrows for its whole length. */
+typedef struct {
+    JSEvalCompile *ec;
+    JSContext *realm;
+    const char *str;
+    size_t len;
+} JSProgCompile;
+
+/* Releases the header's held parse and its source; a no-op where none is held. */
+static void js_prog_compile_drop(JSContext *ctx, JSStepHdr *h)
+{
+    JSProgCompile *pc = h->prog_compile;
+
+    if (pc) {
+        js_eval_compile_drop(pc->realm, &pc->ec);
+        JS_FreeCString(ctx, pc->str);
+        js_free(ctx, pc);
+        h->prog_compile = NULL;
+    }
+    JS_FreeValue(ctx, h->prog_src);
+    h->prog_src = JS_UNDEFINED;
+}
 
 /* `realm` is the realm the program BELONGS to — its own for eval and the Function constructor, the eval realm
    for ShadowRealm.prototype.evaluate, whose 3.2.1 is this same compile-then-call in another global environment.
@@ -27488,10 +27517,9 @@ static int step_program_run(JSContext *ctx, JSStepHdr *h, JSContext *realm, JSVa
                             JSValue *pout, JSValue **out_cb, int *out_argc, int origin_flags)
 {
     if (h->prog_phase == PROG_PH_START) {
-        JSValue clo, text;
-        const char *str;
-        size_t len;
+        JSValue text;
         JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
         /* THE @S JS-CONTEXT SINK AND §19.2.1.1's step 2, for every algorithm that reaches this sub-sequence:
            the INDIRECT eval (19.2.1), CreateDynamicFunction (20.2.1.1.1) and ShadowRealm.prototype.evaluate.
            Both halves belong to js_eval_program_source and neither is re-decided here — the direct-eval
@@ -27502,17 +27530,48 @@ static int step_program_run(JSContext *ctx, JSStepHdr *h, JSContext *realm, JSVa
             *pout = js_dup(src);   /* 19.2.1.1 step 2: a non-string source is the result, unevaluated */
             return 0;
         }
-        str = JS_ToCStringLen(ctx, &len, text);
-        JS_FreeValue(ctx, text);
-        if (!str)
+        h->prog_src = text;
+        h->prog_phase = PROG_PH_PARSE;
+    }
+    if (h->prog_phase == PROG_PH_PARSE) {
+        /* The parse hands the thread back where the scheduler asks and is continued here from the record; a
+           fork sheds the record and the sibling begins again from `prog_src`. */
+        JSProgCompile *pc = h->prog_compile;
+        JSValue clo;
+
+        JS_FreeValue(ctx, in);
+        if (!pc) {
+            JSEvalCompile **outer = g_eval_compile_slot;
+
+            pc = js_mallocz(ctx, sizeof *pc);
+            if (!pc)
+                return -1;
+            pc->realm = realm;
+            pc->str = JS_ToCStringLen(ctx, &pc->len, h->prog_src);
+            if (!pc->str) {
+                js_free(ctx, pc);
+                return -1;
+            }
+            h->prog_compile = pc;
+            /* NO CALLER FRAME, and that is what INDIRECT means: 19.2.1.1 evaluates in the GLOBAL environment,
+               so there is no caller scope to take — the `-1` scope_idx beside it says the same thing. */
+            g_eval_compile_slot = &pc->ec;
+            clo = JS_EvalInternal(realm, realm->global_obj, pc->str, pc->len, JS_EVAL_SCRIPT_NAME, 1,
+                                  JS_EVAL_TYPE_INDIRECT | JS_EVAL_FLAG_TRAMP_CLOSURE | origin_flags, -1, NULL);
+            g_eval_compile_slot = outer;
+        } else {
+            DCHECK(pc->ec != NULL && pc->realm == realm,
+                   "a program parse resumed with nothing parked, or in another realm than it began in");
+            clo = js_eval_compile_continue(realm, &pc->ec);
+        }
+        if (JS_VALUE_GET_TAG(clo) == JS_TAG_UNINITIALIZED)
+            return JS_STEP_YIELD;
+        DCHECK(pc->ec == NULL, "a program parse answered and left a parked parse behind");
+        js_prog_compile_drop(ctx, h);
+        if (JS_IsException(clo)) {
+            h->prog_phase = PROG_PH_START;
             return -1;
-        /* NO CALLER FRAME, and that is what INDIRECT means: 19.2.1.1 evaluates in the GLOBAL environment, so
-           there is no caller scope to take — the `-1` scope_idx beside it says the same thing. */
-        clo = JS_EvalInternal(realm, realm->global_obj, str, len, JS_EVAL_SCRIPT_NAME, 1,
-                              JS_EVAL_TYPE_INDIRECT | JS_EVAL_FLAG_TRAMP_CLOSURE | origin_flags, -1, NULL);
-        JS_FreeCString(ctx, str);
-        if (JS_IsException(clo))
-            return -1;
+        }
         DCHECK(tramp_body_is_plain(clo), "a program closure is not a trampolinable bytecode function");
         DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
                "a coercion is already in flight on this machine's header");
@@ -27932,6 +27991,7 @@ static JSValue tramp_step_state_free_1(JSContext *ctx, void *st, bool take_resul
        threw or was abandoned after running on over the operand's example, and is released with the state. */
     JS_FreeValue(ctx, h->unknown_operand);
     h->unknown_operand = JS_UNINITIALIZED;
+    js_prog_compile_drop(ctx, h);
     if (!take_result && h->coercing && h->def->onerror)
         h->def->onerror(ctx, h->this_val, h->def->body_magic);   /* BEFORE the receiver is released */
 
@@ -28527,6 +28587,9 @@ static void *tramp_step_state_clone(JSContext *ctx, const void *src)
     h->keys_pred = js_dup(h->keys_pred);
     /* The unknown operand a machine runs on over the example of, held across the fork like keys_pred. */
     h->unknown_operand = js_dup(h->unknown_operand);
+    /* A held parse is a cache: the sibling parses again from its own reference to the source. */
+    h->prog_src = js_dup(h->prog_src);
+    h->prog_compile = NULL;
     o->def->visit(ctx, h, (JSStepVisit *)&js_step_visit_dup);   /* the machine's own owned fields, taken a second time */
     return h;
 }
@@ -120892,6 +120955,25 @@ typedef struct JSShadowEval {
 enum { SEVAL_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_shadow_realm_evaluate_steps[] = { SEVAL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* Step 8: a PARSE failure is a SyntaxError of the CALLER's realm — the eval realm's error object must not cross
+   the membrane, and a caller catching it compares constructor identity. Everything else (an out-of-memory on
+   the source text) is not the spec's case and propagates unchanged. Takes the pending exception; returns -1. */
+static int js_shadow_realm_parse_failed(JSContext *ctx, JSContext *eval_realm)
+{
+    JSValue e = JS_GetException(ctx);
+    JSValue proto = JS_GetPrototype(ctx, e);
+    bool syn = js_same_value(ctx, proto, eval_realm->native_error_proto[JS_SYNTAX_ERROR]);
+
+    JS_FreeValue(ctx, proto);
+    if (!syn) {
+        JS_Throw(ctx, e);
+        return -1;
+    }
+    JS_FreeValue(ctx, e);
+    JS_ThrowSyntaxError(ctx, "ShadowRealm.prototype.evaluate: source text could not be parsed");
+    return -1;
+}
+
 static int js_shadow_realm_evaluate_step(JSContext *ctx, void *st, JSValue cb_result,
                                          JSValue **out_cb, int *out_argc)
 {
@@ -120923,22 +121005,8 @@ static int js_shadow_realm_evaluate_step(JSContext *ctx, void *st, JSValue cb_re
                               out_cb, out_argc, 0);
         if (pr > 0)
             return pr;
-        if (pr < 0) {
-            /* step 8: a PARSE failure is a SyntaxError of the CALLER's realm — the eval realm's error object
-               must not cross the membrane, and a caller catching it compares constructor identity. Everything
-               else (an out-of-memory on the source text) is not the spec's case and propagates unchanged. */
-            JSValue e = JS_GetException(ctx);
-            JSValue proto = JS_GetPrototype(ctx, e);
-            bool syn = js_same_value(ctx, proto, sd->realm->native_error_proto[JS_SYNTAX_ERROR]);
-            JS_FreeValue(ctx, proto);
-            if (!syn) {
-                JS_Throw(ctx, e);
-                return -1;
-            }
-            JS_FreeValue(ctx, e);
-            JS_ThrowSyntaxError(ctx, "ShadowRealm.prototype.evaluate: source text could not be parsed");
-            return -1;
-        }
+        if (pr < 0)
+            return js_shadow_realm_parse_failed(ctx, sd->realm);
         /* a non-string source never reaches here, so the program always ran */
         s->hdr.stage = SE_ST_WRAP;
     } else if (s->hdr.stage == SE_ST_RAN) {
@@ -120952,8 +121020,10 @@ static int js_shadow_realm_evaluate_step(JSContext *ctx, void *st, JSValue cb_re
         }
         pr = step_program_run(ctx, &s->hdr, sd->realm, JS_UNDEFINED, cb_result, &s->retval,
                               out_cb, out_argc, 0);
-        if (pr)
-            return pr < 0 ? -1 : pr;
+        if (pr > 0)
+            return pr;
+        if (pr < 0)
+            return js_shadow_realm_parse_failed(ctx, sd->realm);   /* the parse rested, then failed */
         /* held for the reason the wrapped call's result is: step_wrap_run reads the value only in its start
            phase and the request ANSWER in every later one. */
         s->hdr.stage = SE_ST_WRAP;
