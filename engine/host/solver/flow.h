@@ -62,9 +62,15 @@ typedef struct FlowSite FlowSite;
    the member's code site has received in its family and `pull_work` the quantum it is counted in
    (ENGINE_QUANTUM_WORK).
    `visits` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
-   member could take the thread. `unit` is where its next quantum resumes, a literal no term reads: "program" (a
-   suspended program frame), "parked" (a parked job continuation), "checkpoint" (a microtask owed), "between" (a
-   unit ended, the next not begun), or "running" (the switched-in member, whose parks are the runtime's). */
+   member could take the thread. `unit` is where its next quantum resumes, a FlowUnitAt no term reads; it is a
+   number because a census row carries numbers only (extension/bridge.js's resultDocumentRefusal). */
+typedef enum {
+    FLOW_UNIT_BETWEEN = 0,      /* a unit ended and the next has not begun (or none has) */
+    FLOW_UNIT_PROGRAM = 1,      /* a suspended program frame */
+    FLOW_UNIT_PARKED = 2,       /* a parked job continuation */
+    FLOW_UNIT_CHECKPOINT = 3,   /* a microtask is owed */
+    FLOW_UNIT_RUNNING = 4       /* the switched-in member, whose parks are the runtime's */
+} FlowUnitAt;
 typedef struct {
     int present;
     double reward;
@@ -76,7 +82,7 @@ typedef struct {
     int64_t assumed;      /* flow_assumed */
     double assume_cost;   /* FLOW_ASSUMPTION_COST, which each assumption is priced at */
     int host_owed, running;
-    const char *unit;
+    FlowUnitAt unit;
 } FlowWeightOperands;
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
