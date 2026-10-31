@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/loader/script_compile.h"
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
@@ -2260,6 +2261,31 @@ static bool handler_compile_owed(JSContext *ctx, JSValueConst h)
     return owed;
 }
 
+/* §8.1.8.1 step 3's compile record, the CALLER's: `stage` is 0 when no compile is in flight, EHC_PARSE while step
+   3.9's program is parsed across the rests it takes, EHC_EVAL while it is evaluated. The scope carrier and its
+   layers are held from the parse to the evaluation. */
+enum { EHC_EVAL = 1, EHC_PARSE = 2 };
+typedef struct {
+    uint8_t       stage;
+    uint8_t       layers;
+    JSValue       carrier;
+    ScriptCompile sc;
+} EhCompile;
+
+static void eh_compile_init(EhCompile *c)
+{
+    c->stage = 0;
+    c->layers = 0;
+    c->carrier = JS_UNDEFINED;
+    script_compile_init(&c->sc);
+}
+
+static void eh_compile_visit(JSContext *ctx, EhCompile *c, JSStepVisit *v)
+{
+    v->val(ctx, &c->carrier);
+    script_compile_visit(ctx, &c->sc, v);
+}
+
 /* HTML §8.1.8.1 "Event handlers"' GET THE CURRENT VALUE OF THE EVENT HANDLER, STEPS 3.8-3.12 — the compile
  * that turns an internal raw uncompiled handler into something a dispatch can invoke. §@S's "ONLY FIRING
  * proves it" is a sentence about this function: without it every `onerror=` and `onload=` a page writes in
@@ -2307,15 +2333,15 @@ static bool handler_compile_owed(JSContext *ctx, JSValueConst h)
  *   0    — the compile is complete, `*pout` is the handler function (owned) and step 3.12 has written it to
  *          the handler map, so the NEXT dispatch reads a function and never reaches this again.
  *   -1   — the program evaluation was abrupt. */
-static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, JSValue *cb, int cb_cap,
+static int handler_compile_run(JSContext *ctx, EhCompile *c, uint8_t *cphase, JSValue *cb, int cb_cap,
                                JSValueConst target, const char *type, JSValue in, JSValue *pout,
                                JSValue **out_cb, int *out_argc)
 {
-    JSValue fn = JS_UNDEFINED;
+    JSValue fn = JS_UNDEFINED, prog = JS_UNDEFINED, recv;
     int r;
 
-    if (*stage == 0) {
-        JSValue map = handler_map(ctx, target, 0), h, body, prog, recv;
+    if (c->stage == 0) {
+        JSValue map = handler_map(ctx, target, 0), h, body;
         JSValue carrier = JS_UNDEFINED;
         unsigned layers = 0;
         size_t n = 0;
@@ -2455,15 +2481,27 @@ static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, 
            with this parameter list under JS_EVAL_FLAG_COMPILE_ONLY and answered that it parses, and the heads
            this shape adds are this file's own fixed text over a carrier it built, so a parse error here is the
            two probes disagreeing about one text. */
-        prog = JS_Eval(ctx, src, n, EVENT_HANDLER_SCRIPT_NAME,
-                       JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE |
-                       (layers == 0 ? JS_EVAL_FLAG_FUNCTION_CTOR : 0));
+        script_compile_begin(ctx, &c->sc, src, n, EVENT_HANDLER_SCRIPT_NAME);
         free(src);
         JS_FreeValue(ctx, h);
         JS_FreeValue(ctx, map);
+        c->carrier = carrier;
+        c->layers = (uint8_t)layers;
+        c->stage = EHC_PARSE;
+    }
+    if (c->stage == EHC_PARSE) {
+        /* The parse rests where the scheduler asks, and the caller re-enters here to continue it; the carrier
+           and its layers wait on the record. */
+        r = script_compile_run(ctx, &c->sc, c->layers == 0 ? JS_EVAL_FLAG_FUNCTION_CTOR : 0, &prog);
+        if (r) {
+            JS_FreeValue(ctx, in);
+            return r;
+        }
         if (JS_IsException(prog)) {
             JS_FreeValue(ctx, JS_GetException(ctx));
-            JS_FreeValue(ctx, carrier);
+            JS_FreeValue(ctx, c->carrier);
+            c->carrier = JS_UNDEFINED;
+            c->stage = 0;
             DFAIL("§8.1.8.1 step 3.9's compile of an event handler body FAILED on a body step 3.7 had already "
                   "answered was parsable — the body and its parameter list are the text 3.7's pinned probe "
                   "accepted, and everything else in this source is fixed text this file wrote over a carrier "
@@ -2472,20 +2510,21 @@ static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, 
             JS_ThrowInternalError(ctx, "HTML §8.1.8.1 step 3.9's compile failed on a body step 3.7 accepted");
             return -1;
         }
-        *stage = 1;
+        c->stage = EHC_EVAL;
         /* THE RECEIVER IS THE GLOBAL OBJECT WHERE THE SCOPE HAS NO LAYERS, which is what a global program's
            evaluation is given — the same value step_program_run puts in its own request buffer's `this` slot
            — and THE CARRIER where it has them, because `this[0..2]` is how the heads name their objects.
            SWAPPING IT IS NOT OBSERVABLE TO THE HANDLER: the function expression is an ordinary function with
            thisMode non-lexical-this, so its own `this` is whatever the DISPATCH passes at invoke time and
            never the program's. What reads the program's `this` is the head text this file wrote. */
-        recv = (layers == 0) ? JS_GetGlobalObject(ctx) : JS_DupValue(ctx, carrier);
+        recv = (c->layers == 0) ? JS_GetGlobalObject(ctx) : JS_DupValue(ctx, c->carrier);
         r = step_call_run(ctx, cphase, cb, cb_cap, prog, recv, 0, NULL, in, &fn, out_cb, out_argc);
         JS_FreeValue(ctx, recv);
-        JS_FreeValue(ctx, carrier);   /* the request holds the layers through `recv`, which it dup'd into cb[] */
+        JS_FreeValue(ctx, c->carrier);   /* the request holds the layers through `recv`, dup'd into cb[] */
+        c->carrier = JS_UNDEFINED;
         JS_FreeValue(ctx, prog);   /* step_call_run dup'd both into cb[] */
     } else {
-        DCHECK(*stage == 1, "§8.1.8.1 step 3's compile resumed in a stage it never parks in");
+        DCHECK(c->stage == EHC_EVAL, "§8.1.8.1 step 3's compile resumed in a stage it never parks in");
         r = step_call_run(ctx, cphase, cb, cb_cap, JS_UNDEFINED, JS_UNDEFINED, 0, NULL, in, &fn,
                           out_cb, out_argc);
     }
@@ -2495,10 +2534,10 @@ static int handler_compile_run(JSContext *ctx, uint8_t *stage, uint8_t *cphase, 
         /* THE RECORD'S INVARIANT IS RESTORED HERE AND NOT ONLY AT THE CALLER: `stage` is zero exactly when no
            compile is in flight, and an abrupt one is not in flight. A caller that also clears it is agreeing
            with this, never the other way round. */
-        *stage = 0;
+        c->stage = 0;
         return -1;
     }
-    *stage = 0;
+    c->stage = 0;
     DCHECK(JS_IsFunction(ctx, fn),
            "§8.1.8.1 step 3.9's program evaluated to something that is not a function — the program is one "
            "parenthesised FunctionExpression, under any scope heads step 3.9 asked for, and a program's "
@@ -2653,10 +2692,9 @@ typedef struct {
        serve as this latch even though it is also zero on entry: handler_compile_run RESETS it to zero when the
        compile completes, so it answers "not started" again at exactly the moment the machine is finishing. */
     uint8_t   started;
-    /* handler_compile_run's OWN stage byte, which it documents as zero exactly when no compile is in flight —
-       so it is this machine's "have I parked inside step 3" test and there is no second flag to keep in step
-       with it. */
-    uint8_t   ehc;
+    /* handler_compile_run's record, whose stage is zero exactly when no compile is in flight — so it is this
+       machine's "have I parked inside step 3" test and there is no second flag to keep in step with it. */
+    EhCompile ehc;
     uint8_t   cphase;   /* the program evaluation's call phase, borrowed by handler_compile_run */
     /* STEP 1's eventTarget, OWNED ACROSS THE PARK. It is re-derivable from the receiver — determine the target
        runs no page code — but re-deriving it on the resume would ask a question the page's own handler may
@@ -2676,6 +2714,7 @@ static void ehg_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->target);
     v->val(ctx, &s->result);
     STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
+    eh_compile_visit(ctx, &s->ehc, v);
 }
 
 /* THE ANSWER LEAVES THROUGH `presult`, WHICH IS WHY THERE IS NO `fini` HERE. A raw machine hands its result
@@ -2709,12 +2748,13 @@ static int ehg_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         s->started = 1;
         s->target = s->result = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        eh_compile_init(&s->ehc);
     }
 
     /* THE RESUME COMES BACK INSIDE STEP 3, NOT AT STEP 1. `ehc` is non-zero exactly while the compile is in
        flight, so it is the whole of the routing: steps 1-2 are performed once, on the entry that finds it
        zero, and a park inside step 3.9 returns here to finish the same compile over the same target. */
-    if (s->ehc != 0)
+    if (s->ehc.stage != 0)
         goto compile;
 
     /* STEP 1 — "Let eventTarget be the result of determining the target of an event handler given this object
@@ -2748,7 +2788,7 @@ compile:
     r = handler_compile_run(ctx, &s->ehc, &s->cphase, STEP_CB(s->cb), s->target, EH_TYPE[magic],
                             cb_result, &s->result, out_cb, out_argc);
     if (r > 0)
-        return r;   /* parked evaluating the program; the resume re-enters above and jumps back to `compile` */
+        return r;   /* parked parsing or evaluating the program; the resume jumps back to `compile` */
     if (r < 0) {
         /* THE ABRUPT ARM IS A THROW OUT OF THE GETTER AND NOT A NULL, and that is the one place this algorithm
            differs from the dispatch walk's use of the same sub-algorithm. §2.9 "inner invoke" step 2.11 gives
@@ -3325,7 +3365,7 @@ typedef struct JSDispatchState {
        invoke. `ehc` is non-zero exactly across that, and it is a marker of its own rather than a value of
        `eh.stage` because the two are different algorithms: `eh` is the event handler PROCESSING algorithm's
        invocation, and this is the COMPILE that produces what that algorithm invokes. */
-    uint8_t   ehc;
+    EhCompile ehc;
     /* §2.9 step 6.7's SLOT-IN-CLOSED-TREE, and step 6.10's CLEARTARGETS. Both are one-bit walk state that has
        to survive a park between two ancestors, which is the whole reason they are on the state and not on the
        C stack of a loop that does not exist. */
@@ -3372,6 +3412,7 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->exc);
     report_exception_work_visit(ctx, &s->rep, v);
     event_handler_work_visit(ctx, &s->eh, v);
+    eh_compile_visit(ctx, &s->ehc, v);
     v->val(ctx, &s->cur);
     v->val(ctx, &s->tgt);
     v->val(ctx, &s->slottable);
@@ -3748,7 +3789,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         }
         report_exception_work_start(&s->rep);
         event_handler_work_start(&s->eh);
-        s->ehc = 0;   /* §8.1.8.1 step 3's compile: nothing in flight — see the field */
+        eh_compile_init(&s->ehc);   /* §8.1.8.1 step 3's compile: nothing in flight — see the field */
         s->eh_index = -1;
         /* THREE ENTRIES, ONE MACHINE, and `arg` is decided at REGISTRATION so no call site chooses:
              DISPATCH_ARG  — dispatchEvent: the receiver is the target, the page supplied the event.
@@ -4070,7 +4111,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        request it belongs to, at resume_listener. The handler algorithm's stage is one of the four things that
        can be in flight: its Web IDL return-type coercion and its step 6 fork both park with `cphase` back at
        zero, so a walk that asked only about the call would free the answer they are waiting for. */
-    if (s->cphase == 0 && s->lphase == 0 && s->reporting == 0 && s->eh.stage == 0 && s->ehc == 0)
+    if (s->cphase == 0 && s->lphase == 0 && s->reporting == 0 && s->eh.stage == 0 && s->ehc.stage == 0)
         { JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED; }
     /* §2.9 steps 6.13 and 6.14: TWO passes over the path, not three legs over parts of it. The old shape ran the
        target as a leg of its own with BOTH kinds of listener in registration order, which is a different answer
@@ -4091,9 +4132,9 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                cannot tell "the program that produces the handler" from "the handler". The record is not
                re-read for the same reason the resume below does not re-read it: what the walk needs across
                this park is on the state (`lcb` holds the uncompiled record, `eh_index` the attribute). */
-            if (s->ehc != 0)
+            if (s->ehc.stage != 0)
                 goto compile_handler;
-            if (s->cphase == 0 && s->lphase == 0 && s->eh.stage == 0 && s->ehc == 0
+            if (s->cphase == 0 && s->lphase == 0 && s->eh.stage == 0 && s->ehc.stage == 0
                 && event_stop_immediate(ctx, s->ev))
                 break;
             if (s->cphase != 0 || s->eh.stage != 0) {
@@ -4240,7 +4281,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                `handleEvent` to find. Reading one off `el.onclick = {handleEvent(){…}}` would run a method no
                browser runs, and would do it while reporting nothing. */
 compile_handler:
-            DCHECK(s->ehc == 0 || s->eh_index >= 0,
+            DCHECK(s->ehc.stage == 0 || s->eh_index >= 0,
                    "§8.1.8.1 step 3's compile is in flight for a slot the walk does not call an event handler "
                    "— `ehc` is raised only inside the arm `eh_index` selects, so the two have come apart and "
                    "the resume would fall through to the callback-interface lookup with the compile still up");
@@ -4257,7 +4298,7 @@ compile_handler:
                    implementation and not one per door. It happens ONCE per handler either way — step 3.12
                    writes the function back to the map — so whichever door arrives second finds a function and
                    this whole block is a predicate that answers false. */
-                if (s->ehc != 0 || handler_compile_owed(ctx, s->lcb)) {
+                if (s->ehc.stage != 0 || handler_compile_owed(ctx, s->lcb)) {
                     JSValue compiled = JS_UNDEFINED;
                     const char *t = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
 
@@ -4274,7 +4315,7 @@ compile_handler:
                            listener's own throw takes — REPORT it and carry on down the listener list — which
                            is what a browser does with a handler it could not produce, and is the only arm
                            that does not silently drop a slot the page can see is registered. */
-                        s->ehc = 0;
+                        DCHECK(s->ehc.stage == 0, "an abrupt §8.1.8.1 step 3 compile left its record in flight");
                         goto listener_threw;
                     }
                     JS_FreeValue(ctx, s->lcb);

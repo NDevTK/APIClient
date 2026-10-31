@@ -22,7 +22,8 @@ bool script_compile_pending(const ScriptCompile *c);
 /* Takes copies of `src` (UTF-8, `n` bytes) and the base URL the program is named by. */
 void script_compile_begin(JSContext *ctx, ScriptCompile *c, const char *src, size_t n, const char *base);
 /* One stint of the parse, as a global program whose closure runs on the caller's trampoline
-   (JS_FlowCompileStep's flags; `eval_flags` adds JS_EVAL_FLAG_STRICT or JS_EVAL_FLAG_INLINE_SCRIPT).
+   (JS_FlowCompileStep's flags; `eval_flags` adds JS_EVAL_FLAG_STRICT, JS_EVAL_FLAG_INLINE_SCRIPT or
+   JS_EVAL_FLAG_FUNCTION_CTOR).
    JS_STEP_YIELD while the parse is parked (the caller returns it and is re-entered here), otherwise 0 with
    *prog the closure (owned) or JS_EXCEPTION with the SyntaxError pending; `c` is then released. */
 int  script_compile_run(JSContext *ctx, ScriptCompile *c, int eval_flags, JSValue *prog);

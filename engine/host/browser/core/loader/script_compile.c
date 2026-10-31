@@ -48,7 +48,7 @@ int script_compile_run(JSContext *ctx, ScriptCompile *c, int eval_flags, JSValue
     int cr;
 
     DCHECK(script_compile_pending(c), "a script compile was stepped with nothing begun");
-    DCHECK(!(eval_flags & ~(JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT)),
+    DCHECK(!(eval_flags & ~(JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT | JS_EVAL_FLAG_FUNCTION_CTOR)),
            "a script compile was asked for flags JS_FlowCompileStep does not carry");
     if (!r) {
         r = malloc(sizeof *r);

@@ -53563,7 +53563,7 @@ static JSValue JS_FlowCompileSource(JSContext *ctx, const char *src, size_t len,
        program impossible to compile at all. */
     return JS_Eval(ctx, src, len, filename ? filename : "<flow>",
                    JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE |
-                   (eval_flags & (JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT)));
+                   (eval_flags & (JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT | JS_EVAL_FLAG_FUNCTION_CTOR)));
 }
 /* Resume the flow until it PREEMPTS (returns 1) or COMPLETES/throws (returns 0). An AWAIT does NOT return to
    the caller as "suspended": its result is DELIVERED (the continuation resumes WITH the settled value, or
