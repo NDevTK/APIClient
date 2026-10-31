@@ -46,7 +46,7 @@ bool registrable_domain_suffix_or_equal(const char *s, size_t n, const UrlHost *
     od = original->domain;
     if (!dot_suffix_of(sd, od)) return false;                        /* step 4.2 */
     /* STEP 4.3's FIRST DISJUNCT — "hostSuffix equals hostSuffix's public suffix" — which is the question RFC
-       6265 §5.3 Storage Model's step 5 also asks about a cookie's `Domain`, so it is asked through the ONE
+       6265bis-22 §5.7 "Storage Model" step 9 also asks about a cookie's `Domain`, so it is asked through the ONE
        spelling the list component exports rather than re-composed here out of public_suffix_of and a strcmp. */
     if (host_is_public_suffix(out_suffix)) return false;
     /* STEP 4.3's SECOND DISJUNCT. `original` is a domain, so URL §3.2 gives it a public suffix rather than

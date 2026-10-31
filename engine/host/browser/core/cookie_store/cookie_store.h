@@ -1,5 +1,5 @@
 /* COOKIE STORE API §3 The CookieStore interface — the asynchronous read of the cookie store this agent already
- * has, over RFC 6265's jar in core/loader/cookie_jar.c.
+ * has, over RFC 6265bis-22's jar in core/loader/cookie_jar.c.
  *
  * WHICH STANDARD THIS IS, BECAUSE IT MOVED. The Cookie Store API was developed in the W3C WICG and is now a
  * WHATWG Living Standard at https://cookiestore.spec.whatwg.org/, whose own intellectual-property boilerplate
@@ -78,14 +78,14 @@ void cookie_store_free(void);
  * core/loader/cookie_jar.h draws for `cookie_jar_default_path` — "two standards share one definition and this
  * tree holds one implementation of it" — and the alternative at each is a second copy that can drift. */
 
-/* §3.1 "The get() method" step 4's `settings's creation URL`, as the REQUEST-URI RFC 6265 §5.4 "The Cookie
- * Header" is computed against: THIS realm's document address. Returns false for a document with no usable
+/* §3.1 "The get() method" step 4's `settings's creation URL`, as the retrieval URI RFC 6265bis-22 §5.8.3
+ * "Retrieval Algorithm" is computed against: THIS realm's document address. Returns false for a document with no usable
  * address; `*rec` is initialised either way and the caller ALWAYS frees it.
  *
- * FALSE IS A POSITIVE ANSWER AND NOT A FAILURE, which is what §7.4's second consumer reads it for. RFC 6265's
+ * FALSE IS A POSITIVE ANSWER AND NOT A FAILURE, which is what §7.4's second consumer reads it for. The cookie
  * store is reached for http(s) alone — the same condition HTML §3.1.4 "Resource metadata management"'s
  * cookie-averse test applies to `document.cookie` — so a Window sitting at `about:blank` has no request-host,
- * §5.4 step 1's requirements are not evaluable for it, and its observable change set is empty by that rather
+ * §5.8.3 step 3's requirements are not evaluable for it, and its observable change set is empty by that rather
  * than by a filter. §7.4 step 1 walks "every Window window" and this is how it skips one. */
 bool cookie_store_request_uri(JSContext *ctx, UrlRecord *rec);
 

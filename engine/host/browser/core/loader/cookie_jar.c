@@ -1,85 +1,34 @@
-/* RFC 6265 §5 — the cookie store, its receive and its read. See cookie_jar.h for WHY the store is the agent's.
+/* RFC 6265bis-22 §5 "User Agent Requirements" — the cookie store, its receive (§5.6, §5.7) and its read
+ * (§5.8.3). See cookie_jar.h for why the store is the agent's.
  *
- * THE REPRESENTATION, AND WHAT IT DOES AND DOES NOT MODEL.
+ * The store is one JS object with a null prototype, `key -> entry`, built at the agent's declaration (the
+ * pre-boot baseline). Platform data a flow queues is a JS value: its mutations are property writes the per-flow
+ * COW delta captures, so the arm that ran `document.cookie = "s=1"` is the only arm whose later read sees it,
+ * and the store parks and resumes with the flow. A store made on first touch would be made inside one flow and
+ * become every other flow's baseline.
  *
- * The store is ONE JS OBJECT with a null prototype, `key -> entry`, and both halves are STRINGS. That it is a
- * JS value is CLAUDE.md's §State-isolation rule and is load-bearing rather than stylistic: "PLATFORM DATA A
- * FLOW QUEUES IS A JS VALUE, never malloc'd C", because a JS object's mutations are ordinary property writes
- * the per-flow COW delta already captures, and it parks to the IDB cold tier and resumes with the flow it
- * belongs to. So the arm that ran `document.cookie = "session=1"` is the only arm whose later read sees it,
- * while a malloc'd list would be ONE timeline for every flow at once. The object is built at the agent's
- * declaration, which is the PRE-BOOT BASELINE — a store made on first touch would be made inside whichever flow
- * happened to read first, and that flow's jar would become every other flow's.
+ * Entries are replaced, never edited (§5.7 step 23), and the entry text is an immutable JS string, so every
+ * write this component makes is a write to the jar, the one object the delta captures.
  *
- * THAT THE ENTRY IS A STRING RATHER THAN AN OBJECT IS THE SAME INVARIANT ONE STEP FURTHER. §5.3 steps 11 and 12
- * REPLACE a cookie rather than edit one, so nothing may ever mutate an entry in place — and a nested object
- * that nobody happens to mutate today is one refactor away from being mutated by a flow that did not create it.
- * A JS string cannot be mutated at all, so every write this component can make is a write to the JAR, which is
- * the one object the delta captures. The impossible state is impossible rather than asserted.
+ * Modelled — §5.7's fields, each because something reads it:
+ *   name, value       — §5.8.3 step 6's serialization.
+ *   domain, host-only — step 23's identity and §5.8.3 step 3's domain requirement.
+ *   path              — step 23's identity, §5.8.3 step 3's path-match and step 4's sort key.
+ *   secure-only-flag  — steps 13 and 16, and §5.8.3 step 3's secure requirement.
+ *   http-only-flag    — set only by an HTTP receive; every read here is "non-HTTP", and a "non-HTTP" write
+ *                       abandons an HttpOnly cookie (step 15) or one replacing an HttpOnly cookie (step 23.2).
+ *   expiry-time       — §5.7's "The user agent MUST evict all expired cookies from the cookie store if, at any
+ *                       time, an expired cookie exists in the cookie store."
+ *   creation-time     — the store's property order: a re-write of an existing key keeps its position, which is
+ *                       step 23.3, and a key is never an array index, so §5.8.3 step 4's tie-break is free.
  *
- * WHAT IS MODELLED — §5.3's fields, each because something reads it:
- *   name, value       — §5.4 step 4's serialization.
- *   domain            — §5.3 step 11's identity, and §5.4 step 1's domain-match.
- *   path              — §5.3 step 11's identity, §5.4 step 1's path-match, and step 2's sort key. This is the
- *                       one that MUST arrive with the move to a per-agent store: while the store was a realm's,
- *                       every cookie in it had been set by the only document that could read it, so ignoring
- *                       Path changed no answer. Shared between `/a/x.html` and `/b/y.html` it changes many.
- *   host-only-flag    — §5.3 step 6, and the first branch of §5.4 step 1.
- *   secure-only-flag  — §5.4 step 1's third bullet.
- *   http-only-flag    — set by an HTTP receive (cookie_jar_receive_http, a response's Set-Cookie). A
- *                       "non-HTTP" read (§5.4 step 1's fourth bullet) never sees an entry carrying it, and a
- *                       "non-HTTP" write abandons an HttpOnly cookie (§5.3 step 10) or one replacing an
- *                       HttpOnly cookie (step 11.2).
- *   expiry-time       — §5.3's "A cookie is expired if the cookie has an expiry date in the past. The user
- *                       agent MUST evict all expired cookies from the cookie store if, at any time, an expired
- *                       cookie exists in the cookie store."
- *
- * WHAT IS NOT, AND WHY EACH IS A STATEMENT ABOUT THE STANDARD RATHER THAN A GAP:
- *   persistent-flag   — its only reader is "When the current session is over, the user agent MUST remove from
- *                       the cookie store all cookies with the persistent-flag set to false". The session and
- *                       this store have the SAME lifetime: the store is the agent's and is released with it, so
- *                       the removal is the deallocation.
- *   creation-time     — §5.3 step 11.3 preserves it across a replacement and §5.4 step 2 breaks a path-length
- *                       tie by it. Both are answered by the store's own PROPERTY ORDER: a key first written
- *                       takes its position then, a re-write of an existing key keeps that position (which is
- *                       exactly step 11.3), and a key is never a numeric index (it begins with a length header
- *                       ending in a colon), so insertion order is the enumeration order. It is not a field
- *                       because it is not a second fact.
- *   last-access-time  — §5.4 step 3 updates it and only §5.3's "remove excess cookies" reads it, which is next.
- *   remove excess     — §5.3's two "the user agent MAY remove excess cookies" paragraphs are a CAP on how much
- *                       distinct state a run may hold, and CLAUDE.md's §NO BOUNDS forbids one. This user agent
- *                       takes the MAY-not.
- *   public suffixes   — §5.3 Storage Model's step 5 is conditional on the user agent being configured to
- *                       reject "public suffixes". THIS ONE IS, and the step is built below. That is a CHOICE
- *                       and it is the one every browser makes: the standard's own note calls the step
- *                       "essential for preventing attacker.com from disrupting the integrity of example.com
- *                       by setting a cookie with a Domain attribute of "com"", and core/url/public_suffix.h
- *                       holds the list it answers over.
- *                       THE REASON THIS LINE GAVE HAS NOW BEEN WRONG TWICE, AND BOTH ARE KEPT because a
- *                       reader who re-derives a retired reason re-introduces it. It first said "the Public
- *                       Suffix List is data this engine is not given", which was FALSE WHEN READ and had
- *                       already reached a landed commit message by way of a lane building the Cookie Store
- *                       API. It then said the step's condition is false because this agent is not configured
- *                       to reject public suffixes — true as written, and a configuration nobody had chosen on
- *                       the merits once the list was present.
- *                       AND THE RESIDUAL THAT REPLACED IT WAS WRONG IN ITS NEXT-DIFF CLAUSE, which is the
- *                       clause §THE-ASYMMETRY-IS-STRUCTURAL says is the half a reader may not check. Its NOT
- *                       COVERED and HOW ITS ABSENCE SHOWS were exact — `Domain=com` was stored here and is
- *                       dropped by every browser. Its remedy said to "take step 5's reject arm when the whole
- *                       domain matches it", and STEP 5 HAS TWO ARMS: a domain-attribute identical to the
- *                       canonicalized request-host is EMPTIED, not refused, which demotes the cookie to
- *                       host-only through step 6's own else-branch. Building the single arm that clause named
- *                       would have dropped `Domain=localhost` on `localhost` — and every intranet
- *                       single-label host with it — because the PSL's prevailing rule `*` makes a
- *                       single-label host its OWN public suffix, so step 5's condition is TRUE for exactly
- *                       the hosts a person develops on. A regression delivered as a fix. The spec half of
- *                       that residual was evidence and its remedy was a hypothesis; the hypothesis yielded.
- *                       AND THE QUOTATION BESIDE IT WAS FLATTENED THE SAME WAY, which is the co-occurrence
- *                       CLAUDE.md's §THE-CHEAPEST-TELL names: this line used to put its quotes round
- *                       `configured to reject public suffixes`, where the RFC quotes only the term — "If the
- *                       user agent is configured to reject "public suffixes" and the domain-attribute is a
- *                       public suffix". The mis-placed span and the collapsed two-arm step were one error
- *                       written twice, three lines apart. */
+ * Not modelled, each a statement about the standard:
+ *   persistent-flag   — read only when "the current session is over", and the session and this store end
+ *                       together.
+ *   last-access-time  — read only by "remove excess cookies", a MAY this user agent does not take: it would cap
+ *                       how much distinct state a run may hold.
+ *   same-site-flag    — see cookie_store.c's named residual.
+ * This user agent rejects public suffixes (step 9, §5.8.3 step 3) over core/url/public_suffix.h. */
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -91,6 +40,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
+#include "core/frame/secure_context.h"
 #include "core/loader/cookie_jar.h"
 #include "core/url/origin.h"
 #include "core/url/public_suffix.h"
@@ -128,7 +78,7 @@ static int   g_agent_secure = -1;
 /* BORROWED — the store is the agent's and outlives every read of it, so nothing here takes a reference. */
 static JSValueConst cj_jar(void)
 {
-    DCHECK(g_ready, "the cookie store was reached before cookie_jar_init built it — §5.3's store is the AGENT's "
+    DCHECK(g_ready, "the cookie store was reached before cookie_jar_init built it — §5.7's store is the AGENT's "
                     "and is declared with the platform, so a reader that finds none is running in an agent the "
                     "platform list never declared");
     return g_jar;
@@ -208,16 +158,15 @@ void cookie_jar_set_process_changes(CookieJarProcessChanges run)
 
 /* ---- §5.1's subcomponent algorithms ------------------------------------------------------------------------ */
 
-/* §5.1.2's CANONICALIZED HOST NAME. url.c's parser has already produced it: a domain reaches URL_HOST_DOMAIN
-   lowercased and through domain-to-ASCII, which is §5.1.2's three steps. The second answer is §5.1.3's third
-   condition, "the string is a host name (i.e., NOT AN IP ADDRESS)" — the URL record knows which it parsed, so
-   the question is answered by the parse rather than re-derived from the text. OWNED. */
+/* §5.1.2 "Canonicalized Host Names". url.c's parser has already produced it: a domain reaches URL_HOST_DOMAIN
+   lowercased and through domain-to-ASCII. The second answer is §5.1.3's "The string is a host name (i.e., not
+   an IP address)", read off the parse rather than the text. OWNED. */
 static char *cj_request_host(const UrlRecord *u, bool *is_host_name)
 {
     char *h;
 
     DCHECK(u->host.kind != URL_HOST_NULL,
-           "§5.3 was handed a request-uri with no host — the only caller is HTML §3.1.4, whose cookie-averse "
+           "§5.7 was handed a request-uri with no host — the only caller is HTML §3.1.4, whose cookie-averse "
            "test has already refused every scheme but http(s), and a special scheme cannot parse without one");
     *is_host_name = (u->host.kind == URL_HOST_DOMAIN);
     h = url_serialize_host(&u->host);
@@ -225,16 +174,9 @@ static char *cj_request_host(const UrlRecord *u, bool *is_host_name)
     return h;
 }
 
-/* §5.1.3 DOMAIN MATCHING, both conditions. */
-/* §5.3 STEP 5's CONDITION, "the domain-attribute is a public suffix", over PAGE-SUPPLIED BYTES — which is the
-   whole of why it is written this way. The domain-attribute is whatever a `Set-Cookie` or a `document.cookie`
-   assignment put there, so an empty, malformed, over-long or IP-address value must produce an ANSWER and never
-   an abort: this engine's own parser decides whether those bytes name a domain at all, and a value it refuses
-   is not a public suffix, which leaves step 6's domain-match to dispose of it exactly as it does today.
-
-   THE PARSE IS THE ENGINE'S AND THE ASSERTION RIDES ON IT: `host_is_public_suffix` is asked about a UrlHost
-   this function built, never about the raw attribute, so the list is consulted on a lowercased A-label host in
-   the one representation §Algorithm requires both sides to be in. */
+/* "Is a public suffix", for §5.7 step 9's domain-attribute and §5.8.3 step 3's stored domain. The bytes are
+   page-supplied, so an empty, malformed or IP-address value answers false rather than aborting, and step 10's
+   domain-match disposes of it. The list is consulted on a host this engine's parser built. */
 static bool cj_domain_attribute_is_public_suffix(const char *dom, size_t dlen)
 {
     UrlHost h;
@@ -249,6 +191,7 @@ static bool cj_domain_attribute_is_public_suffix(const char *dom, size_t dlen)
     return r;
 }
 
+/* §5.1.3 "Domain Matching", both conditions. */
 static bool cj_domain_match(const char *s, size_t slen, const char *d, size_t dlen, bool s_is_host_name)
 {
     if (slen == dlen && memcmp(s, d, dlen) == 0)
@@ -294,7 +237,7 @@ char *cookie_jar_default_path(const UrlRecord *u)
 /* §5.1.4's PATH-MATCH, all three conditions. */
 static bool cj_path_match(const char *req, size_t rlen, const char *cp, size_t clen)
 {
-    DCHECK(clen > 0, "§5.1.4's path-match was asked about an EMPTY cookie-path — §5.2.4 gives a cookie whose "
+    DCHECK(clen > 0, "§5.1.4's path-match was asked about an EMPTY cookie-path — §5.6.4 gives a cookie whose "
                      "Path is empty or does not begin with a solidus the default-path instead, and §5.1.4's "
                      "default-path is at shortest \"/\", so no cookie in this store can have one");
     if (rlen == clen && memcmp(req, cp, clen) == 0)
@@ -304,12 +247,12 @@ static bool cj_path_match(const char *req, size_t rlen, const char *cp, size_t c
     return cp[clen - 1] == '/' || req[clen] == '/';
 }
 
-/* §5.4 step 1's third bullet: "the request-uri's scheme must denote a 'secure' protocol (as defined by the user
-   agent)". The NOTE names the definition every user agent uses, and the only schemes that reach this component
-   are the two HTML §3.1.4's cookie-averse test lets through. */
+/* A "secure" connection "(as defined by the user agent)", for §5.7 steps 13 and 16 and §5.8.3 step 3. This
+   user agent's definition is Secure Contexts §3.1 "Is origin potentially trustworthy?", which admits https and
+   the trusted host localhost the standard's note names. */
 static bool cj_secure_scheme(const UrlRecord *u)
 {
-    return u->scheme && strcmp(u->scheme, "https") == 0;
+    return secure_context_origin_potentially_trustworthy(u);
 }
 
 #if APICLIENT_DEV
@@ -317,7 +260,7 @@ static void cj_assert_one_principal(const UrlRecord *u)
 {
     bool is_name;
     char *host = cj_request_host(u, &is_name);
-    int secure = cj_secure_scheme(u) ? 1 : 0;
+    int secure = u->scheme && strcmp(u->scheme, "https") == 0;
 
     if (!g_agent_host) {
         g_agent_host = host;
@@ -329,7 +272,7 @@ static void cj_assert_one_principal(const UrlRecord *u)
            "instance is one (browsing-context group, ORIGIN), so two principals mean this document belongs to a "
            "PEER instance and its cookies are that instance's store's. BUILD the cross-instance read: §3.1.4's "
            "getter suspends exactly as a cross-origin property read does, the instance holding that document "
-           "runs §5.4 over its own jar, and the flow resumes with the cookie-string");
+           "runs §5.8.3 over its own jar, and the flow resumes with the cookie-string");
     free(host);
 }
 #else
@@ -338,19 +281,18 @@ static void cj_assert_one_principal(const UrlRecord *u)
 
 /* ---- the entry codec ---------------------------------------------------------------------------------------
  *
- * KEY   = "<nlen>:<dlen>:<plen>:" name domain path   — §5.3 step 11's (name, domain, path) identity. It is
- *         LENGTH-PREFIXED because a cookie-name and a cookie-path are both free-form: §5.2's parse takes a name
- *         as everything up to the first "=" and a path as everything up to the next ";", so any separator
- *         character can occur inside one and only a length can delimit them. It begins with a digit and
- *         contains a colon, so it is never an array index and the store's property order stays insertion order.
- * ENTRY = <secure><host-only><http-only><expiry> ":" value — the flags are one character each, and the expiry is a
- *         decimal epoch second or "*" for §5.3 step 3's "latest representable date". */
+ * KEY   = "<nlen>:<dlen>:<plen>:<host-only>:" name domain path — RFC 6265bis-22 §5.7 "Storage Model" step
+ *         23's (name, domain, host-only-flag, path) identity. Length-prefixed because a name and a path are
+ *         free-form: any separator can occur inside one. It begins with a digit and contains a colon, so it is
+ *         never an array index and the store's property order stays insertion order.
+ * ENTRY = <secure><http-only><expiry> ":" value — one character per flag; the expiry is a decimal epoch second
+ *         or "*" for step 6's "latest representable date". */
 
-static char *cj_key(const char *name, size_t nlen, const char *dom, size_t dlen,
+static char *cj_key(const char *name, size_t nlen, const char *dom, size_t dlen, bool host_only,
                     const char *path, size_t plen, size_t *out_len)
 {
     char hdr[64];
-    int hn = snprintf(hdr, sizeof hdr, "%zu:%zu:%zu:", nlen, dlen, plen);
+    int hn = snprintf(hdr, sizeof hdr, "%zu:%zu:%zu:%c:", nlen, dlen, plen, host_only ? '1' : '0');
     size_t total;
     char *k;
 
@@ -371,13 +313,13 @@ static char *cj_key(const char *name, size_t nlen, const char *dom, size_t dlen,
 /* The inverse, over a key this component wrote. Every failure here is a disagreement between the two halves of
    one codec, never a state — so each is a DCHECK and none is recoverable control flow. */
 static void cj_key_parse(const char *k, size_t klen, const char **name, size_t *nlen,
-                         const char **dom, size_t *dlen, const char **path, size_t *plen)
+                         const char **dom, size_t *dlen, bool *host_only, const char **path, size_t *plen)
 {
-    unsigned long long a = 0, b = 0, c = 0;
+    unsigned long long a = 0, b = 0, c = 0, h = 0;
     const char *p = k, *end = k + klen;
     int field;
 
-    for (field = 0; field < 3; field++) {
+    for (field = 0; field < 4; field++) {
         unsigned long long v = 0;
         const char *start = p;
         while (p < end && *p >= '0' && *p <= '9') { v = v * 10 + (unsigned)(*p - '0'); p++; }
@@ -385,13 +327,15 @@ static void cj_key_parse(const char *k, size_t klen, const char **name, size_t *
                "a cookie store key has no length header — every key is written by cj_key, so a key without one "
                "came from somewhere that is not this codec");
         p++;
-        if (field == 0) a = v; else if (field == 1) b = v; else c = v;
+        if (field == 0) a = v; else if (field == 1) b = v; else if (field == 2) c = v; else h = v;
     }
+    DCHECK(h <= 1, "a cookie store key's host-only field is not a flag — the two halves of one codec disagree");
     DCHECK((size_t)(end - p) == a + b + c,
            "a cookie store key's length header does not describe its own tail — the two halves of one codec "
            "disagree");
     *name = p;        *nlen = (size_t)a;
     *dom  = p + a;    *dlen = (size_t)b;
+    *host_only = h == 1;
     *path = p + a + b; *plen = (size_t)c;
 }
 
@@ -399,7 +343,7 @@ static void cj_key_parse(const char *k, size_t klen, const char **name, size_t *
    real epoch can collide with it. */
 #define CJ_NEVER "*"
 
-static char *cj_entry(bool secure, bool host_only, bool http_only, long long expiry, bool persistent,
+static char *cj_entry(bool secure, bool http_only, long long expiry, bool persistent,
                       const char *value, size_t vlen, size_t *out_len)
 {
     char hdr[48];
@@ -408,11 +352,9 @@ static char *cj_entry(bool secure, bool host_only, bool http_only, long long exp
     char *e;
 
     if (persistent)
-        hn = snprintf(hdr, sizeof hdr, "%c%c%c%lld:", secure ? '1' : '0', host_only ? '1' : '0',
-                      http_only ? '1' : '0', expiry);
+        hn = snprintf(hdr, sizeof hdr, "%c%c%lld:", secure ? '1' : '0', http_only ? '1' : '0', expiry);
     else
-        hn = snprintf(hdr, sizeof hdr, "%c%c%c" CJ_NEVER ":", secure ? '1' : '0', host_only ? '1' : '0',
-                      http_only ? '1' : '0');
+        hn = snprintf(hdr, sizeof hdr, "%c%c" CJ_NEVER ":", secure ? '1' : '0', http_only ? '1' : '0');
     CHECK(hn > 0 && (size_t)hn < sizeof hdr, "a cookie entry's header did not fit");
     total = (size_t)hn + vlen;
     e = lexbor_malloc(total + 1);
@@ -424,19 +366,17 @@ static char *cj_entry(bool secure, bool host_only, bool http_only, long long exp
     return e;
 }
 
-static void cj_entry_parse(const char *e, size_t elen, bool *secure, bool *host_only, bool *http_only,
+static void cj_entry_parse(const char *e, size_t elen, bool *secure, bool *http_only,
                            bool *expired, const char **value, size_t *vlen)
 {
-    const char *p = e + 3, *end = e + elen;
+    const char *p = e + 2, *end = e + elen;
     long long expiry = 0;
     bool persistent;
 
-    DCHECK(elen >= 5 && (e[0] == '0' || e[0] == '1') && (e[1] == '0' || e[1] == '1') &&
-           (e[2] == '0' || e[2] == '1'),
+    DCHECK(elen >= 4 && (e[0] == '0' || e[0] == '1') && (e[1] == '0' || e[1] == '1'),
            "a cookie store entry has no flag header — the two halves of one codec disagree");
     *secure = e[0] == '1';
-    *host_only = e[1] == '1';
-    *http_only = e[2] == '1';
+    *http_only = e[1] == '1';
     persistent = *p != CJ_NEVER[0];
     if (persistent) {
         const char *start = p;
@@ -450,7 +390,7 @@ static void cj_entry_parse(const char *e, size_t elen, bool *secure, bool *host_
     }
     DCHECK(p < end && *p == ':', "a cookie store entry's header is unterminated");
     p++;
-    /* §5.3: "A cookie is 'expired' if the cookie has an expiry date in the past." */
+    /* §5.7: "A cookie is "expired" if the cookie has an expiry date in the past." */
     *expired = persistent && expiry <= (long long)time(NULL);
     *value = p;
     *vlen = (size_t)(end - p);
@@ -490,7 +430,7 @@ static const char *cj_entry_text(JSContext *ctx, JSValueConst entry, size_t *tle
 
 /* ---- §5.1.1's PARSE A COOKIE-DATE --------------------------------------------------------------------------- */
 
-/* RFC 6265 §4.1.1's OWS, which §5.2 step 4 strips from both the name and the value. */
+/* WSP (RFC 5234's SP / HTAB), which RFC 6265bis-22 §5.6 strips from the name, the value and each cookie-av. */
 static bool cj_is_wsp(char c) { return c == ' ' || c == '\t'; }
 
 static void cj_trim(const char **p, size_t *n)
@@ -499,8 +439,8 @@ static void cj_trim(const char **p, size_t *n)
     while (*n && cj_is_wsp((*p)[*n - 1])) (*n)--;
 }
 
-/* ASCII case-insensitive equality against a lowercase literal — RFC 6265 compares attribute names and month
-   names case-insensitively, and this engine may not assume a locale-aware strcasecmp is on the platform. */
+/* ASCII case-insensitive equality against a lowercase literal — §5.6 and §5.1.1 compare attribute names and
+   month names case-insensitively, and this engine may not assume a locale-aware strcasecmp is on the platform. */
 static bool cj_ci_eq(const char *s, size_t n, const char *lower)
 {
     size_t i;
@@ -534,8 +474,8 @@ static long long cj_days_from_civil(int y, int m, int d)
     return era * 146097 + doe - 719468;
 }
 
-/* §5.1.1 PARSE A COOKIE-DATE. Returns true and fills `*out` with the epoch time; false is the standard's
-   "abort these steps" — an unparsable date, which §5.2.1 answers by IGNORING the attribute. */
+/* §5.1.1 "Dates": parse a cookie-date. Returns true and fills `*out` with the epoch time; false is the
+   standard's "fail to parse the cookie-date", which §5.6.1 step 2 answers by ignoring the cookie-av. */
 static bool cj_parse_cookie_date(const char *s, size_t n, long long *out)
 {
     static const char *const MONTHS[12] = { "jan", "feb", "mar", "apr", "may", "jun",
@@ -623,13 +563,27 @@ static bool cj_parse_cookie_date(const char *s, size_t n, long long *out)
     return true;
 }
 
-/* ---- §5.2's PARSE A SET-COOKIE-STRING and §5.3's STORAGE MODEL --------------------------------------------- */
+/* ---- §5.6 "The Set-Cookie Header Field" and §5.7 "Storage Model" ------------------------------------------- */
 
-/* The cookie-attribute-list is `CookieJarAttributes` in cookie_jar.h, and it is DECLARED THERE rather than
-   here because §5.3 is reached by two callers and only one of them owns a string: see cookie_jar_store. Its
-   `have_expiry` is §5.3 step 3's "contains an attribute with an attribute-name of Max-Age / Expires", and
-   Max-Age's presence is what makes Expires unread — the precedence is the standard's, stated once there. */
+/* §5.5 "Cookie Lifetime Limits": 400 days, the recommended limit, in seconds. Applied at the store, which
+   every route with a lifetime reaches (a Set-Cookie, `document.cookie=`, Cookie Store API §7.2). */
+#define CJ_AGE_LIMIT 34560000LL
 
+/* A %x00-08 / %x0A-1F / %x7F octet: §5.6 step 1's and §5.7 step 3's CTL characters excluding HTAB. */
+static bool cj_has_ctl(const char *s, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if ((c <= 0x1F && c != 0x09) || c == 0x7F) return true;
+    }
+    return false;
+}
+
+/* §5.6's unparsed-attributes algorithm and §5.6.1-§5.6.6, appending to `a` (zeroed by the caller). The
+   cookie-attribute-list keeps, per attribute-name, what §5.7 reads of its last member. SameSite (§5.6.7) is
+   not recognized; see cookie_store.c's residual. */
 static void cj_parse_attrs(const char *attrs, size_t attrs_len, CookieJarAttributes *a)
 {
     while (attrs_len) {
@@ -638,7 +592,7 @@ static void cj_parse_attrs(const char *attrs, size_t attrs_len, CookieJarAttribu
         const char *aname, *aval;
         const char *sep = memchr(attrs, ';', attrs_len);
 
-        /* STEPS 3-4 of the unparsed-attributes parse: one cookie-av, split at its FIRST "=". */
+        /* Steps 2-4: one cookie-av, split at its first "=". The caller has consumed the leading ";". */
         if (sep) {
             plen = (size_t)(sep - attrs);
             attrs = sep + 1;
@@ -652,64 +606,61 @@ static void cj_parse_attrs(const char *attrs, size_t attrs_len, CookieJarAttribu
         alen = aeq ? (size_t)(aeq - piece) : plen;
         aval = aeq ? aeq + 1 : piece + plen;
         vlen = aeq ? plen - alen - 1 : 0;
-        cj_trim(&aname, &alen);      /* STEP 5 */
+        cj_trim(&aname, &alen);      /* step 5 */
         cj_trim(&aval, &vlen);
+        if (vlen > 1024) continue;   /* step 6 */
         if (cj_ci_eq(aname, alen, "max-age")) {
-            /* §5.2.2: the first character must be a DIGIT or "-" and the rest DIGITs, or the attribute is
-               IGNORED — an ignored cookie-av is never appended to the cookie-attribute-list, which is why an
-               invalid Max-Age leaves an Expires beside it readable. A non-positive delta-seconds is the
-               earliest representable date; a positive one is `now + delta`. */
+            /* §5.6.2: steps 1-3 ignore the cookie-av unless it is DIGITs, optionally after one "-". */
             bool neg = vlen && aval[0] == '-';
             size_t k = neg ? 1 : 0;
             bool ok = vlen > k;
             long long secs = 0;
             for (; k < vlen && ok; k++) {
                 if (aval[k] < '0' || aval[k] > '9') ok = false;
-                else if (secs < 1000000000LL) secs = secs * 10 + (aval[k] - '0');
+                else if (secs <= CJ_AGE_LIMIT) secs = secs * 10 + (aval[k] - '0');
             }
             if (ok) {
-                a->max_age_seen = true;               /* §5.3 step 3: MAX-AGE WINS, whatever the order */
+                /* Step 6's limit is applied at the store; the digits stop accumulating past it. */
+                a->max_age_seen = true;
                 a->have_expiry = true;
-                /* §5.2.2: "If delta-seconds is less than or equal to zero (0), let expiry-time be the earliest
-                   representable date and time.  Otherwise, let the expiry-time be the current date and time
-                   plus delta-seconds seconds." */
-                a->expiry = (neg || secs == 0) ? LLONG_MIN : (long long)time(NULL) + secs;
+                a->expiry = (neg || secs == 0) ? LLONG_MIN : (long long)time(NULL) + secs;   /* step 7 */
             }
         } else if (cj_ci_eq(aname, alen, "expires")) {
+            /* §5.6.1; step 4's limit is applied at the store. §5.7 step 6 reads Expires only when no Max-Age
+               is in the list. */
             long long when = 0;
             if (!a->max_age_seen && cj_parse_cookie_date(aval, vlen, &when)) {
                 a->have_expiry = true;
                 a->expiry = when;
             }
         } else if (cj_ci_eq(aname, alen, "domain")) {
-            /* §5.2.3: an empty attribute-value SHOULD be ignored entirely; a leading "." is dropped. The
-               lowercasing happens at the store, where the buffer that holds it lives. */
-            if (vlen) {
-                a->domain = aval[0] == '.' ? aval + 1 : aval;
-                a->domain_len = aval[0] == '.' ? vlen - 1 : vlen;
-            }
+            /* §5.6.3: a leading "." is dropped and the value appended even when empty, so a later empty
+               Domain makes the cookie host-only. The lowercasing happens at the store. */
+            bool dot = vlen && aval[0] == '.';
+            a->domain = dot ? aval + 1 : aval;
+            a->domain_len = dot ? vlen - 1 : vlen;
         } else if (cj_ci_eq(aname, alen, "path")) {
-            /* §5.2.4: empty, or not beginning with "/", means the default-path. */
-            a->have_path = vlen && aval[0] == '/';
-            if (a->have_path) { a->path = aval; a->path_len = vlen; }
+            /* §5.6.4: empty, or not beginning with "/", is the default-path. */
+            a->have_path = true;
+            a->path_is_default = !(vlen && aval[0] == '/');
+            a->path = a->path_is_default ? NULL : aval;
+            a->path_len = a->path_is_default ? 0 : vlen;
         } else if (cj_ci_eq(aname, alen, "secure")) {
-            a->secure = true;                          /* §5.2.5 */
+            a->secure = true;                          /* §5.6.5 */
         } else if (cj_ci_eq(aname, alen, "httponly")) {
-            a->http_only = true;                       /* §5.2.6 */
+            a->http_only = true;                       /* §5.6.6 */
         }
-        /* §5.2 step 6's parenthetical: "attributes with unrecognized attribute-names are ignored". */
+        /* Step 7: "attributes with unrecognized attribute-names are ignored". */
     }
 }
 
-/* §5.2's PARSE A SET-COOKIE-STRING — THIS ENTRY'S WHOLE JOB, with §5.3 reached through cookie_jar_store below.
-   Splitting the two is the other standard's own seam and not a refactor for its convenience; the argument for
-   it, and what routing around it would manufacture, are at cookie_jar_store's declaration in cookie_jar.h. */
 static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
                      const char *value, size_t value_len, JSValue value_js, const CookieJarAttributes *attrs,
                      bool http_api);
 
-/* `sc` is the set-cookie-string as the page's value (a String or an unknown) for a "non-HTTP" API, JS_UNDEFINED
-   for a response's field; `s` is its bytes, which are its example's where `s_is_example`. */
+/* §5.6's set-cookie-string algorithm, then §5.7 through cj_store. `sc` is the set-cookie-string as the page's
+   value (a String or an unknown) for a "non-HTTP" API, JS_UNDEFINED for a response's field; `s` is its bytes,
+   which are its example's where `s_is_example`. */
 static void cj_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size_t len, bool http_api,
                        JSValueConst sc, bool s_is_example)
 {
@@ -720,21 +671,22 @@ static void cj_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size
     CookieJarAttributes a;
 
     cj_assert_one_principal(uri);
-    /* §5.2 STEP 1: the name-value-pair string, and the unparsed-attributes after the first ";". */
+    if (cj_has_ctl(s, len)) return;   /* step 1 */
+    /* Step 2: the name-value-pair string, and the unparsed-attributes after the first ";". */
     if (semi) {
         nvlen = (size_t)(semi - s);
         attrs = semi + 1;
         attrs_len = len - nvlen - 1;
     }
+    /* Step 3: with no "=", the name is empty and the whole pair is the value. */
     eq = memchr(nv, '=', nvlen);
-    if (!eq) return;                  /* STEP 2: no "=" — ignore the set-cookie-string entirely */
-    name = nv;                        /* STEP 3 */
-    name_len = (size_t)(eq - nv);
-    value = eq + 1;
-    value_len = nvlen - name_len - 1;
-    cj_trim(&name, &name_len);        /* STEP 4 */
+    name = nv;
+    name_len = eq ? (size_t)(eq - nv) : 0;
+    value = eq ? eq + 1 : nv;
+    value_len = eq ? nvlen - name_len - 1 : nvlen;
+    cj_trim(&name, &name_len);        /* step 4 */
     cj_trim(&value, &value_len);
-    if (!name_len) return;            /* STEP 5: an empty name — ignore the set-cookie-string entirely */
+    if (name_len + value_len > 4096) return;   /* step 5 */
 
     memset(&a, 0, sizeof a);
     cj_parse_attrs(attrs, attrs_len, &a);
@@ -755,10 +707,7 @@ static void cj_receive(JSContext *ctx, const UrlRecord *uri, const char *s, size
         else
             JS_FreeValue(ctx, ex);
     }
-    /* §5.2 step 6 has read the whole of the unparsed-attributes; every step from here is §5.3's. `name` and
-       `value` still point into the caller's string, which outlives this call, and so do `a.domain` and
-       `a.path` — which is the borrowing cookie_jar.h states and the reason this is not a tail call by
-       accident but by contract. */
+    /* `name`, `value`, `a.domain` and `a.path` point into the caller's string, which outlives this call. */
     cj_store(ctx, uri, name, name_len, value, value_len, value_js, &a, http_api);
 }
 
@@ -844,7 +793,7 @@ static void cj_store_cookie(JSContext *ctx, const UrlRecord *uri, const char *na
                             const char *value, size_t value_len, JSValueConst value_js,
                             const CookieJarAttributes *attrs, bool http_api);
 
-/* §5.3 for one cookie, from an HTTP API (`http_api`, a response's Set-Cookie) or a "non-HTTP" one. `value_js`
+/* §5.7 for one cookie, from an HTTP API (`http_api`, a response's Set-Cookie) or a "non-HTTP" one. `value_js`
    (consumed) is the value as the JS string it was set from; `value` is its bytes. */
 static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
                      const char *value, size_t value_len, JSValue value_js, const CookieJarAttributes *attrs,
@@ -854,33 +803,95 @@ static void cj_store(JSContext *ctx, const UrlRecord *uri, const char *name, siz
     JS_FreeValue(ctx, value_js);
 }
 
+/* §5.1.3's "the string is a host name (i.e., not an IP address)", for a domain this store holds. */
+static bool cj_is_host_name(const char *d, size_t dlen)
+{
+    UrlHost h;
+    bool r = url_parse_host(&h, d, dlen, /*is_opaque*/ false) && h.kind == URL_HOST_DOMAIN;
+
+    url_host_free(&h);
+    return r;
+}
+
+/* An ASCII case-insensitive "begins with" against a lowercase literal, for §5.7 steps 20-22. */
+static bool cj_ci_prefix(const char *s, size_t n, const char *lower)
+{
+    size_t m = strlen(lower);
+
+    return n >= m && cj_ci_eq(s, m, lower);
+}
+
+/* §5.7 step 16's criteria: a stored cookie named `name` with its secure-only-flag set, whose domain
+   domain-matches `dom` or the reverse, and whose path the new cookie's `path` path-matches. */
+static bool cj_shadows_secure(JSContext *ctx, const char *name, size_t nlen, const char *dom, size_t dlen,
+                              const char *path, size_t plen)
+{
+    JSValueConst jar = cj_jar();
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i;
+    bool found = false, new_is_name = cj_is_host_name(dom, dlen);
+
+    CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, jar, JS_GPN_STRING_MASK) == 0,
+          "the cookie store could not be enumerated, and nothing of the page's is on it");
+    for (i = 0; i < n && !found; i++) {
+        size_t klen = 0, elen = 0, onlen, odlen, oplen, ovlen;
+        const char *k = JS_AtomToCStringLen(ctx, &klen, tab[i].atom), *e, *on, *od, *op, *ov;
+        bool ohost, osec, ohttp, oexp;
+        JSValue v;
+
+        CHECK(k != NULL, "a stored cookie's key could not be read as a string");
+        cj_key_parse(k, klen, &on, &onlen, &od, &odlen, &ohost, &op, &oplen);
+        if (onlen == nlen && memcmp(on, name, nlen) == 0) {
+            v = JS_GetProperty(ctx, jar, tab[i].atom);
+            CHECK(!JS_IsException(v), "a stored cookie could not be read back");
+            e = cj_entry_text(ctx, v, &elen, NULL);
+            cj_entry_parse(e, elen, &osec, &ohttp, &oexp, &ov, &ovlen);
+            found = osec &&
+                    (cj_domain_match(od, odlen, dom, dlen, cj_is_host_name(od, odlen)) ||
+                     cj_domain_match(dom, dlen, od, odlen, new_is_name)) &&
+                    cj_path_match(path, plen, op, oplen);
+            JS_FreeCString(ctx, e);
+            JS_FreeValue(ctx, v);
+        }
+        JS_FreeCString(ctx, k);
+    }
+    JS_FreePropertyEnum(ctx, tab, n);
+    return found;
+}
+
 static void cj_store_cookie(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
                             const char *value, size_t value_len, JSValueConst value_js,
                             const CookieJarAttributes *attrs, bool http_api)
 {
     size_t dlen = 0, plen, klen, hostlen;
     char *host, *dom = NULL, *path = NULL, *key;
-    bool host_is_name, host_only;
+    bool host_is_name, host_only, secure_conn = cj_secure_scheme(uri);
+    long long now = (long long)time(NULL), expiry = attrs->expiry;
     JSValueConst jar = cj_jar();
     JSAtom atom;
 
-    /* ASSERTED HERE AS WELL AS AT THE PARSE, because this is a second PUBLIC entry and the request-uri is its
-       own argument: an invariant is asserted at the origin of the value, and the origin of this one is this
-       caller. Both spellings route to the one predicate rather than restating it. */
+    /* Asserted here as well as at the parse: this is a second public entry and the request-uri is its own
+       argument. */
     cj_assert_one_principal(uri);
-    /* §5.3 STEP 10: a cookie carrying HttpOnly is ABANDONED when it arrives through a "non-HTTP" API. Cookie
-       Store API §7.2 states no HttpOnly attribute at all — its CookieInit has no member for one — so that
-       caller reaches this step with the flag clear and needs no special case here. */
-    if (!http_api && attrs->http_only) return;
-
+    /* Both callers bound Domain and Path at 1024 octets: §5.6 step 6 and Cookie Store API §7.2 steps 12.7
+       and 18-19. */
+    DCHECK(attrs->domain_len <= 1024 && attrs->path_len <= 1024,
+           "a cookie-attribute-list reached §5.7 with a Domain or Path over 1024 octets — both callers bound them");
+    DCHECK(!attrs->path_is_default || attrs->have_path,
+           "a cookie-attribute-list's Path is the default-path with no Path attribute in the list");
+    /* Step 1 is the user agent's choice, which this one never makes. */
+    if (!name_len && !value_len) return;                                    /* step 2 */
+    if (cj_has_ctl(name, name_len) || cj_has_ctl(value, value_len)) return; /* step 3 */
+    if (name_len + value_len > 4096) return;                                /* step 4 */
+    /* Step 5 creates the cookie; its creation-time is the store's property order (step 23.3). Step 6's
+       expiry-time, held to §5.5's limit. Step 7: the domain-attribute, lowercased (§5.6.3 step 3). */
+    if (attrs->have_expiry && expiry > now + CJ_AGE_LIMIT) expiry = now + CJ_AGE_LIMIT;
     host = cj_request_host(uri, &host_is_name);
     hostlen = strlen(host);
-    /* §5.3 STEP 4 — the domain-attribute, which §5.2.3 has already stripped of a leading U+002E and which is
-       lowercased here. Steps 5 and 6 both read it, and step 5 may EMPTY it. */
     if (attrs->domain_len) {
         size_t i;
         dom = lexbor_malloc(attrs->domain_len + 1);
-        CHECK(dom != NULL, "OOM lowercasing §5.2.3's cookie-domain");
+        CHECK(dom != NULL, "OOM lowercasing §5.6.3's cookie-domain");
         for (i = 0; i < attrs->domain_len; i++) {
             char c = attrs->domain[i];
             dom[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
@@ -888,48 +899,33 @@ static void cj_store_cookie(JSContext *ctx, const UrlRecord *uri, const char *na
         dom[attrs->domain_len] = 0;
         dlen = attrs->domain_len;
     }
-    /* §5.3 Storage Model's STEP 5, whose condition is "If the user agent is configured to reject "public
-       suffixes" and the domain-attribute is a public suffix". THIS USER AGENT IS SO CONFIGURED, which is a
-       choice and is the one every browser makes: the standard's own note calls the step "essential for
-       preventing attacker.com from disrupting the integrity of example.com by setting a cookie with a Domain
-       attribute of "com"", and the engine holds the list (core/url/public_suffix.h) that answers it.
-
-       IT HAS TWO ARMS AND BOTH ARE BUILT, because the reject arm alone is not this step. "If the domain-
-       attribute is identical to the canonicalized request-host: let the domain-attribute be the empty string.
-       Otherwise: ignore the cookie entirely and abort these steps." The first arm demotes the cookie to
-       host-only through step 6's own else-branch below; it is not a refusal at all. Taking only the second
-       would drop `Domain=localhost` on `localhost` — and every intranet single-label host with it — because
-       §Algorithm's prevailing rule `*` makes a single-label host its OWN public suffix, so the condition above
-       is TRUE for exactly the hosts a person develops on. */
+    /* Step 8: a character that is not in CHAR (%x01-7F). */
+    for (size_t i = 0; i < dlen; i++) {
+        if (dom[i] == 0 || (unsigned char)dom[i] > 0x7F) goto ignore;
+    }
+    /* Step 9. This user agent rejects public suffixes, as every browser does. The first arm demotes the cookie
+       to host-only: without it `Domain=localhost` on localhost is dropped, since the list's `*` rule makes a
+       single-label host its own public suffix. */
     if (dom && cj_domain_attribute_is_public_suffix(dom, dlen)) {
-        if (dlen != hostlen || memcmp(dom, host, dlen) != 0) {
-            free(dom);
-            free(host);
-            return;                   /* "Ignore the cookie entirely and abort these steps." */
-        }
-        free(dom);                    /* "Let the domain-attribute be the empty string." */
+        if (dlen != hostlen || memcmp(dom, host, dlen) != 0) goto ignore;
+        free(dom);
         dom = NULL;
         dlen = 0;
     }
-    /* §5.3 STEP 6, branching on "if the domain-attribute is non-empty" — which step 5 may just have made
-       false for a value that arrived non-empty. */
+    /* Step 10. */
     if (dom) {
-        if (!cj_domain_match(host, hostlen, dom, dlen, host_is_name)) {
-            free(dom);
-            free(host);
-            return;                   /* "Ignore the cookie entirely and abort these steps." */
-        }
+        if (!cj_domain_match(host, hostlen, dom, dlen, host_is_name)) goto ignore;
         host_only = false;
     } else {
-        dom = host;                   /* "Set the cookie's domain to the canonicalized request-host." */
+        dom = host;
         host = NULL;
         dlen = strlen(dom);
         host_only = true;
     }
-    /* §5.3 STEP 7. */
-    if (attrs->have_path) {
+    /* Step 11. */
+    if (attrs->have_path && !attrs->path_is_default) {
         path = lexbor_malloc(attrs->path_len + 1);
-        CHECK(path != NULL, "OOM copying §5.2.4's cookie-path");
+        CHECK(path != NULL, "OOM copying §5.6.4's cookie-path");
         memcpy(path, attrs->path, attrs->path_len);
         path[attrs->path_len] = 0;
         plen = attrs->path_len;
@@ -937,78 +933,68 @@ static void cj_store_cookie(JSContext *ctx, const UrlRecord *uri, const char *na
         path = cookie_jar_default_path(uri);
         plen = strlen(path);
     }
+    if (!secure_conn && attrs->secure) goto ignore;                         /* steps 12-13 */
+    if (!http_api && attrs->http_only) goto ignore;                         /* steps 14-15 */
+    if (!attrs->secure && !secure_conn &&
+        cj_shadows_secure(ctx, name, name_len, dom, dlen, path, plen)) goto ignore;   /* step 16 */
+    /* Steps 17-19 are SameSite, which this store does not model; see cookie_store.c's residual. */
+    if (cj_ci_prefix(name, name_len, "__secure-") && !attrs->secure) goto ignore;      /* step 20 */
+    if (cj_ci_prefix(name, name_len, "__host-") &&
+        !(attrs->secure && host_only && attrs->have_path && plen == 1 && path[0] == '/')) goto ignore; /* 21 */
+    if (!name_len && (cj_ci_prefix(value, value_len, "__secure-") ||
+                      cj_ci_prefix(value, value_len, "__host-"))) goto ignore;         /* step 22 */
 
-    key = cj_key(name, name_len, dom, dlen, path, plen, &klen);
+    key = cj_key(name, name_len, dom, dlen, host_only, path, plen, &klen);
     atom = JS_NewAtomLen(ctx, key, klen);
     CHECK(atom != JS_ATOM_NULL, "document.cookie: a cookie's store key could not be interned");
-    /* §5.3 STEP 11.2: "If the newly created cookie was received from a "non-HTTP" API and the old-cookie's
-       http-only-flag is set, abort these steps and ignore the newly created cookie entirely." */
+    /* Step 23.2: a "non-HTTP" API never replaces an HttpOnly cookie. */
     if (!http_api) {
         JSValue old = JS_GetProperty(ctx, jar, atom);
         bool old_http_only = false;
 
         CHECK(!JS_IsException(old), "a stored cookie could not be read back");
         if (!JS_IsUndefined(old)) {
-            size_t olen = 0;
-            const char *oe = cj_entry_text(ctx, old, &olen, NULL);
-            bool osec, ohost, oexp;
-            const char *ov;
-            size_t ovlen;
+            size_t olen = 0, ovlen;
+            const char *oe = cj_entry_text(ctx, old, &olen, NULL), *ov;
+            bool osec, oexp;
 
-            cj_entry_parse(oe, olen, &osec, &ohost, &old_http_only, &oexp, &ov, &ovlen);
+            cj_entry_parse(oe, olen, &osec, &old_http_only, &oexp, &ov, &ovlen);
             JS_FreeCString(ctx, oe);
         }
         JS_FreeValue(ctx, old);
         if (old_http_only) {
             JS_FreeAtom(ctx, atom);
             free(key);
-            free(path);
-            free(dom);
-            free(host);
-            return;
+            goto ignore;
         }
     }
-    /* §5.3 STEPS 11 and 12, then the standard's eviction rule in the one place a cookie can become expired
-       without time passing: "The user agent MUST evict all expired cookies from the cookie store if, at any
-       time, an expired cookie exists in the cookie store." Step 11.4 removes the old cookie either way; when
-       the new one is already expired, the eviction removes it in the same breath, and the observable result is
-       the deletion every page writes `expires=Thu, 01 Jan 1970` to get.
-       A WRITE THAT SURVIVES IS JS_SetProperty ON AN EXISTING KEY, which keeps the key's position in the
-       store's property order — which is §5.3 step 11.3's "update the creation-time of the newly created cookie
-       to match the creation-time of the old-cookie", since that order IS this store's creation-time. */
+    /* Steps 23 and 24, then §5.7's eviction rule, "The user agent MUST evict all expired cookies from the
+       cookie store if, at any time, an expired cookie exists in the cookie store": a cookie inserted already
+       expired is removed at once. A write that survives is JS_SetProperty on the key, which keeps an existing
+       key's position in the property order — step 23.3's preserved creation-time. */
     {
         size_t elen;
-        char *entry = cj_entry(attrs->secure, host_only, http_api && attrs->http_only, attrs->expiry,
+        char *entry = cj_entry(attrs->secure, http_api && attrs->http_only, expiry,
                                attrs->have_expiry, value, value_len, &elen);
-        bool immediately_evicted = attrs->have_expiry && attrs->expiry <= (long long)time(NULL);
+        bool immediately_evicted = attrs->have_expiry && expiry <= now;
 
         if (immediately_evicted) {
             JS_DeleteProperty(ctx, jar, atom, 0);
         } else {
             JSValue v = cj_entry_pair(ctx, entry, elen, JS_DupValue(ctx, value_js));
 
-            /* An ordinary property write on the agent's one jar — which is exactly why the store is a JS object:
-               the heap COW captures it, so the arm that set this cookie is the only arm that reads it back. */
+            /* A property write on the agent's one jar, so the heap COW captures it for this flow alone. */
             CHECK(JS_SetProperty(ctx, jar, atom, v) >= 0,
                   "document.cookie: the cookie store refused a write, and nothing of the page's is on it");
         }
-        /* The jar is the user agent's (RFC 6265 §5.3's cookie store), so this write survives a fresh load of the
-           page: the load-again act's precondition (solver/engine.h). */
+        /* The jar is the user agent's, so this write survives a fresh load of the page: the load-again act's
+           precondition (solver/engine.h). */
         engine_note_persistent_write();
-        /* COOKIE STORE API §2.2's FIRST CONDITION, "A newly-created cookie is inserted into the cookie store",
-           classified by §7.4's own bullets — see cookie_jar.h. §5.3's step 12 inserts the newly created cookie
-           on BOTH arms above and the eviction rule then removes it on the first, so the classification asks
-           only whether it survived: "A newly-created cookie which is not immediately evicted is considered
-           changed", "A newly-created cookie which is immediately evicted is considered deleted".
-           THE OLD COOKIE AT THIS KEY IS RECORDED AS NOTHING, on either arm, because §7.4 says so in its own
-           words: "A cookie which is removed due to an insertion of another cookie with the same name, domain,
-           and path is ignored." That is step 11.4's removal, and this store performs it as the one property
-           write landing on a key that already existed.
-           IT DOES NOT ASK WHETHER A COOKIE WAS ALREADY THERE, and that is the bullets' own shape rather than a
-           simplification: both of them are about the NEWLY-CREATED cookie, which step 12 creates whether or not
-           step 11 found an old one to replace. So `cookieStore.delete` of a name this store does not hold is a
-           `deleted` change carrying that name, which is what those two sentences say and is not a claim about
-           what any particular browser reports. */
+        /* Cookie Store API §2.2's first condition, "A newly-created cookie is inserted into the cookie store",
+           classified by §7.4's bullets on whether the new cookie survived: "not immediately evicted is
+           considered changed", "immediately evicted is considered deleted". The replaced old cookie records
+           nothing: "A cookie which is removed due to an insertion of another cookie with the same name,
+           domain, and path is ignored." */
         cj_record_change(ctx, key, klen, entry, elen,
                          immediately_evicted ? COOKIE_CHANGE_DELETED : COOKIE_CHANGE_CHANGED);
         free(entry);
@@ -1018,25 +1004,68 @@ static void cj_store_cookie(JSContext *ctx, const UrlRecord *uri, const char *na
     free(path);
     free(dom);
     free(host);
-    /* §2.2: "perform the steps to process cookie changes". AFTER the frees, because §7.4 runs the other
-       standard's whole step 1 — a walk of every Window of this agent — and nothing it does needs this call's
-       working storage. */
+    /* §2.2: "perform the steps to process cookie changes", after the frees: §7.4 walks every Window of this
+       agent and needs none of this call's storage. */
     cj_process_changes(ctx);
+    return;
+ignore:
+    /* "Abort this algorithm and ignore the cookie entirely." */
+    free(path);
+    free(dom);
+    free(host);
 }
 
-/* ---- §5.4's COOKIE HEADER ---------------------------------------------------------------------------------- */
+/* ---- §5.8.3 "Retrieval Algorithm" ------------------------------------------------------------------------- */
 
-/* One member of §5.4 step 1's cookie-list, holding the two C strings it was read out of so that step 4 can
+/* One member of §5.8.3 step 3's cookie-list, holding the two C strings it was read out of so that step 4 can
    serialize from them and this component can free exactly what it allocated. */
 typedef struct {
     const char *key, *entry;      /* OWNED — JS_FreeCString */
     const char *name;  size_t nlen;
     const char *value; size_t vlen;
     JSValue     val;              /* OWNED — the value as the JS string it was set from */
-    size_t      plen;             /* §5.4 step 2's sort key: the cookie-path's length */
+    size_t      plen;             /* step 4's sort key: the cookie-path's length */
 } CjHit;
 
-/* §5.4 STEPS 1 AND 2 — THE PART TWO STANDARDS SHARE. Collected and sorted once, with step 4's serialization
+/* The retrieval's URI, as §5.8.3 step 3's requirements read it: its canonicalized host, its path and whether it
+   denotes a secure connection. */
+typedef struct {
+    char  *host;   size_t hostlen;   bool host_is_name;   /* OWNED */
+    char  *path;   size_t path_len;                       /* OWNED */
+    bool   secure;
+} CjRetrieval;
+
+static void cj_retrieval_init(CjRetrieval *r, const UrlRecord *uri)
+{
+    cj_assert_one_principal(uri);
+    r->host = cj_request_host(uri, &r->host_is_name);     /* steps 1-2 */
+    r->hostlen = strlen(r->host);
+    r->path = url_serialize_path(uri);
+    CHECK(r->path != NULL, "OOM serializing the retrieval's URI's path for §5.8.3's path-match");
+    r->path_len = strlen(r->path);
+    r->secure = cj_secure_scheme(uri);
+}
+
+static void cj_retrieval_free(CjRetrieval *r)
+{
+    free(r->host);
+    free(r->path);
+}
+
+/* §5.8.3 step 3's requirements for one stored cookie, for a "non-HTTP" retrieval, which every read of this
+   store is: the http-only bullet excludes an HttpOnly cookie from all of them. The same-site bullet is
+   unmodelled; see cookie_store.c's residual. Expiry is not among the requirements. */
+static bool cj_retrievable(const CjRetrieval *r, const char *dom, size_t dlen, bool host_only,
+                           const char *path, size_t plen, bool secure, bool http_only)
+{
+    bool domain_ok = host_only ? (r->hostlen == dlen && memcmp(r->host, dom, dlen) == 0)
+                               : cj_domain_match(r->host, r->hostlen, dom, dlen, r->host_is_name) &&
+                                 !cj_domain_attribute_is_public_suffix(dom, dlen);
+
+    return domain_ok && cj_path_match(r->path, r->path_len, path, plen) && (!secure || r->secure) && !http_only;
+}
+
+/* §5.8.3 STEPS 1-4 — THE PART TWO STANDARDS SHARE. Collected and sorted once, with step 6's serialization
    and Cookie Store API §7.1's step 3 both reading the result.
 
    THE SPLIT IS THE OTHER STANDARD'S OWN WORDS AND NOT A REFACTOR FOR ITS CONVENIENCE. Cookie Store API §7.1
@@ -1049,7 +1078,7 @@ typedef struct {
    it back into pairs — is a SECOND PARSER for a syntax this component just serialized, and its inverse would
    have to re-derive a codec that is private to this file. Two answers to one question is the shape that
    drifts, and the drift would be silent: a cookie whose value contains "=" round-trips through the first
-   split correctly today and stops the day §5.4 step 4's join changes. The list has no syntax to disagree
+   split correctly today and stops the day §5.8.3 step 6's join changes. The list has no syntax to disagree
    about. Returns the cookie-list, `*out_nhit` long, OWNED — released by cj_hits_free. */
 static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhit)
 {
@@ -1058,23 +1087,15 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
     uint32_t n = 0, i;
     CjHit *hits;
     uint32_t nhit = 0;
-    char *host, *req_path;
-    size_t hostlen, req_len;
-    bool host_is_name, secure_ok;
+    CjRetrieval r;
 
-    cj_assert_one_principal(uri);
-    host = cj_request_host(uri, &host_is_name);
-    hostlen = strlen(host);
-    req_path = url_serialize_path(uri);
-    CHECK(req_path != NULL, "OOM serializing the request-uri's path for §5.4's path-match");
-    req_len = strlen(req_path);
-    secure_ok = cj_secure_scheme(uri);
+    cj_retrieval_init(&r, uri);
 
     CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, jar, JS_GPN_STRING_MASK) == 0,
           "the cookie store could not be enumerated, and nothing of the page's is on it");
     hits = n ? lexbor_calloc(n, sizeof *hits) : NULL;
-    CHECK(n == 0 || hits != NULL, "OOM collecting §5.4 step 1's cookie-list");
-    /* STEP 1: the set of cookies that meet all of the requirements. */
+    CHECK(n == 0 || hits != NULL, "OOM collecting §5.8.3 step 3's cookie-list");
+    /* Step 3: the set of cookies that meet all of the requirements. */
     for (i = 0; i < n; i++) {
         JSValue v = JS_GetProperty(ctx, jar, tab[i].atom);
         size_t klen = 0, elen = 0;
@@ -1090,16 +1111,10 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
         e = cj_entry_text(ctx, v, &elen, &val);
         JS_FreeValue(ctx, v);
         CHECK(k != NULL, "a stored cookie's key could not be read as a string");
-        cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &path, &plen);
-        cj_entry_parse(e, elen, &secure, &host_only, &http_only, &expired, &value, &vlen);
-        /* Every read of this store is a "non-HTTP" API's, so §5.4 step 1's fourth bullet excludes an HttpOnly
-           cookie from every one. */
-        keep = !expired && !http_only &&
-               (host_only ? (hostlen == dlen && memcmp(host, dom, dlen) == 0)
-                          : cj_domain_match(host, hostlen, dom, dlen, host_is_name)) &&
-               cj_path_match(req_path, req_len, path, plen) &&
-               (!secure || secure_ok);
-        /* §5.3's eviction rule, at the one moment an expired cookie is known to exist. It is a property write
+        cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &host_only, &path, &plen);
+        cj_entry_parse(e, elen, &secure, &http_only, &expired, &value, &vlen);
+        keep = !expired && cj_retrievable(&r, dom, dlen, host_only, path, plen, secure, http_only);
+        /* §5.7's eviction rule, at the one moment an expired cookie is known to exist. It is a property write
            on the jar like any other, so it belongs to the flow that made the read and to no sibling.
            COOKIE STORE API §2.2's SECOND CONDITION, "A user agent evicts expired cookies from the cookie
            store", whose cookie §7.4 classifies under its last bullet: "A cookie which is otherwise evicted or
@@ -1123,14 +1138,13 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
         nhit++;
     }
     JS_FreePropertyEnum(ctx, tab, n);
-    free(req_path);
-    free(host);
+    cj_retrieval_free(&r);
 
-    /* STEP 2: "Cookies with longer paths are listed before cookies with shorter paths. Among cookies that have
+    /* Step 4: "Cookies with longer paths are listed before cookies with shorter paths. Among cookies that have
        equal-length path fields, cookies with earlier creation-times are listed before cookies with later
        creation-times." An INSERTION SORT because it is stable, and the order it is stable in is the store's own
        property order, which is creation order — so the second bullet needs no comparison at all.
-       Step 3's last-access-time update has no reader in this engine; see the file header. */
+       Step 5's last-access-time update has no reader in this engine; see the file header. */
     for (i = 1; i < nhit; i++) {
         CjHit h = hits[i];
         uint32_t j = i;
@@ -1168,18 +1182,18 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri)
     JSValue out = JS_NewStringLen(ctx, "", 0);
 
     CHECK(!JS_IsException(out), "document.cookie: the cookie string could not be allocated");
-    /* RFC 6265bis-22 §5.8.3 "Retrieval Algorithm" step 6: each cookie's name and "=" (the store holds no empty
-       name: §5.6 ignores one), its value, and "; " before every cookie but the first. Joined as strings, so a
-       value set from an unknown stays that unknown's piece of the result. */
+    /* Step 6: a non-empty name and "=", the value, and "; " before every cookie but the first. Joined as
+       strings, so a value set from an unknown stays that unknown's piece of the result; an empty value adds
+       nothing either way. */
     for (i = 0; i < nhit; i++) {
-        size_t plen = (i ? 2 : 0) + hits[i].nlen + 1;
+        size_t plen = (i ? 2 : 0) + hits[i].nlen + (hits[i].nlen ? 1 : 0);
         char *pre = lexbor_malloc(plen + 1);
         JSValue p;
 
         CHECK(pre != NULL, "document.cookie: OOM building the cookie string");
         memcpy(pre, "; ", i ? 2 : 0);
         memcpy(pre + (i ? 2 : 0), hits[i].name, hits[i].nlen);
-        pre[plen - 1] = '=';
+        if (hits[i].nlen) pre[plen - 1] = '=';
         p = JS_NewStringLen(ctx, pre, plen);
         free(pre);
         CHECK(!JS_IsException(p), "document.cookie: OOM building the cookie string");
@@ -1196,7 +1210,7 @@ JSValue cookie_jar_cookie_list(JSContext *ctx, const UrlRecord *uri)
     CjHit *hits = cj_collect(ctx, uri, &nhit);
     JSValue list = JS_NewArray(ctx);
 
-    CHECK(!JS_IsException(list), "OOM building §5.4 step 1's cookie-list");
+    CHECK(!JS_IsException(list), "OOM building §5.8.3 step 3's cookie-list");
     for (i = 0; i < nhit; i++) {
         JSValue pair = JS_NewArray(ctx);
         JSValue name, value;
@@ -1206,7 +1220,7 @@ JSValue cookie_jar_cookie_list(JSContext *ctx, const UrlRecord *uri)
         value = JS_DupValue(ctx, hits[i].val);
         CHECK(!JS_IsException(name) && !JS_IsException(value),
               "OOM building a cookie-list entry's name and value");
-        /* §5.3's stored fields, decoded where the standard that reads them decodes: Cookie Store API §7.1's
+        /* §5.7's stored fields, decoded where the standard that reads them decodes: Cookie Store API §7.1's
            "create a CookieListItem" runs UTF-8 decode without BOM on each of the two, and JS_NewStringLen is
            that decode; the value is the JS string it was set from, which that decode of its bytes is. The
            other five stored fields are deliberately not here — see cookie_jar.h. */
@@ -1214,31 +1228,23 @@ JSValue cookie_jar_cookie_list(JSContext *ctx, const UrlRecord *uri)
               JS_DefinePropertyValueUint32(ctx, pair, 1, value, JS_PROP_C_W_E) >= 0,
               "a cookie-list entry refused its own name and value");
         CHECK(JS_DefinePropertyValueUint32(ctx, list, i, pair, JS_PROP_C_W_E) >= 0,
-              "§5.4 step 1's cookie-list refused an entry");
+              "§5.8.3 step 3's cookie-list refused an entry");
     }
     cj_hits_free(ctx, hits, nhit);
     return list;
 }
 
-/* Cookie Store API §7.4's `observable changes for url` — RFC 6265 §5.4 step 1's requirements over §7.4's change
-   set rather than over the store. Why there is no expiry test, why the http-only requirement is vacuous here and
+/* Cookie Store API §7.4's `observable changes for url` — RFC 6265bis-22 §5.8.3 step 3's requirements over §7.4's
+   change set rather than over the store. Why there is no expiry test, why the http-only requirement is vacuous here and
    what the returned shape is are all in cookie_jar.h. */
 JSValue cookie_jar_observable_changes(JSContext *ctx, const UrlRecord *uri)
 {
     JSValue out = JS_NewArray(ctx), len;
-    char *host, *req_path;
-    size_t hostlen, req_len;
-    bool host_is_name, secure_ok;
+    CjRetrieval r;
     uint32_t i, n = 0, nout = 0;
 
     CHECK(!JS_IsException(out), "OOM building §7.4's observable changes");
-    cj_assert_one_principal(uri);
-    host = cj_request_host(uri, &host_is_name);
-    hostlen = strlen(host);
-    req_path = url_serialize_path(uri);
-    CHECK(req_path != NULL, "OOM serializing a Window's address for §5.4 step 1's path-match");
-    req_len = strlen(req_path);
-    secure_ok = cj_secure_scheme(uri);
+    cj_retrieval_init(&r, uri);
 
     len = JS_GetPropertyStr(ctx, g_changes, "length");
     CHECK(JS_ToUint32(ctx, &n, len) >= 0, "§7.4's change set has no length");
@@ -1269,21 +1275,17 @@ JSValue cookie_jar_observable_changes(JSContext *ctx, const UrlRecord *uri)
         DCHECK(type == COOKIE_CHANGE_CHANGED || type == COOKIE_CHANGE_DELETED,
                "a cookie change carries a type that is neither of §7.4's two — the enumeration is this store's "
                "own and cj_record_change is the only writer of it");
-        cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &path, &plen);
-        cj_entry_parse(e, elen, &secure, &host_only, &http_only, &expired, &value, &vlen);
-        /* §5.4 STEP 1's REQUIREMENTS, the http-only exclusion among them, and `expired` is deliberately not
-           consulted — see cookie_jar.h. */
-        if (http_only || !((host_only ? (hostlen == dlen && memcmp(host, dom, dlen) == 0)
-                         : cj_domain_match(host, hostlen, dom, dlen, host_is_name)) &&
-              cj_path_match(req_path, req_len, path, plen) &&
-              (!secure || secure_ok))) {
+        cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &host_only, &path, &plen);
+        cj_entry_parse(e, elen, &secure, &http_only, &expired, &value, &vlen);
+        /* `expired` is deliberately not consulted — see cookie_jar.h. */
+        if (!cj_retrievable(&r, dom, dlen, host_only, path, plen, secure, http_only)) {
             JS_FreeCString(ctx, k);
             JS_FreeCString(ctx, e);
             continue;
         }
         pair = JS_NewArray(ctx);
         CHECK(!JS_IsException(pair), "OOM building an observable change");
-        /* §5.3's stored fields, decoded where the standard that reads them decodes — §7.1's `create a
+        /* §5.7's stored fields, decoded where the standard that reads them decodes — §7.1's `create a
            CookieListItem` runs UTF-8 decode without BOM on each of the two, and JS_NewStringLen is that
            decode. Same answer, same reason, as cookie_jar_cookie_list's entries. */
         nameval = JS_NewStringLen(ctx, name, nlen);
@@ -1299,8 +1301,7 @@ JSValue cookie_jar_observable_changes(JSContext *ctx, const UrlRecord *uri)
         JS_FreeCString(ctx, k);
         JS_FreeCString(ctx, e);
     }
-    free(req_path);
-    free(host);
+    cj_retrieval_free(&r);
     return out;
 }
 
@@ -1308,13 +1309,13 @@ JSValue cookie_jar_observable_changes(JSContext *ctx, const UrlRecord *uri)
 
 void cookie_jar_init(JSContext *ctx)
 {
-    DCHECK(!g_ready, "cookie_jar_init ran twice — §5.3's store is the AGENT's, and a second one would give the "
+    DCHECK(!g_ready, "cookie_jar_init ran twice — §5.7's store is the AGENT's, and a second one would give the "
                      "documents declared after it a jar the documents declared before it cannot see");
     g_rt = JS_GetRuntime(ctx);
     /* A NULL PROTOTYPE, so a cookie named `toString` or `__proto__` is a cookie and not a collision with
-       Object.prototype — §5.2's cookie-name is any run of bytes without "=" or ";", which includes both. */
+       Object.prototype — §5.6's cookie-name is any run of bytes without "=" or ";", which includes both. */
     g_jar = JS_NewObjectProto(ctx, JS_NULL);
-    CHECK(!JS_IsException(g_jar), "§5.3's cookie store could not be allocated");
+    CHECK(!JS_IsException(g_jar), "§5.7's cookie store could not be allocated");
     /* §7.4's change set, built HERE for the reason the store is: a per-flow COW delta captures a property write
        on an object that exists at the pre-boot baseline, and an array minted inside whichever flow first
        inserted a cookie would be that flow's private creation. */
@@ -1322,9 +1323,9 @@ void cookie_jar_init(JSContext *ctx)
     CHECK(!JS_IsException(g_changes), "Cookie Store API §7.4's change set could not be allocated");
     g_ready = 1;
     agent_state_flag("cookie_jar", &g_ready, "the declaration latch");
-    agent_state_value("cookie_jar", &g_jar, "RFC 6265 §5.3's cookie store");
+    agent_state_value("cookie_jar", &g_jar, "RFC 6265bis-22 §5.7's cookie store");
     agent_state_value("cookie_jar", &g_changes, "Cookie Store API §7.4's pending cookie-change set");
-    agent_state_ptr("cookie_jar", &g_rt, "the runtime §5.3's store was allocated in");
+    agent_state_ptr("cookie_jar", &g_rt, "the runtime §5.7's store was allocated in");
 #if APICLIENT_DEV
     agent_state_ptr("cookie_jar", &g_agent_host, "the agent host the dev-only same-host assertion compares");
 #endif
@@ -1334,7 +1335,7 @@ void cookie_jar_free(void)
 {
     if (!g_ready)
         return;
-    DCHECK(g_rt != NULL, "§5.3's store was built without recording the runtime that owns its strings");
+    DCHECK(g_rt != NULL, "§5.7's store was built without recording the runtime that owns its strings");
     JS_FreeValueRT(g_rt, g_jar);
     g_jar = JS_UNDEFINED;
     JS_FreeValueRT(g_rt, g_changes);

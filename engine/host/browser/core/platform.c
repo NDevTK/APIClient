@@ -1016,7 +1016,7 @@ static const PlatformComponent PLATFORM[] = {
        `document`'s XMLDocument are `[Exposed=Window]`. */
     { "font_face",           d_font_face,           NULL,              r_font_face },
     { "html_iframe",         d_iframe,              NULL,        r_iframe },
-    /* RFC 6265 §5.3's cookie store, before the component whose §3.1.4 members read it. The store is the user
+    /* RFC 6265bis-22 §5.7's cookie store, before the component whose §3.1.4 members read it. The store is the user
        agent's and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime, not to any
        JSContext, and is released here, since nothing frees it when a realm goes. */
     { "cookie_jar",          d_cookie_jar,          NULL,        r_cookie_jar },

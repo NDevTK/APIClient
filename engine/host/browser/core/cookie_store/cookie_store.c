@@ -8,7 +8,7 @@
  * predicate is HTML §7.1.1.2's `is a registrable domain suffix of or is equal to`, and it was PRIVATE — static
  * inside core/dom/document_domain.c, whose header exports only init, install and free — so §7.2 was blocked on
  * extracting it into a component both callers share, while §7.1 was blocked on nothing because it reads RFC
- * 6265 §5.4, which the jar implements whole.
+ * 6265bis-22 §5.8.3, which the jar implements.
  *
  * THAT BLOCKER IS GONE: the predicate is core/url/registrable_domain.h and it is reached, not re-stated.
  * WRITING A SECOND COPY HERE REMAINS THE ANSWER THAT MUST NOT BE TAKEN, and the reason outlives the blocker —
@@ -55,7 +55,7 @@
 /* THE SOURCE IDENTITY, and it is the member's own name rather than `document.cookie`'s because a candidate run
    substitutes BY identity: a PoC that fires through `cookieStore.get(...).value` is delivered and reproduced
    through this member, and one that fires through `document.cookie` is not. See the declaration in
-   cookie_store_init for the character set, which is the SAME RFC 6265 fact stated in a second place. */
+   cookie_store_init for the character set, which is the SAME RFC 6265bis-22 fact stated in a second place. */
 #define CS_SOURCE "cookieStore"
 
 static JSClassID g_cs_class;
@@ -130,7 +130,7 @@ static bool cs_brand(JSContext *ctx, JSValueConst this_val)
     return false;
 }
 
-/* §3.1 step 4's `settings's creation URL`, as the REQUEST-URI RFC 6265 §5.4 is computed against. It is this
+/* §3.1 step 4's `settings's creation URL`, as the retrieval URI RFC 6265bis-22 §5.8.3 is computed against. It is this
    realm's document address: `cookieStore` is a per-realm object, so `this`'s relevant settings object is the
    settings object of the realm this member was installed on, and a child navigable's store answers for the
    child. DECLARED, because §7.4 "Process changes"' step 1 asks the same question of every Window it walks —
@@ -145,7 +145,7 @@ bool cookie_store_request_uri(JSContext *ctx, UrlRecord *rec)
     CHECK(url_parse(rec, url, strlen(url), NULL),
           "a document's own address is not a URL — the host captured something this engine cannot make a "
           "principal out of");
-    /* RFC 6265's store is reached for http(s) alone, which is the same condition HTML §3.1.4's cookie-averse
+    /* The cookie store is reached for http(s) alone, which is the same condition HTML §3.1.4's cookie-averse
        test applies to `document.cookie` and the same one cookie_jar.c's request-host assert relies on. */
     return rec->scheme && (strcmp(rec->scheme, "http") == 0 || strcmp(rec->scheme, "https") == 0);
 }
@@ -159,7 +159,7 @@ bool cookie_store_request_uri(JSContext *ctx, UrlRecord *rec)
  * fifth field added here would be this engine becoming that implementation.
  *
  * THE VALUE IS THE SOURCE AND THE NAME IS NOT, which is a claim about which of the two an attacker writes.
- * A cookie's VALUE is attacker-controlled — RFC 6265 gives a sibling subdomain a write to this jar, and a
+ * A cookie's VALUE is attacker-controlled — RFC 6265bis-22 §5.7 step 10 gives a sibling subdomain a write, and a
  * planted cookie is read by a later load — so it is minted through the one seam solver/concolic.h names and
  * the auth gate a bundle writes over it FORKS. The NAME is not left concrete for want of rigour: for `get(n)`
  * and `getAll(n)` §7.1 step 3.2.3 has already CONTINUED past every cookie whose name is not `n`, so the name
@@ -217,8 +217,8 @@ typedef struct {
 
 /* §2.1 Cookie's "To normalize a cookie name or value given a string input: remove all U+0009 TAB and U+0020
    SPACE that are at the start or end of input" — §7.2 steps 1 and 2.
-   IT IS THE SAME TWO CHARACTERS RFC 6265's WSP NAMES AND IT IS A DIFFERENT STANDARD'S ALGORITHM, which is why
-   it is stated here rather than reached: the jar trims a set-cookie-string's fields on §5.2 step 5's authority
+   IT IS THE SAME TWO CHARACTERS RFC 6265bis-22's WSP NAMES AND IT IS A DIFFERENT STANDARD'S ALGORITHM, which is
+   why it is stated here rather than reached: the jar trims a set-cookie-string's fields on §5.6 step 4's authority
    over a string IT parsed, and this trims a dictionary member on §2.1's. The two agreeing today is a fact about
    two character sets and not a shared definition, so neither may be routed to the other. */
 static void cs_normalize(const char **p, size_t *n)
@@ -266,12 +266,12 @@ static bool cs_has_refused_byte(const char *s, size_t n)
     return false;
 }
 
-/* §7.2 step 13.2's `expires (date serialized)` AND §5.3's EXPIRY-TIME, WITHOUT THE COOKIE-DATE BETWEEN THEM.
+/* §7.2 step 13.2's `expires (date serialized)` AND RFC 6265bis-22 §5.7's EXPIRY-TIME, WITHOUT THE COOKIE-DATE BETWEEN THEM.
  *
  * §7 "Algorithms" defines the serialization: "To date serialize a DOMHighResTimeStamp millis, let dateTime be
  * the date and time millis milliseconds after 00:00:00 UTC, 1 January 1970 (assuming that there are exactly
  * 86,400,000 milliseconds per day), and return a byte sequence corresponding to the closest cookie-date
- * representation of dateTime according to Cookies § Dates." Its consumer is RFC 6265 §5.2.1, which PARSES that
+ * representation of dateTime according to Cookies § Dates." Its consumer is RFC 6265bis-22 §5.6.1, which PARSES that
  * byte sequence straight back into an expiry-time — so the pair composes to `millis` at the resolution a
  * cookie-date has, which is ONE SECOND. Spelling the cookie-date and re-reading it is the round trip
  * cookie_jar.h's cookie_jar_store declaration argues against at length, and it would buy nothing here: the
@@ -279,12 +279,11 @@ static bool cs_has_refused_byte(const char *s, size_t n)
  * "CLOSEST" IS A ROUNDING AND NOT A TRUNCATION, which is the one place the two differ — 1500 ms is second 2 and
  * not second 1 — and it is the standard's own word.
  *
- * AND IT SATURATES, ON RFC 6265 §5.2.1's OWN PERMISSION: "If the expiry-time is later than the last date the
- * user agent can represent, the user agent MAY replace the expiry-time with the last representable date." A
- * `DOMHighResTimeStamp` is a double, so a page may write 1e300 and the seconds it names do not fit a `long
- * long` at all — and a C conversion of an out-of-range double is UNDEFINED rather than merely wrong, so the
- * band is tested BEFORE the cast and never after it. The floor is the same permission read downward, which is
- * also the earliest-representable date §5.2.2 names for a non-positive Max-Age. */
+ * IT SATURATES BEFORE THE CAST: a `DOMHighResTimeStamp` is a double, so a page may write 1e300, and a C
+ * conversion of an out-of-range double is undefined. The ceiling is then reduced to §5.5 "Cookie Lifetime
+ * Limits"' 400 days at the store; the floor is §5.6.1 step 5's permission, "If the expiry-time is earlier than
+ * the earliest date the user agent can represent, the user agent MAY replace the expiry-time with the earliest
+ * representable date", the same date §5.6.2 names for a non-positive Max-Age. */
 static long long cs_expiry_seconds(double millis)
 {
     double secs;
@@ -308,24 +307,18 @@ static long long cs_expiry_seconds(double millis)
  * ITS LAST STEP BUT ONE IS THE SEAM AND NOT A SERIALIZATION. Step 24 is "Perform the steps defined in Cookies
  * § Storage Model for when the user agent 'receives a cookie' with url as request-uri, encodedName as
  * cookie-name, encodedValue as cookie-value, and attributes as cookie-attribute-list", and those four are
- * `cookie_jar_store`'s signature exactly. §5.2 is named nowhere in that step, because its input is a header
+ * `cookie_jar_store`'s signature exactly. §5.6 is named nowhere in that step, because its input is a header
  * field and this algorithm's is a dictionary — see cookie_jar.h for what routing through the string form would
  * MANUFACTURE past step 12.3.
  *
- * TWO OF ITS ATTRIBUTES REACH A STORE THAT MODELS NO FIELD FOR THEM, AND THAT IS RFC 6265 §5.2 STEP 6's OWN
- * ANSWER RATHER THAN A DROP — "Notice that attributes with unrecognized attribute-names are ignored". The jar
- * is RFC 6265's store and recognizes Expires, Max-Age, Domain, Path, Secure and HttpOnly; SameSite and
- * Partitioned are neither, so a cookie-attribute-list carrying them stores exactly as one without them does.
- * NAMED RESIDUAL. NOT COVERED: step 22's SameSite and step 23's Partitioned, so `sameSite` and `partitioned`
- * are converted, refused when their types refuse them, and then change nothing about which entry this store
- * holds or which request reads it back. NEXT DIFF: a SameSite flag on `CookieJarAttributes` read by §5.4's
- * collect against the request's own site, and a partition key folded into the store's (name, domain, path) key
- * — which is a change to what a cookie's IDENTITY is and therefore to `cj_key` and to every read, not a field.
- * HOW ITS ABSENCE WOULD SHOW: a reader would observe two `set` calls that differ ONLY in `partitioned`
- * overwriting one another in this store, where a browser keeps a partitioned cookie and an unpartitioned one
- * apart; and §3.4's own two entries, which pass `true` and `partitioned` respectively, deleting the same entry.
- * A field on that struct with no reader would be the write-with-no-reader §A-FIELD-A-CONSUMER-DEFAULTS names,
- * so the attributes are not carried at all rather than carried and ignored. */
+ * NAMED RESIDUAL. NOT COVERED: the jar models no same-site-flag (RFC 6265bis-22 §5.6.7, §5.7 steps 17-19 and
+ * §5.8.3 step 3's same-site requirement) and no partition key, so step 22's `sameSite` and step 23's
+ * `partitioned` — and a Set-Cookie's or `document.cookie`'s SameSite — change nothing about which entry the
+ * store holds or which retrieval reads it back. NEXT DIFF: a same-site-flag on `CookieJarAttributes` and the
+ * entry, with the retrieval's same-site status (RFC 6265bis-22 §5.2 "Same-site" and "cross-site"
+ * Requests) computed for each retrieval, and a partition key folded into `cj_key`'s identity. HOW ITS
+ * ABSENCE WOULD SHOW: two `set` calls differing only in `partitioned` overwrite one another, and a cross-site
+ * frame's `document.cookie` reads a Lax or Strict cookie a browser withholds. */
 static bool cs_set_cookie(JSContext *ctx, const UrlRecord *url, const CsCookie *in)
 {
     CsCookie c = *in;
@@ -340,10 +333,8 @@ static bool cs_set_cookie(JSContext *ctx, const UrlRecord *url, const CsCookie *
         return false;                           /* STEP 3 */
     if (memchr(c.name, '=', c.name_len))
         return false;                           /* STEP 4 */
-    /* STEP 5, whose three sub-steps are reached ONLY for an empty cookie-name — which §7.2 permits and which
-       §5.2 step 5 would have ignored, so this is one of the two divergences cookie_jar.h names as the reason
-       this path does not go through a set-cookie-string. With no name, the VALUE is what a serialized cookie
-       would begin with, which is why these three ask of it what steps 4 and 6 ask of a name. */
+    /* STEP 5, reached only for an empty cookie-name. With no name, the VALUE is what RFC 6265bis-22 §5.8.3
+       step 6 serializes first, which is why these three ask of it what steps 4 and 6 ask of a name. */
     if (!c.name_len) {
         if (memchr(c.value, '=', c.value_len))
             return false;                       /* STEP 5.1 */
@@ -406,11 +397,11 @@ static bool cs_set_cookie(JSContext *ctx, const UrlRecord *url, const CsCookie *
         attrs.have_expiry = true;               /* STEP 13.2 */
         attrs.expiry = cs_expiry_seconds(c.expires);
     } else if (c.have_max_age) {
-        /* STEP 14. The attribute-value §7.2 appends is `ToString(maxAge)`, and RFC 6265 §5.2.2 is what reads
+        /* STEP 14. The attribute-value §7.2 appends is `ToString(maxAge)`, and RFC 6265bis-22 §5.6.2 is what reads
            one: "If delta-seconds is less than or equal to zero (0), let expiry-time be the earliest
            representable date and time. Otherwise, let the expiry-time be the current date and time plus
            delta-seconds seconds." The jar's attribute-list carries that EXPIRY-TIME rather than the delta, so
-           this is §5.2.2's arithmetic and not a second reading of it — the same computation the string parse
+           this is §5.6.2's arithmetic and not a second reading of it — the same computation the string parse
            performs, at the one field both callers must fill.
            THE ADD SATURATES for the reason the date serialization does: `maxAge` is a `long long` the page
            chose, so `now + maxAge` is free to overflow, and signed overflow is UNDEFINED rather than large. */
@@ -428,10 +419,10 @@ static bool cs_set_cookie(JSContext *ctx, const UrlRecord *url, const CsCookie *
     }
     if (!c.path_len) {
         /* STEP 15. `serialized cookie default path` is FETCH §3.1.3 "Cookie infrastructure"'s, whose inner
-           `cookie default path` is RFC 6265 §5.1.4's — one definition, reached through cookie_jar.h rather
+           `cookie default path` is RFC 6265bis-22 §5.1.4's — one definition, reached through cookie_jar.h rather
            than restated, because a second copy of a path rule is a second answer about which requests a
            cookie is sent to. The substituted value is what steps 16, 17 and 19 then read, which is why it is
-           taken as a VALUE here instead of being left to §5.3 step 7's own default. */
+           taken as a VALUE here instead of being left to §5.7 step 11's own default. */
         def_path = cookie_jar_default_path(url);
         CHECK(def_path != NULL, "OOM computing §7.2 step 15's serialized cookie default path");
         c.path = def_path;
@@ -448,11 +439,11 @@ static bool cs_set_cookie(JSContext *ctx, const UrlRecord *url, const CsCookie *
     attrs.path = c.path;
     attrs.path_len = c.path_len;
     /* STEP 21: "Append (`Secure`, ``) to attributes" — UNCONDITIONALLY, for every cookie this API writes. It
-       is the whole of why a cookie set here is withheld from an http request-uri by §5.4's secure-only test,
+       is the whole of why a cookie set here is withheld from an http retrieval URI by §5.8.3's secure-only test,
        and it is not a property of the document: a secure context may still have an http address. */
     attrs.secure = true;
-    /* STEPS 22 AND 23 append SameSite and Partitioned, which this store recognizes neither of — see this
-       function's own named residual. `sameSite` is still READ, because a value outside CookieSameSite's three
+    /* STEPS 22 AND 23 append SameSite and Partitioned, which the jar models neither of — see this function's
+       named residual. `sameSite` is still READ, because a value outside CookieSameSite's three
        strings is Web IDL §3.2.18's TypeError at the declaration and never reaches here. */
     DCHECK(c.same_site != NULL &&
            (strcmp(c.same_site, "strict") == 0 || strcmp(c.same_site, "lax") == 0 ||
@@ -461,7 +452,7 @@ static bool cs_set_cookie(JSContext *ctx, const UrlRecord *url, const CsCookie *
            "enumeration is checked by the declared type before any step of this algorithm runs, so a fourth "
            "string here is this component composing one rather than a page supplying one");
     (void)c.partitioned;
-    /* STEP 24: §5.3 "receive a cookie", over the four things this algorithm computed and no string. */
+    /* STEP 24: §5.7 "receive a cookie", over the four things this algorithm computed and no string. */
     cookie_jar_store(ctx, url, c.name, c.name_len, c.value, c.value_len, &attrs);
     ok = true;                                  /* STEP 25 */
 done:
@@ -472,7 +463,7 @@ done:
 
 /* §7.3 "Delete a cookie" — FOUR STEPS, whose last one is "Return the results of running set a cookie with url,
  * name, value, null, domain, path, "strict", partitioned, and 0". So there is no second storage algorithm here:
- * a delete is a SET whose maxAge is 0, which §7.2 step 14 appends as `Max-Age: 0` and which RFC 6265 §5.2.2
+ * a delete is a SET whose maxAge is 0, which §7.2 step 14 appends as `Max-Age: 0` and which RFC 6265bis-22 §5.6.2
  * turns into the earliest representable date — the expiry the jar's own store step then removes the entry for.
  *
  * STEP 3 IS WHY A NAMELESS COOKIE CAN BE DELETED AT ALL: "If name's length is 0, then set value to any
@@ -513,7 +504,7 @@ static bool cs_delete_cookie(JSContext *ctx, const UrlRecord *url, const char *n
 }
 
 /* §3.1 get and §3.2 getAll, whose only differences are step 5's empty-options rejection and what they settle
- * with. Both reach §7.1 "Query cookies", whose step 1 is RFC 6265 §5.4 with the cookie-string discarded — which
+ * with. Both reach §7.1 "Query cookies", whose step 1 is RFC 6265bis-22 §5.8.3 with the cookie-string discarded — which
  * is why the jar hands back the intermediate cookie-list and this body never sees a cookie-string at all. */
 static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -612,7 +603,7 @@ static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     }
     JS_FreeValue(ctx, opt_url);
 
-    /* §7.1 STEP 1: RFC 6265 §5.4 with the cookie-string discarded and its intermediate cookie-list kept. */
+    /* §7.1 STEP 1: RFC 6265bis-22 §5.8.3 with the cookie-string discarded and its intermediate cookie-list kept. */
     list = cookie_jar_cookie_list(ctx, &uri);
     url_record_free(&uri);
     CHECK(!JS_IsException(list), "§7.1 step 1's cookie-list could not be computed");
@@ -629,7 +620,7 @@ static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 
     out = JS_NewArray(ctx);
     CHECK(!JS_IsException(out), "OOM building §7.1 step 2's list");
-    /* §7.1 STEP 3, over the cookie-list in §5.4 step 2's order. */
+    /* §7.1 STEP 3, over the cookie-list in §5.8.3 step 4's order. */
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, list, i);
         JSValue item;
@@ -1001,13 +992,12 @@ static void cs_install_realm(JSContext *ctx)
 
        TWO RESIDUALS THAT STOOD HERE ARE DISCHARGED BY THE DIFFS THAT LANDED set AND delete, AND THEIR WRONG
        CLAUSES ARE KEPT BECAUSE BOTH WERE WRONG IN THE SAME PLACE AND A READER WILL RE-DERIVE EITHER. The first
-       named `cookie_jar_receive` as §7.2's seam: that entry takes a set-cookie-string and runs §5.2's parse over
+       named `cookie_jar_receive` as §7.2's seam: that entry takes a set-cookie-string and runs §5.6's parse over
        it, and §7.2 refuses U+003B (;) in the NAME and the VALUE and in NOTHING ELSE — its own Note leaves open
        whether the restriction "should also apply to expires, domain, path, and sameSite as well" — so
        `path: "/;Domain=example"` spelled as a set-cookie-string is split at that semicolon into a Domain
        attribute the page never wrote and step 12.3 never judged. The round trip does not lose an attribute, it
-       MANUFACTURES one past the check that clause existed to reach, and drops one too, since §7.2 permits an
-       empty cookie-name and §5.2 step 5 ignores a set-cookie-string carrying one. §7.2's own step 24 names the
+       MANUFACTURES one past the check that clause existed to reach. §7.2's own step 24 names the
        right seam, which is `cookie_jar_store`. The second named IDL_USVSTRING_OR_DICT for §3.3's position 0:
        that row is Window's `postMessage`, whose SHORTER entry declares its dictionary position OPTIONAL, so its
        two entries MEET at one arity and §3.6 step 12 reads the page's VALUE there. Both of §3.3's entries

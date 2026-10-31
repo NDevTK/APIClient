@@ -462,7 +462,7 @@ lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_do
 /* §4.5's `document.URL` FOR ONE DOCUMENT: its ADDRESS. NOT what DOM §4.4's `baseURI` answers — that is the
    document BASE URL (document_base_url_of above), which this used to be mistaken for; the address is only
    §2.4.3's LAST step, and a document carrying a `<base href>` or an about base URL answers neither of the
-   earlier two with it. This is what RFC 6265's request-uri, §4.4's clone-a-Document and §7.4.4's URL and
+   earlier two with it. This is what RFC 6265bis-22's request-uri, §4.4's clone-a-Document and §7.4.4's URL and
    history update steps are about. */
 const char *document_url_of(const lxb_dom_document_t *dom);
 /* Referrer Policy §8.3 "Determine request's Referrer"'s `client` arm for this realm's Window environment: the

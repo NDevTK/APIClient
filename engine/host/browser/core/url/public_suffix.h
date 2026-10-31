@@ -40,7 +40,7 @@ const char *public_suffix_of(const UrlHost *h);
 
 /* "HOST IS A PUBLIC SUFFIX" — one question, two standards, so ONE spelling of it. HTML §7.1.1.2 Relaxing the
    same-origin restriction's step 4.3 has as its first disjunct "hostSuffix equals hostSuffix's public suffix";
-   RFC 6265 §5.3 Storage Model's step 5 has as its condition "the domain-attribute is a public suffix". They
+   RFC 6265bis-22 §5.7 "Storage Model" step 9 has as its condition "the domain-attribute is a public suffix". They
    are the same question about the same list, and the intuitive way to ask it — call public_suffix_of and
    strcmp the answer against the host's own domain — is a spelling each caller would write for itself, which
    is how two right answers to one question come to disagree.

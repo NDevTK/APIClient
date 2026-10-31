@@ -33,7 +33,7 @@
  *
  * THE STORE ITSELF IS NOT HERE, and that is the other half of "one problem per file": §3.1.4 is two sentences
  * of HTML over an algorithm that belongs to a different standard, and the standard's own scope for that
- * algorithm is the USER AGENT rather than the document. So RFC 6265 §5's store, its receive and its read are
+ * algorithm is the USER AGENT rather than the document. So RFC 6265bis-22 §5's store, its receive and its read are
  * core/loader/cookie_jar.c — one per AGENT — and what stays here is exactly what HTML says: the cookie-averse
  * test, the opaque-origin throw, the request-uri to run those algorithms against, and the source the value is
  * minted as. */
@@ -92,7 +92,7 @@ static lxb_dom_document_t *dm_receiver(JSContext *ctx, JSValueConst this_val)
 /* §3.1.4's COOKIE-AVERSE test AND the REQUEST-URI in one, because they are one question asked of one thing.
    "A Document object whose browsing context is null" or "a Document whose URL's scheme is not an HTTP(S) scheme"
    is cookie-averse — the getter answers the empty string and the setter does nothing. Everything else IS the
-   document's URL, which is what RFC 6265 §5.3 and §5.4 mean by the request-uri: its host is the canonicalized
+   document's URL, which is what RFC 6265bis-22 §5.7 and §5.8.3 mean by the request-uri: its host is the canonicalized
    request-host, its path is what the default-path and every path-match are computed from, and its scheme is
    what the Secure attribute is measured against. So the parse that answers the averse test is the parse the
    store needs, and doing it twice would be two answers to one question.

@@ -234,7 +234,7 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
  * before the runtime is freed.
  *
  * IT IS THE THIRD COLUMN OF THE SAME ROW, and it is here for the reason the other two are. A component that
- * holds state for the whole AGENT rather than for a realm — RFC 6265 §5.3's cookie store is the first — has
+ * holds state for the whole AGENT rather than for a realm — RFC 6265bis-22 §5.7's cookie store is the first — has
  * nothing that goes with a JSContext, so it needs a call at teardown, and a call at teardown written into each
  * host is the hand-copied list this file was built to abolish: the same list, in the same three places, drifting
  * the same way (and it is not hypothetical — the shipped ABI entry's teardown had already drifted four frees

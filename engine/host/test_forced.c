@@ -16137,9 +16137,27 @@ TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
     fold_row(&cn_tt, &cn_why, !strstr(js, "{\"sink\":\"innerHTML\""),
              "a constant-set cookie read back reached innerHTML as an unknown, so the page's own bytes carried a "
              "provenance");
+    /* RFC 6265bis-22 §5.6/§5.7 over cookieStore.getAll()'s concrete names; each row reads the other value
+       absent too, so a forked flag cannot pass. */
+    const char *bis_why[4] = { NULL, NULL, NULL, NULL };
+    int bis_tt[4] = { 1, 1, 1, 1 };
+    static const char *const bis_param[4] = { "bare", "hostok", "hostbad", "ctl" };
+    static const int bis_want[4] = { 1, 1, 0, 0 };
+    for (int b = 0; b < 4; b++) {
+        fold_row(&bis_tt[b], &bis_why[b], !!strstr(js, "\"/api/cc-bis\""),
+                 "NOT REACHED: there is no /api/cc-bis record, so cookieStore.getAll() never settled");
+        fold_row(&bis_tt[b], &bis_why[b],
+                 param_value_is(js, "/api/cc-bis", bis_param[b], bis_want[b] ? "true" : "false") &&
+                 !param_value_is(js, "/api/cc-bis", bis_param[b], bis_want[b] ? "false" : "true"),
+                 "the jar stored or ignored this cookie against RFC 6265bis-22 §5.6/§5.7");
+    }
     const Probe rows[] = {
         { "cc-read", cr_tt, "/api/cc-read", SESS_EXPLORE, cr_why },
         { "cc-no-attacker-root", cn_tt, "'ccView'", SESS_EXPLORE, cn_why },
+        { "cc-bis-nameless", bis_tt[0], "/api/cc-bis", SESS_EXPLORE, bis_why[0] },
+        { "cc-bis-host-ok", bis_tt[1], "/api/cc-bis", SESS_EXPLORE, bis_why[1] },
+        { "cc-bis-host-refused", bis_tt[2], "/api/cc-bis", SESS_EXPLORE, bis_why[2] },
+        { "cc-bis-ctl-refused", bis_tt[3], "/api/cc-bis", SESS_EXPLORE, bis_why[3] },
         { "ps-piece-poc", pp_tt, "'psView'", SESS_EXPLORE, pp_why },
         { "ps-cross-precondition", pc_tt, "'psCross'", SESS_EXPLORE, pc_why },
     };

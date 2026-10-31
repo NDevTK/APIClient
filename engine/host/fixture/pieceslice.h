@@ -5,7 +5,10 @@
    both pieces depends on both and stays labelled with the cookie's precondition. The fragment is set first so
    the source's example places its piece.
    `cookieconst` is the jar's negative: a cookie the page sets from a constant reads back out of document.cookie
-   as the page's own bytes, so its sink write carries no unknown and no @S record is made of it.
+   as the page's own bytes, so its sink write carries no unknown and no @S record is made of it. It also sets
+   cookies RFC 6265bis-22 §5.6/§5.7 store or ignore and reads their names through cookieStore.getAll(), whose
+   names are concrete: a nameless cookie and a Secure `__Host-` cookie stored, a `__Host-` cookie with no
+   Secure (step 21) and one carrying a CTL character (§5.6 step 1) ignored.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_PIECESLICE_H
@@ -36,6 +39,15 @@ static const char HTML_COOKIECONST[] =
     "  fetch('/api/cc-read');"
     "  document.getElementById('ccView').innerHTML = ccJar.slice(ccAt + 8).split(';')[0];"
     "}"
+    "document.cookie = 'ccBare';"
+    "document.cookie = '__Host-ccOk=1; Secure; Path=/';"
+    "document.cookie = '__Host-ccBad=1; Path=/';"
+    "document.cookie = 'ccCtl=a\\u0001b';"
+    "cookieStore.getAll().then(function (l) {"
+    "  var n = l.map(function (c) { return c.name; });"
+    "  fetch('/api/cc-bis?bare=' + (n.indexOf('') >= 0) + '&hostok=' + (n.indexOf('__Host-ccOk') >= 0) +"
+    "        '&hostbad=' + (n.indexOf('__Host-ccBad') >= 0) + '&ctl=' + (n.indexOf('ccCtl') >= 0));"
+    "});"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

@@ -768,8 +768,8 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       about both halves — so expect what a corpus that wants a driver does in an engine that
                       has none, and what each abort NAMES is the work queue, read off the run. */
                    "fullscreen",
-                   /* COOKIES — ADDED BECAUSE A LANDED FIX HAD NO ORACLE IN EITHER DIRECTION. RFC 6265 §5.3
-                      step 5 refuses a `Domain` that is a public suffix, and until it was built this engine
+                   /* COOKIES — ADDED BECAUSE A LANDED FIX HAD NO ORACLE IN EITHER DIRECTION. RFC 6265bis-22 §5.7
+                      step 9 refuses a `Domain` that is a public suffix, and until it was built this engine
                       STORED `Domain=com`; the reason it survived is that no gate here could see it. That is
                       the excluded-test failure in its purest form — not a test that fails, a test that is not
                       on disk, so the area reports nothing and the total looks complete.
