@@ -6181,6 +6181,7 @@ static int hostreq_answer_all(JSContext *ctx)
                 static const char DOC_COOKIE[] =
                     "<!doctype html><html><head></head><body><script>"
                     "fetch('/api/cookieload?c=' + encodeURIComponent(document.cookie || 'none'));"
+                    "fetch('/api/cookieslice?c=' + encodeURIComponent(document.cookie.slice(7) || 'none'));"
                     "</script></body></html>";
                 /* The `realm-timeline` row's document: an unhandled rejection, then a host read that parks the
                    flow before the script's checkpoint, and a listener naming the opener's arm. */
@@ -13914,6 +13915,14 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
     }
     fold_row(&flowjar_tt, &flowjar_why, param_value_only(js, "/api/cookiesib", "c", "rootc%3D1"),
              "no sibling arm's document.cookie is the root's `rootc=1`");
+    /* The negative control for the flow-jar row's length facet: `document.cookie.slice(7)` drops the seven
+       units the jar's `flowc=1` fixes, so its bound is 0 and `|| 'none'` must still fork both arms. */
+    const char *ckslice_why = NULL; int ckslice_tt = 1;
+    fold_row(&ckslice_tt, &ckslice_why, !!strstr(js, "\"/api/cookieslice"),
+             "NOT REACHED: no /api/cookieslice record, so the loaded /cookieload Document's second read never ran");
+    fold_row(&ckslice_tt, &ckslice_why, param_value_is(js, "/api/cookieslice", "c", "none"),
+             "no /api/cookieslice record reads `none`: a String whose length facet states nothing took only its "
+             "true arm, so ToBoolean was decided by something other than the facet");
     /* A realm built in one arm is no environment of its sibling: the `/rejload` Document's rejection is
        notified only in the arm that navigated (opener's cfg.arm 'A'), while the other arm checkpoints. */
     const char *rtime_why = NULL; int rtime_tt = 1;
@@ -14139,6 +14148,7 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
         { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
         { "flow-jar", flowjar_tt, "/api/ckgate", SESS_EXPLORE, flowjar_why },
         { "realm-timeline", rtime_tt, "/api/rejwait", SESS_EXPLORE, rtime_why },
+        { "flow-jar-fork", ckslice_tt, "/api/ckgate", SESS_EXPLORE, ckslice_why },
         { "time-origin-deferred", torigin_tt, "/api/timeorigin", SESS_EXPLORE, torigin_why },
         { "root-jar", rootjar_tt, "/api/rootjar", SESS_EXPLORE, rootjar_why },
         { "blank-pin", blankpin_tt, "/api/blankgate", SESS_EXPLORE, blankpin_why },
