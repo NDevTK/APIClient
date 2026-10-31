@@ -29,7 +29,7 @@ static const char HTML_DOCNAMED[] =
     "var dnLoc = typeof document.location.href;"
     "var dnDel = delete document.dnDup;"
     "var dnKey = Object.keys(document).indexOf('dnDup') >= 0;"
-    "fetch('/api/dn?ov=' + dnOv + '&qs=' + dnQs + '&coll=' + dnColl + '&obj=' + dnObj + '&bare=' + dnBare +"
+    "fetch('/api/docnamed?ov=' + dnOv + '&qs=' + dnQs + '&coll=' + dnColl + '&obj=' + dnObj + '&bare=' + dnBare +"
     "      '&img=' + dnImg + '&loc=' + dnLoc + '&del=' + dnDel + '&key=' + dnKey);"
     "</script>"
     TF_CANVAS_INK

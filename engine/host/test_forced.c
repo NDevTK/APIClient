@@ -16476,10 +16476,10 @@ TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
         const char *why = NULL;
         int tt = 1;
 
-        fold_row(&tt, &why, !!strstr(js, "\"/api/dn\""), "NOT REACHED: there is no /api/dn record");
-        fold_row(&tt, &why, param_value_is(js, "/api/dn", R[i].param, R[i].want) &&
-                            !param_value_is(js, "/api/dn", R[i].param, R[i].other), R[i].what);
-        rows[i] = (Probe){ R[i].row, tt, "/api/dn", SESS_EXPLORE, why };
+        fold_row(&tt, &why, !!strstr(js, "\"/api/docnamed\""), "NOT REACHED: there is no /api/docnamed record");
+        fold_row(&tt, &why, param_value_is(js, "/api/docnamed", R[i].param, R[i].want) &&
+                            !param_value_is(js, "/api/docnamed", R[i].param, R[i].other), R[i].what);
+        rows[i] = (Probe){ R[i].row, tt, "/api/docnamed", SESS_EXPLORE, why };
     }
     probes_append(tab, n, rows, (int)(sizeof R / sizeof R[0]));
 }

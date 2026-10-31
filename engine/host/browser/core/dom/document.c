@@ -4358,6 +4358,7 @@ void document_init(JSContext *ctx)
        (`fullscreen` on this prototype, `fullscreenElement` on this one and on ShadowRoot's) install from this
        component's list, so the declaration is paired here. */
     fullscreen_init(ctx);
+    document_named_init(ctx);
     realm_declare_intrinsic(document_install_proto);
     /* §13.2.7 "The end" is an agent fact: document_lifecycle_step walks navigable_tree_order and answers for every
        document of this agent in one call, so the frontier's single document-lifecycle slot is claimed once, here,

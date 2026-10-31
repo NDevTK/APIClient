@@ -59,6 +59,9 @@
 /* What one box metric derivation is in line items (solver/rest_unit.h's LINE_METRICS: "one costs what a
    hundred of those do"). */
 #define THREAD_WORK_LINE_ITEMS_PER_METRIC 100
+/* A named-property lookup's walk rests at every element and is charged one element per rest, so the per-call
+   floor above (rounded up) prices an element at one unit whatever the rate; the rate states that floor. */
+#define THREAD_WORK_UNITS_PER_KI_DOM_ELEMENTS 1024
 
 #include <stddef.h>
 #include <stdint.h>
@@ -75,6 +78,7 @@ typedef enum {
     THREAD_WORK_LAYOUT_BOX,     /* a §9.4.1 question body run, charged per question answered (layout_job.c) */
     THREAD_WORK_LAYOUT_LINE,    /* a line box fill or intrinsic run's items taken (layout_job.c's spends) */
     THREAD_WORK_SELECTOR_MATCH, /* style rules tested by one element's author match (css_style_declaration.c) */
+    THREAD_WORK_DOM_WALK,       /* elements a named-property lookup visited (core/dom/document_named.c) */
     THREAD_WORK_N
 } ThreadWorkKind;
 
