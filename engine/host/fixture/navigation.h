@@ -176,6 +176,13 @@ static const char HTML_NAVIGATION[] =
     " fetch('/api/ckwait').then(function(){ return fetch('/api/ckwait'); }).then(function(){"
     " return fetch('/api/ckwait'); }).then(function(){"
     " fetch('/api/cookiesib?c=' + encodeURIComponent(document.cookie || 'none')); }); });</script>"
+    /* A realm exists only in the timeline that built it. The `cfg.admin` arm navigates a popup to `/rejload`,
+       whose Document leaves a rejection unhandled and parks inside its script on a host read; the other arm
+       runs microtask checkpoints across three host round trips meanwhile. The `realm-timeline` row requires
+       every `unhandledrejection` the Document reports to come from the arm that built it. */
+    "<script>if (cfg.admin) { open('/rejload'); } else {"
+    " fetch('/api/rejwait').then(function(){ return fetch('/api/rejwait'); }).then(function(){"
+    " return fetch('/api/rejwait'); }).then(function(){ fetch('/api/rejsib?a=' + cfg.arm); }); }</script>"
     /* A request made from an initial about:blank Document (HTML §7.3.1 "Creating a new browsing context"), whose
        realm runs on the creating flow. The `=== 'eu-west-9'` arm contradicts the reply and pins `region`, so its
        request rests on a value the fork chose and must state `pinned`; the other arm's states `unpinned`. The

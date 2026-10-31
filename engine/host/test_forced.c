@@ -6182,6 +6182,14 @@ static int hostreq_answer_all(JSContext *ctx)
                     "<!doctype html><html><head></head><body><script>"
                     "fetch('/api/cookieload?c=' + encodeURIComponent(document.cookie || 'none'));"
                     "</script></body></html>";
+                /* The `realm-timeline` row's document: an unhandled rejection, then a host read that parks the
+                   flow before the script's checkpoint, and a listener naming the opener's arm. */
+                static const char DOC_REJECT[] =
+                    "<!doctype html><html><head></head><body><script>"
+                    "addEventListener('unhandledrejection', function(e){ e.preventDefault();"
+                    " fetch('/api/rejnote?a=' + opener.cfg.arm); });"
+                    "Promise.reject(1); hostRead('rj');"
+                    "</script></body></html>";
                 /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer
                    policy><TAB><initiator><TAB><url>` — the ADDRESS IS THE REMAINDER, past the SEVENTH tab. This
                    fixture reads the six fields before it nowhere: it stands in
@@ -6216,11 +6224,13 @@ static int hostreq_answer_all(JSContext *ctx)
                 if ((size_t)(end - asked) >= sizeof FIXTURE_CROSS_SITE - 1 &&
                     !memcmp(asked, FIXTURE_CROSS_SITE, sizeof FIXTURE_CROSS_SITE - 1))
                     g_docfetch_cross_site++;
-                bool cookie_doc = false;
+                bool cookie_doc = false, reject_doc = false;
                 size_t ask_len = (size_t)(end - asked), ak;
                 bool own_doc = tf_own_document_at(asked, ask_len);
                 for (ak = 0; ak + 11 <= ask_len && !cookie_doc; ak++)
                     cookie_doc = !memcmp(asked + ak, "/cookieload", 11);
+                for (ak = 0; ak + 8 <= ask_len && !reject_doc; ak++)
+                    reject_doc = !memcmp(asked + ak, "/rejload", 8);
                 JS_DefinePropertyValueStr(ctx, v, "url",
                                           JS_NewStringLen(ctx, asked, (size_t)(end - asked)), JS_PROP_C_W_E);
                 /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one.
@@ -6239,6 +6249,9 @@ static int hostreq_answer_all(JSContext *ctx)
                                           : cookie_doc
                                             ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC_COOKIE,
                                                                     sizeof DOC_COOKIE - 1)
+                                          : reject_doc
+                                            ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC_REJECT,
+                                                                    sizeof DOC_REJECT - 1)
                                             : JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC, sizeof DOC - 1),
                                           JS_PROP_C_W_E);
                 /* THE RESPONSE'S HEADER LIST, as the field lines §7.4 step 14's answer carries — EMPTY here,
@@ -13901,6 +13914,16 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
     }
     fold_row(&flowjar_tt, &flowjar_why, param_value_only(js, "/api/cookiesib", "c", "rootc%3D1"),
              "no sibling arm's document.cookie is the root's `rootc=1`");
+    /* A realm built in one arm is no environment of its sibling: the `/rejload` Document's rejection is
+       notified only in the arm that navigated (opener's cfg.arm 'A'), while the other arm checkpoints. */
+    const char *rtime_why = NULL; int rtime_tt = 1;
+    fold_row(&rtime_tt, &rtime_why, !!strstr(js, "\"/api/rejnote"),
+             "NOT REACHED: no /api/rejnote record, so the navigated Document's own rejection was never notified");
+    fold_row(&rtime_tt, &rtime_why, param_value_is(js, "/api/rejsib", "a", "P"),
+             "NOT REACHED: no /api/rejsib record from arm P, so the sibling's checkpoints are unscored");
+    fold_row(&rtime_tt, &rtime_why, param_value_only(js, "/api/rejnote", "a", "A"),
+             "a /rejload Document's unhandledrejection reported an opener arm other than `A`: a checkpoint of the "
+             "arm that never built that Document notified its rejection (core/realm.c realm_next_environment)");
     /* The root document's own response's Set-Cookie is in the jar before its first script runs. */
     const char *rootjar_why = NULL; int rootjar_tt = 1;
     fold_row(&rootjar_tt, &rootjar_why, !!strstr(js, "\"/api/rootjar\""),
@@ -14115,6 +14138,7 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
         { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
         { "flow-jar", flowjar_tt, "/api/ckgate", SESS_EXPLORE, flowjar_why },
+        { "realm-timeline", rtime_tt, "/api/rejwait", SESS_EXPLORE, rtime_why },
         { "time-origin-deferred", torigin_tt, "/api/timeorigin", SESS_EXPLORE, torigin_why },
         { "root-jar", rootjar_tt, "/api/rootjar", SESS_EXPLORE, rootjar_why },
         { "blank-pin", blankpin_tt, "/api/blankgate", SESS_EXPLORE, blankpin_why },
