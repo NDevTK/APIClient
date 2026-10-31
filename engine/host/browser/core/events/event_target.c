@@ -1919,9 +1919,9 @@ static JSValue handler_map(JSContext *ctx, JSValueConst target, int create)
    on location, where the script body originated".
      THE COMPILE IS NO LONGER WHAT WAITS ON IT, and this used to say it was. RETIRED TEXT, unquoted because
    it is this file's and not a standard's: its ONLY consumer is a syntax error the compile below does not
-   exist to report yet — the crash in handler_current names it beside the compile, so the diff that reads it
+   exist to report yet — the crash in handler_current_run names it beside the compile, so the diff that reads it
    is the diff that writes it. Step 3.7 is BUILT and the two have come
-   apart. handler_current now decides step 3.7's condition and takes both of its arms, and the location is owed
+   apart. handler_current_run now decides step 3.7's condition and takes both of its arms, and the location is owed
    by the UNPARSABLE arm alone, whose residual names it; a parsable body never reads this field at all. So the
    diff that writes it is the diff that performs steps 3.7.2-3.7.3, which is not the compile.
    Returns JS_EXCEPTION on allocation failure, like every other constructor here. */
@@ -2036,7 +2036,7 @@ static JSValue uncompiled_body(JSContext *ctx, JSValueConst h)
    js_parse_fn_ctor_source's first act is js_parse_expect(s, '(') under a DCHECK that the next token is
    `function`, so a source beginning `with` is refused by construction and no flag changes that. It does not
    need it: a body that could close the wrapper — `}); alert(1); ({` — is not a FunctionBody ALONE, so step
-   3.7 answered NOT PARSABLE and handler_current returned null instead of the record. Every body that reaches
+   3.7 answered NOT PARSABLE and handler_current_run returned null instead of the record. Every body that reaches
    the compile has been through that pinned probe, over the identical `(function (event) {` prefix and the
    identical following token, so its token stream here is the one the pin accepted and it is balanced. The
    compile asserts that rather than assuming it. */
@@ -2085,60 +2085,33 @@ static char *handler_source(JSContext *ctx, JSValueConst body, bool five, unsign
     return out;
 }
 
-/* §8.1.8.1 step 3.7's CONDITION — "if body is not parsable as FunctionBody or if parsing detects an early
-   error" — answered the other way round: true when the body IS parsable.
-     IT IS ASKED OF THE BODY WITH ITS PARAMETER LIST AND NEVER OF THE BODY ALONE, because the step's second
-   disjunct is about EARLY ERRORS and a function's early errors are stated over its parameters and its body
-   together. `<img onerror="let event;">` is a SyntaxError in every browser precisely because `event` is step
-   3.9's parameterList; a probe with an empty parameter list would accept it here and the compile would then
-   fail — a rejection arriving one step late, in the wrong algorithm, with no step of the standard to report it.
-     THE PIN IS js_parse_fn_ctor_source's END OF INPUT, and it is what makes this EXACT rather than close. A
-   Script's body is a StatementList, so a PROGRAM parse of the same text accepts a body that CLOSES the
-   wrapper: `}); alert(1); ({` is three source elements, every one of which a program may hold, and the engine
-   then runs the page's `alert(1)` at the point the standard makes a parse. Pinned to end of input as one
-   parenthesised FunctionExpression, a body that closes the wrapper has nowhere to put what follows.
-     JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_FUNCTION_CTOR IS THAT PIN AND DECIDES NOTHING ELSE, which is a fact
-   about the flags rather than a convention borrowed from `new Function`. That flag has exactly two consumers
-   in quickjs.c: `s->fn_ctor_toplevel`, which routes the top-level parse to js_parse_fn_ctor_source, and
-   `fd->from_eval`, which is `(eval_type == DIRECT || INDIRECT) && !FUNCTION_CTOR` and is therefore ALREADY
-   false at JS_EVAL_TYPE_GLOBAL. So at this eval type the flag selects the pinned parse and says nothing about
-   eval origin — which is also the right answer, since an event handler is not eval code.
-     THE EVAL TYPE IS ALSO WHAT KEEPS THIS OFF THE @S SEAM. §19.2.1.2 HostEnsureCanCompileStrings is performed
-   by §19.2.1.1 PerformEval step 5 and §20.2.1.1.1 CreateDynamicFunction step 11 and by nothing else, so the
-   sink is named by DIRECT ∪ INDIRECT; a GLOBAL compile announces nothing, and announcing this one would report
-   every inline handler on every page as a code-execution sink — a fabricated finding, which propagates.
-     THE PENDING SyntaxError IS CONSUMED HERE, and this is the one place in this file where consuming one is
-   correct rather than a swallow: the parse failure IS this step's condition. Step 3.7.2 mints its OWN
-   SyntaxError, one that "describes the error while parsing" and is based on the handler's location, so the
-   probe's exception is not that exception and must not escape into an algorithm that has not reached its
-   throw.
-     RUNS NO PAGE CODE. JS_EVAL_FLAG_COMPILE_ONLY produces bytecode and evaluates nothing, so step 3.7 needs no
-   rest point and no flow base — which is why it can be performed from the dispatch walk and from the plain C
-   accessor alike, and why it is the half of step 3 that lands first. */
-static bool handler_body_parsable(JSContext *ctx, JSValueConst body, bool five)
-{
-    size_t n = 0;
-    /* NO SCOPE LAYERS, AND THAT IS THE STEP'S OWN SHAPE: 3.7 asks whether the body "is not parsable as
-       FunctionBody", which is a question about the body and its parameter list ALONE. The layers are step
-       3.9's, they are a SCOPE rather than a grammar, and a probe carrying them would be asking a different
-       question — and could not be pinned, since a source beginning with a `with` head is one
-       js_parse_fn_ctor_source refuses by construction. */
-    char *src = handler_source(ctx, body, five, 0, &n);
-    JSValue bc = JS_Eval(ctx, src, n, EVENT_HANDLER_SCRIPT_NAME,
-                         JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_FUNCTION_CTOR | JS_EVAL_FLAG_COMPILE_ONLY);
+/* §8.1.8.1 step 3's compile record, the CALLER's: `stage` is 0 when no compile is in flight, EHC_PROBE while step
+   3.7's parse probe rests, EHC_PARSE while step 3.9's program is parsed across the rests it takes, EHC_EVAL while
+   it is evaluated. The scope carrier and its layers are held from the parse to the evaluation. `accepted` is the
+   uncompiled record step 3.7's probe last answered parsable, which step 3.9's compile asserts it is compiling. */
+enum { EHC_EVAL = 1, EHC_PARSE = 2, EHC_PROBE = 3 };
+typedef struct {
+    uint8_t       stage;
+    uint8_t       layers;
+    JSValue       carrier;
+    JSValue       accepted;
+    ScriptCompile sc;
+} EhCompile;
 
-    free(src);
-    if (JS_IsException(bc)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        return false;
-    }
-    DCHECK(JS_VALUE_GET_TAG(bc) == JS_TAG_FUNCTION_BYTECODE,
-           "§8.1.8.1 step 3.7's probe compiled without an exception and did not answer with a program — "
-           "JS_EVAL_FLAG_COMPILE_ONLY's whole contract is that it produces bytecode and evaluates nothing, so "
-           "anything else here means this compile RAN, which for a page's inline handler is the escape the "
-           "end-of-input pin exists to make impossible");
-    JS_FreeValue(ctx, bc);
-    return true;
+static void eh_compile_init(EhCompile *c)
+{
+    c->stage = 0;
+    c->layers = 0;
+    c->carrier = JS_UNDEFINED;
+    c->accepted = JS_UNDEFINED;
+    script_compile_init(&c->sc);
+}
+
+static void eh_compile_visit(JSContext *ctx, EhCompile *c, JSStepVisit *v)
+{
+    v->val(ctx, &c->carrier);
+    v->val(ctx, &c->accepted);
+    script_compile_visit(ctx, &c->sc, v);
 }
 
 /* §8.1.8.1's GETTING THE CURRENT VALUE of the event handler for `type` on `target` — ITS CODE-FREE HALF.
@@ -2147,24 +2120,30 @@ static bool handler_body_parsable(JSContext *ctx, JSValueConst body, bool five)
    INTERNAL RAW UNCOMPILED HANDLER RECORD ITSELF, meaning steps 3.8-3.12 are owed and the caller must perform
    them through handler_compile_run. `uncompiled_body` is the test for that third case and a caller that
    cannot compile must CRASH on it rather than pass it on — a record is not a callback.
-   NO PAGE CODE
-   and no request — which is what lets the dispatch walk resolve the marker in place. RETIRED TEXT, unquoted because it is this
-   file's and not a standard's: this used to justify itself as a map read, so no page code. The premise has moved while the conclusion has not: step 3.7 makes this a map
-   read AND A PARSE, and a parse of the page's own markup is still none of the page's code, because
-   JS_EVAL_FLAG_COMPILE_ONLY evaluates nothing. The day step 3.7.2's report lands, the conclusion goes too —
-   reporting an exception FIRES AN EVENT, and firing one runs the page's listeners.
+   It answers into `*pout` and returns 0, or returns JS_STEP_YIELD while step 3.7's parse rests, with the
+   parse held on `c` for the caller's re-entry. It runs no page code and issues no request: step 3.7 is a map
+   read and a parse that evaluates nothing (step 3.7.2's report, which fires an event, is the residual below).
    AN OBJECT, NOT A FUNCTION. `EventHandler` is `EventHandlerNonNull?` and Web IDL §3.2.19 Callback function
    types says a callback function type IS a function object "except in the [LegacyTreatNonObjectAsNull] case,
    when they can be ANY object" — so `el.onclick = {}` stores that object, `el.onclick` gives it back, and the
    TypeError arrives at §3.12's invoke when the event fires. Filtering to callables here answered `null` for a
    value the page had assigned and could read back in every browser. */
-static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *type)
+static int handler_current_run(JSContext *ctx, EhCompile *c, JSValueConst target, const char *type,
+                               JSValue *pout)
 {
     JSValue map = handler_map(ctx, target, 0), h, body;
 
+    *pout = JS_UNDEFINED;
     /* STEPS 1-2 — "let handlerMap be eventTarget's event handler map", "let eventHandler be handlerMap[name]".
-       A target with no map has never had a handler set, which is every entry's initial null value. */
-    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_NULL; }
+       A target with no map has never had a handler set, which is every entry's initial null value. They read
+       state no rest can change, so a resume re-reads them on the way back to the probe. */
+    DCHECK(c->stage == 0 || c->stage == EHC_PROBE, "§8.1.8.1's current value was asked with a compile in flight");
+    if (!JS_IsObject(map)) {
+        DCHECK(c->stage == 0, "§8.1.8.1 step 3.7's probe resumed over a target whose map has gone");
+        JS_FreeValue(ctx, map);
+        *pout = JS_NULL;
+        return 0;
+    }
     h = JS_GetPropertyStr(ctx, map, type);
     /* STEP 3 — "if eventHandler's value is an INTERNAL RAW UNCOMPILED HANDLER". Its twelve substeps are the
        COMPILE, and they are the whole of what turns `<button onclick="doThing()">` into something that runs. */
@@ -2177,8 +2156,45 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
            answer until the parameter list is known. The condition is step 3.9's own, verbatim: five arguments
            "if name is onerror and eventTarget is a Window object", one otherwise. */
         bool five = (i >= 0 && strcmp(EH_NAME[i], "onerror") == 0 && event_target_is_window(ctx, target));
-        bool parsable = handler_body_parsable(ctx, body, five);
+        bool parsable;
+        JSValue probe = JS_UNDEFINED;
+        int r;
 
+        /* STEP 3.7 — "if body is not parsable as FunctionBody or if parsing detects an early error". It is
+           asked of the body with step 3.9's parameter list, because early errors are stated over both
+           (`<img onerror="let event;">` fails), and with no scope layers, which are 3.9's scope and not its
+           grammar. JS_EVAL_FLAG_FUNCTION_CTOR at the global eval type pins the parse to end of input as one
+           parenthesised FunctionExpression, so `}); alert(1); ({` cannot close the wrapper; it decides nothing
+           else, and a global compile is no §19.2.1.2 HostEnsureCanCompileStrings sink. The parse produces
+           bytecode and runs none; it rests where the scheduler asks, and the caller re-enters here with it held
+           on its record. Its SyntaxError is this step's condition, not step 3.7.2's error, so it is consumed. */
+        if (c->stage == 0) {
+            size_t n = 0;
+            char *src = handler_source(ctx, body, five, 0, &n);
+
+            script_compile_begin(ctx, &c->sc, src, n, EVENT_HANDLER_SCRIPT_NAME);
+            free(src);
+            c->stage = EHC_PROBE;
+        }
+        r = script_compile_run(ctx, &c->sc, JS_EVAL_FLAG_FUNCTION_CTOR, &probe);
+        if (r) {
+            JS_FreeValue(ctx, body);
+            JS_FreeValue(ctx, h);
+            JS_FreeValue(ctx, map);
+            return r;
+        }
+        c->stage = 0;
+        parsable = !JS_IsException(probe);
+        if (parsable) {
+            DCHECK(JS_VALUE_GET_TAG(probe) == JS_TAG_FUNCTION_BYTECODE,
+                   "§8.1.8.1 step 3.7's probe answered without an exception and not with a program, so it ran "
+                   "the page's handler body where the step makes a parse");
+            JS_FreeValue(ctx, probe);
+            JS_FreeValue(ctx, c->accepted);
+            c->accepted = JS_DupValue(ctx, h);
+        } else {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        }
         JS_FreeValue(ctx, body);
         if (!parsable) {
             /* STEP 3.7.1 — "Set eventHandler's value to null" — and its own note, which is why this is a bare
@@ -2188,19 +2204,12 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
                does not apply, and §2.9's walk skips a slot that resolves to null — which is what a browser
                does with markup that would not parse, and what makes this a state and not a repeated failure.
                STEP 3.7.4 — "Return null" — is the return below.
-               RESIDUAL: STEPS 3.7.2 AND 3.7.3 ARE NOT PERFORMED. What is above is CORRECT for what it does and
-               NARROWER than the step. WHAT IS NOT COVERED: the SyntaxError step 3.7.2 mints, and HTML
-               §8.1.8.1 step 3.7.3's "Report an exception with syntaxError for settings object's global
-               object". WHAT THE NEXT DIFF
-               BUILDS: (i) the LOCATION on the uncompiled record — uncompiled_new does not carry it and says
-               why, and §8.1.8.1's attribute change steps step 5.4 is where it comes from — and (ii) the report
-               itself through report_exception_run, which this file's own dispatch machine already drives with
-               a ReportExceptionWork of its own; that sub-sequence PARKS, so performing it here requires
-               handler_current to be reached from a machine rather than from plain C. THAT USED TO SAY the
-               compile needed the same rest point "and is why the two land together", and the compile has
-               landed WITHOUT it: steps 3.8-3.12 are a sub-algorithm the CALLER drives (handler_compile_run),
-               so this function stayed plain C and the report did not come with it. What the report still
-               needs is its own such sub-algorithm, driven the same way. HOW ITS ABSENCE SHOWS:
+               RESIDUAL: steps 3.7.2 and 3.7.3 are not performed. What is not covered: the SyntaxError step
+               3.7.2 mints, and step 3.7.3's "Report an exception with syntaxError for settings object's
+               global object". What the next diff builds: (i) the location on the uncompiled record, which
+               §8.1.8.1's attribute change steps step 5.4 supplies, and (ii) the report through
+               report_exception_run as a sub-algorithm both callers drive, as they drive handler_compile_run,
+               since the report parks. How its absence shows:
                `<img src=x onerror="}">` fires no `error` event at the Window and puts nothing in the
                page-error stream, where a browser reports a SyntaxError at the attribute's position. It does
                NOT show in the getter — `el.onerror` is null either way — so the getter is the wrong place to
@@ -2208,7 +2217,8 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
             JS_SetPropertyStr(ctx, map, type, JS_NULL);
             JS_FreeValue(ctx, map);
             JS_FreeValue(ctx, h);
-            return JS_NULL;
+            *pout = JS_NULL;
+            return 0;
         }
         JS_FreeValue(ctx, map);
         /* `h` IS NOT FREED HERE — it is the RETURN VALUE now, and its reference transfers to the caller. The
@@ -2244,13 +2254,15 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
              STEP 3.6 — the settings object — is an input to step 3.7.2's report, and is named where that is
                  owed, at the unparsable arm above. */
         (void)i;
-        return h;   /* the RECORD, for the caller to compile — see the contract on this function */
+        *pout = h;   /* the RECORD, for the caller to compile — see the contract on this function */
+        return 0;
     }
     JS_FreeValue(ctx, map);
-    return JS_IsObject(h) ? h : (JS_FreeValue(ctx, h), JS_NULL);
+    *pout = JS_IsObject(h) ? h : (JS_FreeValue(ctx, h), JS_NULL);
+    return 0;
 }
 
-/* IS §8.1.8.1 STEP 3'S COMPILE OWED ON THIS VALUE — the third answer handler_current can give, asked as a
+/* IS §8.1.8.1 STEP 3'S COMPILE OWED ON THIS VALUE — the third answer handler_current_run can give, asked as a
    predicate so no call site has to know that the record's brand and its body are one slot. */
 static bool handler_compile_owed(JSContext *ctx, JSValueConst h)
 {
@@ -2259,31 +2271,6 @@ static bool handler_compile_owed(JSContext *ctx, JSValueConst h)
 
     JS_FreeValue(ctx, body);
     return owed;
-}
-
-/* §8.1.8.1 step 3's compile record, the CALLER's: `stage` is 0 when no compile is in flight, EHC_PARSE while step
-   3.9's program is parsed across the rests it takes, EHC_EVAL while it is evaluated. The scope carrier and its
-   layers are held from the parse to the evaluation. */
-enum { EHC_EVAL = 1, EHC_PARSE = 2 };
-typedef struct {
-    uint8_t       stage;
-    uint8_t       layers;
-    JSValue       carrier;
-    ScriptCompile sc;
-} EhCompile;
-
-static void eh_compile_init(EhCompile *c)
-{
-    c->stage = 0;
-    c->layers = 0;
-    c->carrier = JS_UNDEFINED;
-    script_compile_init(&c->sc);
-}
-
-static void eh_compile_visit(JSContext *ctx, EhCompile *c, JSStepVisit *v)
-{
-    v->val(ctx, &c->carrier);
-    script_compile_visit(ctx, &c->sc, v);
 }
 
 /* HTML §8.1.8.1 "Event handlers"' GET THE CURRENT VALUE OF THE EVENT HANDLER, STEPS 3.8-3.12 — the compile
@@ -2356,7 +2343,7 @@ static int handler_compile_run(JSContext *ctx, EhCompile *c, uint8_t *cphase, JS
         body = uncompiled_body(ctx, h);
         DCHECK(!JS_IsUndefined(body),
                "§8.1.8.1 step 3's compile was entered for a handler whose value is not an internal raw "
-               "uncompiled handler — handler_current answers the RECORD exactly when steps 3.8-3.12 are owed, "
+               "uncompiled handler — handler_current_run answers the RECORD exactly when steps 3.8-3.12 are owed, "
                "so this is a caller that decided the compile was owed some other way");
 
         /* STEP 3.1's PARTITION — "If eventTarget is an element, then let element be eventTarget, and document
@@ -2435,16 +2422,14 @@ static int handler_compile_run(JSContext *ctx, EhCompile *c, uint8_t *cphase, JS
             layers |= EH_SCOPE_ELEMENT;
         }
 
-        /* EVERY BODY THAT REACHES THE COMPILE HAS PASSED STEP 3.7, AND THE HEADED SOURCE'S SOUNDNESS RESTS ON
-           IT — see handler_source's banner. handler_current answers the RECORD only on its parsable arm, so
-           this re-asks the same question of the same body with the same parameter list, and a disagreement is
-           a caller that reached the compile some other way rather than a body that changed. It is dev-only and
-           runs once per handler, because step 3.12's write is what makes the compile happen once. */
-        DCHECK(handler_body_parsable(ctx, body, five),
-               "§8.1.8.1 step 3.9 is compiling a body that is NOT parsable as a FunctionBody alone — step 3.7 "
-               "is the whole of what stops `}); alert(1); ({` from closing the wrapper and running as program "
-               "source, and the element arm's `with`-headed shape cannot carry js_parse_fn_ctor_source's "
-               "end-of-input pin, so a body that never went through 3.7's probe is an escape");
+        /* Every body that reaches the compile has passed step 3.7, and the headed source's soundness rests
+           on it (see handler_source): the element arm's `with`-headed shape cannot carry the end-of-input
+           pin, so a body 3.7 never accepted could close the wrapper and run as program source. */
+        DCHECKF(JS_VALUE_GET_PTR(c->accepted) == JS_VALUE_GET_PTR(h),
+                "§8.1.8.1 step 3.9 is compiling record %p, and step 3.7's probe last accepted %p",
+                JS_VALUE_GET_PTR(h), JS_IsObject(c->accepted) ? JS_VALUE_GET_PTR(c->accepted) : NULL);
+        JS_FreeValue(ctx, c->accepted);
+        c->accepted = JS_UNDEFINED;
 
         /* STEPS 3.8 AND 3.10 — the realm execution context pushed for the create and popped after — are the
            REALM this compile happens in, and the note beside 3.8 says so: "This is necessary so the subsequent
@@ -2478,7 +2463,7 @@ static int handler_compile_run(JSContext *ctx, EhCompile *c, uint8_t *cphase, JS
            can be, because a second independent stop costs nothing; it is not what the argument rests on, and
            the DCHECK above is where the argument is checked.
            IT CANNOT FAIL, AND THAT IS ASSERTED RATHER THAN HANDLED: step 3.7 has already compiled this body
-           with this parameter list under JS_EVAL_FLAG_COMPILE_ONLY and answered that it parses, and the heads
+           with this parameter list through the pinned parse and answered that it parses, and the heads
            this shape adds are this file's own fixed text over a carrier it built, so a parse error here is the
            two probes disagreeing about one text. */
         script_compile_begin(ctx, &c->sc, src, n, EVENT_HANDLER_SCRIPT_NAME);
@@ -2754,8 +2739,13 @@ static int ehg_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
     /* THE RESUME COMES BACK INSIDE STEP 3, NOT AT STEP 1. `ehc` is non-zero exactly while the compile is in
        flight, so it is the whole of the routing: steps 1-2 are performed once, on the entry that finds it
        zero, and a park inside step 3.9 returns here to finish the same compile over the same target. */
-    if (s->ehc.stage != 0)
+    if (s->ehc.stage == EHC_PARSE || s->ehc.stage == EHC_EVAL)
         goto compile;
+    if (s->ehc.stage == EHC_PROBE) {
+        JS_FreeValue(ctx, cb_result);   /* a rest's resume carries nothing the probe asked for */
+        cb_result = JS_UNDEFINED;
+        goto current;   /* steps 1-2 already named the target */
+    }
 
     /* STEP 1 — "Let eventTarget be the result of determining the target of an event handler given this object
        and name." The receiver is the header's, which is where a machine's `this` lives.
@@ -2772,10 +2762,13 @@ static int ehg_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         return JS_STEP_DONE;
     }
     /* STEP 3 — "Return the result of getting the current value of the event handler given eventTarget and
-       name." handler_current performs that algorithm's code-free half and answers the INTERNAL RAW UNCOMPILED
+       name." handler_current_run performs that algorithm's code-free half and answers the INTERNAL RAW UNCOMPILED
        HANDLER when its steps 3.8-3.12 are owed; the predicate below is what tells that third answer from a
        value the page assigned, exactly as the dispatch walk's does. */
-    h = handler_current(ctx, s->target, EH_TYPE[magic]);
+current:
+    r = handler_current_run(ctx, &s->ehc, s->target, EH_TYPE[magic], &h);
+    if (r)
+        return r;   /* step 3.7's probe rested; the resume comes back to `current` */
     if (!handler_compile_owed(ctx, h)) {
         s->result = h;
         ehg_done(s, presult);
@@ -4111,7 +4104,8 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        request it belongs to, at resume_listener. The handler algorithm's stage is one of the four things that
        can be in flight: its Web IDL return-type coercion and its step 6 fork both park with `cphase` back at
        zero, so a walk that asked only about the call would free the answer they are waiting for. */
-    if (s->cphase == 0 && s->lphase == 0 && s->reporting == 0 && s->eh.stage == 0 && s->ehc.stage == 0)
+    if (s->cphase == 0 && s->lphase == 0 && s->reporting == 0 && s->eh.stage == 0
+        && (s->ehc.stage == 0 || s->ehc.stage == EHC_PROBE))
         { JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED; }
     /* §2.9 steps 6.13 and 6.14: TWO passes over the path, not three legs over parts of it. The old shape ran the
        target as a leg of its own with BOTH kinds of listener in registration order, which is a different answer
@@ -4132,7 +4126,7 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                cannot tell "the program that produces the handler" from "the handler". The record is not
                re-read for the same reason the resume below does not re-read it: what the walk needs across
                this park is on the state (`lcb` holds the uncompiled record, `eh_index` the attribute). */
-            if (s->ehc.stage != 0)
+            if (s->ehc.stage == EHC_PARSE || s->ehc.stage == EHC_EVAL)
                 goto compile_handler;
             if (s->cphase == 0 && s->lphase == 0 && s->eh.stage == 0 && s->ehc.stage == 0
                 && event_stop_immediate(ctx, s->ev))
@@ -4182,7 +4176,18 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                    invoke needs the same answer for its own reason — a handler slot whose handler is null is
                    not a listener at all and the walk skips it without invoking anything — and one question
                    asked twice is two answers. */
-                fn = t ? handler_current(ctx, s->cur, t) : JS_UNDEFINED;
+                fn = JS_UNDEFINED;
+                if (t) {
+                    /* Step 3.7's probe can rest: the walk then returns with this listener unconsumed and its
+                       re-entry reads the same record back to here, where the probe held on `ehc` continues. */
+                    int pr = handler_current_run(ctx, &s->ehc, s->cur, t, &fn);
+
+                    if (pr) {
+                        JS_FreeCString(ctx, t);
+                        JS_FreeValue(ctx, rec);
+                        return pr;
+                    }
+                }
                 s->eh_index = t ? (int16_t)eh_index_of_type(t) : -1;
                 if (t) JS_FreeCString(ctx, t);
                 /* NULL AND NOT-CALLABLE ARE DIFFERENT ANSWERS HERE. Step 3's null is this skip; a non-callable
@@ -4286,7 +4291,7 @@ compile_handler:
                    "— `ehc` is raised only inside the arm `eh_index` selects, so the two have come apart and "
                    "the resume would fall through to the callback-interface lookup with the compile still up");
             if (s->eh_index >= 0) {
-                /* HTML §8.1.8.1's GET THE CURRENT VALUE steps 3.8-3.12. handler_current stopped at the last
+                /* HTML §8.1.8.1's GET THE CURRENT VALUE steps 3.8-3.12. handler_current_run stopped at the last
                    step that runs no code and answered the INTERNAL RAW UNCOMPILED HANDLER when the compile is
                    owed; this is one of the TWO drivers that finish it, because a program evaluation needs a
                    JSStepHdr and a request buffer and this machine has both.
