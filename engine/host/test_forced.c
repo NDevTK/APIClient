@@ -8519,6 +8519,20 @@ static const char *arg_val(int argc, char **argv, const char *flag) {
     return NULL;
 }
 
+/* RAM pressure's share as the spawning party states it (`--ram-share`, permille), or 0 when it states none. */
+static unsigned tf_ram_share_arg(int argc, char **argv) {
+    const char *share = arg_val(argc, argv, "--ram-share");
+    char *end;
+    unsigned long v;
+
+    if (!share) return 0;
+    v = strtoul(share, &end, 10);
+    CHECK(*share && !*end && v >= 1 && v <= 1000,
+          "--ram-share is RAM pressure's share of the instance's limit, a whole number of permille from 1 to 1000");
+    return (unsigned)v;
+}
+
+
 /* ─── THIS HOST'S COLD-TIER STORE ────────────────────────────────────────────────────────────────────────────
  * THE PARK DOCUMENT HAS TO OUTLIVE THE PROCESS, WHICH IS THE WHOLE OF WHAT A SECOND SESSION IS. `_park` rides
  * the result document to a trusted zone that puts it in IndexedDB and hands it back to qjs_begin on the next
@@ -34602,17 +34616,7 @@ TF_UNIT int abi_main(int argc, char **argv)
     qjs_set_arrival(arrival_f);
     /* RAM pressure's share (solver/engine.h's engine_set_ram_share), stated by the party that spawned this
        process, as `--paint-dir` is; without it the engine's default stands. */
-    {
-        const char *share = arg_val(argc, argv, "--ram-share");
-        if (share) {
-            char *end;
-            unsigned long v = strtoul(share, &end, 10);
-            CHECK(*share && !*end && v >= 1 && v <= 1000,
-                  "--ram-share is RAM pressure's share of the instance's limit, a whole number of permille from 1 "
-                  "to 1000");
-            engine_set_ram_share((unsigned)v);
-        }
-    }
+    if (tf_ram_share_arg(argc, argv) != 0) engine_set_ram_share(tf_ram_share_arg(argc, argv));
 
     /* NO RESIDUE, STATED. `qjs_begin`'s argument is the parked frontier a previous session left, and the empty
        string is the positive statement that this session continues none. A cross-session resume is a field on
@@ -35464,7 +35468,12 @@ int main(int argc, char **argv) {
         /* AND AN EMPTY §7.1.5 CREATION SANDBOXING FLAG SET, from the same fact one link along: a top-level
            traversable has no embedder element, so §7.1.5 answers from its POPUP sandboxing flag set, which
            begins empty and which only §7.3.1.7's rules for choosing a navigable ever fill. */
-        if (tf_doc_share(doc_name) != 0) engine_set_ram_share(tf_doc_share(doc_name));
+        /* The instance's share: the spawning party's `--ram-share`, or the document's TF_DOCS row. One source per
+           run, so a document that states its own share is not given a second. */
+        DCHECK(tf_ram_share_arg(argc, argv) == 0 || tf_doc_share(doc_name) == 0,
+               "`--ram-share` was given for a document whose TF_DOCS row states its own share");
+        if (tf_ram_share_arg(argc, argv) != 0) engine_set_ram_share(tf_ram_share_arg(argc, argv));
+        else if (tf_doc_share(doc_name) != 0) engine_set_ram_share(tf_doc_share(doc_name));
         root_proxy = navigable_root(ctx, world_local_doc(), NULL, tf_doc_coop(doc_name), "u",
                                     serialized_policy_container_none(), &root_embedder, 0);
         embedder_policy_free(&root_embedder);
