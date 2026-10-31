@@ -2,8 +2,8 @@
  "spec": "CSS Box Alignment Module Level 3",
  "key": "cssalign3",
  "base": "https://drafts.csswg.org/css-align-3/",
- "specUpdated": "8 October 2026",
- "fetched": "2026-10-11",
+ "specUpdated": "21 October 2026",
+ "fetched": "2026-10-31",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -81,7 +81,7 @@
    "id": "partial"
   },
   "4.1": {
-   "title": "Positional Alignment: the center , start , end , self-start , self-end , flex-start , flex-end , left , and right keywords",
+   "title": "Positional Alignment: the center , start , end , self-start , self-end , flow-start , flow-end , flex-start , flex-end , left , and right keywords",
    "page": "",
    "id": "positional-values"
   },
@@ -491,9 +491,6 @@
    "4.2": 3,
    "5.1": 2
   },
-  "content distribution properties": {
-   "4.1": 2
-  },
   "content position": {
    "5.1": 2
   },
@@ -550,7 +547,6 @@
    "4.2": 2
   },
   "self alignment properties": {
-   "4.1": 2,
    "5.4": 4
   },
   "self position": {
