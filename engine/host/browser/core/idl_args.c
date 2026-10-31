@@ -2405,10 +2405,13 @@ int idl_union_unknown_arm(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, unsign
     if (r) return r;
     *parm = arms[arm];
     /* The arm is a fact about the value's type: a sequence or a record is an Object, null is null or
-       undefined, and beside a null arm the string arm is neither. */
+       undefined, and the string arm is neither beside a null arm, nor an Object beside a record arm (step
+       11.5 takes every Object step 11.2 does not). */
     if (*parm == IDL_UNION_ARM_SEQUENCE || *parm == IDL_UNION_ARM_RECORD) concolic_type_facet_file(v, objs);
     else if (*parm == IDL_UNION_ARM_NULL) concolic_type_facet_file(v, nullish);
-    else if (nullish) concolic_type_facet_file(v, CONCOLIC_TYF_ALL & ~nullish);
+    else if (nullish || (declared & IDL_UNION_ARM_RECORD))
+        concolic_type_facet_file(v, CONCOLIC_TYF_ALL & ~nullish &
+                                    ~((declared & IDL_UNION_ARM_RECORD) ? objs : 0u));
     return 0;
 }
 
