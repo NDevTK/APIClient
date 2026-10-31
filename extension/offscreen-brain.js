@@ -2097,31 +2097,49 @@ function startExploitProbe(msg) {
 }
 
 
-/* The attacker document's address, or the reason there is none: the root of the attacker site the person
-   configured, or the root of the origin a message PoC's acts post from, which the engine's search composed under
-   the site (and so is pinned and forced). Opening it is this tool's navigation, judged by the one firing rule
-   (safeFetchFiringRefusal) like any other: from no document, carrying the profile's cookies for that site.
-   Its `reaches` row is `attacker-site` exactly where the address is under the configured site. */
+/* The launcher a PoC that needs no particular attacker origin opens when no attacker site is configured: a
+   documentation domain's front page (RFC 2606's example.com), which sends no CSP, so the MAIN world can evaluate.
+   The launcher's origin reaches the victim only as its referrer and its opener relation. */
+const ATTACKER_LAUNCHER_URL = "https://example.com/";
+
+/* The attacker document's address, or the reason there is none. Opening it is the person's explicit act on the
+   Verify surface (personVerifyAct), so it owes no firing decision; it owes a destination this zone names
+   exactly, and there are three:
+   - a message PoC whose acts post from an origin: that origin, only where its `reaches` row is `attacker-site`
+     (lib/attacker-site.js), so the person's configured site holds it;
+   - any other PoC with an attacker site configured: that site's root;
+   - any other PoC with none: ATTACKER_LAUNCHER_URL.
+   Anything else is refused with its reason. */
 function _attackerPageAddress(ses) {
   const rec = attackerSiteNow();
-  if (rec === null)
-    return { why: "no attacker site is configured, so there is no page to open: a live verify runs its PoC from " +
-                  "a document on a site you serve (the popup's Attacker site setting)" };
-  const composed = ses.attackerOrigin !== null;
-  const url = composed ? ses.attackerOrigin + "/" : "https://" + rec.site + "/";
-  const prov = composed ? PROVENANCE_FORCED : PROVENANCE_DERIVED, pin = composed ? "pinned" : "unpinned";
-  const refusal = safeFetchFiringRefusal({
-    url, destination: "document", provenance: prov, pinned: pin,
-    doc: docRecord(prov, DRIVEN_NO, pin, NAVIGABLE_NOTICE.sandbox.none, "public"),
-    actor: "tool", driven: "unstated", credentialed: true, headers: null });
-  if (refusal !== null)
-    return { why: "opening the attacker page " + url + " is refused by its origin's egress policy on `" + refusal +
-                  "`" };
-  return { url };
+  if (ses.attackerOrigin !== null) {
+    const url = ses.attackerOrigin + "/";
+    if (rec === null)
+      return { why: "this PoC's messages post from " + ses.attackerOrigin + ", and no attacker site is configured " +
+                    "to serve it (the popup's Attacker site setting)" };
+    if (attackerSiteReaches(new URL(url)) !== "attacker-site")
+      return { why: "this PoC's messages post from " + ses.attackerOrigin + ", which is not under the configured " +
+                    "attacker site " + rec.site + " (the engine composed it before the site was set)" };
+    return { url };
+  }
+  return { url: rec === null ? ATTACKER_LAUNCHER_URL : "https://" + rec.site + "/" };
+}
+
+/* The person's Verify act, minted only from the popup's own message: the router's extension-origin sender pinned
+   to popup.html, the person's initiator grade, and the user activation the popup's click handler read
+   (`navigator.userActivation.isActive`). An open asked for with no activation is refused with a reason, since a
+   popup handler running past its click carries none; anything else crashes, since only that surface sends it. */
+const _PERSON_ACT = Symbol("person-verify-act");
+function personVerifyAct(msg, sender) {
+  CHECK(!!sender && sender.origin === EXTENSION_ORIGIN && sender.url === chrome.runtime.getURL("popup.html") &&
+        msg.initiator === PAGE_CONTEXT_USER_INITIATED && typeof msg.activation === "boolean",
+        "an attacker page open was asked for by " + JSON.stringify(sender && sender.url) + " with initiator " +
+        JSON.stringify(msg.initiator) + " — only the popup's Verify act opens one");
+  return msg.activation ? Object.freeze({ stated: _PERSON_ACT }) : null;
 }
 
 /* Open the attacker tab and arm its button, two acts through the service worker's relay:
-   - `attackerPage.open`: the worker opens the address `_attackerPageAddress` judged in a new, active tab and
+   - `attackerPage.open`: the worker opens the address `_attackerPageAddress` names in a new, active tab and
      records it as the one tab `scripting.exec` may arm. It is active because the person's click is the user
      activation HTML §7.2.2.1's window open steps need to reach a navigable past a popup blocker.
    - `scripting.exec` with op `pocAttackerButton`: a named injector the worker holds, given only serializable
@@ -2130,9 +2148,11 @@ function _attackerPageAddress(ses) {
    into a tab still at `about:blank` would arm the button at the wrong origin; a tab that never completes is
    reported. Nothing is asserted about what the injector returns: it ran in a third-party MAIN world, and the
    browser-stated half arrives later on the POC_RAN relay's own `_facts`. */
-async function armAttackerPage(ses) {
-  /* The person's egress table and attacker site are restored at load; the address is judged against both. */
-  await egressPolicyReady();
+async function armAttackerPage(ses, act) {
+  CHECK(!!act && act.stated === _PERSON_ACT,
+        "an attacker page open was reached without the person's Verify act — it is the operator's act and no " +
+        "other path may open one, whatever its destination");
+  /* The person's attacker site is restored at load; the address is named from it. */
   await _attackerSiteReady;
   const page = _attackerPageAddress(ses);
   if (!("url" in page)) return { error: page.why };

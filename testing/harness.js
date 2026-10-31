@@ -1295,15 +1295,19 @@ async function cmdPocRun(args) {
   });
 }
 
-/* The live verify of a cross-document-message PoC against the harness's attacker site, and its control.
-   `attacker-case <victim-url>` states the site in the popup's setting (and prints the check's record), opens the
-   victim, waits for a finding whose delivery is a cross-document message, clicks its Verify button, clicks Run on
-   the attacker page it opens and prints the verdict and the attacker page's address. `attacker-case <url> unset`
-   is the negative control: with the setting cleared, the verify answers that no attacker site is configured and
-   no attacker page opens. Needs `restart` with HARNESS_ATTACKER_SITE=1 for the first form. */
+/* A live verify end to end, for one delivery: `attacker-case <victim-url> <delivery> [unset]` sets the attacker
+   site (or clears it, with `unset`) in the popup's setting and prints the check's record, opens the victim, waits
+   for a finding of that delivery (`cross-document-message` or `address`), clicks its Verify button, prints the
+   destination the surface shows, clicks "Open the attacker page", clicks Run there and prints the attacker page's
+   address and the verdict. The three cases and what each must print:
+     <url> cross-document-message       the attacker page under attacker.test, and a verdict
+     <url> cross-document-message unset control: "no attacker site is configured", and no page opened
+     <url> address unset                the constant launcher opens with no site configured, and a verdict
+   The first needs `restart` with HARNESS_ATTACKER_SITE=1. */
 async function cmdAttackerCase(args) {
-  const victimUrl = args[0], unset = args[1] === "unset";
-  if (!victimUrl) throw new Error("usage: attacker-case <victim-url> [unset]");
+  const [victimUrl, delivery] = args, unset = args[2] === "unset";
+  if (!victimUrl || ["cross-document-message", "address"].indexOf(delivery) < 0)
+    throw new Error("usage: attacker-case <victim-url> <cross-document-message|address> [unset]");
   await withBrowser(async (browser) => {
     const popup = await getPopupPage(browser);
     const send = (m) => popup.evaluate((msg) => new Promise((r) => chrome.runtime.sendMessage(msg, r)), m);
@@ -1312,50 +1316,58 @@ async function cmdAttackerCase(args) {
     const victim = await browser.newPage();
     await victim.goto(victimUrl, { waitUntil: "load", timeout: 30000 });
     await victim.bringToFront();
-    /* Every page created from here on, so the control can say whether the verify opened one. */
+    /* Every page created from here on, so a case can say whether the verify opened one. */
     const created = [];
     browser.on("targetcreated", (t) => { if (t.type() === "page") created.push(t); });
     let clicked = false;
     for (let i = 0; i < 120 && !clicked; i++) {
       await popup.reload({ waitUntil: "domcontentloaded" });
       await sleep(1000);
-      clicked = await popup.evaluate(() => {
+      clicked = await popup.evaluate((d) => {
         const b = [...document.querySelectorAll(".verify-btn")].find((x) => {
-          try { return JSON.parse(x.dataset.probe).delivery === "cross-document-message"; } catch { return false; }
+          try { return JSON.parse(x.dataset.probe).delivery === d; } catch { return false; }
         });
         if (b) b.click();
         return !!b;
-      });
+      }, delivery);
     }
-    if (!clicked) { log("attacker-case: NO FINDING — no cross-document-message finding rendered a Verify button"); return; }
+    if (!clicked) { log(`attacker-case: NO FINDING — no ${delivery} finding rendered a Verify button`); return; }
+    const resultText = () => popup.evaluate(() => [...document.querySelectorAll(".verify-result")].map((r) => r.textContent).join(" | "));
     let result = "";
     for (let i = 0; i < 40; i++) {
-      result = await popup.evaluate(() => [...document.querySelectorAll(".verify-result")].map((r) => r.textContent).join(" | "));
-      if (/no attacker site|could not be armed|not deliverable|a tab has opened/.test(result)) break;
+      result = await resultText();
+      if (/cannot be opened|not deliverable|Opens https:/.test(result)) break;
       await sleep(500);
     }
     log("verify: " + result);
-    const opened = created.map((t) => t.url()).filter((u) => !u.startsWith("chrome-extension://"));
-    if (unset) {
-      log("attacker-case control: " + (/no attacker site is configured/.test(result) && opened.length === 0
+    const opened = () => created.map((t) => t.url()).filter((u) => !u.startsWith("chrome-extension://"));
+    if (unset && delivery === "cross-document-message") {
+      log("attacker-case control: " + (/no attacker site is configured/.test(result) && opened().length === 0
         ? "PASS — the verify refused with no site configured and opened no page"
-        : "FAIL — with no site configured the verify " + (opened.length ? "opened " + opened.join(", ") : "answered otherwise")));
+        : "FAIL — with no site configured the verify " + (opened().length ? "opened " + opened().join(", ") : "answered otherwise")));
       return;
     }
+    /* The person's second click, which carries the user activation the open requires. */
+    const armedClick = await popup.evaluate(() => {
+      const b = document.querySelector(".verify-open-btn:not([disabled])");
+      if (b) b.click();
+      return !!b;
+    });
+    if (!armedClick) { log("attacker-case: NO OPEN BUTTON — the surface showed no destination to open"); return; }
     let attacker = null;
     for (let i = 0; i < 60 && !attacker; i++) {
       for (const pg of await browser.pages())
         if (await evalNoGesture(pg, "!!document.getElementById('__apiclient_poc_overlay')").catch(() => false)) attacker = pg;
       if (!attacker) await sleep(250);
     }
-    if (!attacker) { log("attacker-case: NOT ARMED — no attacker page carries the Run button"); return; }
+    if (!attacker) { log("attacker-case: NOT ARMED — " + (await resultText())); return; }
     log("attacker page: " + attacker.url());
     await attacker.bringToFront();
     await sleep(500);
     await attacker.click("#__apiclient_poc_overlay button");
     let verdict = "";
     for (let i = 0; i < 60; i++) {
-      verdict = await popup.evaluate(() => [...document.querySelectorAll(".verify-result")].map((r) => r.textContent).join(" | "));
+      verdict = await resultText();
       if (/FIRED IN THE DELIVERED DOCUMENT|NOT DELIVERED|REFUSED —/.test(verdict)) break;
       await sleep(500);
     }

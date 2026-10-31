@@ -128,9 +128,9 @@ chrome.webRequest.onErrorOccurred.addListener(_wrRelay("onErrorOccurred"), _WR_F
 // preferred: the MAIN world evaluates and dispatches a CustomEvent, and content.js's ISOLATED world relays it —
 // the same cross-world transport `__uasr_probe_hit` already uses, which is a `document` event rather than a
 // `window.postMessage` precisely so no page handler sees a `message` event that was not the page's.
-/* The live-verify attacker document is an ordinary tab of a page on the attacker site the person configured,
-   opened at the address the offscreen judged by the one firing rule (offscreen-brain.js _attackerPageAddress),
-   and the payload is evaluated in it rather than served from it. A page CSP without 'unsafe-eval' would refuse
+/* The live-verify attacker document is an ordinary tab, opened at the address the offscreen named for the
+   person's Verify act (offscreen-brain.js _attackerPageAddress: the attacker site the person configured, or a
+   constant launcher), and the payload is evaluated in it rather than served from it. A page CSP without 'unsafe-eval' would refuse
    that, which the site's configuration check reports and `pocAttackerButton` reports as an EvalError. A message
    PoC's page is opened at the origin its acts post from, under the same site. */
 /* The tabs `attackerPage.open` opened that are still open: the only tabs `scripting.exec` arms. It is this
@@ -301,7 +301,7 @@ async function _swRpc(msg) {
   switch (api) {
     case "tabs.sendMessage": return chrome.tabs.sendMessage(...args);
     case "attackerPage.open": {
-      /* The decision is the offscreen's (the attacker site and the egress table live there); this CHECK is
+      /* The decision is the offscreen's (the person's act and the attacker site live there); this CHECK is
          defence in depth, holding the open to an https page with no userinfo, port or fragment. */
       const url = args[0] && args[0].url;
       const u = typeof url === "string" && URL.canParse(url) ? new URL(url) : null;

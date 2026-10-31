@@ -481,7 +481,7 @@ surface that shows them the bytes, and what it owes is a destination this zone c
 | Renderer program assembly (`renderer-host.js`) | a constant list off the extension origin | none | no bundle influences it; a bundle-influenced name would make it analyzer HTTP |
 | The page's own traffic through `intercept.js`'s `fetch`, `XMLHttpRequest`, `WebSocket` and `EventSource` wrappers | the page | the page's | none needed: the wrapper calls the original and confers nothing. A fetch() or XHR record's request line, header lists, request body and status are the browser's webRequest record of it (`lib/web-request.js`); the wrapper supplies only the response body, the call site and the key it is joined on. The browser's record is the observed request and the wrapper only adds to it: a record no capture joins (a fetch made from a realm the wrapper does not run in) is filed from the record alone, its response body absent, and a capture the record contradicts is refused |
 | Operator writes into a channel the page opened (`WS_SEND_MSG`, `PM_SEND_MSG`, `MC_SEND_MSG`) | the page opened the socket, port or window | the page's | the router's document→document rule; `documentId` routing; a postMessage target must be one real origin (`_isRealTargetOrigin` in `lib/popup-console.js`, DCHECKed in `lib/popup-handlers.js`) |
-| Live-verify attacker tab (`attackerPage.open`: the service worker's `tabs.create` of the address the offscreen judged) | the zone, as the root of the attacker site the person configured | the person's profile | `_firingRefusal`, like any tool-composed navigation: its `reaches` row is `attacker-site`, which fires by default because the person configured it as their own server, and any other address is refused unless the person widened its origin; the worker `CHECK`s an https address with no userinfo, port or fragment as defence in depth |
+| Live-verify attacker tab (`attackerPage.open`: the service worker's `tabs.create` of the address the offscreen named) | the person, by their click on the Verify surface, which shows the attacker page and the victim address before it; the zone names one of exactly three destinations (`_attackerPageAddress`): a message PoC's act origin where its `reaches` row is `attacker-site`, else the configured attacker site's root, else the constant launcher `https://example.com/` | the person's profile | the operator's explicit act, so no firing decision: `personVerifyAct` `CHECK`s the popup's own message (extension-origin sender pinned to `popup.html`, the user-initiated grade) and refuses one without the click's user activation, and `armAttackerPage` `CHECK`s that act, so no engine-initiated or scheduled path opens one; any other destination is refused; the worker `CHECK`s an https address with no userinfo, port or fragment as defence in depth |
 | Live-verify navigation (`window.open` of the delivery address) | the page the sink was observed on, plus a fragment or query the engine declared | the person's profile | the address (see Live verify); the person's click |
 
 The operator's channel writes are the one send outside `safeFetch`, and the reason is the reply's path: a
@@ -707,9 +707,12 @@ payload's code ran in the delivered document, not that the sink produced the cal
   (`pocWhy`) instead of a PoC. A delivered document is latched only where the attacker window made it: a
   top-level document whose browser-stated `openerTabId` is the attacker tab, or a frame of the attacker tab on
   the frame route.
-- `EXPLOIT_PROBE_ARM` runs `armAttackerPage`: the offscreen composes the attacker page's address as the root of
-  the configured attacker site and judges it with `_firingRefusal` (no site configured is a stated reason, and no
-  tab opens); the service worker's `attackerPage.open` opens it and records the tab in `_attackerTabs`; after a wait for the tab
+- `EXPLOIT_PROBE_START` answers the attacker page's address and the victim address with the PoC, and the popup
+  shows both before the person's second click, which sends `EXPLOIT_PROBE_ARM` with that click's user activation.
+  `armAttackerPage` runs only with the act `personVerifyAct` mints from it, names the address
+  (`_attackerPageAddress`: an `attacker-site` act origin, the configured site's root, or the constant launcher;
+  a message PoC whose origin no configured site holds is a stated reason, and no tab opens); the service worker's
+  `attackerPage.open` opens it and records the tab in `_attackerTabs`; after a wait for the tab
   to complete, `scripting.exec` with the named injector `pocAttackerButton` (`background.js`) renders a Run
   button in the attacker document's `MAIN` world. `scripting.exec` `CHECK`s that the tab is one
   `attackerPage.open` opened and is still open, and injects its top frame only. The offscreen selects the

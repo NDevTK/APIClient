@@ -766,8 +766,15 @@ async function handlePopupMessage(msg, sender, sendResponse) {
                "EXPLOIT_PROBE_START has neither a PoC nor a reason to answer with — buildLiveDelivery states " +
                "one of the two on every arm, so this reply would render as a broken build for a finding whose " +
                "breakout is fire-verified");
+        /* WHERE THE OPEN WILL GO, stated before the person's click that opens it: the attacker page this zone
+           names and the victim address it delivers to. Read again at the open, which names its own. */
+        await _attackerSiteReady;
+        const page = session.pocJs === null ? null : _attackerPageAddress(session);
         sendResponse({ success: true, sessionId: session.marker, pocJs: session.pocJs,
-                       pocWhy: session.pocWhy });
+                       pocWhy: session.pocWhy,
+                       attackerPageUrl: page !== null && "url" in page ? page.url : null,
+                       attackerPageWhy: page !== null && "why" in page ? page.why : null,
+                       targetUrl: session.expect === null ? null : session.expect.url });
       } catch (e) {
         RETHROW_FATAL(e);   // an invariant abort is never reported as a probe that failed to build
         sendResponse({ error: (e && e.message) || String(e) });
@@ -793,7 +800,13 @@ async function handlePopupMessage(msg, sender, sendResponse) {
                                + "which is buildLiveDelivery's pairing broken rather than a mechanism") });
         return;
       }
-      armAttackerPage(ses).then(function (r) { sendResponse(r); }).catch(function (e) {
+      const act = personVerifyAct(msg, sender);
+      if (act === null) {
+        sendResponse({ error: "the attacker page opens only from your click on the Verify surface, and this ask " +
+                              "carried no user activation" });
+        return;
+      }
+      armAttackerPage(ses, act).then(function (r) { sendResponse(r); }).catch(function (e) {
         RETHROW_FATAL(e);   // an invariant abort is never reported as a tab that failed to open
         sendResponse({ error: (e && e.message) || String(e) });
       });

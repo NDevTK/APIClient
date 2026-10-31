@@ -1524,6 +1524,33 @@ var _ATTACKER_HANDLE = new Map([
          + "is offscreen-brain.js\u2019s buildLiveDelivery having grown a second statement, so that function is "
          + "the whole of what to read. A CONTRACT GAP in the harness, stated as one on purpose"],
 ]);
+/* The person's click on "Open the attacker page": the open, asked for with the activation that click carried,
+   then the poll of the session it armed. */
+async function _armVerify(openBtn, resultEl, sessionId, probe, activation) {
+  openBtn.disabled = true;
+  try {
+    resultEl.textContent = "opening the attacker page…";
+    var armed = await new Promise(function (res) { chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_ARM",
+      sessionId: sessionId, initiator: "user-initiated", activation: activation }, function (r) { res(r); }); });
+    if (!armed || armed.error || !armed.success) {
+      resultEl.textContent = "the attacker page could not be armed: "
+        + ((armed && armed.error) || "the offscreen answered neither a success nor a reason — an engine↔host contract gap");
+      return;
+    }
+    /* THE PERSON IS TOLD WHERE THE BUTTON IS, BECAUSE IT IS NOT IN THIS DOCUMENT: the click has to happen in
+       another tab, and this popup closes when it loses focus. The poll below reads the session's own `ran`
+       record rather than waiting for a message, and reopening the popup re-reads it. */
+    resultEl.textContent = "a tab has opened at " + armed.attackerPageUrl
+      + " — click Run PoC there (your click is the user gesture window.open needs). This panel reads the result "
+      + "back from the session, so it survives this popup closing.";
+    // The probe carries the engine's policy facts (present only when the engine stated them), so the ONE
+    // _policyBlockers reading serves the card and the verify verdict alike.
+    _pollVerify(resultEl, sessionId, _policyBlockers(probe));
+  } catch (err) {
+    RETHROW_FATAL(err);   // an invariant abort is never reported as a verify that went wrong
+    resultEl.textContent = "verify error: " + (err && err.message || err);
+  }
+}
 async function _handleVerify(btn) {
   // THE PROBE IS THIS VIEW'S OWN JSON, so a parse failure here is this file disagreeing with itself — never a
   // page state. `probe = {}` on the catch built a probe with no poc and no pageUrl and sent it anyway, and
@@ -1560,27 +1587,23 @@ async function _handleVerify(btn) {
            + "crypto.randomUUID marker on every session and popup-handlers answers it as `sessionId`, so its "
            + "absence is that reply broken and this verify could never be correlated to a real Chrome hit");
     /* ARMING IS A SECOND COMMAND AND IT OPENS A TAB, which is why it is not folded into START: a session whose
-       delivery could not be built refuses above without a tab ever appearing. The payload does not travel with
-       this message — the offscreen already holds it and hands it to the service worker's named injector, so the
-       artifact the engine fire-verified is the one that runs. */
-    resultEl.textContent = "opening the attacker page…";
-    var armed = await new Promise(function (res) { chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_ARM", sessionId: start.sessionId }, function (r) { res(r); }); });
-    if (!armed || armed.error || !armed.success) {
-      resultEl.textContent = "the attacker page could not be armed: "
-        + ((armed && armed.error) || "the offscreen answered neither a success nor a reason — an engine↔host contract gap");
+       delivery could not be built refuses above without a tab ever appearing. It is the person's own act, so
+       it is a second CLICK: START answers where the open will go (the attacker page this zone names and the
+       victim address it delivers to), shown here before anything opens, and the open is asked for from that
+       click's handler with the activation it carries (offscreen personVerifyAct). The payload does not travel
+       with the message; the offscreen hands its own copy to the service worker's named injector. */
+    if (typeof start.attackerPageUrl !== "string") {
+      DCHECK(typeof start.attackerPageWhy === "string",
+             "EXPLOIT_PROBE_START answered a PoC with neither an attacker page nor the reason there is none");
+      resultEl.textContent = "the attacker page cannot be opened: " + start.attackerPageWhy;
       btn.disabled = false; btn.textContent = prev; return;
     }
-    /* THE PERSON IS TOLD WHERE THE BUTTON IS, BECAUSE IT IS NO LONGER IN THIS DOCUMENT. That is the whole cost
-       of moving the attacker page to a real origin: the click has to happen in another tab, and this popup
-       closes when it loses focus. The poll below therefore reads the session's own `ran` record rather than
-       waiting for a message, and reopening the popup re-reads it. */
-    resultEl.textContent = "a tab has opened at " + (armed.attackerPageUrl || "the attacker page")
-      + " — click Run PoC there (your click is the user gesture window.open needs). This panel reads the result "
-      + "back from the session, so it survives this popup closing.";
-    // The probe carries the engine's policy facts (present only when the engine stated them), so the ONE
-    // _policyBlockers reading serves the card and the verify verdict alike. Two spellings of "did the page's
-    // policy kill this" is how the badge and the envelope came to disagree in the first place.
-    _pollVerify(resultEl, start.sessionId, _policyBlockers(probe));
+    var openBtn = domElement("button", { class: "verify-open-btn" }, ["Open the attacker page"]);
+    domReplaceChildren(resultEl, ["Opens " + start.attackerPageUrl + " in a new tab; its Run PoC button delivers "
+      + "the engine’s PoC to " + start.targetUrl + ". ", openBtn]);
+    openBtn.addEventListener("click", function () {
+      _armVerify(openBtn, resultEl, start.sessionId, probe, navigator.userActivation.isActive);
+    }, { once: true });
     btn.textContent = prev; btn.disabled = false;
   } catch (err) {
     RETHROW_FATAL(err);   // an invariant abort is never reported as a verify that went wrong
