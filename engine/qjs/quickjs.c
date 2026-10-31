@@ -71520,63 +71520,53 @@ static void js_continue_module_loading(JSContext *ctx, JSValueConst state, JSMod
    SOURCE TEXT, which is what the loader parked on. Compiling it registers the record under the resolved name,
    so a second import of the same specifier finds it in the map and never asks the host again. This is the
    RESUME of the load: the importing flow's continuation is the reaction chain this runs on, and no scope is
-   ever re-entered (a re-run would be a replay). */
-static JSValue js_module_request_fulfilled(JSContext *ctx, JSValueConst this_val,
-                                           int argc, JSValueConst *argv, int magic,
-                                           JSValueConst *func_data)
-{
-    JSValueConst state = func_data[0];
-    JSModuleDef *referrer, *m;
-    JSReqModuleEntry *rme;
-    JSAtom name_atom;
-    const char *src, *name;
-    size_t src_len;
-    JSValue func_obj;
-    int idx;
+   ever re-entered (a re-run would be a replay). The compile rests like the dynamic import's
+   (step_module_source_compile). */
+#define MODREQ_STAGES(X) \
+    X(MODREQ_COMPILE, "16.2.1.11 FinishLoadingImportedModule, the host's 16.2.1.10 HostLoadImportedModule " \
+                      "finishing a static request: the record is created from the fetched source text " \
+                      "(16.2.1.7.1 ParseModule)")
+enum { MODREQ_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_module_request_steps[] = { MODREQ_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    DCHECK(argc >= 1, "a module source promise fulfilled with no value — what the loader parked on is the "
-                      "module's SOURCE TEXT, and there is nothing to compile without it");
-    DCHECK(JS_VALUE_GET_TAG(func_data[1]) == JS_TAG_MODULE,
+static int js_module_request_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSModSrc *s = st;
+    JSCFunctionDataRecord *rec = JS_VALUE_GET_OBJ(s->hdr.func_obj)->u.c_function_data_record;
+    JSValueConst state = rec->data[0];
+    JSModuleDef *referrer, *m = NULL;
+    JSReqModuleEntry *rme;
+    int idx, r;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(s->hdr.stage == MODREQ_COMPILE, "a module request reaction resumed in no stage");
+    DCHECK(s->hdr.argc >= 1, "a module source promise fulfilled with no value — what the loader parked on is the "
+                             "module's SOURCE TEXT, and there is nothing to compile without it");
+    DCHECK(JS_VALUE_GET_TAG(rec->data[1]) == JS_TAG_MODULE,
            "a parked module request's referrer is not a module record");
-    DCHECK(JS_VALUE_GET_TAG(func_data[2]) == JS_TAG_INT,
+    DCHECK(JS_VALUE_GET_TAG(rec->data[2]) == JS_TAG_INT,
            "a parked module request's index is not the integer its only writer writes");
-    referrer = JS_VALUE_GET_PTR(func_data[1]);
-    idx = JS_VALUE_GET_INT(func_data[2]);
+    referrer = JS_VALUE_GET_PTR(rec->data[1]);
+    idx = JS_VALUE_GET_INT(rec->data[2]);
     DCHECK(idx >= 0 && idx < referrer->req_module_entries_count,
            "a parked module request names an index outside its referrer's request table");
     rme = &referrer->req_module_entries[idx];
 
-    if (!js_gls_is_loading(ctx, state))
-        return JS_UNDEFINED;             /* 16.2.1.6.1.1.2 step 1: a sibling request already rejected this load */
-
-    /* ALREADY LOADED? Two flows exploring the same page park on the same specifier, and both resume with the
-       same body — the loader ran once per flow because neither had finished when the other asked. Compiling it
-       twice would put a second record under one name. The module map is the load's memo (16.2.1.11 finishes a
-       load another already completed by handing back the existing record), so this asks it first. */
-    name_atom = JS_ValueToAtom(ctx, func_data[3]);
-    if (name_atom == JS_ATOM_NULL)
-        goto fail;
-    m = js_find_loaded_module(ctx, name_atom);
-    JS_FreeAtom(ctx, name_atom);
-    if (!m) {
-        src = JS_ToCStringLen(ctx, &src_len, argv[0]);
-        if (!src)
-            goto fail;
-        name = JS_ToCString(ctx, func_data[3]);
-        if (!name) {
-            JS_FreeCString(ctx, src);
-            goto fail;
+    /* 16.2.1.6.1.1.2 step 1: a sibling request already rejected this load, before or while the parse rested. */
+    if (!js_gls_is_loading(ctx, state)) {
+        if (s->comp) {
+            js_modsrc_compile_destroy(ctx, s->comp);
+            s->comp = NULL;
         }
-        func_obj = JS_Eval(ctx, src, src_len, name,
-                           JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-        JS_FreeCString(ctx, name);
-        JS_FreeCString(ctx, src);
-        if (JS_IsException(func_obj))
-            goto fail;
-        DCHECK(JS_VALUE_GET_TAG(func_obj) == JS_TAG_MODULE,
-               "compiling a module source did not produce a module record");
-        m = JS_VALUE_GET_PTR(func_obj);
-        JS_FreeValue(ctx, func_obj);     /* the module map owns the record */
+        return JS_STEP_DONE;
+    }
+    r = step_module_source_compile(ctx, &s->comp, step_arg(&s->hdr, 0), rec->data[3], &m);
+    if (r > 0)
+        return r;
+    if (r < 0) {
+        js_continue_module_loading(ctx, state, NULL);
+        return JS_STEP_DONE;
     }
     /* 16.2.1.11 step 1.a: a request already answered must be answered with the SAME record. 16.2.1.10 requires
        the host to be idempotent per (referrer, request), and a host that is not would silently give one import
@@ -71585,11 +71575,15 @@ static JSValue js_module_request_fulfilled(JSContext *ctx, JSValueConst this_val
            "16.2.1.10's idempotence broken: one (referrer, request) was answered with two different records");
     rme->module = m;                     /* step 1.b: append to referrer's [[LoadedModules]] */
     js_continue_module_loading(ctx, state, m);
-    return JS_UNDEFINED;
- fail:
-    js_continue_module_loading(ctx, state, NULL);
-    return JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static const JSTrampStepDef js_module_request_def = {
+    sizeof(JSModSrc), js_module_request_step, js_module_source_fini, 0,
+    .visit = js_module_source_visit,
+    .algorithm = "16.2.1.11 FinishLoadingImportedModule, a static request's module source arrival",
+    .steps = js_module_request_steps
+};
 
 /* The source fetch itself failed: 16.2.1.11 with a throw completion, which ContinueModuleLoading turns into the
    load's rejection — what a browser does for a module whose network request did not succeed. */
@@ -71634,7 +71628,7 @@ static JSModuleDef *js_module_request_host_load(JSContext *ctx, JSValueConst sta
     func_data[1] = mv;
     func_data[2] = js_int32(idx);
     func_data[3] = name;
-    reactions[0] = JS_NewCFunctionData(ctx, js_module_request_fulfilled, 1, 0, 4, func_data);
+    reactions[0] = js_new_step_closure(ctx, &js_module_request_def, 1, 0, 4, func_data);
     reactions[1] = JS_NewCFunctionData(ctx, js_module_request_rejected, 1, 0, 4, func_data);
     CHECK(!JS_IsException(reactions[0]) && !JS_IsException(reactions[1]),
           "a parked module request could not build its re-entry — the load would never resume and the flow "
