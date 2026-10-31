@@ -75,14 +75,6 @@
 
 #include "core/css/css_length.h"
 
-/* THE WIDTH (`vertical` false) OR HEIGHT of `el`'s scrolling area, in CSS pixels — the distance between the
-   two edges §2's table gives that axis.
-   THE CALLER HAS ALREADY ESTABLISHED THAT THE ELEMENT HAS AN ASSOCIATED BOX (core/dom/element_view.h's one
-   predicate), which is §6's own step 6 and is what makes the element's padding edge and its position exist at
-   all. Every box this component cannot place or measure crashes in the component that owns that half, naming
-   its own section; there is no fallback extent. */
-CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical);
-
 /* §2's OVERFLOW DIRECTIONS for `el`'s scrolling box, reduced to the one bit every consumer needs: does the
    ENDING edge of the scrolling area sit at the LARGER coordinate on this axis. "A scrolling box of a viewport
    or element has two overflow directions, which are the block-end and inline-end directions for that viewport
@@ -109,12 +101,14 @@ bool scrolling_area_ending_edge_at_higher_coordinate(lxb_dom_element_t *el, bool
    both rest on, and it is asserted here rather than at either of them. */
 CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical);
 
-/* The same two rows as a cursor over the descendant walk, for a step machine that rests inside it: `walk_*`
-   computes everything before the walk (the same preconditions as the two entries above), each `step` folds
-   one descendant node or answers false ("not yet": the node's origin deferred a question, which is suspended
-   on the current job for the caller's drive, and the cursor still names the node), and `extent` answers once
-   `done`. The two entries above are this cursor driven to
-   completion. The cursor holds DOM nodes of the running flow, which a fork shares by address, and lengths. */
+/* Both columns as a cursor over the descendant walk, for a step machine that rests inside it: `walk_*`
+   computes everything before the walk, each `step` folds one descendant node or answers false ("not yet": the
+   node's origin deferred a question, which is suspended on the current job for the caller's drive, and the
+   cursor still names the node), and `extent` answers once `done`. The element's row needs an element with an
+   associated box (core/dom/element_view.h's one predicate, §6's own step 6); the viewport's row has the
+   preconditions of the entry above, which is this cursor driven to completion. Every box this component cannot
+   place or measure crashes in the component that owns that half; there is no fallback extent. The cursor holds
+   DOM nodes of the running flow, which a fork shares by address, and lengths. */
 typedef struct {
     lxb_dom_element_t *root;            /* the walk root: the element, or the viewport's document element */
     lxb_dom_element_t *exclude_under;   /* the element for its own row; NULL for the viewport's */

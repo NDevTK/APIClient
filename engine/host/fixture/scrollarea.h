@@ -1,18 +1,15 @@
-/* THE SCROLLING AREA DOCUMENT: CSSOM VIEW §6's `scrollHeight`/`scrollWidth` step 7, §2's scrolling area over a
-   deep and a wide subtree, walked under a resting drive. One of test_forced.c's exploring documents (its
-   TF_DOCS table). #sa1 is a 100 x 50 clipped box holding 200 nested blocks with 1px of top padding each around
-   a 500 x 10 leaf, so its area is 210 tall and, by css-overflow-3 §3.3's border boxes, 500 wide (CSSOM VIEW
-   §2's table says margin edges, and the over-constrained leaf's CSS 2.1 §10.3.3 right margin would put that at
-   100); #sa2 holds 300 blocks 2px tall, so its area is 600 tall. Both walks visit more descendants than one
-   activation of a resting drive takes, so the reads rest (`_layoutScrollAreaRests`) and resume where they
-   stopped. #sa3 to #sa6 are §3.3's margin areas: a block's trailing margin, an inline-block's and a flex
-   item's right margin, and a grid item inside its 200px track. #sa7 holds 400 blocks 5px tall, so the root's
-   `scrollHeight` (step 4, the viewport's scrolling area) is the document's 2300px, also walked resting. Chrome
-   155.0.8059.84 and Firefox 158.0.1 give every value expected. Cross-engine notes, left out: both browsers
-   count a zero-height block 500px wide, where §3.3 says "Border boxes with zero area do not affect the
-   scrollable overflow area"; and both add §3.3's end padding (a 10px-padded box over a 300 x 200 child is
-   320 x 220), which this engine does not build yet. It ends with TF_CANVAS_INK, which test_forced.c defines
-   before including it. */
+/* THE SCROLLING AREA DOCUMENT: CSSOM VIEW §6's scroll members over §2's scrolling area, walked under a resting
+   drive (`_layoutScrollAreaRests`). One of test_forced.c's exploring documents (its TF_DOCS table). #sa1 nests
+   200 blocks with 1px of top padding around a 500 x 10 leaf in a 100 x 50 clipped box: 210 tall and, by
+   css-overflow-3 §3.3's border boxes, 500 wide (CSSOM VIEW §2's margin edges, with the leaf's CSS 2.1 §10.3.3
+   right margin, would give 100). #sa2 holds 300 blocks 2px tall: 600. #sa3 to #sa6 are §3.3's margin areas of
+   a block, an inline-block, a flex item and a grid item in a 200px track. #sa7's 400 blocks of 5px make the
+   root's `scrollHeight` (step 4, the viewport's area) 2300. The setter and scroll members measure #sa2 for steps
+   10 and 11, landing where it is; #sa7 has no scrolling box, so step 10 terminates; the root's setter scrolls
+   the viewport to 100. Chrome 155.0.8059.84 and Firefox 158.0.1 give every value expected. Cross-engine
+   notes, left out: both count a zero-height block 500px wide, where §3.3 says "Border boxes with zero area do
+   not affect the scrollable overflow area"; both add §3.3's end padding (a 10px-padded box over a 300 x 200
+   child is 320 x 220), not built here. It ends with TF_CANVAS_INK, which test_forced.c defines first. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLAREA_H
 #define ENGINE_HOST_FIXTURE_SCROLLAREA_H
 #ifndef TF_CANVAS_INK
@@ -43,10 +40,13 @@ static const char HTML_SCROLLAREA[] =
     "for(i=0;i<400;i++){d=document.createElement('div');d.style.height='5px';p.appendChild(d);}"
     "var a=document.getElementById('sa1'),b=document.getElementById('sa2');"
     "function E(i){return document.getElementById(i);}"
+    "b.scrollTop=0;b.scrollTo({top:0});b.scrollBy(0,0);E('sa7').scrollTop=5;"
+    "document.documentElement.scrollTop=100;"
     "fetch('/api/scrollarea?sh='+a.scrollHeight+'&sw='+a.scrollWidth+'&ch='+a.clientHeight"
     "+'&m3='+E('sa3').scrollHeight+'&m4='+E('sa4').scrollWidth+'&m5='+E('sa5').scrollWidth"
     "+'&m6='+E('sa6').scrollWidth"
-    "+'&lh='+b.scrollHeight+'&lw='+b.scrollWidth+'&rh='+document.documentElement.scrollHeight);"
+    "+'&lh='+b.scrollHeight+'&lw='+b.scrollWidth+'&rh='+document.documentElement.scrollHeight"
+    "+'&rt='+document.documentElement.scrollTop+'&nt='+E('sa7').scrollTop);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

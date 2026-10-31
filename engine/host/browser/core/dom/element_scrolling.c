@@ -67,8 +67,7 @@ ScrollLogicalPosition element_scrolling_logical_position(const char *keyword)
  * that is unknown external input cannot be a `double`; core/dom/element_view.c's setter crashes naming it. */
 typedef ElementScrollingBox EsBox;
 
-/* Every field of an element's box but its scrolling area, which a caller either walks in steps
-   (`es_into_view_measure`) or asks whole (`es_box_of_element`). */
+/* Every field of an element's box but its scrolling area, which element_scrolling_measure_next walks. */
 static void es_box_open_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b)
 {
     FlowPoint o = flow_padding_box_origin(el);
@@ -94,14 +93,6 @@ static void es_box_open_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b
         b->ending_at_hi[a] = scrolling_area_ending_edge_at_higher_coordinate(el, vertical);
         b->cur[a] = element_view_scroll_position(el, vertical);
     }
-}
-
-static void es_box_of_element(lxb_dom_element_t *el, JSContext *dctx, EsBox *b)
-{
-    int a;
-
-    es_box_open_element(el, dctx, b);
-    for (a = ES_X; a <= ES_Y; a++) b->area[a] = scrolling_area_extent_px(el, a == ES_Y);
 }
 
 /* The viewport's EsBox. Its overflow directions are core/layout/scrolling_area.h's, which answers both columns
@@ -275,32 +266,28 @@ static void es_determine_position(lxb_dom_element_t *target, ScrollLogicalPositi
     out[ES_X] = es_clamp(b, ES_X, b->cur[ES_X] + es_align_delta(b, elo, ehi, ES_X, inline_pos));
 }
 
-void element_scrolling_scroll_element(lxb_dom_element_t *el, double x, double y, const char *behavior)
+void element_scrolling_scroll_element(const ElementScrollingMeasure *m, double x, double y, const char *behavior)
 {
-    JSContext *dctx;
-    EsBox b;
     double position[2];
 
-    DCHECK(el != NULL, "§6.1's scroll an element to x,y was invoked with no element");
+    DCHECK(m->axis > ES_Y && m->box.el != NULL,
+           "§6.1's scroll an element to x,y was handed a box that is the viewport or whose scrolling area is not "
+           "yet measured");
     DCHECK(isfinite(x) && isfinite(y),
            "§6.1's scroll an element to x,y was handed a non-finite coordinate. CSSOM VIEW §3.2 \"WebIDL "
            "values\"' normalize non-finite values turns Infinity, -Infinity and NaN into 0, and it is the "
            "CALLER's step — §6's setter's step 2 and its scroll members' step 1 — so a non-finite here is that "
            "step having been skipped");
-    dctx = document_active_realm_of(lxb_dom_interface_node(lxb_dom_interface_node(el)->owner_document));
-    DCHECK(dctx != NULL,
-           "§6.1's scroll an element to x,y was reached for an element whose node document is no navigable's "
-           "ACTIVE document — §6's own steps 3 to 6 return before step 11 for exactly that document, so the "
-           "caller's order has come apart");
-    /* Step 1 — "let box be element's ASSOCIATED SCROLLING BOX". §6's step 10 has already terminated for an
-       element that has none, so the constructor's own assert is the pairing between the two steps. */
-    es_box_of_element(el, dctx, &b);
+    DCHECK(element_scrolling_has_overflow(m),
+           "§6.1's scroll an element to x,y was reached for a box with no overflow — §6's step 10 terminates for "
+           "it first");
     /* Steps 2 and 3 — the clamp, and step 4's "let position be the scroll position box would have by aligning
-       scrolling area x-coordinate x with the left of box", which for a clamped pair IS that pair. */
-    position[ES_X] = es_clamp(&b, ES_X, x);
-    position[ES_Y] = es_clamp(&b, ES_Y, y);
+       scrolling area x-coordinate x with the left of box", which for a clamped pair IS that pair. Step 1's box
+       is the measured one. */
+    position[ES_X] = es_clamp(&m->box, ES_X, x);
+    position[ES_Y] = es_clamp(&m->box, ES_Y, y);
     /* Steps 5 and 6 */
-    es_perform_scroll(&b, position, behavior);
+    es_perform_scroll(&m->box, position, behavior);
 }
 
 /* ONE ITERATION of scroll a target into view's step 2 — the substeps run per scrolling box. */
@@ -358,32 +345,38 @@ static bool es_into_view_visit(ElementScrollingIntoView *w, const EsBox *b, cons
     return false;
 }
 
-/* Begin the descendant walk of the open box's scrolling area on `w->axis`. The viewport's row is the one
+/* Begin the descendant walk of the open box's scrolling area on `m->axis`. The viewport's row is the one
    core/frame/viewport.c's `viewport_scrolling_area_*` asks, over the same initial containing block. */
-static void es_area_begin(ElementScrollingIntoView *w)
+static void es_area_begin(ElementScrollingMeasure *m)
 {
-    bool vertical = w->axis == ES_Y;
+    bool vertical = m->axis == ES_Y;
 
-    if (w->box.el != NULL) scrolling_area_walk_element(&w->area, w->box.el, vertical);
-    else                   scrolling_area_walk_viewport(&w->area, w->doc, w->box.extent[w->axis], vertical);
+    if (m->box.el != NULL) scrolling_area_walk_element(&m->area, m->box.el, vertical);
+    else                   scrolling_area_walk_viewport(&m->area, m->doc, m->box.extent[m->axis], vertical);
 }
 
-/* Open a scrolling box (`el` NULL for the viewport) and begin its first area walk. */
-static void es_into_view_open(ElementScrollingIntoView *w, lxb_dom_element_t *el, JSContext *dctx)
+void element_scrolling_measure_element(ElementScrollingMeasure *m, lxb_dom_element_t *el)
 {
-    if (el != NULL) es_box_open_element(el, dctx, &w->box);
-    else            es_box_open_viewport(w->doc, dctx, &w->box);
-    w->axis = ES_X;
-    w->box_open = true;
-    es_area_begin(w);
+    JSContext *dctx;
+
+    DCHECK(el != NULL, "§6.1's scrolling box of an element was opened with no element");
+    dctx = document_active_realm_of(lxb_dom_interface_node(el->node.owner_document));
+    DCHECK(dctx != NULL,
+           "§6.1's scrolling box of an element was opened for an element whose node document is no navigable's "
+           "ACTIVE document — §6's own steps 3 to 6 return before step 10 for exactly that document, so the "
+           "caller's order has come apart");
+    es_box_open_element(el, dctx, &m->box);
+    m->doc = lxb_dom_interface_node(el->node.owner_document);
+    m->axis = ES_X;
+    es_area_begin(m);
 }
 
-/* One rest unit of the open box's area walks, or, once both are complete, the visit. The boxes the walk folds
-   are the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures them against the slice; the
-   unit also ends when the drive spends its boxes (REST_UNIT_LAYOUT_BOXES). */
-static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavior)
+/* The boxes the walk folds are the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures
+   them against the slice; the unit also ends when the drive spends its boxes (REST_UNIT_LAYOUT_BOXES). */
+bool element_scrolling_measure_next(ElementScrollingMeasure *m)
 {
-    if (!scrolling_area_walk_done(&w->area)) {
+    DCHECK(m->axis <= ES_Y, "a scrolling box's measurement was continued after both axes were measured");
+    if (!scrolling_area_walk_done(&m->area)) {
         size_t k = 0, n = rest_unit_items(REST_UNIT_LAYOUT_DESCENDANTS);
         LayoutJobDrive d;
 
@@ -391,8 +384,8 @@ static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavi
            and each activation computes them first, up to the drive's boxes, then retries the node. */
         rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
         layout_job_drive_begin_resting(&d);
-        while (k < n && !scrolling_area_walk_done(&w->area) && block_flow_drive_deferred(&d)) {
-            if (scrolling_area_walk_step(&w->area)) k++;
+        while (k < n && !scrolling_area_walk_done(&m->area) && block_flow_drive_deferred(&d)) {
+            if (scrolling_area_walk_step(&m->area)) k++;
             else if (layout_job_drive_spent(&d)) break;
         }
         layout_job_drive_end(&d);
@@ -400,15 +393,37 @@ static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavi
         return true;
     }
     /* The viewport's area is the bare number core/frame/viewport.c answers. */
-    w->box.area[w->axis] = w->box.el != NULL ? scrolling_area_walk_extent(&w->area)
-                                             : css_px(scrolling_area_walk_extent(&w->area).px);
-    if (w->axis == ES_X) {
-        w->axis = ES_Y;
-        es_area_begin(w);
-        return true;
-    }
+    m->box.area[m->axis] = m->box.el != NULL ? scrolling_area_walk_extent(&m->area)
+                                             : css_px(scrolling_area_walk_extent(&m->area).px);
+    m->axis++;
+    if (m->axis > ES_Y) return false;
+    es_area_begin(m);
+    return true;
+}
+
+bool element_scrolling_has_overflow(const ElementScrollingMeasure *m)
+{
+    DCHECK(m->axis > ES_Y, "a scrolling box's overflow was asked before both axes were measured");
+    return m->box.area[ES_X].px > m->box.extent[ES_X].px || m->box.area[ES_Y].px > m->box.extent[ES_Y].px;
+}
+
+/* Open a scrolling box (`el` NULL for the viewport) and begin its first area walk. */
+static void es_into_view_open(ElementScrollingIntoView *w, lxb_dom_element_t *el, JSContext *dctx)
+{
+    if (el != NULL) es_box_open_element(el, dctx, &w->m.box);
+    else            es_box_open_viewport(w->doc, dctx, &w->m.box);
+    w->m.doc = w->doc;
+    w->m.axis = ES_X;
+    w->box_open = true;
+    es_area_begin(&w->m);
+}
+
+/* One rest unit of the open box's area walks, or, once both are complete, the visit. */
+static bool es_into_view_measure(ElementScrollingIntoView *w, const char *behavior)
+{
+    if (element_scrolling_measure_next(&w->m)) return true;
     w->box_open = false;
-    return es_into_view_visit(w, &w->box, behavior);
+    return es_into_view_visit(w, &w->m.box, behavior);
 }
 
 bool element_scrolling_into_view_next(ElementScrollingIntoView *w, const char *behavior)

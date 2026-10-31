@@ -813,30 +813,16 @@ CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
     return css_px_sub(hi, lo);
 }
 
-/* NAMED RESIDUAL. Not covered: the callers of these two — CSSOM VIEW §6's has-overflow test, §6.1's
-   scrolling-box opening, and core/frame/viewport.c — drive the walk to completion in one activation, so a flow
-   scrolling an element or the viewport cannot rest inside the document walk; §6.1's scroll into view and §6's
+/* NAMED RESIDUAL. Not covered: the callers of this drive — core/frame/viewport.c's §4 `scroll()` clamp and
+   scroll-position assert, and core/dom/element_scrolling.c's perform-a-scroll capability — walk the viewport's
+   scrolling area to completion in one activation, so a flow scrolling the viewport cannot rest inside the
+   document walk; §6.1's scroll into view, §6's scroll members over an element and §6's
    `scrollWidth`/`scrollHeight` step the cursor instead. Next: those callers stepping the cursor, after which
-   these two are deleted. How its absence shows: a flow's slice overrun in §4's `scroll()` or §6's scroll
-   setter on a large document, with `_layoutJobRests` flat. */
-/* Each walk runs inside one drive, so the current job holds its memo and records across every descendant:
+   this drive is deleted. How its absence shows: a flow's slice overrun in §4's `scroll()` on a large
+   document, with `_layoutJobRests` flat. */
+/* The walk runs inside one drive, so the current job holds its memo and records across every descendant:
    without a driven job entered, the synchronous job holds them only while a drive is open. A step that answers
    "not yet" is retried after the drive computes what it deferred. */
-CssPx scrolling_area_extent_px(lxb_dom_element_t *el, bool vertical)
-{
-    ScrollingAreaWalk w;
-    LayoutJobDrive d;
-    CssPx extent;
-
-    layout_job_drive_begin(&d);
-    scrolling_area_walk_element(&w, el, vertical);
-    while (!scrolling_area_walk_done(&w))
-        if (!scrolling_area_walk_step(&w)) (void)block_flow_drive_deferred(&d);
-    extent = scrolling_area_walk_extent(&w);
-    layout_job_drive_end(&d);
-    return extent;
-}
-
 CssPx scrolling_area_viewport_extent_px(lxb_dom_node_t *doc, CssPx icb_extent, bool vertical)
 {
     ScrollingAreaWalk w;

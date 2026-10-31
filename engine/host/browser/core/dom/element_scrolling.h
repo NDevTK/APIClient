@@ -71,13 +71,47 @@ ScrollLogicalPosition element_scrolling_logical_position(const char *keyword);
 double element_scrolling_clamp_position(double v, double area_extent, double box_extent,
                                         bool ending_edge_at_higher_coordinate);
 
-/* §6.1's "To SCROLL AN ELEMENT (or pseudo-element) element to x,y optionally with a scroll behavior behavior".
-   `x` and `y` are the requested position in CSS pixels, before §6.1's own clamp. `behavior` is §4's
-   ScrollBehavior keyword the caller's dictionary carried; it is consumed by §3.1's perform a scroll.
-   THE CALLER HAS ALREADY RUN §6's STEP 10 — the element has an associated box, it has an associated scrolling
-   box, and it has overflow — which is what makes step 1's "let box be element's associated scrolling box" have
-   an answer. Both facts are asserted here rather than trusted. */
-void element_scrolling_scroll_element(lxb_dom_element_t *el, double x, double y, const char *behavior);
+/* A scrolling box as §6.1's two position algorithms read it: its edges in client coordinates (CSSOM VIEW
+   §6's `getBoundingClientRect()` space), its own extent, its scrolling area, its current scroll position
+   and its overflow directions. element_scrolling.c states why edges are `CssPx` and positions `double`. */
+typedef struct {
+    lxb_dom_element_t *el;    /* the scroll container, or NULL when this box is the viewport */
+    JSContext *dctx;          /* the realm whose active document this box belongs to */
+    CssPx  lo[2], hi[2];      /* the box's own edges, in client coordinates */
+    CssPx  area[2];           /* §2's scrolling area extent on each axis */
+    CssPx  extent[2];         /* the box's own extent: an element's padding edge, or the viewport's ICB */
+    double cur[2];            /* its current scroll position */
+    bool   ending_at_hi[2];   /* §2's overflow directions: is the ending edge at the larger coordinate */
+} ElementScrollingBox;
+
+/* A scrolling box being measured: every field but its scrolling area is read at the open, and the area is
+   walked one rest unit of descendants per `next`, axis by axis, so a step machine rests inside a large
+   subtree. The caller enters its layout job around each `next`. The cursor holds DOM nodes of the running
+   flow, which a fork shares by address, and lengths. */
+typedef struct {
+    ElementScrollingBox box;
+    lxb_dom_node_t     *doc;    /* the box's document: the viewport's, or the element's node document */
+    ScrollingAreaWalk   area;
+    int                 axis;   /* the axis whose area is being walked; 2 once both are measured */
+} ElementScrollingMeasure;
+
+/* Open `el`'s associated scrolling box, which css-overflow-3 §3.1's scroll-container question has answered
+   yes for, in the active document of a navigable. */
+void element_scrolling_measure_element(ElementScrollingMeasure *m, lxb_dom_element_t *el);
+/* One rest unit of the walk; false once both axes are measured. */
+bool element_scrolling_measure_next(ElementScrollingMeasure *m);
+/* §6's "the element has no overflow", negated: the scrolling area exceeds the padding box on either axis. The
+   area's beginning edges are the padding box's, so the two differ exactly when a descendant reaches past the
+   ending edge. Compared on the example, as the clamp is. */
+bool element_scrolling_has_overflow(const ElementScrollingMeasure *m);
+
+/* §6.1's "To SCROLL AN ELEMENT (or pseudo-element) element to x,y optionally with a scroll behavior behavior",
+   over the measured box of `el`. `x` and `y` are the requested position in CSS pixels, before §6.1's own clamp.
+   `behavior` is §4's ScrollBehavior keyword the caller's dictionary carried; it is consumed by §3.1's perform a
+   scroll. The caller has run §6's step 10 — the element has an associated box, an associated scrolling box,
+   and overflow — which is what makes step 1's "let box be element's associated scrolling box" the measured
+   one. */
+void element_scrolling_scroll_element(const ElementScrollingMeasure *m, double x, double y, const char *behavior);
 
 /* §6.1's "To SCROLL A TARGET INTO VIEW target … with a scroll behavior behavior, a block flow direction
    position block, an inline base direction position inline, and an optional containing Element to stop
@@ -93,30 +127,14 @@ typedef enum {
     ES_INTO_VIEW_DONE
 } ElementScrollingIntoViewPhase;
 
-/* A scrolling box as §6.1's two position algorithms read it: its edges in client coordinates (CSSOM VIEW
-   §6's `getBoundingClientRect()` space), its own extent, its scrolling area, its current scroll position
-   and its overflow directions. element_scrolling.c states why edges are `CssPx` and positions `double`. */
-typedef struct {
-    lxb_dom_element_t *el;    /* the scroll container, or NULL when this box is the viewport */
-    JSContext *dctx;          /* the realm whose active document this box belongs to */
-    CssPx  lo[2], hi[2];      /* the box's own edges, in client coordinates */
-    CssPx  area[2];           /* §2's scrolling area extent on each axis */
-    CssPx  extent[2];         /* the box's own extent: an element's padding edge, or the viewport's ICB */
-    double cur[2];            /* its current scroll position */
-    bool   ending_at_hi[2];   /* §2's overflow directions: is the ending edge at the larger coordinate */
-} ElementScrollingBox;
-
 typedef struct {
     lxb_dom_element_t *target, *walk, *container;
     lxb_dom_node_t    *doc;
     ScrollLogicalPosition block, inline_pos;
     ElementScrollingIntoViewPhase phase;   /* where the walk continues once no box is open */
-    /* The box being measured: its scrolling area is walked one rest unit of descendants per `next`, axis by
-       axis, before steps 2.2 to 2.4 run over it. */
-    bool                box_open;
-    int                 axis;
-    ElementScrollingBox box;
-    ScrollingAreaWalk   area;
+    /* The box being measured, before steps 2.2 to 2.4 run over it. */
+    bool                    box_open;
+    ElementScrollingMeasure m;
 } ElementScrollingIntoView;
 
 void element_scrolling_into_view_begin(ElementScrollingIntoView *w, lxb_dom_element_t *target,
