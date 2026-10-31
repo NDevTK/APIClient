@@ -2307,27 +2307,17 @@ static void emit_origin_candidates(JsonBuf *b, const char *tmpl) {
         base = (size_t)(hash - s);
         k = dl_key_variant(s, sn, hash);
         if (k == 0) {
-            char *src = strndup(s, base);
-
-            CHECK(src, "solve: OOM naming an origin source's candidates");
             json_buf_raw(b, open ? "]}," : ",");
             if (!open) { json_buf_key(b, "originCandidates"); json_buf_raw(b, "["); }
-            json_buf_raw(b, "{"); json_buf_key(b, "source"); json_buf_str(b, src);
+            json_buf_raw(b, "{"); json_buf_key(b, "source"); json_buf_str_n(b, s, base);
             json_buf_raw(b, ","); json_buf_key(b, "origins"); json_buf_raw(b, "[");
-            free(src);
             open = s; open_n = base;
         } else {
             DCHECK(open && open_n == base && !memcmp(open, s, base) && k == next,
                    "a message template's origin keys for one source are not written as #0..#n-1 in a row");
             json_buf_raw(b, ",");
         }
-        {
-            char *val = strndup(x, xn);
-
-            CHECK(val, "solve: OOM copying an origin candidate");
-            json_buf_raw(b, val);
-            free(val);
-        }
+        json_buf_raw_n(b, x, xn);
         next = k + 1;
     }
     if (open) json_buf_raw(b, "]}]");

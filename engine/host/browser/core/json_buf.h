@@ -59,6 +59,8 @@ void  json_buf_key_(JsonBuf *b, const char *quoted_name_colon);   /* json_buf_ke
    name reaches the buffer through json_buf_key alone, and engine/fieldgate.mjs reports a `"name":` inside a
    json_buf_raw LITERAL as a defect: the compiler forbids the computed key, the gate forbids the literal one. */
 void  json_buf_raw(JsonBuf *b, const char *s);
+/* json_buf_raw over the first `n` bytes of `s`, for a slice of a larger string, so the slice is not copied. */
+void  json_buf_raw_n(JsonBuf *b, const char *s, size_t n);
 /* One JSON STRING VALUE, quotes included: `"` and `\` escaped, the three named control characters written as
    their escapes and every other C0 byte as `\u00xx`. Bytes above 0x7F are passed through, which is correct
    because everything written here is already UTF-8 and JSON is a UTF-8 format.
@@ -66,6 +68,8 @@ void  json_buf_raw(JsonBuf *b, const char *s);
    endpoint surface's headers, keyed by header name — is not a contract a reader could audit and never was.
    Writing it through the value entry is what keeps it visibly a different construct from a field name. */
 void  json_buf_str(JsonBuf *b, const char *s);
+/* json_buf_str over the first `n` bytes of `s`, which may hold no NUL among them. */
+void  json_buf_str_n(JsonBuf *b, const char *s, size_t n);
 /* The bytes, NUL-terminated, transferred to the caller (who frees them). The buffer is empty afterwards. NULL
    only for a JSON_BUF_AT_REST buffer the allocator refused. */
 char *json_buf_take(JsonBuf *b);

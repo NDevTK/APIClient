@@ -43,12 +43,16 @@ char *json_buf_block(size_t n)
     return lexbor_malloc(n);
 }
 
+void json_buf_raw_n(JsonBuf *b, const char *s, size_t n)
+{
+    if (!json_buf_ensure(b, n)) return;
+    memcpy(b->b + b->n, s, n);
+    b->n += n;
+}
+
 void json_buf_raw(JsonBuf *b, const char *s)
 {
-    size_t l = strlen(s);
-    if (!json_buf_ensure(b, l)) return;
-    memcpy(b->b + b->n, s, l);
-    b->n += l;
+    json_buf_raw_n(b, s, strlen(s));
 }
 
 /* THE HALF THE PREPROCESSOR CANNOT SEE. json_buf_key's macro proves its argument is a LITERAL and says nothing
@@ -74,9 +78,17 @@ void json_buf_key_(JsonBuf *b, const char *quoted_name_colon)
 
 void json_buf_str(JsonBuf *b, const char *s)
 {
+    json_buf_str_n(b, s, strlen(s));
+}
+
+void json_buf_str_n(JsonBuf *b, const char *s, size_t n)
+{
+    const char *end = s + n;
+
+    DCHECK(!memchr(s, '\0', n), "json_buf_str_n was handed a slice holding a NUL, which no JSON string carries");
     if (!json_buf_ensure(b, 1)) return;
     b->b[b->n++] = '"';
-    for (; *s; s++) {
+    for (; s < end; s++) {
         unsigned char c = (unsigned char)*s;
         if (c == '"' || c == '\\') {
             if (!json_buf_ensure(b, 2)) return;
