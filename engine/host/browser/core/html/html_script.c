@@ -1176,31 +1176,12 @@ void html_script_exec_init(ScriptExec *x)
     x->phase = 0;
     x->cb[0] = JS_UNDEFINED;
     x->cb[1] = JS_UNDEFINED;
-    x->src = JS_UNDEFINED;
-    x->base = JS_UNDEFINED;
-    x->comp = NULL;
+    script_compile_init(&x->sc);
     x->old = JS_UNDEFINED;
     x->exc = JS_UNDEFINED;
     report_exception_work_start(&x->rx);
 }
 
-/* The parse of step 34's classic script, held across the rests it hands the thread back at. The compile borrows
-   `src` and `base` for its whole length, so they are UTF-8 copies the record owns. */
-typedef struct {
-    const char *src, *base;
-    size_t      n;
-    void       *carrier;
-} ScriptCompile;
-
-static void script_compile_destroy(JSContext *ctx, void *p)
-{
-    ScriptCompile *c = p;
-
-    JS_FlowCompileDrop(ctx, &c->carrier);
-    JS_FreeCString(ctx, c->src);
-    JS_FreeCString(ctx, c->base);
-    free(c);
-}
 
 bool html_script_exec_owed(const ScriptExec *x) { return x->stage != SX_IDLE; }
 
@@ -1237,9 +1218,7 @@ void html_script_exec_visit(JSContext *ctx, ScriptExec *x, JSStepVisit *v)
            "allocation to two forked arms");
     v->val(ctx, &x->cb[0]);
     v->val(ctx, &x->cb[1]);
-    v->val(ctx, &x->src);
-    v->val(ctx, &x->base);
-    v->cache(ctx, &x->comp, script_compile_destroy);
+    script_compile_visit(ctx, &x->sc, v);
     v->val(ctx, &x->old);
     v->val(ctx, &x->exc);
     report_exception_work_visit(ctx, &x->rx, v);
@@ -1286,8 +1265,6 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
 
         if (x->phase == 0) {
             JSValue prog = JS_UNDEFINED, global;
-            ScriptCompile *c;
-            int cr;
 
             DCHECK(JS_IsUndefined(in),
                    "\"execute the script element\" was entered carrying a completion before it had asked for "
@@ -1337,38 +1314,16 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
                        "document has none — HTML §2.4.3 \"Document base URLs\" ends its fallback base URL at "
                        "\"return document's URL\", so every Document has one, and an absent one is a document "
                        "built somewhere that never set its URL");
-                x->src = JS_NewStringLen(ctx, x->text, x->text_n);
-                x->base = JS_NewString(ctx, base);
-                CHECK(!JS_IsException(x->src) && !JS_IsException(x->base),
-                      "HTML: OOM holding a script's source text across its compile");
+                script_compile_begin(ctx, &x->sc, x->text, x->text_n, base);
             }
             free(x->text);
             x->text = NULL;
             x->text_n = 0;
         compile:
-            /* The parse rests where the scheduler asks: JS_FlowCompileStep answers 0 with the parse parked in
-               the record, and this stage is re-entered to continue it. A fork sheds the record and the sibling
-               parses again from `src`. */
-            if (!x->comp) {
-                c = malloc(sizeof *c);
-                CHECK(c != NULL, "HTML: OOM allocating a script's compile record");
-                c->src = JS_ToCStringLen(ctx, &c->n, x->src);
-                c->base = JS_ToCString(ctx, x->base);
-                c->carrier = NULL;
-                CHECK(c->src != NULL && c->base != NULL, "HTML: OOM reading a script's source text back");
-                x->comp = c;
-            }
-            c = x->comp;
-            cr = JS_FlowCompileStep(ctx, c->src, c->n, c->base, JS_EVAL_FLAG_INLINE_SCRIPT, &prog, &c->carrier);
-            if (cr == 0)
-                return JS_STEP_YIELD;
-            script_compile_destroy(ctx, c);
-            x->comp = NULL;
-            JS_FreeValue(ctx, x->src);
-            JS_FreeValue(ctx, x->base);
-            x->src = x->base = JS_UNDEFINED;
-            if (cr < 0)
-                prog = JS_EXCEPTION;
+            /* The parse rests where the scheduler asks, and this stage is re-entered to continue it. */
+            r = script_compile_run(ctx, &x->sc, JS_EVAL_FLAG_INLINE_SCRIPT, &prog);
+            if (r)
+                return r;
             /* STEP 6's CLASSIC ARM, STEPS 1-2 — "let oldCurrentScript be the value to which document's
                currentScript object was most recently set" and "if el's root is not a shadow root, then set
                document's currentScript attribute to el; otherwise, set it to null". OPENED BEFORE THE COMPILE'S
