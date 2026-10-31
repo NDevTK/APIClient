@@ -17,6 +17,7 @@
 #include "core/layout/flow_placement.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_position.h"
+#include "core/layout/grid_item_alignment.h"
 #include "core/layout/grid_track.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/float_placement.h"
@@ -468,20 +469,22 @@ static bool fp_is_grid_item(lxb_dom_element_t *el)
 }
 
 /* css-grid-1 §3.3 "Grid Areas": the item is laid out in its grid area, so its border-box origin is the
-   container's content-box origin, plus the area's offset (core/layout/grid_track.h), plus the item's own
-   leading margins (its stretched size fills the area less them). */
+   container's content-box origin, plus the area's offset (core/layout/grid_track.h), plus the margin box's
+   self-alignment offset in the area (core/layout/grid_item_alignment.h), plus the item's own leading margin. */
 static bool fp_grid_item_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     lxb_dom_element_t *container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
     FlowPoint o;
-    CssPx ax, ay;
+    CssPx ax, ay, dx, dy;
 
     if (!flow_border_box_origin_ask(container, &o) || !grid_item_area_origin_ask(container, el, &ax, &ay))
         return false;
+    dx = grid_item_self_alignment_offset(container, el, grid_item_area_inline_size(container, el), false);
+    dy = grid_item_self_alignment_offset(container, el, grid_item_area_block_size(container, el), true);
     out->x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(container, false)),
-                        css_px_add(ax, used_value_px(el, "margin-left")));
+                        css_px_add(css_px_add(ax, dx), used_value_px(el, "margin-left")));
     out->y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(container, true)),
-                        css_px_add(ay, used_value_px(el, "margin-top")));
+                        css_px_add(css_px_add(ay, dy), used_value_px(el, "margin-top")));
     return true;
 }
 

@@ -1184,6 +1184,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/gridtemplate.h"
 #include "fixture/calctree.h"
 #include "fixture/svgattr.h"
+#include "fixture/gridalign.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1730,6 +1731,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "gridtemplate", HTML_GRIDTEMPLATE },
     { "calctree", HTML_CALCTREE },
     { "svgattr", HTML_SVGATTR },
+    { "gridalign", HTML_GRIDALIGN },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15576,6 +15578,37 @@ TF_UNIT void probes_svgattr(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gridalign` document (fixture/gridalign.h): each item's offset from its container's content
+   box, x_y; Chrome 155.0.8059.84 and Firefox 158.0.1 give every value they expect. */
+TF_UNIT void probes_gridalign(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "a1", "0_0", "css-align-3 §4.1: `start` is not flush with the area's start edges" },
+        { "a2", "80_70", "css-align-3 §4.1: `end` is not flush with the area's end edges" },
+        { "a3", "40_35", "css-align-3 §4.1: `center` does not centre the item in its area" },
+        { "a4", "80_70", "css-align-3 §4.1: `flex-end` outside a flex container is not `end`" },
+        { "a5", "80_0", "css-align-3 §4.1: `flex-start` is not `start`, or `right` is not the right edge" },
+        { "a6", "0_0", "css-align-3 §4.1: `left` is not the left edge" },
+        { "a7", "0_0", "css-align-3 §6.1: `stretch` on a definite size does not fall back to start" },
+        { "a8", "80_35", "css-align-3 §6.1: `auto` does not take the container's `align-items`/`justify-items`" },
+        { "a9", "-10_0", "css-align-3 §4.4.1.3: an overflowing item is not centred unsafely by default" },
+        { "a10", "0_0", "css-align-3 §4.4: `safe` does not start-align an overflowing item" },
+        { "a11", "80_0", "css-align-3 §4.1: `start` in an rtl container is not its right edge" },
+        { "a12", "0_0", "css-align-3 §4.1: `end` in an rtl container is not its left edge" },
+        { "a13", "77_65", "css-align-3 §6.1.5: the margin box is not what is aligned" },
+    };
+    const char *ga_why = NULL; int ga_tt = !!strstr(js, "\"/api/gridalign\"");
+    unsigned i;
+
+    fold_row(&ga_tt, &ga_why, ga_tt,
+             "NOT REACHED: there is no /api/gridalign record at all, so the document aborted before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&ga_tt, &ga_why, param_value_is(js, "/api/gridalign", ROWS[i].key, ROWS[i].want), ROWS[i].why);
+    const Probe rows[] = {
+        { "grid-self-alignment", ga_tt, "/api/gridalign", SESS_EXPLORE, ga_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21696,6 +21729,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_gridtemplate(js, probes, &np);
     probes_calctree(js, probes, &np);
     probes_svgattr(js, probes, &np);
+    probes_gridalign(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
