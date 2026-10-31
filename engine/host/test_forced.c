@@ -779,6 +779,8 @@ static const TfServed TF_SERVED[] = {
       "}" },
     /* HTML_REPLYROLE's account reply: a viewer, so the document's admin arm is reachable only by forcing. */
     { "https://x.test/api/rrme", "application/json", "{\"role\":\"viewer\",\"id\":42,\"org\":\"acme\"}" },
+    /* HTML_REFLECTINT's reply: an integer, a non-numeric string and a negative integer for the reflected setters. */
+    { "https://x.test/api/rint", "application/json", "{\"n\":300,\"s\":\"wide\",\"m\":-3}" },
 };
 
 /* …ASKED OF THE ABSOLUTE SERIALIZED ADDRESS, which is what a park carries and what the caller holds by the
@@ -1150,6 +1152,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/realmsell.h"
 #include "fixture/realmsellclose.h"
 #include "fixture/adoptexpando.h"
+#include "fixture/reflectint.h"
 #include "fixture/fragfork.h"
 #include "fixture/fragplace.h"
 #include "fixture/fragxml.h"
@@ -1706,6 +1709,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "realmsell", HTML_REALMSELL, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "realmsellclose", HTML_REALMSELLCLOSE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "adoptexpando", HTML_ADOPTEXPANDO },
+    { "reflectint", HTML_REFLECTINT },
     { "fragfork", HTML_FRAGFORK },
     { "fragplace", HTML_FRAGPLACE },
     { "fragxml", HTML_FRAGXML },
@@ -18142,6 +18146,28 @@ TF_UNIT void probes_adoptexpando(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `reflectint` document (fixture/reflectint.h): §2.6.1's integer setters over unknown reply fields
+   write the attribute the served value makes, and the getter reads it back. */
+TF_UNIT void probes_reflectint(const char *js, Probe *tab, int *n) {
+    const char *ri_why = NULL;
+    int ri_tt = 1;
+    fold_row(&ri_tt, &ri_why, !!strstr(js, "\"/api/rintback\""),
+             "NOT REACHED: there is no /api/rintback record, so a reflected integer setter over a reply field "
+             "aborted or the reply was never read");
+    fold_row(&ri_tt, &ri_why, param_value_is(js, "/api/rintback", "n", "300") &&
+                              param_value_is(js, "/api/rintback", "na", "300"),
+             "`canvas.width = 300` from the reply did not read back 300 through the getter and the attribute");
+    fold_row(&ri_tt, &ri_why, param_value_is(js, "/api/rintback", "s", "0") &&
+                              param_value_is(js, "/api/rintback", "sa", "0"),
+             "`canvas.width = 'wide'` from the reply did not write 0: ConvertToInt of NaN is 0, inside the range");
+    fold_row(&ri_tt, &ri_why, param_value_is(js, "/api/rintback", "m", "-3"),
+             "`li.value = -3` from the reply did not read back -3: the `long` setter writes the value itself");
+    const Probe rows[] = {
+        { "reflect-int-unknown", ri_tt, "/api/rintback", SESS_EXPLORE, ri_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowopenerclose` document. */
 TF_UNIT void probes_windowopenerclose(const char *js, Probe *tab, int *n) {
     /* And over a cross-origin popup, which the incumbent is familiar with only through its opener link. */
@@ -21995,6 +22021,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_realmsell(js, probes, &np);
     probes_realmsellclose(js, probes, &np);
     probes_adoptexpando(js, probes, &np);
+    probes_reflectint(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);
     probes_idlindex(js, probes, &np);

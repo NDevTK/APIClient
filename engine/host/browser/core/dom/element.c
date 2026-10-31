@@ -1726,70 +1726,29 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
         dom_cow_remove_attribute(el, g_reflect[magic].attr);
         return JS_UNDEFINED;
     }
-    /* §2.6.1's `unsigned long` SETTER, and the sentence that makes it not the getter's mirror: "Clamped to the
-       range has no effect on the setter steps." So `[ReflectRange]` is absent from these steps entirely and
-       `td.colSpan = 5000` WRITES 5000 — the attribute holds it and only the getter clamps, which is what
-       `td.colSpan = 5000; td.getAttribute('colspan')` reads back in a browser. What the setter does use is the
-       DEFAULT: newValue starts at minimum, becomes defaultValue if the member has one, and becomes the given
-       value only when that is in [minimum, 2147483647]. The declared IDL_UNSIGNED_LONG has already applied
-       §3.2.4's modulo, so this runs none of the page's code and the value can only be 0..4294967295 — a page
-       writing 3000000000 lands above 2147483647 and gets the default written, not a wrap. */
-    if (g_reflect[magic].kind == REFLECT_ULONG) {
-        /* minimum is 0 until a [ReflectPositive] kind exists; it is spelled so the day it does, this reads.
-           `given` IS THE CONVERSION'S OWN TYPE and was a `long long`, which is a CONSTRAINT VIOLATION rather
-           than a style point: `JS_ToInt64` takes an `int64_t *`, and on a target where those two spellings are
-           different types the compiler is entitled to assume the pointer does not alias what it was handed. It
-           compiled because the build passes `-w`, and it worked because both are 64 bits on this host — an
-           agreement no line here states and the wasm target does not share. */
-        long long minimum = 0, newValue;
-        int64_t given = 0;
+    /* §2.6.1's integer setters. `unsigned long`: newValue is the default (else minimum, 0), replaced by the
+       given value when it is in [minimum, 2147483647]; the range clamp is a getter step and has no effect
+       here. `long`: the given value itself, since no row carries §2.6.2's [ReflectNonNegative]. Either way
+       the attribute is set to the shortest valid integer string, which is ECMAScript's ToString of it.
+       Unknown input crosses the declared conversion (idl_concolic_rule), so the steps run on its example
+       through idl_number_of and the written bytes are derived from the unknown; both setters write in every
+       world, so the result is a function of the input and needs no fork. With no example yet the attribute
+       holds the unknown itself, as the `double` setter below does. */
+    if (g_reflect[magic].kind == REFLECT_ULONG || g_reflect[magic].kind == REFLECT_LONG) {
+        bool is_ulong = g_reflect[magic].kind == REFLECT_ULONG;
+        double given;
+        long long newValue;
 
-        JS_ToInt64(ctx, &given, val);
-        newValue = g_reflect[magic].has_dflt ? g_reflect[magic].dflt : minimum;
-        if (given >= minimum && given <= 2147483647LL) newValue = given;
-        /* "converted to the shortest possible string representing the number as a valid non-negative integer" —
-           §2.3.4.2's production: base ten, no sign, no leading zeros. That is ECMAScript's own ToString of the
-           number for every value this can hold, so it is the ENGINE's conversion and never a printf format, for
-           the reason core/html/number_microsyntax.h gives at §2.3.4.3's counterpart. */
+        if (!idl_number_of(ctx, is_ulong ? IDL_UNSIGNED_LONG : IDL_LONG, val, &given)) {
+            el_set_attribute_internal(ctx, this_val, g_reflect[magic].attr, val);
+            return JS_UNDEFINED;
+        }
+        newValue = (long long)given;
+        if (is_ulong && !(newValue >= 0 && newValue <= 2147483647LL))
+            newValue = g_reflect[magic].has_dflt ? g_reflect[magic].dflt : 0;
         verified = JS_ToString(ctx, JS_NewInt64(ctx, newValue));
         if (JS_IsException(verified)) return JS_EXCEPTION;
-        el_set_attribute_internal(ctx, this_val, g_reflect[magic].attr, verified);
-        JS_FreeValue(ctx, verified);
-        return JS_UNDEFINED;
-    }
-    /* §2.6.1's `long` SETTER, AND IT IS NOT THE `unsigned long` SETTER WITH A SIGN. That one is five steps and
-       spends four of them on a value it may REPLACE: newValue starts at minimum, becomes defaultValue when the
-       member has one, and becomes the given value only if that is in [minimum, 2147483647]. This one is TWO
-       steps, and the first cannot fire here: it reads "If the reflected IDL attribute is limited to only
-       non-negative numbers and the given value is negative, then throw an" — §2.6.2's `[ReflectNonNegative]`,
-       which no `[Reflect]` row carries — leaving exactly "Run this's set the content attribute with the given
-       value converted to the shortest possible string representing the number as a valid integer."
-       SO THE DEFAULT IS A GETTER STEP AND READING IT HERE WOULD BE A WRONG VALUE: `ol.start = 0` writes "0"
-       over a `[ReflectDefault=1]`, and a setter that substituted the default would write "1" for an attribute
-       the page set to 0 — the same value the getter answers for an attribute that is ABSENT, so the two states
-       a page can distinguish would collapse into one. `li.value = -3` writes "-3" for the same reason: there is
-       no minimum in these steps to pull it to.
-       THE CONVERSION IS THE DECLARED TYPE'S. IDL_LONG is §3.2.4.5's `ConvertToInt(V, 32, "signed")`, so for
-       every value this engine determined the number reaching this body is a `long`, and JS_ToString of it is
-       §2.3.4.1's valid integer — "one or more ASCII digits, optionally prefixed with a U+002D HYPHEN-MINUS
-       character (-)" — which is the ENGINE's own ToString and never a printf format, for the reason the
-       `unsigned long` setter above gives at its counterpart.
-       AND THAT IS WHY THERE IS NO ASSERT ON THE RANGE HERE, which is the line a reader arrives wanting to add.
-       The range would be an invariant if the conversion always ran, and idl_concolic_rule answers CROSSES for
-       every integer type — so unknown external input reaches this body UNCONVERTED, wearing an ordinary
-       Object, and what `JS_ToInt64` then makes of it is decided by a value the PAGE supplied. A `DCHECK` over
-       it would not be this codebase asserting its own logic, it would be a page-held abort switch on a
-       reflected setter forty-odd members share. The REFLECT_ULONG branch of this same function asserts nothing over
-       its own `given` for the same reason, and it has been exercised on the wider population without firing.
-       SO THE WIDTH IS THE CONVERSION'S TO STATE AND NOT THIS LINE'S: JS_NewInt64 places whatever arrived, and
-       a narrowing cast here would silently rewrite a crossed value into a different number rather than report
-       anything. Every int64 serializes as a valid integer, so no arrival can produce malformed markup. */
-    if (g_reflect[magic].kind == REFLECT_LONG) {
-        int64_t given = 0;
-
-        JS_ToInt64(ctx, &given, val);
-        verified = JS_ToString(ctx, JS_NewInt64(ctx, given));
-        if (JS_IsException(verified)) return JS_EXCEPTION;
+        if (concolic_is(val)) verified = concolic_builtin_hook(ctx, val, g_reflect[magic].idl, verified);
         el_set_attribute_internal(ctx, this_val, g_reflect[magic].attr, verified);
         JS_FreeValue(ctx, verified);
         return JS_UNDEFINED;
