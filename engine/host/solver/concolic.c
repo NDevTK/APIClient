@@ -198,12 +198,18 @@ typedef struct {
     /* Which unknown owns which units of `example`: `piece_n` runs in order (JSUnknownPiece, the shape a buffer's
        runs take, here in UTF-16 code units), each owned by the operand whose example spells it. Written at a
        string concatenation whose operands' examples are both held, and on no other value; units in no piece
-       are the page's own. A slice whose range lies inside one piece answers that piece's derivation
+       are the page's own. A run starts `image_pos` units into its unknown's example. Also written on a slice
+       whose range crosses pieces (pieces_clip). A slice inside one piece answers that piece's derivation
        (concolic_piece_slice). `piece_known` says the table was written, so a concatenation whose units no
        unknown owns (`piece_n` 0) is told from a value that records none. Owned, the unknowns with it. */
     JSUnknownPiece *piece;
     int piece_n;
     uint8_t piece_known;
+    /* §22.1.3.23 String.prototype.split over a string with pieces, by a separator String of `split_sep` units
+       (0: not such a split): `split_of` is that string (owned), so element i is the range of its units the
+       example array's elements and separators place (concolic_exotic_get). */
+    JSValue split_of;
+    uint32_t split_sep;
     /* ECMAScript §6.1 ECMAScript Language Types: the set of types this value takes in every world, as CTY_*
        bits. Stated only by a mint whose algorithm fixes its result's type (concolic_type_state), and asserted
        there against the example; 0 is unstated, never "no type", so a value no mint typed stays unknown-typed. */
@@ -2211,6 +2217,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->hole_span);
     for (int i = 0; i < c->piece_n; i++) JS_FreeValueRT(rt, c->piece[i].unknown);
     free(c->piece);
+    if (c->split_sep) JS_FreeValueRT(rt, c->split_of);
     JS_FreeValueRT(rt, c->example);
     /* The second owned JSValue on this record. A field added to the struct is an obligation here and at
        concolic_gc_mark together. JS_UNINITIALIZED is not refcounted, so the never-asked case needs no test. */
@@ -2225,6 +2232,7 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
        walks is these records pointing at each other, and an unreported one would be collected while live. */
     if (c && !JS_IsUninitialized(c->proto)) JS_MarkValue(rt, c->proto, mark_func);
     for (int i = 0; c && i < c->piece_n; i++) JS_MarkValue(rt, c->piece[i].unknown, mark_func);
+    if (c && c->split_sep) JS_MarkValue(rt, c->split_of, mark_func);
 }
 
 /* @S candidate injection: during a verification re-run, every read of the source g_cand_at returns
@@ -3685,6 +3693,36 @@ int concolic_value_truth(const char *ident)
 }
 static char *row_segment(const char *name);
 
+static uint32_t example_units(JSContext *ctx, JSValueConst ex);
+JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example);
+static void pieces_clip(JSContext *ctx, JSValueConst r, JSValueConst s, uint32_t from, uint32_t to);
+
+/* Element `atom` of a recorded split (Concolic.split_of): §22.1.3.23 steps 12-14 place element i after
+   elements 0..i-1 and a separator after each, so its range of the split string is read off the example array.
+   Answers that range's slice (concolic_piece_slice), or JS_UNINITIALIZED where it is not one piece's or the
+   page's own. */
+static JSValue split_element(JSContext *ctx, const Concolic *c, JSAtom atom)
+{
+    uint32_t idx, start = 0, len = 0;
+    int64_t n = 0;
+    JSValue el;
+
+    if (!c->split_sep || !c->ex_has || !JS_IsArray(c->example) || !JS_AtomIsIndex(ctx, &idx, atom))
+        return JS_UNINITIALIZED;
+    CHECK(JS_GetLength(ctx, c->example, &n) >= 0, "concolic: a split's example array has no length");
+    if ((int64_t)idx >= n) return JS_UNINITIALIZED;
+    for (uint32_t j = 0; j <= idx; j++) {
+        JSValue e = JS_GetPropertyUint32(ctx, c->example, j);
+
+        DCHECK(JS_IsString(e), "a split's example array holds a non-String — §22.1.3.23 appends substrings only");
+        len = example_units(ctx, e);
+        if (j < idx) start += len + c->split_sep;
+        JS_FreeValue(ctx, e);
+    }
+    el = JS_GetPropertyUint32(ctx, c->example, idx);
+    return concolic_piece_slice(ctx, c->split_of, start, start + len, el);
+}
+
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -3705,6 +3743,11 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
         return r;
     }
     r = pin_of(ctx, shape);                                  /* an EQ gate pinned this source -> the real value */
+    if (!JS_IsUninitialized(r)) {
+        free(shape); free(ident);
+        return r;
+    }
+    r = split_element(ctx, c, atom);
     if (!JS_IsUninitialized(r)) {
         free(shape); free(ident);
         return r;
@@ -5146,6 +5189,9 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
     }
     /* A slice or substring of a string an unknown was concatenated into, over a range inside one piece, is that
        piece's own derivation: the bytes are its owner's whatever the other pieces hold. */
+    int crossing = 0;
+    uint32_t cross_from = 0, cross_to = 0, split_sep = 0;
+
     if (c->member && (!strcmp(c->member, "slice") || !strcmp(c->member, "substring")) && concolic_is(this_val) &&
         concolic_example_present(this_val)) {
         JSValue tex = concolic_example(ctx, this_val);
@@ -5155,6 +5201,9 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
 
         JS_FreeValue(ctx, tex);
         if (ranged) {
+            crossing = 1;
+            cross_from = from;
+            cross_to = to;
             JSValue pr = concolic_piece_slice(ctx, this_val, from, to, JS_DupValue(ctx, example));
 
             if (!JS_IsUninitialized(pr)) {
@@ -5163,6 +5212,13 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
                 return pr;
             }
         }
+    }
+    /* A split by a separator String, with no limit, of a string with pieces: its elements are ranges of it. */
+    if (c->member && !strcmp(c->member, "split") && concolic_is(this_val) && argc >= 1 && JS_IsString(argv[0]) &&
+        (argc < 2 || JS_IsUndefined(argv[1]))) {
+        const Concolic *tc = JS_GetOpaque(this_val, g_concolic_class);
+
+        if (tc && tc->piece_known) split_sep = example_units(ctx, argv[0]);
     }
     /* The arguments are part of the call's identity and therefore of its shape. `x.startsWith("/api")` and
        `x.startsWith("javascript:")` are two gates over one source, and a shape is also the field path an @S
@@ -5195,6 +5251,13 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
        so a candidate substitutes at the call), and not new bytes: whatever carried the callee's bytes in
        carried these. */
     r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, example);
+    if (crossing && concolic_is(r)) pieces_clip(ctx, r, this_val, cross_from, cross_to);
+    if (split_sep && concolic_is(r)) {
+        Concolic *rc = JS_GetOpaque(r, g_concolic_class);
+
+        rc->split_of = JS_DupValue(ctx, this_val);
+        rc->split_sep = split_sep;
+    }
     /* The result's type set where the callee's algorithm fixes it (JSTrampStepDef.result_types: §22.1.3.22
        String.prototype.slice returns a String). The callee's example is the callee in every world only where
        the receiver is one primitive type, since §7.3.3 GetV reads the member off that type's prototype; a
@@ -7807,6 +7870,7 @@ static void pieces_append(JSContext *ctx, JSValueConst v, uint32_t off, uint32_t
                    "an operand's piece ends past its own example — pieces are runs of the value's example");
             pc->offset = off + c->piece[i].offset;
             pc->length = c->piece[i].length;
+            pc->image_pos = c->piece[i].image_pos;
             pc->unknown = JS_DupValue(ctx, c->piece[i].unknown);
         } else {
             pc->offset = off;
@@ -7834,6 +7898,54 @@ static void pieces_concat(JSContext *ctx, JSValueConst r, JSValueConst a, uint32
     c->piece_known = 1;
 }
 
+/* The code units of an unknown's example, or UINT32_MAX where this flow holds none (a run then never covers
+   it whole). */
+static uint32_t unknown_units(JSContext *ctx, JSValueConst u)
+{
+    JSValue ex;
+    uint32_t n;
+
+    if (!concolic_is(u)) return JS_IsString(u) ? example_units(ctx, u) : UINT32_MAX;
+    if (!concolic_example_present(u)) return UINT32_MAX;
+    ex = concolic_example(ctx, u);
+    n = JS_IsString(ex) ? example_units(ctx, ex) : UINT32_MAX;
+    JS_FreeValue(ctx, ex);
+    return n;
+}
+
+/* `r` is the slice [from, to) of `s`, a range crossing pieces: its pieces are `s`'s clipped to the range and
+   shifted to it, a partly covered run keeping its unknown at a later `image_pos`. */
+static void pieces_clip(JSContext *ctx, JSValueConst r, JSValueConst s, uint32_t from, uint32_t to)
+{
+    Concolic *rc = g_concolic_class ? JS_GetOpaque(r, g_concolic_class) : NULL;
+    const Concolic *sc = g_concolic_class ? JS_GetOpaque(s, g_concolic_class) : NULL;
+    JSUnknownPiece *pc = NULL;
+    int n = 0;
+
+    if (!rc || !sc || !sc->piece_known) return;
+    DCHECK(!rc->piece_known, "a slice's pieces were recorded twice");
+    for (int i = 0; i < sc->piece_n; i++) {
+        const JSUnknownPiece *q = &sc->piece[i];
+        uint32_t lo = q->offset > from ? q->offset : from, hi = q->offset + q->length < to ? q->offset + q->length : to;
+        JSUnknownPiece *g;
+
+        if (lo >= hi) continue;
+        g = realloc(pc, (size_t)(n + 1) * sizeof *g);
+        CHECK(g, "concolic: OOM recording which unknown owns which units of a slice");
+        pc = g;
+        memset(&pc[n], 0, sizeof pc[n]);
+        pc[n].example = true;
+        pc[n].offset = lo - from;
+        pc[n].length = hi - lo;
+        pc[n].image_pos = q->image_pos + (lo - q->offset);
+        pc[n].unknown = JS_DupValue(ctx, q->unknown);
+        n++;
+    }
+    rc->piece = pc;
+    rc->piece_n = n;
+    rc->piece_known = 1;
+}
+
 JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(s, g_concolic_class) : NULL;
@@ -7849,13 +7961,14 @@ JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint
         if (from < p->offset || to > p->offset + p->length) continue;
         DCHECK(p->offset <= from && to <= p->offset + p->length,
                "a slice was answered by a piece its range does not lie inside");
-        if (from == p->offset && to == p->offset + p->length) {
+        if (p->image_pos == 0 && from == p->offset && to == p->offset + p->length &&
+            p->length == unknown_units(ctx, p->unknown)) {
             JS_FreeValue(ctx, example);
             return JS_DupValue(ctx, p->unknown);
         }
         ops[0] = p->unknown;
-        ops[1] = JS_NewInt32(ctx, (int32_t)(from - p->offset));
-        ops[2] = JS_NewInt32(ctx, (int32_t)(to - p->offset));
+        ops[1] = JS_NewInt32(ctx, (int32_t)(p->image_pos + from - p->offset));
+        ops[2] = JS_NewInt32(ctx, (int32_t)(p->image_pos + to - p->offset));
         r = concolic_new_derived(ctx, "§22.1.3.22 String.prototype.slice", ops, 3, example);
         if (concolic_is(r)) concolic_type_state(r, CTY_STRING);
         return r;

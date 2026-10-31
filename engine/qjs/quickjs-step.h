@@ -1286,7 +1286,8 @@ JS_EXTERN bool JS_IsDetachedBufferSource(JSValueConst obj);
    both kinds of value that carry pieces: a buffer source's window (byte offsets) and a string an unknown was
    concatenated into (UTF-16 code-unit offsets into its example, solver/concolic.c). `unknown` is owned; for a
    codec image (`codec` set) it is the unknown the codec ran over and `image_pos` is the run's first position
-   in that output. `example` says the run's units in the value are its unknown's example. */
+   in that output, and for a string's piece `image_pos` is the unit of its unknown's example the run begins
+   at. `example` says the run's units in the value are its unknown's example. */
 typedef struct JSUnknownPiece {
     uint32_t offset, length;
     JSValue unknown;

@@ -16123,6 +16123,20 @@ TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
              "the fragment's slice does not state its delivery through `#`");
     fold_row(&pp_tt, &pp_why, has && !s_field(js, "innerHTML", src, "\"precondition\""),
              "the fragment's slice is labelled with a precondition, so the cookie's piece reached its root");
+    /* `psSplit`: the split element inside the fragment's piece is the fragment's own derivation, `.slice(2)`. */
+    char ssrc[512];
+    const char *sp_why = NULL;
+    int sp_tt = 1;
+    int shas = s_rooted_source(js, "innerHTML", "slice(2)", ssrc, sizeof ssrc);
+
+    fold_row(&sp_tt, &sp_why, shas,
+             "NOT REACHED: no innerHTML @S record's source is the second fragment read, so the split element "
+             "inside its piece was not answered by that piece");
+    fold_row(&sp_tt, &sp_why, shas && !strstr(ssrc, "split") && !strstr(ssrc, "document.cookie"),
+             "the split element's source is a derivation over the whole jar string rather than the fragment's");
+    fold_row(&sp_tt, &sp_why, shas && s_stage(js, "innerHTML", ssrc) == S_FIRED, "the split element fired no PoC");
+    fold_row(&sp_tt, &sp_why, shas && !s_field(js, "innerHTML", ssrc, "\"precondition\""),
+             "the split element is labelled with a precondition, so the cookie's piece reached its root");
     fold_row(&pc_tt, &pc_why, chas, "NOT REACHED: no innerHTML @S record's source is rooted in the cookie string");
     fold_row(&pc_tt, &pc_why, chas && s_field(js, "innerHTML", csrc, "\"precondition\""),
              "the slice across both pieces is not labelled with the cookie's precondition");
@@ -16160,6 +16174,7 @@ TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
         { "cc-bis-ctl-refused", bis_tt[3], "/api/cc-bis", SESS_EXPLORE, bis_why[3] },
         { "ps-piece-poc", pp_tt, "'psView'", SESS_EXPLORE, pp_why },
         { "ps-cross-precondition", pc_tt, "'psCross'", SESS_EXPLORE, pc_why },
+        { "ps-split-poc", sp_tt, "'psSplit'", SESS_EXPLORE, sp_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

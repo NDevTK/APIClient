@@ -2,8 +2,10 @@
    string) and an attacker source (the fragment, decoded, since the fragment percent-encodes markup's bytes),
    then sliced back apart. A slice inside the fragment's piece
    is the fragment's own derivation, so its sink write is an attacker PoC delivered through `#`; a slice across
-   both pieces depends on both and stays labelled with the cookie's precondition. The fragment is set first so
-   the source's example places its piece.
+   both pieces depends on both and stays labelled with the cookie's precondition. A slice from an indexOf to the
+   end crosses the fragment's piece and the page's trailing bytes, and the first element of its split lies inside
+   the fragment's piece again (a second read of the fragment, `.slice(2)`, so its record is its own). The
+   fragment is set first so the source's example places its piece.
    `cookieconst` is the jar's negative: a cookie the page sets from a constant reads back out of document.cookie
    as the page's own bytes, so its sink write carries no unknown and no @S record is made of it. It also sets
    cookies RFC 6265bis-22 §5.6/§5.7 store or ignore and reads their names through cookieStore.getAll(), whose
@@ -19,12 +21,14 @@
 
 static const char HTML_PIECESLICE[] =
     "<!doctype html><html><body>"
-    "<div id='psView'></div><div id='psCross'></div>"
+    "<div id='psView'></div><div id='psCross'></div><div id='psSplit'></div>"
     "<script>"
     "history.replaceState(null, '', '#seed');"
     "var psMix = document.cookie + '|' + decodeURIComponent(location.hash.slice(1));"
     "document.getElementById('psView').innerHTML = psMix.slice(psMix.indexOf('|') + 1);"
     "document.getElementById('psCross').innerHTML = psMix.slice(0);"
+    "var psJar = document.cookie + ';psT=' + decodeURIComponent(location.hash.slice(2)) + ';psEnd=1';"
+    "document.getElementById('psSplit').innerHTML = psJar.slice(psJar.indexOf('psT=') + 4).split(';')[0];"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
