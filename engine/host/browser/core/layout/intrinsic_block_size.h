@@ -16,6 +16,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_INTRINSIC_BLOCK_SIZE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_INTRINSIC_BLOCK_SIZE_H
 
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
@@ -36,5 +38,10 @@ CssPx intrinsic_block_size(lxb_dom_element_t *el);
    inherited from the enclosing non-anonymous box"); its `writing-mode` is asserted as above. The run's own
    edges are not added: its non-inherited properties are initial ("the margins will be 0"). */
 CssPx intrinsic_block_run_size(lxb_dom_element_t *style, BlockFlowRun run);
+
+/* The two entries above as asks: true once the entry answers without computing anything a resting drive
+   defers, false ("not yet") with the deferred questions suspended on the current job for the caller's drive. */
+bool intrinsic_block_size_ask(lxb_dom_element_t *el);
+bool intrinsic_block_run_size_ask(lxb_dom_element_t *style, BlockFlowRun run);
 
 #endif

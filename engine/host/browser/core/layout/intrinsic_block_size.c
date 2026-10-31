@@ -88,3 +88,25 @@ CssPx intrinsic_block_run_size(lxb_dom_element_t *style, BlockFlowRun run)
         return h;
     }
 }
+
+/* A replaced box's §10.6.2 height reads its own natural dimensions and declarations, no descendant walk; a
+   block container's is block_flow_auto_height's walk. */
+bool intrinsic_block_size_ask(lxb_dom_element_t *el)
+{
+    CssPx h;
+
+    DCHECK(el != NULL, "css-sizing-3 §3.2's intrinsic block size was asked for with no element");
+    ibs_require_horizontal_tb(el);
+    if (replaced_element_of(el).replaced) return true;
+    return block_flow_auto_height_ask(el, &h);
+}
+
+bool intrinsic_block_run_size_ask(lxb_dom_element_t *style, BlockFlowRun run)
+{
+    LineBoxAvailableWidth avail = line_box_available_width_derived();
+
+    DCHECK(style != NULL, "css-sizing-3 §3.2's intrinsic block size of an anonymous box was asked for with no "
+                          "styling element");
+    ibs_require_horizontal_tb(style);
+    return line_box_atomics_ask(style, run, avail) && line_box_extents_ask(style, run, avail);
+}

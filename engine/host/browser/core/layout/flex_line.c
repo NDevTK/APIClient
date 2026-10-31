@@ -542,6 +542,37 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, bool ve
     return n;
 }
 
+/* fl_collect's measurements asked, over the same child list and the same two kinds, so the walk that follows
+   reads answered sizes under a resting drive: false ("not yet") at the first item whose measurement defers. */
+static bool fl_measures_ask(lxb_dom_element_t *container, bool vertical)
+{
+    lxb_dom_node_t *c = box_tree_child_node(box_tree_first_child(container));
+
+    while (c != NULL) {
+        lxb_dom_node_t *next = box_tree_child_node(box_tree_next_sibling(container, box_tree_child_of_node(c)));
+        BlockFlowRun seq;
+
+        switch (flex_item_child_kind(container, c)) {
+        case FLEX_ITEM_CHILD_NONE:
+            break;
+        case FLEX_ITEM_CHILD_TEXT:
+            seq.after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(c)));
+            seq.end = next = flex_item_text_sequence_end(container, c);
+            if (!(vertical ? intrinsic_block_run_size_ask(container, seq)
+                           : intrinsic_inline_run_sizes_ask(container, seq)))
+                return false;
+            break;
+        case FLEX_ITEM_CHILD_ELEMENT:
+            if (!(vertical ? intrinsic_block_size_ask(lxb_dom_interface_element(c))
+                           : intrinsic_inline_sizes_ask(lxb_dom_interface_element(c))))
+                return false;
+            break;
+        }
+        c = next;
+    }
+    return true;
+}
+
 /* §9.7's step 3 and its "as for initial free space, above": "Sum the outer sizes of all items on the line,
    and subtract this from the flex container's inner main size. For frozen items, use their outer target main
    size; for other items, use their outer flex base size." One function for both, as the section states them. */
@@ -851,4 +882,13 @@ size_t flex_line_members(lxb_dom_element_t *container, FlexLineMember **out)
     free(items);
     DCHECK((*out)[n - 1].line + 1 == lines, "§9.3's step 5 counted a different number of lines than it wrote");
     return n;
+}
+
+bool flex_line_members_ask(lxb_dom_element_t *container, FlexLineMember **out, size_t *n)
+{
+    DCHECK(container != NULL && out != NULL && n != NULL,
+           "css-flexbox-1 §9.3's line membership was asked for with no container or nowhere to put it");
+    if (!fl_measures_ask(container, flex_container_axis_is_vertical(container, FLEX_AXIS_MAIN))) return false;
+    *n = flex_line_members(container, out);
+    return true;
 }

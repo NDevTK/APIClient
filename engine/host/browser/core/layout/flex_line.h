@@ -51,4 +51,8 @@ typedef struct {
    are contiguous runs of equal `line`. The preconditions are `flex_line_used_main_size`'s on `container`. */
 size_t flex_line_members(lxb_dom_element_t *container, FlexLineMember **out);
 
+/* The same as an ask: true with `*out` and `*n` as above once every item's §9.2 measurement is answered, false
+   ("not yet") with the deferred questions suspended on the current job for the caller's drive. */
+bool flex_line_members_ask(lxb_dom_element_t *container, FlexLineMember **out, size_t *n);
+
 #endif
