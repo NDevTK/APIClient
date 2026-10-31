@@ -6,6 +6,7 @@
 #include "core/idl_args.h"   /* §3.3.7 [Exposed] step 1: resolving a [Global] interface's global names */
 #include "core/realm.h"
 #include "solver/concolic.h"
+#include "core/timing/event_loop.h"   /* a stated time origin is a moment the clock has reached */
 #if APICLIENT_DEV
 /* THE GENERATED CORPUS TABLE ITSELF, read for the check below and not restated. This is the second
    translation unit to include it (core/idl_args.c is the first), and that is the point rather than a
@@ -78,6 +79,9 @@ static JSClassID g_top_level_url_slot;
    rather than at each ask, so a host names an interface and nothing downstream re-derives what that name
    means. */
 static JSClassID g_global_names_slot;
+/* HR-TIME §4's TIME ORIGIN OF THIS REALM'S ENVIRONMENT, stated by its creator for the URL's reason: a field of
+   the environment, settled at the build and read by an intrinsic (hr_time's) while the list is installing. */
+static JSClassID g_time_origin_slot;
 
 /* HTML §8.1.3.5 "Secure contexts" STEP 1.2.1's OPERAND — the answer the worker's owner gave — in the same
    per-realm store and for the same reason as the two above: it is a fact about the ENVIRONMENT, settled when
@@ -558,7 +562,8 @@ void realm_assert_interface_objects_asked(JSContext *ctx)
 #endif
 
 void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *top_level_creation_url,
-                              const char *global_interface, bool owner_is_secure_context)
+                              const char *global_interface, bool owner_is_secure_context,
+                              JSValueConst time_origin)
 {
     unsigned names;
     int i;
@@ -648,6 +653,30 @@ void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *
         g_global_names_slot = realm_value_declare(ctx, "Web IDL §3.3.8 [Global] the realm's global names");
     if (g_owner_secure_slot == JS_INVALID_CLASS_ID)
         g_owner_secure_slot = realm_value_declare(ctx, "HTML §8.1.3.5 the worker owner's secure-context answer");
+    if (g_time_origin_slot == JS_INVALID_CLASS_ID)
+        g_time_origin_slot = realm_value_declare(ctx, "HR-TIME §4 the environment's time origin");
+    if (JS_IsUndefined(time_origin)) {
+        /* Created by this build: the agent is named above, so its clock answers. */
+        realm_value_set(ctx, g_time_origin_slot, event_loop_now(ctx));
+    } else {
+        /* A moment of the clock or a derivation of one, and one the clock has reached: a creation moment from
+           the clock's future would be a moment some caller computed. Read, never asked, so it fires on a decided
+           contradiction (event_loop_before_decided never forks). */
+        DCHECK(JS_IsNumber(time_origin) || concolic_is(time_origin),
+               "a realm was built with a time origin that is neither a moment of the monotonic clock nor a "
+               "derivation of one — its creator states the moment the environment was created");
+#if APICLIENT_DEV
+        {
+            JSValue now = event_loop_now(ctx);
+
+            DCHECK(event_loop_before_decided(ctx, now, time_origin) != 1,
+                   "a realm was built with a time origin the monotonic clock has not reached — the creation "
+                   "moment is read from the clock when the browsing context is created, never computed");
+            JS_FreeValue(ctx, now);
+        }
+#endif
+        realm_value_set(ctx, g_time_origin_slot, JS_DupValue(ctx, time_origin));
+    }
     /* THE GLOBAL NAMES FIRST, because everything below and every install after it reads them: §3.3.7 step 1
        through idl_exposed_in_realm, and §8.1.3.5's own branch through realm_global_is_worker. */
     realm_value_set(ctx, g_global_names_slot, JS_NewInt32(ctx, (int32_t)names));
@@ -730,6 +759,13 @@ JSValue realm_top_level_creation_url(JSContext *ctx)
            "at its step 1.2 instead (realm_owner_is_secure_context); a reader inheriting the field into a "
            "child navigable is standing in a realm that has none, because a worker has no navigables");
     return realm_value_get(ctx, g_top_level_url_slot);   /* asserts THIS realm ran the install */
+}
+
+JSValue realm_time_origin(JSContext *ctx)
+{
+    DCHECK(g_time_origin_slot != JS_INVALID_CLASS_ID,
+           "a realm's time origin was read in an agent where no realm has been built");
+    return realm_value_get(ctx, g_time_origin_slot);   /* asserts THIS realm ran the install */
 }
 
 bool realm_global_is_worker(JSContext *ctx)
@@ -829,6 +865,7 @@ void realm_intrinsics_free(void)
     g_top_level_url_slot = JS_INVALID_CLASS_ID;
     g_global_names_slot = JS_INVALID_CLASS_ID;
     g_owner_secure_slot = JS_INVALID_CLASS_ID;
+    g_time_origin_slot = JS_INVALID_CLASS_ID;
 #if APICLIENT_DEV
     /* The two §3.8 censuses are slots like the three above and are released the same way — their CONTENTS are
        the realms' and went with them; what the agent holds is the slot id. */

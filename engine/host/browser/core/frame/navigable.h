@@ -153,13 +153,16 @@
    algorithm. It travels WITH the creation for the identical reason the row above does: the Document RECORD
    does not exist until the builder has returned, and this is the fact that decides what §4.2.3's freeze and
    §4.8.5's iframe walk are told when they ask §2.4.3 inside it. */
+/* `time_origin` is the new environment's HR-TIME §4 time origin, borrowed, which the builder states to
+   realm_install_intrinsics (core/realm.h) for the Document's navigation start time: the navigable's creation
+   moment for §7.3.2.1's initial about:blank, JS_UNDEFINED (created by the build) for a navigation. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                    const char *top_level_url, const char *origin, DocumentKind kind,
                                    SerializedPolicyContainer policy,
                                    SerializedResponsePermissionsPolicy permissions_policy,
                                    SandboxFlags sandbox_flags,
                                    uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
-                                   bool is_iframe_srcdoc);
+                                   bool is_iframe_srcdoc, JSValueConst time_origin);
 void navigable_set_realm_builder(RealmBuilder b);
 
 /* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS. The answer is BORROWED, and that is a statement
@@ -219,6 +222,8 @@ void navigable_set_realm_builder(RealmBuilder b);
    one. A Document built through here is of that class in no reading, so the value it would be handed is the
    constant false, and a parameter that can only take one value is a knob a caller could get wrong for no
    capability at all. */
+/* `created` is HTML §7.3.2.1's unsafeContextCreationTime the navigable was created at (window_proxy.c's record),
+   borrowed: the initial about:blank's navigation start time, and so its Window's time origin. */
 /* `content_type` is the RESPONSE's `Content-Type` value as Fetch §2.2.2's `get` joined it, and the ONE thing
    read off it here is HTML §13.2.3.2 "Determining the character encoding"'s transport-layer charset (through
    Fetch §3.5's legacy extract an encoding). It is NOT what decides which parse this Document gets — that is
@@ -243,7 +248,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
                            const char *content_type, const MimeType *computed_type,
                            SerializedPolicyContainer policy,
-                           const char *about_base_url, SandboxFlags sandbox_flags);
+                           const char *about_base_url, SandboxFlags sandbox_flags, JSValueConst created);
 
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */
 void navigable_init(JSContext *ctx);

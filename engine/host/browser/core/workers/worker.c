@@ -447,7 +447,11 @@ static JSContext *worker_realm_new(JSContext *ctx, const char *url)
     agent = platform_create_agent(wctx, true);
     /* Step 5: a new realm whose global is a DedicatedWorkerGlobalScope; HTML §10.2.6.2's top-level creation URL is
        null, and §8.1.3.5 step 1.2.1 reads the owner's secure-context answer. */
-    realm_install_intrinsics(wctx, agent, NULL, "DedicatedWorkerGlobalScope", secure_context_is(ctx));
+    /* JS_UNDEFINED: HTML §10.2.4 "Processing model"'s run a worker reads "Let unsafeWorkerCreationTime be the
+       unsafe shared current time." as it creates this realm, so the worker agent's clock at this build is that
+       moment. */
+    realm_install_intrinsics(wctx, agent, NULL, "DedicatedWorkerGlobalScope", secure_context_is(ctx),
+                             JS_UNDEFINED);
     /* "Append owner to worker global scope's owner set": the scheduler files the worker's work under its owner's
        document. */
     document_set_worker_environment(wctx, ctx, url);

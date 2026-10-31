@@ -214,7 +214,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
    `top_level_url` is HTML §8.1.3.1's, decided by the operation: §7.4's creator's for a nested navigable, the
    navigable's own address for an auxiliary one, the zone's statement for a joined document. Passing `url` would
    make an about:blank iframe of an http page a secure context. */
-static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
+static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url, JSValueConst time_origin)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -233,7 +233,8 @@ static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
     /* §3.3.7 [Exposed] step 1's realm side: every realm this host builds is a navigable's, whose global is a
        Window. */
     realm_install_intrinsics(ctx, platform_window_agent(), top_level_url, "Window",
-                             false);   /* §8.1.3.5 step 1.2.1: a Window has no owner set */
+                             false,   /* §8.1.3.5 step 1.2.1: a Window has no owner set */
+                             time_origin);   /* the builder's, or JS_UNDEFINED for a joined document */
     return ctx;
 }
 
@@ -243,9 +244,9 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
                                      SerializedResponsePermissionsPolicy permissions_policy,
                                      SandboxFlags sandbox_flags,
                                      uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
-                                     bool is_iframe_srcdoc)
+                                     bool is_iframe_srcdoc, JSValueConst time_origin)
 {
-    JSContext *ctx = engine_realm_new(rt, top_level_url);
+    JSContext *ctx = engine_realm_new(rt, top_level_url, time_origin);
 
     engine_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
                          nav_proxy, about_base_url, is_iframe_srcdoc);
@@ -920,7 +921,7 @@ static void qjs_join_install(QjsPendingDocument *p)
     DocScripts scripts;
 
     dom = engine_parse_finish(p, &joined_kind, &joined_encoding);
-    cctx = engine_realm_new(g_rt, top_level_url);
+    cctx = engine_realm_new(g_rt, top_level_url, JS_UNDEFINED);   /* created by this build */
     {
         /* NULL: this host does not know the navigable's name. Whoever embeds this document (a peer or the browser)
            created the navigable, and a peer's `navigable.create` notice carries no name, so `window.name` reads

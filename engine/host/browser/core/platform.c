@@ -1545,7 +1545,8 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
        [Global] kind would also take a browsing context group, a `requestsOAC` and a top-level creation URL a
        worker has not got. `false` is §8.1.3.5 step 1.2.1's operand, read from a WorkerGlobalScope's §10.2.1.1
        owner set, which a Window has not got; core/realm.c asserts a non-worker realm states exactly this. */
-    realm_install_intrinsics(ctx, g_window_agent, agent->top_level_url, "Window", false);
+    realm_install_intrinsics(ctx, g_window_agent, agent->top_level_url, "Window", false,
+                             JS_UNDEFINED);   /* the agent's first environment is created by this build */
 }
 
 /* The worker agent's entry. HTML §8.1.2.1 "Integration with the JavaScript agent formalism" types an agent by its
@@ -1592,7 +1593,8 @@ void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *
        §10.2.6.2's and §8.1.3.5's, and realm_install_intrinsics asserts the pair: NULL for the top-level creation
        URL, and the owner's secure-context answer, which §8.1.3.5 "Secure contexts" step 1.2.1 reads from this
        global's §10.2.1.1 owner set, a fact about the creating agent the caller states. */
-    realm_install_intrinsics(ctx, record, NULL, global_interface, owner_is_secure_context);
+    realm_install_intrinsics(ctx, record, NULL, global_interface, owner_is_secure_context,
+                             JS_UNDEFINED);   /* created by this build */
 }
 
 void platform_agent_free(void)

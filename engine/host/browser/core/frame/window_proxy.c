@@ -45,6 +45,7 @@
 #include "core/frame/remote_location.h"   /* §7.2.4's cross-origin arms: `location` of a peer's document */
 #include "core/frame/document_lifecycle.h"
 #include "core/dom/document.h"
+#include "core/timing/event_loop.h"   /* §7.3.2.1's unsafeContextCreationTime, read when a navigable is created */
 #include <stdio.h>
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include "solver/reclaim.h"
@@ -70,6 +71,14 @@ typedef struct {
        when something reads through it. */
     JSContext *realm;
     char      *url;    /* the navigable's address, for a realm not yet materialized (owned) */
+    /* HTML §7.3.2.1 "Creating browsing contexts"' unsafeContextCreationTime ("Let unsafeContextCreationTime be the
+       unsafe shared current time"), read from the creating flow's clock when §7.4 created this navigable. Its
+       initial about:blank's navigation start time is that moment coarsened, and §7.2.2.6 makes the Window's time
+       origin that start time, so a realm materialized later is handed this rather than the build's moment.
+       A JSValue because the flow clock can be unknown; JS_UNDEFINED on a proxy over a realm that already exists
+       (the self proxy) or lives in a peer, which never reaches proxy_realm's build. A creation fact: never
+       rewritten. */
+    JSValue created;
     /* The active document's origin, §7.1.1's record, for the §7.1.1 same origin check §7.2.1 makes. Borrowed: an
        origin is immutable and lives for the agent (core/url/origin.h), so it can sit inside the bytes proxy_of
        captures; a navigation replaces this pointer rather than mutating its target, so a parked flow's copy still
@@ -301,8 +310,8 @@ static int g_wp_location_setter_id = -1;
 
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
 static const uint16_t PROXY_VALS[] = { WP_OFF(window), WP_OFF(parent), WP_OFF(opener), WP_OFF(container),
-                                       WP_OFF(name_val) };
-static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 5 };
+                                       WP_OFF(name_val), WP_OFF(created) };
+static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 6 };
 
 /* The capture is in the accessor, as for every other component record: a record a flow has reached is one it may
    write, so there is no write site to miss. `origin` is a POD pointer and `doc` a POD id inside the captured bytes;
@@ -576,6 +585,7 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
                       "object can reach a collection");
     JS_FreeValueRT(rt, p->window);
     JS_FreeValueRT(rt, p->name_val);
+    JS_FreeValueRT(rt, p->created);
     JS_FreeValueRT(rt, p->parent);
     JS_FreeValueRT(rt, p->opener);
     JS_FreeValueRT(rt, p->container);
@@ -595,6 +605,7 @@ static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
        creator's Window, which reaches the child through the element wrapper that holds it. */
     JS_MarkValue(rt, p->window, mark_func);
     JS_MarkValue(rt, p->name_val, mark_func);
+    JS_MarkValue(rt, p->created, mark_func);
     JS_MarkValue(rt, p->parent, mark_func);
     JS_MarkValue(rt, p->opener, mark_func);
     /* §7.3.1.3's container closes a tighter cycle: the element's wrapper holds this proxy in a hidden own slot and
@@ -630,6 +641,9 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
                                "realm that already exists is minted by window_proxy_new_self, which carries it");
+        DCHECK(JS_IsNumber(p->created) || concolic_is(p->created),
+               "a deferred navigable reached its realm's build with no §7.3.2.1 creation moment — window_proxy_new "
+               "reads it for every navigable minted with an address");
         /* The initial about:blank, which came from no response: no bytes, and §7.1.7's container is the clone of
            its creator's this navigable was created with (creator_policy). A fetch here is impossible, not
            deferred: this runs inside the property read that reached through the navigable, and a fetch suspends.
@@ -645,7 +659,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            inherited policy's CSP-derived flags in here would re-sandbox the popup `allow-popups-to-escape-sandbox`
            exists to free. The union belongs to §7.4.5's navigation (core/frame/navigable.c). */
         p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0, NULL, NULL,
-                                   p->creator_policy, p->creator_base_url, p->creation_sandbox_flags);
+                                   p->creator_policy, p->creator_base_url, p->creation_sandbox_flags, p->created);
         wp_set(ctx, p, &p->window, JS_GetGlobalObject(p->realm));
     }
     return p->realm;
@@ -881,6 +895,10 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
                          const char *top_level_url,
                          const Origin *top_level_origin, JSValueConst parent, JSValueConst opener)
 {
+    /* §7.3.2.1's step 2, for a navigable whose realm is built from this record; the self proxy's environment
+       stated its own time origin when the host built it. Read before the object exists, since a read over an
+       unknown moment allocates and nothing may allocate between the object and its record. */
+    JSValue created = url ? event_loop_now(ctx) : JS_UNDEFINED;
     JSValue obj;
     ProxyData *p;
 
@@ -894,7 +912,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     /* JS_NewObjectClass takes the prototype from this realm's class slot, so no mint has a JS_SetPrototype to
        forget. */
     obj = JS_NewObjectClass(ctx, g_proxy_class);
-    if (JS_IsException(obj)) return obj;
+    if (JS_IsException(obj)) { JS_FreeValue(ctx, created); return obj; }
     p = lexbor_calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a WindowProxy");
     /* §7.3's is created by web content: this mint is §7.4's create a new navigable, whose top-level form is
@@ -904,6 +922,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     p->name_val = JS_UNDEFINED;
     p->realm  = NULL;
     p->url    = url ? proxy_strdup(url) : NULL;   /* NULL only for the self proxy, whose realm is already built */
+    p->created = created;
     DCHECK(origin != NULL, "a navigable was created with no origin — §7.3.2.1's determine-the-origin "
                            "answers for every Document, including the initial about:blank one §7.4 creates a "
                            "navigable with, and the answer is a RECORD whose identity the same-origin check "
@@ -1121,6 +1140,7 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     CHECK(p != NULL, "window proxy: OOM building a remote WindowProxy");
     p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
     p->name_val = JS_UNDEFINED;
+    p->created = JS_UNDEFINED;   /* its environment is the peer's, which stated its own time origin */
     DCHECK(origin != NULL, "a remote navigable was minted with no origin — the peer's principal is what every "
                            "cross-origin filter over this proxy compares, and it is stated by the trusted zone");
     p->origin = origin;   /* borrowed, and never same origin with this agent's; see origin_parse */

@@ -21,8 +21,6 @@
 #define HR_TIME_RESOLUTION_MS          0.1
 #define HR_TIME_RESOLUTION_ISOLATED_MS 0.005
 
-static JSClassID g_origin_slot = JS_INVALID_CLASS_ID;
-
 /* §4's ESTIMATED MONOTONIC TIME OF THE UNIX EPOCH — "Each group of environment settings objects that could
  * possibly communicate in any way has an estimated monotonic time of the Unix epoch, a moment on the monotonic
  * clock". A GROUP, so it is AGENT state and not realm state: CLAUDE.md's §Security makes an instance an
@@ -71,33 +69,20 @@ static double hr_floor(double m, double resolution)
 }
 
 /* §4: "Performance measurements report a duration from a moment early in the initialization of a relevant
- * environment settings object. That moment is stored in that settings object's time origin." This runs from
- * the one call every realm goes through (core/realm.h), which is where this engine creates that environment —
- * so the moment the standard describes and the moment this reads are the same one.
- *
- * WHAT IS STORED IS THE RAW MOMENT, AND THE COARSENING HAPPENS AT THE READ. §4 stores a MOMENT here and names
- * `coarsen time` nowhere in this sentence; the algorithm that coarsens is `relative high resolution time`,
- * which runs when a timestamp is asked for. That is also the only ORDER in which the coarsening can be
- * correct, and the reason this is not a stylistic move: `coarsen time`'s resolution is decided by THE
- * ENVIRONMENT'S CROSS-ORIGIN ISOLATED CAPABILITY, and HTML §7.2.2.6 "Script settings for Window objects"
- * defines that capability over "window's associated DOCUMENT" — which does not exist yet at this point in the
- * realm's construction (core/platform.c installs `document` last, because §4.8.5's insertion steps create
- * child navigables and need every other component already standing). Coarsening here therefore asked an
- * environment field before the environment was set up, and it went unnoticed only for as long as the second
- * conjunct of that capability was a crash nobody reached: the first cross-origin-isolated page to load —
- * `Cross-Origin-Opener-Policy: same-origin` beside `Cross-Origin-Embedder-Policy: require-corp`, which is
- * every wasm application on the web — takes the `concrete` arm and asks the Document.
- *
- * THE ORIGIN IS STILL COARSENED BEFORE ANYTHING COMPARES IT, which is what hr_time_relative needs and why
- * hr_time_origin below does it rather than this. `relative high resolution coarse time` is "the duration from
- * the time origin to coarseTime", so an origin off the resolution grid would make that duration carry a
- * sub-resolution remainder — and would make it NEGATIVE for a moment equal to the origin, which is the one
- * comparison hr_time_relative asserts. Coarsening both ends at the read puts every page-visible timestamp on
- * the grid and keeps the duration a multiple of the resolution, which is what a browser reports, and the floor
- * is a pure function of the stored moment so no read can disagree with another. */
+ * environment settings object. That moment is stored in that settings object's time origin." The creator states
+ * it (core/realm.h's realm_install_intrinsics, read back raw by realm_time_origin): HTML §7.3.2.1 reads
+ * unsafeContextCreationTime when the browsing context is created, earlier than a deferred realm's build. This
+ * install initializes only the group's estimate.
+ * The raw moment is stored and coarsened at each read (hr_time_origin), for two reasons. `coarsen time`'s
+ * resolution is the environment's cross-origin isolated capability, which HTML §7.2.2.6 defines over the
+ * window's associated Document, and that does not exist during the realm's construction (core/platform.c
+ * installs `document` last). And `relative high resolution coarse time` is the duration from the origin to a
+ * coarse moment, so an origin off the grid would leave a sub-resolution remainder and go NEGATIVE for a moment
+ * equal to it, which hr_time_relative asserts against; coarsening both ends at the read keeps every timestamp a
+ * multiple of the resolution, as a browser reports, and the floor is a pure function of the stored moment. */
 static void hr_time_install(JSContext *ctx)
 {
-    JSValue moment = event_loop_now(ctx);
+    JSValue moment = realm_time_origin(ctx);
 
     /* §4's FOUR STEPS THAT INITIALIZE THE GROUP'S ESTIMATED MONOTONIC TIME OF THE UNIX EPOCH, run at the FIRST
      * realm this agent builds and at no other. §4 states the estimate as a property of the group and gives no
@@ -112,10 +97,10 @@ static void hr_time_install(JSContext *ctx)
     if (!g_epoch_known) {
         double monotonic_ms = 0, wall_ms;
 
-        /* §4 step 2: "Let monotonic time be the monotonic clock's unsafe current time." It is the moment read
-           at the top of this function, which is also the one this realm's time origin is stamped with — one
-           read and not two, so the group's estimate and the first environment's origin cannot be placed against
-           each other by a clock that moved in between. The read is therefore BEFORE step 1's below rather than
+        /* §4 step 2: "Let monotonic time be the monotonic clock's unsafe current time." It is the first
+           realm's stated time origin, which its creator read from the clock at the build (nothing creates the
+           first realm earlier) — one read and not two, so the group's estimate and the first environment's
+           origin cannot be placed against each other by a clock that moved in between. The read is therefore BEFORE step 1's below rather than
            after, and that reordering is unobservable STRUCTURALLY rather than by a property of the clock. It
            used to be argued from one — "this monotonic clock advances only when a task source becomes due, so
            it holds one moment for the whole of an install" — and that argument DIED when the clock got its
@@ -156,20 +141,19 @@ static void hr_time_install(JSContext *ctx)
             g_session_wall_ms = floor(wall_ms);
         g_epoch_known = 1;
     }
-    /* Running twice in one realm is asserted by realm_value_set, which is where the first moment is standing. */
-    realm_value_set(ctx, g_origin_slot, moment);
+    JS_FreeValue(ctx, moment);
 }
 
 JSValue hr_time_origin(JSContext *ctx)
 {
-    JSValue v = realm_value_get(ctx, g_origin_slot), coarse;
+    JSValue v = realm_time_origin(ctx), coarse;
 
     DCHECK(JS_IsNumber(v) || concolic_is(v),
            "an environment's TIME ORIGIN is neither a moment on the monotonic clock nor a derivation of one — "
-           "HR-TIME §4 stores the clock's moment at this realm's creation, and the install that stamps it is "
-           "the only thing that ever writes this slot");
+           "HR-TIME §4 stores the clock's moment at this environment's creation, which its creator states to "
+           "realm_install_intrinsics");
     /* §4's coarsen time, at the read — see hr_time_install for why it cannot be at the write. The stored
-       moment is BORROWED back from the slot by this call and released here; what leaves is the coarsening. */
+       moment is read back from the realm by this call and released here; what leaves is the coarsening. */
     coarse = hr_time_coarsen(ctx, v);
     JS_FreeValue(ctx, v);
     return coarse;
@@ -340,7 +324,7 @@ static JSValue hr_duration(JSContext *ctx, JSValue from, JSValue to)
  * does not exist here and borrowing its answer would be applying one algorithm's step inside another. */
 JSValue hr_time_origin_timestamp(JSContext *ctx)
 {
-    JSValue origin = realm_value_get(ctx, g_origin_slot);
+    JSValue origin = realm_time_origin(ctx);
 
     DCHECK(g_epoch_known,
            "HR-TIME §7.2's `timeOrigin` was read before §4's estimated monotonic time of the Unix epoch was "
@@ -348,10 +332,10 @@ JSValue hr_time_origin_timestamp(JSContext *ctx)
            "reachable only THROUGH a realm, so the two cannot come apart unless the install stopped running");
     DCHECK(JS_IsNumber(origin) || concolic_is(origin),
            "an environment's TIME ORIGIN is neither a moment on the monotonic clock nor a derivation of one — "
-           "HR-TIME §4 stores the clock's moment at this realm's creation, and the install that stamps it is "
-           "the only thing that ever writes this slot");
+           "HR-TIME §4 stores the clock's moment at this environment's creation, which its creator states to "
+           "realm_install_intrinsics");
     /* §4 step 3: "Return the duration from the estimated monotonic time of the Unix epoch to timeOrigin." */
-    return hr_duration(ctx, JS_NewFloat64(ctx, g_epoch_estimate_ms), origin);
+    return hr_duration(ctx, JS_NewFloat64(ctx, g_epoch_estimate_ms), origin);   /* consumes both */
 }
 
 JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
@@ -384,12 +368,10 @@ JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
     origin = hr_time_origin(ctx);
 
     /* §4: "the duration from global's relevant settings object's time origin to coarseTime". A NEGATIVE
-       duration would be a moment this environment can observe that precedes the environment's own creation,
-       and there is exactly one way for that to arise here: core/frame/window_proxy.h DEFERS building a child
-       navigable's realm until something reaches it, so a Window §7.4 created at one moment gets its time
-       origin at a LATER one. The day this fires, the fix is the one core/html/user_activation.c already names
-       for the same deferral — carry the creation moment on the NAVIGABLE and hand it to the realm when it
-       materializes — and never a clamp here, which would report a page's own first frame as moment zero.
+       duration would be a moment this environment can observe that precedes the environment's own creation.
+       A deferred child realm (core/frame/window_proxy.h) is handed its navigable's creation moment, HTML
+       §7.3.2.1's unsafeContextCreationTime, rather than the later moment it is built at, so this holds for it
+       too; a clamp here would report a page's own first frame as moment zero.
        IT IS READ FROM THE CLOCK'S OWN ORDER AND NOT RE-COMPUTED. Over two known moments this is exactly the
        `coarse >= origin` that stood here; over an unknown one a comparison is an arm to take rather than a
        fact to test, so the invariant asks what this flow ALREADY DECIDED (event_loop_before_decided never
@@ -397,8 +379,8 @@ JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
        content is the violated invariant, which is the assertion manufacturing the world in which it holds. */
     DCHECK(event_loop_before_decided(ctx, coarse, origin) != 1,
            "HR-TIME §4's relative high resolution time is NEGATIVE — this environment was asked about a moment "
-           "earlier than its own TIME ORIGIN, which means the origin was stamped when the realm materialized "
-           "rather than when HTML §7.4 created the Window");
+           "earlier than its own TIME ORIGIN — a creator stated a moment later than the environment's creation "
+           "(HTML §7.3.2.1's unsafeContextCreationTime, §10.2.4's unsafeWorkerCreationTime)");
     return hr_duration(ctx, origin, coarse);
 }
 
@@ -476,12 +458,9 @@ JSValue hr_time_current(JSContext *ctx)
 
 void hr_time_init(JSContext *ctx)
 {
-    DCHECK(g_origin_slot == JS_INVALID_CLASS_ID, "hr_time_init ran twice — the TIME ORIGIN's slot is declared once per AGENT");
     DCHECK(!g_epoch_known, "hr_time_init ran twice — §4's estimated monotonic time of the Unix epoch is the "
                            "GROUP's, so a second agent starting on the first one's estimate would place its "
                            "clock's zero against a wall-clock reading taken in a process that is gone");
-    g_origin_slot = realm_value_declare(ctx, "HR-TIME §4 the environment settings object's time origin");
-    agent_state_realm_slot("hr_time", &g_origin_slot, "HR-TIME §4's time-origin realm slot");
     agent_state_flag("hr_time", &g_epoch_known,
                      "HR-TIME §4's estimated monotonic time of the Unix epoch, and the latch that says the "
                      "first realm's install has stamped it");
@@ -490,9 +469,6 @@ void hr_time_init(JSContext *ctx)
 
 void hr_time_free(void)
 {
-    /* The moments are the REALMS' — each is released with its context. What the agent holds is the slot, and a
-       slot id is a class id in a runtime that is going away with it. */
-    g_origin_slot = JS_INVALID_CLASS_ID;
     /* §4's estimate is the GROUP's and this group is over. The double goes back with its latch rather than
        being left to be read under a `g_epoch_known` a later agent has re-raised: it names a moment on a
        monotonic clock that no longer runs, and the pair is one fact. */

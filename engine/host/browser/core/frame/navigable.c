@@ -1133,7 +1133,11 @@ static void nav_create_abandon(NavCreateWork *w)
 
 /* §7.5.1's CREATE AND INITIALIZE A DOCUMENT OBJECT, FINISHED — the parse's own end, then the realm the host
    builds around the finished tree, then §7.4.6.2's update the document for a navigation. */
-static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueConst nav_proxy)
+/* `time_origin` is the new environment's HR-TIME §4 time origin, borrowed, or JS_UNDEFINED for one created by
+   this build (core/realm.h): handed to the realm build rather than held on `w`, which is malloc'd and crosses
+   parks a JSValue may not. */
+static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueConst nav_proxy,
+                                    JSValueConst time_origin)
 {
     SerializedPolicyContainer policy;
     JSContext *cctx;
@@ -1211,7 +1215,7 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
                                                                   w->permissions_policy_report_only),
                            w->sandbox_flags, w->doc, nav_proxy,
                            w->about_base_url && *w->about_base_url ? w->about_base_url : NULL,
-                           w->is_iframe_srcdoc);
+                           w->is_iframe_srcdoc, time_origin);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     /* AND §13.2.3.2's ANSWER ONTO THE DOCUMENT IT IS ABOUT, for the same reason and in the same place as the
        about base URL below: it is a fact the OPERATION determined and the host's realm builder cannot answer.
@@ -1299,7 +1303,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
                            const char *content_type, const MimeType *computed_type,
                            SerializedPolicyContainer policy,
-                           const char *about_base_url, SandboxFlags sandbox_flags)
+                           const char *about_base_url, SandboxFlags sandbox_flags, JSValueConst created)
 {
     NavCreateWork *w;
 
@@ -1326,7 +1330,9 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "§7.4's initial about:blank was opened as a creation with items left to fill — its markup is a "
            "constant of this build and reaches child_document as the no-response arm, which takes no load "
            "handle at all, so a steppable one here is a response that arrived through the entry above");
-    return nav_create_finish(ctx, w, nav_proxy);
+    /* §7.3.2.1's initial about:blank: its navigation start time, and so §7.2.2.6's time origin, is the
+       navigable's creation moment, not this build's. */
+    return nav_create_finish(ctx, w, nav_proxy, created);
 }
 
 /* §7.4 STEP 14's NAVIGATE IS A SCHEDULED WORK ITEM, and it has to be one because NOT ONE of its three callers
@@ -2626,7 +2632,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        §7.4.6.2's update the document — all of it inside nav_create_finish, which is where the five facts this
        frame determined before the suspension come back out of the record. */
     {
-        JSContext *cctx = nav_create_finish(ctx, s->create, proxy);
+        /* Named residual. Not covered: §7.5.1 gives a navigated Document "navigation start time set to
+           navigationParams's response's timing info's start time", and this load records no fetch timing, so the
+           time origin is the moment the Document is created, later than the fetch began. Next diff builds: the
+           load's fetch-start moment, read when the fetch is asked and carried on the job as a JS value. Absence
+           shows as: a navigated document's performance.timeOrigin later than its own navigation's fetch. */
+        JSContext *cctx = nav_create_finish(ctx, s->create, proxy, JS_UNDEFINED);
 
         s->create = NULL;
         /* HTML §7.4.1.2 "Document state"'s RESOURCE ONTO THE ENTRY THE INSTALL HAS JUST MINTED — the field

@@ -54,8 +54,19 @@ void realm_declare_intrinsic(RealmIntrinsic install);
  * Each combination is asserted, so the pair a host cannot state wrongly is the only pair that passes. */
 /* `agent` is the realm's agent (HTML §8.1.2.1, realm.[[AgentSignifier]]), owned by the runtime: the record
  * its own entry created for an agent's first realm, and that agent's record for every later realm of it. */
+/* `time_origin` is the environment's HR-TIME §4 time origin as an unsafe moment of the event loop's monotonic
+ * clock (core/timing/event_loop.h), stated by the operation that creates the environment, borrowed: HTML §7.2.2.6
+ * gives a Window's as its Document's navigation start time, which §7.3.2.1 reads as unsafeContextCreationTime
+ * when the browsing context is created, so a realm built later (a deferred about:blank) is handed that earlier
+ * moment. JS_UNDEFINED states that the environment is created by this build, its moment read from the realm's
+ * own agent's clock once the realm names its agent: an agent's first realm, a worker's (§10.2.4 reads
+ * unsafeWorkerCreationTime as it creates the realm), a joined or a navigated Document. */
 void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *top_level_creation_url,
-                              const char *global_interface, bool owner_is_secure_context);
+                              const char *global_interface, bool owner_is_secure_context,
+                              JSValueConst time_origin);
+/* HR-TIME §4's time origin of `ctx`'s environment, the raw moment realm_install_intrinsics was handed, not
+ * coarsened (core/timing/hr_time.h coarsens at its reads). Owned. */
+JSValue realm_time_origin(JSContext *ctx);
 
 /* HTML §8.1.3.2's environment settings objects whose responsible event loop is `ctx`'s: the realm after `prev`
  * (NULL starts the walk) that shares `ctx`'s agent and was built through realm_install_intrinsics, or NULL.

@@ -6675,7 +6675,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
                                  SerializedResponsePermissionsPolicy permissions_policy,
                                  SandboxFlags sandbox_flags,
                                  uint32_t doc_id, JSValueConst nav_proxy, const char *about_base_url,
-                                 bool is_iframe_srcdoc)
+                                 bool is_iframe_srcdoc, JSValueConst time_origin)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -6687,7 +6687,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
     /* §3.3.7 step 1: a child navigable is a Window; §8.1.3.5 step 1.2.1: a Window has no owner set. */
-    realm_install_intrinsics(ctx, platform_window_agent(), top_level_url, "Window", false);
+    realm_install_intrinsics(ctx, platform_window_agent(), top_level_url, "Window", false, time_origin);
     tf_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
                      nav_proxy, about_base_url, is_iframe_srcdoc);
     return ctx;
@@ -7512,7 +7512,8 @@ TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
        never reaches. realm_assert_interface_objects_asked here would therefore fire on every interface object
        that column places, which is the same population the table's Window `false` rows are about. */
     realm_install_intrinsics(win, platform_window_agent(), top_level_url, "Window",
-                             false);   /* §8.1.3.5 step 1.2.1: no owner set */
+                             false,   /* §8.1.3.5 step 1.2.1: no owner set */
+                             JS_UNDEFINED);   /* created by this build */
     /* AND IT HAS THE SURFACE THE AGENT'S OWN WINDOW REALM HAS, ASKED OF THE ONE FACT THAT COULD MAKE THEM
        DIFFER. Web IDL §3.3.13 [SecureContext]'s members are installed or absent by HTML §8.1.3.5's answer, so
        a Window realm built here at an address whose answer differs from the caller's would carry a DIFFERENT
@@ -7543,9 +7544,9 @@ TF_UNIT void exposure_selftest(JSContext *ctx, const char *top_level_url)
     /* Each is a dedicated worker agent of its own (HTML §8.1.2.1: one DedicatedWorkerGlobalScope per agent),
        created given canBlock true as §8.1.2.2's obtain-a-dedicated-worker-agent does. */
     realm_install_intrinsics(worker, platform_create_agent(worker, true), NULL,
-                             "DedicatedWorkerGlobalScope", owner_secure);
+                             "DedicatedWorkerGlobalScope", owner_secure, JS_UNDEFINED);
     realm_install_intrinsics(worker_insecure, platform_create_agent(worker_insecure, true), NULL,
-                             "DedicatedWorkerGlobalScope", !owner_secure);
+                             "DedicatedWorkerGlobalScope", !owner_secure, JS_UNDEFINED);
     /* AND THESE TWO REALMS ARE FINISHED, WHICH USED TO BE A STATEMENT ONLY THIS FIXTURE COULD MAKE. Two calls
        to core/realm.h's owed half — every interface object a realm owes is one some component asked Web IDL
        §3.8 for — stood here, on the argument that it may be asked only where no further placement will happen
