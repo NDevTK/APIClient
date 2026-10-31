@@ -39,7 +39,7 @@ static const char HTML_CALCTREE[] =
     "['calc(NaN * 1px)','calc(NaN * 1px)'],['max(10px, 1em * 2, 3em)','max(10px, 2em, 3em)'],"
     "['calc(2 * (1em + 50%))','calc(100% + 2em)'],['calc(-1 * (1em + 1px))','calc(-1em - 1px)'],"
     "['calc(1em - (50% - 1px))','calc(-50% + 1em + 1px)'],['round(10.5px, 1em)','round(10.5px, 1em)'],"
-    "['calc(1Q + 1MM)','calc(4.72441px)'],['calc(5vw - (2em * 2))','calc(-4em + 5vw)'],"
+    "['calc(1PC + 3PT)','calc(20px)'],['calc(5vw - (2em * 2))','calc(-4em + 5vw)'],"
     "['min(1em, 1px)','min(1em, 1px)']];"
     "function E(i){return document.getElementById(i);}"
     "function C(i,p){return getComputedStyle(E(i))[p];}"
