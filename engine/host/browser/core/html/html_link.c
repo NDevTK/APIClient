@@ -2153,19 +2153,12 @@ int html_link_connected_step(JSContext *ctx)
                    "not a node — it is written from that Document's own object and from nowhere else, and it "
                    "is cleared only together with the `served` sentinel that stops this arm being reached");
             dctx = document_realm_of(root);
-            /* NOT AN IMPOSSIBLE STATE — A COUPLING THAT IS NOT BUILT, which is why it crashes here naming it
-               rather than skipping the entry. The entry is appended by the install that BUILDS that realm, so
-               a null means the Document's record went away while a timeline still owed its preloads a request:
-               HTML §7.5.10 "Destroying documents"' step 5 removes that document's queued TASKS, and this
-               inventory is not one of them, so the destruction must drop this timeline's entry the same way.
-               Skipping instead would leave the flow's cursor standing on a document that no longer exists and
-               call the preloads served, which is a page whose whole chunk graph silently never loads. */
+            /* A destroyed Document's entry was dropped by HTML §7.5.10 step 5 in this timeline
+               (html_link_document_destroyed), so an entry still owed names a live realm. */
             DCHECK(dctx != NULL,
-                   "the parsed-document list holds a document with no realm — a Document was DESTROYED while a "
-                   "timeline still owed its parsed `<link>` elements HTML §4.6.8.20 Link type \"preload\"'s "
-                   "browsing-context-connected time. HTML §7.5.10 \"Destroying documents\"' step 5 takes that "
-                   "document's queued tasks off the flow and this inventory is not one of them: drop this "
-                   "timeline's entry there, beside that removal");
+                   "the parsed-document list owes a document with no realm — §7.5.10 step 5 drops a destroyed "
+                   "Document's entry in the destroying timeline (html_link_document_destroyed), so this realm "
+                   "went away by a route that is not that destruction");
             el = link_parsed_nth(dctx, root, served);
             if (el) {
                 link_rec_set_int(ctx, rec, "served", served + 1);
@@ -2193,6 +2186,30 @@ int html_link_connected_step(JSContext *ctx)
         link_rec_set_int(ctx, g_parsed, "i", i + 1);
     }
     return 0;
+}
+
+/* See html_link.h. Every entry naming the Document is dropped, behind the cursor or ahead of it: a drained entry
+   already holds no document, so only an owed one can match. */
+void html_link_document_destroyed(JSContext *realm)
+{
+    JSValueConst doc = document_object(realm);
+    int i, n;
+
+    DCHECK(g_ready, "HTML §7.5.10 step 5 reached §4.6.8.20's inventory before html_link_declare ran");
+    DCHECK(JS_IsObject(doc), "HTML §7.5.10 step 5 dropped the link inventory of a realm with no Document object — "
+                             "steps 6 and 7 release the realm after step 5, so the Document is still installed");
+    n = link_rec_int(realm, g_parsed, "n");
+    for (i = link_rec_int(realm, g_parsed, "i"); i < n; i++) {
+        JSValue rec = JS_GetPropertyUint32(realm, g_parsed, (uint32_t)i);
+        JSValue d = JS_GetPropertyStr(realm, rec, "doc");
+
+        if (JS_IsObject(d) && JS_VALUE_GET_PTR(d) == JS_VALUE_GET_PTR(doc)) {
+            link_rec_set_int(realm, rec, "served", -1);
+            JS_SetPropertyStr(realm, rec, "doc", JS_UNDEFINED);
+        }
+        JS_FreeValue(realm, d);
+        JS_FreeValue(realm, rec);
+    }
 }
 
 /* ---- the agent's declaration ------------------------------------------------------------------------------ */

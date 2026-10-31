@@ -19,6 +19,7 @@
 #include "core/frame/session_history.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/html_iframe.h"
+#include "core/html/html_link.h"
 #include "core/html/user_activation.h"
 #include "core/timing/timer.h"
 #include "solver/engine.h"   /* the cross-agent close: a host request and its addressee */
@@ -213,6 +214,10 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
            goes has its pending entry dropped with it, which is §7.5.11 "Aborting a document load" cancelling
            the one instance of the fetch algorithm this document still had in flight. */
         flow_programs_remove_for_document(flow_running(), document_doc(cctx));
+        /* And the parser's `<link>` elements still owed HTML §4.6.8.20 Link type "preload"'s
+           browsing-context-connected time: a task that has not been queued yet, which step 5 removes with the
+           rest, in this timeline only. */
+        html_link_document_destroyed(cctx);
     }
     /* STEPS 6 AND 7 — the browsing context is null, and the navigable stops naming this Document. LAST, which
        is the standard's own order and is load-bearing here: every step above reads the active document through

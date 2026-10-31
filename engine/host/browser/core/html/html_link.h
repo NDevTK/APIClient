@@ -140,6 +140,11 @@ void html_link_parsed(JSContext *ctx, lxb_dom_node_t *root);
    preloads are never requested, which is a lazy-chunk graph that never loads. */
 int html_link_connected_step(JSContext *ctx);
 
+/* HTML §7.5.10 "Destroying documents" step 5 for the inventory above: the running timeline stops owing the
+   destroyed Document (`realm`'s, still installed) its parsed links' connected time. Called from the destruction
+   while the flow performing it is switched in, so the write rides that flow's delta alone. */
+void html_link_document_destroyed(JSContext *realm);
+
 /* §4.2.4's `rel` SUPPORTED TOKENS, one keyword at a time — DOM §7.1 "Interface DOMTokenList"'s validation
    steps, reached through core/html/supported_tokens.c. The answer is this component's own classification of
    which of §4.2.4's states a keyword puts a link element in, because §4.2.4 makes the set "the tokens from
