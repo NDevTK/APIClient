@@ -210,6 +210,11 @@ typedef struct {
        example array's elements and separators place (concolic_exotic_get). */
     JSValue split_of;
     uint32_t split_sep;
+    /* The search an occurrence index answers (JS_FunctionSearchResult): `search_recv` is the receiver's hole,
+       `search_tok` its String argument 0, `search_last` whether the last occurrence is asked. Written on the
+       call result and copied onto a comparison of it with a Number (search_carry). Owned. */
+    char *search_recv, *search_tok;
+    uint8_t search_last;
     /* ECMAScript §6.1 ECMAScript Language Types: the set of types this value takes in every world, as CTY_*
        bits. Stated only by a mint whose algorithm fixes its result's type (concolic_type_state), and asserted
        there against the example; 0 is unstated, never "no type", so a value no mint typed stays unknown-typed. */
@@ -866,12 +871,20 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    reports a bound the source does not contain. */
 typedef struct { double num; char *txt; signed char present; signed char inclusive; } BoundSide;
 typedef struct { BoundSide lo, hi; } Bound;
+/* srange: the set an occurrence index (a search result) is narrowed to on this path, keyed by its hole: the
+   integers [lo, hi] less `ex`, inside the result's output domain {-1} ∪ [0, ∞). Each branch over the result
+   narrows it by its own numeric fact (concolic_search_facet). sub: what those sets prove about the searched
+   receiver, keyed by the receiver's hole: `tok` occurs (holds 1) with its first, or `last`, occurrence at
+   [lo, hi], or does not occur (holds 0). */
+typedef struct { double lo, hi; double *ex; int nex; } SearchRange;
+typedef struct { char *tok; signed char holds, last; double lo, hi; } SubFacet;
 typedef struct { char *key; char *val; signed char valkind; char **excl; int nexcl; Bound *bnd;
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
                  ConcolicPrincipalPin *ppin; int nppin; char **ptok; int nptok;
                  signed char truth; signed char ex_contra;
                  char *adec; int adec_arm; signed char adec_what; signed char adec_neg;
-                 unsigned short types_out, lang_in, lang_out; } Cons;
+                 unsigned short types_out, lang_in, lang_out;
+                 SearchRange *srange; SubFacet *sub; int nsub; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
 /* The one copy of one side, used by the fork's copy-up; a field added to BoundSide must be copied here or a
@@ -906,6 +919,9 @@ static void cons_entry_free(Cons *e) {
     for (i = 0; i < e->nptok; i++) free(e->ptok[i]);
     free(e->ptok);
     free(e->adec);
+    if (e->srange) { free(e->srange->ex); free(e->srange); }
+    for (i = 0; i < e->nsub; i++) free(e->sub[i].tok);
+    free(e->sub);
 }
 /* …and one measurement: the freeze's byte census reads exactly the fields the free above disposes of. */
 static long cons_entry_bytes(const Cons *e) {
@@ -933,6 +949,9 @@ static long cons_entry_bytes(const Cons *e) {
     n += (long)e->nptok * (long)sizeof(char *);
     for (i = 0; i < e->nptok; i++) n += (long)strlen(e->ptok[i]) + 1;
     if (e->adec) n += (long)strlen(e->adec) + 1;
+    if (e->srange) n += (long)sizeof(SearchRange) + (long)e->srange->nex * (long)sizeof(double);
+    n += (long)e->nsub * (long)sizeof(SubFacet);
+    for (i = 0; i < e->nsub; i++) n += (long)strlen(e->sub[i].tok) + 1;
     return n;
 }
 
@@ -1117,6 +1136,34 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].types_out = below ? below->types_out : 0;
     g_pins[g_pins_n].lang_in = below ? below->lang_in : 0;
     g_pins[g_pins_n].lang_out = below ? below->lang_out : 0;
+    g_pins[g_pins_n].srange = NULL;
+    if (below && below->srange) {
+        SearchRange *r = reclaim_malloc(sizeof *r);
+
+        CHECK(r, "concolic: OOM copying an inherited search range");
+        *r = *below->srange;
+        r->ex = NULL;
+        if (r->nex) {
+            r->ex = reclaim_malloc((size_t)r->nex * sizeof *r->ex);
+            CHECK(r->ex, "concolic: OOM copying an inherited search range's exclusions");
+            memcpy(r->ex, below->srange->ex, (size_t)r->nex * sizeof *r->ex);
+        }
+        g_pins[g_pins_n].srange = r;
+    }
+    g_pins[g_pins_n].sub = NULL;
+    g_pins[g_pins_n].nsub = 0;
+    if (below && below->nsub) {
+        int k;
+
+        g_pins[g_pins_n].sub = reclaim_malloc((size_t)below->nsub * sizeof(SubFacet));
+        CHECK(g_pins[g_pins_n].sub, "concolic: OOM copying an inherited substring facet set");
+        for (k = 0; k < below->nsub; k++) {
+            g_pins[g_pins_n].sub[k] = below->sub[k];
+            g_pins[g_pins_n].sub[k].tok = reclaim_strdup(below->sub[k].tok);
+            CHECK(g_pins[g_pins_n].sub[k].tok, "concolic: OOM copying an inherited substring facet");
+        }
+        g_pins[g_pins_n].nsub = below->nsub;
+    }
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
@@ -1558,6 +1605,55 @@ const ConcolicPred *concolic_strpred_read(const char *hole, int *n) {
     return c->pred;
 }
 
+/* The substring facets this flow filed on the receiver hole `recv` (concolic_search_facet), borrowed; `*n` 0
+   with NULL where none. */
+static const SubFacet *sub_read(const char *recv, int *n)
+{
+    const char *f[1] = { recv };
+    char *key = concolic_ident_compose("substr", f, 1);
+    const Cons *c;
+
+    CHECK(key, "concolic: OOM composing a substring facet key");
+    c = cons_lookup(key);
+    free(key);
+    *n = c ? c->nsub : 0;
+    return *n ? c->sub : NULL;
+}
+
+/* File one facet on `recv`, replacing the earlier one about the same token and occurrence: a range only
+   narrows on one path, so the newer facet implies the older. */
+static void sub_file(const char *recv, const char *tok, int holds, int last, double lo, double hi)
+{
+    const char *f[1] = { recv };
+    char *key = concolic_ident_compose("substr", f, 1);
+    Cons *c;
+    SubFacet *a;
+    int i;
+
+    CHECK(key, "concolic: OOM composing a substring facet key");
+    c = cons_entry(key);
+    free(key);
+    for (i = 0; i < c->nsub; i++)
+        if (!strcmp(c->sub[i].tok, tok) && c->sub[i].last == last) break;
+    if (i == c->nsub) {
+        a = realloc(c->sub, (size_t)(c->nsub + 1) * sizeof *a);
+        CHECK(a, "concolic: OOM recording a substring facet");
+        c->sub = a;
+        c->sub[i].tok = reclaim_strdup(tok);
+        CHECK(c->sub[i].tok, "concolic: OOM recording a substring facet's token");
+        c->nsub++;
+    } else {
+        DCHECK(c->sub[i].holds == holds,
+               "a search's range moved from proving its token occurs to proving it does not on one path — the "
+               "range only narrows, and an empty one files nothing");
+    }
+    c->sub[i].holds = (signed char)holds;
+    c->sub[i].last = (signed char)last;
+    c->sub[i].lo = lo;
+    c->sub[i].hi = hi;
+}
+
+
 void concolic_constrain_branch(const char *key, int truth) {
     cons_entry(key)->truth = (signed char)(truth ? 1 : 0);
 }
@@ -1750,6 +1846,74 @@ static JSValue pin_of(JSContext *ctx, const char *src) {
 }
 
 static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */
+
+void concolic_search_facet(JSValueConst cond, int arm)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
+    const char *hole, *f[1];
+    SearchRange *r;
+    char *key;
+    Cons *e;
+    int moved = 1;
+
+    if (!c || !c->search_recv) return;
+    DCHECK(arm == 0 || arm == 1, "a search's range was narrowed by an arm that is neither taken nor not-taken");
+    hole = c->rel_op != REL_NONE ? c->rel_subj : c->cmp_subj;
+    if (!hole) return;   /* a comparison whose concrete side this engine could not spell */
+    f[0] = hole;
+    key = concolic_ident_compose("srange", f, 1);
+    CHECK(key, "concolic: OOM composing a search range key");
+    e = cons_entry(key);
+    free(key);
+    if (!e->srange) {
+        e->srange = reclaim_calloc(1, sizeof *e->srange);
+        CHECK(e->srange, "concolic: OOM recording a search range");
+        e->srange->lo = -1;               /* the output domain: -1, or an index */
+        e->srange->hi = INFINITY;
+    }
+    r = e->srange;
+    /* The branch's own fact over the index, an integer: an ordering by §7.2.12, a numeric equality by §7.2.14
+       or §7.2.13 (a Number token compares numerically under both). */
+    if (c->rel_op != REL_NONE) {
+        double n = c->rel_num;
+
+        switch (arm ? c->rel_op : rel_op_negate(c->rel_op)) {
+        case REL_LT: r->hi = fmin(r->hi, ceil(n) - 1); break;
+        case REL_LE: r->hi = fmin(r->hi, floor(n)); break;
+        case REL_GT: r->lo = fmax(r->lo, floor(n) + 1); break;
+        case REL_GE: r->lo = fmax(r->lo, ceil(n)); break;
+        default: DFAIL("a search's ordering negated to no relation"); return;
+        }
+    } else if (c->cmp_op == OPCMP_EQ && c->cmp_kind == CONCOLIC_LIT_NUMBER) {
+        double v = strtod(c->cmp_tok, NULL);
+
+        if (arm) {
+            r->lo = fmax(r->lo, v);
+            r->hi = fmin(r->hi, v);
+            if (v != floor(v)) r->hi = r->lo - 1;   /* no index equals a fraction */
+        } else {
+            double *g = realloc(r->ex, (size_t)(r->nex + 1) * sizeof *g);
+
+            CHECK(g, "concolic: OOM recording a search range's exclusion");
+            r->ex = g;
+            r->ex[r->nex++] = v;
+        }
+    } else {
+        return;
+    }
+    while (moved) {
+        moved = 0;
+        for (int i = 0; i < r->nex; i++) {
+            if (r->ex[i] == r->lo) { r->lo++; moved = 1; }
+            if (r->ex[i] == r->hi) { r->hi--; moved = 1; }
+        }
+    }
+    /* The facet the set proves, by the search's own result: no -1 means the token occurs, at an index in the
+       set; only -1 means it does not. An empty set is an arm no world takes, and files nothing. */
+    if (r->lo > r->hi) return;
+    if (r->lo >= 0) sub_file(c->search_recv, c->search_tok, 1, c->search_last, r->lo, r->hi);
+    else if (r->hi <= -1) sub_file(c->search_recv, c->search_tok, 0, c->search_last, -1, -1);
+}
 
 /* The whose-mask of an operand: the one in-file read, spelled once because every derivation that threads a root
    threads this beside it. Zero for a non-concolic, like concolic_root_c's NULL: a concrete operand contributes
@@ -2218,6 +2382,8 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     for (int i = 0; i < c->piece_n; i++) JS_FreeValueRT(rt, c->piece[i].unknown);
     free(c->piece);
     if (c->split_sep) JS_FreeValueRT(rt, c->split_of);
+    free(c->search_recv);
+    free(c->search_tok);
     JS_FreeValueRT(rt, c->example);
     /* The second owned JSValue on this record. A field added to the struct is an obligation here and at
        concolic_gc_mark together. JS_UNINITIALIZED is not refcounted, so the never-asked case needs no test. */
@@ -3083,17 +3249,106 @@ static int row_chain_walk(const char *root, char **bytes, int stop_at_key)
     return row;
 }
 
-char *concolic_candidate_poc(const char *root, const char *payload)
+/* `bytes` (consumed) behind the composed `head` where the walk reached the base row, owned. */
+static char *head_join(const char *head, int row, char *bytes)
 {
-    char *bytes = reclaim_strdup(payload);
+    char *out;
+    size_t hn;
 
-    CHECK(bytes != NULL, "concolic: OOM composing a PoC");
-    row_chain_walk(root, &bytes, 1);
-    DCHECK(bytes != NULL, "a fired PoC's markup could not be composed from the path its candidate was delivered by");
-    return bytes;
+    if (!head || !bytes || row < 0 || g_srcs[row].parent) return bytes;
+    hn = strlen(head);
+    out = reclaim_malloc(hn + strlen(bytes) + 1);
+    CHECK(out != NULL, "concolic: OOM composing a candidate around its head");
+    memcpy(out, head, hn);
+    strcpy(out + hn, bytes);
+    free(bytes);
+    return out;
 }
 
-void concolic_set_candidate(const char *src, const char *root, const char *payload) {
+char *concolic_candidate_poc(const char *root, const char *payload, const char *head)
+{
+    char *bytes = reclaim_strdup(payload);
+    int row;
+
+    CHECK(bytes != NULL, "concolic: OOM composing a PoC");
+    row = row_chain_walk(root, &bytes, 1);
+    DCHECK(bytes != NULL, "a fired PoC's markup could not be composed from the path its candidate was delivered by");
+    return head_join(head, row, bytes);
+}
+
+/* The first (or `last`) index of `tok` in `s`, or -1. */
+static long occurrence(const char *s, const char *tok, int last)
+{
+    const char *p = strstr(s, tok), *q;
+
+    if (!p) return -1;
+    if (last) while ((q = strstr(p + 1, tok)) != NULL) p = q;
+    return (long)(p - s);
+}
+
+char *concolic_url_head(const char *root)
+{
+    int row = root ? root_declared_row(root) : -1, n = 0, placed = 0;
+    const SubFacet *fs;
+    char pre, *b, *hole, *out;
+    size_t len = 0, cap = 64;
+
+    while (row >= 0 && g_srcs[row].parent) row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
+    if (row < 0 || root_carrier(root) != CARRIER_URL) return NULL;
+    {
+        char *shape = shapef("{%s}", g_srcs[row].src);
+
+        hole = concolic_hole_key(shape);
+        free(shape);
+    }
+    fs = hole ? sub_read(hole, &n) : NULL;
+    free(hole);
+    if (!n) return NULL;
+    pre = g_srcs[row].prefix;
+    b = reclaim_malloc(cap);
+    CHECK(b, "concolic: OOM composing a URL component");
+    if (pre) b[len++] = pre;
+    b[len] = 0;
+    /* Each occurring token at the lowest index its set admits, in order of that index, after what is placed;
+       a token that must begin the value shares its first byte with the component's prefix. */
+    while (placed < n) {
+        const SubFacet *next = NULL;
+        size_t tn, at;
+
+        for (int i = 0; i < n; i++)
+            if (fs[i].holds && occurrence(b, fs[i].tok, 0) < 0 && (!next || fs[i].lo < next->lo))
+                next = &fs[i];
+        if (!next) break;
+        placed++;
+        tn = strlen(next->tok);
+        if (next->lo == 0 && pre && len == 1 && next->tok[0] == pre) {
+            at = 0;
+        } else {
+            at = len > (size_t)next->lo ? len : (size_t)next->lo;
+            if ((double)at > next->hi) { free(b); return NULL; }
+        }
+        while (cap < at + tn + 1) cap *= 2;
+        b = reclaim_realloc(b, cap);
+        CHECK(b, "concolic: OOM composing a URL component");
+        while (len < at) b[len++] = 'x';   /* filler: any byte that spells none of the tokens */
+        memcpy(b + at, next->tok, tn);
+        len = at + tn;
+        b[len] = 0;
+    }
+    /* What the head proves on its own, which re-execution then decides with the payload behind it. */
+    for (int i = 0; i < n; i++) {
+        long at = occurrence(b, fs[i].tok, fs[i].last);
+
+        if (fs[i].holds ? (at < 0 || at < fs[i].lo || at > fs[i].hi) : at >= 0) { free(b); return NULL; }
+    }
+    if (len <= (pre ? 1u : 0u)) { free(b); return NULL; }
+    out = reclaim_strdup(b + (pre ? 1 : 0));
+    CHECK(out, "concolic: OOM composing a URL component");
+    free(b);
+    return out;
+}
+
+void concolic_set_candidate(const char *src, const char *root, const char *payload, const char *head) {
     int row;
 
     free(g_cand_src); free(g_cand_payload); free(g_cand_at); free(g_cand_bytes);
@@ -3111,6 +3366,7 @@ void concolic_set_candidate(const char *src, const char *root, const char *paylo
         g_cand_bytes = reclaim_strdup(payload);
         CHECK(g_cand_bytes != NULL, "concolic: OOM installing an @S candidate's delivery");
         row = row_chain_walk(root, &g_cand_bytes, 0);
+        g_cand_bytes = head_join(head, row, g_cand_bytes);
         if (g_cand_bytes) {
             g_cand_at = reclaim_strdup(row >= 0 ? g_srcs[row].src : src);
             CHECK(g_cand_at != NULL, "concolic: OOM installing an @S candidate's delivery");
@@ -4407,6 +4663,25 @@ static void pred_set_strpred(JSValueConst v, const char *method, char **args, in
  * `c->conj` is not carried either: `!(p ∧ q)` is not a conjunction, and copying the list would let
  * `(!(p ∧ q)) ∧ r` flatten into `p ∧ q ∧ r`, a different proposition. The negation enters a parent set as
  * one opaque member. */
+/* The search facts of `s` onto `d`, a comparison over it or its negation. */
+static void search_carry_fields(Concolic *d, const Concolic *s) {
+    if (!s->search_recv) return;
+    DCHECK(d->search_recv == NULL, "a comparison was given the search facts of two operands");
+    d->search_recv = reclaim_strdup(s->search_recv);
+    d->search_tok = reclaim_strdup(s->search_tok);
+    CHECK(d->search_recv && d->search_tok, "concolic: OOM carrying a search's receiver onto its comparison");
+    d->search_last = s->search_last;
+}
+
+/* A comparison `res` of the unknown `opq` with the concrete `other`: a search result compared with a Number
+   carries the search, which decide.c's branch narrows (concolic_search_facet). */
+static void search_carry(JSValueConst res, JSValueConst opq, JSValueConst other) {
+    Concolic *d = g_concolic_class ? JS_GetOpaque(res, g_concolic_class) : NULL;
+    const Concolic *s = g_concolic_class ? JS_GetOpaque(opq, g_concolic_class) : NULL;
+
+    if (d && s && !concolic_is(other) && JS_IsNumber(other)) search_carry_fields(d, s);
+}
+
 static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     Concolic *d = JS_GetOpaque(dst, g_concolic_class);
     Concolic *s = JS_GetOpaque(src, g_concolic_class);
@@ -4447,6 +4722,7 @@ static void pred_carry_through_not(JSValueConst dst, JSValueConst src) {
     }
     d->cmp_typeof = s->cmp_typeof;
     d->cmp_subj_types = s->cmp_subj_types;
+    search_carry_fields(d, s);
     d->rel_op  = s->rel_op;
     d->rel_num = s->rel_num;
     if (s->rel_op != REL_NONE && s->facet_src) {
@@ -4962,6 +5238,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
     res = pred_new(ctx, cmp_op_ident(op), src, root, root_whose_of(opq), iu, io,
                    tok ? OPCMP_EQ : OPCMP_NONE,
                    tok ? (int)op : CMP_ALGO_NONE, kind, tok, subj, shape);
+    if (tok) search_carry(res, opq, other);
     /* Which value the predicate is about, by its own identity: read off `opq` (not `iu`, which is swapped when
        both operands are unknown), under the same condition as the hole. An operand this engine cannot spell
        gets none; the predicate still forks, pins and excludes, and only the per-flow degrade has nowhere to be
@@ -5252,6 +5529,28 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
        carried these. */
     r = concolic_derived(ctx, shape, shape, c->root, c->root_whose, ident, example);
     if (crossing && concolic_is(r)) pieces_clip(ctx, r, this_val, cross_from, cross_to);
+    /* An occurrence index of a String argument in an unknown receiver: the result carries the search, by the
+       callee's definition (a page's own `indexOf` declares none). Named residual: not covered — a non-String
+       argument 0, whose §7.1.17 ToString this does not spell; next diff — spell it through literal_tok's
+       classification; absence shows as `s.indexOf(5) >= 0` filing no substring facet. */
+    if (concolic_is(r) && concolic_is(this_val) && argc >= 1 && JS_IsString(argv[0])) {
+        JSValue fex = concolic_example(ctx, func_obj);
+        int sr = JS_FunctionSearchResult(fex);
+        char *recv = sr ? concolic_hole_key(concolic_shape_c(this_val)) : NULL;
+
+        JS_FreeValue(ctx, fex);
+        if (recv) {
+            Concolic *rc = JS_GetOpaque(r, g_concolic_class);
+            const char *t = JS_ToCString(ctx, argv[0]);
+
+            CHECK(t != NULL, "concolic: OOM reading a search's argument");
+            rc->search_recv = recv;
+            rc->search_tok = reclaim_strdup(t);
+            JS_FreeCString(ctx, t);
+            CHECK(rc->search_tok, "concolic: OOM recording a search's argument");
+            rc->search_last = sr == JS_SEARCH_RESULT_LAST;
+        }
+    }
     if (split_sep && concolic_is(r)) {
         Concolic *rc = JS_GetOpaque(r, g_concolic_class);
 
@@ -5402,6 +5701,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
         res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq), root_whose_of(opq),
                        ident_of_operand(ctx, a), ident_of_operand(ctx, b),
                        OPCMP_NONE, CMP_ALGO_NONE, CONCOLIC_LIT_NONE, NULL, NULL, shape);
+        search_carry(res, opq, other);
         /* A bound exists only where the relation's meaning is determined, which §7.2.12 IsLessThan ( x, y,
            leftFirst ) decides: it compares as Strings only when both primitives are Strings, so a Number on
            the concrete side fixes the numeric path, while a String leaves the page performing a lexicographic

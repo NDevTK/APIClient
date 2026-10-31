@@ -157,6 +157,9 @@ typedef struct {
        composed from its domain at the capture (act_list_message_deliveries), with MSG_PAYLOAD_SLOT where the
        payload goes; NULL where the path holds no message act or a composition refused. Owned. */
     char *dl_tmpl;
+    /* The value a URL-carried root's base source begins with for a candidate (concolic_url_head), composed from
+       the detecting flow's facets at the capture; NULL where none composes. Owned. */
+    char *url_head;
     /* The runway position as its two halves, emitted as `runwayWalked`/`runwayOf`, so a best of 3/8000 is not
        rounded to 0 as it is in `replay_pm`. Ratcheted on itself by cross-multiplication (observe_runway), in
        integers. `replay_of` is dec_total() at that sample, not `reinject_len`: for an arm forked off a
@@ -844,6 +847,8 @@ static void cand_learn_path(Cand *e) {
     /* And the messages the path's acts posted, composed while their domains are this flow's. */
     if (flow_running() && flow_running()->orphan)
         e->dl_tmpl = act_list_message_deliveries(flow_running(), e->src, MSG_PAYLOAD_SLOT);
+    /* And the URL component the path's search facets shape, composed while they are this flow's. */
+    if (e->root && !e->url_head) e->url_head = concolic_url_head(e->root);
 }
 
 /* A detected sink opens its search: a single-context class states its breakouts, any other class the probes
@@ -973,7 +978,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
     *f = (Finding){
         .cls = cls,
         .source = reclaim_strdup(source ? source : "?"),
-        .poc = concolic_candidate_poc(twin->root, poc),   /* the markup a named-access chain composed */
+        .poc = concolic_candidate_poc(twin->root, poc, twin->url_head),   /* named-access markup, URL head */
         .root = reclaim_strdup(twin->root),
         .acts = acts,
         .under_act = under_act,
@@ -2210,7 +2215,7 @@ static void observe_runway(Cand *e, const Flow *f) {
    and closes, so a candidate's payload and endpoint suppression cannot leak into an ordinary flow scheduled
    after it, which would read the attacker's concrete string where its concolic source belongs. */
 void solve_flow_begin(Flow *f) {
-    const char *root = NULL;
+    const char *root = NULL, *head = NULL;
 
     /* A sink candidate is delivered through its search's root; a witness verification pins a value at its
        identity and is no search's. */
@@ -2219,8 +2224,9 @@ void solve_flow_begin(Flow *f) {
 
         DCHECK(rc != NULL && rc->root != NULL, "a candidate flow was switched in whose search holds no root");
         root = rc ? rc->root : NULL;
+        head = rc ? rc->url_head : NULL;
     }
-    concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL);
+    concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL, head);
     concolic_set_deliveries(f ? f->cand_dsrc : NULL, f ? f->cand_dval : NULL, f ? f->cand_dn : 0);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
     /* A witness verification substitutes and suppresses like a sink candidate and is no search's: its sinks
@@ -2800,6 +2806,7 @@ void solve_free(void) {
         }
         free(g_pending[i].vf);
         free(g_pending[i].dl_tmpl);
+        free(g_pending[i].url_head);
         sender_pins_free(&g_pending[i].pp);
         sender_pins_free(&g_pending[i].snd);
         free(g_pending[i].src);

@@ -553,8 +553,21 @@ int         concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op);
    tries `payload`. Every read of the root's declared source returns the payload through that source's real
    transform, a keyed root's as its tuple in the parent component, so one delivered value answers every read in
    the world. A root no component declares (or NULL, a witness verification) substitutes at `src` itself.
-   NULL src and payload clear it. */
-void        concolic_set_candidate(const char *src, const char *root, const char *payload);
+   `head` (concolic_url_head, or NULL) goes before the bytes the base source answers. NULL src and payload
+   clear it. */
+void        concolic_set_candidate(const char *src, const char *root, const char *payload, const char *head);
+/* The value a URL-carried base source of `root` begins with, so that every substring facet the running flow
+   filed on it holds (concolic_search_facet): each occurring token at the lowest index its set admits, the
+   payload to follow. Without the component's prefix; owned. NULL where the base is not URL-carried, nothing is
+   filed, or the facets admit no such head. A candidate, decided by re-execution and the fire.
+   Named residual: not covered — facets on a derivation of the base (`location.search.slice(1).indexOf(t)`)
+   and a token the payload must also keep out; next diff — map a derivation's facets back through its slice
+   offset, and refuse a payload carrying an excluded token; absence shows as a parked search with
+   `substituted` > 0 and `sinkStrings` 0 behind such a gate. */
+char       *concolic_url_head(const char *root);
+/* The branch over a comparison of a search result (an occurrence index, JS_FunctionSearchResult) with a Number,
+   on its arm `arm`: narrows the result's set on this path and files what the set proves about the receiver. */
+void        concolic_search_facet(JSValueConst cond, int arm);
 /* The running flow's further deliveries (flow.h's `cand_dsrc`/`cand_dval`), installed after its candidate at
    every switch-in: each a cross-document message's data or origin source whose read answers the value its JSON
    text spells, the payload's own delivery included where the search injects inside that message. */
@@ -1076,9 +1089,9 @@ JSValue     concolic_new_named_access(JSContext *ctx, JSValueConst markup, JSVal
    root with none. What a parked candidate carries so its resume re-derives the rows before install. */
 char       *concolic_source_chain(const char *root);
 void        concolic_declare_source_chain(const char *chain);
-/* `payload` composed through `root`'s derived rows down to its first keyed row or its base: the bytes a PoC
-   states beside its deliveryKey. Owned. */
-char       *concolic_candidate_poc(const char *root, const char *payload);
+/* `payload` composed through `root`'s derived rows down to its first keyed row or its base, behind `head` where
+   it reached the base: the bytes a PoC states beside its deliveryKey. Owned. */
+char       *concolic_candidate_poc(const char *root, const char *payload, const char *head);
 /* concolic_new_derived over the elements of the array `list`, which is borrowed. */
 JSValue     concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example);
 struct JSUnknownPiece;

@@ -1215,6 +1215,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/storedxss.h"
 #include "fixture/histreload.h"
 #include "fixture/pieceslice.h"
+#include "fixture/indexgate.h"
 #include "fixture/windowname.h"
 #include "fixture/twinread.h"
 #include "fixture/requestsink.h"
@@ -1784,6 +1785,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "histreload", HTML_HISTRELOAD },
     { "pieceslice", HTML_PIECESLICE },
     { "cookieconst", HTML_COOKIECONST },
+    { "indexgate", HTML_INDEXGATE },
+    { "indexgatefar", HTML_INDEXGATEFAR },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
@@ -16179,6 +16182,37 @@ TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* One index-gate row: an innerHTML record rooted in `root` fired, and its PoC begins with `head`, the value the
+   gate's facets composed. */
+static void ig_row(const char *js, const char *root, const char *head, int *tt, const char **why)
+{
+    char src[384];
+    int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
+
+    fold_row(tt, why, has, "NOT REACHED: no innerHTML @S record is rooted in the gated component");
+    fold_row(tt, why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the gated sink fired no PoC: the delivery did not satisfy the occurrence-index gate");
+    fold_row(tt, why, has && s_poc(js, "innerHTML", src, head),
+             "the fired PoC does not begin with the head the gate's facets compose");
+}
+
+/* The rows of the `indexgate` and `indexgatefar` documents (fixture/indexgate.h). */
+TF_UNIT void probes_indexgate(const char *js, Probe *tab, int *n) {
+    const char *q_why = NULL, *f_why = NULL, *r_why = NULL;
+    int q_tt = 1, f_tt = 1, r_tt = 1;
+
+    ig_row(js, LOCATION_SEARCH_SRC, "q=", &q_tt, &q_why);
+    ig_row(js, LOCATION_HASH_SRC, "k=", &f_tt, &f_why);
+    /* The control: `> 5` proves the token occurs at index 6 or later, not that it starts the fragment. */
+    ig_row(js, LOCATION_HASH_SRC, "xxxxxk=", &r_tt, &r_why);
+    const Probe rows[] = {
+        { "ig-ge-poc", q_tt, "'igQuery'", SESS_EXPLORE, q_why },
+        { "ig-lt-false-poc", f_tt, "'igFrag'", SESS_EXPLORE, f_why },
+        { "ig-gt5-far-poc", r_tt, "'igFar'", SESS_EXPLORE, r_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `replyrole` document (fixture/replyrole.h). */
 TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
     /* The control: the served reply reached the page and its viewer arm built its address from the reply. */
@@ -22247,6 +22281,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_replyrole(js, probes, &np);
     probes_histreload(js, probes, &np);
     probes_pieceslice(js, probes, &np);
+    probes_indexgate(js, probes, &np);
     probes_storedxss(js, probes, &np);
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);

@@ -402,11 +402,21 @@ typedef struct JSTrampStepDef {
        question). 0 for every other machine, whose coercions run over the operand's example and whose
        completion the driver derives from the operand (step_coerce_unknown). */
     uint8_t answers_unknown;
+    /* Where the algorithm's result is the index of an occurrence of ToString(argument 0) in ToString(this
+       value), or -1 where there is none: JS_SEARCH_RESULT_FIRST for the first occurrence at or after the start
+       (§22.1.3.9 String.prototype.indexOf), JS_SEARCH_RESULT_LAST for the last at or before it (§22.1.3.11
+       String.prototype.lastIndexOf); 0 for any other. Read through JS_FunctionSearchResult. */
+    unsigned char search_result;
 } JSTrampStepDef;
+
+enum { JS_SEARCH_RESULT_NONE = 0, JS_SEARCH_RESULT_FIRST = 1, JS_SEARCH_RESULT_LAST = 2 };
 
 /* The result_types a built-in function object's definition declares, or 0 for any other value (a page
    function, a bound function, a function whose definition declares none). Reads no property. */
 JS_EXTERN unsigned JS_FunctionResultTypes(JSValueConst f);
+/* The search_result a built-in function object's definition declares, JS_SEARCH_RESULT_NONE for any other
+   value. Reads no property. */
+JS_EXTERN int JS_FunctionSearchResult(JSValueConst f);
 
 /* ONE DECLARATION OF A MACHINE'S STAGES — the enum and the labels, from one list, so neither can move without
    the other. A machine writes:

@@ -1665,6 +1665,8 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
             concolic_strpred_file(sp.subject, sp.method, sp.args, sp.nargs, arm);
         }
     }
+    /* A comparison over an occurrence index narrows that index's set, whatever operator spelled it. */
+    concolic_search_facet(cond, arm);
     /* Named residual: a bare truthiness gate narrows and is recorded under a key the @H surface cannot look up.
        Not covered: a condition that is the unknown itself (`if (cfg.admin)`), for which concolic_cmp,
        concolic_rel and concolic_strpred all answer nothing, though §7.1.2 "ToBoolean ( arg )" narrows it. The

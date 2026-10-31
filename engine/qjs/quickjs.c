@@ -94196,9 +94196,13 @@ static const JSTrampStepDef js_str_substring_def  = { sizeof(JSStrRecv), js_str_
                                                     .steps = js_str_substring_steps };
 static const JSTrampStepDef js_str_indexOf_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_INDEXOF, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.9 String.prototype.indexOf",
+                                                    .result_types = JS_LANG_TYPE_NUMBER,
+                                                    .search_result = JS_SEARCH_RESULT_FIRST,
                                                     .steps = js_str_indexOf_steps };
 static const JSTrampStepDef js_str_lastIndexOf_def= { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_LASTINDEXOF, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.11 String.prototype.lastIndexOf",
+                                                    .result_types = JS_LANG_TYPE_NUMBER,
+                                                    .search_result = JS_SEARCH_RESULT_LAST,
                                                     .steps = js_str_lastIndexOf_steps };
 static const JSTrampStepDef js_str_normalize_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_NORMALIZE, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.15 String.prototype.normalize",
@@ -97479,6 +97483,18 @@ unsigned JS_FunctionResultTypes(JSValueConst f)
         (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
         return 0;
     return tramp_step_def_of(f)->result_types;
+}
+
+int JS_FunctionSearchResult(JSValueConst f)
+{
+    JSObject *fp;
+
+    if (JS_VALUE_GET_TAG(f) != JS_TAG_OBJECT) return JS_SEARCH_RESULT_NONE;
+    fp = JS_VALUE_GET_OBJ(f);
+    if (fp->class_id != JS_CLASS_C_FUNCTION ||
+        (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
+        return JS_SEARCH_RESULT_NONE;
+    return tramp_step_def_of(f)->search_result;
 }
 
 /* the same question restricted to [[Construct]]: a plain step machine is not a constructor, so `new (arr.map)`
