@@ -88,6 +88,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/html/unhandled_rejection.h"
+#include "solver/flow.h"   /* the running timeline, named by the consumer assert */
 
 /* §8.1.3.3: "A global object has an about-to-be-notified rejected promises list", so the list is a per-realm
    value, a heap Array that time-travels with the flow that fills it. Each live entry is a two-element array
@@ -430,6 +431,12 @@ static int js_reject_notify_step(JSContext *ctx, void *st, JSValue cb_result, JS
     JSValue global;
     int r, k;
 
+    /* The task was queued by notify_global for an environment of the running timeline, and the flow that runs it
+       continues that timeline; a realm built in a sibling world has no global for this event to be fired at. */
+    DCHECKF(realm_of_running_timeline(ctx),
+            "§8.1.4.7's unhandledrejection task runs in a realm built by timeline %s, which the running timeline "
+            "%s does not continue — realm_next_environment hands a checkpoint only its own timeline's realms",
+            world_name(realm_building_world(ctx)), world_name(flow_running_world()));
     if (s->hdr.stage == REJECT_EVENT) {
         s->ev = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;

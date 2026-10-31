@@ -1107,6 +1107,13 @@ void  flow_set_running(Flow *f) {
 }
 Flow *flow_running(void) { return g_running; }
 
+WorldId flow_running_world(void) { return g_running ? g_running->world : WORLD_NONE; }
+
+bool flow_running_continues(WorldId creator)
+{
+    return world_is_none(creator) || g_running == NULL || world_descends_from(g_running->world, creator);
+}
+
 void flow_running_cascade_written(void)
 {
     if (g_running != NULL) g_running->cascade_writes++;

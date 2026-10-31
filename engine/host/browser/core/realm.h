@@ -22,6 +22,7 @@
 #include <stdbool.h>
 
 #include "quickjs.h"
+#include "solver/world.h"   /* WorldId: the timeline that built a realm */
 /* FOR `IDL_SITE`, WHICH THE TWO PER-REALM-VALUE MACROS BELOW EXPAND AT THEIR CALLER. A macro body is
    expanded where it is USED, so the convention has to be visible to every caller of this header rather than
    only to this file — and spelling `__FILE__, __LINE__` here instead would be a second copy of a convention
@@ -68,9 +69,15 @@ void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *
  * coarsened (core/timing/hr_time.h coarsens at its reads). Owned. */
 JSValue realm_time_origin(JSContext *ctx);
 
+/* The timeline that built `ctx`: the running flow's world at realm_install_intrinsics, WORLD_NONE outside every
+ * flow. Set once by the install, which every reader follows. */
+WorldId realm_building_world(JSContext *ctx);
+/* Whether `ctx` exists in the running timeline (solver/flow.h's flow_running_continues over its builder). */
+bool realm_of_running_timeline(JSContext *ctx);
+
 /* HTML §8.1.3.2's environment settings objects whose responsible event loop is `ctx`'s: the realm after `prev`
- * (NULL starts the walk) that shares `ctx`'s agent and was built through realm_install_intrinsics, or NULL.
- * Borrowed. */
+ * (NULL starts the walk) that shares `ctx`'s agent, was built through realm_install_intrinsics, and exists in the
+ * running timeline (realm_of_running_timeline), or NULL. Borrowed. */
 JSContext *realm_next_environment(JSContext *ctx, JSContext *prev);
 
 /* WEB IDL §3.3.8 [Global]: is this realm's global object a WorkerGlobalScope, or a WorkletGlobalScope — HTML

@@ -6,6 +6,7 @@
 #include "core/idl_args.h"   /* §3.3.7 [Exposed] step 1: resolving a [Global] interface's global names */
 #include "core/realm.h"
 #include "solver/concolic.h"
+#include "solver/flow.h"   /* the timeline a realm is built in and the one asking */
 #include "core/timing/event_loop.h"   /* a stated time origin is a moment the clock has reached */
 #if APICLIENT_DEV
 /* THE GENERATED CORPUS TABLE ITSELF, read for the check below and not restated. This is the second
@@ -82,6 +83,10 @@ static JSClassID g_global_names_slot;
 /* HR-TIME §4's TIME ORIGIN OF THIS REALM'S ENVIRONMENT, stated by its creator for the URL's reason: a field of
    the environment, settled at the build and read by an intrinsic (hr_time's) while the list is installing. */
 static JSClassID g_time_origin_slot;
+/* THE TIMELINE THAT BUILT THIS REALM, as [doc, session, serial] of its WorldId: the running flow's world at the
+   build, or WORLD_NONE's zeros outside every flow. A realm a flow builds is a creation of that flow, which its
+   delta does not capture, so the runtime holds it for every flow while it exists only in the builder's lineage. */
+static JSClassID g_building_world_slot;
 
 /* HTML §8.1.3.5 "Secure contexts" STEP 1.2.1's OPERAND — the answer the worker's owner gave — in the same
    per-realm store and for the same reason as the two above: it is a fact about the ENVIRONMENT, settled when
@@ -655,6 +660,18 @@ void realm_install_intrinsics(JSContext *ctx, JSAgentRecord *agent, const char *
         g_owner_secure_slot = realm_value_declare(ctx, "HTML §8.1.3.5 the worker owner's secure-context answer");
     if (g_time_origin_slot == JS_INVALID_CLASS_ID)
         g_time_origin_slot = realm_value_declare(ctx, "HR-TIME §4 the environment's time origin");
+    if (g_building_world_slot == JS_INVALID_CLASS_ID)
+        g_building_world_slot = realm_value_declare(ctx, "the timeline (WorldId) that built the realm");
+    {
+        WorldId w = flow_running_world();
+        JSValue rec = JS_NewArray(ctx);
+
+        CHECK(!JS_IsException(rec), "realm: the building timeline's record could not be allocated");
+        JS_SetPropertyUint32(ctx, rec, 0, JS_NewUint32(ctx, w.doc));
+        JS_SetPropertyUint32(ctx, rec, 1, JS_NewUint32(ctx, w.session));
+        JS_SetPropertyUint32(ctx, rec, 2, JS_NewUint32(ctx, w.serial));
+        realm_value_set(ctx, g_building_world_slot, rec);
+    }
     if (JS_IsUndefined(time_origin)) {
         /* Created by this build: the agent is named above, so its clock answers. */
         realm_value_set(ctx, g_time_origin_slot, event_loop_now(ctx));
@@ -805,6 +822,29 @@ bool realm_owner_is_secure_context(JSContext *ctx)
     return r;
 }
 
+WorldId realm_building_world(JSContext *ctx)
+{
+    JSValue rec = realm_value_get(ctx, g_building_world_slot);   /* asserts THIS realm ran the install */
+    uint32_t f[3];
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, rec, (uint32_t)i);
+
+        DCHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT || JS_VALUE_GET_TAG(v) == JS_TAG_FLOAT64,
+               "a realm's building-timeline record holds a field that is not the number the install wrote");
+        CHECK(JS_ToUint32(ctx, &f[i], v) == 0, "realm: the building timeline's record could not be read");
+        JS_FreeValue(ctx, v);
+    }
+    JS_FreeValue(ctx, rec);
+    return (WorldId){ .doc = f[0], .session = f[1], .serial = f[2] };
+}
+
+bool realm_of_running_timeline(JSContext *ctx)
+{
+    return flow_running_continues(realm_building_world(ctx));
+}
+
 JSContext *realm_next_environment(JSContext *ctx, JSContext *prev)
 {
     JSAgentRecord *agent = JS_GetRealmAgent(ctx);
@@ -822,7 +862,9 @@ JSContext *realm_next_environment(JSContext *ctx, JSContext *prev)
         names = JS_GetClassProto(r, g_global_names_slot);
         built = !JS_IsNull(names);
         JS_FreeValue(r, names);
-        if (built) return r;
+        /* §8.1.7.3's "whose responsible event loop is this event loop", asked in the running timeline: a realm a
+           sibling flow built is in the runtime but is no environment of this one. */
+        if (built && realm_of_running_timeline(r)) return r;
     }
     return NULL;
 }
@@ -866,6 +908,7 @@ void realm_intrinsics_free(void)
     g_global_names_slot = JS_INVALID_CLASS_ID;
     g_owner_secure_slot = JS_INVALID_CLASS_ID;
     g_time_origin_slot = JS_INVALID_CLASS_ID;
+    g_building_world_slot = JS_INVALID_CLASS_ID;
 #if APICLIENT_DEV
     /* The two §3.8 censuses are slots like the three above and are released the same way — their CONTENTS are
        the realms' and went with them; what the agent holds is the slot id. */

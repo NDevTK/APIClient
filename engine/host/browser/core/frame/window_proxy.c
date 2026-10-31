@@ -451,21 +451,10 @@ static int           g_live_navs_n, g_live_navs_cap;
    live_nav_of_document cannot see, and its two readers would report a document this agent holds as
    unmaterialized, which is right for a navigable nothing has read through and wrong for one that was never
    recorded. One function, so a third mint cannot answer differently by forgetting. */
-/* The creating timeline a new navigable records: the running flow's, or none outside every flow. */
-static WorldId proxy_creating_world(void)
-{
-    Flow *f = flow_running();
-
-    return f ? f->world : WORLD_NONE;
-}
-
-/* Is this navigable one the asking timeline can see? Made outside every flow, or by a timeline the running one
-   continues. With no flow running every row answers, which is what a lookup made between flows always read. */
+/* Is this navigable one the asking timeline can see? The test core/realm.c's environment walk asks of a realm. */
 static bool proxy_of_this_timeline(const ProxyData *p)
 {
-    Flow *f = flow_running();
-
-    return world_is_none(p->creator) || f == NULL || world_descends_from(f->world, p->creator);
+    return flow_running_continues(p->creator);
 }
 
 static void live_nav_record(JSValueConst proxy)
@@ -1013,7 +1002,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
        creates one from a target name with no element to be presented by. */
     p->container = JS_NULL;
     p->doc = doc;
-    p->creator = proxy_creating_world();
+    p->creator = flow_running_world();
     JS_SetOpaque(obj, p);
     /* After JS_SetOpaque, because live_nav_of_document reads the record off every row and asserts every row has
        one. */
@@ -1157,7 +1146,7 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p->opener = JS_DupValue(ctx, opener);
     p->container = JS_NULL;   /* §7.3.1.3's link is written by the create, exactly as it is for a local one */
     p->doc = doc;
-    p->creator = proxy_creating_world();
+    p->creator = flow_running_world();
     JS_SetOpaque(obj, p);
     /* A remote proxy is in both tables, which answer two questions. The remote table answers a peer's navigable's
        identity (`w[0] === w[0]` over a document another instance holds); this one answers which navigable of

@@ -1711,6 +1711,12 @@ uint64_t flow_running_switches(void);
 /* The running flow (scheduler-set). Detectors credit emitted value to it; the scheduler ages it. */
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);
+/* The running flow's world, or WORLD_NONE outside every flow: the timeline a creation made now belongs to. */
+WorldId flow_running_world(void);
+/* Whether something created in timeline `creator` exists in the asking one: made outside every flow, asked
+   outside every flow, or made by a timeline the running flow continues (itself or an ancestor). A sibling's
+   creation is absent here although it is in the runtime, since objects a flow creates are not captured. */
+bool    flow_running_continues(WorldId creator);
 /* The running flow's cascade input generation (`cascade_writes`): raised by a write to one, read with the flow
    it belongs to. With no flow running (host time: a parse before the first flow, a paint) the write raises
    nothing and the read answers NULL and 0, since no step's record spans host time. */
