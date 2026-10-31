@@ -8,6 +8,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/css/css_cascade_pass.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_style.h"
 #include "core/css/css_computed_value.h"
@@ -37,6 +38,7 @@
 #include "core/dom/document.h"
 #include "core/dom/shadow_root.h"
 #include "core/frame/viewport.h"
+#include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include "solver/reclaim.h"
@@ -3600,6 +3602,51 @@ static JSValue css_resolved_longhand_held(JSContext *ctx, lxb_dom_element_t *el,
     }
     /* §9's "any other property", and the value every escape above breaks to: the COMPUTED value. */
     return css_resolved_computed(ctx, el, name);
+}
+
+/* The layout §9's used-value arms read for `name` on `el`, asked under the caller's resting drive: a box-model
+   length's operands for the used-if-rendered properties, and for the insets both axes' operands and, for an
+   absolutely positioned box, its placement (which its static position is part of). It walks the same
+   applies-to and box conjuncts the arms test, so a property answered by its computed value asks nothing. */
+static bool css_resolved_longhand_ask(lxb_dom_element_t *el, const char *name)
+{
+    CssPx px;
+    FlowPoint o;
+
+    switch (css_resolved_kind(name)) {
+    case CSS_RESOLVED_USED_IF_RENDERED:
+        if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) return true;
+        return used_value_px_ask(el, name, &px);
+    case CSS_RESOLVED_USED_IF_POSITIONED:
+        if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) return true;
+        if (!used_value_offset_operands_ask(el, false) || !used_value_offset_operands_ask(el, true)) return false;
+        if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+            css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED))
+            return flow_border_box_origin_ask(el, &o);
+        return true;
+    case CSS_RESOLVED_COMPUTED:
+    case CSS_RESOLVED_USED:
+    case CSS_RESOLVED_LINE_HEIGHT:
+    case CSS_RESOLVED_TRANSFORM:
+    case CSS_RESOLVED_BORDER_SPACING:
+        return true;
+    }
+    DFAIL("§9's resolved value was asked over a kind css_resolved_kind does not answer");
+    return true;
+}
+
+bool css_resolved_ask(lxb_dom_element_t *el, const char *name)
+{
+    const char *const *lh;
+    unsigned nlh, i;
+
+    DCHECK(el != NULL && name != NULL, "a resolved value's layout was asked for with no element or no name");
+    DCHECK(css_cascade_record_is_held(), "a resolved value's layout was asked outside a held cascade record");
+    lh = css_shorthand_longhands(name, &nlh);
+    if (lh == NULL) return css_resolved_longhand_ask(el, name);
+    for (i = 0; i < nlh; i++)
+        if (!css_resolved_longhand_ask(el, lh[i])) return false;
+    return true;
 }
 
 /* One resolved value is one hold: its computed, cascaded and used values share the record its first ask opens,

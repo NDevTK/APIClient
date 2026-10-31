@@ -15848,6 +15848,9 @@ TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
         { "ot", "2300", "CSSOM VIEW §7: the offsetTop of a block after 2300px of blocks is not 2300" },
         { "oh", "0", "CSSOM VIEW §7: an empty block's offsetHeight is not 0" },
         { "lt", "648", "CSSOM VIEW §7: the last of #sa2's 300 2px blocks is not at offsetTop 648" },
+        { "gw", "100px", "CSSOM §9: getComputedStyle's width of an auto-width block is not its used 100px" },
+        { "gt", "100px", "CSSOM §9: getComputedStyle's top of an absolutely positioned `top: auto` box is not its "
+                         "static position, 100px" },
     };
     const char *rests = strstr(js, "\"_layoutScrollAreaRests\":");
     long nrests = rests ? strtol(rests + strlen("\"_layoutScrollAreaRests\":"), NULL, 10) : -1;

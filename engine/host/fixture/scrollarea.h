@@ -8,7 +8,8 @@
    setter, §4's window members and the root's scrollTo() move the viewport to 100, 200, 250 and 300. HTML
    §6.6.6's focus() step 4 scrolls #fb into view, and preventScroll keeps #fa's at 0. §7's offsetTop of #oe is
    2300 and of #sa2's last block 648 (from the initial containing block, as Blink measures a non-positioned
-   body offsetParent). Chrome 155.0.8059.84 gives every value expected. Cross-engine notes, left out: Chrome
+   body offsetParent). CSSOM §9's resolved width of #sa2's first block and top of the `top: auto` #ap are
+   their used 100px. Chrome 155.0.8059.84 gives every value expected. Cross-engine notes, left out: Chrome
    and Firefox 158.0.1 count a zero-height block 500px wide, where §3.3 says "Border boxes with zero area do not
    affect the scrollable overflow area", and add §3.3's end padding (a 10px-padded box over a 300 x 200 child
    is 320 x 220), not built here. It ends with TF_CANVAS_INK, which test_forced.c defines first. */
@@ -23,6 +24,7 @@ static const char HTML_SCROLLAREA[] =
     "<body style=\"margin:0\">"
     "<div id=sa1 style=\"height:50px;width:100px;overflow:hidden\"></div>"
     "<div id=sa2 style=\"height:50px;width:100px;overflow:hidden\"></div>"
+    "<div id=ap style=\"position:absolute;width:10px;height:10px\"></div>"
     "<div id=sa3 style=\"height:50px;width:100px;overflow:hidden\"><div style=\"height:100px;margin-bottom:30px\">"
     "</div></div>"
     "<div id=sa4 style=\"height:50px;width:100px;overflow:hidden\"><div style=\"display:inline-block;width:200px;"
@@ -56,7 +58,8 @@ static const char HTML_SCROLLAREA[] =
     "+'&lh='+b.scrollHeight+'&lw='+b.scrollWidth+'&rh='+document.documentElement.scrollHeight"
     "+'&rt='+rt+'&nt='+E('sa7').scrollTop+'&w1='+w1+'&w2='+w2+'&w3='+w3"
     "+'&f1='+f1+'&f2='+f2"
-    "+'&ot='+E('oe').offsetTop+'&oh='+E('oe').offsetHeight+'&lt='+b.lastChild.offsetTop);"
+    "+'&ot='+E('oe').offsetTop+'&oh='+E('oe').offsetHeight+'&lt='+b.lastChild.offsetTop"
+    "+'&gw='+getComputedStyle(b.firstChild).width+'&gt='+getComputedStyle(E('ap')).top);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

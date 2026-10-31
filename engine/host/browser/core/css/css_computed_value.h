@@ -292,6 +292,11 @@ CssResolvedKind css_resolved_kind(const char *name);
    is answered per is the ELEMENT's document's, which core/layout/used_value.c reads for itself. */
 JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name);
 
+/* The layout css_resolved_value reads for `name` on `el`, asked under the caller's resting drive on its entered
+   layout job: true once the resolved value computes nothing that drive would defer, false ("not yet") with the
+   question suspended on the job. The caller holds the job's cascade record. */
+bool css_resolved_ask(lxb_dom_element_t *el, const char *name);
+
 /* §9's USED COLOUR of `name` on `el`, as a `CssColor` in sRGB rather than as the string a page reads — the
    second entry over one derivation, for the reason core/dom/element_view.h gives for `element_view_bounding_
    box_px` standing beside `getBoundingClientRect`: a caller inside the engine that must COMPUTE with the value

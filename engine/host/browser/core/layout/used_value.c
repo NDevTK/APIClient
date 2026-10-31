@@ -4784,6 +4784,32 @@ bool used_value_padding_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *ou
     return true;
 }
 
+bool used_value_px_ask(lxb_dom_element_t *el, const char *name, CssPx *out)
+{
+    size_t n;
+    bool vertical;
+
+    DCHECK(el != NULL && name != NULL && out != NULL,
+           "a used value was asked for with no element, no property name or no answer");
+    /* The block axis of the ten physical lengths `used_value_px` carries: `height` and the `-top`/`-bottom`
+       sides. Any other name reaches that entry's own refusal. */
+    n = strlen(name);
+    vertical = strcmp(name, "height") == 0 || (n > 4 && strcmp(name + n - 4, "-top") == 0) ||
+               (n > 7 && strcmp(name + n - 7, "-bottom") == 0);
+    if (!uv_operands_ask(el, vertical)) return false;
+    *out = used_value_px(el, name);
+    return true;
+}
+
+bool used_value_offset_operands_ask(lxb_dom_element_t *el, bool vertical)
+{
+    UvCb cb = uv_cb(el);
+
+    DCHECK(el != NULL, "a used offset's operands were asked for with no element");
+    if (!uv_operands_ask(el, vertical)) return false;
+    return cb.element == NULL || uv_operands_ask(cb.element, vertical);
+}
+
 bool used_value_border_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *out)
 {
     DCHECK(el != NULL && out != NULL, "a border edge's extent was asked for with no element or no answer");

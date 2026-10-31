@@ -96,6 +96,7 @@
 #include "core/dom/node.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
+#include "core/dom/element_view.h"   /* the box tests a resolved used value asks first */
 #include "core/dom/selector_match.h"
 #include "core/html/integer_microsyntax.h"   /* §4.3.11.1's `headingoffset` runs §2.3.4.2's rules for parsing non-negative integers */
 #include "core/css/css_author_sheets.h"   /* css-cascade-5 §6.2's author origin, one set per root */
@@ -112,6 +113,7 @@
 #include "core/css/css_keyframes.h"
 #include "core/css/css_logical.h"
 #include "core/css/css_match_result.h"   /* the author origin's matched declarations, one result per element */
+#include "core/layout/block_flow.h"   /* the drive a resolved used value's deferred layout is computed under */
 #include "core/layout/layout_job.h"   /* the resting drive a build takes its rules from */
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_math.h"
@@ -131,6 +133,7 @@
 #include "solver/dom_cow.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include "solver/reclaim.h"
+#include "solver/rest_unit.h"
 
 /* TWO PRIVATE KEYS, BOTH SYMBOLS, AND THEY ARE TWO BECAUSE A SLOT IS A BRAND. `g_decl_key` hangs a block's own
    §6.6 record off the block; `g_inline_key` hangs CSSOM §7.1's [SameObject] block off the ELEMENT's wrapper. One key
@@ -172,6 +175,7 @@ static int g_set_css_text_id = -1, g_get_prop_id = -1, g_remove_prop_id = -1, g_
    and why it exists are at `cssd_own_init`. */
 #define CSSD_OWN_MAX 128
 static int g_property_set_id[LXB_CSS_PROPERTY__LAST_ENTRY + CSSD_OWN_MAX];
+static int g_property_get_id[LXB_CSS_PROPERTY__LAST_ENTRY + CSSD_OWN_MAX];
 /* CSSOM §6.6.1's id space resolved to ONE name — defined beside the list it reads, forward-declared here
    because the two per-property accessors above it are what `idl_setter_id` is handed. */
 static const char *cssd_property_name_of(uintptr_t id);
@@ -4468,7 +4472,7 @@ static JSValue cssd_readonly_throw(JSContext *ctx)
                                 "the CSS declaration block's readonly flag is set");
 }
 
-/* magic 0 = getPropertyValue, 1 = removeProperty, 2 = getPropertyPriority */
+/* magic 1 = removeProperty, 2 = getPropertyPriority; getPropertyValue is CSSD_GET_PROP_DECL */
 static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue block = cssd_block(ctx, this_val);
@@ -4537,14 +4541,21 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
             cssd_decls_free(&d);
         }
         r = JS_NewString(ctx, important ? "important" : "");
-    } else if (computed) {
-        /* CSSOM §9's RESOLVED value, which for most properties is the computed value and for the box-model
-           ones is the used value (css_computed_value.h). It answers a JSValue rather than text because a used
-           value derived from CSS 2.1 §10.1's initial containing block carries the VIEWPORT's domain, and a
-           `char *` here would carry the number and drop the fork. */
-        r = cssd_computed_has_declarations(ctx, block)
-              ? css_resolved_value(ctx, cssd_owner_element(ctx, block), name) : JS_NewStringLen(ctx, "", 0);
     } else {
+        DFAIL("§6.6.1's getPropertyValue reached the plain removeProperty/getPropertyPriority body; it is "
+              "CSSD_GET_PROP_DECL's step machine");
+        r = JS_UNDEFINED;
+    }
+    JS_FreeCString(ctx, name);
+    JS_FreeValue(ctx, block);
+    return r;
+}
+
+/* §6.6.1's getPropertyValue over a block that is not a computed one: the declarations' own value of `name`. */
+static JSValue cssd_specified_value(JSContext *ctx, JSValueConst block, const char *name)
+{
+    JSValue r;
+    {
         CssDecls d = { 0 };
         char *v;
         JSValue unknown;
@@ -4569,10 +4580,141 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
           : v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
         free(v);
     }
-    JS_FreeCString(ctx, name);
-    JS_FreeValue(ctx, block);
     return r;
 }
+
+/* §6.6.1's getPropertyValue and its per-property attribute getters, which "must return the result of invoking
+   getPropertyValue()", as one step machine owning a layout job. A specified block answers from its
+   declarations at once. A computed block answers CSSOM §9's resolved value, which for the box-model lengths and
+   the insets is a used value: the element's and its ancestors' author matches (element_view_box_tests_ask) and
+   then the layout the value reads (css_resolved_ask) are asked under a resting drive, one rest unit per
+   activation, and the value is resolved on the same job, whose cascade record is the hold. It is a JSValue
+   rather than text because a used value derived from CSS 2.1 §10.1's initial containing block carries the
+   viewport's domain. */
+#define CSSD_GET_STAGES(X) \
+    X(CSSD_GET_MEASURE, "CSSOM §6.6.1 The CSSStyleDeclaration Interface getPropertyValue(property) and its " \
+                        "attributes, over CSSOM §9's resolved value of a computed block (the box tests and the " \
+                        "value's layout under a resting drive, then the value on the same job)")
+enum { IDL_STEP_STAGE_BASE(CSSD_GET_STAGES) CSSD_GET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CSSD_GET_STEPS[] = { CSSD_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL until a computed block is read */
+} CssdGetState;
+
+static void cssd_get_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    CssdGetState *s = st;
+
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
+}
+
+/* One activation of the machine for property `name`. */
+static int cssd_get_run(JSContext *ctx, JSStepHdr *hdr, CssdGetState *s, const char *name, JSValue *presult)
+{
+    JSValue block = cssd_block(ctx, hdr->this_val);
+    lxb_dom_element_t *el;
+    LayoutJobDrive d;
+    bool matched, done = false;
+    int rc;
+
+    if (JS_IsException(block)) return JS_STEP_ABRUPT;
+    if (!cssd_flag(ctx, block, "computed")) {
+        *presult = cssd_specified_value(ctx, block, name);
+        JS_FreeValue(ctx, block);
+        return JS_STEP_DONE;
+    }
+    if (!cssd_computed_has_declarations(ctx, block)) {
+        JS_FreeValue(ctx, block);
+        *presult = JS_NewStringLen(ctx, "", 0);
+        return JS_STEP_DONE;
+    }
+    el = cssd_owner_element(ctx, block);
+    JS_FreeValue(ctx, block);
+    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    matched = element_view_box_tests_ask(lxb_dom_interface_node(el));
+    DCHECK(matched || layout_job_drive_spent(&d),
+           "CSSOM §9's resolved value parked an author match with the drive's allowance unspent, so its next "
+           "activation would ask the same thing over the same state for ever");
+    while (matched && block_flow_drive_deferred(&d)) {
+        if (css_resolved_ask(el, name)) {
+            done = true;
+            break;
+        }
+        DCHECK(layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+               "CSSOM §9's resolved value answered \"not yet\" with no question suspended and no allowance spent, "
+               "so its next activation would ask the same thing over the same state for ever");
+    }
+    if (done) *presult = css_resolved_value(ctx, el, name);
+    layout_job_drive_end(&d);
+    layout_job_leave(s->job);
+    rest_unit_end();
+    if (layout_job_declined(s->job)) {
+        if (done) JS_FreeValue(ctx, *presult);
+        *presult = JS_UNDEFINED;
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
+    if (!done) {
+        layout_job_rested(s->job);
+        return JS_STEP_YIELD;
+    }
+    return JS_STEP_DONE;
+}
+
+/* getPropertyValue(property). The name can be unknown external input, which crosses a CSSOMString argument as
+   itself and denotes its own display shape (js_cssd_prop_op states why that is the honest answer); it is
+   re-read from the invocation's own argument on every activation. */
+static int js_cssd_get_property_value(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    const char *name;
+    int rc;
+
+    (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(CSSD_GET_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+    STEP_ARM(CSSD_GET_MEASURE);
+    DCHECK(argc >= 1, "§6.6.1's getPropertyValue reached its body with no property name — its IDL argument is "
+                      "required, so the declaration's own argument-count check should have refused the call");
+    name = concolic_name_cstr(ctx, argv[0]);
+    if (!name) return JS_STEP_ABRUPT;
+    rc = cssd_get_run(ctx, hdr, st, name, presult);
+    JS_FreeCString(ctx, name);
+    return rc;
+}
+
+/* A per-property attribute getter; `magic` is lexbor's property id, so the name is read back out of the
+   registry rather than stored twice. */
+static int js_cssd_property_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                     JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    const char *pname = cssd_property_name_of((uintptr_t)idl_step_magic(hdr));
+
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(CSSD_GET_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+    STEP_ARM(CSSD_GET_MEASURE);
+    DCHECK(pname != NULL,
+           "a CSS attribute was declared with a property id the space does not have. `magic` indexes the "
+           "registry's rows followed by this engine's own (cssd_property_name_of), so a NULL here is an "
+           "installer and that seam disagreeing about which properties exist");
+    return cssd_get_run(ctx, hdr, st, pname, presult);
+}
+
+static const IdlStepDecl CSSD_GET_PROP_DECL = {
+    js_cssd_get_property_value, sizeof(CssdGetState), cssd_get_visit, NULL,
+    "CSSOM §6.6.1 The CSSStyleDeclaration Interface getPropertyValue(property)", CSSD_GET_STEPS
+};
+static const IdlStepDecl CSSD_PROP_GET_DECL = {
+    js_cssd_property_get_step, sizeof(CssdGetState), cssd_get_visit, NULL,
+    "CSSOM §6.6.1 The CSSStyleDeclaration Interface camel-cased, webkit-cased and dashed attributes' getter",
+    CSSD_GET_STEPS
+};
 
 static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -4709,42 +4851,6 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
     JS_FreeCString(ctx, priority);
     JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
-}
-
-/* THE ONE PAIR OF BODIES ALL THREE §6.6.1 SPELLINGS ANSWER THROUGH. §6.6.1 states both halves of each of them
-   as a forward — the getter "must return the result of invoking getPropertyValue()" and the setter "must invoke
-   setProperty() ... and no third argument" — so they answer out of the same two paths above and never grow a
-   rule of their own. `magic` is Lexbor's own property id, so the PROPERTY name is read back out of the registry
-   rather than stored twice, and the attribute's own spelling is never inverted to recover it. */
-static JSValue js_cssd_property_get(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    const char *pname = cssd_property_name_of((uintptr_t)magic);
-    JSValue block = cssd_block(ctx, this_val), r;
-
-    DCHECK(pname != NULL,
-           "a CSS attribute was declared with a property id the SPACE does not have. `magic` indexes the "
-           "registry's rows followed by this engine's own (cssd_property_name_of), so a NULL here is an "
-           "installer and that seam disagreeing about which properties exist");
-    if (JS_IsException(block)) return block;
-    if (cssd_flag(ctx, block, "computed")) {
-        r = cssd_computed_has_declarations(ctx, block)
-              ? css_resolved_value(ctx, cssd_owner_element(ctx, block), pname) : JS_NewStringLen(ctx, "", 0);
-    } else {
-        CssDecls d = { 0 };
-        char *v;
-        JSValue unknown;
-
-        cssd_declarations_read(ctx, block, &d);
-        v = cssd_property_value(&d, pname);
-        unknown = cssd_taint_read(ctx, block, pname, v);
-
-        cssd_decls_free(&d);
-        r = !JS_IsUndefined(unknown) ? unknown
-          : v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
-        free(v);
-    }
-    JS_FreeValue(ctx, block);
-    return r;
 }
 
 /* IT IS A STEP MACHINE BECAUSE ITS VALUE CAN BE AN UNKNOWN WITH NO BYTES, and that is a FORK: §6.6.1's
@@ -4975,7 +5081,7 @@ static const IdlStepDecl CSSD_PROP_SET_DECL = {
  * and to engine/idlgen.mjs's gap audit, which names these three by their own names and reports the day one of
  * them stops being called. A single loop can lose a spelling silently inside itself.
  *
- * ALL THREE ANSWER THROUGH js_cssd_property_get / js_cssd_property_set, whose `magic` is lexbor's property
+ * ALL THREE ANSWER THROUGH CSSD_PROP_GET_DECL / CSSD_PROP_SET_DECL, whose `magic` is lexbor's property
  * id, which is exactly what §6.6.1 asks for and is why no inverse algorithm is written here. The getter of a
  * webkit-cased attribute must invoke getPropertyValue "with the argument being the result of running the IDL
  * attribute to CSS property algorithm ... with the dash prefix flag set" — that inverse exists to recover the
@@ -5226,7 +5332,7 @@ static void cssom_install_property_attribute(JSContext *ctx, JSValueConst proto,
     DCHECK(g_property_set_id[id] >= 0,
            "a §6.6.1 per-property attribute is being installed for a property cssom_init declared no setter "
            "for — the attribute would be silently read-only");
-    idl_install_accessor(ctx, proto, name, js_cssd_property_get, (int)id, g_property_set_id[id]);
+    idl_install_accessor_step(ctx, proto, name, g_property_get_id[id], g_property_set_id[id]);
 }
 
 static void cssom_install_camel_cased_attributes(JSContext *ctx, JSValueConst proto)
@@ -6187,7 +6293,7 @@ void cssom_init(JSContext *ctx)
            its own copy, which is how it came to write Web IDL §3.7.6 step 4.5.8.4's Throw flag as `true` where the
            standard writes `false`, and to reach the forwarded-to setter with a JS_SetPropertyStr from C. */
         g_put_forwards_id = idl_setter_id_put_forwards(ctx, "style", "cssText");
-        g_get_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 0);
+        g_get_prop_id = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &CSSD_GET_PROP_DECL, 0);
         g_remove_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 1);
         g_get_priority_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 2);
         g_set_prop_id = idl_method_id(ctx, THREE_STR, 3, js_cssd_set_property, 0);
@@ -6230,11 +6336,10 @@ void cssom_init(JSContext *ctx)
        walks and `cssd_property_id_end` is that extent. Both are per AGENT — a setter id is a runtime's, and
        the list is collected from tables that do not change while one runs. */
     cssd_own_init();
-    /* THE SETTER IS A STEP MACHINE AND THE GETTER IS NOT, which is the split core/idl_args.h already draws: a
-       getter "runs none of the page's code — it reads the component's own tree — so it is an ordinary C
-       function and not a machine", and this setter has a FORK in it. One machine DECLARATION shared by every
-       property, because §6.6.1 gives all three spellings of every property the same setter steps; what differs
-       per property is the `magic`, which is lexbor's own property id.
+    /* BOTH HALVES ARE STEP MACHINES: the setter has a fork in it, and the getter of a computed block resolves
+       a used value, whose layout rests (CSSD_PROP_GET_DECL). One machine declaration per half shared by every
+       property, because §6.6.1 gives all three spellings of every property the same steps; what differs per
+       property is the `magic`, which is lexbor's own property id.
        AND THE KEY'S WIDTH IS SETTLED HERE, OVER THE WHOLE SPACE, WHICH IS WHAT MAKES A TRUNCATED CONSTRAINT KEY
        IMPOSSIBLE RATHER THAN MERELY CAUGHT. A truncated key files two properties' questions under ONE name, so
        one property's recorded arm decides another's and a resumed flow answers a world it never explored — the
@@ -6247,7 +6352,7 @@ void cssom_init(JSContext *ctx)
         const char *pname = cssd_property_name_of(id);
         char probe[CSSD_PROP_OP_MAX];
 
-        if (!pname) { g_property_set_id[id] = -1; continue; }
+        if (!pname) { g_property_set_id[id] = g_property_get_id[id] = -1; continue; }
         DCHECKF(cssd_prop_fork_op(probe, sizeof probe, pname),
                 "the CSS property `%s` cannot be spelled into the per-property setter's constraint key — the "
                 "key is what a parked flow's recorded answers are filed under, and a truncated one makes one "
@@ -6255,6 +6360,7 @@ void cssom_init(JSContext *ctx)
                 "the predicate until this name fits",
                 pname);
         g_property_set_id[id] = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &CSSD_PROP_SET_DECL, (int)id);
+        g_property_get_id[id] = idl_getter_id_step(ctx, &CSSD_PROP_GET_DECL, (int)id);
     }
     {
         /* CSS Fonts 5 §9.1 and CSSOM §6.4.7 both declare every descriptor attribute
