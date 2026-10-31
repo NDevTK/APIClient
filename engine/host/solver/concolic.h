@@ -532,6 +532,14 @@ JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, co
 JSValue concolic_source_wrap_joint_affine(JSContext *ctx, const char *const *shapes, const char *const *srcs,
                                           int n, const char *term, double c, JSValue computed);
 
+/* §22.1.3.5 String.prototype.concat over two strings a component holds (`a` and `b` consumed, each a String or an
+   unknown), through the same derivation the page's own concatenation takes, so the result records which unknown
+   owns which units (the pieces concolic_piece_slice reads). Owned. */
+JSValue     concolic_string_concat(JSContext *ctx, JSValue a, JSValue b);
+/* The units `[from, to)` of `s`'s example when they lie inside one piece: the piece's unknown itself for the whole
+   piece, else §22.1.3.22 String.prototype.slice's derivation of it with `example` (consumed) as its example.
+   JS_UNINITIALIZED where `s` records no pieces or the range is empty or crosses one. */
+JSValue     concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example);
 /* Propagation through a CONCATENATION — installed as JSConcolicHooks.add (JS_SetConcolicHooks). `op` names
    which spec algorithm the caller is performing, because 13.15.3's `+` has a numeric arm and 22.1.3.5's
    String.prototype.concat does not; see JSConcolicAddOp in quickjs.h. */
@@ -1069,12 +1077,12 @@ void        concolic_declare_source_chain(const char *chain);
 char       *concolic_candidate_poc(const char *root, const char *payload);
 /* concolic_new_derived over the elements of the array `list`, which is borrowed. */
 JSValue     concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst list, JSValue example);
-struct JSBufferUnknownPiece;
+struct JSUnknownPiece;
 /* The value one unknown run of a buffer source stands for (quickjs-step.h's JS_BufferSourceUnknowns): a codec
    image's run is derived from (unknown, position, length) through `<codec>[]` — at length 1 the element read's
    own derivation, with the byte for its example — and any other run is its span's unknown. `window` is the
    source's window bytes. Owned. */
-JSValue     concolic_buffer_run(JSContext *ctx, const struct JSBufferUnknownPiece *u, const uint8_t *window);
+JSValue     concolic_buffer_run(JSContext *ctx, const struct JSUnknownPiece *u, const uint8_t *window);
 /* The operands a derivation over the bytes of the buffer source `src` is keyed on, as an array in byte order:
    each unknown run's concolic_buffer_run value, and each concrete run as a string naming its length and
    digest, so two windows differing in any byte compose two identities. JS_UNDEFINED when no byte is unknown,

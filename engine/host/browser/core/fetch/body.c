@@ -207,7 +207,7 @@ static char *body_span_example_text(JSContext *ctx, JSValueConst unknown)
    and must be UTF-8 — see solver/endpoint.c's body_params. */
 static void body_spans_capture(JSContext *ctx, BodyState *b, JSValueConst src)
 {
-    JSBufferUnknownPiece *u = NULL;
+    JSUnknownPiece *u = NULL;
     int n = JS_BufferSourceUnknowns(ctx, src, &u), i;
 
     for (i = 0; i < n; i++) {

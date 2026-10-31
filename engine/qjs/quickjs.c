@@ -125444,9 +125444,9 @@ static const JSArrayBufferSpan *js_ab_span_owner(const JSArrayBuffer *abuf, uint
 /* The unknown pieces of bytes [lo, hi) of `abuf` (whose object is `bufobj`), each run of bytes one span still
    describes, with offsets relative to `lo`; *ppieces is owned by the caller (JS_FreeBufferUnknowns). */
 static int js_ab_unknown_pieces(JSContext *ctx, const JSArrayBuffer *abuf, JSObject *bufobj, uint32_t lo,
-                                uint32_t hi, JSBufferUnknownPiece **ppieces)
+                                uint32_t hi, JSUnknownPiece **ppieces)
 {
-    JSBufferUnknownPiece *pieces = NULL;
+    JSUnknownPiece *pieces = NULL;
     uint32_t b, e;
     int n = 0, cap = 0;
 
@@ -125455,7 +125455,7 @@ static int js_ab_unknown_pieces(JSContext *ctx, const JSArrayBuffer *abuf, JSObj
         return 0;
     for (b = lo; b < hi; b = e) {
         const JSArrayBufferSpan *s = js_ab_span_owner(abuf, b);
-        JSBufferUnknownPiece *u;
+        JSUnknownPiece *u;
 
         e = b + 1;
         while (e < hi && js_ab_span_owner(abuf, e) == s)
@@ -125463,7 +125463,7 @@ static int js_ab_unknown_pieces(JSContext *ctx, const JSArrayBuffer *abuf, JSObj
         if (!s)
             continue;
         if (n == cap) {
-            JSBufferUnknownPiece *g;
+            JSUnknownPiece *g;
 
             cap = cap ? cap * 2 : 4;
             g = js_realloc(ctx, pieces, sizeof(*pieces) * (size_t)cap);
@@ -125502,9 +125502,9 @@ static int js_ab_unknown_pieces(JSContext *ctx, const JSArrayBuffer *abuf, JSObj
    whole window is one run, derived from its unknown start and from the `n` pieces its example window had (taken
    and freed), whose block bytes are its example where the offset and every such piece have one. Answers 1. */
 static int js_ta_window_at_unknown_offset(JSContext *ctx, const JSTypedArray *ta, uint32_t len,
-                                          JSBufferUnknownPiece **ppieces, int n)
+                                          JSUnknownPiece **ppieces, int n)
 {
-    JSBufferUnknownPiece *pieces = *ppieces, *g;
+    JSUnknownPiece *pieces = *ppieces, *g;
     JSValue *ops;
     bool example = js_concolic_held(ta->offset_unknown);
     int i;
@@ -125535,12 +125535,12 @@ static int js_ta_window_at_unknown_offset(JSContext *ctx, const JSTypedArray *ta
 }
 
 /* see quickjs-step.h */
-int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPiece **ppieces)
+int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSUnknownPiece **ppieces)
 {
     JSArrayBuffer *abuf = js_buffer_source_buffer(obj);
     JSObject *p = JS_VALUE_GET_OBJ(obj), *bufobj = p;
     JSTypedArray *ta = NULL;
-    JSBufferUnknownPiece *pieces, *g;
+    JSUnknownPiece *pieces, *g;
     JSValue extent, ops[3], ex;
     uint32_t lo = 0, hi;
     int n;
@@ -125594,7 +125594,7 @@ int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPie
     return n + 1;
 }
 
-void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *pieces, int n)
+void JS_FreeBufferUnknowns(JSContext *ctx, JSUnknownPiece *pieces, int n)
 {
     int i;
 
@@ -128466,7 +128466,7 @@ static const char *const js_view_type_names[JS_TYPED_ARRAY_COUNT] = {
 static JSValue js_dataview_span_value(JSContext *ctx, JSObject *bufobj, uint32_t start, int size,
                                       bool little_endian, int class_id, JSValue real)
 {
-    JSBufferUnknownPiece *pc;
+    JSUnknownPiece *pc;
     JSValue *ops, r;
     char op[80];
     int n, i, k = 0;

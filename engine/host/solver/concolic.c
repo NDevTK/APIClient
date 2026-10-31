@@ -195,6 +195,13 @@ typedef struct {
        other bytes are the page's own; NULL on every other value, whose whole shape spells one unknown. Owned. */
     int *hole_span;
     int  hole_n;
+    /* Which unknown owns which units of `example`: `piece_n` runs in order (JSUnknownPiece, the shape a buffer's
+       runs take, here in UTF-16 code units), each owned by the operand whose example spells it. Written at a
+       string concatenation whose operands' examples are both held, and on no other value; units in no piece
+       are the page's own. A slice whose range lies inside one piece answers that piece's derivation
+       (concolic_piece_slice). Owned, the unknowns with it. */
+    JSUnknownPiece *piece;
+    int piece_n;
     /* ECMAScript §6.1 ECMAScript Language Types: the set of types this value takes in every world, as CTY_*
        bits. Stated only by a mint whose algorithm fixes its result's type (concolic_type_state), and asserted
        there against the example; 0 is unstated, never "no type", so a value no mint typed stays unknown-typed. */
@@ -2200,6 +2207,8 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->str_of_shape);
     aff_free(c->aff);
     free(c->hole_span);
+    for (int i = 0; i < c->piece_n; i++) JS_FreeValueRT(rt, c->piece[i].unknown);
+    free(c->piece);
     JS_FreeValueRT(rt, c->example);
     /* The second owned JSValue on this record. A field added to the struct is an obligation here and at
        concolic_gc_mark together. JS_UNINITIALIZED is not refcounted, so the never-asked case needs no test. */
@@ -2213,6 +2222,7 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
     /* The derived prototype is reachable only from here: another value of this class, so the chain a page
        walks is these records pointing at each other, and an unreported one would be collected while live. */
     if (c && !JS_IsUninitialized(c->proto)) JS_MarkValue(rt, c->proto, mark_func);
+    for (int i = 0; c && i < c->piece_n; i++) JS_MarkValue(rt, c->piece[i].unknown, mark_func);
 }
 
 /* @S candidate injection: during a verification re-run, every read of the source g_cand_at returns
@@ -5057,6 +5067,56 @@ JSValue concolic_strict_equal(JSContext *ctx, JSValueConst a, JSValueConst b) {
    forks. The arguments already ran: they are the page's own expressions. `example` is what quickjs.c's
    js_concolic_call_def got by running the callee's example on the operands' examples, or JS_UNDEFINED for
    none; it is consumed. */
+static uint32_t example_units(JSContext *ctx, JSValueConst ex);
+
+/* An argument's number where this flow holds one: a Number, or an unknown whose believed example is one, and
+   undefined as `absent`. Answers 0 for anything else, which ToIntegerOrInfinity would coerce through the
+   page's code or which no example states. */
+static int piece_arg(JSContext *ctx, JSValueConst v, double *d, int *absent)
+{
+    JSValue ex;
+    int ok;
+
+    *absent = JS_IsUndefined(v);
+    if (*absent) return 1;
+    if (JS_IsNumber(v)) return JS_ToFloat64(ctx, d, v) == 0;
+    if (!concolic_is(v) || !concolic_example_present(v)) return 0;
+    ex = concolic_example(ctx, v);
+    ok = JS_IsNumber(ex) && JS_ToFloat64(ctx, d, ex) == 0;
+    JS_FreeValue(ctx, ex);
+    return ok;
+}
+
+/* The range of `this`'s example (`len` units) that §22.1.3.22 String.prototype.slice ( start, end ) steps 4-8 or
+   §22.1.3.25 String.prototype.substring ( start, end ) steps 4-10 read, from arguments a flow holds numbers for;
+   0 where one is not. */
+static int piece_call_range(JSContext *ctx, const char *member, uint32_t len, int argc, JSValueConst *argv,
+                            uint32_t *from, uint32_t *to)
+{
+    double a = 0, b = len, L = len;
+    int na, nb;
+
+    if (!piece_arg(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &a, &na) ||
+        !piece_arg(ctx, argc > 1 ? argv[1] : JS_UNDEFINED, &b, &nb))
+        return 0;
+    a = na || isnan(a) ? 0 : trunc(a);
+    b = nb ? L : isnan(b) ? 0 : trunc(b);
+    if (!strcmp(member, "slice")) {
+        a = a < 0 ? fmax(L + a, 0) : fmin(a, L);
+        b = b < 0 ? fmax(L + b, 0) : fmin(b, L);
+    } else {
+        double lo, hi;
+
+        a = fmin(fmax(a, 0), L);
+        b = fmin(fmax(b, 0), L);
+        lo = fmin(a, b); hi = fmax(a, b);
+        a = lo; b = hi;
+    }
+    *from = (uint32_t)a;
+    *to = (uint32_t)b;
+    return 1;
+}
+
 static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValueConst this_val,
                                   int argc, JSValueConst *argv, JSValue example)
 {
@@ -5080,6 +5140,26 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
         if (!(concolic_types(c->facet_src) & callable)) {
             JS_FreeValue(ctx, example);
             return JS_ThrowTypeError(ctx, "%s is not a function", c->member);
+        }
+    }
+    /* A slice or substring of a string an unknown was concatenated into, over a range inside one piece, is that
+       piece's own derivation: the bytes are its owner's whatever the other pieces hold. */
+    if (c->member && (!strcmp(c->member, "slice") || !strcmp(c->member, "substring")) && concolic_is(this_val) &&
+        concolic_example_present(this_val)) {
+        JSValue tex = concolic_example(ctx, this_val);
+        uint32_t from, to;
+        int ranged = JS_IsString(tex) &&
+                     piece_call_range(ctx, c->member, example_units(ctx, tex), argc, argv, &from, &to);
+
+        JS_FreeValue(ctx, tex);
+        if (ranged) {
+            JSValue pr = concolic_piece_slice(ctx, this_val, from, to, JS_DupValue(ctx, example));
+
+            if (!JS_IsUninitialized(pr)) {
+                if (c->member && c->facet_src) type_facet_narrow(c->facet_src, callable);
+                JS_FreeValue(ctx, example);
+                return pr;
+            }
         }
     }
     /* The arguments are part of the call's identity and therefore of its shape. `x.startsWith("/api")` and
@@ -5971,7 +6051,7 @@ JSValue concolic_new_derived_list(JSContext *ctx, const char *op, JSValueConst l
 }
 
 /* See concolic.h. */
-JSValue concolic_buffer_run(JSContext *ctx, const JSBufferUnknownPiece *u, const uint8_t *window)
+JSValue concolic_buffer_run(JSContext *ctx, const JSUnknownPiece *u, const uint8_t *window)
 {
     JSValueConst ops[3];
     JSValue r, ex = JS_UNDEFINED;
@@ -6007,7 +6087,7 @@ static JSValue buffer_concrete_run(JSContext *ctx, const uint8_t *p, size_t n)
 JSValue concolic_buffer_operands(JSContext *ctx, JSValueConst src, const uint8_t *window, size_t len,
                                  bool always, bool *example)
 {
-    JSBufferUnknownPiece *u = NULL;
+    JSUnknownPiece *u = NULL;
     int n = JS_BufferSourceUnknowns(ctx, src, &u), i;
     uint32_t k = 0;
     size_t at = 0;
@@ -7676,6 +7756,111 @@ static JSValue example_number_add(JSContext *ctx, JSValueConst exa, JSValueConst
    computed, so `concolic(5) + 3` gives 8, not "53". Steps 1.a and 1.b are not performed here (js_add_slow
    calls this before any coercion); the assert inside names the trampoline that owes them. The concolic result
    is the same either way: provenance, shape and identity, and a later branch still forks. */
+/* The UTF-16 code units the UTF-8 `s` (`n` bytes, as JS_ToCStringLen writes a String) spells: a four-byte
+   sequence is a surrogate pair, every other lead byte one unit. */
+static uint32_t units_of_utf8(const char *s, size_t n)
+{
+    uint32_t u = 0;
+
+    for (size_t i = 0; i < n; i++) {
+        unsigned char b = (unsigned char)s[i];
+
+        if ((b & 0xC0) != 0x80) u += b >= 0xF0 ? 2 : 1;
+    }
+    return u;
+}
+
+/* The code units of ToString of an example this engine holds (a String, Number, Boolean, null or undefined:
+   example_operable's set, which runs no page code). */
+static uint32_t example_units(JSContext *ctx, JSValueConst ex)
+{
+    size_t n = 0;
+    const char *t = JS_ToCStringLen(ctx, &n, ex);
+    uint32_t u;
+
+    CHECK(t != NULL, "concolic: an example's string form could not be read");
+    u = units_of_utf8(t, n);
+    JS_FreeCString(ctx, t);
+    return u;
+}
+
+/* `v`'s pieces shifted by `off`, appended to `*out` (`*n` long, grown here): a concolic with recorded pieces
+   gives them, any other concolic is one piece of `units` owned by itself, and a concrete operand gives none. */
+static void pieces_append(JSContext *ctx, JSValueConst v, uint32_t off, uint32_t units, JSUnknownPiece **out,
+                          int *n)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    int add = !c ? 0 : c->piece ? c->piece_n : units ? 1 : 0;
+    JSUnknownPiece *g;
+
+    if (!add) return;
+    g = realloc(*out, (size_t)(*n + add) * sizeof *g);
+    CHECK(g, "concolic: OOM recording which unknown owns which units of a string");
+    *out = g;
+    for (int i = 0; i < add; i++) {
+        JSUnknownPiece *pc = &g[*n + i];
+
+        memset(pc, 0, sizeof *pc);
+        pc->example = true;
+        if (c->piece) {
+            DCHECK(c->piece[i].offset + c->piece[i].length <= units,
+                   "an operand's piece ends past its own example — pieces are runs of the value's example");
+            pc->offset = off + c->piece[i].offset;
+            pc->length = c->piece[i].length;
+            pc->unknown = JS_DupValue(ctx, c->piece[i].unknown);
+        } else {
+            pc->offset = off;
+            pc->length = units;
+            pc->unknown = JS_DupValue(ctx, v);
+        }
+    }
+    *n += add;
+}
+
+/* `r` is the string concatenation of `a` (whose example is `ua` code units) and `b` (`ub`): its pieces are
+   theirs, in order. Only a concolic `r` holds them; a candidate re-fire's plain String carries none. */
+static void pieces_concat(JSContext *ctx, JSValueConst r, JSValueConst a, uint32_t ua, JSValueConst b, uint32_t ub)
+{
+    Concolic *c = g_concolic_class ? JS_GetOpaque(r, g_concolic_class) : NULL;
+    JSUnknownPiece *pc = NULL;
+    int n = 0;
+
+    if (!c) return;
+    DCHECK(c->piece == NULL, "a concatenation's pieces were recorded twice");
+    pieces_append(ctx, a, 0, ua, &pc, &n);
+    pieces_append(ctx, b, ua, ub, &pc, &n);
+    c->piece = pc;
+    c->piece_n = n;
+}
+
+JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example)
+{
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(s, g_concolic_class) : NULL;
+
+    if (!c || !c->piece || to <= from) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
+    for (int i = 0; i < c->piece_n; i++) {
+        const JSUnknownPiece *p = &c->piece[i];
+        JSValueConst ops[3];
+        JSValue r;
+
+        if (from < p->offset || to > p->offset + p->length) continue;
+        DCHECK(p->offset <= from && to <= p->offset + p->length,
+               "a slice was answered by a piece its range does not lie inside");
+        if (from == p->offset && to == p->offset + p->length) {
+            JS_FreeValue(ctx, example);
+            return JS_DupValue(ctx, p->unknown);
+        }
+        ops[0] = p->unknown;
+        ops[1] = JS_NewInt32(ctx, (int32_t)(from - p->offset));
+        ops[2] = JS_NewInt32(ctx, (int32_t)(to - p->offset));
+        r = concolic_new_derived(ctx, "§22.1.3.22 String.prototype.slice", ops, 3, example);
+        if (concolic_is(r)) concolic_type_state(r, CTY_STRING);
+        return r;
+    }
+    JS_FreeValue(ctx, example);
+    return JS_UNINITIALIZED;
+}
+
 /* `v`'s hole spans shifted by `off`, written to `out` when it is not NULL; answers how many. A non-concolic
    contributes none, and a value with no recorded spans is one unknown spelled by its whole shape. */
 static int hole_spans_of(JSValueConst v, size_t off, int *out)
@@ -7790,6 +7975,10 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     unsigned ta = cty_of_operand(a), tb = cty_of_operand(b);
     int string_fixed = op == JS_CONCOLIC_ADD_CONCAT || ta == CTY_STRING || tb == CTY_STRING;
     int string_arm = string_fixed || (hava && JS_IsString(exa)) || (havb && JS_IsString(exb));
+    /* The units each operand's example spells in the result, where both are held: the pieces are placed by
+       them. */
+    uint32_t ua = string_arm && hava && havb ? example_units(ctx, exa) : 0;
+    uint32_t ub = string_arm && hava && havb ? example_units(ctx, exb) : 0;
     JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
     /* The shape, by the arm. On the string arm it is the string the concatenation produced, so
        `"/api/" + cfg.region` renders `/api/{cfg.region}`, the @H provenance the endpoint surface is built from
@@ -7842,6 +8031,7 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     if (concolic_is(result)) ((Concolic *)JS_GetOpaque(result, g_concolic_class))->src_own = 0;
     if (af) aff_attach(result, af);
     if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
+    if (string_arm && hava && havb) pieces_concat(ctx, result, a, ua, b, ub);
     /* §13.15.3 answers a String, a Number or a BigInt; the numeric arm is a Number unless both operands may be
        BigInts (carith_result_types's reading of step 4), and is reached only when neither may be a String. */
     {
@@ -7870,6 +8060,20 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = result;
     return 1;
+}
+
+JSValue concolic_string_concat(JSContext *ctx, JSValue a, JSValue b)
+{
+    JSValue sp[2] = { a, b }, r;
+
+    DCHECK(JS_IsString(a) || concolic_is(a), "a component concatenated something that is not a string");
+    DCHECK(JS_IsString(b) || concolic_is(b), "a component concatenated something that is not a string");
+    if (concolic_add_hook(ctx, sp + 2, JS_CONCOLIC_ADD_CONCAT)) return sp[0];
+    r = example_string_concat(ctx, a, b);
+    JS_FreeValue(ctx, a);
+    JS_FreeValue(ctx, b);
+    CHECK(JS_IsString(r), "concolic: a component's concatenation of two strings could not be allocated");
+    return r;
 }
 
 /* The hook tables are two sets because they answer two questions. What a concolic value does once it exists

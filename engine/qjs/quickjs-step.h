@@ -1282,25 +1282,27 @@ JS_EXTERN bool JS_IsSharedBufferSource(JSValueConst obj);
    buffer-source brand test comes first. */
 JS_EXTERN bool JS_IsDetachedBufferSource(JSValueConst obj);
 
-/* The unknown bytes of a buffer source's window, as maximal runs each described by one span, in byte order;
-   bytes in no run are concrete. `offset` is window-relative. `unknown` is owned; for a codec image (`codec`
-   set) it is the unknown the codec ran over and `image_pos` is the run's first position in that output.
-   `example` says the run's bytes in the block are its unknown's example. A window whose length is an unknown
-   ends with one more run, of length 0 at the window's end: the bytes past its stored example, whose `example`
-   says that length has one. Requires a brand-tested buffer source that is not out of bounds. Returns the
-   count; free with JS_FreeBufferUnknowns. */
-typedef struct JSBufferUnknownPiece {
+/* A piece: a run `[offset, offset + length)` of a value whose bytes the unknown `unknown` owns. One shape for
+   both kinds of value that carry pieces: a buffer source's window (byte offsets) and a string an unknown was
+   concatenated into (UTF-16 code-unit offsets into its example, solver/concolic.c). `unknown` is owned; for a
+   codec image (`codec` set) it is the unknown the codec ran over and `image_pos` is the run's first position
+   in that output. `example` says the run's units in the value are its unknown's example. */
+typedef struct JSUnknownPiece {
     uint32_t offset, length;
     JSValue unknown;
     const char *codec;
     uint32_t image_pos;
     bool example;
-} JSBufferUnknownPiece;
-JS_EXTERN int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSBufferUnknownPiece **ppieces);
+} JSUnknownPiece;
+/* The unknown bytes of a buffer source's window, as maximal runs in byte order; bytes in no run are concrete.
+   `offset` is window-relative. A window whose length is an unknown ends with one more run, of length 0 at the
+   window's end: the bytes past its stored example, whose `example` says that length has one. Requires a
+   brand-tested buffer source that is not out of bounds. Returns the count; free with JS_FreeBufferUnknowns. */
+JS_EXTERN int JS_BufferSourceUnknowns(JSContext *ctx, JSValueConst obj, JSUnknownPiece **ppieces);
 /* ECMAScript §7.1.16 StringToBigInt ( string ) over the String `str`: 1 where it answers a BigInt, 0 where it answers
    undefined, -1 with a throw live (allocation). Runs no page code. */
 JS_EXTERN int JS_StringToBigIntDefined(JSContext *ctx, JSValueConst str);
-JS_EXTERN void JS_FreeBufferUnknowns(JSContext *ctx, JSBufferUnknownPiece *pieces, int n);
+JS_EXTERN void JS_FreeBufferUnknowns(JSContext *ctx, JSUnknownPiece *pieces, int n);
 /* A Uint8Array holding `buf`, recorded as `codec`'s output over the unknown `unknown` (whose example `buf` was
    computed from), so each element reads as an unknown derived from it. `codec` is a static string. A NULL
    `buf` with `len` 0 is the output over an unknown with no primitive example: no example bytes, and its length

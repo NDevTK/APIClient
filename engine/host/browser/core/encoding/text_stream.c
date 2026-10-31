@@ -271,7 +271,7 @@ static JSValue tx_decode(JSContext *ctx, TextStreamData *t, JSValueConst chunk, 
         if (encoding_buffer_source(ctx, chunk, &p, &len, &buf) < 0)
             return JS_EXCEPTION;
         {
-            JSBufferUnknownPiece *u = NULL;
+            JSUnknownPiece *u = NULL;
             int n = JS_BufferSourceUnknowns(ctx, chunk, &u);
 
             JS_FreeBufferUnknowns(ctx, u, n);

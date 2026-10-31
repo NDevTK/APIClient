@@ -1214,6 +1214,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/replyrole.h"
 #include "fixture/storedxss.h"
 #include "fixture/histreload.h"
+#include "fixture/pieceslice.h"
 #include "fixture/windowname.h"
 #include "fixture/twinread.h"
 #include "fixture/requestsink.h"
@@ -1781,6 +1782,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "storedread", HTML_STOREDREAD },
     { "storedidb", HTML_STOREDIDB },
     { "histreload", HTML_HISTRELOAD },
+    { "pieceslice", HTML_PIECESLICE },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
@@ -16103,6 +16105,33 @@ TF_UNIT void probes_histreload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `pieceslice` document (fixture/pieceslice.h): a slice inside the fragment's piece of a
+   concatenation is the fragment's own value, and a slice across both pieces is not. */
+TF_UNIT void probes_pieceslice(const char *js, Probe *tab, int *n) {
+    const char *pp_why = NULL, *pc_why = NULL;
+    int pp_tt = 1, pc_tt = 1;
+    char src[192] = "", csrc[192] = "";
+    int has = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src);
+    int chas = s_rooted_source(js, "innerHTML", "document.cookie", csrc, sizeof csrc);
+
+    fold_row(&pp_tt, &pp_why, has,
+             "NOT REACHED: no innerHTML @S record's source is rooted in the fragment, so the slice inside its "
+             "piece answered a derivation over the whole concatenation");
+    fold_row(&pp_tt, &pp_why, has && s_stage(js, "innerHTML", src) == S_FIRED, "the fragment's slice fired no PoC");
+    fold_row(&pp_tt, &pp_why, has && s_field(js, "innerHTML", src, "\"deliveryPrefix\":\"#\""),
+             "the fragment's slice does not state its delivery through `#`");
+    fold_row(&pp_tt, &pp_why, has && !s_field(js, "innerHTML", src, "\"precondition\""),
+             "the fragment's slice is labelled with a precondition, so the cookie's piece reached its root");
+    fold_row(&pc_tt, &pc_why, chas, "NOT REACHED: no innerHTML @S record's source is rooted in the cookie string");
+    fold_row(&pc_tt, &pc_why, chas && s_field(js, "innerHTML", csrc, "\"precondition\""),
+             "the slice across both pieces is not labelled with the cookie's precondition");
+    const Probe rows[] = {
+        { "ps-piece-poc", pp_tt, "'psView'", SESS_EXPLORE, pp_why },
+        { "ps-cross-precondition", pc_tt, "'psCross'", SESS_EXPLORE, pc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `replyrole` document (fixture/replyrole.h). */
 TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
     /* The control: the served reply reached the page and its viewer arm built its address from the reply. */
@@ -22170,6 +22199,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_borrowedkey(js, probes, &np);
     probes_replyrole(js, probes, &np);
     probes_histreload(js, probes, &np);
+    probes_pieceslice(js, probes, &np);
     probes_storedxss(js, probes, &np);
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);
