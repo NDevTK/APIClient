@@ -1439,6 +1439,14 @@ typedef struct {
        reader names the term that keeps the starved population behind. `present` is 0 where no member is
        never-dispatched. */
     FlowWeightOperands never_picked_top_ops, never_picked_ops;
+    /* The observed world against the front: members whose path no fork forced against its example
+       (flow_path_forced), resting on no assumption (flow_assumed), and neither a drive nor an @S candidate, so
+       their arms are the page's own run. `observed_members` counts them; `observed_w_gap` is `w_top` minus the
+       best weight among them, and the pair of operands is that member's and the front's. `present` is 0 and the
+       gap 0.0 where no such member stands. */
+    long observed_members;
+    double observed_w_gap;
+    FlowWeightOperands observed_top_ops, observed_ops;
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 

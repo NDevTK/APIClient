@@ -231,6 +231,12 @@ METRIC(cur_deep_wgap, "curDeepWGap", GAUGE, "point", AGENT, "solver/flow.c", FIX
 METRIC(cur_deep_terms, "curDeepTerms", GAUGE, "operand", AGENT, "solver/flow.c", OBJECT)
 /* …and `neverPickedGap`'s two ends in the same shape, `never` in place of `deep`. */
 METRIC(never_picked_terms, "neverPickedTerms", GAUGE, "operand", AGENT, "solver/flow.c", OBJECT)
+/* …and the observed world against the front (solver/flow.h's `observed_ops`): how many members stand in it, how
+   far its best member stands behind the front, and the two ends' operands, `observed` in place of `deep`. A gap
+   that grows while `observedMembers` holds is the page's own run losing the thread to forked worlds. */
+METRIC(observed_members, "observedMembers", GAUGE, "member", AGENT, "solver/flow.c", INT)
+METRIC(observed_wgap, "observedWGap", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
+METRIC(observed_terms, "observedTerms", GAUGE, "operand", AGENT, "solver/flow.c", OBJECT)
 /* …and what asking the order cost (solver/flow.h's FLOW_SCANS: three entries, counted apart,
    in counts not time). Two causes of an unreached tail: too little thread for the members
    standing, or thread spent asking. Read `scanNextWeights / steps` against `members` and

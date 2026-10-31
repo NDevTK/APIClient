@@ -5361,6 +5361,9 @@ void flow_wfq_census(WfqCensus *out) {
     long cur_deep_live = 0;
     double cur_deep_w = 0.0;
     int have_cur_deep = 0;
+    /* The best-weighted member of the observed world (flow.h's `observed_ops`), recorded by the walk. */
+    double observed_w = 0.0;
+    const Flow *observed_holder = NULL;
     /* And the member offering that weight, the gap's far end, for its operands (flow.h's `cur_deep_ops`). */
     const Flow *cur_deep_holder = NULL;
 
@@ -5456,6 +5459,10 @@ void flow_wfq_census(WfqCensus *out) {
     out->cur_deep = 0; out->cur_deep_live = 0; out->cur_deep_w_gap = 0.0;
     memset(&out->cur_deep_top_ops, 0, sizeof out->cur_deep_top_ops);
     memset(&out->cur_deep_ops, 0, sizeof out->cur_deep_ops);
+    out->observed_members = 0;
+    out->observed_w_gap = 0.0;
+    memset(&out->observed_top_ops, 0, sizeof out->observed_top_ops);
+    memset(&out->observed_ops, 0, sizeof out->observed_ops);
     memset(&out->never_picked_top_ops, 0, sizeof out->never_picked_top_ops);
     memset(&out->never_picked_ops, 0, sizeof out->never_picked_ops);
     for (i = 0; i < g_flows_n; i++) {
@@ -5546,6 +5553,10 @@ void flow_wfq_census(WfqCensus *out) {
            family produces. A member never handed the thread is the population starvation is about, and `picks` is
            the one field nothing resets. The best weight among them goes to the gap below: how far the most-favoured
            starved member stands behind the pick is the reading, which the count cannot make (flow.h). */
+        if (!flow_path_forced(f) && flow_assumed(f) == 0 && !f->orphan && f->cand_payload == NULL) {
+            out->observed_members++;
+            if (!observed_holder || w > observed_w) { observed_w = w; observed_holder = f; }
+        }
         if (f->picks == 0) {
             out->never_picked++;
             /* The maximum and its width in one pass, without a second weighing: the width resets with the maximum,
@@ -5932,6 +5943,16 @@ void flow_wfq_census(WfqCensus *out) {
         DCHECK(out->never_picked_top_ops.w == out->w_top && out->never_picked_ops.w == never_w,
                "the neverPickedGap operands were read off members whose weights are not the gap's two ends — the "
                "front and the best never-dispatched member are the two the walk recorded");
+    }
+
+    /* And how far the front stands ahead of the observed world's best member (flow.h's `observed_ops`). */
+    if (observed_holder && top) {
+        out->observed_w_gap = out->w_top - observed_w;
+        flow_weight_operands(top, &out->observed_top_ops);
+        flow_weight_operands(observed_holder, &out->observed_ops);
+        DCHECK(out->observed_top_ops.w == out->w_top && out->observed_ops.w == observed_w,
+               "the observedWGap operands were read off members whose weights are not the gap's two ends — the "
+               "front and the observed world's best member are the two the walk recorded");
     }
 
     /* And how far the front stands ahead of the members that have run furthest through the document, one branch so

@@ -555,6 +555,7 @@ char *result_wfq_json(void) {
     WfqCensus w;
     char *terms = NULL;
     char *never_terms = NULL;
+    char *observed_terms = NULL;
     NetReachCensus nr;
     JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes this census absent */
 
@@ -783,6 +784,20 @@ char *result_wfq_json(void) {
     } else {
         METRIC_ABSENT(never_picked_terms);
     }
+    METRIC_SET(observed_members, w.observed_members);
+    METRIC_SET_REAL(observed_wgap, w.observed_w_gap);
+    if (w.observed_top_ops.present) {
+        char *top = weight_operands_json(&w.observed_top_ops), *obs = weight_operands_json(&w.observed_ops);
+        observed_terms = composef("{\"ageQuantum\":%.17g,\"assumeCost\":%.17g,\"rungs\":%d,\"gap\":%.17g,"
+                                  "\"top\":%s,\"observed\":%s}",
+                                  w.observed_top_ops.age_quantum, w.observed_top_ops.assume_cost,
+                                  FLOW_RUNGS_N, w.observed_w_gap, top, obs);
+        CHECK(top && obs && observed_terms, "result: OOM composing the observedWGap operands");
+        METRIC_SET_OBJECT(observed_terms, observed_terms);   /* borrowed until the rows are rendered below */
+        free(top); free(obs);
+    } else {
+        METRIC_ABSENT(observed_terms);
+    }
     METRIC_SET(scan_next_runs, flow_scan_runs(FLOW_SCAN_NEXT));
     METRIC_SET(scan_next_weights, flow_scan_weights(FLOW_SCAN_NEXT));
     METRIC_SET(scan_rival_runs, flow_scan_runs(FLOW_SCAN_RIVAL));
@@ -841,6 +856,7 @@ char *result_wfq_json(void) {
     json_buf_raw(&b, "}");
     free(terms);
     free(never_terms);
+    free(observed_terms);
     return json_buf_take(&b);
 }
 
