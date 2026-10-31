@@ -691,11 +691,17 @@ Live verify runs the engine's exact PoC in the person's real Chrome. Its signal 
 payload's code ran in the delivered document, not that the sink produced the call.
 
 - `startExploitProbe` in `offscreen-brain.js` mints the marker with `crypto.randomUUID`, and `buildLiveDelivery`
-  rewrites the engine's fire marker into `apiclientsink('<marker>')`. Only an `address` delivery produces a PoC:
+  rewrites the engine's fire marker into `apiclientsink('<marker>')`. An `address` delivery produces a PoC:
   the page the sink was observed on, re-parsed by the URL parser, with its fragment (and for a query delivery,
-  its query) cleared and the payload appended at the component the engine declared. Every other mechanism
-  (`plant`, `referring-address`, `user-file`, `cross-document-message`, `user-input`) answers a stated reason (`pocWhy`)
-  instead of a PoC.
+  its query) cleared and the payload appended at the component the engine declared. A `cross-document-message`
+  delivery whose acts are messages on one route, with data, from one origin under the attacker site (or none
+  stated) produces one too (`_messagePosts`): the attacker page opens the victim and posts the acts' data in
+  order every 250 ms over the wait, or embeds it and posts after its load, each post targeting the victim's
+  origin, and the attacker page is opened at the acts' origin. Every other mechanism (`plant`,
+  `referring-address`, `user-file`, `user-input`, and a message PoC outside that shape) answers a stated reason
+  (`pocWhy`) instead of a PoC. A delivered document is latched only where the attacker window made it: a
+  top-level document whose browser-stated `openerTabId` is the attacker tab, or a frame of the attacker tab on
+  the frame route.
 - `EXPLOIT_PROBE_ARM` runs `armAttackerPage`: the offscreen composes the attacker page's address as the root of
   the configured attacker site and judges it with `_firingRefusal` (no site configured is a stated reason, and no
   tab opens); the service worker's `attackerPage.open` opens it and records the tab in `_attackerTabs`; after a wait for the tab
@@ -774,7 +780,7 @@ Each residual states what is not covered, what would close it, and how its absen
 | Same-document probe-hit fabrication | `window.apiclientsink` lives in the delivered document's `MAIN` world, and every fact the hook could report about its caller comes from that world | irreducible by this mechanism | a fired verdict for a sink that never fired, on a page that reads its own address |
 | Hit attribution is not tied to the delivery witness | `_recordProbeHit` latches the first top-level document of the target origin to fire the marker; it does not require that document to be the one `_recordProbeDelivery` witnessed | compare `facts.documentId` against `ses.delivered.documentId` | an attributed hit whose `documentId` differs from the session's `delivered.documentId` |
 | Fragment deliveries may not be witnessed | a witness needs the payload's component in `MessageSender.url` or in the seed address; if both drop the fragment, a `#` delivery latches nothing | `content.js` ships the document's `location.href` on `CONTENT_SEED` beside `seedUrl`, compared as a third source | a `#` delivery reporting not delivered with a nonzero `deliveredNearMiss` |
-| A message act's origin needs a chosen origin | the attacker page is the configured site's root, so a PoC whose message act carries an `origin` is stated as engine-fired, live-unverified with that origin and who holds it | the attacker page opened at an `attacker-site` act origin, posting the acts; a `registered-domain` origin needs the person's statement of a domain they hold | a PoC whose message act is `originOwned:"attacker-site"` answering `pocWhy` where address-delivered findings beside it arm a Run button |
+| A registered domain's message origin | a PoC whose message act's origin is `registered-domain` is stated as engine-fired, live-unverified, since no attacker site the person configured holds that name | the person's statement of a registered domain they hold, configured like the attacker site and opened at the act's origin | a PoC whose message act is `originOwned:"registered-domain"` answering `pocWhy` where `attacker-site` message PoCs beside it arm a Run button |
 | Passive learning is page-claimed | `RESPONSE_BODY`, `CONTENT_FORM_SUBMIT` and the `sourceOrigin` / `targetOrigin` on `PM_RECV` / `MC_OPEN` records are built in the page's renderer, and any script there can dispatch the wrapper events, so a page can file records under any address or origin. They do not reach the engine as an `event.origin` | none at this layer; the popup labels them as claims (`_claimedOriginPair`) and refuses to reply to a non-origin (`_isRealTargetOrigin`) | records for an origin the person never visited, learned while on an unrelated page |
 | Cross-origin child navigables load uncredentialed | `navigationCarriesSession` refuses the session cross-origin, because the chokepoint's credentialed gate asks whether the requesting principal may read the bytes, while a navigation's reader is another instance keyed on the response's origin | a document-load type in `safe-fetch.js` whose read principal is the response's own origin, not an `if` at the caller | cross-origin child documents loading in their logged-out form |
 | Page requests are uncredentialed | `fetched` and `fetchedXhr` state `credentialed: false`, so the analysed page's own data requests see the logged-out reply. They already pass the page origin the credentialed SOP would need (`eng.origin`); the wrong origin would be `originOf(msg.sourceUrl)`, which gives a sandboxed iframe its embedder's | a per-origin credential decision over the request's own credentials mode | an app whose boot data differs by session analysed in its logged-out form |

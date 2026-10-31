@@ -1653,13 +1653,59 @@ function _messageActsWhy(acts) {
     return "a message posted to the window from " + a.origin + (a.originOwned === "registered-domain"
       ? " (a registered domain ending in the constant the page compared the origin with)"
       : " (a document on the attacker's own site)");
-  }).join(", then ") + ". It is engine-fired, live-unverified: this layer posts no message, so no live run "
-    + "has reproduced it" + (msgs.some(function (a) { return a.originOwned === "registered-domain"; })
-      ? ", and one needs a registered domain ending in that constant." : ".");
+  }).join(", then ") + ". It is engine-fired, live-unverified: "
+    + (msgs.some(function (a) { return a.originOwned === "registered-domain"; })
+      ? "a live run needs a registered domain ending in that constant, which no attacker site you configured holds."
+      : "this layer posts messages only for a cross-document-message delivery.");
+}
+
+/* The posts a cross-document-message PoC makes, from its message acts: {route, origin, data: [...]}, with each
+   act's data carrying the marker call where the engine's fire marker stood; or {why} for acts no one attacker
+   window reproduces. Every act is a message with data, all on one route (HTML §9.3.3 "Posting messages" from
+   the window that opened the victim, or from the document embedding it), and all from one origin: the
+   attacker site's own (an `attacker-site` act origin, or none stated). A registered domain's origin needs a
+   domain the person holds, so it is stated (_messageActsWhy).
+   Named residual. Not covered: a PoC whose acts mix a message with a click, typing or another act, which the
+   delivered document and the attacker window would have to perform in the engine's order. Next diff builds:
+   the posts interleaved with `pocPerformActs` segments in act order. Absence shows as: a message PoC with a
+   non-message act answering this function's mixed-acts reason. */
+function _messagePosts(acts, call) {
+  var msgs = acts ? acts.filter(function (a) { return a.kind === "message"; }) : [];
+  if (msgs.length === 0)
+    return { why: "the engine stated no message act, so there is no data to post" };
+  if (msgs.length !== acts.length)
+    return { why: "its acts mix a message with other acts, which this layer does not perform together yet" };
+  if (msgs.some(function (a) { return a.originOwned === "registered-domain"; })) return { why: _messageActsWhy(acts) };
+  if (msgs.some(function (a) { return !("data" in a); }))
+    return { why: "a message act states no data, so there is nothing of the attacker's to post" };
+  var route = msgs[0].route;
+  if (msgs.some(function (a) { return a.route !== route; }))
+    return { why: "its messages need two routes (" + msgs.map(function (a) { return a.route; }).join(", ") +
+                  "), which no one attacker window holds" };
+  if (route === "none")
+    return { why: "the victim refuses both routes a message arrives by (it is neither openable with an opener nor " +
+                  "framable), so no attacker window can post to it" };
+  var origins = msgs.filter(function (a) { return "origin" in a; }).map(function (a) { return a.origin; })
+    .filter(function (o, i, all) { return all.indexOf(o) === i; });
+  if (origins.length > 1)
+    return { why: "its messages need two sender origins (" + origins.join(", ") + "), which no one attacker " +
+                  "window has" };
+  function mark(v) {
+    if (typeof v === "string") return v.split("X9()").join(call).split("X9").join(call);
+    if (Array.isArray(v)) return v.map(mark);
+    if (v !== null && typeof v === "object") {
+      var o = {};
+      Object.keys(v).forEach(function (k) { o[k] = mark(v[k]); });
+      return o;
+    }
+    return v;
+  }
+  return { route: route, origin: origins.length === 1 ? origins[0] : null,
+           data: msgs.map(function (a) { return mark(a.data); }) };
 }
 
 function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deliveryKey, pageUrl, marker,
-                           principalDemand, principalPins, precondition, acts) {
+                           principalDemand, principalPins, precondition, acts, waitMs) {
   DCHECK(typeof poc === "string" && poc.length > 0,
          "an @S live-verify was started with no engine poc — solve_json_array emits `poc` on every fire-verified "
          + "entry and only on those, so a probe without one is being built for a PARKED search (sink=" + sinkName + ")");
@@ -1844,7 +1890,38 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deli
       return out;
     }
     if (msgWhy) {
-      out.why = _pgWhy + msgWhy;
+      var posts = _messagePosts(acts, call);
+      if ("why" in posts) {
+        out.why = _pgWhy + posts.why;
+        return out;
+      }
+      var victim;
+      try { victim = new URL(pageUrl); }
+      catch (_) {
+        out.why = _pgWhy + "The page this sink was observed on has no parseable address (" + JSON.stringify(pageUrl) +
+                  "), so there is no document to open or embed.";
+        return out;
+      }
+      out.targetUrl = victim.href;
+      out.targetOrigin = victim.origin;
+      out.deliveryComponent = "message";
+      out.route = posts.route;
+      out.attackerOrigin = posts.origin;
+      /* The opener route opens the victim and posts every act in order, again every 250 ms over `waitMs`: an
+         opener cannot observe a cross-origin openee's load, and a post before it reaches the initial
+         about:blank, which the target origin argument drops. The frame route embeds the victim and posts after
+         the frame's load. Each post names the victim's origin as its target origin. The completion value is the
+         victim's WindowProxy, which the attacker button reads by identity only. */
+      var D = JSON.stringify(posts.data), T = JSON.stringify(out.targetOrigin), U = JSON.stringify(out.targetUrl);
+      out.pocJs = posts.route === "opener"
+        ? "(function () { var w = window.open(" + U + ", \"_blank\"), d = " + D + ", n = 0;"
+          + " var t = setInterval(function () { n += 1;"
+          + " for (var i = 0; i < d.length; i++) { try { w.postMessage(d[i], " + T + "); } catch (e) {} }"
+          + " if (n * 250 >= " + waitMs + ") clearInterval(t); }, 250); return w; })()"
+        : "(function () { var f = document.createElement(\"iframe\"), d = " + D + ";"
+          + " f.addEventListener(\"load\", function () {"
+          + " for (var i = 0; i < d.length; i++) f.contentWindow.postMessage(d[i], " + T + "); }, { once: true });"
+          + " f.src = " + U + "; document.body.appendChild(f); return f.contentWindow; })()";
       return out;
     }
     if (principalDemand === "none") {
@@ -1966,6 +2043,8 @@ function startExploitProbe(msg) {
     actAt: 0,
     attackerTabId: null,
     replaced: [],
+    /* The origin the attacker page must have, for a message PoC whose acts name one; null opens the site's root. */
+    attackerOrigin: null,
   };
   // ENGINE AGREEMENT: perform the delivery the ENGINE declared, carrying its EXACT poc (X9 -> apiclientsink).
   // The user runs it by clicking Run on the ATTACKER PAGE, a real registrable origin the trusted zone opens as
@@ -1976,7 +2055,7 @@ function startExploitProbe(msg) {
   // PROBE_HIT lands on this marker and _recordProbeHit decides whether the reporting document is the one the
   // payload was delivered to.
   var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deliveryKey, session.pageUrl, marker,
-                               principalDemand, principalPins, precondition, acts);
+                               principalDemand, principalPins, precondition, acts, wait);
   DCHECK(!!_poc && typeof _poc === "object" && typeof _poc.payload === "string",
          "buildLiveDelivery answered with no record — it returns {pocJs, payload, context, source} on every "
          + "arm including the ones it cannot perform, so an absent one is that function having grown a path "
@@ -1992,13 +2071,20 @@ function startExploitProbe(msg) {
        missing one would make that reading answer the `#` arm for a `?` delivery. THIS codebase computes it —
        `buildLiveDelivery` states it on the arm that placed the payload — so it is ASSERTED rather than
        defaulted; a `||` here would be this zone choosing a component on a producer's behalf. */
-    DCHECK(_poc.deliveryComponent === "fragment" || _poc.deliveryComponent === "query",
+    DCHECK(_poc.deliveryComponent === "fragment" || _poc.deliveryComponent === "query" ||
+           (_poc.deliveryComponent === "message" && (_poc.route === "opener" || _poc.route === "frame")),
            "a delivery arm produced a pocJs without naming which component of the address it placed the "
-           + "payload in (got " + JSON.stringify(_poc.deliveryComponent) + ") — a URL has no third place an "
-           + "attacker-controlled component lives, and the near-miss reading is computed from it");
-    // frameId 0 is the BROWSER'S name for the top-level traversable, and window.open creates exactly one.
-    session.expect = { url: _poc.targetUrl, origin: _poc.targetOrigin, frameId: 0,
-                       component: _poc.deliveryComponent };
+           + "payload in, or a message delivery without its route (got " + JSON.stringify(_poc.deliveryComponent)
+           + ") — the near-miss reading is computed from the component, and the latch from the route");
+    /* `route` says which document the attacker window makes: a top-level one it opened (frameId 0, the browser's
+       name for the top-level traversable, with the attacker tab as its opener), or a frame it embeds. */
+    session.expect = { url: _poc.targetUrl, origin: _poc.targetOrigin,
+                       component: _poc.deliveryComponent,
+                       route: _poc.deliveryComponent === "message" ? _poc.route : "opener" };
+    /* The attacker page's origin, where a message must come from one; null opens the site's root. The posts are
+       the attacker window's, so a message PoC leaves no act for the delivered document to perform. */
+    session.attackerOrigin = _poc.deliveryComponent === "message" ? _poc.attackerOrigin : null;
+    if (_poc.deliveryComponent === "message") session.acts = null;
   }
   /* THE REASON IS AS REQUIRED AS THE PoC, because one of the two is always the answer: a delivery this layer
      can perform has a pocJs, and one it cannot has the sentence saying which mechanism and why. An absent
@@ -2011,19 +2097,22 @@ function startExploitProbe(msg) {
 }
 
 
-/* The attacker document's address: the root of the attacker site the person configured, or the reason there is
-   none. Opening it is this tool's navigation, judged by the one firing rule (safeFetchFiringRefusal) like any
-   other: the zone composed it from the person's setting, from no document, carrying the profile's cookies for
-   that site, and its `reaches` row is `attacker-site`, which fires by default. */
-function _attackerPageAddress() {
+/* The attacker document's address, or the reason there is none: the root of the attacker site the person
+   configured, or the root of the origin a message PoC's acts post from, which the engine's search composed under
+   the site (and so is pinned and forced). Opening it is this tool's navigation, judged by the one firing rule
+   (safeFetchFiringRefusal) like any other: from no document, carrying the profile's cookies for that site.
+   Its `reaches` row is `attacker-site` exactly where the address is under the configured site. */
+function _attackerPageAddress(ses) {
   const rec = attackerSiteNow();
   if (rec === null)
     return { why: "no attacker site is configured, so there is no page to open: a live verify runs its PoC from " +
                   "a document on a site you serve (the popup's Attacker site setting)" };
-  const url = "https://" + rec.site + "/";
+  const composed = ses.attackerOrigin !== null;
+  const url = composed ? ses.attackerOrigin + "/" : "https://" + rec.site + "/";
+  const prov = composed ? PROVENANCE_FORCED : PROVENANCE_DERIVED, pin = composed ? "pinned" : "unpinned";
   const refusal = safeFetchFiringRefusal({
-    url, destination: "document", provenance: PROVENANCE_DERIVED, pinned: "unpinned",
-    doc: docRecord(PROVENANCE_DERIVED, DRIVEN_NO, "unpinned", NAVIGABLE_NOTICE.sandbox.none, "public"),
+    url, destination: "document", provenance: prov, pinned: pin,
+    doc: docRecord(prov, DRIVEN_NO, pin, NAVIGABLE_NOTICE.sandbox.none, "public"),
     actor: "tool", driven: "unstated", credentialed: true, headers: null });
   if (refusal !== null)
     return { why: "opening the attacker page " + url + " is refused by its origin's egress policy on `" + refusal +
@@ -2045,7 +2134,7 @@ async function armAttackerPage(ses) {
   /* The person's egress table and attacker site are restored at load; the address is judged against both. */
   await egressPolicyReady();
   await _attackerSiteReady;
-  const page = _attackerPageAddress();
+  const page = _attackerPageAddress(ses);
   if (!("url" in page)) return { error: page.why };
   const tab = await swRpc("attackerPage.open", { url: page.url });
   const tabId = tab && tab.id;
@@ -2190,7 +2279,10 @@ function _recordProbeDelivery(seedUrl, facts) {
     if (ses.delivered) continue;        // latched: the first document to arrive at the address is the delivery
     if (ses.replaced.indexOf(facts.documentId) >= 0) continue;   // a load an open act already came after
     if (facts.origin !== exp.origin) continue;
-    if (facts.frameId !== exp.frameId) continue;
+    /* The document the attacker window made: a frame of the attacker tab on the frame route, a top-level one
+       otherwise, whose opener the latch reads from the browser below. */
+    if (exp.route === "frame" ? facts.tabId !== ses.attackerTabId || facts.frameId === 0 : facts.frameId !== 0)
+      continue;
     const browserStated = _sameAddress(exp.url, facts.url);
     const pageClaimed = _sameAddress(exp.url, seedUrl);
     if (!browserStated && !pageClaimed) {
@@ -2203,14 +2295,26 @@ function _recordProbeDelivery(seedUrl, facts) {
       }
       continue;
     }
-    ses.delivered = {
-      documentId: facts.documentId, tabId: facts.tabId,
-      origin: facts.origin, frameId: facts.frameId,
-      addressSource: browserStated ? "browser-stated" : "page-claimed",
-      at: Date.now(),
-    };
-    if (ses.acts) _performProbeActs(ses);
+    if (exp.route === "opener") _latchIfAttackerOpened(ses, facts, browserStated);
+    else _latchProbeDelivery(ses, facts, browserStated);
   }
+}
+/* A top-level document at the delivered address is the delivery only when the attacker tab opened it: the
+   browser's `openerTabId` for its tab, so a tab of the same page the person already had open is not latched. */
+async function _latchIfAttackerOpened(ses, facts, browserStated) {
+  const tab = await swRpc("tabs.get", facts.tabId);
+  if (ses.delivered || ses.replaced.indexOf(facts.documentId) >= 0) return;
+  if (typeof ses.attackerTabId !== "number" || tab.openerTabId !== ses.attackerTabId) return;
+  _latchProbeDelivery(ses, facts, browserStated);
+}
+function _latchProbeDelivery(ses, facts, browserStated) {
+  ses.delivered = {
+    documentId: facts.documentId, tabId: facts.tabId,
+    origin: facts.origin, frameId: facts.frameId,
+    addressSource: browserStated ? "browser-stated" : "page-claimed",
+    at: Date.now(),
+  };
+  if (ses.acts) _performProbeActs(ses);
 }
 /* The PoC's acts, in the delivered document and nowhere else: the worker's `pocPerformActs` injector is pinned
    to that document's id, which is the browser's statement of which document announced itself at the
@@ -2279,8 +2383,9 @@ function _recordProbeHit(msg, facts) {
              + "so no document was ever handed this marker";
   } else if (facts.origin !== exp.origin) {
     mismatch = "reported by " + facts.origin + ", but the payload was delivered to " + exp.origin;
-  } else if (facts.frameId !== exp.frameId) {
-    mismatch = "reported by frame " + facts.frameId + ", but the payload was delivered to the top-level document";
+  } else if (exp.route === "frame" ? facts.tabId !== ses.attackerTabId || facts.frameId === 0 : facts.frameId !== 0) {
+    mismatch = "reported by frame " + facts.frameId + " of tab " + facts.tabId + ", but the payload was delivered " +
+               "to " + (exp.route === "frame" ? "a frame the attacker page embeds" : "a top-level document");
   } else if (ses.replaced.indexOf(facts.documentId) >= 0 || _opensPending(ses)) {
     mismatch = "reported by a load the PoC's `open` act comes after — the engine's fire is in the document the "
              + "attacker page opens at the address again";

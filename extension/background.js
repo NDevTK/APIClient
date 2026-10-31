@@ -131,12 +131,8 @@ chrome.webRequest.onErrorOccurred.addListener(_wrRelay("onErrorOccurred"), _WR_F
 /* The live-verify attacker document is an ordinary tab of a page on the attacker site the person configured,
    opened at the address the offscreen judged by the one firing rule (offscreen-brain.js _attackerPageAddress),
    and the payload is evaluated in it rather than served from it. A page CSP without 'unsafe-eval' would refuse
-   that, which the site's configuration check reports and `pocAttackerButton` reports as an EvalError.
-   Named residual. Not covered: a message act's origin (solve.h's act `origin`), which the site's root meets
-   only by coincidence, so `buildLiveDelivery` states such PoCs as engine-fired, live-unverified. Next diff
-   builds: the attacker page opened at an `attacker-site` act origin, posting the acts to the victim it opens.
-   Absence shows as: a PoC whose message act is `originOwned:"attacker-site"` answering a `pocWhy` beside
-   address-delivered findings that arm a Run button. */
+   that, which the site's configuration check reports and `pocAttackerButton` reports as an EvalError. A message
+   PoC's page is opened at the origin its acts post from, under the same site. */
 /* The tabs `attackerPage.open` opened that are still open: the only tabs `scripting.exec` arms. It is this
    worker's memory, so an eviction empties it and an injection after one is refused, never widened. */
 const _attackerTabs = new Set();
