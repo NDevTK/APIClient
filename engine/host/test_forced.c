@@ -1231,6 +1231,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/datenum.h"
 #include "fixture/rxcompile.h"
 #include "fixture/b64coerce.h"
+#include "fixture/dateparsecoerce.h"
 #include "fixture/rxliteral.h"
 #include "fixture/rxinsert.h"
 #include "fixture/rxtimer.h"
@@ -1806,6 +1807,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "datenum", HTML_DATENUM },
     { "rxcompile", HTML_RXCOMPILE },
     { "b64coerce", HTML_B64COERCE },
+    { "dateparsecoerce", HTML_DATEPARSECOERCE },
     { "rxliteral", HTML_RXLITERAL },
     { "rxinsert", HTML_RXINSERT },
     { "rxtimer", HTML_RXTIMER },
@@ -17134,6 +17136,19 @@ TF_UNIT void probes_b64coerce(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `dateparsecoerce` document (fixture/dateparsecoerce.h): Date.parse ran the page's toString
+   once and parsed the date it answered. */
+TF_UNIT void probes_dateparsecoerce(const char *js, Probe *tab, int *n) {
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, param_value_is(js, "/api/dpc-parse", "got", "86400000-3"),
+             "no /api/dpc-parse?got=86400000-3 record: Date.parse did not parse the date the page's toString "
+             "answered after running it once");
+    const Probe rows[] = {
+        { "dpc-parse", p_tt, "/api/dpc-parse", SESS_EXPLORE, p_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22497,6 +22512,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_datenum(js, probes, &np);
     probes_rxcompile(js, probes, &np);
     probes_b64coerce(js, probes, &np);
+    probes_dateparsecoerce(js, probes, &np);
     probes_rxliteral(js, probes, &np);
     probes_rxinsert(js, probes, &np);
     probes_rxtimer(js, probes, &np);
