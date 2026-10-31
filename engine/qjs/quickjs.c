@@ -70767,7 +70767,7 @@ static JSValue js_load_module_fulfilled(JSContext *ctx, JSValueConst this_val,
    park into and aborted. Its "XXX: what to do if exception ?" is answered by the same move rather than by a
    policy: the settle's own throw is a COMPLETION now, never a value to drop.
    ITS FIVE CALL SITES DO NOT SHARE ONE ANSWER, because the question is what is UNDER the C activation and that
-   differs. THREE OF THEM ALREADY RUN INSIDE A FLOW: js_module_source_fulfilled and the two load continuations
+   differs. THREE OF THEM ALREADY RUN INSIDE A FLOW: js_module_source_def's machine and the two load continuations
    js_load_module_then registers are promise REACTION HANDLERS, so each is phase 0 of promise_reaction_job's
    call-root flow and its completion already has somewhere to go.
    There the rejection is the handler's OWN THROW — the exception stays in flight, the handler returns
@@ -71114,67 +71114,139 @@ static const JSTrampStepDef js_module_loaded_import_def = {
     .unforkable = js_module_loaded_unforkable
 };
 
-/* The source arrived. func_data = [resolve, reject, module_name]; argv[0] is the module's SOURCE TEXT. Compiling
-   it here registers the record under that name, so a second import of the same specifier finds it loaded and
-   never asks the host again. This is the resume of the load the loader parked — the importing flow's
-   continuation is the reaction chain this runs on, never a re-run of the importing scope.
-   EVERY FAILURE HERE IS THIS REACTION'S OWN THROW, delivered to the import's reject as phase 1 of this flow —
-   see the note where js_load_module_reject_pending used to stand. The JS_Call it used to make ran the reject
-   inside this C activation with no base under it. */
-static JSValue js_module_source_fulfilled(JSContext *ctx, JSValueConst this_val,
-                                          int argc, JSValueConst *argv, int magic,
-                                          JSValueConst *func_data)
-{
-    JSValueConst *resolving_funcs = func_data;
+/* A MODULE SOURCE'S COMPILE, held across the rests its parse takes: the UTF-8 the parse borrows and the parked
+   parse. A cache over the reaction's own source argument and name, so a fork sheds it and the sibling parses
+   again from them. */
+typedef struct {
+    JSEvalCompile *ec;
     const char *src, *name;
-    size_t src_len;
-    JSValue func_obj;
-    JSModuleDef *m;
-    JSAtom name_atom;
+    size_t len;
+} JSModSrcCompile;
 
-    /* ALREADY LOADED? Two flows exploring the same page park on the same specifier, and both resume with the
-       same body — the loader ran once per flow because neither had finished when the other asked. Compiling it
-       twice would put a second record under one name. The module map is the load's memo (16.2.1.11
-       FinishLoadingImportedModule finishes a load that another already completed by handing back the existing
-       record — step 1.a asserts the record already in [[LoadedModules]] IS the one being finished), so this
-       asks it first. */
-    name_atom = JS_ValueToAtom(ctx, func_data[2]);
+static void js_modsrc_compile_destroy(JSContext *ctx, void *p)
+{
+    JSModSrcCompile *c = p;
+
+    js_eval_compile_drop(ctx, &c->ec);
+    JS_FreeCString(ctx, c->src);
+    JS_FreeCString(ctx, c->name);
+    js_free(ctx, c);
+}
+
+/* Compile `src_v` as the module named `name_v`, one stint per entry. ALREADY LOADED is asked before every stint:
+   two flows exploring one page can park on one specifier and both resume with its body, and the module map is
+   the load's memo (16.2.1.11 finishes a load another completed by handing back the existing record), so the
+   record that is published first wins and a parked parse of the same name is dropped. The final stint publishes
+   inside the stint, so nothing interleaves between that check and the publication.
+   0 with *pm the record, JS_STEP_YIELD while the parse is parked in *pcomp, -1 with the exception pending. */
+static int step_module_source_compile(JSContext *ctx, void **pcomp, JSValueConst src_v, JSValueConst name_v,
+                                      JSModuleDef **pm)
+{
+    JSModSrcCompile *c = *pcomp;
+    JSAtom name_atom = JS_ValueToAtom(ctx, name_v);
+    JSModuleDef *m;
+    JSValue func_obj;
+
     if (name_atom == JS_ATOM_NULL)
-        return JS_EXCEPTION;
+        return -1;
     m = js_find_loaded_module(ctx, name_atom);
     JS_FreeAtom(ctx, name_atom);
     if (m) {
-        if (js_load_module_then(ctx, m, resolving_funcs, &js_module_loaded_import_def) < 0)
-            return JS_EXCEPTION;
-        return JS_UNDEFINED;
+        if (c) {
+            js_modsrc_compile_destroy(ctx, c);
+            *pcomp = NULL;
+        }
+        *pm = m;
+        return 0;
     }
+    if (!c) {
+        JSEvalCompile **outer = g_eval_compile_slot;
 
-    src = JS_ToCStringLen(ctx, &src_len, argv[0]);
-    if (!src)
-        return JS_EXCEPTION;
-    name = JS_ToCString(ctx, func_data[2]);
-    if (!name) {
-        JS_FreeCString(ctx, src);
-        return JS_EXCEPTION;
+        c = js_mallocz(ctx, sizeof *c);
+        if (!c)
+            return -1;
+        c->src = JS_ToCStringLen(ctx, &c->len, src_v);
+        c->name = JS_ToCString(ctx, name_v);
+        *pcomp = c;
+        if (!c->src || !c->name) {
+            js_modsrc_compile_destroy(ctx, c);
+            *pcomp = NULL;
+            return -1;
+        }
+        g_eval_compile_slot = &c->ec;
+        func_obj = JS_Eval(ctx, c->src, c->len, c->name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        g_eval_compile_slot = outer;
+    } else {
+        DCHECK(c->ec != NULL, "a module source compile resumed with nothing parked");
+        func_obj = js_eval_compile_continue(ctx, &c->ec);
     }
-    func_obj = JS_Eval(ctx, src, src_len, name,
-                       JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-    JS_FreeCString(ctx, name);
-    JS_FreeCString(ctx, src);
+    if (JS_VALUE_GET_TAG(func_obj) == JS_TAG_UNINITIALIZED)
+        return JS_STEP_YIELD;
+    DCHECK(c->ec == NULL, "a module source compile answered and left a parked parse behind");
+    js_modsrc_compile_destroy(ctx, c);
+    *pcomp = NULL;
     if (JS_IsException(func_obj))
-        return JS_EXCEPTION;
-    DCHECK(JS_VALUE_GET_TAG(func_obj) == JS_TAG_MODULE,
-           "compiling a module source did not produce a module record");
+        return -1;
+    DCHECK(JS_VALUE_GET_TAG(func_obj) == JS_TAG_MODULE, "compiling a module source did not produce a module record");
     m = JS_VALUE_GET_PTR(func_obj);
-    /* js_load_module_then takes its own reference through JS_NewModuleValue. */
-    JS_FreeValue(ctx, func_obj);
-    /* COMPILING IS NOT LOADING. The record this just parsed has its own `import`s and an EMPTY [[LoadedModules]]
-       (16.2.1.7.1), so what follows the compile is the load of ITS graph — not the link. That is the whole
-       difference between the phase order this file used to have and the one the spec states. */
-    if (js_load_module_then(ctx, m, resolving_funcs, &js_module_loaded_import_def) < 0)
-        return JS_EXCEPTION;
+    JS_FreeValue(ctx, func_obj);   /* the module map owns the record */
+    *pm = m;
+    return 0;
+}
+
+/* The source arrived. func_data = [resolve, reject, module_name]; argv[0] is the module's SOURCE TEXT. Compiling
+   it registers the record under that name, so a second import of the same specifier finds it loaded and never
+   asks the host again. This is the resume of the load the loader parked — the importing flow's continuation is
+   the reaction chain this runs on, never a re-run of the importing scope.
+   EVERY FAILURE HERE IS THIS REACTION'S OWN THROW, delivered to the import's reject as phase 1 of this flow. */
+typedef struct JSModSrc {
+    JSStepHdr hdr;
+    void *comp;   /* the parse in flight (JSModSrcCompile, a cache) */
+} JSModSrc;
+#define MODSRC_STAGES(X) \
+    X(MODSRC_COMPILE, "13.3.10.3 ContinueDynamicImport, the host's 16.2.1.10 HostLoadImportedModule finishing: " \
+                      "the module record is created from the fetched source text (16.2.1.7.1 ParseModule)")
+enum { MODSRC_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_module_source_steps[] = { MODSRC_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_module_source_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSModSrc *s = st;
+    JSCFunctionDataRecord *rec = JS_VALUE_GET_OBJ(s->hdr.func_obj)->u.c_function_data_record;
+    JSModuleDef *m = NULL;
+    int r;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(s->hdr.stage == MODSRC_COMPILE, "a module source reaction resumed in no stage");
+    r = step_module_source_compile(ctx, &s->comp, step_arg(&s->hdr, 0), rec->data[2], &m);
+    if (r)
+        return r < 0 ? JS_STEP_ABRUPT : r;
+    /* COMPILING IS NOT LOADING. The record has its own `import`s and an EMPTY [[LoadedModules]] (16.2.1.7.1), so
+       what follows the compile is the load of ITS graph — not the link. */
+    if (js_load_module_then(ctx, m, rec->data, &js_module_loaded_import_def) < 0)
+        return JS_STEP_ABRUPT;
+    return JS_STEP_DONE;
+}
+
+static void js_module_source_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSModSrc *s = st;
+    v->cache(ctx, &s->comp, js_modsrc_compile_destroy);
+}
+
+static JSValue js_module_source_fini(JSContext *ctx, void *st, bool take_result)
+{
+    (void)ctx; (void)st; (void)take_result;
     return JS_UNDEFINED;
 }
+
+static const JSTrampStepDef js_module_source_def = {
+    sizeof(JSModSrc), js_module_source_step, js_module_source_fini, 0,
+    .visit = js_module_source_visit,
+    .algorithm = "13.3.10.3 ContinueDynamicImport, the module source's arrival",
+    .steps = js_module_source_steps
+};
 
 /* The source fetch itself failed: the import rejects with whatever the host settled the source promise with,
    which is what a browser does for a module whose network request did not succeed. */
@@ -71855,7 +71927,7 @@ static void JS_LoadModuleInternal(JSContext *ctx, const char *basename,
     func_data[0] = resolving_funcs[0];
     func_data[1] = resolving_funcs[1];
     func_data[2] = name_val;
-    reactions[0] = JS_NewCFunctionData(ctx, js_module_source_fulfilled, 1, 0, 3, func_data);
+    reactions[0] = js_new_step_closure(ctx, &js_module_source_def, 1, 0, 3, func_data);
     reactions[1] = JS_NewCFunctionData(ctx, js_module_source_rejected, 1, 0, 3, func_data);
     /* CHECKED, because perform_promise_then does not report a handler that is an EXCEPTION — JS_IsFunction says
        no and it is filed as "no handler", so an OOM here would silently turn the arriving source into a
@@ -71865,7 +71937,7 @@ static void JS_LoadModuleInternal(JSContext *ctx, const char *basename,
           "a module source load could not build its continuations — the source would arrive and reach nobody");
     JS_FreeValue(ctx, name_val);
     /* THE DERIVED CAPABILITY IS THE IMPORT'S REJECT, with an UNDEFINED resolve — the same pair, and the same two
-       reasons, as js_load_module_then's: it carries js_module_source_fulfilled's THROW (which is every failure
+       reasons, as js_load_module_then's: it carries js_module_source_def's THROW (which is every failure
        of the compile, now that the settle is a completion rather than a JS_Call), and it settles nothing when
        that handler returns normally, because what it returns to is a load it has just registered on. */
     cap[0] = JS_UNDEFINED;
