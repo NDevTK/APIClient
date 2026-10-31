@@ -1551,6 +1551,13 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     key = decide_key(cond);
     /* The arm the compared value's type facet leaves an equality, in the predicate's terms (-1 when both). */
     refined = tok && op != OPCMP_NONE ? concolic_equality_outcome(ctx, cond) : -1;
+    /* A branch on the String itself (`s || d`, `if (s)`) is §7.1.2 ToBoolean over it, which its length facet
+       can leave one arm. A String carries no polarity: only a ToBoolean result does. */
+    if (op == OPCMP_NONE && concolic_string_nonempty(cond)) {
+        DCHECK(neg == 0, "a String-typed branch condition carries a negation's polarity — only a ToBoolean result "
+                         "does, and that is a Boolean");
+        refined = 1;
+    }
     slot = g_c;
     arm = decide_arm(ctx, key, cond, NULL, -1, restartable, nonforking, real, refined, &forked, site);
     /* Whether that fork was taken over a subject this flow had already proved (see the counter). Raised here,

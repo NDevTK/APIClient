@@ -205,6 +205,11 @@ typedef struct {
     JSUnknownPiece *piece;
     int piece_n;
     uint8_t piece_known;
+    /* A lower bound, in every world, on the String's length in code units: the facet ECMAScript §7.1.2
+       ToBoolean ( argument ) asks of a String. Written once, at a concatenation whose String arm is taken in
+       every world, as the sum of its operands' (a concrete String's own length); 0, which states nothing, on
+       every other value. A slice's piece table cannot answer it: an unknown's example length is one world's. */
+    uint32_t len_lo;
     /* §22.1.3.23 String.prototype.split over a string with pieces, by a separator String of `split_sep` units
        (0: not such a split): `split_of` is that string (owned), so element i is the range of its units the
        example array's elements and separators place (concolic_exotic_get). */
@@ -6108,6 +6113,8 @@ JSValue concolic_tobool_hook(JSContext *ctx, JSValueConst v, int negate) {
     JSValue ex, example = JS_UNDEFINED, r;
 
     if (!concolic_is(v)) return JS_UNINITIALIZED;
+    /* A String the length facet proves non-empty is true in every world, so no predicate is minted. */
+    if (concolic_string_nonempty(v)) return JS_NewBool(ctx, !negate);
     DCHECK(negate == 0 || negate == 1,
            "§7.1.2 ToBoolean was asked for with a polarity that is neither the value nor its complement — the "
            "parameter is one bit and a third value would compose an identity no operator produces");
@@ -8201,6 +8208,46 @@ static void pieces_concat(JSContext *ctx, JSValueConst r, JSValueConst a, uint32
     c->piece_known = 1;
 }
 
+/* An operand's own length lower bound in a concatenation: a concolic's facet, a concrete String's length, and 0
+   for a concrete non-String, whose ToString this does not compute. */
+static uint32_t len_lo_operand(JSContext *ctx, JSValueConst v)
+{
+    const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    if (c) return c->len_lo;
+    return JS_IsString(v) ? example_units(ctx, v) : 0;
+}
+
+/* `r` is the concatenation of `a` and `b` in every world: its bound is the sum of theirs, saturated. */
+static void len_lo_concat(JSContext *ctx, JSValueConst r, JSValueConst a, JSValueConst b)
+{
+    Concolic *c = g_concolic_class ? JS_GetOpaque(r, g_concolic_class) : NULL;
+    uint64_t lo;
+
+    if (!c) return;
+    DCHECK(c->len_lo == 0, "a concatenation's length bound was written twice");
+    lo = (uint64_t)len_lo_operand(ctx, a) + len_lo_operand(ctx, b);
+    c->len_lo = lo > UINT32_MAX ? UINT32_MAX : (uint32_t)lo;
+#if APICLIENT_DEV
+    if (concolic_example_present(r)) {
+        JSValue ex = concolic_example(ctx, r);
+
+        DCHECKF(!JS_IsString(ex) || example_units(ctx, ex) >= c->len_lo,
+                "a concatenation's length bound %u exceeds its own example's %u code units — the bound holds in "
+                "every world, this run's included", c->len_lo, JS_IsString(ex) ? example_units(ctx, ex) : 0);
+        JS_FreeValue(ctx, ex);
+    }
+#endif
+}
+
+int concolic_string_nonempty(JSValueConst v)
+{
+    const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+
+    DCHECK(c != NULL, "a String's length facet was asked of a value that is not a concolic");
+    return c != NULL && c->len_lo > 0 && cty_of_operand(v) == CTY_STRING;
+}
+
 /* The code units of an unknown's example, or UINT32_MAX where this flow holds none (a run then never covers
    it whole). */
 static uint32_t unknown_units(JSContext *ctx, JSValueConst u)
@@ -8453,6 +8500,7 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     if (af) aff_attach(result, af);
     if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
     if (string_arm && hava && havb) pieces_concat(ctx, result, a, ua, b, ub);
+    if (string_fixed) len_lo_concat(ctx, result, a, b);
     /* §13.15.3 answers a String, a Number or a BigInt; the numeric arm is a Number unless both operands may be
        BigInts (carith_result_types's reading of step 4), and is reached only when neither may be a String. */
     {
