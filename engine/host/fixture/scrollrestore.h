@@ -42,4 +42,29 @@ static const char HTML_SCROLLCLAMP[] =
     TF_CANVAS_INK
     "</body></html>";
 
+static const char HTML_SCROLLFWD[] =
+    "<!doctype html><html>"
+    "<body style=\"margin:0\"><div style=\"height:3000px\"></div>"
+    "<script>"
+    "scrollTo(0,400);history.pushState({a:1},'','#b');scrollTo(0,900);var n=0;"
+    "addEventListener('popstate',function(){n++;if(n==1){scrollTo(0,200);history.forward();return;}var p=scrollY;"
+    "setTimeout(function(){fetch('/api/scrollfwd?p='+p+'&r3='+scrollY);},200);});"
+    "history.back();"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
+static const char HTML_SCROLLFWDCLAMP[] =
+    "<!doctype html><html>"
+    "<body style=\"margin:0\"><div id=t style=\"height:3000px\"></div>"
+    "<script>"
+    "scrollTo(0,400);history.pushState({a:1},'','#b');scrollTo(0,900);var n=0;"
+    "addEventListener('popstate',function(){n++;if(n==1){scrollTo(0,200);history.forward();return;}var p=scrollY;"
+    "document.getElementById('t').style.height='100px';"
+    "setTimeout(function(){fetch('/api/scrollfwdclamp?p='+p+'&r4='+scrollY);},200);});"
+    "history.back();"
+    "</script>"
+    TF_CANVAS_INK
+    "</body></html>";
+
 #endif

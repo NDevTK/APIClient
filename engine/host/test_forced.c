@@ -1795,6 +1795,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "scrollarea", HTML_SCROLLAREA },
     { "scrollrestore", HTML_SCROLLRESTORE },
     { "scrollclamp", HTML_SCROLLCLAMP },
+    { "scrollfwd", HTML_SCROLLFWD },
+    { "scrollfwdclamp", HTML_SCROLLFWDCLAMP },
     { "travnav", HTML_TRAVNAV },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
@@ -15945,7 +15947,7 @@ TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `scrollrestore` and `scrollclamp` documents (fixture/scrollrestore.h): HTML §7.4.6.5 as the
+/* The rows of the four scroll restoration documents (fixture/scrollrestore.h): HTML §7.4.6.5 as the
    text states it. `scroll-restore` departs from Chrome 155.0.8059.84 (400), which saves at push time. */
 TF_UNIT void probes_scrollrestore(const char *js, Probe *tab, int *n) {
     const char *sr_why = NULL; int sr_tt = !!strstr(js, "\"/api/scrollrestore\"");
@@ -15960,9 +15962,30 @@ TF_UNIT void probes_scrollrestore(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/scrollclamp record at all, so the document aborted before its fetch");
     fold_row(&sc_tt, &sc_why, param_value_is(js, "/api/scrollclamp", "r2", "0"),
              "HTML §7.4.6.5: a restored position past the shrunk document's scrolling area did not land at 0");
+    /* A traversal to an entry an activation saved restores it after popstate, and the restore clamps into the
+       scrolling area as laid out when it runs. */
+    const char *sf_why = NULL; int sf_tt = !!strstr(js, "\"/api/scrollfwd\"");
+    const char *sfc_why = NULL; int sfc_tt = !!strstr(js, "\"/api/scrollfwdclamp\"");
+
+    fold_row(&sf_tt, &sf_why, sf_tt,
+             "NOT REACHED: there is no /api/scrollfwd record at all, so the document aborted before its fetch");
+    fold_row(&sf_tt, &sf_why, param_value_only(js, "/api/scrollfwd", "p", "200"),
+             "the second popstate did not see the position the first one scrolled to (200): §7.4.6.2 restores at "
+             "step 6.4.4, after step 6.4.3's popstate");
+    fold_row(&sf_tt, &sf_why, param_value_only(js, "/api/scrollfwd", "r3", "900"),
+             "going forward did not restore the 900 that going back saved into the pushed entry (HTML §7.4.6.5)");
+    fold_row(&sfc_tt, &sfc_why, sfc_tt,
+             "NOT REACHED: there is no /api/scrollfwdclamp record at all, so the document aborted before its fetch");
+    fold_row(&sfc_tt, &sfc_why, param_value_only(js, "/api/scrollfwdclamp", "p", "200"),
+             "the second popstate did not see the position the first one scrolled to (200)");
+    fold_row(&sfc_tt, &sfc_why, param_value_only(js, "/api/scrollfwdclamp", "r4", "0"),
+             "the restored 900 did not clamp to 0 in the document the popstate listener shrank — the restore "
+             "measured a layout from before the listener ran");
     const Probe rows[] = {
         { "scroll-restore", sr_tt, "/api/scrollrestore", SESS_EXPLORE, sr_why },
         { "scroll-restore-clamp", sc_tt, "/api/scrollclamp", SESS_EXPLORE, sc_why },
+        { "scroll-restore-forward", sf_tt, "/api/scrollfwd?", SESS_EXPLORE, sf_why },
+        { "scroll-restore-forward-clamp", sfc_tt, "/api/scrollfwdclamp", SESS_EXPLORE, sfc_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
