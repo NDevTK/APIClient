@@ -11460,9 +11460,17 @@ int engine_headroom_at_rest(size_t bytes) {
     for (;;) {
         void *p;
         if (bytes == 0) return 1;
-        p = reclaim_malloc(bytes);
+        p = malloc(bytes);   /* a probe: the sale below is the one this loop makes, at rest */
         if (p) { free(p); return 1; }
-        if (!engine_reclaim_at_rest()) return 0;   /* the floor: the composition's own CHECK answers */
+        if (!engine_reclaim_at_rest()) {
+            /* The floor: the composition's own CHECK answers. Reached only with nothing left to sell, so a frontier
+               still holding members other than the running one means the probe asked for what no sale can give. */
+            DCHECKF(flow_count() <= 1,
+                    "headroom for %zu bytes met the floor with %d members still in the frontier (live %zu, footprint "
+                    "%zu) — a sale was refused, or the probe asks for one block the freed memory cannot form",
+                    bytes, flow_count(), c_alloc_live(), c_alloc_footprint());
+            return 0;
+        }
     }
 }
 
