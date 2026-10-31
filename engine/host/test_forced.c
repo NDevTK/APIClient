@@ -1787,6 +1787,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "cookieconst", HTML_COOKIECONST },
     { "indexgate", HTML_INDEXGATE },
     { "indexgatefar", HTML_INDEXGATEFAR },
+    { "indexgatespell", HTML_INDEXGATESPELL },
+    { "indexgatepos", HTML_INDEXGATEPOS },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
@@ -10321,11 +10323,14 @@ static int s_stage_prefix(const char *js, const char *sink, const char *prefix, 
     *src = 0;
     snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s", sink, prefix);
     while ((e = strstr(e, pat)) != NULL) {
-        const char *b = e + strlen(pat) - strlen(prefix), *q = strchr(b, '"');
+        const char *b = e + strlen(pat) - strlen(prefix), *q;
         char one[192];
         int st;
 
-        if (!q) break;
+        /* The source as the document spells it, to its closing quote: a `\"` inside is part of it. */
+        for (q = b; *q && *q != '"'; q++)
+            if (*q == '\\' && q[1]) q++;
+        if (!*q) break;
         if ((size_t)(q - b) < sizeof one) {
             memcpy(one, b, (size_t)(q - b));
             one[q - b] = 0;
@@ -16205,7 +16210,26 @@ TF_UNIT void probes_indexgate(const char *js, Probe *tab, int *n) {
     ig_row(js, LOCATION_HASH_SRC, "k=", &f_tt, &f_why);
     /* The control: `> 5` proves the token occurs at index 6 or later, not that it starts the fragment. */
     ig_row(js, LOCATION_HASH_SRC, "xxxxxk=", &r_tt, &r_why);
+    /* Two more spellings of the occurring set, one row each, and the exact index. */
+    const char *nl_why = NULL, *nm_why = NULL, *e3_why = NULL, *n3_why = NULL;
+    int nl_tt = 1, nm_tt = 1, e3_tt = 1, n3_tt = 1;
+    char nsrc[384];
+    int nhas;
+
+    ig_row(js, LOCATION_SEARCH_SRC, "q=", &nl_tt, &nl_why);
+    ig_row(js, LOCATION_HASH_SRC, "k=", &nm_tt, &nm_why);
+    ig_row(js, LOCATION_SEARCH_SRC, "xxq=", &e3_tt, &e3_why);
+    /* The negative control: `!== 3` keeps -1 in the set, so nothing is filed and nothing composed. */
+    nhas = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, nsrc, sizeof nsrc);
+    fold_row(&n3_tt, &n3_why, nhas && s_stage(js, "innerHTML", nsrc) == S_FIRED,
+             "NOT REACHED: the ungated fragment's sink fired no PoC, so the control is unscored");
+    fold_row(&n3_tt, &n3_why, nhas && !s_poc(js, "innerHTML", nsrc, "x") && !s_poc(js, "innerHTML", nsrc, "k="),
+             "a set that keeps -1 composed a head: a facet was filed where the gate proves nothing");
     const Probe rows[] = {
+        { "ig-not-lt-poc", nl_tt, "'igNotLt'", SESS_EXPLORE, nl_why },
+        { "ig-ne-minus-poc", nm_tt, "'igNeMinus'", SESS_EXPLORE, nm_why },
+        { "ig-eq3-poc", e3_tt, "'igEq3'", SESS_EXPLORE, e3_why },
+        { "ig-ne3-none", n3_tt, "'igNe3'", SESS_EXPLORE, n3_why },
         { "ig-ge-poc", q_tt, "'igQuery'", SESS_EXPLORE, q_why },
         { "ig-lt-false-poc", f_tt, "'igFrag'", SESS_EXPLORE, f_why },
         { "ig-gt5-far-poc", r_tt, "'igFar'", SESS_EXPLORE, r_why },
