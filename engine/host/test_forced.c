@@ -1260,6 +1260,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxfunc.h"
 #include "fixture/rxdeval.h"
 #include "fixture/rxworker.h"
+#include "fixture/rxprobe.h"
 #include "fixture/textencunk.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
@@ -1841,6 +1842,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "rxfunc", HTML_RXFUNC },
     { "rxdeval", HTML_RXDEVAL },
     { "rxworker", HTML_RXWORKER },
+    { "rxprobe", HTML_RXPROBE },
     { "textencunk", HTML_TEXTENCUNK },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
@@ -17287,6 +17289,30 @@ TF_UNIT void probes_rxworker(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxprobe` document (fixture/rxprobe.h): the IDL getter answered null for a body that does not
+   parse, and §8.1.8.1 step 3.7's parse rested inside the literal before it failed. No other parse in the
+   document holds a literal, so every rest it counts is the probe's. */
+TF_UNIT void probes_rxprobe(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, !!strstr(js, "\"/api/rxp\""),
+             "NOT REACHED: there is no /api/rxp record, so the script never ran to its fetch");
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/rxp", "n", "true"),
+             "the onclick getter did not answer null for a body step 3.7 must refuse");
+    const char *r_why = NULL; int r_tt = 1;
+    fold_row(&r_tt, &r_why, rests != NULL,
+             "the result document carries no `twRegexpCompileRests` row from solver/metrics/cold.def");
+    fold_row(&r_tt, &r_why, nrests >= 1,
+             "step 3.7's parse took no rest inside the literal, so it ran without a slot to hand the thread "
+             "back through");
+    const Probe rows[] = {
+        { "rxp-null", m_tt, "/api/rxp", SESS_EXPLORE, m_why },
+        { "rxp-rests", r_tt, "/api/rxp", SESS_EXPLORE, r_why, .gate = "rxp-null" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22662,6 +22688,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxfunc(js, probes, &np);
     probes_rxdeval(js, probes, &np);
     probes_rxworker(js, probes, &np);
+    probes_rxprobe(js, probes, &np);
     probes_textencunk(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
