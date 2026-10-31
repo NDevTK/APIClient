@@ -1217,6 +1217,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/timegate.h"
 #include "fixture/datenum.h"
 #include "fixture/rxcompile.h"
+#include "fixture/rxliteral.h"
 #include "fixture/textencunk.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
@@ -1770,6 +1771,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "timegate", HTML_TIMEGATE },
     { "datenum", HTML_DATENUM },
     { "rxcompile", HTML_RXCOMPILE },
+    { "rxliteral", HTML_RXLITERAL },
     { "textencunk", HTML_TEXTENCUNK },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
@@ -16585,6 +16587,30 @@ TF_UNIT void probes_rxcompile(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxliteral` document (fixture/rxliteral.h): the literal's program matches, and its compile
+   rested inside the script parse, read from the census quickjs.c's literal production raises. The document runs
+   no RegExp constructor or compile, so every rest it counts is the literal's. */
+TF_UNIT void probes_rxliteral(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, !!strstr(js, "\"/api/rxl\""),
+             "NOT REACHED: there is no /api/rxl record, so the inserted script never ran to its fetch");
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/rxl", "m", "true"),
+             "the program the parse compiled from the literal across its rests does not match what its pattern "
+             "states");
+    const char *r_why = NULL; int r_tt = 1;
+    fold_row(&r_tt, &r_why, rests != NULL,
+             "the result document carries no `twRegexpCompileRests` row from solver/metrics/cold.def");
+    fold_row(&r_tt, &r_why, nrests >= 1,
+             "the literal's compile, several work quanta long, took no rest inside the script parse");
+    const Probe rows[] = {
+        { "rxl-match", m_tt, "/api/rxl", SESS_EXPLORE, m_why },
+        { "rxl-rests", r_tt, "/api/rxl", SESS_EXPLORE, r_why, .gate = "rxl-match" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -21810,6 +21836,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_timegate(js, probes, &np);
     probes_datenum(js, probes, &np);
     probes_rxcompile(js, probes, &np);
+    probes_rxliteral(js, probes, &np);
     probes_textencunk(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
