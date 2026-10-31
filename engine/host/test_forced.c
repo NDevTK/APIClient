@@ -1253,6 +1253,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxhandler.h"
 #include "fixture/rxeval.h"
 #include "fixture/rxfunc.h"
+#include "fixture/rxdeval.h"
 #include "fixture/textencunk.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
@@ -1832,6 +1833,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "rxhandler", HTML_RXHANDLER },
     { "rxeval", HTML_RXEVAL },
     { "rxfunc", HTML_RXFUNC },
+    { "rxdeval", HTML_RXDEVAL },
     { "textencunk", HTML_TEXTENCUNK },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
@@ -17228,6 +17230,33 @@ TF_UNIT void probes_rxmodstatic(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxdeval` document (fixture/rxdeval.h): both direct evals answer true in the caller's scope,
+   and the literal's compile rested inside the parse, so the eval opcode re-executed over its held source. The
+   document runs no RegExp constructor or compile, so every rest it counts is a literal's. */
+TF_UNIT void probes_rxdeval(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *c_why = NULL; int c_tt = 1;
+    fold_row(&c_tt, &c_why, param_value_is(js, "/api/rxd-call", "m", "true"),
+             "no /api/rxd-call?m=true record: `eval(src)` did not answer the literal's matcher and the caller's "
+             "local");
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, param_value_is(js, "/api/rxd-spread", "m", "true"),
+             "no /api/rxd-spread?m=true record: `eval(...[src])` did not answer the literal's matcher and the "
+             "caller's local");
+    const char *r_why = NULL; int r_tt = 1;
+    fold_row(&r_tt, &r_why, rests != NULL,
+             "the result document carries no `twRegexpCompileRests` row from solver/metrics/cold.def");
+    fold_row(&r_tt, &r_why, nrests >= 2,
+             "the two direct evals' parses did not each rest inside their literal");
+    const Probe rows[] = {
+        { "rxd-call", c_tt, "/api/rxd-call", SESS_EXPLORE, c_why },
+        { "rxd-spread", p_tt, "/api/rxd-spread", SESS_EXPLORE, p_why },
+        { "rxd-rests", r_tt, "/api/rxd-call", SESS_EXPLORE, r_why, .gate = "rxd-call" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22601,6 +22630,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxhandler(js, probes, &np);
     probes_rxeval(js, probes, &np);
     probes_rxfunc(js, probes, &np);
+    probes_rxdeval(js, probes, &np);
     probes_textencunk(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
