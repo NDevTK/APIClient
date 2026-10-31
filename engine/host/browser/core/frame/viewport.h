@@ -246,16 +246,12 @@ void viewport_set_scroll_position(JSContext *ctx, double x, double y);
    wrong; it had two already. */
 double viewport_window_scroll(JSContext *ctx, bool vertical);
 
-/* CSSOM VIEW §2's SCROLLING AREA OF THIS REALM'S VIEWPORT — the ICB extended by the margin edges of all of the
-   viewport's descendants' boxes. THE EXTENSION IS COMPUTED, by core/layout/scrolling_area.h's VIEWPORT entry:
-   §2's table has two columns, one walk answers both, and this file owns only what the ICB is (CSS 2.2 §10.1
-   gives it "the dimensions of the viewport") and hands that in. It ANSWERED THE ICB ALONE for as long as the
-   walk had no viewport row, which was wrong for every document taller than its viewport and showed as
-   `document.documentElement.scrollHeight` reporting 720 for a 1400-pixel-tall page through the third reader
-   below; that is built, so this is a real extreme and the answer grows with the layout.
-   Exported because THREE algorithms read it and none of them may state it for itself:
-   §4's `scroll()` clamps against it, `scrollX`/`scrollY`'s single valid position is derived from it, and §6's
-   `scrollWidth`/`scrollHeight` answer max(it, the viewport) for the root element. */
+/* CSSOM VIEW §2's SCROLLING AREA OF THIS REALM'S VIEWPORT — the ICB extended by the boxes of all of the
+   viewport's descendants, computed by core/layout/scrolling_area.h's viewport walk: this file owns only what
+   the ICB is (CSS 2.2 §10.1 gives it "the dimensions of the viewport") and hands that in. The walk runs to
+   completion here; §6's `scrollWidth`/`scrollHeight` step the same walk under a resting drive instead.
+   Exported because §4's `scroll()` clamps against it, the scroll-position writer asserts against it, and
+   core/dom/element_scrolling.c asks whether the viewport has overflow. */
 double viewport_scrolling_area_width(JSContext *ctx);
 double viewport_scrolling_area_height(JSContext *ctx);
 

@@ -1004,50 +1004,41 @@ static const IdlStepDecl EV_SCROLL_INTO_VIEW_STEP = {
 
 /* ---- §6's `scrollWidth` and `scrollHeight` --------------------------------------------------------------- */
 
-/* Steps 2 to 6, which answer before the element's own scrolling area: true with `*out` when one of them
-   does, false when step 7 is reached and the caller walks §2's scrolling area. */
-static bool ev_scroll_extent_early(JSContext *ctx, const EvTarget *t, bool vertical, JSValue *out)
+/* Which scrolling area §6's `scrollWidth`/`scrollHeight` returns at, once steps 2 to 6 have not answered
+   from the viewport's size alone. */
+typedef enum {
+    EV_EXTENT_ANSWERED,   /* a step answered without walking a scrolling area */
+    EV_EXTENT_VIEWPORT,   /* steps 4 and 5: max(the viewport's scrolling area, the viewport) */
+    EV_EXTENT_ELEMENT,    /* step 7: the element's scrolling area */
+} EvExtentArea;
+
+/* Steps 2 to 7 up to the scrolling area each of steps 4, 5 and 7 walks: `*out` is the answer for
+   EV_EXTENT_ANSWERED, and `*vp` is the viewport's own extent, the other operand of steps 4 and 5's max, for
+   EV_EXTENT_VIEWPORT. */
+static EvExtentArea ev_scroll_extent_early(JSContext *ctx, const EvTarget *t, bool vertical, JSValue *out,
+                                           double *vp)
 {
     bool presented;
-    double vp, area;
 
     /* step 2 */
-    if (!t->dctx) { *out = ev_long(ctx, 0.0); return true; }
+    if (!t->dctx) { *out = ev_long(ctx, 0.0); return EV_EXTENT_ANSWERED; }
     /* step 3: "the width of the viewport EXCLUDING the width of the scroll bar, if any, or zero if there is no
-       viewport". This user agent renders no scroll bar — there is nothing to overflow the one box in the model
-       — so the exclusion removes nothing and the answer is the viewport. */
+       viewport". This user agent renders no scroll bar, so the exclusion removes nothing. */
     presented = viewport_exists(t->dctx);
-    vp = !presented ? 0.0 : (vertical ? viewport_height(t->dctx) : viewport_width(t->dctx));
-    /* Steps 4 and 5 both return MAX(VIEWPORT SCROLLING AREA, viewport), and the max is computed rather than
-       assumed away: the scrolling area is viewport.h's own derivation, read from there so that a layout which
-       grows it grows this answer with it. Today they are equal, which is why THIS IS THE ANSWER THAT IS NOT
-       ZERO — `document.documentElement.scrollWidth` is 1280 in the top-level traversable and 300 in a child
-       navigable, computed rather than shrugged at. */
-    area = !presented ? 0.0 : (vertical ? viewport_scrolling_area_height(t->dctx)
-                                        : viewport_scrolling_area_width(t->dctx));
-    if (t->is_root && !t->quirks) {
-        *out = presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
-                         : ev_long(ctx, 0.0);
-        return true;
-    }
-    /* Step 5's condition is PER AXIS — "not potentially scrollable in the x axis" for `scrollWidth` and "in the
-       y axis" for `scrollHeight` — which is why it is asked with this member's own axis and not with the
-       at-least-one-axis form the scroll-position steps use. */
-    if (t->is_body && t->quirks && !ev_potentially_scrollable(t, vertical)) {
-        *out = presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
-                         : ev_long(ctx, 0.0);
-        return true;
+    *vp = !presented ? 0.0 : (vertical ? viewport_height(t->dctx) : viewport_width(t->dctx));
+    /* Steps 4 and 5 return max(viewport scrolling area width, viewport width), or zero with no viewport. Step
+       5's condition is per axis: "not potentially scrollable in the x axis" for `scrollWidth` and "in the y
+       axis" for `scrollHeight`. */
+    if ((t->is_root && !t->quirks) || (t->is_body && t->quirks && !ev_potentially_scrollable(t, vertical))) {
+        if (!presented) { *out = ev_long(ctx, 0.0); return EV_EXTENT_ANSWERED; }
+        return EV_EXTENT_VIEWPORT;
     }
     /* step 6 */
-    if (!t->has_box) { *out = ev_long(ctx, 0.0); return true; }
-    /* Step 7 — "return the width of the element's scrolling area", which is §2's own term and is
-       core/layout/scrolling_area.h's: a right-most POSITION over this element's padding edge and every one of
-       its descendants' margin edges, and NOT the padding edge's extent `clientWidth` above reports. The two
-       differ exactly when the element's content overflows it, which is the state a page asks this member
-       about. EV_VIEW_STEP walks it under a resting drive and converts the extent as `clientWidth`'s is, so a
-       box whose chain bottoms out in the initial containing block reports a `long` carrying the viewport's
-       domain. */
-    return false;
+    if (!t->has_box) { *out = ev_long(ctx, 0.0); return EV_EXTENT_ANSWERED; }
+    /* Step 7 — "return the width of the element's scrolling area": a right-most position over this element's
+       padding edge and its descendants' boxes (core/layout/scrolling_area.h), not the padding edge's extent
+       `clientWidth` reports. The two differ exactly when the element's content overflows it. */
+    return EV_EXTENT_ELEMENT;
 }
 
 /* ---- §6's `clientWidth`, `clientHeight`, `clientTop` and `clientLeft` ------------------------------------- */
@@ -1799,25 +1790,27 @@ static JSValue ev_get_member(JSContext *ctx, const EvTarget *t, ElementViewMembe
    ancestors under a resting drive, so a page-sized sheet rests between rules and a selector the cascade cannot
    decide forks the flow (layout_job_fork); the member then runs on the same job, whose cascade record holds
    those matches for every element and property it asks.
-   `scrollWidth`/`scrollHeight`'s step 7 walks §2's scrolling area over the descendants in a stage of its own,
-   one rest unit per activation under a resting drive, so a deep or wide subtree rests inside the walk.
-   Named residual. Not covered: the other members' own layout (a scroll position, and the viewport's scrolling
-   area steps 4 and 5 read) runs to completion after the box tests, so a descendant's style it reads is matched
-   with no resting drive, cannot keep a fork and does not rest. Next diff: the viewport's walk in the same
-   stage, then `scrollTop`/`scrollLeft`. Absence shows as: selector_match_node's abort for a build with no
-   resting drive under one of those members, or a rest unit overrun inside one. */
+   `scrollWidth`/`scrollHeight` walk §2's scrolling area (the element's for step 7, the viewport's for steps 4
+   and 5) over the descendants in a stage of their own, one rest unit per activation under a resting drive, so
+   a deep or wide subtree rests inside the walk.
+   Named residual. Not covered: `scrollTop`/`scrollLeft`'s own layout (a scroll position) runs to completion
+   after the box tests, so a descendant's style it reads is matched with no resting drive, cannot keep a fork
+   and does not rest. Next diff: `scrollTop`/`scrollLeft` in a stage of their own. Absence shows as:
+   selector_match_node's abort for a build with no resting drive under one of those members, or a rest unit
+   overrun inside one. */
 #define EV_VIEW_STAGES(X) \
     X(EV_VIEW_MEASURE, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollTop / scrollLeft / " \
                        "scrollWidth / scrollHeight / clientTop / clientLeft (the box tests under a resting " \
                        "drive, then the member on the same job)") \
-    X(EV_VIEW_AREA, "CSSOM VIEW §6 scrollWidth / scrollHeight step 7: CSSOM VIEW §2's scrolling area walked " \
-                    "under a resting drive")
+    X(EV_VIEW_AREA, "CSSOM VIEW §6 scrollWidth / scrollHeight steps 4, 5 and 7: CSSOM VIEW §2's scrolling " \
+                    "area walked under a resting drive")
 enum { IDL_STEP_STAGE_BASE(EV_VIEW_STAGES) EV_VIEW_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const EV_VIEW_STEPS[] = { EV_VIEW_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     LayoutJob         *job;    /* owned, declared through layout_job_step_ops; NULL before the first activation */
     ScrollingAreaWalk  area;   /* EV_VIEW_AREA's cursor; its nodes are the running flow's, shared by address */
+    double             vp;     /* steps 4 and 5's viewport extent, the max's other operand when area.viewport */
 } EvViewState;
 
 static void ev_view_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1862,9 +1855,24 @@ static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         ev_target(hdr->this_val, &t);
         if (m != EV_SCROLL_WIDTH && m != EV_SCROLL_HEIGHT)
             *presult = ev_get_member(ctx, &t, m);
-        else if (!ev_scroll_extent_early(ctx, &t, m == EV_SCROLL_HEIGHT, presult)) {
+        else switch (ev_scroll_extent_early(ctx, &t, m == EV_SCROLL_HEIGHT, presult, &s->vp)) {
+        case EV_EXTENT_ANSWERED:
+            break;
+        case EV_EXTENT_VIEWPORT:
+            DCHECK(document_root_node(t.dctx) != NULL &&
+                   lxb_dom_interface_node(document_root_node(t.dctx)->owner_document) == t.doc,
+                   "steps 4 and 5 walk the viewport of the realm whose active document is the element's node "
+                   "document, so that realm's document element must belong to that document");
+            scrolling_area_walk_viewport(&s->area, t.doc,
+                                         m == EV_SCROLL_HEIGHT ? viewport_icb_height(t.dctx)
+                                                               : viewport_icb_width(t.dctx),
+                                         m == EV_SCROLL_HEIGHT);
+            area = true;
+            break;
+        case EV_EXTENT_ELEMENT:
             scrolling_area_walk_element(&s->area, lxb_dom_interface_element(t.node), m == EV_SCROLL_HEIGHT);
             area = true;
+            break;
         }
     }
     layout_job_leave(s->job);
@@ -1900,7 +1908,12 @@ static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         layout_job_drive_end(&d);
         rest_unit_end();
         done = scrolling_area_walk_done(&s->area);
-        if (done) *presult = ev_length_long(ctx, scrolling_area_walk_extent(&s->area));
+        if (done && !s->area.viewport) *presult = ev_length_long(ctx, scrolling_area_walk_extent(&s->area));
+        else if (done) {
+            ev_target(hdr->this_val, &t);
+            *presult = ev_env_long(ctx, &t, s->area.vertical ? "scrollHeight" : "scrollWidth",
+                                   fmax(scrolling_area_walk_extent(&s->area).px, s->vp));
+        }
         layout_job_leave(s->job);
         if (layout_job_declined(s->job)) {
             rc = layout_job_fork(ctx, hdr, s->job);

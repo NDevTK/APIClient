@@ -15759,6 +15759,7 @@ TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
         { "ch", "50", "CSSOM VIEW §6: the clipped box's clientHeight is not its 50px padding edge" },
         { "lh", "600", "CSSOM VIEW §2: the wide subtree's scrolling area is not 300 blocks of 2px" },
         { "lw", "100", "CSSOM VIEW §2: the wide subtree's scrolling area is wider than its box" },
+        { "rh", "2300", "CSSOM VIEW §6 step 4: the root's scrollHeight is not the viewport's scrolling area" },
     };
     const char *rests = strstr(js, "\"_layoutScrollAreaRests\":");
     long nrests = rests ? strtol(rests + strlen("\"_layoutScrollAreaRests\":"), NULL, 10) : -1;
