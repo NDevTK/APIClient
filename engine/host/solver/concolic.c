@@ -2751,13 +2751,32 @@ const char *concolic_source_precondition(const char *root)
 static char g_attacker_site[254] = "attacker.test";
 static char g_attacker_page[sizeof g_attacker_site + 10] = "https://attacker.test/";
 
+int concolic_host_ldh(const char *h, size_t n)
+{
+    size_t label = 0;
+
+    if (!h || n == 0 || n > 253) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = h[i];
+
+        if (c == '.') {
+            if (label == 0 || h[i - 1] == '-') return 0;
+            label = 0;
+            continue;
+        }
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) return 0;
+        if (c == '-' && label == 0) return 0;
+        if (++label > 63) return 0;
+    }
+    return label > 0 && h[n - 1] != '-';
+}
+
 void concolic_set_attacker_site(const char *host)
 {
     size_t n = host ? strlen(host) : 0;
 
-    CHECK(n > 0 && n < sizeof g_attacker_site && strspn(host, "abcdefghijklmnopqrstuvwxyz0123456789-.") == n &&
-          host[0] != '.' && host[0] != '-' && host[n - 1] != '.' && strchr(host, '.'),
-          "concolic: the attacker site is not a lowercase registrable host name");
+    CHECK(n < sizeof g_attacker_site && concolic_host_ldh(host, n) && strchr(host, '.'),
+          "concolic: the attacker site is not a lowercase host name of at least two labels");
     memcpy(g_attacker_site, host, n + 1);
     snprintf(g_attacker_page, sizeof g_attacker_page, "https://%s/", host);
 }

@@ -725,6 +725,11 @@ int         concolic_source_precondition_declared_by(const char *component, cons
    url for use as a referrer") is what the victim reads; a cross-document-message delivery frames or opens the
    victim from it; a request breakout and a composed message origin reach a host under the site. */
 void        concolic_set_attacker_site(const char *host);
+/* Whether `h`/`n` is a host name of letter-digit-hyphen labels, lowercase: RFC 1035 §2.3.1 Preferred name syntax
+   as RFC 1123 §2.1 Host Names and Numbers relaxes its first character to a letter or a digit, each label at most
+   63 and the name at most 255 octets on the wire (RFC 1035 §2.3.4 Size limits), so 253 characters spelled. A
+   string that is anything else spells no host label: no userinfo, port, path, fragment or empty label passes. */
+int         concolic_host_ldh(const char *h, size_t n);
 const char *concolic_attacker_site(void);
 const char *concolic_attacker_page(void);
 #define REFERRER_ATTACKER_POLICY "unsafe-url"

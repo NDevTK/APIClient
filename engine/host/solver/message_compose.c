@@ -20,6 +20,7 @@
 #include "solver/concolic.h"
 #include "solver/message_compose.h"
 #include "solver/reclaim.h"
+#include "core/url/url.h"
 
 typedef struct { const char *src, *ident; const char *const *path; int n; } Node;
 typedef struct { Node *v; int n, cap; } Nodes;
@@ -335,33 +336,24 @@ char *message_compose(const char *root, const char *inject, const char *payload,
     return json_buf_take(&b);
 }
 
-/* The constants the page compared an origin with, each reduced to a host fragment: the host of an absolute URL,
-   or the constant itself, kept to the characters a host label may hold (lowercased) and trimmed of separators.
-   `dotted` says the constant began with a label separator, so a host ending in it is a subdomain of the site it
-   names. */
+/* The constants the page compared an origin with, each taken as a host fragment only where it spells one: a
+   serialized origin `http(s)://<host>` or a bare `<host>`, optionally led by one label separator, whose host is
+   letter-digit-hyphen labels (concolic_host_ldh). Anything else (userinfo, a port, a path, a fragment, an empty
+   label, an uppercase letter no serialized origin holds) is refused and contributes no label, because the page
+   controls these bytes and a repaired one would compose a host its check never named. `dotted` says the
+   constant began with a label separator, so a host ending in it is a subdomain of the site it names. */
 typedef struct { char **frag; int *dotted; int n; } OriginFrags;
 
 static void origin_frag(void *ud, const char *tok)
 {
     OriginFrags *o = ud;
-    const char *p = strstr(tok, "://"), *end;
-    char frag[256];
-    size_t n = 0;
-    int dotted;
+    const char *p = tok;
+    int dotted = 0;
 
-    p = p ? p + 3 : tok;
-    dotted = *p == '.';
-    end = p + strcspn(p, "/:?#");
-    for (; p < end && n < sizeof frag - 1; p++) {
-        char ch = (char)(*p >= 'A' && *p <= 'Z' ? *p - 'A' + 'a' : *p);
-
-        if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.') frag[n++] = ch;
-    }
-    while (n && (frag[n - 1] == '.' || frag[n - 1] == '-')) n--;
-    frag[n] = 0;
-    p = frag;
-    while (*p == '.' || *p == '-') p++;
-    if (!*p) return;
+    if (!strncmp(p, "https://", 8)) p += 8;
+    else if (!strncmp(p, "http://", 7)) p += 7;
+    else if (*p == '.') { p++; dotted = 1; }
+    if (!concolic_host_ldh(p, strlen(p))) return;
     o->frag = realloc(o->frag, (size_t)(o->n + 1) * sizeof *o->frag);
     o->dotted = realloc(o->dotted, (size_t)(o->n + 1) * sizeof *o->dotted);
     CHECK(o->frag && o->dotted, "message compose: OOM collecting an origin's constants");
@@ -381,13 +373,29 @@ static void origin_pins(void *user, const char *src, const ConcolicPrincipalPin 
     for (int i = 0; i < n; i++) origin_frag(op->o, pin[i].tok);
 }
 
+/* The origin `https://<host>` built by the URL parser (WHATWG URL §4.4 basic URL parser) from a host that
+   passed concolic_host_ldh, its serialization taken from the parsed record: such a host parses to itself, so the
+   parsed domain equal to `host` is asserted. Malloc'd. */
 static char *origin_of_host(const char *host)
 {
-    size_t n = strlen(host) + sizeof "https://";
-    char *out = reclaim_malloc(n);
+    size_t n = strlen(host) + sizeof "https:///";
+    char *in = reclaim_malloc(n), *out;
+    UrlRecord u;
+    bool ok;
 
+    CHECK(in, "message compose: OOM spelling an origin");
+    DCHECK(concolic_host_ldh(host, strlen(host)), "an origin was composed over a host of invalid labels");
+    snprintf(in, n, "https://%s/", host);
+    url_record_init(&u);
+    ok = url_parse(&u, in, strlen(in), NULL);
+    DCHECK(ok && u.host.kind == URL_HOST_DOMAIN && !strcmp(u.host.domain, host),
+           "a host of letter-digit-hyphen labels did not parse to itself — the composed origin would name a "
+           "host other than the one its labels spell");
+    out = reclaim_malloc(strlen(u.host.domain) + sizeof "https://");
     CHECK(out, "message compose: OOM spelling an origin");
-    snprintf(out, n, "https://%s", host);
+    sprintf(out, "https://%s", u.host.domain);
+    url_record_free(&u);
+    free(in);
     return out;
 }
 
@@ -409,7 +417,8 @@ int message_compose_origins(const char *origin_src, char ***out)
     json_buf_raw(&sub, concolic_attacker_site());
     host = json_buf_take(&sub);
     CHECK(host, "message compose: OOM spelling an origin");
-    c[n++] = origin_of_host(host);
+    /* Every constant under the site, or the site alone where that name is too long to be a host. */
+    c[n++] = origin_of_host(concolic_host_ldh(host, strlen(host)) ? host : concolic_attacker_site());
     free(host);
     for (int i = 0; i < o.n; i++) {
         /* A registrable domain of the attacker's own that ends in the constant: a fresh label prefixed to it, a
@@ -421,7 +430,7 @@ int message_compose_origins(const char *origin_src, char ***out)
 
             CHECK(own, "message compose: OOM spelling an origin");
             snprintf(own, len, "x%s", o.frag[i]);
-            c[n++] = origin_of_host(own);
+            if (concolic_host_ldh(own, strlen(own))) c[n++] = origin_of_host(own);
             free(own);
         }
         free(o.frag[i]);

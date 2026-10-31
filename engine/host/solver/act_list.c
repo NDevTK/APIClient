@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/url/url.h"
 #include "core/json_buf.h"
 #include "solver/act_list.h"
 #include "solver/concolic.h"
@@ -21,19 +22,28 @@ static void acts_append(JsonBuf *b, int *first, const char *act)
 
 /* Who holds the origin a message act is posted from (a JSON String this file composed): `attacker-site` for
    the attacker's own site or a name under it, which the person verifying serves, `registered-domain` for a
-   registrable domain an attacker would have to register, which no live verify reproduces without one. */
+   registrable domain an attacker would have to register, which no live verify reproduces without one. Asked of
+   the host the URL parser (WHATWG URL §4.4 basic URL parser) reads out of the origin, never of its spelling. */
 static const char *origin_owned(const char *origin)
 {
-    const char *site = concolic_attacker_site(), *host = strstr(origin, "://");
-    size_t hn, sn = strlen(site);
+    const char *site = concolic_attacker_site(), *host;
+    size_t hn, sn = strlen(site), on = strlen(origin);
+    char *bare;
+    UrlRecord u;
+    bool ok, owned;
 
-    DCHECK(host && origin[0] == '"', "a message act's origin is not a JSON String holding an origin");
-    host += 3;
-    hn = strcspn(host, "\":/");
-    if ((hn == sn && !memcmp(host, site, sn)) || (hn > sn + 1 && host[hn - sn - 1] == '.' &&
-                                                   !memcmp(host + hn - sn, site, sn)))
-        return "attacker-site";
-    return "registered-domain";
+    DCHECK(on > 2 && origin[0] == '"' && origin[on - 1] == '"', "a message act's origin is not a JSON String");
+    bare = reclaim_strndup(origin + 1, on - 2);
+    CHECK(bare, "act list: OOM reading a message act's origin");
+    url_record_init(&u);
+    ok = url_parse(&u, bare, strlen(bare), NULL);
+    DCHECK(ok && u.host.kind == URL_HOST_DOMAIN, "a composed message origin did not parse to a domain host");
+    host = ok && u.host.kind == URL_HOST_DOMAIN ? u.host.domain : "";
+    hn = strlen(host);
+    owned = (hn == sn && !strcmp(host, site)) || (hn > sn + 1 && host[hn - sn - 1] == '.' && !strcmp(host + hn - sn, site));
+    url_record_free(&u);
+    free(bare);
+    return owned ? "attacker-site" : "registered-domain";
 }
 
 /* `act` with the `data` (JSON) and the `origin` (a JSON String) its message is posted with (both borrowed), and
