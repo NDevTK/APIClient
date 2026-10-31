@@ -607,6 +607,12 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
                "re-judge in this file — and make it ask this property's own production");
     }
 #endif
+    /* Named residual: a math function's specified value is kept as written rather than as css-values-4 §10.13
+       "Serialization" writes a specified value (`calc(50% * 2 - 10px)` reads back unchanged, not as
+       `calc(100% - 10px)`). The next diff builds §10.10.1's specified-value simplification in core/css/
+       css_math.c — a Sum with one term per unit, relative units left unconverted — and stores its
+       serialization here. Its absence shows as a `style` or `cssText` read of a math function that differs from
+       a browser's in spacing or in terms left uncombined. */
     if (at >= 0) {
         if (d->v[at].important && !important) { free(value); return; }
         cssd_decls_remove_at(d, (unsigned)at);
