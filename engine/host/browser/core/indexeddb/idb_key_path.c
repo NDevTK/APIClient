@@ -175,11 +175,9 @@ bool idb_key_path_has_unknown(JSContext *ctx, JSValueConst path)
     return false;
 }
 
-/* One string of a key path. An unknown one forks, outcome 0 valid; `real` is §2.5 run on its example. The
-   string is borrowed from the converted argument the machine holds.
-   Named residual. Not covered: the valid arm files no domain over the string (identifiers joined by '.').
-   Next diff: file it as that arm's constraint. How its absence shows: a delivery at this key path composing a
-   value the valid arm's own grammar refuses. */
+/* One string of a key path. An unknown one forks, outcome 0 valid; `real` is §2.5 run on its example. Each arm
+   files its membership of §2.5's language. The string is borrowed from the converted argument the machine
+   holds. */
 static int idb_key_path_string_valid_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, uint32_t *decided,
                                          uint32_t *seen, bool *pvalid)
 {
@@ -200,6 +198,7 @@ static int idb_key_path_string_valid_run(JSContext *ctx, JSStepHdr *hdr, JSValue
     JS_FreeValue(ctx, ex);
     r = step_fork_run(ctx, hdr, v, "Indexed Database §2.5 valid key path", 2, real, &arm);
     if (r) return r;
+    concolic_lang_file(v, idb_key_path_is_valid, arm == 0);
     *pvalid = arm == 0;
     if (arm == 0) (*decided)++;
     return 0;

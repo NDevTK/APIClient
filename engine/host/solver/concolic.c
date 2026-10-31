@@ -836,6 +836,8 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    leq: the loose equalities that held, each as the operand the page wrote and its kind. A strict equality's
    holding arm determines a value (`val`); a loose one's (§7.2.13 IsLooselyEqual ( x, y )) bounds the operand
    to a set only that algorithm can read; both failing arms are `excl`. An exact repeat adds nothing. */
+/* lang_in, lang_out: the recognizers (bits over g_langs) whose language this flow decided the source's String is
+   in, and is not in (concolic_lang_file). */
 /* types_out: the types (CONCOLIC_TYF_* bits) this flow proved the source at this key does not take — its type
    facet, filed on the operand's own key by concolic_equality_facet from a typeof equality's row or from the steps
    of §7.2.13 IsLooselyEqual / §7.2.14 IsStrictlyEqual over the token; cty_of_operand narrows by it. */
@@ -853,7 +855,7 @@ typedef struct { char *key; char *val; signed char valkind; char **excl; int nex
                  ConcolicPrincipalPin *ppin; int nppin; char **ptok; int nptok;
                  signed char truth; signed char ex_contra;
                  char *adec; int adec_arm; signed char adec_what; signed char adec_neg;
-                 unsigned short types_out; } Cons;
+                 unsigned short types_out, lang_in, lang_out; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
 /* The one copy of one side, used by the fork's copy-up; a field added to BoundSide must be copied here or a
@@ -1097,6 +1099,8 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].adec_arm = below ? below->adec_arm : 0;
     g_pins[g_pins_n].adec_neg = below ? below->adec_neg : 0;
     g_pins[g_pins_n].types_out = below ? below->types_out : 0;
+    g_pins[g_pins_n].lang_in = below ? below->lang_in : 0;
+    g_pins[g_pins_n].lang_out = below ? below->lang_out : 0;
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
@@ -4003,6 +4007,50 @@ int concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds)
     return c->cmp_typeof != 0;
 }
 
+/* The recognizers a language facet names, in the order the agent first filed them: a bit is an index here. They
+   are code, the same in every flow, so the table is the agent's and only the bits are a flow's. */
+static ConcolicLangFn g_langs[16];
+static int g_nlangs;
+
+void concolic_lang_file(JSValueConst v, ConcolicLangFn in, int member)
+{
+    const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    Cons *e;
+    int b;
+
+    DCHECK(c != NULL && in != NULL && (member == 0 || member == 1),
+           "a language facet was filed on a value that is not unknown input, or with no recognizer or arm");
+    if (c->src_own != 1 || !c->src) return;
+    for (b = 0; b < g_nlangs && g_langs[b] != in; b++) {}
+    if (b == g_nlangs) {
+        CHECK(g_nlangs < (int)(sizeof g_langs / sizeof g_langs[0]),
+              "concolic: more language recognizers than a facet has bits");
+        g_langs[g_nlangs++] = in;
+    }
+    e = cons_entry(c->src);
+    if (member) e->lang_in |= (unsigned short)(1u << b);
+    else e->lang_out |= (unsigned short)(1u << b);
+    DCHECKF(!(e->lang_in & e->lang_out), "%s is both in and out of one language on this flow's path — a "
+            "component forked over membership it had already decided", c->src);
+}
+
+/* Whether the String `tok` can be the subject's value under the language facet its src carries. */
+static int lang_admits(const char *subject, const char *tok)
+{
+    const Cons *e = subject && g_nlangs ? cons_lookup(subject) : NULL;
+    size_t len = strlen(tok);
+    int b;
+
+    if (!e) return 1;
+    for (b = 0; b < g_nlangs; b++) {
+        unsigned bit = 1u << b;
+
+        if (!((e->lang_in | e->lang_out) & bit)) continue;
+        if (!g_langs[b](tok, len) != !(e->lang_in & bit)) return 0;
+    }
+    return 1;
+}
+
 int concolic_equality_outcome(JSContext *ctx, JSValueConst cond)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(cond, g_concolic_class) : NULL;
@@ -4014,6 +4062,11 @@ int concolic_equality_outcome(JSContext *ctx, JSValueConst cond)
                                    "equality mints state one");
     can_hold = eq_admitted(ctx, c, 1, &subject);
     can_fail = eq_admitted(ctx, c, 0, &subject);
+    /* A strict equality with a String holds only for that String, which is its own ToString; a loose one
+       compares through ToNumber and is left to the type facet. */
+    if (!c->cmp_typeof && c->cmp_algo != JS_CONCOLIC_EQ_LOOSE && c->cmp_kind == CONCOLIC_LIT_STRING &&
+        !lang_admits(subject, c->cmp_tok))
+        can_hold = 0;
     types = c->cmp_subj_types & (subject ? concolic_types(subject) : CONCOLIC_TYF_ALL);
     DCHECKF(types & (can_hold | can_fail),
             "an equality against %s (typeof subject %d) over %s admits types 0x%x holding and 0x%x failing, and "

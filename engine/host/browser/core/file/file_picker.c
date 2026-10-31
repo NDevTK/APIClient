@@ -152,6 +152,27 @@ static const char *picker_suffix_refusal(const char *sx, size_t len)
     return NULL;
 }
 
+/* The languages the valid arms below decide membership of, as concolic_lang_file's recognizers: *validate a
+   suffix*'s, and step 2.1.1's parse with and without step 2.1.3's parameter test. */
+static bool picker_suffix_valid(const char *s, size_t len)
+{
+    return !picker_suffix_refusal(s, len);
+}
+
+static bool picker_mime_parse_paramless(const char *s, size_t len, bool want_paramless)
+{
+    MimeType m;
+    bool ok;
+
+    mime_type_init(&m);
+    ok = mime_type_parse(&m, s, len) && (!want_paramless || m.nparams == 0);
+    mime_type_free(&m);
+    return ok;
+}
+
+static bool picker_mime_parses(const char *s, size_t len) { return picker_mime_parse_paramless(s, len, false); }
+static bool picker_mime_paramless(const char *s, size_t len) { return picker_mime_parse_paramless(s, len, true); }
+
 /* The unknown keys and suffixes one pass of process accept types has met, in order, against how many this flow
    already decided valid: the pass re-runs from step 1 on every entry of its stage, so one decided on an earlier
    entry is answered from `decided` rather than asked again, and a refusal ends the pass. `decided` lives on the
@@ -164,10 +185,8 @@ typedef struct {
 
 /* *validate a suffix* over unknown input: its four steps are tests of bytes the input does not hold, so the
    valid world and the TypeError world are forked, outcome 0 valid; `real` is the four steps run on the
-   suffix's example. The suffix is borrowed from the converted options the machine holds.
-   Named residual. Not covered: the valid arm files no domain over the suffix (a leading '.', the code point
-   set, at most 16 code points). Next diff: file them as that arm's constraint. How its absence shows: a
-   delivery at this suffix composing a value the valid arm's own steps refuse. */
+   suffix's example. Each arm files its membership of the valid-suffix language. The suffix is borrowed from
+   the converted options the machine holds. */
 static int picker_validate_unknown_suffix(JSContext *ctx, PickerAsk *ask, JSValueConst suffix)
 {
     JSValue ex;
@@ -186,6 +205,7 @@ static int picker_validate_unknown_suffix(JSContext *ctx, PickerAsk *ask, JSValu
     JS_FreeValue(ctx, ex);
     r = step_fork_run(ctx, ask->hdr, suffix, "File System Access §3.2.1 validate a suffix", 2, real, &arm);
     if (r) return r;
+    concolic_lang_file(suffix, picker_suffix_valid, arm == 0);
     if (arm == 1) {
         JS_ThrowTypeError(ctx, "a file picker suffix is not a valid suffix");
         return -1;
@@ -196,11 +216,9 @@ static int picker_validate_unknown_suffix(JSContext *ctx, PickerAsk *ask, JSValu
 
 /* Steps 2.1.1-2.1.3 over an unknown `accept` key (a record of unknown keys): parse a MIME type is a reading of
    bytes the key does not hold, so its three worlds are forked, outcome 0 a parameterless type, 1 step 2.1.2's
-   parse failure and 2 step 2.1.3's parameters; `real` is the parse run on the key's example. The key is
-   borrowed from the converted options the machine holds.
-   Named residual. Not covered: the valid arm files no domain over the key (a type and subtype of HTTP token
-   code points and no parameters). Next diff: file it as that arm's constraint. How its absence shows: a
-   delivery at this key composing a value the parse refuses. */
+   parse failure and 2 step 2.1.3's parameters; `real` is the parse run on the key's example. Each arm files
+   what it decided of the two languages, parsing and parsing with no parameters. The key is borrowed from the
+   converted options the machine holds. */
 static int picker_validate_unknown_key(JSContext *ctx, PickerAsk *ask, JSValueConst key)
 {
     JSValue ex;
@@ -223,6 +241,12 @@ static int picker_validate_unknown_key(JSContext *ctx, PickerAsk *ask, JSValueCo
     r = step_fork_run(ctx, ask->hdr, key, "File System Access §3.2.1 process accept types steps 2.1.1-2.1.3 "
                       "(parse a MIME type from the accept key)", 3, real, &arm);
     if (r) return r;
+    if (arm == 1) {
+        concolic_lang_file(key, picker_mime_parses, 0);
+    } else {
+        concolic_lang_file(key, picker_mime_parses, 1);
+        concolic_lang_file(key, picker_mime_paramless, arm == 0);
+    }
     if (arm == 1) {
         JS_ThrowTypeError(ctx, "a file picker accept key is not a valid MIME type");
         return -1;
