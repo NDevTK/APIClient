@@ -14,6 +14,7 @@
 #include "core/crypto/crypto.h"
 #include "core/css/css_keyword_value.h"
 #include "core/css/css_length.h"
+#include "core/css/css_math.h"
 #include "core/css/css_math_value.h"
 #include "core/css/css_namespace.h"
 #include "core/css/css_numeric_value.h"
@@ -268,6 +269,7 @@ static void d_animation_frame(JSContext *c, const PlatformAgent *a) { (void)a; a
 static void d_idle_callback(JSContext *c, const PlatformAgent *a) { (void)a; idle_callback_init(c); }
 static void d_page_reveal(JSContext *c, const PlatformAgent *a) { (void)a; page_reveal_init(c); }
 static void d_css_length(JSContext *c, const PlatformAgent *a) { (void)a; css_length_init(c); }
+static void d_css_math(JSContext *c, const PlatformAgent *a) { (void)a; css_math_init(c); }
 static void d_viewport(JSContext *c, const PlatformAgent *a) { (void)a; viewport_init(c); }
 static void d_visual_viewport(JSContext *c, const PlatformAgent *a) { (void)a; visual_viewport_init(c); }
 static void d_scroll_events(JSContext *c, const PlatformAgent *a) { (void)a; scroll_events_init(c); }
@@ -488,6 +490,7 @@ static void r_history(JSRuntime *rt) { (void)rt; history_free(); }
 /* CSSOM View §4's viewport and §12's VisualViewport over it: §12's members derive from §4's layout viewport, so
    reverse declaration order releases §12 first. */
 static void r_css_length(JSRuntime *rt) { (void)rt; css_length_free(); }
+static void r_css_math(JSRuntime *rt) { (void)rt; css_math_free(); }
 static void r_viewport(JSRuntime *rt) { (void)rt; viewport_free(); }
 static void r_visual_viewport(JSRuntime *rt) { (void)rt; visual_viewport_free(); }
 /* CSSOM View §13.2 "Scrolling"'s pending scroll events: no geometry of its own, but §3.1's perform a scroll fills
@@ -903,6 +906,8 @@ static const PlatformComponent PLATFORM[] = {
     { "page_reveal",         d_page_reveal,         i_page_reveal, r_page_reveal },
     /* css_length.h's per-realm form table, ahead of `viewport`, whose facts are the first lengths a realm forms. */
     { "css_length",          d_css_length,          NULL,        r_css_length },
+    /* css_math.h's per-realm table of the calculation trees computed values keep. */
+    { "css_math",            d_css_math,            NULL,        r_css_math },
     { "viewport",            d_viewport,            NULL,        r_viewport },
     { "visual_viewport",     d_visual_viewport,     NULL,        r_visual_viewport },
     /* CSSOM View §13.2 "Scrolling"'s pending scroll events, before `rendering`: update-the-rendering step 9 drains

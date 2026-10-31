@@ -47,18 +47,14 @@
  * as `50vw` is, and a math component that dropped the set at its own subtraction would delete the mobile arm
  * that `css_px_sub` exists to keep.
  *
- * WHAT A MATH FUNCTION SIMPLIFIES TO HERE, AND WHERE THAT STOPS. §10.10.1 simplifies a calculation tree
- * EAGERLY and bottom-up, so this file simplifies AS IT PARSES and never materializes the tree: each production
- * returns an already-simplified value, which for every math function that resolves to a production CSS admits
- * is a Sum of at most two terms — a number in the canonical unit and a `<percentage>` that §10.11 "Computed
- * Value" leaves unresolved ("Where percentages are not resolved at computed-value time, they are not resolved
- * in math functions, e.g. calc(100% - 100% + 1px) resolves to calc(0% + 1px), not to 1px"). That pair is the
- * `CssMathValue` below. The residues it cannot hold are the ones §10.10.1 leaves as live tree nodes — a
- * Product of two percentage-carrying operands, a Min whose arguments cannot be compared because a percentage
- * "might resolve against a negative basis" — and those CRASH rather than answering, because a plausible number
- * there is exactly the §Architecture defect where a default makes a hole look like a measurement. They crash
- * only when the function is OTHERWISE VALID: `calc(50% * 50%)` types to «["percent" → 2]», which matches no
- * production, so it is refused as invalid CSS and never reaches the crash.
+ * What a math function simplifies to here, and where that stops. §10.10.1 simplifies eagerly and bottom-up,
+ * so this file simplifies as it parses: each production returns a Sum of at most two terms — a number in the
+ * canonical unit and a `<percentage>` that §10.11 "Computed Value" leaves unresolved ("calc(100% - 100% + 1px)
+ * resolves to calc(0% + 1px), not to 1px") — or, where §10.10.1 cannot combine operands yet, an operator node
+ * of §10.10's calculation tree over such Sums: a Product of two percentage-carrying operands, or a Min whose
+ * arguments cannot be compared because a percentage "might resolve against a negative basis". A function
+ * whose root is such a node answers that tree in `CssMathValue.tree`, and css_math_tree_resolve finishes the
+ * simplification once used-value time supplies the basis.
  *
  * §10.9.2's DEGENERATE VALUES ARE IEEE-754 AND ARE MOSTLY FREE, WHICH IS WHY THE EXCEPTIONS ARE WRITTEN OUT.
  * "Math functions follow IEEE-754 semantics", and a C `double` IS IEEE-754, so signed zero and the infinity
@@ -73,6 +69,9 @@
 #include <stddef.h>
 
 #include "core/css/css_length.h"
+
+/* §10.10's calculation tree, as css_math.c keeps it where §10.10.1 stops (see CssMathValue). */
+typedef struct CssMathTree CssMathTree;
 
 /* CSS Typed OM 1 §4.3.2 "Numeric Value Typing"'s BASE TYPES, in that section's own order: "The base types are
    "length", "angle", "time", "frequency", "resolution", "flex", and "percent". The ordering of a type's
@@ -317,20 +316,26 @@ typedef struct {
    behavior.)" So `calc(100% - 100% + 1px)` answers pct 0 WITH a percentage term, which is exactly the
    `calc(0% + 1px)` §10.11 says it computes to, and a caller that read `pct != 0` instead would call it `1px`. */
 typedef struct {
-    CssMathType type;
-    CssPx       num;
-    double      pct;
-    bool        pct_term;
+    CssMathType        type;
+    CssPx              num;
+    double             pct;
+    bool               pct_term;
+    /* Non-NULL where §10.10.1 stops at an operator node it cannot reduce yet, because an operand still carries
+       a percentage the used-value basis resolves (`min(320px, 100% - 568px)`): the value IS that calculation
+       tree, and `num`, `pct` and `pct_term` are unused. Interned in the resolver's realm, which owns it for the
+       realm's lifetime, so copies share it. */
+    const CssMathTree *tree;
 } CssMathValue;
 
 /* §10.10 "Internal Representation" + §10.10.1 "Simplification" + §10.9.2's top-level censoring, over the text
-   of one math function. TRUE with `*out` written when the function is valid AND its type matches `want`.
+   of one math function. A function whose simplification stops above the pair answers its calculation tree in
+   `tree`, owned by `res->realm`. TRUE with `*out` written when the function is valid AND its type matches
+   `want`.
    FALSE — writing nothing — for text that is not a math function, for one whose type is failure, and for one
    that resolves to a different production; all three are "this value does not match this grammar", which is
    the answer a page's own invalid declaration deserves and is never a crash.
-   IT CRASHES for a valid math function this component cannot reduce to the pair above (see the header) and for
-   one whose leaves need a capability nothing in this engine has (css-grid-2 §7.2.4's `fr`), because those are
-   unbuilt mechanisms rather than authoring mistakes.
+   It crashes for a valid math function whose leaves need a capability nothing in this engine has (css-grid-2
+   §7.2.4's `fr`), because that is an unbuilt mechanism rather than an authoring mistake.
    §10.12 "Range Checking" IS THE CALLER'S: "The clamping/rounding behavior of numeric functions is, for math
    functions, only performed on the results of a top-level calculation" — and the range is the PROPERTY's
    (`width` is [0,∞], `opacity` is [0,1]), which this component does not know. §10.9.2's context-free half is
@@ -338,5 +343,24 @@ typedef struct {
    An infinity is returned AS an infinity, for the caller's §10.12 step to clamp. */
 bool css_math_eval(const char *text, size_t len, const CssMathResolver *res,
                    CssMathProduction want, CssMathValue *out);
+
+/* §10.11 "Computed Value": "The calculation tree is again simplified at used value time; with used value time
+   information, a math function always simplifies down to a single numeric value." Every percentage leaf of
+   `tree` is resolved against `basis` (§10.10.1's first step: "If root is a percentage that will be resolved
+   against another value, and there is enough information available to resolve it, do so"), every operator
+   node then runs, and §10.9.2's top-level censoring applies. §10.12's range clamp is the caller's. */
+CssPx css_math_tree_resolve(const CssMathTree *tree, CssPx basis);
+
+/* §10.13 "Serialization"'s serialize a math function over `tree`, as a computed value: the root's function
+   name, or `calc(` for a calc-operator root, around its children serialized by "serialize a calculation tree".
+   OWNED. */
+char *css_math_tree_serialize(const CssMathTree *tree);
+
+/* The union of the environment facts `tree`'s leaves carry. */
+CssEnvSet css_math_tree_env(const CssMathTree *tree);
+
+/* The per-realm table that owns every interned calculation tree, declared once per agent. */
+void css_math_init(JSContext *ctx);
+void css_math_free(void);
 
 #endif

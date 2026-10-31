@@ -1156,6 +1156,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cascforkview.h"
 #include "fixture/scrollflex.h"
 #include "fixture/gridtemplate.h"
+#include "fixture/calctree.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1698,6 +1699,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "cascforkview", HTML_CASCFORKVIEW },
     { "scrollflex", HTML_SCROLLFLEX },
     { "gridtemplate", HTML_GRIDTEMPLATE },
+    { "calctree", HTML_CALCTREE },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15451,6 +15453,41 @@ TF_UNIT void probes_gridtemplate(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `calctree` document (fixture/calctree.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give every
+   value they expect. */
+TF_UNIT void probes_calctree(const char *js, Probe *tab, int *n) {
+    const char *ct_why = NULL; int ct_tt = !!strstr(js, "\"/api/calctree\"");
+
+    fold_row(&ct_tt, &ct_why, ct_tt,
+             "NOT REACHED: there is no /api/calctree record at all, so the document aborted before its fetch");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "aw", "320"),
+             "css-values-4 §10.11: in a 1000px parent the min()'s 320px argument does not win");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "bw", "32"),
+             "css-values-4 §10.11: in a 600px parent the min()'s `100% - 568px` argument does not win");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "cw", "290"),
+             "css-values-4 §10.10.1: `calc(50% * 2 - 10px)` does not resolve to 100% less 10px");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "dw", "150"),
+             "css-values-4 §10.11: in a 300px parent `min(50%, 200px)`'s percentage does not win");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "ew", "200"),
+             "css-values-4 §10.11: in a 600px parent `min(50%, 200px)`'s 200px does not win");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "as", "ok"),
+             "css-values-4 §10.13: the specified `max-width` does not serialize as `min(320px, 100% - 568px)`");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "ac", "ok"),
+             "css-values-4 §10.13: the computed `max-width` does not serialize as `min(320px, 100% - 568px)`");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "cs", "ok"),
+             "css-values-4 §10.13: the specified `width` does not serialize as `calc(100% - 10px)`");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "cc", "ok"),
+             "CSSOM §9: the resolved `width` of a rendered box is not its used 290px");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "ds", "ok"),
+             "css-values-4 §10.13: the specified `width` does not serialize as `min(50%, 200px)`");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "dc", "ok"),
+             "CSSOM §9: the resolved `width` of a rendered box is not its used 150px");
+    const Probe rows[] = {
+        { "calc-tree", ct_tt, "/api/calctree", SESS_EXPLORE, ct_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -21487,6 +21524,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_cascforkview(js, probes, &np);
     probes_scrollflex(js, probes, &np);
     probes_gridtemplate(js, probes, &np);
+    probes_calctree(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);

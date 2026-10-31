@@ -744,7 +744,7 @@ static bool iss_source_size_value(JSContext *ctx, const char *text, size_t len, 
                therefore reaches the page through `img.currentSrc`, which is where the source identity belongs.
                ASSERTED rather than assumed, so the day that table starts answering an environment fact this
                arm is where the obligation to carry it surfaces. */
-            DCHECK(v.num.env == CSS_ENV_NONE && !v.pct_term,
+            DCHECK(v.num.env == CSS_ENV_NONE && !v.pct_term && v.tree == NULL,
                    "a `sizes` attribute's math function resolved to a length carrying an environment fact or a "
                    "surviving `<percentage>`. Neither is reachable through this resolver: core/css/"
                    "media_query.h answers a plain modelled number by design, and HTML §4.8.4.2.2 'Sizes "

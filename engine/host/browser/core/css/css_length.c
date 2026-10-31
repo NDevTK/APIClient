@@ -1363,7 +1363,11 @@ bool css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *
                    — §10.10.1 "Simplification"'s "zero-valued terms cannot be simply removed from a Sum" is why
                    `css_math_eval` answers `pct_term` beside `pct`, and reading `pct != 0` here would turn that
                    worked example's `calc(0% + 1px)` into the `1px` the sentence says it is not. */
-                if (v.pct_term) {
+                if (v.tree != NULL) {
+                    out.kind = CSS_LENGTH_CALCULATED;
+                    out.tree = v.tree;
+                }
+                else if (v.pct_term) {
                     out.kind = CSS_LENGTH_CALCULATED;
                     out.pct = v.pct;
                 }
@@ -1746,6 +1750,8 @@ CssPx css_length_resolve_pct_at(CssLength len, CssPx basis, const char *file, in
             "set `pct` on a value it had already given a length — the repair is at whichever parse wrote it, "
             "and the site named here points only at the property to go and read",
             len.px.px, file, line);
+    /* §10.11: a calculation tree is simplified again now that its percentages have a basis. */
+    if (len.tree != NULL) return css_math_tree_resolve(len.tree, basis);
     /* §5.6's "both values are converted to absolute lengths and added", as ONE expression — the scaled basis
        carries the basis's facts, the length term carries its own, and `css_px_add` is what makes the answer a
        joint function of both rather than of whichever operand was resolved last. */

@@ -2969,6 +2969,18 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
             free(pct);
             return out;
         }
+        if (len.kind == CSS_LENGTH_CALCULATED && len.tree != NULL) {
+            char *calc = css_math_tree_serialize(len.tree);
+
+            /* A tree keeps its percentages, so its text derives from its leaves' environment facts only. */
+            DCHECK(css_math_tree_env(len.tree) == CSS_ENV_NONE,
+                   "a computed calculation tree whose leaves carry an environment fact was serialized, and its "
+                   "text reaches the page with no source. Build the joint fact carrier over a tree's leaves "
+                   "for viewport_env_derived, as the Sum arm below passes its length term");
+            out = JS_NewString(ctx, calc);
+            free(calc);
+            return out;
+        }
         if (len.kind == CSS_LENGTH_CALCULATED) {
             char *calc;
 

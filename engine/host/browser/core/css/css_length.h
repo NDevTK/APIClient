@@ -381,6 +381,10 @@ typedef struct {
     CssPx         px;        /* CSS_LENGTH_ABSOLUTE and CSS_LENGTH_CALCULATED */
     double        pct;       /* CSS_LENGTH_PERCENTAGE and CSS_LENGTH_CALCULATED */
     CssKeyword    keyword;   /* CSS_LENGTH_KEYWORD; CSS_KEYWORD_INVALID for every other kind */
+    /* CSS_LENGTH_CALCULATED only, and NULL unless §10.10.1 left an operator node over a percentage (a
+       `min(320px, 100% - 568px)`): the computed value is then that calculation tree (core/css/css_math.h), `px`
+       and `pct` are unused, and css_length_resolve_pct simplifies it at used-value time. */
+    const struct CssMathTree *tree;
 } CssLength;
 
 /* Is `len` the keyword `k`? */

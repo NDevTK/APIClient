@@ -1,18 +1,25 @@
 /* CSS Values and Units 4 §10 "Mathematical Expressions". See css_math.h for why this is a component, what
  * lexbor supplied and what is ported, why the type algebra is not arithmetic on numbers, and where §10.10.1's
  * simplification stops. */
+#include <ctype.h>
 #include <math.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <lexbor/css/syntax/token.h>
 #include <lexbor/css/syntax/tokenizer.h>
 
 #include "check.h"
+#include "core/agent_state.h"
 #include "core/css/css_dimension.h"
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
+#include "core/realm.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* §10.7.1 "Numeric Constants: e, pi", to the digits that section itself prints: e is "approximately equal to
@@ -409,10 +416,10 @@ static bool mth_type_is_valid(const CssMathType *t, CssMathProduction ctx)
    reader to build a calculation tree when what is missing is a grid track sizer. */
 typedef enum {
     MTH_RESOLVED = 0,
-    /* §10.10.1 left a LIVE TREE NODE and this file holds no tree — a Product of two percentage-carrying
-       operands, or a Min whose children cannot be compared because "percentages might resolve against a
-       negative basis". */
-    MTH_UNRESOLVED_TREE,
+    /* §10.10.1 cannot run this function's operation yet — a Min whose children cannot be compared because
+       "percentages might resolve against a negative basis" — so mth_function_apply keeps it as an operator
+       node of the calculation tree. Transient: no value leaves that function carrying it. */
+    MTH_LIVE_NODE,
     /* css-grid-2 §7.2.4's `fr`, whose value exists only inside css-grid-2 §12's track sizing. */
     MTH_UNRESOLVED_FLEX
 } MthUnresolved;
@@ -424,12 +431,20 @@ static MthUnresolved mth_worse(MthUnresolved a, MthUnresolved b)
     return a != MTH_RESOLVED ? a : b;
 }
 
+/* §10.10's calc-operator nodes and the function node, kept where §10.10.1 stops. */
+typedef enum { MTH_NODE_SUM, MTH_NODE_NEGATE, MTH_NODE_PRODUCT, MTH_NODE_INVERT, MTH_NODE_FUNCTION } MthNodeOp;
+
+/* A simplified calculation: a Sum of at most two numeric terms, or (`node`) an operator node over such values.
+   `num_term` records that the Sum has a non-percentage term even when its number is zero, which §10.13's
+   serialization of a node's operands reads (`min(50%, 200px)` against `min(50% + 0px, 200px)`). */
 typedef struct {
-    CssMathType   type;
-    CssPx         num;      /* the non-percentage term, in §5.4.1's canonical unit for `type` */
-    double        pct;      /* the `<percentage>` term, as a number of percent */
-    bool          pct_term; /* §10.10.1: a zero-valued Sum term is not removable, so this is not `pct != 0` */
-    MthUnresolved blocked;
+    CssMathType          type;
+    CssPx                num;      /* the non-percentage term, in §5.4.1's canonical unit for `type` */
+    double               pct;      /* the `<percentage>` term, as a number of percent */
+    bool                 pct_term; /* §10.10.1: a zero-valued Sum term is not removable, so this is not `pct != 0` */
+    bool                 num_term;
+    MthUnresolved        blocked;
+    struct CssMathTree  *node;     /* non-NULL: the value is this operator node; the four fields above unused */
 } MthVal;
 
 static MthVal mth_val(CssMathType type, double n)
@@ -440,7 +455,9 @@ static MthVal mth_val(CssMathType type, double n)
     v.num = css_px(n);
     v.pct = 0.0;
     v.pct_term = false;
+    v.num_term = true;
     v.blocked = MTH_RESOLVED;
+    v.node = NULL;
     return v;
 }
 
@@ -465,7 +482,32 @@ typedef struct {
        That is CLAUDE.md's own named defect — an operation whose input is read back off the object it acts on
        is read at the wrong TIME — and the fix is the same one: the input travels with the operation. */
     bool                        ws_before;
+    /* Every operator node this parse made, freed when it ends; a tree that survives it is interned first. */
+    struct CssMathTree         *arena;
 } Mth;
+
+/* An operator node: a Sum or Product over `n` children, a Negate or Invert over one, or a math function over
+   its arguments in order (`fn` names it, its rounding strategy and its `none` arms). Each child is a simplified
+   Sum of numeric terms or another node. A parse's nodes are owned by its arena (`arena_next`); an interned
+   tree's by its realm's table, children included. */
+struct CssMathTree {
+    MthNodeOp           op;
+    CssMathType         type;
+    MthVal             *kid;
+    unsigned            n;
+    char                name[16];
+    size_t              nlen;
+    int                 shape;        /* MthShape */
+    int                 how;          /* MthRounding */
+    bool                none[3];
+    MthUnresolved       blocked;
+    JSContext          *realm;        /* an interned tree's owning realm; NULL in a parse's arena */
+    struct CssMathTree *arena_next;
+};
+
+struct MthFn;
+static MthVal mth_node(Mth *m, MthNodeOp op, CssMathType type, const MthVal *kids, unsigned n,
+                       const struct MthFn *fn);
 
 static lxb_css_syntax_token_t *mth_peek(Mth *m) { return lxb_css_syntax_token(m->tkz); }
 
@@ -652,6 +694,7 @@ static MthLeaf mth_leaf(Mth *m, MthVal *out)
         *out = mth_val(ty, 0.0);
         out->pct = lxb_css_syntax_token_number(t)->num;
         out->pct_term = true;
+        out->num_term = false;
         mth_take(m);
         return MTH_LEAF_VALUE;
     }
@@ -708,21 +751,42 @@ static MthLeaf mth_leaf(Mth *m, MthVal *out)
    children and replace them with a single numeric value containing the sum of the removed nodes." Once the
    TYPES have added, both operands are the same type and both terms are addable in that type's canonical unit —
    which is why the type check is the whole of the validity question and the arithmetic below has none. */
-static void mth_add(const MthVal *a, const MthVal *b, MthVal *out)
+static void mth_add(Mth *m, const MthVal *a, const MthVal *b, MthVal *out)
 {
+    if (a->node != NULL || b->node != NULL) {
+        MthVal kids[2] = { *a, *b };
+
+        *out = mth_node(m, MTH_NODE_SUM, mth_types_added(&a->type, &b->type), kids, 2, NULL);
+        return;
+    }
     out->type = mth_types_added(&a->type, &b->type);
     out->num = css_px_add(a->num, b->num);
     out->pct = a->pct + b->pct;
     out->pct_term = a->pct_term || b->pct_term;
+    out->num_term = a->num_term || b->num_term;
     out->blocked = mth_worse(a->blocked, b->blocked);
+    out->node = NULL;
 }
 
 /* §10.10.1's Negate over an already-simplified Sum: "If root's child is a numeric value, return an equivalent
    numeric value, but with the value negated (0 - value)", applied to each surviving term. */
-static MthVal mth_negate(const MthVal *a)
+static MthVal mth_negate(Mth *m, const MthVal *a)
 {
     MthVal out = *a;
 
+    if (a->node != NULL && a->node->op == MTH_NODE_SUM) {
+        /* §10.10.1's Negate over a Sum: "Return a Sum node with negated grandchildren as its children". */
+        const struct CssMathTree *sum = a->node;
+        MthVal *neg = lexbor_malloc(sum->n * sizeof *neg);
+        unsigned i;
+
+        CHECK(neg != NULL, "css_math: OOM negating a calculation node's children");
+        for (i = 0; i < sum->n; i++) neg[i] = mth_negate(m, &sum->kid[i]);
+        out = mth_node(m, MTH_NODE_SUM, a->type, neg, sum->n, NULL);
+        free(neg);
+        return out;
+    }
+    if (a->node != NULL) return mth_node(m, MTH_NODE_NEGATE, a->type, a, 1, NULL);
     out.num = css_px_sub(css_px(0.0), a->num);
     out.pct = 0.0 - a->pct;
     return out;
@@ -733,10 +797,19 @@ static MthVal mth_negate(const MthVal *a)
    and the rule above it ("If root contains only two children, one of which is a number ... and the other of
    which is a Sum whose children are all numeric values, multiply all of the Sum's children by the number").
    Anything else leaves a live Product node, which is `blocked`. */
-static void mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
+static void mth_multiply(Mth *m, const MthVal *a, const MthVal *b, MthVal *out)
 {
-    out->type = mth_types_multiplied(&a->type, &b->type);
+    CssMathType ty = mth_types_multiplied(&a->type, &b->type);
+    MthVal kids[2] = { *a, *b };
+
+    if (a->node != NULL || b->node != NULL) {
+        *out = mth_node(m, MTH_NODE_PRODUCT, ty, kids, 2, NULL);
+        return;
+    }
+    out->type = ty;
     out->blocked = mth_worse(a->blocked, b->blocked);
+    out->node = NULL;
+    out->num_term = true;
     if (!a->pct_term && !b->pct_term) {
         out->num = css_px_mul(a->num, b->num);
         out->pct = 0.0;
@@ -755,13 +828,13 @@ static void mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
             out->num = css_px_mul(sum->num, k->num);
             out->pct = sum->pct * k->num.px;
             out->pct_term = true;
+            out->num_term = sum->num_term;
             return;
         }
     }
-    out->num = css_px(0.0);
-    out->pct = 0.0;
-    out->pct_term = a->pct_term || b->pct_term;
-    mth_block(out, MTH_UNRESOLVED_TREE);
+    /* Anything else is a live Product node, which the used-value simplification runs once its percentages
+       have a basis. */
+    *out = mth_node(m, MTH_NODE_PRODUCT, ty, kids, 2, NULL);
 }
 
 /* A function's result value: css_length.h's atom for the function `name` (`nlen` bytes, the notation as written)
@@ -781,7 +854,7 @@ static CssPx mth_atom(const char *name, size_t nlen, const char *qual, const Css
    sub-expression's type is the result of multiplying the left type and right type." §10.10.1's Invert reduces
    only "if root's child is a number (not a percentage or dimension)", so a divisor carrying a percentage term
    leaves a live Invert node under the Product — which the multiply above then reports as blocked. */
-static void mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
+static void mth_divide(Mth *m, const MthVal *a, const MthVal *b, MthVal *out)
 {
     MthVal inv;
 
@@ -792,16 +865,14 @@ static void mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
        give rather than a crash. The environment facts still ride the operand, so the union is unaffected. */
     inv = *b;
     inv.type = css_math_type_invert(&b->type);
-    if (b->pct_term) {
-        inv.num = css_px(0.0);
-        inv.pct = 0.0;
-        mth_block(&inv, MTH_UNRESOLVED_TREE);
+    if (b->pct_term || b->node != NULL) {
+        inv = mth_node(m, MTH_NODE_INVERT, inv.type, b, 1, NULL);
     } else {
         inv.num = mth_atom("inv", 3, NULL, &b->num, 1, 1.0 / b->num.px);
         inv.pct = 0.0;
         inv.pct_term = false;
     }
-    mth_multiply(a, &inv, out);
+    mth_multiply(m, a, &inv, out);
 }
 
 /* ---- §10.2 to §10.6's functions ------------------------------------------------------------------------- */
@@ -957,7 +1028,7 @@ typedef enum {
 
 /* One math function being read: its name, its shape, and one calculation per argument position read so far
    (`arg`, OWNED). A clamp() `none` holds a placeholder and is marked in `none`. */
-typedef struct {
+typedef struct MthFn {
     char        name[16];
     size_t      nlen;
     MthShape    shape;
@@ -966,6 +1037,103 @@ typedef struct {
     bool        none[3];
     MthRounding how;
 } MthFn;
+
+/* ---- §10.10's calculation tree, where §10.10.1 stops ------------------------------------------------------ */
+
+static void mth_kids_push(MthVal **v, unsigned *n, unsigned *cap, MthVal x)
+{
+    if (*n == *cap) {
+        unsigned c = *cap ? 2 * *cap : 4;
+        MthVal *grown = lexbor_realloc(*v, c * sizeof *grown);
+
+        CHECK(grown != NULL, "css_math: OOM keeping a calculation node's children");
+        *v = grown;
+        *cap = c;
+    }
+    (*v)[(*n)++] = x;
+}
+
+/* §10.10.1's operator node `op` over `kids`, in the arena: a Sum's and a Product's children that are the same
+   operation are replaced by their children ("For each of root's children that are Sum nodes, replace them with
+   their children", and the Product rule's twin), a Sum's numeric children are combined into one ("For each set
+   of root's children that are numeric values with identical units ... a single numeric value containing the
+   sum"), a Negate of a Negate is its grandchild, and a node left with one child is that child. */
+static MthVal mth_node(Mth *m, MthNodeOp op, CssMathType type, const MthVal *kids, unsigned n, const MthFn *fn)
+{
+    struct CssMathTree *t;
+    MthVal *v = NULL, out;
+    unsigned cnt = 0, cap = 0, i, j;
+    int linear = -1;
+
+    /* §10.9's type-only mode reads only the type, which every node's maker has already computed. */
+    if (m->res == NULL) {
+        out = mth_val(type, 0.0);
+        return out;
+    }
+    if (op == MTH_NODE_NEGATE && kids[0].node != NULL && kids[0].node->op == MTH_NODE_NEGATE)
+        return kids[0].node->kid[0];
+    for (i = 0; i < n; i++) {
+        const struct CssMathTree *k = kids[i].node;
+
+        if ((op == MTH_NODE_SUM || op == MTH_NODE_PRODUCT) && k != NULL && k->op == op) {
+            for (j = 0; j < k->n; j++) mth_kids_push(&v, &cnt, &cap, k->kid[j]);
+            continue;
+        }
+        mth_kids_push(&v, &cnt, &cap, kids[i]);
+    }
+    if (op == MTH_NODE_SUM) {
+        unsigned w = 0;
+
+        for (i = 0; i < cnt; i++) {
+            if (v[i].node == NULL && linear >= 0) {
+                MthVal sum;
+
+                mth_add(m, &v[linear], &v[i], &sum);
+                v[linear] = sum;
+                continue;
+            }
+            if (v[i].node == NULL) linear = (int)w;
+            v[w++] = v[i];
+        }
+        cnt = w;
+    }
+    if (cnt == 1 && (op == MTH_NODE_SUM || op == MTH_NODE_PRODUCT)) {
+        out = v[0];
+        free(v);
+        return out;
+    }
+    t = lexbor_calloc(1, sizeof *t);
+    CHECK(t != NULL, "css_math: OOM making a calculation node");
+    t->op = op;
+    t->type = type;
+    t->kid = v;
+    t->n = cnt;
+    t->blocked = MTH_RESOLVED;
+    for (i = 0; i < cnt; i++) t->blocked = mth_worse(t->blocked, v[i].blocked);
+    if (fn != NULL) {
+        memcpy(t->name, fn->name, fn->nlen);
+        t->nlen = fn->nlen;
+        t->shape = (int)fn->shape;
+        t->how = (int)fn->how;
+        memcpy(t->none, fn->none, sizeof t->none);
+    }
+    t->arena_next = m->arena;
+    m->arena = t;
+    out = mth_val(type, 0.0);
+    out.blocked = t->blocked;
+    out.node = t;
+    return out;
+}
+
+static void mth_tree_free(struct CssMathTree *t)
+{
+    unsigned i;
+
+    for (i = 0; i < t->n; i++)
+        if (t->kid[i].node != NULL && t->realm != NULL) mth_tree_free(t->kid[i].node);
+    free(t->kid);
+    free(t);
+}
 
 /* `name`'s shape, false for a name that is none of §10.8's twenty-one. */
 static bool mth_shape_of(const char *name, size_t nlen, MthShape *out)
@@ -1100,7 +1268,7 @@ static void mth_variadic(Mth *m, int kind, const MthVal *argv, unsigned argc, Mt
        the ABSOLUTE VALUE of its input" (§10.5), which is a sign question a percentage cannot answer either. */
     if (any_pct) {
         free(args);
-        if (n > 1 || kind == 2) mth_block(out, MTH_UNRESOLVED_TREE);
+        if (n > 1 || kind == 2) mth_block(out, MTH_LIVE_NODE);
         return;
     }
     out->pct = 0.0;
@@ -1138,7 +1306,7 @@ static void mth_clamp(Mth *m, const MthVal *arg, const bool *none, MthVal *out)
        minimum wins over the maximum when the two are in the wrong order — which §10.2 states as a rule and not
        as a consequence ("clamp(100px, ..., 50px) will resolve to 100px, exceeding its stated 'max' value"). */
     if (arg[1].pct_term || (present[0] && arg[0].pct_term) || (present[2] && arg[2].pct_term)) {
-        if (present[0] || present[2]) mth_block(out, MTH_UNRESOLVED_TREE);
+        if (present[0] || present[2]) mth_block(out, MTH_LIVE_NODE);
         return;
     }
     {
@@ -1183,7 +1351,7 @@ static bool mth_round(Mth *m, MthRounding how, const MthVal *argv, unsigned argc
     out->blocked = mth_worse(a.blocked, have_b ? b.blocked : MTH_RESOLVED);
     if (m->res == NULL) return true;
     if (a.pct_term || (have_b && b.pct_term)) {
-        mth_block(out, MTH_UNRESOLVED_TREE);
+        mth_block(out, MTH_LIVE_NODE);
         return true;
     }
     /* §10.3's `line-width` strategy ends in css-values-4 §6's SNAP A LENGTH AS A LINE WIDTH — with B omitted
@@ -1253,7 +1421,7 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
         out->type = ty;
         out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
         if (m->res != NULL) {
-            if (arg[0].pct_term || arg[1].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
+            if (arg[0].pct_term || arg[1].pct_term) { mth_block(out, MTH_LIVE_NODE); ok = true; goto done; }
             CssPx ab[2] = { arg[0].num, arg[1].num };
 
             out->num = mth_atom(name, nlen, NULL, ab, 2, mth_name_is(name, nlen, "mod")
@@ -1278,7 +1446,7 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
         if (m->res != NULL) {
             double r;
 
-            if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
+            if (arg[0].pct_term) { mth_block(out, MTH_LIVE_NODE); ok = true; goto done; }
             r = mth_to_radians(&arg[0], is_angle);
             /* §10.4.1: "In sin(A), cos(A), or tan(A), if A is infinite, the result is NaN." C's `sin` already
                answers NaN there, and its NaN propagation is the same; the guard is written so the rule is
@@ -1306,7 +1474,7 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
         if (m->res != NULL) {
             double v = arg[0].num.px, r;
 
-            if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
+            if (arg[0].pct_term) { mth_block(out, MTH_LIVE_NODE); ok = true; goto done; }
             if (v != v) r = NAN;
             else if (mth_name_is(name, nlen, "asin")) r = asin(v);   /* §10.4.1: |A| > 1 is NaN, which C gives */
             else if (mth_name_is(name, nlen, "acos")) r = acos(v);
@@ -1329,7 +1497,7 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
         out->type = ty;
         out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
         if (m->res != NULL) {
-            if (arg[0].pct_term || arg[1].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
+            if (arg[0].pct_term || arg[1].pct_term) { mth_block(out, MTH_LIVE_NODE); ok = true; goto done; }
             CssPx ab[2] = { arg[0].num, arg[1].num };
 
             out->num = mth_atom(name, nlen, NULL, ab, 2, (mth_is_nan(&arg[0]) || mth_is_nan(&arg[1]))
@@ -1355,7 +1523,7 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
         out->blocked = mth_worse(arg[0].blocked, have_b ? arg[1].blocked : MTH_RESOLVED);
         if (m->res != NULL) {
             if (arg[0].pct_term || (have_b && arg[1].pct_term)) {
-                mth_block(out, MTH_UNRESOLVED_TREE);
+                mth_block(out, MTH_LIVE_NODE);
                 ok = true;
                 goto done;
             }
@@ -1379,7 +1547,7 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
         *out = arg[0];
         out->type = ty;
         if (m->res != NULL) {
-            if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
+            if (arg[0].pct_term) { mth_block(out, MTH_LIVE_NODE); ok = true; goto done; }
             out->num = mth_atom(name, nlen, NULL, &arg[0].num, 1,
                                 mth_name_is(name, nlen, "sqrt") ? sqrt(arg[0].num.px) : exp(arg[0].num.px));
             out->pct = 0.0;
@@ -1393,7 +1561,7 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
         if (m->res != NULL) {
             /* §10.6's own note: "an expression like 10% might be positive or negative once it's resolved,
                depending on what value it's resolved against", so a surviving percentage blocks the sign. */
-            if (arg[0].pct_term) mth_block(out, MTH_UNRESOLVED_TREE);
+            if (arg[0].pct_term) mth_block(out, MTH_LIVE_NODE);
             else out->num = mth_atom(name, nlen, NULL, &arg[0].num, 1, fabs(arg[0].num.px));
         }
         ok = true;
@@ -1408,7 +1576,7 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
         if (m->res != NULL) {
             double v = arg[0].num.px;
 
-            if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
+            if (arg[0].pct_term) { mth_block(out, MTH_LIVE_NODE); ok = true; goto done; }
             out->num = mth_atom(name, nlen, NULL, &arg[0].num, 1,
                                 v != v ? NAN : v < 0.0 ? -1.0 : v > 0.0 ? 1.0 : signbit(v) ? -0.0 : 0.0);
             out->pct = 0.0;
@@ -1421,6 +1589,38 @@ static bool mth_function_value(Mth *m, const MthFn *fn, MthVal *out)
     }
 
 done:
+    return ok;
+}
+
+/* A math function over its arguments, or its operator node where §10.10.1 cannot run it yet: an argument that is
+   itself a node ("If root is an operator node that's not one of the calc-operator nodes, and all of its
+   calculation children are numeric values with enough information to compute the operation root represents,
+   return the result"; a node child is not one), or an operation a percentage argument blocks. The node's type
+   is §10.9's, from the same dispatch run over the types alone. calc() is its argument and never a node. */
+static bool mth_function_apply(Mth *m, const MthFn *fn, MthVal *out)
+{
+    bool live = false, ok;
+    unsigned i;
+
+    for (i = 0; i < fn->n; i++)
+        if (fn->arg[i].node != NULL) live = true;
+    if (m->res != NULL && live && !mth_name_is(fn->name, fn->nlen, "calc")) {
+        Mth typed = *m;
+
+        typed.res = NULL;
+        ok = mth_function_value(&typed, fn, out);
+        if (ok) *out = mth_node(m, MTH_NODE_FUNCTION, out->type, fn->arg, fn->n, fn);
+        return ok;
+    }
+    ok = mth_function_value(m, fn, out);
+    if (!ok || m->res == NULL) return ok;
+    if (out->blocked == MTH_LIVE_NODE) {
+        CssMathType ty = out->type;
+
+        *out = mth_node(m, MTH_NODE_FUNCTION, ty, fn->arg, fn->n, fn);
+    } else if (out->node == NULL && !out->pct_term) {
+        out->num_term = true;
+    }
     return ok;
 }
 
@@ -1582,8 +1782,8 @@ static bool mth_function(Mth *m, MthVal *out)
                 f->prod = v;
                 f->have_prod = true;
             } else {
-                if (f->div) mth_divide(&f->prod, &v, &res);
-                else mth_multiply(&f->prod, &v, &res);
+                if (f->div) mth_divide(m, &f->prod, &v, &res);
+                else mth_multiply(m, &f->prod, &v, &res);
                 f->prod = res;
             }
             mth_skip_ws(m);
@@ -1599,8 +1799,8 @@ static bool mth_function(Mth *m, MthVal *out)
                 f->sum = f->prod;
                 f->have_sum = true;
             } else {
-                rhs = f->minus ? mth_negate(&f->prod) : f->prod;
-                mth_add(&f->sum, &rhs, &res);
+                rhs = f->minus ? mth_negate(m, &f->prod) : f->prod;
+                mth_add(m, &f->sum, &rhs, &res);
                 f->sum = res;
             }
             f->have_prod = false;
@@ -1645,7 +1845,7 @@ static bool mth_function(Mth *m, MthVal *out)
             break;
         case MTH_CLOSE:
             f = &w.v[w.n - 1];
-            ok = mth_function_value(m, &f->fn, &v);
+            ok = mth_function_apply(m, &f->fn, &v);
             free(f->fn.arg);
             w.n--;
             m->depth--;
@@ -1691,6 +1891,460 @@ typedef enum {
     MTH_GATE_VALID,        /* ... and §10.9's validity */
     MTH_GATE_PRODUCTION    /* ... and §10.9's last rule against `want` */
 } MthGate;
+
+/* ---- the per-realm table of interned calculation trees --------------------------------------------------
+   A computed value is copied freely (core/css/css_length.h's CssLength carries no destructor), so the tree it
+   holds is immutable and interned: one copy per distinct tree per realm, keyed by its whole content, owned by
+   the realm and freed with it. A tree's leaves name the realm's environment facts, which is why the realm and
+   no wider scope owns it. */
+
+typedef struct {
+    char               **key;    /* open-addressed, a power of two long, at most half full; NULL is empty */
+    struct CssMathTree **tree;   /* beside `key`; both OWNED */
+    size_t               cap, n;
+} MthTreeTable;
+
+static JSClassID g_mth_tree_table_class;
+static JSClassID g_mth_tree_table_slot;
+
+static void mth_tree_table_finalizer(JSRuntime *rt, JSValue v)
+{
+    MthTreeTable *t = JS_GetOpaque(v, g_mth_tree_table_class);
+    size_t i;
+
+    (void)rt;
+    if (t == NULL) return;
+    for (i = 0; i < t->cap; i++) {
+        if (t->key[i] == NULL) continue;
+        free(t->key[i]);
+        mth_tree_free(t->tree[i]);
+    }
+    free(t->key);
+    free(t->tree);
+    free(t);
+}
+
+static void mth_install_realm(JSContext *ctx)
+{
+    JSValue obj = JS_NewObjectClass(ctx, (int)g_mth_tree_table_class);
+    MthTreeTable *t;
+
+    CHECK(!JS_IsException(obj), "css_math: OOM creating a realm's calculation tree table");
+    t = lexbor_calloc(1, sizeof *t);
+    CHECK(t != NULL, "css_math: OOM creating a realm's calculation tree table");
+    JS_SetOpaque(obj, t);
+    realm_value_set(ctx, g_mth_tree_table_slot, obj);
+}
+
+void css_math_init(JSContext *ctx)
+{
+    JSClassDef def = { "CssMathTreeTable", .finalizer = mth_tree_table_finalizer };
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    DCHECK(g_mth_tree_table_slot == JS_INVALID_CLASS_ID, "css_math_init ran twice — the tree table's class and "
+                                                         "slot are the agent's");
+    JS_NewClassID(rt, &g_mth_tree_table_class);
+    CHECK(JS_NewClass(rt, g_mth_tree_table_class, &def) == 0, "css_math: the tree table's class could not be "
+                                                               "declared");
+    g_mth_tree_table_slot = realm_value_declare(ctx, "css_math.h's per-realm table of interned calculation trees");
+    agent_state_class("css_math", &g_mth_tree_table_class, "the per-realm calculation tree table's class");
+    agent_state_realm_slot("css_math", &g_mth_tree_table_slot, "the per-realm calculation tree table's slot");
+    realm_declare_intrinsic(mth_install_realm);
+}
+
+void css_math_free(void)
+{
+    g_mth_tree_table_slot = JS_INVALID_CLASS_ID;
+    g_mth_tree_table_class = 0;
+}
+
+typedef struct {
+    char  *p;
+    size_t n, cap;
+} MthBuf;
+
+static void mth_buf_put(MthBuf *b, const char *s, size_t n)
+{
+    if (b->n + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap : 64;
+        char *grown;
+
+        while (b->n + n + 1 > cap) cap *= 2;
+        grown = lexbor_realloc(b->p, cap);
+        CHECK(grown != NULL, "css_math: OOM composing a calculation tree's text");
+        b->p = grown;
+        b->cap = cap;
+    }
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+    b->p[b->n] = '\0';
+}
+
+static void mth_buf_puts(MthBuf *b, const char *s) { mth_buf_put(b, s, strlen(s)); }
+
+static void mth_buf_printf(MthBuf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void mth_buf_printf(MthBuf *b, const char *fmt, ...)
+{
+    char tmp[256];
+    va_list ap;
+    int w;
+
+    va_start(ap, fmt);
+    w = vsnprintf(tmp, sizeof tmp, fmt, ap);
+    va_end(ap);
+    CHECK(w >= 0 && (size_t)w < sizeof tmp, "css_math: a calculation tree's key field outgrew its buffer");
+    mth_buf_put(b, tmp, (size_t)w);
+}
+
+/* A value's identity over every field a resolution or a serialization reads, a node's children included. The
+   environment facts are named by their interned form and realm, which identify them within the realm. */
+static void mth_key(MthBuf *b, const MthVal *v)
+{
+    unsigned i;
+
+    mth_buf_puts(b, "{");
+    for (i = 0; i < CSS_MATH_BASE_COUNT; i++) mth_buf_printf(b, "%d,", v->type.exp[i]);
+    mth_buf_printf(b, "h%d;", v->type.hint);
+    if (v->node == NULL) {
+        mth_buf_printf(b, "%a,%u,%p,%p,%a,%d%d}", v->num.px, (unsigned)v->num.env, (void *)v->num.realm,
+                       (const void *)v->num.form, v->pct, v->pct_term, v->num_term);
+        return;
+    }
+    mth_buf_printf(b, "o%d,%.*s,%d,%d%d%d,%u:", (int)v->node->op, (int)v->node->nlen, v->node->name,
+                   v->node->how, v->node->none[0], v->node->none[1], v->node->none[2], v->node->n);
+    for (i = 0; i < v->node->n; i++) mth_key(b, &v->node->kid[i]);
+    mth_buf_puts(b, "}");
+}
+
+static uint64_t mth_key_hash(const char *k)
+{
+    uint64_t h = 1469598103934665603ull;
+
+    for (; *k; k++) h = (h ^ (unsigned char)*k) * 1099511628211ull;
+    return h;
+}
+
+/* A deep copy of the arena node `src` into storage `realm` owns. */
+static struct CssMathTree *mth_tree_copy(const struct CssMathTree *src, JSContext *realm)
+{
+    struct CssMathTree *t = lexbor_malloc(sizeof *t);
+    unsigned i;
+
+    CHECK(t != NULL, "css_math: OOM interning a calculation tree");
+    *t = *src;
+    t->realm = realm;
+    t->arena_next = NULL;
+    t->kid = lexbor_malloc((src->n ? src->n : 1) * sizeof *t->kid);
+    CHECK(t->kid != NULL, "css_math: OOM interning a calculation tree");
+    for (i = 0; i < src->n; i++) {
+        t->kid[i] = src->kid[i];
+        if (src->kid[i].node != NULL) t->kid[i].node = mth_tree_copy(src->kid[i].node, realm);
+    }
+    return t;
+}
+
+/* `realm`'s one copy of the tree whose root is `v`, a node of a parse's arena. */
+static const CssMathTree *mth_tree_intern(JSContext *realm, const MthVal *v)
+{
+    MthBuf b = { NULL, 0, 0 };
+    JSValue obj;
+    MthTreeTable *t;
+    size_t i;
+
+    DCHECK(v->node != NULL, "a value that is no calculation node was interned as a tree");
+    mth_key(&b, v);
+    obj = realm_value_get(realm, g_mth_tree_table_slot);
+    t = JS_GetOpaque(obj, g_mth_tree_table_class);
+    JS_FreeValue(realm, obj);
+    CHECK(t != NULL, "css_math: a realm's calculation tree table is missing — its install runs at every realm's "
+                     "creation");
+    if (2 * (t->n + 1) > t->cap) {
+        size_t cap = t->cap ? 2 * t->cap : 32, j;
+        char **keys = lexbor_calloc(cap, sizeof *keys);
+        struct CssMathTree **trees = lexbor_calloc(cap, sizeof *trees);
+
+        CHECK(keys != NULL && trees != NULL, "css_math: OOM growing a realm's calculation tree table");
+        for (j = 0; j < t->cap; j++) {
+            if (t->key[j] == NULL) continue;
+            for (i = mth_key_hash(t->key[j]) & (cap - 1); keys[i]; i = (i + 1) & (cap - 1)) {}
+            keys[i] = t->key[j];
+            trees[i] = t->tree[j];
+        }
+        free(t->key);
+        free(t->tree);
+        t->key = keys;
+        t->tree = trees;
+        t->cap = cap;
+    }
+    for (i = mth_key_hash(b.p) & (t->cap - 1); t->key[i]; i = (i + 1) & (t->cap - 1))
+        if (strcmp(t->key[i], b.p) == 0) {
+            free(b.p);
+            return t->tree[i];
+        }
+    t->key[i] = b.p;
+    t->tree[i] = mth_tree_copy(v->node, realm);
+    t->n++;
+    return t->tree[i];
+}
+
+/* ---- §10.11's used-value simplification ------------------------------------------------------------------ */
+
+static CssPx mth_tree_no_unit(void *ctx, double n, const char *unit, size_t unit_len)
+{
+    (void)ctx; (void)n; (void)unit; (void)unit_len;
+    DFAIL("a calculation tree's leaf was converted to its canonical unit at used-value time. Every dimension leaf "
+          "was canonicalized when the tree was made, so only percentages are left to resolve");
+    return css_px(0.0);
+}
+
+/* `v` with every percentage resolved against `basis` and every operator node run: a Sum of one numeric term. */
+static MthVal mth_tree_value(Mth *m, const MthVal *v, CssPx basis)
+{
+    const struct CssMathTree *t = v->node;
+    MthVal *r, out, acc, one;
+    MthFn f;
+    unsigned i;
+    bool ok;
+
+    if (t == NULL) {
+        out = *v;
+        if (out.pct_term) out.num = css_px_add(css_px_scale(basis, out.pct / 100.0), out.num);
+        out.pct = 0.0;
+        out.pct_term = false;
+        out.num_term = true;
+        return out;
+    }
+    r = lexbor_malloc((t->n ? t->n : 1) * sizeof *r);
+    CHECK(r != NULL, "css_math: OOM resolving a calculation tree");
+    for (i = 0; i < t->n; i++) r[i] = mth_tree_value(m, &t->kid[i], basis);
+    switch (t->op) {
+    case MTH_NODE_SUM:
+    case MTH_NODE_PRODUCT:
+        acc = r[0];
+        for (i = 1; i < t->n; i++) {
+            if (t->op == MTH_NODE_SUM) mth_add(m, &acc, &r[i], &out);
+            else mth_multiply(m, &acc, &r[i], &out);
+            acc = out;
+        }
+        out = acc;
+        break;
+    case MTH_NODE_NEGATE:
+        out = mth_negate(m, &r[0]);
+        break;
+    case MTH_NODE_INVERT:
+        one = mth_val(css_math_type_number(), 1.0);
+        mth_divide(m, &one, &r[0], &out);
+        break;
+    case MTH_NODE_FUNCTION:
+        memset(&f, 0, sizeof f);
+        memcpy(f.name, t->name, t->nlen);
+        f.nlen = t->nlen;
+        f.shape = (MthShape)t->shape;
+        f.how = (MthRounding)t->how;
+        memcpy(f.none, t->none, sizeof f.none);
+        f.arg = r;
+        f.n = f.cap = t->n;
+        ok = mth_function_value(m, &f, &out);
+        DCHECK(ok, "a calculation node's function refused operands of the types it was built over");
+        break;
+    default:
+        DFAIL("a calculation node carries an operation §10.10 does not define");
+        out = r[0];
+        break;
+    }
+    free(r);
+    DCHECK(out.node == NULL && !out.pct_term && out.blocked == MTH_RESOLVED,
+           "a calculation tree did not simplify to a single numeric value at used-value time, though §10.11 says "
+           "\"with used value time information, a math function always simplifies down to a single numeric "
+           "value\" and every percentage leaf has just been resolved");
+    return out;
+}
+
+CssPx css_math_tree_resolve(const CssMathTree *tree, CssPx basis)
+{
+    CssMathResolver res = { mth_tree_no_unit, NULL, NULL };
+    Mth m;
+    MthVal root;
+    CssPx px;
+
+    DCHECK(tree != NULL && tree->realm != NULL, "a calculation tree was resolved that no realm interned");
+    memset(&m, 0, sizeof m);
+    res.realm = tree->realm;
+    m.res = &res;
+    root = mth_val(tree->type, 0.0);
+    root.node = (struct CssMathTree *)tree;
+    px = mth_tree_value(&m, &root, basis).num;
+    DCHECK(m.arena == NULL, "the used-value simplification made a calculation node");
+    /* §10.9.2's top-level censoring, as mth_top applies it to a function reduced at parse time. */
+    if (px.px != px.px) px = mth_atom("nan-censor", 10, NULL, &px, 1, 0.0);
+    if (px.px == 0.0) px = css_px_add(px, css_px(0.0));
+    return px;
+}
+
+CssEnvSet css_math_tree_env(const CssMathTree *tree)
+{
+    CssEnvSet env = CSS_ENV_NONE;
+    unsigned i;
+
+    for (i = 0; i < tree->n; i++)
+        env |= tree->kid[i].node != NULL ? css_math_tree_env(tree->kid[i].node) : tree->kid[i].num.env;
+    return env;
+}
+
+/* ---- §10.13's serialization of a computed calculation tree ------------------------------------------------ */
+
+static const char *mth_canonical_unit(const CssMathType *t)
+{
+    if (mth_only(t, CSS_MATH_LENGTH)) return "px";
+    if (mth_only(t, CSS_MATH_ANGLE)) return "deg";
+    if (mth_only(t, CSS_MATH_TIME)) return "s";
+    if (mth_only(t, CSS_MATH_FREQUENCY)) return "hz";
+    if (mth_only(t, CSS_MATH_RESOLUTION)) return "dppx";
+    if (mth_no_entries(t)) return "";
+    DFAIL("a calculation tree's numeric leaf has a type no canonical unit serializes — §10.9's last rule admits "
+          "only the eight productions, so a leaf of another type is a tree built over an invalid function");
+    return "";
+}
+
+static void mth_ser_number(MthBuf *b, double v, const char *unit)
+{
+    char *t = css_length_serialize_number(v, unit);
+
+    mth_buf_puts(b, t);
+    free(t);
+}
+
+static void mth_ser(MthBuf *b, const MthVal *v);
+
+/* A numeric child of a Sum, as its terms in "sort a calculation's children nodes"' order — a number or a
+   percentage before a dimension — each after its sign: " + ", or " - " and the negation for a negative one. */
+static void mth_ser_terms(MthBuf *b, const MthVal *v, bool *first)
+{
+    const char *unit = mth_canonical_unit(&v->type);
+    bool pct_first = v->pct_term, num_after = v->num_term || !v->pct_term;
+    double terms[2];
+    int kinds[2], k = 0, i;
+
+    if (pct_first) { terms[k] = v->pct; kinds[k++] = 1; }
+    if (num_after) { terms[k] = v->num.px; kinds[k++] = 0; }
+    for (i = 0; i < k; i++) {
+        double x = terms[i];
+
+        if (!*first) {
+            mth_buf_puts(b, x < 0.0 || (x == 0.0 && signbit(x)) ? " - " : " + ");
+            x = fabs(x);
+        }
+        mth_ser_number(b, x, kinds[i] ? "%" : unit);
+        *first = false;
+    }
+}
+
+static void mth_ser_stripped(MthBuf *b, const MthVal *v)
+{
+    MthBuf in = { NULL, 0, 0 };
+
+    mth_ser(&in, v);
+    if (in.n >= 2 && in.p[0] == '(' && in.p[in.n - 1] == ')') mth_buf_put(b, in.p + 1, in.n - 2);
+    else mth_buf_puts(b, in.p);
+    free(in.p);
+}
+
+/* §10.13's "serialize a calculation tree". A numeric child is a Sum of up to two terms, written as one. */
+static void mth_ser(MthBuf *b, const MthVal *v)
+{
+    const struct CssMathTree *t = v->node;
+    bool first = true;
+    unsigned i, pass;
+
+    if (t == NULL) {
+        bool two = v->pct_term && v->num_term;
+
+        if (two) mth_buf_puts(b, "(");
+        mth_ser_terms(b, v, &first);
+        if (two) mth_buf_puts(b, ")");
+        return;
+    }
+    switch (t->op) {
+    case MTH_NODE_NEGATE:
+        mth_buf_puts(b, "(-1 * ");
+        mth_ser(b, &t->kid[0]);
+        mth_buf_puts(b, ")");
+        return;
+    case MTH_NODE_INVERT:
+        mth_buf_puts(b, "(1 / ");
+        mth_ser(b, &t->kid[0]);
+        mth_buf_puts(b, ")");
+        return;
+    case MTH_NODE_SUM:
+        /* "Sort root's children": the one numeric child's terms first, then the nodes in order. */
+        mth_buf_puts(b, "(");
+        for (pass = 0; pass < 2; pass++)
+            for (i = 0; i < t->n; i++) {
+                const MthVal *c = &t->kid[i];
+
+                if ((c->node == NULL) != (pass == 0)) continue;
+                if (c->node == NULL) { mth_ser_terms(b, c, &first); continue; }
+                if (!first) mth_buf_puts(b, c->node->op == MTH_NODE_NEGATE ? " - " : " + ");
+                mth_ser(b, c->node->op == MTH_NODE_NEGATE && !first ? &c->node->kid[0] : c);
+                first = false;
+            }
+        mth_buf_puts(b, ")");
+        return;
+    case MTH_NODE_PRODUCT:
+        mth_buf_puts(b, "(");
+        for (pass = 0; pass < 2; pass++)
+            for (i = 0; i < t->n; i++) {
+                const MthVal *c = &t->kid[i];
+
+                if ((c->node == NULL) != (pass == 0)) continue;
+                if (!first) mth_buf_puts(b, c->node != NULL && c->node->op == MTH_NODE_INVERT ? " / " : " * ");
+                mth_ser(b, c->node != NULL && c->node->op == MTH_NODE_INVERT && !first ? &c->node->kid[0] : c);
+                first = false;
+            }
+        mth_buf_puts(b, ")");
+        return;
+    case MTH_NODE_FUNCTION:
+        for (i = 0; i < t->nlen; i++) {
+            char ch = (char)tolower((unsigned char)t->name[i]);
+
+            mth_buf_put(b, &ch, 1);
+        }
+        mth_buf_puts(b, "(");
+        if (t->how != MTH_ROUND_NEAREST && mth_name_is(t->name, t->nlen, "round")) {
+            static const char *const HOW[] = { "nearest", "up", "down", "to-zero", "line-width" };
+
+            mth_buf_puts(b, HOW[t->how]);
+            mth_buf_puts(b, ", ");
+        }
+        for (i = 0; i < t->n; i++) {
+            if (i > 0) mth_buf_puts(b, ", ");
+            if (i < 3 && t->none[i]) mth_buf_puts(b, "none");
+            else mth_ser_stripped(b, &t->kid[i]);
+        }
+        mth_buf_puts(b, ")");
+        return;
+    }
+    DFAIL("a calculation node carries an operation §10.13 does not serialize");
+}
+
+char *css_math_tree_serialize(const CssMathTree *tree)
+{
+    MthBuf b = { NULL, 0, 0 };
+    MthVal root;
+
+    DCHECK(tree != NULL, "a calculation tree was serialized that does not exist");
+    root = mth_val(tree->type, 0.0);
+    root.node = (struct CssMathTree *)tree;
+    /* §10.13's serialize a math function: a function root is its name; a calc-operator root is `calc(`. */
+    if (tree->op == MTH_NODE_FUNCTION) {
+        mth_ser(&b, &root);
+        return b.p;
+    }
+    mth_buf_puts(&b, "calc(");
+    mth_ser_stripped(&b, &root);
+    mth_buf_puts(&b, ")");
+    return b.p;
+}
 
 /* ---- the three public questions -------------------------------------------------------------------------- */
 
@@ -1772,18 +2426,20 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
               "`calc(1fr + 1fr)` IS a `<flex>`, which is why every caller that asks for a `<length>` refuses "
               "one before reaching here. BUILD css-grid-2 §12's track sizing algorithm, and resolve an `fr` "
               "from the free space it computes");
-    else if (v.blocked == MTH_UNRESOLVED_TREE)
-        DFAIL("a VALID math function simplified to a residue this engine cannot represent. css-values-4 "
-              "§10.10.1 'Simplification' reduces a calculation tree eagerly and leaves a LIVE NODE where it "
-              "cannot — a Product of two operands that both still carry a `<percentage>` (`calc(50% * 1em / "
-              "1px)`), or a Min/Max/clamp whose arguments cannot be compared because \"percentages might "
-              "resolve against a negative basis, and thus end up with an opposite comparative relationship "
-              "than the raw percentage value would seem to indicate\". core/css/css_math.h states that this "
-              "component simplifies as it parses and therefore holds no tree, which is what makes those "
-              "residues unrepresentable rather than merely unevaluated. BUILD §10.10's CALCULATION TREE as a "
-              "real node graph here — Sum, Product, Negate, Invert plus one node per math function, owned and "
-              "freed by this file — and make §10.10.1 a walk over it, so an unreduced node survives to "
-              "§10.11's computed-value simplification with the information it was waiting for");
+    DCHECK(v.blocked == MTH_RESOLVED, "a math function's top-level value carries a block its function node "
+                                      "was meant to absorb");
+    out->tree = NULL;
+    if (v.node != NULL) {
+        /* §10.11: the calculation tree is the computed value until used-value time supplies the basis. */
+        DCHECK(res->realm != NULL, "a math function that keeps its calculation tree was evaluated through a "
+                                   "resolver with no realm to own the tree");
+        out->type = v.type;
+        out->num = css_px(0.0);
+        out->pct = 0.0;
+        out->pct_term = false;
+        out->tree = mth_tree_intern(res->realm, &v);
+        goto done;
+    }
     out->type = v.type;
     out->num = v.num;
     out->pct = v.pct;
@@ -1814,6 +2470,13 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
                             mth_round_value(MTH_ROUND_NEAREST, out->num.px, 1.0));
 
 done:
+    while (m.arena != NULL) {
+        struct CssMathTree *next = m.arena->arena_next;
+
+        free(m.arena->kid);
+        free(m.arena);
+        m.arena = next;
+    }
     lxb_css_syntax_tokenizer_destroy(m.tkz);
     return ok;
 }

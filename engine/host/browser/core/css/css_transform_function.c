@@ -539,7 +539,8 @@ static char *css_tf_length_text(const CssLength *len)
     switch (len->kind) {
     case CSS_LENGTH_ABSOLUTE:   return css_length_serialize_px(len->px.px);
     case CSS_LENGTH_PERCENTAGE: return css_length_serialize_pct(len->pct);
-    case CSS_LENGTH_CALCULATED: return css_length_serialize_calc(len->pct, len->px.px);
+    case CSS_LENGTH_CALCULATED:
+        return len->tree != NULL ? css_math_tree_serialize(len->tree) : css_length_serialize_calc(len->pct, len->px.px);
     case CSS_LENGTH_KEYWORD:    break;
     }
     /* UNREACHABLE BY CONSTRUCTION, and this arm is a GUARD rather than a capability this file owes. The only
