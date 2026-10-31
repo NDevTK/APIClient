@@ -722,7 +722,10 @@ typedef struct {
     RecordCursor rec;
     JSValue      item[2];
     int          nitem;
-    UspList      list;
+    JSValue      src;            /* the USVString arm's string, `?` included, parsed at UC_DONE */
+    JSValue      pairs;          /* every converted pair so far, name then value, appended at UC_DONE */
+    uint32_t     npairs;
+    uint8_t      as_record;      /* the pairs came from the record arm (Web IDL §3.2.23's map) */
     JSValue      unknown;        /* an unknown string init, handed to the object (UspObj's `unknown`) */
     int          unknown_example;
     JSValue      upair;          /* the unknown sequence arm's current innerSequence */
@@ -752,15 +755,8 @@ static void js_usp_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->item[1]);
     v->val(ctx, &s->unknown);
     v->val(ctx, &s->upair);
-}
-
-/* THE PARAMETER LIST ALONE — a malloc'd array of malloc'd name/value pairs, which is not a reference and which
-   no declaration names. The two cursors and the pair being read are named by js_usp_ctor_visit, and the
-   teardown discharges that one list. */
-static void js_usp_ctor_release(JSContext *ctx, void *st)
-{
-    (void)ctx;
-    usp_list_free(&((JSUspCtorState *)st)->list);
+    v->val(ctx, &s->src);
+    v->val(ctx, &s->pairs);
 }
 
 /* §6.2 step 5.2's key conversion is to USVString, which every String and no Symbol is. */
@@ -843,6 +839,10 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         s->unknown = JS_UNDEFINED;
         s->unknown_example = 0;
         s->upair = JS_UNDEFINED;
+        s->src = JS_UNDEFINED;
+        s->pairs = JS_UNDEFINED;
+        s->npairs = 0;
+        s->as_record = 0;
         iter_cursor_init(&s->outer);
         iter_cursor_init(&s->inner);
         record_cursor_init(&s->rec);
@@ -864,14 +864,8 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             /* §6.2's USVString arm. The declaration passes the init through unconverted (the union is this
                machine's to resolve), so the scalar-value replacement happens here. */
             JSValue str = JS_ToScalarValueString(ctx, JS_ToString(ctx, init));
-            size_t n = 0;
-            const char *q;
             if (JS_IsException(str)) return -1;
-            q = JS_ToCStringLen(ctx, &n, str);
-            JS_FreeValue(ctx, str);
-            if (!q) return -1;
-            usp_parse(&s->list, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
-            JS_FreeCString(ctx, q);
+            s->src = str;
             UC_GOTO(hdr, s, UC_DONE);
             return JS_STEP_YIELD;
         }
@@ -908,8 +902,6 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            (usp_derive), with a leading `?` stripped as for a concrete string. */
         {
             JSValue ex;
-            size_t n = 0;
-            const char *q;
 
             s->unknown = JS_DupValue(ctx, init);
             ex = concolic_example_string(ctx, init);
@@ -917,11 +909,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             if (s->unknown_example) {
                 ex = JS_ToScalarValueString(ctx, ex);
                 if (JS_IsException(ex)) return -1;
-                q = JS_ToCStringLen(ctx, &n, ex);
-                JS_FreeValue(ctx, ex);
-                if (!q) return -1;
-                usp_parse(&s->list, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
-                JS_FreeCString(ctx, q);
+                s->src = ex;
             }
         }
         UC_GOTO(hdr, s, UC_DONE);
@@ -1097,21 +1085,53 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             UC_GOTO(hdr, s, UC_PAIR_VALUE_STR);
             return JS_STEP_YIELD;
         }
-        if (usp_take_pair(ctx, &s->list, s->item[0], s->item[1],
-                          s->after_pair == UC_KEY_PAIR) < 0) return -1;
+        if (JS_IsUndefined(s->pairs)) {
+            s->pairs = JS_NewArray(ctx);
+            CHECK(!JS_IsException(s->pairs), "urlsearchparams: OOM holding the init's pairs");
+            s->as_record = s->after_pair == UC_KEY_PAIR;
+        }
+        DCHECK(s->as_record == (s->after_pair == UC_KEY_PAIR),
+               "one URLSearchParams init converted pairs from both its record and its sequence arm");
+        CHECK(JS_DefinePropertyValueUint32(ctx, s->pairs, 2 * s->npairs, JS_DupValue(ctx, s->item[0]),
+                                           JS_PROP_C_W_E) >= 0 &&
+              JS_DefinePropertyValueUint32(ctx, s->pairs, 2 * s->npairs + 1, JS_DupValue(ctx, s->item[1]),
+                                           JS_PROP_C_W_E) >= 0, "urlsearchparams: OOM holding an init pair");
+        s->npairs++;
         UC_GOTO(hdr, s, s->after_pair);
         return JS_STEP_YIELD;
     }
 
+    /* The list is built here and nowhere earlier: until this stage the state may be forked, and a fork copies
+       only what js_usp_ctor_visit names, so the parameter list is held as JS values until nothing can fork. */
     STEP_ARM(UC_DONE);
     JS_FreeValue(ctx, in);
     {
         UspList *l = lexbor_malloc(sizeof *l);
-        JSValue unknown = s->unknown;
+        JSValue unknown;
+        uint32_t i;
 
         CHECK(l != NULL, "urlsearchparams: OOM holding a constructed list");
-        *l = s->list;
-        memset(&s->list, 0, sizeof s->list);   /* the object owns it now */
+        memset(l, 0, sizeof *l);
+        DCHECK(!(JS_IsString(s->src) && s->npairs),
+               "a URLSearchParams init took both its USVString arm and a pair-converting arm");
+        if (JS_IsString(s->src)) {
+            size_t n = 0;
+            const char *q = JS_ToCStringLen(ctx, &n, s->src);
+
+            if (!q) { usp_list_free(l); free(l); return -1; }
+            usp_parse(l, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
+            JS_FreeCString(ctx, q);
+        }
+        for (i = 0; i < s->npairs; i++) {
+            JSValue k = JS_GetPropertyUint32(ctx, s->pairs, 2 * i);
+            JSValue v = JS_GetPropertyUint32(ctx, s->pairs, 2 * i + 1);
+            int bad = JS_IsException(k) || JS_IsException(v) || usp_take_pair(ctx, l, k, v, s->as_record) < 0;
+
+            JS_FreeValue(ctx, k);
+            JS_FreeValue(ctx, v);
+            if (bad) { usp_list_free(l); free(l); return -1; }
+        }
+        unknown = s->unknown;
         s->unknown = JS_UNDEFINED;
         *presult = usp_new_with(ctx, JS_UNDEFINED, l, unknown, s->unknown_example);
     }
@@ -1120,7 +1140,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl js_usp_ctor_decl = {
-    js_usp_ctor_step, sizeof(JSUspCtorState), js_usp_ctor_visit, js_usp_ctor_release,
+    js_usp_ctor_step, sizeof(JSUspCtorState), js_usp_ctor_visit, NULL,
     "URL §6.2 new URLSearchParams(init)", UC_STEPS
 };
 
