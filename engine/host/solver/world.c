@@ -394,7 +394,7 @@ static WorldId mint(WorldId parent)
     DCHECK(g_doc != 0, "a world was minted before world_registry_init named this document");
     if (g_minted_n == g_minted_cap) {
         uint32_t cap = g_minted_cap ? g_minted_cap * 2 : 64;
-        MintedWorld *g = realloc(g_minted, cap * sizeof *g);
+        MintedWorld *g = reclaim_realloc(g_minted, cap * sizeof *g);
         CHECK(g != NULL, "world registry: OOM recording a world — a world whose ancestry is lost can never be "
                          "materialized by a peer, which silently drops that flow's writes in another document");
         g_minted = g;

@@ -95,10 +95,11 @@
    reclaim_install routes here, and through reclaim_strdup and reclaim_strndup for its string copies; the solver's
    fresh allocations call reclaim_* directly. A free path keeps the C library, since a sale there would re-enter the
    release walking it, and so does the park document's block, which engine_park_fund funds instead.
-   Named residual. Not covered: the solver's realloc sites other than world_doc_intern's, whose buffer may belong to
-   a flow a sale releases, or to a registry a sale grows (world.c's dead-world list). Next diff converts them file by
-   file, each after checking its pointer belongs to the running flow or to a registry no sale writes. Absence shows
-   as an OOM CHECK at a solver realloc while the census's `members` is above one. */
+   Named residual. Not covered: the solver's realloc sites other than world.c's document and minted-world tables (a sale
+   writes the second's rows in place and never grows it), whose buffer may belong to a flow a sale releases, or to a
+   registry a sale grows (world.c's dead-world list). Next diff converts them file by file, each after checking its
+   pointer belongs to the running flow or to a registry no sale writes. Absence shows as an OOM CHECK at a solver
+   realloc while the census's `members` is above one. */
 void *reclaim_malloc(size_t size);
 void *reclaim_realloc(void *ptr, size_t size);
 void *reclaim_calloc(size_t num, size_t size);
