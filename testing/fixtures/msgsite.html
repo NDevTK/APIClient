@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>msgsite</title></head>
+<body>
+<!-- The live case for a cross-document-message PoC from the attacker site (testing/harness.js attacker-case):
+     the listener admits a sender whose origin contains `trusted.example`, so the engine composes the sender
+     https://trusted.example.<attacker site> and the live verify posts from a page at that origin. -->
+<div id="out"></div>
+<script>
+window.addEventListener("message", function (e) {
+  if (e.origin.indexOf("trusted.example") === -1) return;
+  document.getElementById("out").innerHTML = e.data.markup;
+});
+</script>
+</body></html>

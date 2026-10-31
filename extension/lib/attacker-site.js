@@ -54,14 +54,16 @@ function attackerSiteReaches(url) {
   return h === site || h.endsWith("." + site) ? "attacker-site" : "another-party";
 }
 
-/* The address the check sends to: a fresh label under the site, so a resolution and a certificate for a name
-   the person never configured shows the wildcard a composed origin needs. */
+/* The address the check sends to: a fresh name two labels under the site, so a resolution and a certificate for
+   a name the person never configured shows what a composed origin needs: it joins every constant's labels under
+   the site, at any depth, which wildcard DNS resolves and only a certificate issued per name covers (a
+   certificate's `*` matches one label). */
 function attackerSiteProbeUrl(site) {
   CHECK(attackerSiteRefusal(site) === null, "the attacker site check was asked of " + JSON.stringify(site));
   const b = new Uint8Array(8);
   crypto.getRandomValues(b);
-  return "https://apiclient-check-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("") + "." +
-         site + "/";
+  return "https://apiclient-check-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("") +
+         ".apiclient-depth." + site + "/";
 }
 
 /* The failing requirements of one check send's outcome: {netError, error} for a send that rejected, where
@@ -81,7 +83,8 @@ function attackerSiteRequirements(outcome) {
       fail("wildcard-dns", ne);
       unchecked("certificate", "unchecked: the name did not resolve");
     } else if (/^net::ERR_(CERT_|SSL_)/.test(ne)) {
-      fail("certificate", ne);
+      fail("certificate", ne + " for a name two labels under the site: a composed origin needs a certificate " +
+                          "for each name, which a wildcard certificate does not give");
       unchecked("serves", "unchecked: the connection was refused at TLS");
     } else {
       fail("serves", ne);

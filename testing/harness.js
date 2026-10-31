@@ -172,6 +172,102 @@ function procIdentity(pid) {
 }
 async function clearLock() { try { await fsp.unlink(LOCK_FILE); } catch {} }
 
+// ─── the live-verify attacker site (HARNESS_ATTACKER_SITE=1) ──────────────────
+/* A live verify opens its attacker page on the attacker site the person configured (extension/lib/attacker-site.js):
+   every subdomain resolving to a server they run, with a certificate for each name. The harness stands one up on
+   loopback: `attacker.test` (RFC 2606, a name no victim lists) and every name under it map to a local HTTPS
+   server holding a certificate generated for this run, in a fresh directory under the OS temp dir that `restart`
+   deletes; no key is ever written into the checkout. The two Chrome flags that make that resolve and verify are
+   set only here, only when HARNESS_ATTACKER_SITE=1, and never on the shared default profile or on a real
+   browser's user-data directory (assertAttackerProfile). The page served sends no CSP and no COOP. */
+const ATTACKER_SITE = "attacker.test";
+const DEFAULT_PROFILE_DIR = path.join(__dirname, "profile");
+function attackerSiteArmed() { return process.env.HARNESS_ATTACKER_SITE === "1"; }
+/* The profile the attacker flags may be set on: one a lane named for itself (HARNESS_PROFILE), never the default
+   every lane's harness shares, and never under a real Chrome or Chromium user-data directory, so a certificate
+   bypass and a resolver override cannot reach a browser a person uses. */
+function assertAttackerProfile() {
+  const home = require("os").homedir();
+  const real = [".config/google-chrome", ".config/chromium", ".config/google-chrome-beta",
+                "Library/Application Support/Google/Chrome", "Library/Application Support/Chromium"]
+    .map((d) => path.join(home, d));
+  if (PROFILE_DIR === DEFAULT_PROFILE_DIR || !process.env.HARNESS_PROFILE ||
+      real.some((d) => PROFILE_DIR === d || PROFILE_DIR.startsWith(d + path.sep)))
+    throw new Error(`the attacker-site flags (--host-resolver-rules, --ignore-certificate-errors-spki-list) are ` +
+                    `set only on a lane's own profile, and ${PROFILE_DIR} is the shared default or a real ` +
+                    `browser's. Set HARNESS_PROFILE=/tmp/<lane>/prof`);
+}
+/* A one-day self-signed certificate for exactly `name` over the run's key: a composed origin can sit any number
+   of labels under the site, which no wildcard certificate covers (one `*` matches one label), so the server
+   issues per name on demand, as a real attacker site must. Every certificate carries the one key. */
+function attackerSiteCertFor(dir, name) {
+  return execSync(`openssl req -x509 -new -key ${JSON.stringify(path.join(dir, "key.pem"))} -days 1 ` +
+                  `-subj "/CN=${name}" -addext "subjectAltName=DNS:${name}"`).toString();
+}
+/* The run's key, in a fresh temp directory, and the base64 SHA-256 of its SubjectPublicKeyInfo, which
+   --ignore-certificate-errors-spki-list takes. */
+function attackerSiteCertificate() {
+  const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "apiclient-attacker-"));
+  const key = path.join(dir, "key.pem");
+  execSync(`openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ${JSON.stringify(key)}`, { stdio: "ignore" });
+  const spki = execSync(`openssl pkey -in ${JSON.stringify(key)} -pubout -outform der | ` +
+                        `openssl dgst -sha256 -binary | openssl enc -base64`).toString().trim();
+  return { dir, spki };
+}
+/* Start the server (`attacker-serve`, detached so it outlives this command) and answer {pid, port, dir, spki,
+   identity}; the port is the one it bound, read from the file it writes once listening. */
+async function attackerSiteStart() {
+  const { dir, spki } = attackerSiteCertificate();
+  const child = spawn(process.execPath, [__filename, "attacker-serve", dir], { detached: true, stdio: "ignore" });
+  child.unref();
+  const portFile = path.join(dir, "port");
+  while (!fs.existsSync(portFile)) {
+    try { process.kill(child.pid, 0); } catch { throw new Error("the attacker-site server exited before listening"); }
+    await sleep(100);
+  }
+  return { pid: child.pid, port: Number(fs.readFileSync(portFile, "utf8")), dir, spki, identity: procIdentity(child.pid) };
+}
+/* Stop a server a previous `restart` recorded, only while its pid is still that process, and delete its key. */
+function attackerSiteStop(rec) {
+  if (!rec) return;
+  const now = procIdentity(rec.pid);
+  if (now !== null && rec.identity && now.startTime === rec.identity.startTime && now.cmdline === rec.identity.cmdline)
+    try { process.kill(rec.pid, "SIGKILL"); log(`stopped the attacker-site server pid ${rec.pid}`); } catch {}
+  if (typeof rec.dir === "string" && path.basename(rec.dir).startsWith("apiclient-attacker-"))
+    fs.rmSync(rec.dir, { recursive: true, force: true });
+}
+/* The flags that point the browser at that server: every name under the site resolves to it, and its certificate
+   is accepted by its key's hash alone. Behind a proxy the site is bypassed, since the proxy cannot resolve it. */
+function attackerSiteFlags(server, proxy) {
+  assertAttackerProfile();
+  return [`--host-resolver-rules=MAP *.${ATTACKER_SITE} 127.0.0.1:${server.port}, MAP ${ATTACKER_SITE} 127.0.0.1:${server.port}`,
+          `--ignore-certificate-errors-spki-list=${server.spki}`,
+          ...(proxy ? [`--proxy-bypass-list=*.${ATTACKER_SITE};${ATTACKER_SITE}`] : [])];
+}
+/* The server itself: any name under the site answers one attacker page, with no CSP and no COOP, over a
+   certificate minted for the name the client indicates (TLS SNI). */
+async function cmdAttackerServe(args) {
+  const dir = args[0];
+  const https = require("https"), tls = require("tls");
+  const key = fs.readFileSync(path.join(dir, "key.pem"));
+  const contexts = new Map();
+  const contextFor = (name) => {
+    if (!contexts.has(name)) contexts.set(name, tls.createSecureContext({ key, cert: attackerSiteCertFor(dir, name) }));
+    return contexts.get(name);
+  };
+  const under = (name) => name === ATTACKER_SITE || name.endsWith("." + ATTACKER_SITE);
+  const server = https.createServer({ key, cert: attackerSiteCertFor(dir, ATTACKER_SITE),
+                                      SNICallback: (name, cb) => cb(null, contextFor(under(name) ? name : ATTACKER_SITE)) },
+                                    (req, res) => {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.end("<!doctype html><title>attacker page</title><p>attacker page served by testing/harness.js for " +
+            String(req.headers.host).replace(/[<>&"]/g, "") + "</p>");
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  fs.writeFileSync(path.join(dir, "port"), String(server.address().port));
+  await new Promise(() => {});
+}
+
 // ─── browser attach ────────────────────────────────────────────────────────
 
 async function connect(port) {
@@ -279,6 +375,7 @@ async function getPopupPage(browser) {
 // the profile so authenticated sites stay logged in. Use after `node engine/build.mjs stage`.
 async function cmdRestart(args, keepIdb) {
   const lock = await readLock();
+  attackerSiteStop(lock && lock.attackerServer);
   if (lock && lock.pid) {
     /* The recorded pid is killed only while it is still the process the lock recorded: once that Chrome has
        exited the kernel may hand its pid to anything, and its process group with it. A pid whose start time or
@@ -940,6 +1037,8 @@ async function cmdStart(args) {
      `--no-sandbox` renderer has `Seccomp: 0`, `NoNewPrivs: 0` and init's namespace. That is the difference the
      flag was quietly making. */
   const dropTo = resolveUnprivileged(chromePath);
+  const attackerServer = attackerSiteArmed() ? (assertAttackerProfile(), await attackerSiteStart()) : null;
+  if (attackerServer) log(`attacker site ${ATTACKER_SITE} served on 127.0.0.1:${attackerServer.port} (pid ${attackerServer.pid})`);
   /* AND THE LAST LAUNCH INPUT NOBODY ASKED THE TARGET UID ABOUT. `dropTo` is known exactly here and
      EXT_DIR goes onto the command line on the next line, so this is the origin of the claim that Chrome
      can load what it is being handed. */
@@ -987,7 +1086,9 @@ async function cmdStart(args) {
        and routing them through the interceptor would break the very documents under test. An explicit
        `<-loopback>` here would REMOVE that implicit rule, which is the opposite of what is wanted. */
     ...(proxy ? [`--proxy-server=${proxy}`, "--disable-quic", "--ssl-version-max=tls1.2"] : []),
+    ...(attackerServer ? attackerSiteFlags(attackerServer, proxy) : []),
   ];
+  if (chromeArgs.some((f) => /^--(host-resolver-rules|ignore-certificate-errors-spki-list)=/.test(f))) assertAttackerProfile();
   /* CHROME'S OWN EXPLANATION IS KEPT, because `stdio: "ignore"` threw it away and left this function able to
      say only "port isn't responding" — a report that names the symptom and discards the cause, which is the
      defect this project keeps finding in its own instruments. The two errors above were sitting in that
@@ -1048,6 +1149,7 @@ async function cmdStart(args) {
       if (tail.length) { log(`Chrome said (${chromeLog}):`); for (const l of tail) log(`  ${l}`); }
       else log(`Chrome wrote nothing to ${chromeLog} — it died before it could explain, or never exec'd`);
     } catch { log(`could not read ${chromeLog}`); }
+    attackerSiteStop(attackerServer);
     process.exit(1);
   }
 
@@ -1069,7 +1171,7 @@ async function cmdStart(args) {
   if (process.platform !== "win32" && identity === null)
     throw new Error(`Chrome (pid ${chromeProc.pid}) answered on port ${port} but /proc has no such pid — the lock ` +
                     `would record a process that is not running`);
-  await writeLock({ port, pid: chromeProc.pid, extId, startedAt: Date.now(), identity });
+  await writeLock({ port, pid: chromeProc.pid, extId, startedAt: Date.now(), identity, attackerServer });
   /* THE ID SAYS WHERE IT CAME FROM, BECAUSE IT IS A CLAIM AND IT READ AS AN OBSERVATION. `extId` is
      `computeExtensionId(EXT_DIR)` — a pure function of the PATH STRING — so this line printed an extension id
      for a browser holding no extension at all, which is the state `assertExtDirReachable` above now refuses
@@ -1190,6 +1292,74 @@ async function cmdPocRun(args) {
       await sleep(500);
     }
     log("verdict: " + verdict);
+  });
+}
+
+/* The live verify of a cross-document-message PoC against the harness's attacker site, and its control.
+   `attacker-case <victim-url>` states the site in the popup's setting (and prints the check's record), opens the
+   victim, waits for a finding whose delivery is a cross-document message, clicks its Verify button, clicks Run on
+   the attacker page it opens and prints the verdict and the attacker page's address. `attacker-case <url> unset`
+   is the negative control: with the setting cleared, the verify answers that no attacker site is configured and
+   no attacker page opens. Needs `restart` with HARNESS_ATTACKER_SITE=1 for the first form. */
+async function cmdAttackerCase(args) {
+  const victimUrl = args[0], unset = args[1] === "unset";
+  if (!victimUrl) throw new Error("usage: attacker-case <victim-url> [unset]");
+  await withBrowser(async (browser) => {
+    const popup = await getPopupPage(browser);
+    const send = (m) => popup.evaluate((msg) => new Promise((r) => chrome.runtime.sendMessage(msg, r)), m);
+    const set = await send({ type: "ATTACKER_SITE", initiator: "user-initiated", site: unset ? null : ATTACKER_SITE });
+    log("attacker site: " + JSON.stringify(set));
+    const victim = await browser.newPage();
+    await victim.goto(victimUrl, { waitUntil: "load", timeout: 30000 });
+    await victim.bringToFront();
+    /* Every page created from here on, so the control can say whether the verify opened one. */
+    const created = [];
+    browser.on("targetcreated", (t) => { if (t.type() === "page") created.push(t); });
+    let clicked = false;
+    for (let i = 0; i < 120 && !clicked; i++) {
+      await popup.reload({ waitUntil: "domcontentloaded" });
+      await sleep(1000);
+      clicked = await popup.evaluate(() => {
+        const b = [...document.querySelectorAll(".verify-btn")].find((x) => {
+          try { return JSON.parse(x.dataset.probe).delivery === "cross-document-message"; } catch { return false; }
+        });
+        if (b) b.click();
+        return !!b;
+      });
+    }
+    if (!clicked) { log("attacker-case: NO FINDING — no cross-document-message finding rendered a Verify button"); return; }
+    let result = "";
+    for (let i = 0; i < 40; i++) {
+      result = await popup.evaluate(() => [...document.querySelectorAll(".verify-result")].map((r) => r.textContent).join(" | "));
+      if (/no attacker site|could not be armed|not deliverable|a tab has opened/.test(result)) break;
+      await sleep(500);
+    }
+    log("verify: " + result);
+    const opened = created.map((t) => t.url()).filter((u) => !u.startsWith("chrome-extension://"));
+    if (unset) {
+      log("attacker-case control: " + (/no attacker site is configured/.test(result) && opened.length === 0
+        ? "PASS — the verify refused with no site configured and opened no page"
+        : "FAIL — with no site configured the verify " + (opened.length ? "opened " + opened.join(", ") : "answered otherwise")));
+      return;
+    }
+    let attacker = null;
+    for (let i = 0; i < 60 && !attacker; i++) {
+      for (const pg of await browser.pages())
+        if (await evalNoGesture(pg, "!!document.getElementById('__apiclient_poc_overlay')").catch(() => false)) attacker = pg;
+      if (!attacker) await sleep(250);
+    }
+    if (!attacker) { log("attacker-case: NOT ARMED — no attacker page carries the Run button"); return; }
+    log("attacker page: " + attacker.url());
+    await attacker.bringToFront();
+    await sleep(500);
+    await attacker.click("#__apiclient_poc_overlay button");
+    let verdict = "";
+    for (let i = 0; i < 60; i++) {
+      verdict = await popup.evaluate(() => [...document.querySelectorAll(".verify-result")].map((r) => r.textContent).join(" | "));
+      if (/FIRED IN THE DELIVERED DOCUMENT|NOT DELIVERED|REFUSED —/.test(verdict)) break;
+      await sleep(500);
+    }
+    log("attacker-case verdict: " + verdict);
   });
 }
 
@@ -1918,7 +2088,7 @@ async function cmdNetDiff(args) {
 }
 
 
-const CMDS = { start: cmdStart, restart: cmdRestart, "restart-keep": (a) => cmdRestart(a, true), page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, capture: cmdCapture, multitab: cmdMultiTab, netdiff: cmdNetDiff };
+const CMDS = { "attacker-serve": cmdAttackerServe, "attacker-case": cmdAttackerCase, start: cmdStart, restart: cmdRestart, "restart-keep": (a) => cmdRestart(a, true), page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, capture: cmdCapture, multitab: cmdMultiTab, netdiff: cmdNetDiff };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
