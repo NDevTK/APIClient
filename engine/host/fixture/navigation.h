@@ -184,6 +184,16 @@ static const char HTML_NAVIGATION[] =
     "fetch('/api/blankgate').then(function(r){ return r.json(); }).then(function(c){"
     " if (c.region === 'eu-west-9') _bf.contentWindow.fetch('https://x.test/api/blankpin?r=' + c.region);"
     " else _bf.contentWindow.fetch('https://x.test/api/blankobs?r=' + c.region); });</script>"
+    /* HR-TIME §4 over a deferred initial about:blank: the child navigable is created at insertion, the creator
+       then retires enough work to move its clock past the resolution, reads its own current moment, and only
+       then reaches the child's Window, which builds its realm. HTML §7.3.2.1 makes that Window's time origin the
+       moment the navigable was created, so it is earlier than the creator's read; the realm's build moment is
+       later. The `time-origin-deferred` row reads which. */
+    "<script>var _tf = document.createElement('iframe'); document.body.appendChild(_tf);"
+    "for (var _ti = 0, _ts = 0; _ti < 100000; _ti++) _ts += _ti;"
+    "var _tn = performance.timeOrigin + performance.now();"
+    "fetch('/api/timeorigin?v=' + (_tf.contentWindow.performance.timeOrigin < _tn ? 'earlier' : 'later'));"
+    "</script>"
     TF_CANVAS_INK
     "</body></html>";
 

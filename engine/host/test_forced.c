@@ -14051,6 +14051,16 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
     fold_row(&sbxdead_tt, &sbxdead_why, param_value_only(js, "/api/sbxdetached", "v", "TypeError"),
              "a fetch called with a removed iframe's window as its receiver did not reject with a TypeError, "
              "which Chrome 155 does");
+    /* HR-TIME §4 over a deferred about:blank (fixture/navigation.h): the child's time origin is its navigable's
+       creation moment, earlier than the creator's later read. */
+    const char *torigin_why = NULL;
+    int torigin_tt = 1;
+    fold_row(&torigin_tt, &torigin_why, !!strstr(js, "\"/api/timeorigin"),
+             "NOT REACHED: there is no /api/timeorigin record, so the deferred child's time origin was never read");
+    fold_row(&torigin_tt, &torigin_why, param_value_only(js, "/api/timeorigin", "v", "earlier"),
+             "the deferred about:blank child's performance.timeOrigin is not earlier than its creator's read made "
+             "after creating it: its realm's time origin is the moment the realm was built, not HTML §7.3.2.1's "
+             "unsafeContextCreationTime of its navigable");
     const Probe rows[] = {
         { "sandbox-fetch", sbx_tt, "/api/sbxbound", SESS_EXPLORE, sbx_why },
         { "sandbox-fetch-detached", sbxdead_tt, "/api/sbxdetached", SESS_EXPLORE, sbxdead_why },
@@ -14059,6 +14069,7 @@ TF_UNIT void probes_navigation(const char *js, Probe *tab, int *n) {
         { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE, navopen_why },
         { "nav-door", navdoor_tt, "/navhidden", SESS_EXPLORE, navdoor_why },
         { "flow-jar", flowjar_tt, "/api/ckgate", SESS_EXPLORE, flowjar_why },
+        { "time-origin-deferred", torigin_tt, "/api/timeorigin", SESS_EXPLORE, torigin_why },
         { "root-jar", rootjar_tt, "/api/rootjar", SESS_EXPLORE, rootjar_why },
         { "blank-pin", blankpin_tt, "/api/blankgate", SESS_EXPLORE, blankpin_why },
         { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE, sop_why },
