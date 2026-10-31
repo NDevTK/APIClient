@@ -682,8 +682,8 @@ static void park_rec_world(const char *vector)
  * it one member's name where a minified bundle repeats a body's text.
  *
  * Grammar: sixteen lower-case hex digits, fixed width so a reader refuses a short name, written outside
- * park_rec, whose charset has no 'a' to 'd'; then ',' and the member's document ordinal in decimal through
- * park_rec (flow.h's `orphan_chain_doc`). */
+ * park_rec, whose charset has no 'a' to 'd'; then ',' and the member's document ordinal in decimal (flow.h's
+ * `orphan_chain_doc`), inside the same record. */
 /* A locator's spelling: sixteen lower-case hex digits, most significant first, NUL-terminated. */
 static void park_orphan_hex(uint64_t hash, char out[17])
 {
@@ -721,7 +721,7 @@ static void park_rec_orphan(const Flow *f)
         park_str("o");
         park_str(rec);
         park_str(",");
-        park_rec(doc);   /* the load of the page the member was called in (flow.h's `orphan_chain_doc`) */
+        park_str(doc);   /* the load of the page the member was called in (flow.h's `orphan_chain_doc`) */
         g_parked_census.orphans++;   /* per record, since the next record's open checks the census */
     }
 }
