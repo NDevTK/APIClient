@@ -1,8 +1,9 @@
 /* THE URLSEARCHPARAMS-RECORD-KEY DOCUMENT: a posted message's member names a property of a plain object, so
    the object's one key is an unknown with no example, and URL §6.2's constructor converts that object as a
    Web IDL §3.2.23 record. Step 4.2.1 converts the key the cursor hands on, the unknown itself, so the
-   serialized list is an unknown too and the page's comparison of it with "admin=v" has a world where it holds.
-   The witness carries the comparison's answer.
+   serialized list is an unknown too and the page's branch on its equality with "admin=v" has a world where it
+   holds. Each arm fetches a concrete address, so the request carries no unknown and the arm it names is the
+   witness.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_USPRECKEY_H
@@ -19,7 +20,7 @@ static const char HTML_USPRECKEY[] =
     "  if (d === null || typeof d !== 'object') return;"
     "  o[d.k] = 'v';"
     "  var q = '' + new URLSearchParams(o);"
-    "  fetch('/api/usk?eq=' + (q === 'admin=v'));"
+    "  if (q === 'admin=v') fetch('/api/usk?eq=true'); else fetch('/api/usk?eq=false');"
     "});"
     "</script>"
     TF_CANVAS_INK
