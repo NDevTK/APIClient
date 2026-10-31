@@ -475,12 +475,13 @@ static bool fp_grid_item_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     lxb_dom_element_t *container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
     FlowPoint o;
-    CssPx ax, ay, dx, dy;
+    CssPx ax, ay, aw, ah, dx, dy;
 
-    if (!flow_border_box_origin_ask(container, &o) || !grid_item_area_origin_ask(container, el, &ax, &ay))
+    if (!flow_border_box_origin_ask(container, &o) || !grid_item_area_origin_ask(container, el, &ax, &ay) ||
+        !grid_item_area_extents_ask(container, el, &aw, &ah) ||
+        !grid_item_self_alignment_offset_ask(container, el, aw, false, &dx) ||
+        !grid_item_self_alignment_offset_ask(container, el, ah, true, &dy))
         return false;
-    dx = grid_item_self_alignment_offset(container, el, grid_item_area_inline_size(container, el), false);
-    dy = grid_item_self_alignment_offset(container, el, grid_item_area_block_size(container, el), true);
     out->x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(container, false)),
                         css_px_add(css_px_add(ax, dx), used_value_px(el, "margin-left")));
     out->y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(container, true)),

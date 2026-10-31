@@ -27,11 +27,11 @@ static CssAlign gia_self(lxb_dom_element_t *container, lxb_dom_element_t *item, 
    The next diff builds the bias over the scroll container's scrollable overflow area for both. Its absence
    shows as a centred item wider than its area reaching past a scroll container's start edge where a browser
    keeps it scrollable. */
-CssPx grid_item_self_alignment_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx area,
-                                      bool vertical)
+bool grid_item_self_alignment_offset_ask(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx area,
+                                         bool vertical, CssPx *out)
 {
     CssAlign a = gia_self(container, item, vertical);
-    CssPx free_space = css_px_sub(area, used_value_margin_edge_px(item, vertical));
+    CssPx margin_box, free_space;
     bool ltr = vertical || css_computed_keyword_is(container, "direction", CSS_KEYWORD_LTR);
     double share = 0.0;
     char buf[160];
@@ -84,8 +84,16 @@ CssPx grid_item_self_alignment_offset(lxb_dom_element_t *container, lxb_dom_elem
                box_subject(item, buf, sizeof buf), css_keyword_name(a.value));
         break;
     }
+    /* A subject at the area's start sits there whatever its size, so it is not laid out to find out. */
+    if (share == 0.0) {
+        *out = css_px(0.0);
+        return true;
+    }
+    if (!used_value_margin_edge_ask(item, vertical, &margin_box)) return false;
+    free_space = css_px_sub(area, margin_box);
     /* css-align-3 §4.4's `safe`: an overflowing subject is aligned "as if the alignment mode were flow-start",
        which is `start` here. */
     if (a.overflow == CSS_KEYWORD_SAFE && free_space.px < 0.0) share = ltr ? 0.0 : 1.0;
-    return css_px_scale(free_space, share);
+    *out = css_px_scale(free_space, share);
+    return true;
 }

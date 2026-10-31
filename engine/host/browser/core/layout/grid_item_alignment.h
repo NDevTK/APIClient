@@ -7,9 +7,10 @@
 #include <lexbor/dom/dom.h>
 #include "core/css/css_length.h"
 
-/* The offset of `item`'s margin box from the start of its grid area of extent `area` (a content-box extent),
-   on the block axis when `vertical` and the inline axis otherwise. `item` is a grid item of `container`. */
-CssPx grid_item_self_alignment_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx area,
-                                      bool vertical);
+/* The offset of `item`'s margin box from the start of its grid area of extent `area`, on the block axis when
+   `vertical` and the inline axis otherwise, asked under a step machine's resting drive: false ("not yet") with
+   `*out` unwritten when the item's size was deferred. `item` is a grid item of `container`. */
+bool grid_item_self_alignment_offset_ask(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx area,
+                                         bool vertical, CssPx *out);
 
 #endif

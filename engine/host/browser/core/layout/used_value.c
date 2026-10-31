@@ -4684,6 +4684,14 @@ bool used_value_padding_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *ou
     return true;
 }
 
+bool used_value_margin_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *out)
+{
+    DCHECK(el != NULL && out != NULL, "a margin edge's extent was asked for with no element or no answer");
+    if (!uv_operands_ask(el, vertical)) return false;
+    *out = used_value_margin_edge_px(el, vertical);
+    return true;
+}
+
 /* CSS 2.1 §10.3.7's and §10.6.4's USED `left` or `top`, out of the same solve that answers this box's size
    and its margins — see `uv_abs_solve`. The SIZE it is solved against is the one §10.4/§10.7's final pass ran
    with, which is what `uv_sized` reports and why this entry does not read the property. */

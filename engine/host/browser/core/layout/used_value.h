@@ -181,6 +181,10 @@ CssPx used_value_leading_edge_px(lxb_dom_element_t *el, bool vertical);
    position is core/layout/flow_position.h's. */
 CssPx used_value_margin_edge_px(lxb_dom_element_t *el, bool vertical);
 
+/* The entry above asked under a step machine's resting drive, as `used_value_padding_edge_ask` asks its own:
+   false ("not yet") with `*out` unwritten when an operand was deferred. */
+bool used_value_margin_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *out);
+
 /* The border edge for a caller that has already derived the box's content extent on that axis: that extent
    plus the four terms css-sizing-3 §3.3's conversion is stated over. §10.7's clamp runs here over the extent
    handed in, which is §10.4/§10.7 step 1's "tentative used height"; a stacked child reporting an unclamped

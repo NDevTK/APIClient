@@ -110,6 +110,8 @@ CssPx grid_item_area_block_size(lxb_dom_element_t *container, lxb_dom_element_t 
    is "not yet". Refuses, by name, a content alignment (css-grid-1 §10.5 "Aligning the Grid") that would move
    a track. */
 bool grid_item_area_origin_ask(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y);
+/* The two area extents above, asked under a step machine's resting drive: false is "not yet". */
+bool grid_item_area_extents_ask(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *w, CssPx *h);
 /* css-grid-1 §5.2 "Sizing Grid Containers"' max-content block size of `container`, a content-box extent: the
    sum of its row sizes under a max-content constraint. False is "not yet". */
 bool grid_container_max_content_block_size_ask(lxb_dom_element_t *container, CssPx *out);

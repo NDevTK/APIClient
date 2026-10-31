@@ -1193,6 +1193,23 @@ bool grid_item_area_origin_ask(lxb_dom_element_t *container, lxb_dom_element_t *
     return true;
 }
 
+bool grid_item_area_extents_ask(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *w, CssPx *h)
+{
+    GridAxisSizing c, r;
+
+    DCHECK(item != NULL && w != NULL && h != NULL, "a grid area's extents were asked for with nowhere to put them");
+    DCHECK(!layout_job_grid_rows_sizing(container),
+           "a grid area's block extent was asked while its container's rows are being sized, which is the size "
+           "those rows compute");
+    if (!gt_run_ask(&c, container, item, false, GRID_SIZING_AVAILABLE)) return false;
+    *w = gt_target_extent(&c);
+    grid_axis_sizing_end(&c);
+    if (!gt_run_ask(&r, container, item, true, GRID_SIZING_AVAILABLE)) return false;
+    *h = gt_target_extent(&r);
+    grid_axis_sizing_end(&r);
+    return true;
+}
+
 bool grid_container_max_content_block_size_ask(lxb_dom_element_t *container, CssPx *out)
 {
     GridAxisSizing g;
