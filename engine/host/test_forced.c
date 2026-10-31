@@ -1230,6 +1230,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxinsert.h"
 #include "fixture/rxtimer.h"
 #include "fixture/rxhandler.h"
+#include "fixture/rxeval.h"
+#include "fixture/rxfunc.h"
 #include "fixture/textencunk.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
@@ -1791,6 +1793,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "rxinsert", HTML_RXINSERT },
     { "rxtimer", HTML_RXTIMER },
     { "rxhandler", HTML_RXHANDLER },
+    { "rxeval", HTML_RXEVAL },
+    { "rxfunc", HTML_RXFUNC },
     { "textencunk", HTML_TEXTENCUNK },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
@@ -16759,6 +16763,50 @@ TF_UNIT void probes_rxhandler(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxeval` document (fixture/rxeval.h): the program's literal matches, and its compile rested inside
+   ECMAScript §19.2.1.1 PerformEval's parse. The document runs no RegExp constructor or compile, so every rest it counts is the literal's. */
+TF_UNIT void probes_rxeval(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, !!strstr(js, "\"/api/rxe\""),
+             "NOT REACHED: there is no /api/rxe record, so the program never answered");
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/rxe", "m", "true"),
+             "the program compiled from the literal does not match what its pattern states");
+    const char *r_why = NULL; int r_tt = 1;
+    fold_row(&r_tt, &r_why, rests != NULL,
+             "the result document carries no `twRegexpCompileRests` row from solver/metrics/cold.def");
+    fold_row(&r_tt, &r_why, nrests >= 1,
+             "the parse took no rest inside its literal, so it ran without a slot to hand the thread back through");
+    const Probe rows[] = {
+        { "rxe-match", m_tt, "/api/rxe", SESS_EXPLORE, m_why },
+        { "rxe-rests", r_tt, "/api/rxe", SESS_EXPLORE, r_why, .gate = "rxe-match" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `rxfunc` document (fixture/rxfunc.h): the program's literal matches, and its compile rested inside
+   ECMAScript §20.2.1.1.1 CreateDynamicFunction's parse. The document runs no RegExp constructor or compile, so every rest it counts is the literal's. */
+TF_UNIT void probes_rxfunc(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, !!strstr(js, "\"/api/rxf\""),
+             "NOT REACHED: there is no /api/rxf record, so the program never answered");
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/rxf", "m", "true"),
+             "the program compiled from the literal does not match what its pattern states");
+    const char *r_why = NULL; int r_tt = 1;
+    fold_row(&r_tt, &r_why, rests != NULL,
+             "the result document carries no `twRegexpCompileRests` row from solver/metrics/cold.def");
+    fold_row(&r_tt, &r_why, nrests >= 1,
+             "the parse took no rest inside its literal, so it ran without a slot to hand the thread back through");
+    const Probe rows[] = {
+        { "rxf-match", m_tt, "/api/rxf", SESS_EXPLORE, m_why },
+        { "rxf-rests", r_tt, "/api/rxf", SESS_EXPLORE, r_why, .gate = "rxf-match" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22054,6 +22102,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxinsert(js, probes, &np);
     probes_rxtimer(js, probes, &np);
     probes_rxhandler(js, probes, &np);
+    probes_rxeval(js, probes, &np);
+    probes_rxfunc(js, probes, &np);
     probes_textencunk(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
