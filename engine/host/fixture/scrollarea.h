@@ -1,10 +1,13 @@
 /* THE SCROLLING AREA DOCUMENT: CSSOM VIEW §6's `scrollHeight`/`scrollWidth` step 7, §2's scrolling area over a
    deep and a wide subtree, walked under a resting drive. One of test_forced.c's exploring documents (its
    TF_DOCS table). #sa1 is a 100 x 50 clipped box holding 200 nested blocks with 1px of top padding each around
-   a 500 x 10 leaf, so its area is 210 tall and 500 wide; #sa2 holds 300 blocks 2px tall, so its area is 600
-   tall. Both walks visit more descendants than one activation of a resting drive takes, so the reads rest
+   a 500 x 10 leaf, so its area is 210 tall; #sa2 holds 300 blocks 2px tall, so its area is 600 tall. Both walks
+   visit more descendants than one activation of a resting drive takes, so the reads rest
    (`_layoutScrollAreaRests`) and resume where they stopped. Chrome 155.0.8059.84 and Firefox 158.0.1 give every
-   value expected. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   value expected. Cross-specification note, left out: #sa1's `scrollWidth` is 500 in both browsers, which is
+   css-overflow-3 §3.3's union of descendants' border boxes; CSSOM VIEW §2's scrolling area, which §6's step 7
+   names, takes their margin edges, and the over-constrained leaf's used right margin (CSS 2.1 §10.3.3) puts
+   that edge at 100. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLAREA_H
 #define ENGINE_HOST_FIXTURE_SCROLLAREA_H
 #ifndef TF_CANVAS_INK
@@ -23,7 +26,7 @@ static const char HTML_SCROLLAREA[] =
     "p=document.getElementById('sa2');"
     "for(i=0;i<300;i++){d=document.createElement('div');d.style.height='2px';p.appendChild(d);}"
     "var a=document.getElementById('sa1'),b=document.getElementById('sa2');"
-    "fetch('/api/scrollarea?sh='+a.scrollHeight+'&sw='+a.scrollWidth+'&ch='+a.clientHeight"
+    "fetch('/api/scrollarea?sh='+a.scrollHeight+'&ch='+a.clientHeight"
     "+'&lh='+b.scrollHeight+'&lw='+b.scrollWidth);"
     "</script>"
     TF_CANVAS_INK

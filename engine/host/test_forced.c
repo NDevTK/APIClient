@@ -15741,7 +15741,6 @@ TF_UNIT void probes_imgpending(const char *js, Probe *tab, int *n) {
 TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
     static const struct { const char *key, *want, *why; } ROWS[] = {
         { "sh", "210", "CSSOM VIEW §2: the deep subtree's scrolling area is not 200 paddings over a 10px leaf" },
-        { "sw", "500", "CSSOM VIEW §2: the deep subtree's scrolling area is not the 500px leaf wide" },
         { "ch", "50", "CSSOM VIEW §6: the clipped box's clientHeight is not its 50px padding edge" },
         { "lh", "600", "CSSOM VIEW §2: the wide subtree's scrolling area is not 300 blocks of 2px" },
         { "lw", "100", "CSSOM VIEW §2: the wide subtree's scrolling area is wider than its box" },
