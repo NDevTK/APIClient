@@ -5157,11 +5157,9 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            "and replay the parent's side effects");
     /* Unstarted cross-agent operations and routed deliveries are asserted at the branch hook, not here: an
        answer fork happens at a park, where the zone may have attached one. */
-    /* The sibling joins the frontier on flow_add's first line, so nothing may page it out while the dozen
-       allocations below construct it: a newborn carries the full optimism bonus and ranks near the top, so a
-       reclaim at the refusal edge could free `sib` under these writes. The job-drop walk takes the same
-       precaution for the same reason. */
-    int prev_reclaim = engine_reclaim_set(0);
+    /* The allocations below may sell other members at the refusal edge; `sib` is not among them, since it stays out
+       of every query from its creation until the assembly ends (flow_assembly_begin, flow_assembly_end). The parent
+       is the running flow, which no sale takes. */
     /* Both arms get a child world and the fork point is retired: the sibling's by flow_add, the parent's on the
      * line after, from the same parent name. The edge is recorded so another instance holding a segment for the
      * fork point can materialize each arm's by forking it. Retiring the point matters twice: a peer asking
@@ -5182,6 +5180,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* Unseeded: an arm inherits its parent's sequence (copied below), so seeding would allocate the root
        document's rows onto it and leak them under the copy. */
     Flow *sib = flow_add_unseeded(ctx, parent->fn, fork_point);
+    flow_assembly_begin(sib);
     parent->world = world_mint_child(fork_point);
     /* Its account is a child of the parent's too: the WFQ's two terms, taken over at the branch. First, because
        it decides where the flow enters the queue. */
@@ -5463,7 +5462,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         }
     }
 #endif
-    engine_reclaim_set(prev_reclaim);   /* the sibling is fully assembled: it may be paged like any other member */
+    flow_assembly_end(sib);   /* the sibling is fully assembled: it may be paged like any other member */
     DCHECK(g_genfork_n == 0,
            "a fork finished with generator-state swaps still stashed — the sibling's cloned gen_data was never "
            "recorded on its delta");
@@ -11336,7 +11335,7 @@ int engine_park_fund(void) {
     if (!t) {
         /* The floor is reached only with no sellable bulk left: every member but the excluded one has given its
            bulk back, as the record being written or as an owed one. */
-        DCHECKF(flow_count() <= g_sale_owed_n + 1 + (g_reclaim_keep || flow_running() ? 1 : 0),
+        DCHECKF(flow_count() <= g_sale_owed_n + 1 + (g_reclaim_keep || flow_running() ? 1 : 0) + flow_assembling(),
                 "the park document met the floor with %ld members and only %ld owed records — a member still "
                 "holds bulk that no query offered for sale", (long)flow_count(), g_sale_owed_n);
         return 0;

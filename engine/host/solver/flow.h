@@ -378,6 +378,9 @@ typedef struct Flow {
        releases only the remainder. The flow is then out of the order's index and the host-owed list, so no query
        sells it twice. */
     int bulk_released;
+    /* Is the fork assembling this sibling (flow_assembly_begin to flow_assembly_end)? It is then out of the order's
+       index and the host-owed list, so no sale can pick it while its fields are being written. */
+    int assembling;
     /* The next flow on the pager's owed-record list (engine.c): sold for its bulk while another record was being
        written, its own record still to write. */
     struct Flow *sale_next;
@@ -1840,6 +1843,12 @@ void  flow_release(JSContext *ctx, Flow *f);
    It also takes the flow out of the order's index or the host-owed list. flow_release then frees the remainder.
    Asserts the flow is not switched in and not released twice. */
 void  flow_release_bulk(JSContext *ctx, Flow *f);
+/* A sibling's assembly: begin takes the just-added flow out of the order's index, so no sale can pick it while the
+   fork writes its fields with the refusal edge armed; end puts it in once it is complete. One at a time, asserted.
+   flow_assembling answers how many stand between the two (0 or 1). */
+void  flow_assembly_begin(Flow *f);
+void  flow_assembly_end(Flow *f);
+int   flow_assembling(void);
 /* Does `f` read, for cold_park_flow, as it did when its bulk was released? Defined in dev builds, where the
    snapshot is kept; named only inside DCHECK conditions. */
 int flow_park_reads_unchanged(const Flow *f);

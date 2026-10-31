@@ -2085,9 +2085,12 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
        INSIDE THE SWAP SCOPE, because "this allocation can sell a flow" is the same sentence that opens the
        scope everywhere else in this file: a sale runs with whatever the hooks are set to, and a fork is not a
        moment at which the page may capture anything. */
-    cow_swap_begin();
+    /* Allocated before the swap scope opens: the ask can sell a flow, and the round trip below must not have begun. */
+    DCHECK(g_swapping == 0, "a fork segment was asked for inside a swap scope — a sale run by the ask would release "
+                            "deltas while this file's own heap operation is half done");
     seg = reclaim_malloc(sizeof *seg);
     CHECK(seg, "cow: OOM fork segment — a shared delta would be corrupted");
+    cow_swap_begin();
     /* THE FETCH, for an applied delta only: unapply is what puts each entry's branch-point value into `cur`. A
        parked delta's entries hold it already, and running this on one would read the heap of whatever flow IS
        applied and record another timeline's values as this delta's. */

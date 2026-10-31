@@ -2083,9 +2083,11 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     DCHECK(sib->acct != NULL && sib->acct->up == NULL,
            "a forked sibling already stands under a flow in the fork tree — flow_new mints a root, so this is a "
            "second inheritance onto one sibling");
-    /* Out of the order's index while its key's operands and its bucket and family are rewritten: flow_new indexed
-       it under the root it minted, and it is indexed again under its parent's family once the transfer below ends. */
-    flow_ix_remove(sib);
+    /* Out of the order's index while its key's operands and its site and family are rewritten: the assembly took
+       it out (flow_assembly_begin) and puts it back under its parent's family once it is complete. */
+    DCHECK(sib->assembling && !sib->ix_in,
+           "a sibling inherited its parent's fork-tree state outside its assembly — its key's operands would be "
+           "rewritten while the order's index holds it, and a sale could pick it half-written");
     /* The reward is not copied here; the family join below carries it, one pointer read by every arm, which is why
        the equality at the end holds over a term this function never names. `Flow.val` is what one member emitted,
        never inherited and unranked, so the precondition requires it to be zero rather than assigning it. */
@@ -2173,8 +2175,6 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->assumed_reads = parent->assumed_reads;
     for (int i = 0; i < parent->assumed_slots_n; i++) flow_assumed_slot_push(sib, parent->assumed_slots[i]);
     if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot);
-    /* Back into the index under its final site and family. */
-    flow_ix_insert(sib);
     /* And the path's forced mark, the one inherited thing the ranking never reads: an arm is its parent's path with
        one more arm on it, so it stands on everything the parent's path stood on. A sibling born clean of it would
        declare its requests derived on the strength of being forked, the provenance form of reset-by-splitting, and
@@ -2220,6 +2220,27 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            "may take; a weight term the fork does not carry lets a flow change its own rank by branching, which "
            "is the one thing the WFQ may never let it do");
 }
+
+static int g_flows_assembling;   /* siblings between flow_assembly_begin and flow_assembly_end, 0 or 1 */
+
+void flow_assembly_begin(Flow *f) {
+    DCHECK(f != NULL && f->ix_in && !f->assembling && g_flows_assembling == 0,
+           "a sibling's assembly began on a flow the order's index does not hold, or inside another assembly");
+    flow_ix_remove(f);
+    f->assembling = 1;
+    g_flows_assembling++;
+}
+
+void flow_assembly_end(Flow *f) {
+    DCHECK(f != NULL && f->assembling && !f->ix_in && !flow_host_owed(f),
+           "a sibling's assembly ended on a flow that was not being assembled, or one something indexed or marked "
+           "host-owed mid-assembly");
+    f->assembling = 0;
+    g_flows_assembling--;
+    flow_ix_insert(f);
+}
+
+int flow_assembling(void) { return g_flows_assembling; }
 
 #if APICLIENT_DEV
 static FlowParkReads flow_park_reads(const Flow *f) {
@@ -6198,6 +6219,9 @@ Flow *flow_worst(const Flow *exclude) {
        host. */
     g_scan_runs[FLOW_SCAN_OTHER]++;
     tail = flow_tail_of(exclude, &entries, &weighed);
+    DCHECK(!tail || (!tail->assembling && !tail->bulk_released),
+           "the pager's tail is a sibling still being assembled or a flow already sold for its bulk — both are out "
+           "of every query by construction, so the index or the host-owed list still holds one");
     g_scan_weights[FLOW_SCAN_OTHER] += weighed;
     g_ix_entries += entries;
     return tail;
@@ -6272,6 +6296,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         g_picks_departed += f->picks;
         /* And out of the order: the index if it is runnable, the host-owed list if it is not, the two exactly
            partitioning the members. Before acct_depart, which clears the bucket and family the index reads. */
+        DCHECK(!f->assembling, "a sibling was removed from the frontier before its assembly ended");
         if (f->ix_in) flow_ix_remove(f);
         else if (!f->bulk_released) flow_owed_unlink(f);   /* a sold flow left both at flow_release_bulk */
         f->at->members--;
