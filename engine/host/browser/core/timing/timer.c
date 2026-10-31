@@ -101,6 +101,7 @@
  * union's non-callable arm resolves to DOMString, idl_args.c passes unknown external input across the boundary
  * AS ITSELF so opacity survives the coercion, and the body's `JS_IsString` assertion then fired on it — a
  * canonical XSS sink took the document down on an assert against attacker input. */
+#include "core/loader/script_compile.h"
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"      /* §8.7's FOUR page-facing members are step machines: each asks a question over a
@@ -866,6 +867,7 @@ typedef struct {
        than a third ownership list. */
     uint8_t   aborted;
     JSValue   exc;
+    ScriptCompile sc;   /* substep 9.8.7's classic script, compiled across the rests its parse takes */
     /* [this, handler] AND NOTHING MORE, which is timer_init's declaration read at the far end: §8.7's
        `any... arguments` tail is not declared, so no entry of the map carries extra arguments and
        timer_run_due asserts that where it would have to copy them. Substep 9.8.8's call needs exactly the same
@@ -884,6 +886,7 @@ static void tt_visit(JSContext *ctx, void *stp, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
     STEP_CB_FOREACH(s->rcb, k) v->val(ctx, &s->rcb[k]);
     v->val(ctx, &s->exc);
+    script_compile_visit(ctx, &s->sc, v);
 }
 
 static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -907,6 +910,7 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
             s->rphase = 0;
             s->threw = 0;
             s->exc = JS_UNDEFINED;
+            script_compile_init(&s->sc);
             STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
             STEP_CB_FOREACH(s->rcb, k) s->rcb[k] = JS_UNDEFINED;
             DCHECK(s->hdr.argc == TT_ARG_N,
@@ -1063,11 +1067,13 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                               cb_result, &out, out_cb, out_argc);
         } else {
             const char *src, *base;
-            JSValue prog;
+            JSValue prog = JS_UNDEFINED;
             size_t src_n = 0;
             JSValue text;
             int announced;
 
+            if (script_compile_pending(&s->sc))
+                goto compile;   /* re-entered after the parse handed the thread back */
             DCHECK(JS_IsString(handler) || concolic_is(handler),
                    "§8.7 Timers's substep 9.8 was reached over a handler that is neither a string nor unknown "
                    "external input — 9.8.2 is \"Assert: handler is a string\", the arm above sends every "
@@ -1176,9 +1182,15 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                    "document has none — HTML §2.4.3 \"Document base URLs\" ends its fallback base URL at "
                    "\"return document's URL\", so every Document has one, and an absent one is a document "
                    "built somewhere that never set its URL");
-            prog = JS_Eval(ctx, src, src_n, base,
-                           JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE | JS_EVAL_FLAG_INLINE_SCRIPT);
+            script_compile_begin(ctx, &s->sc, src, src_n, base);
             JS_FreeCString(ctx, src);
+        compile:
+            /* The parse rests where the scheduler asks, and this stage is re-entered to continue it. */
+            r = script_compile_run(ctx, &s->sc, JS_EVAL_FLAG_INLINE_SCRIPT, &prog);
+            if (r) {
+                JS_FreeValue(ctx, cb_result);   /* no request was made on this leg — see TT_INVOKE's arm */
+                return r;
+            }
             if (JS_IsException(prog)) {
                 /* §8.1.4.3 "Creating scripts"'s creating a classic script over source text that does not parse
                    returns a script whose `error to rethrow` is set, and §8.1.4.4 "Calling scripts" step 6 then
