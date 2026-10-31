@@ -1197,6 +1197,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/gridreplaced.h"
 #include "fixture/imgpending.h"
 #include "fixture/scrollarea.h"
+#include "fixture/scrollrestore.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1764,6 +1765,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "gridreplaced", HTML_GRIDREPLACED },
     { "imgpending", HTML_IMGPENDING },
     { "scrollarea", HTML_SCROLLAREA },
+    { "scrollrestore", HTML_SCROLLRESTORE },
+    { "scrollclamp", HTML_SCROLLCLAMP },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15808,6 +15811,27 @@ TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `scrollrestore` and `scrollclamp` documents (fixture/scrollrestore.h), read off Chrome
+   155.0.8059.84. */
+TF_UNIT void probes_scrollrestore(const char *js, Probe *tab, int *n) {
+    const char *sr_why = NULL; int sr_tt = !!strstr(js, "\"/api/scrollrestore\"");
+    const char *sc_why = NULL; int sc_tt = !!strstr(js, "\"/api/scrollclamp\"");
+
+    fold_row(&sr_tt, &sr_why, sr_tt,
+             "NOT REACHED: there is no /api/scrollrestore record at all, so the document aborted before its fetch");
+    fold_row(&sr_tt, &sr_why, param_value_is(js, "/api/scrollrestore", "r1", "400"),
+             "HTML §7.4.6.5: going back did not restore the first entry's scroll position, 400");
+    fold_row(&sc_tt, &sc_why, sc_tt,
+             "NOT REACHED: there is no /api/scrollclamp record at all, so the document aborted before its fetch");
+    fold_row(&sc_tt, &sc_why, param_value_is(js, "/api/scrollclamp", "r2", "0"),
+             "HTML §7.4.6.5: a restored position past the shrunk document's scrolling area did not land at 0");
+    const Probe rows[] = {
+        { "scroll-restore", sr_tt, "/api/scrollrestore", SESS_EXPLORE, sr_why },
+        { "scroll-restore-clamp", sc_tt, "/api/scrollclamp", SESS_EXPLORE, sc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -22405,6 +22429,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_gridreplaced(js, probes, &np);
     probes_imgpending(js, probes, &np);
     probes_scrollarea(js, probes, &np);
+    probes_scrollrestore(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
