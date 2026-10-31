@@ -200,6 +200,10 @@ typedef struct {
     uint8_t             stage;   /* SX_* in html_script.c — which step of "execute the script element" */
     uint8_t             phase;   /* step_call_run's own cursor */
     JSValue             cb[SCRIPT_EXEC_CB_SLOTS];
+    /* The classic arm's compile, which can hand the thread back: the source text and step 34's base URL as
+       Strings (owned), and the parse in flight (a ScriptCompile, a cache re-derived from those two). */
+    JSValue             src, base;
+    void               *comp;
     JSValue             old;     /* step 6's oldCurrentScript, held across the run */
     JSValue             exc;     /* §8.1.4.4 step 8's evaluationStatus.[[Value]], held across the report */
     ReportExceptionWork rx;      /* §8.1.4.6, which fires `error` at the global and so parks on the page's code */
