@@ -890,9 +890,12 @@ static void cow_composing_note(JSContext *ctx, JSValueConst obj)
         g_composing_cap = cap;
     }
     if (!g_composing[id].name) {
-        JSAtom a = JS_GetClassName(JS_GetRuntime(ctx), id);
-        const char *s = JS_AtomToCString(ctx, a);
+        JSAtom a = JS_GetClassName(JS_GetRuntime(ctx), id);   /* owned */
+        const char *s;
 
+        DCHECK(a != JS_ATOM_NULL, "a captured object's class is not registered");
+        s = JS_AtomToCString(ctx, a);
+        JS_FreeAtom(ctx, a);
         CHECK(s != NULL, "cow: OOM naming a composing class");
         g_composing[id].name = strdup(s);
         CHECK(g_composing[id].name != NULL, "cow: OOM naming a composing class");
