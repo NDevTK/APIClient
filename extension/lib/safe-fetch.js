@@ -854,6 +854,12 @@ var _SIGNALS = [
      `lineage=unknown`, including addresses the bundle demonstrably built from a logged-in reply. */
   { name: "lineage", gates: true, certainty: "undetermined", values: ["unknown"],
     of: function () { return "unknown"; } },
+  /* Whose server the request reaches: the attacker site the person configured as their own
+     (lib/attacker-site.js's attackerSiteReaches, on the URL parser's host), or another party's. Last of the
+     gating rows, so a refusal names it only where every row before it is permitted. `certain`: the zone parses
+     the address and compares it with its own record of the person's setting. */
+  { name: "reaches", gates: true, certainty: "certain", values: ["attacker-site", "another-party"],
+    of: function (f) { return attackerSiteReaches(f.url); } },
   /* The method, a fact about this transport and not a control: `init` hardcodes `method:"GET"` and
      `_refuseUnreadOptions` refuses a caller that states one, so the value space has one member. It is shown
      because a person deciding is entitled to know this transport sends one verb; the day it can send another,
@@ -1001,6 +1007,11 @@ function _signalVector(facts) {
    made anyway. Each arm is one entry to delete if the intended reading is narrower, and the refusal that
    follows names the signal. These are permissions only, so nothing here narrows the table. */
 var _DEFAULT_ARMS = [
+  /* A request to the person's own attacker site, which they configured as a server they run: it reaches no
+     other party's state, so it fires at every other row's value, a live verify's attacker page among them. */
+  { when: [{ signal: "reaches", value: "attacker-site" }],
+    why: "the request reaches the attacker site the person configured as their own server, and no other " +
+         "party's state" },
   /* Program loads are destination-keyed alone. A forced segment in a program's address does not move it
      across the line: `import("/chunks/" + region + ".js")` with `region` pinned by forcing is still the app's
      own code, served to anyone who asks, and is the gated surface this product exists to reach. So the

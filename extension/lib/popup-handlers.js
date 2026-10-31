@@ -1103,13 +1103,6 @@ async function handlePopupMessage(msg, sender, sendResponse) {
 // ─── Exploit probe (interactive per-finding verification) ─────────────────
 
 
-// The real cross-origin attacker origin the PoC runs on. A minimal, stable,
-// CSP-free page (IANA's reserved example domain) so the injected PoC can frame
-// the target and run without the attacker page's own policy interfering. This
-// is what a researcher would paste the PoC onto.
-const PROBE_ATTACKER_ORIGIN = "https://example.com/";
-
-
 // Sessions persist past completion so the popup can reopen after the
 // probe finishes and still render the result. Capped via TTL + LRU.
 const PROBE_SESSION_TTL_MS = 10 * 60 * 1000;

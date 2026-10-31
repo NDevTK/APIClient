@@ -220,6 +220,8 @@ const PROBE_PERMITS = {
   'url-authority': ['unknown'],
   /* The one value this row has today; the chokepoint's own residual says why. */
   lineage: ['unknown'],
+  /* This process configures no attacker site, so `localhost` is another party's server. */
+  reaches: ['another-party'],
 };
 
 /* What the child may fire at both authorities: every grade of the page's own act, and no act of this tool's.
@@ -235,6 +237,7 @@ const RUN_PERMITS = {
   witness: ['unstated'],
   'url-authority': ['unknown'],
   lineage: ['unknown'],
+  reaches: ['another-party'],
 };
 
 /* ── THE CHOKEPOINT, IN A REALM OF ITS OWN ───────────────────────────────────────────────────────────────────

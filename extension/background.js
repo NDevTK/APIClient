@@ -7,7 +7,7 @@
 //   2. forward browser events the offscreen can't observe (tab removal, and the webRequest events of a
 //      document's fetch() and XMLHttpRequest traffic) to the brain,
 //   3. perform privileged chrome.tabs.* calls the offscreen can't, as RPC, and own the live-verify attacker
-//      tab: it opens ATTACKER_PAGE_URL itself and keeps, in memory only, which tabs it opened for it,
+//      tab: it opens the address the offscreen judged and keeps, in memory only, which tabs it opened for it,
 //   4. hold the zone's one network fetch, which lib/safe-fetch.js decides in the offscreen document (wire.js).
 // The popup talks to the brain directly over chrome.runtime.sendMessage (a
 // broadcast reaches the offscreen); the SW stays out of those messages.
@@ -128,17 +128,15 @@ chrome.webRequest.onErrorOccurred.addListener(_wrRelay("onErrorOccurred"), _WR_F
 // preferred: the MAIN world evaluates and dispatches a CustomEvent, and content.js's ISOLATED world relays it —
 // the same cross-world transport `__uasr_probe_hit` already uses, which is a `document` event rather than a
 // `window.postMessage` precisely so no page handler sees a `message` event that was not the page's.
-/* The live-verify attacker document's address, which only this worker opens. The payload is evaluated in an
-   ordinary tab of this page rather than served from it, so nothing is hosted and nothing but one GET of a
-   documentation domain's front page leaves the browser. That page sends no CSP, so the MAIN world can
-   evaluate; a page CSP without 'unsafe-eval' would refuse it, and `pocAttackerButton` reports the EvalError.
-   Named residual. Not covered: a message act's origin (solve.h's act `origin`), which this fixed address meets
+/* The live-verify attacker document is an ordinary tab of a page on the attacker site the person configured,
+   opened at the address the offscreen judged by the one firing rule (offscreen-brain.js _attackerPageAddress),
+   and the payload is evaluated in it rather than served from it. A page CSP without 'unsafe-eval' would refuse
+   that, which the site's configuration check reports and `pocAttackerButton` reports as an EvalError.
+   Named residual. Not covered: a message act's origin (solve.h's act `origin`), which the site's root meets
    only by coincidence, so `buildLiveDelivery` states such PoCs as engine-fired, live-unverified. Next diff
-   builds: an attacker page under the trusted zone's provisioned attacker site (engine/trusted.mjs
-   `--attacker-site`) for an `attacker-site` origin; a `registered-domain` origin stays unverified until the
-   person states a domain they hold. Absence shows as: a PoC whose message act is `originOwned:"attacker-site"`
-   answering a `pocWhy` beside address-delivered findings that arm a Run button. */
-const ATTACKER_PAGE_URL = "https://example.com/";
+   builds: the attacker page opened at an `attacker-site` act origin, posting the acts to the victim it opens.
+   Absence shows as: a PoC whose message act is `originOwned:"attacker-site"` answering a `pocWhy` beside
+   address-delivered findings that arm a Run button. */
 /* The tabs `attackerPage.open` opened that are still open: the only tabs `scripting.exec` arms. It is this
    worker's memory, so an eviction empties it and an injection after one is refused, never widened. */
 const _attackerTabs = new Set();
@@ -307,10 +305,18 @@ async function _swRpc(msg) {
   switch (api) {
     case "tabs.sendMessage": return chrome.tabs.sendMessage(...args);
     case "attackerPage.open": {
-      const tab = await chrome.tabs.create({ url: ATTACKER_PAGE_URL, active: true });
+      /* The decision is the offscreen's (the attacker site and the egress table live there); this CHECK is
+         defence in depth, holding the open to an https page with no userinfo, port or fragment. */
+      const url = args[0] && args[0].url;
+      const u = typeof url === "string" && URL.canParse(url) ? new URL(url) : null;
+      CHECK(u !== null && u.href === url && u.protocol === "https:" && u.username === "" && u.password === "" &&
+            u.port === "" && u.hash === "",
+            "attackerPage.open was asked to open " + JSON.stringify(url) + ", which is not an https page address " +
+            "with no userinfo, port or fragment");
+      const tab = await chrome.tabs.create({ url, active: true });
       CHECK(!!tab && typeof tab.id === "number", "chrome.tabs.create answered no tab id for the attacker page");
       _attackerTabs.add(tab.id);
-      return { id: tab.id, status: tab.status, url: ATTACKER_PAGE_URL };
+      return { id: tab.id, status: tab.status, url };
     }
     case "tabs.query": return chrome.tabs.query(...args);
     case "tabs.get": return chrome.tabs.get(...args);

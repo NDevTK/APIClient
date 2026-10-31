@@ -45,6 +45,15 @@ function attackerSiteStated(record) {
 }
 function attackerSiteNow() { return _attackerSite; }
 
+/* Whose server `url` (a parsed URL) reaches: "attacker-site" when its host is the configured site or a name
+   under it, compared on the URL parser's host and never on a spelling, and "another-party" otherwise, including
+   whenever no site is configured. */
+function attackerSiteReaches(url) {
+  if (_attackerSite === null) return "another-party";
+  const h = url.hostname, site = _attackerSite.site;
+  return h === site || h.endsWith("." + site) ? "attacker-site" : "another-party";
+}
+
 /* The address the check sends to: a fresh label under the site, so a resolution and a certificate for a name
    the person never configured shows the wildcard a composed origin needs. */
 function attackerSiteProbeUrl(site) {

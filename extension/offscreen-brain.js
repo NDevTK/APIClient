@@ -2011,10 +2011,30 @@ function startExploitProbe(msg) {
 }
 
 
+/* The attacker document's address: the root of the attacker site the person configured, or the reason there is
+   none. Opening it is this tool's navigation, judged by the one firing rule (safeFetchFiringRefusal) like any
+   other: the zone composed it from the person's setting, from no document, carrying the profile's cookies for
+   that site, and its `reaches` row is `attacker-site`, which fires by default. */
+function _attackerPageAddress() {
+  const rec = attackerSiteNow();
+  if (rec === null)
+    return { why: "no attacker site is configured, so there is no page to open: a live verify runs its PoC from " +
+                  "a document on a site you serve (the popup's Attacker site setting)" };
+  const url = "https://" + rec.site + "/";
+  const refusal = safeFetchFiringRefusal({
+    url, destination: "document", provenance: PROVENANCE_DERIVED, pinned: "unpinned",
+    doc: docRecord(PROVENANCE_DERIVED, DRIVEN_NO, "unpinned", NAVIGABLE_NOTICE.sandbox.none, "public"),
+    actor: "tool", driven: "unstated", credentialed: true, headers: null });
+  if (refusal !== null)
+    return { why: "opening the attacker page " + url + " is refused by its origin's egress policy on `" + refusal +
+                  "`" };
+  return { url };
+}
+
 /* Open the attacker tab and arm its button, two acts through the service worker's relay:
-   - `attackerPage.open`: the worker opens its own ATTACKER_PAGE_URL in a new, active tab and records it as the
-     one tab `scripting.exec` may arm. It is active because the person's click is the user activation HTML
-     §7.2.2.1's window open steps need to reach a navigable past a popup blocker.
+   - `attackerPage.open`: the worker opens the address `_attackerPageAddress` judged in a new, active tab and
+     records it as the one tab `scripting.exec` may arm. It is active because the person's click is the user
+     activation HTML §7.2.2.1's window open steps need to reach a navigable past a popup blocker.
    - `scripting.exec` with op `pocAttackerButton`: a named injector the worker holds, given only serializable
      arguments, so this zone cannot inject code of its own composing.
    The load is waited for, by a stated number of asks (a UI round trip, not the frontier), because injecting
@@ -2022,7 +2042,12 @@ function startExploitProbe(msg) {
    reported. Nothing is asserted about what the injector returns: it ran in a third-party MAIN world, and the
    browser-stated half arrives later on the POC_RAN relay's own `_facts`. */
 async function armAttackerPage(ses) {
-  const tab = await swRpc("attackerPage.open");
+  /* The person's egress table and attacker site are restored at load; the address is judged against both. */
+  await egressPolicyReady();
+  await _attackerSiteReady;
+  const page = _attackerPageAddress();
+  if (!("url" in page)) return { error: page.why };
+  const tab = await swRpc("attackerPage.open", { url: page.url });
   const tabId = tab && tab.id;
   if (typeof tabId !== "number") {
     return { error: "the browser created no tab for the attacker page, so there is no document to arm" };
