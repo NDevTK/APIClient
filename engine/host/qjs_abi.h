@@ -112,6 +112,8 @@ QJS_EXPORT int qjs_host_decline(unsigned req, const char *reason);
 QJS_EXPORT void qjs_set_referenced(int referenced);
 /* How the document was reached, as an arrival word, stated before qjs_begin (main.c). */
 QJS_EXPORT void qjs_set_arrival(const char *arrival);
+/* The attacker's site the person configured, a lowercase domain, stated before qjs_begin (main.c). */
+QJS_EXPORT void qjs_set_attacker_site(const char *site);
 /* Set-Cookie [URL, field] pairs (JSON) for this agent's jar, stated after qjs_init (main.c). */
 QJS_EXPORT void qjs_receive_cookies(const char *pairs_json);
 QJS_EXPORT int qjs_referenced(void);
