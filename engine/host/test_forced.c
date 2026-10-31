@@ -1198,6 +1198,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/imgpending.h"
 #include "fixture/scrollarea.h"
 #include "fixture/scrollrestore.h"
+#include "fixture/travnav.h"
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
@@ -1767,6 +1768,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "scrollarea", HTML_SCROLLAREA },
     { "scrollrestore", HTML_SCROLLRESTORE },
     { "scrollclamp", HTML_SCROLLCLAMP },
+    { "travnav", HTML_TRAVNAV },
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
@@ -15890,6 +15892,31 @@ TF_UNIT void probes_scrollrestore(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `travnav` document (fixture/travnav.h): `history.back()` fires a cancelable traverse navigate
+   event, and canceling it leaves the document at the pushed entry. */
+TF_UNIT void probes_travnav(const char *js, Probe *tab, int *n) {
+    const char *ev_why = NULL; int ev_tt = 1;
+    const char *cx_why = NULL; int cx_tt = 1;
+
+    fold_row(&ev_tt, &ev_why, !!strstr(js, "\"/api/travnav\""),
+             "NOT REACHED: no /api/travnav record, so no navigate event reached the listener on history.back()");
+    fold_row(&ev_tt, &ev_why, param_value_only(js, "/api/travnav", "t", "traverse") &&
+                              param_value_only(js, "/api/travnav", "c", "true") &&
+                              param_value_only(js, "/api/travnav", "s", "true"),
+             "HTML §7.4.6.1 step 5: history.back()'s navigate event is not a cancelable same-document "
+             "\"traverse\" (§7.2.6.10.4 inner steps 8-9)");
+    fold_row(&cx_tt, &cx_why, !!strstr(js, "\"/api/travnavend\""),
+             "NOT REACHED: no /api/travnavend record, so the document's later read never ran");
+    fold_row(&cx_tt, &cx_why, param_value_only(js, "/api/travnavend", "h", "%23b"),
+             "HTML §7.4.6.1 step 5: a traversal whose navigate event was canceled was applied anyway — the document "
+             "left the pushed entry's #b");
+    const Probe rows[] = {
+        { "travnav-event", ev_tt, "/api/travnav", SESS_EXPLORE, ev_why },
+        { "travnav-cancel", cx_tt, "/api/travnavend", SESS_EXPLORE, cx_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `flexwrap` document (fixture/flexwrap.h). */
 TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
     const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwrap\"");
@@ -22490,6 +22517,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_imgpending(js, probes, &np);
     probes_scrollarea(js, probes, &np);
     probes_scrollrestore(js, probes, &np);
+    probes_travnav(js, probes, &np);
     probes_svgelement(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
