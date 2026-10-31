@@ -327,13 +327,7 @@ static JSContext *doc_realm(JSContext *ctx, JSUpdateRendering *s)
    "Scrolling" fills doc's list when a viewport or an element GETS SCROLLED, which is §3.1's perform a scroll
    and is an INTERNAL ALGORITHM with no name on any global to probe for. Asked instead of the component that
    owns the scrolling box, the assert fired the day §2's viewport row gave the clamp somewhere to land, and
-   the step it named is now built: core/dom/scroll_events.c is §13.2 and UR_SCROLL is its drain.
-   THE ARGUMENT THAT MADE THE NAME TEST LOOK SOUND IS RETIRED AND IS RESTATED IN CAPITALS SO NOBODY
-   RE-DERIVES IT: §4's WINDOW MEMBERS ARE §4's ARGUMENT QUESTIONS PLUS A CALL TO `viewport_scroll`, WHOSE
-   CLAMP LANDS ON THE POSITION THE VIEWPORT ALREADY HAS, SO THEY MOVE NOTHING. §2's viewport row retired the
-   clamp half and core/dom/perform_scroll.c retired the rest. What survives is the shape of the mistake and
-   not its arithmetic: A MEMBER IS NOT A CAPABILITY, and core/timing/hr_time.c records what the name test cost
-   the last time. */
+   the step it named is now built: core/dom/scroll_events.c is §13.2 and UR_SCROLL is its drain. */
 
 /* STEP 10 IS WRITTEN — it is UR_MEDIA, below. Its assert is gone rather than relaxed, which is the whole point
    of the mechanism: the producer (`matchMedia`) arrived, the DCHECK fired at this exact place in the order, and

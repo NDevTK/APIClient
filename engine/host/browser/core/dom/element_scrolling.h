@@ -98,12 +98,16 @@ typedef struct {
 /* Open `el`'s associated scrolling box, which css-overflow-3 §3.1's scroll-container question has answered
    yes for, in the active document of a navigable. */
 void element_scrolling_measure_element(ElementScrollingMeasure *m, lxb_dom_element_t *el);
+/* Open the viewport of the document `dctx` presents, which has one (§4's step 4 has not aborted). */
+void element_scrolling_measure_viewport(ElementScrollingMeasure *m, JSContext *dctx);
 /* One rest unit of the walk; false once both axes are measured. */
 bool element_scrolling_measure_next(ElementScrollingMeasure *m);
 /* §6's "the element has no overflow", negated: the scrolling area exceeds the padding box on either axis. The
    area's beginning edges are the padding box's, so the two differ exactly when a descendant reaches past the
    ending edge. Compared on the example, as the clamp is. */
 bool element_scrolling_has_overflow(const ElementScrollingMeasure *m);
+/* The clamp below over the measured box on one axis: `v` placed in the box's scrolling area. */
+double element_scrolling_measured_clamp(const ElementScrollingMeasure *m, bool vertical, double v);
 
 /* §6.1's "To SCROLL AN ELEMENT (or pseudo-element) element to x,y optionally with a scroll behavior behavior",
    over the measured box of `el`. `x` and `y` are the requested position in CSS pixels, before §6.1's own clamp.

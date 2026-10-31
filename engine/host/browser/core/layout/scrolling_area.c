@@ -813,13 +813,12 @@ CssPx scrolling_area_walk_extent(const ScrollingAreaWalk *w)
     return css_px_sub(hi, lo);
 }
 
-/* NAMED RESIDUAL. Not covered: the callers of this drive — core/frame/viewport.c's §4 `scroll()` clamp and
-   scroll-position assert, and core/dom/element_scrolling.c's perform-a-scroll capability — walk the viewport's
-   scrolling area to completion in one activation, so a flow scrolling the viewport cannot rest inside the
-   document walk; §6.1's scroll into view, §6's scroll members over an element and §6's
-   `scrollWidth`/`scrollHeight` step the cursor instead. Next: those callers stepping the cursor, after which
-   this drive is deleted. How its absence shows: a flow's slice overrun in §4's `scroll()` on a large
-   document, with `_layoutJobRests` flat. */
+/* NAMED RESIDUAL. Not covered: the callers of this drive — the scroll-position writer's assert in
+   core/frame/viewport.c, and core/dom/element_scrolling.c's perform-a-scroll capability behind two asserts in
+   focus() and session history — re-walk the viewport's scrolling area to completion in dev builds, where every
+   scroll algorithm steps the cursor. Next: those asserts read the clamp's own measurement, the stored viewport
+   position, and focus()'s built scroll into view, after which this drive is deleted. How its absence shows: a
+   dev build's work count above a release build's on a scroll, with `_layoutJobRests` equal. */
 /* The walk runs inside one drive, so the current job holds its memo and records across every descendant:
    without a driven job entered, the synchronous job holds them only while a drive is open. A step that answers
    "not yet" is retried after the drive computes what it deferred. */

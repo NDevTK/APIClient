@@ -15780,6 +15780,9 @@ TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
         { "rh", "2300", "CSSOM VIEW §6 step 4: the root's scrollHeight is not the viewport's scrolling area" },
         { "rt", "100", "CSSOM VIEW §6's scrollTop setter step 8: the root did not scroll the viewport to 100" },
         { "nt", "0", "CSSOM VIEW §6's scrollTop setter step 10: a box with no scrolling box was scrolled" },
+        { "w1", "200", "CSSOM VIEW §4's scrollTo(0, 200) did not scroll the viewport to 200" },
+        { "w2", "250", "CSSOM VIEW §4's scrollBy({top: 50}) did not add 50 to the viewport's position" },
+        { "w3", "300", "CSSOM VIEW §6's scrollTo step 8: the root did not scroll the viewport to 300" },
     };
     const char *rests = strstr(js, "\"_layoutScrollAreaRests\":");
     long nrests = rests ? strtol(rests + strlen("\"_layoutScrollAreaRests\":"), NULL, 10) : -1;

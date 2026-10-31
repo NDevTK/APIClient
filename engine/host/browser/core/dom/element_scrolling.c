@@ -371,6 +371,21 @@ void element_scrolling_measure_element(ElementScrollingMeasure *m, lxb_dom_eleme
     es_area_begin(m);
 }
 
+void element_scrolling_measure_viewport(ElementScrollingMeasure *m, JSContext *dctx)
+{
+    lxb_dom_node_t *root = document_root_node(dctx);
+
+    /* A CHECK because the walk dereferences the document element in release: a viewport is the area a
+       navigable presents a document in, so a viewport with no document element is two records come apart. */
+    CHECK(root != NULL && root->owner_document != NULL,
+          "CSSOM VIEW §4's scroll() measured a viewport whose realm presents no document element; its step 4, "
+          "\"if there is no viewport\", is the step that should have returned");
+    m->doc = lxb_dom_interface_node(root->owner_document);
+    es_box_open_viewport(m->doc, dctx, &m->box);
+    m->axis = ES_X;
+    es_area_begin(m);
+}
+
 /* The boxes the walk folds are the rest unit's items (REST_UNIT_LAYOUT_DESCENDANTS), and the bracket measures
    them against the slice; the unit also ends when the drive spends its boxes (REST_UNIT_LAYOUT_BOXES). */
 bool element_scrolling_measure_next(ElementScrollingMeasure *m)
@@ -405,6 +420,12 @@ bool element_scrolling_has_overflow(const ElementScrollingMeasure *m)
 {
     DCHECK(m->axis > ES_Y, "a scrolling box's overflow was asked before both axes were measured");
     return m->box.area[ES_X].px > m->box.extent[ES_X].px || m->box.area[ES_Y].px > m->box.extent[ES_Y].px;
+}
+
+double element_scrolling_measured_clamp(const ElementScrollingMeasure *m, bool vertical, double v)
+{
+    DCHECK(m->axis > ES_Y, "a scrolling box's clamp was asked before both axes were measured");
+    return es_clamp(&m->box, vertical ? ES_Y : ES_X, v);
 }
 
 /* Open a scrolling box (`el` NULL for the viewport) and begin its first area walk. */

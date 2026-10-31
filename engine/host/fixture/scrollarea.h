@@ -5,11 +5,12 @@
    right margin, would give 100). #sa2 holds 300 blocks 2px tall: 600. #sa3 to #sa6 are §3.3's margin areas of
    a block, an inline-block, a flex item and a grid item in a 200px track. #sa7's 400 blocks of 5px make the
    root's `scrollHeight` (step 4, the viewport's area) 2300. The setter and scroll members measure #sa2 for steps
-   10 and 11, landing where it is; #sa7 has no scrolling box, so step 10 terminates; the root's setter scrolls
-   the viewport to 100. Chrome 155.0.8059.84 and Firefox 158.0.1 give every value expected. Cross-engine
-   notes, left out: both count a zero-height block 500px wide, where §3.3 says "Border boxes with zero area do
-   not affect the scrollable overflow area"; both add §3.3's end padding (a 10px-padded box over a 300 x 200
-   child is 320 x 220), not built here. It ends with TF_CANVAS_INK, which test_forced.c defines first. */
+   10 and 11, landing where it is; #sa7 has no scrolling box, so step 10 terminates; the root's setter, §4's
+   window members and the root's scrollTo() move the viewport to 100, 200, 250 and 300. Chrome 155.0.8059.84
+   and Firefox 158.0.1 give every value expected. Cross-engine notes, left out: both count a zero-height block
+   500px wide, where §3.3 says "Border boxes with zero area do not affect the scrollable overflow area"; both add
+   §3.3's end padding (a 10px-padded box over a 300 x 200 child is 320 x 220), not built here. It ends with
+   TF_CANVAS_INK, which test_forced.c defines first. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLAREA_H
 #define ENGINE_HOST_FIXTURE_SCROLLAREA_H
 #ifndef TF_CANVAS_INK
@@ -41,12 +42,14 @@ static const char HTML_SCROLLAREA[] =
     "var a=document.getElementById('sa1'),b=document.getElementById('sa2');"
     "function E(i){return document.getElementById(i);}"
     "b.scrollTop=0;b.scrollTo({top:0});b.scrollBy(0,0);E('sa7').scrollTop=5;"
-    "document.documentElement.scrollTop=100;"
+    "document.documentElement.scrollTop=100;var rt=document.documentElement.scrollTop;"
+    "scrollTo(0,200);var w1=scrollY;scrollBy({top:50});var w2=scrollY;"
+    "document.documentElement.scrollTo(0,300);var w3=scrollY;"
     "fetch('/api/scrollarea?sh='+a.scrollHeight+'&sw='+a.scrollWidth+'&ch='+a.clientHeight"
     "+'&m3='+E('sa3').scrollHeight+'&m4='+E('sa4').scrollWidth+'&m5='+E('sa5').scrollWidth"
     "+'&m6='+E('sa6').scrollWidth"
     "+'&lh='+b.scrollHeight+'&lw='+b.scrollWidth+'&rh='+document.documentElement.scrollHeight"
-    "+'&rt='+document.documentElement.scrollTop+'&nt='+E('sa7').scrollTop);"
+    "+'&rt='+rt+'&nt='+E('sa7').scrollTop+'&w1='+w1+'&w2='+w2+'&w3='+w3);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

@@ -669,19 +669,15 @@ static EvScrollToArm ev_scroll_steps(JSContext *ctx, const EvTarget *t, bool rel
    any associated box" and "has no associated scrolling box" (css-overflow-3 §3.1's scroll container,
    core/layout/scroll_container.h). EV_SCROLL_TO_AREA measures that scrolling box, one rest unit of §2's
    scrolling-area walk per activation, for step 10's last disjunct, "the element has no overflow", and step 11's
-   clamp, which read the one measurement.
-   Named residual. Not covered: steps 8 and 9's §4 `scroll()` on the window runs to completion after the job,
-   walking the viewport's scrolling area in one activation. Next diff: §4's `scroll()` as a step machine whose
-   clamp measures the viewport through element_scrolling.h's cursor, entered from here and from the Window
-   members. Absence shows as: a slice overrun in a root element's scroll member or setter on a large document,
-   with `_layoutJobRests` flat. */
+   clamp, which read the one measurement. Steps 8 and 9's §4 `scroll()` on the window measures the viewport's
+   box in the same stage and runs §4's steps 7 to 13 over it (core/frame/viewport.h). */
 #define EV_SCROLL_TO_STAGES(X) \
     X(EV_SCROLL_TO_TARGET, "CSSOM VIEW §6 \"Extensions to the Element Interface\" scrollTop / scrollLeft setter " \
                            "and scroll() / scrollTo() / scrollBy() steps 1-10 (the box tests under a resting " \
                            "drive, then the steps on the same job)") \
     X(EV_SCROLL_TO_AREA, "CSSOM VIEW §6 scroll members step 10's overflow and step 11: CSSOM VIEW §6.1 " \
-                         "\"Element Scrolling Members\" scroll an element to x,y over the scrolling box " \
-                         "measured under a resting drive")
+                         "\"Element Scrolling Members\" scroll an element to x,y, or steps 8-9's CSSOM VIEW §4 " \
+                         "scroll() steps 7-13, over the scrolling box measured under a resting drive")
 enum { IDL_STEP_STAGE_BASE(EV_SCROLL_TO_STAGES) EV_SCROLL_TO_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const EV_SCROLL_TO_STEPS[] = { EV_SCROLL_TO_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -741,9 +737,16 @@ static int js_ev_scroll_to_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             } else {
                 arm = ev_scroll_steps(ctx, &t, kind == EV_SCROLL_RELATIVE, argc, argv, s);
             }
-            /* Step 10's first two disjuncts; the third is the measurement below. */
-            measures = arm == EV_SCROLL_TO_ELEMENT && t.has_box && scroll_container_is(el);
-            if (measures) element_scrolling_measure_element(&s->m, el);
+            /* Steps 8 and 9 reach §4's scroll() on the window, whose step 4 aborts with no viewport and whose
+               steps 5 to 13 run over the viewport's measured box. Otherwise step 10's first two disjuncts; the
+               third is the measurement below. */
+            if (arm == EV_SCROLL_TO_WINDOW) {
+                measures = viewport_exists(t.dctx);
+                if (measures) element_scrolling_measure_viewport(&s->m, t.dctx);
+            } else {
+                measures = arm == EV_SCROLL_TO_ELEMENT && t.has_box && scroll_container_is(el);
+                if (measures) element_scrolling_measure_element(&s->m, el);
+            }
         }
         layout_job_leave(s->job);
         if (layout_job_declined(s->job)) {
@@ -754,7 +757,6 @@ static int js_ev_scroll_to_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             layout_job_rested(s->job);
             return JS_STEP_YIELD;
         }
-        if (arm == EV_SCROLL_TO_WINDOW) viewport_scroll(t.dctx, s->x, s->y, s->behavior);
         if (!measures) {
             *presult = ev_scroll_to_result(ctx, kind);
             return JS_STEP_DONE;
@@ -768,9 +770,12 @@ static int js_ev_scroll_to_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     if (rc) return rc;
     layout_job_enter(s->job);
     more = element_scrolling_measure_next(&s->m);
-    /* Step 10's "or the element has no overflow" terminates; otherwise step 11. The requested position is
-       resolved here, the one step that consumes it (core/dom/perform_scroll.h). */
-    if (!more && element_scrolling_has_overflow(&s->m))
+    /* An element's box: §6's step 10, "or the element has no overflow", terminates, otherwise step 11. The
+       window's box runs §4's steps 7 to 13. The requested position is resolved by the step that consumes it
+       (core/dom/perform_scroll.h). */
+    if (!more && s->m.box.el == NULL)
+        viewport_scroll_measured(&s->m, s->x, s->y, s->behavior);
+    else if (!more && element_scrolling_has_overflow(&s->m))
         element_scrolling_scroll_element(&s->m, scroll_request_resolve(s->x), scroll_request_resolve(s->y),
                                          s->behavior);
     layout_job_leave(s->job);

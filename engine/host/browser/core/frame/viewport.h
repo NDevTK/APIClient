@@ -95,6 +95,7 @@
 #include <stdbool.h>
 #include "quickjs.h"
 #include "core/css/css_length.h"
+#include "core/dom/element_scrolling.h"
 #include "core/dom/perform_scroll.h"
 #include "core/idl_args.h"
 
@@ -225,9 +226,9 @@ double viewport_scroll_x(JSContext *ctx);
 double viewport_scroll_y(JSContext *ctx);
 
 /* CSSOM VIEW §3.1's INSTANT SCROLL OF THIS REALM'S VIEWPORT — the ONE writer of the position above, and it is
-   exported for exactly one caller (core/dom/perform_scroll.c). It is not `viewport_scroll` below: that is §4's
-   thirteen steps, which ask §4's own questions and END here; this is the write those steps decided on, and
-   §6.1's route reaches it through the same §3.1 without going through §4 at all.
+   exported for exactly one caller (core/dom/perform_scroll.c). It is not `viewport_scroll_measured` below:
+   that is §4's thirteen steps, which ask §4's own questions and END here; this is the write those steps
+   decided on, and §6.1's route reaches it through the same §3.1 without going through §4 at all.
    `x`/`y` ARE ALREADY CLAMPED by whichever of the two algorithms decided them — they are the same four rows
    over one fact (core/dom/element_scrolling.h) — and the postcondition of that clamp is asserted here rather
    than the clamp being re-run, so a route that skipped it crashes instead of placing the viewport outside its
@@ -249,51 +250,25 @@ double viewport_window_scroll(JSContext *ctx, bool vertical);
 /* CSSOM VIEW §2's SCROLLING AREA OF THIS REALM'S VIEWPORT — the ICB extended by the boxes of all of the
    viewport's descendants, computed by core/layout/scrolling_area.h's viewport walk: this file owns only what
    the ICB is (CSS 2.2 §10.1 gives it "the dimensions of the viewport") and hands that in. The walk runs to
-   completion here; §6's `scrollWidth`/`scrollHeight` step the same walk under a resting drive instead.
-   Exported because §4's `scroll()` clamps against it, the scroll-position writer asserts against it, and
-   core/dom/element_scrolling.c asks whether the viewport has overflow. */
+   completion here.
+   §4's `scroll()` and §6's `scrollWidth`/`scrollHeight` step the same walk under a resting drive instead.
+   Exported because the scroll-position writer asserts against it and core/dom/element_scrolling.c asks
+   whether the viewport has overflow. */
 double viewport_scrolling_area_width(JSContext *ctx);
 double viewport_scrolling_area_height(JSContext *ctx);
 
-/* CSSOM VIEW §4's `scroll()` STEPS OVER THIS REALM'S VIEWPORT — the INTERNAL algorithm, which §2 is explicit
-   that a member "said to call another method or attribute" must invoke rather than the page-visible member (so
-   a page overriding `window.scroll` cannot change what `el.scrollTop = 10` on the root element does).
-   `x`/`y` are the REQUESTED position, with §3.2's normalize-non-finite already applied by the caller whose IDL
-   type carries it; `behavior` is §4's `ScrollBehavior` keyword the caller's dictionary carried, which step 12
-   hands to §3.1 and which is `auto` for the `scrollTop`/`scrollLeft` setter's two window arms because §6 gives
-   them no options to carry one. Steps 7 and 8 clamp the request into the viewport's scrolling area — one step
-   per axis, each a two-armed switch on §2's OVERFLOW DIRECTIONS, and BOTH arms are written — step 10 aborts
-   when the clamped position is the one the viewport already has, and steps 11 to 13 PERFORM A SCROLL of it
-   (core/dom/perform_scroll.h). SO THIS MOVES THE VIEWPORT, and the sentence that stood here — NOTHING HERE
-   MOVES A BOX YET, AND §3.1 IS THE ONE THING LEFT BETWEEN THIS AND THAT — is what the arrival of §3.1 retired.
-   THESE NUMBERS ARE THE THIRTEEN TOP-LEVEL STEPS of the edition engine/specindex/cssomview.json is keyed to.
-   They stood one lower from step 4 onward, because §4's clamp is TWO steps each holding a two-armed
-   `<dl class="switch">` and a flat count of the arms reads that pair as four.
-   IT IS NOT `window.scroll`, AND THAT MEMBER NOW EXISTS — it is installed below, and this paragraph used to
-   say installing it "would give a page a second spelling of what `documentElement.scrollTop = n` already
-   reaches and would change nothing this file does". Both halves were true OF THIS FILE and neither was the
-   question: a page that calls `window.scrollTo(x, y)` without a member gets a TypeError, which ends the flow
-   that called it, and no amount of `scrollTop` reaching the same algorithm answers for a name the page
-   actually wrote. The distinction the sentence was drawing survives and is why the two are still separate
-   entries: §2 requires an algorithm "said to call another method or attribute" to invoke the INTERNAL API,
-   so this entry is what `el.scrollTop = 10` on the root element reaches and the member below is what a page
-   reaches, and a page overriding `window.scroll` cannot change the first. That is worth
-   stating because six sites in five files used to assert themselves against the NAME `scrollTo` on the global
-   as a stand-in for the question A SCROLLING BOX CAN BE MOVED, and this header used to name four of them as
-   though the
-   member were the capability. It is not, and the sites ask core/dom/element_scrolling.h's
-   `element_scrolling_box_can_move` instead — WHICH §3.1's ARRIVAL DID NOT RETIRE, and that is worth saying
-   because it reads as though it should have. That question is about SLACK, not about whether a perform-a-scroll
-   exists: where §2's scrolling area equals the viewport, every arm of the clamp above lands on the origin, so a
-   box cannot be anywhere else no matter how many algorithms are written; where it does not, one can. §3.1 is
-   what makes that comparison LOAD-BEARING — it used to be the outer of two reasons, with "nothing reaches
-   §3.1" behind it — and load-bearing is not retired. */
-/* THE REQUEST IS A `ScrollRequest` AND NOT A `double`, AND THE ORDER IS WHY. §4's step 4 — "if there is no
-   viewport, return a resolved Promise and abort the remaining steps" — runs BEFORE step 7 reads x and y, so a
-   caller that resolved an UNKNOWN requested position on the way in would crash on a call the algorithm
-   terminates before it consumes anything. The decision belongs to the first step that READS the position,
-   which is inside these steps and not in front of them (core/dom/perform_scroll.h). */
-void viewport_scroll(JSContext *ctx, ScrollRequest x, ScrollRequest y, const char *behavior);
+/* CSSOM VIEW §4's `scroll()` steps 7 to 13 over this realm's viewport, measured in `m` — the internal
+   algorithm §2 says a member "said to call another method or attribute" invokes, so a page overriding
+   `window.scroll` cannot change what `el.scrollTop = 10` on the root element does. Steps 1 to 6 are the
+   caller's: the requested position read and normalized, step 4's "if there is no viewport" answered, and the
+   viewport's box measured (core/dom/element_scrolling.h's ElementScrollingMeasure, walked to completion).
+   `x`/`y` are the requested position as a `ScrollRequest` because step 7 is the first step that reads it, so
+   an unknown one is decided there. `behavior` is §4's `ScrollBehavior` keyword, which step 12 hands to §3.1;
+   it is `auto` for the `scrollTop`/`scrollLeft` setter's window arms, which carry no options. Steps 7 and 8
+   clamp into the viewport scrolling area, step 10 aborts when the clamped position is the current one, and
+   steps 11 to 13 perform a scroll of the viewport (core/dom/perform_scroll.h). */
+void viewport_scroll_measured(const ElementScrollingMeasure *m, ScrollRequest x, ScrollRequest y,
+                              const char *behavior);
 
 /* CSSOM VIEW §4's OWN ENUMERATION AND DICTIONARY, DECLARED WHERE §4 IS.
  *
