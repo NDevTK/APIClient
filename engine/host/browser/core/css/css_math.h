@@ -356,6 +356,12 @@ CssPx css_math_tree_resolve(const CssMathTree *tree, CssPx basis);
    OWNED. */
 char *css_math_tree_serialize(const CssMathTree *tree);
 
+/* §10.13 "Serialization"'s serialize a math function over the specified value of `text`, one math function
+   valid as `want`: §10.10.1 simplified with what is known before computed-value time, so §6.2's absolute
+   units are in px and every other `<length>` unit keeps its own term (`calc(1em + 2px + 3em)` is
+   `calc(4em + 2px)`). OWNED; NULL where `text` is not such a function. */
+char *css_math_specified_serialize(const char *text, size_t len, CssMathProduction want);
+
 /* The union of the environment facts `tree`'s leaves carry. */
 CssEnvSet css_math_tree_env(const CssMathTree *tree);
 

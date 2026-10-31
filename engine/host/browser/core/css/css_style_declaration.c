@@ -544,6 +544,33 @@ static char *cssd_strdup(const char *s)
     return out;
 }
 
+/* A lone math function's value under a property this engine types, as css-values-4 §10.13 "Serialization"
+   writes its specified value (`calc(50% * 2 - 10px)` is `calc(100% - 10px)`), in place of the text as
+   written; any other value unchanged. Takes and returns ownership of `value`. */
+static char *cssd_math_specified(const char *name, char *value)
+{
+    unsigned prods, p;
+    size_t len;
+
+    if (value == NULL || (name[0] == '-' && name[1] == '-') || css_pending_is(value) ||
+        css_var_references(value) || !css_property_numeric_audited(name))
+        return value;
+    len = strlen(value);
+    if (!css_math_is_lone_function(value, len)) return value;
+    (void)css_property_numeric(name, &prods);
+    for (p = 0; (prods >> p) != 0; p++) {
+        char *s;
+
+        if ((prods & CSS_NUMERIC_BIT(p)) == 0) continue;
+        s = css_math_specified_serialize(value, len, (CssMathProduction)p);
+        if (s != NULL) {
+            free(value);
+            return s;
+        }
+    }
+    return value;
+}
+
 /* ONE PARSED LONGHAND DECLARATION joining the block's, under the collapse rule the note above states: an
    earlier important declaration is not replaced, and any other earlier one is REMOVED so the survivor takes
    this declaration's place. Takes ownership of `value`. */
@@ -607,12 +634,7 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
                "re-judge in this file — and make it ask this property's own production");
     }
 #endif
-    /* Named residual: a math function's specified value is kept as written rather than as css-values-4 §10.13
-       "Serialization" writes a specified value (`calc(50% * 2 - 10px)` reads back unchanged, not as
-       `calc(100% - 10px)`). The next diff builds §10.10.1's specified-value simplification in core/css/
-       css_math.c — a Sum with one term per unit, relative units left unconverted — and stores its
-       serialization here. Its absence shows as a `style` or `cssText` read of a math function that differs from
-       a browser's in spacing or in terms left uncombined. */
+    value = cssd_math_specified(name, value);
     if (at >= 0) {
         if (d->v[at].important && !important) { free(value); return; }
         cssd_decls_remove_at(d, (unsigned)at);
@@ -3839,6 +3861,7 @@ static void cssd_decls_set(CssDecls *d, const char *name, char *value, bool impo
     bool physical = true, move = false;
     unsigned j;
 
+    value = cssd_math_specified(name, value);
     if (at >= 0) {
         group = css_logical_group_of(name, &physical);
         for (j = (unsigned)at + 1; group != CSS_LOGICAL_GROUP_NONE && j < d->n; j++) {

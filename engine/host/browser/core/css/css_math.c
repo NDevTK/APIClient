@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <lexbor/css/syntax/token.h>
 #include <lexbor/css/syntax/tokenizer.h>
@@ -443,6 +444,9 @@ typedef struct {
     double               pct;      /* the `<percentage>` term, as a number of percent */
     bool                 pct_term; /* §10.10.1: a zero-valued Sum term is not removable, so this is not `pct != 0` */
     bool                 num_term;
+    /* Non-empty only at specified-value time: `num` is in this relative `<length>` unit, lowercased, because
+       §10.10.1 converts a dimension to its canonical unit only "if there is enough information available". */
+    char                 unit[8];
     MthUnresolved        blocked;
     struct CssMathTree  *node;     /* non-NULL: the value is this operator node; the four fields above unused */
 } MthVal;
@@ -456,6 +460,7 @@ static MthVal mth_val(CssMathType type, double n)
     v.pct = 0.0;
     v.pct_term = false;
     v.num_term = true;
+    v.unit[0] = '\0';
     v.blocked = MTH_RESOLVED;
     v.node = NULL;
     return v;
@@ -484,6 +489,8 @@ typedef struct {
     bool                        ws_before;
     /* Every operator node this parse made, freed when it ends; a tree that survives it is interned first. */
     struct CssMathTree         *arena;
+    /* The specified value is asked for: a relative length keeps its unit (MthVal.unit). */
+    bool                        specified;
 } Mth;
 
 /* An operator node: a Sum or Product over `n` children, a Negate or Invert over one, or a math function over
@@ -712,7 +719,20 @@ static MthLeaf mth_leaf(Mth *m, MthVal *out)
            still says `<flex>`, so `width: calc(1fr)` is refused by §10.9's last rule as invalid CSS and the
            crash below is reached only by a caller that genuinely asked for a `<flex>` value. */
         if (m->res != NULL) {
+            double px;
+
             if (base == CSS_MATH_FLEX) out->blocked = MTH_UNRESOLVED_FLEX;
+            else if (m->specified && base == CSS_MATH_LENGTH &&
+                     !css_length_absolute_px((const char *)u->data, u->length, n, &px)) {
+                size_t i;
+
+                DCHECK(u->length < sizeof out->unit, "a `<length>` unit outgrew MthVal's unit field; §6's "
+                                                     "longest is five bytes");
+                for (i = 0; i < u->length; i++) out->unit[i] = (char)tolower(u->data[i]);
+                out->unit[u->length] = '\0';
+                out->num = css_px(n);
+            }
+            else if (m->specified && base == CSS_MATH_LENGTH) out->num = css_px(px);
             else out->num = mth_canonical(m, base, n, (const char *)u->data, u->length);
         }
         mth_take(m);
@@ -753,7 +773,7 @@ static MthLeaf mth_leaf(Mth *m, MthVal *out)
    which is why the type check is the whole of the validity question and the arithmetic below has none. */
 static void mth_add(Mth *m, const MthVal *a, const MthVal *b, MthVal *out)
 {
-    if (a->node != NULL || b->node != NULL) {
+    if (a->node != NULL || b->node != NULL || strcmp(a->unit, b->unit) != 0) {
         MthVal kids[2] = { *a, *b };
 
         *out = mth_node(m, MTH_NODE_SUM, mth_types_added(&a->type, &b->type), kids, 2, NULL);
@@ -764,6 +784,7 @@ static void mth_add(Mth *m, const MthVal *a, const MthVal *b, MthVal *out)
     out->pct = a->pct + b->pct;
     out->pct_term = a->pct_term || b->pct_term;
     out->num_term = a->num_term || b->num_term;
+    memcpy(out->unit, a->unit, sizeof out->unit);
     out->blocked = mth_worse(a->blocked, b->blocked);
     out->node = NULL;
 }
@@ -803,6 +824,42 @@ static void mth_multiply(Mth *m, const MthVal *a, const MthVal *b, MthVal *out)
     MthVal kids[2] = { *a, *b };
 
     if (a->node != NULL || b->node != NULL) {
+        const MthVal *sum = a->node != NULL ? a : b;
+        const MthVal *k = a->node != NULL ? b : a;
+        bool numeric = k->node == NULL && k->unit[0] == '\0' && !k->pct_term && mth_no_entries(&k->type) &&
+                       sum->node->op == MTH_NODE_SUM;
+        unsigned i;
+
+        for (i = 0; numeric && i < sum->node->n; i++)
+            if (sum->node->kid[i].node != NULL) numeric = false;
+        /* §10.10.1: "If root contains only two children, one of which is a number (not a percentage or
+           dimension) and the other of which is a Sum whose children are all numeric values, multiply all of
+           the Sum's children by the number, then return the Sum." */
+        if (numeric) {
+            MthVal *scaled = lexbor_malloc(sum->node->n * sizeof *scaled);
+
+            CHECK(scaled != NULL, "css_math: OOM distributing a number over a Sum");
+            for (i = 0; i < sum->node->n; i++) mth_multiply(m, &sum->node->kid[i], k, &scaled[i]);
+            *out = mth_node(m, MTH_NODE_SUM, ty, scaled, sum->node->n, NULL);
+            free(scaled);
+            return;
+        }
+        *out = mth_node(m, MTH_NODE_PRODUCT, ty, kids, 2, NULL);
+        return;
+    }
+    /* A relative length times a plain number keeps its unit (§10.10.1's number-times-Sum rule); with anything
+       else the product waits for the unit's value. */
+    if (a->unit[0] != '\0' || b->unit[0] != '\0') {
+        const MthVal *d = a->unit[0] != '\0' ? a : b;
+        const MthVal *k = a->unit[0] != '\0' ? b : a;
+
+        if (k->unit[0] == '\0' && !k->pct_term && mth_no_entries(&k->type)) {
+            *out = *d;
+            out->type = ty;
+            out->num = css_px_mul(d->num, k->num);
+            out->blocked = mth_worse(a->blocked, b->blocked);
+            return;
+        }
         *out = mth_node(m, MTH_NODE_PRODUCT, ty, kids, 2, NULL);
         return;
     }
@@ -810,6 +867,7 @@ static void mth_multiply(Mth *m, const MthVal *a, const MthVal *b, MthVal *out)
     out->blocked = mth_worse(a->blocked, b->blocked);
     out->node = NULL;
     out->num_term = true;
+    out->unit[0] = '\0';
     if (!a->pct_term && !b->pct_term) {
         out->num = css_px_mul(a->num, b->num);
         out->pct = 0.0;
@@ -865,7 +923,7 @@ static void mth_divide(Mth *m, const MthVal *a, const MthVal *b, MthVal *out)
        give rather than a crash. The environment facts still ride the operand, so the union is unaffected. */
     inv = *b;
     inv.type = css_math_type_invert(&b->type);
-    if (b->pct_term || b->node != NULL) {
+    if (b->pct_term || b->node != NULL || b->unit[0] != '\0') {
         inv = mth_node(m, MTH_NODE_INVERT, inv.type, b, 1, NULL);
     } else {
         inv.num = mth_atom("inv", 3, NULL, &b->num, 1, 1.0 / b->num.px);
@@ -1085,14 +1143,16 @@ static MthVal mth_node(Mth *m, MthNodeOp op, CssMathType type, const MthVal *kid
         unsigned w = 0;
 
         for (i = 0; i < cnt; i++) {
-            if (v[i].node == NULL && linear >= 0) {
+            linear = -1;
+            for (j = 0; v[i].node == NULL && j < w && linear < 0; j++)
+                if (v[j].node == NULL && strcmp(v[j].unit, v[i].unit) == 0) linear = (int)j;
+            if (linear >= 0) {
                 MthVal sum;
 
                 mth_add(m, &v[linear], &v[i], &sum);
                 v[linear] = sum;
                 continue;
             }
-            if (v[i].node == NULL) linear = (int)w;
             v[w++] = v[i];
         }
         cnt = w;
@@ -1600,10 +1660,18 @@ done:
 static bool mth_function_apply(Mth *m, const MthFn *fn, MthVal *out)
 {
     bool live = false, ok;
-    unsigned i;
+    const char *unit = NULL;
+    unsigned i, first = 0;
 
-    for (i = 0; i < fn->n; i++)
+    /* At specified-value time a function of relative lengths runs only when every argument is in one unit —
+       then each is the same multiple of one unknown, and every function §10.8 defines over a `<length>` is
+       homogeneous in it. Any other mix waits for the units' values, as a node. */
+    for (i = 0; i < fn->n; i++) {
+        if (fn->shape == MTH_SHAPE_CLAMP && i < 3 && fn->none[i]) continue;
         if (fn->arg[i].node != NULL) live = true;
+        if (unit == NULL) { unit = fn->arg[i].unit; first = i; }
+        else if (strcmp(unit, fn->arg[i].unit) != 0) live = true;
+    }
     if (m->res != NULL && live && !mth_name_is(fn->name, fn->nlen, "calc")) {
         Mth typed = *m;
 
@@ -1614,6 +1682,15 @@ static bool mth_function_apply(Mth *m, const MthFn *fn, MthVal *out)
     }
     ok = mth_function_value(m, fn, out);
     if (!ok || m->res == NULL) return ok;
+    if (unit != NULL && unit[0] != '\0' && out->node == NULL) {
+        bool same = true;
+
+        for (i = 0; i < CSS_MATH_BASE_COUNT; i++)
+            if (out->type.exp[i] != fn->arg[first].type.exp[i]) same = false;
+        /* A result of the arguments' own type is in their unit; sign() and atan2() answer a ratio. */
+        if (same) memcpy(out->unit, fn->arg[first].unit, sizeof out->unit);
+        else out->unit[0] = '\0';
+    }
     if (out->blocked == MTH_LIVE_NODE) {
         CssMathType ty = out->type;
 
@@ -2006,6 +2083,7 @@ static void mth_key(MthBuf *b, const MthVal *v)
     for (i = 0; i < CSS_MATH_BASE_COUNT; i++) mth_buf_printf(b, "%d,", v->type.exp[i]);
     mth_buf_printf(b, "h%d;", v->type.hint);
     if (v->node == NULL) {
+        DCHECK(v->unit[0] == '\0', "a calculation tree with a relative-unit term was interned as a computed value");
         mth_buf_printf(b, "%a,%u,%p,%p,%a,%d%d}", v->num.px, (unsigned)v->num.env, (void *)v->num.realm,
                        (const void *)v->num.form, v->pct, v->pct_term, v->num_term);
         return;
@@ -2107,6 +2185,7 @@ static MthVal mth_tree_value(Mth *m, const MthVal *v, CssPx basis)
     bool ok;
 
     if (t == NULL) {
+        DCHECK(v->unit[0] == '\0', "a computed calculation tree holds a relative-unit term");
         out = *v;
         if (out.pct_term) out.num = css_px_add(css_px_scale(basis, out.pct / 100.0), out.num);
         out.pct = 0.0;
@@ -2191,7 +2270,7 @@ CssEnvSet css_math_tree_env(const CssMathTree *tree)
     return env;
 }
 
-/* ---- §10.13's serialization of a computed calculation tree ------------------------------------------------ */
+/* ---- §10.13's serialization ------------------------------------------------------------------------------ */
 
 static const char *mth_canonical_unit(const CssMathType *t)
 {
@@ -2206,36 +2285,92 @@ static const char *mth_canonical_unit(const CssMathType *t)
     return "";
 }
 
+/* One child of §10.13's "sort a calculation's children nodes": a number, a percentage, a dimension (`unit`), or
+   any other node, which sorts last in its own order. */
+typedef enum { MTH_TERM_NUMBER, MTH_TERM_PERCENT, MTH_TERM_DIMENSION, MTH_TERM_OTHER } MthTermKind;
+
+typedef struct {
+    MthTermKind   kind;
+    const char   *unit;
+    double        v;
+    const MthVal *other;   /* MTH_TERM_OTHER */
+    unsigned      at;      /* position before sorting, which keeps the sort stable */
+} MthTerm;
+
+static int mth_term_cmp(const void *pa, const void *pb)
+{
+    const MthTerm *a = pa, *b = pb;
+    int c;
+
+    if (a->kind != b->kind) return (int)a->kind - (int)b->kind;
+    if (a->kind == MTH_TERM_DIMENSION && (c = strcasecmp(a->unit, b->unit)) != 0) return c;
+    return a->at < b->at ? -1 : a->at > b->at;
+}
+
+/* A numeric value's text: CSSOM §6.7.2's number and its unit, or, for one §10.13 calls infinite or NaN, the
+   keyword times one canonical unit ("Serialize the keyword infinity, -infinity, or NaN ... If fn's type is
+   anything other than «[ ]» ... append " * " to s", then the unit value 1). */
 static void mth_ser_number(MthBuf *b, double v, const char *unit)
 {
-    char *t = css_length_serialize_number(v, unit);
+    char *t;
 
+    if (v != v || isinf(v)) {
+        mth_buf_puts(b, v != v ? "NaN" : v > 0 ? "infinity" : "-infinity");
+        if (unit[0] != '\0') {
+            mth_buf_puts(b, " * 1");
+            mth_buf_puts(b, unit);
+        }
+        return;
+    }
+    t = css_length_serialize_number(v, unit);
     mth_buf_puts(b, t);
     free(t);
 }
 
 static void mth_ser(MthBuf *b, const MthVal *v);
 
-/* A numeric child of a Sum, as its terms in "sort a calculation's children nodes"' order — a number or a
-   percentage before a dimension — each after its sign: " + ", or " - " and the negation for a negative one. */
-static void mth_ser_terms(MthBuf *b, const MthVal *v, bool *first)
+/* The terms of a linear value (a Sum of at most two numeric children), appended to `t` from `*n`. */
+static void mth_terms_of(const MthVal *v, MthTerm *t, unsigned *n)
 {
-    const char *unit = mth_canonical_unit(&v->type);
-    bool pct_first = v->pct_term, num_after = v->num_term || !v->pct_term;
-    double terms[2];
-    int kinds[2], k = 0, i;
+    unsigned at = *n;
 
-    if (pct_first) { terms[k] = v->pct; kinds[k++] = 1; }
-    if (num_after) { terms[k] = v->num.px; kinds[k++] = 0; }
-    for (i = 0; i < k; i++) {
-        double x = terms[i];
+    DCHECK(v->node == NULL, "an operator node was read as numeric terms");
+    if (v->pct_term) {
+        t[at] = (MthTerm){ MTH_TERM_PERCENT, "%", v->pct, NULL, at };
+        at++;
+    }
+    if (v->num_term || !v->pct_term) {
+        const char *unit = v->unit[0] != '\0' ? v->unit : mth_canonical_unit(&v->type);
 
-        if (!*first) {
-            mth_buf_puts(b, x < 0.0 || (x == 0.0 && signbit(x)) ? " - " : " + ");
-            x = fabs(x);
+        t[at] = (MthTerm){ unit[0] != '\0' ? MTH_TERM_DIMENSION : MTH_TERM_NUMBER, unit, v->num.px, NULL, at };
+        at++;
+    }
+    *n = at;
+}
+
+/* A sorted Sum's children (§10.13's Sum branch): the first as it is, each later one after " - " when it is a
+   Negate node or a negative numeric value (written negated), and after " + " otherwise. */
+static void mth_ser_sum_terms(MthBuf *b, MthTerm *t, unsigned n)
+{
+    unsigned i;
+
+    qsort(t, n, sizeof *t, mth_term_cmp);
+    for (i = 0; i < n; i++) {
+        if (t[i].kind == MTH_TERM_OTHER) {
+            const MthVal *c = t[i].other;
+            bool neg = i > 0 && c->node->op == MTH_NODE_NEGATE;
+
+            if (i > 0) mth_buf_puts(b, neg ? " - " : " + ");
+            mth_ser(b, neg ? &c->node->kid[0] : c);
+            continue;
         }
-        mth_ser_number(b, x, kinds[i] ? "%" : unit);
-        *first = false;
+        if (i > 0 && (t[i].v < 0.0 || (t[i].v == 0.0 && signbit(t[i].v)))) {
+            mth_buf_puts(b, " - ");
+            mth_ser_number(b, -t[i].v, t[i].unit);
+        } else {
+            if (i > 0) mth_buf_puts(b, " + ");
+            mth_ser_number(b, t[i].v, t[i].unit);
+        }
     }
 }
 
@@ -2249,19 +2384,21 @@ static void mth_ser_stripped(MthBuf *b, const MthVal *v)
     free(in.p);
 }
 
-/* §10.13's "serialize a calculation tree". A numeric child is a Sum of up to two terms, written as one. */
+/* §10.13's "serialize a calculation tree". A linear value of two terms is the Sum it stands for. */
 static void mth_ser(MthBuf *b, const MthVal *v)
 {
     const struct CssMathTree *t = v->node;
-    bool first = true;
-    unsigned i, pass;
+    MthTerm *terms;
+    unsigned i, n = 0;
 
     if (t == NULL) {
-        bool two = v->pct_term && v->num_term;
+        MthTerm two[2];
 
-        if (two) mth_buf_puts(b, "(");
-        mth_ser_terms(b, v, &first);
-        if (two) mth_buf_puts(b, ")");
+        mth_terms_of(v, two, &n);
+        if (n == 1) { mth_ser_number(b, two[0].v, two[0].unit); return; }
+        mth_buf_puts(b, "(");
+        mth_ser_sum_terms(b, two, n);
+        mth_buf_puts(b, ")");
         return;
     }
     switch (t->op) {
@@ -2276,32 +2413,43 @@ static void mth_ser(MthBuf *b, const MthVal *v)
         mth_buf_puts(b, ")");
         return;
     case MTH_NODE_SUM:
-        /* "Sort root's children": the one numeric child's terms first, then the nodes in order. */
+        terms = lexbor_malloc(2 * t->n * sizeof *terms);
+        CHECK(terms != NULL, "css_math: OOM serializing a Sum");
+        for (i = 0; i < t->n; i++) {
+            if (t->kid[i].node == NULL) mth_terms_of(&t->kid[i], terms, &n);
+            else { terms[n] = (MthTerm){ MTH_TERM_OTHER, "", 0.0, &t->kid[i], n }; n++; }
+        }
         mth_buf_puts(b, "(");
-        for (pass = 0; pass < 2; pass++)
-            for (i = 0; i < t->n; i++) {
-                const MthVal *c = &t->kid[i];
-
-                if ((c->node == NULL) != (pass == 0)) continue;
-                if (c->node == NULL) { mth_ser_terms(b, c, &first); continue; }
-                if (!first) mth_buf_puts(b, c->node->op == MTH_NODE_NEGATE ? " - " : " + ");
-                mth_ser(b, c->node->op == MTH_NODE_NEGATE && !first ? &c->node->kid[0] : c);
-                first = false;
-            }
+        mth_ser_sum_terms(b, terms, n);
         mth_buf_puts(b, ")");
+        free(terms);
         return;
     case MTH_NODE_PRODUCT:
-        mth_buf_puts(b, "(");
-        for (pass = 0; pass < 2; pass++)
-            for (i = 0; i < t->n; i++) {
-                const MthVal *c = &t->kid[i];
+        /* A child that is a Sum of two terms sorts with the other nodes. */
+        terms = lexbor_malloc(t->n * sizeof *terms);
+        CHECK(terms != NULL, "css_math: OOM serializing a Product");
+        for (i = 0; i < t->n; i++) {
+            const MthVal *c = &t->kid[i];
+            unsigned k = 0;
+            MthTerm one[2];
 
-                if ((c->node == NULL) != (pass == 0)) continue;
-                if (!first) mth_buf_puts(b, c->node != NULL && c->node->op == MTH_NODE_INVERT ? " / " : " * ");
-                mth_ser(b, c->node != NULL && c->node->op == MTH_NODE_INVERT && !first ? &c->node->kid[0] : c);
-                first = false;
-            }
+            if (c->node == NULL) mth_terms_of(c, one, &k);
+            if (c->node == NULL && k == 1) { one[0].at = n; terms[n] = one[0]; }
+            else terms[n] = (MthTerm){ MTH_TERM_OTHER, "", 0.0, c, n };
+            terms[n].other = c;
+            n++;
+        }
+        qsort(terms, n, sizeof *terms, mth_term_cmp);
+        mth_buf_puts(b, "(");
+        for (i = 0; i < n; i++) {
+            const MthVal *c = terms[i].other;
+            bool inv = i > 0 && c->node != NULL && c->node->op == MTH_NODE_INVERT;
+
+            if (i > 0) mth_buf_puts(b, inv ? " / " : " * ");
+            mth_ser(b, inv ? &c->node->kid[0] : c);
+        }
         mth_buf_puts(b, ")");
+        free(terms);
         return;
     case MTH_NODE_FUNCTION:
         for (i = 0; i < t->nlen; i++) {
@@ -2327,23 +2475,30 @@ static void mth_ser(MthBuf *b, const MthVal *v)
     DFAIL("a calculation node carries an operation §10.13 does not serialize");
 }
 
-char *css_math_tree_serialize(const CssMathTree *tree)
+/* §10.13's serialize a math function whose root is `root`: a function node writes its own name, and any other
+   root — a calc-operator node, or a numeric value in a specified value — writes `calc(`. */
+static char *mth_ser_root(const MthVal *root)
 {
     MthBuf b = { NULL, 0, 0 };
+
+    if (root->node != NULL && root->node->op == MTH_NODE_FUNCTION) {
+        mth_ser(&b, root);
+        return b.p;
+    }
+    mth_buf_puts(&b, "calc(");
+    mth_ser_stripped(&b, root);
+    mth_buf_puts(&b, ")");
+    return b.p;
+}
+
+char *css_math_tree_serialize(const CssMathTree *tree)
+{
     MthVal root;
 
     DCHECK(tree != NULL, "a calculation tree was serialized that does not exist");
     root = mth_val(tree->type, 0.0);
     root.node = (struct CssMathTree *)tree;
-    /* §10.13's serialize a math function: a function root is its name; a calc-operator root is `calc(`. */
-    if (tree->op == MTH_NODE_FUNCTION) {
-        mth_ser(&b, &root);
-        return b.p;
-    }
-    mth_buf_puts(&b, "calc(");
-    mth_ser_stripped(&b, &root);
-    mth_buf_puts(&b, ")");
-    return b.p;
+    return mth_ser_root(&root);
 }
 
 /* ---- the three public questions -------------------------------------------------------------------------- */
@@ -2358,7 +2513,7 @@ char *css_math_tree_serialize(const CssMathTree *tree)
    was ONE math function under `<angle-percentage>` and not a math function at all under anything else, and
    the caller that asked had to invent the context it was answered in. */
 static bool mth_top(const char *text, size_t len, const CssMathResolver *res, CssMathProduction want,
-                    MthGate gate, CssMathValue *out)
+                    MthGate gate, CssMathValue *out, char **specified)
 {
     Mth m = { NULL, res, CSS_MATH_HINT_NULL, 0, false };
     lxb_css_syntax_token_t *t;
@@ -2374,6 +2529,9 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
            "that callback the ONE question this component asks its caller, so a resolver without it is one "
            "assembled field-by-field rather than by the caller that owns the unit table — and the first `2em` "
            "would call through a NULL");
+    DCHECK(specified == NULL || (res != NULL && out == NULL),
+           "a specified value was asked for with no resolver for its absolute units, or with a computed one");
+    m.specified = specified != NULL;
     m.pct_base = mth_pct_base(want);
     m.tkz = lxb_css_syntax_tokenizer_create();
     CHECK(m.tkz != NULL, "css math: the math function tokenizer allocation failed");
@@ -2416,6 +2574,10 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
     if (gate == MTH_GATE_VALID && !mth_type_is_valid(&v.type, want)) goto done;
     if (gate == MTH_GATE_PRODUCTION && !mth_type_matches(&v.type, want)) goto done;
     ok = true;
+    if (specified != NULL) {
+        *specified = mth_ser_root(&v);
+        goto done;
+    }
     if (res == NULL || out == NULL) goto done;
     if (v.blocked == MTH_UNRESOLVED_FLEX)
         DFAIL("a VALID math function resolves to a `<flex>` and this engine has no grid track sizer to give one "
@@ -2483,7 +2645,7 @@ done:
 
 bool css_math_matches(const char *text, size_t len, CssMathProduction want)
 {
-    return mth_top(text, len, NULL, want, MTH_GATE_PRODUCTION, NULL);
+    return mth_top(text, len, NULL, want, MTH_GATE_PRODUCTION, NULL, NULL);
 }
 
 bool css_math_is_valid_function(const char *text, size_t len)
@@ -2496,7 +2658,7 @@ bool css_math_is_valid_function(const char *text, size_t len)
        it, and `calc(25% + 10deg)` is INVALID under it and valid in a position that states an
        `<angle-percentage>`. A caller that knows the position asks `css_math_matches` for it instead, and gets
        §10.9's last rule read against that position rather than against this one. */
-    return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, MTH_GATE_VALID, NULL);
+    return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, MTH_GATE_VALID, NULL, NULL);
 }
 
 bool css_math_is_lone_function(const char *text, size_t len)
@@ -2510,7 +2672,7 @@ bool css_math_is_lone_function(const char *text, size_t len)
        compute stops it reaching EOF, and `CSS_MATH_PROD_NUMBER` names the context whose percentages resolve
        against nothing — the one a caller that has not yet decided what it is asking for would mean.
        `res` is NULL, so §10.9's rounding step — the other reader of `want` — is not reached either. */
-    return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, MTH_GATE_SYNTAX, NULL);
+    return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, MTH_GATE_SYNTAX, NULL, NULL);
 }
 
 bool css_math_eval(const char *text, size_t len, const CssMathResolver *res, CssMathProduction want,
@@ -2520,5 +2682,21 @@ bool css_math_eval(const char *text, size_t len, const CssMathResolver *res, Css
            "a math function was evaluated with no resolver or nowhere to write the result — the TYPE question "
            "needs neither and is `css_math_matches`, so an absent one here is a caller that meant to ask that "
            "one instead");
-    return mth_top(text, len, res, want, MTH_GATE_PRODUCTION, out);
+    return mth_top(text, len, res, want, MTH_GATE_PRODUCTION, out, NULL);
+}
+
+static CssPx mth_specified_length(void *ctx, double n, const char *unit, size_t unit_len)
+{
+    (void)ctx; (void)n; (void)unit; (void)unit_len;
+    DFAIL("a `<length>` was converted through the specified-value resolver. The specified walk converts §6.2's "
+          "absolute units itself and keeps every other unit, so nothing asks this");
+    return css_px(0.0);
+}
+
+char *css_math_specified_serialize(const char *text, size_t len, CssMathProduction want)
+{
+    CssMathResolver res = { mth_specified_length, NULL, NULL };
+    char *s = NULL;
+
+    return mth_top(text, len, &res, want, MTH_GATE_PRODUCTION, NULL, &s) ? s : NULL;
 }

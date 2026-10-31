@@ -5,8 +5,11 @@
    1000px and a 600px parent, so each argument of the min() wins once; #d and #e do the same for
    `min(50%, 200px)` as a `width`; #c is `calc(50% * 2 - 10px)`, which §10.10.1 reduces to a Sum of two terms.
    The specified and computed serializations (§10.13 "Serialization") are compared in the page against the
-   strings Chrome 155.0.8059.84 and Firefox 158.0.1 both give. It ends with TF_CANVAS_INK, which test_forced.c
-   defines before including it. */
+   strings Chrome 155.0.8059.84 and Firefox 158.0.1 both give, and so is each specified `width` in SPEC: a
+   relative unit keeps its own term, absolute units fold into px, terms sort by unit, a number distributes over
+   a Sum, and a non-finite term is written as a keyword times one unit. The two engines differ on a function
+   of one relative unit (`min(1em, 2em)`: Chrome keeps it, Firefox and §10.10.1's text compute `calc(1em)`),
+   which is left out. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_CALCTREE_H
 #define ENGINE_HOST_FIXTURE_CALCTREE_H
 #ifndef TF_CANVAS_INK
@@ -23,7 +26,21 @@ static const char HTML_CALCTREE[] =
     "<div style=\"width:300px\"><div id=c style=\"height:1px;width:calc(50% * 2 - 10px)\"></div></div>"
     "<div style=\"width:300px\"><div id=d style=\"height:1px;width:min(50%, 200px)\"></div></div>"
     "<div style=\"width:600px\"><div id=e style=\"height:1px;width:min(50%, 200px)\"></div></div>"
+    "<div id=y></div>"
     "<script>"
+    "var SPEC=[['calc(1em + 2px + 3em)','calc(4em + 2px)'],['calc(10px + 1em)','calc(1em + 10px)'],"
+    "['calc(2 * 3em)','calc(6em)'],['calc(1in + 1px)','calc(97px)'],['calc(50% + 0px)','calc(50% + 0px)'],"
+    "['calc(1px + 2px)','calc(3px)'],['calc(100% - 1em*2)','calc(100% - 2em)'],['calc(1vw / 2)','calc(0.5vw)'],"
+    "['max(10px, 1em + 1px)','max(10px, 1em + 1px)'],['calc(50%)','calc(50%)'],"
+    "['calc(-10px + 50%)','calc(50% - 10px)'],['min(10px, 20px)','calc(10px)'],"
+    "['clamp(10px, 50%, 1em)','clamp(10px, 50%, 1em)'],['calc(1rem + 1REM + 1Px)','calc(1px + 2rem)'],"
+    "['calc(0.5em + 1vh - 3%)','calc(-3% + 0.5em + 1vh)'],['calc(1px + (2px - 1em))','calc(-1em + 3px)'],"
+    "['calc(1px * -infinity + 50%)','calc(50% - infinity * 1px)'],['calc(1px / 0)','calc(infinity * 1px)'],"
+    "['calc(NaN * 1px)','calc(NaN * 1px)'],['max(10px, 1em * 2, 3em)','max(10px, 2em, 3em)'],"
+    "['calc(2 * (1em + 50%))','calc(100% + 2em)'],['calc(-1 * (1em + 1px))','calc(-1em - 1px)'],"
+    "['calc(1em - (50% - 1px))','calc(-50% + 1em + 1px)'],['round(10.5px, 1em)','round(10.5px, 1em)'],"
+    "['calc(1Q + 1MM)','calc(4.72441px)'],['calc(5vw - (2em * 2))','calc(-4em + 5vw)'],"
+    "['min(1em, 1px)','min(1em, 1px)']];"
     "function E(i){return document.getElementById(i);}"
     "function C(i,p){return getComputedStyle(E(i))[p];}"
     "function Q(v,want){return v===want?'ok':'wrong';}"
@@ -33,6 +50,13 @@ static const char HTML_CALCTREE[] =
     "+'&ac='+Q(C('a','maxWidth'),'min(320px, 100% - 568px)')"
     "+'&cs='+Q(E('c').style.width,'calc(100% - 10px)')+'&cc='+Q(C('c','width'),'290px')"
     "+'&ds='+Q(E('d').style.width,'min(50%, 200px)')+'&dc='+Q(C('d','width'),'150px')"
+    "+'&ct='+Q(E('c').style.cssText,'height: 1px; width: calc(100% - 10px);');"
+    "var y=E('y'),sp=0,bad='';"
+    "for(var i=0;i<SPEC.length;i++){y.style.width='';y.style.width=SPEC[i][0];"
+    "if(y.style.width===SPEC[i][1])sp++;else if(!bad)bad=SPEC[i][0]+'|'+y.style.width;}"
+    "E('c').style.color='red';"
+    "q+='&sp='+sp+'&spn='+SPEC.length+'&ca='+Q(E('c').getAttribute('style'),"
+    "'height: 1px; width: calc(100% - 10px); color: red;')+'&bad='+encodeURIComponent(bad)"
     "+'&raw='+encodeURIComponent(E('a').style.maxWidth+'|'+C('a','maxWidth')+'|'+E('c').style.width"
     "+'|'+E('d').style.width);"
     "fetch('/api/calctree?'+q);"

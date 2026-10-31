@@ -15498,6 +15498,13 @@ TF_UNIT void probes_calctree(const char *js, Probe *tab, int *n) {
              "css-values-4 §10.13: the specified `width` does not serialize as `min(50%, 200px)`");
     fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "dc", "ok"),
              "CSSOM §9: the resolved `width` of a rendered box is not its used 150px");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "ct", "ok"),
+             "CSSOM §6.6: `cssText` does not carry the simplified specified `width`");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "sp", "27"),
+             "css-values-4 §10.13: a specified `width` in the SPEC table does not serialize as both browsers do "
+             "(the `bad` parameter names the first)");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/calctree", "ca", "ok"),
+             "CSSOM §6.6: the style attribute rewritten by a CSSOM write does not carry the simplified `width`");
     const Probe rows[] = {
         { "calc-tree", ct_tt, "/api/calctree", SESS_EXPLORE, ct_why },
     };
