@@ -822,6 +822,15 @@ int64_t idl_integer_of(IdlArgType t, double x);
    decides. */
 int idl_number_of(JSContext *ctx, IdlArgType t, JSValueConst v, double *out);
 
+/* Web IDL §3.2.25 Union types over unknown external input, whose arm is a type test the input does not answer.
+   `declared` is the union's arm set (IDL_UNION_ARM_*; the string arm is required). The arms the value's type
+   facet admits are forked at the outcome seam, outcome 0 the lowest bit; `ops[admitted]` names the fork of each
+   admissible set of two or more (a static string, the fork's key). `*pin` is released before a fork. Returns >0
+   parked (the caller returns it), or 0 with `*parm` the chosen IDL_UNION_ARM_* bit. */
+enum { IDL_UNION_ARM_STRING = 1, IDL_UNION_ARM_SEQUENCE = 2, IDL_UNION_ARM_RECORD = 4, IDL_UNION_ARM_NULL = 8 };
+int idl_union_unknown_arm(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, unsigned declared,
+                          const char *const ops[16], JSValue *pin, unsigned *parm);
+
 /* Web IDL §3.2.4.8 unsigned long long as a magnitude rather than the int64_t bit pattern the modulo leaves
    (the half above 2**63 is what a page reaches by writing a negative). Public for the reason idl_integer_of is
    (File System's write algorithm reads its own dictionary members). */

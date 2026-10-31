@@ -2359,6 +2359,59 @@ static int idl_union_seq_arm(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, ui
     return 0;
 }
 
+/* See idl_args.h. The arms admitted follow §3.2.25's order over the type facet: an Object takes step 11.2's
+   sequence arm (an @@iterator) or, with none, step 11.5's record arm, and falls to step 15's string arm only
+   when no record arm is declared; null and undefined take step 2's null arm when the union is nullable. */
+int idl_union_unknown_arm(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, unsigned declared,
+                          const char *const ops[16], JSValue *pin, unsigned *parm)
+{
+    const unsigned objs = CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION;
+    const unsigned nullish = (declared & IDL_UNION_ARM_NULL) ? CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED : 0;
+    unsigned ty = concolic_operand_types(v), admitted = 0, arms[4];
+    int n = 0, ex_arm = -1, real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
+
+    DCHECK(concolic_is(v), "§3.2.25's arm was asked over unknown input of a value this flow determined");
+    DCHECK(declared & IDL_UNION_ARM_STRING, "a union over unknown input was declared without its string arm");
+    if ((ty & ~objs & ~nullish) || ((ty & objs) && !(declared & IDL_UNION_ARM_RECORD)))
+        admitted |= IDL_UNION_ARM_STRING;
+    if ((ty & objs) && (declared & IDL_UNION_ARM_SEQUENCE)) admitted |= IDL_UNION_ARM_SEQUENCE;
+    if ((ty & objs) && (declared & IDL_UNION_ARM_RECORD)) admitted |= IDL_UNION_ARM_RECORD;
+    if (ty & nullish) admitted |= IDL_UNION_ARM_NULL;
+    DCHECK(admitted != 0, "an unknown reached a union with a type facet that admits no type — the flow that "
+                          "excluded every type is infeasible and should have been pruned there");
+    for (unsigned b = IDL_UNION_ARM_STRING; b <= IDL_UNION_ARM_NULL; b <<= 1)
+        if (admitted & b) arms[n++] = b;
+    if (concolic_example_present(v)) {
+        JSValue ex = concolic_example(ctx, v);
+
+        /* An Object example other than an Array is unstated: its @@iterator is its own [[Get]]. */
+        ex_arm = (nullish && (JS_IsNull(ex) || JS_IsUndefined(ex))) ? IDL_UNION_ARM_NULL
+               : JS_IsArray(ex) ? IDL_UNION_ARM_SEQUENCE : JS_IsObject(ex) ? -1 : IDL_UNION_ARM_STRING;
+        JS_FreeValue(ctx, ex);
+    }
+    for (int i = 0; i < n; i++)
+        if ((int)arms[i] == ex_arm) real = i;
+    DCHECK(ex_arm < 0 || real >= 0, "an unknown's held example takes a §3.2.25 arm its own type facet excludes — "
+                                    "the example and the facet are two readings of one value in one flow");
+    if (n == 1) {
+        *parm = arms[0];
+        return 0;
+    }
+    DCHECK(ops[admitted] != NULL, "a union over unknown input forked an arm set its declaration names no fork for");
+    /* The outstanding answer is released here: the sibling's snapshot is taken at the fork's return. */
+    JS_FreeValue(ctx, *pin);
+    *pin = JS_UNDEFINED;
+    r = step_fork_run(ctx, hdr, v, ops[admitted], n, real, &arm);
+    if (r) return r;
+    *parm = arms[arm];
+    /* The arm is a fact about the value's type: a sequence or a record is an Object, null is null or
+       undefined, and beside a null arm the string arm is neither. */
+    if (*parm == IDL_UNION_ARM_SEQUENCE || *parm == IDL_UNION_ARM_RECORD) concolic_type_facet_file(v, objs);
+    else if (*parm == IDL_UNION_ARM_NULL) concolic_type_facet_file(v, nullish);
+    else if (nullish) concolic_type_facet_file(v, CONCOLIC_TYF_ALL & ~nullish);
+    return 0;
+}
+
 /* §3.2.25 Union types over `(S or sequence<S>)`, S the string type `elem` names (DOMString, and its nullable
    spelling, or USVString), for unknown external input, whose arm is a type test the input does not answer. Step 2's IDL null, step 11.2's sequence (an Object
    whose GetMethod(V, %Symbol.iterator%) is not undefined) and step 15's string are each a world where the
@@ -2379,56 +2432,26 @@ static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w
     DCHECK(concolic_is(v), "the unknown arm of a string-or-sequence union was asked of a value that is not "
                            "unknown input — a concrete value answers §3.2.25's type tests through idl_union_seq_arm");
     if (*phase == IDL_UNI_ASK) {
-        const unsigned objs = CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION;
-        const unsigned nullish = nullable ? CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED : 0;
-        unsigned ty = concolic_operand_types(v);
-        uint8_t arms[3];
-        int n = 0, ex_arm = -1, real = JS_OUTCOME_REAL_UNSTATED, arm = 0;
-
-        if ((ty & objs) || (ty & ~objs & ~nullish)) arms[n++] = IDL_UNI_STRING;
-        if (ty & objs) arms[n++] = IDL_UNI_UNKNOWN_SEQUENCE;
-        if (ty & nullish) arms[n++] = IDL_UNI_NULL;
-        DCHECK(n > 0, "an unknown reached a string-or-sequence union with a type facet that admits no type — "
-                      "the flow that excluded every type is infeasible and should have been pruned there");
-        if (concolic_example_present(v)) {
-            JSValue ex = concolic_example(ctx, v);
-
-            /* An Object example other than an Array is unstated: its @@iterator is its own [[Get]]. */
-            ex_arm = (nullable && (JS_IsNull(ex) || JS_IsUndefined(ex))) ? IDL_UNI_NULL
-                   : JS_IsArray(ex) ? IDL_UNI_UNKNOWN_SEQUENCE : JS_IsObject(ex) ? -1 : IDL_UNI_STRING;
-            JS_FreeValue(ctx, ex);
-        }
-        for (int i = 0; i < n; i++)
-            if (arms[i] == ex_arm) real = i;
-        DCHECK(ex_arm < 0 || real >= 0,
-               "an unknown's held example takes a §3.2.25 arm its own type facet excludes — the example and the "
-               "facet are two readings of one value in one flow");
-        if (n == 1) {
-            *phase = arms[0];
-        } else {
-            static const char *const OPS[2][2][2] = {
-                { { NULL, "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, null" },
-                  { "§3.2.25 (DOMString or sequence<DOMString>) arm: string, sequence",
+        static const char *const OPS[2][2][16] = {
+            { { [IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE] =
+                    "§3.2.25 (DOMString or sequence<DOMString>) arm: string, sequence" },
+              { [IDL_UNION_ARM_STRING | IDL_UNION_ARM_NULL] =
+                    "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, null",
+                [IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE | IDL_UNION_ARM_NULL] =
                     "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, sequence, null" } },
-                { { NULL, NULL },
-                  { "§3.2.25 (USVString or sequence<USVString>) arm: string, sequence", NULL } },
-            };
-            const char *op = OPS[elem == IDL_USVSTRING][!!(ty & objs)][!!(ty & nullish)];
-            int r;
+            { { [IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE] =
+                    "§3.2.25 (USVString or sequence<USVString>) arm: string, sequence" },
+              { NULL } },
+        };
+        unsigned arm = 0;
+        int r;
 
-            DCHECK(op != NULL, "a forked string-or-sequence arm set has neither a sequence nor a null arm");
-            /* The outstanding answer is released here: the sibling's snapshot is taken at this return. */
-            JS_FreeValue(ctx, *pin);
-            *pin = JS_UNDEFINED;
-            r = step_fork_run(ctx, hdr, v, op, n, real, &arm);
-            if (r) return r;
-            *phase = arms[arm];
-            /* The arm is a fact about the value's type: a sequence is an Object, null is null or undefined,
-               and beside a null arm the string arm is neither. */
-            if (*phase == IDL_UNI_UNKNOWN_SEQUENCE) concolic_type_facet_file(v, objs);
-            else if (*phase == IDL_UNI_NULL) concolic_type_facet_file(v, nullish);
-            else if (nullish) concolic_type_facet_file(v, CONCOLIC_TYF_ALL & ~nullish);
-        }
+        r = idl_union_unknown_arm(ctx, hdr, v,
+                                  IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE | (nullable ? IDL_UNION_ARM_NULL : 0),
+                                  OPS[elem == IDL_USVSTRING][nullable], pin, &arm);
+        if (r) return r;
+        *phase = arm == IDL_UNION_ARM_SEQUENCE ? IDL_UNI_UNKNOWN_SEQUENCE
+               : arm == IDL_UNION_ARM_NULL     ? IDL_UNI_NULL : IDL_UNI_STRING;
         if (*phase == IDL_UNI_UNKNOWN_SEQUENCE) {
             DCHECK(w->seq_phase == 0, "the union's sequence arm was chosen while a sequence was already in flight "
                                       "on this machine — one argument is converted at a time");

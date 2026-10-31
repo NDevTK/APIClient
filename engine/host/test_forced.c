@@ -781,6 +781,9 @@ static const TfServed TF_SERVED[] = {
     { "https://x.test/api/rrme", "application/json", "{\"role\":\"viewer\",\"id\":42,\"org\":\"acme\"}" },
     /* HTML_REFLECTINT's reply: an integer, a non-numeric string and a negative integer for the reflected setters. */
     { "https://x.test/api/rint", "application/json", "{\"n\":300,\"s\":\"wide\",\"m\":-3}" },
+    /* HTML_USPUNION's reply: a URLSearchParams init of each of §6.2's three arms. */
+    { "https://x.test/api/uspi", "application/json",
+      "{\"q\":\"a=1\",\"o\":{\"b\":\"2\"},\"l\":[[\"c\",\"3\"]]}" },
 };
 
 /* …ASKED OF THE ABSOLUTE SERIALIZED ADDRESS, which is what a park carries and what the caller holds by the
@@ -1153,6 +1156,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/realmsellclose.h"
 #include "fixture/adoptexpando.h"
 #include "fixture/reflectint.h"
+#include "fixture/uspunion.h"
 #include "fixture/fragfork.h"
 #include "fixture/fragplace.h"
 #include "fixture/fragxml.h"
@@ -1710,6 +1714,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "realmsellclose", HTML_REALMSELLCLOSE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "adoptexpando", HTML_ADOPTEXPANDO },
     { "reflectint", HTML_REFLECTINT },
+    { "uspunion", HTML_USPUNION },
     { "fragfork", HTML_FRAGFORK },
     { "fragplace", HTML_FRAGPLACE },
     { "fragxml", HTML_FRAGXML },
@@ -18168,6 +18173,27 @@ TF_UNIT void probes_reflectint(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `uspunion` document (fixture/uspunion.h): URL §6.2's init union over unknown reply fields runs
+   the arm each field's example takes, and get() reads its pair back. */
+TF_UNIT void probes_uspunion(const char *js, Probe *tab, int *n) {
+    const char *uu_why = NULL;
+    int uu_tt = 1;
+    fold_row(&uu_tt, &uu_why, !!strstr(js, "\"/api/uspq\"") && !!strstr(js, "\"/api/uspo\"") &&
+                              !!strstr(js, "\"/api/uspl\""),
+             "NOT REACHED: a URLSearchParams built from an unknown reply field sent no record, so the init union "
+             "aborted or a world threw");
+    fold_row(&uu_tt, &uu_why, param_value_is(js, "/api/uspq", "v", "1"),
+             "the string arm over `\"a=1\"` did not read `a` back as 1");
+    fold_row(&uu_tt, &uu_why, param_value_is(js, "/api/uspo", "v", "2"),
+             "the record arm over `{\"b\":\"2\"}` did not read `b` back as 2");
+    fold_row(&uu_tt, &uu_why, param_value_is(js, "/api/uspl", "v", "3"),
+             "the sequence arm over `[[\"c\",\"3\"]]` did not read `c` back as 3");
+    const Probe rows[] = {
+        { "usp-init-union-unknown", uu_tt, "/api/uspq", SESS_EXPLORE, uu_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `windowopenerclose` document. */
 TF_UNIT void probes_windowopenerclose(const char *js, Probe *tab, int *n) {
     /* And over a cross-origin popup, which the incumbent is familiar with only through its opener link. */
@@ -22022,6 +22048,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_realmsellclose(js, probes, &np);
     probes_adoptexpando(js, probes, &np);
     probes_reflectint(js, probes, &np);
+    probes_uspunion(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);
     probes_idlindex(js, probes, &np);

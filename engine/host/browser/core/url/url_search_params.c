@@ -687,6 +687,12 @@ static const IdlPairIterOps USP_PAIR_OPS = { usp_pair_count, usp_pair_at, "URLSe
     X(UC_START, \
       "URL §6.2 new URLSearchParams(init) steps 1-2 (the leading `?` stripped from a string init, then " \
       "initialize's step 3 for that arm; Web IDL §3.7.1's `new` requirement precedes them)") \
+    X(UC_UNKNOWN_ARM, \
+      "Web IDL §3.2.25 over unknown input (which of the three arms the init's type facet admits, forked)") \
+    X(UC_USEQ_LEN, "URL §6.2 initialize step 1 over an unknown sequence (§7.3.18 LengthOfArrayLike)") \
+    X(UC_USEQ_PAIR, "URL §6.2 initialize step 1 over an unknown sequence (Get of the next innerSequence)") \
+    X(UC_USEQ_PLEN, "URL §6.2 initialize step 1.1 over an unknown innerSequence (its size, which must be 2)") \
+    X(UC_USEQ_ITEM, "URL §6.2 initialize step 1.2 over an unknown innerSequence (Get of its two items)") \
     X(UC_ITER_ASKED, \
       "Web IDL §3.2.25 (Get(init, @@iterator) — the read that picks the sequence arm of " \
       "`sequence<sequence<USVString>> or record<USVString, USVString> or USVString` over the record one)") \
@@ -716,6 +722,8 @@ typedef struct {
     UspList      list;
     JSValue      unknown;        /* an unknown string init, handed to the object (UspObj's `unknown`) */
     int          unknown_example;
+    JSValue      upair;          /* the unknown sequence arm's current innerSequence */
+    int64_t      ulen, ui, plen; /* that arm's length and position, and the innerSequence's size */
 } JSUspCtorState;
 
 /* EVERY REQUEST THIS MACHINE CAN HAVE IN FLIGHT, LISTED ONCE. STEP_GOTO takes that list at every transition and
@@ -729,7 +737,7 @@ typedef struct {
    at IT_CALL_NEXT between pairs, so listing it would assert that the walk has not started. */
 #define UC_GOTO(hdr, s, to) STEP_GOTO((hdr)->stage, (to), &(s)->outer.cphase, &(s)->inner.cphase,   \
                                       &(hdr)->get_phase, &(hdr)->keys_phase, &(hdr)->desc_phase,    \
-                                      &(hdr)->str_phase, NULL)
+                                      &(hdr)->str_phase, &(hdr)->len_phase, NULL)
 
 static void js_usp_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -740,6 +748,7 @@ static void js_usp_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->item[0]);
     v->val(ctx, &s->item[1]);
     v->val(ctx, &s->unknown);
+    v->val(ctx, &s->upair);
 }
 
 /* THE PARAMETER LIST ALONE — a malloc'd array of malloc'd name/value pairs, which is not a reference and which
@@ -830,6 +839,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            below, which hands `unknown` to the object. */
         s->unknown = JS_UNDEFINED;
         s->unknown_example = 0;
+        s->upair = JS_UNDEFINED;
         iter_cursor_init(&s->outer);
         iter_cursor_init(&s->inner);
         record_cursor_init(&s->rec);
@@ -841,31 +851,10 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             UC_GOTO(hdr, s, UC_DONE);
             return JS_STEP_YIELD;
         }
-        /* §3.2.25 OVER UNKNOWN INPUT: the union's arm is a runtime type test on the value, which an unknown
-           answers only through its stated type set. A String in every world takes the USVString arm; the list
-           is the parse of its example and every read derives from the unknown (usp_derive). */
+        /* §3.2.25 over unknown input: the arm is a type test the unknown answers only through its type facet,
+           so UC_UNKNOWN_ARM forks the arms it admits. */
         if (concolic_is(init)) {
-            JSValue ex;
-            size_t n = 0;
-            const char *q;
-
-            if (!concolic_type_is_string(init))
-                DFAIL("URL §6.2's init union was handed unknown input whose type set is not String, so which of "
-                      "its three arms runs is a runtime type test over unknown input — build that fork; the "
-                      "release arm takes the USVString arm");
-            s->unknown = JS_DupValue(ctx, init);
-            ex = concolic_example_string(ctx, init);
-            s->unknown_example = !JS_IsUndefined(ex);
-            if (s->unknown_example) {
-                ex = JS_ToScalarValueString(ctx, ex);
-                if (JS_IsException(ex)) return -1;
-                q = JS_ToCStringLen(ctx, &n, ex);
-                JS_FreeValue(ctx, ex);
-                if (!q) return -1;
-                usp_parse(&s->list, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
-                JS_FreeCString(ctx, q);
-            }
-            UC_GOTO(hdr, s, UC_DONE);
+            UC_GOTO(hdr, s, UC_UNKNOWN_ARM);
             return JS_STEP_YIELD;
         }
         if (!JS_IsObject(init)) {
@@ -886,6 +875,129 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         UC_GOTO(hdr, s, UC_ITER_ASKED);
         return JS_STEP_YIELD;
     }
+
+    STEP_ARM(UC_UNKNOWN_ARM);
+    {
+        static const char *const OPS[16] = {
+            [IDL_UNION_ARM_SEQUENCE | IDL_UNION_ARM_RECORD] =
+                "§3.2.25 (sequence<sequence<USVString>> or record<USVString, USVString> or USVString) "
+                "arm: sequence, record",
+            [IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE | IDL_UNION_ARM_RECORD] =
+                "§3.2.25 (sequence<sequence<USVString>> or record<USVString, USVString> or USVString) "
+                "arm: string, sequence, record",
+        };
+        unsigned arm = 0;
+
+        r = idl_union_unknown_arm(ctx, hdr, init,
+                                  IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE | IDL_UNION_ARM_RECORD, OPS, &in,
+                                  &arm);
+        if (r) return r;
+        JS_FreeValue(ctx, in);
+        if (arm == IDL_UNION_ARM_RECORD) {
+            UC_GOTO(hdr, s, UC_KEY_PAIR);
+            return JS_STEP_YIELD;
+        }
+        if (arm == IDL_UNION_ARM_SEQUENCE) {
+            UC_GOTO(hdr, s, UC_USEQ_LEN);
+            return JS_STEP_YIELD;
+        }
+        /* The USVString arm: the list is the parse of the example and every read derives from the unknown
+           (usp_derive), with a leading `?` stripped as for a concrete string. */
+        {
+            JSValue ex;
+            size_t n = 0;
+            const char *q;
+
+            s->unknown = JS_DupValue(ctx, init);
+            ex = concolic_example_string(ctx, init);
+            s->unknown_example = !JS_IsUndefined(ex);
+            if (s->unknown_example) {
+                ex = JS_ToScalarValueString(ctx, ex);
+                if (JS_IsException(ex)) return -1;
+                q = JS_ToCStringLen(ctx, &n, ex);
+                JS_FreeValue(ctx, ex);
+                if (!q) return -1;
+                usp_parse(&s->list, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
+                JS_FreeCString(ctx, q);
+            }
+        }
+        UC_GOTO(hdr, s, UC_DONE);
+        return JS_STEP_YIELD;
+    }
+
+    /* THE SEQUENCE ARM OVER AN UNKNOWN: an unknown has no iterator to call, so §3.2.21.1's walk is the Array
+       iterator's own (%ArrayIteratorPrototype%.next steps 9-14): §7.3.18 LengthOfArrayLike, then Get per index,
+       as idl_union_seq_unknown walks its sequence arm. Each innerSequence is walked the same way. */
+    STEP_ARM(UC_USEQ_LEN);
+    r = step_length_run(ctx, hdr, init, in, &s->ulen, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return -1;
+    s->ui = 0;
+    UC_GOTO(hdr, s, UC_USEQ_PAIR);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(UC_USEQ_PAIR);
+    if (s->ui >= s->ulen) {
+        JS_FreeValue(ctx, in);
+        UC_GOTO(hdr, s, UC_DONE);
+        return JS_STEP_YIELD;
+    }
+    {
+        JSValue index = JS_NewInt64(ctx, s->ui);
+        JSAtom key = JS_ValueToAtom(ctx, index);
+        JSValue pair = JS_UNDEFINED;
+
+        JS_FreeValue(ctx, index);
+        CHECK(key != JS_ATOM_NULL, "OOM interning a sequence index");
+        r = step_getprop_run(ctx, hdr, init, key, in, &pair, out_cb, out_argc);
+        JS_FreeAtom(ctx, key);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        JS_FreeValue(ctx, s->upair);
+        s->upair = pair;
+    }
+    /* §3.2.21's conversion of the innerSequence: a non-Object is a TypeError. A member read of unknown input
+       answers an unknown or a pinned primitive, never a concrete Object. */
+    if (!concolic_is(s->upair)) {
+        DCHECK(!JS_IsObject(s->upair), "a member read of unknown input answered an Object that is not unknown "
+                                       "input — its @@iterator would be the page's code, which this arm cannot run");
+        JS_ThrowTypeError(ctx, "a URLSearchParams init pair is not iterable");
+        return -1;
+    }
+    UC_GOTO(hdr, s, UC_USEQ_PLEN);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(UC_USEQ_PLEN);
+    r = step_length_run(ctx, hdr, s->upair, in, &s->plen, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return -1;
+    if (s->plen != 2) {
+        JS_ThrowTypeError(ctx, "a URLSearchParams init pair does not contain exactly two items");
+        return -1;
+    }
+    JS_FreeValue(ctx, s->item[0]); JS_FreeValue(ctx, s->item[1]);
+    s->item[0] = s->item[1] = JS_UNDEFINED;
+    s->nitem = 0;
+    UC_GOTO(hdr, s, UC_USEQ_ITEM);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(UC_USEQ_ITEM);
+    {
+        JSAtom key = JS_NewAtomUInt32(ctx, (uint32_t)s->nitem);
+        JSValue item = JS_UNDEFINED;
+
+        CHECK(key != JS_ATOM_NULL, "OOM interning a sequence index");
+        r = step_getprop_run(ctx, hdr, s->upair, key, in, &item, out_cb, out_argc);
+        JS_FreeAtom(ctx, key);
+        if (r > 0) return r;
+        if (r < 0) return -1;
+        s->item[s->nitem++] = item;
+    }
+    if (s->nitem < 2) return JS_STEP_YIELD;   /* the stage does not move: the second item is the next turn's */
+    s->ui++;
+    s->after_pair = UC_USEQ_PAIR;
+    UC_GOTO(hdr, s, UC_PAIR_NAME_STR);
+    return JS_STEP_YIELD;
 
     STEP_ARM(UC_ITER_ASKED);
     {
