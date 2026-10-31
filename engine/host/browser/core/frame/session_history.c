@@ -11,13 +11,13 @@
 #include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/dom/document.h"
-#include "core/dom/element_scrolling.h"
 #include "core/events/event_target.h"
 #include "core/events/hash_change_event.h"
 #include "core/events/pop_state_event.h"
 #include "core/fetch/fetch.h"   /* Referrer Policy §3's policies, for §7.4.1.2's request referrer policy */
 #include "core/frame/navigation.h"
 #include "core/frame/session_history.h"
+#include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
 #include "core/realm.h"
 #include "core/structured_clone.h"
@@ -37,7 +37,7 @@ static JSClassID g_slot = JS_INVALID_CLASS_ID;
  * THE FIELDS THIS ENGINE DOES NOT HOLD ARE NAMED WHERE THEY ARE NOT HELD, not omitted. §7.4.1.1 also gives an
  * entry a SCROLL POSITION DATA and a PERSISTED USER STATE, which §7.4.6.5's save/restore are the only writers
  * and readers of. A traversal reaches those two, and reaches them through sh_persisted_state, which asserts
- * against the `scrollTo` that would give this user agent a scroll position to save in the first place.
+ * that the scroll position data it would save is every region's origin.
  *
  * THE NAVIGATION API'S THREE FIELDS ARE HELD, and they are §7.4.1.1's own rather than §7.2.6's: an entry has a
  * navigation API STATE (serialized, initially StructuredSerializeForStorage(UNDEFINED) — not null, which is
@@ -743,33 +743,29 @@ static void sh_apply_free(JSContext *ctx, SessionHistoryApply *a)
 }
 
 /* §7.4.6.5's SAVE PERSISTED STATE TO a session history entry, and its twin RESTORE PERSISTED STATE FROM one.
- * Both are entirely about state a RENDERING holds: "set the scroll position data of entry to contain the scroll
- * positions for all of entry's document's restorable scrollable regions", and then an OPTIONAL clause for "any
- * state that the user agent wishes to persist, such as the values of form fields".
- * THE ARGUMENT THAT USED TO MAKE THAT A NO-OP IS RETIRED AND IS RESTATED IN CAPITALS SO NOBODY RE-DERIVES IT:
- * THIS USER AGENT HAS NO SCROLL POSITION TO SAVE — core/frame/viewport.c DERIVES scrollX/scrollY RATHER THAN
- * HOLDING THEM, BECAUSE WITH NO LAYOUT THE SCROLLING AREA IS THE VIEWPORT AND THE ONLY POSITION IT CAN HAVE IS
- * (0,0). Both halves of that are gone: §2's viewport row made the scrolling area a real extreme, and CSSOM
- * VIEW §3.1 "Scrolling"'s perform a scroll (core/dom/perform_scroll.h) made the position real per-flow state
- * that a page can move. The optional clause is still optional.
- * ASSERTED AGAINST THE CAPABILITY rather than written down as a claim, and the capability is asked of the
- * component that owns the scrolling box (core/dom/element_scrolling.h) rather than of a name on the global.
- * This asked `realm_awaits(ctx, "scrollTo", …)`, and a [[HasProperty]] answers whether a MEMBER is installed,
- * which is a different question from whether a box can hold a position — so the probe was pre-loaded to fire on
- * an installation this file does not care about. */
+ * Both are about state a rendering holds: "set the scroll position data of entry to contain the scroll
+ * positions for all of entry's document's restorable scrollable regions", and then an optional clause for "any
+ * state that the user agent wishes to persist, such as the values of form fields", which stays optional.
+ * No entry holds scroll position data, which is exact while every restorable scrollable region is at its
+ * origin: a document starts there, an element's box cannot be moved (core/dom/perform_scroll.c refuses it), and
+ * the viewport's position is the one this realm stores (core/frame/viewport.h). So the assert is over that
+ * stored position: it fires on a traversal after a scroll left the viewport elsewhere, which is exactly when
+ * the data this skips would differ from the origin a document starts at. */
 static void sh_persisted_state(JSContext *ctx)
 {
-    DCHECK(!element_scrolling_box_can_move(ctx),
-           "HTML §7.4.6.5 \"Persisted history entry state\"'s save persisted state — \"set the scroll position "
-           "data of entry to contain the scroll positions for all of entry's document's restorable scrollable "
-           "regions\" — carries a session history entry's SCROLL POSITION DATA across a traversal, and §2's "
-           "scrolling area of a box in this document EXCEEDS that box, so §3.1's perform a scroll has somewhere "
-           "to put it and the position a traversal would drop is a real one. So "
-           "an entry gains a scroll position data field, activate-history-entry writes the outgoing entry's "
-           "from the document's restorable scrollable regions, and §7.4.6.2 \"Updating the document\"'s update "
-           "document for history step application restores the incoming entry's where it says \"Restore "
-           "persisted state given entry\" — twice, once on each arm of its same-document branch — with the "
-           "\"auto\" condition living inside §7.4.6.5's restore-persisted-state and not at either call site");
+    double x = viewport_window_scroll(ctx, false), y = viewport_window_scroll(ctx, true);
+
+    DCHECKF(x == 0.0 && y == 0.0,
+            "HTML §7.4.6.5 \"Persisted history entry state\"'s save persisted state — \"set the scroll position "
+            "data of entry to contain the scroll positions for all of entry's document's restorable scrollable "
+            "regions\" — carries a session history entry's scroll position data across a traversal, and this "
+            "document's viewport is scrolled to (%g, %g), so the data a traversal would drop is not the origin. "
+            "Build it: an entry gains a scroll position data field, activate-history-entry writes the outgoing "
+            "entry's from the document's restorable scrollable regions, and §7.4.6.2 \"Updating the document\"'s "
+            "update document for history step application restores the incoming entry's where it says "
+            "\"Restore persisted state given entry\" — twice, once on each arm of its same-document branch — "
+            "with the \"auto\" condition inside §7.4.6.5's restore-persisted-state and not at either call site",
+            x, y);
 }
 
 /* §7.4.6.1's ACTIVATE HISTORY ENTRY for this navigable — reached only when update-only is false, which is only
