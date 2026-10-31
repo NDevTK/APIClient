@@ -1,6 +1,8 @@
 /* THE MESSAGE-LANGUAGE DOCUMENT: a `message` listener hands `e.data.s` to File System Access §3.2.1's process
    accept types as a suffix and renders `e.data.h` into markup only when the picker rejects with a SecurityError,
-   which §3.1 step 4 does in the unactivated world once every suffix is valid. So the sink is reached only in
+   which §3.1 step 4 does in the unactivated world once every suffix is valid. The record value is the bare
+   member, so its `(USVString or sequence<USVString>)` union forks its arms over the unknown and the string arm
+   hands the unknown itself to *validate a suffix*. So the sink is reached only in
    the world where *validate a suffix* accepted the unknown, and a composed message proves it only when its `s`
    is a String that language holds: the shortest strings and an omitted member are all refused.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
@@ -19,7 +21,7 @@ static const char HTML_MSGLANG[] =
     "  var d = e.data;"
     "  if (d === null || typeof d !== 'object') return;"
     "  try {"
-    "    await showOpenFilePicker({ types: [{ accept: { 'text/plain': [d.s] } }] });"
+    "    await showOpenFilePicker({ types: [{ accept: { 'text/plain': d.s } }] });"
     "  } catch (ex) {"
     "    if (ex.name === 'SecurityError') document.getElementById('mlOut').innerHTML = d.h;"
     "  }"
