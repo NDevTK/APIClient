@@ -2824,6 +2824,9 @@ int concolic_src_within(const char *src, const char *p, size_t n)
 {
     DCHECK(src != NULL && p != NULL && n > 0, "an injection identity was matched against no member");
     if (strlen(src) == n && !strncmp(src, p, n)) return 1;
+    /* A member that is already a hole (`{state}`) spells its own braces, and its closing brace ends the name, so
+       a derivation over it is that spelling followed by a path (`{state}.code`). */
+    if (p[0] == '{') return p[n - 1] == '}' && !strncmp(src, p, n);
     return src[0] == '{' && !strncmp(src + 1, p, n) && src[n + 1] == '}';
 }
 
