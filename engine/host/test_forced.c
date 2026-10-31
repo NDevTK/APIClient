@@ -1230,6 +1230,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/timegate.h"
 #include "fixture/datenum.h"
 #include "fixture/rxcompile.h"
+#include "fixture/b64coerce.h"
 #include "fixture/rxliteral.h"
 #include "fixture/rxinsert.h"
 #include "fixture/rxtimer.h"
@@ -1804,6 +1805,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "timegate", HTML_TIMEGATE },
     { "datenum", HTML_DATENUM },
     { "rxcompile", HTML_RXCOMPILE },
+    { "b64coerce", HTML_B64COERCE },
     { "rxliteral", HTML_RXLITERAL },
     { "rxinsert", HTML_RXINSERT },
     { "rxtimer", HTML_RXTIMER },
@@ -17114,6 +17116,19 @@ TF_UNIT void probes_rxfunc(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `b64coerce` document (fixture/b64coerce.h): atob ran the page's toString once and decoded
+   what it answered. */
+TF_UNIT void probes_b64coerce(const char *js, Probe *tab, int *n) {
+    const char *a_why = NULL; int a_tt = 1;
+    fold_row(&a_tt, &a_why, param_value_is(js, "/api/b64c-atob", "got", "ab-3"),
+             "no /api/b64c-atob?got=ab-3 record: atob did not decode what the page's toString answered after "
+             "running it once");
+    const Probe rows[] = {
+        { "b64c-atob", a_tt, "/api/b64c-atob", SESS_EXPLORE, a_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22476,6 +22491,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_timegate(js, probes, &np);
     probes_datenum(js, probes, &np);
     probes_rxcompile(js, probes, &np);
+    probes_b64coerce(js, probes, &np);
     probes_rxliteral(js, probes, &np);
     probes_rxinsert(js, probes, &np);
     probes_rxtimer(js, probes, &np);
