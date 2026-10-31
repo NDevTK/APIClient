@@ -1305,6 +1305,16 @@ static int dec_subject_assumed(JSValueConst v) {
     return concolic_root_every(v, absent_assumed_member);
 }
 
+/* Is an arm over `v` a decision about an input another party sets: does a member of its root declare a
+   precondition (application state: absent.c's record members, served or missing, and the origin's own stores)
+   or a delivery (an attacker source)? An environment unknown (a random value, a browser fact) declares neither
+   and is grounded by its domain, so a witness lists none of its arms (endpoint.h's `witness`). */
+static int dec_subject_input(JSValueConst v) {
+    const char *root = concolic_root_c(v);
+
+    return root && (concolic_source_precondition(root) != NULL || concolic_root_delivered_any(root));
+}
+
 static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, uint32_t asked,
                         int restartable, int real_arm, int *forked, const char *site) {
     int take = real_arm < 0 ? 1 : real_arm;
@@ -1670,7 +1680,8 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     /* What this flow assumed here, when no observation established the arm (its example contradicts it, or
        there is none) and the arm determined no value: the pin above states an arm that did, and an endpoint's
        witness reads both (solver/endpoint.c). */
-    if ((real == REAL_ARM_UNOBSERVED || arm != real) && !pinned && key) concolic_note_assumed_branch(key, concolic_shape_c(cond), arm, neg);
+    if ((real == REAL_ARM_UNOBSERVED || arm != real) && !pinned && key && dec_subject_input(cond))
+        concolic_note_assumed_branch(key, concolic_shape_c(cond), arm, neg);
     free(key);
     /* Back into the value's terms: everything above recorded facts about the predicate, and the interpreter asked
        about the condition, which for a negation is the complement. The forked bit is about the branch, not its
@@ -1814,11 +1825,13 @@ int solver_outcome_settled(JSValueConst over, const char *op, int n) {
 }
 
 /* The completion this walk ended on, filed as an assumed decision under its settled key when it is not the
-   completion the machine declared real (or the machine declared none). An operand with no identity has no
-   key, as outcome_settle answers for it. */
+   completion the machine declared real (or the machine declared none) and its operand is an input another
+   party sets (dec_subject_input). An operand with no identity has no key, as outcome_settle answers for it. */
 static void outcome_note_assumed(JSValueConst over, const char *op, int c) {
-    char *key = outcome_key(over, op, c);
+    char *key;
 
+    if (!dec_subject_input(over)) return;
+    key = outcome_key(over, op, c);
     if (!key) return;
     concolic_note_assumed_outcome(key, op, concolic_shape_c(over), c);
     free(key);

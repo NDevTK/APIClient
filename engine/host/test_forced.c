@@ -21322,14 +21322,15 @@ TF_UNIT void probes_libstate(const char *js, Probe *tab, int *n) {
     fold_row(&lr_tt, &lr_why, !!strstr(js, "\"/api/ls-random\""),
              "NOT REACHED: there is no /api/ls-random record, so the expando comparison's true arm never ran");
     fold_row(&lr_tt, &lr_why, cl_witness_without(js, "/api/ls-random", "\"assumed\":[]", "\"assumed\":[{"),
-             "every sighting of /api/ls-random assumed something: a function and a string are never strictly "
-             "equal, so the expando comparison's true arm is the observed one");
+             "every sighting of /api/ls-random assumed something: the expando comparison is over Math.random, an "
+             "environment unknown its domain grounds, so no world reaching the request assumes application "
+             "state");
     const char *lu_why = NULL; int lu_tt = 1;
     fold_row(&lu_tt, &lu_why, !!strstr(js, "\"/api/ls-ua\""),
              "NOT REACHED: there is no /api/ls-ua record, so the user-agent test's false arm never ran");
     fold_row(&lu_tt, &lu_why, cl_witness_without(js, "/api/ls-ua", "\"assumed\":[]", "\"assumed\":[{"),
-             "every sighting of /api/ls-ua assumed something: the user agent this engine presents is no old IE, "
-             "so the test's false arm is the observed one");
+             "every sighting of /api/ls-ua assumed something: the user-agent test is over navigator.userAgent, a "
+             "browser fact and not application state, so no world reaching the request assumes any");
     const Probe rows[] = {
         { "ls-observed-world", lo_tt, "var lsState", SESS_EXPLORE, lo_why },
         { "ls-random-observed", lr_tt, "var lsExpando", SESS_EXPLORE, lr_why },

@@ -4,8 +4,8 @@
    is minted unknown with its value as the example (solver/absent.c's present arm), so the world this document
    is served in sends the request without assuming anything of `lsState`. Two more requests sit behind tests
    jQuery's boot makes on every page: its expando (`version + Math.random()` with the non-digits removed)
-   compared with a function, and a user-agent regular expression; the served world takes each test's real
-   arm, so it assumes nothing there either.
+   compared with a function, and a user-agent regular expression; both test environment unknowns, not
+   application state, so neither is an assumption.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_LIBSTATE_H

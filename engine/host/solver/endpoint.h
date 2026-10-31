@@ -394,17 +394,19 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 /* `witness`: one element per distinct sighting witness, never a union of two (it would state a combination no
    flow assumed), never empty. An element is `null` where no flow stood (`witnessClass` `unasked`), else
    `{assumed, verification}`, `assumed` being the minting flow's assumptions at the act, sorted by kind then
-   text: `{source, value, kind}` per pin (the source
-   path, the ToString of the operand its `===` determined, that operand's type), whether or not an observation
-   agreed; `{decision, taken}` per branch arm that pinned nothing and that no observation established (its
-   example contradicts it, or there is none), as the condition's shape and its ToBoolean; `{decision,
-   completion}` per native operation settling on a completion other than its machine's declared real one,
-   as `op(operand)` and the completion index. A decision states the arm, never a value satisfying it.
-   Named residual. Not covered: an assumed arm whose predicate has no spellable identity, a declined request's
-   failure arm, a modelled close request and a document's forced arrival (engine.h's engine_set_arrival) mark
-   the path forced and file no decision. Next diff: a decision row for each, keyed by the act's own name (for
-   an arrival, the creating instance's witness crossing beside the arrival grade). How its absence shows: a `forced` row whose every witness
-   element has an empty `assumed`. */
+   text: `{source, value, kind}` per pin (the source path, the ToString of the operand its `===` determined,
+   that operand's type), whether or not an observation agreed; `{decision, taken}` per branch arm over an
+   input another party sets (a root member declaring a precondition or a delivery) that pinned nothing and that
+   no observation established (its example contradicts it, or there is none), as the condition's shape and its
+   ToBoolean; `{decision, completion}` per native operation over such an input settling on a completion other
+   than its machine's declared real one, as `op(operand)` and the completion index. A decision states the arm,
+   never a value satisfying it; an environment unknown's arm is none. */
+/* Named residual. Not covered: an assumed arm over an input whose predicate has no spellable
+   identity, a declined request's failure arm, a modelled close request and a document's forced arrival
+   (engine.h's engine_set_arrival) mark the path forced and file no decision. Next diff: a decision row for
+   each, keyed by the act's own name (for an arrival, the creating instance's witness crossing beside the
+   arrival grade). How its absence shows: a `forced` row whose every witness element has an empty `assumed`
+   on a page whose code reads no environment unknown. */
 /* `verification` is what firing the witness established (solver/witness_verify.h): `verified` when a run with
    its value delivered through the source's real transform reached this method and path assuming nothing of
    its own; `candidate` when such a run was minted and has not; `no-candidate` when firing cannot check it
