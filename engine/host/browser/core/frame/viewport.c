@@ -557,13 +557,11 @@ double viewport_scroll_y(JSContext *ctx)
 
 /* §3.1's INSTANT SCROLL OF THIS REALM'S VIEWPORT — the one writer, and see viewport.h for why the position is
    this component's to hold rather than §3.1's.
-   THE CLAMP IS THE CALLER'S AND IS NOT RE-MADE HERE. §4's steps 7-8 and §6.1's own two rows are the same four
-   rows over one fact (core/dom/element_scrolling.h), so a second clamp at the write would be a third statement
-   of them, free to disagree with the one that decided the position. What IS asserted is that the position the
-   caller arrived at is one the box can actually have — that is the clamp's own postcondition, and asserting it
-   is what makes a caller that skipped the clamp crash here instead of silently placing the viewport outside
-   its scrolling area. */
-void viewport_set_scroll_position(JSContext *ctx, double x, double y)
+   The clamp is the caller's and is not re-made here: §4's steps 7-8 and §6.1's own two rows are the same four
+   rows over one fact (core/dom/element_scrolling.h). What is asserted is the clamp's postcondition against the
+   very box `b` the caller measured and clamped into, so a route that skipped the clamp crashes here instead of
+   placing the viewport outside its scrolling area, and no second walk of that area is made. */
+void viewport_set_scroll_position(JSContext *ctx, double x, double y, const ElementScrollingBox *b)
 {
     JSValue rec;
 
@@ -571,19 +569,19 @@ void viewport_set_scroll_position(JSContext *ctx, double x, double y)
            "the viewport's scroll position was written in a realm that is presenting no document — §3.1's "
            "perform a scroll asserts the same thing one frame up, and a position without a viewport is a "
            "number about a rectangle that is not there");
+    DCHECK(b->el == NULL && b->dctx == ctx,
+           "the viewport's scroll position was written against a box that is not this realm's viewport");
     DCHECK(isfinite(x) && isfinite(y),
            "the viewport's scroll position was written non-finite — CSSOM VIEW §3.2 \"WebIDL values\"' "
            "normalize non-finite values runs at the member and §6.1's clamp is total, so a non-finite here is "
            "one of those two having been skipped");
-    DCHECK(fabs(x) <= viewport_scrolling_area_width(ctx) - viewport_width(ctx) &&
-           fabs(y) <= viewport_scrolling_area_height(ctx) - viewport_height(ctx),
-           "the viewport was moved to a position outside §2's scrolling area of a viewport. Every route to "
-           "this writer runs §4's steps 7-8 or §6.1's identical rows first — one derivation, "
-           "core/dom/element_scrolling.h — so a position beyond the SLACK between the area and the box is a "
-           "route that skipped them. It is stated as a MAGNITUDE and not as a second call to the clamp for "
-           "the reason above: max(0, min(v, slack)) lands in [0, slack] and min(0, max(v, -slack)) lands in "
-           "[-slack, 0], so this one comparison holds whichever of §2's two overflow directions the document "
-           "has, and it needs no direction of its own to state");
+    /* A magnitude, so it holds for either overflow direction: max(0, min(v, slack)) lands in [0, slack] and
+       min(0, max(v, -slack)) in [-slack, 0]. */
+    DCHECKF(fabs(x) <= b->area[0].px - b->extent[0].px && fabs(y) <= b->area[1].px - b->extent[1].px,
+            "the viewport was moved to (%g, %g), outside §2's scrolling area of a viewport (%g x %g over a %g x "
+            "%g viewport) that the caller measured: every route to this writer runs §4's steps 7-8 or §6.1's "
+            "identical rows over that box first, so this route skipped them",
+            x, y, b->area[0].px, b->area[1].px, b->extent[0].px, b->extent[1].px);
     rec = realm_value_get(ctx, g_scroll_slot);
     JS_SetPropertyStr(ctx, rec, VP_POS_X, JS_NewFloat64(ctx, x));
     JS_SetPropertyStr(ctx, rec, VP_POS_Y, JS_NewFloat64(ctx, y));
@@ -686,7 +684,7 @@ void viewport_scroll_measured(const ElementScrollingMeasure *m, ScrollRequest x,
        layout viewport, so maxX and maxY are zero, both visual deltas are zero and the whole of the request is
        the layout delta this line performs. A scale factor that is not 1 is what would separate them, and it is
        visual_viewport.c that would then own the second half. */
-    perform_scroll(ctx, NULL, xp, yp, lxb_dom_interface_element(document_root_node(ctx)), behavior);
+    perform_scroll(ctx, &m->box, xp, yp, lxb_dom_interface_element(document_root_node(ctx)), behavior);
     /* Step 13 — "Return scrollPromise." This entry returns `void` and its callers mint a RESOLVED promise: §3.1
        resolves the promise it minted before it returns, because every scroll this user agent performs is an
        INSTANT one (core/dom/perform_scroll.h). */

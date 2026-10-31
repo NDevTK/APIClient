@@ -50,10 +50,12 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "core/dom/element_scrolling.h"
 
 /* §3.1's perform a scroll, over the scrolling box of `ctx`'s ACTIVE document.
- * `box` is the scroll container the position belongs to, or NULL for that document's VIEWPORT — the two kinds
- *   §2 "Terminology" gives a scrolling box, and the discriminator §13.2's own steps use.
+ * `box` is the measured scrolling box the position belongs to (core/dom/element_scrolling.h): its `el` is the
+ *   scroll container, or NULL for that document's VIEWPORT — the two kinds §2 "Terminology" gives a scrolling
+ *   box, and the discriminator §13.2's own steps use. Its scrolling area is the one the caller clamped into.
  * `x`/`y` are §3.1's `position`, ALREADY CLAMPED into the box's scrolling area by the caller: §4's steps 7-8
  *   and §6.1's own two rows are the same four rows (core/dom/element_scrolling.h), and clamping here as well
  *   would be a second statement of them free to disagree with the one the caller already made.
@@ -65,7 +67,7 @@
  * The CALLER has already made §3.1's own preceding test — §4 step 10 and §6.1's step 5 both abort when the
  * position is the one the box already has — so this entry is reached only for a position that differs, which
  * is asserted rather than trusted. */
-void perform_scroll(JSContext *ctx, lxb_dom_element_t *box, double x, double y,
+void perform_scroll(JSContext *ctx, const ElementScrollingBox *box, double x, double y,
                     lxb_dom_element_t *element, const char *behavior);
 
 /* A REQUESTED SCROLL POSITION ON ONE AXIS, BETWEEN THE MEMBER THAT READ IT AND THE STEP THAT PERFORMS A SCROLL.

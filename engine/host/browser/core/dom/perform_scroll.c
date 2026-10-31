@@ -43,11 +43,11 @@ static bool ps_honors_scroll_behavior(void)
    asked of the position BEFORE and AFTER, at the one place both are in hand, rather than inferred from the
    caller's own abort step — those are two different questions and only this one is about what happened.
    THE POSITION IS THE BOX OWNER'S, NEVER THIS FILE'S — perform_scroll.h states why. */
-static bool ps_instant_scroll(JSContext *ctx, lxb_dom_element_t *box, double x, double y)
+static bool ps_instant_scroll(JSContext *ctx, const ElementScrollingBox *box, double x, double y)
 {
     double before_x, before_y;
 
-    if (box != NULL) {
+    if (box->el != NULL) {
         DFAIL("CSSOM VIEW §3.1 \"Scrolling\"'s perform a scroll was reached for an ELEMENT's scrolling box, and "
               "an element in this engine has nowhere to put a scroll position. BUILD the store: it is per-flow "
               "state, because two flows that scrolled one element differently must read back different values, "
@@ -73,14 +73,17 @@ static bool ps_instant_scroll(JSContext *ctx, lxb_dom_element_t *box, double x, 
            "caller has an abort step for exactly that — §4's step 10 and §6.1's scroll-an-element step 5 both "
            "return a resolved Promise there — so reaching this line means one of them was skipped, and step "
            "7.1's \"changed as a result of this call\" would then be answered by a scroll that did not happen");
-    viewport_set_scroll_position(ctx, x, y);
+    viewport_set_scroll_position(ctx, x, y, box);
     return x != before_x || y != before_y;
 }
 
-void perform_scroll(JSContext *ctx, lxb_dom_element_t *box, double x, double y,
+void perform_scroll(JSContext *ctx, const ElementScrollingBox *box, double x, double y,
                     lxb_dom_element_t *element, const char *behavior)
 {
     bool changed;
+
+    DCHECK(box != NULL && box->dctx == ctx,
+           "§3.1's perform a scroll was handed no scrolling box, or one measured in another realm");
 
     DCHECK(ctx != NULL, "§3.1's perform a scroll was invoked with no realm — a scrolling box belongs to a "
                         "document, and which document is what the realm names");

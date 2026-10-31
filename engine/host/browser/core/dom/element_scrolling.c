@@ -165,12 +165,12 @@ static void es_perform_scroll(const EsBox *b, const double position[2], const ch
            viewport one, for core/dom/perform_scroll.h's reason (at this model's scale factor the two
            coincide). It calls §3.1 directly rather than §4's scroll(), whose own clamp would re-clamp a
            position §6.1 has already clamped. */
-        perform_scroll(b->dctx, NULL, position[ES_X], position[ES_Y],
+        perform_scroll(b->dctx, b, position[ES_X], position[ES_Y],
                        lxb_dom_interface_element(document_root_node(b->dctx)), behavior);
         return;
     }
     /* THE ELEMENT ARM — "with the element as the associated element". */
-    perform_scroll(b->dctx, b->el, position[ES_X], position[ES_Y], b->el, behavior);
+    perform_scroll(b->dctx, b, position[ES_X], position[ES_Y], b->el, behavior);
 }
 
 /* §6.1's DETERMINE THE SCROLL-INTO-VIEW POSITION, ON ONE AXIS. §6.1 writes the block half and the inline half

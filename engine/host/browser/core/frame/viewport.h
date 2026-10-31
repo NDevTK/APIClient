@@ -230,10 +230,9 @@ double viewport_scroll_y(JSContext *ctx);
    that is §4's thirteen steps, which ask §4's own questions and END here; this is the write those steps
    decided on, and §6.1's route reaches it through the same §3.1 without going through §4 at all.
    `x`/`y` ARE ALREADY CLAMPED by whichever of the two algorithms decided them — they are the same four rows
-   over one fact (core/dom/element_scrolling.h) — and the postcondition of that clamp is asserted here rather
-   than the clamp being re-run, so a route that skipped it crashes instead of placing the viewport outside its
-   own scrolling area. */
-void viewport_set_scroll_position(JSContext *ctx, double x, double y);
+   over one fact (core/dom/element_scrolling.h) — and the postcondition of that clamp is asserted here against
+   `b`, the measured viewport box the caller clamped into, rather than the clamp or the walk being re-run. */
+void viewport_set_scroll_position(JSContext *ctx, double x, double y, const ElementScrollingBox *b);
 
 /* THE `scrollX`/`scrollY` ATTRIBUTES' OWN ANSWER — the derivation above plus §4's own "or zero if there is no
    viewport", which is a DIFFERENT question from the derivation and belongs to the MEMBER. `vertical` false is
@@ -252,8 +251,7 @@ double viewport_window_scroll(JSContext *ctx, bool vertical);
    the ICB is (CSS 2.2 §10.1 gives it "the dimensions of the viewport") and hands that in. The walk runs to
    completion here.
    §4's `scroll()` and §6's `scrollWidth`/`scrollHeight` step the same walk under a resting drive instead.
-   Exported because the scroll-position writer asserts against it and core/dom/element_scrolling.c asks
-   whether the viewport has overflow. */
+   Exported because core/dom/element_scrolling.c asks whether the viewport has overflow. */
 double viewport_scrolling_area_width(JSContext *ctx);
 double viewport_scrolling_area_height(JSContext *ctx);
 
