@@ -1279,6 +1279,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/msgchain.h"
 #include "fixture/msgorigin.h"
 #include "fixture/libstate.h"
+#include "fixture/mixedroot.h"
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
 #include "fixture/flagflow.h"
@@ -1847,6 +1848,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "msgchain", HTML_MSGCHAIN },
     { "msgorigin", HTML_MSGORIGIN },
     { "libstate", HTML_LIBSTATE },
+    { "mixedroot", HTML_MIXEDROOT },
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
     { "flagflow", HTML_FLAGFLOW },
@@ -21927,6 +21929,23 @@ TF_UNIT void probes_libstate(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `mixedroot` document (fixture/mixedroot.h): a value an environment unknown's identity names
+   reaches the markup sink alone and joined with application state, and the joined write is searched at the
+   member that declares (document.cookie) rather than at the environment unknown. */
+TF_UNIT void probes_mixedroot(const char *js, Probe *tab, int *n) {
+    const char *mj_why = NULL; int mj_tt = 1;
+    fold_row(&mj_tt, &mj_why, !!strstr(js, "\"/api/mr-alone\"") && !!strstr(js, "\"/api/mr-joined\""),
+             "NOT REACHED: there is no /api/mr-alone or /api/mr-joined record, so the run did not pass both writes");
+    fold_row(&mj_tt, &mj_why, !!strstr(js, "{\"sink\":\"innerHTML\",\"source\":\"document.cookie\""),
+             "no innerHTML @S record is searched at document.cookie: the joined write's value carries the "
+             "environment unknown's identity, and a search keyed by that identity injects where no party "
+             "writes, while the member that declares application state is never searched");
+    const Probe rows[] = {
+        { "mr-member-search", mj_tt, "var mrTag", SESS_EXPLORE, mj_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring or a bare suffix check
    admits is composed and fires; a dotted suffix, an exact match on another site's origin, or a chain whose
    messages need two different origins never does. */
@@ -22210,6 +22229,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_msgchain(js, probes, &np);
     probes_msgorigin(js, probes, &np);
     probes_libstate(js, probes, &np);
+    probes_mixedroot(js, probes, &np);
     probes_msgchaincoop(js, probes, &np);
     probes_clickhash(js, probes, &np);
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
