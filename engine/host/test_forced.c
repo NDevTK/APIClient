@@ -17116,15 +17116,20 @@ TF_UNIT void probes_rxfunc(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `b64coerce` document (fixture/b64coerce.h): atob ran the page's toString once and decoded
-   what it answered. */
+/* The rows of the `b64coerce` document (fixture/b64coerce.h): atob and btoa each ran the page's toString once
+   and decoded or encoded what it answered. */
 TF_UNIT void probes_b64coerce(const char *js, Probe *tab, int *n) {
     const char *a_why = NULL; int a_tt = 1;
     fold_row(&a_tt, &a_why, param_value_is(js, "/api/b64c-atob", "got", "ab-3"),
              "no /api/b64c-atob?got=ab-3 record: atob did not decode what the page's toString answered after "
              "running it once");
+    const char *b_why = NULL; int b_tt = 1;
+    fold_row(&b_tt, &b_why, param_value_is(js, "/api/b64c-btoa", "got", "YWI=-6"),
+             "no /api/b64c-btoa?got=YWI=-6 record: btoa did not encode what the page's toString answered after "
+             "running it once");
     const Probe rows[] = {
         { "b64c-atob", a_tt, "/api/b64c-atob", SESS_EXPLORE, a_why },
+        { "b64c-btoa", b_tt, "/api/b64c-btoa", SESS_EXPLORE, b_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
