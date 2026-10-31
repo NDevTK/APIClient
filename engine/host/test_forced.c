@@ -20567,10 +20567,18 @@ TF_UNIT void probes_platform(const char *js, Probe *tab, int *n) {
     };
     const char *platalgo_why = NULL;
  int platalgo_tt = 1;
-    /* The whole-document negative over this document's `wrong` tokens, as node-algo's is over its own. */
-    fold_row(&platalgo_tt, &platalgo_why, !strstr(js, "wrong"),
-             "some statement of the platform document recorded its `wrong` token — or a §4.13.3 refusal "
-             "recorded `-wrongreason`, which is the right exception raised for the wrong reason");
+    /* The whole-document negative over this document's `wrong` tokens, as node-algo's is over its own; the
+       message carries the record text before the first one, so the statement is named. */
+    {
+        static char wrongat[320];
+        const char *w = strstr(js, "wrong"), *from = w;
+
+        while (from && from > js && w - from < 240 && memcmp(from, "/api/", 5) != 0) from--;
+        if (w)
+            snprintf(wrongat, sizeof wrongat, "some statement of the platform document recorded its `wrong` "
+                     "token, or a §4.13.3 refusal its `-wrongreason`: …%.*s", (int)(w - from + 12), from);
+        fold_row(&platalgo_tt, &platalgo_why, w == NULL, wrongat);
+    }
     /* §4.13: the async reaction's loop ran to its END across the preempts, not to some suspended partial. */
     fold_row(&platalgo_tt, &platalgo_why, !!strstr(js, "\"44850\""),
              "§4.13 the async reaction's loop ran to its END across the preempts");
