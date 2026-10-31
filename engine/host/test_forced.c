@@ -21683,10 +21683,33 @@ TF_UNIT void probes_libstate(const char *js, Probe *tab, int *n) {
     fold_row(&lu_tt, &lu_why, cl_witness_without(js, "/api/ls-ua", "\"assumed\":[]", "\"assumed\":[{"),
              "every sighting of /api/ls-ua assumed something: the user-agent test is over navigator.userAgent, a "
              "browser fact and not application state, so no world reaching the request assumes any");
+    /* The other arm of each environment test is reachable only against the example the engine computes for
+       the test, so every sighting behind it is forced. Without a computed example neither arm is observed and
+       the arm reads as derived. */
+    static const char LS_FORCED[] = "\"provenance\":\"forced\"";
+    EmittedRec rec[EMITTED_REC_MAX];
+    int nre = emitted_records(js, "/api/ls-random-eq", rec, EMITTED_REC_MAX), nri = 0;
+    for (int i = 0; i < nre; i++) nri += memmem(rec[i].b, rec[i].n, LS_FORCED, sizeof LS_FORCED - 1) != NULL;
+    const char *rp_why = NULL; int rp_tt = 1;
+    fold_row(&rp_tt, &rp_why, nre > 0,
+             "NOT REACHED: there is no /api/ls-random-eq record, so the expando comparison's equal arm never ran");
+    fold_row(&rp_tt, &rp_why, nre > 0 && nri == nre,
+             "a sighting of /api/ls-random-eq is not forced: the expando's example (the real replace run over "
+             "Math.random's example) says a function never equals it, so only a forced world reaches this arm");
+    int nue = emitted_records(js, "/api/ls-ua-ie", rec, EMITTED_REC_MAX), nui = 0;
+    for (int i = 0; i < nue; i++) nui += memmem(rec[i].b, rec[i].n, LS_FORCED, sizeof LS_FORCED - 1) != NULL;
+    const char *up_why = NULL; int up_tt = 1;
+    fold_row(&up_tt, &up_why, nue > 0,
+             "NOT REACHED: there is no /api/ls-ua-ie record, so the user-agent test's true arm never ran");
+    fold_row(&up_tt, &up_why, nue > 0 && nui == nue,
+             "a sighting of /api/ls-ua-ie is not forced: the test's example (the real RegExp test run over the "
+             "user agent this engine presents) is false, so only a forced world reaches this arm");
     const Probe rows[] = {
         { "ls-observed-world", lo_tt, "var lsState", SESS_EXPLORE, lo_why },
         { "ls-random-observed", lr_tt, "var lsExpando", SESS_EXPLORE, lr_why },
         { "ls-ua-observed", lu_tt, "var lsOldIE", SESS_EXPLORE, lu_why },
+        { "ls-random-predicted", rp_tt, "var lsExpando", SESS_EXPLORE, rp_why },
+        { "ls-ua-predicted", up_tt, "var lsOldIE", SESS_EXPLORE, up_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

@@ -5,7 +5,8 @@
    is served in sends the request without assuming anything of `lsState`. Two more requests sit behind tests
    jQuery's boot makes on every page: its expando (`version + Math.random()` with the non-digits removed)
    compared with a function, and a user-agent regular expression; both test environment unknowns, not
-   application state, so neither is an assumption.
+   application state, so neither is an assumption. Each test's other arm sends a request of its own, which only a
+   world forced against the test's example reaches: the example the engine computes for each test predicts it.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_LIBSTATE_H
@@ -25,8 +26,10 @@ static const char HTML_LIBSTATE[] =
     "var lsExpando = ('3.7.1' + Math.random()).replace(/\\D/g, '');"
     "function lsFn() {}"
     "if (lsFn !== lsExpando) fetch('/api/ls-random');"
+    "if (lsFn === lsExpando) fetch('/api/ls-random-eq');"
     "var lsOldIE = /Trident\\/|MSIE /.test(navigator.userAgent);"
     "if (!lsOldIE) fetch('/api/ls-ua');"
+    "if (lsOldIE) fetch('/api/ls-ua-ie');"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
