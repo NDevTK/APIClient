@@ -1245,6 +1245,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbkphash.h"
 #include "fixture/idbkpcycle.h"
 #include "fixture/idbkpinject.h"
+#include "fixture/fpakey.h"
 #include "fixture/fileparsedrop.h"
 #include "fixture/fileparseworker.h"
 #include "fixture/workererror.h"
@@ -1795,6 +1796,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkphash", HTML_IDBKPHASH },
     { "idbkpcycle", HTML_IDBKPCYCLE },
     { "idbkpinject", HTML_IDBKPINJECT },
+    { "fpakey", HTML_FPAKEY },
     { "fileparse-drop", HTML_FILEPARSE_DROP },
     { "fileparse-worker", HTML_FILEPARSE_WORKER },
     { "fileparse-worker-copy", HTML_FILEPARSE_WORKER_COPY },
@@ -17211,6 +17213,24 @@ TF_UNIT void probes_idbkpinject(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fpakey` document (fixture/fpakey.h): an unknown `accept` key runs step 2.1's refusal world
+   and its valid world, each with the record holding that one key. */
+TF_UNIT void probes_fpakey(const char *js, Probe *tab, int *n) {
+    const char *i_why = NULL; int i_tt = 1;
+    fold_row(&i_tt, &i_why, param_value_is(js, "/api/fpk-pick", "got", "TypeError-key-1"),
+             "no /api/fpk-pick?got=TypeError-key-1 record: no arm refused the record's one unknown key as a MIME "
+             "type");
+    const char *v_why = NULL; int v_tt = 1;
+    fold_row(&v_tt, &v_why, param_value_is(js, "/api/fpk-pick", "got", "SecurityError-1"),
+             "no /api/fpk-pick?got=SecurityError-1 record: no arm took the record's one unknown key as a valid "
+             "MIME type and reached §3.1 step 4");
+    const Probe rows[] = {
+        { "fpk-invalid", i_tt, "/api/fpk-pick", SESS_EXPLORE, i_why },
+        { "fpk-valid", v_tt, "/api/fpk-pick", SESS_EXPLORE, v_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `spaniso` document (fixture/spaniso.h): the write arm ran, and the sibling read its own
    element, as a concrete 5 on every record, after the writer stored at an unknown index into the shared buffer. */
 TF_UNIT void probes_spaniso(const char *js, Probe *tab, int *n) {
@@ -21770,6 +21790,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkphash(js, probes, &np);
     probes_idbkpcycle(js, probes, &np);
     probes_idbkpinject(js, probes, &np);
+    probes_fpakey(js, probes, &np);
     probes_fileparse_drop(js, probes, &np);
     probes_fileparse_worker(js, probes, &np);
     probes_fileparse_worker_copy(js, probes, &np);
