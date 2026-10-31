@@ -759,7 +759,8 @@ static void js_usp_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->pairs);
 }
 
-/* §6.2 step 5.2's key conversion is to USVString, which every String and no Symbol is. */
+/* §6.2 step 5.2's key conversion is to USVString, which every String and no Symbol is. An unknown key is
+   converted at UC_PAIR_NAME_STR, as an unknown value is. */
 static int usp_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
 {
     (void)user;
@@ -1056,7 +1057,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         UC_GOTO(hdr, s, UC_DONE);
         return JS_STEP_YIELD;
     }
-    JS_FreeValue(ctx, s->item[0]); s->item[0] = JS_DupValue(ctx, s->rec.name);
+    JS_FreeValue(ctx, s->item[0]); s->item[0] = JS_DupValue(ctx, s->rec.key);
     JS_FreeValue(ctx, s->item[1]); s->item[1] = JS_DupValue(ctx, s->rec.value);
     s->after_pair = UC_KEY_PAIR;
     UC_GOTO(hdr, s, UC_PAIR_NAME_STR);

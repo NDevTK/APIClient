@@ -257,15 +257,16 @@ int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCons
             }
             JS_FreeValue(ctx, desc);
             if (!keep) { c->i++; c->phase = RC_NEXT_KEY; continue; }
-            if (key_ok && key_ok(ctx, c->name, user) < 0) return -1;
             /* The key the conversion receives is the enumerated name as a value, spelled as the language's
-               own enumerations spell it, so a member the engine named for an unknown hands the unknown on. */
+               own enumerations spell it, so a member the engine named for an unknown hands the unknown on;
+               step 4.2.1 converts that value, never the name's composed bytes. */
             a = JS_ValueToAtom(ctx, c->name);
             if (a == JS_ATOM_NULL) return -1;
             JS_FreeValue(ctx, c->key);
             c->key = JS_EnumKeyValue(ctx, a);
             JS_FreeAtom(ctx, a);
             if (JS_IsException(c->key)) { c->key = JS_UNDEFINED; return -1; }
+            if (key_ok && key_ok(ctx, c->key, user) < 0) return -1;
             c->phase = RC_VALUE_ASKED;
         }
         DCHECK(c->phase == RC_VALUE_ASKED, "the record cursor was re-entered at a phase it never parks in");

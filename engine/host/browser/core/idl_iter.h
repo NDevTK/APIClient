@@ -106,11 +106,9 @@ void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method)
    `new Headers({a:1})` and `new URLSearchParams({a:1})` are one algorithm.
    `key_ok` runs on the key BEFORE the value's [[Get]] is issued, because §3.2.23 step 4.2.1 converts the key
    first and a record of {a:"b", "\uFFFF":"d"} must therefore perform five operations and not six. It runs none
-   of the page's code (the key is already a String or a Symbol); return -1 with a throw live to stop.
-   Named residual. Not covered: Headers and URLSearchParams convert `name`, so a member named for an unknown
-   reaches them as its composed bytes. Next diff: both take `key` and keep an unknown name's shape as they
-   already keep an unknown value's. How its absence shows: `new Headers(e.data)` over an unknown message
-   sends a header whose name is concrete text no run computed. */
+   of the page's code; it is handed `key`, a String, a Symbol, or the unknown a minted name stands for, and
+   returns -1 with a throw live to stop. A consumer reads `key` for step 4.2.1's key and never `name`, which is
+   the property key the cursor looks members up by. */
 typedef struct {
     uint8_t phase;
     int     i, n;               /* the cursor into the key list, and how many keys there are */

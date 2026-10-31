@@ -1284,6 +1284,11 @@ static int headers_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
         JS_ThrowTypeError(ctx, "a Symbol is not a valid header name");
         return -1;
     }
+    /* An unknown key's ByteString range is a partition of its domain (the throw arm and the name that passes),
+       and §5.1's name check and guard are two more; none is forked yet. */
+    DCHECK(!concolic_is(key),
+           "a Headers record key is unknown input, and Web IDL §3.2.11's ByteString range and §5.1's header-name "
+           "check have no fork over it; build both as forks over the key's domain, the name keeping its shape");
     kn = JS_ToCStringLen(ctx, &kn_len, key);
     if (!kn) return -1;
     r = headers_bytestring(ctx, kn, kn_len, "name");
@@ -1454,7 +1459,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             if (r < 0) return -1;
             in = JS_UNDEFINED;
             if (f->rec.done) return 0;
-            JS_FreeValue(ctx, f->name);  f->name = JS_DupValue(ctx, f->rec.name);
+            JS_FreeValue(ctx, f->name);  f->name = JS_DupValue(ctx, f->rec.key);
             JS_FreeValue(ctx, f->value); f->value = JS_DupValue(ctx, f->rec.value);
             f->phase = FILL_VALUE_STR;
         }
@@ -1465,12 +1470,6 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
            runtime value the reviewer has to supply. This is the same explicit projection fetch_park asks for on
            the URL, for the same reason. */
         DCHECK(f->phase == FILL_VALUE_STR, "the headers fill was re-entered at a phase it never parks in");
-        /* AN UNKNOWN VALUE KEEPS ITS SHAPE. A header built out of external input — `{'Authorization': 'Bearer '
-           + token}` where the token is server-injected — is a CONCOLIC, and coercing it would either abort at
-           the ToString boundary or, worse, quietly de-taint it into some concrete-looking string. Its shape is
-           the display form the @H surface reports, and the `{hole}` in it is exactly what marks the header as a
-           runtime value the reviewer has to supply. This is the same explicit projection fetch_park asks for on
-           the URL, for the same reason. */
         if (concolic_is(f->value)) {
             const char *sh = concolic_shape_c(f->value);
             JSValue sv = JS_NewString(ctx, sh ? sh : "{}");
