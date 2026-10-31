@@ -175,6 +175,9 @@ bool idb_key_path_has_unknown(JSContext *ctx, JSValueConst path)
     return false;
 }
 
+/* §2.5's language of valid key path strings, as the language facet names it. */
+static const ConcolicLang IDB_KEY_PATH_LANG = { idb_key_path_is_valid, "a", "a..b" };
+
 /* One string of a key path. An unknown one forks, outcome 0 valid; `real` is §2.5 run on its example. Each arm
    files its membership of §2.5's language. The string is borrowed from the converted argument the machine
    holds. */
@@ -198,7 +201,7 @@ static int idb_key_path_string_valid_run(JSContext *ctx, JSStepHdr *hdr, JSValue
     JS_FreeValue(ctx, ex);
     r = step_fork_run(ctx, hdr, v, "Indexed Database §2.5 valid key path", 2, real, &arm);
     if (r) return r;
-    concolic_lang_file(v, idb_key_path_is_valid, arm == 0);
+    concolic_lang_file(v, &IDB_KEY_PATH_LANG, arm == 0);
     *pvalid = arm == 0;
     if (arm == 0) (*decided)++;
     return 0;

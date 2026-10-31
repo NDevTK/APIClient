@@ -173,6 +173,10 @@ static bool picker_mime_parse_paramless(const char *s, size_t len, bool want_par
 static bool picker_mime_parses(const char *s, size_t len) { return picker_mime_parse_paramless(s, len, false); }
 static bool picker_mime_paramless(const char *s, size_t len) { return picker_mime_parse_paramless(s, len, true); }
 
+static const ConcolicLang PICKER_SUFFIX_LANG = { picker_suffix_valid, ".txt", "txt" };
+static const ConcolicLang PICKER_MIME_LANG = { picker_mime_parses, "text/plain", "text" };
+static const ConcolicLang PICKER_PARAMLESS_LANG = { picker_mime_paramless, "text/plain", "text/plain;a=b" };
+
 /* The unknown keys and suffixes one pass of process accept types has met, in order, against how many this flow
    already decided valid: the pass re-runs from step 1 on every entry of its stage, so one decided on an earlier
    entry is answered from `decided` rather than asked again, and a refusal ends the pass. `decided` lives on the
@@ -205,7 +209,7 @@ static int picker_validate_unknown_suffix(JSContext *ctx, PickerAsk *ask, JSValu
     JS_FreeValue(ctx, ex);
     r = step_fork_run(ctx, ask->hdr, suffix, "File System Access §3.2.1 validate a suffix", 2, real, &arm);
     if (r) return r;
-    concolic_lang_file(suffix, picker_suffix_valid, arm == 0);
+    concolic_lang_file(suffix, &PICKER_SUFFIX_LANG, arm == 0);
     if (arm == 1) {
         JS_ThrowTypeError(ctx, "a file picker suffix is not a valid suffix");
         return -1;
@@ -242,10 +246,10 @@ static int picker_validate_unknown_key(JSContext *ctx, PickerAsk *ask, JSValueCo
                       "(parse a MIME type from the accept key)", 3, real, &arm);
     if (r) return r;
     if (arm == 1) {
-        concolic_lang_file(key, picker_mime_parses, 0);
+        concolic_lang_file(key, &PICKER_MIME_LANG, 0);
     } else {
-        concolic_lang_file(key, picker_mime_parses, 1);
-        concolic_lang_file(key, picker_mime_paramless, arm == 0);
+        concolic_lang_file(key, &PICKER_MIME_LANG, 1);
+        concolic_lang_file(key, &PICKER_PARAMLESS_LANG, arm == 0);
     }
     if (arm == 1) {
         JS_ThrowTypeError(ctx, "a file picker accept key is not a valid MIME type");

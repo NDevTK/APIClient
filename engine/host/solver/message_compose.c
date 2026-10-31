@@ -5,7 +5,8 @@
  * spelled: the member reads under the root (concolic_members_each) are the nodes, and each node's facets are what
  * the flow filed on it — a pinned literal (concolic_src_pin), the types still open (concolic_types), its
  * truthiness (concolic_value_truth), the tokens an equality proved it is not (concolic_excluded), the loose
- * equalities that held, an ordering bound, and the string call predicates on either arm. A node with members is
+ * equalities that held, an ordering bound, the string call predicates on either arm, and the languages a
+ * component decided it is in or out of (concolic_lang_admits, drawn from concolic_lang_exemplars). A node with members is
  * an object; the injection node holds the payload; any other node holds the simplest JSON value its facets
  * admit, and a node nothing constrained is left out. A facet it cannot satisfy refuses the composition, naming
  * the facet and the node.
@@ -165,11 +166,35 @@ static int bound_number(const Rows *r, const char *src, int truth, char *out, si
     return 0;
 }
 
-/* A string the facets admit: empty unless truthy, and not a token an equality excluded. */
-static void emit_string(JsonBuf *b, const char *src, int truth)
+/* Does `s` satisfy every string facet on `src`: the truthiness the path decided, no excluded token, every call
+   predicate on its arm, and every language the flow filed the source in or out of. */
+static int string_admitted(const Rows *r, const char *src, int truth, const char *s)
+{
+    if ((truth == 1 && !*s) || (truth == 0 && *s)) return 0;
+    if (excluded(src, s) || !concolic_lang_admits(src, s)) return 0;
+    for (int i = 0; i < r->npred; i++) if (pred_satisfied(&r->pred[i], s) != 1) return 0;
+    return 1;
+}
+
+/* `base`, a string the other facets built, where the language facet admits it, else the first exemplar of a
+   filed language that every facet admits; NULL, refused naming the facet, where neither is. */
+static const char *lang_choose(Compose *c, const Rows *r, const char *src, int truth, const char *base)
+{
+    const char *ex[16];
+    int n = concolic_lang_exemplars(src, ex, 16);
+
+    if (concolic_lang_admits(src, base)) return base;
+    for (int i = 0; i < n; i++) if (string_admitted(r, src, truth, ex[i])) return ex[i];
+    refuse(c, "a language facet no string this composition draws satisfies", src);
+    return NULL;
+}
+
+/* A string the facets admit: empty unless truthy, not a token an equality excluded, and in the languages filed. */
+static void emit_string(Compose *c, JsonBuf *b, const Rows *r, const char *src, int truth)
 {
     char tok[16] = "";
     size_t len = truth == 1 ? 1 : 0;
+    const char *s;
 
     for (;; len++) {
         memset(tok, 'x', len);
@@ -177,7 +202,8 @@ static void emit_string(JsonBuf *b, const char *src, int truth)
         if (!excluded(src, tok)) break;
         CHECK(len < sizeof tok - 1, "message compose: every short string was excluded");
     }
-    json_buf_str(b, tok);
+    s = lang_choose(c, r, src, truth, tok);
+    if (s) json_buf_str(b, s);
 }
 
 static void emit_node(Compose *c, JsonBuf *b, const Node *node, int *omitted);
@@ -220,7 +246,7 @@ static void emit_node(Compose *c, JsonBuf *b, const Node *node, int *omitted)
     unsigned types = concolic_types(node->src);
     int truth = concolic_value_truth(node->ident);
     ConcolicLit kind;
-    const char *val;
+    const char *val, *lang;
     Rows dr;
 
     *omitted = 0;
@@ -235,7 +261,10 @@ static void emit_node(Compose *c, JsonBuf *b, const Node *node, int *omitted)
     }
     if (concolic_src_pin(node->src, &kind, &val)) {
         switch (kind) {
-        case CONCOLIC_LIT_STRING: json_buf_str(b, val); goto done;
+        case CONCOLIC_LIT_STRING:
+            if (!concolic_lang_admits(node->src, val)) refuse(c, "a pinned string its language facet excludes", node->src);
+            else json_buf_str(b, val);
+            goto done;
         case CONCOLIC_LIT_BOOL: case CONCOLIC_LIT_NULL: json_buf_raw(b, val); goto done;
         case CONCOLIC_LIT_NUMBER:
             if (strcmp(val, "NaN") && !strstr(val, "Infinity")) { json_buf_raw(b, val); goto done; }
@@ -275,7 +304,11 @@ static void emit_node(Compose *c, JsonBuf *b, const Node *node, int *omitted)
             goto done;
         }
         switch ((ConcolicLit)dr.leq[0].kind) {
-        case CONCOLIC_LIT_STRING: json_buf_str(b, dr.leq[0].tok); goto done;
+        case CONCOLIC_LIT_STRING:
+            if (!concolic_lang_admits(node->src, dr.leq[0].tok))
+                refuse(c, "a loose equality's string its language facet excludes", node->src);
+            else json_buf_str(b, dr.leq[0].tok);
+            goto done;
         case CONCOLIC_LIT_NUMBER: case CONCOLIC_LIT_BOOL: case CONCOLIC_LIT_NULL: json_buf_raw(b, dr.leq[0].tok); goto done;
         case CONCOLIC_LIT_UNDEFINED: *omitted = 1; goto done;
         default: refuse(c, "a loose equality whose operand JSON does not spell", node->src); goto done;
@@ -288,7 +321,8 @@ static void emit_node(Compose *c, JsonBuf *b, const Node *node, int *omitted)
         if (!(types & CONCOLIC_TYF_STRING)) { refuse(c, "call predicates on a value whose facets admit no string", node->src); goto done; }
         str = pred_string(&dr, node->src, truth, &why);
         if (!str) { refuse(c, why, node->src); goto done; }
-        json_buf_str(b, str);
+        lang = lang_choose(c, &dr, node->src, truth, str);
+        if (lang) json_buf_str(b, lang);
         free(str);
         goto done;
     }
@@ -302,8 +336,12 @@ static void emit_node(Compose *c, JsonBuf *b, const Node *node, int *omitted)
         json_buf_raw(b, num);
         goto done;
     }
-    if (types == CONCOLIC_TYF_ALL && truth < 0) { *omitted = 1; goto done; }   /* nothing constrained it */
-    if (types & CONCOLIC_TYF_STRING) { emit_string(b, node->src, truth); goto done; }
+    /* nothing constrained it */
+    if (types == CONCOLIC_TYF_ALL && truth < 0 && !concolic_lang_exemplars(node->src, &lang, 1)) {
+        *omitted = 1;
+        goto done;
+    }
+    if (types & CONCOLIC_TYF_STRING) { emit_string(c, b, &dr, node->src, truth); goto done; }
     if ((types & CONCOLIC_TYF_NUMBER) && !excluded(node->src, truth == 1 ? "1" : "0")) {
         json_buf_raw(b, truth == 1 ? "1" : "0");
         goto done;

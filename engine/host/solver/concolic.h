@@ -1217,15 +1217,23 @@ int         concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds
 int         concolic_equality_outcome(JSContext *ctx, JSValueConst cond);
 /* A SOURCE'S LANGUAGE FACET: a component's algorithm decided, by forking over unknown input, whether the String
    it converted the source to is a member of a language that algorithm defines (a valid key path, a valid
-   suffix). `in` is the component's recognizer over UTF-8 bytes; `member` is the arm the flow took. Filed on
-   `v`'s own src in the running flow's constraint, where concolic_equality_outcome reads it: a strict equality
-   against a String the facet excludes takes only its failing arm. Up to 16 recognizers per agent.
-   Named residual. Not covered: a value that does not own its src (a derivation) files nothing, and a delivery
-   composed at the source does not consult the facet. Next diff: the @S composer draws a candidate the
-   recognizer admits, and a derivation files under its own identity. How its absence shows: a fired candidate
-   at such a source that the component refuses on the re-fire. */
-typedef bool (*ConcolicLangFn)(const char *s, size_t len);
-void        concolic_lang_file(JSValueConst v, ConcolicLangFn in, int member);
+   suffix). The language is the component's recognizer over UTF-8 bytes with one String in it and one not, which
+   the @S composer draws from; `member` is the arm the flow took. Filed on `v`'s own src in the running flow's
+   constraint, where concolic_equality_outcome reads it: a strict equality against a String the facet excludes
+   takes only its failing arm. Up to 16 languages per agent.
+   Named residual. Not covered: a value that does not own its src (a derivation) files nothing. Next diff: a
+   derivation files under its own identity. How its absence shows: a strict equality over a value derived from
+   such a source keeps an arm the source's language excludes. */
+typedef struct {
+    bool       (*in)(const char *s, size_t len);
+    const char  *member, *nonmember;
+} ConcolicLang;
+void        concolic_lang_file(JSValueConst v, const ConcolicLang *lang, int member);
+/* Whether `tok` can be `src`'s String under the language facet the running flow filed on it (1 where none is). */
+int         concolic_lang_admits(const char *src, const char *tok);
+/* The exemplar of each language the running flow filed `src` in or out of, in filing order: its member where
+   the flow filed it in, its nonmember where out. Borrowed; returns how many were written, at most `cap`. */
+int         concolic_lang_exemplars(const char *src, const char **out, int cap);
 /* An ordering against a finite Number narrows its subject's type facet on the arm the flow took (`holds`): no
    arm admits a Symbol and a holding one no Undefined (§7.2.12 IsLessThan ( x, y, leftFirst )). A call through a
    member read narrows the parent at the call itself (concolic.c's tyf_callable_member). */

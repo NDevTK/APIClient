@@ -4402,23 +4402,26 @@ int concolic_equality_facet(JSContext *ctx, JSValueConst cond, int holds)
 
 /* The recognizers a language facet names, in the order the agent first filed them: a bit is an index here. They
    are code, the same in every flow, so the table is the agent's and only the bits are a flow's. */
-static ConcolicLangFn g_langs[16];
+static const ConcolicLang *g_langs[16];
 static int g_nlangs;
 
-void concolic_lang_file(JSValueConst v, ConcolicLangFn in, int member)
+void concolic_lang_file(JSValueConst v, const ConcolicLang *lang, int member)
 {
     const Concolic *c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
     Cons *e;
     int b;
 
-    DCHECK(c != NULL && in != NULL && (member == 0 || member == 1),
-           "a language facet was filed on a value that is not unknown input, or with no recognizer or arm");
+    DCHECK(c != NULL && lang != NULL && lang->in != NULL && (member == 0 || member == 1),
+           "a language facet was filed on a value that is not unknown input, or with no language or arm");
     if (c->src_own != 1 || !c->src) return;
-    for (b = 0; b < g_nlangs && g_langs[b] != in; b++) {}
+    for (b = 0; b < g_nlangs && g_langs[b] != lang; b++) {}
     if (b == g_nlangs) {
         CHECK(g_nlangs < (int)(sizeof g_langs / sizeof g_langs[0]),
               "concolic: more language recognizers than a facet has bits");
-        g_langs[g_nlangs++] = in;
+        DCHECKF(lang->in(lang->member, strlen(lang->member)) && !lang->in(lang->nonmember, strlen(lang->nonmember)),
+                "a language's exemplars disagree with its recognizer: member \"%s\", nonmember \"%s\"",
+                lang->member, lang->nonmember);
+        g_langs[g_nlangs++] = lang;
     }
     e = cons_entry(c->src);
     if (member) e->lang_in |= (unsigned short)(1u << b);
@@ -4427,8 +4430,7 @@ void concolic_lang_file(JSValueConst v, ConcolicLangFn in, int member)
             "component forked over membership it had already decided", c->src);
 }
 
-/* Whether the String `tok` can be the subject's value under the language facet its src carries. */
-static int lang_admits(const char *subject, const char *tok)
+int concolic_lang_admits(const char *subject, const char *tok)
 {
     const Cons *e = subject && g_nlangs ? cons_lookup(subject) : NULL;
     size_t len = strlen(tok);
@@ -4439,9 +4441,23 @@ static int lang_admits(const char *subject, const char *tok)
         unsigned bit = 1u << b;
 
         if (!((e->lang_in | e->lang_out) & bit)) continue;
-        if (!g_langs[b](tok, len) != !(e->lang_in & bit)) return 0;
+        if (!g_langs[b]->in(tok, len) != !(e->lang_in & bit)) return 0;
     }
     return 1;
+}
+
+int concolic_lang_exemplars(const char *src, const char **out, int cap)
+{
+    const Cons *e = src && g_nlangs ? cons_lookup(src) : NULL;
+    int b, n = 0;
+
+    for (b = 0; e && b < g_nlangs && n < cap; b++) {
+        unsigned bit = 1u << b;
+
+        if (e->lang_in & bit) out[n++] = g_langs[b]->member;
+        else if (e->lang_out & bit) out[n++] = g_langs[b]->nonmember;
+    }
+    return n;
 }
 
 int concolic_equality_outcome(JSContext *ctx, JSValueConst cond)
@@ -4458,7 +4474,7 @@ int concolic_equality_outcome(JSContext *ctx, JSValueConst cond)
     /* A strict equality with a String holds only for that String, which is its own ToString; a loose one
        compares through ToNumber and is left to the type facet. */
     if (!c->cmp_typeof && c->cmp_algo != JS_CONCOLIC_EQ_LOOSE && c->cmp_kind == CONCOLIC_LIT_STRING &&
-        !lang_admits(subject, c->cmp_tok))
+        !concolic_lang_admits(subject, c->cmp_tok))
         can_hold = 0;
     types = c->cmp_subj_types & (subject ? concolic_types(subject) : CONCOLIC_TYF_ALL);
     DCHECKF(types & (can_hold | can_fail),
