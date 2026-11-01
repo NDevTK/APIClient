@@ -17101,6 +17101,8 @@ TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
           "[[GetOwnProperty]] through a trapless Proxy did not forward to the target's named access" },
         { "px-assign", "/api/proxynamed", "assign", "true", "false",
           "Object.assign from the Document did not write its named properties onto the target" },
+        { "wn-in", "/api/proxynamed", "win", "true", "false",
+          "`in` over the WindowProxy did not walk W's prototype chain to WindowProperties' named access" },
     };
     Probe rows[sizeof R / sizeof R[0]];
     for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {

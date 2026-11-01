@@ -42840,8 +42840,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                algorithm, so it stops here rather than walking. */
                             if (unlikely(hres < 0)) goto getprop_throw;
                             ret_val = JS_FALSE;
-                        } else if (hp->shape->proto) {
-                            gp_obj = JS_MKPTR(JS_TAG_OBJECT, hp->shape->proto);
+                        } else if (js_walk_proto(ctx, hp)) {
+                            /* the next link as every ordinary walk takes it (js_walk_proto): a WindowProxy's
+                               is its class's (HTML §7.2.3.1 [[GetPrototypeOf]] ( ), W's prototype), not its
+                               stored one */
+                            gp_obj = JS_MKPTR(JS_TAG_OBJECT, js_walk_proto(ctx, hp));
                             gp_recv = gp_recv_r; gp_no_throw = gp_nothrow_r;
                             if (gp_trapst) { js_trapget_free(ctx, gp_trapst); gp_trapst = NULL; }
                             goto do_getprop_tramp;

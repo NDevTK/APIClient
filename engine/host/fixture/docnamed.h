@@ -19,6 +19,7 @@
    function, and a spread whose array iterator lost its own `next` reaches `<img name=next>`; each throws a TypeError.
    A Proxy with no traps over the Document or WindowProperties forwards `in` and [[GetOwnProperty]] to its target's
    named access. Object.assign copies the Document's named properties onto its target, the receiver of each write.
+   `in` over the WindowProxy walks W's chain to WindowProperties.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_DOCNAMED_H
@@ -107,9 +108,10 @@ static const char HTML_DOCNAMED[] =
     "var pxDd = Object.getOwnPropertyDescriptor(pxD, 'dnObj'), pxWd = Object.getOwnPropertyDescriptor(pxW, 'dnObj');"
     "var pxGopd = !!pxDd && pxDd.enumerable && pxDd.value instanceof HTMLObjectElement &&"
     " !!pxWd && !pxWd.enumerable && pxWd.writable && Object.prototype.hasOwnProperty.call(pxD, 'dnObj');"
+    "var pxWin = 'dnObj' in window && 'dnObj' in self && Reflect.has(window, 'dnObj') && !('dnNoSuch' in window);"
     "var pxTo = Object.assign({}, document);"
     "var pxAssign = pxTo.dnObj instanceof HTMLObjectElement && Object.prototype.hasOwnProperty.call(pxTo, 'dnObj');"
-    "fetch('/api/proxynamed?has=' + pxHas + '&gopd=' + pxGopd + '&assign=' + pxAssign);"
+    "fetch('/api/proxynamed?has=' + pxHas + '&gopd=' + pxGopd + '&assign=' + pxAssign + '&win=' + pxWin);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
