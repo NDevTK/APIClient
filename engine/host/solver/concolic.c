@@ -2507,6 +2507,16 @@ static int src_row(const char *p, size_t n)
     return -1;
 }
 
+/* The named-access row (concolic_declare_named_source) a whole root is, or -1: a member read extends that row's
+   path only off the named value itself, and a joint root is a derivation over several operands, never that
+   value. Asked apart from root_declared_row, which answers which source carries a value's bytes. */
+static int root_named_access_row(const char *root)
+{
+    int row = src_row(root, strlen(root));
+
+    return row >= 0 && g_srcs[row].path ? row : -1;
+}
+
 /* Which declared source a root names, over a root that may name several: the one walk both registry readers
  * below share. An exact strcmp would match no row for a joint root and answer 0 / NULL, which the report reads
  * as the positive statement "no component carries these bytes".
@@ -4048,7 +4058,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     {
         JSValue mex;
         int held = c->ex_has && example_member(ctx, c->example, atom, &mex);
-        int nrow = c->root ? root_declared_row(c->root) : -1;
+        int nrow = c->root ? root_named_access_row(c->root) : -1;
         char *nsrc = NULL;
 
         /* A member of an element named access reached over unknown markup is reached along a longer path, so
