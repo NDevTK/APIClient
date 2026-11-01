@@ -810,10 +810,17 @@ char *result_wfq_json(void) {
     {
         char *rows = strdup("{\"sites\":[");
         for (int k = 0; k < w.never_top_n && rows; k++) {
-            char *next = composef("%s%s{\"kind\":%d,\"key\":\"%016llx\",\"seen\":%lld,\"served\":%lld,"
-                                  "\"members\":%ld}", rows, k ? "," : "", w.never_top[k].kind,
-                                  (unsigned long long)w.never_top[k].key, (long long)w.never_top[k].seen,
-                                  (long long)w.never_top[k].served, w.never_top[k].members);
+            JsonBuf wb = JSON_BUF_AT_REST;
+            char *where;
+            char *next;
+
+            json_buf_str(&wb, w.never_top[k].where);
+            where = json_buf_take(&wb);
+            next = composef("%s%s{\"kind\":%d,\"key\":\"%016llx\",\"seen\":%lld,\"served\":%lld,"
+                            "\"members\":%ld,\"where\":%s}", rows, k ? "," : "", w.never_top[k].kind,
+                            (unsigned long long)w.never_top[k].key, (long long)w.never_top[k].seen,
+                            (long long)w.never_top[k].served, w.never_top[k].members, where ? where : "\"\"");
+            free(where);
             free(rows);
             rows = next;
         }
