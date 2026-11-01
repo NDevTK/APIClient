@@ -58,6 +58,7 @@
 #include "core/html/html_style_element.h"
 #include "core/html/media_element.h"
 #include "core/html/html_image.h"
+#include "core/html/image_input_type.h"
 #include "core/html/html_link.h"
 #include "core/html/html_option.h"
 #include "core/html/html_dialog.h"   /* HTML §4.11.4's attribute change steps and removing steps, both below */
@@ -3113,6 +3114,9 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        (`img.src = u`, `setAttribute`, `attributes.src.value = u`) and the IDL reflection's setter answers for
        exactly one of them, which is how `<img>` came to reflect its address without ever requesting it. */
     html_image_attr_changed(rctx, el, ns, local);
+    /* HTML §4.10.5.1.19's trigger events for an Image Button's image, `type` entering the state and `src` set
+       or changed in it, for the same reason. */
+    image_input_attr_changed(rctx, el, ns, local);
     /* HTML §4.2.5.1's meta `referrer` also runs when the element "has its name or content attributes
        changed". */
     if (!(ns && *ns) && local && (!strcmp(local, "name") || !strcmp(local, "content")))

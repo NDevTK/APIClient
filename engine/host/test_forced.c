@@ -1215,6 +1215,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/flexreplaced.h"
 #include "fixture/gridreplaced.h"
 #include "fixture/imgpending.h"
+#include "fixture/imagebutton.h"
 #include "fixture/scrollarea.h"
 #include "fixture/scrollrestore.h"
 #include "fixture/travnav.h"
@@ -1796,6 +1797,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "flexreplaced", HTML_FLEXREPLACED },
     { "gridreplaced", HTML_GRIDREPLACED },
     { "imgpending", HTML_IMGPENDING },
+    { "imagebutton", HTML_IMAGEBUTTON },
     { "scrollarea", HTML_SCROLLAREA },
     { "scrollrestore", HTML_SCROLLRESTORE },
     { "scrollclamp", HTML_SCROLLCLAMP },
@@ -15932,6 +15934,39 @@ TF_UNIT void probes_imgpending(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `imagebutton` document (fixture/imagebutton.h); Chrome 153.0.8010.12 gives the event and
+   rule 1 values, and 57x16 for the two rule 2 boxes (see the fixture). */
+TF_UNIT void probes_imagebutton(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *addr, *want, *why; } R[] = {
+        { "image-button-parsed-load", "/api/ibA", "load:2x3",
+          "HTML §4.10.5.1.19: a parsed Image Button's loaded image is not its 2x3 box at `load`" },
+        { "image-button-script-load", "/api/ibE", "load:2x3",
+          "HTML §4.10.5.1.19: a script-made Image Button whose type was set before its src did not load as 2x3" },
+        { "image-button-error", "/api/ibB", "error:300x150",
+          "HTML §15.4.2 rule 2: a corrupt image with no alt did not fire `error` as a 300x150 replaced box" },
+        { "image-button-no-src", "/api/ibC", "300x150",
+          "HTML §15.4.2 rule 2: an Image Button with no src and no alt is not a 300x150 box" },
+    };
+    Probe rows[COUNTOF(R) + 1];
+    const char *src_why = NULL; int src_tt = 1;
+    unsigned i;
+
+    for (i = 0; i < COUNTOF(R); i++) {
+        const char *why = NULL;
+        int tt = 1;
+        char quoted[64];
+
+        snprintf(quoted, sizeof quoted, "\"%s\"", R[i].addr);
+        fold_row(&tt, &why, !!strstr(js, quoted), "NOT REACHED: there is no record of the row's address");
+        fold_row(&tt, &why, param_value_is(js, R[i].addr, "v", R[i].want), R[i].why);
+        rows[i] = (Probe){ R[i].row, tt, R[i].addr, SESS_EXPLORE, why };
+    }
+    fold_row(&src_tt, &src_why, emitted_record_has(js, "https://x.test/api/ibsrc.png", "\"door\":\"image-input\""),
+             "HTML §4.10.5.1.19: a parsed Image Button's src did not reach the surface under the image-input door");
+    rows[COUNTOF(R)] = (Probe){ "image-button-endpoint", src_tt, "/api/ibsrc.png", SESS_EXPLORE, src_why };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `scrollarea` document (fixture/scrollarea.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give
    every value they expect. The rest is read from the counter element_view.c raises where EV_VIEW_STEP yields
    inside the walk. */
@@ -22935,6 +22970,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_flexreplaced(js, probes, &np);
     probes_gridreplaced(js, probes, &np);
     probes_imgpending(js, probes, &np);
+    probes_imagebutton(js, probes, &np);
     probes_scrollarea(js, probes, &np);
     probes_scrollrestore(js, probes, &np);
     probes_travnav(js, probes, &np);

@@ -57,6 +57,7 @@
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"
 #include "core/html/html_image.h"
+#include "core/html/image_input_type.h"
 #include "core/html/html_audio.h"
 #include "core/html/html_option.h"
 #include "core/html/html_link.h"
@@ -1127,6 +1128,8 @@ void html_element_init(JSContext *ctx)
        here because HTMLImageElement is a row of the table above and `Image` is a global NAME this file owns
        the list of, exactly as §4.8.11's three interface objects are. */
     html_image_declare(ctx);
+    /* HTML §4.10.5.1.19's Image Button image record key, beside `img`'s for the same reason. */
+    image_input_declare(ctx);
     /* §4.8.9's `Audio` — the second of the three names HTML declares with Web IDL §3.7.2's
        `[LegacyFactoryFunction]`, declared beside `Image` because HTMLAudioElement is a row of the table above
        and because a legacy factory function is a global NAME, and this file owns the list of those. */
@@ -1663,6 +1666,7 @@ void html_element_free(JSRuntime *rt)
     html_canvas_element_free(rt);
     popover_free(rt);   /* §6.12's slot keys and member ids, and the top layer's two slot keys with them */
     media_element_free(rt);
+    image_input_free(rt);
     html_image_free(rt);
     html_audio_free(rt);
     html_option_free(rt);

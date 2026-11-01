@@ -107,6 +107,9 @@ typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
     /* HTML §4.8.4.3.5 "Updating the image data", its source set and its undecided arm. An `<img>` the      \
        parser built and one `new Image()` composed are one door. */                                          \
     X(EPD_IMAGE_ELEMENT,   "image-element", EPR_EITHER, EPB_DOCUMENT)                               \
+    /* HTML §4.10.5.1.19 "Image Button state (type=image)": an `<input type=image>`'s own image fetch, a   \
+       different algorithm from an `img`'s over the same destination. Markup and script reach it alike. */  \
+    X(EPD_IMAGE_INPUT,     "image-input", EPR_EITHER, EPB_DOCUMENT)                                 \
     /* a `<form action>` from the markup and one whose action a script wrote reach core/html/html_form.c's  \
        one recording pair alike */                                                                           \
     X(EPD_FORM_SUBMIT,     "form-submit", EPR_EITHER, EPB_DOCUMENT)                                 \

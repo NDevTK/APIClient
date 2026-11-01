@@ -29,6 +29,7 @@
 #include "core/html/media_element.h"
 #include "core/html/event_handler_attribute.h"
 #include "core/html/html_image.h"
+#include "core/html/image_input_type.h"
 #include "core/html/html_link.h"
 #include "core/html/html_dialog.h"
 #include "core/html/html_style_element.h"
@@ -2784,10 +2785,11 @@ int document_lifecycle_step(JSContext *ctx)
            only while the element is fetching, and a fetching script is on one of the lists step 5 or step 7
            waits for until it has run.
            Named residual. Not covered: `img` (§4.8.4.3.5 "Updating the image data": "When delay load event is true,
-           fetching the image must delay the load event of element's node document") and the media elements'
-           §4.8.11.5 "Loading the media resource" delaying-the-load-event flag. Next diff builds: each as a flag its
-           own element component raises and this predicate reads. How its absence would show: a document reaching
-           `load` before such an element finished. */
+           fetching the image must delay the load event of element's node document"), the Image Button
+           (§4.10.5.1.19: "Fetching the image must delay the load event of the element's node document") and the
+           media elements' §4.8.11.5 "Loading the media resource" delaying-the-load-event flag. Next diff builds:
+           each as a flag its own element component raises and this predicate reads. How its absence would show:
+           a document reaching `load` before such an element finished. */
         /* Step 7, the spin over the two as-soon-as-possible lists, asked before step 8's. */
         if (document_readiness(realm) == 1 && document_dcl_queued(realm) &&
             !engine_document_load_scripts_held(document_doc(realm)) &&
@@ -5170,6 +5172,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        §13.2.6.1's "create an element for a token" and its insertion is the parser's). This walk is what makes a
        document's own `<img src=…>` markup issue its request and gives its markup `onerror` something to fire it. */
     html_image_parsed(ctx, lxb_dom_interface_node(dom));
+    /* HTML §4.10.5.1.19 for the same tree: an Image Button's type is "first set to the Image Button state
+       (possibly when the element is first created)", which for a parsed element is a creation no attribute
+       change step sees. */
+    image_input_parsed(ctx, lxb_dom_interface_node(dom), lxb_dom_interface_node(dom));
     /* HTML §4.2.4 for the same tree and reason: §4.6.8.20's appropriate times are stated over an element that
        "becomes browsing-context connected", and a parser-inserted `<link>` becomes connected through the parser,
        not the mutation chokepoint, so the markup's `<link rel=preload>` elements are found here. After the

@@ -14,6 +14,7 @@
 #include "core/dom/element.h"       /* §2.6.1's `unsigned long` model — §4.12.5's bitmap reads one */
 #include "core/html/html_form.h"
 #include "core/html/html_image.h"
+#include "core/html/image_input_type.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/containment.h"
 #include "core/layout/replaced_element.h"
@@ -123,7 +124,7 @@ static ImgRepresents rep_img_represents(lxb_dom_element_t *el, HtmlImageState st
    Button state, according to the first applicable rules from the following list", so the arms are ordered.
    Rules 1 and 2 apply to both elements, rules 3 and 4 open "If the element is an img element", and rule 5 opens
    "If the element is an input element"; so the four arms below are the whole list for an `img`. The `input`
-   half is `replaced_element_of`'s `input` arm. */
+   half is `rep_image_button` below. */
 static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
 {
     bool complete = false;
@@ -195,6 +196,37 @@ static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
            "— the three preceding rules cover an image and text, and §4.8.3 gives an img exactly those three "
            "answers, so this is the two lists having come apart");
     return rep_sized(0.0, 0.0);
+}
+
+/* ---- HTML §15.4.2 "Images", the Image Button half ---------------------------------------------------------
+   HTML §4.10.5.1.19 "Image Button state (type=image)" says what the element represents: "If the src attribute
+   is set, and the image is available and the user agent is configured to display that image, then the element
+   represents a control for selecting a coordinate from the image"; "Otherwise, the element represents a submit
+   button whose label is given by the value of the alt attribute." Rules 3 and 4 open "If the element is an img
+   element", so rules 1, 2 and 5 are the list for an `input`. */
+static ReplacedElement rep_image_button(JSContext *ctx, lxb_dom_element_t *el)
+{
+    double w = 0.0, h = 0.0;
+    ImageInputImage image = image_input_image(ctx, el, &w, &h);
+
+    /* Rule 1: the element represents an image; its natural dimensions are the image header's. */
+    if (image == IMAGE_INPUT_AVAILABLE && rep_attr_present(el, "src")) return rep_sized(w, h);
+    /* Rule 2: "the user agent has reason to believe that the image will become available and be rendered in
+       due course" (a fetch outstanding), or "the element has no alt attribute". A replaced element with no
+       natural dimensions, which CSS 2.1 §10.3.2's last arm sizes 300 by 150. */
+    if (image == IMAGE_INPUT_FETCHING || !rep_attr_present(el, "alt")) return rep_bare();
+    DCHECK(lxb_dom_interface_node(el)->owner_document->compat_mode != LXB_DOM_DOCUMENT_CMODE_QUIRKS,
+           "HTML §15.4.2's second rule reached a quirks-mode Image Button and its third disjunct (\"the Document "
+           "is in quirks mode, and the element already has natural dimensions\") is not asked; an Image Button "
+           "supports dimension attributes. Build it with the `img` arm's");
+    /* Rule 5: "If the element is an input element that does not represent an image and the user agent does
+       not expect this to change: … a replaced element consisting of a button whose content is the element's
+       alternative text. The natural dimensions of the button are expected to be about one line in height and
+       whatever width is necessary to render the text on one line." The release arm is rule 2's box. */
+    DFAIL("HTML §15.4.2's fifth rule reached an Image Button with an alt attribute and no image: its natural "
+          "width is the alt text's advance on one line, and core/layout/text_run.h measures only DOM text "
+          "nodes. Build a text_run measure over supplied characters with a style element");
+    return rep_bare();
 }
 
 /* ---- HTML §4.12.5 "The canvas element": one dimension of the element's bitmap ------------------------------
@@ -423,45 +455,14 @@ static ReplacedElement rep_classify(lxb_dom_element_t *el)
                "whether the element is an `input`, so this is the tag dispatch here and the tag test in "
                "core/html/html_form.c disagreeing about one element");
         if (state != INPUT_STATE_IMAGE) return rep_not();
-        /* Always fatal: past a compiled-out assert, release would read an `img` image request off an `input`'s
-           wrapper and feed the result into §10.3.2. That is a data-integrity failure (check.h's `CHECK`). */
-        CHECK_FAIL("HTML §15.4.2 \"Images\"' rules were reached for an `input` in §4.10.5.1.19 \"Image Button state "
-              "(type=image)\"'s state, and every one of them turns on what the element REPRESENTS — which for "
-              "this element is §4.10.5.1.19's own two-case sentence and NOT §4.8.3's five-case one that "
-              "`rep_img_represents` above implements: \"If the src attribute is set, and the image is "
-              "available and the user agent is configured to display that image, then the element represents a "
-              "control for selecting a coordinate from the image specified by the src attribute\", and "
-              "\"Otherwise, the element represents a submit button whose label is given by the value of the "
-              "alt attribute.\" BOTH CASES TURN ON THE IMAGE REQUEST AND THIS ELEMENT HAS NONE. §4.10.5.1.19 "
-              "is what would create it — \"Let request be a new request whose URL is url, client is the "
-              "element's node document's relevant settings object, destination is \\\"image\\\", initiator "
-              "type is \\\"input\\\", credentials mode is \\\"include\\\", and whose use-URL-credentials flag "
-              "is set.\" — and nothing in this engine queues those steps for an `input`: "
-              "core/html/html_image.c runs §4.8.4.3's processing model for `img` ALONE and asserts it, so "
-              "`html_image_current_request_state` would abort on this element rather than answer for it. BUILD "
-              "§4.10.5.1.19's fetch, its `load`/`error` element tasks on the user interaction task source, and "
-              "the delay it puts on the document's load event; the request is also an ENDPOINT this tool "
-              "exists to find, so what the absence costs is more than a box size. THEN HTML §15.4.2 \"Images\"' "
-              "list runs here with THREE arms reachable for an `input` and not five. Its FIRST rule (the "
-              "element represents an image) needs the same DECODER `rep_img`'s first rule does. Its SECOND "
-              "gives a replaced element with no natural dimensions — HTML §15.4.2: \"For input elements, the "
-              "element is expected to appear button-like to indicate that the element is a button.\" — which "
-              "CSS 2.1 §10.3.2's last arm then sizes 300 by 150. Its THIRD and FOURTH open HTML §15.4.2's "
-              "\"If the element is an img element\" and cannot apply here at all. ITS FIFTH IS THE INPUT'S OWN "
-              "and is the one this file previously mislabelled as a four-rule list — HTML §15.4.2: \"The user "
-              "agent is expected to treat the element as a replaced element consisting of a button whose "
-              "content is the element's alternative text.\" THE CLAIM THAT ITS WIDTH IS A READ WAS WRONG AND "
-              "IS DELETED. HTML §15.4.2 states that rule's natural dimensions as \"about one line in height "
-              "and whatever width is necessary to render the text on one line\", and this line used to send the "
-              "reader to core/layout/intrinsic_size.h for the second as though it were already answered. IT IS "
-              "NOT, for two reasons that are each on their own decisive: `intrinsic_inline_sizes` CRASHES BY "
-              "NAME on its first step for a REPLACED element, which is what §15.4.2's fifth rule has just made "
-              "this one, and its walk measures a box's CHILDREN while an `input` has none — the label is the "
-              "`alt` attribute's value, a string that is nowhere in the tree. What is genuinely needed is an "
-              "advance measure over a STRING, and core/layout/text_run.h's collection takes DOM TEXT NODES "
-              "(`text_run_measure_text_begin` asserts its node's type and its parent), so BUILD that entry "
-              "there — one run over supplied characters carrying a style element — which §15.5.12's button "
-              "label needs too and is the reason it belongs in that component rather than here");
+        dctx = rep_scripting_realm(n);
+        if (dctx == NULL)
+            /* Always fatal, as for an `img` below: the image is a record on the element's wrapper, and a
+               document no navigable presents has no realm to read it from. */
+            CHECK_FAIL("HTML §15.4.2 \"Images\"' rules were asked about an Image Button in a document no "
+                       "navigable presents, so no realm holds its image. Build CSSOM §9's missing conjunct over "
+                       "core/dom/element_view.h's `element_view_has_box`, as for an `img`");
+        return rep_image_button(dctx, el);
     }
 
     /* Every other tag on §15.4's list has returned or failed fatally by now in both builds, so this is a

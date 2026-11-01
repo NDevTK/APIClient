@@ -25,7 +25,7 @@ static const char HTML_DOCNAMED[] =
     "<form name='dnDup'></form><img name='dnDup' src='/dn2.png'>"
     "<object id='dnObj'></object><img id='dnBare'><img id='dnImg' name='dnImgName' src='/dn3.png'>"
     "<img name='location' src='/dn4.png'><img name='title' src='/dn5.png'><img id='wnSetMe'>"
-    "<form id='fmA' action='/api/fmact'><input name='action'><input type='image' name='fmIb' hidden><div id='fmDiv'></div>"
+    "<form id='fmA' action='/api/fmact'><input name='action'><input type='image' name='fmIb'><div id='fmDiv'></div>"
     "<img name='fmPic' src='/dn6.png'><input id='fmOld' name='fmOld'></form><input name='fmExt' form='fmA'>"
     "<script>"
     "var dnOv = document.getElementById instanceof HTMLImageElement;"

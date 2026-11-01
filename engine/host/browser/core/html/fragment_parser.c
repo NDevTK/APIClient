@@ -34,6 +34,7 @@
 #include "core/html/html_script.h"
 #include "core/html/media_element.h"
 #include "core/html/event_handler_attribute.h"
+#include "core/html/image_input_type.h"
 #include "core/html/sanitizer.h"
 #include "core/idl_args.h"
 #include "solver/dom_cow.h"
@@ -453,6 +454,11 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
            AFTER the declarative-shadow conversion, and the walk is shadow-including, for the media walk's
            reason: a handler attribute inside a `<template shadowrootmode>` moved with the contents. */
         event_handler_attribute_parsed(ctx, s->frag);
+        /* HTML §4.10.5.1.19 over the fragment, at creation like the handlers above: an Image Button's type is
+           "first set to the Image Button state (possibly when the element is first created)", and creation is
+           here, not at insertion. The target's node document decides whether its image is fetched, so a
+           template's contents fetch nothing. */
+        image_input_parsed(ctx, s->frag, s->anchor);
         /* NO §4.8.4.3.2 WALK OVER THIS FRAGMENT, and that is a statement rather than an omission. An `img`'s
            mutation list already contains "the img HTML element insertion steps", and every node of this
            fragment that reaches a document goes through §4.2.3 insert step 7's shadow-including inclusive

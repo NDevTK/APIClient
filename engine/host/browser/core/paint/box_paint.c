@@ -23,7 +23,8 @@
 #include "core/html/html_canvas_element.h" /* canvas_bitmap_get — HTML §15.4.1's "the contents of such
                                               elements are the element's bitmap, if any" */
 #include "core/html/html_image.h"    /* html_image_decoded_rgba — CSS 2.1 §E.2's "the replaced content", for
-                                        the one replaced element that fetches its own */
+                                        an `img` */
+#include "core/html/image_input_type.h"   /* image_input_decoded_rgba — an Image Button's image */
 #include "core/layout/block_flow.h"  /* CSS 2.2 §9.2.1.1's TWO shapes of one inline formatting context */
 #include "core/layout/box_tree.h"   /* css-display-3 §2.5's spliced child sequence — the range this walk steps */
 #include "core/layout/containment.h"
@@ -493,6 +494,24 @@ static bool bp_replaced_image(BpState *st, lxb_dom_element_t *el)
     return true;
 }
 
+/* HTML §15.4.2 "Images"' first rule for an `input` in HTML §4.10.5.1.19 "Image Button state (type=image)":
+ * the image's pixels, when it has them. Rule 2's box holds the text the element represents, which for an
+ * element with no alt attribute is none, and an image still being fetched has nothing yet; both lay no mark.
+ * Named residual: rule 5's button content, the alt text, is not painted. Next: the text_run measure over a
+ * supplied string that rule 5's size needs, then a glyph run here. Absence shows as an Image Button with an
+ * alt attribute and no image laying no ink inside its box. */
+static bool bp_replaced_image_button(BpState *st, lxb_dom_element_t *el)
+{
+    uint8_t *rgba;
+    uint32_t w = 0, h = 0;
+
+    rgba = image_input_decoded_rgba(st->ctx, el, &w, &h);
+    if (rgba == NULL) { bp_decline(st, BOX_PAINT_DECLINE_NO_REPLACED_CONTENT); return true; }
+    bp_composite_content_box(st, el, rgba, w, h);
+    free(rgba);
+    return true;
+}
+
 /* HTML §15.4.1 "Embedded content"'s CANVAS SENTENCE, ENTIRE — "A canvas element that represents embedded
  * content is expected to be treated as a replaced element; the contents of such elements are the element's
  * bitmap, if any, or else a transparent black bitmap with the same natural dimensions as the element."
@@ -567,9 +586,8 @@ static bool bp_replaced_canvas(BpState *st, lxb_dom_element_t *el)
  *
  * THE TAIL IS A GUARD AND NOT A GAP. The set of elements that reach here is core/layout/replaced_element.c's
  * `replaced_element_of`, a closed list of HTML tags plus the outermost `svg` — an `audio`, an `object`
- * and every `input` but §4.10.5.1.19's image button answer `rep_not` there, and that file's image-button arm
- * is an always-fatal CHECK of its own — so the six arms above are total at this revision and a seventh is that
- * component gaining a row. The crash therefore names THAT file, because the remedy is an arm here written
+ * and every `input` but §4.10.5.1.19's image button answer `rep_not` there — so the seven arms above are
+ * total at this revision and an eighth is that component gaining a row. The crash therefore names THAT file, because the remedy is an arm here written
  * against whatever sentence made the new element replaced.
  *
  * IT RETURNS TRUE ON A REFUSAL, which is this file's own convention and is worth saying because the opposite
@@ -605,6 +623,7 @@ static bool bp_replaced_content(BpState *st, lxb_dom_element_t *el)
            "component having come apart");
     if (lxb_html_tree_node_is(n, LXB_TAG_IMG)) return bp_replaced_image(st, el);
     if (lxb_html_tree_node_is(n, LXB_TAG_CANVAS)) return bp_replaced_canvas(st, el);
+    if (lxb_html_tree_node_is(n, LXB_TAG_INPUT)) return bp_replaced_image_button(st, el);
     /* THE THREE THAT REPRESENT NOTHING THIS AGENT CAN COMPOSITE — see the residual above for which sentence
        makes each of them empty. They are spelled out rather than folded into the tail so that the tail stays
        a statement about `replaced_element_of` growing a row. */
@@ -621,8 +640,8 @@ static bool bp_replaced_content(BpState *st, lxb_dom_element_t *el)
     }
     DFAIL("CSS 2.1 §E.2 \"Painting order\"'s \"the replaced content, atomically\" was offered for an element "
           "this painter has no arm for. The arms here are the closed list core/layout/replaced_element.c's "
-          "`replaced_element_of` answers `replaced` for — `img`, `canvas`, `iframe`, `video`, `embed` and the "
-          "outermost `svg` — so "
+          "`replaced_element_of` answers `replaced` for — `img`, `canvas`, an Image Button `input`, `iframe`, "
+          "`video`, `embed` and the outermost `svg` — so "
           "reaching this line means THAT file gained a row and this one did not. BUILD the arm here, against "
           "the sentence that made the new element replaced: HTML §15.4.1 \"Embedded content\" states one per "
           "element and names what each one's contents ARE, which is the operand the arm needs");
