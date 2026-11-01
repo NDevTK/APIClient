@@ -563,7 +563,8 @@ void        concolic_set_deliveries(char *const *srcs, char *const *vals, int n)
 int         concolic_path_gates(const char *root,
                                 void (*cb)(void *ud, const char *src, const char *equals, int composable), void *ud);
 /* The precondition token of the first declared precondition source (concolic_declare_source_precondition) the
-   running flow's path pinned a value of, or NULL: a path that took the arm where app state holds a value. */
+   running flow's path pinned a present value of (neither null nor undefined), or NULL: a path that took the arm
+   where app state holds a value. */
 const char *concolic_path_precondition(void);
 /* The running flow's gates: further deliveries of the attacker sources its search's path pinned (`srcs` and the
    Strings `vals` they were pinned to, concolic_path_gates), installed after its candidate and its deliveries at

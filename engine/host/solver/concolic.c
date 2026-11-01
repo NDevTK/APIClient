@@ -3601,7 +3601,11 @@ const char *concolic_path_precondition(void)
     for (int j = 0; j < g_pres_n; j++) {
         const Cons *c = cons_lookup(g_pres[j].src);
 
-        if (c && c->val) return precondition_token(g_pres[j].kind);
+        /* A null or undefined pin is the state's absence, which a victim who never ran this app's own write
+           holds; only a present value is a link the PoC rests on. */
+        if (c && c->val && c->valkind != (signed char)CONCOLIC_LIT_NULL &&
+            c->valkind != (signed char)CONCOLIC_LIT_UNDEFINED)
+            return precondition_token(g_pres[j].kind);
     }
     return NULL;
 }
