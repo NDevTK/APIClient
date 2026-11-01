@@ -56,9 +56,9 @@ typedef struct FlowSite FlowSite;
 #define FLOW_STEP_RETIRED 3
 
 /* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
-   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/(1 + site_served/pull_work + orphan_seen)
-   + ((-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N) - (assumed + against_env)*A))`, with
-   Q = FLOW_AGE_QUANTUM and A = FLOW_ASSUMPTION_COST. `coord_notch` is the family notch plus the carry bit;
+   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/(1 + site_served/pull_work + orphan_seen
+   + (assumed + against_env)*P) + (-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N))`, with
+   Q = FLOW_AGE_QUANTUM and P = FLOW_PRICED_PULLS. `coord_notch` is the family notch plus the carry bit;
    `site_served` is the work the member's code site has received in its family and `pull_work` the quantum it is
    counted in (ENGINE_PULL_WORK).
    `visits` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
@@ -81,7 +81,7 @@ typedef struct {
     double age_quantum;   /* FLOW_AGE_QUANTUM, which the two notches are priced at */
     int64_t assumed;      /* flow_assumed */
     int64_t against_env;  /* flow_against_env */
-    double assume_cost;   /* FLOW_ASSUMPTION_COST, which each assumption and each against_env is priced at */
+    int64_t priced_pulls; /* FLOW_PRICED_PULLS, the pulls each assumption and each against_env adds */
     int host_owed, running;
     FlowUnitAt unit;
     int next_arm, next_sited;   /* Flow.next_arm1 - 1 (-1: never stood by a step end) and Flow.next_sited */
@@ -115,7 +115,6 @@ typedef struct FlowIxTreap {
     int64_t notch;
     double replay, surv;
     int rung;
-    int64_t priced;   /* flow_priced */
     uint64_t seq, floor;
     uint64_t prio;
     struct FlowIxNode *cls;
@@ -235,8 +234,9 @@ typedef struct Flow {
     /* This flow's node in the fork tree: minted with the flow, attached under its parent's by flow_fork_inherit,
        and refcounted so `family` stays addressable while any descendant can read it. See flow.c. */
     FlowAcct *acct;
-    /* The code site this member stands at in its family's ledger (flow.c's FlowSite): the optimism term reads the
-       service that site has received. Moved by flow_stand_at and flow_set_orphan_seen, copied at a fork, NULL only
+    /* The class this member stands in at a code site of its family's ledger (flow.c's FlowSite): the optimism term
+       reads the service that code site has received, beside the member's own drive count and priced decisions.
+       Moved by flow_stand_at, flow_set_orphan_seen and a change of the priced count, set at a fork, NULL only
        outside the frontier. Owned by the family root. */
     FlowSite *at;
     /* An observation no term reads: one plus the ladder rung (engine.c's NextArm) flow_next_unit answered at this
@@ -353,8 +353,8 @@ typedef struct Flow {
     /* How many drives of this body's identity (solver/novelty.h's NOVELTY_DRIVE: quickjs's content locator)
        were known when this drive was seeded: the product's, from every other document and session of this
        cluster, and this instance's own earlier drives of it, a second compile of the same bytes included. A
-       term of the optimism denominator, `1/(1 + pulls + orphan_seen)`, and part of the site's identity, so
-       members of one site read one denominator: explored code is lowered and never removed. Written once, at the
+       term of the optimism denominator, `1/(1 + pulls + orphan_seen + ...)`, and part of the standing class's
+       identity, so members of one class read one denominator: explored code is lowered and never removed. Written once, at the
        seed (flow_set_orphan_seen), before the drive is dispatched, and copied by a fork; 0 for every flow that is
        not a seeded drive, a resumed one included (its own recorded drive is the drive it resumes). */
     int64_t orphan_seen;
@@ -1088,7 +1088,6 @@ typedef struct {
     long never_picked;
     double never_picked_gap;
     long assumed_members, assumed_sum, assumed_max;   /* flow_assumed over the members: above zero, sum, max */
-    long priced_max;   /* flow_assumed plus flow_against_env, the most any member is priced for */
     /* How many never-picked members stand exactly at the front (weight == `w_top`): the N of the tie above. A
        small N is a sweep in progress; a large N is an order whose within-family terms no longer separate
        anything, so `g_flows` position decides the pick. On a one-family frontier the reward and the family
@@ -1506,7 +1505,8 @@ typedef struct {
        behind the observed one. `present` 0 and gap 0.0 where no assumed member stands. */
     double assumed_w_gap;
     FlowWeightOperands assumed_top_ops, assumed_ops;
-    /* Where the never-dispatched members stand: how many distinct ledger sites (FlowSite, per family and `seen`),
+    /* Where the never-dispatched members stand: how many distinct standing classes (FlowSite, per family, code
+       site, `seen` and priced count),
        how many distinct code identities (`kind`, `key`) across families, how many of those sites have received
        no service, and the five sites holding the most of them. The same two counts over every member beside. */
     long never_sites, never_codes, never_sites_unserved, all_sites, all_codes;
@@ -1781,14 +1781,16 @@ const Flow *flow_running_cascade_writes(uint64_t *gen);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
 /* The member stands at a code site (FlowSite's identity): a code position named by quickjs's JS_RunningSiteHash
-   (or a program's entry, by its content digest), or a driven body named by its orphan hash. Moves it to that site's ledger in its family and
-   raises a rank change. */
+   (or a program's entry, by its content digest), or a driven body named by its orphan hash. Moves it to its class
+   at that code site in its family and raises a rank change. */
 #define FLOW_SITE_CODE  1
 #define FLOW_SITE_DRIVE 2
 void  flow_stand_at(Flow *f, int kind, uint64_t key);
-/* The member's optimism denominator in work, `Q*(1 + orphan_seen) + site_served` with Q = ENGINE_PULL_WORK:
-   engine.c's rank assertions snapshot it. */
+/* The member's optimism denominator in work, `Q*(1 + orphan_seen + P*priced) + site_served` with
+   Q = ENGINE_PULL_WORK and P = FLOW_PRICED_PULLS: engine.c's rank assertions snapshot it. */
 int64_t flow_optimism_den(const Flow *f);
+/* The work the code site the member stands at has received in its family. */
+int64_t flow_site_served(const Flow *f);
 /* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */
 /* Takes `act` (may be NULL); `doc` is the member's document ordinal. `repeat` admits a body the chain already holds:
    a listener driven again is the next event, where a take hands a body over once per timeline. */

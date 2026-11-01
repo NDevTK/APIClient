@@ -768,9 +768,9 @@ char *result_wfq_json(void) {
     METRIC_SET_REAL(cur_deep_wgap, w.cur_deep_w_gap);
     if (w.cur_deep_top_ops.present) {
         char *top = weight_operands_json(&w.cur_deep_top_ops), *deep = weight_operands_json(&w.cur_deep_ops);
-        terms = composef("{\"ageQuantum\":%.17g,\"assumeCost\":%.17g,\"rungs\":%d,\"gap\":%.17g,"
+        terms = composef("{\"ageQuantum\":%.17g,\"pricedPulls\":%lld,\"rungs\":%d,\"gap\":%.17g,"
                          "\"top\":%s,\"deep\":%s}",
-                         w.cur_deep_top_ops.age_quantum, w.cur_deep_top_ops.assume_cost, FLOW_RUNGS_N,
+                         w.cur_deep_top_ops.age_quantum, (long long)w.cur_deep_top_ops.priced_pulls, FLOW_RUNGS_N,
                          w.cur_deep_w_gap, top, deep);
         CHECK(top && deep && terms, "result: OOM composing the curDeepWGap operands");
         METRIC_SET_OBJECT(cur_deep_terms, terms);   /* borrowed until the rows are rendered below */
@@ -780,9 +780,9 @@ char *result_wfq_json(void) {
     }
     if (w.never_picked_top_ops.present) {
         char *top = weight_operands_json(&w.never_picked_top_ops), *never = weight_operands_json(&w.never_picked_ops);
-        never_terms = composef("{\"ageQuantum\":%.17g,\"assumeCost\":%.17g,\"rungs\":%d,\"gap\":%.17g,"
+        never_terms = composef("{\"ageQuantum\":%.17g,\"pricedPulls\":%lld,\"rungs\":%d,\"gap\":%.17g,"
                                "\"top\":%s,\"never\":%s}",
-                               w.never_picked_top_ops.age_quantum, w.never_picked_top_ops.assume_cost,
+                               w.never_picked_top_ops.age_quantum, (long long)w.never_picked_top_ops.priced_pulls,
                                FLOW_RUNGS_N, w.never_picked_gap, top, never);
         CHECK(top && never && never_terms, "result: OOM composing the neverPickedGap operands");
         METRIC_SET_OBJECT(never_picked_terms, never_terms);   /* borrowed until the rows are rendered below */
@@ -794,9 +794,9 @@ char *result_wfq_json(void) {
     METRIC_SET_REAL(observed_wgap, w.observed_w_gap);
     if (w.observed_top_ops.present) {
         char *top = weight_operands_json(&w.observed_top_ops), *obs = weight_operands_json(&w.observed_ops);
-        observed_terms = composef("{\"ageQuantum\":%.17g,\"assumeCost\":%.17g,\"rungs\":%d,\"gap\":%.17g,"
+        observed_terms = composef("{\"ageQuantum\":%.17g,\"pricedPulls\":%lld,\"rungs\":%d,\"gap\":%.17g,"
                                   "\"top\":%s,\"observed\":%s}",
-                                  w.observed_top_ops.age_quantum, w.observed_top_ops.assume_cost,
+                                  w.observed_top_ops.age_quantum, (long long)w.observed_top_ops.priced_pulls,
                                   FLOW_RUNGS_N, w.observed_w_gap, top, obs);
         CHECK(top && obs && observed_terms, "result: OOM composing the observedWGap operands");
         METRIC_SET_OBJECT(observed_terms, observed_terms);   /* borrowed until the rows are rendered below */
@@ -843,9 +843,9 @@ char *result_wfq_json(void) {
     }
     if (w.assumed_top_ops.present) {
         char *top = weight_operands_json(&w.assumed_top_ops), *as = weight_operands_json(&w.assumed_ops);
-        assumed_terms = composef("{\"ageQuantum\":%.17g,\"assumeCost\":%.17g,\"rungs\":%d,\"gap\":%.17g,"
+        assumed_terms = composef("{\"ageQuantum\":%.17g,\"pricedPulls\":%lld,\"rungs\":%d,\"gap\":%.17g,"
                                  "\"top\":%s,\"assumed\":%s}",
-                                 w.assumed_top_ops.age_quantum, w.assumed_top_ops.assume_cost,
+                                 w.assumed_top_ops.age_quantum, (long long)w.assumed_top_ops.priced_pulls,
                                  FLOW_RUNGS_N, w.assumed_w_gap, top, as);
         CHECK(top && as && assumed_terms, "result: OOM composing the assumedWGap operands");
         METRIC_SET_OBJECT(assumed_terms, assumed_terms);   /* borrowed until the rows are rendered below */

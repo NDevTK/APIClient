@@ -10,21 +10,23 @@ import { fileURLToPath } from "node:url";
 const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pullWork", "visits", "orphanSeen",
                     "replay", "surv", "rung", "assumed", "againstEnv", "picks", "hostOwed", "running"];
 
-/* The five terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The
-   aging is split into its family half (in `coord`, with the reward) and its own half; the optimism is read off the
-   member's site (`siteServed` in quanta of `pullWork`). `visits` is an operand the row carries and no term
-   reads. */
-function termsOf(o, q, a, rungs, where) {
+/* The terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The aging is
+   split into its family half (in `coord`, with the reward) and its own half; the optimism is read off the member's
+   site (`siteServed` in quanta of `pullWork`) with each priced decision adding `p` pulls, and `assume` is how much
+   of it the priced decisions took (the optimism less its unpriced reading), so `opt + assume` is the term the
+   weight sums. `visits` is an operand the row carries and no term reads. */
+function termsOf(o, q, p, rungs, where) {
   for (const k of END_FIELDS)
     if (typeof o[k] !== "number")
       throw new Error(`${where}: a curDeepTerms end carries no number \`${k}\` — solver/result.c's ` +
                       `weight_operands_json writes all of ${END_FIELDS.join(", ")}`);
   const coord = o.reward - o.coordNotch * q;
   const own = -o.ownNotch * q;
+  const priced = 1.0 / (1.0 + o.siteServed / o.pullWork + o.orphanSeen + (o.assumed + o.againstEnv) * p);
   const opt = 1.0 / (1.0 + o.siteServed / o.pullWork + o.orphanSeen);
   const dist = (o.replay + o.surv + o.rung) / rungs;
-  const assume = -(o.assumed + o.againstEnv) * a;
-  const w = coord + (opt + ((own + dist) + assume));
+  const assume = priced - opt;
+  const w = coord + (priced + (own + dist));
   if (w !== o.w)
     throw new Error(`${where}: a curDeepTerms end does not recompose to its weight (published ${o.w}, ` +
                     `recomposed ${w}) — this reader and solver/flow.c's flow_weight_recompose compose ` +
@@ -36,11 +38,11 @@ function termsOf(o, q, a, rungs, where) {
    the gap recomposed exactly from the two weights. Null when the census carries no such row. */
 function termSplit(t, far, row, where) {
   if (t === undefined || t === null) return null;
-  if (typeof t.ageQuantum !== "number" || typeof t.assumeCost !== "number" || typeof t.rungs !== "number" ||
+  if (typeof t.ageQuantum !== "number" || typeof t.pricedPulls !== "number" || typeof t.rungs !== "number" ||
       typeof t.gap !== "number")
-    throw new Error(`${where}: ${row} carries no number ageQuantum, assumeCost, rungs and gap`);
-  const top = termsOf(t.top, t.ageQuantum, t.assumeCost, t.rungs, where + " (top)");
-  const end = termsOf(t[far], t.ageQuantum, t.assumeCost, t.rungs, where + ` (${far})`);
+    throw new Error(`${where}: ${row} carries no number ageQuantum, pricedPulls, rungs and gap`);
+  const top = termsOf(t.top, t.ageQuantum, t.pricedPulls, t.rungs, where + " (top)");
+  const end = termsOf(t[far], t.ageQuantum, t.pricedPulls, t.rungs, where + ` (${far})`);
   if (top.w - end.w !== t.gap)
     throw new Error(`${where}: the ${row} gap recomposed from its two weights (${top.w - end.w}) is not the ` +
                     `gap the census computed (${t.gap})`);

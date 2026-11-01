@@ -138,6 +138,8 @@ static uint64_t g_running_switches = 0;
  * its owning flow and by every live child's `up`, so the ancestry is addressable exactly as long as something below
  * it can be charged. `owner == NULL` is a flow that left the frontier: a charge walks past it to the nearest live
  * ancestor and compresses the run it walked (union-find's find), so a deep dead ancestry is paid for once. */
+typedef struct FlowCodeSite FlowCodeSite;
+
 typedef struct FlowAcct {
     Flow *owner;              /* the flow this node accounts for; NULL once it has left the frontier */
     /* The node of the flow this one was forked from; NULL for a from-baseline flow. Nothing charges through it and
@@ -278,9 +280,12 @@ typedef struct FlowAcct {
        generation on the first member of a scan that reaches its node rather than by a clearing pass. */
     unsigned fan_gen;
     long fan_n;
-    /* The family's code-site ledger (FlowSite), meaningful only on a root: a chained hash table of every site a
-       member has stood at, never shrunk while the family lives, so a site's service outlives its members. Freed
-       with the node. */
+    /* The family's code-site ledger (FlowCodeSite), meaningful only on a root: a chained hash table of every code
+       site a member has stood at, never shrunk while the family lives, so a site's service outlives its members;
+       and the standing classes (FlowSite) members stand in, a chained hash table of the classes holding a member.
+       Both freed with the node. */
+    FlowCodeSite **codes;
+    size_t codes_cap, codes_n;
     FlowSite **sites;
     size_t sites_cap, sites_n;
     /* The order's index (the flow_ix_* banner), meaningful only on a root: the roots of its three site heaps (the
@@ -292,36 +297,47 @@ typedef struct FlowAcct {
     Flow *away_head;
 } FlowAcct;
 
-/* One code site in one family's ledger: where members stand, and the service the family has given members
-   dispatched from there. Level 2's UCB bonus is optimism over that service, `1/(1 + pulls + seen)` with `pulls`
-   the service in quanta of work (Level 1's unit of a pull, a real number, so service shorter than a quantum
-   still counts), so the count a
-   member's optimism reads is the family's (a share the family owns, kept on the account), and every member at one
-   site reads it at every instant. A fork moves nothing: both arms stand at the parent's site. Service at a site
+/* One code site in one family's ledger: the service the family has given members dispatched from there. Level 2's
+   UCB bonus is optimism over that service, `1/(1 + pulls + ...)` with `pulls` the service in quanta of work (Level
+   1's unit of a pull, a real number, so service shorter than a quantum still counts), so the count a member's
+   optimism reads is the family's (a share the family owns, kept on the account), and every member at one code site
+   reads it at every instant. A fork moves nothing: both arms stand at the parent's code site. Service at a site
    lowers every member standing there at once, and an arm that reaches a site its family has not served stands at
-   full optimism.
-   The identity is (`kind`, `key`, `seen`): `kind` 0 is the site of a member that has decided nothing, FLOW_SITE_CODE
-   a code position (quickjs's JS_RunningSiteHash: the body's cross-session locator, which folds the bundle's
-   content digest, plus the opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a
-   driven body (its orphan hash). `seen` is the members' `orphan_seen`, part of the identity so the denominator is
-   one number per site. */
-/* A member stands where it last decided (the fork) or at the entry of the unit it last began (engine.c's
+   full optimism, less what its own operands price (FlowSite).
+   The identity is (`kind`, `key`): `kind` 0 is the site of a member that has decided nothing, FLOW_SITE_CODE a code
+   position (quickjs's JS_RunningSiteHash: the body's cross-session locator, which folds the bundle's content
+   digest, plus the opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a driven body
+   (its orphan hash).
+   A member stands where it last decided (the fork) or at the entry of the unit it last began (engine.c's
    flow_next_unit, asked after each step), so a quantum's service is charged to the decision whose subtree it runs.
    Where a quantum ended names no site: the quantum is the scheduler's rest granularity, so a key that moved with
    it would make optimism a function of the slice size.
-   Named residual. Not covered: a code site's service is split between the `seen` classes standing at it; and the
-   ledger is not parked, so a cold-resumed member stands at its family's keyless site at zero service. Next diff
-   builds: the ledger keyed by code site alone with `seen` beside it, and the ledger in the cold tier's family
-   record. Absence shows as: two drives of one body at one in-body decision splitting `served`, and a resumed session
-   re-serving sites from zero. */
-struct FlowSite {
-    FlowAcct *fam;              /* the family root whose ledger holds it; never NULL */
-    struct FlowSite *hnext;     /* its chain in `fam->sites` */
+   Named residual. Not covered: the ledger is not parked, so a cold-resumed member stands at its family's keyless
+   site at zero service. Next diff builds: the ledger in the cold tier's family record. Absence shows as: a resumed
+   session re-serving sites from zero. */
+struct FlowCodeSite {
+    FlowAcct *fam;                  /* the family root whose ledger holds it; never NULL */
+    struct FlowCodeSite *hnext;     /* its chain in `fam->codes` */
     int kind;
     uint64_t key;
+    int64_t served;                 /* lifetime: work charged to members while they were dispatched from here */
+    FlowSite *classes;              /* its standing classes that hold a member, linked through `cnext`/`cprev` */
+};
+
+/* One standing class at a code site: the members of one family at one code site whose own operands of the optimism
+   denominator agree, so that every member here reads one number, `offset`, and the order's index files the class as
+   one entry. The operands are `seen` (the members' `orphan_seen`: drives of the same body known elsewhere) and
+   `priced` (flow_priced: the decisions the member rests on that a world the page runs in would not take), each
+   added to the code site's pulls. A class holds nothing that outlives its members: the service is the code site's,
+   so the class is minted at its first member and freed at its last member's leaving. */
+struct FlowSite {
+    FlowAcct *fam;              /* the family root whose ledger holds it; never NULL */
+    FlowCodeSite *code;         /* the code site whose service it reads; never NULL */
+    struct FlowSite *hnext;     /* its chain in `fam->sites` */
+    struct FlowSite *cnext, *cprev;   /* its links in `code->classes` */
     int64_t seen;
-    int64_t served;             /* lifetime: work charged to members while they were dispatched from here */
-    double offset;              /* `1/(1 + served/ENGINE_PULL_WORK + seen)`, what every member here reads */
+    int64_t priced;
+    double offset;              /* site_optimism over the code site's service and the two operands */
     long members;               /* live members whose `at` names it */
     /* Its node in its family's site heap, set while it holds an indexed member (`ix_bin`), and in the family's
        tail heap under the same flag (`ix_bm`), its node in the family's never-dispatched heap (`ix_bnin`), the root
@@ -345,65 +361,114 @@ static long g_acct_live;
 static int64_t g_charged_work = 0;
 static int64_t g_branch_retired_work = 0;
 
-/* The optimism of a site from its operands, the one expression flow_site_reprice stores and the census operands
+/* The price of one priced decision (flow_priced: an assumption, or an arm against an environment unknown's
+   example), in pulls added to the optimism denominator of the member that rests on it. One pull is the
+   denominator's own unit, so a priced world reads its code site as if the world the page runs in had already been
+   given one quantum there: at code no member has served, that world's arm (1/1) runs before the priced arm (1/2);
+   once the code site has been served `s` pulls the two read 1/(1+s) and 1/(2+s), a gap that shrinks with the
+   service, so the priced world competes on the same terms once the site's optimism is spent, and an arm that
+   reaches unserved code still outranks a crowd at a served one. Any positive price orders unserved code that way;
+   a larger one would hold a priced world back by more pulls than that ordering needs, at every site it reaches. A
+   whole number keeps flow_optimism_den an exact integer in work. A cost and not a tier: nothing is dropped. */
+#define FLOW_PRICED_PULLS 1
+
+/* The optimism of a class from its operands, the one expression flow_site_reprice stores and the census operands
    recompose. */
-static double site_optimism(int64_t served, int64_t seen) {
-    return 1.0 / (1.0 + (double)served / (double)ENGINE_PULL_WORK + (double)seen);
+static double site_optimism(int64_t served, int64_t seen, int64_t priced) {
+    return 1.0 / (1.0 + (double)served / (double)ENGINE_PULL_WORK + (double)seen
+                  + (double)(priced * FLOW_PRICED_PULLS));
 }
 
 /* The optimism every member at `st` reads, asserted against the counts it is a function of, so a writer of `served`
-   or `seen` that skipped flow_site_reprice is caught at the next weighing. */
+   that skipped flow_code_reprice is caught at the next weighing. */
 static double site_offset(const FlowSite *st) {
-    DCHECKF(st->offset == site_optimism(st->served, st->seen),
-            "a site's optimism offset is stale against its counts (offset %.17g, served %lld, seen %lld) — "
-            "flow_site_reprice is the one writer of the offset and every writer of `served` or `seen` calls it",
-            st->offset, (long long)st->served, (long long)st->seen);
+    DCHECKF(st->offset == site_optimism(st->code->served, st->seen, st->priced),
+            "a class's optimism offset is stale against its counts (offset %.17g, served %lld, seen %lld, priced "
+            "%lld) — flow_site_reprice is the one writer of the offset and every writer of `served` calls "
+            "flow_code_reprice",
+            st->offset, (long long)st->code->served, (long long)st->seen, (long long)st->priced);
     return st->offset;
 }
 
 static void flow_site_reprice(FlowSite *st) {
-    st->offset = site_optimism(st->served, st->seen);
+    st->offset = site_optimism(st->code->served, st->seen, st->priced);
 }
 
-static size_t site_slot(int kind, uint64_t key, int64_t seen, size_t cap) {
-    uint64_t z = key ^ ((uint64_t)kind << 56) ^ ((uint64_t)seen * 0x9e3779b97f4a7c15ull);
+static size_t site_slot(int kind, uint64_t key, int64_t seen, int64_t priced, size_t cap) {
+    uint64_t z = key ^ ((uint64_t)kind << 56) ^ ((uint64_t)seen * 0x9e3779b97f4a7c15ull)
+                 ^ ((uint64_t)priced * 0xc2b2ae3d27d4eb4full);
     z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
     z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
     return (size_t)((z ^ (z >> 31)) & (cap - 1));
 }
 
-/* The site (`kind`, `key`, `seen`) in `fam`'s ledger, minted at zero service on first use. The table doubles at
-   load one, so a lookup is O(1) expected. */
-/* The site (`kind`, `key`, `seen`) in `fam`'s ledger if it has been minted, else NULL. A read. */
-static const FlowSite *flow_site_find(const FlowAcct *fam, int kind, uint64_t key, int64_t seen) {
-    const FlowSite *st;
+/* The code site (`kind`, `key`) in `fam`'s ledger if it has been minted, else NULL. A read. */
+static const FlowCodeSite *flow_code_find(const FlowAcct *fam, int kind, uint64_t key) {
+    const FlowCodeSite *c;
 
-    if (!fam || !fam->sites) return NULL;
-    for (st = fam->sites[site_slot(kind, key, seen, fam->sites_cap)]; st; st = st->hnext)
-        if (st->kind == kind && st->key == key && st->seen == seen) return st;
+    if (!fam || !fam->codes) return NULL;
+    for (c = fam->codes[site_slot(kind, key, 0, 0, fam->codes_cap)]; c; c = c->hnext)
+        if (c->kind == kind && c->key == key) return c;
     return NULL;
 }
 
-static FlowSite *flow_site_of(FlowAcct *fam, int kind, uint64_t key, int64_t seen) {
+/* The code site (`kind`, `key`) in `fam`'s ledger, minted at zero service on first use. The table doubles at load
+   one, so a lookup is O(1) expected. */
+static FlowCodeSite *flow_code_of(FlowAcct *fam, int kind, uint64_t key) {
+    FlowCodeSite *c = (FlowCodeSite *)flow_code_find(fam, kind, key);
+    size_t i;
+
+    if (c) return c;
+    if (fam->codes_n + 1 > fam->codes_cap) {
+        size_t cap = fam->codes_cap ? fam->codes_cap * 2 : 8;
+        FlowCodeSite **t = reclaim_calloc(cap, sizeof *t);
+        CHECK(t, "flow: OOM growing a family's code-site ledger");
+        for (size_t j = 0; j < fam->codes_cap; j++) {
+            FlowCodeSite *n = fam->codes[j];
+            while (n) {
+                FlowCodeSite *next = n->hnext;
+                size_t k = site_slot(n->kind, n->key, 0, 0, cap);
+                n->hnext = t[k]; t[k] = n;
+                n = next;
+            }
+        }
+        free(fam->codes);
+        fam->codes = t; fam->codes_cap = cap;
+    }
+    c = reclaim_calloc(1, sizeof *c);
+    CHECK(c, "flow: OOM minting a code site in a family's ledger");
+    c->fam = fam; c->kind = kind; c->key = key;
+    i = site_slot(kind, key, 0, 0, fam->codes_cap);
+    c->hnext = fam->codes[i]; fam->codes[i] = c;
+    fam->codes_n++;
+    return c;
+}
+
+/* The standing class (`kind`, `key`, `seen`, `priced`) in `fam`, minted on first use with no member; the caller
+   stands a member in it at once (flow_site_join), since a class is freed at its last member's leaving. */
+static FlowSite *flow_site_of(FlowAcct *fam, int kind, uint64_t key, int64_t seen, int64_t priced) {
+    FlowCodeSite *code;
     FlowSite *st;
     size_t i;
-    DCHECK(fam != NULL && fam->up == NULL && seen >= 0 &&
+    DCHECK(fam != NULL && fam->up == NULL && seen >= 0 && priced >= 0 &&
                (kind == 0 ? key == 0 : (kind == FLOW_SITE_CODE || kind == FLOW_SITE_DRIVE)),
-           "a code site was asked of a node that is not a family root, with a negative drive count, or with a kind "
-           "this ledger does not name — sites are the family's, and kind 0 is the one keyless site");
+           "a code site was asked of a node that is not a family root, with a negative drive or priced count, or "
+           "with a kind this ledger does not name — sites are the family's, and kind 0 is the one keyless site");
     if (fam->sites) {
-        for (st = fam->sites[site_slot(kind, key, seen, fam->sites_cap)]; st; st = st->hnext)
-            if (st->kind == kind && st->key == key && st->seen == seen) return st;
+        for (st = fam->sites[site_slot(kind, key, seen, priced, fam->sites_cap)]; st; st = st->hnext)
+            if (st->code->kind == kind && st->code->key == key && st->seen == seen && st->priced == priced)
+                return st;
     }
+    code = flow_code_of(fam, kind, key);
     if (fam->sites_n + 1 > fam->sites_cap) {
         size_t cap = fam->sites_cap ? fam->sites_cap * 2 : 8;
         FlowSite **t = reclaim_calloc(cap, sizeof *t);
-        CHECK(t, "flow: OOM growing a family's code-site ledger");
+        CHECK(t, "flow: OOM growing a family's standing classes");
         for (size_t j = 0; j < fam->sites_cap; j++) {
             FlowSite *n = fam->sites[j];
             while (n) {
                 FlowSite *next = n->hnext;
-                size_t k = site_slot(n->kind, n->key, n->seen, cap);
+                size_t k = site_slot(n->code->kind, n->code->key, n->seen, n->priced, cap);
                 n->hnext = t[k]; t[k] = n;
                 n = next;
             }
@@ -412,30 +477,65 @@ static FlowSite *flow_site_of(FlowAcct *fam, int kind, uint64_t key, int64_t see
         fam->sites = t; fam->sites_cap = cap;
     }
     st = reclaim_calloc(1, sizeof *st);
-    CHECK(st, "flow: OOM minting a code site in a family's ledger");
-    st->fam = fam; st->kind = kind; st->key = key; st->seen = seen;
+    CHECK(st, "flow: OOM minting a standing class in a family's ledger");
+    st->fam = fam; st->code = code; st->seen = seen; st->priced = priced;
     flow_site_reprice(st);
-    i = site_slot(kind, key, seen, fam->sites_cap);
+    i = site_slot(kind, key, seen, priced, fam->sites_cap);
     st->hnext = fam->sites[i]; fam->sites[i] = st;
     fam->sites_n++;
+    st->cnext = code->classes; st->cprev = NULL;
+    if (code->classes) code->classes->cprev = st;
+    code->classes = st;
     return st;
 }
 
-/* A node's ledger at its free: nothing may stand at or be indexed under any of its sites. */
+/* Stand `f`, which stands nowhere, in class `st`. */
+static void flow_site_join(Flow *f, FlowSite *st) {
+    DCHECK(f->at == NULL && st->fam != NULL, "a member was stood in a class while standing in another");
+    f->at = st;
+    st->members++;
+}
+
+/* Take `f` out of its class, freeing the class when it was the last member: nothing outlives the members but the
+   code site's service, which the class only reads. */
+static void flow_site_leave(Flow *f) {
+    FlowSite *st = f->at, **pp;
+
+    DCHECK(st != NULL && st->members > 0, "a member left a class it does not stand in, or one counting no member");
+    f->at = NULL;
+    if (--st->members > 0) return;
+    DCHECK(!st->ix_bin && !st->ix_bnin && !st->ix_members,
+           "a class lost its last member while still filed in the order's index — every member leaves the index "
+           "before it leaves its class");
+    for (pp = &st->fam->sites[site_slot(st->code->kind, st->code->key, st->seen, st->priced, st->fam->sites_cap)];
+         *pp != st; pp = &(*pp)->hnext)
+        DCHECK(*pp != NULL, "a class is missing from its family's chain");
+    *pp = st->hnext;
+    st->fam->sites_n--;
+    if (st->cprev) st->cprev->cnext = st->cnext; else st->code->classes = st->cnext;
+    if (st->cnext) st->cnext->cprev = st->cprev;
+    free(st);
+}
+
+/* A node's ledger at its free: no class may be left, since each is freed with its last member, and the code sites
+   go with the node. */
 static void acct_free_sites(FlowAcct *a) {
-    for (size_t j = 0; j < a->sites_cap; j++) {
-        FlowSite *n = a->sites[j];
+    DCHECK(a->sites_n == 0,
+           "a family's ledger was freed with a standing class still in it — every member leaves its class at "
+           "flow_remove or at the fork that moves it, and the class goes with its last member");
+    for (size_t j = 0; j < a->codes_cap; j++) {
+        FlowCodeSite *n = a->codes[j];
         while (n) {
-            FlowSite *next = n->hnext;
-            DCHECK(n->members == 0 && !n->ix_bin && !n->ix_bnin && !n->ix_members,
-                   "a code site was freed with members standing at it or still filed in the order's index — every "
-                   "member leaves its site at flow_remove or at the fork that moves it");
+            FlowCodeSite *next = n->hnext;
+            DCHECK(n->classes == NULL, "a code site was freed with a standing class still linked to it");
             free(n);
             n = next;
         }
     }
     free(a->sites);
+    free(a->codes);
     a->sites = NULL; a->sites_cap = a->sites_n = 0;
+    a->codes = NULL; a->codes_cap = a->codes_n = 0;
 }
 
 /* Drop a reference: refcount--, free at zero, continue into `up`. A loop, not recursion: the ancestry is as deep as
@@ -596,6 +696,7 @@ static void flow_owed_unlink(Flow *f);
 static void flow_ix_rekey(Flow *f);
 static void flow_ix_first_pick(Flow *f);
 static void flow_ix_site_sync(FlowSite *st);
+static int flow_priced(const Flow *f);
 static FlowAcct *g_ix_fams;   /* the families holding an indexed member, linked through `ix_fprev`/`ix_fnext` */
 static long g_ix_fams_n;      /* …how many */
 static long g_ix_n;           /* members in the index: the frontier's members not host-owed */
@@ -1525,46 +1626,55 @@ void flow_user_acts_copy(Flow *dst, const Flow *src)
     }
 }
 
-/* Move `f` to site `to` in its own family: off its old site's treap and onto the new one's. */
+/* Move `f` to class `to` in its own family: off its old class's treap and onto the new one's. */
 static void flow_site_move(Flow *f, FlowSite *to) {
     int in = f->ix_in;
     DCHECK(f->at != NULL && to->fam == f->family,
            "a member was moved to a site with no site to leave, or into another family's ledger");
     if (to == f->at) return;
     if (in) flow_ix_remove(f);
-    f->at->members--;
-    f->at = to;
-    to->members++;
+    flow_site_leave(f);
+    flow_site_join(f, to);
     if (in) flow_ix_insert(f);
     frontier_rank_changed();
 }
 
-void flow_site_bank_running(int64_t us) {
-    FlowSite *st;
+/* `us` more service at code site `c`: every class standing there reads it, so each is repriced and re-filed. */
+static void flow_code_charge(FlowCodeSite *c, int64_t us) {
+    c->served += us;
+    for (FlowSite *st = c->classes; st; st = st->cnext) {
+        flow_site_reprice(st);
+        flow_ix_site_sync(st);
+    }
+    frontier_rank_changed();
+}
 
+void flow_site_bank_running(int64_t us) {
     DCHECK(g_running != NULL && g_running->at != NULL && us >= 0,
            "work was banked to a site with no flow running, at no site, or as a negative amount");
     if (us == 0) return;
-    st = g_running->at;
-    st->served += us;
     g_running->site_banked += us;
-    flow_site_reprice(st);
-    flow_ix_site_sync(st);
-    frontier_rank_changed();
+    flow_code_charge(g_running->at->code, us);
+}
+
+/* The class `f` belongs in at code site (`kind`, `key`): its own drive count and priced decisions beside it. */
+static FlowSite *flow_site_for(Flow *f, int kind, uint64_t key) {
+    return flow_site_of(f->family, kind, key, f->orphan_seen, flow_priced(f));
 }
 
 void flow_stand_at(Flow *f, int kind, uint64_t key) {
     DCHECK(f != NULL && f->family != NULL && f->at != NULL && (kind == FLOW_SITE_CODE || kind == FLOW_SITE_DRIVE),
            "a code site was stood at by a flow outside the frontier, or with a kind the ledger does not name");
-    flow_site_move(f, flow_site_of(f->family, kind, key, f->orphan_seen));
+    flow_site_move(f, flow_site_for(f, kind, key));
 }
 
 void flow_set_orphan_seen(Flow *f, int64_t seen) {
-    DCHECK(f != NULL && f->orphan && f->picks == 0 && seen >= 0 && f->at != NULL && f->at->kind == FLOW_SITE_DRIVE,
+    DCHECK(f != NULL && f->orphan && f->picks == 0 && seen >= 0 && f->at != NULL &&
+               f->at->code->kind == FLOW_SITE_DRIVE,
            "a product drive count was written on a flow that is not a just-seeded, never-dispatched drive standing "
            "at its body — engine.c stands the drive at its body before it writes the count");
     f->orphan_seen = seen;
-    flow_site_move(f, flow_site_of(f->family, f->at->kind, f->at->key, seen));
+    flow_site_move(f, flow_site_for(f, f->at->code->kind, f->at->code->key));
 }
 
 /* The other kind of quantity in the weight. flow_credit_emit is a ledger entry: it records that something was
@@ -1784,7 +1894,7 @@ int flow_against_env(const Flow *f) {
     return f->env_slots_n;
 }
 
-/* The decisions the weight prices at FLOW_ASSUMPTION_COST each: the assumptions and the arms against an
+/* The decisions the optimism term prices at FLOW_PRICED_PULLS each: the assumptions and the arms against an
    environment unknown's example. */
 static int flow_priced(const Flow *f) { return flow_assumed(f) + flow_against_env(f); }
 
@@ -1803,10 +1913,10 @@ static void flow_slot_push(int **v, int *n, int slot) {
 static void flow_assumed_slot_push(Flow *f, int slot) { flow_slot_push(&f->assumed_slots, &f->assumed_slots_n, slot); }
 static void flow_env_slot_push(Flow *f, int slot) { flow_slot_push(&f->env_slots, &f->env_slots_n, slot); }
 
-/* A priced count moved: the member's key and the order with it. */
-static void flow_assumed_moved(Flow *f) {
-    flow_ix_rekey(f);
-    frontier_rank_changed();
+/* A priced count moved: the member stands in the class of its new count at the same code site, which moves no
+   service, since the service is the code site's. */
+static void flow_priced_moved(Flow *f) {
+    flow_site_move(f, flow_site_for(f, f->at->code->kind, f->at->code->key));
 }
 
 /* Records `slot` in the running flow's list `*v`/`*n` unless it holds it: a sibling's own fork slot is recorded at
@@ -1835,19 +1945,19 @@ static int flow_slot_truncate(int **v, int *n, int c) {
 void flow_note_assumed_read(void) {
     DCHECK(g_running != NULL, "an assumed read was recorded with no flow running");
     g_running->assumed_reads++;
-    flow_assumed_moved(g_running);
+    flow_priced_moved(g_running);
 }
 
 void flow_note_assumed_slot(int slot) {
     Flow *f = g_running;
     DCHECK(f != NULL, "an assumed decision slot was recorded with no flow running");
-    if (flow_slot_note(&f->assumed_slots, &f->assumed_slots_n, slot)) flow_assumed_moved(f);
+    if (flow_slot_note(&f->assumed_slots, &f->assumed_slots_n, slot)) flow_priced_moved(f);
 }
 
 void flow_note_env_slot(int slot) {
     Flow *f = g_running;
     DCHECK(f != NULL, "an env decision slot was recorded with no flow running");
-    if (flow_slot_note(&f->env_slots, &f->env_slots_n, slot)) flow_assumed_moved(f);
+    if (flow_slot_note(&f->env_slots, &f->env_slots_n, slot)) flow_priced_moved(f);
 }
 
 void flow_priced_truncate(int c) {
@@ -1856,7 +1966,7 @@ void flow_priced_truncate(int c) {
     DCHECK(f != NULL && c >= 0, "a priced-slot truncation was asked with no flow running or below slot 0");
     a = flow_slot_truncate(&f->assumed_slots, &f->assumed_slots_n, c);
     e = flow_slot_truncate(&f->env_slots, &f->env_slots_n, c);
-    if (a || e) flow_assumed_moved(f);
+    if (a || e) flow_priced_moved(f);
 }
 
 int flow_path_forced(const Flow *f) {
@@ -1971,10 +2081,7 @@ void flow_age_running(int64_t us) {
         DCHECK(st != NULL && st->fam == g_running->family,
                "the running flow stands at no site, or at one in another family's ledger — flow_new, the fork and "
                "flow_stand_at keep `at` in the member's own family");
-        st->served += us - g_running->site_banked;
-        flow_site_reprice(st);
-        flow_ix_site_sync(st);
-        frontier_rank_changed();
+        flow_code_charge(st->code, us - g_running->site_banked);
     }
     /* The same units went to both halves, which keeps them one reading at two scopes. This is the only site
        that adds to either, so the only one that could add to one alone; a charge reaching `work` and missing
@@ -2214,7 +2321,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     /* And the completed units, an observation: an arm has finished every unit its parent finished before the
        branch. */
     sib->visits = parent->visits;
-    /* And the drive count, part of the site's identity below. An arm of a drive drives the same body, and the count
+    /* And the drive count, part of the class's identity below. An arm of a drive drives the same body, and the count
        is the one its seed read; a non-drive copies zero to zero; a drive's own seed rewrites the copy it was
        assembled with (flow_set_orphan_seen), after this equality, because the seed is an arrival and not a branch. */
     sib->orphan_seen = parent->orphan_seen;
@@ -2245,12 +2352,6 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        keeps a root addressable), `family` the account. Collapsing them would mean walking the ancestry on every
        flow_weight, which is evaluated inside DCHECK conditions where a compressing walk is forbidden. */
     sib->family = parent->family;
-    /* And the site, the optimism term's operand: the arm stands where its parent stands, in the family it just
-       joined, so both read one count and the fork moves nothing. The arm's keyless site in the root flow_new minted
-       is left empty and freed with that node. */
-    sib->at->members--;
-    sib->at = parent->at;
-    sib->at->members++;
     /* And a newborn that inherited a burn is born away from its family's base (FlowAcct's `away_n`). The family
        pointer is only now in place, so this is the first instant flow_own_silence can be asked of this member; a
        fork off a parent at base mints a member at base, hence the test. */
@@ -2282,10 +2383,10 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
             sib->acct->branch = br;
         }
     }
-    /* The priced decisions, before the index takes the arm's key: the parent's, plus the sibling's own arm when that
-       arm takes absent application state as present or goes against an environment unknown's example. That one is
-       the stated exception to the rank-neutrality equality, which compares the weights with the priced term left
-       out. */
+    /* The priced decisions, before the arm takes its class: the parent's, plus the sibling's own arm when that arm
+       takes absent application state as present or goes against an environment unknown's example. That one is the
+       stated exception to the rank-neutrality equality, which compares the weights with the priced decisions left
+       out of the optimism. */
     DCHECK(at_branch.assumed_slot < 0 || at_branch.env_slot < 0,
            "a fork priced its sibling's one arm twice, as an assumption and as an arm against an environment "
            "unknown — decide.c classifies a subject by its root's declared kind, which is one or the other");
@@ -2294,6 +2395,11 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot);
     for (int i = 0; i < parent->env_slots_n; i++) flow_env_slot_push(sib, parent->env_slots[i]);
     if (at_branch.env_slot >= 0) flow_env_slot_push(sib, at_branch.env_slot);
+    /* And the site, the optimism term's operand: the arm stands at its parent's code site, in the family it just
+       joined, so both read one service count and the fork moves nothing; in its parent's class unless its own arm
+       is priced. The arm's keyless class in the root flow_new minted is freed as the arm leaves it. */
+    flow_site_leave(sib);
+    flow_site_join(sib, flow_site_for(sib, parent->at->code->kind, parent->at->code->key));
     /* And the path's forced mark, the one inherited thing the ranking never reads: an arm is its parent's path with
        one more arm on it, so it stands on everything the parent's path stood on. A sibling born clean of it would
        declare its requests derived on the strength of being forked, the provenance form of reset-by-splitting, and
@@ -2317,11 +2423,11 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     /* The scheduler's one WFQ, asserted at the fork: a fork is rank-neutral, so at birth the sibling is worth exactly
        what its parent is worth. It fires the moment anything enters flow_weight that a fork does not carry (a depth
        bonus, a script-index term, a separate visit counter, a "prefer flows that have run" tiebreak).
-       flow_weight is `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+pulls+orphan_seen)
-       − (own_silence + fam_work)*RATE`, so a fork carries eight things through seven assignments: the three `cand_*`
-       (decide_fork_blob hands the sibling the parent's cursor); `work` and `work_gen`; the family tag, joined, which
-       carries the reward and the aging's family half (a fresh root would read 0 for both and fire); and the site,
-       which carries the site's count and `orphan_seen`.
+       flow_weight is `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N
+       + 1/(1+pulls+orphan_seen+P*priced) − (own_silence + fam_work)*RATE`, so a fork carries nine things: the three
+       `cand_*` (decide_fork_blob hands the sibling the parent's cursor); `work` and `work_gen`; the family tag,
+       joined, which carries the reward and the aging's family half (a fresh root would read 0 for both and fire);
+       the code site, which carries the site's count; `orphan_seen`; and the priced decisions.
        What it cannot see: it compares the arm with the parent after the fork has written both, so a term over a
        count the fork raises in a shared place (a bucket's membership, say) moves the forker and
        everyone sharing the count while passing this line, and is not fork-neutral. And it is a claim about one
@@ -2746,8 +2852,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     g_flows[g_flows_n++] = f;
     f->ix_t.seq = ++g_ix_seq;   /* the treap's search tie-break, unique for the instance's life */
     /* And it stands at its family's keyless site: it has decided nothing yet. */
-    f->at = flow_site_of(f->family, 0, 0, 0);
-    f->at->members++;
+    flow_site_join(f, flow_site_of(f->family, 0, 0, 0, 0));
     /* And into the order's index under the root and site minted above: a newcomer is runnable (calloc leaves no
        host-owed mark), and a fork re-indexes it under its parent's family in flow_fork_inherit. */
     flow_ix_insert(f);
@@ -3825,11 +3930,6 @@ typedef char flow_quantum_costs_at_most_one_finding[(FLOW_SILENCE_WORK >= FLOW_S
  * multiply then floor: two flows on the same notch get the identical product, which keeps the fork's
  * rank-neutrality equality exact. */
 #define FLOW_AGE_QUANTUM ((double)FLOW_SERVICE_WORK * FLOW_AGE_RATE)
-/* The price of one assumption (flow.h's `assumed_reads`/`assumed_slots`) and of one arm against an environment
- * unknown's example (`env_slots`): one never-run member's whole optimism bonus, so a world resting on absent
- * application state or departing from the example's world ranks behind the observed world's unexplored arms and
- * ahead of it once the observed world has aged past that much; a cost and not a tier, so nothing is dropped. */
-#define FLOW_ASSUMPTION_COST 1.0
 
 /* How many whole quanta of the thread this flow has consumed: the one quantised reading of `work`, a census quantity
  * saying who is consuming the thread at the granularity it is handed out in. The aging term reads it summed with
@@ -3914,23 +4014,35 @@ static double flow_queue_nonreward(const Flow *f) {
     return -(double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
 }
 
-/* The optimism term, CLAUDE.md's UCB bonus: optimism over service, `1/(1 + pulls + orphan_seen)` read off the
-   member's code site (FlowSite), so a never-served site is never starved. 1.0 at a site its family has not served
-   and over code unexplored elsewhere, one emission's worth of promise, which flow_nonreward's bound prices. The
-   count is the family's and the site's, not the member's: arms minted at one decision stand at one site and share
-   one count, so minting arms does not mint optimism, and service at the site lowers all of them at once. The
-   aging still prices the member's own burn. `orphan_seen` is the product's count of drives of the same body
-   elsewhere (flow.h): it lowers and never removes, and its floor 1/(1 + orphan_seen) is what the never-starved
-   guards in flow_pick_walk read. */
+/* The optimism term, CLAUDE.md's UCB bonus: optimism over service, `1/(1 + pulls + orphan_seen + P*priced)` read
+   off the member's class (FlowSite), so a never-served site is never starved. 1.0 at a site its family has not
+   served, over code unexplored elsewhere, for a member resting on no priced decision: one emission's worth of
+   promise, which flow_nonreward's bound prices. The service count is the family's and the code site's, not the
+   member's: arms minted at one decision stand at one code site and share one count, so minting arms does not mint
+   optimism, and service at the site lowers all of them at once. The aging still prices the member's own burn.
+   `orphan_seen` is the product's count of drives of the same body elsewhere (flow.h): it lowers and never removes,
+   and its floor 1/(1 + orphan_seen) is what the never-starved guards in flow_pick_walk read. `priced` is the
+   member's priced decisions at FLOW_PRICED_PULLS each, a fact about its executed prefix and so the member's. */
 static double flow_optimism(const Flow *f) {
+    DCHECK(f->at->seen == f->orphan_seen && f->at->priced == flow_priced(f),
+           "a member stands in a class whose drive count or priced count is not its own — flow_stand_at, the fork, "
+           "flow_set_orphan_seen and flow_priced_moved stand a member in the class of its own operands");
     return site_offset(f->at);
 }
 
-/* The optimism denominator in work, `Q*(1 + seen) + served` with Q = ENGINE_QUANTUM_WORK, one exact integer:
-   what the census's spread rows and engine.c's rank asserts read. */
-int64_t flow_optimism_den(const Flow *f) {
-    return ENGINE_PULL_WORK * (1 + f->at->seen) + f->at->served;
+/* The same term as if the member rested on no priced decision: what the fork's rank-neutrality equality reads,
+   since the sibling's own priced arm is the one difference a fork may make. */
+static double flow_optimism_unpriced(const Flow *f) {
+    return site_optimism(f->at->code->served, f->at->seen, 0);
 }
+
+/* The optimism denominator in work, `Q*(1 + seen + P*priced) + served` with Q = ENGINE_PULL_WORK and
+   P = FLOW_PRICED_PULLS, one exact integer: what the census's spread rows and engine.c's rank asserts read. */
+int64_t flow_optimism_den(const Flow *f) {
+    return ENGINE_PULL_WORK * (1 + f->at->seen + f->at->priced * FLOW_PRICED_PULLS) + f->at->code->served;
+}
+
+int64_t flow_site_served(const Flow *f) { return f->at->code->served; }
 
 /* The queue coordinate: the reward plus the remainder above, what an arrival is placed at
    (flow_arrive_at_virtual_time); every term is a tag a newcomer can stand at, not a reading of its own payload.
@@ -3981,8 +4093,9 @@ double flow_distance(const Flow *f) {
 /* The range of everything the order is made of except the reward, written as the derivation, term by term against
    flow_nonreward's summands (as wfq_accounted_spread is written against flow_weight's). Each line is one term at
    the end of its range that pushes the sum up:
-     - the optimism bonus 1/(1+pulls+orphan_seen) decreases in counts that cannot go below zero, so its maximum is
-       its reading at an unserved site over unexplored code, the unit one emission is priced against;
+     - the optimism bonus 1/(1+pulls+orphan_seen+P*priced) decreases in counts that cannot go below zero, so its
+       maximum is its reading at an unserved site over unexplored code with nothing priced, the unit one emission
+       is priced against;
      - the fitness distance is (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N with the two fractions asserted in
        [0,1] (flow_observe_replay, flow_observe_survival) and cand_rung on the ladder (flow_observe_rung), whose top
        is FLOW_RUNGS_N - 2, so its maximum is (1 + 1 + (N-2))/N = 1 for any N;
@@ -3995,8 +4108,7 @@ double flow_distance(const Flow *f) {
                            + (1.0 + 1.0 + (double)(FLOW_RUNGS_N - 2)) / (double)FLOW_RUNGS_N /* distance: two   */ \
                                                                                         /* fractions + the top  */ \
                                                                                         /* boolean rung         */ \
-                           - 0.0 * FLOW_AGE_QUANTUM                                     /* aging, no silence    */ \
-                           - 0.0 * FLOW_ASSUMPTION_COST )                               /* no assumption        */
+                           - 0.0 * FLOW_AGE_QUANTUM )                                   /* aging, no silence    */
 
 
 /* A member's birth sequence, an entry from outside this file whose callers have no other statement of its
@@ -4012,15 +4124,10 @@ uint64_t flow_birth_seq(const Flow *f) {
    notch are per account, the optimism is per site (one count read by every member standing there), and the own
    notch and the fitness distance are per member (`f->work` against its family's `emit_gen`,
    `f->cand_replay`/`cand_surv`/`cand_rung`), which no other member can move. The index holds each scope where it
-   moves (family, site, member), so no write re-keys more members than it moved. */
-static double flow_index_key_observed(const Flow *f) {
-    return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM + flow_distance(f);
-}
-
-/* The member key with each priced decision priced in, the last summand, so a member with none reads
-   flow_index_key_observed to the bit (`x - 0.0 == x`). */
+   moves (family, site, member), so no write re-keys more members than it moved. A member's priced decisions are
+   read in the optimism, through the class it stands in. */
 static double flow_index_key(const Flow *f) {
-    return flow_index_key_observed(f) - (double)flow_priced(f) * FLOW_ASSUMPTION_COST;
+    return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM + flow_distance(f);
 }
 
 /* The service the same code site (`kind`, `key`, `seen`) has received in every family's ledger but `f`'s own: what
@@ -4041,9 +4148,9 @@ static int64_t flow_site_served_elsewhere(const Flow *f) {
         if (!seen) fams[nf++] = fam;
     }
     for (int j = 0; j < nf; j++) {
-        const FlowSite *st = flow_site_find(fams[j], f->at->kind, f->at->key, f->at->seen);
+        const FlowCodeSite *c = flow_code_find(fams[j], f->at->code->kind, f->at->code->key);
 
-        if (st) sum += st->served;
+        if (c) sum += c->served;
     }
     free(fams);
     return sum;
@@ -4052,10 +4159,9 @@ static int64_t flow_site_served_elsewhere(const Flow *f) {
 /* A member's weight rebuilt from its operands, in flow_order_key's composition and order of operations, so it is
    the same double: the census publishes the operands and a reader recomputes this. */
 static double flow_weight_recompose(const FlowWeightOperands *o) {
-    double opt = site_optimism(o->site_served, o->orphan_seen);
+    double opt = site_optimism(o->site_served, o->orphan_seen, o->assumed + o->against_env);
     double dist = (o->replay + o->surv + (double)o->rung) / (double)FLOW_RUNGS_N;
-    double ikey = -(double)o->own_notch * FLOW_AGE_QUANTUM + dist
-                  - (double)(o->assumed + o->against_env) * FLOW_ASSUMPTION_COST;
+    double ikey = -(double)o->own_notch * FLOW_AGE_QUANTUM + dist;
     return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + (opt + ikey);
 }
 
@@ -4066,7 +4172,7 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
     o->reward = flow_reward(f);
     o->coord_notch = flow_family_notch(f) + flow_silence_carry(f);
     o->own_notch = flow_service_notch(f);
-    o->site_served = f->at->served;
+    o->site_served = f->at->code->served;
     o->site_served_elsewhere = flow_site_served_elsewhere(f);
     o->pull_work = ENGINE_PULL_WORK;
     o->visits = f->visits;
@@ -4079,7 +4185,7 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
     o->age_quantum = FLOW_AGE_QUANTUM;
     o->assumed = flow_assumed(f);
     o->against_env = flow_against_env(f);
-    o->assume_cost = FLOW_ASSUMPTION_COST;
+    o->priced_pulls = FLOW_PRICED_PULLS;
     o->host_owed = flow_host_owed(f);
     o->running = (f == g_running);
     o->unit = o->running ? FLOW_UNIT_RUNNING
@@ -4143,10 +4249,10 @@ static FlowOrderKey flow_order_key(const Flow *f) {
     return o;
 }
 
-/* The weight with the priced term left out, in flow_order_key's composition: what the fork's rank-neutrality
-   equality compares. Mentioned only inside DCHECK conditions. */
+/* The weight with the priced decisions left out of the optimism, in flow_order_key's composition: what the fork's
+   rank-neutrality equality compares. Mentioned only inside DCHECK conditions. */
 static double flow_weight_observed(const Flow *f) {
-    return flow_family_coord(f) + (flow_optimism(f) + flow_index_key_observed(f));
+    return flow_family_coord(f) + (flow_optimism_unpriced(f) + flow_index_key(f));
 }
 
 /* Positive when `a` ranks above `b`, negative below; zero only for one member, since a birth sequence is unique. */
@@ -4263,7 +4369,6 @@ static int ix_t_cmp(const FlowIxTreap *a, const FlowIxTreap *b) {
     if (a->rung != b->rung) return a->rung < b->rung ? -1 : 1;
     if (a->replay != b->replay) return a->replay < b->replay ? -1 : 1;
     if (a->surv != b->surv) return a->surv < b->surv ? -1 : 1;
-    if (a->priced != b->priced) return a->priced < b->priced ? -1 : 1;
     return 0;
 }
 
@@ -4428,7 +4533,6 @@ static void ix_t_stamp(Flow *f) {
     f->ix_t.replay = f->cand_replay;
     f->ix_t.surv = f->cand_surv;
     f->ix_t.rung = f->cand_rung;
-    f->ix_t.priced = flow_priced(f);
 }
 
 static void flow_ix_insert(Flow *f) {
@@ -4490,7 +4594,7 @@ static void flow_ix_rekey(Flow *f) {
     if (!f->ix_in) return;
     fresh.key = flow_index_key(f); fresh.phase = flow_silence_phase(f); fresh.notch = flow_service_notch(f);
     fresh.replay = f->cand_replay; fresh.surv = f->cand_surv;
-    fresh.rung = f->cand_rung; fresh.priced = flow_priced(f);
+    fresh.rung = f->cand_rung;
     if (fresh.key == f->ix_t.key && ix_t_cmp(&fresh, &f->ix_t) == 0) return;
     flow_ix_remove(f);
     flow_ix_insert(f);
@@ -5069,7 +5173,7 @@ static Flow *flow_pick_walk(FlowScan why) {
             m->ikey_last = ik;
         }
 #endif
-        if (g_flows[i]->at->served == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {
+        if (g_flows[i]->at->code->served == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {
             unrun = g_flows[i]; unrun_w = w;
         }
         if (!best || w > bw || (w == bw && flow_order_above(g_flows[i], best))) {
@@ -5413,10 +5517,7 @@ static double wfq_accounted_spread(const WfqCensus *c) {
          + c->dist_max
          + ((double)ENGINE_PULL_WORK / (double)c->opt_den_min
             - (double)ENGINE_PULL_WORK / (double)c->opt_den_max)
-         + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM
-         /* And the priced decisions, which enter negatively at FLOW_ASSUMPTION_COST each and are at least zero, so
-            the most any member is priced for bounds their range. */
-         + (double)c->priced_max * FLOW_ASSUMPTION_COST;
+         + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM;
 }
 
 /* The mark the census counts families with (FlowAcct's `census_gen`): a generation rather than a clear pass, for
@@ -5527,8 +5628,8 @@ static int site_ptr_cmp(const void *a, const void *b) {
 }
 static int site_code_cmp(const void *a, const void *b) {
     const FlowSite *x = *(const FlowSite *const *)a, *y = *(const FlowSite *const *)b;
-    if (x->kind != y->kind) return x->kind < y->kind ? -1 : 1;
-    return x->key < y->key ? -1 : x->key > y->key;
+    if (x->code->kind != y->code->kind) return x->code->kind < y->code->kind ? -1 : 1;
+    return x->code->key < y->code->key ? -1 : x->code->key > y->code->key;
 }
 static void site_runs(const FlowSite **v, long n, long *sites, long *codes, long *unserved, WfqCensus *top) {
     long i, run;
@@ -5539,12 +5640,12 @@ static void site_runs(const FlowSite **v, long n, long *sites, long *codes, long
     for (i = 0; i < n; i += run) {
         for (run = 1; i + run < n && v[i + run] == v[i]; run++) {}
         (*sites)++;
-        if (unserved && v[i]->served == 0) (*unserved)++;
+        if (unserved && v[i]->code->served == 0) (*unserved)++;
         if (top) {
             int full = top->never_top_n == 5, k = full ? 4 : top->never_top_n++;
             if (full && top->never_top[4].members >= run) continue;
-            top->never_top[k].kind = v[i]->kind; top->never_top[k].key = v[i]->key;
-            top->never_top[k].seen = v[i]->seen; top->never_top[k].served = v[i]->served;
+            top->never_top[k].kind = v[i]->code->kind; top->never_top[k].key = v[i]->code->key;
+            top->never_top[k].seen = v[i]->seen; top->never_top[k].served = v[i]->code->served;
             top->never_top[k].members = run;
             for (; k > 0 && top->never_top[k].members > top->never_top[k - 1].members; k--) {
                 __typeof__(top->never_top[0]) t = top->never_top[k];
@@ -5555,7 +5656,8 @@ static void site_runs(const FlowSite **v, long n, long *sites, long *codes, long
     qsort(v, (size_t)n, sizeof *v, site_code_cmp);
     *codes = 0;
     for (i = 0; i < n; i += run) {
-        for (run = 1; i + run < n && v[i + run]->kind == v[i]->kind && v[i + run]->key == v[i]->key; run++) {}
+        for (run = 1; i + run < n && v[i + run]->code->kind == v[i]->code->kind &&
+                             v[i + run]->code->key == v[i]->code->key; run++) {}
         (*codes)++;
     }
 }
@@ -5641,7 +5743,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->vt = frontier_vt();
     out->never_picked = 0;
     out->never_picked_gap = 0.0;
-    out->assumed_members = out->assumed_sum = out->assumed_max = out->priced_max = 0;
+    out->assumed_members = out->assumed_sum = out->assumed_max = 0;
     out->never_picked_at_top = 0;
     out->picks_live = out->picks_max = 0;
     /* The lifetime half, not a reading of this walk: dispatches this instance has ever made, unconditional, and the
@@ -5802,7 +5904,6 @@ void flow_wfq_census(WfqCensus *out) {
         /* How many members stand at zero of the aging's own half, read through flow_own_silence, the quantity the
            order is made of, rather than `Flow.work`, which is that quantity only while its window mark is current. */
         if (flow_own_silence(f) == 0) out->unrun++;
-        if (flow_priced(f) > out->priced_max) out->priced_max = flow_priced(f);
         if (flow_assumed(f) > 0) {
             out->assumed_members++;
             out->assumed_sum += flow_assumed(f);
@@ -6590,8 +6691,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
         DCHECK(!f->assembling, "a sibling was removed from the frontier before its assembly ended");
         if (f->ix_in) flow_ix_remove(f);
         else if (!f->bulk_released) flow_owed_unlink(f);   /* a sold flow left both at flow_release_bulk */
-        f->at->members--;
-        f->at = NULL;
+        flow_site_leave(f);
         acct_depart(f);
         free(f);
         g_flows[slot] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
