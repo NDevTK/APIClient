@@ -560,6 +560,7 @@ char *result_wfq_json(void) {
     char *observed_terms = NULL;
     char *assumed_terms = NULL;
     char *never_top = NULL;
+    char *pick_fresh = NULL;
     NetReachCensus nr;
     JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes this census absent */
 
@@ -803,6 +804,18 @@ char *result_wfq_json(void) {
         METRIC_ABSENT(observed_terms);
     }
     METRIC_SET_REAL(assumed_wgap, w.assumed_w_gap);
+    {
+        long pf[5][2];
+        char *row;
+
+        engine_pick_fresh(pf);
+        row = composef("{\"start\":[%ld,%ld],\"between\":[%ld,%ld],\"program\":[%ld,%ld],\"parked\":[%ld,%ld],"
+                       "\"checkpoint\":[%ld,%ld]}", pf[0][0], pf[0][1], pf[1][0], pf[1][1], pf[2][0], pf[2][1],
+                       pf[3][0], pf[3][1], pf[4][0], pf[4][1]);
+        CHECK(row, "result: OOM composing picksFreshLife");
+        pick_fresh = row;
+        METRIC_SET_OBJECT(picks_fresh_life, pick_fresh);
+    }
     METRIC_SET(never_sites, w.never_sites);
     METRIC_SET(never_codes, w.never_codes);
     METRIC_SET(never_sites_unserved, w.never_sites_unserved);
@@ -900,6 +913,7 @@ char *result_wfq_json(void) {
     free(observed_terms);
     free(assumed_terms);
     free(never_top);
+    free(pick_fresh);
     return json_buf_take(&b);
 }
 

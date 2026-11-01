@@ -9384,6 +9384,14 @@ static void flow_next_unit_check(const FlowNextUnit *nu, NextArm seen, const cha
 #define FLOW_NEXT_UNIT_CHECK(nu, seen) ((void)sizeof(seen))
 #endif
 
+/* Picks by where the picked member's quantum resumes (a program start, another between-units rung, a program
+   frame, a parked continuation, a checkpoint), each as [picks at a site with no service, picks]. Lifetime. */
+static long g_pick_fresh[5][2];
+void engine_pick_fresh(long out[5][2]) {
+    DCHECK(out != NULL, "the pick-freshness census was asked for with nowhere to put it");
+    memcpy(out, g_pick_fresh, sizeof g_pick_fresh);
+}
+
 /* The programs are the flow's own rows (`f->dyn`), so this takes no inventory. */
 static int flow_step(JSContext *ctx, Flow *f) {
     /* A flow is about to run, so the flow stamp and the DOM capture must both be on. This is the one point a flow
@@ -12477,6 +12485,15 @@ static int engine_sched_slice(void) {
             {
                 uint64_t b = flow_birth_seq(cur);
                 for (int i = 0; i < 8; i++) { g_pick_digest ^= (b >> (8 * i)) & 0xff; g_pick_digest *= 1099511628211ULL; }
+            }
+            /* Whether the pick went to a member standing at a site no quantum has been charged to, by where its
+               quantum resumes (solver/engine.h's engine_pick_fresh). A report: nothing reads it to decide. */
+            {
+                int cls = flow_frame(cur) ? 2 : JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 3
+                        : flow_job_microtask(cur) ? 4 : cur->next_arm1 == (int)NEXT_START_PROGRAM + 1 ? 0 : 1;
+
+                g_pick_fresh[cls][1]++;
+                if (flow_optimism_den(cur) == ENGINE_QUANTUM_WORK * (1 + cur->orphan_seen)) g_pick_fresh[cls][0]++;
             }
             int r = flow_step(ctx, cur);
             /* The work retired since the step's last poll is the step's own (core/timing/thread_work.h): banked on

@@ -311,6 +311,9 @@ EngineRivalMiss engine_rival_miss(void);
    across it. 54000 units is about 12 ms of the native dev build at thread_work.h's 0.222 us per opcode, and it
    fits flow.c's per-residue census domain (at most 65536). */
 #define ENGINE_QUANTUM_WORK ((int64_t)54000)
+/* Picks by where the picked member resumes (program start, other between-units rung, program frame, parked
+   continuation, checkpoint), each [picks standing at a site with no service yet, picks]. A lifetime report. */
+void engine_pick_fresh(long out[5][2]);
 /* How often the slice's budget is asked, in interpreter dispatches (JSFlowControlHooks.budget_period, since
    quickjs.c includes no host header). The ask is a load and a compare, so the period only bounds the overshoot
    past the budget: at most one period, under 2% of the slice. The gate counts down, so it need not be a power

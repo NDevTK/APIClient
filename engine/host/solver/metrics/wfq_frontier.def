@@ -250,6 +250,9 @@ METRIC(never_sites_unserved, "neverSitesUnserved", GAUGE, "site", AGENT, "solver
 METRIC(all_sites, "allSites", GAUGE, "site", AGENT, "solver/flow.c", INT)
 METRIC(all_codes, "allCodes", GAUGE, "site", AGENT, "solver/flow.c", INT)
 METRIC(never_top_sites, "neverTopSites", GAUGE, "site", AGENT, "solver/flow.c", OBJECT)
+/* …and the picks by where the picked member resumes, each [picks at a site no quantum has been charged to, picks]
+   (solver/engine.h's engine_pick_fresh): whether a resumption's site is fresh far more often than a start's. */
+METRIC(picks_fresh_life, "picksFreshLife", LIFETIME, "pick", AGENT, "solver/engine.c", OBJECT)
 /* …and what asking the order cost (solver/flow.h's FLOW_SCANS: three entries, counted apart,
    in counts not time). Two causes of an unreached tail: too little thread for the members
    standing, or thread spent asking. Read `scanNextWeights / steps` against `members` and
