@@ -1070,6 +1070,22 @@ static JSValue chain_related(JSContext *ctx, JSValueConst chain, uint32_t n, boo
     return chain_value(ctx, chain, n - 1);
 }
 
+/* §6.6.2's focusable-area test as the focusing steps' machine asks it: on the layout job its state owns, so the
+   box test's computed `display` is held in that job's cascade record. NAMED RESIDUAL. Not covered: the test
+   runs whole on the entered job with no resting drive, so a page-sized author match under it does not rest.
+   Next: element_view_box_tests_ask under a resting drive ahead of the test, as FOC_SCROLL asks its own. How its
+   absence shows: a slice overrun inside focus() or blur() with `_layoutJobRests` flat. */
+static bool focus_area_test(JSContext *ctx, FocusState *s, JSValueConst el)
+{
+    bool r;
+
+    if (s->job == NULL) s->job = layout_job_new();
+    layout_job_enter(s->job);
+    r = el_is_focusable_area(ctx, el);
+    layout_job_leave(s->job);
+    return r;
+}
+
 static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -1277,7 +1293,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 if (same) { in_chain = true; break; }
             }
             if (!in_chain) return 0;
-            if (!el_is_focusable_area(ctx, s->target)) return 0;                        /* step 6 */
+            if (!focus_area_test(ctx, s, s->target)) return 0;                          /* step 6 */
             /* Step 7: topDocument is the old chain's LAST entry, and its navigable HAS system focus (this
                engine's own traversable does, and the chain ends in it), so the branch taken is the first —
                run the FOCUSING STEPS for topDocument's viewport. That is what §6.6.6 means by "blur() moves
@@ -1312,11 +1328,15 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             JSValue focused;
 
             if (s->kind == FA_NAVIGABLE ||
-                (s->kind == FA_ELEMENT && !el_is_focusable_area(ctx, s->target))) {     /* step 1 */
+                (s->kind == FA_ELEMENT && !focus_area_test(ctx, s, s->target))) {       /* step 1 */
                 int k;
                 JSValue v;
 
+                /* Its candidates' focusable-area tests run on the state's job too. */
+                if (s->job == NULL) s->job = layout_job_new();
+                layout_job_enter(s->job);
                 get_focusable_area(ctx, s->kind, s->target, &k, &v);
+                layout_job_leave(s->job);
                 JS_FreeValue(ctx, s->target);
                 s->target = v;
                 s->kind = (uint8_t)k;
@@ -1629,6 +1649,9 @@ bool focus_focused_area_is_focusable(JSContext *ctx)
     bool ok;
 
     DCHECK(g_ready, "§8.1.7.3 step 17 asked its condition before focus_init declared §6.6's members");
+    DCHECK(css_cascade_record_is_held(),
+           "§8.1.7.3 step 17 asked its condition with no layout job entered — update the rendering's machine "
+           "enters one, so the focused element's box test reads that job's cascade record");
     area = focused_area_of(ctx, &kind);
     DCHECK(kind == FA_ELEMENT || kind == FA_VIEWPORT,
            "§8.1.7.3 step 17 read a focused area that is neither an element nor a viewport — those are the two "

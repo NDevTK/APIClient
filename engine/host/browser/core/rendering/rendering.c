@@ -1152,7 +1152,15 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             }
             docctx = doc_realm(ctx, s);
             if (s->cphase == 0) {
-                if (focus_focused_area_is_focusable(docctx)) { s->i++; continue; }
+                /* The condition's box test is asked on a layout job this machine owns for the activation. */
+                LayoutJob *job = layout_job_new();
+                bool focusable;
+
+                layout_job_enter(job);
+                focusable = focus_focused_area_is_focusable(docctx);
+                layout_job_leave(job);
+                layout_job_free(job);
+                if (focusable) { s->i++; continue; }
                 /* THE STEP'S SECOND HALF: "and set doc's relevant global object's NAVIGATION API's `focus
                    changed during ongoing navigation` to false" (HTML §7.2.6.8's flag). It is INSIDE the branch,
                    where the standard puts it — the repair and the clear are one conditional, and §6.6.4's focus
