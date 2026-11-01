@@ -12491,7 +12491,7 @@ static int engine_sched_slice(void) {
                         : flow_job_microtask(cur) ? 4 : cur->next_arm1 == (int)NEXT_START_PROGRAM + 1 ? 0 : 1;
 
                 g_pick_fresh[cls][1]++;
-                if (flow_optimism_den(cur) == ENGINE_QUANTUM_WORK * (1 + cur->orphan_seen)) g_pick_fresh[cls][0]++;
+                if (flow_optimism_den(cur) == ENGINE_PULL_WORK * (1 + cur->orphan_seen)) g_pick_fresh[cls][0]++;
             }
             int r = flow_step(ctx, cur);
             /* The work retired since the step's last poll is the step's own (core/timing/thread_work.h): banked on

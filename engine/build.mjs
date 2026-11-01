@@ -1210,9 +1210,9 @@ const forkSiteLightestKey = sourceFact(() =>
   forkCensusName("SITE_LIGHTEST_KEY",
                  "the @FORKAT reader tells the unnamed-fork-site table's BOUND from the rows by that exact " +
                  "name, and without it that bound is summed into the forks as mass no fork produced"));
-/* The quantum a site's service is counted in (solver/flow.c's FlowSite), read rather than copied. */
+/* The pull a site's service is counted in (solver/flow.c's FlowSite), read rather than copied. */
 const pullWork = sourceFact(() =>
-  hostDefine("solver/engine.h", "ENGINE_QUANTUM_WORK",
+  hostDefine("solver/engine.h", "ENGINE_PULL_WORK",
              "the @WFQ reader prices the optimism term's range from the work a pull is counted in"));
 /* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. */
 const ageQuantum = sourceFact(() =>

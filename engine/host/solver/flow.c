@@ -321,7 +321,7 @@ struct FlowSite {
     uint64_t key;
     int64_t seen;
     int64_t served;             /* lifetime: work charged to members while they were dispatched from here */
-    double offset;              /* `1/(1 + served/ENGINE_QUANTUM_WORK + seen)`, what every member here reads */
+    double offset;              /* `1/(1 + served/ENGINE_PULL_WORK + seen)`, what every member here reads */
     long members;               /* live members whose `at` names it */
     /* Its node in its family's site heap, set while it holds an indexed member (`ix_bin`), and in the family's
        tail heap under the same flag (`ix_bm`), its node in the family's never-dispatched heap (`ix_bnin`), the root
@@ -348,7 +348,7 @@ static int64_t g_branch_retired_work = 0;
 /* The optimism of a site from its operands, the one expression flow_site_reprice stores and the census operands
    recompose. */
 static double site_optimism(int64_t served, int64_t seen) {
-    return 1.0 / (1.0 + (double)served / (double)ENGINE_QUANTUM_WORK + (double)seen);
+    return 1.0 / (1.0 + (double)served / (double)ENGINE_PULL_WORK + (double)seen);
 }
 
 /* The optimism every member at `st` reads, asserted against the counts it is a function of, so a writer of `served`
@@ -3883,7 +3883,7 @@ static double flow_optimism(const Flow *f) {
 /* The optimism denominator in work, `Q*(1 + seen) + served` with Q = ENGINE_QUANTUM_WORK, one exact integer:
    what the census's spread rows and engine.c's rank asserts read. */
 int64_t flow_optimism_den(const Flow *f) {
-    return ENGINE_QUANTUM_WORK * (1 + f->at->seen) + f->at->served;
+    return ENGINE_PULL_WORK * (1 + f->at->seen) + f->at->served;
 }
 
 /* The queue coordinate: the reward plus the remainder above, what an arrival is placed at
@@ -4022,7 +4022,7 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
     o->own_notch = flow_service_notch(f);
     o->site_served = f->at->served;
     o->site_served_elsewhere = flow_site_served_elsewhere(f);
-    o->pull_work = ENGINE_QUANTUM_WORK;
+    o->pull_work = ENGINE_PULL_WORK;
     o->visits = f->visits;
     o->orphan_seen = f->orphan_seen;
     o->picks = f->picks;
@@ -5364,8 +5364,8 @@ static void flow_ix_check(void) {
 static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
          + c->dist_max
-         + ((double)ENGINE_QUANTUM_WORK / (double)c->opt_den_min
-            - (double)ENGINE_QUANTUM_WORK / (double)c->opt_den_max)
+         + ((double)ENGINE_PULL_WORK / (double)c->opt_den_min
+            - (double)ENGINE_PULL_WORK / (double)c->opt_den_max)
          + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM
          /* And the assumptions, which enter negatively at FLOW_ASSUMPTION_COST each and are at least zero, so the
             most any member rests on bounds their range. */
@@ -5641,7 +5641,7 @@ void flow_wfq_census(WfqCensus *out) {
        is both a family and a branch and one field cannot record being counted once as each. */
     if (++g_wfq_census_gen == 0) g_wfq_census_gen = 1;
     out->vis_min = out->vis_max = 0;
-    out->opt_den_min = out->opt_den_max = ENGINE_QUANTUM_WORK;
+    out->opt_den_min = out->opt_den_max = ENGINE_PULL_WORK;
     out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
     out->cand_svc_max = 0;
     out->dec_max = 0;

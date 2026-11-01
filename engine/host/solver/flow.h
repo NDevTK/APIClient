@@ -60,7 +60,7 @@ typedef struct FlowSite FlowSite;
    + ((-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N) - assumed*A))`, with Q = FLOW_AGE_QUANTUM and
    A = FLOW_ASSUMPTION_COST. `coord_notch` is the family notch plus the carry bit; `site_served` is the work
    the member's code site has received in its family and `pull_work` the quantum it is counted in
-   (ENGINE_QUANTUM_WORK).
+   (ENGINE_PULL_WORK).
    `visits` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
    member could take the thread. `unit` is where its next quantum resumes, a FlowUnitAt no term reads; it is a
    number because a census row carries numbers only (extension/bridge.js's resultDocumentRefusal). */
@@ -1769,7 +1769,7 @@ void  flow_set_orphan_seen(Flow *f, int64_t seen);
 #define FLOW_SITE_CODE  1
 #define FLOW_SITE_DRIVE 2
 void  flow_stand_at(Flow *f, int kind, uint64_t key);
-/* The member's optimism denominator in work, `Q*(1 + orphan_seen) + site_served` with Q = ENGINE_QUANTUM_WORK:
+/* The member's optimism denominator in work, `Q*(1 + orphan_seen) + site_served` with Q = ENGINE_PULL_WORK:
    engine.c's rank assertions snapshot it. */
 int64_t flow_optimism_den(const Flow *f);
 /* A flow's chain of drives (`orphan_chain`): one more member, or an arm's copy of its parent's first `n`. */

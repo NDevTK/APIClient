@@ -311,6 +311,11 @@ EngineRivalMiss engine_rival_miss(void);
    across it. 54000 units is about 12 ms of the native dev build at thread_work.h's 0.222 us per opcode, and it
    fits flow.c's per-residue census domain (at most 65536). */
 #define ENGINE_QUANTUM_WORK ((int64_t)54000)
+/* The pull: a fixed amount of engine work that Level 1 counts a document's service in and Level 2's optimism counts
+   a code site's service in. CLAUDE.md's "a pull is one quantum of work" names the amount, not the slice: a count of
+   pulls is a statistic over a fixed unit, so it may not move when the scheduler changes where its slices end. It
+   equals today's slice, and stays fixed if the slice is retuned. */
+#define ENGINE_PULL_WORK ((int64_t)54000)
 /* Picks by where the picked member resumes (program start, other between-units rung, program frame, parked
    continuation, checkpoint), each [picks standing at a site with no service yet, picks]. A lifetime report. */
 void engine_pick_fresh(long out[5][2]);

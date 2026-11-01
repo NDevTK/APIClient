@@ -1958,8 +1958,8 @@ QJS_EXPORT void qjs_host_answers_exhausted(unsigned req)
 
 /* This instance's Level-1 account, the three facts the trusted zone ranks documents by:
    `{"runnable":0|1,"paid":<novel value>,"pulls":<quanta served>}`. `paid` is novelty_landed_value and
-   `pulls` engine_service_work over ENGINE_QUANTUM_WORK, both lifetime counters of this instance; a pull is one
-   quantum of work, so the zone ranks in pulls and reads no work unit. No flow weight crosses: Level 1 compares
+   `pulls` engine_service_work over ENGINE_PULL_WORK, both lifetime counters of this instance; a pull is a fixed
+   amount of work (engine.h), so the zone ranks in pulls and reads no work unit. No flow weight crosses: Level 1 compares
    documents by novel value per pull, never one frontier's order against another's. The buffer is this entry's and is overwritten by the
    next call; the host copies the string out of linear memory before it asks again. */
 QJS_EXPORT const char *qjs_level1_account(void)
@@ -1980,7 +1980,7 @@ QJS_EXPORT const char *qjs_level1_account(void)
             "the Level-1 account is negative or NaN (paid %g, serviceWork %lld) — both are sums of non-negative "
             "charges that only climb", paid, (long long)work);
     n = snprintf(buf, sizeof buf, "{\"runnable\":%d,\"paid\":%.17g,\"pulls\":%.17g}", engine_runnable(),
-                 paid, (double)work / (double)ENGINE_QUANTUM_WORK);
+                 paid, (double)work / (double)ENGINE_PULL_WORK);
     CHECK(n > 0 && (size_t)n < sizeof buf, "the Level-1 account did not fit its buffer — the zone would parse a "
                                            "truncated record");
     return buf;
