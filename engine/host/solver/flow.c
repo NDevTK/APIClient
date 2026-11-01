@@ -4020,9 +4020,10 @@ static double flow_queue_nonreward(const Flow *f) {
    promise, which flow_nonreward's bound prices. The service count is the family's and the code site's, not the
    member's: arms minted at one decision stand at one code site and share one count, so minting arms does not mint
    optimism, and service at the site lowers all of them at once. The aging still prices the member's own burn.
-   `orphan_seen` is the product's count of drives of the same body elsewhere (flow.h): it lowers and never removes,
-   and its floor 1/(1 + orphan_seen) is what the never-starved guards in flow_pick_walk read. `priced` is the
-   member's priced decisions at FLOW_PRICED_PULLS each, a fact about its executed prefix and so the member's. */
+   `orphan_seen` is the product's count of drives of the same body elsewhere (flow.h): it lowers and never removes.
+   `priced` is the member's priced decisions at FLOW_PRICED_PULLS each, a fact about its executed prefix and so the
+   member's. An unserved member's reading, 1/(1 + orphan_seen + P*priced), is the floor the never-starved guards in
+   flow_pick_walk read. */
 static double flow_optimism(const Flow *f) {
     DCHECK(f->at->seen == f->orphan_seen && f->at->priced == flow_priced(f),
            "a member stands in a class whose drive count or priced count is not its own — flow_stand_at, the fork, "
@@ -4920,7 +4921,7 @@ static inline int64_t flow_silence_us_to_sink(const Flow *f, double floor) {
     /* The reward is the one flow_queue_weight reads, the family's, the account the silence on the other side is
        charged to; read off the flow, the bound would be on a quantity the weight does not contain. `+ 1.0` is the
        fitness fraction, in [0, 1], per the derivation above. `floor` is the untouched
-       member's optimism, 1.0 unless it is a drive of code explored elsewhere (`1/(1 + orphan_seen)`); the
+       member's optimism, 1.0 unless it is a drive of code explored elsewhere or rests on a priced decision; the
        derivation's `>= 1` becomes `>= floor`, which loosens the bound by `1 - floor`, under one point. */
     return (int64_t)((acct_family_val(f) + 1.0 + (1.0 - floor)) * (double)FLOW_SILENCE_WORK) + FLOW_SERVICE_WORK;
 }
@@ -5216,8 +5217,8 @@ static Flow *flow_pick_walk(FlowScan why) {
        prices; each lets "never starved" stop meaning anything while every other assertion passes. */
     DCHECK(!best || !unrun || flow_weight(best) >= flow_optimism(unrun),
            "the WFQ picked a flow worth less than an untouched member of its frontier — a never-run flow at an "
-           "unserved site carries its whole optimism bonus (1.0, or 1/(1 + orphan_seen) for a drive explored "
-           "elsewhere) and no aging, so the pick's maximum must be at least that");
+           "unserved site carries its whole optimism bonus (1.0, or 1/(1 + orphan_seen + P*priced) for a drive "
+           "explored elsewhere or a priced world) and no aging, so the pick's maximum must be at least that");
     /* The pairwise distance (`w(best) − w(unrun) <= R(best) − R(unrun) + 1.0`) is asked of one item at
        flow_nonreward, which needs no reference member. Its consequence remains: the inequality is tight in the
        reward and slack in everything else, so a frontier whose untouched members are unreachable has an
@@ -5508,8 +5509,9 @@ static void flow_ix_check(void) {
    assertion holds the observed spread to, written term by term so that a term added to the weight without a range
    here is visible in one place and a fired assert in the other. `val` and the fitness distance enter positively
    and contribute max−min (the distance's floor is 0, flow.h, so its maximum is its range). The optimism
-   1/(1+pulls+orphan_seen) is decreasing, so its range is taken at the denominator's ends in that order. The aging enters
-   negatively at FLOW_AGE_QUANTUM per notch, and flow_silence_notch floors the sum `(own_silence + fam_work)` while
+   1/(1+pulls+orphan_seen+P*priced) is decreasing, so its range is taken at the denominator's ends in that order.
+   The aging enters negatively at FLOW_AGE_QUANTUM per notch, and flow_silence_notch floors the sum
+   `(own_silence + fam_work)` while
    the census floors the halves separately: floor(a+b) <= floor(a)+floor(b)+1, so the two spreads plus one notch
    bound it exactly, the only slack here. */
 static double wfq_accounted_spread(const WfqCensus *c) {

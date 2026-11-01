@@ -354,9 +354,9 @@ typedef struct Flow {
        were known when this drive was seeded: the product's, from every other document and session of this
        cluster, and this instance's own earlier drives of it, a second compile of the same bytes included. A
        term of the optimism denominator, `1/(1 + pulls + orphan_seen + ...)`, and part of the standing class's
-       identity, so members of one class read one denominator: explored code is lowered and never removed. Written once, at the
-       seed (flow_set_orphan_seen), before the drive is dispatched, and copied by a fork; 0 for every flow that is
-       not a seeded drive, a resumed one included (its own recorded drive is the drive it resumes). */
+       identity, so members of one class read one denominator: explored code is lowered and never removed. Written
+       once, at the seed (flow_set_orphan_seen), before the drive is dispatched, and copied by a fork; 0 for every
+       flow that is not a seeded drive, a resumed one included (its own recorded drive is the drive it resumes). */
     int64_t orphan_seen;
     /* Does this resumed drive still have a chain member whose call it has not built? Set by the cold tier's
        rebuild and cleared when the last member's call is built. A resumed session's heap holds the closure only
