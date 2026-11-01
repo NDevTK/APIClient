@@ -305,8 +305,10 @@ typedef struct FlowAcct {
    content digest, plus the opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a
    driven body (its orphan hash). `seen` is the members' `orphan_seen`, part of the identity so the denominator is
    one number per site. */
-/* A member stands where it last decided (the fork) or, after each step, at the code its next unit enters
-   (engine.c's flow_next_unit), so a quantum's service is charged to the code that quantum ran from.
+/* A member stands where it last decided (the fork) or at the entry of the unit it last began (engine.c's
+   flow_next_unit, asked after each step), so a quantum's service is charged to the decision whose subtree it runs.
+   Where a quantum ended names no site: the quantum is the scheduler's rest granularity, so a key that moved with
+   it would make optimism a function of the slice size.
    Named residual. Not covered: a code site's service is split between the `seen` classes standing at it; and the
    ledger is not parked, so a cold-resumed member stands at its family's keyless site at zero service. Next diff
    builds: the ledger keyed by code site alone with `seen` beside it, and the ledger in the cold tier's family

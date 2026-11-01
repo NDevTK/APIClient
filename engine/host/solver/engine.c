@@ -9262,36 +9262,19 @@ typedef struct {
     uint64_t site;
 } FlowNextUnit;
 
-/* The site a suspended flow resumes from: the innermost page frame of its program's chain, or of the parked
-   continuation the pump resumes next. */
-static void flow_suspension_site(JSContext *ctx, const Flow *f, FlowNextUnit *nu) {
-    if (flow_frame(f)) {
-        if (JS_FlowSiteHash(ctx, (JSValue *)flow_frame(f), &nu->site)) nu->site_kind = FLOW_SITE_CODE;
-    } else {
-        JSContext *park_realm;
-
-        if (JS_ParkedFlowsSiteHash(JS_GetRuntime(ctx), &nu->site, &park_realm)) nu->site_kind = FLOW_SITE_CODE;
-        /* The runtime holds the switched-in agent's parks alone (JS_PutParkedFlows asserts it empty at the
-           switch-in), so the head is this flow's, parked by its selected agent. */
-        DCHECK(park_realm == NULL || JS_GetRealmAgent(park_realm) == flow_agent_running(f)->agent,
-               "the parked continuation this flow is stood at was parked by another agent — the runtime holds only "
-               "the switched-in agent's parks, so a stranger's is a switch that left its set behind, and the site "
-               "would be another timeline's code");
-    }
-}
-
 /* The ladder, read: which rung flow_step takes next for the switched-in flow `f`, and the code that unit enters.
    It writes nothing, so the scheduler asks it after a step to stand the member at its next unit, and flow_step
    asks it at each pass and dispatches on the answer. `entry` is the step's first pass (the one rest point where
    an agent is chosen); `task_done` is flow_step's `turn_task_done`. A program entry is named by its row's content
-   digest, a job's by JS_JobSiteHash over its callee, a resumption by the suspended chain's site.
+   digest, a job's by JS_JobSiteHash over its callee. A member's site is thus the last decision it reached (the fork
+   stands it there) or the entry of the unit it began since, never where a quantum ended: the quantum is the
+   scheduler's rest granularity, and no ranking term may move with it.
    Named residual. Not covered: the agent choice of a flow with more than one agent, and the rungs below
-   run-a-task, answer HOOK_UNDECIDED; and the rungs that run no page code of their own (from link-connected to the
-   spin, but for the checkpoint) and a job whose callee is a step machine name no site, so a member about to take
-   one keeps standing where its last unit left it. Next diff builds: those hooks as due reads beside their
-   performs, as done here for the four above the sequence, and the code each host rung hands control to (a
-   settled reply's head reaction, a timer task's handler). Absence shows as: an `observedTerms` row at unit 0
-   whose next step runs new code without its siteServed moving. */
+   run-a-task, answer HOOK_UNDECIDED; and the host rungs (from link-connected to the spin, but for the checkpoint)
+   and a job whose callee is a step machine name no entry. Next diff builds: those hooks as due reads beside their
+   performs, and the code each host rung hands control to (a settled reply's head reaction, a timer task's
+   handler). Absence shows as: an `observedTerms` row at unit 0 whose next step runs new code without its
+   siteServed moving. */
 static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry, int task_done) {
     FlowNextUnit nu = { .arm = NEXT_IDLE, .due = NEXT_DUE, .index = -1, .row = ROW_NONE };
     int stack_empty;
@@ -9314,11 +9297,9 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
     else if ((nu.index = flow_reply_success_fork_at(ctx, f)) >= 0) nu.arm = NEXT_FORK_REPLY_SUCCESS;
     else if (JS_HasParkedFlow(JS_GetRuntime(ctx))) nu.arm = NEXT_RESUME_PARKED;
     else if (flow_frame(f)) nu.arm = NEXT_RESUME_PROGRAM;
-    if (nu.arm != NEXT_IDLE) {
-        /* A fork clones the suspension and leaves this flow standing in it, so its site is the resumption's. */
-        flow_suspension_site(ctx, f, &nu);
-        return nu;
-    }
+    /* A fork rung or a resumption continues the unit the member is in, so it names no site: the member keeps standing
+       at its last decision or at the entry of that unit, which its path decides and where a quantum ended does not. */
+    if (nu.arm != NEXT_IDLE) return nu;
     if (!task_done && g_link_connected_due && g_link_connected_due(ctx)) { nu.arm = NEXT_LINK_CONNECTED; return nu; }
     if (!task_done && flow_deliver_pending(f)) { nu.arm = NEXT_ROUTED_DELIVERY; return nu; }
     if (!task_done && flow_perform_pending(f)) { nu.arm = NEXT_CROSS_AGENT_OP; return nu; }
@@ -12753,10 +12734,9 @@ static int engine_sched_slice(void) {
             g_step_us += now - t0;
             g_step_work += step_work;
             flow_age_running(step_work);
-            /* The service just charged was the site the flow stood at while it ran. The next quantum serves the
-               code its next unit enters (flow_next_unit): the opcode a program or job parked at, the head of a
-               checkpoint, the program or task the ladder starts next. A rung that names no code leaves it where it
-               stands (flow_next_unit_pass's residual). */
+            /* The service just charged was the site the flow stood at while it ran. A member about to begin a unit
+               stands at that unit's entry (flow_next_unit: the program or task the ladder starts next, the head of a
+               checkpoint); one in the middle of a unit keeps its last decision or that unit's entry. */
             if (r == FLOW_STEP_MORE || r == FLOW_STEP_OWED) {
                 FlowNextUnit nu = flow_next_unit(ctx, cur);
 

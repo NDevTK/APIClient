@@ -117710,29 +117710,6 @@ static int flow_chain_site_hash(JSRuntime *rt, JSAsyncFunctionState *s, uint64_t
     return 1;
 }
 
-int JS_FlowSiteHash(JSContext *ctx, JSValue *flow, uint64_t *out)
-{
-    DCHECK(flow != NULL && out != NULL, "a suspended flow's site was asked of no flow or with nowhere to put it");
-    return flow_chain_site_hash(ctx->rt, (JSAsyncFunctionState *)flow, out);
-}
-
-/* The continuation the pump resumes next, the head of the FIFO JS_ResumeParkedFlow takes from: the code the
-   flow's next quantum runs from. */
-int JS_ParkedFlowsSiteHash(JSRuntime *rt, uint64_t *out, JSContext **realm)
-{
-    JSAsyncFunctionState *head;
-
-    DCHECK(out != NULL && realm != NULL, "a parked flow's site was asked with nowhere to put it");
-    *realm = NULL;
-    if (list_empty(&rt->parked_flows))
-        return 0;
-    head = list_entry(rt->parked_flows.next, JSAsyncFunctionState, park_link);
-    DCHECK(head->park_fn != NULL && head->park_ctx != NULL,
-           "the parked queue's head holds no parked continuation — flow_park writes the record with the link");
-    *realm = head->park_ctx;
-    return flow_chain_site_hash(rt, head, out);
-}
-
 /* ── AN INTRINSIC'S NAME ──────────────────────────────────────────────────────────────────────────────────────
  *
  * THE SECOND OF THE TWO NAME SOURCES A VALUE CAN HAVE, and the one that needs no per-object state at all. An
