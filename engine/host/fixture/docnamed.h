@@ -11,6 +11,12 @@
    A form's named getter (HTML §4.10.3, [LegacyOverrideBuiltIns]) answers `<input name=action>` over the
    `action` member, an `img` it owns and a control whose form attribute names it, never an Image Button or a
    div, a renamed control by its old name from the past names map, with an unenumerable, unwritable descriptor.
+   A computed-key write of an object (`o[k] = {}`) whose chain holds a named-properties link is OrdinarySet over
+   that link: on the Window it defines on the Window, a named element's name included; on a Document, or an
+   object inheriting from one, it defines on the receiver.
+   A Document placed above a primitive's prototype or above %IteratorPrototype% answers a C activation's own
+   lookups there by its step: JSON.stringify's toJSON read off a BigInt reaches `<img name=toJSON>`, which is no
+   function, and a spread whose array iterator lost its own `next` reaches `<img name=next>`; each throws a TypeError.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_DOCNAMED_H
@@ -65,6 +71,33 @@ static const char HTML_DOCNAMED[] =
     "var fmDesc = !!fmD && !fmD.enumerable && fmD.configurable && !fmD.writable && fmD.value instanceof HTMLInputElement;"
     "fetch('/api/formnamed?ov=' + fmOv + '&ib=' + fmIb + '&div=' + fmDiv + '&pic=' + fmPic + '&ext=' + fmExt +"
     "      '&past=' + fmPast + '&desc=' + fmDesc + '&inv=' + fmInv);"
+    "</script>"
+    "<script>"
+    "var peK = ['wnPutEl', 'dnObj', 'dnPutEl', 'dnProtoPut'];"
+    "window[peK[0]] = {a: 1};"
+    "var peW = window.wnPutEl.a === 1 && Object.getOwnPropertyDescriptor(window, 'wnPutEl').value.a === 1;"
+    "window[peK[1]] = {c: 3};"
+    "var peWn = window.dnObj.c === 3 && Object.prototype.hasOwnProperty.call(window, 'dnObj');"
+    "document[peK[2]] = {b: 2};"
+    "var peD = document.dnPutEl.b === 2 && Object.prototype.hasOwnProperty.call(document, 'dnPutEl');"
+    "var peO = Object.create(document); peO[peK[3]] = {f: 6};"
+    "var peDc = peO.dnProtoPut.f === 6 && !('dnProtoPut' in document);"
+    "fetch('/api/putelnamed?w=' + peW + '&wn=' + peWn + '&d=' + peD + '&dc=' + peDc);"
+    "</script>"
+    "<img name='toJSON' src='/dn7.png'><img name='next' src='/dn8.png'>"
+    "<script>"
+    "var cwJ, cwG, cwS;"
+    "Object.setPrototypeOf(BigInt.prototype, document);"
+    "try { cwJ = JSON.stringify({a: 1n}); } catch (e) { cwJ = e.constructor.name; }"
+    "cwG = (1n).toJSON instanceof HTMLImageElement;"
+    "Object.setPrototypeOf(BigInt.prototype, Object.prototype);"
+    "var cwAip = Object.getPrototypeOf([][Symbol.iterator]()), cwNext = cwAip.next;"
+    "var cwIp = Object.getPrototypeOf(cwAip);"
+    "delete cwAip.next; Object.setPrototypeOf(cwIp, document);"
+    "try { cwS = [...[1, 2]].length; } catch (e) { cwS = e.constructor.name; }"
+    "Object.setPrototypeOf(cwIp, Object.prototype);"
+    "Object.defineProperty(cwAip, 'next', {value: cwNext, writable: true, configurable: true});"
+    "fetch('/api/chainnamed?json=' + cwJ + '&get=' + cwG + '&spread=' + cwS);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

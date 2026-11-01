@@ -17081,6 +17081,20 @@ TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
         { "fm-desc", "/api/formnamed", "desc", "true", "false",
           "a form named property's descriptor is not §3.9.1's, unenumerable and not writable" },
         { "fm-miss", "/api/formnamed", "inv", "undefined", "object", "a name nothing carries answered a value" },
+        { "pe-window", "/api/putelnamed", "w", "true", "false",
+          "a computed-key write of an object on the Window did not define on the Window" },
+        { "pe-window-named", "/api/putelnamed", "wn", "true", "false",
+          "a computed-key write over a Window named property did not define on the Window" },
+        { "pe-document", "/api/putelnamed", "d", "true", "false",
+          "a computed-key write of an object on the Document did not define on the Document" },
+        { "pe-document-chain", "/api/putelnamed", "dc", "true", "false",
+          "a computed-key write on an object inheriting from the Document did not define on that object" },
+        { "cw-json-bigint", "/api/chainnamed", "json", "TypeError", "undefined",
+          "JSON.stringify of a BigInt under a Document above BigInt.prototype did not throw a TypeError" },
+        { "cw-get-bigint", "/api/chainnamed", "get", "true", "false",
+          "a read off a BigInt did not reach a named element of the Document above BigInt.prototype" },
+        { "cw-spread-next", "/api/chainnamed", "spread", "TypeError", "2",
+          "a spread whose array iterator lost `next` did not reach the Document above %IteratorPrototype%" },
     };
     Probe rows[sizeof R / sizeof R[0]];
     for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {

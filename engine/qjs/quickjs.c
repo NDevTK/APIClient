@@ -42734,9 +42734,20 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        JS_SetPropertyInternal2 and ran the body from C: JSON.stringify's toJSON read off a BigInt
                        is what named it. */
                     JSValueConst pproto = JS_GetPrototypePrimitive(ctx, gp_obj);
-                    if (JS_VALUE_GET_TAG(pproto) == JS_TAG_OBJECT)
+                    if (JS_VALUE_GET_TAG(pproto) == JS_TAG_OBJECT) {
+                        /* a Proxy or a step-answering link above the primitive takes the request, the primitive
+                           its receiver, exactly as above an object (tramp_walk_base answers its own keys) */
+                        tramp_px = gp_op == GP_GET ? tramp_proto_keyed_read(ctx, gp_obj, gp_atom)
+                                                   : tramp_proto_keyed_write(ctx, gp_obj, gp_atom);
+                        if (tramp_px) {
+                            gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px);
+                            gp_recv = gp_recv_r; gp_no_throw = gp_nothrow_r;
+                            if (gp_trapst) { js_trapget_free(ctx, gp_trapst); gp_trapst = NULL; }
+                            goto do_getprop_tramp;
+                        }
                         accessor = gp_op == GP_GET ? tramp_accessor_getter(ctx, pproto, gp_atom)
                                                    : tramp_accessor_setter(ctx, pproto, gp_atom);
+                    }
                 }
                 if (step_gop) {
                     /* the class's step function, called f(obj, key, receiver, op) below; no target, so no trap
@@ -90707,6 +90718,7 @@ static JSIterAtState data_method_at(JSContext *ctx, JSObject *p, JSAtom atom, JS
         JSPropertyDescriptor desc;
         int ret;
         if (p->class_id == JS_CLASS_PROXY) return ITERAT_DECLINE;   /* an own-property query IS a trap */
+        if (tramp_step_exotic(ctx, p, atom)) return ITERAT_DECLINE;  /* ...or a step, which runs on the chain */
         ret = JS_GetOwnPropertyInternal(ctx, &desc, p, atom);
         if (ret < 0) return ITERAT_DECLINE;
         if (ret) {
