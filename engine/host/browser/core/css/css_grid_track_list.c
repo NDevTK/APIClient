@@ -23,7 +23,7 @@ static const char *gtl_component_end(const char *s, const char *end)
 }
 
 /* A `<flex>`: a CSS number, then the unit `fr` (ASCII case-insensitive). False when `t` is not one. The
-   number's grammar is css-syntax-3 §4.3.12 "Consume a number": digits, an optional fraction and an optional
+   number's grammar is css-syntax-3 §4.3.13 "Consume a number": digits, an optional fraction and an optional
    exponent, with an optional sign; `strtod`'s other spellings (hexadecimal, `inf`, `nan`) are refused. */
 static bool gtl_flex(const char *t, size_t n, double *out)
 {
