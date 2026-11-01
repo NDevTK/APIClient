@@ -14912,11 +14912,22 @@ TF_UNIT void probes_isarraytype(const char *js, Probe *tab, int *n) {
     fold_row(&mem_tt, &mem_why, !param_value_is(js, "/api/ia-m3", "x", "1"),
              "a /api/ia-m3 record carries x=1: a member read off a value whose example the flow's type facet "
              "contradicts took the contradicted Object's member as its example (concolic.c's record_example)");
+    const char *key_why = NULL;
+    int key_tt = 1;
+    char key_other[64];
+
+    fold_row(&key_tt, &key_why, param_value_is(js, "/api/ia-k3", "n", "0"),
+             "NOT REACHED: no /api/ia-k3 record with n=0, so no flow answered Object.keys over `iaRec.f` on its "
+             "Boolean arm as a Boolean's empty list");
+    fold_row(&key_tt, &key_why, param_values_other(js, "/api/ia-k3", "n", "0", key_other, sizeof key_other) == 0,
+             "a /api/ia-k3 record carries an n other than 0: Object.keys over a value its type facet proved a "
+             "Boolean forked its own-key set (concolic.c's own_keys_pred) instead of answering from the type");
     const Probe rows[] = {
         { "isarraytype-string", str_tt, "iaV", SESS_EXPLORE, str_why },
         { "isarraytype-json", obj_tt, "iaJ", SESS_EXPLORE, obj_why },
         { "isarraytype-facet", fac_tt, "iaRec", SESS_EXPLORE, fac_why },
         { "isarraytype-facet-member", mem_tt, "iaRec", SESS_EXPLORE, mem_why },
+        { "isarraytype-facet-keys", key_tt, "iaRec", SESS_EXPLORE, key_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
