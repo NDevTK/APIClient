@@ -1545,7 +1545,11 @@ static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
        whose address assert holds for every response that has a body. A page reads this whenever a handler
        runs after a failed request (`onloadend`, or a handler the solver drives uncalled). */
     if (d->network_error) return JS_NewString(ctx, "");
-    return xhr_reply_content(ctx, d, xhr_decode_text(ctx, d));
+    JSValue r = xhr_reply_content(ctx, d, xhr_decode_text(ctx, d));
+
+    /* Step 5 returns the result of decode, a String whatever bytes the server sends. */
+    if (concolic_is(r)) concolic_state_string(r);
+    return r;
 }
 
 /* §3.6.6 "set a document response". The HTML arm is lexbor's parser over a document with NO browsing context —

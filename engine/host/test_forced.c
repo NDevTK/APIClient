@@ -1198,6 +1198,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
 #include "fixture/splitunits.h"
+#include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
@@ -1795,6 +1796,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
     { "splitunits", HTML_SPLITUNITS },
+    { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
@@ -14809,6 +14811,31 @@ TF_UNIT void probes_splitunits(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `xhrtext` document: an XMLHttpRequest's text reply is a String in every world, so its typeof
+   decides, and it is still unknown input, so a parse over it keeps both completions. */
+TF_UNIT void probes_xhrtext(const char *js, Probe *tab, int *n) {
+    const char *ty_why = NULL, *keep_why = NULL;
+    int ty_tt = 1, keep_tt = 1;
+
+    fold_row(&ty_tt, &ty_why,
+             emitted_record_has(js, "/api/xt-b1", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/xt-b2", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/xt-b4", "\"door\":\"fetch\""),
+             "NOT REACHED: no /api/xt-b1, xt-b2 or xt-b4 record, so no load handler read the text reply");
+    fold_row(&ty_tt, &ty_why,
+             !strstr(js, "\"/api/xt-a1\"") && !strstr(js, "\"/api/xt-a2\"") && !strstr(js, "\"/api/xt-a4\""),
+             "a /api/xt-a1, xt-a2 or xt-a4 record exists: a text reply getter's value was taken as not a String");
+    fold_row(&keep_tt, &keep_why,
+             emitted_record_has(js, "/api/xt-a3", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/xt-b3", "\"door\":\"fetch\""),
+             "JSON.parse over the text reply did not keep both its success and its throw");
+    const Probe rows[] = {
+        { "xhrtext-typed", ty_tt, "xtReq", SESS_EXPLORE, ty_why },
+        { "xhrtext-kept", keep_tt, "xtReq", SESS_EXPLORE, keep_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `isarraytype` document: IsArray over an unknown whose type set holds no Object answers false
    (solver/concolic.c's concolic_isarray_hook), and over one that may be an Object keeps both arms. */
 TF_UNIT void probes_isarraytype(const char *js, Probe *tab, int *n) {
@@ -23437,6 +23464,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
     probes_splitunits(js, probes, &np);
+    probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
