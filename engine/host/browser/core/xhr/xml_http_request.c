@@ -812,6 +812,7 @@ static JSValueConst xhr_idl_arg(int argc, JSValueConst *argv, int i)
  * exceptional arm on its way to a sink. */
 enum { OPEN_M_OK = 0, OPEN_M_NOT_A_METHOD, OPEN_M_FORBIDDEN, OPEN_M_OUTCOMES };
 #define OPEN_METHOD_OP "XHR §3.5.1 open() steps 2-4 over the method"
+#define OPEN_CREDENTIALS_OP "XHR §3.5.1 open() step 8 (set the username and password)"
 
 /* WHICH OF THOSE THREE THE STEPS REACH WHEN RUN ON THE UNKNOWN'S OWN EXAMPLE — step_fork_run's `real`, and a
    DIFFERENT declaration from the numbering above: not "which completion does a run with no forking policy
@@ -850,6 +851,84 @@ static int xhr_open_method_real(JSContext *ctx, JSValueConst mv, char **pnorm)
     return real;
 }
 
+/* URL §4.4 "URL parsing"'s set the username or set the password (by `member`) given `rec` and a
+   credential argument that is a String or the IDL null, as XHR §3.5.1 open() step 8 asks: null sets nothing. */
+static void open_credential_set(JSContext *ctx, UrlRecord *rec, int member, JSValueConst v)
+{
+    const char *c;
+    size_t n = 0;
+
+    if (JS_IsNull(v) || JS_IsUndefined(v)) return;
+    DCHECK(JS_IsString(v), "XHR §3.5.1 step 8 was handed a credential §3.2.12 USVString did not convert");
+    c = JS_ToCStringLen(ctx, &n, v);
+    CHECK(c != NULL, "XMLHttpRequest: OOM reading a credential for §3.5.1 step 8");
+    url_member_set(rec, member, c, n);
+    JS_FreeCString(ctx, c);
+}
+
+/* A credential's bytes in its example's world, as Web IDL §3.2.20's null rule and §3.2.12 USVString convert
+   the example: 1 with `*out` the IDL value (null or a String, owned), 0 when the unknown holds no example
+   whose conversion runs no page code. A known value is its own example. */
+static int open_credential_example(JSContext *ctx, JSValueConst v, JSValue *out)
+{
+    JSValue ex;
+
+    if (!concolic_is(v)) {
+        *out = JS_DupValue(ctx, v);
+        return 1;
+    }
+    if (!concolic_example_present(v)) return 0;
+    ex = concolic_example(ctx, v);
+    if (JS_IsNull(ex) || JS_IsUndefined(ex)) {
+        *out = JS_NULL;
+        return 1;
+    }
+    JS_FreeValue(ctx, ex);
+    ex = concolic_example_string(ctx, v);
+    if (!JS_IsString(ex)) {
+        JS_FreeValue(ctx, ex);
+        return 0;
+    }
+    *out = JS_ToScalarValueString(ctx, ex);
+    CHECK(!JS_IsException(*out), "XMLHttpRequest: OOM converting a credential's example to a USVString");
+    return 1;
+}
+
+/* XHR §3.5.1 open() step 8 over an unknown username or password. The credentials are URL-carried authority,
+   an egress signal, so the request URL becomes an unknown derived from the address argument and both
+   credentials, whose example is step 8 run on their examples over `rec` (the parse step 5 made, of bytes or
+   of the address's example). Where every operand has bytes, `rec` is left holding that example's URL and the
+   class is EXAMPLE; otherwise there are no bytes to send and the class is UNKNOWN. Returns the derived value
+   (owned). */
+static JSValue open_credentials_unknown(JSContext *ctx, UrlRecord *rec, FetchAddressClass *cls,
+                                        JSValueConst address, JSValueConst user, JSValueConst pass)
+{
+    JSValueConst operands[3] = { address, user, pass };
+    JSValue uex = JS_UNDEFINED, pex = JS_UNDEFINED, example = JS_UNDEFINED, r;
+
+    DCHECK(*cls != FETCH_ADDRESS_UNPLACED, "step 8's derivation was asked before step 5 placed the address");
+    if (*cls != FETCH_ADDRESS_UNKNOWN && open_credential_example(ctx, user, &uex) &&
+        open_credential_example(ctx, pass, &pex)) {
+        char *ser;
+
+        open_credential_set(ctx, rec, URL_USERNAME, uex);
+        open_credential_set(ctx, rec, URL_PASSWORD, pex);
+        ser = url_serialize(rec, false);
+        CHECK(ser != NULL, "XMLHttpRequest: OOM serializing step 8's example URL");
+        example = JS_NewString(ctx, ser);
+        free(ser);
+        *cls = FETCH_ADDRESS_EXAMPLE;
+    } else {
+        *cls = FETCH_ADDRESS_UNKNOWN;
+    }
+    JS_FreeValue(ctx, uex);
+    JS_FreeValue(ctx, pex);
+    r = concolic_new_derived(ctx, OPEN_CREDENTIALS_OP, operands, 3, example);
+    DCHECK(concolic_is(r), "step 8's derivation answered that no operand was unknown — it is asked only where "
+                           "concolic_is says a credential is");
+    return r;
+}
+
 static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -863,6 +942,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         UrlRecord rec;
         bool ok;
         FetchAddressClass url_address;
+        JSValue url_src = JS_UNINITIALIZED;   /* step 8's derived address (owned), stored at 11.3 beside `url` */
         bool async = true;
         int i;
 
@@ -1000,23 +1080,25 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (argc > 2) async = JS_ToBool(ctx, xhr_idl_arg(argc, argv, 2)) != 0;
         /* Step 8: the credentials, set into the parsed URL when it has a host. Step 7 already left them null
            for the omitted-argument call, and the declaration converts `USVString?` null and undefined to the
-           IDL null — so the two tests below ARE step 8's two conditions and there is no third to add. */
+           IDL null — so the two tests below ARE step 8's two conditions and there is no third to add. An
+           unknown credential crosses that conversion unconverted: the URL is then a derivation over the
+           address and both credentials (open_credentials_unknown), never bytes coerced from one. */
         {
             JSValueConst user = xhr_idl_arg(argc, argv, 3), pass = xhr_idl_arg(argc, argv, 4);
             if (rec.host.kind != URL_HOST_NULL) {
-                if (!JS_IsNull(user) && !JS_IsUndefined(user)) {
-                    const char *v = JS_ToCString(ctx, user);
-                    if (v) { url_member_set(&rec, URL_USERNAME, v, strlen(v)); JS_FreeCString(ctx, v); }
-                }
-                if (!JS_IsNull(pass) && !JS_IsUndefined(pass)) {
-                    const char *v = JS_ToCString(ctx, pass);
-                    if (v) { url_member_set(&rec, URL_PASSWORD, v, strlen(v)); JS_FreeCString(ctx, v); }
+                if (concolic_is(user) || concolic_is(pass)) {
+                    url_src = open_credentials_unknown(ctx, &rec, &url_address, xhr_idl_arg(argc, argv, 1),
+                                                       user, pass);
+                } else {
+                    open_credential_set(ctx, &rec, URL_USERNAME, user);
+                    open_credential_set(ctx, &rec, URL_PASSWORD, pass);
                 }
             }
         }
         /* Step 9: a synchronous request on a Window may carry neither a timeout nor a response type. */
         if (!async && xhr_global_is_window(ctx) && (d->timeout != 0 || d->response_type != RT_EMPTY)) {
             JS_FreeValue(ctx, mval);
+            JS_FreeValue(ctx, url_src);
             url_record_free(&rec);
             return JS_ThrowDOMException(ctx, "InvalidAccessError",
                                         "a synchronous open() with a timeout or a responseType set"), -1;
@@ -1036,8 +1118,10 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         /* AND THE ARGUMENT ITSELF, kept beside the serialization for the @H surface — see `url_src`. Held only
            when it carries something the serialization does not: a plain string IS its own parse, so storing
            one would make every endpoint carry a second copy of its own address. */
-        xhr_set(ctx, d, &d->url_src, concolic_is(xhr_idl_arg(argc, argv, 1))
-                                   ? JS_DupValue(ctx, xhr_idl_arg(argc, argv, 1)) : JS_NULL);
+        if (JS_IsUninitialized(url_src))
+            url_src = concolic_is(xhr_idl_arg(argc, argv, 1)) ? JS_DupValue(ctx, xhr_idl_arg(argc, argv, 1))
+                                                              : JS_NULL;
+        xhr_set(ctx, d, &d->url_src, url_src);
         url_record_free(&rec);
         d->synchronous = async ? 0 : 1;
         d->url_address = url_address;
