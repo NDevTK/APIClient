@@ -19,6 +19,7 @@ struct DynBody {
        made the body and is a fact about the buffer's provenance rather than about any flow. */
     char   parsed;      /* some flow of this process has finished parsing these bytes */
     char   own_decode;  /* the buffer came from `dyn_body_adopt` — one flow's own decode of a reply */
+    uint64_t digest;    /* FNV-1a 64 over `text[0 .. len)`, taken at the wrap; the bytes never change after it */
     /* THE PARSE OF `text`, AND THE KEY IT WAS COMPILED UNDER — see dyn_body.h for the whole contract. Unlike
        the two census bytes above, this IS read to decide something: whether a timeline reaching these bytes
        spends a parse on them. It decides no WORK (no program is skipped and no arm is chosen), which is the
@@ -55,6 +56,8 @@ static DynBody *dyn_body_wrap(char *text, size_t len, int own_decode)
     b->text = text;
     b->parsed = 0;
     b->own_decode = (char)(own_decode != 0);
+    b->digest = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < len; i++) { b->digest ^= (unsigned char)text[i]; b->digest *= 0x100000001b3ULL; }
     /* NO PARSE YET, AND THE PAIR IS WRITTEN TOGETHER at the one site that mints a body, so the predicate
        (`parse_realm`) and the value it guards cannot begin life disagreeing. */
     b->parse = JS_UNDEFINED;
@@ -173,6 +176,12 @@ const char *dyn_body_text(const DynBody *b)
            "a program's source text was read after its last holder released it — the buffer is freed with "
            "that release, so this read is of memory the allocator has given away");
     return b->text;
+}
+
+uint64_t dyn_body_digest(const DynBody *b)
+{
+    DCHECK(b != NULL && b->refs > 0, "a program's digest was asked of no body, or after its last holder released it");
+    return b->digest;
 }
 
 size_t dyn_body_len(const DynBody *b)

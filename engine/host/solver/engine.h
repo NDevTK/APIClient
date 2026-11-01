@@ -163,9 +163,10 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
    browser components below register hooks for the same reason: the scheduler may not depend on the browser
    half. */
 void engine_set_timer_hook(int (*fn)(JSContext *ctx));
-/* The timer source's arrival stamp for its next task when that task is already due (core/timing/timer.h's
-   timer_due_stamp), registered by the timer component beside the step above. */
-void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx));
+/* The timer source's arrival stamp for its next task when that task is already due, as a read
+   (core/timing/timer.h's timer_due_stamp), and the write it reads (timer_stamp_due), which the scheduler performs
+   at the end of each step of the running flow. Registered by the timer component beside the step above. */
+void engine_set_timer_due_hooks(uint64_t (*due)(JSContext *ctx), void (*stamp)(JSContext *ctx));
 /* The delivery arm's half of the deadline race (core/timing/timer.h's timer_race_arrival). */
 void engine_set_timer_race_hook(int (*fn)(JSContext *ctx));
 /* How many timers stand in the maps of active timers (core/timing/timer.h's timer_active_count), registered by
@@ -190,8 +191,9 @@ void engine_set_idle_hook(int (*fn)(JSContext *ctx));
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
 /* HTML §13.2.7 "The end" step 3 (core/dom/document.c's document_parse_end_step), asked above the sequence once the
    execution context stack and the microtask queue are empty: it runs in the parser's own task, before step 5's
-   spin. One claimant at a time (asserted); NULL releases the slot. */
-void engine_set_parse_end_hook(int (*fn)(JSContext *ctx));
+   spin. `due` reads whether a document owes it and writes nothing; `step` performs it and is asked only on that
+   yes. One claimant at a time (asserted); NULL releases the slot. */
+void engine_set_parse_end_hooks(int (*due)(JSContext *ctx), void (*step)(JSContext *ctx));
 /* HTML §13.2.7 "The end", asked of document `doc` in the running flow. The first is true while the document owes
    a script DOMContentLoaded waits for (step 5's list, and the parse's own scripts before it); the second while
    it owes any script `load` waits for, adding step 7's two as-soon-as-possible lists. */
@@ -205,8 +207,9 @@ lxb_dom_element_t *engine_document_parse_position(uint32_t doc);
    (html_link.h). Asked ahead of everything else a flow could do: a browser connects them during tree
    construction, so their requests precede every script of the document. The baseline walk that finds them can
    only inventory them, because §4.2.4.3 "Fetching and processing a resource from a link element" ends in a
-   fetch, and a fetch parks on a flow. */
-void engine_set_link_connected_hook(int (*fn)(JSContext *ctx));
+   fetch, and a fetch parks on a flow. `due` reads whether an element is owed and writes nothing; `step` serves
+   one and is asked only on that yes. */
+void engine_set_link_connected_hooks(int (*due)(JSContext *ctx), void (*step)(JSContext *ctx));
 /* The end of a microtask checkpoint: HTML §8.1.7.3's "perform a microtask checkpoint" step after the microtask
    queue drains and before the flag clears, asked when the flow that just ran a unit of work holds no
    microtask. Registered by the component that owns the steps HTML runs there: Indexed Database §2.7.1

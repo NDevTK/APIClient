@@ -50,6 +50,7 @@
 #define ENGINE_HOST_SOLVER_DYN_BODY_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "quickjs.h"   /* a HELD PARSE is a JSValue; see dyn_body_parse_hold below */
 
@@ -93,6 +94,9 @@ const char *dyn_body_text(const DynBody *b);
    this pair replaces), and it is kept rather than recomputed for a second reason: the census walks every row of
    every flow, and a `strlen` there is a pass over every byte of every bundle the frontier holds. */
 size_t dyn_body_len(const DynBody *b);
+/* The program's content digest, FNV-1a 64 over its `len` bytes (the fold quickjs's parse takes as a script's
+   content digest), computed once when the body is made: the scheduler names a program's entry by it. */
+uint64_t dyn_body_digest(const DynBody *b);
 
 /* HAVE THESE BYTES ALREADY BEEN PARSED TO COMPLETION BY SOME FLOW OF THIS PROCESS — the direct answer to the
    question `classicCompiles` against a document's program count was being asked to infer, and it lives HERE

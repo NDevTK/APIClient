@@ -174,8 +174,8 @@
    `TE_FN` and held a callable only, because the string arm made no entry at all; every consequence of that is
    in this file's banner. `timer_after`'s entries are always callable, which is that algorithm's own statement
    and not a property of the field. */
-/* TE_DUE is the entry's task's arrival on the work clock (solver/flow.h's flow_work_seq_next), minted the first
-   time timer_due_stamp sees the entry due; 0 until then. */
+/* TE_DUE is the entry's task's arrival on the work clock (solver/flow.h's flow_work_seq_next), minted by
+   timer_stamp_due at the end of the first step whose work moved the clock past the expiry; 0 until then. */
 enum { TE_HANDLE = 0, TE_WHEN, TE_REPEAT, TE_TIMEOUT, TE_THIS, TE_NEST, TE_SEQ, TE_DUE, TE_HANDLER, TE_ARG0 };
 
 static JSClassID g_slot = JS_INVALID_CLASS_ID;
@@ -506,14 +506,12 @@ int timer_due_before(JSContext *ctx, JSValueConst moment)
 }
 
 /* See timer.h. The walk is over every global of the agent, as timer_earliest's is, and compares numbers only: an
-   unknown expiry or clock answers 0 before anything is stamped, so this asks no question a fork would decide. The
-   earliest due entry is the one timer_run_due fires next, since any entry earlier than a due one is due too. */
-uint64_t timer_due_stamp(JSContext *ctx)
+   unknown expiry or clock ends it before anything further is stamped, so it asks no question a fork would decide.
+   Every entry whose expiry the clock has reached and that carries no arrival yet is given one. */
+void timer_stamp_due(JSContext *ctx)
 {
     JSValue all = navigable_tree_order(ctx);
     uint32_t i, n = arr_len(ctx, all);
-    uint64_t best = 0;
-    double best_when = 0, best_seq = 0;
     int unknown = 0;
 
     for (i = 0; i < n && !unknown; i++) {
@@ -527,23 +525,57 @@ uint64_t timer_due_stamp(JSContext *ctx)
         if (!unknown) JS_ToFloat64(docctx, &t, now);
         for (k = 0; k < m && !unknown; k++) {
             JSValue e = JS_GetPropertyUint32(docctx, q, k), when = JS_UNDEFINED;
-            double w = 0, due, seq;
+            double w = 0;
 
             if (JS_IsObject(e)) when = timer_entry_when(docctx, e);
             if (JS_IsObject(e) && !JS_IsUndefined(when) && !(unknown = !JS_IsNumber(when))) {
                 JS_ToFloat64(docctx, &w, when);
-                if (w <= t) {
-                    due = timer_entry_num(docctx, e, TE_DUE);
-                    if (due == 0) {
-                        due = (double)flow_work_seq_next();
-                        JS_SetPropertyUint32(docctx, e, TE_DUE, JS_NewFloat64(docctx, due));
-                    }
-                    seq = timer_entry_num(docctx, e, TE_SEQ);
-                    if (!best || w < best_when || (w == best_when && seq < best_seq)) {
-                        best = (uint64_t)due;
-                        best_when = w;
-                        best_seq = seq;
-                    }
+                if (w <= t && timer_entry_num(docctx, e, TE_DUE) == 0)
+                    JS_SetPropertyUint32(docctx, e, TE_DUE, JS_NewFloat64(docctx, (double)flow_work_seq_next()));
+            }
+            JS_FreeValue(docctx, when);
+            JS_FreeValue(docctx, e);
+        }
+        JS_FreeValue(docctx, q);
+        JS_FreeValue(docctx, now);
+        JS_FreeValue(ctx, proxy);
+    }
+    JS_FreeValue(ctx, all);
+}
+
+/* See timer.h. timer_stamp_due's walk, reading: the earliest due entry is the one timer_run_due fires next, since
+   any entry earlier than a due one is due too, and its arrival is the answer. An entry the clock reached since the
+   last stamp has none yet and answers 0, which orders it behind everything already queued, as its stamp will. */
+uint64_t timer_due_stamp(JSContext *ctx)
+{
+    JSValue all = navigable_tree_order(ctx);
+    uint32_t i, n = arr_len(ctx, all);
+    uint64_t best = 0;
+    double best_when = 0, best_seq = 0;
+    int unknown = 0, found = 0;
+
+    for (i = 0; i < n && !unknown; i++) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
+        JSContext *docctx = window_proxy_realm(ctx, proxy);
+        JSValue now = event_loop_now(docctx), q = timer_map(docctx);
+        uint32_t k, m = arr_len(docctx, q);
+        double t = 0;
+
+        unknown = !JS_IsNumber(now);
+        if (!unknown) JS_ToFloat64(docctx, &t, now);
+        for (k = 0; k < m && !unknown; k++) {
+            JSValue e = JS_GetPropertyUint32(docctx, q, k), when = JS_UNDEFINED;
+            double w = 0, seq;
+
+            if (JS_IsObject(e)) when = timer_entry_when(docctx, e);
+            if (JS_IsObject(e) && !JS_IsUndefined(when) && !(unknown = !JS_IsNumber(when))) {
+                JS_ToFloat64(docctx, &w, when);
+                seq = timer_entry_num(docctx, e, TE_SEQ);
+                if (w <= t && (!found || w < best_when || (w == best_when && seq < best_seq))) {
+                    found = 1;
+                    best = (uint64_t)timer_entry_num(docctx, e, TE_DUE);
+                    best_when = w;
+                    best_seq = seq;
                 }
             }
             JS_FreeValue(docctx, when);
@@ -1443,7 +1475,7 @@ int timer_run_due(JSContext *ctx)
        for a nested `setTimeout` inside the handler and for substep 9.11's re-performance. */
     nest = (int)timer_entry_num(docctx, e, TE_NEST);
     handle = (uint32_t)timer_entry_num(docctx, e, TE_HANDLE);
-    /* The arrival timer_due_stamp gave the task when it first saw it due, or 0 if nothing saw it before now. */
+    /* The arrival timer_stamp_due gave the task when a step ended with it due, or 0 if none has since. */
     due = timer_entry_num(docctx, e, TE_DUE);
     {
         JSValue rep = JS_GetPropertyUint32(docctx, e, TE_REPEAT);
@@ -2512,7 +2544,7 @@ void timer_init(JSContext *ctx)
        documents. There is one event loop per agent and one hook slot on it, so the claim is made once, here,
        and given back once, below. */
     engine_set_timer_hook(timer_run_due);
-    engine_set_timer_due_hook(timer_due_stamp);
+    engine_set_timer_due_hooks(timer_due_stamp, timer_stamp_due);
     engine_set_timer_race_hook(timer_race_arrival);
     engine_set_timer_active_hook(timer_active_count);
     /* ECMA-262 §9.5's two job hooks Atomics answers through, which HTML §8.1.6.6 defines over this event loop's
@@ -2609,7 +2641,7 @@ void timer_free(JSRuntime *rt)
        core/agent_state.h found in idb_transaction. solver_agent_free asserts it, and the whole platform is
        released before the solver is. */
     engine_set_timer_hook(NULL);
-    engine_set_timer_due_hook(NULL);
+    engine_set_timer_due_hooks(NULL, NULL);
     engine_set_timer_race_hook(NULL);
     engine_set_timer_active_hook(NULL);
     /* The MAPS are the realms' — each is released with its context, which is what the per-realm slot array is

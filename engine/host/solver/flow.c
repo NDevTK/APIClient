@@ -301,11 +301,12 @@ typedef struct FlowAcct {
    lowers every member standing there at once, and an arm that reaches a site its family has not served stands at
    full optimism.
    The identity is (`kind`, `key`, `seen`): `kind` 0 is the site of a member that has decided nothing, FLOW_SITE_CODE
-   a decision point (quickjs's JS_RunningSiteHash: the body's cross-session locator, which folds the bundle's
-   content digest, plus the opcode offset), FLOW_SITE_DRIVE a driven body (its orphan hash). `seen` is the members'
-   `orphan_seen`, part of the identity so the denominator is one number per site. */
-/* A member stands where it last decided (the fork) or where its turn last suspended it (engine.c's step, through
-   quickjs's JS_FlowSiteHash), so a quantum's service is charged to the code that quantum ran from.
+   a code position (quickjs's JS_RunningSiteHash: the body's cross-session locator, which folds the bundle's
+   content digest, plus the opcode offset; or a program's entry, its row's content digest), FLOW_SITE_DRIVE a
+   driven body (its orphan hash). `seen` is the members' `orphan_seen`, part of the identity so the denominator is
+   one number per site. */
+/* A member stands where it last decided (the fork) or, after each step, at the code its next unit enters
+   (engine.c's flow_next_unit), so a quantum's service is charged to the code that quantum ran from.
    Named residual. Not covered: a code site's service is split between the `seen` classes standing at it; and the
    ledger is not parked, so a cold-resumed member stands at its family's keyless site at zero service. Next diff
    builds: the ledger keyed by code site alone with `seen` beside it, and the ledger in the cold tier's family
@@ -818,7 +819,7 @@ static void flow_agent_switch(JSContext *ctx, Flow *f, int i)
     f->cur_agent = i;
 }
 
-void flow_select_agent(JSContext *ctx, Flow *f)
+int flow_agent_next(JSContext *ctx, const Flow *f)
 {
     int best = 0;
 
@@ -839,7 +840,12 @@ void flow_select_agent(JSContext *ctx, Flow *f)
 
         if (runnable && f->agents[i].work < f->agents[best].work) best = i;
     }
-    flow_agent_switch(ctx, f, best);
+    return best;
+}
+
+void flow_select_agent(JSContext *ctx, Flow *f)
+{
+    flow_agent_switch(ctx, f, flow_agent_next(ctx, f));
 }
 
 int flow_select_other_agent(JSContext *ctx, Flow *f)
@@ -3426,6 +3432,34 @@ int flow_task_precedes(const Flow *f, uint64_t row_seq) {
     /* Strictly older, and there is no tie: one clock issues every stamp and never reuses one (g_work_seq), so two
        work items of one flow cannot share a number and `<` is total. */
     return s < row_seq;
+}
+
+int flow_job_next_site(const Flow *f, uint64_t *out) {
+    JSValueConst q = *job_queue_running(f);
+    int n = job_queue_len(q), argc, id, i, named;
+    JSValue e, len, stack[8], *args = stack;
+
+    DCHECK(out != NULL, "a queued job's site was asked for with nowhere to put it");
+    if (n <= 0) return 0;
+    e = job_entry(q, job_pick_index(q, n));
+    len = JS_GetPropertyStr(pending_ctx(), e, "length");
+    DCHECK(JS_VALUE_GET_TAG(len) == JS_TAG_INT, "a job record has no small-integer length");
+    argc = JS_VALUE_GET_INT(len) - JOB_HDR;
+    DCHECK(argc >= 0, "a job record is shorter than its own header — the header is written whole at the push");
+    id = job_field_int(e, JOB_FN);
+    DCHECK(id >= 0 && id < g_job_fn_n, "a job record names a callee this session never saw");
+    if (argc > (int)(sizeof stack / sizeof *stack)) {
+        args = reclaim_malloc(sizeof(*args) * (size_t)argc);
+        CHECK(args != NULL, "flow: OOM reading a queued job's argument vector to name its site");
+    }
+    for (i = 0; i < argc; i++)
+        args[i] = JS_GetPropertyUint32(pending_ctx(), e, (uint32_t)(JOB_HDR + i));
+    named = JS_JobSiteHash(pending_ctx(), g_job_fn[id], argc, (JSValueConst *)args, out);
+    for (i = 0; i < argc; i++)
+        JS_FreeValue(pending_ctx(), args[i]);
+    if (args != stack) free(args);
+    JS_FreeValue(pending_ctx(), e);
+    return named;
 }
 
 JSValue flow_job_take(JSContext *ctx, Flow *f) {

@@ -2725,30 +2725,45 @@ static bool document_parse_ended(JSContext *realm)
     return d == NULL || !html_parse_insertion_point_defined(lxb_dom_interface_document(d->dom));
 }
 
-/* See document.h. Steps 1, 2 and 4 have nothing to do here: there is no speculative parser, and lexbor's close
-   already set the insertion point to undefined and popped the stack of open elements. */
-int document_parse_end_step(JSContext *ctx)
+/* The first document of this agent, in tree order, whose parse has ended with its readiness still "loading" and
+   no script row holding a parse position: §13.2.7 step 3 is owed to it. NULL when none. A read. */
+static JSContext *document_parse_end_owed(JSContext *ctx)
 {
     JSValue docs = navigable_tree_order(ctx), len;
+    JSContext *owed = NULL;
     uint32_t n = 0, i;
-    int did = 0;
 
     len = JS_GetPropertyStr(ctx, docs, "length");
     JS_ToUint32(ctx, &n, len);
     JS_FreeValue(ctx, len);
-    for (i = 0; i < n && !did; i++) {
+    for (i = 0; i < n && !owed; i++) {
         JSValue proxy = JS_GetPropertyUint32(ctx, docs, i);
         JSContext *realm = window_proxy_realm(ctx, proxy);
 
         if (document_readiness(realm) == 0 && document_parse_ended(realm) &&
-            engine_document_parse_position(document_doc(realm)) == NULL) {
-            document_set_ready(realm, 1);   /* step 3, which fires `readystatechange` (§3.1.5 step 4) */
-            did = 1;
-        }
+            engine_document_parse_position(document_doc(realm)) == NULL)
+            owed = realm;
         JS_FreeValue(ctx, proxy);
     }
     JS_FreeValue(ctx, docs);
-    return did;
+    return owed;
+}
+
+/* See document.h. */
+int document_parse_end_due(JSContext *ctx)
+{
+    return document_parse_end_owed(ctx) != NULL;
+}
+
+/* See document.h. Steps 1, 2 and 4 have nothing to do here: there is no speculative parser, and lexbor's close
+   already set the insertion point to undefined and popped the stack of open elements. */
+void document_parse_end_step(JSContext *ctx)
+{
+    JSContext *realm = document_parse_end_owed(ctx);
+
+    DCHECK(realm != NULL, "§13.2.7 step 3 was performed with no document owing it — the scheduler asks "
+                          "document_parse_end_due and performs only on its yes");
+    document_set_ready(realm, 1);   /* step 3, which fires `readystatechange` (§3.1.5 step 4) */
 }
 
 int document_lifecycle_step(JSContext *ctx)
@@ -4360,7 +4375,7 @@ void document_init(JSContext *ctx)
        document of this agent in one call, so the frontier's single document-lifecycle slot is claimed once, here,
        and given back once at document_agent_free (the setter asserts both). */
     engine_set_document_done_hook(document_lifecycle_step);
-    engine_set_parse_end_hook(document_parse_end_step);   /* §13.2.7 step 3, asked above the sequence */
+    engine_set_parse_end_hooks(document_parse_end_due, document_parse_end_step);   /* §13.2.7 step 3 */
     agent_state_ptr("document", &g_document_rt,
                     "the runtime §4.5's interface and its ten sub-components declared into, and the latch");
     agent_state_class("document", &g_document_class, "§4.5's interface prototype slot and brand");
@@ -5305,7 +5320,7 @@ void document_agent_free(JSRuntime *rt)
        defect core/agent_state.h records for Indexed Database §2.7.1). First, as element_free's two DOM-write hooks
        are, because the very next call can run a finalizer. */
     engine_set_document_done_hook(NULL);
-    engine_set_parse_end_hook(NULL);
+    engine_set_parse_end_hooks(NULL, NULL);
     /* The sub-components document_init declares, in the reverse of that order, by platform_agent_free's rule: a
        component declared after another may hold what that one minted. document_fragment, shadow_root and slot are
        declared only by document_init, so only this releases them. */

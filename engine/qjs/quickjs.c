@@ -118596,6 +118596,60 @@ static JSValue js_promise_resolve_thenable_job(JSContext *ctx,
     return JS_EXCEPTION;
 }
 
+/* The site a callee's call enters, by JS_RunningSiteHash's rule: a body named by its locator, standing at its first
+   opcode (position 0, what the frame reads before it executes one). A bound function enters its target. An
+   async activation's resolving function resumes that activation, so it names the site the activation is
+   suspended at. Anything else (a C function, a step machine, a Proxy) has no page frame to name. */
+static int callee_entry_site_hash(JSRuntime *rt, JSValueConst fn, uint64_t *out)
+{
+    for (;;) {
+        JSObject *p;
+
+        if (JS_VALUE_GET_TAG(fn) != JS_TAG_OBJECT)
+            return 0;
+        p = JS_VALUE_GET_OBJ(fn);
+        if (js_class_has_bytecode(p->class_id) && p->u.func.function_bytecode &&
+            p->u.func.function_bytecode->byte_code_buf) {
+            *out = orphan_hash_u32(orphan_hash_body(rt, p->u.func.function_bytecode), 0);
+            return 1;
+        }
+        if (p->class_id == JS_CLASS_BOUND_FUNCTION) {
+            fn = p->u.bound_function->func_obj;
+            continue;
+        }
+        if (p->class_id == JS_CLASS_ASYNC_FUNCTION_RESOLVE || p->class_id == JS_CLASS_ASYNC_FUNCTION_REJECT) {
+            JSAsyncFunctionData *s = p->u.async_function_data;
+
+            return s != NULL && s->is_active && flow_chain_site_hash(rt, &s->func_state, out);
+        }
+        return 0;
+    }
+}
+
+int JS_JobSiteHash(JSContext *ctx, JSJobFunc *job, int argc, JSValueConst *argv, uint64_t *out)
+{
+    DCHECK(job != NULL && out != NULL && (argc == 0 || argv != NULL),
+           "a queued job's site was asked of no job, with nowhere to put it, or with arguments it did not bring");
+    if (job == promise_reaction_job) {
+        /* ECMA-262 §27.2.2.1 NewPromiseReactionJob: the handler runs, or with none the capability's resolving
+           function the completion goes to. */
+        DCHECK(argc == 5, "a promise reaction job carries other than its five arguments");
+        if (!JS_IsUndefined(argv[2]))
+            return callee_entry_site_hash(ctx->rt, argv[2], out);
+        return callee_entry_site_hash(ctx->rt, argv[JS_ToBool(ctx, argv[3]) ? 1 : 0], out);
+    }
+    if (job == host_call_job) {
+        DCHECK(argc >= 1, "a host call job carries no callee");
+        return callee_entry_site_hash(ctx->rt, argv[0], out);
+    }
+    if (job == js_promise_resolve_thenable_job) {
+        /* §27.2.2.2 NewPromiseResolveThenableJob calls the thenable's `then`. */
+        DCHECK(argc == 3, "a resolve-thenable job carries other than its three arguments");
+        return callee_entry_site_hash(ctx->rt, argv[2], out);
+    }
+    return 0;
+}
+
 static void js_promise_resolve_function_free_resolved(JSRuntime *rt,
                                                       JSPromiseFunctionDataResolved *sr)
 {

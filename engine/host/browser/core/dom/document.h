@@ -181,10 +181,11 @@ int document_lifecycle_step(JSContext *ctx);
 
 /* HTML §13.2.7 "The end" step 3 for ONE document of this agent whose parser has stopped — no row of the running
    flow holds its parse position (solver/engine.h's engine_document_parse_position) — updating its readiness to
-   "interactive", which fires `readystatechange`. Returns 1 when it moved one, else 0. Registered as the
-   scheduler's parse-end hook, asked before the flow's next program, so a deferred or module script reads
-   "interactive" as in a browser. */
-int document_parse_end_step(JSContext *ctx);
+   "interactive", which fires `readystatechange`. The due read answers whether such a document exists and writes
+   nothing; the step performs it and is called only on that yes. Registered as the scheduler's parse-end hooks,
+   asked before the flow's next program, so a deferred or module script reads "interactive" as in a browser. */
+int  document_parse_end_due(JSContext *ctx);
+void document_parse_end_step(JSContext *ctx);
 
 /* Whether §13.2.7 step 6's DOMContentLoaded task has run for this realm's document in the running timeline,
    since the last §8.4.1 reset. */

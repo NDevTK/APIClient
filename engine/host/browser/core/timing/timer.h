@@ -52,15 +52,22 @@ int timer_due_before(JSContext *ctx, JSValueConst moment);
 
 /* THE ARRIVAL STAMP OF THE TIMER SOURCE'S NEXT TASK, IF IT IS ALREADY DUE at the clock's current moment, or 0.
    §8.7 Timers's step 12 queues the task when the wait completes, so a due entry is a queued task, and its stamp
-   (on solver/flow.h's work clock) is minted the first time this sees it due. The scheduler asks at every task
-   boundary and orders the task against replies and queued callbacks by it (HTML §8.1.7.1 Definitions, "not
-   starving other task queues").
-   Named residual. Not covered: an expiry or clock that is unknown external input answers 0; an expiry passed
-   inside a task is stamped at the task's end, after a reply the host paid during it; and a program row younger
-   than a due timer still starts first. Next diff builds: the stamp over an unknown expiry through
-   event_loop_before, a stamp at the quantum yield, and the row arm asking the stamp once `seq_compiles` is
-   hoisted. Absence shows as: a due timer's task running behind work that arrived after it was due. */
+   (on solver/flow.h's work clock) is the one timer_stamp_due gave it. A read, so the scheduler can ask it of a
+   flow's next unit as often as it likes; it orders the task against replies and queued callbacks by it (HTML
+   §8.1.7.1 Definitions, "not starving other task queues").
+   The stamp cannot be derived from the expiry instead: the expiry is a moment on the event loop's clock, while a
+   reply's arrival (PEND_WORK_SEQ) and a callback's (JOB_SEQ) are work-clock stamps with no moment on that clock,
+   so ordering the task against them needs the work-clock instant its expiry was passed, which only a write at
+   that instant records.
+   Named residual. Not covered: an expiry or clock that is unknown external input answers 0; and a program row
+   younger than a due timer still starts first. Next diff builds: the stamp over an unknown expiry through
+   event_loop_before, and the row arm asking the stamp once `seq_compiles` is hoisted. Absence shows as: a due
+   timer's task running behind work that arrived after it was due. */
 uint64_t timer_due_stamp(JSContext *ctx);
+/* The write timer_due_stamp reads: every entry whose expiry the clock has reached is given its arrival, once. The
+   scheduler calls it at the end of each step of the running flow, the first instant after the work that moved
+   the clock past the expiry, and before the host can pay a reply that would otherwise be stamped first. */
+void timer_stamp_due(JSContext *ctx);
 
 /* HOW MANY TIMERS STAND IN THE MAPS OF ACTIVE TIMERS of every global of the agent, for the running flow (§8.7
    Timers: an entry leaves that map when its task is queued, and a repeating timer re-enters it). A count and not

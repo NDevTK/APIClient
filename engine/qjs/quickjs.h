@@ -3690,6 +3690,11 @@ JS_EXTERN JSValue JS_GetModulePrivateValue(JSContext *ctx, JSModuleDef *m);
 /* JS Job support */
 
 typedef JSValue JSJobFunc(JSContext *ctx, int argc, JSValueConst *argv);
+/* The site a queued job's run enters, by JS_RunningSiteHash's rule: the entry (opcode 0) of the body its callee names (a
+   promise reaction's handler, a host call's callee, a thenable's `then`; a bound callee's target), or for an async
+   activation's continuation the site that activation is suspended at. Answers 0 for a job whose callee has no
+   bytecode body, and for a job kind this runtime does not queue with a callee. */
+JS_EXTERN int JS_JobSiteHash(JSContext *ctx, JSJobFunc *job, int argc, JSValueConst *argv, uint64_t *out);
 JS_EXTERN int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func,
                             int argc, JSValueConst *argv);
 /* …onto a TASK SOURCE instead of the microtask queue. See JS_EnqueueCallTask, whose `source` this takes for

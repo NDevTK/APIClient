@@ -798,12 +798,15 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx))
 }
 
 /* The browser layer's §13.2.7 step 3, see engine.h. */
-static int (*g_parse_end_hook)(JSContext *ctx);
-void engine_set_parse_end_hook(int (*fn)(JSContext *ctx))
+static int (*g_parse_end_due)(JSContext *ctx);
+static void (*g_parse_end_step)(JSContext *ctx);
+void engine_set_parse_end_hooks(int (*due)(JSContext *ctx), void (*step)(JSContext *ctx))
 {
-    DCHECK(fn == NULL || g_parse_end_hook == NULL,
+    DCHECK((due == NULL) == (step == NULL), "§13.2.7 step 3's read and perform were claimed apart");
+    DCHECK(due == NULL || g_parse_end_due == NULL,
            "a second component claimed §13.2.7 step 3 — one call answers for every document of this agent");
-    g_parse_end_hook = fn;
+    g_parse_end_due = due;
+    g_parse_end_step = step;
 }
 
 /* The event loop's timer step, registered by the timer component so the scheduler does not depend on the browser
@@ -842,24 +845,29 @@ void engine_set_timer_active_hook(int (*fn)(JSContext *ctx))
 }
 
 static uint64_t (*g_timer_due_hook)(JSContext *ctx);
-void engine_set_timer_due_hook(uint64_t (*fn)(JSContext *ctx))
+static void (*g_timer_stamp_hook)(JSContext *ctx);
+void engine_set_timer_due_hooks(uint64_t (*due)(JSContext *ctx), void (*stamp)(JSContext *ctx))
 {
-    DCHECK(fn == NULL || g_timer_due_hook == NULL,
+    DCHECK((due == NULL) == (stamp == NULL), "the timer source's arrival read and its stamp were claimed apart");
+    DCHECK(due == NULL || g_timer_due_hook == NULL,
            "a second component claimed the timer source's arrival stamp — there is one timer source per event loop");
-    g_timer_due_hook = fn;
+    g_timer_due_hook = due;
+    g_timer_stamp_hook = stamp;
 }
 
 /* The timer source's due task takes the turn of a younger reply or callback (HTML §8.1.7.1 Definitions: within
    §8.1.7.3 step 2.1's implementation-defined choice of queue, arrival order starves no queue). It is due, so the
    step fires it without moving the clock. */
-static int engine_timer_takes_turn(JSContext *ctx, Flow *f, uint64_t timer_seq, uint64_t other_seq) {
-    int fired;
+static int engine_timer_turn_due(const Flow *f, uint64_t timer_seq, uint64_t other_seq) {
+    return timer_seq != 0 && timer_seq < other_seq && !flow_blocked(f);
+}
 
-    if (timer_seq == 0 || timer_seq >= other_seq || flow_blocked(f)) return 0;
-    fired = g_timer_hook(ctx);
+static void engine_timer_take_turn(JSContext *ctx) {
+    int fired = g_timer_hook(ctx);
+
     DCHECK(fired, "a timer the arrival stamp found due did not fire — timer_due_stamp and timer_run_due "
                   "disagree about which entry is the timer source's next task");
-    return fired;
+    (void)fired;
 }
 
 /* The event loop's other clock-driven source: §8.1.7.3's in-parallel half, which queues an update-the-rendering
@@ -917,13 +925,16 @@ static int engine_clock_idle_asked(JSContext *ctx) {
 /* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for elements a parse produced,
    registered by the link component. It is asked ahead of everything else a flow could do, by position
    (see the arm in flow_step). */
-static int (*g_link_connected_hook)(JSContext *ctx);
-void engine_set_link_connected_hook(int (*fn)(JSContext *ctx))
+static int (*g_link_connected_due)(JSContext *ctx);
+static void (*g_link_connected_step)(JSContext *ctx);
+void engine_set_link_connected_hooks(int (*due)(JSContext *ctx), void (*step)(JSContext *ctx))
 {
-    DCHECK(fn == NULL || g_link_connected_hook == NULL,
+    DCHECK((due == NULL) == (step == NULL), "§4.6.8.20's connected-time read and perform were claimed apart");
+    DCHECK(due == NULL || g_link_connected_due == NULL,
            "a second component claimed §4.6.8.20's connected time for parsed link elements — the inventory it drains "
            "is one list per agent, and a second claim would stop the first from draining");
-    g_link_connected_hook = fn;
+    g_link_connected_due = due;
+    g_link_connected_step = step;
 }
 
 /* The end of a microtask checkpoint (HTML §8.1.7.3), registered by the browser component that owns what HTML
@@ -5530,10 +5541,23 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  * FLOW_COMMIT_ARM_NONE for a resumed sender at the receiving peer). Absence shows as: in a drive that parks and
  * resumes, the answering-timeline count engine/route.mjs logs for a read equal to the peer's whole frontier after
  * the park while the same read before it reported a strict subset. */
-static int flow_answer_fork(JSContext *ctx, Flow *f) {
+/* The first register entry holding a peer answer beyond the one taken, or -1: whether flow_answer_fork is due. A
+   read. */
+static int flow_answer_fork_at(const Flow *f) {
     int n = pending_count(f->pending), i;
 
     for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(f->pending, i);
+        int extra = pending_extra_count(e) != 0;
+
+        JS_FreeValue(pending_ctx(), e);
+        if (extra) return i;
+    }
+    return -1;
+}
+
+static void flow_answer_fork(JSContext *ctx, Flow *f, int i) {
+    {
         JSValue e = pending_entry(f->pending, i), av = JS_UNDEFINED, aw = JS_UNDEFINED, am = JS_UNDEFINED, se;
         JSValue *clone;
         void *parked;
@@ -5541,7 +5565,9 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         Flow *sib;
         int completion;
 
-        if (pending_extra_count(e) == 0) { JS_FreeValue(ctx, e); continue; }
+        DCHECK(pending_extra_count(e) != 0,
+               "an answer fork was performed over an entry holding no answer beyond its own — flow_answer_fork_at "
+               "named it and nothing between the read and the perform writes the register");
         DCHECK(flow_running() == f, "an answer fork was taken while another flow was switched in — the arm would "
                                     "clone that flow's delta and DOM head");
         /* Where this flow's suspension is, asked of both homes. A flow inside a program holds its call site in
@@ -5621,9 +5647,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
                "an arm was forked over a peer's answer onto a request still unanswered — the assembly re-issues "
                "unanswered requests under a fresh id");
         JS_FreeValue(ctx, se);
-        return 1;
     }
-    return 0;
 }
 
 /* The standby a peer answer leaves behind: before a flow resumes on an answer one of a peer's timelines computed,
@@ -5640,10 +5664,30 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
  * generation that flow_answer_fork's residual names, so a carried row relates to the timeline's continuation.
  * Absence shows as: after a park and resume of both instances, arms over one read numbering the resumed family's
  * members times the peer's timelines. */
-static int flow_answer_standby(JSContext *ctx, Flow *f) {
+/* The first entry a standby is owed for, or -1: a peer's answer taken, not fixed, not exhausted and with no
+   standby left yet. A zone answer carries no world string and leaves none. A read. */
+static int flow_answer_standby_at(const Flow *f) {
     int n = pending_count(f->pending), i;
 
     for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(f->pending, i), wv;
+        int owed = pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && pending_get_int(e, PEND_HAVE_VALUE) &&
+                   !pending_get_int(e, PEND_ANSWER_FIXED) && !pending_get_int(e, PEND_STANDBY_LEFT) &&
+                   !pending_get_int(e, PEND_ANSWER_EXHAUSTED);
+
+        if (owed) {
+            wv = pending_get(e, PEND_ANSWER_WORLD);
+            owed = JS_IsString(wv);
+            JS_FreeValue(pending_ctx(), wv);
+        }
+        JS_FreeValue(pending_ctx(), e);
+        if (owed) return i;
+    }
+    return -1;
+}
+
+static void flow_answer_standby(JSContext *ctx, Flow *f, int i) {
+    {
         JSValue e = pending_entry(f->pending, i), wv, se;
         JSValue *clone;
         void *parked;
@@ -5651,11 +5695,8 @@ static int flow_answer_standby(JSContext *ctx, Flow *f) {
         const char *w;
         Flow *sib;
 
-        if (pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ || !pending_get_int(e, PEND_HAVE_VALUE) ||
-            pending_get_int(e, PEND_ANSWER_FIXED) || pending_get_int(e, PEND_STANDBY_LEFT) ||
-            pending_get_int(e, PEND_ANSWER_EXHAUSTED)) { JS_FreeValue(ctx, e); continue; }
         wv = pending_get(e, PEND_ANSWER_WORLD);
-        if (!JS_IsString(wv)) { JS_FreeValue(ctx, wv); JS_FreeValue(ctx, e); continue; }   /* a zone answer */
+        DCHECK(JS_IsString(wv), "a standby was performed over an entry flow_answer_standby_at did not name");
         DCHECK(pending_extra_count(e) == 0,
                "a standby was about to be left while answers beyond the first wait for arms — flow_answer_fork runs "
                "first in flow_step, so the arms and the standby would split one timeline between them");
@@ -5692,9 +5733,7 @@ static int flow_answer_standby(JSContext *ctx, Flow *f) {
         JS_FreeCString(ctx, w);
         JS_FreeValue(ctx, wv);
         JS_FreeValue(ctx, e);
-        return 1;
     }
-    return 0;
 }
 
 /* Whether this flow waits on a peer request the peer has exhausted: no timeline will answer it, so the timeline
@@ -5797,41 +5836,53 @@ static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int 
  * a declined request (flow_success_arm). Asked before the reply is delivered, so the arm clones the flow still
  * waiting on it; this flow keeps the observed reply unless its recorded path chose the success arm. A reply no
  * server sent is never asked again. One per step. */
-static int flow_reply_success_fork(JSContext *ctx, Flow *f) {
+/* Whether a fork may clone this flow's suspension now: flow_decline_fork's three refusals (a parse parked mid-row,
+   and an operation the spec makes atomic in either home) plus, where `one_home` is set, both homes at once. A
+   read, asked of the switched-in flow. */
+static int flow_fork_homes_open(JSContext *ctx, const Flow *f, int one_home) {
+    int in_program = flow_frame(f) != NULL, in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
+
+    return f->compile == NULL && !(one_home && in_program && in_job) &&
+           !(in_program && JS_FlowUnforkable(ctx, (JSValue *)flow_frame(f))) &&
+           !(in_job && JS_ParkedFlowsUnforkable(ctx));
+}
+
+/* The first reply whose success arm is owed (a `fetch()` answered, observed, not opaque, with a status that is not
+   ok, and neither arm taken yet), or -1 when there is none or the suspension cannot be cloned now. A read. */
+static int flow_reply_success_fork_at(JSContext *ctx, const Flow *f) {
     int n = pending_count(f->pending), i;
 
+    if (!flow_fork_homes_open(ctx, f, 1)) return -1;
     for (i = 0; i < n; i++) {
-        JSValue e = pending_entry(f->pending, i), v, pe;
-        int in_program, in_job, ask;
+        JSValue e = pending_entry(f->pending, i), v;
+        int ask = pending_get_int(e, PEND_KIND) == FLOW_PENDING_RESOLVE && pending_get_int(e, PEND_HAVE_VALUE) &&
+                  !pending_get_int(e, PEND_SUCCESS_TAKEN) && !pending_get_int(e, PEND_DECLINE_TAKEN);
 
-        ask = pending_get_int(e, PEND_KIND) == FLOW_PENDING_RESOLVE && pending_get_int(e, PEND_HAVE_VALUE) &&
-              !pending_get_int(e, PEND_SUCCESS_TAKEN) && !pending_get_int(e, PEND_DECLINE_TAKEN);
         v = ask ? pending_get(e, PEND_VALUE) : JS_UNDEFINED;
         ask = ask && JS_IsObject(v) && !fetch_reply_unobserved(ctx, v) &&
               fetch_reply_type(ctx, v) != FETCH_REPLY_OPAQUE && !script_fetch_status_ok(fetch_reply_status(ctx, v));
         JS_FreeValue(ctx, v);
         JS_FreeValue(ctx, e);
-        if (!ask) continue;
-        DCHECK(flow_running() == f && f->parked == NULL,
-               "a success arm was forked with another flow switched in, or with parked continuations off the "
-               "runtime");
-        in_program = flow_frame(f) != NULL;
-        in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
-        /* flow_decline_fork's three refusals, for its reasons: two homes at once, and an atomic operation. */
-        if (f->compile != NULL || (in_program && in_job) ||
-            (in_program && JS_FlowUnforkable(ctx, (JSValue *)flow_frame(f))) ||
-            (in_job && JS_ParkedFlowsUnforkable(ctx)))
-            continue;
-        flow_success_arm(ctx, f, i, in_program, in_job,
-                         "(a reply's status was not ok — the arm takes a reply no server sent)", PEND_SUCCESS_TAKEN,
-                         /*cross*/ -1);
-        /* This flow's own copy, so the register's arm is never forked twice, whichever arm this flow took. */
-        pe = pending_unshare(f->pending, i);
-        pending_set_int(pe, PEND_SUCCESS_TAKEN, 1);
-        JS_FreeValue(ctx, pe);
-        return 1;
+        if (ask) return i;
     }
-    return 0;
+    return -1;
+}
+
+static void flow_reply_success_fork(JSContext *ctx, Flow *f, int i) {
+    JSValue pe;
+    int in_program, in_job;
+
+    DCHECK(flow_running() == f && f->parked == NULL,
+           "a success arm was forked with another flow switched in, or with parked continuations off the runtime");
+    in_program = flow_frame(f) != NULL;
+    in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
+    flow_success_arm(ctx, f, i, in_program, in_job,
+                     "(a reply's status was not ok — the arm takes a reply no server sent)", PEND_SUCCESS_TAKEN,
+                     /*cross*/ -1);
+    /* This flow's own copy, so the register's arm is never forked twice, whichever arm this flow took. */
+    pe = pending_unshare(f->pending, i);
+    pending_set_int(pe, PEND_SUCCESS_TAKEN, 1);
+    JS_FreeValue(ctx, pe);
 }
 
 /* Fetch §4.1 Main fetch step 12's same-origin test for the declined request `e` to an unknown address, asked by
@@ -5892,20 +5943,32 @@ static int flow_unaddressed_same_origin(JSContext *ctx, Flow *f, JSValueConst e,
  * flow_deliver_one_reply turns it into each kind's own failure (a rejected `fetch()`, §4.12.1.1's null result,
  * HostLoadImportedModule's TypeError, a `<link>`'s error branch), so this holds no per-kind knowledge of the
  * outcome beyond the synchronous kind's completion below. */
-static int flow_decline_fork(JSContext *ctx, Flow *f) {
+/* The first declined request whose fork is owed, or -1 when there is none or the suspension cannot be cloned now
+   (flow_fork_homes_open, which says why such a fork waits). A read. */
+static int flow_decline_fork_at(JSContext *ctx, const Flow *f) {
     int n = pending_count(f->pending), i;
 
+    if (!flow_fork_homes_open(ctx, f, 0)) return -1;
     for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(f->pending, i);
+        int owed = pending_entry_declined(e) && !pending_get_int(e, PEND_DECLINE_TAKEN);
+
+        JS_FreeValue(ctx, e);
+        if (owed) return i;
+    }
+    return -1;
+}
+
+static void flow_decline_fork(JSContext *ctx, Flow *f, int i) {
+    {
         JSValue e = pending_entry(f->pending, i), se, pe, reason;
         JSValue *clone;
         void *parked, *dblob;
         int in_program, in_job, kind, cross;
         Flow *sib, *arm_flow;
 
-        if (!pending_entry_declined(e) || pending_get_int(e, PEND_DECLINE_TAKEN)) {
-            JS_FreeValue(ctx, e);
-            continue;
-        }
+        DCHECK(pending_entry_declined(e) && !pending_get_int(e, PEND_DECLINE_TAKEN),
+               "a decline fork was performed over an entry flow_decline_fork_at did not name");
         DCHECK(flow_running() == f,
                "a decline fork was taken while another flow was switched in — the arm would clone that flow's delta "
                "and DOM head");
@@ -5949,14 +6012,10 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
            only through a job or a parked call site that resumes after it, so forking at the operation's end
            is the same pair of arms. A parse parked mid-row (`f->compile`) is the same case: a parse runs no page
            code, and the parked parse is a third home of the suspension no arm could clone. The answer fork
-           cannot wait: its arm resumes the call site this one leaves. */
-        if (f->compile != NULL ||
-            (in_program && JS_FlowUnforkable(ctx, (JSValue *)flow_frame(f))) ||
-            (in_job && JS_ParkedFlowsUnforkable(ctx))) {
-            JS_FreeValue(ctx, reason);
-            JS_FreeValue(ctx, e);
-            continue;
-        }
+           cannot wait: its arm resumes the call site this one leaves. flow_decline_fork_at asked it. */
+        DCHECK(flow_fork_homes_open(ctx, f, 0),
+               "a decline fork was performed while the suspension cannot be cloned — flow_decline_fork_at refuses "
+               "that state");
         /* An unknown address's origin first: it decides whether the success arm below exists. */
         cross = pending_get_int(e, PEND_ADDRESS) != FETCH_ADDRESS_UNKNOWN ? -1
               : !flow_unaddressed_same_origin(ctx, f, e, in_program, in_job);
@@ -6003,7 +6062,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                               PEND_DECLINE_TAKEN, cross))) {
             JS_FreeValue(ctx, reason);
             JS_FreeValue(ctx, e);
-            return 1;
+            return;
         }
         /* This flow's copy, answered with §5.6's network error (JS_NULL, core/fetch/fetch.h). The delivery owns
            what each kind does with it; this states the outcome. */
@@ -6045,9 +6104,7 @@ static int flow_decline_fork(JSContext *ctx, Flow *f) {
                "requests would be graded derived");
         JS_FreeValue(ctx, reason);
         JS_FreeValue(ctx, e);
-        return 1;
     }
-    return 0;
 }
 
 /* There is no replay fork: re-running a nested flow from its start is not byte-identical (shared state can
@@ -8714,7 +8771,7 @@ static long g_unframed_steps;
    Named residual. Not covered: rows are still not in the arrival chain above the delivery arm. Next diff builds:
    the oldest runnable row's stamp computed above the delivery arm, putting all three carriers in one arrival
    order, after which `g_task_held_deliv` counts nothing. Absence shows as: `g_task_held_deliv` above zero (today
-   every use of `seq_compiles` is below the line `grep -n 'uint64_t deliv_seq = flow_stack_empty'` prints). */
+   every use of `seq_compiles` is below the delivery rung of flow_next_unit_pass). */
 static long g_task_held_deliv, g_task_held_seq, g_task_arm_older, g_task_arm_row_wait, g_task_arm_no_row;
 /* Why a turn did not end a unit of work, the three readings behind a low `g_units_done`. The unit boundary in the
    dispatch loop is a conjunction of three clauses, and these count which refused:
@@ -9150,6 +9207,183 @@ static int flow_step_agent(JSContext *ctx, Flow *f) {
     return 0;
 }
 
+/* What the row at the cursor lets this step do with the flow's own sequence (flow_step's row block): nothing
+   (the cursor is past the last row), wait for an external script's bytes (HTML §4.12.1.1 step 31's
+   parser-blocking wait), run step 4 of "execute the script element" for a failed load, or start a program. */
+typedef enum { ROW_NONE, ROW_AWAITS, ROW_FAILED, ROW_COMPILES } RowClass;
+
+static RowClass flow_row_class(const Flow *f) {
+    DynKind kind;
+
+    if (f->script_i >= f->dyn_n) return ROW_NONE;
+    kind = flow_dyn_kind(f);
+    return kind == DYN_SCRIPT_SRC ? ROW_AWAITS : kind == DYN_SCRIPT_FAILED ? ROW_FAILED : ROW_COMPILES;
+}
+
+/* The rungs of flow_step's ladder, in its order: what flow_next_unit answers and flow_step dispatches on. A rung
+   is where the step goes; the step unit it names (solver/step_unit.h) can be a finer outcome of it. */
+typedef enum {
+    NEXT_AGENT,                 /* another agent of this flow may be selected */
+    NEXT_RETIRE,
+    NEXT_FORK_PEER_ANSWER,
+    NEXT_LEAVE_STANDBY,
+    NEXT_FORK_DECLINED,
+    NEXT_FORK_REPLY_SUCCESS,
+    NEXT_RESUME_PARKED,
+    NEXT_RESUME_PROGRAM,
+    NEXT_LINK_CONNECTED,
+    NEXT_ROUTED_DELIVERY,
+    NEXT_CROSS_AGENT_OP,
+    NEXT_MICROTASK,
+    NEXT_TURN_DONE,             /* a continued pass: the task is done and its checkpoint has drained */
+    NEXT_PARSE_END,
+    NEXT_TIMER_ARRIVED,
+    NEXT_TIMER_RACE,            /* the deadline race is asked; its other answer is NEXT_DELIVER_REPLY */
+    NEXT_DELIVER_REPLY,
+    NEXT_SCRIPT_LOAD_FAILED,
+    NEXT_PARSE_SPIN,
+    NEXT_START_PROGRAM,
+    NEXT_RUN_TASK,
+    NEXT_HOST_BLOCKED,
+    NEXT_IDLE                   /* the rungs below run-a-task */
+} NextArm;
+
+/* NEXT_DUE: the rung is due, read purely. HOOK_UNDECIDED: the rung is the first whose due-ness this cannot read
+   without performing it, so the rungs from it down are asked by flow_step's own hooks. */
+typedef enum { NEXT_DUE, HOOK_UNDECIDED } NextDue;
+
+typedef struct {
+    NextArm arm;
+    NextDue due;
+    int index;                  /* the register entry a fork rung names, else -1 */
+    RowClass row;               /* the cursor row's class, read for the rungs at and below the sequence */
+    int job_precedes;           /* a queued task arrived before the row at the cursor (flow_task_precedes) */
+    int site_kind;              /* FLOW_SITE_CODE when `site` names the code the unit enters, else 0 */
+    uint64_t site;
+} FlowNextUnit;
+
+/* The site a suspended flow resumes from: the innermost page frame of its program's chain, or of the parked
+   continuation the pump resumes next. */
+static void flow_suspension_site(JSContext *ctx, const Flow *f, FlowNextUnit *nu) {
+    if (flow_frame(f)) {
+        if (JS_FlowSiteHash(ctx, (JSValue *)flow_frame(f), &nu->site)) nu->site_kind = FLOW_SITE_CODE;
+    } else {
+        JSContext *park_realm;
+
+        if (JS_ParkedFlowsSiteHash(JS_GetRuntime(ctx), &nu->site, &park_realm)) nu->site_kind = FLOW_SITE_CODE;
+        /* The runtime holds the switched-in agent's parks alone (JS_PutParkedFlows asserts it empty at the
+           switch-in), so the head is this flow's, parked by its selected agent. */
+        DCHECK(park_realm == NULL || JS_GetRealmAgent(park_realm) == flow_agent_running(f)->agent,
+               "the parked continuation this flow is stood at was parked by another agent — the runtime holds only "
+               "the switched-in agent's parks, so a stranger's is a switch that left its set behind, and the site "
+               "would be another timeline's code");
+    }
+}
+
+/* The ladder, read: which rung flow_step takes next for the switched-in flow `f`, and the code that unit enters.
+   It writes nothing, so the scheduler asks it after a step to stand the member at its next unit, and flow_step
+   asks it at each pass and dispatches on the answer. `entry` is the step's first pass (the one rest point where
+   an agent is chosen); `task_done` is flow_step's `turn_task_done`. A program entry is named by its row's content
+   digest, a job's by JS_JobSiteHash over its callee, a resumption by the suspended chain's site.
+   Named residual. Not covered: the agent choice of a flow with more than one agent, and the rungs below
+   run-a-task, answer HOOK_UNDECIDED; and the rungs that run no page code of their own (from link-connected to the
+   spin, but for the checkpoint) and a job whose callee is a step machine name no site, so a member about to take
+   one keeps standing where its last unit left it. Next diff builds: those hooks as due reads beside their
+   performs, as done here for the four above the sequence, and the code each host rung hands control to (a
+   settled reply's head reaction, a timer task's handler). Absence shows as: an `observedTerms` row at unit 0
+   whose next step runs new code without its siteServed moving. */
+static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry, int task_done) {
+    FlowNextUnit nu = { .arm = NEXT_IDLE, .due = NEXT_DUE, .index = -1, .row = ROW_NONE };
+    int stack_empty;
+    uint64_t deliv_seq, timer_seq;
+
+    DCHECK(flow_running() == f,
+           "a flow's next unit was read while another flow was switched in — the runtime's parks and the applied "
+           "delta it reads would be that flow's");
+    if (entry ? f->n_agents > 1 && (f->cur_agent != 0 || flow_agent_next(ctx, f) != 0) : f->cur_agent != 0) {
+        DCHECK(entry, "a continued pass of the window agent's step found another agent selected — only the entry "
+                      "selects one");
+        nu.arm = NEXT_AGENT;
+        nu.due = HOOK_UNDECIDED;
+        return nu;
+    }
+    if (!task_done && flow_answer_exhausted(f)) { nu.arm = NEXT_RETIRE; return nu; }
+    if ((nu.index = flow_answer_fork_at(f)) >= 0) nu.arm = NEXT_FORK_PEER_ANSWER;
+    else if ((nu.index = flow_answer_standby_at(f)) >= 0) nu.arm = NEXT_LEAVE_STANDBY;
+    else if ((nu.index = flow_decline_fork_at(ctx, f)) >= 0) nu.arm = NEXT_FORK_DECLINED;
+    else if ((nu.index = flow_reply_success_fork_at(ctx, f)) >= 0) nu.arm = NEXT_FORK_REPLY_SUCCESS;
+    else if (JS_HasParkedFlow(JS_GetRuntime(ctx))) nu.arm = NEXT_RESUME_PARKED;
+    else if (flow_frame(f)) nu.arm = NEXT_RESUME_PROGRAM;
+    if (nu.arm != NEXT_IDLE) {
+        /* A fork clones the suspension and leaves this flow standing in it, so its site is the resumption's. */
+        flow_suspension_site(ctx, f, &nu);
+        return nu;
+    }
+    if (!task_done && g_link_connected_due && g_link_connected_due(ctx)) { nu.arm = NEXT_LINK_CONNECTED; return nu; }
+    if (!task_done && flow_deliver_pending(f)) { nu.arm = NEXT_ROUTED_DELIVERY; return nu; }
+    if (!task_done && flow_perform_pending(f)) { nu.arm = NEXT_CROSS_AGENT_OP; return nu; }
+    if (flow_checkpoint_due(f)) {
+        nu.arm = NEXT_MICROTASK;
+        if (flow_job_next_site(f, &nu.site)) nu.site_kind = FLOW_SITE_CODE;
+        return nu;
+    }
+    if (task_done) { nu.arm = NEXT_TURN_DONE; return nu; }
+    stack_empty = flow_stack_empty(f);
+    if (stack_empty && g_parse_end_due && g_parse_end_due(ctx)) { nu.arm = NEXT_PARSE_END; return nu; }
+    deliv_seq = stack_empty ? flow_pending_ready_next_seq(f) : 0;
+    timer_seq = stack_empty && g_timer_due_hook ? g_timer_due_hook(ctx) : 0;
+    if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {
+        nu.arm = engine_timer_turn_due(f, timer_seq, deliv_seq) ? NEXT_TIMER_ARRIVED
+               : !flow_blocked(f) && g_timer_active_hook && g_timer_active_hook(ctx) > 0 ? NEXT_TIMER_RACE
+               : NEXT_DELIVER_REPLY;
+        return nu;
+    }
+    nu.row = flow_row_class(f);
+    if (nu.row == ROW_FAILED) { nu.arm = NEXT_SCRIPT_LOAD_FAILED; return nu; }
+    nu.job_precedes = nu.row == ROW_COMPILES && flow_task_precedes(f, f->dyn_run[f->script_i]);
+    if (nu.row == ROW_COMPILES && !nu.job_precedes) {
+        if (f->spin_row != f->dyn_id[f->script_i] && flow_row_parse_rank(f, f->script_i) == 1) {
+            nu.arm = NEXT_PARSE_SPIN;
+        } else {
+            nu.arm = NEXT_START_PROGRAM;
+            nu.site_kind = FLOW_SITE_CODE;
+            nu.site = dyn_body_digest(f->dyn[f->script_i]);
+        }
+        return nu;
+    }
+    if (flow_job_pending(f) > 0) {
+        if (timer_seq != 0 && !flow_task_precedes(f, timer_seq) && engine_timer_turn_due(f, timer_seq, UINT64_MAX)) {
+            nu.arm = NEXT_TIMER_ARRIVED;
+        } else {
+            nu.arm = NEXT_RUN_TASK;
+            if (flow_job_next_site(f, &nu.site)) nu.site_kind = FLOW_SITE_CODE;
+        }
+        return nu;
+    }
+    if (flow_blocked(f)) { nu.arm = NEXT_HOST_BLOCKED; return nu; }
+    nu.due = HOOK_UNDECIDED;
+    return nu;
+}
+
+/* The unit `f` runs when it is next stepped, from the rest point between two steps. */
+static FlowNextUnit flow_next_unit(JSContext *ctx, const Flow *f) {
+    return flow_next_unit_pass(ctx, f, /*entry*/ 1, /*task_done*/ 0);
+}
+
+/* flow_step's own reading of the state a rung is decided by names rung `seen`; the answer it dispatches on must
+   name the same one. A shared helper, so the caller's place is passed in. */
+#if APICLIENT_DEV
+static void flow_next_unit_check(const FlowNextUnit *nu, NextArm seen, const char *file, int line) {
+    DCHECKF(nu->arm == seen,
+            "%s:%d: flow_next_unit answered rung %d where the step's own reading of the same state names rung %d — "
+            "the read and the ladder have stopped being one order, so a member stands at a unit the step does not "
+            "run", file, line, (int)nu->arm, (int)seen);
+}
+#define FLOW_NEXT_UNIT_CHECK(nu, seen) flow_next_unit_check(&(nu), (seen), __FILE__, __LINE__)
+#else
+#define FLOW_NEXT_UNIT_CHECK(nu, seen) ((void)sizeof(seen))
+#endif
+
 /* The programs are the flow's own rows (`f->dyn`), so this takes no inventory. */
 static int flow_step(JSContext *ctx, Flow *f) {
     /* A flow is about to run, so the flow stamp and the DOM capture must both be on. This is the one point a flow
@@ -9179,10 +9413,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
        one consumer is the `!framed_at_entry` assert beside `g_unframed_steps++`. The loop may move `flow_frame(f)`, and
        the two disagreeing is what makes that assert a check. In release it is only type-checked inside `sizeof`. */
     /* The rest point between two steps, where the scheduler names the agent this step runs. */
-    flow_select_agent(ctx, f);
-    if (f->cur_agent != 0) return flow_step_agent(ctx, f);
+    FlowNextUnit nu = flow_next_unit(ctx, f);
+    if (nu.arm == NEXT_AGENT) {
+        flow_select_agent(ctx, f);
+        if (f->cur_agent != 0) return flow_step_agent(ctx, f);
+    }
     const int framed_at_entry = (flow_frame(f) != NULL);
-    for (;;) {
+    for (int pass = 0;; pass++) {
+        /* The rung this pass takes, read before it performs anything (flow_next_unit_pass); the entry's answer is
+           the one read above unless the agent choice moved. Every arm below is guarded by it. */
+        if (pass > 0 || nu.arm == NEXT_AGENT) nu = flow_next_unit_pass(ctx, f, /*entry*/ 0, turn_task_done);
         /* One arm per distinct answer, before anything else this flow could do: everything else consumes what the
            arm is made of. The arm clones the frame this flow is suspended in, and the first resume below takes the
            answer off the register and leaves that call site; the flow is switched in, so its delta, DOM head and
@@ -9192,22 +9432,22 @@ static int flow_step(JSContext *ctx, Flow *f) {
            step already named for the task it performed, or `deliver-one-reply` would be credited only to
            deliveries whose `turn_continues()` answered no. `turn_task_done` is that settled-name predicate: its
            writers are the reply-delivery arm and §13.2.7 step 3's arm, meaning this step performed its task. */
-        if (!turn_task_done && flow_answer_exhausted(f)) {
+        if (nu.arm == NEXT_RETIRE) {
             g_step_unit = STEP_UNIT_RETIRE_EXHAUSTED_ASK;
             return FLOW_STEP_RETIRED;
         }
         if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_PEER_ANSWER;
-        if (flow_answer_fork(ctx, f)) return 0;
+        if (nu.arm == NEXT_FORK_PEER_ANSWER) { flow_answer_fork(ctx, f, nu.index); return 0; }
         if (!turn_task_done) g_step_unit = STEP_UNIT_LEAVE_ANSWER_STANDBY;
-        if (flow_answer_standby(ctx, f)) return 0;
+        if (nu.arm == NEXT_LEAVE_STANDBY) { flow_answer_standby(ctx, f, nu.index); return 0; }
         /* One arm per declined request, beside it for the same reason: a fork over a value that arrived (the zone
            will not ask, two feasible outcomes and no observation, flow_decline_fork), built from the same frame,
            delta and DOM head. */
         if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_DECLINED_REQ;
-        if (flow_decline_fork(ctx, f)) return 0;
+        if (nu.arm == NEXT_FORK_DECLINED) { flow_decline_fork(ctx, f, nu.index); return 0; }
         /* …and the success arm of a reply whose status is not ok, before that reply is delivered. */
         if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_REPLY_SUCCESS;
-        if (flow_reply_success_fork(ctx, f)) return 0;
+        if (nu.arm == NEXT_FORK_REPLY_SUCCESS) { flow_reply_success_fork(ctx, f, nu.index); return 0; }
         /* The parked continuation outranks everything else this flow could do: a forced preempt must be
            transparent to observable ordering, so the flow resumes before any job it has queued. Yielding after
            one resume keeps the scheduler in charge; a park that parks again rides the switch-out. */
@@ -9230,7 +9470,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                "a flow holds a parked parse and a parked continuation at once — no job runs while a parse is held "
                "(flow_run_one_job), so the continuation parked before the parse began, when the compile arm below "
                "could not have been reached");
-        {
+        if (nu.arm == NEXT_RESUME_PARKED) {
             JSValue pcv = JS_UNDEFINED;
             if (JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv)) {
                 engine_refuse_suspension(ctx);
@@ -9243,13 +9483,20 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
             JS_FreeValue(ctx, pcv);
+            DFAIL("the ladder read a parked continuation the resume did not find — JS_HasParkedFlow and "
+                  "JS_ResumeParkedFlow ask one queue");
+            return 0;
         }
         /* Which row this flow had started before this step, read before the block that may start another and
            consumed at the resume below. A reading of the one field the compile writes: `last_compiled` is written at
            one line and strictly increasing (the no-replay DCHECK there), so "it moved" means "this step compiled".
            Declared inside the loop body, so it is re-read on every pass. */
         int last_compiled0 = f->last_compiled;
-        if (!flow_frame(f)) {
+        DCHECKF((nu.arm == NEXT_RESUME_PROGRAM) == (flow_frame(f) != NULL),
+                "flow_next_unit answered rung %d while this flow %s a live frame — the program resume is the "
+                "rung for exactly a framed flow with no fork or park above it", (int)nu.arm,
+                flow_frame(f) ? "holds" : "holds no");
+        if (nu.arm != NEXT_RESUME_PROGRAM) {
             const char *body;
             /* The ladder has been descended, counted at the one line entering it, before any arm is asked. The
                orphan ask below is raised on the same per-pass basis, so `asked` is a subset of this, asserted in
@@ -9301,16 +9548,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
                This arm and the two below each produce a task, so each is guarded by `turn_task_done`: on a pass
                the turn continuation created the task is done and only step 2.8's checkpoint may run. On an entry
                the guards are constant true. */
-            if (!turn_task_done && g_link_connected_hook && g_link_connected_hook(ctx)) {
-                g_step_unit = STEP_UNIT_LINK_CONNECTED; return 0; }
+            if (nu.arm == NEXT_LINK_CONNECTED) {
+                g_link_connected_step(ctx); g_step_unit = STEP_UNIT_LINK_CONNECTED; return 0; }
             /* The routed deliveries this flow was handed, before the arms that find their tasks on the queue. One
                per step, oldest first: each becomes a §9.3.3 task at the receiving Window, so tasks are enqueued in
                post order and the scheduler re-ranks between them. */
-            if (!turn_task_done && flow_deliver_pending(f)) {
+            if (nu.arm == NEXT_ROUTED_DELIVERY) {
                 g_step_unit = STEP_UNIT_ROUTED_DELIVERY; flow_deliver(ctx, f); return 0; }
             /* The operation a peer is parked on, before this flow's own programs for the delivery's reason: another
                agent's flow is suspended at it, and it becomes one of this flow's programs. */
-            if (!turn_task_done && flow_perform_pending(f)) {
+            if (nu.arm == NEXT_CROSS_AGENT_OP) {
                 g_step_unit = STEP_UNIT_CROSS_AGENT_OP; flow_perform(ctx, f); return 0; }
             /* The microtask checkpoint, before the next program and not after the last one: HTML §8.1.4.4 Calling
                scripts' clean up after running script step 3, decided by flow_checkpoint_due. The checkpoint belongs
@@ -9318,7 +9565,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                below is a task. A job can park (reaction_flow_step parks a step machine suspended on a synchronous
                host request), so a blocked flow reports OWED rather than progress: reporting progress would resume
                and re-park it for ever without the host being asked. */
-            if (flow_checkpoint_due(f)) {
+            if (nu.arm == NEXT_MICROTASK) {
                 /* The step is named after its task, and the checkpoint is not one: a step that delivered a reply
                    and then drained the reactions it enqueued did one unit, §8.1.7.3 step 2's iteration, and renaming
                    it `microtask-checkpoint` would leave `deliver-one-reply` counting only deliveries whose turn the
@@ -9343,13 +9590,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* One iteration of §8.1.7.3 Processing model step 2 ends here: the task is done (2.6) and the
                checkpoint above has drained (2.8), so the next task is the next iteration and the next step. This
                return keeps the continuation from becoming a drain: one task per call of flow_step. */
-            if (turn_task_done) return 0;
+            if (nu.arm == NEXT_TURN_DONE) return 0;
             /* HTML §13.2.7 "The end" step 3, "Update the current document readiness to 'interactive'", in the
                parser's own task: the program that held the last parse position has left the stack and its
                checkpoint has drained, and nothing else of this flow may start first, because step 5's spin is
                where the event loop runs again. The update fires `readystatechange`, whose reactions are this
                turn's checkpoint. */
-            if (flow_stack_empty(f) && g_parse_end_hook && g_parse_end_hook(ctx)) {
+            if (nu.arm == NEXT_PARSE_END) {
+                g_parse_end_step(ctx);
                 g_step_unit = STEP_UNIT_PARSE_END;
                 turn_task_done = 1;
                 if (turn_continues()) continue;
@@ -9393,23 +9641,21 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * whole life. A per-member rate over `live` measures neither population (framed members never reach
              * this ladder); read solver/flow.h's `deliv_ready`/`deliv_framed`/`deliv_owed`, and `stepUnitRuns`
              * beside @COLD's `live`/`framed`, before blaming this arm for a frozen `deepest`. */
-            uint64_t deliv_seq = flow_stack_empty(f) ? flow_pending_ready_next_seq(f) : 0;
-            /* The timer source's due task, stamped at the first task boundary that sees it due. */
-            uint64_t timer_seq = flow_stack_empty(f) && g_timer_due_hook ? g_timer_due_hook(ctx) : 0;
-            if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq) &&
-                engine_timer_takes_turn(ctx, f, timer_seq, deliv_seq)) {
+            /* The timer source's due task, older than the reply or task this step would take (timer_stamp_due's
+               arrival, compared by flow_next_unit), fires without moving the clock. */
+            if (nu.arm == NEXT_TIMER_ARRIVED) {
+                engine_timer_take_turn(ctx);
                 g_step_unit = STEP_UNIT_TIMER_ARRIVED;
                 return 0;
             }
             /* The deadline race before this arrival: where a timer ahead of the clock comes first, it fires and
                every answered reply arrives after its task (pending_restamp_answered), so the next step runs it. */
-            if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq) && !flow_blocked(f) && g_timer_race_hook &&
-                g_timer_race_hook(ctx)) {
+            if (nu.arm == NEXT_TIMER_RACE && g_timer_race_hook(ctx)) {
                 pending_restamp_answered(f->pending, flow_work_seq_next);
                 g_step_unit = STEP_UNIT_TIMER_RACED;
                 return 0;
             }
-            if (deliv_seq != 0 && !flow_task_precedes(f, deliv_seq)) {
+            if (nu.arm == NEXT_TIMER_RACE || nu.arm == NEXT_DELIVER_REPLY) {
                 /* Whether this arm took a step the flow's task queue could have had (`g_task_held_deliv`), raised
                    before the delivery, whose settle lengthens the queue. With the stack empty a queued job is a task:
                    the checkpoint arm above is guarded by exactly `flow_job_microtask && flow_stack_empty`, asserted.
@@ -9504,7 +9750,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    step-machine entry to "execute the script element" that flow_step drives at the row, making step 4
                    and step 8's `load` bare fires. Absence shows as: a page with `setTimeout(f,0)` beside a failing
                    `<script src>` observing `f` before `onerror`, where a browser runs `onerror` first. */
-                if (kind == DYN_SCRIPT_FAILED) {
+                if (nu.arm == NEXT_SCRIPT_LOAD_FAILED) {
+                    DCHECK(kind == DYN_SCRIPT_FAILED, "the failed-load rung was answered over a row of another kind");
                     DCHECK(f->dyn_el[f->script_i] != NULL,
                            "a failed-load row carries no element — both producers (flow_deliver_one_reply's null "
                            "arm, engine_seed_scripts for a refused `src`) assert it, and §4.12.1.1 fires `error` at "
@@ -9523,7 +9770,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    `seq_awaits`, and a DYN_SCRIPT_FAILED row (whose body is its address, the account of what failed)
                    took step 4 above. The guard also carries the assertion's premise: an address body is non-NULL, so
                    without it the DCHECK would pass on the row it is written about. */
-                if (!seq_awaits) {
+                if (!seq_awaits && kind != DYN_SCRIPT_FAILED) {
                     DCHECK(body != NULL,
                            "a row reached the compile with no body — engine_queue_into asserts one, and the two "
                            "address-bodied kinds are taken by the branches above");
@@ -9572,7 +9819,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* The queue's length, read once for both arms of the choice (`g_task_held_seq`), so a raise and the
                dispatch it is about read one state; nothing between here and the arms touches the queue. */
             int jobs_here = flow_job_pending(f);
-            if (seq_compiles && !job_precedes) {
+            /* This step's own reading of the row, the queue and the block, against the rung it dispatches on. */
+            FLOW_NEXT_UNIT_CHECK(nu, seq_compiles && !job_precedes
+                                         ? (f->spin_row != f->dyn_id[f->script_i] &&
+                                            flow_row_parse_rank(f, f->script_i) == 1 ? NEXT_PARSE_SPIN
+                                                                                     : NEXT_START_PROGRAM)
+                                     : jobs_here > 0 ? NEXT_RUN_TASK
+                                     : flow_blocked(f) ? NEXT_HOST_BLOCKED : NEXT_IDLE);
+            if (nu.arm == NEXT_PARSE_SPIN || nu.arm == NEXT_START_PROGRAM) {
                 /* No work here: this arm's work is the compile below, and its body only declines every arm beneath
                    so control reaches that one compile. The one statement is a report (`g_task_held_seq`): the arrival
                    comparison answered no, so a task on the queue here is one the sequence went in front of. */
@@ -9587,7 +9841,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    parser-blocking script that is ready. Next diff builds: the timer source asked at the spin
                    through the same due-only rule. How its absence would show: a `setTimeout(f, 0)` from a
                    parser-inserted script running after a deferred script. */
-                if (f->spin_row != f->dyn_id[f->script_i] && flow_row_parse_rank(f, f->script_i) == 1) {
+                if (nu.arm == NEXT_PARSE_SPIN) {
                     int queued = g_rendering_hook != NULL && g_rendering_hook(ctx, true);
 
                     f->spin_row = f->dyn_id[f->script_i];
@@ -9596,7 +9850,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     return 0;
                 }
             }
-            else if (jobs_here > 0) {
+            else if (nu.arm == NEXT_RUN_TASK) {
                 /* What is left on the queue is a task (HTML §8.1.7.3 Processing model step 2, whose 2.3 takes "the
                  * first runnable task in taskQueue" and 2.6 performs its steps). The checkpoint above consumes every
                  * microtask before any program and declines only for an immediate row (flow_stack_empty's second
@@ -9630,11 +9884,6 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    answering yes (the row at the cursor is younger than a queued task), `seq_awaits` is a row at the
                    cursor still waiting to start, and otherwise the member has no row left. Different populations;
                    their sum is asserted at the accessor. */
-                if (timer_seq != 0 && !flow_task_precedes(f, timer_seq) &&
-                    engine_timer_takes_turn(ctx, f, timer_seq, UINT64_MAX)) {
-                    g_step_unit = STEP_UNIT_TIMER_ARRIVED;
-                    return 0;
-                }
                 if (job_precedes) g_task_arm_older++;
                 else if (seq_awaits) g_task_arm_row_wait++;
                 else g_task_arm_no_row++;
@@ -9661,7 +9910,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                running a `load` listener, rendering opportunity or timer callback now would interleave two program
                points of one flow. Stated positively so an arm added below inherits it. OWED, because only the host
                can change it (engine_host_answer). */
-            else if (flow_blocked(f)) {
+            else if (nu.arm == NEXT_HOST_BLOCKED) {
                 g_step_unit = STEP_UNIT_HOST_BLOCKED;   /* suspended mid-expression on a synchronous request */
                 return FLOW_STEP_OWED;
             }
@@ -12337,6 +12586,11 @@ static int engine_sched_slice(void) {
                 unhandled_rejection_notify(ctx);
             if (g_checkpoint_hook && r != FLOW_STEP_DONE && unit_ended)
                 g_checkpoint_hook(ctx);
+            /* The timer source's arrivals, at the first instant after the work that moved this flow's clock past an
+               expiry and before the host can pay a reply between steps (core/timing/timer.h's timer_stamp_due). Any
+               step's end, inside a program too: the clock is the flow's work, not its units. */
+            if (g_timer_stamp_hook && r != FLOW_STEP_DONE && r != FLOW_STEP_RETIRED)
+                g_timer_stamp_hook(ctx);
             /* The checkpoint's tail is the stepped flow's own work, HTML §8.1.7.3 "perform a microtask checkpoint"
                step 4 and the steps after it: notify about rejected promises (§8.1.4.7) captures the realm's list
                into this flow's delta and queues its task on this flow, so its allocations may sell the tail like
@@ -12482,26 +12736,14 @@ static int engine_sched_slice(void) {
             g_step_us += now - t0;
             g_step_work += step_work;
             flow_age_running(step_work);
-            /* The service just charged was the site the flow stood at while it ran. A turn that ended inside a
-               program or a job leaves it standing at the opcode it parked at (solver/flow.c's FlowSite), read off
-               the chain it suspended: the next quantum serves that code, not the last fork's. */
-            if (r != FLOW_STEP_DONE && !unit_ended) {
-                uint64_t site;
-                int named;
-                if (flow_frame(cur)) {
-                    named = JS_FlowSiteHash(ctx, (JSValue *)flow_frame(cur), &site);
-                } else {
-                    JSContext *park_realm;
-                    named = JS_ParkedFlowsSiteHash(JS_GetRuntime(ctx), &site, &park_realm);
-                    /* The runtime holds the switched-in agent's parks alone (JS_PutParkedFlows asserts it empty at
-                       the switch-in), so the head is this flow's, parked by its selected agent. */
-                    DCHECK(park_realm == NULL ||
-                               JS_GetRealmAgent(park_realm) == flow_agent_running(cur)->agent,
-                           "the parked continuation this flow is stood at was parked by another agent — the runtime "
-                           "holds only the switched-in agent's parks, so a stranger's is a switch that left its set "
-                           "behind, and the site would be another timeline's code");
-                }
-                if (named) flow_stand_at(cur, FLOW_SITE_CODE, site);
+            /* The service just charged was the site the flow stood at while it ran. The next quantum serves the
+               code its next unit enters (flow_next_unit): the opcode a program or job parked at, the head of a
+               checkpoint, the program or task the ladder starts next. A rung that names no code leaves it where it
+               stands (flow_next_unit_pass's residual). */
+            if (r == FLOW_STEP_MORE || r == FLOW_STEP_OWED) {
+                FlowNextUnit nu = flow_next_unit(ctx, cur);
+
+                if (nu.site_kind != 0) flow_stand_at(cur, nu.site_kind, nu.site);
             }
 #if APICLIENT_DEV
             /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, the UCB bonus that
@@ -13518,10 +13760,10 @@ void solver_agent_free(JSContext *ctx)
     DCHECK(g_docdone_hook == NULL,
            "§13.2.7's document-load lifecycle step was still registered when the solver's agent state was released — "
            "core/dom/document.c gives it back at document_agent_free, which runs first");
-    DCHECK(g_parse_end_hook == NULL,
+    DCHECK(g_parse_end_due == NULL,
            "§13.2.7 step 3 was still registered when the solver's agent state was released — document_agent_free "
            "gives it back");
-    DCHECK(g_link_connected_hook == NULL,
+    DCHECK(g_link_connected_due == NULL,
            "§4.6.8.20's connected time for parsed link elements was still registered when the solver's agent state "
            "was released — html_link_free gives it back, and platform.h's release column runs first");
     /* The orphan counters and the generation they last walked at, given back with the frontier they describe.

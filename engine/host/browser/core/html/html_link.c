@@ -2113,21 +2113,9 @@ void html_link_parsed(JSContext *ctx, lxb_dom_node_t *root)
     link_rec_set_int(ctx, g_parsed, "n", n + 1);
 }
 
-/* See html_link.h. ONE ELEMENT PER CALL, then return, because this is a work item on the one frontier like
- * everything else the scheduler asks for — core/dom/document.c's document_lifecycle_step states the same
- * sentence for the same reason, and it is what keeps a document that ships seventy preloads from being a
- * stretch of the scheduler's time with no suspend point on it.
- *
- * THE CURSOR IS THE FLOW'S, WHICH IS THE WHOLE POINT: `served` and `i` are properties of baseline records, so
- * a write to either rides the writing flow's COW delta and every timeline drains this list once, on its own.
- * That is the same answer the document's own `<script>` rows already get — every base flow of a document runs
- * its programs — and it is what makes a resumed flow re-issue the preloads it was in the middle of.
- *
- * IN THE DOCUMENT'S OWN REALM. §4.6.8.20's steps read that document's base URL, its policy container and its
- * media environment, so the realm is asked of the ENTRY and never of whoever is running: a same-origin agent
- * cluster holds a realm per document, and answering a child's preload with the root's policy is the defect
- * CLAUDE.md §per-realm names — one fact answered from one place for many agents. */
-int html_link_connected_step(JSContext *ctx)
+/* See html_link.h. A read: the first entry at or past the cursor still owing its document is the answer, and an
+   entry drained by the step below or by §7.5.10 holds `served` -1, so no tree is walked here. */
+int html_link_connected_due(JSContext *ctx)
 {
     int i, n;
 
@@ -2142,50 +2130,83 @@ int html_link_connected_step(JSContext *ctx)
                "its own length — the entry and the length are written together at the one site that appends, "
                "so a hole here is a list whose count outran what a flow can see of it");
         served = link_rec_int(ctx, rec, "served");
-        if (served >= 0) {
-            JSValue docv = JS_GetPropertyStr(ctx, rec, "doc");
-            lxb_dom_node_t *root = node_of(docv);
-            JSContext *dctx;
-            lxb_dom_element_t *el;
-
-            DCHECK(root != NULL,
-                   "HTML §4.6.8.20 Link type \"preload\"'s parsed-document list holds an entry whose `doc` is "
-                   "not a node — it is written from that Document's own object and from nowhere else, and it "
-                   "is cleared only together with the `served` sentinel that stops this arm being reached");
-            dctx = document_realm_of(root);
-            /* A destroyed Document's entry was dropped by HTML §7.5.10 step 5 in this timeline
-               (html_link_document_destroyed), so an entry still owed names a live realm. */
-            DCHECK(dctx != NULL,
-                   "the parsed-document list owes a document with no realm — §7.5.10 step 5 drops a destroyed "
-                   "Document's entry in the destroying timeline (html_link_document_destroyed), so this realm "
-                   "went away by a route that is not that destruction");
-            el = link_parsed_nth(dctx, root, served);
-            if (el) {
-                link_rec_set_int(ctx, rec, "served", served + 1);
-                JS_FreeValue(ctx, docv);
-                JS_FreeValue(ctx, rec);
-                {
-                    /* This inventory is the parser's elements, so el's node document's parser created it. */
-                    JSValue wrap = node_wrap(dctx, lxb_dom_interface_node(el));
-
-                    CHECK(!JS_IsException(wrap), "§4.6.8.20: OOM reaching a parsed link element's processing state");
-                    link_set_parser_created(dctx, wrap);
-                    JS_FreeValue(dctx, wrap);
-                }
-                link_trigger(dctx, el, true);
-                return 1;
-            }
-            link_rec_set_int(ctx, rec, "served", -1);
-            JS_SetPropertyStr(ctx, rec, "doc", JS_UNDEFINED);
-            JS_FreeValue(ctx, docv);
-        }
         JS_FreeValue(ctx, rec);
-        /* THE ENTRY CURSOR ONLY EVER ADVANCES, because this loop drains in index order and returns the moment
-           it serves one: an entry below `i` is drained in this timeline, so the scan a drained list costs is
-           one integer read rather than a pass over every document this agent has ever parsed. */
-        link_rec_set_int(ctx, g_parsed, "i", i + 1);
+        if (served >= 0) return 1;
     }
     return 0;
+}
+
+/* See html_link.h. ONE ELEMENT PER CALL, then return, because this is a work item on the one frontier like
+ * everything else the scheduler asks for — core/dom/document.c's document_lifecycle_step states the same
+ * sentence for the same reason, and it is what keeps a document that ships seventy preloads from being a
+ * stretch of the scheduler's time with no suspend point on it.
+ *
+ * THE CURSOR IS THE FLOW'S, WHICH IS THE WHOLE POINT: `served` and `i` are properties of baseline records, so
+ * a write to either rides the writing flow's COW delta and every timeline drains this list once, on its own.
+ * That is the same answer the document's own `<script>` rows already get — every base flow of a document runs
+ * its programs — and it is what makes a resumed flow re-issue the preloads it was in the middle of.
+ *
+ * IN THE DOCUMENT'S OWN REALM. §4.6.8.20's steps read that document's base URL, its policy container and its
+ * media environment, so the realm is asked of the ENTRY and never of whoever is running: a same-origin agent
+ * cluster holds a realm per document, and answering a child's preload with the root's policy is the defect
+ * CLAUDE.md §per-realm names — one fact answered from one place for many agents. */
+void html_link_connected_step(JSContext *ctx)
+{
+    int i, n, served;
+    JSValue rec, docv;
+    lxb_dom_node_t *root;
+    JSContext *dctx;
+    lxb_dom_element_t *el;
+
+    DCHECK(html_link_connected_due(ctx),
+           "§4.6.8.20's connected time was performed with no parsed document owing it — the scheduler asks "
+           "html_link_connected_due and performs only on its yes");
+    n = link_rec_int(ctx, g_parsed, "n");
+    /* The cursor only advances: an entry below it is drained in this timeline, so a drained list costs one
+       integer read. */
+    for (i = link_rec_int(ctx, g_parsed, "i");; i++) {
+        DCHECK(i < n, "the parsed-document list's due read found an owed entry this walk did not");
+        rec = JS_GetPropertyUint32(ctx, g_parsed, (uint32_t)i);
+        served = link_rec_int(ctx, rec, "served");
+        if (served >= 0) break;
+        JS_FreeValue(ctx, rec);
+        link_rec_set_int(ctx, g_parsed, "i", i + 1);
+    }
+    docv = JS_GetPropertyStr(ctx, rec, "doc");
+    root = node_of(docv);
+    DCHECK(root != NULL,
+           "HTML §4.6.8.20 Link type \"preload\"'s parsed-document list holds an entry whose `doc` is "
+           "not a node — it is written from that Document's own object and from nowhere else, and it "
+           "is cleared only together with the `served` sentinel that stops this arm being reached");
+    dctx = document_realm_of(root);
+    /* A destroyed Document's entry was dropped by HTML §7.5.10 step 5 in this timeline
+       (html_link_document_destroyed), so an entry still owed names a live realm. */
+    DCHECK(dctx != NULL,
+           "the parsed-document list owes a document with no realm — §7.5.10 step 5 drops a destroyed "
+           "Document's entry in the destroying timeline (html_link_document_destroyed), so this realm "
+           "went away by a route that is not that destruction");
+    el = link_parsed_nth(dctx, root, served);
+    /* The entry is drained when no parsed link follows the one served now, written here so the due read never
+       walks the tree. A link the page removed since the last step can leave none at `served` at all: the
+       document owes nothing more, and the step is that account. */
+    if (el && link_parsed_nth(dctx, root, served + 1)) {
+        link_rec_set_int(ctx, rec, "served", served + 1);
+    } else {
+        link_rec_set_int(ctx, rec, "served", -1);
+        JS_SetPropertyStr(ctx, rec, "doc", JS_UNDEFINED);
+        link_rec_set_int(ctx, g_parsed, "i", i + 1);
+    }
+    JS_FreeValue(ctx, docv);
+    JS_FreeValue(ctx, rec);
+    if (el) {
+        /* This inventory is the parser's elements, so el's node document's parser created it. */
+        JSValue wrap = node_wrap(dctx, lxb_dom_interface_node(el));
+
+        CHECK(!JS_IsException(wrap), "§4.6.8.20: OOM reaching a parsed link element's processing state");
+        link_set_parser_created(dctx, wrap);
+        JS_FreeValue(dctx, wrap);
+        link_trigger(dctx, el, true);
+    }
 }
 
 /* See html_link.h. Every entry naming the Document is dropped, behind the cursor or ahead of it: a drained entry
@@ -2240,14 +2261,14 @@ void html_link_declare(JSContext *ctx)
     JS_SetPropertyStr(ctx, g_parsed, "i", JS_NewInt32(ctx, 0));
     /* §4.6.8.20's browsing-context-connected time for the PARSER's own elements is a work item on the ONE
        frontier — see html_link_connected_step. Claimed here, once per AGENT, beside the machine above. */
-    engine_set_link_connected_hook(html_link_connected_step);
+    engine_set_link_connected_hooks(html_link_connected_due, html_link_connected_step);
     g_ready = 1;
 }
 
 void html_link_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    engine_set_link_connected_hook(NULL);
+    engine_set_link_connected_hooks(NULL, NULL);
     JS_FreeAtomRT(rt, g_atom_state);
     g_atom_state = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_state_key);

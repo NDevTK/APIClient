@@ -734,6 +734,8 @@ FlowAgent *flow_agent_running(const Flow *f);
 /* HTML §8.1.2.1's "the agent equivalent of the current realm": which of `f`'s agents runs next, chosen at a rest
    point where no agent's base is mid-step. `f` is switched in: the runtime holds the selected agent's parks. */
 void flow_select_agent(JSContext *ctx, Flow *f);
+/* The agent index flow_select_agent would select, as a read (0 is the window agent). */
+int  flow_agent_next(JSContext *ctx, const Flow *f);
 /* Selects a runnable agent other than the selected one, when the selected one has nothing to do this step;
    answers whether it switched. */
 int flow_select_other_agent(JSContext *ctx, Flow *f);
@@ -904,6 +906,10 @@ int  flow_job_microtask(const Flow *f);
 /* How many of each kind. Both halves are returned, because deriving one by subtracting the other from
    flow_job_pending would make the partition identity unfalsifiable. See the census's `jobs_ready_task`. */
 void flow_job_kinds(const Flow *f, int *task_out, int *micro_out);
+/* The site the job the next pick takes (flow_job_take's: the first microtask, else the first task) enters,
+   quickjs's JS_JobSiteHash over its callee. Answers 0 for an empty queue or a callee with no bytecode body. A
+   read. */
+int  flow_job_next_site(const Flow *f, uint64_t *out);
 /* Append to the queue of `ctx`'s agent, which must be one of the flow's, with `argv` dup'd into the record. `task`
    picks which of HTML §8.1.7 "Event loops"' two queues. `handle` is the runtime's name for the callback, so the
    host that took the job can find it again. */
@@ -1737,8 +1743,8 @@ void  flow_running_cascade_written(void);
 const Flow *flow_running_cascade_writes(uint64_t *gen);
 /* A just-seeded drive's product count (flow.h's `orphan_seen`), re-keyed and raised as a rank change. */
 void  flow_set_orphan_seen(Flow *f, int64_t seen);
-/* The member stands at a code site (FlowSite's identity): a decision point named by quickjs's
-   JS_RunningSiteHash, or a driven body named by its orphan hash. Moves it to that site's ledger in its family and
+/* The member stands at a code site (FlowSite's identity): a code position named by quickjs's JS_RunningSiteHash
+   (or a program's entry, by its content digest), or a driven body named by its orphan hash. Moves it to that site's ledger in its family and
    raises a rank change. */
 #define FLOW_SITE_CODE  1
 #define FLOW_SITE_DRIVE 2

@@ -131,14 +131,16 @@ void html_link_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *n
    the parse, so what moves is the MOMENT the trigger is performed and never the order of its steps. */
 void html_link_parsed(JSContext *ctx, lxb_dom_node_t *root);
 
-/* …AND THE FLOW THAT SERVES THEM. Runs §4.6.8.20's browsing-context-connected time for ONE inventoried element
-   and returns 1, or 0 when every document this timeline can see has been drained. Registered with the
-   scheduler as a work item on the ONE frontier (solver/engine.h's engine_set_link_connected_hook), asked
-   AHEAD of the document's own programs because in a browser the parser connects a `<link>` during tree
-   construction and every script of the document is written after it. It is declared here as well because a
-   host that drives its own pump owes the same step; a host that runs none of it has documents whose own
-   preloads are never requested, which is a lazy-chunk graph that never loads. */
-int html_link_connected_step(JSContext *ctx);
+/* …AND THE FLOW THAT SERVES THEM, as a read and a perform. html_link_connected_due answers whether any document
+   this timeline can see still owes an inventoried element §4.6.8.20's browsing-context-connected time, writing
+   nothing; html_link_connected_step, asked only on its yes, runs that time for ONE element (or records that the
+   page removed what was left). Registered with the scheduler as a work item on the ONE frontier
+   (solver/engine.h's engine_set_link_connected_hooks), asked AHEAD of the document's own programs because in a
+   browser the parser connects a `<link>` during tree construction and every script of the document is written
+   after it. A host that runs neither has documents whose own preloads are never requested, which is a
+   lazy-chunk graph that never loads. */
+int  html_link_connected_due(JSContext *ctx);
+void html_link_connected_step(JSContext *ctx);
 
 /* HTML §7.5.10 "Destroying documents" step 5 for the inventory above: the running timeline stops owing the
    destroyed Document (`realm`'s, still installed) its parsed links' connected time. Called from the destruction
