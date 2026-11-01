@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pullWork", "visits", "orphanSeen",
-                    "replay", "surv", "rung", "assumed", "picks", "hostOwed", "running"];
+                    "replay", "surv", "rung", "assumed", "againstEnv", "picks", "hostOwed", "running"];
 
 /* The five terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The
    aging is split into its family half (in `coord`, with the reward) and its own half; the optimism is read off the
@@ -23,7 +23,7 @@ function termsOf(o, q, a, rungs, where) {
   const own = -o.ownNotch * q;
   const opt = 1.0 / (1.0 + o.siteServed / o.pullWork + o.orphanSeen);
   const dist = (o.replay + o.surv + o.rung) / rungs;
-  const assume = -o.assumed * a;
+  const assume = -(o.assumed + o.againstEnv) * a;
   const w = coord + (opt + ((own + dist) + assume));
   if (w !== o.w)
     throw new Error(`${where}: a curDeepTerms end does not recompose to its weight (published ${o.w}, ` +
@@ -68,7 +68,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     try { c = JSON.parse(m[1]); } catch { continue; }
     const f = (x) => x.toFixed(6);
     const end = (e) => `site ${e.siteServed} visits ${e.visits} k ${e.ownNotch} K+c ${e.coordNotch} ` +
-                       `assumed ${e.assumed} picks ${e.picks} owed ${e.hostOwed} running ${e.running}`;
+                       `assumed ${e.assumed} againstEnv ${e.againstEnv} picks ${e.picks} owed ${e.hostOwed} running ${e.running}`;
     for (const [name, r] of [["curDeep", curDeepTermSplit(c, `${path} census ${c.censusSeq}`)],
                              ["neverPicked", neverPickedTermSplit(c, `${path} census ${c.censusSeq}`)]]) {
       if (!r) continue;

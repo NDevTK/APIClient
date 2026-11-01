@@ -784,6 +784,9 @@ const char *concolic_source_precondition(const char *root);
    constraint as the whole of one; the mechanism to build is one candidate per declaring member, each with its
    own envelope, and the one that fires is the one emitted. */
 int         concolic_source_delivery(const char *root, const char **kind, char *prefix);
+/* Does the member slice `p`/`n` name no row of the source tables: no delivery, no precondition, no principal?
+   The member property concolic_root_every asks to learn that no party is declared to set a value. */
+int         concolic_member_undeclared(const char *p, size_t n);
 /* Does any member of `root` name a source declared with a browser delivery? 0 for NULL. The quantifier a record
    asks to learn whether an attacker source roots it at all, so two declaring members answer 1 rather than
    crashing as concolic_source_delivery does, which must name one member's envelope. */

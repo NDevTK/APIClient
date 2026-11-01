@@ -1195,6 +1195,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/xdmulti.h"
 #include "fixture/declines.h"
 #include "fixture/absentarm.h"
+#include "fixture/envarm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
 #include "fixture/splitunits.h"
@@ -1803,6 +1804,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "xdmulti", HTML_XDMULTI },
     { "declines", HTML_DECLINES },
     { "absentarm", HTML_ABSENTARM },
+    { "envarm", HTML_ENVARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
     { "splitunits", HTML_SPLITUNITS },
@@ -6568,13 +6570,16 @@ static int g_id_host_read, g_id_append_child;   /* declared once per agent — a
  * here — rather than `at least one did`, which is true the moment one flow gets it right and says nothing
  * about the rest. It is meaningful for every token: for a chunk-staged one it reads 0, correctly, because a
  * chunk's throw site is the chunk's address. */
-typedef struct { const char *tok; int stands; int retracted; int stands_here; } TfErrEdges;
+/* `first` is the ordinal, among every standing announcement of any staged token, of this token's first one (0:
+   never announced), so a row can read which of two throws the stream reached first. */
+typedef struct { const char *tok; int stands; int retracted; int stands_here; int first; } TfErrEdges;
+static int g_tf_err_stands;
 static TfErrEdges g_tf_err_edges[] = {
-    { "rejNOHANDLER", 0, 0, 0 },   /* never handled — announced, never corrected */
-    { "rejTAKEBACK",  0, 0, 0 },   /* handled a task later — announced, then corrected */
-    { "rejMUTE",      0, 0, 0 },   /* cancelled, then handled — announced at NEITHER edge */
-    { "rejRELAPSE",   0, 0, 0 },   /* corrected and then announced AGAIN — the latch's rising edge */
-    { "rejTWICE",     0, 0, 0 },   /* two occurrences, one taken back — the row still stands, so no correction */
+    { "rejNOHANDLER", 0, 0, 0, 0 },   /* never handled — announced, never corrected */
+    { "rejTAKEBACK",  0, 0, 0, 0 },   /* handled a task later — announced, then corrected */
+    { "rejMUTE",      0, 0, 0, 0 },   /* cancelled, then handled — announced at NEITHER edge */
+    { "rejRELAPSE",   0, 0, 0, 0 },   /* corrected and then announced AGAIN — the latch's rising edge */
+    { "rejTWICE",     0, 0, 0, 0 },   /* two occurrences, one taken back — the row still stands, so no correction */
     /* …AND THE ONE THIS DOCUMENT RAISES ITSELF, which no chunk can stage.
        DOM §4.2.3 "Mutation algorithms"'s move step 24.3 enqueues a reaction — that section holds nine lists
        and exactly one of them reaches step 24, whose single sub-list has three items, so the sub-number is
@@ -6588,7 +6593,7 @@ static TfErrEdges g_tf_err_edges[] = {
        its throw is CORRECT behaviour rather than a defect. The token is the fixture's own — the string this
        document throws — and never a word of any engine message, which is the line the printer's paragraph
        draws and the side of it a fixture-owned marker sits on. */
-    { "synmove",      0, 0, 0 },
+    { "synmove",      0, 0, 0, 0 },
     /* …AND THE SECOND ONE THIS DOCUMENT RAISES ITSELF, which is the OTHER OBSERVABLE of a guard this fixture
        already tests from the inside and could not see from the outside.
        HTML §8.1.4.6 "Runtime script errors"' report-an-exception puts its whole fire inside one condition —
@@ -6606,11 +6611,15 @@ static TfErrEdges g_tf_err_edges[] = {
        string THIS DOCUMENT throws (`reportError(new RangeError('reentrant'))`) and never a word of any engine
        message. The OUTER TypeError is cancelled by that listener's `ev.preventDefault()` and so does not
        stand, which is why this pair expects exactly one announcement and not two. */
-    { "reentrant",    0, 0, 0 },
+    { "reentrant",    0, 0, 0, 0 },
     /* HTML_ABSENTARM's two throws, one per arm of a branch over a global this session does not have; the
        `absent-arm` row asserts both stood and which of them is filed as this engine's exploration. */
-    { "absBOOMARM",   0, 0, 0 },
-    { "absBOOMOBS",   0, 0, 0 },
+    { "absBOOMARM",   0, 0, 0, 0 },
+    { "absBOOMOBS",   0, 0, 0, 0 },
+    /* HTML_ENVARM's two throws, one per arm of a branch over Math.random(); `env-example-first` reads their
+       order. */
+    { "envBOOMenvLO", 0, 0, 0, 0 },
+    { "envBOOMenvHI", 0, 0, 0, 0 },
 };
 /* THIS DOCUMENT'S OWN ADDRESS, TAKEN FROM THE ONE CALL THAT ESTABLISHES IT rather than spelled a sixth time.
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
@@ -6652,6 +6661,8 @@ static void tf_err_edge_seen(const char *msg, const char *filename, ResultPageEr
         switch (edge) {
         case RESULT_PAGE_ERROR_STANDS:
             g_tf_err_edges[i].stands++;
+            g_tf_err_stands++;
+            if (!g_tf_err_edges[i].first) g_tf_err_edges[i].first = g_tf_err_stands;
             /* `filename` is REQUIRED and never NULL at this hook (solver/result.h asserts it at
                result_page_error), so it is compared as it arrived rather than defaulted past. */
             if (filename && g_tf_doc_url && !strcmp(filename, g_tf_doc_url))
@@ -14875,6 +14886,42 @@ TF_UNIT void probes_isarraytype(const char *js, Probe *tab, int *n) {
     const Probe rows[] = {
         { "isarraytype-string", str_tt, "iaV", SESS_EXPLORE, str_why },
         { "isarraytype-json", obj_tt, "iaJ", SESS_EXPLORE, obj_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `envarm` document. The branch over Math.random() keeps its example's arm on the running flow and
+   prices the other (solver/decide.c's dec_subject_environment), so the example's world reaches its timer's throw
+   first; which arm that is, is read off the grades, since the example is the engine's. The branch over
+   window.name runs both arms at no price. */
+TF_UNIT void probes_envarm(const char *js, Probe *tab, int *n) {
+    int lo_ex = emitted_record_graded_has(js, "/api/envarm", "derived", "envLO");
+    int hi_ex = emitted_record_graded_has(js, "/api/envarm", "derived", "envHI");
+    const TfErrEdges *ex = tf_err_edges(lo_ex ? "envBOOMenvLO" : "envBOOMenvHI");
+    const TfErrEdges *other = tf_err_edges(lo_ex ? "envBOOMenvHI" : "envBOOMenvLO");
+    const char *ord_why = NULL; int ord_tt = 1;
+    const char *atk_why = NULL; int atk_tt = 1;
+
+    fold_row(&ord_tt, &ord_why,
+             emitted_record_graded_has(js, "/api/envarm", "forced", lo_ex ? "envHI" : "envLO") && lo_ex != hi_ex,
+             "NOT REACHED: /api/envarm does not stand at exactly one derived arm and the other forced, so the "
+             "branch over Math.random() did not run both arms against one example");
+    fold_row(&ord_tt, &ord_why, lo_ex,
+             "the example's arm is not `envLO`, the arm that works before its throw — without that the example's "
+             "world throws first whether or not the other arm is priced, so the order below tests nothing");
+    fold_row(&ord_tt, &ord_why, ex->first > 0 && other->first > 0,
+             "the stream did not announce both arms' timer throws, so neither world's order can be read");
+    fold_row(&ord_tt, &ord_why, ex->first < other->first,
+             "the arm against Math.random()'s example announced its throw before the example's arm — that arm is "
+             "priced as an assumption, so the example's world reaches its timer first");
+    fold_row(&atk_tt, &atk_why,
+             emitted_record_graded_has(js, "/api/envatk", "derived", "envPLAIN") &&
+                 emitted_record_graded_has(js, "/api/envatk", "forced", "envNAMED"),
+             "/api/envatk does not stand at both arms of the branch over window.name — an attacker source's arms "
+             "cost nothing and both run");
+    const Probe rows[] = {
+        { "env-example-first", ord_tt, "envBOOM", SESS_EXPLORE, ord_why },
+        { "env-attacker-arms", atk_tt, "envNAMED", SESS_EXPLORE, atk_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -23782,6 +23829,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
+    probes_envarm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
     probes_splitunits(js, probes, &np);

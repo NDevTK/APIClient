@@ -321,7 +321,7 @@ static void dec_leave_path(void) {
        `replayLeftArms >= replayLeft` holds of the printed numbers. */
     g_replay_left++;
     g_replay_left_arms += dec_total() - g_c;
-    flow_assumed_truncate(g_c);   /* the slots above the cursor are no longer this flow's */
+    flow_priced_truncate(g_c);   /* the slots above the cursor are no longer this flow's */
     if (g_c == 0) {                      /* the very first branch disagreed: this flow stands on nothing */
         g_dec_base = NULL; g_dec_below = 0;
         dec_seg_unref(old);
@@ -1305,6 +1305,24 @@ static int dec_subject_assumed(JSValueConst v) {
     return concolic_root_every(v, absent_assumed_member);
 }
 
+/* Is `v` an environment unknown: a value the page reads that no party is declared to set? Every root member is the
+   world's (supplied from outside the served bytes, so not a served value or a hole this engine minted) and names
+   no row of concolic.c's source tables: no delivery (an attacker source, whose arms cost nothing), no
+   precondition (application state and the origin's own stores, absent.c's injected state among them) and no
+   principal. Math.random, the clock, a device fact and a server's reply are such roots. An arm against its
+   example costs as an assumption does, so the example's world runs first. */
+static int dec_subject_environment(JSValueConst v) {
+    return concolic_root_whose_all(v, CONCOLIC_WHOSE_WORLD) && concolic_root_every(v, concolic_member_undeclared);
+}
+
+/* A decision consumed at `slot` on the arm its example contradicts (`forced_arm`), recorded where its subject
+   prices it: the sibling replaying its own fork slot, or a resumed flow replaying its path. */
+static void dec_note_priced(JSValueConst subject, int forced_arm, int slot) {
+    if (!forced_arm || g_c <= slot) return;
+    if (dec_subject_assumed(subject)) flow_note_assumed_slot(slot);
+    else if (dec_subject_environment(subject)) flow_note_env_slot(slot);
+}
+
 /* Is an arm over `v` a decision about an input another party sets: does a member of its root declare a
    precondition (application state: absent.c's record members, served or missing, and the origin's own stores)
    or a delivery (an attacker source)? An environment unknown (a random value, a browser fact) declares neither
@@ -1319,8 +1337,10 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
                         int restartable, int real_arm, int *forked, const char *site) {
     int take = real_arm < 0 ? 1 : real_arm;
     /* The sibling's arm is the one the example contradicts, so over absent application state it is an
-       assumption, priced on the sibling from its birth at this slot. */
+       assumption, and over an environment unknown a departure from the example's world; either is priced on the
+       sibling from its birth at this slot. */
     int assumed_slot = real_arm != REAL_ARM_UNOBSERVED && dec_subject_assumed(subject) ? g_c : -1;
+    int env_slot = real_arm != REAL_ARM_UNOBSERVED && assumed_slot < 0 && dec_subject_environment(subject) ? g_c : -1;
     void *dblob;
     void *pblob;
 
@@ -1343,7 +1363,7 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
     if (key) fork_key_count(key, FORK_ROW_PREDICATE);
     else     fork_key_count(fork_site_name(subject), FORK_ROW_SITE);
     pblob = concolic_pins_suspend();
-    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable, site, assumed_slot);
+    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable, site, assumed_slot, env_slot);
     /* This flow's own arm, onto the head the freeze emptied, under the question both arms answer, so the sibling
        and every later replay of this path check the slot against what they ask and diverge on a mismatch.
        Named residual. Not covered: one code site with the same subject shape met in swapped order across
@@ -1569,9 +1589,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     if (forked && concolic_src_pinned(src)) g_fork_over_pinned++;
 
     forced_arm = decide_note_forced_arm(cond, real, arm);
-    /* A slot this decision consumed on the arm its example contradicts, over absent application state: the
-       sibling replaying its own fork slot, or a resumed flow replaying its path, records the assumption. */
-    if (forced_arm && g_c > slot && dec_subject_assumed(cond)) flow_note_assumed_slot(slot);
+    dec_note_priced(cond, forced_arm, slot);
 
     /* The source equals tok on the arm that makes the equality true (arm 1; `!==` arrives as `===`). The root
        travels with the pin, read off the comparison result (pred_new gives it the tested operand's root): whose
@@ -1926,8 +1944,7 @@ int solver_outcome_at(JSContext *ctx, JSValueConst over, const char *op, int n, 
         free(key);
         /* The arm this flow ends on, against the machine's declaration, as decide_branch does, before the forked
            bit (a message to the driver, not part of the arm) is composed. Only i == 0 can fire it. */
-        if (decide_note_forced_arm(over, real_arm, arm) && g_c > slot && dec_subject_assumed(over))
-            flow_note_assumed_slot(slot);
+        dec_note_priced(over, decide_note_forced_arm(over, real_arm, arm), slot);
         if (arm == 1) {
             /* The answer, written under every name it has (see outcome_settle), after decide_note_forced_arm,
                which may have taken this operand's example away, and on the arm that ended the walk, which also

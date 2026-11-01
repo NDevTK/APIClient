@@ -1768,7 +1768,7 @@ int flow_path_victim_act(const Flow *f) {
 }
 
 FlowPathMarks flow_path_marks(const Flow *f) {
-    FlowPathMarks m = { flow_path_forced(f), f->path_pinned, f->path_peer_driven, f->path_peer_pinned, -1 };
+    FlowPathMarks m = { flow_path_forced(f), f->path_pinned, f->path_peer_driven, f->path_peer_pinned, -1, -1 };
     return m;
 }
 
@@ -1778,22 +1778,58 @@ int flow_assumed(const Flow *f) {
     return f->assumed_reads + f->assumed_slots_n;
 }
 
-/* Appends `slot` to `f`'s assumed slots, which stay ascending because a flow's decisions are consumed in cursor
-   order and a fork's sibling arm is the slot past every one its parent holds. */
-static void flow_assumed_slot_push(Flow *f, int slot) {
-    int *g;
-    DCHECK(slot >= 0 && (f->assumed_slots_n == 0 || f->assumed_slots[f->assumed_slots_n - 1] < slot),
-           "an assumed decision slot arrived below one the flow already holds — slots are taken in cursor order");
-    g = realloc(f->assumed_slots, (size_t)(f->assumed_slots_n + 1) * sizeof *g);
-    CHECK(g, "flow: OOM recording an assumed decision slot");
-    f->assumed_slots = g;
-    f->assumed_slots[f->assumed_slots_n++] = slot;
+int flow_against_env(const Flow *f) {
+    DCHECK(f->env_slots_n >= 0 && (f->env_slots_n == 0) == !f->env_slots,
+           "a flow's env slot list and its length disagree");
+    return f->env_slots_n;
 }
 
-/* An assumption count moved: the member's key and the order with it. */
+/* The decisions the weight prices at FLOW_ASSUMPTION_COST each: the assumptions and the arms against an
+   environment unknown's example. */
+static int flow_priced(const Flow *f) { return flow_assumed(f) + flow_against_env(f); }
+
+/* Appends `slot` to one of a flow's priced slot lists (`*v`, `*n`), which stay ascending because a flow's
+   decisions are consumed in cursor order and a fork's sibling arm is the slot past every one its parent holds. */
+static void flow_slot_push(int **v, int *n, int slot) {
+    int *g;
+    DCHECK(slot >= 0 && (*n == 0 || (*v)[*n - 1] < slot),
+           "a priced decision slot arrived below one the flow already holds — slots are taken in cursor order");
+    g = realloc(*v, (size_t)(*n + 1) * sizeof *g);
+    CHECK(g, "flow: OOM recording a priced decision slot");
+    *v = g;
+    (*v)[(*n)++] = slot;
+}
+
+static void flow_assumed_slot_push(Flow *f, int slot) { flow_slot_push(&f->assumed_slots, &f->assumed_slots_n, slot); }
+static void flow_env_slot_push(Flow *f, int slot) { flow_slot_push(&f->env_slots, &f->env_slots_n, slot); }
+
+/* A priced count moved: the member's key and the order with it. */
 static void flow_assumed_moved(Flow *f) {
     flow_ix_rekey(f);
     frontier_rank_changed();
+}
+
+/* Records `slot` in the running flow's list `*v`/`*n` unless it holds it: a sibling's own fork slot is recorded at
+   the fork and met again at its replay, the only slot that can be. Answers whether the list grew. */
+static int flow_slot_note(int **v, int *n, int slot) {
+    if (*n && (*v)[*n - 1] >= slot) {
+        DCHECK((*v)[*n - 1] == slot,
+               "a replayed slot below the flow's last priced slot was not among them — slots are replayed in "
+               "cursor order, so only the sibling's own fork slot can be met again");
+        return 0;
+    }
+    flow_slot_push(v, n, slot);
+    return 1;
+}
+
+/* Drops the slots at or above `c` from `*v`/`*n`; answers whether any went. */
+static int flow_slot_truncate(int **v, int *n, int c) {
+    int k;
+    for (k = *n; k > 0 && (*v)[k - 1] >= c; k--) {}
+    if (k == *n) return 0;
+    *n = k;
+    if (!k) { free(*v); *v = NULL; }
+    return 1;
 }
 
 void flow_note_assumed_read(void) {
@@ -1805,25 +1841,22 @@ void flow_note_assumed_read(void) {
 void flow_note_assumed_slot(int slot) {
     Flow *f = g_running;
     DCHECK(f != NULL, "an assumed decision slot was recorded with no flow running");
-    if (f->assumed_slots_n && f->assumed_slots[f->assumed_slots_n - 1] >= slot) {
-        DCHECK(f->assumed_slots[f->assumed_slots_n - 1] == slot,
-               "a replayed slot below the flow's last assumed slot was not among them — slots are replayed in "
-               "cursor order, so only the sibling's own fork slot can be met again");
-        return;
-    }
-    flow_assumed_slot_push(f, slot);
-    flow_assumed_moved(f);
+    if (flow_slot_note(&f->assumed_slots, &f->assumed_slots_n, slot)) flow_assumed_moved(f);
 }
 
-void flow_assumed_truncate(int c) {
+void flow_note_env_slot(int slot) {
     Flow *f = g_running;
-    int n;
-    DCHECK(f != NULL && c >= 0, "an assumed-slot truncation was asked with no flow running or below slot 0");
-    for (n = f->assumed_slots_n; n > 0 && f->assumed_slots[n - 1] >= c; n--) {}
-    if (n == f->assumed_slots_n) return;
-    f->assumed_slots_n = n;
-    if (!n) { free(f->assumed_slots); f->assumed_slots = NULL; }
-    flow_assumed_moved(f);
+    DCHECK(f != NULL, "an env decision slot was recorded with no flow running");
+    if (flow_slot_note(&f->env_slots, &f->env_slots_n, slot)) flow_assumed_moved(f);
+}
+
+void flow_priced_truncate(int c) {
+    Flow *f = g_running;
+    int a, e;
+    DCHECK(f != NULL && c >= 0, "a priced-slot truncation was asked with no flow running or below slot 0");
+    a = flow_slot_truncate(&f->assumed_slots, &f->assumed_slots_n, c);
+    e = flow_slot_truncate(&f->env_slots, &f->env_slots_n, c);
+    if (a || e) flow_assumed_moved(f);
 }
 
 int flow_path_forced(const Flow *f) {
@@ -2152,7 +2185,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
            sib->cand_replay == 0.0 && sib->cand_replay_of == 0 && sib->cand_replay_arms == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->path_pinned == 0 && sib->path_peer_driven == 0 && sib->path_peer_pinned == 0 &&
-           sib->assumed_reads == 0 && sib->assumed_slots_n == 0 &&
+           sib->assumed_reads == 0 && sib->assumed_slots_n == 0 && sib->env_slots_n == 0 &&
            sib->family == sib->acct && sib->family->fam_work == 0 && sib->family->emit_gen == 0 &&
            sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
            "a forked sibling was credited, charged, dispatched or decided before inheriting its parent's account — "
@@ -2249,12 +2282,18 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
             sib->acct->branch = br;
         }
     }
-    /* The assumptions, before the index takes the arm's key: the parent's, plus the sibling's own arm when that arm
-       takes absent application state as present. That one is the stated exception to the rank-neutrality equality,
-       which compares the weights with the assumption term left out. */
+    /* The priced decisions, before the index takes the arm's key: the parent's, plus the sibling's own arm when that
+       arm takes absent application state as present or goes against an environment unknown's example. That one is
+       the stated exception to the rank-neutrality equality, which compares the weights with the priced term left
+       out. */
+    DCHECK(at_branch.assumed_slot < 0 || at_branch.env_slot < 0,
+           "a fork priced its sibling's one arm twice, as an assumption and as an arm against an environment "
+           "unknown — decide.c classifies a subject by its root's declared kind, which is one or the other");
     sib->assumed_reads = parent->assumed_reads;
     for (int i = 0; i < parent->assumed_slots_n; i++) flow_assumed_slot_push(sib, parent->assumed_slots[i]);
     if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot);
+    for (int i = 0; i < parent->env_slots_n; i++) flow_env_slot_push(sib, parent->env_slots[i]);
+    if (at_branch.env_slot >= 0) flow_env_slot_push(sib, at_branch.env_slot);
     /* And the path's forced mark, the one inherited thing the ranking never reads: an arm is its parent's path with
        one more arm on it, so it stands on everything the parent's path stood on. A sibling born clean of it would
        declare its requests derived on the strength of being forked, the provenance form of reset-by-splitting, and
@@ -2294,11 +2333,13 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        `work_gen`. This is the site that mints that population, so the relation is asserted on the newborn. */
     DCHECK_AGING_ONE_WINDOW(sib, "a fork handed this arm its parent's account");
     DCHECK(flow_weight_observed(sib) == flow_weight_observed(parent) &&
-               flow_assumed(sib) == flow_assumed(parent) + (at_branch.assumed_slot >= 0),
+               flow_assumed(sib) == flow_assumed(parent) + (at_branch.assumed_slot >= 0) &&
+               flow_against_env(sib) == flow_against_env(parent) + (at_branch.env_slot >= 0) &&
+               (at_branch.assumed_slot >= 0 || at_branch.env_slot >= 0 || flow_weight(sib) == flow_weight(parent)),
            "a fork changed the ranking — the sibling is the parent's path with one arm appended, so the two "
-           "must be worth the same at the instant of the branch apart from the one assumption the sibling's arm "
-           "may take; a weight term the fork does not carry lets a flow change its own rank by branching, which "
-           "is the one thing the WFQ may never let it do");
+           "must be worth the same at the instant of the branch apart from the one priced decision the sibling's "
+           "arm may take; a weight term the fork does not carry lets a flow change its own rank by branching, "
+           "which is the one thing the WFQ may never let it do");
 }
 
 static int g_flows_assembling;   /* siblings between flow_assembly_begin and flow_assembly_end, 0 or 1 */
@@ -3784,8 +3825,9 @@ typedef char flow_quantum_costs_at_most_one_finding[(FLOW_SILENCE_WORK >= FLOW_S
  * multiply then floor: two flows on the same notch get the identical product, which keeps the fork's
  * rank-neutrality equality exact. */
 #define FLOW_AGE_QUANTUM ((double)FLOW_SERVICE_WORK * FLOW_AGE_RATE)
-/* The price of one assumption (flow.h's `assumed_reads`/`assumed_slots`): one never-run member's whole optimism
- * bonus, so a world resting on absent application state ranks behind the observed world's unexplored arms and
+/* The price of one assumption (flow.h's `assumed_reads`/`assumed_slots`) and of one arm against an environment
+ * unknown's example (`env_slots`): one never-run member's whole optimism bonus, so a world resting on absent
+ * application state or departing from the example's world ranks behind the observed world's unexplored arms and
  * ahead of it once the observed world has aged past that much; a cost and not a tier, so nothing is dropped. */
 #define FLOW_ASSUMPTION_COST 1.0
 
@@ -3975,10 +4017,10 @@ static double flow_index_key_observed(const Flow *f) {
     return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM + flow_distance(f);
 }
 
-/* The member key with each assumption priced in, the last summand, so a member with none reads
+/* The member key with each priced decision priced in, the last summand, so a member with none reads
    flow_index_key_observed to the bit (`x - 0.0 == x`). */
 static double flow_index_key(const Flow *f) {
-    return flow_index_key_observed(f) - (double)flow_assumed(f) * FLOW_ASSUMPTION_COST;
+    return flow_index_key_observed(f) - (double)flow_priced(f) * FLOW_ASSUMPTION_COST;
 }
 
 /* The service the same code site (`kind`, `key`, `seen`) has received in every family's ledger but `f`'s own: what
@@ -4013,7 +4055,7 @@ static double flow_weight_recompose(const FlowWeightOperands *o) {
     double opt = site_optimism(o->site_served, o->orphan_seen);
     double dist = (o->replay + o->surv + (double)o->rung) / (double)FLOW_RUNGS_N;
     double ikey = -(double)o->own_notch * FLOW_AGE_QUANTUM + dist
-                  - (double)o->assumed * FLOW_ASSUMPTION_COST;
+                  - (double)(o->assumed + o->against_env) * FLOW_ASSUMPTION_COST;
     return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + (opt + ikey);
 }
 
@@ -4036,6 +4078,7 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
     o->w = flow_weight(f);
     o->age_quantum = FLOW_AGE_QUANTUM;
     o->assumed = flow_assumed(f);
+    o->against_env = flow_against_env(f);
     o->assume_cost = FLOW_ASSUMPTION_COST;
     o->host_owed = flow_host_owed(f);
     o->running = (f == g_running);
@@ -4100,7 +4143,7 @@ static FlowOrderKey flow_order_key(const Flow *f) {
     return o;
 }
 
-/* The weight with the assumption term left out, in flow_order_key's composition: what the fork's rank-neutrality
+/* The weight with the priced term left out, in flow_order_key's composition: what the fork's rank-neutrality
    equality compares. Mentioned only inside DCHECK conditions. */
 static double flow_weight_observed(const Flow *f) {
     return flow_family_coord(f) + (flow_optimism(f) + flow_index_key_observed(f));
@@ -4220,7 +4263,7 @@ static int ix_t_cmp(const FlowIxTreap *a, const FlowIxTreap *b) {
     if (a->rung != b->rung) return a->rung < b->rung ? -1 : 1;
     if (a->replay != b->replay) return a->replay < b->replay ? -1 : 1;
     if (a->surv != b->surv) return a->surv < b->surv ? -1 : 1;
-    if (a->assumed != b->assumed) return a->assumed < b->assumed ? -1 : 1;
+    if (a->priced != b->priced) return a->priced < b->priced ? -1 : 1;
     return 0;
 }
 
@@ -4385,7 +4428,7 @@ static void ix_t_stamp(Flow *f) {
     f->ix_t.replay = f->cand_replay;
     f->ix_t.surv = f->cand_surv;
     f->ix_t.rung = f->cand_rung;
-    f->ix_t.assumed = flow_assumed(f);
+    f->ix_t.priced = flow_priced(f);
 }
 
 static void flow_ix_insert(Flow *f) {
@@ -4447,7 +4490,7 @@ static void flow_ix_rekey(Flow *f) {
     if (!f->ix_in) return;
     fresh.key = flow_index_key(f); fresh.phase = flow_silence_phase(f); fresh.notch = flow_service_notch(f);
     fresh.replay = f->cand_replay; fresh.surv = f->cand_surv;
-    fresh.rung = f->cand_rung; fresh.assumed = flow_assumed(f);
+    fresh.rung = f->cand_rung; fresh.priced = flow_priced(f);
     if (fresh.key == f->ix_t.key && ix_t_cmp(&fresh, &f->ix_t) == 0) return;
     flow_ix_remove(f);
     flow_ix_insert(f);
@@ -5371,9 +5414,9 @@ static double wfq_accounted_spread(const WfqCensus *c) {
          + ((double)ENGINE_PULL_WORK / (double)c->opt_den_min
             - (double)ENGINE_PULL_WORK / (double)c->opt_den_max)
          + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM
-         /* And the assumptions, which enter negatively at FLOW_ASSUMPTION_COST each and are at least zero, so the
-            most any member rests on bounds their range. */
-         + (double)c->assumed_max * FLOW_ASSUMPTION_COST;
+         /* And the priced decisions, which enter negatively at FLOW_ASSUMPTION_COST each and are at least zero, so
+            the most any member is priced for bounds their range. */
+         + (double)c->priced_max * FLOW_ASSUMPTION_COST;
 }
 
 /* The mark the census counts families with (FlowAcct's `census_gen`): a generation rather than a clear pass, for
@@ -5598,7 +5641,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->vt = frontier_vt();
     out->never_picked = 0;
     out->never_picked_gap = 0.0;
-    out->assumed_members = out->assumed_sum = out->assumed_max = 0;
+    out->assumed_members = out->assumed_sum = out->assumed_max = out->priced_max = 0;
     out->never_picked_at_top = 0;
     out->picks_live = out->picks_max = 0;
     /* The lifetime half, not a reading of this walk: dispatches this instance has ever made, unconditional, and the
@@ -5759,6 +5802,7 @@ void flow_wfq_census(WfqCensus *out) {
         /* How many members stand at zero of the aging's own half, read through flow_own_silence, the quantity the
            order is made of, rather than `Flow.work`, which is that quantity only while its window mark is current. */
         if (flow_own_silence(f) == 0) out->unrun++;
+        if (flow_priced(f) > out->priced_max) out->priced_max = flow_priced(f);
         if (flow_assumed(f) > 0) {
             out->assumed_members++;
             out->assumed_sum += flow_assumed(f);
@@ -6519,6 +6563,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
            else for a removed flow (the teardown walks the flows still there). */
         free(f->cand_src); free(f->cand_payload); fire_target_clear(&f->fire);
         free(f->assumed_slots);
+        free(f->env_slots);
         for (int k = 0; k < f->cand_dn; k++) { free(f->cand_dsrc[k]); free(f->cand_dval[k]); }
         free(f->cand_dsrc); free(f->cand_dval);
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);

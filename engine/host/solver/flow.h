@@ -57,10 +57,10 @@ typedef struct FlowSite FlowSite;
 
 /* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
    flow_weight_operands): `w = (reward - coord_notch*Q) + (1/(1 + site_served/pull_work + orphan_seen)
-   + ((-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N) - assumed*A))`, with Q = FLOW_AGE_QUANTUM and
-   A = FLOW_ASSUMPTION_COST. `coord_notch` is the family notch plus the carry bit; `site_served` is the work
-   the member's code site has received in its family and `pull_work` the quantum it is counted in
-   (ENGINE_PULL_WORK).
+   + ((-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N) - (assumed + against_env)*A))`, with
+   Q = FLOW_AGE_QUANTUM and A = FLOW_ASSUMPTION_COST. `coord_notch` is the family notch plus the carry bit;
+   `site_served` is the work the member's code site has received in its family and `pull_work` the quantum it is
+   counted in (ENGINE_PULL_WORK).
    `visits` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
    member could take the thread. `unit` is where its next quantum resumes, a FlowUnitAt no term reads; it is a
    number because a census row carries numbers only (extension/bridge.js's resultDocumentRefusal). */
@@ -80,7 +80,8 @@ typedef struct {
     double w;
     double age_quantum;   /* FLOW_AGE_QUANTUM, which the two notches are priced at */
     int64_t assumed;      /* flow_assumed */
-    double assume_cost;   /* FLOW_ASSUMPTION_COST, which each assumption is priced at */
+    int64_t against_env;  /* flow_against_env */
+    double assume_cost;   /* FLOW_ASSUMPTION_COST, which each assumption and each against_env is priced at */
     int host_owed, running;
     FlowUnitAt unit;
     int next_arm, next_sited;   /* Flow.next_arm1 - 1 (-1: never stood by a step end) and Flow.next_sited */
@@ -114,7 +115,7 @@ typedef struct FlowIxTreap {
     int64_t notch;
     double replay, surv;
     int rung;
-    int64_t assumed;
+    int64_t priced;   /* flow_priced */
     uint64_t seq, floor;
     uint64_t prio;
     struct FlowIxNode *cls;
@@ -537,6 +538,11 @@ typedef struct Flow {
     int   assumed_reads;
     int  *assumed_slots;
     int   assumed_slots_n;
+    /* The decision slots whose arm went against the example of an environment unknown (decide.c's
+       dec_subject_environment), in `assumed_slots`' form; their count is flow_against_env, priced as an
+       assumption is. Fork-carried, not cold-tier state, for the same reason. */
+    int  *env_slots;
+    int   env_slots_n;
     /* The document's load stage is not here: a flow reaches several Documents in its agent cluster and each has
        its own readiness, so it lives on each Document (document.c's readiness slot), isolated per flow by the
        COW delta. */
@@ -1082,6 +1088,7 @@ typedef struct {
     long never_picked;
     double never_picked_gap;
     long assumed_members, assumed_sum, assumed_max;   /* flow_assumed over the members: above zero, sum, max */
+    long priced_max;   /* flow_assumed plus flow_against_env, the most any member is priced for */
     /* How many never-picked members stand exactly at the front (weight == `w_top`): the N of the tie above. A
        small N is a sweep in progress; a large N is an order whose within-family terms no longer separate
        anything, so `g_flows` position decides the pick. On a one-family frontier the reward and the family
@@ -1836,8 +1843,9 @@ void  flow_observe_survival(Flow *f, double frac);
    has not stood on. */
 void  flow_observe_rung(Flow *f, int rung);
 /* A flow's path marks, read at one instant. `assumed_slot` is the decision slot of a fork's sibling arm when that
-   arm takes absent application state as present (decide.c's dec_fork_here), and -1 otherwise. */
-typedef struct { int forced, pinned, peer_driven, peer_pinned, assumed_slot; } FlowPathMarks;
+   arm takes absent application state as present, `env_slot` when it goes against an environment unknown's example
+   (decide.c's dec_fork_here), and -1 otherwise; at most one is a slot. */
+typedef struct { int forced, pinned, peer_driven, peer_pinned, assumed_slot, env_slot; } FlowPathMarks;
 /* The running flow just took an arm its concrete example contradicts: `path_forced`'s one writer. Idempotent and
    monotone. Not a credit or a charge: a fork is rank-neutral, so it does not bump the frontier generation. */
 void  flow_mark_forced_arm(void);
@@ -1859,8 +1867,14 @@ void  flow_note_assumed_read(void);
 /* The running flow's decision slot `slot` took absent application state as present against its example
    (decide.c, at a replay). Idempotent per slot, since a fork's sibling holds its own arm's slot from the fork. */
 void  flow_note_assumed_slot(int slot);
-/* The running flow's decision vector now ends at slot `c` (decide.c's dec_leave_path): its slots at or above go. */
-void  flow_assumed_truncate(int c);
+/* How many decisions `f`'s path took against an environment unknown's example: its env slots. */
+int   flow_against_env(const Flow *f);
+/* The running flow's decision slot `slot` went against an environment unknown's example (decide.c, at a replay),
+   idempotent per slot as flow_note_assumed_slot is. */
+void  flow_note_env_slot(int slot);
+/* The running flow's decision vector now ends at slot `c` (decide.c's dec_leave_path): its assumed and env slots
+   at or above go. */
+void  flow_priced_truncate(int c);
 /* The running flow just determined a source's value on an arm no example confirmed: `path_pinned`'s one writer,
    idempotent and monotone. Called where decide.c's pin determined a value on an arm decide_note_forced_arm
    marked or decide_real_arm answered REAL_ARM_UNOBSERVED for, and where a witness verification delivers a
