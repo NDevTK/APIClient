@@ -7633,14 +7633,27 @@ static JSValue own_keys_pred(JSContext *ctx, const Concolic *c)
     }
 }
 
+/* Whether the record's type set in this flow decides its own keys to be none. ECMAScript §20.1.2.19 Object.keys
+   ( obj ) reaches [[OwnPropertyKeys]] only past ToObject, which throws for undefined and null, and the wrapper it
+   makes of a Boolean, Number, BigInt or Symbol is an ordinary object with no own property (§20.3.4 Properties of
+   Boolean Instances and its three siblings). A String's wrapper lists its indices, so only a set holding neither
+   an Object nor a String is answered. */
+static int own_keys_typed_empty(JSValueConst record)
+{
+    unsigned ty = cty_of_operand(record);
+
+    return ty && !(ty & (CTY_OBJECT | CTY_STRING));
+}
+
 JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record)
 {
     Concolic *c = g_concolic_class ? JS_GetOpaque(record, g_concolic_class) : NULL;
 
-    /* No question for an ordinary object (its key set is its shape) or a record with an example (its key set is
-       the example's, answered by the internal method below). Only an example-free record has an unknown key
-       set; the condition matches the method's so the asker and the reader agree. */
-    if (!c || record_example_held(c))
+    /* No question for an ordinary object (its key set is its shape), a record with an example (its key set is
+       the example's, answered by the internal method below) or one whose type set leaves it none. Only an
+       example-free record that may be an Object or a String has an unknown key set; the condition matches the
+       method's so the asker and the reader agree. */
+    if (!c || record_example_held(c) || own_keys_typed_empty(record))
         return JS_UNINITIALIZED;
     return own_keys_pred(ctx, c);
 }
@@ -7689,6 +7702,9 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n)
            "a record whose example holds its key set was asked to materialise an UNKNOWN member — its key set "
            "is an observation about the payload this visitor was served, so the caller forked over a question "
            "concolic_own_keys_pred never minted");
+    DCHECK(!own_keys_typed_empty(record),
+           "a record whose type set leaves it no own key (no Object, no String) was asked to materialise an "
+           "UNKNOWN member, over a question concolic_own_keys_pred does not mint for it");
     DCHECK(n >= 0, "an unknown member was asked for at a negative position — the chain's cursor is a count");
     atom = own_member_atom(ctx, record, n);
     if (atom == JS_ATOM_NULL)
@@ -7734,12 +7750,16 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
     JSPropertyEnum *tab = NULL;
     JSValue ex;
     uint32_t n = 0;
+    int held;
 
     *ptab = NULL;
     *plen = 0;
     if (!c)
         return 0;
-    if (!record_example(ctx, c, &ex)) {
+    held = record_example(ctx, c, &ex);
+    if (!held && own_keys_typed_empty(obj))
+        return 0;   /* the type set decides it in every world: a primitive's wrapper holds no own property */
+    if (!held) {
         /* No example is not an empty record: answering the empty List as a fact would decide
            `Object.keys(x).length === 0` for a record the run never saw. So it is answered as the flow's own arm.
            The question (`concolic_own_keys_pred`) is asked by the consumer, which has a resume point to fork at;
