@@ -14964,8 +14964,17 @@ TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     fold_row(&thenrej_tt, &thenrej_why, param_value_is(js, "/api/tnrej", "w", "trNOW"),
              "no /api/tnrej record carries `trNOW` — no arm rejected at resolve time, so §27.5.1.3 step 2.g's "
              "abrupt `then` read is missing from the thenable fork's partition");
+    /* Fetch §5.3's text() is UTF-8 decode, a String whatever bytes a body over an unknown holds. */
+    const char *abstext_why = NULL; int abstext_tt = 1;
+
+    fold_row(&abstext_tt, &abstext_why, !!strstr(js, "\"/api/abstext\""),
+             "NOT REACHED: no /api/abstext record, so text() over a body built from an unknown never settled");
+    fold_row(&abstext_tt, &abstext_why, param_value_only(js, "/api/abstext", "w", "string"),
+             "text() over a body built from an unknown resolved with a value whose type is not String in every "
+             "world, so `typeof` forked arms Fetch §5.3's UTF-8 decode never produces");
     const Probe rows[] = {
         { "absent-arm", absarm_tt, "__tfAbsentGate", SESS_EXPLORE, absarm_why },
+        { "absent-body-text", abstext_tt, "/api/abstext", SESS_EXPLORE, abstext_why },
         { "then-throws", thenrej_tt, "/api/tnrej", SESS_EXPLORE, thenrej_why },
         { "absent-optchain", absopt_tt, "__tfMaybe", SESS_EXPLORE, absopt_why },
         { "absent-totag", abstag_tt, "__tfAbsTag", SESS_EXPLORE, abstag_why },

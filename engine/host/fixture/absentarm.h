@@ -32,6 +32,8 @@ static const char HTML_ABSENTARM[] =
     "var trM = 'trNOW'; new Promise(function (r) { r(Math[window.__tfThenSrc]); }).then("
     "function () { fetch('/api/tnrej?w=trFUL'); }, function () { fetch('/api/tnrej?w=' + trM); });"
     "Promise.resolve().then(function () { trM = 'trJOB'; });"
+    /* text() over a body built from one more unknown is a String in every world: no thenable arm. */
+    "new Response(window.__tfBodyText).text().then(function (t) { fetch('/api/abstext?w=' + typeof t); });"
     "</script>"
     "<script>"
     "function absBoom(tag) { throw new Error('absBOOM' + tag); }"

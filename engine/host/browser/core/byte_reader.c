@@ -141,6 +141,33 @@ static int byte_reader_capability(JSContext *ctx, JSByteReaderState *s, int reje
     return 0;
 }
 
+/* SELF's answer for an unknown that is not a String in every world: UTF-8 decode answers a String whatever the
+   bytes are, and the bytes are the UTF-8 encoding of the unknown's §7.1.19 ToString (Fetch §5.2's string arm).
+   So the result is derived from the unknown, String-typed, with the real round trip run on its example where
+   that ToString runs no page code. Borrows `unknown`. */
+static JSValue byte_reader_unknown_string(JSContext *ctx, JSValueConst recv, const ByteReaderIface *f,
+                                          const ByteReader *rd, JSValueConst unknown)
+{
+    JSValue ex = concolic_example_string(ctx, unknown), example = JS_UNDEFINED, r;
+    char op[64];
+
+    if (JS_IsString(ex)) {
+        size_t n = 0;
+        const char *b = JS_ToCStringLen(ctx, &n, ex);
+
+        CHECK(b != NULL, "byte reader: OOM spelling an unknown body's example");
+        example = rd->make(ctx, recv, b, n);
+        JS_FreeCString(ctx, b);
+        CHECK(JS_IsString(example), "a reader answering SELF made no String of a String's bytes");
+    }
+    JS_FreeValue(ctx, ex);
+    snprintf(op, sizeof op, "%s.%s()", f->iface, rd->name);
+    r = concolic_new_derived(ctx, op, &unknown, 1, example);
+    DCHECK(concolic_is(r), "a body's unknown derived no unknown — the take answered it as one");
+    concolic_state_string(r);
+    return r;
+}
+
 static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSByteReaderState *s = st;
@@ -183,7 +210,12 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
                 s->value = rd->image(ctx, unknown);
                 JS_FreeValue(ctx, unknown);
                 if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
-            } else if (rd->unknown != BYTE_READER_UNKNOWN_SELF) {
+            } else if (rd->unknown == BYTE_READER_UNKNOWN_SELF) {
+                if (!concolic_type_is_string(unknown)) {
+                    s->value = byte_reader_unknown_string(ctx, s->hdr.this_val, f, rd, unknown);
+                    JS_FreeValue(ctx, unknown);
+                }
+            } else {
                 DFAILF("%s.%s() was asked to read a body of unknown external input and declares no answer for "
                        "one — give the reader its ByteReaderUnknown answer (a container image of the unknown, as "
                        "arrayBuffer() has, or a call over it, as json() has)",

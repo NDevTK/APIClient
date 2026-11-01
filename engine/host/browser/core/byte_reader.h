@@ -14,8 +14,9 @@
    out of the call itself. */
 typedef JSValue (*ByteReaderMake)(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
 /* WHAT A READER RESOLVES WITH WHEN THE BODY IS UNKNOWN EXTERNAL INPUT, which `take` hands over as a value
-   because its bytes cannot be spelled. SELF resolves with the unknown itself: text()'s UTF-8 decode undoes
-   §5.2's UTF-8 encode of a scalar value string. CALL resolves with what `callee` (this realm's function,
+   because its bytes cannot be spelled. SELF resolves with a String: the unknown itself where it is a String in
+   every world, since text()'s UTF-8 decode undoes §5.2's UTF-8 encode of a scalar value string, and otherwise a
+   String derived from it, the decode of the encoding of its ToString. CALL resolves with what `callee` (this realm's function,
    owned) returns over it, and rejects with its throw: json()'s parse JSON from bytes is %JSON.parse%. IMAGE
    resolves with what `image` builds over it: a container whose bytes are the unknown's byte sequence, holding
    no example bytes. NONE, the zero, is a reader with no answer, and the machine crashes naming it. */
