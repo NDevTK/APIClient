@@ -1,9 +1,11 @@
 /* THE NESTED FLEX DOCUMENTS: css-flexbox-1 §9.6 "Cross-Axis Alignment"' content-based cross size of `row` flex
-   containers nested one inside the next, three deep (`flexnest3`) and six deep (`flexnest6`). Two of
-   test_forced.c's exploring documents (its TF_DOCS table). Each level holds a 5px by 1px item and then the next
+   containers nested one inside the next, three deep (`flexnest3`), six deep (`flexnest6`) and ten deep
+   (`flexnest10`). Three of test_forced.c's exploring documents (its TF_DOCS table). Each level holds a 5px by 1px item and then the next
    level as its second item; the innermost holds a 5px by 1px item and a 5px by 10px one. So every line is 10px
    tall (§9.4 step 8's largest outer hypothetical cross size), `#fo`'s scrolling area is 10px tall, and the 10px
    item starts 5px per level from the left (§9.7 resolves no flexible length: every item fits at its basis).
+   Every level but the outermost is a flex item whose `width` is `auto`, so its §9.2 flex base size is §9.9.1's
+   max-content size of the level inside it, and each level's §9.3 lines read every level below.
    CSSOM VIEW §7's `offsetLeft` and `offsetTop` and §6's `scrollHeight` are read under a resting drive, which
    asks every level's cross size, a layout job question answered once per job. The numbers are derived from
    those sections, not read off a browser. They end with TF_CANVAS_INK, which test_forced.c defines before
@@ -28,6 +30,9 @@ static const char HTML_FLEXNEST3[] = FN_DOC("flexnest3", FN_OPEN FN_OPEN FN_OPEN
 static const char HTML_FLEXNEST6[] =
     FN_DOC("flexnest6", FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN,
            FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE);
+static const char HTML_FLEXNEST10[] =
+    FN_DOC("flexnest10", FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN,
+           FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE);
 
 /* THE WRAPPING FLEX DOCUMENT (`linecrossrest`): a multi-line `row` flex container 40px wide given forty 3px
    items of heights 1px, 2px, 3px in turn and then `#fz`, 3px by 2px. css-flexbox-1 §9.3 "Main Size

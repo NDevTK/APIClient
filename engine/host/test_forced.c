@@ -1843,6 +1843,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "scrollflex", HTML_SCROLLFLEX },
     { "flexnest3", HTML_FLEXNEST3 },
     { "flexnest6", HTML_FLEXNEST6 },
+    { "flexnest10", HTML_FLEXNEST10 },
     { "linecrossrest", HTML_LINECROSSREST },
     { "gridnest2", HTML_GRIDNEST2 },
     { "gridnest4", HTML_GRIDNEST4 },
@@ -16366,6 +16367,9 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
         { "flex-nest-6", "/api/flexnest6", "h", "10", "css-flexbox-1 §9.6: six nested rows of 10px lines are not 10px tall" },
         { "flex-nest-6", "/api/flexnest6", "l", "30", "css-flexbox-1 §9.7: the innermost 10px item does not start 30px in" },
         { "flex-nest-6", "/api/flexnest6", "t", "0", "css-flexbox-1 §9.6: the innermost 10px item is not at its line's top" },
+        { "flex-nest-10", "/api/flexnest10", "h", "10", "css-flexbox-1 §9.6: ten nested rows of 10px lines are not 10px tall" },
+        { "flex-nest-10", "/api/flexnest10", "l", "50", "css-flexbox-1 §9.7: the innermost 10px item does not start 50px in" },
+        { "flex-nest-10", "/api/flexnest10", "t", "0", "css-flexbox-1 §9.6: the innermost 10px item is not at its line's top" },
         { "line-cross-rest", "/api/linecrossrest", "t", "9", "css-flexbox-1 §9.4 step 8: three 3px lines do not put the fourth 9px down" },
         { "line-cross-rest", "/api/linecrossrest", "l", "3", "css-flexbox-1 §9.3 step 5: the fourth line does not hold #fz second" },
         { "line-cross-rest", "/api/linecrossrest", "h", "11", "css-flexbox-1 §9.4 step 8: four lines of 3, 3, 3 and 2px are not 11px tall" },
@@ -16376,7 +16380,8 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
         { "grid-nest-4", "/api/gridnest4", "l", "0", "css-grid-1 §11: the innermost square does not start at the left edge" },
         { "grid-nest-4", "/api/gridnest4", "sw", "200", "css-grid-1 §11.8: the outer grid's scrolling area is not 200px wide" },
     };
-    static const char *const ROWS[] = { "flex-nest-3", "flex-nest-6", "line-cross-rest", "grid-nest-2", "grid-nest-4" };
+    static const char *const ROWS[] = { "flex-nest-3", "flex-nest-6", "flex-nest-10", "line-cross-rest", "grid-nest-2",
+                                        "grid-nest-4" };
     Probe rows[COUNTOF(ROWS)];
     unsigned i, j;
 
