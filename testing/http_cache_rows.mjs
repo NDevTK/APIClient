@@ -15,6 +15,9 @@ const count = (method, path) => hits.get(method + ' ' + path) || 0;
 /* The validators each send carried, by path, in arrival order. */
 const conditions = new Map();
 const OLD = 'Wed, 01 Jan 2020 00:00:00 GMT';
+/* Two origins of one site (HTML §7.1.1 Origins' same site ignores the port), so one partition, neither of them the
+   server's origin. Nothing is served at either: they name the asking documents. */
+const SITE_X = 'http://127.0.0.1:1', SITE_Y = 'http://127.0.0.1:2';
 const server = createServer((req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
   const key = req.method + ' ' + path;
@@ -27,6 +30,8 @@ const server = createServer((req, res) => {
   if (req.method === 'OPTIONS') head['Access-Control-Allow-Headers'] = 'X-Probe';
   if (path === '/nostore') head['Cache-Control'] = 'no-store, max-age=600';
   if (path === '/vary') { head['Cache-Control'] = 'max-age=600'; head.Vary = 'X-Probe'; }
+  /* Fresh, granting one origin and varying on nothing, so a same-partition request from another origin hits. */
+  if (path === '/acao') { head['Cache-Control'] = 'max-age=600'; head['Access-Control-Allow-Origin'] = SITE_X; }
   /* Stale at once, with an entity tag the server always matches. */
   if (path === '/etag') {
     Object.assign(head, { 'Cache-Control': 'max-age=0', ETag: '"v1"' });
@@ -52,9 +57,10 @@ ZONE.safeFetchEgressStated({});
 const PERSON = { origin: 'test:person' };
 ZONE.senderIsExtensionDocument = (s) => s === PERSON;
 
-/* A page request as engine/trusted.mjs's workFetch states it, from a document at `page`. */
+/* A page request as engine/trusted.mjs's workFetch states it, from a document at `page`, answering a refusal's
+   reason in `refused`. */
 /* `docKey` names the document; an opaque one (a `data:` page) is given the loopback space its creator had. */
-async function pageGet(page, url, headers, zone = ZONE, docKey = 'engine:' + new URL(page).origin) {
+async function pageRead(page, url, headers, zone = ZONE, docKey = 'engine:' + new URL(page).origin) {
   const origin = new URL(page).origin;
   const space = origin === 'null' ? 'loopback' : zone.safeFetchDocumentAddressSpace(page, null);
   const r = await zone.safeFetch(url, {
@@ -63,10 +69,16 @@ async function pageGet(page, url, headers, zone = ZONE, docKey = 'engine:' + new
     headers, doc: zone.docRecord('observed', 'undriven', 'unpinned', NAVIGABLE_NOTICE.sandbox.none, space),
     identity: await zone.pageRequestIdentity(origin, page, docKey, url, 'same-origin', 'cors',
                                              'strict-origin-when-cross-origin', page) });
-  if (r.refusal) throw new Error(`${url} was refused: ${r.refusal.reason}`);
+  if (r.refusal) return { refused: r.refusal.reason };
   /* A store completes when the clone of the body has been read, a task after the reply is returned. */
   await new Promise((done) => setImmediate(done));
-  return { status: r.status, text: new TextDecoder().decode(r.body), age: r.headers.age };
+  return { refused: null, status: r.status, text: new TextDecoder().decode(r.body), age: r.headers.age };
+}
+/* pageRead, for a row whose every send must be answered. */
+async function pageGet(page, url, headers, zone, docKey) {
+  const r = await pageRead(page, url, headers, zone, docKey);
+  if (r.refused) throw new Error(`${url} was refused: ${r.refused}`);
+  return r;
 }
 async function personPost(page, url) {
   const origin = new URL(page).origin;
@@ -135,6 +147,15 @@ const ROWS = [
       const two = await pageGet(PAGE_B, `${A}/pf`, [['X-Probe', 'a']]);
       return [['OPTIONS /pf', count('OPTIONS', '/pf'), 2], ['GET /pf', count('GET', '/pf'), 1],
               ['stored body', two.text, one.text]]; } },
+  /* Fetch §4.6 "HTTP-network-or-cache fetch" may answer from a stored response whose Vary names nothing this
+     request differs in, and §4.4 "HTTP fetch" then runs §4.10 "CORS check" on the response it returns, a stored
+     one included: the grant to X answers X's request and refuses Y's. */
+  { label: 'a hit stored for one origin runs the CORS check for another origin of its partition', run: async () => {
+      const x = await pageRead(`${SITE_X}/page`, `${A}/acao`);
+      const y = await pageRead(`${SITE_Y}/page`, `${A}/acao`);
+      const x2 = await pageRead(`${SITE_X}/page`, `${A}/acao`);
+      return [['GET /acao', count('GET', '/acao'), 1], ['X read', x.refused, null], ['X hit read', x2.refused, null],
+              ['Y refused by the CORS check', /^blocked-cors:/.test(y.refused || ''), true]]; } },
   { label: 'a stale entry is validated with its entity tag, and a 304 answers the stored body', run: async () => {
       const one = await pageGet(PAGE_A, `${A}/etag`), two = await pageGet(PAGE_A, `${A}/etag`);
       return [['GET /etag', count('GET', '/etag'), 2], ['If-None-Match sent', conditions.get('/etag')[1][0], '"v1"'],
@@ -164,7 +185,7 @@ try {
   server.close();
 }
 /* Every row's first send reached the server, or nothing above is a reading. */
-const first = ['/stale', '/fresh', '/nostore', '/vary', '/inval', '/part', '/pf', '/etag', '/lm', '/changed', '/kept', '/opq']
+const first = ['/stale', '/fresh', '/nostore', '/vary', '/inval', '/part', '/pf', '/etag', '/lm', '/changed', '/kept', '/opq', '/acao']
   .every((p) => count('GET', p) >= 1);
 if (!first) { console.log('  CONTROL FAILED: a row\'s first send never reached the server'); process.exit(2); }
 console.log(bad === 0 ? '  every row answered as Fetch §4.6 predicts' : `  ${bad} ROW(S) DISAGREED`);
