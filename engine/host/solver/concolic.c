@@ -2479,7 +2479,7 @@ int concolic_src_determined(const char *src) {
    own bytes has none of them. A candidate walks the chain to its base (concolic_set_candidate). */
 typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver;
                  int principal; char *key; char *parent; char *(*serialize)(const char *s, size_t n);
-                 char *path; }
+                 char *path; char *event; }
         SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
@@ -2720,6 +2720,7 @@ void concolic_declare_source(const char *component, const char *src, const char 
     g_srcs[g_srcs_n].parent = NULL;
     g_srcs[g_srcs_n].serialize = NULL;
     g_srcs[g_srcs_n].path = NULL;
+    g_srcs[g_srcs_n].event = NULL;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
 }
@@ -2748,6 +2749,7 @@ void concolic_undeclare_sources(const char *component)
         free(g_srcs[i].key);
         free(g_srcs[i].parent);
         free(g_srcs[i].path);
+        free(g_srcs[i].event);
         /* The order of the rest is preserved rather than closed with a swap: lookups are by identity, but a
            walk's order must not depend on which unrelated component released first. */
         memmove(&g_srcs[i], &g_srcs[i + 1], (size_t)(g_srcs_n - i - 1) * sizeof *g_srcs);
@@ -2807,6 +2809,31 @@ void concolic_declare_source_principal(const char *component, const char *src)
           "delivery row, so there is nothing here to write it onto — and a registry that grew a row for it "
           "would hold a source whose browser delivery nothing states, which the reproduction envelope reads as "
           "\"no component carries these bytes to the victim\". Call concolic_declare_source first");
+}
+
+void concolic_declare_source_event(const char *component, const char *src, const char *event)
+{
+    int row;
+
+    DCHECK(component != NULL && *component && src != NULL && event != NULL && *event,
+           "a source was declared one event of a sequence by no component, with no identity or with no event "
+           "identity");
+    row = src_row(src, strlen(src));
+    DCHECK(row >= 0 && strcmp(g_srcs[row].component, component) == 0 && g_srcs[row].event == NULL,
+           "a source was declared one event of a sequence before its delivery was declared, by a component "
+           "that does not own its row, or twice — the event identity is a column of the claimant's row");
+    if (row < 0) return;
+    g_srcs[row].event = reclaim_strdup(event);
+    CHECK(g_srcs[row].event != NULL, "concolic: OOM declaring a source's event identity");
+}
+
+const char *concolic_source_identity(const char *src)
+{
+    int row;
+
+    DCHECK(src != NULL, "a source's identity was asked of no source");
+    row = src_row(src, strlen(src));
+    return row >= 0 && g_srcs[row].event ? g_srcs[row].event : src;
 }
 
 /* The pins this flow made on each attacker principal (see concolic.h). A walk of the registry rather than a

@@ -6472,19 +6472,20 @@ static JSValue engine_attacker_message_event(JSContext *ctx, uint64_t hash, int 
 /* The person types into the text control whose listener `fn` is (core/events/listener_act.h's `input` act), in
    the running flow's timeline, before the drive's first opcode. The typed text is the attacker source
    `user-input:<locator>`, with the chain position past a body's first call, as engine_orphan_call names the
-   call's other unknowns. */
+   call's other unknowns; every position is one event of the sequence `user-input:<locator>` names. */
 static bool act_is_typing(const char *act) { return act && strstr(act, "\"kind\":\"input\"") != NULL; }
 
 static void engine_orphan_type(JSContext *ctx, JSValueConst fn, uint64_t hash, int pos) {
     JSValueConst control = listener_act_typed_control(ctx, fn);
-    char src[64];
+    char src[64], event[64];
 
     DCHECK(JS_IsObject(control),
            "a drive whose act is typing found no text control holding its listener — the act is answered in the "
            "world the call is built in, and that world's state is the one the drive types into");
     if (pos > 0) snprintf(src, sizeof src, "user-input:%016llx#%d", (unsigned long long)hash, pos);
     else snprintf(src, sizeof src, "user-input:%016llx", (unsigned long long)hash);
-    input_value_user_edit(ctx, control, src);
+    snprintf(event, sizeof event, "user-input:%016llx", (unsigned long long)hash);
+    input_value_user_edit(ctx, control, src, event);
 }
 
 /* The event a driven `drop` listener is handed when the person drops a file dragged from another application

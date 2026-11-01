@@ -565,7 +565,7 @@ bool input_value_user_types(JSContext *ctx, JSValueConst wrap)
     }
 }
 
-void input_value_user_edit(JSContext *ctx, JSValueConst wrap, const char *src)
+void input_value_user_edit(JSContext *ctx, JSValueConst wrap, const char *src, const char *event)
 {
     lxb_dom_element_t *el;
     HtmlInputState st = iv_state_of(wrap, &el);
@@ -576,9 +576,11 @@ void input_value_user_edit(JSContext *ctx, JSValueConst wrap, const char *src)
     DCHECK(input_value_user_types(ctx, wrap),
            "a person typed into a control that takes no typed text — the typing act is stated only for a mutable "
            "`input` in a free-text state, so the act and its target were answered from different elements");
-    DCHECK(src != NULL && *src, "typed text was minted with no source identity");
-    if (!concolic_source_declared_by(IV_COMPONENT, src))
+    DCHECK(src != NULL && *src && event != NULL && *event, "typed text was minted with no source or event identity");
+    if (!concolic_source_declared_by(IV_COMPONENT, src)) {
         concolic_declare_source(IV_COMPONENT, src, "", 0, SRC_DELIVER_USER_INPUT);
+        concolic_declare_source_event(IV_COMPONENT, src, event);
+    }
     n = snprintf(shape, sizeof shape, "{%s}", src);
     CHECK(n > 0 && (size_t)n < sizeof shape, "input: a typed source's name does not fit its shape");
     typed = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);

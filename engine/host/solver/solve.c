@@ -470,11 +470,30 @@ static const SinkClass *sink_class(int sink) {
 }
 static const char *sink_name(int sink) { return sink_class(sink)->name; }
 
-/* The identity of a search (NOVELTY_SINK) or of its fired finding (NOVELTY_FINDING): the (class, source) pair
-   both `sink_search` and record_sink's store are keyed by, so one entry is one identity. */
+/* The identity of a search (NOVELTY_SINK) or of its fired finding (NOVELTY_FINDING): the class and the name the
+   product knows the source by (concolic_source_identity). `sink_search` and record_sink's store are keyed by the
+   injection source, which is finer: each event of one sequence is its own unknown, injected at its own read. So
+   one identity can stand for several entries, and each credit site asks identity_held_elsewhere first. */
 static NoveltyId sink_identity(NoveltyKind kind, int sink, const char *src) {
-    const char *f[2] = { sink_name(sink), src };
+    const char *f[2] = { sink_name(sink), concolic_source_identity(src) };
     return novelty_id(kind, f, 2);
+}
+
+/* Whether an entry other than the one at `self` of class `sink` already holds `src`'s identity: an opened search
+   when `findings` is 0, a stored finding when it is 1. */
+static int identity_held_elsewhere(int findings, int sink, const char *src, const void *self) {
+    const char *id = concolic_source_identity(src);
+    int n = findings ? g_sinks_n : g_pending_n;
+
+    for (int i = 0; i < n; i++) {
+        const void *at = findings ? (const void *)&g_sinks[i] : (const void *)&g_pending[i];
+        int cls = findings ? g_sinks[i].cls : g_pending[i].sink;
+        const char *other = findings ? g_sinks[i].source : g_pending[i].src;
+
+        if (at == self || cls != sink || (!findings && !g_pending[i].opened)) continue;
+        if (!strcmp(concolic_source_identity(other), id)) return 1;
+    }
+    return 0;
 }
 
 /* The class of a candidate flow's marker target (`fire.sink`). The flow holds this table's own name pointer, so the binding is
@@ -895,8 +914,12 @@ static void add_pending(const char *src, const char *root, int sink) {
     /* The flow that made the observation is paid for it. The credit is at the open rather than at the slot's
        creation, because a cold resume creating the slot observes nothing and runs with no flow; it sits below
        the assert so a missing flow aborts instead of silently skipping the payment. A search the product already
-       holds, opened by another document or session, is paid nothing (solver/novelty.h). */
-    novelty_credit(NOVELTY_SINK, novelty_note(NOVELTY_SINK, sink_identity(NOVELTY_SINK, sink, src)), 0);
+       holds, opened by another document or session or at another event of the same sequence (a listener's next
+       event), is paid nothing (solver/novelty.h). */
+    novelty_credit(NOVELTY_SINK,
+                   !identity_held_elsewhere(0, sink, src, e) &&
+                       novelty_note(NOVELTY_SINK, sink_identity(NOVELTY_SINK, sink, src)),
+                   0);
     cand_learn_path(e);
     sc = sink_class(sink);
     /* A single-context class's written-down vectors are attacks: the seeder may withdraw a contradicted one, and
@@ -1014,7 +1037,9 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
     /* The flow that proved the exploit is paid for it, as add_pending pays the detection. A candidate flow
        records no endpoints (endpoint_suppress), so without this its reward would rest on the optimism term. A
        finding the product already holds is paid nothing (solver/novelty.h). */
-    novelty_credit(NOVELTY_FINDING, novelty_note(NOVELTY_FINDING, sink_identity(NOVELTY_FINDING, cls, f->source)),
+    novelty_credit(NOVELTY_FINDING,
+                   !identity_held_elsewhere(1, cls, f->source, f) &&
+                       novelty_note(NOVELTY_FINDING, sink_identity(NOVELTY_FINDING, cls, f->source)),
                    1);
     /* Give back the re-injection point: the blob pins the frozen segment and every segment below it, and a
        solved search seeds nothing further. Clearing it is what closes the search, since search_seeds reads this

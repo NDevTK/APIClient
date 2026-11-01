@@ -677,6 +677,19 @@ void        concolic_declare_source(const char *component, const char *src, cons
  * The component must already own `src`; a principal declared for a row nobody holds is a claim with no
  * claimant, which is the one thing the registry's give-back cannot express. */
 void        concolic_declare_source_principal(const char *component, const char *src);
+/* `src` is the value of one event in a sequence the person performs at one target (the Nth typing into one
+   control), and `event` names that target's events without the ordinal: what the product calls this source.
+   The component must already own `src`. */
+void        concolic_declare_source_event(const char *component, const char *src, const char *event);
+/* The name the product knows source `src` by: the event identity its row declares, else `src` itself. Two
+   ordinals of one event sequence are one source to the product, so an identity built over it (solve.c's search
+   and finding identities) does not pay a listener's next event as new output. Borrowed.
+   Named residual. Not covered: a driven message listener's data source (window_message_delivery_sources) is
+   named after its record, which carries the chain position, and declares no event. Next diff builds: the
+   record's event identity passed beside it and declared here. Absence shows as: a document whose message
+   listener reaches a sink opening one @S search per re-drive, with @WFQ's creditsPaidLifetime growing with
+   them. */
+const char *concolic_source_identity(const char *src);
 /* One pin this flow made on a principal: the sender identity a delivery must present. `tok` and `kind` are the
    operand the page compared against, `loose` whether the equality was §7.2.13 IsLooselyEqual ( x, y ) rather
    than §7.2.14 IsStrictlyEqual ( x, y ). `subject` is the injection identity of the value compared, which is the

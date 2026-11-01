@@ -57,11 +57,12 @@ void input_value_set_relevant(JSContext *ctx, JSValueConst wrap, JSValueConst va
 bool input_value_user_types(JSContext *ctx, JSValueConst wrap);
 
 /* The person types text into `wrap`, which input_value_user_types answers true for. The typed text is the attacker
-   source `src` (delivery `user-input`), declared by this component on first sight. It becomes the element's
+   source `src` (delivery `user-input`), declared by this component on first sight as one event of the typing
+   sequence `event` names (concolic_declare_source_event). It becomes the element's
    value under the dirty value flag (§4.10.5: the flag "must be set to true whenever the user interacts with the
    control in a way that changes the value"), sanitized under the element's state, and the text entry cursor
    ends after it. */
-void input_value_user_edit(JSContext *ctx, JSValueConst wrap, const char *src);
+void input_value_user_edit(JSContext *ctx, JSValueConst wrap, const char *src, const char *event);
 
 /* §4.10.5's TYPE CHANGE STEPS — "When an input element's type attribute changes state, the user agent must run
    the following steps". A no-op for every element and attribute but an `input`'s `type`, like every other
