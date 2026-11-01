@@ -1432,18 +1432,25 @@ static lxb_dom_node_t *node_from_arg(JSContext *ctx, lxb_dom_node_t *owner, JSVa
     lxb_dom_text_t *text;
 
     if (n) return n;
-    /* DOM §4.2.6's "convert nodes into a node": anything that is not a Node is a DOMString, and became one in the
-       DECLARATION — `(Node or DOMString)...` is a variadic union the IDL machine converts, brand-checking each
-       argument against the node class. It used to be a JS_ToCStringLen right here, which ran the page's
-       toString FROM C with no flow base to park into: `el.append({toString(){ for(;;){} }})` was the
-       drive-to-completion this engine exists not to have. */
-    DCHECK(JS_IsString(v), "a ChildNode/ParentNode argument reached the body unconverted — the declaration is "
-                           "what turns a non-Node into a DOMString, and doing it here runs the page's code "
-                           "from C");
-    s = JS_ToCStringLen(ctx, &slen, v);
-    if (!s) return NULL;
-    text = lxb_dom_document_create_text_node(owner->owner_document, (const lxb_char_t *)s, slen);
-    JS_FreeCString(ctx, s);
+    /* DOM §4.2.6 "convert nodes into a node" step 1: anything that is not a Node is a DOMString, converted by the
+       declaration, since `(Node or DOMString)...` is a variadic union the IDL machine converts; converting here
+       would run the page's toString from C. Unknown external input crosses that union as itself and is never a
+       platform object, so it is the string arm, and its shape is the Text node's data, as createTextNode and
+       CharacterData's `data` give it. */
+    DCHECK(JS_IsString(v) || concolic_is(v),
+           "a ChildNode/ParentNode argument reached the body unconverted — the declaration is what turns a non-Node "
+           "into a DOMString, and doing it here runs the page's code from C");
+    if (concolic_is(v)) {
+        s = concolic_shape_c(v);
+        DCHECK(s != NULL, "a concolic value answered no display shape to DOM §4.2.6's conversion");
+        text = lxb_dom_document_create_text_node(owner->owner_document, (const lxb_char_t *)(s ? s : ""),
+                                                 s ? strlen(s) : 0);
+    } else {
+        s = JS_ToCStringLen(ctx, &slen, v);
+        if (!s) return NULL;
+        text = lxb_dom_document_create_text_node(owner->owner_document, (const lxb_char_t *)s, slen);
+        JS_FreeCString(ctx, s);
+    }
     if (!text) return NULL;
     /* THIS FLOW MADE IT, so the delta owns it and destroys it when the delta is discarded — the same record
        `createTextNode` and `splitText` push at their own creation sites. The INSERTION that follows is a
