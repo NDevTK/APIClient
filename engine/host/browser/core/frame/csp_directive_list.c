@@ -309,6 +309,13 @@ char *csp_policy_serialize(const CspPolicy *policy)
     return out;
 }
 
+const CspDirective *csp_policy_string_compilation_directive(const CspPolicy *policy)
+{
+    const CspDirective *d = csp_policy_directive(policy, "script-src");
+
+    return d ? d : csp_policy_directive(policy, "default-src");
+}
+
 const CspDirective *csp_policy_directive(const CspPolicy *policy, const char *name)
 {
     size_t i;

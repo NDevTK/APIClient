@@ -216,4 +216,9 @@ bool csp_should_fetch_directive_execute(const char *effective_name, const char *
    ASSERTED against §6.8.4 itself rather than argued in a comment. */
 const CspDirective *csp_policy_governing_directive(const CspPolicy *policy, const char *effective_name);
 
+/* CSP §4.4.1 EnsureCSPDoesNotBlockStringCompilation step 4.1's source-list: the policy's script-src directive,
+   else its default-src, else NULL. Not §6.8's fallback machinery: §6.1.10 makes 'unsafe-eval' a page-wide flag,
+   so the granular script-src-elem and script-src-attr forms are never consulted for it. */
+const CspDirective *csp_policy_string_compilation_directive(const CspPolicy *policy);
+
 #endif

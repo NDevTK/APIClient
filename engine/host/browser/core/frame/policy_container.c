@@ -572,18 +572,13 @@ SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list
     return out;
 }
 
-/* §4.4.1's EnsureCSPDoesNotBlockStringCompilation steps 4.1-4.3, for ONE policy. Its directive lookup is
-   written out in the algorithm itself and is NOT §6.8's fallback machinery: "if policy contains a directive
-   whose name is script-src, set source-list to that directive's value; otherwise if policy contains
-   default-src, that one." §6.1.10 says why — 'unsafe-eval' acts as a global page flag, so the granular
-   script-src-elem and script-src-attr forms are never consulted for it. 'trusted-types-eval' permits it too,
-   but only where the realm requires Trusted Types for 'script' (`trusted_types_required`), since only then has
-   step 2 run the source through them. */
+/* §4.4.1's EnsureCSPDoesNotBlockStringCompilation steps 4.1-4.3, for ONE policy. 'trusted-types-eval' permits
+   compilation only where the realm requires Trusted Types for 'script' (`trusted_types_required`), since only
+   then has step 2 run the source through them. */
 static bool policy_permits_compilation(const CspPolicy *policy, bool trusted_types_required)
 {
-    const CspDirective *d = csp_policy_directive(policy, "script-src");
+    const CspDirective *d = csp_policy_string_compilation_directive(policy);
 
-    if (!d) d = csp_policy_directive(policy, "default-src");
     /* A policy with neither says nothing about compilation, which is not the same as forbidding it. */
     if (!d) return true;
     if (trusted_types_required && csp_source_list_contains(d, "'trusted-types-eval'")) return true;
@@ -658,8 +653,7 @@ bool policy_allows_string_compilation(CspReporter reporter, const PolicyContaine
     for (i = 0; i < p->csp.n_policies; i++)
         if (!policy_permits_compilation(&p->csp.policies[i], trusted_types_required)) {
             /* Step 4.4: §2.4.1 on global, policy and the literal "script-src", whose resource is "eval"; the
-               'report-sample' sample of sourceString is csp_violation.c's, resolved through §6.8's script-src
-               fallback list, which names the same source list step 4.1 found. */
+               'report-sample' sample of sourceString is csp_violation.c's, over step 4.1's source list. */
             csp_report_violation_for_global(reporter, &p->csp.policies[i], "script-src", CSP_RESOURCE_EVAL,
                                             source, source_len, NULL);
             /* "If policy's disposition is "enforce", then set result to "Blocked"." */

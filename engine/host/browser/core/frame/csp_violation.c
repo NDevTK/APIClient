@@ -597,7 +597,10 @@ void csp_report_violation_for_global(CspReporter r, const CspPolicy *policy, con
        by running §6.8.4 over this same policy and this same effective directive one step earlier, which is
        how it knows the content was refused at all. */
     if (source && source_len) {
-        const CspDirective *d = csp_policy_governing_directive(policy, effective_directive);
+        /* §4.4.1 tests the source list its own step 4.1 found, which is not a §6.8.4 lookup. */
+        const CspDirective *d = resource == CSP_RESOURCE_EVAL
+                                    ? csp_policy_string_compilation_directive(policy)
+                                    : csp_policy_governing_directive(policy, effective_directive);
 
         DCHECK(d != NULL,
                "CSP §5.5 was handed the CONTENT of a violation by a policy that carries no directive "
