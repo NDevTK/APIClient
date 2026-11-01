@@ -23,6 +23,7 @@
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_style_declaration.h"   /* step 22 asks the root's author match first */
 #include "core/css/media_query_list.h"
 #include "core/css/top_layer.h"
 #include "core/dom/page_visibility.h"
@@ -286,6 +287,44 @@ static void ur_paint_destroy(JSContext *ctx, void *p)
     document_paint_frame_free(u->frame);
     layout_job_free(u->job);
     free(u);
+}
+
+/* Step 22's paint begins by reading the document element's computed `display` (document_paint_begin), so its
+   author match is asked first under a resting drive on the paint's job: a page-sized sheet rests between rules,
+   and a rule a §17.3 match cannot decide is declined and forked by this machine (layout_job_fork) instead of
+   aborting a build that cannot keep the arm. Returns a step code for the machine to return, or 0 when the
+   root's style can be read.
+   Named residual. Not covered: the elements §E.2's walk visits after the root read their styles with no ask.
+   Next diff builds: box_paint's visit asking cssom_style_ask per element before its reads, resting there.
+   Absence shows as: selector_match.c's no-`out_undet` abort reached from box_paint_step. */
+static int ur_paint_root_style_ask(JSContext *ctx, JSUpdateRendering *s, JSContext *docctx, UrPaint *u)
+{
+    lxb_dom_document_t *doc = document_associated(docctx);
+    lxb_dom_node_t *root = document_document_element_of(lxb_dom_interface_node(doc));
+    LayoutJobDrive d;
+    bool done;
+    int rc;
+
+    rc = layout_job_fork(ctx, &s->hdr, u->job);
+    if (rc) return rc;
+    if (root == NULL) return 0;
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(u->job);
+    layout_job_drive_begin_resting(&d);
+    done = cssom_style_ask(lxb_dom_interface_element(root));
+    layout_job_drive_end(&d);
+    layout_job_leave(u->job);
+    rest_unit_end();
+    if (layout_job_declined(u->job)) {
+        rc = layout_job_fork(ctx, &s->hdr, u->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
+    if (!done) {
+        layout_job_rested(u->job);
+        METRIC_ADD(paint_rests, 1);
+        return JS_STEP_YIELD;
+    }
+    return 0;
 }
 
 static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1269,8 +1308,13 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             CHECK(u != NULL, "update the rendering step 22 could not allocate its paint");
             u->job = layout_job_new();
             s->paint = u;
+        }
+        if (u->frame == NULL) {
+            int rc = ur_paint_root_style_ask(ctx, s, docctx, u);
+
+            if (rc) return rc;
             layout_job_enter(u->job);
-            u->frame = document_paint_begin(docctx, doc);
+            u->frame = document_paint_begin(docctx, document_associated(docctx));
         } else {
             layout_job_enter(u->job);
         }

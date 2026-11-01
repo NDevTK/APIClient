@@ -1285,6 +1285,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cssdsetprop.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
+#include "fixture/paintroot.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
@@ -1894,6 +1895,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "cssdsetprop", HTML_CSSDSETPROP },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
+    { "paintroot", HTML_PAINTROOT },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
@@ -18136,6 +18138,20 @@ TF_UNIT void probes_cyclicreplaced(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `paintroot` document (fixture/paintroot.h): a frame painted over a root whose `class` is
+   unknown. */
+TF_UNIT void probes_paintroot(const char *js, Probe *tab, int *n) {
+    const char *pr_why = NULL; int pr_tt = 1;
+    fold_row(&pr_tt, &pr_why, param_value_is(js, "/api/paintroot", "w", "prPAINTED"),
+             "NOT REACHED: no /api/paintroot record, so no frame was painted over a document element whose "
+             "`class` is unknown — update the rendering's step 22 built the root's cascade with no resting "
+             "drive to keep the undecided class test's arm");
+    const Probe rows[] = {
+        { "paint-root-unknown-class", pr_tt, "/api/paintroot", SESS_EXPLORE, pr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -23681,6 +23697,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_cssdsetprop(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
+    probes_paintroot(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);
