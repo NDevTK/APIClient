@@ -109,12 +109,17 @@ lxb_dom_attr_local_name(const lxb_dom_attr_t *attr, size_t *len);
 lxb_inline const lxb_char_t *
 lxb_dom_attr_value(lxb_dom_attr_t *attr, size_t *len)
 {
+    /* DOM §4.9.2 "Interface Attr": an attribute's value is "a string", never null, and "create an attribute"
+       defaults it to the empty string. A valueless parsed attribute (`<div inert>`) stores no value, and it
+       still answers "", so every caller reads presence the same way a scripted setAttribute(n, "") gives it. */
+    static lxb_char_t empty[1] = {0};
+
     if (attr->value == NULL) {
         if (len != NULL) {
             *len = 0;
         }
 
-        return NULL;
+        return empty;
     }
 
     if (len != NULL) {
