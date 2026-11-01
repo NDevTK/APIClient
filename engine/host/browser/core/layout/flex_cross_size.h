@@ -10,7 +10,8 @@
  * there, since a content-based size is asked exactly when there is none. The cross axis is whichever one §5.1
  * makes it; the physical axis comes from `flex_container_axis_is_vertical` (core/layout/flex_item.h).
  * §9 numbers steps globally, so §9.6 holds steps 13 to 16; 13, 14 and 16 place items and are not here.
- * Nothing is stored (per-flow state, solver/dom_cow.h). */
+ * The content-based cross size is held in the layout job's memo, whose lifetime sees no DOM write; nothing else
+ * is stored (per-flow state, solver/dom_cow.h). */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_CROSS_SIZE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_CROSS_SIZE_H
 
@@ -28,6 +29,7 @@
 #include "core/css/css_align.h"
 #include "core/css/css_length.h"
 #include "core/layout/flex_line.h"
+#include "core/layout/layout_question.h"
 
 /* css-flexbox-1 §9.6 "Cross-Axis Alignment"' "If a content-based cross size is needed, use the sum of the flex
    lines' cross sizes" for `container`, as a content-box extent in CSS pixels on its cross axis. `container`
@@ -42,13 +44,17 @@
    exposing caller's. Whether one is needed is the caller's reading of §9.6's conditional, not a test of the
    declaration: css-sizing-3 §3.2's `min-content`/`max-content` block size is "equivalent to its automatic
    size", so `min-height: max-content` on a container with a declared `height` asks for this number with a
-   definite cross size in hand, and is right to. */
-CssPx flex_cross_size_content_based(lxb_dom_element_t *container);
-/* The same size asked under a resting drive (core/layout/layout_job.h): each in-flow child's intrinsic inline
-   sizes (its flex base size), each element item's content-based height and the baselines of the items
-   step 8.1 collects are asked first, and the sum is then computed over the answered memo. False ("not yet")
-   with `*out` unwritten when one was deferred. */
+   definite cross size in hand, and is right to.
+   It is a layout job question (core/layout/layout_job.h's LAYOUT_Q_FLEX_CROSS), answered once per job: true
+   with `*out` written when the memo holds it, else false ("not yet") with the question suspended for the
+   caller's drive. */
 bool flex_cross_size_content_based_ask(lxb_dom_element_t *container, CssPx *out);
+/* The body of LAYOUT_Q_FLEX_CROSS question `q` at entry `at` of the current job, run by a drive
+   (core/layout/block_flow.h's `block_flow_drive_deferred`): each in-flow child's intrinsic inline sizes (its
+   flex base size), each element item's content-based height, the baselines of the items step 8.1 collects
+   and each anonymous item's line boxes are asked first, and the sum is then computed over the answered memo
+   and memoized; at the first "not yet" the entry suspends and re-runs from its start. */
+void flex_cross_size_question_run(LayoutQuestion q, size_t at);
 
 /* css-flexbox-1 §9.4 "Cross Size Determination"' step 11: one flex item's used cross size, as a content-box
    extent in CSS pixels on `container`'s cross axis, for an item whose cross size property computes to `auto` or

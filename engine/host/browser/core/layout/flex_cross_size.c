@@ -20,6 +20,7 @@
 #include "core/layout/layout_job.h"
 #include "core/layout/line_box.h"
 #include "core/layout/used_value.h"
+#include "core/timing/thread_work.h"
 
 
 /* css-writing-modes-4 §7.2 "Dimensional Mapping"'s physical names of the three cross-axis properties read as
@@ -134,8 +135,8 @@ static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *ite
  *     line is the flex container's inner cross size", which `used_value_content_px` on the cross axis is.
  *   - Indefinite: step 8.3's maximum, which §9.6 makes the container's auto cross size ("the sum of the flex
  *     lines' cross sizes", one term), reached through `used_value_content_px` -> `block_flow_auto_height` ->
- *     `flex_cross_size_content_based`. On an inline cross axis §9.6's formatting-context rule (CSS 2.1 §10.3.3's
- *     equation) answers first, so the same call is right on both axes.
+ *     `flex_cross_size_content_based_ask`. On an inline cross axis §9.6's formatting-context rule (CSS 2.1
+ *     §10.3.3's equation) answers first, so the same call is right on both axes.
  *   - Step 8.3's single-line clamp to "the container's computed min and max cross sizes" is §10.7, already run
  *     in a used value ("if CSS 2.1's definition of min/max-width/height applied more generally, this behavior
  *     would fall out automatically"). It sits in the `Otherwise` arm only, not after both.
@@ -293,7 +294,7 @@ static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container,
 /* The two preconditions both entries state, in one place: the box is a flex container and its block axis is
    vertical (`horizontal-tb`). They are one fact about the container shared by §9.4's steps 8 and 11. Either
    physical axis may be the cross one (edges come from `fx_cross_props`); the entry-specific block-axis
-   condition is `flex_cross_size_content_based`'s. Messages name the section, not the caller. */
+   condition is `fx_content_based`'s. Messages name the section, not the caller. */
 static void fx_require_supported_container(lxb_dom_element_t *container)
 {
     char nbuf[160], wbuf[64];
@@ -404,7 +405,9 @@ static size_t fx_line_cross_sizes(lxb_dom_element_t *container, bool vertical, C
     return lines;
 }
 
-CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
+/* §9.6's sum over answered operands (`fx_content_based_operands_ask`): the LAYOUT_Q_FLEX_CROSS body's
+   computation, which only that body runs. */
+static CssPx fx_content_based(lxb_dom_element_t *container)
 {
     CssPx *sizes, sum = css_px(0.0);
     size_t lines, i;
@@ -441,15 +444,19 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
     return sum;
 }
 
-bool flex_cross_size_content_based_ask(lxb_dom_element_t *container, CssPx *out)
+/* The layout `fx_content_based` reads, asked under the job: the container's used width (§9.2's available main
+   space, whose containing-block chain can cross a grid area), each in-flow child's intrinsic inline sizes (its
+   flex base size), each element item's content-based height, the baselines of the items step 8.1 collects,
+   and each anonymous item's line boxes. False ("not yet") when one was deferred. */
+static bool fx_content_based_operands_ask(lxb_dom_element_t *container)
 {
     FlexLineMember *m;
     BoxTreeChild c;
     size_t n, i;
-    bool done = true, has;
+    bool done, has;
     CssPx h;
 
-    DCHECK(container != NULL && out != NULL, "a content-based cross size was asked with no container or no answer");
+    done = used_value_content_ask(container, false, &h);
     /* §9.2's flex base sizes, which step 7's lines and main sizes are built from. */
     for (c = box_tree_first_child(container); done && box_tree_child_exists(c);
          c = box_tree_next_sibling(container, c)) {
@@ -469,7 +476,10 @@ bool flex_cross_size_content_based_ask(lxb_dom_element_t *container, CssPx *out)
     for (i = 0; done && i < n; i++) {
         lxb_dom_element_t *item;
 
-        if (m[i].anonymous) continue;
+        if (m[i].anonymous) {
+            done = flex_cross_size_anonymous_lines_ask(container, &m[i]);
+            continue;
+        }
         item = lxb_dom_interface_element(m[i].first);
         /* Step 7's block arm lays the item out as a block-level box, whose automatic height is §10.6.3's. */
         if (used_value_height_behaves_as_auto(item)) done = block_flow_auto_height_ask(item, &h);
@@ -478,8 +488,40 @@ bool flex_cross_size_content_based_ask(lxb_dom_element_t *container, CssPx *out)
                    block_flow_last_line_box_baseline_ask(item, &h, &has);
     }
     free(m);
-    if (!done) return false;
-    *out = flex_cross_size_content_based(container);
+    return done;
+}
+
+void flex_cross_size_question_run(LayoutQuestion q, size_t at)
+{
+    LayoutAnswer a;
+    ThreadWorkSpan tw;
+
+    DCHECKF(q.kind == LAYOUT_Q_FLEX_CROSS && q.element != NULL && q.code == 1,
+            "a flex cross size body was handed a question of kind %d with parameter %u", (int)q.kind, q.code);
+    thread_work_begin(&tw);
+    if (!fx_content_based_operands_ask(q.element)) {
+        thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 0);
+        layout_job_suspend(at);
+        return;
+    }
+    a.flex_cross = fx_content_based(q.element);
+    thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 1);
+    layout_job_answer(at, &a);
+}
+
+bool flex_cross_size_content_based_ask(lxb_dom_element_t *container, CssPx *out)
+{
+    LayoutQuestion q;
+    LayoutAnswer a;
+
+    DCHECK(container != NULL && out != NULL, "a content-based cross size was asked with no container or no answer");
+    q = layout_question(LAYOUT_Q_FLEX_CROSS, container, NULL, 1);
+    LAYOUT_QUESTION_REPEAT_CHECK(q,
+        "A flex container's content-based cross size asked for itself: an item's height or baseline read the "
+        "container's own automatic height, which is indefinite while it is computed. Fix it at the rule that "
+        "re-enters, never by a limit.");
+    if (!layout_job_ask(q, &a)) return false;
+    *out = a.flex_cross;
     return true;
 }
 

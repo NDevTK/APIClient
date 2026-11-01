@@ -143,7 +143,7 @@ static bool lj_is_bf(LayoutQuestionKind kind)
 /* The kinds the memo holds and the stack suspends; every other kind is opened and closed by its own frame. */
 static bool lj_is_stacked(LayoutQuestionKind kind)
 {
-    return lj_is_bf(kind) || kind == LAYOUT_Q_GRID_AXIS;
+    return lj_is_bf(kind) || kind == LAYOUT_Q_GRID_AXIS || kind == LAYOUT_Q_FLEX_CROSS;
 }
 
 static void lj_memo_grow(LayoutJob *job)
@@ -684,7 +684,7 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
     e = &job->stack[job->n - 1];
     DCHECKF(e->state == LJ_SUSPENDED && lj_is_stacked(e->q.kind),
             "a drive found a %s entry of kind %d at the top of its stack — only a deferred stacked question "
-            "(a §9.4.1 contribution or stack, a grid axis) is left above a drive's mark, "
+            "(a §9.4.1 contribution or stack, a grid axis, a flex cross size) is left above a drive's mark, "
             "because every other entry is closed by its own frame",
             e->state == LJ_COMPUTING ? "computing" : "suspended", (int)e->q.kind);
     DCHECK(!layout_job_drive_spent(d),

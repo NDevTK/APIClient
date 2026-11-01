@@ -88,12 +88,14 @@ typedef struct {
     CssPx  pos, run_pos, run_neg, esc_pos, esc_neg, baseline;
 } LayoutBfCursor;
 
-/* What a stacked question answers, one member per kind: `bf` for LAYOUT_Q_BF_BOX and LAYOUT_Q_BF_WALK, and
-   `grid` for LAYOUT_Q_GRID_AXIS (core/layout/grid_track.c's sized axis, held in the job's answer storage). */
+/* What a stacked question answers, one member per kind: `bf` for LAYOUT_Q_BF_BOX and LAYOUT_Q_BF_WALK, `grid`
+   for LAYOUT_Q_GRID_AXIS (core/layout/grid_track.c's sized axis, held in the job's answer storage) and
+   `flex_cross` for LAYOUT_Q_FLEX_CROSS (a content-box extent). */
 struct GridAxisAnswer;
 typedef union {
     LayoutBfAnswer               bf;
     const struct GridAxisAnswer *grid;
+    CssPx                        flex_cross;
 } LayoutAnswer;
 
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
@@ -200,12 +202,12 @@ void layout_job_line_metrics_spend(size_t n);
 
 /* ---- the stacked questions --------------------------------------------------------------------------------- */
 
-/* Ask a BF_BOX, BF_WALK or GRID_AXIS question. Asserts a drive is open: every ask has one beneath it on
+/* Ask a BF_BOX, BF_WALK, GRID_AXIS or FLEX_CROSS question. Asserts a drive is open: every ask has one beneath it on
    the C stack. True with `*out` written when the memo holds the answer; otherwise the question is pushed suspended
    and the caller returns "not yet". No body runs inside its asker's frame: the drive loop is the one caller of a
    body (`layout_job_drive_next`), so the C stack a body uses does not grow with the depth of the box tree, and a
    question is answered once per job however many readers ask it. A contribution's body takes one box; a stack counts
-   its steps, and a grid axis counts what its own asks take. A drive nested inside a
+   its steps, and a grid axis or a flex container's cross size counts what its own asks take. A drive nested inside a
    resting job runs to completion in the activation, so the step machine owning the job could not rest there: taking
    a body there is a DFAIL naming the nested drive's site, whose caller is to become an ask propagated to the resting
    drive. */

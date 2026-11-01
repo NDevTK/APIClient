@@ -2732,6 +2732,9 @@ bool block_flow_drive_deferred(LayoutJobDrive *d)
         case LAYOUT_Q_GRID_AXIS:
             grid_track_question_run(q, at);
             break;
+        case LAYOUT_Q_FLEX_CROSS:
+            flex_cross_size_question_run(q, at);
+            break;
         default:
             DFAIL("a drive took a layout question of a kind no body in this engine computes; layout_job.c "
                   "stacks only the kinds dispatched here");
