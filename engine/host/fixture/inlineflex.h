@@ -8,8 +8,12 @@
    second item's text. An inline-block holds a `column` container whose items are 40px and 60px wide, so its
    §9.9.2 width is 60px; the same container made multi-line, with an automatic block size and with only a
    `min-height`, collects both items into one line and is 60px too (Chrome 155 and Firefox 158 agree on those
-   two). Chrome 155 gives these numbers for the same markup. It ends with TF_CANVAS_INK, which test_forced.c
-   defines before including it. */
+   two). Chrome 155 gives these numbers for the same markup. The baseline-aligned items are placed too: the
+   second container's at its line's cross-start (css-flexbox-1 §8.3: the item with the largest distance to its
+   baseline is flush), and in a two-line `wrap` container with 20px lines each item on its own line, the
+   second 29px below the first (the first line is its 9px padding over one line box). Those offset queries read
+   §8.3's baseline-sharing groups (core/layout/flex_baseline.c) and §9.4 step 8's line cross sizes under the
+   resting job. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_INLINEFLEX_H
 #define ENGINE_HOST_FIXTURE_INLINEFLEX_H
 #ifndef TF_CANVAS_INK
@@ -22,7 +26,7 @@ static const char HTML_INLINEFLEX[] =
     "<div id=l1><span id=t1>text</span> <span style=\"display:inline-flex\"><div style=\"padding-top:5px\">ab</div>"
     "<div>cd ef</div></span> tail</div>"
     "<div id=l2><span id=t2>text</span> <span style=\"display:inline-flex\"><div style=\"height:30px;width:20px\">"
-    "</div><div style=\"align-self:baseline;padding-top:9px\">xy</div></span> tail</div>"
+    "</div><div id=b2 style=\"align-self:baseline;padding-top:9px\">xy</div></span> tail</div>"
     "<div id=l3><span id=t3>text</span> <span style=\"display:inline-flex;height:30px;width:20px;"
     "margin-bottom:4px\"></span> tail</div>"
     "<div id=l4><span id=t4>text</span> <span style=\"display:inline-flex\"><div style=\"height:20px;width:20px;"
@@ -35,10 +39,15 @@ static const char HTML_INLINEFLEX[] =
     "<div><div id=c7 style=\"display:inline-block\"><div style=\"display:flex;flex-direction:column;"
     "flex-wrap:wrap;min-height:50px\"><div style=\"width:40px;height:10px\"></div><div style=\"width:60px;"
     "height:10px\"></div></div></div></div>"
+    "<div id=l8><span id=c8 style=\"display:inline-flex;flex-wrap:wrap;width:60px;line-height:20px\">"
+    "<div id=b8a style=\"align-self:baseline;padding-top:9px;width:40px\">xy</div>"
+    "<div id=b8b style=\"align-self:baseline;width:40px\">zw</div></span> tail</div>"
     "<script>function R(id) { return document.getElementById(id).getBoundingClientRect(); }"
     "fetch('/api/iflex?t1=' + (R('t1').top - R('l1').top) + '&t2=' + (R('t2').top - R('l2').top)"
     " + '&t3=' + (R('t3').top - R('l3').top) + '&t4=' + (R('t4').top - R('l4').top)"
-    " + '&l3=' + R('l3').height + '&c5=' + R('c5').width + '&c6=' + R('c6').width + '&c7=' + R('c7').width);"
+    " + '&l3=' + R('l3').height + '&c5=' + R('c5').width + '&c6=' + R('c6').width + '&c7=' + R('c7').width"
+    " + '&b2=' + (R('b2').top - R('l2').top) + '&b8=' + (R('b8b').top - R('b8a').top)"
+    " + '&c8=' + (R('b8a').top - R('c8').top));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

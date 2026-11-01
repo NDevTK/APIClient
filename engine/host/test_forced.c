@@ -19756,8 +19756,21 @@ TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     fold_row(&iflexw_tt, &iflexw_why, param_value_is(js, "/api/iflex", "c7", "60"),
              "css-flexbox-1 §9.9.2: a multi-line `column` container with only a `min-height` is not one line "
              "60px wide");
+    /* css-flexbox-1 §8.3's baseline-aligned items placed, read by an offset query under the resting job. */
+    const char *iflexp_why = NULL; int iflexp_tt = !!strstr(js, "\"/api/iflex\"");
+    fold_row(&iflexp_tt, &iflexp_why, iflexp_tt,
+             "NOT REACHED: there is no /api/iflex record at all, so the document aborted before its fetch");
+    fold_row(&iflexp_tt, &iflexp_why, param_value_is(js, "/api/iflex", "b2", "0"),
+             "css-flexbox-1 §8.3: the one baseline-aligned item is not flush with its line's cross-start");
+    fold_row(&iflexp_tt, &iflexp_why, param_value_is(js, "/api/iflex", "c8", "0"),
+             "css-flexbox-1 §8.3: a multi-line container's first baseline-aligned item is not at its first line's "
+             "cross-start");
+    fold_row(&iflexp_tt, &iflexp_why, param_value_is(js, "/api/iflex", "b8", "29"),
+             "css-flexbox-1 §9.4 step 8.1: the second line does not start below a first line sized by its "
+             "baseline-sharing group (9px padding over one 20px line box)");
     const Probe rows[] = {
         { "inline-flex-baseline", iflexb_tt, "/api/iflex", SESS_EXPLORE, iflexb_why },
+        { "inline-flex-baseline-place", iflexp_tt, "/api/iflex", SESS_EXPLORE, iflexp_why },
         { "flex-column-intrinsic-width", iflexw_tt, "/api/iflex", SESS_EXPLORE, iflexw_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
