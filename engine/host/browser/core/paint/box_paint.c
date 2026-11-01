@@ -590,7 +590,7 @@ static bool bp_replaced_canvas(BpState *st, lxb_dom_element_t *el)
  * `embed` arm on nothing this agent will have.
  * HOW ITS ABSENCE WOULD SHOW: a document whose only content is an `<iframe>`, a `<video poster>` or an
  * `<embed>` paints its borders and its background and nothing inside them, so the display list's mark count
- * is that box's chrome alone — which `box_paint_stacking_context`'s offer count beside it is what separates
+ * is that box's chrome alone — which `box_paint_begin`'s census's offer count beside it is what separates
  * from a walk that never reached the box.
  * RETIREMENT: this record loses a clause as each arm lands, and goes when every arm below composites. */
 static bool bp_replaced_content(BpState *st, lxb_dom_element_t *el)
@@ -1192,7 +1192,7 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
  * THE THREE INPUTS ARE THREE DIFFERENT MECHANISMS AND THAT IS WHAT MAKES THE SUM CHECKABLE. `ok` is the
  * producer's own answer; the mark delta is the DISPLAY LIST's own length, which this file does not maintain;
  * and `why` is a mask the producers wrote. An offer whose arm returned without coming through here would
- * leave `offers` risen and no outcome recorded, and `box_paint_stacking_context`'s assert is what says so —
+ * leave `offers` risen and no outcome recorded, and `box_paint_end`'s assert is what says so —
  * which is exactly the editing mistake a switch of twelve `return` statements invites.
  *
  * THE ORDER OF THE FOUR IS NOT A PREFERENCE, IT IS A CONTAINMENT. A walk that STOPPED left its prefix in the
@@ -1368,7 +1368,7 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
           "reaches here is not a new step but an out-of-range value");
     /* AND IT REACHES THE TAIL TOO, for the reason the release arm above states: this line is reachable in a
        release build, and an offer counted at the top of this function with no outcome recorded for it is the
-       one state `box_paint_stacking_context`'s own assert cannot distinguish from a missing `bp_offer_done`
+       one state `box_paint_end`'s own assert cannot distinguish from a missing `bp_offer_done`
        call. There is deliberately no `default:` label on the switch — `-Wswitch` is the real guard and a
        label would silence it — so this line is where an out-of-range value lands. */
     return bp_offer_done(st, step, before, false);
@@ -1477,22 +1477,5 @@ bool box_paint_end(BoxPaintWalk *w)
     ok = w->ok;
     paint_order_free(w->order);
     free(w);
-    return ok;
-}
-
-bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
-                                BoxPaintCensus *census)
-{
-    CssComputedStyleHold hold;
-    BoxPaintWalk *w;
-    bool ok;
-
-    /* One hold over the whole walk, `begin` included: the cursor's first frame reads the context element's
-       computed values. */
-    css_computed_style_hold_begin(&hold);
-    w = box_paint_begin(ctx, context_el, out, census);
-    while (box_paint_step(w)) {}
-    ok = box_paint_end(w);
-    css_computed_style_hold_end(&hold);
     return ok;
 }

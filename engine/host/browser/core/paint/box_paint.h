@@ -54,7 +54,7 @@
  * HOW ITS ABSENCE WOULD SHOW: a page whose background is declared as an image alone paints no page
  * background, while the same page declaring a colour beside the image paints the colour and none of the image
  * — so a document comes out with its fallback colour where a browser puts its artwork.
- * RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for CSS 2.1 §E.2's step 1
+ * RETIREMENT: this record goes when `box_paint_step` appends a mark for CSS 2.1 §E.2's step 1
  * second item.
  *
  * NAMED RESIDUAL — THE TWO STEPS THAT STILL APPEND NOTHING, AND THE TWO DIFFERENT THINGS THEY WANT.
@@ -124,7 +124,7 @@
  * HOW ITS ABSENCE WOULD SHOW: a table whose stripes are declared on its rows, columns or groups paints only
  * the cells' own backgrounds and the table's own plane, so a zebra-striped table comes out uniform while a
  * table striped by a rule on the cells comes out correctly.
- * RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for each of the four steps. */
+ * RETIREMENT: this record goes when `box_paint_step` appends a mark for each of the four steps. */
 #ifndef ENGINE_HOST_BROWSER_CORE_PAINT_BOX_PAINT_H
 #define ENGINE_HOST_BROWSER_CORE_PAINT_BOX_PAINT_H
 
@@ -143,7 +143,7 @@
    for, OR a walk that STOPPED — and those take opposite work. The first is a correct picture of a document
    with no ink in it; the second names a capability to build; the third is a partial picture whose remaining
    boxes were never looked at.
-   EXACTLY ONE MEMBER IS RECORDED PER OFFER and `box_paint_stacking_context` asserts that the four sum to the
+   EXACTLY ONE MEMBER IS RECORDED PER OFFER and `box_paint_end` asserts that the four sum to the
    offer count, which is what makes the total unable to move without one of its parts moving. */
 typedef enum {
     BOX_PAINT_INKED,   /* the offer appended at least one mark to the list */
@@ -215,15 +215,11 @@ typedef struct {
    the offers the walk DID make — every mark already appended stays appended, which is what paint_order.h's
    offer contract exists to make possible and is why a document with one unpaintable box is a partial
    picture rather than no picture. The offer that stopped it is the one `BOX_PAINT_STOPPED`. */
-bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
-                                BoxPaintCensus *census);
-
-/* The same walk one offer at a time, for a caller that rests between offers (update the rendering step 22).
-   `begin` takes the preconditions above and zeroes `census`; `step` paints the next offer and answers whether
-   the walk goes on (false once the sequence is complete or this painter stopped), and every step runs with a
-   cascade record held (asserted); `end` answers what the entry above answers and releases the walk. `out` and
-   `census` are the caller's and must outlive the walk. The entry above is `begin`, `step` until false, `end`,
-   inside one computed style hold. */
+/* The walk is one offer at a time, so its caller can rest between offers (update the rendering step 22). `begin`
+   takes the preconditions above and zeroes `census`; `step` paints the next offer and answers whether the walk
+   goes on (false once the sequence is complete or this painter stopped), and every step runs with a cascade
+   record held (asserted); `end` answers what the walk answered, as above, and releases it. `out` and `census`
+   are the caller's and must outlive the walk. */
 typedef struct BoxPaintWalk BoxPaintWalk;
 BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
                               BoxPaintCensus *census);

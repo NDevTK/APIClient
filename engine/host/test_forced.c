@@ -31342,6 +31342,36 @@ static size_t tf_pt_glyphs(const DisplayList *dl)
     return n;
 }
 
+/* A self-test's reads of computed values and layout, made as a step machine makes them: on a layout job entered
+   for the reads, so the cascade record is the job's. No DOM write may happen between the two. */
+static LayoutJob *tf_job_enter(void)
+{
+    LayoutJob *job = layout_job_new();
+
+    layout_job_enter(job);
+    return job;
+}
+
+static void tf_job_leave(LayoutJob *job)
+{
+    layout_job_leave(job);
+    layout_job_free(job);
+}
+
+/* CSS 2.1 §E.2's ink for one stacking context, as update the rendering step 22 lays it (core/paint/box_paint.h's
+   begin / step / end), on a job entered for the walk. */
+static bool tf_box_paint(JSContext *ctx, lxb_dom_element_t *root, DisplayList *out, BoxPaintCensus *census)
+{
+    LayoutJob *job = tf_job_enter();
+    BoxPaintWalk *w = box_paint_begin(ctx, root, out, census);
+    bool ok;
+
+    while (box_paint_step(w)) {}
+    ok = box_paint_end(w);
+    tf_job_leave(job);
+    return ok;
+}
+
 /* ONE PAINT of the fixture's own active document, with `<p style=STYLE>TEXT</p>` appended to its body and
    removed again. A NULL `style` is the BASE paint — the same document with no paragraph in it, which is what
    makes "the tail of the list is the paragraph's" a checked statement rather than an assumption.
@@ -31391,7 +31421,7 @@ static bool tf_pt_paint(JSContext *ctx, lxb_html_document_t *dom, const char *st
        is the offer COUNT — the rows that read the partition are `box_paint_scratch_selftest` below, over a
        document whose element set is four elements this file writes. A helper that carried the whole census
        out would be handing every caller a struct three of them do not read. */
-    ok = box_paint_stacking_context(ctx, root, out, &census);
+    ok = tf_box_paint(ctx, root, out, &census);
     *offers = census.offers;
     /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, so a failing expectation below leaves the tree exactly as the
        selftests after this one expect to find it — and so the removal is not a step an early return can
@@ -31695,7 +31725,7 @@ static bool tf_document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSu
  * THE OFFER COUNT IS WHAT MAKES A ZERO-MARK ANSWER READABLE, which is core/paint/box_paint.h's own reason for
  * making it a required out-parameter rather than a convenience: "the walk ran and every box it offered was
  * transparent, or the walk never reached a box at all" are two states behind one empty list and they take
- * opposite work. THE SENTINEL IS WHAT HOLDS THE ENTRY TO WRITING IT. `box_paint_stacking_context` sets
+ * opposite work. THE SENTINEL IS WHAT HOLDS THE ENTRY TO WRITING IT. `box_paint_begin` sets
  * `*offers` from a counter that starts at zero and rises by one per visit, so a value planted here that no
  * walk of any document could produce turns "the number is plausible" into "the write happened" — and those
  * are exactly the two readings an out-parameter nobody checks has.
@@ -31793,7 +31823,7 @@ TF_UNIT void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
     display_list_append(&dl, &seed);
 
     census.offers = TF_BP_UNWRITTEN;
-    ok = box_paint_stacking_context(ctx, root, &dl, &census);
+    ok = tf_box_paint(ctx, root, &dl, &census);
     offers = census.offers;
 
     CHECK(offers != TF_BP_UNWRITTEN,
@@ -32317,7 +32347,7 @@ TF_UNIT void box_paint_scratch_selftest(JSContext *ctx)
                         "for markup that names none, and this markup names one");
     display_list_init(&dl);
     census.offers = TF_BP_UNWRITTEN;
-    ok = box_paint_stacking_context(ctx, root, &dl, &census);
+    ok = tf_box_paint(ctx, root, &dl, &census);
     offers = census.offers;
 
     CHECK(offers != TF_BP_UNWRITTEN,
@@ -32423,7 +32453,7 @@ TF_UNIT void box_paint_scratch_selftest(JSContext *ctx)
     CHECK(root != NULL, "the canvas markup this file wrote parsed into a document with no root element");
     display_list_init(&dl);
     census.offers = TF_BP_UNWRITTEN;
-    ok = box_paint_stacking_context(ctx, root, &dl, &census);
+    ok = tf_box_paint(ctx, root, &dl, &census);
     offers = census.offers;
 
     CHECK(!ok && offers == 1u && dl.n == 0u,
@@ -32524,7 +32554,7 @@ static bool tf_ib_paint_flat(JSContext *ctx, lxb_html_document_t *dom, const cha
        is the offer COUNT — the rows that read the partition are `box_paint_scratch_selftest` below, over a
        document whose element set is four elements this file writes. A helper that carried the whole census
        out would be handing every caller a struct three of them do not read. */
-    ok = box_paint_stacking_context(ctx, root, out, &census);
+    ok = tf_box_paint(ctx, root, out, &census);
     *offers = census.offers;
     /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, which is `tf_pt_paint`'s own rule and is what makes the removal
        CHECKED rather than trusted: all three passes below are counted against ONE base, so a paragraph left
@@ -32562,7 +32592,7 @@ static bool tf_ib_paint_nested(JSContext *ctx, lxb_html_document_t *dom, const c
        is the offer COUNT — the rows that read the partition are `box_paint_scratch_selftest` below, over a
        document whose element set is four elements this file writes. A helper that carried the whole census
        out would be handing every caller a struct three of them do not read. */
-    ok = box_paint_stacking_context(ctx, root, out, &census);
+    ok = tf_box_paint(ctx, root, out, &census);
     *offers = census.offers;
     dom_cow_remove_baseline(lxb_dom_interface_node(p));
     return ok;
@@ -33136,6 +33166,7 @@ static TfBbShape tf_bb_prefix(lxb_dom_document_t *d, lxb_dom_node_t *body)
    plausible mark count for some other document. */
 static void tf_bb_arm(TfBbShape s)
 {
+    LayoutJob *job = tf_job_enter();
     BlockFlowAnonBox *v = NULL;
     LineBoxFragment *frags = NULL;
     lxb_dom_element_t *est = NULL;
@@ -33211,6 +33242,7 @@ static void tf_bb_arm(TfBbShape s)
            "an inline ancestor or run past this container to an outer one, at which point the two rectangles a "
            "later diff reads against each other are in a frame neither CSS 2.2 §9.2.1.1 box is in",
            box_subject(est, ebuf, sizeof ebuf));
+    tf_job_leave(job);
 }
 
 /* THE TEXT TAIL — `<p><span style=…>t<em style=…>x</em>more</span></p>`. The second run holds a run of TEXT
@@ -33230,7 +33262,7 @@ static bool tf_bb_paint_text(JSContext *ctx, lxb_html_document_t *dom, DisplayLi
     tf_ib_text(d, lxb_dom_interface_node(s.broken), "more");
     tf_bb_arm(s);
     display_list_init(out);
-    ok = box_paint_stacking_context(ctx, root, out, &census);
+    ok = tf_box_paint(ctx, root, out, &census);
     *offers = census.offers;
     /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, which is `tf_pt_paint`'s own rule and is what makes the removal
        CHECKED rather than trusted: both documents are counted against ONE base, so a paragraph left in puts
@@ -33261,7 +33293,7 @@ static bool tf_bb_paint_box(JSContext *ctx, lxb_html_document_t *dom, DisplayLis
     tf_ib_text(d, lxb_dom_interface_node(tail), "B");
     tf_bb_arm(s);
     display_list_init(out);
-    ok = box_paint_stacking_context(ctx, root, out, &census);
+    ok = tf_box_paint(ctx, root, out, &census);
     *offers = census.offers;
     dom_cow_remove_baseline(lxb_dom_interface_node(s.container));
     return ok;
@@ -33533,8 +33565,11 @@ TF_UNIT void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
     unsigned held = 0;
     bool vblock, vinline, hblock, hinline, armed, gone;
 
+    LayoutJob *job;
+
     vert = tf_ib_box(d, body, "p", "writing-mode:vertical-rl");
     horz = tf_ib_box(d, body, "p", NULL);
+    job = tf_job_enter();
 
     /* THE ARMING CHECK, AND IT IS THE ONE ASSERTION HERE THAT IS NOT ABOUT THE TABLE. Every equality below is
        satisfied by a run in which the cascade never delivered the declaration at all — the control would then
@@ -33623,6 +33658,7 @@ TF_UNIT void css_logical_writing_mode_selftest(lxb_html_document_t *dom)
        this one depend on: core/layout/line_box.c refuses a box whose computed `writing-mode` is not
        `horizontal-tb`, so a `vertical-rl` element still in this document would abort the next row that paints
        it — in a component this row is not about, over markup this row wrote. */
+    tf_job_leave(job);
     dom_cow_remove_baseline(lxb_dom_interface_node(vert));
     dom_cow_remove_baseline(lxb_dom_interface_node(horz));
     gone = lxb_dom_interface_node(vert)->parent == NULL && lxb_dom_interface_node(horz)->parent == NULL;
@@ -33725,7 +33761,12 @@ TF_UNIT void document_paint_boxless_root_selftest(JSContext *ctx)
     CHECK(root != NULL, "the markup this file wrote for css-display-3 §2.5's `none` parsed into a document "
                         "with no root element — HTML §13.2.6 \"Tree construction\" generates an `html` element "
                         "for markup that names none, and this markup names one");
-    display = css_display_serialize(css_computed_display(root));
+    {
+        LayoutJob *job = tf_job_enter();
+
+        display = css_display_serialize(css_computed_display(root));
+        tf_job_leave(job);
+    }
     CHECK(display != NULL && strcmp(display, "none") == 0,
           "the root element this file declared `display:none` on has some other computed value. css-display-3 "
           "§2.7 \"Automatic Box Type Transformations\" is what keeps it: \"This has no effect on display types "
@@ -33780,7 +33821,12 @@ TF_UNIT void document_paint_boxless_root_selftest(JSContext *ctx)
     root = lxb_dom_document_element(lxb_dom_interface_document(dom));
     CHECK(root != NULL, "the markup this file wrote for css-display-3 §2.5's `contents` parsed into a document "
                         "with no root element");
-    display = css_display_serialize(css_computed_display(root));
+    {
+        LayoutJob *job = tf_job_enter();
+
+        display = css_display_serialize(css_computed_display(root));
+        tf_job_leave(job);
+    }
     CHECK(display != NULL && strcmp(display, "block") == 0,
           "the root element this file declared `display:contents` on does not compute to `block`. "
           "css-display-3 §2.8 \"The Root Element's Principal Box\" says \"Additionally, a display of contents "
@@ -33839,6 +33885,7 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
                                          const char *span_computed)
 {
     lxb_html_document_t *dom = bp_scratch_document(ctx, html);
+    LayoutJob           *job = tf_job_enter();
     lxb_dom_element_t   *body;
     lxb_dom_node_t      *c, *first, *end;
     BoxTreeChild         m;
@@ -33952,6 +33999,7 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
               "css-flexbox-1 §4's item walk did not advance past the child it had just classified");
         c = next;
     }
+    tf_job_leave(job);
     return out;
 }
 

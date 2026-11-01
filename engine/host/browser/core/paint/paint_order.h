@@ -245,7 +245,7 @@ PaintInlineKind paint_order_inline_kind(lxb_dom_element_t *el);
    that file's residual and not this one's.
    HOW THE ABSENCE OF (c) SHOWS: text inside a `<span>` that is itself a stacking context is missing, while the
    same text in an ordinary paragraph is drawn.
-   RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for
+   RETIREMENT: this record goes when `box_paint_step` appends a mark for
    `PAINT_STEP_INLINE_LINE_BOXES`.
 
    RETIRED CLAUSE (a), KEPT BECAUSE ITS NEXT-DIFF HALF WAS WRONG AND A READER WHO RE-DERIVES IT WILL BE WRONG
