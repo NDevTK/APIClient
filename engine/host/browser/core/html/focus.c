@@ -69,6 +69,7 @@
 #include "core/frame/navigation.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/focus.h"
+#include "core/html/global_attributes.h"
 #include "core/html/html_dialog.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
@@ -347,10 +348,12 @@ static bool el_is_summary_for_parent_details(const lxb_dom_node_t *n)
    means for a user agent with no platform conventions of its own to differ by. Every entry is a fact about the
    element's markup, so every entry is decidable here.
    IT IS NOT THE SAME LIST AS THE `tabIndex` GETTER'S DEFAULT, which is why the two are two functions. This one
-   admits an `a` only WITH an `href`, an `input` only when its type is not Hidden, an editing host and any
-   element carrying `draggable`; that one admits `a`, `area`, `frame`, `iframe`, `input` and `object`
-   unconditionally and admits none of the last three. A shared predicate would have to be wrong for one of
-   them. */
+   admits an `a` only WITH an `href`, an `input` only when its type is not Hidden, and an editing host; that
+   one admits `a`, `area`, `frame`, `iframe`, `input` and `object` unconditionally and no editing host. A
+   shared predicate would have to be wrong for one of them.
+   "Elements with a draggable attribute set, if that would enable the user agent to allow the user to begin drag
+   operations for those elements without the use of a pointing device" is no entry here: this user agent begins
+   no drag without a pointing device, so its condition never holds. */
 static bool el_is_ua_focusable(const lxb_dom_node_t *n)
 {
     size_t len = 0;
@@ -364,12 +367,7 @@ static bool el_is_ua_focusable(const lxb_dom_node_t *n)
     /* "summary elements that are the FIRST summary element child of a details element" — §4.11.2's algorithm,
        above, which is the definition that sentence restates. */
     if (el_is(n, "summary")) return el_is_summary_for_parent_details(n);
-    if (el_attr(n, "draggable", &len)) return true;
-    /* An EDITING HOST: an element whose `contenteditable` is in the true or plaintext-only state. */
-    {
-        const lxb_char_t *ce = el_attr(n, "contenteditable", &len);
-        if (ce && !(len == 5 && !strncasecmp((const char *)ce, "false", 5))) return true;
-    }
+    if (html_element_is_editing_host(lxb_dom_interface_element((lxb_dom_node_t *)n))) return true;
     return el_is(n, "iframe");   /* a navigable container */
 }
 

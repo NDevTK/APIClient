@@ -2,6 +2,10 @@
    mirroring one attribute. See global_attributes.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_GLOBAL_ATTRIBUTES_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_GLOBAL_ATTRIBUTES_H
+#include <stdbool.h>
+
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 
 /* Once per AGENT — the setter step ids these members are declared with. */
@@ -11,5 +15,9 @@ void global_attributes_declare(JSContext *ctx);
    `isContentEditable`, and §6.11.7's `draggable`. */
 void global_attributes_install(JSContext *ctx, JSValueConst proto);
 void global_attributes_free(void);
+
+/* HTML §6.8.1's EDITING HOST: an HTML element whose `contenteditable` is in the true or plaintext-only state.
+   The one answer core/html/focus.c's focusable-area list and `isContentEditable` both read. */
+bool html_element_is_editing_host(lxb_dom_element_t *el);
 
 #endif

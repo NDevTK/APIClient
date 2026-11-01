@@ -321,31 +321,26 @@ lxb_dom_attr_clone_name_value(lxb_dom_attr_t *attr_from,
     return LXB_STATUS_OK;
 }
 
+/* HTML §13.2.4.3 "The list of active formatting elements": two attributes pair when they have "identical names,
+   namespaces, and values". The values are compared through lxb_dom_attr_value, so a parsed `x` (no stored
+   value) and `x=""` hold the same empty string, as DOM §4.9.2 "Interface Attr" states. */
 bool
 lxb_dom_attr_compare(lxb_dom_attr_t *first, lxb_dom_attr_t *second)
 {
-    if (first->node.local_name == second->node.local_name
-        && first->node.ns == second->node.ns
-        && first->qualified_name == second->qualified_name)
+    const lxb_char_t *fv, *sv;
+    size_t flen, slen;
+
+    if (first->node.local_name != second->node.local_name
+        || first->node.ns != second->node.ns
+        || first->qualified_name != second->qualified_name)
     {
-        if (first->value == NULL) {
-            if (second->value == NULL) {
-                return true;
-            }
-
-            return false;
-        }
-
-        if (second->value != NULL
-            && first->value->length == second->value->length
-            && lexbor_str_data_ncmp(first->value->data, second->value->data,
-                                    first->value->length))
-        {
-            return true;
-        }
+        return false;
     }
 
-    return false;
+    fv = lxb_dom_attr_value(first, &flen);
+    sv = lxb_dom_attr_value(second, &slen);
+
+    return flen == slen && (flen == 0 || lexbor_str_data_ncmp(fv, sv, flen));
 }
 
 void

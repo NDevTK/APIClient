@@ -418,7 +418,7 @@ static int content_editable_state(lxb_dom_element_t *el)
    makes `design mode enabled` a Document boolean "initially false" that only the `designMode` setter changes,
    and this engine's Document does not install `designMode` — the IDL audit names it among Document's absent
    members. Building §6.8.2 is what makes the arm reachable, and this is one of the readers it has to reach. */
-static bool is_editing_host(lxb_dom_element_t *el)
+bool html_element_is_editing_host(lxb_dom_element_t *el)
 {
     int st;
 
@@ -437,11 +437,11 @@ static bool is_editable(lxb_dom_element_t *el)
 {
     lxb_dom_element_t *e;
 
-    if (is_editing_host(el)) return false;   /* "it is not an editing host" */
+    if (html_element_is_editing_host(el)) return false;   /* "it is not an editing host" */
     for (e = el; e; e = parent_element(e)) {
         lxb_dom_element_t *p;
 
-        if (e != el && is_editing_host(e)) return true;   /* the parent chain reached an editing host */
+        if (e != el && html_element_is_editing_host(e)) return true;   /* the parent chain reached an editing host */
         if (content_editable_state(e) == CE_FALSE) return false;
         /* "either it is an HTML element, or it is an svg or math element" — an element in any other namespace
            is not editable and neither is anything below it, so the walk stops rather than skipping it. */
@@ -505,7 +505,7 @@ static JSValue js_is_content_editable(JSContext *ctx, JSValueConst this_val, int
     lxb_dom_element_t *el = receiver_element(this_val);
 
     (void)magic;
-    return JS_NewBool(ctx, is_editing_host(el) || is_editable(el));
+    return JS_NewBool(ctx, html_element_is_editing_host(el) || is_editable(el));
 }
 
 /* ---- HTML §6.11.7 The draggable attribute ------------------------------------------------------------------ */
@@ -530,8 +530,8 @@ static int draggable_state(lxb_dom_element_t *el)
    element, an object element that represents an image, or an a element with an href content attribute, the
    draggable IDL attribute must return true; otherwise, ... false."
    THE `object` ARM IS UNREACHABLE IN THIS ENGINE AND THAT IS A FACT ABOUT §4.8.7, NOT A SHORTCUT HERE — the
-   same shape as the `designMode` arm of is_editing_host above. "The object element represents the specified
-   image" is a branch of §4.8.7's RUN THE OBJECT ELEMENT STEPS, reached only after that algorithm has FETCHED
+   same shape as the `designMode` arm of html_element_is_editing_host above. "The object element represents the
+   specified image" is a branch of §4.8.7's RUN THE OBJECT ELEMENT STEPS, reached only after that algorithm has FETCHED
    the resource and found a type starting with `image/` "and support for images has not been disabled". Nothing
    in this engine runs those steps and nothing decodes an image, so no object element has ever represented one;
    an element whose steps have not run represents its fallback content. Building §4.8.7's steps is what makes
