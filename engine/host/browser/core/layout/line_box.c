@@ -19,12 +19,14 @@
 #include "core/layout/grid_baseline.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/button_label.h"
 #include "core/layout/inline_run_walk.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/layout_job.h"   /* the line box record of the job whose activation holds the thread */
 #include "core/layout/line_box.h"
 #include "core/layout/phrasing_break.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/scroll_container.h"
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
 #include "solver/metrics.h"   /* `_layoutFillRests` */
@@ -230,23 +232,18 @@ static LbExtent lb_strut_extent(lxb_dom_element_t *el)
     return out;
 }
 
-/* One disjunct of the exception in CSS 2.2 §10.8.1 "Leading and half-leading"'s `inline-block` sentence: "The
-   baseline of an 'inline-block' is the baseline of its last line box in the normal flow, unless it has either
-   no in-flow line boxes or if its 'overflow' property has a computed value other than 'visible', in which
-   case the baseline is the bottom margin edge." CSS 2.2 writes the `line-height` and `vertical-align`
-   definitions under the §10.8.1 heading, so §10.8.1 is the number that carries these words, though the
-   parent §10.8 also contains them.
-   This disjunct is a computed value, answerable without laying out the box, while "no in-flow line boxes"
-   needs the inside flowed; `lb_atomic_extent` asks this first, so a scroll container's contents are never
-   flowed for a baseline already stated, and the other disjunct is `LbLines.any` from the reduction that runs
-   anyway. css-overflow-3 §3.1 "Managing Overflow: the overflow-x, overflow-y, and overflow properties" makes
-   `overflow` a shorthand, so "computed value other than 'visible'" is the negation of both longhands being
-   `visible`; §3.1's pairing rule ("if the other axis specifies a scrollable value, a specified value of
-   visible computes to auto") can only turn `visible` into `auto`, never the reverse. */
+/* One disjunct of the exception in CSS 2.2 §10.8.1 "Leading and half-leading"'s `inline-block` sentence, "if
+   its 'overflow' property has a computed value other than 'visible', in which case the baseline is the bottom
+   margin edge", as css-align-3 §9.1 "Determining the Baselines of a Box" restates it for the values CSS 2.2
+   predates: "for legacy reasons if its baseline-source is auto (the initial value) a block-level or
+   inline-level block container that is a block-axis scroll container always has a last baseline set, whose
+   baselines all correspond to its block-end margin edge". So `clip`, which is no scroll container, keeps the
+   box's line-box baseline. css-overflow-3 §3.1's pairing makes a box scrollable in one axis scrollable in both,
+   so core/layout/scroll_container.h's scroll container is the block-axis one. A computed value, answerable
+   without laying out the box, so `lb_atomic_extent` asks it before flowing the inside for a baseline. */
 static bool lb_inline_block_overflow_excepts_baseline(lxb_dom_element_t *el)
 {
-    return !(css_computed_keyword_is(el, "overflow-x", CSS_KEYWORD_VISIBLE) &&
-             css_computed_keyword_is(el, "overflow-y", CSS_KEYWORD_VISIBLE));
+    return scroll_container_is(el);
 }
 
 /* CSS 2 §8.1 "Box dimensions"' three edges between a box's top margin edge and its top content edge: the
@@ -455,7 +452,7 @@ static bool lb_phrasing_break(TextRunMeasure *m, lxb_dom_element_t *el)
 /* What `lb_child` left for its caller: nothing, a text node whose characters are the next items, an inline
    box whose opening edge it emitted and whose box-tree children are next, with its closing edge after them, or
    "not yet" for an atomic inline whose intrinsic sizes are not ready, with nothing added. */
-typedef enum { LB_CHILD_PLACED = 0, LB_CHILD_TEXT, LB_CHILD_INLINE_BOX, LB_CHILD_NOT_YET } LbChildNext;
+typedef enum { LB_CHILD_PLACED = 0, LB_CHILD_TEXT, LB_CHILD_LABEL, LB_CHILD_INLINE_BOX, LB_CHILD_NOT_YET } LbChildNext;
 
 /* One member of the inline formatting context; `*node` receives the text node or inline box the answer names.
    A wholly collapsible text node is not content: CSS 2.2 §9.2.2.1 "Anonymous inline boxes" says white space
@@ -478,13 +475,16 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
        gets the marker's block size). Not covered: that contribution. Next diff: the marker box laid out over
        §3.2's marker string, once css-counter-styles-3 generates it, with its extent taken into the first line
        box. Absence shows as an empty list item measuring zero tall where Chrome gives it one line. */
-    if (box_tree_child_is_pseudo(c)) {
+    if (box_tree_child_is_marker(c)) {
         DCHECK(block_flow_child_kind(parent, c) == BLOCK_FLOW_CHILD_OUTSIDE_MARKER,
                "a pseudo-element member of a list item's inline formatting context was classified as something "
                "other than css-lists-3 §3.5's outside marker, which is the one arm core/layout/block_flow.h "
                "answers for it");
         return LB_CHILD_PLACED;
     }
+    /* HTML §15.5.12's label: the input button's characters, in its own box, under a text node's rule. */
+    if (box_tree_child_is_label(c))
+        return block_flow_label_generates_box(parent) ? LB_CHILD_LABEL : LB_CHILD_PLACED;
     n = c.node;
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
@@ -881,6 +881,15 @@ static size_t lb_collect_step(LbCollect *k)
         text_run_measure_text_begin(m, parent, node, &k->text);
         k->in_text = !text_run_measure_text_done(&k->text);
         break;
+    case LB_CHILD_LABEL: {
+        size_t len = 0;
+        const lxb_char_t *d = button_label_text(parent, &len);
+
+        inline_run_walk_take(&k->walk, NULL);
+        text_run_measure_chars_begin(m, parent, d, len, &k->text);
+        k->in_text = !text_run_measure_text_done(&k->text);
+        break;
+    }
     case LB_CHILD_INLINE_BOX:
         inline_run_walk_take(&k->walk, lxb_dom_interface_element(node));
         break;

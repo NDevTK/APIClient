@@ -1,35 +1,32 @@
-/* css-display-3 §1 "Introduction"'s box tree on its child axis: §2.5's `contents` splice and css-lists-3 §3.1's
-   marker member. See box_tree.h for the contract and for why the member is a pair rather than a node. */
+/* css-display-3 §1 "Introduction"'s box tree on its child axis: §2.5's `contents` splice, css-lists-3 §3.1's
+   marker member and HTML §15.5.12's label member. See box_tree.h for the contract and for why the member is a
+   pair rather than a node. */
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
-#include <lexbor/css/selectors/pseudo_const.h>
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_style_declaration.h"   /* the style ask a child walk makes before its reads */
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/button_label.h"
 #include "core/layout/list_marker.h"
 
-/* `__UNDEF == 0` makes a zero-initialised member a source-document node. engine/lexbor is vendored and synced,
-   so an upstream renumbering would silently turn every `{0}` member into a real pseudo-element. */
-_Static_assert(LXB_CSS_SELECTOR_PSEUDO_ELEMENT__UNDEF == 0,
-               "a zero-initialised box-tree child must name NO pseudo-element");
-_Static_assert(LXB_CSS_SELECTOR_PSEUDO_ELEMENT_MARKER != LXB_CSS_SELECTOR_PSEUDO_ELEMENT__UNDEF,
-               "css-lists-3 §3.1's ::marker must be a nameable value of the discriminator this sequence takes");
+/* A zero-initialised member is a source-document node. */
+_Static_assert(BOX_TREE_NODE == 0, "a zero-initialised box-tree child must be a source-document node");
 
-/* `<li> (display `list-item`)::marker`, or the node's own subject for a source-document member. */
+/* `<li> (display `list-item`)::marker`, `<input> (…) label`, or the node's own subject for a source member. */
 static const char *bt_subject(BoxTreeChild c, char *buf, size_t cap)
 {
     char inner[160];
 
-    if (!box_tree_child_is_pseudo(c)) return box_subject_node(c.node, buf, cap);
-    snprintf(buf, cap, "%s::%s", box_subject_node(c.node, inner, sizeof inner),
-             c.pseudo == LXB_CSS_SELECTOR_PSEUDO_ELEMENT_MARKER ? "marker" : "(pseudo-element)");
+    if (!box_tree_child_is_generated(c)) return box_subject_node(c.node, buf, cap);
+    snprintf(buf, cap, "%s%s", box_subject_node(c.node, inner, sizeof inner),
+             box_tree_child_is_marker(c) ? "::marker" : " label");
     return buf;
 }
 
@@ -121,14 +118,24 @@ static lxb_dom_node_t *bt_resolve_back(lxb_dom_element_t *box, lxb_dom_node_t *n
 /* The member a list item's sequence opens with when it has a marker box (css-lists-3 §3.1). */
 static BoxTreeChild bt_marker_of(lxb_dom_element_t *box)
 {
-    BoxTreeChild c = { lxb_dom_interface_node(box), LXB_CSS_SELECTOR_PSEUDO_ELEMENT_MARKER };
+    BoxTreeChild c = { lxb_dom_interface_node(box), BOX_TREE_MARKER };
 
     return c;
 }
 
-/* The first source-document member of `box`'s sequence, which follows the marker where there is one. */
-static BoxTreeChild bt_first_source_member(lxb_dom_element_t *box)
+static BoxTreeChild bt_label_of(lxb_dom_element_t *box)
 {
+    BoxTreeChild c = { lxb_dom_interface_node(box), BOX_TREE_LABEL };
+
+    return c;
+}
+
+/* What follows the marker, or opens a sequence with none: an input button's label, which is its whole content
+   (HTML §15.5.12: "its contents are expected to be the text of the element's value attribute"), or the first
+   source-document member. */
+static BoxTreeChild bt_first_content_member(lxb_dom_element_t *box)
+{
+    if (button_label_generated(box)) return bt_label_of(box);
     return box_tree_child_of_node(bt_resolve(box, lxb_dom_interface_node(box)->first_child));
 }
 
@@ -140,7 +147,7 @@ static bool bt_in_sequence(lxb_dom_element_t *box, BoxTreeChild n)
     return box_tree_parent(n) == box;
 }
 
-/* REFUSES A STEP FROM A NON-MEMBER — a node with a box-generating element between it and `box`, or a pseudo
+/* REFUSES A STEP FROM A NON-MEMBER — a node with a box-generating element between it and `box`, or a generated
    member this sequence did not yield. Asked at the entry rather than on the ascent's path, which returns at
    the first node that has a sibling and would pass for exactly the half-converted walk this exists to catch.
    The guard sits in the body so the call is declared at both settings: a release DCHECK type-checks its
@@ -150,12 +157,14 @@ static void bt_require_in_sequence(lxb_dom_element_t *box, BoxTreeChild child)
 #if APICLIENT_DEV
     char nbuf[200], bbuf[160];
 
-    if (box_tree_child_is_pseudo(child)) {
-        DCHECKF(child.pseudo == LXB_CSS_SELECTOR_PSEUDO_ELEMENT_MARKER && child.node == lxb_dom_interface_node(box)
-                    && list_marker_box_generated(box),
-                "%s, stepped as a child of %s: a pseudo-element member this sequence does not yield. It yields "
-                "one pseudo member, css-lists-3 §3.1's ::marker, as the head of the sequence of the list item "
-                "it originates from and only where `list_marker_box_generated` answers TRUE",
+    if (box_tree_child_is_generated(child)) {
+        DCHECKF(child.node == lxb_dom_interface_node(box) &&
+                    (box_tree_child_is_marker(child) ? list_marker_box_generated(box)
+                                                     : button_label_generated(box)),
+                "%s, stepped as a child of %s: a generated member this sequence does not yield. It yields "
+                "css-lists-3 §3.1's ::marker at the head of a list item's sequence where "
+                "`list_marker_box_generated` answers TRUE, and HTML §15.5.12's label as an input button's "
+                "content where `button_label_generated` does",
                 bt_subject(child, nbuf, sizeof nbuf), box_subject(box, bbuf, sizeof bbuf));
         return;
     }
@@ -196,11 +205,10 @@ lxb_dom_node_t *box_tree_child_node_at(BoxTreeChild c, const char *file, int lin
 {
     char nbuf[200];
 
-    DCHECKF(!box_tree_child_is_pseudo(c),
-            "%s:%d met %s: a css-pseudo-4 §4 \"Tree-Abiding Pseudo-elements\" member of core/layout/box_tree.h's "
-            "sequence reached a walk that reads it as a source-document node. The walk at that site has no arm "
-            "for a pseudo-element box — BUILD that arm (core/layout/block_flow.h's `block_flow_child_kind` "
-            "classifies css-lists-3 §3.1's ::marker)",
+    DCHECKF(!box_tree_child_is_generated(c),
+            "%s:%d met %s: a generated member of core/layout/box_tree.h's sequence (css-lists-3 §3.1's ::marker "
+            "or HTML §15.5.12's label) reached a walk that reads it as a source-document node. BUILD that walk's "
+            "arm for it (core/layout/block_flow.h's `block_flow_child_kind` classifies both)",
             file, line, bt_subject(c, nbuf, sizeof nbuf));
     (void) file;
     (void) line;
@@ -213,11 +221,11 @@ lxb_dom_element_t *box_tree_parent(BoxTreeChild c)
     lxb_dom_node_t *p;
 
     DCHECK(c.node != NULL, "css-display-3 §2.5's box parent was asked of no node");
-    /* A pseudo-element's box is a child of its originating element's box: css-lists-3 §3.1 generates the marker
-       "as the list item’s first child". */
-    if (box_tree_child_is_pseudo(c)) {
+    /* A generated member's box is a child of its originating element's box: css-lists-3 §3.1 generates the marker
+       "as the list item’s first child", and HTML §15.5.12's label is the element's contents. */
+    if (box_tree_child_is_generated(c)) {
         DCHECK(c.node->type == LXB_DOM_NODE_TYPE_ELEMENT,
-               "a pseudo-element member's originating node is not an element — css-pseudo-4 §1 "
+               "a generated member's originating node is not an element — css-pseudo-4 §1 "
                "\"Introduction\" associates each pseudo-element with an originating ELEMENT");
         return lxb_dom_interface_element(c.node);
     }
@@ -242,7 +250,7 @@ BoxTreeChild box_tree_first_child(lxb_dom_element_t *box)
     /* css-lists-3 §3.1 "The ::marker Pseudo-Element": the marker box is "the list item’s first child", where
        css-lists-3 §3.2 "Generating Marker Contents" generates one at all. */
     if (list_marker_box_generated(box)) return bt_marker_of(box);
-    first = bt_first_source_member(box);
+    first = bt_first_content_member(box);
     bt_require_answer_is_in_sequence(box, first);
     return first;
 }
@@ -252,8 +260,13 @@ BoxTreeChild box_tree_next_sibling(lxb_dom_element_t *box, BoxTreeChild child)
     DCHECK(box != NULL && child.node != NULL,
            "css-display-3 §2.5's spliced child sequence was stepped with no box, or from no node");
     bt_require_in_sequence(box, child);
-    /* The marker heads the sequence, so the member after it is the first source-document member. */
-    if (box_tree_child_is_pseudo(child)) return bt_first_source_member(box);
+    /* The marker heads the sequence, so the member after it is the first content member; the label is an input
+       button's whole content, so nothing follows it. */
+    if (box_tree_child_is_marker(child)) return bt_first_content_member(box);
+    if (box_tree_child_is_label(child)) return box_tree_child_of_node(NULL);
+    DCHECK(!button_label_generated(box),
+           "an input button's sequence was stepped from a source-document member, which HTML §15.5.12 does not "
+           "make its contents — its one content member is its label");
     DCHECK(!bt_is_spliced(child.node),
            "css-display-3 §2.5's spliced child sequence was stepped FROM an element whose own computed "
            "`display` is `contents`. This sequence never yields one — §2.5 replaces it by its contents — so a "
@@ -268,7 +281,9 @@ BoxTreeChild box_tree_prev_sibling(lxb_dom_element_t *box, BoxTreeChild child)
     DCHECK(box != NULL && child.node != NULL,
            "css-display-3 §2.5's spliced child sequence was stepped backward with no box, or from no node");
     bt_require_in_sequence(box, child);
-    if (box_tree_child_is_pseudo(child)) return box_tree_child_of_node(NULL);
+    if (box_tree_child_is_marker(child)) return box_tree_child_of_node(NULL);
+    if (box_tree_child_is_label(child))
+        return list_marker_box_generated(box) ? bt_marker_of(box) : box_tree_child_of_node(NULL);
     DCHECK(!bt_is_spliced(child.node),
            "css-display-3 §2.5's spliced child sequence was stepped BACKWARD from an element whose own "
            "computed `display` is `contents`. This sequence never yields one — §2.5 replaces it by its "

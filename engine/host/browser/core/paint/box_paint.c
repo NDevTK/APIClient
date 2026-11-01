@@ -862,7 +862,7 @@ static bool bp_step_7_2_1(BpState *st, BpRun *r, lxb_dom_element_t *parent, BoxT
            leaves to the UA ("CSS does not specify the precise location of the marker box or its position in
            the painting order"). Next diff: a paint offer for the marker box over §3.2's marker string, once
            css-counter-styles-3 generates it. Absence shows as list items painting no bullet or number. */
-        if (box_tree_child_is_pseudo(member)) {
+        if (box_tree_child_is_marker(member)) {
             DCHECK(block_flow_child_kind(parent, member) == BLOCK_FLOW_CHILD_OUTSIDE_MARKER,
                    "a pseudo-element member of a list item's inline formatting context was classified as "
                    "something other than css-lists-3 §3.5's outside marker, which is the one arm "
@@ -870,7 +870,8 @@ static bool bp_step_7_2_1(BpState *st, BpRun *r, lxb_dom_element_t *parent, BoxT
             continue;
         }
         child = member.node;
-        if (child->type == LXB_DOM_NODE_TYPE_TEXT) {
+        /* A text node and HTML §15.5.12's label are both runs of text whose box is `parent`. */
+        if (box_tree_child_is_label(member) || child->type == LXB_DOM_NODE_TYPE_TEXT) {
             while (r->cursor < r->n && r->g[r->cursor].style == parent) {
                 if (!bp_glyph(st, &r->g[r->cursor], r->origin_x, r->origin_y)) return false;
                 r->cursor++;

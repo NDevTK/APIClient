@@ -15,6 +15,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/containment.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/button_label.h"
 #include "core/layout/flex_container_baseline.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_intrinsic_size.h"
@@ -473,18 +474,11 @@ static bool bf_min_height_is_zero(lxb_dom_element_t *el)
        which css-text-3 §5.5 "Line Breaking Details" makes a FORCED LINE BREAK. Counting it as collapsible
        removed the box silently: the run was classified as generating none, so neither the line box walk nor the
        intrinsic size walk was ever handed the character that would have crashed for it. */
-bool block_flow_text_is_all_document_white_space(const lxb_dom_node_t *n)
+/* The character scan over `len` bytes at `d`, shared by a text node and HTML §15.5.12's label. */
+static bool bf_chars_all_document_white_space(const lxb_char_t *d, size_t len)
 {
-    const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
-    const lxb_char_t *d;
-    size_t len, i;
+    size_t i;
 
-    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT,
-           "css-text-3 §4's character question was asked about something that is not a TEXT node — the answer "
-           "is a scan of character data, and the cast below reads a node's data pointer through a struct only "
-           "a CharacterData node has");
-    d = cd->data.data;
-    len = cd->data.length;
     if (d == NULL) return true;
     for (i = 0; i < len; i++) {
         char c = (char)d[i];
@@ -492,6 +486,17 @@ bool block_flow_text_is_all_document_white_space(const lxb_dom_node_t *n)
         if (c != ' ' && c != '\t' && c != '\n' && c != '\r') return false;
     }
     return true;
+}
+
+bool block_flow_text_is_all_document_white_space(const lxb_dom_node_t *n)
+{
+    const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
+
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT,
+           "css-text-3 §4's character question was asked about something that is not a TEXT node — the answer "
+           "is a scan of character data, and the cast below reads a node's data pointer through a struct only "
+           "a CharacterData node has");
+    return bf_chars_all_document_white_space(cd->data.data, cd->data.length);
 }
 
 /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes": "White space content that would subsequently be collapsed away
@@ -520,11 +525,45 @@ bool block_flow_text_is_all_document_white_space(const lxb_dom_node_t *n)
    "Box Generation: the none and contents keywords"'s Note: the splice moves a node into another box's child
    sequence and moves no inheritance with it, so the container a walk is enumerating and the element this run
    inherits from are two different elements the moment a `display: contents` ancestor stands between them. */
-bool block_flow_text_child_generates_box(const lxb_dom_node_t *n)
+/* §9.2.2.1 over characters whose inline box is `style`'s: the text node's DOM parent, or the input button a
+   label is the contents of. */
+static bool bf_chars_generate_box(lxb_dom_element_t *style, const lxb_char_t *d, size_t len)
 {
-    lxb_dom_element_t *style;
     char *ws;
     bool collapses;
+
+    /* A run that is not entirely white space has content §9.2.2.1's sentence says nothing about collapsing
+       away, so it generates a box whatever `white-space` says. */
+    if (!bf_chars_all_document_white_space(d, len)) return true;
+    ws = bf_computed(style, "white-space");
+    collapses = strcmp(ws, "normal") == 0 || strcmp(ws, "nowrap") == 0;
+    /* `pre-line` collapses spaces and tabs and preserves segment breaks (css-text-3 §4.1.3 "Segment Break
+       Transformation Rules"), so a run of only spaces and tabs collapses away and one holding a line feed is a
+       forced break with a line box. */
+    if (strcmp(ws, "pre-line") == 0) collapses = d == NULL || memchr(d, '\n', len) == NULL;
+    free(ws);
+    /* THE COLLAPSED ARM IS §9.2.2.1's SENTENCE AND NOT A SHORTCUT PAST ONE, and it is exact only because of
+       what §16.6 makes `normal` and `nowrap` do: a collapsible run between two BLOCK-LEVEL boxes is removed
+       entirely, so there is no anonymous inline box and nothing to place. Inside an INLINE formatting context
+       the same run may survive as a single space, and core/layout/line_box.c is where that difference is
+       decided — it is a fact about the whole formatting context (css-text-3 §4.1.2 "Phase II: Trimming and
+       Positioning" removes a collapsible sequence only at the beginning or the end of a LINE), which is not a
+       question a per-node predicate can answer and must not pretend to. */
+    return !collapses;
+}
+
+bool block_flow_label_generates_box(lxb_dom_element_t *el)
+{
+    const lxb_char_t *d;
+    size_t len = 0;
+
+    d = button_label_text(el, &len);
+    return bf_chars_generate_box(el, d, len);
+}
+
+bool block_flow_text_child_generates_box(const lxb_dom_node_t *n)
+{
+    const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
 
     DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT,
            "§9.2.2.1's white-space question was asked about something that is not a TEXT node — the rule is "
@@ -538,30 +577,7 @@ bool block_flow_text_child_generates_box(const lxb_dom_node_t *n)
            "property inheritance, are not affected\" — so the element this run inherits from is its own DOM "
            "parent and there is no other answer to fall back to. A text node whose parent is a document or a "
            "fragment is not a child any walk over a block container's content reaches");
-
-    /* A run that is not entirely white space has content §9.2.2.1's sentence says nothing about collapsing
-       away, so it generates a box whatever `white-space` says. */
-    if (!block_flow_text_is_all_document_white_space(n)) return true;
-    style = lxb_dom_interface_element(n->parent);
-    ws = bf_computed(style, "white-space");
-    collapses = strcmp(ws, "normal") == 0 || strcmp(ws, "nowrap") == 0;
-    /* `pre-line` collapses spaces and tabs and preserves segment breaks (css-text-3 §4.1.3 "Segment Break
-       Transformation Rules"), so a run of only spaces and tabs collapses away and one holding a line feed is a
-       forced break with a line box. */
-    if (strcmp(ws, "pre-line") == 0) {
-        const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
-
-        collapses = cd->data.data == NULL || memchr(cd->data.data, '\n', cd->data.length) == NULL;
-    }
-    free(ws);
-    /* THE COLLAPSED ARM IS §9.2.2.1's SENTENCE AND NOT A SHORTCUT PAST ONE, and it is exact only because of
-       what §16.6 makes `normal` and `nowrap` do: a collapsible run between two BLOCK-LEVEL boxes is removed
-       entirely, so there is no anonymous inline box and nothing to place. Inside an INLINE formatting context
-       the same run may survive as a single space, and core/layout/line_box.c is where that difference is
-       decided — it is a fact about the whole formatting context (css-text-3 §4.1.2 "Phase II: Trimming and
-       Positioning" removes a collapsible sequence only at the beginning or the end of a LINE), which is not a
-       question a per-node predicate can answer and must not pretend to. */
-    return !collapses;
+    return bf_chars_generate_box(lxb_dom_interface_element(n->parent), cd->data.data, cd->data.length);
 }
 
 /* CSS 2.2 §9.2.1 "Block-level elements and block boxes" over css-display-3 §2's pair: a block-level box whose
@@ -703,7 +719,7 @@ static BlockFlowChildKind bf_marker_child(lxb_dom_element_t *parent, BoxTreeChil
 {
     char pbuf[160];
 
-    DCHECK(c.pseudo == LXB_CSS_SELECTOR_PSEUDO_ELEMENT_MARKER,
+    DCHECK(box_tree_child_is_marker(c),
            "CSS 2 §9.2's box generation was asked about a pseudo-element member other than ::marker, which is "
            "the one core/layout/box_tree.h yields — css-pseudo-4 §4.1's ::before and ::after need a computed "
            "`content`, and that property does not parse here");
@@ -746,7 +762,11 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, BoxTreeChild
            "`n->parent` FOR THE ARGUMENT IS EXACTLY WHAT THIS NOW CATCHES — a `contents` element is not a box "
            "and cannot be the `parent` any classification is stated against. §9.2.2.1's collapsing used to be "
            "named here as a third answer stated over `parent`'s child list and is no longer one of them");
-    if (box_tree_child_is_pseudo(c)) return bf_marker_child(parent, c);
+    if (box_tree_child_is_marker(c)) return bf_marker_child(parent, c);
+    /* HTML §15.5.12's label is a text sequence, so it is §9.2.2.1's anonymous inline box under the same
+       white-space rule as a text node's. */
+    if (box_tree_child_is_label(c))
+        return block_flow_label_generates_box(parent) ? BLOCK_FLOW_CHILD_INLINE : BLOCK_FLOW_CHILD_NO_BOX;
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_ELEMENT:
         return bf_element_child(lxb_dom_interface_element(n));
@@ -854,7 +874,8 @@ bool block_flow_child_breaks_inline_box(lxb_dom_element_t *parent, BoxTreeChild 
            "section's sentence is about an INLINE BOX being broken around a block-level box inside it, so a "
            "child with no such box is not a subject of it at all — and a caller that asked here without "
            "classifying first would be reading a `display` off a node §9.2 generates nothing for");
-    /* An INLINE answer is a source-document node: the one pseudo member is classified as an outside marker. */
+    /* A label is a text sequence, which has no children to break around; the marker is never INLINE. */
+    if (box_tree_child_is_label(c)) return false;
     n = box_tree_child_node(c);
     if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     el = lxb_dom_interface_element(n);

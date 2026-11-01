@@ -157,6 +157,10 @@ bool block_flow_display_is_block_container(CssDisplay display);
    at the walks core/layout/box_tree.h is still waiting for rather than a sentence each must remember. */
 bool block_flow_text_child_generates_box(const lxb_dom_node_t *text);
 
+/* The same rule over HTML §15.5.12's label of the input button `el` (core/layout/button_label.h), whose
+   characters are `el`'s contents and whose `white-space` is `el`'s own. */
+bool block_flow_label_generates_box(lxb_dom_element_t *el);
+
 /* THE CHARACTER HALF OF THE RULE ABOVE, ON ITS OWN: is every character of this text node one css-text-3 §4
    "White Space Processing Rules" gives to the `white-space` property — a space, a tab, a line feed or a
    carriage return — and therefore NOT U+000C FORM FEED, which that section makes a visible glyph and [UAX14]

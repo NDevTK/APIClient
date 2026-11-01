@@ -13,6 +13,7 @@
 #include "core/layout/containment.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_tree.h"
+#include "core/layout/button_label.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/grid_track.h"
 #include "core/layout/flex_item.h"
@@ -262,7 +263,7 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
    children are next, or "not yet" for an atomic inline whose own sizes are not ready, with nothing added. Both
    classify the same inline formatting context and must agree on which children are in it; a block-level child
    is unreachable from either, because core/layout/block_flow.h's run ends before one at any depth. */
-typedef enum { IS_CHILD_PLACED = 0, IS_CHILD_TEXT, IS_CHILD_INLINE_BOX, IS_CHILD_NOT_YET } IsChildNext;
+typedef enum { IS_CHILD_PLACED = 0, IS_CHILD_TEXT, IS_CHILD_LABEL, IS_CHILD_INLINE_BOX, IS_CHILD_NOT_YET } IsChildNext;
 
 /* CSS 2.2 §9.5's floats of one run as its intrinsic sizes see them. Between two forced breaks, the floats at the
    top of the line sit beside its content and add to its max-content size, left and right; a float that clears a
@@ -289,13 +290,16 @@ static IsChildNext is_child(TextRunMeasure *m, IsFloats *fl, lxb_dom_element_t *
     /* css-lists-3 §3.5's outside marker box "is placed outside the principal block box", so it contributes
        nothing to the content's css-sizing-3 §5.1 "Intrinsic Sizes", as core/layout/line_box.c's fill skips
        it. */
-    if (box_tree_child_is_pseudo(c)) {
+    if (box_tree_child_is_marker(c)) {
         DCHECK(block_flow_child_kind(parent, c) == BLOCK_FLOW_CHILD_OUTSIDE_MARKER,
                "a pseudo-element member of a list item's inline formatting context was classified as something "
                "other than css-lists-3 §3.5's outside marker, which is the one arm core/layout/block_flow.h "
                "answers for it");
         return IS_CHILD_PLACED;
     }
+    /* HTML §15.5.12's label, as core/layout/line_box.c's fill collects it. */
+    if (box_tree_child_is_label(c))
+        return block_flow_label_generates_box(parent) ? IS_CHILD_LABEL : IS_CHILD_PLACED;
     n = c.node;
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
@@ -730,6 +734,15 @@ static size_t is_collect_step(IsMeasure *k)
         text_run_measure_text_begin(m, parent, node, &k->text);
         k->in_text = !text_run_measure_text_done(&k->text);
         break;
+    case IS_CHILD_LABEL: {
+        size_t len = 0;
+        const lxb_char_t *d = button_label_text(parent, &len);
+
+        inline_run_walk_take(&k->walk, NULL);
+        text_run_measure_chars_begin(m, parent, d, len, &k->text);
+        k->in_text = !text_run_measure_text_done(&k->text);
+        break;
+    }
     case IS_CHILD_INLINE_BOX:
         inline_run_walk_take(&k->walk, lxb_dom_interface_element(node));
         break;

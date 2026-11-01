@@ -24,7 +24,7 @@ lxb_dom_element_t *grid_item_of(lxb_dom_element_t *container, BoxTreeChild c)
        container becomes a grid item, and each child text sequence is wrapped in an anonymous block container
        grid item", a white-space-only sequence not rendered — and §9 takes an absolutely positioned child out of
        the grid's layout, as §4.1 does a flex container's, so §4's classification answers for a grid. */
-    if (box_tree_child_is_pseudo(c))
+    if (box_tree_child_is_generated(c))
         DFAILF("%s has a pseudo-element child box, which css-grid-1 §6 \"Grid Items\" makes a grid item. "
                "BUILD the pseudo-element as an item of the track sizing",
                box_subject(container, buf, sizeof buf));

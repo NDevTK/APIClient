@@ -2500,6 +2500,19 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
        `<input>` is the single most measured element on the web and `input.clientWidth` was zero for every one
        of them. */
     { "input", "display", "inline-block" }, { "button", "display", "inline-block" },
+    /* HTML §15.3.10 Form controls' type-selector declarations of the properties this engine computes:
+       `input, button { line-height: initial }`, `input, select, textarea { text-align: initial }` (both
+       longhands of css-text-4 §7.1's shorthand), and the `select` and `button` members of its `box-sizing:
+       border-box` and `text-align: center` rules. Its `input` rules with attribute selectors are
+       `cssd_ua_form_control`'s. The rules over `letter-spacing`, `word-spacing`, `text-transform`,
+       `text-indent`, `text-shadow`, `appearance`, `overflow-clip-margin` and `field-sizing` are not here:
+       core/css/css_property_id.h computes none of the eight. */
+    { "input", "line-height", "initial" },     { "button", "line-height", "initial" },
+    { "input", "text-align-all", "initial" },  { "input", "text-align-last", "initial" },
+    { "select", "text-align-all", "initial" }, { "select", "text-align-last", "initial" },
+    { "textarea", "text-align-all", "initial" }, { "textarea", "text-align-last", "initial" },
+    { "button", "text-align-all", "center" },  { "button", "text-align-last", "auto" },
+    { "select", "box-sizing", "border-box" },  { "button", "box-sizing", "border-box" },
     { "fieldset", "display", "block" },
     { "details", "display", "block" }, { "summary", "display", "block" },
     { "marquee", "display", "inline-block" },
@@ -2690,6 +2703,47 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
     return NULL;
 }
 
+/* HTML §15.3.10 Form controls' `input` rules whose selectors read the `type` attribute (Selectors 4 §6.3's `i`
+   flag), each outranking the type rows by css-cascade-5 §6.1's Specificity:
+     input:not([type=range i], [type=checkbox i], [type=radio i]) { overflow: clip !important; }
+     input:is([type=reset i], [type=button i], [type=submit i]) { text-align: center; }
+     input:is([type=radio i], [type=checkbox i], [type=reset i], [type=button i], [type=submit i],
+       [type=color i], [type=search i]) { box-sizing: border-box; }
+   and, in quirks mode, `input:not([type=image i]), textarea { box-sizing: border-box; }`. Answers how many of
+   the at most five declarations it wrote to `out`. */
+typedef struct { const char *prop; const char *value; bool important; } CssdUaDecl;
+
+static unsigned cssd_ua_form_control(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen,
+                                     CssdUaDecl out[5])
+{
+    static const char *const SIZED[] = { "radio", "checkbox", "reset", "button", "submit", "color", "search" };
+    size_t vlen = 0;
+    const lxb_char_t *v;
+    unsigned n = 0, i;
+    bool sized = false, quirks;
+
+    quirks = lxb_dom_interface_node(el)->owner_document->compat_mode == LXB_DOM_DOCUMENT_CMODE_QUIRKS;
+    if (taglen == 8 && memcmp(tag, "textarea", 8) == 0 && quirks)
+        out[n++] = (CssdUaDecl){ "box-sizing", "border-box", false };
+    if (taglen != 5 || memcmp(tag, "input", 5) != 0) return n;
+    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &vlen);
+    if (!cssd_attr_is_ascii_ci(v, vlen, "range") && !cssd_attr_is_ascii_ci(v, vlen, "checkbox") &&
+        !cssd_attr_is_ascii_ci(v, vlen, "radio")) {
+        out[n++] = (CssdUaDecl){ "overflow-x", "clip", true };
+        out[n++] = (CssdUaDecl){ "overflow-y", "clip", true };
+    }
+    if (cssd_attr_is_ascii_ci(v, vlen, "reset") || cssd_attr_is_ascii_ci(v, vlen, "button") ||
+        cssd_attr_is_ascii_ci(v, vlen, "submit")) {
+        out[n++] = (CssdUaDecl){ "text-align-all", "center", false };
+        out[n++] = (CssdUaDecl){ "text-align-last", "auto", false };
+    }
+    for (i = 0; i < sizeof SIZED / sizeof SIZED[0]; i++) sized = sized || cssd_attr_is_ascii_ci(v, vlen, SIZED[i]);
+    if (quirks) sized = sized || !cssd_attr_is_ascii_ci(v, vlen, "image");
+    if (sized) out[n++] = (CssdUaDecl){ "box-sizing", "border-box", false };
+    DCHECK(n <= 5, "HTML §15.3.10's attribute rules wrote more declarations than they state");
+    return n;
+}
+
 /* HTML §4.3.11.1 Heading levels & offsets' COMPUTED HEADING LEVEL, or 0 for an element that has none.
  * IT IS ONE FUNCTION BECAUSE THE SECTION IS ONE ALGORITHM AND §15.3.6 STATES TWO PROPERTIES OVER IT — the
  * font sizes and the block margins are two row sets keyed by the SAME level, and a second copy of this walk
@@ -2876,10 +2930,12 @@ static void cssd_ua_collect(lxb_dom_element_t *el, CssCascadedStyle *s, uint32_t
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &n);
     const char *display, *font_size, *margin_block;
     bool display_important = false, table_display = false;
+    CssdUaDecl form[5];
     uint32_t k = 0;
-    unsigned i;
+    unsigned i, j, nform;
 
     if (!tag) return;
+    nform = cssd_ua_form_control(el, tag, n, form);
     display = cssd_ua_display_conditional(el, tag, n, &display_important);
     DCHECK(display != NULL || !display_important,
            "an attribute-conditional UA rule reported IMPORTANCE and no value — the flag is written only beside "
@@ -2896,6 +2952,8 @@ static void cssd_ua_collect(lxb_dom_element_t *el, CssCascadedStyle *s, uint32_t
         if (font_size != NULL && strcmp(prop, "font-size") == 0) continue;
         if (margin_block != NULL && (strcmp(prop, "margin-block-start") == 0 || strcmp(prop, "margin-block-end") == 0))
             continue;
+        for (j = 0; j < nform && strcmp(prop, form[j].prop) != 0; j++) {}
+        if (j < nform) continue;
         table_display = table_display || is_display;
         css_cascaded_style_add(s, prop, CSS_ORIGIN_UA, is_display && strcmp(UA_DEFAULT[i].tag, "noscript") == 0,
                                false, NULL, 0, seq, k++, UA_DEFAULT[i].value);
@@ -2912,6 +2970,9 @@ static void cssd_ua_collect(lxb_dom_element_t *el, CssCascadedStyle *s, uint32_t
         css_cascaded_style_add(s, "margin-block-end", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++,
                                margin_block);
     }
+    for (j = 0; j < nform; j++)
+        css_cascaded_style_add(s, form[j].prop, CSS_ORIGIN_UA, form[j].important, false, NULL, 0, seq, k++,
+                               form[j].value);
 }
 
 /* THE TABLE'S OWN INVARIANT, asserted once per instance beside the shorthand table's. ONE `{tag, prop}` PAIR

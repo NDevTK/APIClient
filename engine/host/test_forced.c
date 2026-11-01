@@ -1186,6 +1186,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/linkimage.h"
 #include "fixture/focusbox.h"
 #include "fixture/altbutton.h"
+#include "fixture/inputbutton.h"
 #include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
@@ -1777,6 +1778,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "linkimage", HTML_LINKIMAGE },
     { "focusbox", HTML_FOCUSBOX },
     { "altbutton", HTML_ALTBUTTON },
+    { "inputbutton", HTML_INPUTBUTTON },
     { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
@@ -14487,6 +14489,38 @@ TF_UNIT void probes_altbutton(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `inputbutton` document (fixture/inputbutton.h). */
+TF_UNIT void probes_inputbutton(const char *js, Probe *tab, int *n) {
+    const char *lb_why = NULL, *ua_why = NULL; int lb_tt = 1, ua_tt = 1;
+    int reached = !!strstr(js, "\"/api/inputbutton\"");
+    /* HTML §15.5.12: the button's contents are its label, laid out in its own box. */
+    fold_row(&lb_tt, &lb_why, reached,
+             "NOT REACHED: there is no /api/inputbutton record, so the document aborted before its fetch");
+    fold_row(&lb_tt, &lb_why, param_value_is(js, "/api/inputbutton", "b1", "62x24"),
+             "HTML §15.5.12: `value=\"Send it\"` is not its label's 49.8px line plus 12px of padding and border");
+    fold_row(&lb_tt, &lb_why, param_value_is(js, "/api/inputbutton", "b2", "62x24") &&
+                              param_value_is(js, "/api/inputbutton", "b3", "54x24"),
+             "HTML §15.5.12: a Submit or Reset Button with no `value` is not its derived label's line");
+    fold_row(&lb_tt, &lb_why, param_value_is(js, "/api/inputbutton", "b4", "33x24"),
+             "HTML §15.5.12: a Button's `value` is not its label");
+    fold_row(&lb_tt, &lb_why, param_value_is(js, "/api/inputbutton", "b5", "12x4"),
+             "HTML §15.5.12: a Button with no `value` has no characters, so CSS 2.2 §9.4.2 gives it no line box");
+    /* HTML §15.3.10 Form controls' rules. */
+    fold_row(&ua_tt, &ua_why, reached,
+             "NOT REACHED: there is no /api/inputbutton record, so the document aborted before its fetch");
+    fold_row(&ua_tt, &ua_why, param_value_is(js, "/api/inputbutton", "b6", "100x24") &&
+                              param_value_is(js, "/api/inputbutton", "bs", "border-box") &&
+                              param_value_is(js, "/api/inputbutton", "tbs", "content-box"),
+             "HTML §15.3.10: a Submit Button is not `box-sizing: border-box`, or a Text input is");
+    fold_row(&ua_tt, &ua_why, param_value_is(js, "/api/inputbutton", "lh", "normal"),
+             "HTML §15.3.10: an input's `line-height` is not `initial`, so it inherited its body's 40px");
+    const Probe rows[] = {
+        { "input-button-label", lb_tt, "/api/inputbutton", SESS_EXPLORE, lb_why },
+        { "input-button-ua-sheet", ua_tt, "/api/inputbutton", SESS_EXPLORE, ua_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fragdialog` document. */
 TF_UNIT void probes_fragdialog(const char *js, Probe *tab, int *n) {
     /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
@@ -23246,6 +23280,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_linkimage(js, probes, &np);
     probes_focusbox(js, probes, &np);
     probes_altbutton(js, probes, &np);
+    probes_inputbutton(js, probes, &np);
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
