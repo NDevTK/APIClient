@@ -1476,6 +1476,36 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
     if (!base)
         goto done;
     ns_member_spell(base, name, s, &shape, &src);
+    /* A MEMBER THE PAGE'S OWN PROGRAM WROTE (quickjs's JS_RecordMemberWriteSeq: a [[Set]], not the literal).
+       Three facts decide it. A write in this flow's current unit is proof by run-to-completion: nothing can run
+       between it and this read, so the member reads as what the program wrote and no arm is minted. A write in
+       an earlier unit is not: a script the engine never observed or another window holding the record can
+       change it at a task boundary, so the arm stays and its source names that assumption. With no program
+       write the member is the served value, minted below. */
+    {
+        uint64_t wseq, now = flow_running_unit_seq();
+
+        if (JS_RecordMemberWriteSeq(ctx, holder, name, &wseq)) {
+            char *path = src, *label;
+            size_t n;
+
+            DCHECK(wseq <= now, "a published member's program write is latched in a unit after the read's");
+            if (wseq == now)
+                goto done;
+            n = strlen(path) + 128;
+            label = (char *)malloc(n);
+            CHECK(label != NULL, "absent: OOM naming a written member's assumption");
+            snprintf(label, n, "%s written by the page at unit %llu, assumed changed by unobserved code before "
+                     "unit %llu", path, (unsigned long long)wseq, (unsigned long long)now);
+            free(path);
+            src = label;
+            free(shape);
+            n = strlen(src) + 3;
+            shape = (char *)malloc(n);
+            CHECK(shape != NULL, "absent: OOM spelling a written member's provenance");
+            snprintf(shape, n, "{%s}", src);
+        }
+    }
     /* SERVED: this is the PRESENT arm, so the member is one a published record REALLY HOLDS and `value` is
        the bytes themselves. An inline script in the document this engine was served wrote them, so a parse
        of those bytes states this value — and it is minted unknown anyway, deliberately, so that a gate over

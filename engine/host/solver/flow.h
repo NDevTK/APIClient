@@ -570,6 +570,11 @@ typedef struct Flow {
        names the unknown a timer's deadline is raced against (event_loop_deadline_first). A fork carries it; a
        replay re-derives it. */
     uint32_t replies_taken;
+    /* The unit this timeline is in: a work-clock stamp (flow_work_seq_next) minted when a job or a task of the
+       ladder begins and kept across that unit's resumptions, so two equal readings are one run-to-completion
+       stretch with no await, yield or task boundary between them (quickjs.h's JSConcolicHooks.unit_seq). A fork
+       carries it: the arm continues the parent's unit. */
+    uint64_t unit_seq;
     /* This flow's own program rows (a lazily loaded chunk, a queued document script), or, while the row's kind
        is DYN_SCRIPT_SRC, the address of a script whose source has not arrived: one column, because it is one
        queue. The row is this flow's; the bytes are not. Source text is fixed once decoded, so every timeline
@@ -919,6 +924,8 @@ void flow_job_kinds(const Flow *f, int *task_out, int *micro_out);
    quickjs's JS_JobSiteHash over its callee. Answers 0 for an empty queue or a callee with no bytecode body. A
    read. */
 int  flow_job_next_site(const Flow *f, uint64_t *out);
+/* The running flow's unit (Flow.unit_seq), installed as JSConcolicHooks.unit_seq; 0 with no flow running. */
+uint64_t flow_running_unit_seq(void);
 /* Append to the queue of `ctx`'s agent, which must be one of the flow's, with `argv` dup'd into the record. `task`
    picks which of HTML §8.1.7 "Event loops"' two queues. `handle` is the runtime's name for the callback, so the
    host that took the job can find it again. */

@@ -373,6 +373,9 @@ typedef struct JSGCEdgeCensus {
 #define JS_FREE_DRAIN_DEPTH_MAX 1
 
 struct JSRuntime {
+    /* The private name a published record's program writes are latched under (js_record_write_note): one per
+       runtime, minted on the first write a host asks to be latched, released at JS_FreeRuntime. */
+    JSAtom record_write_key;
     /* HOST-REGISTERED STEP MACHINES. JS_CFUNC_STEP_DEF names its machine by an id; the built-in ids index a
        static table and a host component's id continues past STEPDEF_COUNT into this array. It is on the RUNTIME
        because a definition belongs to the engine instance that was told about it, and because the def POINTER
@@ -4838,6 +4841,10 @@ void JS_FreeRuntime(JSRuntime *rt)
     DCHECK(list_empty(&rt->parked_flows),
            "JS_FreeRuntime with a flow still parked — the host tore down without draining the pump's parked "
            "flows (JS_ResumeParkedFlow); that flow and everything it holds is dropped, not finished");
+    if (rt->record_write_key != JS_ATOM_NULL) {
+        JS_FreeAtomRT(rt, rt->record_write_key);
+        rt->record_write_key = JS_ATOM_NULL;
+    }
     JS_FreeValueRT(rt, rt->current_exception);
     for (i = 0; i < rt->ab_codec_n; i++)
         js_free_rt(rt, rt->ab_codec[i]);
@@ -14938,6 +14945,77 @@ bool JS_AtomIsIndexName(JSAtom atom)
    the thing whose extent the document's bytes wrote — and a scalar is not a record, so there is nothing here
    to ask about. The missing piece is a mark on that STORE, not a wider predicate here, and widening this one
    to reach it would have to catch every builtin on the global to do it. */
+/* THE PROGRAM'S OWN WRITES TO A PUBLISHED RECORD, LATCHED PER MEMBER. A [[Set]] by the page's code on a member of a
+   document record records the host's current unit (JSConcolicHooks.unit_seq) under a private name on the record,
+   so the latch is a property write the flow's delta captures like the member write it describes, and no
+   reflection of the page sees it. A literal's own definition is not a [[Set]] and latches nothing: the served
+   value is what the assumption is about. */
+static JSAtom js_record_write_key(JSContext *ctx)
+{
+    JSRuntime *rt = ctx->rt;
+
+    if (rt->record_write_key == JS_ATOM_NULL) {
+        JSAtom desc = JS_NewAtom(ctx, "recordWrites");
+        JSValue sym;
+
+        CHECK(desc != JS_ATOM_NULL, "OOM naming the published-record write latch");
+        sym = JS_NewSymbolFromAtom(ctx, desc, JS_ATOM_TYPE_PRIVATE);
+        JS_FreeAtom(ctx, desc);
+        CHECK(!JS_IsException(sym), "OOM minting the published-record write latch's private name");
+        rt->record_write_key = JS_ValueToAtom(ctx, sym);
+        JS_FreeValue(ctx, sym);
+    }
+    return rt->record_write_key;
+}
+
+static void js_record_write_note(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    JSAtom key;
+    JSValue latch;
+
+    if (likely(g_concolic.unit_seq == NULL) || JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT ||
+        !js_object_is_document_record(JS_VALUE_GET_OBJ(obj)) || !JS_AtomIsPublishedName(ctx->rt, prop))
+        return;
+    key = js_record_write_key(ctx);
+    latch = JS_GetProperty(ctx, obj, key);
+    CHECK(!JS_IsException(latch), "reading a published record's write latch failed");
+    if (!JS_IsObject(latch)) {
+        JS_FreeValue(ctx, latch);
+        latch = JS_NewObjectProto(ctx, JS_NULL);
+        CHECK(!JS_IsException(latch), "OOM allocating a published record's write latch");
+        CHECK(JS_DefinePropertyValue(ctx, obj, key, js_dup(latch), JS_PROP_WRITABLE) >= 0,
+              "attaching a published record's write latch failed");
+    }
+    CHECK(JS_DefinePropertyValue(ctx, latch, prop, JS_NewFloat64(ctx, (double)g_concolic.unit_seq()),
+                                 JS_PROP_C_W_E) >= 0,
+          "latching a published record member's program write failed");
+    JS_FreeValue(ctx, latch);
+}
+
+int JS_RecordMemberWriteSeq(JSContext *ctx, JSValueConst holder, JSAtom prop, uint64_t *seq)
+{
+    JSValue latch, v;
+    double d = 0;
+
+    DCHECK(seq != NULL, "a member's write latch was asked for with nowhere to put it");
+    if (ctx->rt->record_write_key == JS_ATOM_NULL || JS_VALUE_GET_TAG(holder) != JS_TAG_OBJECT)
+        return 0;
+    latch = JS_GetProperty(ctx, holder, ctx->rt->record_write_key);
+    if (!JS_IsObject(latch)) {
+        JS_FreeValue(ctx, latch);
+        return 0;
+    }
+    v = JS_GetProperty(ctx, latch, prop);
+    JS_FreeValue(ctx, latch);
+    if (!JS_IsNumber(v)) {
+        JS_FreeValue(ctx, v);
+        return 0;
+    }
+    JS_ToFloat64(ctx, &d, v);
+    *seq = (uint64_t)d;
+    return 1;
+}
+
 static bool js_present_ask(JSContext *ctx, JSObject *holder, JSAtom prop, JSValueConst held)
 {
     if (likely(g_concolic.present == NULL) || !js_object_is_document_record(holder))
@@ -17705,6 +17783,8 @@ static int JS_SetPropertyInternal2(JSContext *ctx, JSValueConst obj, JSAtom prop
     int ret;
 
     cow_capture(ctx, obj, prop);   /* forced-exec: record the baseline object's pre-write state for per-flow revert */
+    if (unlikely(g_concolic.unit_seq != NULL) && JS_VALUE_GET_PTR(obj) == JS_VALUE_GET_PTR(this_obj))
+        js_record_write_note(ctx, obj, prop);
 
     switch(JS_VALUE_GET_TAG(this_obj)) {
     case JS_TAG_NULL:
@@ -50056,6 +50136,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            is invisible to the per-flow delta and leaks across a context switch. */
                         cow_capture(ctx, obj, atom);
                         set_value(ctx, &pr->u.value, sp[-1]);
+                        /* After the store: the latch's first write adds a slot to `obj`, which moves `pr`. */
+                        if (unlikely(g_concolic.unit_seq != NULL)) js_record_write_note(ctx, obj, atom);
                     } else {
                         goto put_field_slow_path;
                     }

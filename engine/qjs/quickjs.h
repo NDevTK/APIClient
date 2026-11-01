@@ -2761,6 +2761,10 @@ typedef struct JSConcolicHooks {
        global object or a record already published under it; both are BORROWED. Installing this is what makes
        the engine mark records at all, so a host that wants neither half installs neither. */
     void (*publish)(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value);
+    /* THE UNIT THE RUNNING FLOW IS IN: a sequence the host mints when a job or task begins and keeps across the
+       unit's resumptions, so two equal readings are one run-to-completion stretch. Installing it is what makes the
+       engine latch a published record's program writes (JS_RecordMemberWriteSeq). */
+    uint64_t (*unit_seq)(void);
     /* THE COMPILER RESOLVED A FREE IDENTIFIER TO A GLOBAL REFERENCE — reported ONCE PER OCCURRENCE as
        resolve_scope_var rewrites it, which is the one instant at which this engine knows what a program NAMES
        independently of what any flow went on to RUN. Every other member of this table is asked from a live
@@ -3059,6 +3063,10 @@ JS_EXTERN void JS_SetConcolicHooks(const JSConcolicHooks *hooks);
    key rule, every object reachable through a global coerced to a callable unknown and step 1.b.vi threw
    `TypeError` — a whole document's worth of statements lost to a read that looked like an operator bug. */
 JS_EXTERN bool JS_AtomIsPublishedName(JSRuntime *rt, JSAtom atom);
+/* The unit (JSConcolicHooks.unit_seq) of the most recent program write ([[Set]] by the page's code, not a
+   literal's definition) to member `prop` of document record `holder`, in the running flow. Answers 0 when no
+   program write to it was latched. */
+JS_EXTERN int JS_RecordMemberWriteSeq(JSContext *ctx, JSValueConst holder, JSAtom prop, uint64_t *seq);
 
 /* …AND IS IT AN INDEX RATHER THAN A NAME? The two keys the answer above admits are not spelled the same way,
    and a provenance is the EXPRESSION THE RUN BUILT (§@H) — `__STATE__.users[0].role` is one a reader can

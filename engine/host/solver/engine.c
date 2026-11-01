@@ -5259,6 +5259,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     sib->imm_at = parent->imm_at; sib->imm_next = parent->imm_next;
     sib->spin_row = parent->spin_row;
     sib->replies_taken = parent->replies_taken;
+    sib->unit_seq = parent->unit_seq;
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
     /* Generator-state swaps built by clone_deep_flow for this fork, recorded on the sibling's delta so the shared
        generator object resolves to the sibling's own cloned execution state while it runs. */
@@ -8648,6 +8649,7 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
            "a job ran while this flow holds a parse parked part way — the parse is the task in progress (HTML §8.1.4.3 "
            "Creating scripts), and flow_stack_empty, which every job arm is guarded on, answers no while it is held");
     JSValue job = flow_job_take(ctx, f);   /* the pick IS the checkpoint rule — see flow.h */
+    f->unit_seq = flow_work_seq_next();    /* a job is its own unit: an await's continuation is the next job */
     g_jobs_run++;
     JSValue r = flow_job_run(ctx, job);    /* the reaction runs in this flow's timeline */
     /* A job that threw is a page error, as a script that threw is: a promise reaction, a queueMicrotask callback
@@ -9428,6 +9430,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
         /* The rung this pass takes, read before it performs anything (flow_next_unit_pass); the entry's answer is
            the one read above unless the agent choice moved. Every arm below is guarded by it. */
         if (pass > 0 || nu.arm == NEXT_AGENT) nu = flow_next_unit_pass(ctx, f, /*entry*/ 0, turn_task_done);
+        /* A rung that begins a task begins a unit (Flow.unit_seq); a resumption or a fork continues the one the
+           flow is in. A job mints its own at flow_run_one_job. */
+        if (pass == 0 && nu.arm != NEXT_RESUME_PARKED && nu.arm != NEXT_RESUME_PROGRAM && nu.arm != NEXT_RETIRE &&
+            nu.arm != NEXT_FORK_PEER_ANSWER && nu.arm != NEXT_LEAVE_STANDBY && nu.arm != NEXT_FORK_DECLINED &&
+            nu.arm != NEXT_FORK_REPLY_SUCCESS)
+            f->unit_seq = flow_work_seq_next();
         /* One arm per distinct answer, before anything else this flow could do: everything else consumes what the
            arm is made of. The arm clones the frame this flow is suspended in, and the first resume below takes the
            answer off the register and leaves that call site; the flow is switched in, so its delta, DOM head and

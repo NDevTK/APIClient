@@ -8718,6 +8718,9 @@ void concolic_install_source_overlay(void)
     /* The two ends of one channel, installed together: `.publish` marks the records a document injects and
        `.absent` is the only reader of those marks. */
     g_hooks.publish = absent_publish_hook;
+    /* …and the unit the running flow is in, which makes the engine latch a published record's program writes, so
+       absent_present_hook can tell a member the page itself just wrote from the served one. */
+    g_hooks.unit_seq = flow_running_unit_seq;
     JS_SetConcolicHooks(&g_hooks);
 }
 

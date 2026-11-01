@@ -3464,6 +3464,10 @@ int flow_task_precedes(const Flow *f, uint64_t row_seq) {
     return s < row_seq;
 }
 
+uint64_t flow_running_unit_seq(void) {
+    return g_running ? g_running->unit_seq : 0;
+}
+
 int flow_job_next_site(const Flow *f, uint64_t *out) {
     JSValueConst q = *job_queue_running(f);
     int n = job_queue_len(q), argc, id, i, named;

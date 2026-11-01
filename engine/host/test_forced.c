@@ -1186,6 +1186,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/xdmulti.h"
 #include "fixture/declines.h"
 #include "fixture/absentarm.h"
+#include "fixture/pagewrite.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
 #include "fixture/inlineflex.h"
@@ -1770,6 +1771,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "xdmulti", HTML_XDMULTI },
     { "declines", HTML_DECLINES },
     { "absentarm", HTML_ABSENTARM },
+    { "pagewrite", HTML_PAGEWRITE },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
     { "inlineflex", HTML_INLINEFLEX },
@@ -14424,6 +14426,39 @@ TF_UNIT void probes_declines(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `pagewrite` document: a published record's member the page itself wrote reads as that value in
+   the unit that wrote it, keeps a named assumed arm across a task boundary, and a served member it only reads
+   still forks (solver/absent.c's absent_present_hook). */
+TF_UNIT void probes_pagewrite(const char *js, Probe *tab, int *n) {
+    const char *same_why = NULL, *cross_why = NULL, *served_why = NULL;
+    int same_tt = 1, cross_tt = 1, served_tt = 1;
+
+    fold_row(&same_tt, &same_why, emitted_record_graded_has(js, "/api/pw-b3", "derived", "\"door\":\"fetch\""),
+             "NOT REACHED: no derived /api/pw-b3, so the script writing and reading `s.b` did not finish");
+    fold_row(&same_tt, &same_why, !strstr(js, "\"/api/pw-a3\""),
+             "a /api/pw-a3 record exists: `s.b` was read as an assumed unknown in the unit that wrote it, where "
+             "run-to-completion leaves no code that could have changed it");
+    fold_row(&cross_tt, &cross_why,
+             emitted_record_graded_has(js, "/api/pw-b1", "derived", "\"door\":\"fetch\"") &&
+                 emitted_record_graded_has(js, "/api/pw-b2", "derived", "\"door\":\"fetch\""),
+             "NOT REACHED: no derived /api/pw-b1 or /api/pw-b2, so the observed world did not pass a listener's "
+             "guard over a member another listener wrote");
+    fold_row(&cross_tt, &cross_why,
+             emitted_record_graded_has(js, "/api/pw-a1", "forced", "\"door\":\"fetch\"") &&
+                 emitted_record_graded_has(js, "/api/pw-a2", "forced", "\"door\":\"fetch\"") &&
+                 !!strstr(js, "written by the page at unit"),
+             "a member written in an earlier task lost its assumed arm, or the arm's source does not name the "
+             "write it assumes unobserved code changed");
+    fold_row(&served_tt, &served_why, emitted_record_graded_has(js, "/api/pw-flagadmin", "forced", "\"door\":\"fetch\""),
+             "the served `__PWFLAGS.admin`, read with no program write, did not fork its truthy arm");
+    const Probe rows[] = {
+        { "pagewrite-same-unit", same_tt, "__PWFLAGS", SESS_EXPLORE, same_why },
+        { "pagewrite-cross-task", cross_tt, "__PWFLAGS", SESS_EXPLORE, cross_why },
+        { "pagewrite-served", served_tt, "__PWFLAGS", SESS_EXPLORE, served_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `absentarm` document. */
 TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     /* The branch over `window.__tfAbsentGate`: this session reads undefined there, so the falsy arm is the one
@@ -22949,6 +22984,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
+    probes_pagewrite(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
     probes_inlineflex(js, probes, &np);
