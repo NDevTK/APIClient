@@ -27,8 +27,10 @@ typedef struct {
 bool flex_baseline_participates(lxb_dom_element_t *container, const FlexLineMember *m);
 
 /* Step 8.1's two maxima over every participating member of `line`, whose sum the step adds to the line's cross
-   size. FALSE when no member of the line participates. */
-bool flex_baseline_line_extent(lxb_dom_element_t *container, size_t line, FlexBaselineExtent *out);
+   size. FALSE when no member of the line participates. `m` and `n` are the container's members as the caller
+   read them (core/layout/flex_line.h), so the caller's ask or drive is what serves them. */
+bool flex_baseline_line_extent(lxb_dom_element_t *container, const FlexLineMember *m, size_t n, size_t line,
+                               FlexBaselineExtent *out);
 
 /* css-align-3 §9.3 for the baseline-aligned element `item` on a line `line_size` long in the cross axis: the
    distance from the line's cross-start edge to the item's cross-start margin edge, its group aligned by baseline
@@ -36,7 +38,8 @@ bool flex_baseline_line_extent(lxb_dom_element_t *container, size_t line, FlexBa
    self-end` for `last baseline`). Each member's baseline is its first or last baseline set as the preference
    names, from its first or last in-flow line box, or synthesized from its border box where it has none or has
    none in the cross axis (§8.3: "If the item does not have a baseline in the necessary axis, then one is
-   synthesized from the flex item's border box"). */
-CssPx flex_baseline_margin_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx line_size);
+   synthesized from the flex item's border box"). `m` and `n` are the container's members, as above. */
+CssPx flex_baseline_margin_offset(lxb_dom_element_t *container, const FlexLineMember *m, size_t n,
+                                  lxb_dom_element_t *item, CssPx line_size);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_BASELINE_H */

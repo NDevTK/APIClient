@@ -73,6 +73,10 @@ void flex_cross_size_question_run(LayoutQuestion q, size_t at);
 /* §9.4's steps 8 and 9 for every line of a multi-line `container`, on its cross axis: one cross size per line,
    in order, to a calloc'd `*sizes` the caller frees; returns the line count. */
 size_t flex_cross_size_lines(lxb_dom_element_t *container, CssPx **sizes);
+/* What step 8 measures every line over, the LAYOUT_Q_FLEX_CROSS body's operands, asked so a caller under a
+   resting drive can then read `flex_cross_size_lines` or step 11's stretched arm of a multi-line container:
+   false ("not yet") with the deferred questions suspended on the current job for the caller's drive. */
+bool flex_cross_size_lines_ask(lxb_dom_element_t *container);
 
 CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item);
 

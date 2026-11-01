@@ -910,13 +910,10 @@ bool flex_line_lines_ask(lxb_dom_element_t *container)
     return fl_lines_ask(container, &a);
 }
 
-CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item)
+/* `item`'s §9.7 target in the lines `a` answers for `container`. */
+static CssPx fl_target_of(const struct FlexLinesAnswer *a, lxb_dom_element_t *container, lxb_dom_node_t *item)
 {
-    const struct FlexLinesAnswer *a;
-    LayoutJobDrive d;
-    CssPx out = css_px(0.0);
     char nbuf[160];
-    bool found = false;
     size_t i;
 
     DCHECK(container != NULL && item != NULL,
@@ -929,20 +926,36 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *ite
            "flexed against a rectangle it is not in. The relation is the box tree's: css-display-3 §2.5 \"Box "
            "Generation: the none and contents keywords\" puts a `contents` element's children on this "
            "container's line, so a DOM-parent reading would refuse items `fl_collect` collects");
-    a = fl_lines_drive(&d, container);
     for (i = 0; i < a->n; i++)
-        if (a->members[i].first == item) { out = a->target[i]; found = true; break; }
+        if (a->members[i].first == item) return a->target[i];
+    DFAILF("%s: css-flexbox-1 §4 \"Flex Items\"' walk over this item's own flex container did not produce "
+           "the item the used main size was asked for. Every caller establishes that it IS one before asking "
+           "— core/layout/used_value.c classifies the box as a flex item from its box parent's `display`, and "
+           "core/layout/flex_cross_size.c reaches §4's anonymous item through the container's members — so the "
+           "two readings of one child list have disagreed, and the number this entry would otherwise return "
+           "is another item's. A TEXT node here is the first node of a child text sequence (§4's anonymous "
+           "block container flex item) and an ELEMENT node is an item in its own right",
+           box_subject_node(item, nbuf, sizeof nbuf));
+    return css_px(0.0);
+}
+
+CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item)
+{
+    LayoutJobDrive d;
+    CssPx out = fl_target_of(fl_lines_drive(&d, container), container, item);
+
     layout_job_drive_end(&d);
-    DCHECKF(found,
-            "%s: css-flexbox-1 §4 \"Flex Items\"' walk over this item's own flex container did not produce "
-            "the item the used main size was asked for. Every caller establishes that it IS one before asking "
-            "— core/layout/used_value.c classifies the box as a flex item from its box parent's `display`, and "
-            "core/layout/flex_cross_size.c reaches §4's anonymous item through `flex_line_members` — so the "
-            "two readings of one child list have disagreed, and the number this entry would otherwise return "
-            "is another item's. A TEXT node here is the first node of a child text sequence (§4's anonymous "
-            "block container flex item) and an ELEMENT node is an item in its own right",
-            box_subject_node(item, nbuf, sizeof nbuf));
     return out;
+}
+
+bool flex_line_used_main_size_ask(lxb_dom_element_t *container, lxb_dom_node_t *item, CssPx *out)
+{
+    const struct FlexLinesAnswer *a;
+
+    DCHECK(out != NULL, "css-flexbox-1 §9.7's used main size was asked for with nowhere to put it");
+    if (!fl_lines_ask(container, &a)) return false;
+    *out = fl_target_of(a, container, item);
+    return true;
 }
 
 /* The answer's members copied to a calloc'd list the caller frees (NULL when there are none). */

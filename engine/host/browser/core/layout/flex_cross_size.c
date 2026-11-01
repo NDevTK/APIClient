@@ -226,13 +226,17 @@ static CssPx fx_outer_hypothetical_cross(lxb_dom_element_t *container, lxb_dom_e
    `end` one past its last text node, as core/layout/flex_line.c hands it to the intrinsic pass. Not
    `first->prev`: under css-display-3 §2.5's splice that is NULL at the start of a `contents` element's
    children, which would start the run at the container's own start. */
-static void fx_anonymous_run(lxb_dom_element_t *container, const FlexLineMember *m, BlockFlowRun *seq,
-                             LineBoxAvailableWidth *avail)
+static bool fx_anonymous_run_ask(lxb_dom_element_t *container, const FlexLineMember *m, BlockFlowRun *seq,
+                                 LineBoxAvailableWidth *avail)
 {
+    CssPx main;
+
     DCHECK(m->anonymous, "an anonymous flex item's line boxes were measured for an element item");
     seq->after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(m->first)));
     seq->end = m->end;
-    *avail = line_box_available_width_stated(flex_line_used_main_size(container, m->first));
+    if (!flex_line_used_main_size_ask(container, m->first, &main)) return false;
+    *avail = line_box_available_width_stated(main);
+    return true;
 }
 
 bool flex_cross_size_anonymous_lines_ask(lxb_dom_element_t *container, const FlexLineMember *m)
@@ -240,8 +244,8 @@ bool flex_cross_size_anonymous_lines_ask(lxb_dom_element_t *container, const Fle
     BlockFlowRun seq;
     LineBoxAvailableWidth avail;
 
-    fx_anonymous_run(container, m, &seq, &avail);
-    return line_box_atomics_ask(container, seq, avail) && line_box_extents_ask(container, seq, avail);
+    return fx_anonymous_run_ask(container, m, &seq, &avail) && line_box_atomics_ask(container, seq, avail) &&
+           line_box_extents_ask(container, seq, avail);
 }
 
 CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLineMember *m,
@@ -253,13 +257,15 @@ CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLi
     LineBoxAvailableWidth avail;
     LayoutJobDrive d;
     lxb_dom_node_t *first = m->first;
+    bool served;
     char nbuf[160];
 
     /* This entry answers synchronously, so it is a drive: the line box asks computed, with what they defer
        computed beneath it, before the reduction reads them, as `block_flow_auto_height` drives its own walk. */
     layout_job_drive_begin(&d);
     while (!flex_cross_size_anonymous_lines_ask(container, m)) (void)block_flow_drive_deferred(&d);
-    fx_anonymous_run(container, m, &seq, &avail);
+    served = fx_anonymous_run_ask(container, m, &seq, &avail);
+    DCHECK(served, "an anonymous flex item's main size was not served after its own line box asks answered");
     inner = line_box_content_height(container, seq, avail, &any_line_box, first_baseline, last_baseline);
     layout_job_drive_end(&d);
 
@@ -373,14 +379,13 @@ static CssPx fx_member_outer_hypothetical_cross(lxb_dom_element_t *container, co
    `Otherwise` arm: "for each flex line: … The used cross size of the flex line is the largest of the numbers
    found in the previous two steps and zero." Writes one size per line to a calloc'd `*sizes` the caller frees
    and returns the line count. The single-line clamp of step 8.3 is §10.7's, run in a used value (see
-   `fx_line_cross_size`). */
-static size_t fx_line_cross_sizes(lxb_dom_element_t *container, bool vertical, CssPx **sizes)
+   `fx_line_cross_size`). `m` and `n` are the container's §9.3 members as the caller read them. */
+static size_t fx_line_cross_sizes(lxb_dom_element_t *container, const FlexLineMember *m, size_t n, bool vertical,
+                                  CssPx **sizes)
 {
-    FlexLineMember *m;
     FlexBaselineExtent group;
-    size_t n, lines, i;
+    size_t lines, i;
 
-    n = flex_line_members(container, &m);
     *sizes = NULL;
     if (n == 0) return 0;
     lines = m[n - 1].line + 1;
@@ -395,12 +400,11 @@ static size_t fx_line_cross_sizes(lxb_dom_element_t *container, bool vertical, C
         (*sizes)[m[i].line] = css_px_max((*sizes)[m[i].line],
                                          fx_member_outer_hypothetical_cross(container, &m[i], vertical));
     }
-    free(m);
     /* Step 8.1: "Find the largest of the distances between each item's baseline and its hypothetical outer
        cross-start edge, and the largest of the distances between each item's baseline and its hypothetical
        outer cross-end edge, and sum these two values." */
     for (i = 0; i < lines; i++)
-        if (flex_baseline_line_extent(container, i, &group))
+        if (flex_baseline_line_extent(container, m, n, i, &group))
             (*sizes)[i] = css_px_max((*sizes)[i], css_px_add(group.before, group.after));
     return lines;
 }
@@ -410,7 +414,9 @@ static size_t fx_line_cross_sizes(lxb_dom_element_t *container, bool vertical, C
 static CssPx fx_content_based(lxb_dom_element_t *container)
 {
     CssPx *sizes, sum = css_px(0.0);
-    size_t lines, i;
+    FlexLineMember *m = NULL;
+    size_t n = 0, lines, i;
+    bool served;
     char nbuf[160];
 
     fx_require_supported_container(container);
@@ -438,7 +444,10 @@ static CssPx fx_content_based(lxb_dom_element_t *container)
        size is the automatic size (css-sizing-3 §3.2 makes `min-content`/`max-content` block sizes "equivalent
        to its automatic size" too), and an automatic size is not a definite cross size. An empty container sums
        nothing (§6 "Flex Lines": "unless the flex container itself is completely empty"). */
-    lines = fx_line_cross_sizes(container, true, &sizes);
+    served = flex_line_members_ask(container, &m, &n);
+    DCHECK(served, "the LAYOUT_Q_FLEX_CROSS body's members were not served, though its operand pass asked them");
+    lines = fx_line_cross_sizes(container, m, n, true, &sizes);
+    free(m);
     for (i = 0; i < lines; i++) sum = css_px_add(sum, sizes[i]);
     free(sizes);
     return sum;
@@ -488,6 +497,12 @@ static bool fx_content_based_operands_ask(lxb_dom_element_t *container)
     }
     free(m);
     return done;
+}
+
+bool flex_cross_size_lines_ask(lxb_dom_element_t *container)
+{
+    DCHECK(container != NULL, "a flex container's line operands were asked with no container");
+    return fx_content_based_operands_ask(container);
 }
 
 void flex_cross_size_question_run(LayoutQuestion q, size_t at)
@@ -563,11 +578,11 @@ static CssPx fx_multi_line_cross_size_of(lxb_dom_element_t *container, lxb_dom_e
     n = flex_line_members(container, &m);
     for (i = 0; i < n; i++)
         if (m[i].first == lxb_dom_interface_node(item)) { line = m[i].line; found = true; break; }
-    free(m);
     DCHECKF(found, "%s: css-flexbox-1 §9.3's step 5 did not collect this item into any line of its own "
                    "container, so the two readings of one child list disagree",
             box_subject(item, nbuf, sizeof nbuf));
-    lines = fx_line_cross_sizes(container, vertical, &sizes);
+    lines = fx_line_cross_sizes(container, m, n, vertical, &sizes);
+    free(m);
     DCHECK(line < lines, "an item's §9.3 line is past the lines §9.4's step 8 measured over the same walk");
     fx_stretch_lines(container, vertical, sizes, lines);
     out = sizes[line];
@@ -577,15 +592,18 @@ static CssPx fx_multi_line_cross_size_of(lxb_dom_element_t *container, lxb_dom_e
 
 size_t flex_cross_size_lines(lxb_dom_element_t *container, CssPx **sizes)
 {
+    FlexLineMember *m = NULL;
     bool vertical;
-    size_t lines;
+    size_t n, lines;
 
     fx_require_supported_container(container);
     DCHECK(sizes != NULL && flex_container_is_multi_line(container),
            "a flex container's line cross sizes were asked with nowhere to put them or of a single-line "
            "container, whose one line is its inner cross size");
     vertical = flex_container_axis_is_vertical(container, FLEX_AXIS_CROSS);
-    lines = fx_line_cross_sizes(container, vertical, sizes);
+    n = flex_line_members(container, &m);
+    lines = fx_line_cross_sizes(container, m, n, vertical, sizes);
+    free(m);
     fx_stretch_lines(container, vertical, *sizes, lines);
     return lines;
 }

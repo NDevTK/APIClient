@@ -154,10 +154,10 @@ static void fb_take(FlexBaselineExtent *group, FlexBaselineExtent e, bool *any)
    members whose baseline preference (css-align-3 §4.2: "either “first” or “last”") is `pref`, which css-align-3
    §9.2 makes one baseline-sharing group: one line is one shared alignment context, and every item in it has the
    container's block flow direction. */
-static bool fb_group_extent(lxb_dom_element_t *container, size_t line, CssKeyword pref, FlexBaselineExtent *out)
+static bool fb_group_extent(lxb_dom_element_t *container, const FlexLineMember *m, size_t n, size_t line,
+                            CssKeyword pref, FlexBaselineExtent *out)
 {
-    FlexLineMember *m = NULL;
-    size_t n = flex_line_members(container, &m), i;
+    size_t i;
     bool any = false;
 
     out->before = out->after = css_px(0.0);
@@ -168,19 +168,19 @@ static bool fb_group_extent(lxb_dom_element_t *container, size_t line, CssKeywor
             continue;
         fb_take(out, fb_member_extent(container, &m[i]), &any);
     }
-    free(m);
     return any;
 }
 
-bool flex_baseline_line_extent(lxb_dom_element_t *container, size_t line, FlexBaselineExtent *out)
+bool flex_baseline_line_extent(lxb_dom_element_t *container, const FlexLineMember *m, size_t n, size_t line,
+                               FlexBaselineExtent *out)
 {
-    return fb_group_extent(container, line, CSS_KEYWORD_INVALID, out);
+    return fb_group_extent(container, m, n, line, CSS_KEYWORD_INVALID, out);
 }
 
-CssPx flex_baseline_margin_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx line_size)
+CssPx flex_baseline_margin_offset(lxb_dom_element_t *container, const FlexLineMember *m, size_t n,
+                                  lxb_dom_element_t *item, CssPx line_size)
 {
-    FlexLineMember *m = NULL;
-    size_t n = flex_line_members(container, &m), i;
+    size_t i;
     const FlexLineMember *self = NULL;
     FlexBaselineExtent group, e;
     CssKeyword pref;
@@ -193,8 +193,7 @@ CssPx flex_baseline_margin_offset(lxb_dom_element_t *container, lxb_dom_element_
             box_subject(item, nbuf, sizeof nbuf));
     pref = fb_align(container, self).baseline;
     e = fb_member_extent(container, self);
-    (void)fb_group_extent(container, self->line, pref, &group);
-    free(m);
+    (void)fb_group_extent(container, m, n, self->line, pref, &group);
     /* css-align-3 §9.3 aligns the group's baselines; css-flexbox-1 §8.3 then puts "the item with the largest
        distance between its baseline and its cross-start margin edge" flush with the line's cross-start edge,
        which is the `safe self-start` fallback of `first baseline`. `last baseline`'s `safe self-end` puts the

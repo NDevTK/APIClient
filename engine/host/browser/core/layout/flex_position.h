@@ -15,7 +15,8 @@
 #include "core/css/css_length.h"
 
 /* The offset of element flex item `item`'s border-box top-left corner from `container`'s content-box top-left
-   corner, physical, in CSS pixels. `container` must be `item`'s flex container in the box tree (asserted). */
+   corner, physical, in CSS pixels. `container` must be `item`'s flex container in the box tree (asserted), and
+   its operands asked (`flex_position_operands_ask`) under the open drive, which asserts its members served. */
 void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y);
 /* The layout the entry above reads, asked under a step machine's resting drive (core/layout/layout_job.h):
    `container`'s content box on both axes, its §9.3 line membership, each element item's used sizes' operands

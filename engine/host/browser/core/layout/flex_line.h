@@ -35,6 +35,9 @@
    property": "flex-basis determines the size of the content box"); converting to css-sizing-3 §3.3's
    `box-sizing` used value is the exposing caller's job. */
 CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item);
+/* The same as an ask: true with `*out` once the container's lines are answered, false ("not yet") with them
+   suspended on the current job for the caller's drive. */
+bool flex_line_used_main_size_ask(lxb_dom_element_t *container, lxb_dom_node_t *item, CssPx *out);
 
 /* One flex item of a container as §9.3's step 5 collected it: its identity node (as `flex_line_used_main_size`
    takes it), whether it is §4's anonymous item, one past its text sequence when it is (NULL at the end of the

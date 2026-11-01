@@ -216,8 +216,9 @@ static bool fp_cross_margins(lxb_dom_element_t *item, FpAxes a, CssPx line, CssP
 }
 
 /* §9.6 steps 13 and 14 for `item` on the one line, whose cross size is `line`: the distance from the line's
-   cross-start edge to the item's border box. */
-static CssPx fp_cross_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, FpAxes a, CssPx line)
+   cross-start edge to the item's border box. `m` and `n` are the container's §9.3 members. */
+static CssPx fp_cross_offset(lxb_dom_element_t *container, const FlexLineMember *m, size_t n,
+                             lxb_dom_element_t *item, FpAxes a, CssPx line)
 {
     CssPx mt, mb, outer, diff;
     CssAlign align;
@@ -265,7 +266,7 @@ static CssPx fp_cross_offset(lxb_dom_element_t *container, lxb_dom_element_t *it
     /* css-align-3 §9.3 places the item by its baseline-sharing group, fallback alignment included, so the
        share and the `safe` test below do not apply. */
     case CSS_KEYWORD_BASELINE:
-        return css_px_add(flex_baseline_margin_offset(container, item, line), mt);
+        return css_px_add(flex_baseline_margin_offset(container, m, n, item, line), mt);
     default:
         DFAILF("%s: `%s` is no value css-align-3 §6.2's `align-self` or css-align-3 §7.2's `align-items` resolves to",
                box_subject(item, nbuf, sizeof nbuf), css_keyword_name(align.value));
@@ -393,16 +394,23 @@ void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *
 {
     FpAxes a;
     CssPx border = css_px(0.0), ms = css_px(0.0), me = css_px(0.0), main, cross, line, start;
+    FlexLineMember *m = NULL;
+    size_t n = 0;
+    bool served;
 
     DCHECK(x != NULL && y != NULL, "a flex item's position was asked with nowhere to put it");
     a = fp_require_built(container, item);
+    served = flex_line_members_ask(container, &m, &n);
+    DCHECK(served, "a flex item's offset was read with its container's members unasked; every reader asks "
+                   "flex_position_operands_ask first");
     main = fp_main_offset(container, lxb_dom_interface_node(item), a, &border, &ms, &me);
     main = fp_physical(a.main_start, main, border, used_value_content_px(container, a.main_vertical));
     /* The item's line, and where it starts in the container's content box (`fp_line_place`). */
     line = fp_line_place(container, lxb_dom_interface_node(item), a, &start);
-    cross = fp_physical(a.cross_start, css_px_add(start, fp_cross_offset(container, item, a, line)),
+    cross = fp_physical(a.cross_start, css_px_add(start, fp_cross_offset(container, m, n, item, a, line)),
                         used_value_border_edge_px(item, !a.main_vertical),
                         used_value_content_px(container, !a.main_vertical));
+    free(m);
     *x = a.main_vertical ? cross : main;
     *y = a.main_vertical ? main : cross;
 }
