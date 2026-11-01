@@ -6969,8 +6969,24 @@ JSValue concolic_isarray_hook(JSContext *ctx, JSValueConst v) {
     char *shape, *ident;
     JSValue r, example = JS_UNDEFINED;
     ConcolicExState st;
+    unsigned ty;
 
     if (!concolic_is(v)) return JS_UNINITIALIZED;
+    /* §7.2.2 step 1: an argument that is not an Object is not an Array. Where the operand's type set in this flow
+       (its stated types less its type facet) holds no Object, that step answers in every world. */
+    ty = cty_of_operand(v);
+    if (ty && !(ty & CTY_OBJECT)) {
+#if APICLIENT_DEV
+        if (concolic_example_present(v)) {
+            JSValue ex = concolic_example(ctx, v);
+
+            DCHECKF(!JS_IsObject(ex), "an unknown whose type set 0x%x holds no Object holds an Object as its "
+                                      "example", ty);
+            JS_FreeValue(ctx, ex);
+        }
+#endif
+        return JS_FALSE;
+    }
     st = concolic_example_state(v);
     if (st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED) {
         JSValue ex = concolic_example(ctx, v);

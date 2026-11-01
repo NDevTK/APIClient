@@ -1190,6 +1190,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/absentarm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
+#include "fixture/isarraytype.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
 #include "fixture/inlineflex.h"
@@ -1779,6 +1780,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "absentarm", HTML_ABSENTARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
+    { "isarraytype", HTML_ISARRAYTYPE },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
     { "inlineflex", HTML_INLINEFLEX },
@@ -14551,6 +14553,27 @@ TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `isarraytype` document: IsArray over an unknown whose type set holds no Object answers false
+   (solver/concolic.c's concolic_isarray_hook), and over one that may be an Object keeps both arms. */
+TF_UNIT void probes_isarraytype(const char *js, Probe *tab, int *n) {
+    const char *str_why = NULL, *obj_why = NULL;
+    int str_tt = 1, obj_tt = 1;
+
+    fold_row(&str_tt, &str_why, emitted_record_has(js, "/api/ia-b1", "\"door\":\"fetch\""),
+             "NOT REACHED: no /api/ia-b1 record, so no flow tested IsArray over get()'s found arm");
+    fold_row(&str_tt, &str_why, !strstr(js, "\"/api/ia-a1\""),
+             "a /api/ia-a1 record exists: IsArray over a String-typed unknown took an arm where it is an Array");
+    fold_row(&obj_tt, &obj_why,
+             emitted_record_has(js, "/api/ia-a2", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/ia-b2", "\"door\":\"fetch\""),
+             "IsArray over a JSON.parse result, which may be an Array, lost one of its arms");
+    const Probe rows[] = {
+        { "isarraytype-string", str_tt, "iaV", SESS_EXPLORE, str_why },
+        { "isarraytype-json", obj_tt, "iaJ", SESS_EXPLORE, obj_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `absentarm` document. */
 TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     /* The branch over `window.__tfAbsentGate`: this session reads undefined there, so the falsy arm is the one
@@ -23134,6 +23157,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_absentarm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
+    probes_isarraytype(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
     probes_inlineflex(js, probes, &np);
