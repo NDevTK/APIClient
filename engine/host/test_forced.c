@@ -1189,6 +1189,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/declines.h"
 #include "fixture/absentarm.h"
 #include "fixture/pagewrite.h"
+#include "fixture/keydomain.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
 #include "fixture/inlineflex.h"
@@ -1777,6 +1778,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "declines", HTML_DECLINES },
     { "absentarm", HTML_ABSENTARM },
     { "pagewrite", HTML_PAGEWRITE },
+    { "keydomain", HTML_KEYDOMAIN },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
     { "inlineflex", HTML_INLINEFLEX },
@@ -14516,6 +14518,35 @@ TF_UNIT void probes_pagewrite(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `keydomain` document: an unknown String key whose domain no key of the object's chain lies in
+   reads as OrdinaryGet's miss (solver/concolic.c's object_chain_misses_domain), and one whose domain a chain key
+   lies in keeps both arms. */
+TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
+    const char *miss_why = NULL, *keep_why = NULL;
+    int miss_tt = 1, keep_tt = 1;
+
+    fold_row(&miss_tt, &miss_why,
+             emitted_record_has(js, "/api/kd-b1", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/kd-b3", "\"door\":\"fetch\""),
+             "NOT REACHED: no /api/kd-b1 or /api/kd-b3 record, so the script reading through the unknown key did "
+             "not finish");
+    fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a1\""),
+             "a /api/kd-a1 record exists: a read of an ordinary object no link of whose chain holds a key the "
+             "unknown key's domain contains took an arm where it hit");
+    fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a3\""),
+             "a /api/kd-a3 record exists: a slot written through the unknown key did not read back what was written");
+    fold_row(&keep_tt, &keep_why,
+             emitted_record_graded_has(js, "/api/kd-a4", "forced", "\"door\":\"fetch\"") &&
+                 emitted_record_graded_has(js, "/api/kd-a5", "forced", "\"door\":\"fetch\""),
+             "an object holding a key the domain contains (`kdNear`), or a name spent on another unknown key, read "
+             "as a miss: its hit arm is gone");
+    const Probe rows[] = {
+        { "keydomain-miss", miss_tt, "kdKey", SESS_EXPLORE, miss_why },
+        { "keydomain-kept", keep_tt, "kdKey", SESS_EXPLORE, keep_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `absentarm` document. */
 TF_UNIT void probes_absentarm(const char *js, Probe *tab, int *n) {
     /* The branch over `window.__tfAbsentGate`: this session reads undefined there, so the falsy arm is the one
@@ -23098,6 +23129,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
+    probes_keydomain(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
     probes_inlineflex(js, probes, &np);

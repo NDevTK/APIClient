@@ -6803,6 +6803,64 @@ static int primitive_chain_misses_prefix(JSContext *ctx, JSValueConst base, cons
     return misses;
 }
 
+/* The domain a String key's facets state (KeyDomain): every value begins with the `plen` bytes the page wrote
+   before the key's first hole and is at least `len_lo` code units long. A chain key lies in it when it is the
+   name spent on an unknown key (keyname_find: its value is that unknown's, so any), or when its own bytes begin
+   so and it is long enough. */
+typedef struct { const char *prefix; size_t plen; uint32_t len_lo; int hit; } KeyDomain;
+
+static int key_domain_holds(JSContext *ctx, JSAtom key, void *opaque)
+{
+    KeyDomain *d = opaque;
+    size_t n;
+    const char *s = JS_AtomToCStringLen(ctx, &n, key);
+    JSValue v;
+
+    CHECK(s != NULL, "concolic: OOM spelling a chain key against an unknown key's domain");
+    if (keyname_find(s) >= 0) d->hit = 1;
+    else if (n >= d->plen && memcmp(s, d->prefix, d->plen) == 0) {
+        /* `len_lo` counts code units; the bytes only bound them from above, so a key is measured as a String. */
+        v = JS_AtomToString(ctx, key);
+        CHECK(!JS_IsException(v), "concolic: OOM measuring a chain key against an unknown key's domain");
+        d->hit = example_units(ctx, v) >= d->len_lo;
+        JS_FreeValue(ctx, v);
+    }
+    JS_FreeCString(ctx, s);
+    return d->hit;
+}
+
+/* Whether §10.1.8.1 OrdinaryGet ( O, P, Receiver ) over the object `obj` misses for every value of the unknown
+   String key `key` (facets `kc`): JS_ForEachChainKey read every link from storage and no key lies in the domain.
+   0 where a link composes its keys in a hook (a Proxy, a named or indexed property) or a key lies in it. */
+static int object_chain_misses_domain(JSContext *ctx, JSValueConst obj, JSValueConst key, const Concolic *kc)
+{
+    KeyDomain d = { kc->shape, (size_t)kc->hole_span[0], kc->len_lo, 0 };
+    int walk = JS_ForEachChainKey(ctx, obj, key_domain_holds, &d);
+
+    DCHECK((walk == JS_CHAIN_KEYS_STOPPED) == (d.hit != 0),
+           "the chain walk and its reader disagree about whether a key in the domain was met");
+    if (walk != JS_CHAIN_KEYS_ALL) return 0;
+    /* The miss stands on the domain, so the domain must be one this run's own world lies in: the key's example,
+       where the flow holds one, begins with the prefix and is as long as the bound. A prefix that spells
+       anything but the page's leading bytes would decide a miss over keys no world reads. */
+#if APICLIENT_DEV
+    if (concolic_example_state(key) == CONCOLIC_EX_HELD) {
+        JSValue ex = concolic_example(ctx, key);
+        size_t n = 0;
+        const char *s = JS_IsString(ex) ? JS_ToCStringLen(ctx, &n, ex) : NULL;
+
+        DCHECKF(s != NULL && n >= d.plen && memcmp(s, d.prefix, d.plen) == 0 && example_units(ctx, ex) >= d.len_lo,
+                "a String key's domain does not hold its own example: prefix of %zu bytes over shape %s, length "
+                "bound %u, example %s", d.plen, kc->shape, (unsigned)d.len_lo, s ? s : "(not a String)");
+        if (s) JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, ex);
+    }
+#else
+    (void)key;
+#endif
+    return 1;
+}
+
 JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
     const char *src, *root, *f[2];
     char *shape, *ident, *io, *ik;
@@ -6816,6 +6874,12 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
 
         if (!JS_IsObject(obj) && kc->ty == CTY_STRING && kc->hole_span && kc->hole_span[0] > 0 &&
             primitive_chain_misses_prefix(ctx, obj, kc->shape, (size_t)kc->hole_span[0]))
+            return JS_UNDEFINED;
+        /* …and the same of an object, decided against its chain as this flow holds it: no String key any link
+           holds lies in the key's domain, so OrdinaryGet misses in every world. Asked at every read and never
+           remembered, since a later write of a key in the domain makes the next read keep both arms. */
+        if (JS_IsObject(obj) && kc->ty == CTY_STRING && kc->hole_span && kc->hole_span[0] > 0 &&
+            object_chain_misses_domain(ctx, obj, key, kc))
             return JS_UNDEFINED;
     }
     src = concolic_src_c(key);

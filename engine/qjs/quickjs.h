@@ -1646,6 +1646,12 @@ JS_EXTERN int JS_GetOwnSlotDesc(JSContext *ctx, JSPropertyDescriptor *pd, JSValu
 /* Whether `obj`'s class composes [[GetOwnProperty]] in an exotic hook (a Proxy's trap excepted): the population
    whose hook the read above never asks. */
 JS_EXTERN bool JS_ClassComposesOwnProperty(JSContext *ctx, JSValueConst obj);
+/* Every String key an ordinary [[Get]] of `obj` can reach, from each link's own storage, receiver first, handed to
+   `each` until it answers nonzero. Answers which of three walks happened (the definition states each); a key
+   `each` is handed is borrowed for the call. Runs no page code, and retires one unit of work per key. */
+enum { JS_CHAIN_KEYS_ALL = 1, JS_CHAIN_KEYS_STOPPED = 0, JS_CHAIN_KEYS_COMPOSED = -1 };
+JS_EXTERN int JS_ForEachChainKey(JSContext *ctx, JSValueConst obj,
+                                 int (*each)(JSContext *ctx, JSAtom key, void *opaque), void *opaque);
 /* Its VALUE projection, for a component reading a slot IT created (an idl_slots record, a listener map, a key
    path's next step). An accessor is refused on this side — a component's own internal slot is one nothing else
    can define, so an accessor there says the read landed on an object that is not the one it named.

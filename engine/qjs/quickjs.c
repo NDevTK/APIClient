@@ -15016,6 +15016,57 @@ int JS_RecordMemberWriteSeq(JSContext *ctx, JSValueConst holder, JSAtom prop, ui
     return 1;
 }
 
+/* EVERY STRING KEY AN ORDINARY [[Get]] OF `obj` CAN REACH, read from storage: ECMAScript §10.1.8.1 OrdinaryGet
+   ( O, P, Receiver ) asks each link's [[GetOwnProperty]] and then its [[GetPrototypeOf]], and for a link whose
+   both methods are ordinary (§10.1.5.1 OrdinaryGetOwnProperty, §10.1.1.1 OrdinaryGetPrototypeOf) the keys it
+   can answer are exactly its shape's and its element storage's. `each` is called with every String key of every
+   link, receiver first, and answers nonzero to stop. Symbols are passed over: no String key equals one.
+   Answers JS_CHAIN_KEYS_ALL when every link was read so and `each` never stopped, JS_CHAIN_KEYS_STOPPED when
+   `each` stopped, and JS_CHAIN_KEYS_COMPOSED at the first link whose keys are not its storage: a Proxy, or a
+   class composing [[GetOwnProperty]], [[Get]], [[HasProperty]], its own key list or its prototype in a hook (a
+   named or indexed property, a String exotic object's indices, a module namespace's exports). Runs no page code
+   and allocates nothing; every key visited is retired as one unit of the running flow's work. */
+int JS_ForEachChainKey(JSContext *ctx, JSValueConst obj, int (*each)(JSContext *ctx, JSAtom key, void *opaque),
+                       void *opaque)
+{
+    JSRuntime *rt = ctx->rt;
+    JSObject *p;
+    uint64_t visited = 0;
+    int r = JS_CHAIN_KEYS_ALL;
+
+    DCHECK(each != NULL && JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT,
+           "a chain's keys were asked of something that is not an object, or with no reader to hand them to");
+    for (p = JS_VALUE_GET_OBJ(obj); p != NULL && r == JS_CHAIN_KEYS_ALL; p = p->shape->proto) {
+        const JSClassExoticMethods *em = rt->class_array[p->class_id].exotic;
+        JSShapeProperty *prs;
+        uint32_t i;
+
+        if (p->class_id == JS_CLASS_PROXY ||
+            (em && (em->get_own_property || em->get_own_property_step || em->get_own_property_names ||
+                    em->get_property || em->has_property || em->get_prototype))) {
+            r = JS_CHAIN_KEYS_COMPOSED;
+            break;
+        }
+        for (i = 0, prs = get_shape_prop(p->shape); i < (uint32_t)p->shape->prop_count && r == JS_CHAIN_KEYS_ALL;
+             i++, prs++) {
+            JSAtom a = prs->atom;
+
+            if (a == JS_ATOM_NULL) continue;
+            if (!__JS_AtomIsTaggedInt(a) && rt->atom_array[a]->atom_type != JS_ATOM_TYPE_STRING) continue;
+            visited++;
+            if (each(ctx, a, opaque)) r = JS_CHAIN_KEYS_STOPPED;
+        }
+        if (p->fast_array)
+            for (i = 0; i < p->u.array.count && r == JS_CHAIN_KEYS_ALL; i++) {
+                DCHECK(i <= JS_ATOM_MAX_INT, "an element index outside the tagged-integer atom space");
+                visited++;
+                if (each(ctx, __JS_AtomFromUInt32(i), opaque)) r = JS_CHAIN_KEYS_STOPPED;
+            }
+    }
+    JS_FlowRetireWork(visited);
+    return r;
+}
+
 static bool js_present_ask(JSContext *ctx, JSObject *holder, JSAtom prop, JSValueConst held)
 {
     if (likely(g_concolic.present == NULL) || !js_object_is_document_record(holder))
