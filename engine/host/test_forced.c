@@ -1304,6 +1304,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparseset.h"
 #include "fixture/mrkeys.h"
 #include "fixture/arrname.h"
+#include "fixture/propkeyunk.h"
 #include "fixture/mruid.h"
 #include "fixture/mrconsole.h"
 #include "fixture/idbname.h"
@@ -1924,6 +1925,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fileparse-set", HTML_FILEPARSE_SET },
     { "mrkeys", HTML_MRKEYS },
     { "arrname", HTML_ARRNAME },
+    { "propkeyunk", HTML_PROPKEYUNK },
     { "mruid", HTML_MRUID },
     { "mrconsole", HTML_MRCONSOLE },
     { "idbname", HTML_IDBNAME },
@@ -18714,6 +18716,22 @@ TF_UNIT void probes_arrname(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `propkeyunk` document (fixture/propkeyunk.h): an unknown key reaches both property writes
+   and reads back the values written under it. */
+TF_UNIT void probes_propkeyunk(const char *js, Probe *tab, int *n) {
+    const char *why = NULL; int tt = 1;
+    fold_row(&tt, &why, !!strstr(js, "\"/api/propkeyunk\""),
+             "NOT REACHED: there is no /api/propkeyunk record, so the document never finished its key coercions");
+    fold_row(&tt, &why, param_value_is(js, "/api/propkeyunk", "v", "1"),
+             "the object literal's computed member under the unknown key did not read back as 1");
+    fold_row(&tt, &why, param_value_is(js, "/api/propkeyunk", "w", "2"),
+             "the compound assignment under the unknown key did not read back as 2");
+    const Probe rows[] = {
+        { "propkeyunk", tt, "/api/propkeyunk", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `idbname` document (fixture/idbname.h): a database opened, given a store and deleted through
    names that are unknowns reports its one store after the delete succeeds. */
 TF_UNIT void probes_idbname(const char *js, Probe *tab, int *n) {
@@ -23924,6 +23942,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_set(js, probes, &np);
     probes_mathrandom(js, probes, &np);
     probes_arrname(js, probes, &np);
+    probes_propkeyunk(js, probes, &np);
     probes_idbname(js, probes, &np);
     probes_lockgrant(js, probes, &np);
     probes_protoset(js, probes, &np);
