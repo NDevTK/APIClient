@@ -10,6 +10,7 @@
 #include "core/css/css_computed_style.h"
 #include "core/css/css_property_id.h"
 #include "core/layout/layout_job.h"
+#include "solver/metrics.h"   /* `_layoutHoldDrives` */
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 typedef enum {
@@ -63,7 +64,10 @@ lxb_dom_element_t *css_computed_style_element(const CssComputedStyle *s)
 void css_computed_style_hold_begin(CssComputedStyleHold *h)
 {
     h->opened = !css_cascade_record_is_held();
-    if (h->opened) layout_job_drive_begin(&h->drive);
+    if (h->opened) {
+        METRIC_ADD(hold_drives, 1);
+        layout_job_drive_begin(&h->drive);
+    }
     DCHECK(css_cascade_record_is_held(),
            "a computed style hold opened a drive and still no cascade record is held — a drive on the "
            "synchronous job is what makes its record the held one");
