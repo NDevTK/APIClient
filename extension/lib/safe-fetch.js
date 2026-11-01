@@ -195,6 +195,57 @@ function _wireRelaySend(href, init, held) {
   });
 }
 
+/* The identity of a send as the wire carries it: the method, the URL without its fragment, the header list,
+   the speak-as set its document's rule writes (Origin, Referer, Cookie and the rest, as composed for this
+   send), the body, the request's credentials mode and the HTTP cache partition (httpCachePartitionOf). The
+   speak-as set is a set of fields a rule writes, so it is compared by name; the header list in its order. */
+function _wireSendKey(href, init, facts) {
+  var u = new URL(href);
+  u.hash = "";
+  var speak = init.speakAs;
+  var body = init.body === undefined ? null
+    : typeof init.body === "string" ? ["text", init.body] : ["bytes", _b64OfBytes(init.body)];
+  return JSON.stringify([init.method, u.href, init.headers === undefined ? [] : init.headers, speak.origin,
+                         speak.stated, Object.keys(speak.headers).sort().map(function (n) { return [n, speak.headers[n]]; }),
+                         body, facts.credentials, facts.partition]);
+}
+/* One send of a page's request (safeFetch's, and its CORS preflight), answered {resp, requestTime,
+   responseTime}. A send that speaks as a document is made once per identity (_wireSendKey) within that
+   document's exploration, and a byte-identical send of the same document is answered from the record
+   (lib/send-coalesce.js): one act of one document is sent once however many forced worlds make it. Its reply
+   is a Response of this asker's own, whose Set-Cookie fields ride beside it as the wire's do, so every check,
+   cookie store and grade after this runs on it as on a fresh reply. `facts` is {credentials, partition} of the
+   send's identity, or null for a send that speaks as no document.
+   Named residual. Not covered: a send that speaks as no document (no `opts.identity`, as engine/trusted.mjs's
+   navigation load) is never coalesced, since no document key scopes it. Next diff: that load states its
+   issuing document's identity. Its absence shows as a server log counting one navigation of one document
+   once per world that makes it. */
+async function _wireSend(href, init, facts) {
+  var speak = init.speakAs === undefined ? null : init.speakAs;
+  CHECK((speak === null) === (facts === null),
+        "a send speaks as " + (speak === null ? "no document" : speak.docKey) + " and states " +
+        (facts === null ? "no" : "its") + " identity's credentials mode and partition — the two are one identity");
+  if (speak === null) {
+    var requestTime = Date.now();
+    var bare = await _wire(href, init);
+    return { resp: bare, requestTime: requestTime, responseTime: Date.now() };
+  }
+  var answer = await sendCoalesce(speak.docKey, _wireSendKey(href, init, facts), init.signal, async function (signal) {
+    var resp = await _wire(href, Object.assign({}, init, { signal: signal }));
+    var headers = [];
+    resp.headers.forEach(function (v, k) { headers.push([k, v]); });
+    DCHECK(_NULL_BODY_STATUSES.indexOf(resp.status) < 0 || resp.body === null,
+           "the wire answered status " + resp.status + " with a body — Fetch §2.2.3 \"Statuses\" makes it a null " +
+           "body status");
+    return { head: { status: resp.status, statusText: resp.statusText, headers: headers, setCookie: _setCookiesOf(resp) },
+             body: resp.body };
+  });
+  var own = new Response(answer.body, { status: answer.head.status, statusText: answer.head.statusText,
+                                        headers: answer.head.headers });
+  _wireSetCookies.set(own, answer.head.setCookie);
+  return { resp: own, requestTime: answer.requestTime, responseTime: answer.responseTime };
+}
+
 /* A tuple origin (scheme://host[:port]) is usable for same-origin and CORS. An opaque origin reports "null",
    or this zone's minted "null:<uuid>" token, and is unique, so it is same-origin with nothing, not even
    another "null". Only a tuple origin contains "://", so this one test separates them. */
@@ -1586,8 +1637,9 @@ function _extractTokenList(headers, name) {
    the name of the step that failed, which is a network error. The preflight is uncredentialed and does not
    follow a redirect: a 3xx is not an ok status. This zone provides no CORS-preflight cache, so the step "If
    the user agent does not provide for a cache, then return response" ends it and `Access-Control-Max-Age` is
-   not read. `speak` is the OPTIONS request's speak-as (`_speakAs`). */
-async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, origin, signal, speak) {
+   not read. `speak` is the OPTIONS request's speak-as (`_speakAs`) and `facts` its identity's (`_wireSend`). */
+async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, origin, signal, speak,
+                              facts) {
   var unsafe = _corsUnsafeRequestHeaderNames(headerList);
   /* `Access-Control-Request-Method` and `-Headers` are forbidden request-headers (§2.2.2), which a script's
      fetch cannot set; the OPTIONS headers speakAsPreflightHeaders composes (lib/speak-as.js) supply both. */
@@ -1595,7 +1647,7 @@ async function _corsPreflight(href, method, headerList, credentialsMode, usePref
         "request's origin, and safeFetch preflights only a request with an identity");
   var init = { method: "OPTIONS", headers: [["Accept", "*/*"]], credentials: "omit", redirect: "manual", speakAs: speak };
   if (signal) init.signal = signal;
-  var resp = await _wire(href, init);
+  var resp = (await _wireSend(href, init, facts)).resp;
   /* A 3xx is not an ok status and is not followed. */
   var headers = {}, status = resp.status;
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
@@ -2161,6 +2213,7 @@ async function safeFetch(url, opts) {
     var _restoring = httpCacheRestoring();
     if (_restoring) await _restoring;
     var _partition = httpCachePartitionOf(_identity), _cache = httpCacheFor(_partition);
+    var _sendFacts = _identity ? { credentials: _identity.credentials, partition: _partition } : null;
     var _cacheFields = null, _cacheMode = "no-store", _stored = null, _sent;
     if (_cache !== null) {
       _cacheFields = httpCacheRequestFields(_headerList, {});
@@ -2225,18 +2278,18 @@ async function safeFetch(url, opts) {
       /* Fetch §4.1 "Main fetch": the preflight (§4.8) and then the request, as one send. A request with an
          identity speaks as it (`_speakAs`); a preflight failure is a network error and the request is never
          sent. */
-      var _requestTime = Date.now();
       _sent = await _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _isPageAct(_signalFacts),
                              _preflight ? _unsafeNames : null, null, init, async function (speak) {
         if (_preflight) {
           var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
-                                         opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight);
+                                         opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight,
+                                         _sendFacts);
           if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
                                               [parsed.href], {}) };
         }
         if (_answered) return { resp: httpCacheResponse(_stored) };
         init.speakAs = speak === null ? null : speak.request;
-        return { resp: await _wire(_current.href, init) };
+        return await _wireSend(_current.href, init, _sendFacts);
       });
       if (_sent.refusal) return _sent.refusal;
       if (_cache !== null && !_answered) {
@@ -2244,7 +2297,7 @@ async function safeFetch(url, opts) {
            the 304 itself has a null body (Fetch §2.2.3 "Statuses"), so nothing is left unread. */
         var _validated = httpCacheForwarded(_cache, _cacheMode, _current.href, _method,
                                             httpCacheRequestFields(init.headers, _sent.requestHeaders), _sent.resp,
-                                            _requestTime, Date.now(), _stored);
+                                            _sent.requestTime, _sent.responseTime, _stored);
         if (_validated !== null) _sent.resp = _validated;
       }
     }

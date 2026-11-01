@@ -183,8 +183,10 @@ function speakAsHost(sandbox) {
    why nothing below may `instanceof` a value that came back out of it: a Uint8Array minted in that realm is
    not this realm's Uint8Array, and `ArrayBuffer.isView` is the cross-realm question. */
 export function trustedZone() {
-  /* `Response` is what lib/http-cache.js answers a hit with, as the wire's own fetch answers a send. */
-  const sandbox = { console, URL, TextDecoder, TextEncoder, Response, atob };
+  /* `Response` is what lib/http-cache.js answers a hit with, as the wire's own fetch answers a send;
+     `ReadableStream` and `AbortController` are what lib/send-coalesce.js replays a recorded reply with and ends
+     a document's sends with. */
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Response, ReadableStream, AbortController, atob };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
@@ -224,7 +226,8 @@ export function trustedZone() {
                    'docRecordMeet', 'docRecordOfAsker', 'docRecordNameParent', 'docRecordWorldDocument', 'docRecordAskerRefusal',
                    'docRecordNavigableIdentity', 'docRecordOpenerOf', 'docRecordOpenerClaim',
                    'docRecordAddressSpace', 'docRecordWithAddressSpace', 'safeFetchSchemeData',
-                   'safeFetchDocumentAddressSpace', 'noveltyAbsorb', 'noveltyOwed'])
+                   'safeFetchDocumentAddressSpace', 'noveltyAbsorb', 'noveltyOwed', 'sendCoalesceCensus',
+                   'sendCoalesceDocumentEnded'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -2337,6 +2340,13 @@ async function main() {
     }
     e.live = false;
     e.held.clear();
+    /* The instance's document ended, and its recorded sends with it (lib/send-coalesce.js), read first: how
+       many sends its exploration made, how many asks a record answered, and how many identities it holds. */
+    const coalesced = ZONE.sendCoalesceCensus('engine:' + e.docId);
+    console.error(`[trusted] [${e.tag}] send coalescing for engine:${e.docId}: ` + (coalesced === null
+      ? 'no send spoke as this document'
+      : `sends=${coalesced.sends} answers=${coalesced.answers} identities=${coalesced.identities}`));
+    ZONE.sendCoalesceDocumentEnded('engine:' + e.docId);
     ({ code: e.exit, signal: e.signal } = await e.closed);
     /* HOW THIS INSTANCE ENDED, IN ONE PHRASE, so every reader below states the same fact the same way. */
     e.ended = (e.signal ? `on ${e.signal}` : `with code ${e.exit}`) +

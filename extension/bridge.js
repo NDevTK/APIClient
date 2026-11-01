@@ -2118,7 +2118,7 @@ async function frontierRederive(e) {
   /* The parked document speaks as itself for this one load and for nothing else, so it ends with the load. */
   const held = "held:frontier:" + e.key;
   try { return await _frontierRederive(e, held); }
-  finally { speakAsDocumentEnded(held); }
+  finally { speakAsDocumentEnded(held); sendCoalesceDocumentEnded(held); }
 }
 async function _frontierRederive(e, held) {
   DCHECK(e.shed === true,
@@ -4085,9 +4085,13 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
    and `unload` listeners under its own delta when next scheduled (an unload `sendBeacon` is an endpoint), and
    nothing is dropped. */
 /* An instance's frame is removed, and every document it held ends with it (HTML §7.5.10 "Destroying
-   documents"): their speak-as rules go (lib/speak-as.js). */
+   documents"): their speak-as rules (lib/speak-as.js) and recorded sends (lib/send-coalesce.js) go. */
 function engineFrameDestroy(eng) {
-  for (const name of [eng.docId].concat(eng.joinedDocIds)) if (name !== null) speakAsDocumentEnded("engine:" + name);
+  for (const name of [eng.docId].concat(eng.joinedDocIds)) {
+    if (name === null) continue;
+    speakAsDocumentEnded("engine:" + name);
+    sendCoalesceDocumentEnded("engine:" + name);
+  }
   eng.r.destroy();
 }
 async function engineUnload(eng, docName, incomingDocName) {
@@ -4123,6 +4127,7 @@ async function engineUnload(eng, docName, incomingDocName) {
      the engine's one-realm-per-document CHECK. */
   await eng.r.renderer.unload({ docId: docName });
   speakAsDocumentEnded("engine:" + docName);
+  sendCoalesceDocumentEnded("engine:" + docName);
   /* The round ends here, so it records: an unload attaches a job to every live timeline. */
   await engineRecordFacts(eng);
 }
@@ -6929,7 +6934,7 @@ const _hostOps = {
                                                                                    seed.principalUrl, held),
                                                           referrer: "none", policy: null, request: null }),
                                            docRecordOpaque(seed.doc))
-                        .finally(() => speakAsDocumentEnded(held)));
+                        .finally(() => { speakAsDocumentEnded(held); sendCoalesceDocumentEnded(held); }));
         return pick.census;
       }
       if (cand.kind === "doc") {

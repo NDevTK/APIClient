@@ -367,10 +367,11 @@ function _wrReclaim(documentId, d) {
 }
 
 /* The document `documentId` was destroyed (see webRequestDocumentPort): its requests are filed and its
-   captures reclaimed, it stays known as left until its tab closes, and the speak-as rules of sends that spoke as
-   it go (lib/speak-as.js). */
+   captures reclaimed, it stays known as left until its tab closes, and the speak-as rules (lib/speak-as.js) and
+   recorded sends (lib/send-coalesce.js) of sends that spoke as it go. */
 function webRequestDocumentLeft(documentId, tabId) {
   speakAsDocumentEnded("frame:" + documentId);
+  sendCoalesceDocumentEnded("frame:" + documentId);
   var d = _wrDocs.get(documentId);
   if (d !== undefined && d.left) return;
   if (d !== undefined) _wrReclaim(documentId, d);
@@ -417,6 +418,7 @@ function webRequestTabRemoved(tabId) {
     if (d.tabId !== tabId) continue;
     if (!d.left) _wrReclaim(id, d);
     speakAsDocumentEnded("frame:" + id);
+    sendCoalesceDocumentEnded("frame:" + id);
     _wrDocs.delete(id);
   }
 }

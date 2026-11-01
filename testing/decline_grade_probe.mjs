@@ -49,7 +49,8 @@ function zone(edge, table) {
      (engine/psl.mjs), as engine/trusted.mjs answers it. */
   const swRpc = (api, args) => api === 'site.registrableDomains' ? Promise.resolve(siteRegistrableDomains(args))
                                                                  : edge.swRpc(api, args);
-  const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, Response, fetch: edge.fetch, swRpc };
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, Response, ReadableStream, AbortController,
+                    fetch: edge.fetch, swRpc };
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
   loadZone(sandbox);

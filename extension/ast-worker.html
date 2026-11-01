@@ -95,6 +95,8 @@
      opener-policy read uses (RFC 9651). -->
 <script src="lib/structured-fields.js"></script>
 <script src="lib/attacker-site.js"></script>
+<!-- Each document's exploration sends a byte-identical request once; safe-fetch.js asks it per send. -->
+<script src="lib/send-coalesce.js"></script>
 <script src="lib/safe-fetch.js"></script>
 <!-- where each document's wall time went before its instance stepped, a readout for the census only -->
 <script src="lib/boot-span.js"></script>

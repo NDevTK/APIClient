@@ -59,8 +59,11 @@ ZONE.senderIsExtensionDocument = (s) => s === PERSON;
 
 /* A page request as engine/trusted.mjs's workFetch states it, from a document at `page`, answering a refusal's
    reason in `refused`. */
-/* `docKey` names the document; an opaque one (a `data:` page) is given the loopback space its creator had. */
-async function pageRead(page, url, headers, zone = ZONE, docKey = 'engine:' + new URL(page).origin) {
+/* `docKey` names the document; an opaque one (a `data:` page) is given the loopback space its creator had. By
+   default each request is its own document of the page's partition, since the cache is the partition's and a
+   byte-identical send of one document is answered by lib/send-coalesce.js, not by the cache. */
+let documents = 0;
+async function pageRead(page, url, headers, zone = ZONE, docKey = `engine:${new URL(page).origin}#${++documents}`) {
   const origin = new URL(page).origin;
   const space = origin === 'null' ? 'loopback' : zone.safeFetchDocumentAddressSpace(page, null);
   const r = await zone.safeFetch(url, {
