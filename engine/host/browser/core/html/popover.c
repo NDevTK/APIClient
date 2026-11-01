@@ -74,6 +74,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
+#include "core/css/css_cascade_pass.h"   /* the visibility state is a cascade input through `:popover-open` */
 #include "core/css/top_layer.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/document.h"
@@ -1247,6 +1248,22 @@ bool popover_element_is_showing(JSContext *ctx, JSValueConst el)
     return popover_is_showing(ctx, el);
 }
 
+bool popover_open_matches(const lxb_dom_node_t *n)
+{
+    JSValueConst wrap;
+    JSContext *realm;
+
+    DCHECK(n != NULL, "HTML §4.16.3's :popover-open was asked of no node");
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML) return false;
+    if (popover_attribute_state(lxb_dom_interface_element((lxb_dom_node_t *)n)) == POPOVER_STATE_NONE) return false;
+    /* The state is a slot on the wrapper: an element with none was never shown, and §6.12's show popover
+       requires a fully active node document, which a document with no active realm is not. */
+    wrap = node_wrap_peek(n);
+    realm = n->owner_document != NULL ? document_active_realm_of(lxb_dom_interface_node(n->owner_document)) : NULL;
+    if (JS_IsUndefined(wrap) || realm == NULL) return false;
+    return popover_is_showing(realm, wrap);
+}
+
 /* ---- §6.12's HIDE A POPOVER, as its own step machine ---------------------------------------------------------
  *
  * "To hide a popover given an HTML element element, a boolean focusPreviousElement, a boolean fireEvents, a
@@ -1559,6 +1576,7 @@ static int js_popover_hide_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         if (!s->fire_events) top_layer_remove_immediately(ctx, element);
         ps_clear(ctx, element, PS_TRIGGER);                                                      /* step 14 */
         ps_clear(ctx, element, PS_OPENED_MODE);                                                  /* step 15 */
+        css_cascade_element_state_written(node_of(element));   /* `:popover-open` */
         ps_clear(ctx, element, PS_VISIBILITY);                                                   /* step 16 */
         /* Step 17 — "If element is document's hint stack parent, or document's showing hint popover list is
            empty, then set document's hint stack parent to null." BOTH disjuncts are asked, and the second is
@@ -1814,6 +1832,7 @@ static void popover_show_tail(JSContext *ctx, PopoverState *s)
     if (s->effective_type == POPOVER_STATE_HINT && !JS_IsNull(s->ancestor) &&
         !JS_IsUndefined(s->ancestor) && popover_opened_mode(ctx, s->ancestor) == POPOVER_STATE_AUTO)
         ps_set(ctx, s->doc, PS_DOC_HINT_PARENT, JS_DupValue(ctx, s->ancestor));
+    css_cascade_element_state_written(node_of(s->el));   /* `:popover-open` */
     ps_set(ctx, s->el, PS_VISIBILITY, JS_TRUE);                                                   /* step 20 */
     if (!JS_IsNull(s->source)) ps_set(ctx, s->el, PS_TRIGGER, JS_DupValue(ctx, s->source));
     else                       ps_clear(ctx, s->el, PS_TRIGGER);                                  /* step 21 */

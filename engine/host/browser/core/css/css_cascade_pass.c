@@ -13,6 +13,7 @@
 #include "core/css/css_computed_style.h"
 #include "core/css/css_match_result.h"
 #include "core/layout/layout_job.h"   /* the record of the job whose activation holds the thread */
+#include "core/rendering/visual_update.h"   /* an element state's write is a visible effect */
 #include "solver/flow.h"               /* the running flow's cascade input generation */
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
@@ -142,6 +143,19 @@ void css_cascade_record_release(CssCascadeRecord *r)
 bool css_cascade_record_is_held(void) { return layout_job_cascade() != NULL; }
 
 void css_cascade_input_written(void) { flow_running_cascade_written(); }
+
+void css_cascade_element_state_written_at(const lxb_dom_node_t *n, const char *file, int line)
+{
+    DCHECK(n != NULL && n->owner_document != NULL, "a pseudo-class's element state was written on no element");
+    DCHECKF(!css_cascade_record_is_held(),
+            "%s:%d wrote an element state a pseudo-class matches on while a layout job held css-cascade-5 §4.2 "
+            "\"Cascaded Values\"' record, so cascaded values already served were sorted over the other answer. "
+            "Layout writes no cascade input: take the write out of the job's activation", file, line);
+    (void)file;
+    (void)line;
+    css_cascade_input_written();
+    visual_update_document_changed(n->owner_document);
+}
 
 bool css_cascade_pass_author_ask(const lxb_dom_node_t *root, struct CssAuthorSheets **out)
 {

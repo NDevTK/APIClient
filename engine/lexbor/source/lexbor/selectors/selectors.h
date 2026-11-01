@@ -146,8 +146,10 @@ typedef struct {
 lxb_selectors_predicate_t;
 
 typedef struct {
-    /* DOM §4.9: "An element whose custom element state is "uncustomized" or "custom" is said to be defined." */
-    bool (*defined)(const lxb_dom_node_t *node, void *ctx);
+    /* Does `node` match pseudo-class `id`, one of HTML §4.16.3 "Pseudo-classes"' element states: `:defined`
+       (DOM §4.9: "An element whose custom element state is "uncustomized" or "custom" is said to be defined"),
+       `:popover-open`, `:modal` and `:open`. */
+    bool (*element_state)(const lxb_dom_node_t *node, lxb_css_selector_pseudo_class_id_t id, void *ctx);
 
     /*
      * THE HOST IS ABOUT TO HAVE A MATCH DECIDED FROM THIS ATTRIBUTE'S VALUE BYTES, and this is its one chance

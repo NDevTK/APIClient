@@ -1187,6 +1187,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/focusbox.h"
 #include "fixture/altbutton.h"
 #include "fixture/inputbutton.h"
+#include "fixture/pseudostate.h"
 #include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
@@ -1779,6 +1780,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "focusbox", HTML_FOCUSBOX },
     { "altbutton", HTML_ALTBUTTON },
     { "inputbutton", HTML_INPUTBUTTON },
+    { "pseudostate", HTML_PSEUDOSTATE },
     { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
@@ -14521,6 +14523,22 @@ TF_UNIT void probes_inputbutton(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `pseudostate` document (fixture/pseudostate.h). */
+TF_UNIT void probes_pseudostate(const char *js, Probe *tab, int *n) {
+    const char *ps_why = NULL; int ps_tt = 1;
+    fold_row(&ps_tt, &ps_why, !!strstr(js, "\"/api/pseudostate\""),
+             "NOT REACHED: there is no /api/pseudostate record, so a `matches()` threw or the document aborted");
+    fold_row(&ps_tt, &ps_why,
+             param_value_is(js, "/api/pseudostate", "r",
+                            "false.none.true.block.false.false.true.true.true.false.false.none.2"),
+             "HTML §4.16.3: `:popover-open`, `:modal` or `:open` answered other than Chrome 153 for this markup, or "
+             "HTML §15.3.3's `[popover]:not(:popover-open)` rule did not decide the popover's `display`");
+    const Probe rows[] = {
+        { "element-state-pseudo-classes", ps_tt, "/api/pseudostate", SESS_EXPLORE, ps_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fragdialog` document. */
 TF_UNIT void probes_fragdialog(const char *js, Probe *tab, int *n) {
     /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
@@ -23281,6 +23299,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_focusbox(js, probes, &np);
     probes_altbutton(js, probes, &np);
     probes_inputbutton(js, probes, &np);
+    probes_pseudostate(js, probes, &np);
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);

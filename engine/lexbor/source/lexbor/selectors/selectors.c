@@ -1854,13 +1854,15 @@ lxb_selectors_pseudo_class(lxb_selectors_t *selectors,
             return false;
 
         case LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED:
-            /* HTML §4.16.3 "Pseudo-classes": "The :defined pseudo-class must match any element that is
-               defined." Whether an element IS defined is DOM §4.9 "Interface Element"'s custom element state,
-               which no shape of this tree carries -- so the host answers. An embedder that let this selector
-               compile and installed no table is a NULL call here, deliberately: reporting `false` would say
-               every element in the document is un-defined, which is a wrong answer no test distinguishes from
-               an unbuilt one. */
-            return selectors->host->defined(node, selectors->host_ctx);
+        case LXB_CSS_SELECTOR_PSEUDO_CLASS_POPOVER_OPEN:
+        case LXB_CSS_SELECTOR_PSEUDO_CLASS_MODAL:
+        case LXB_CSS_SELECTOR_PSEUDO_CLASS_OPEN:
+            /* HTML §4.16.3 "Pseudo-classes" defines each over a state no shape of this tree carries (DOM §4.9's
+               custom element state, HTML §6.12's popover visibility state, §4.11.4's is modal, a picker being
+               open), so the host answers. An embedder that let one compile and installed no table is a NULL
+               call here, deliberately: a `false` would be a wrong answer no test tells from an unbuilt one. */
+            return selectors->host->element_state(node, (lxb_css_selector_pseudo_class_id_t) pseudo->type,
+                                                  selectors->host_ctx);
 
         case LXB_CSS_SELECTOR_PSEUDO_CLASS_CURRENT:
         case LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFAULT:

@@ -64,7 +64,12 @@ typedef enum {
        generator emits is presentation. Its answer is not a fact about the tree — see
        lxb_selectors_host_cb_t in selectors/selectors.h for who is asked. */
     LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED           = 0x002a,
-    LXB_CSS_SELECTOR_PSEUDO_CLASS__LAST_ENTRY       = 0x002b
+    /* HTML §4.16.3's `:popover-open`, `:modal` and `:open`, appended for the reason `:defined` is: each is an
+       element state the host keeps. */
+    LXB_CSS_SELECTOR_PSEUDO_CLASS_POPOVER_OPEN      = 0x002b,
+    LXB_CSS_SELECTOR_PSEUDO_CLASS_MODAL             = 0x002c,
+    LXB_CSS_SELECTOR_PSEUDO_CLASS_OPEN              = 0x002d,
+    LXB_CSS_SELECTOR_PSEUDO_CLASS__LAST_ENTRY       = 0x002e
 }
 lxb_css_selector_pseudo_class_id_t;
 

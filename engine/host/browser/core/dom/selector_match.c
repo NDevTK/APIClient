@@ -5,8 +5,13 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/dom/document.h"
+#include "core/dom/node.h"
 #include "core/dom/selector_match.h"
+#include "core/fullscreen/fullscreen.h"
 #include "core/html/custom_elements.h"
+#include "core/html/html_dialog.h"
+#include "core/html/popover.h"
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
@@ -17,14 +22,43 @@
 /* THE HOST LANGUAGE'S ANSWERS, for the pseudo-classes whose truth is not a shape of the tree. Selectors Level
    5 §7 "Exposing custom state: the :state() pseudo-class" states the rule in general — "The exact matching
    behavior of :state() pseudo-class is defined by the host language" — and HTML §4.16.3 "Pseudo-classes"
-   defines `:defined` the same way, by deferring to DOM §4.9 "Interface Element"'s custom element state. The
-   table is STATIC because lxb_selectors_host_cb_set borrows it for the arena's whole life, and it is installed
-   at init rather than per match so there is no window in which a compiled `:defined` could be matched against
-   an arena that has nobody to ask. */
-static bool host_defined(const lxb_dom_node_t *node, void *ctx)
+   defines `:defined`, `:popover-open`, `:modal` and `:open` the same way, over element states this engine keeps.
+   The table is STATIC because lxb_selectors_host_cb_set borrows it for the arena's whole life, and it is
+   installed at init rather than per match so there is no window in which a compiled one could be matched
+   against an arena that has nobody to ask. */
+static bool host_html_element_is(const lxb_dom_node_t *node, lxb_tag_id_t tag)
 {
+    return node->ns == LXB_NS_HTML && node->local_name == tag;
+}
+
+static bool host_element_state(const lxb_dom_node_t *node, lxb_css_selector_pseudo_class_id_t id, void *ctx)
+{
+    JSContext *realm;
+    JSValueConst wrap;
+
     (void)ctx;   /* the realm is the ELEMENT's own document's, derived per node — never the running flow's */
-    return custom_elements_is_defined(node);
+    if (id == LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED) return custom_elements_is_defined(node);
+    DCHECK(id == LXB_CSS_SELECTOR_PSEUDO_CLASS_POPOVER_OPEN || id == LXB_CSS_SELECTOR_PSEUDO_CLASS_MODAL ||
+               id == LXB_CSS_SELECTOR_PSEUDO_CLASS_OPEN,
+           "lexbor asked the host about a pseudo-class HTML §4.16.3 does not define over an element state");
+    /* `:open`: "details elements that have an open attribute", "dialog elements that have an open attribute",
+       "select elements that are a drop-down box and whose drop-down boxes are open" and "input elements that
+       support a picker and whose pickers are open". No `select` here has a drop-down box (it is no component
+       yet), and core/html/input_picker.c resolves a picker within the algorithm that shows it, so neither of
+       the last two is open at any instant a match can run. */
+    if (id == LXB_CSS_SELECTOR_PSEUDO_CLASS_OPEN)
+        return (host_html_element_is(node, LXB_TAG_DETAILS) || host_html_element_is(node, LXB_TAG_DIALOG)) &&
+               lxb_dom_element_has_attribute(lxb_dom_interface_element((lxb_dom_node_t *)node),
+                                             (const lxb_char_t *)"open", 4);
+    if (id == LXB_CSS_SELECTOR_PSEUDO_CLASS_POPOVER_OPEN) return popover_open_matches(node);
+    /* `:modal`: "dialog elements whose is modal is true" and "elements whose fullscreen flag is true". Both
+       are slots on the element's wrapper; an element with none was never made modal or fullscreened, and
+       neither can one in a document with no active realm (each algorithm requires a fully active document). */
+    wrap = node_wrap_peek(node);
+    realm = node->owner_document != NULL
+                ? document_active_realm_of(lxb_dom_interface_node(node->owner_document)) : NULL;
+    if (JS_IsUndefined(wrap) || realm == NULL) return false;
+    return html_dialog_is_modal(realm, wrap) || fullscreen_flag_is_set(realm, wrap);
 }
 
 /*
@@ -423,7 +457,7 @@ static lxb_selectors_value_t host_attr_value_read(const lxb_dom_node_t *node,
     return LXB_SELECTORS_VALUE_UNDETERMINED;
 }
 
-static const lxb_selectors_host_cb_t HOST_CB = { host_defined, host_attr_value_read };
+static const lxb_selectors_host_cb_t HOST_CB = { host_element_state, host_attr_value_read };
 
 const lxb_selectors_host_cb_t *selector_match_host_cb(void) { return &HOST_CB; }
 

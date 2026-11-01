@@ -55,6 +55,13 @@ bool css_cascade_record_is_held(void);
    chokepoint the validity list above names, beside its assert that no record is held. */
 void css_cascade_input_written(void);
 
+/* An element state HTML §4.16.3 "Pseudo-classes" matches on (custom element state, popover visibility state,
+   is modal, fullscreen flag) is being written on `n`: asserts no record is held (`file`/`line` name the writer),
+   raises the running flow's generation, and marks `n`'s document changed for HTML §8.1.7.3's rendering
+   opportunity. The tree version does not move for such a write, so this is the only thing that tells. */
+void css_cascade_element_state_written_at(const lxb_dom_node_t *n, const char *file, int line);
+#define css_cascade_element_state_written(n) css_cascade_element_state_written_at((n), __FILE__, __LINE__)
+
 /* The author origin's sheet set for `root` (core/css/css_author_sheets.h). `ask` answers the held sealed set,
    borrowed, or false; on false `*out` is the open set a resting build parked, now the caller's again, or
    NULL, and the caller builds on and hands the set to `hold` when it is sealed or to `park` when its drive

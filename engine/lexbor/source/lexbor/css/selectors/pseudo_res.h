@@ -62,7 +62,10 @@ static const lxb_css_selectors_pseudo_data_t lxb_css_selectors_pseudo_data_pseud
     {(lxb_char_t *) "valid", 5, LXB_CSS_SELECTOR_PSEUDO_CLASS_VALID},
     {(lxb_char_t *) "visited", 7, LXB_CSS_SELECTOR_PSEUDO_CLASS_VISITED},
     {(lxb_char_t *) "warning", 7, LXB_CSS_SELECTOR_PSEUDO_CLASS_WARNING},
-    {(lxb_char_t *) "defined", 7, LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED}
+    {(lxb_char_t *) "defined", 7, LXB_CSS_SELECTOR_PSEUDO_CLASS_DEFINED},
+    {(lxb_char_t *) "popover-open", 12, LXB_CSS_SELECTOR_PSEUDO_CLASS_POPOVER_OPEN},
+    {(lxb_char_t *) "modal", 5, LXB_CSS_SELECTOR_PSEUDO_CLASS_MODAL},
+    {(lxb_char_t *) "open", 4, LXB_CSS_SELECTOR_PSEUDO_CLASS_OPEN}
 };
 
 static const lxb_css_selectors_pseudo_data_func_t lxb_css_selectors_pseudo_data_pseudo_class_function[LXB_CSS_SELECTOR_PSEUDO_CLASS_FUNCTION__LAST_ENTRY] = 
@@ -166,7 +169,9 @@ static const lxb_css_selectors_pseudo_data_func_t lxb_css_selectors_pseudo_data_
    "defined" (len 7) hashes to bucket 48, which held "first-child" (len 11). Filing it behind that row would
    have hit exactly the second rule, so "first-child" moved to the free slot 14 and "defined" took the bucket
    with next=14. Verified by simulating the lookup above over every named key in the table (42 reachable, 0
-   unreachable) and over near-miss keys that must still miss. */
+   unreachable) and over near-miss keys that must still miss.
+   "popover-open" (len 12), "modal" (len 5) and "open" (len 4) hash to the empty buckets 33, 54 and 65, each a
+   chain of one; the same simulation reaches all 45 keys. */
 static const lexbor_shs_entry_t lxb_css_selectors_pseudo_class_shs[79] =
 {
     {NULL, NULL, 78, 0}, 
@@ -202,7 +207,7 @@ static const lexbor_shs_entry_t lxb_css_selectors_pseudo_class_shs[79] =
     {"visited", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_VISITED], 7, 0}, 
     {NULL, NULL, 0, 0}, 
     {NULL, NULL, 0, 0}, 
-    {NULL, NULL, 0, 0}, 
+    {"popover-open", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_POPOVER_OPEN], 12, 0}, 
     {NULL, NULL, 0, 0}, 
     {"root", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_ROOT], 4, 8}, 
     {NULL, NULL, 0, 0}, 
@@ -223,7 +228,7 @@ static const lexbor_shs_entry_t lxb_css_selectors_pseudo_class_shs[79] =
     {"required", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_REQUIRED], 8, 0}, 
     {NULL, NULL, 0, 0}, 
     {"link", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_LINK], 4, 0}, 
-    {NULL, NULL, 0, 0}, 
+    {"modal", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_MODAL], 5, 0}, 
     {"empty", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_EMPTY], 5, 0}, 
     {"invalid", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_INVALID], 7, 0}, 
     {NULL, NULL, 0, 0}, 
@@ -234,7 +239,7 @@ static const lexbor_shs_entry_t lxb_css_selectors_pseudo_class_shs[79] =
     {"blank", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_BLANK], 5, 0}, 
     {NULL, NULL, 0, 0}, 
     {NULL, NULL, 0, 0}, 
-    {NULL, NULL, 0, 0}, 
+    {"open", (void *) &lxb_css_selectors_pseudo_data_pseudo_class[LXB_CSS_SELECTOR_PSEUDO_CLASS_OPEN], 4, 0}, 
     {NULL, NULL, 0, 0}, 
     {NULL, NULL, 0, 0}, 
     {NULL, NULL, 0, 0}, 

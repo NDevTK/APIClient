@@ -98,6 +98,7 @@
 #include "core/dom/element.h"
 #include "core/dom/element_view.h"   /* the box tests a resolved used value asks first */
 #include "core/dom/selector_match.h"
+#include "core/html/popover.h"   /* HTML §15.3.3's `:popover-open` display rules */
 #include "core/html/integer_microsyntax.h"   /* §4.3.11.1's `headingoffset` runs §2.3.4.2's rules for parsing non-negative integers */
 #include "core/css/css_author_sheets.h"   /* css-cascade-5 §6.2's author origin, one set per root */
 #include "core/css/css_cascade.h"
@@ -2654,9 +2655,9 @@ static const char *cssd_ua_hidden(lxb_dom_element_t *el, const lxb_char_t *tag, 
     return "none";
 }
 
-/* THE OTHER TWO UA RULES WHOSE SELECTOR IS AN ATTRIBUTE AND WHOSE PROPERTY IS `display`, each one a box an
- * element HAS OR HAS NOT depending on a content attribute, which is why neither can be a row of the type-name
- * table above and why leaving them out is a box that should not exist rather than a value that is missing:
+/* THE OTHER UA RULES WHOSE SELECTOR IS AN ATTRIBUTE OR AN ELEMENT STATE AND WHOSE PROPERTY IS `display`, each
+ * one a box an element HAS OR HAS NOT depending on a content attribute or a state, which is why none can be a
+ * row of the type-name table above and why leaving them out is a box that should not exist:
  *
  *   HTML §15.3.1 Hidden elements: `input[type=hidden i] { display: none !important }`. Its IMPORTANCE is part of the
  *   rule and is reported, not dropped — CSS Cascade §6.3 puts an important user-agent declaration above every
@@ -2667,11 +2668,11 @@ static const char *cssd_ua_hidden(lxb_dom_element_t *el, const lxb_char_t *tag, 
  *   HTML §15.3.3 Flow content: `dialog:not([open]) { display: none }`, at NORMAL importance, which is why a page
  *   CAN show a closed dialog with its own rule and is a real difference from the line above.
  *
- * WHAT IS DELIBERATELY NOT HERE: HTML §15.3.3's `[popover]:not(:popover-open):not(dialog[open]) { display: none }`
- * and `dialog:popover-open { display: block }`. Both turn on the POPOVER VISIBILITY STATE, which is an
- * element's own state and not an attribute — there is no attribute to read it off, so a rule written from the
- * `popover` attribute alone would hide every popover that a page had shown. Build the popover state machine
- * (HTML §6.12 "The popover attribute") and these two rules land beside the two above. */
+ *   HTML §15.3.3 Flow content: `[popover]:not(:popover-open):not(dialog[open]) { display: none }`, (0,3,1),
+ *   and `dialog:popover-open { display: block }`, (0,1,1) and later in the sheet than `dialog:not([open])`.
+ *   `:popover-open` is HTML §6.12's popover visibility state (core/html/popover.h's popover_open_matches).
+ *   The same section's `[popover]` rule (`position: fixed; inset: 0; margin: auto`, fit-content sizes) waits
+ *   with the `dialog` rule on core/layout/used_value.c's CSS 2.1 §10.3.7. */
 static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen,
                                                bool *important)
 {
@@ -2688,12 +2689,18 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
         v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &vlen);
         if (cssd_attr_is_ascii_ci(v, vlen, "hidden")) { *important = true; return "none"; }
     }
-    /* Then the two NORMAL rules, in css-cascade-5 §6.1's Specificity order, which is the criterion left once the band ties:
-       `[hidden]:not([hidden=until-found i]):not(embed)` is (0,2,1) and `dialog:not([open])` is (0,1,1). They
-       agree on `none` wherever both match, so the order is not observable today — it is the order the spec
-       gives, written down so that it stays right when a third rule joins them. */
+    /* Then the NORMAL rules, in css-cascade-5 §6.1's Specificity order and then Order of Appearance, the criteria
+       left once the band ties: the `[popover]` rule (0,3,1), `[hidden]:not([hidden=until-found i]):not(embed)`
+       (0,2,1), and the two (0,1,1) `dialog` rules, of which `dialog:popover-open` comes later in the sheet. */
+    if (lxb_dom_element_has_attribute(el, (const lxb_char_t *)"popover", 7) &&
+        !popover_open_matches(lxb_dom_interface_node(el)) &&
+        !(taglen == 6 && memcmp(tag, "dialog", 6) == 0 &&
+          lxb_dom_element_has_attribute(el, (const lxb_char_t *)"open", 4)))
+        return "none";
     hidden = cssd_ua_hidden(el, tag, taglen);
     if (hidden) return hidden;
+    if (taglen == 6 && memcmp(tag, "dialog", 6) == 0 && popover_open_matches(lxb_dom_interface_node(el)))
+        return "block";
     /* `dialog:not([open])` is a PRESENCE test and takes `has_attribute` for the reason `cssd_ua_hidden` states:
        `<dialog open>` is the spelling every page writes and it carries no value, so asking `get_attribute` for
        it answered NULL and gave an OPEN dialog `display: none`. */

@@ -70,7 +70,6 @@
 #include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
-#include "core/rendering/visual_update.h"   /* `:defined` moving is a visible effect HTML §8.1.7.3 asks about */
 #include "core/dom/node.h"
 #include "core/dom/names.h"
 #include "core/dom/attr_list.h"   /* §4.9's (namespace, local name) lookup — the old value of THIS attribute */
@@ -810,29 +809,9 @@ static void ce_set_state(JSContext *ctx, JSValueConst wrap, int state)
     DCHECK(JS_IsObject(wrap), "a custom element state was written onto something that is not an element wrapper");
     DCHECK(state >= CE_STATE_UNCUSTOMIZED && state <= CE_STATE_CUSTOM,
            "a custom element state DOM §4.9 does not name was written onto an element");
-    /* A CASCADE INPUT MOVING WHILE A LAYOUT JOB HOLDS ITS RECORD, AND THE ONLY ONE THAT IS NEITHER THE TREE,
-       AN ATTRIBUTE NOR A STYLE SHEET — see core/css/css_cascade_pass.h. Selector matching has exactly ONE host-language
-       answer (core/dom/selector_match.c installs one callback and no other), and it is `:defined`,
-       which css-scoping-1 leaves to the host language and HTML §4.16.3 "Pseudo-classes" defines over
-       DOM §4.9 "Interface Element"'s custom element state — this slot. An UPGRADE moves it without
-       touching the tree, so `dom_cow_version` does not advance for it, and a selector that matched one
-       way before it matches the other way after. */
-    DCHECK(!css_cascade_record_is_held(),
-           "a custom element state was written while css-cascade-5 §4.2 \"Cascaded Values\"' record "
-           "was held by a layout job. That state is what `:defined` matches on — the one host-language "
-           "answer this engine's selector matcher has — so an upgrade here re-decides which author "
-           "rules apply to this element, and every cascaded value the render already served for it was "
-           "sorted over the other answer. The tree version does not move for an upgrade, so nothing "
-           "else in this engine can see it happen. "
-           "Layout reads the cascade and writes none of its inputs: find the write reached from inside "
-           "a layout job's activation (core/layout/layout_job.h) and take it out of the walk");
-    css_cascade_input_written();
-    {
-        lxb_dom_node_t *n = node_of(wrap);   /* `:defined` re-decided is a visible effect for its document */
-
-        DCHECK(n != NULL, "a custom element state was written onto a wrapper with no node");
-        visual_update_document_changed(n->owner_document);
-    }
+    /* HTML §4.16.3's `:defined` matches on this slot, and an upgrade moves it without touching the tree. */
+    DCHECK(node_of(wrap) != NULL, "a custom element state was written onto a wrapper with no node");
+    css_cascade_element_state_written(node_of(wrap));
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_state, JS_NewInt32(ctx, state), CE_SLOT_FLAGS);
 }
 

@@ -189,6 +189,10 @@ void fullscreen_free(JSRuntime *rt);
    step 1 and close_watcher at its step 7. Neither half may grow a private copy of the other's question. */
 JSValue fullscreen_element(JSContext *ctx, lxb_dom_node_t *document);
 
+/* FULLSCREEN §2 "Model"'s fullscreen flag of the element wrapper `element`: set or unset (an absent slot, the
+   initial value). HTML §4.16.3's `:modal` reads it for "elements whose fullscreen flag is true". */
+bool fullscreen_flag_is_set(JSContext *ctx, JSValueConst element);
+
 /* FULLSCREEN §3 "API"'s `partial interface Document`, for one realm. Called from document.c's
    document_install_proto, beside
    the other components that add members to that one prototype — a member of Document is installed where

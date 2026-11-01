@@ -57,6 +57,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/css/css_cascade_pass.h"   /* is modal is a cascade input through `:modal` */
 #include "core/css/top_layer.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/document.h"
@@ -797,6 +798,7 @@ void html_dialog_removing_steps(JSContext *ctx, JSValueConst el)
        rendering update coming that would process a pending removal, so the deferred form would leave it in the
        set for ever. */
     if (top_layer_is_in(ctx, el)) top_layer_remove_immediately(ctx, el);
+    css_cascade_element_state_written(node_of(el));   /* `:modal` */
     ds_clear(ctx, el, DS_IS_MODAL);                                                            /* step 3 */
 }
 
@@ -1127,6 +1129,7 @@ int html_dialog_close_run(JSContext *ctx, DialogCloseRun **slot, JSValueConst su
            lets a page close and re-show a dialog in one task without the set losing it in between. */
         if (ds_flag(ctx, r->subject, DS_IS_MODAL)) top_layer_request_removal(ctx, r->subject);
         r->was_modal = ds_flag(ctx, r->subject, DS_IS_MODAL) ? 1 : 0;                             /* step 7 */
+        css_cascade_element_state_written(node_of(r->subject));   /* `:modal` */
         ds_clear(ctx, r->subject, DS_IS_MODAL);                                                   /* step 8 */
         if (!JS_IsNull(r->result))                                                                /* step 9 */
             dialog_set_return_value(ctx, r->subject, r->result);
@@ -1589,6 +1592,7 @@ static void dialog_show_modal_steps_12_to_15(JSContext *ctx, DialogShowState *s)
            "5 is \"Set the dialog close watcher with subject\". A null here means the write did not reach that "
            "hook — the attribute was placed past the chokepoint — so a close request would not close this "
            "modal dialog and Esc would do nothing");
+    css_cascade_element_state_written(node_of(s->subject));   /* `:modal` */
     ds_set(ctx, s->subject, DS_IS_MODAL, JS_TRUE);                                              /* step 13 */
     /* Step 14 — "Set subject's node document to be blocked by the modal dialog subject." IT WRITES NOTHING,
        AND THE ASSERT BELOW IS WHY THAT IS THE IMPLEMENTATION RATHER THAN A GAP. §6.3.1 DERIVES the predicate —

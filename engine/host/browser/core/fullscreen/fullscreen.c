@@ -76,6 +76,11 @@ static bool fs_flag_is_set(JSContext *ctx, JSValueConst element)
     return set;
 }
 
+bool fullscreen_flag_is_set(JSContext *ctx, JSValueConst element)
+{
+    return fs_flag_is_set(ctx, element);
+}
+
 /* The predicate css-position-4 §3's ordered read is given. It is one own-slot read: no page code, no getter,
    no suspension, and it reaches none of css-position-4 §3.3's manipulation algorithms — which is the
    contract top_layer.h states and the length assert on the other side of the walk is what checks. */

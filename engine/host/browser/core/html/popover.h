@@ -144,6 +144,11 @@ bool popover_flat_tree_descendant_of(JSContext *ctx, const lxb_dom_node_t *node,
    every element §6.12 has never shown. */
 bool popover_element_is_showing(JSContext *ctx, JSValueConst el);
 
+/* HTML §4.16.3 "Pseudo-classes"' `:popover-open`, "any HTML element whose popover attribute is not in the No
+   Popover state and whose popover visibility state is showing", over a node: for the selector matcher and the
+   UA stylesheet's `:popover-open` rules, neither of which holds a wrapper or a realm. */
+bool popover_open_matches(const lxb_dom_node_t *n);
+
 /* Declared ONCE PER AGENT (the slot keys, the three members' pool ids, hide a popover's step-def id and its
    realm slot); installed onto each realm's HTMLElement.prototype, which core/html/html_element.c owns and hands
    over — and that install is also where hide a popover's function object is minted for the realm. */
