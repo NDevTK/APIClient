@@ -170,7 +170,8 @@ static void dom_note_created_attr(lxb_dom_attr_t *a);   /* fwd: the chokepoint i
  *   - it cannot move the APPLIED CHAIN. `g_dom_installed` is the running flow's own `g_dom_base` (dom_apply
  *     installs it, dom_unapply asserts it); every flow holds ONE counted reference on its base and every
  *     segment holds one on ITS base — dom_cow_fork hands out refcount 2, one for the running flow and one for
- *     the sibling, and transfers the running flow's reference on the old base into `seg->base` — so a segment
+ *     the sibling, and transfers the running flow's reference on the old base into `seg->base`, or over an
+ *     empty head gives the sibling one more reference on the running flow's own base — so a segment
  *     the running flow stands on has a refcount of at least 2 the moment any other chain reaches it, and
  *     dom_base_release's dying prefix stops at the first segment whose refcount is not 1. dom_install_chain is
  *     therefore unreachable from inside a sale.
@@ -2897,6 +2898,19 @@ void dom_apply(void) {
    entry silently vanish. The invariant is now the assert at dom_undo_push, which crashes there instead.
    Returns the shared base. */
 void *dom_cow_fork(void) {
+    /* A head holding no entry and introducing no site name has nothing to freeze, so the sibling takes one
+       reference on the running flow's base, as cow_delta_fork does for an empty heap head. A chain's depth then
+       counts the forks that wrote the document, which is what dom_install_chain walks at every switch. */
+    if (g_dom_undo_n == 0 && g_dom_flow_new_n == 0) {
+        DCHECK(g_dom_installed == g_dom_base,
+               "a DOM fork found the document showing a chain other than the running flow's base — the sibling "
+               "would share a base whose state is not what the document holds");
+        DCHECK(g_dom_flow_digest == (g_dom_base ? g_dom_base->digest : 0),
+               "a DOM fork over an empty head found the running flow's site digest differing from its base's — "
+               "the head introduced no name, so the two are one set");
+        if (g_dom_base) g_dom_base->refcount++;
+        return g_dom_base;
+    }
     /* ASKED BEFORE THE UNAPPLY, because this allocation can SELL A FLOW (solver/reclaim.h) and a sale walks
        the frozen document chain. Between the unapply below and the re-apply at the end, the running flow's
        head is half-taken-down and the document shows a tree no entry describes; nothing in this file is

@@ -398,7 +398,8 @@ void dom_buf_free(void *buf, int n);
 /* Persistent-versioned-DOM fork (mirrors the heap's JS_CowFork): freeze the running flow's DOM head into a
    shared immutable base segment (refcount 2) a snapshot-forked sibling references in O(1). The base chain rides
    alongside the head exactly like the heap's cow_base; the scheduler stores it on the Flow as void*. */
-void *dom_cow_fork(void);       /* freeze head -> shared base; returns it (the sibling stores the 2nd reference) */
+void *dom_cow_fork(void);       /* freeze head -> shared base (an empty head shares the current one); returns it, and
+                                   the sibling stores the reference it carries */
 void *dom_base_take(void);      /* detach the shared base chain (park it on the flow) */
 void dom_base_load(void *base); /* install a parked flow's base chain (before dom_apply) */
 /* Drop a flow's reference on a base chain (freed iff last), bringing the DOCUMENT back down to the deepest
@@ -408,8 +409,8 @@ void dom_base_load(void *base); /* install a parked flow's base chain (before do
    they are still live tree. */
 /* A SEGMENT'S REFCOUNT IS EXACTLY the number of flows whose `dom_base` names it plus the number of segments
    whose `base` names it, and there is deliberately no `dom_base_ref` to raise it from outside: dom_cow_fork is
-   the only place a reference is created (two of them, one per flow) and dom_base_release the only place one is
-   dropped. That equation is what makes the installed segment un-freeable during a sale — it is the running
+   the only place a reference is created (one per flow that names the segment it returns) and dom_base_release the
+   only place one is dropped. That equation is what makes the installed segment un-freeable during a sale — it is the running
    flow's own base, so any other chain that reaches it puts its count above 1 — and dom_install_chain asserts
    the consequence. A second way to take a reference would make it uncheckable. */
 void dom_base_release(void *base);
