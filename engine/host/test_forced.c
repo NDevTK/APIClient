@@ -1221,6 +1221,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/scrollicb.h"
 #include "fixture/cascfork.h"
 #include "fixture/cascforkview.h"
+#include "fixture/cascforkjson.h"
+#include "fixture/cascforkderived.h"
 #include "fixture/scrollflex.h"
 #include "fixture/flexnest.h"
 #include "fixture/gridnest.h"
@@ -1827,6 +1829,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "scrollicb", HTML_SCROLLICB },
     { "cascfork", HTML_CASCFORK },
     { "cascforkview", HTML_CASCFORKVIEW },
+    { "cascforkjson", HTML_CASCFORKJSON },
+    { "cascforkderived", HTML_CASCFORKDERIVED },
     { "scrollflex", HTML_SCROLLFLEX },
     { "flexnest3", HTML_FLEXNEST3 },
     { "flexnest6", HTML_FLEXNEST6 },
@@ -16207,6 +16211,46 @@ TF_UNIT void probes_cascforkview(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cascforkjson` document (fixture/cascforkjson.h). Each world reports #t's width. */
+TF_UNIT void probes_cascforkjson(const char *js, Probe *tab, int *n) {
+    const char *cj_why = NULL; int cj_tt = !!strstr(js, "\"/api/cascforkjson\"");
+
+    fold_row(&cj_tt, &cj_why, cj_tt,
+             "NOT REACHED: there is no /api/cascforkjson record at all, so the document aborted before its fetch");
+    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cascforkjson", "w", "50"),
+             "Selectors 4 §6.1: no world where `[data-theme=\"dark\"]` holds over a record member whose type set admits an Object");
+    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cascforkjson", "w", "30"),
+             "Selectors 4 §6.1: no world where `[data-theme=\"light\"]` holds over that member");
+    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cascforkjson", "w", "10"),
+             "Selectors 4 §6.1: no world where neither equality holds");
+    fold_row(&cj_tt, &cj_why, param_value_count_of(js, "/api/cascforkjson", "w", "90") == 0,
+             "Selectors 4 §6.1: a world where the attribute equals both `dark` and `light`, so the holding `=` determined no string the later test read");
+    const Probe rows[] = {
+        { "cascade-predicate-fork-member", cj_tt, "/api/cascforkjson", SESS_EXPLORE, cj_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `cascforkderived` document (fixture/cascforkderived.h). Each world reports #u's width. */
+TF_UNIT void probes_cascforkderived(const char *js, Probe *tab, int *n) {
+    const char *cd_why = NULL; int cd_tt = !!strstr(js, "\"/api/cascforkderived\"");
+
+    fold_row(&cd_tt, &cd_why, cd_tt,
+             "NOT REACHED: there is no /api/cascforkderived record at all, so the document aborted before its fetch");
+    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cascforkderived", "w", "20"),
+             "Selectors 4 §6.1: no world where `[data-mode=\"m-wide\"]` holds over a concatenation");
+    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cascforkderived", "w", "7"),
+             "Selectors 4 §6.1: no world where `[data-mode=\"m-slim\"]` holds over that concatenation");
+    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cascforkderived", "w", "5"),
+             "Selectors 4 §6.1: no world where neither equality holds");
+    fold_row(&cd_tt, &cd_why, param_value_count_of(js, "/api/cascforkderived", "w", "90") == 0,
+             "Selectors 4 §6.1: a world where the attribute equals both `m-wide` and `m-slim`, so the holding `=` determined no string the later test read");
+    const Probe rows[] = {
+        { "cascade-predicate-fork-derived", cd_tt, "/api/cascforkderived", SESS_EXPLORE, cd_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `scrollflex` document (fixture/scrollflex.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give
    every number they expect but h5, which is css-flexbox-1 §9.6 step 14's centring of a 30px item on a 10px line. */
 TF_UNIT void probes_scrollflex(const char *js, Probe *tab, int *n) {
@@ -23859,6 +23903,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_scrollicb(js, probes, &np);
     probes_cascfork(js, probes, &np);
     probes_cascforkview(js, probes, &np);
+    probes_cascforkjson(js, probes, &np);
+    probes_cascforkderived(js, probes, &np);
     probes_scrollflex(js, probes, &np);
     probes_layoutnest(js, probes, &np);
     probes_gridtemplate(js, probes, &np);
