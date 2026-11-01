@@ -97,6 +97,9 @@ typedef struct {
        visitor was served does not have — so absence is this bit and never the field's value. 1 wherever the mint
        was handed bytes (concolic_alloc), and on a member read whose parent's example lacks the member. */
     uint8_t ex_has;
+    /* The example's type as a type facet bit (CONCOLIC_TYF_*), written with `example`: §13.5.3.1 tells a
+       callable Object apart, which needs the realm, so it is read where a context is in hand. */
+    uint16_t ex_tyf;
     /* This value's own [[Prototype]] (§10.1.1 [[GetPrototypeOf]] ( )), derived once and held so the answer has
        an identity: `Object.getPrototypeOf(x) === Object.getPrototypeOf(x)` must be true, and §10.4.7.2
        SetImmutablePrototype ( obj, proto ) step 2 compares by SameValue against what step 1 returned.
@@ -4261,6 +4264,15 @@ static unsigned cty_of_concrete(JSValueConst v)
     return CTY_OBJECT;
 }
 
+/* The type facet bit of a value that is not an unknown: its §6.1 type, with an Object split by [[Call]]. */
+static unsigned tyf_of_example(JSContext *ctx, JSValueConst v)
+{
+    unsigned ty = cty_of_concrete(v);
+
+    if (ty != CTY_OBJECT) return tyf_of_cty(ty);
+    return JS_IsFunction(ctx, v) ? CONCOLIC_TYF_FUNCTION : CONCOLIC_TYF_OBJECT;
+}
+
 /* A SOURCE'S TYPE FACET is a set of CONCOLIC_TYF_* bits: §6.1's eight language types with Object split by
    [[Call]], since §13.5.3.1 typeof tells the two apart. */
 #define TYF_OBJECTS (CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION)
@@ -8051,6 +8063,7 @@ static JSValue concolic_alloc_shaped(JSContext *ctx, const char *shape, const ch
     c->ident = ident;       /* consume — NULL means this engine cannot spell the value; see the struct */
     c->example = example;   /* consume */
     c->ex_has = !JS_IsUndefined(example);
+    c->ex_tyf = (uint16_t)tyf_of_example(ctx, example);
     c->cmp_op = OPCMP_NONE;
     /* The algorithm is the one field here reclaim_calloc cannot set: "not an equality" is CMP_ALGO_NONE, and
        its zero would be JS_CONCOLIC_EQ_LOOSE, claiming the page wrote `==` over a non-predicate. */
@@ -8318,6 +8331,8 @@ static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin)
         const Cons *e = cons_lookup(c->ident);
         if (e && e->ex_contra) return CONCOLIC_EX_CONTRADICTED;
     }
+    /* The source's type facet is this path's proof too: a gate that excluded the example's type disproved it. */
+    if (tyf_out_of(c) & c->ex_tyf) return CONCOLIC_EX_CONTRADICTED;
     return CONCOLIC_EX_HELD;
 }
 
@@ -8331,6 +8346,7 @@ void concolic_hold_undefined(JSValueConst v) {
            "answered");
     if (!c) return;
     c->ex_has = 1;   /* `example` is already JS_UNDEFINED: the presence bit is the whole write */
+    c->ex_tyf = CONCOLIC_TYF_UNDEFINED;
 }
 
 JSValue concolic_example(JSContext *ctx, JSValueConst v) {
@@ -8393,6 +8409,7 @@ void concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example) {
     JS_FreeValue(ctx, c->example);
     c->example = example;   /* consume */
     c->ex_has = !JS_IsUndefined(example);
+    c->ex_tyf = (uint16_t)tyf_of_example(ctx, example);
 }
 
 static char *cstr_dup(JSContext *ctx, JSValueConst v) {   /* concrete operand -> its string form (heap copy) */
