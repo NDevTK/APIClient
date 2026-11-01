@@ -1000,7 +1000,6 @@ void data_transfer_install_protos(JSContext *ctx)
     idl_install_method(ctx, proto, "add", g_add_id);
     idl_install_method(ctx, proto, "remove", g_remove_id);
     idl_install_method(ctx, proto, "clear", g_clear_id);
-    idl_indexed_install_iterable(ctx, proto);
     JS_SetClassProto(ctx, g_list_class, JS_DupValue(ctx, proto));
     ctor = idl_interface_object(ctx, "DataTransferItemList", proto);
     JS_FreeValue(ctx, proto);

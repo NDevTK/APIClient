@@ -1352,6 +1352,11 @@ JS_EXTERN JSValue JS_GetIteratorPrototype(JSContext *ctx);
    %IteratorPrototype% there is no script-level walk to it at all from a host that has no async generator to
    hand. Dup'd. */
 JS_EXTERN JSValue JS_GetAsyncIteratorPrototype(JSContext *ctx);
+/* %Array.prototype.values% — the realm's own function, which Web IDL §3.7.9 Iterable declarations step 1.1
+   installs as an indexed interface's %Symbol.iterator%. Read from the realm's intrinsics rather than off the
+   global, so a page that has replaced `Array.prototype.values` cannot change what a later prototype gets.
+   Dup'd. */
+JS_EXTERN JSValue JS_GetArrayProtoValues(JSContext *ctx);
 
 /* %MapIteratorPrototype%. Web IDL §3.7.11.2 "%Symbol.iterator%" builds a `maplike<>` interface's iterator with
    `CreateIteratorFromClosure(closure, "%MapIteratorPrototype%", %MapIteratorPrototype%)`, so it is that

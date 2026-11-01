@@ -26387,6 +26387,12 @@ JSValue JS_GetAsyncIteratorPrototype(JSContext *ctx)
     return js_dup(ctx->async_iterator_proto);
 }
 
+/* %Array.prototype.values% — see quickjs-step.h. The same function the arguments object's @@iterator is. */
+JSValue JS_GetArrayProtoValues(JSContext *ctx)
+{
+    return js_dup(ctx->array_proto_values);
+}
+
 /* %MapIteratorPrototype% — see quickjs-step.h. It is `class_proto[JS_CLASS_MAP_ITERATOR]`, the object this
    engine's own `Map.prototype.entries` hands its result, and the intrinsic Web IDL §3.7.11.2 names for a
    `maplike<>` interface's iterator. Returned dup'd: the caller installs it as some object's [[Prototype]] and

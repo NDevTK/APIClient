@@ -753,11 +753,7 @@ void css_math_value_install_realm(JSContext *ctx, JSValueConst numeric_proto)
     CHECK(!JS_IsException(na_proto), "CSSNumericArray.prototype could not be allocated");
     idl_interface_tag(ctx, na_proto, "CSSNumericArray");
     idl_install_accessor_no_user_code(ctx, na_proto, "length", js_na_length, 0, -1);
-    /* Web IDL §3.7.9 Iterable declarations' define-the-iteration-methods, both clauses: step 1.1 for the
-       indexed property getter and the integer `length`, and its step 1.2 because §4.3.4 declares
-       `iterable<CSSNumericValue>` — which is what gives a CSSNumericArray `entries`, `keys`, `values` and
-       `forEach` where an interface with only a getter has none. */
-    idl_indexed_install_iterable(ctx, na_proto);
+    /* Web IDL §3.7.9 Iterable declarations step 1.2: CSSNumericArray declares `iterable<CSSNumericValue>`. */
     idl_indexed_install_value_iterator(ctx, na_proto);
     ctor = idl_interface_object(ctx, "CSSNumericArray", na_proto);
     CHECK(!JS_IsException(ctor), "the CSSNumericArray interface object could not be allocated");

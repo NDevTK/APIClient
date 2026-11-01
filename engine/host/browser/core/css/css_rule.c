@@ -5318,8 +5318,8 @@ void css_rule_install_proto(JSContext *ctx)
        difference a page reads: CSSOM §6.4.5's `insertRule(rule, index)` and index-taking `deleteRule` are absent here,
        and the `deleteRule` that IS here takes a keyframe SELECTOR. ITS INDEXED GETTER IS ON THE CLASS, not on this
        prototype: CSS Animations 1 §6.3.3 declares `getter CSSKeyframeRule (unsigned long index)`, which Web IDL §3.9
-       makes an object's own-property behaviour rather than a member. Web IDL §3.7.9 step 1.1's @@iterator IS a
-       prototype member and goes here, because this interface has both an indexed getter and an integer `length`. */
+       makes an object's own-property behaviour rather than a member. Web IDL §3.7.9 Iterable declarations step
+       1.1's @@iterator is a prototype member, which idl_interface_tag defines because the IDL declares that getter. */
     keyframes = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(keyframes), "CSSKeyframesRule.prototype could not be allocated");
     idl_interface_tag(ctx, keyframes, "CSSKeyframesRule");
@@ -5329,7 +5329,6 @@ void css_rule_install_proto(JSContext *ctx)
     idl_install_method(ctx, keyframes, "appendRule", g_id_append_rule);
     idl_install_method(ctx, keyframes, "deleteRule", g_id_kf_delete_rule);
     idl_install_method(ctx, keyframes, "findRule", g_id_find_rule);
-    idl_indexed_install_iterable(ctx, keyframes);
 
     /* CSS Animations §6.2's CSSKeyframeRule.prototype — from CSSRule directly, because a `<keyframe-block>`'s
        body is a `<declaration-list>` and holds no rules at all. */

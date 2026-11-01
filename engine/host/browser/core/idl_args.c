@@ -44,6 +44,7 @@
 #include "core/frame/window_proxy.h"     /* §3.7.6's `jsValue`: the receiver resolution and its Window brand */
 #include "core/streams/readable_stream.h"
 #include "core/idl_iter.h"
+#include "core/idl_indexed.h"     /* Web IDL §3.7.9 Iterable declarations step 1.1, run at idl_interface_tag */
 #include "core/file/blob.h"
 #include "core/html/custom_elements.h"
 #include "core/html/form_data.h"
@@ -7911,6 +7912,11 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
        the interface's qualified name"), stated outside the steps. The write goes second only so that the
        assertion above still aborts naming the interface this object was ABOUT to become. */
     idl_install_unscopables(ctx, proto, iface);
+    /* §3.7.3's "Define the iteration methods of interface on interfaceProtoObj", the part of it that is Web IDL
+       §3.7.9 Iterable declarations step 1.1: the symbol-keyed @@iterator. It follows the [Unscopable] block as
+       §3.7.3 orders them; the string-keyed members §3.7.3 defines before it are ordered apart from symbols by
+       OrdinaryOwnPropertyKeys, so running it here is unobservable. */
+    idl_indexed_define_iterator(ctx, proto, iface);
 }
 
 #if APICLIENT_DEV

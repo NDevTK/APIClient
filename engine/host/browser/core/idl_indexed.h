@@ -74,33 +74,20 @@ int idl_indexed_define_own_property(JSContext *ctx, JSValueConst obj, JSAtom pro
                                     const IdlIndexedDecl *decl);
 int idl_indexed_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop, const IdlIndexedDecl *decl);
 
-/* Web IDL §3.7.9 Iterable declarations' define the iteration methods, step 1.1: an interface with an indexed
-   property getter and an integer `length` gets %Array.prototype.values% as its @@iterator. Installed on the
-   PROTOTYPE, which is where the IDL puts it.
-   TWO SECTIONS CARRY THIS TITLE AND THE TITLE DOES NOT TELL THEM APART, so every citation of it in this
-   engine names the ALGORITHM beside the number: §2.5.9 Iterable declarations is the `iterable<>` DECLARATION
-   and the terminology it mints ("value pairs to iterate over", "pair iterator", "value iterator"), while
-   §3.7.9 Iterable declarations is the JavaScript binding — the "define the iteration methods" algorithm whose
-   steps put members on a prototype. A bare title matches both, and a term resolves to whichever section mints
-   it rather than to the one whose steps the code runs.
-   IT IS NOT §3.7.10, WHICH SAYS SO ITSELF: that section is "Asynchronous iterable declarations", and its own
-   step 2 asserts that a definition reaching it "does not have an indexed property getter or an iterable
-   declaration" — so no arm of it can ever be the clause implemented here.
-   STEP NUMBERS IN THIS FILE AND IN core/idl_iter.* ARE TOP-LEVEL `<li>`s WITH LIST DEPTH TRACKED, counted off
-   the fetched text. The count matters here because this algorithm's shape is not the one a flat reading
-   gives: step 1 holds a nested list, so the value-iterator clause below is 1.2 and NOT a step 2. */
-void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto);
+/* Web IDL §3.7.9 Iterable declarations, define the iteration methods step 1.1: "If definition has an indexed
+   property getter, then: Perform DefineMethodProperty(target, %Symbol.iterator%, %Array.prototype.values%,
+   false)." `iface` has one when browser/idl_indexed_getters.h, generated from the IDL, names it; for any other
+   interface this does nothing. Called by idl_interface_tag only, so every interface prototype object this engine
+   builds runs it. The %Array.prototype.values% is the realm's intrinsic.
+   Two Web IDL sections carry the title "Iterable declarations": this is §3.7.9, the JavaScript binding, and
+   Web IDL §2.5.9 Iterable declarations is the IDL declaration that defines "value iterator". Step 1 holds a
+   nested list, so the value-iterator clause below is step 1.2 and not a step 2. */
+void idl_indexed_define_iterator(JSContext *ctx, JSValueConst proto, const char *iface);
 
-/* §3.7.9's OTHER clause — its step 1.2, NESTED INSIDE step 1 rather than beside it, which is itself the
-   statement that these four members belong only to an interface that ALSO has an indexed property getter.
-   It is a DIFFERENT statement about a different set of interfaces: an interface that
-   declares `iterable<V>` also gets `entries`, `keys`, `values` and `forEach`. NodeList and DOMTokenList declare
-   one; HTMLCollection and NamedNodeMap do not, and one answer for all four gave an HTMLCollection a `forEach`
-   the standard says it has no such member.
-   IT IS ITS OWN CALL, not a flag on the one above: an interface says which members it has by INSTALLING them,
-   and a `true` passed at one call site out of five is a statement no reader — the IDL gap audit included — can
-   attribute to a prototype, so the four members read as installed on every indexed interface in the engine or
-   on none. */
+/* Web IDL §3.7.9 Iterable declarations step 1.2, nested in step 1: an interface that also declares `iterable<V>` (a
+   value iterator) gets `entries`, `keys`, `values` and `forEach`. NodeList and DOMTokenList declare one;
+   HTMLCollection and NamedNodeMap do not. It is the interface's own call, after its operations, because these
+   string-keyed members' creation order is observable; it asserts that step 1.1 already ran on `proto`. */
 void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto);
 
 #endif

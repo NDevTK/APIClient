@@ -37,8 +37,10 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include <stdio.h>
 #include "core/idl_indexed.h"
+#include "idl_indexed_getters.h"   /* GENERATED — Web IDL §3.7.9 Iterable declarations step 1 */
 
 static JSClassID g_class;
 static int       g_ready;
@@ -126,6 +128,18 @@ static void idl_indexed_finalizer(JSRuntime *rt, JSValue val)
     js_free_rt(rt, o);
 }
 
+static int indexed_getters_cmp(const void *key, const void *row)
+{
+    return strcmp((const char *)key, *(const char *const *)row);
+}
+
+/* Whether `iface`'s own IDL definition has an indexed property getter (browser/idl_indexed_getters.h). */
+static bool idl_indexed_declared(const char *iface)
+{
+    return bsearch(iface, IDL_INDEXED_GETTERS, sizeof IDL_INDEXED_GETTERS / sizeof IDL_INDEXED_GETTERS[0],
+                   sizeof IDL_INDEXED_GETTERS[0], indexed_getters_cmp) != NULL;
+}
+
 /* THE DECL A CLASS RESOLVED IS A STATIC PER-INTERFACE CONSTANT, and every one of §3.9's algorithms below
    dereferences it. NULL is the one legitimate answer and it means "not an indexed interface"; a decl that is
    present and incomplete is a class that built one wrong, and the ADDRESS the reader needs is the INTERFACE
@@ -137,11 +151,17 @@ static void idl_indexed_finalizer(JSRuntime *rt, JSValue val)
    operation rather than one shared checker — §AN-ASSERT-THAT-NAMES-A-REMEDY's rule, at the scale this file has
    it. Every use is guarded by an earlier `if (!d)`, which is the NULL contract itself and not a second test. */
 #define DCHECK_DECL(d)                                                                                        \
-    DCHECKF((d)->interface_name && (d)->length && (d)->item,                                                  \
-            "an indexed interface's decl reached one of Web IDL §3.9's internal methods without an interface " \
-            "name, a length or an item — the decl is a static per-interface constant, so the class that "      \
-            "resolved this one built it incomplete (interface_name=%s)",                                       \
-            (d)->interface_name ? (d)->interface_name : "(unnamed)")
+    do {                                                                                                      \
+        DCHECKF((d)->interface_name && (d)->length && (d)->item,                                              \
+                "an indexed interface's decl reached one of Web IDL §3.9's internal methods without an "      \
+                "interface name, a length or an item — the decl is a static per-interface constant, so the "  \
+                "class that resolved this one built it incomplete (interface_name=%s)",                       \
+                (d)->interface_name ? (d)->interface_name : "(unnamed)");                                     \
+        DCHECKF(!(d)->interface_name || idl_indexed_declared((d)->interface_name),                            \
+                "%s's decl answers indexed properties and browser/idl_indexed_getters.h says its IDL has no " \
+                "indexed property getter — fix the decl's interface, or regenerate the table with "           \
+                "`node engine/idlgen.mjs --regen`", (d)->interface_name);                                     \
+    } while (0)
 
 int idl_indexed_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop,
                              const IdlIndexedDecl *d)
@@ -430,7 +450,8 @@ JSValue idl_indexed_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl
     JSValue obj;
 
     DCHECK(g_ready, "an indexed-property object was built before its class was registered");
-    DCHECK(decl && decl->length && decl->item, "an indexed interface must answer both length and item");
+    DCHECK(decl != NULL, "an indexed-property object was built with no decl");
+    DCHECK_DECL(decl);
     obj = JS_NewObjectProtoClass(ctx, proto, g_class);
     if (JS_IsException(obj)) return obj;
     {
@@ -444,62 +465,39 @@ JSValue idl_indexed_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl
     return obj;
 }
 
-void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto)
+void idl_indexed_define_iterator(JSContext *ctx, JSValueConst proto, const char *iface)
 {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue arr = JS_GetPropertyStr(ctx, global, "Array");
-    JSValue ap = JS_GetPropertyStr(ctx, arr, "prototype");
-    JSValue values = JS_GetPropertyStr(ctx, ap, "values");
+    JSAtom a = JS_WellKnownSymbolAtom(JS_WKS_ITERATOR);
+    JSValue values;
+    int r;
 
-    DCHECK(JS_IsFunction(ctx, values), "Array.prototype.values is missing — §3.7.9 step 1.1 names it as the "
-                                       "@@iterator an interface with an indexed getter is given, so there is "
-                                       "nothing to install in its place");
-    /* THE ACTUAL FUNCTION, not a lookalike: §3.7.9 step 1.1 states %Array.prototype.values%, and it works because the
-       object is array-like by construction. A private copy would be a second array iterator to keep in step — AND
-       A PAGE WOULD REPLACE IT. A polyfill that patches these interfaces keys on IDENTITY: it tests
-       `proto[@@iterator] !== Array.prototype.values` and redefines when they differ, so a lookalike does not merely
-       duplicate the iterator, it hands such a page a DIFFERENT function from the one installed here and nothing in
-       the engine would say so. MEASURED in the mirrored corpus, which is why this is a hazard and not a worry.
-       RETIREMENT: this record goes when a check asserts that this operand IS the realm's own
-       %Array.prototype.values%, because the identity is then true by construction rather than by this paragraph. */
+    if (!idl_indexed_declared(iface)) return;
+    values = JS_GetArrayProtoValues(ctx);
+    DCHECKF(JS_IsFunction(ctx, values), "%s.prototype was built before its realm's %%Array.prototype.values%% "
+                                        "intrinsic existed", iface);
+#if APICLIENT_DEV
     {
-        JSValue sym_ctor = JS_GetPropertyStr(ctx, global, "Symbol");
-        JSValue it = JS_GetPropertyStr(ctx, sym_ctor, "iterator");
-        JSAtom a = JS_ValueToAtom(ctx, it);
-        int r;
-        CHECK(a != JS_ATOM_NULL, "@@iterator could not be reached");
-        /* enumerable:FALSE, because step 1.1 is `DefineMethodProperty(target, %Symbol.iterator%, ..., false)` and
-           that fourth argument IS the attribute — where step 1.2's `CreateDataPropertyOrThrow` below is
-           enumerable:TRUE. Two clauses, two attribute sets, and `Object.keys(proto)` can tell them apart. */
-        r = JS_DefinePropertyValue(ctx, (JSValue)proto, a, JS_DupValue(ctx, values),
-                                   JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
-        /* THE STATUS IS READ RATHER THAN DISCARDED, and the define is its own statement so a release build still
-           performs it. A collection whose @@iterator is silently absent makes every `for (const x of coll)`
-           throw in the page — a wrong answer from a run with nothing in its errors, which reads as clean.
-           TWO ANSWERS, TWO INVARIANTS, WHICH IS WHY THIS IS NOT ONE ASSERT. -1 is an ALLOCATION failure, so it
-           is always fatal and spelled `>= 0`, which is what core/idl_args.c's §3.7.3 defines already say. 0 is a
-           REFUSAL — the object is not extensible, or already carries this key non-configurably — which is a claim
-           about a prototype THIS ENGINE has just built and not yet frozen, so it is a DCHECK. */
-        CHECK(r >= 0, "§3.7.9 step 1.1's @@iterator could not be defined on an interface prototype");
-        DCHECK(r == 1, "§3.7.9 step 1.1's @@iterator define was REFUSED rather than failing to allocate, so an "
-                       "interface prototype this realm had just created was already non-extensible or already "
-                       "carried a non-configurable %Symbol.iterator% — install it before anything seals it");
-        JS_FreeAtom(ctx, a);
-        JS_FreeValue(ctx, it);
-        JS_FreeValue(ctx, sym_ctor);
+        JSPropertyDescriptor had;
+        int own = JS_GetOwnSlotDesc(ctx, &had, proto, a);
+
+        DCHECKF(own == 0, "%s.prototype already has its own %%Symbol.iterator%% when Web IDL §3.7.9 Iterable "
+                          "declarations step 1.1 runs — the step belongs to idl_interface_tag alone", iface);
+        if (own == 1) { JS_FreeValue(ctx, had.value); JS_FreeValue(ctx, had.getter); JS_FreeValue(ctx, had.setter); }
     }
-    JS_FreeValue(ctx, values);
-    JS_FreeValue(ctx, ap);
-    JS_FreeValue(ctx, arr);
-    JS_FreeValue(ctx, global);
+#endif
+    /* DefineMethodProperty(..., false): writable, configurable, not enumerable. */
+    r = JS_DefinePropertyValue(ctx, (JSValue)proto, a, values, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    CHECKF(r >= 0, "Web IDL §3.7.9 Iterable declarations step 1.1's %%Symbol.iterator%% could not be defined "
+                   "on %s.prototype", iface);
+    DCHECKF(r == 1, "Web IDL §3.7.9 Iterable declarations step 1.1's %%Symbol.iterator%% define was refused "
+                    "on %s.prototype, which this realm has just created", iface);
 }
 
-/* THE VALUE-ITERATOR MEMBERS ARE A DIFFERENT CLAUSE, AND THEY ARE NOT EVERY INDEXED INTERFACE'S. §3.7.9's
-   step 1.1 gives
-   @@iterator to any interface with an indexed getter and an integer `length`; `entries`, `keys`, `values` and
-   `forEach` are its step 1.2 and come from an `iterable<V>` DECLARATION, which NodeList and DOMTokenList carry and HTMLCollection and
-   NamedNodeMap do not. Installing all four unconditionally put `paragraphs.forEach` on an HTMLCollection, which
-   WPT asserts is absent — so the interface that declares the iterable is the one that calls this. */
+/* Web IDL §3.7.9 Iterable declarations step 1.2: an interface that has a value iterator (an `iterable<V>`
+   declaration) gets `entries`, `keys`, `values` and `forEach`. NodeList and DOMTokenList declare one; HTMLCollection
+   and NamedNodeMap do not, and WPT asserts `forEach` absent on an HTMLCollection — so the interface that declares the
+   iterable calls this. It runs after the interface's operations, where §3.7.3 runs it, because the order of these
+   string-keyed properties is observable. */
 void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto)
 {
     /* THE SPEC'S ORDER, AND IT IS OBSERVABLE: step 1.2's four substeps run entries, keys, values, forEach, and
@@ -511,6 +509,22 @@ void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto)
     JSValue ap = JS_GetPropertyStr(ctx, arr, "prototype");
     unsigned k;
 
+#if APICLIENT_DEV
+    {
+        /* Step 1.2 is nested in step 1, whose step 1.1 idl_interface_tag has already performed on this
+           prototype; an interface reaching here without it has no indexed getter in its IDL. */
+        JSPropertyDescriptor d;
+        JSValue values = JS_GetArrayProtoValues(ctx);
+        int own = JS_GetOwnSlotDesc(ctx, &d, proto, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR));
+
+        DCHECK(own == 1 && JS_VALUE_GET_PTR(d.value) == JS_VALUE_GET_PTR(values),
+               "§3.7.9 step 1.2's value-iterator members were asked for on a prototype step 1.1 did not give "
+               "%Array.prototype.values% as its %Symbol.iterator% — step 1.2 is nested in step 1, so the "
+               "interface has no indexed property getter in browser/idl_indexed_getters.h");
+        if (own == 1) { JS_FreeValue(ctx, d.value); JS_FreeValue(ctx, d.getter); JS_FreeValue(ctx, d.setter); }
+        JS_FreeValue(ctx, values);
+    }
+#endif
     for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++) {
         JSValue f = JS_GetPropertyStr(ctx, ap, NAMES[k]);
         int r;
