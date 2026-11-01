@@ -1996,12 +1996,8 @@ bool used_value_width_ask(lxb_dom_element_t *el)
     case UV_BOX_INLINE_FLEX_GRID:
         return !uv_len_is_auto(width) || intrinsic_inline_sizes_ask(el);
     case UV_BOX_ABS:
-        /* §10.3.7's first entry applies rule 3 or rule 1, and those are the two rules that shrink-to-fit: each
-           has `width` and one of `left`/`right` auto. */
-        if (!uv_len_is_auto(width)) return true;
-        if (!uv_len_is_auto(css_computed_length(el, "left")) && !uv_len_is_auto(css_computed_length(el, "right")))
-            return true;
-        return intrinsic_inline_sizes_ask(el);
+        /* An `auto` width is §10.3.7's solve's (`uv_pass_size`); a declared one is read without it. */
+        return !uv_len_is_auto(width) || used_value_abs_solve_ask(el, false);
     case UV_BOX_TABLE:
         /* A table-internal box's width is the grid's (`uv_pass_size`), so its operands are its table's. */
         return intrinsic_inline_sizes_ask(table_box_kind_generates_table_box(uv_table_box_kind(el))
@@ -3736,6 +3732,46 @@ bool used_value_abs_auto_height_read(lxb_dom_element_t *el)
     return uv_abs_reads_auto_height(el, css_computed_length(el, "height"));
 }
 
+bool used_value_abs_solve_ask(lxb_dom_element_t *el, bool vertical)
+{
+    lxb_dom_element_t *anc = NULL;
+    UvBox box;
+    CssPx unused;
+    bool trailing;
+    char nbuf[160];
+
+    DCHECK(el != NULL, "an absolutely positioned box's solve was asked for with no element");
+    box = uv_box_kind(el);
+    DCHECKF(uv_abs_positioned(el, box),
+            "%s: CSS 2.1 §10.3.7's and §10.6.4's solve is asked only of an absolutely positioned box",
+            box_subject(el, nbuf, sizeof nbuf));
+    if (used_value_abs_static_position_read(el, vertical, &trailing) &&
+        !flow_static_position_ask(el, vertical, trailing, &unused))
+        return false;
+    /* A table is sized by CSS 2.1 §17.5.2 and §17.5.3, whose walks are each cell's intrinsic widths and, on
+       the block axis, its content height. */
+    if (box == UV_BOX_TABLE) {
+        TableGrid grid;
+        bool ready;
+
+        if (!intrinsic_inline_sizes_ask(el)) return false;
+        if (!vertical) return true;
+        table_grid_build(el, &grid);
+        ready = table_heights_ask(el, &grid);
+        table_grid_release(&grid);
+        if (!ready) return false;
+    } else if (!vertical) {
+        /* §10.3.7's first entry, rule 1 and rule 3 shrink-to-fit: each has `width` and one of `left`/`right`
+           auto. A replaced box's width is its natural one (`uv_replaced_size`). */
+        if (replaced_element_of(el).replaced || !uv_len_is_auto(css_computed_length(el, "width"))) return true;
+        if (!uv_len_is_auto(css_computed_length(el, "left")) && !uv_len_is_auto(css_computed_length(el, "right")))
+            return true;
+        return intrinsic_inline_sizes_ask(el);
+    }
+    if (used_value_abs_auto_height_read(el) && !block_flow_auto_height_ask(el, &unused)) return false;
+    return !used_value_abs_cb_content_height_read(el, &anc) || block_flow_auto_height_ask(anc, &unused);
+}
+
 /* The static position as `uv_abs_solve` reads it, asserting that `used_value_abs_static_position_read`
    reports this read, which core/layout/flow_position.c's out-of-flow origin asks before the solve runs. */
 static CssPx uv_abs_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
@@ -4771,8 +4807,13 @@ static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
     }
     /* A block's auto height is its content's, and a grid item's automatic minimum reads the same content
        height (css-grid-1 §6.6's content size suggestion), so both ask it. */
-    if (vertical && uv_box_kind(el) != UV_BOX_INLINE && used_value_height_behaves_as_auto(el))
-        return block_flow_auto_height_ask(el, &h);
+    if (vertical && uv_box_kind(el) != UV_BOX_INLINE && used_value_height_behaves_as_auto(el) &&
+        !block_flow_auto_height_ask(el, &h))
+        return false;
+    /* A non-replaced absolutely positioned box's block-axis lengths are §10.6.4's solve's values, whose operands
+       include its static position. Asked whatever its `height` is, since a margin reads the same solve. */
+    if (vertical && !replaced_element_of(el).replaced && uv_abs_positioned(el, uv_box_kind(el)))
+        return used_value_abs_solve_ask(el, true);
     return true;
 }
 

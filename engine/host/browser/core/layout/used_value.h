@@ -352,6 +352,12 @@ bool used_value_abs_auto_height_read(lxb_dom_element_t *el);
    core/layout/block_flow.h's §10.6.3 walk. False for every other containing block and box kind. */
 bool used_value_abs_cb_content_height_read(lxb_dom_element_t *el, lxb_dom_element_t **ancestor);
 
+/* Every operand that solve reads on one axis, asked under a resting drive so the solve's own drives
+   (`flow_static_position`, `block_flow_auto_height`) find them answered: the static position, the shrink-to-fit
+   intrinsic sizes, a table's §17.5.2/§17.5.3 walks, the content-based height and the containing block's.
+   False ("not yet") when one was deferred. */
+bool used_value_abs_solve_ask(lxb_dom_element_t *el, bool vertical);
+
 /* CSS 2.2 §9.4.3 "Relative positioning"' used translation on one axis: the signed distance a relatively
    positioned box is shifted by after normal flow places it, the used `left` horizontally and `top` vertically
    ("'Left' moves the boxes to the right", "'Top' moves the boxes down"). §9.4.3 states a pair, "the used

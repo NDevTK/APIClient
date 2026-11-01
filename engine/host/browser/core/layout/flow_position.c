@@ -753,36 +753,14 @@ CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
    §10.3.7's equation puts its leading border edge at the containing block's leading edge plus the used offset
    plus the used margin. No ancestor border or padding is added, because §10.1's fourth case is already the
    padding edge (`fp_abs_cb_leading_ask`); that is the difference from §10.1's second case below.
-   The static positions, the content-based height and the containing block's content-based height
-   §10.3.7's and §10.6.4's solve will read are asked first, so a deferred stack walk answers false ("not yet")
-   before anything is computed and the solve then finds them answered. */
+   The operands §10.3.7's and §10.6.4's solve reads on both axes are asked first
+   (`used_value_abs_solve_ask`), so a deferred stack walk answers false ("not yet") before anything is computed
+   and the solve then finds them answered. */
 static bool fp_abs_origin_ask(lxb_dom_element_t *el, FlowPoint *out)
 {
-    lxb_dom_element_t *anc = NULL;
-    CssPx x0, y0, unused;
-    bool vertical, trailing;
+    CssPx x0, y0;
 
-    for (vertical = false;; vertical = true) {
-        if (used_value_abs_static_position_read(el, vertical, &trailing) &&
-            !flow_static_position_ask(el, vertical, trailing, &unused))
-            return false;
-        if (vertical) break;
-    }
-    if (used_value_abs_auto_height_read(el) && !block_flow_auto_height_ask(el, &unused)) return false;
-    /* An absolutely positioned table is sized by CSS 2.1 §17.5.2 and §17.5.3, whose walks (each cell's
-       intrinsic widths and content height) are asked before the solve reads the size. */
-    if (table_box_kind_generates_table_box(table_box_kind(css_computed_display(el)))) {
-        TableGrid grid;
-        bool ready;
-
-        if (!intrinsic_inline_sizes_ask(el)) return false;
-        table_grid_build(el, &grid);
-        ready = table_heights_ask(el, &grid);
-        table_grid_release(&grid);
-        if (!ready) return false;
-    }
-    if (used_value_abs_cb_content_height_read(el, &anc) && !block_flow_auto_height_ask(anc, &unused))
-        return false;
+    if (!used_value_abs_solve_ask(el, false) || !used_value_abs_solve_ask(el, true)) return false;
     if (!fp_abs_cb_leading_ask(el, false, false, &x0) || !fp_abs_cb_leading_ask(el, true, false, &y0))
         return false;
     out->x = css_px_add(css_px_add(x0, used_value_abs_offset_px(el, false)), used_value_px(el, "margin-left"));
