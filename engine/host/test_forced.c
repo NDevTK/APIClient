@@ -23293,8 +23293,10 @@ TF_UNIT void probes_decoder(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/tdunknown record, so a `stream: true` decode over unknown bytes "
              "aborted or never ran");
     fold_row(&tdunk_tt, &tdunk_why,
-             emitted_record_has(js, "/api/tdunknown", "TextDecoder(utf-8).decode") &&
-                 emitted_record_has(js, "/api/tdunknown", LOCATION_HASH_SRC),
+             emitted_record_has(js, "/api/tdunknown",
+                                "\"addressRoot\":\"" LOCATION_HASH_SRC "\",\"attackerRooted\":{\"address\":\""
+                                LOCATION_HASH_SRC "\"},\"params\":[{\"name\":\"u\",\"location\":\"query\","
+                                "\"valueClass\":\"unknown\""),
              "the decode that completed a sequence held from unknown bytes was not derived from the fragment, so "
              "the held bytes' identity was lost between the two calls");
     /* ENCODING §7.1's SERIALIZE I/O QUEUE — see the fixture row for why each clause is here. They are
