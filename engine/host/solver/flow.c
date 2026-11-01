@@ -373,6 +373,16 @@ static size_t site_slot(int kind, uint64_t key, int64_t seen, size_t cap) {
 
 /* The site (`kind`, `key`, `seen`) in `fam`'s ledger, minted at zero service on first use. The table doubles at
    load one, so a lookup is O(1) expected. */
+/* The site (`kind`, `key`, `seen`) in `fam`'s ledger if it has been minted, else NULL. A read. */
+static const FlowSite *flow_site_find(const FlowAcct *fam, int kind, uint64_t key, int64_t seen) {
+    const FlowSite *st;
+
+    if (!fam || !fam->sites) return NULL;
+    for (st = fam->sites[site_slot(kind, key, seen, fam->sites_cap)]; st; st = st->hnext)
+        if (st->kind == kind && st->key == key && st->seen == seen) return st;
+    return NULL;
+}
+
 static FlowSite *flow_site_of(FlowAcct *fam, int kind, uint64_t key, int64_t seen) {
     FlowSite *st;
     size_t i;
@@ -3953,6 +3963,32 @@ static double flow_index_key(const Flow *f) {
     return flow_index_key_observed(f) - (double)flow_assumed(f) * FLOW_ASSUMPTION_COST;
 }
 
+/* The service the same code site (`kind`, `key`, `seen`) has received in every family's ledger but `f`'s own: what
+   the census sets beside `site_served` to say whether a member's unserved site is code another family has run. A
+   walk over the frontier for its families; asked only for the few members a census names. */
+static int64_t flow_site_served_elsewhere(const Flow *f) {
+    const FlowAcct **fams = reclaim_malloc(sizeof *fams * (size_t)(g_flows_n + 1));
+    int nf = 0;
+    int64_t sum = 0;
+
+    CHECK(fams != NULL, "flow: OOM collecting the frontier's families for the census");
+    for (int i = 0; i < g_flows_n; i++) {
+        const FlowAcct *fam = g_flows[i]->family;
+        int seen = 0;
+
+        if (!fam || fam == f->family) continue;
+        for (int j = 0; j < nf && !seen; j++) seen = fams[j] == fam;
+        if (!seen) fams[nf++] = fam;
+    }
+    for (int j = 0; j < nf; j++) {
+        const FlowSite *st = flow_site_find(fams[j], f->at->kind, f->at->key, f->at->seen);
+
+        if (st) sum += st->served;
+    }
+    free(fams);
+    return sum;
+}
+
 /* A member's weight rebuilt from its operands, in flow_order_key's composition and order of operations, so it is
    the same double: the census publishes the operands and a reader recomputes this. */
 static double flow_weight_recompose(const FlowWeightOperands *o) {
@@ -3971,6 +4007,7 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
     o->coord_notch = flow_family_notch(f) + flow_silence_carry(f);
     o->own_notch = flow_service_notch(f);
     o->site_served = f->at->served;
+    o->site_served_elsewhere = flow_site_served_elsewhere(f);
     o->pull_work = ENGINE_QUANTUM_WORK;
     o->visits = f->visits;
     o->orphan_seen = f->orphan_seen;

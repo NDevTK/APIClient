@@ -84,6 +84,7 @@ typedef struct {
     int host_owed, running;
     FlowUnitAt unit;
     int next_arm, next_sited;   /* Flow.next_arm1 - 1 (-1: never stood by a step end) and Flow.next_sited */
+    int64_t site_served_elsewhere;  /* the same code site's service in every other family's ledger; no term reads it */
 } FlowWeightOperands;
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
