@@ -40,9 +40,12 @@
 #include "core/html/trusted_type.h"
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
+#include "core/layout/layout_job.h"
 #include "core/realm.h"
 #include "solver/cow.h"
 #include "solver/dom_cow.h"
+#include "solver/metrics.h"
+#include "solver/rest_unit.h"
 #include "solver/solve.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
@@ -1729,23 +1732,23 @@ static bool range_selects_text(const RangeBounds *b, lxb_dom_node_t *n)
     return n == sn || n == en || range_contains(b, n) || bp_partially_contains(sn, en, n);
 }
 
-/* CSSOM View §9 "Extensions to the Range Interface"'s getClientRects(), in the spec's own order — ONE tree
-   walk in CONTENT ORDER, which is what the standard asks the merged list to be in ("a list of DOMRect objects
-   IN CONTENT ORDER that matches the following constraints"). Two separate passes would produce the two
-   constraints' lists concatenated and not interleaved, which is a different list whenever a range covers
-   both. */
-static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
+/* The elements CSSOM View §9 "Extensions to the Range Interface"'s getClientRects() includes the rectangles of:
+   every element the range contains whose parent it does not contain. ONE tree walk in CONTENT ORDER, which is
+   what the standard asks the merged list to be in ("a list of DOMRect objects IN CONTENT ORDER that matches the
+   following constraints"), so a selected Text node's rectangles belong between the elements' and two passes
+   would concatenate the constraints' lists instead. Stores a newly allocated array at `*out`, which the caller
+   frees, and answers its count. It reads no layout. */
+static size_t range_rect_elements(const RangeBounds *b, lxb_dom_element_t ***out)
 {
     lxb_dom_node_t *root, *n;
-    JSValue out = JS_NewArray(ctx);
-    uint32_t k = 0;
+    lxb_dom_element_t **els = NULL;
+    size_t m = 0, cap = 0;
 
-    CHECK(!JS_IsException(out), "the range client-rect list could not be allocated");
-    if (!range_in_document(b)) return dom_rect_list_new(ctx, out);
+    *out = NULL;
+    if (!range_in_document(b)) return 0;
     /* THE WALK IS OVER THE COMMON ANCESTOR AND NOT THE DOCUMENT, and that is a statement about the range and
        not a saving: DOM §5.5's "contained in" places both of a contained node's boundary points inside the
-       range, so no node outside `commonAncestorContainer` can be contained or partially contained, and a walk
-       from the document root would visit them only to answer no. Starting here is the same list. */
+       range, so no node outside `commonAncestorContainer` can be contained or partially contained. */
     root = common_ancestor(bounds_start(b), bounds_end(b));
     for (n = root; n != NULL; n = node_next_in(n, root)) {
         if (range_selects_text(b, n))
@@ -1764,74 +1767,171 @@ static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
                   "content-based height. BUILD the per-glyph advance "
                   "beside `A` and `D`, and css-text-3's typographic character unit segmentation; this rule and "
                   "those two are then one component's three consumers");
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && range_contains(b, n) &&
-            !(n->parent != NULL && range_contains(b, n->parent))) {
-            JSValue list = element_view_client_rects(lxb_dom_interface_element(n)), len;
-            uint32_t i, m = 0;
-
-            DCHECK(JS_IsObject(list), "CSSOM View §9 \"Extensions to the Range Interface\" invoked CSSOM View "
-                                      "§6 \"Extensions to the Element Interface\"'s getClientRects() on a "
-                                      "selected element and got no list back — that algorithm answers a "
-                                      "DOMRectList on every path it has");
-            len = JS_GetPropertyStr(ctx, list, "length");
-            JS_ToUint32(ctx, &m, len);
-            JS_FreeValue(ctx, len);
-            for (i = 0; i < m; i++)
-                JS_SetPropertyUint32(ctx, out, k++, JS_GetPropertyUint32(ctx, list, i));
-            JS_FreeValue(ctx, list);
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || !range_contains(b, n) ||
+            (n->parent != NULL && range_contains(b, n->parent)))
+            continue;
+        if (m == cap) {
+            cap = cap ? cap * 2 : 8;
+            els = lexbor_realloc(els, cap * sizeof *els);
+            CHECK(els != NULL, "CSSOM View §9's selected-element list could not be grown");
         }
+        els[m++] = lxb_dom_interface_element(n);
+    }
+    *out = els;
+    return m;
+}
+
+/* One selected element's client rectangles, derived inside the job and minted after it. */
+typedef struct {
+    lxb_dom_element_t *el;
+    CssPx            (*r)[4];   /* owned */
+    size_t             n;
+} RangeElementRects;
+
+/* Inside the entered job: asks every selected element's rectangles under `d` and, once all are answered, derives
+   them over the answered memo into `rects` (one per element of `els`). False when the activation must rest. */
+static bool range_rects_measure(lxb_dom_element_t **els, size_t m, LayoutJobDrive *d, RangeElementRects *rects)
+{
+    size_t i;
+
+    for (i = 0; i < m; i++)
+        if (!element_view_client_rects_ask(els[i], d)) return false;
+    for (i = 0; i < m; i++) {
+        rects[i].el = els[i];
+        rects[i].n = element_view_client_rects_px(els[i], &rects[i].r);
+    }
+    return true;
+}
+
+/* getClientRects()'s list. Each rectangle is minted in its element's relevant realm, as §6's own list is. */
+static JSValue range_client_rects_mint(JSContext *ctx, const RangeElementRects *rects, size_t m)
+{
+    JSValue out = JS_NewArray(ctx);
+    uint32_t k = 0;
+    size_t i, j;
+
+    CHECK(!JS_IsException(out), "the range client-rect list could not be allocated");
+    for (i = 0; i < m; i++) {
+        JSContext *rctx = document_realm_of(lxb_dom_interface_node(rects[i].el));
+
+        DCHECK(rctx != NULL || rects[i].n == 0,
+               "a selected element answered client rectangles while its node document has no realm; an element "
+               "with an associated box is in a presented document, which has one");
+        for (j = 0; j < rects[i].n; j++)
+            JS_SetPropertyUint32(ctx, out, k++, element_view_rect_mint(rctx, rects[i].r[j]));
     }
     return dom_rect_list_new(ctx, out);
 }
 
-/* CSSOM View §9 "Extensions to the Range Interface"'s getBoundingClientRect(), which is its OWN four steps
-   and not CSSOM View §6 "Extensions to the Element Interface"'s get-the-bounding-box — the standard writes
-   them out again for the Range, so they are written out again here. Steps 3 and 4 reduce a list of one to that
-   one rectangle under either: the smallest rectangle enclosing one rectangle is that rectangle. */
-static JSValue range_bounding_rect(JSContext *ctx, const RangeBounds *b)
+/* CSSOM View §9's getBoundingClientRect(), its own four steps over its own list: step 1's list is the
+   getClientRects() list above, step 2 answers an empty one with zeros, and steps 3 and 4 are §6's get the
+   bounding box's, which the standard writes out again here and element_view.h's reduction implements. */
+static JSValue range_bounding_rect_mint(JSContext *ctx, const RangeElementRects *rects, size_t m)
 {
-    JSValue list = range_client_rects(ctx, b), len;
-    uint32_t n = 0;
+    CssPx (*all)[4], box[4];
+    size_t i, j, total = 0, k = 0;
+    JSValue v;
 
-    len = JS_GetPropertyStr(ctx, list, "length");
-    JS_ToUint32(ctx, &n, len);
-    JS_FreeValue(ctx, len);
-    /* step 2 */
-    if (n == 0) {
-        JS_FreeValue(ctx, list);
-        return dom_rect_new(ctx, 0.0, 0.0, 0.0, 0.0);
-    }
-    /* steps 3 and 4, which agree for a one-rectangle list */
-    if (n == 1) {
-        JSValue only = JS_GetPropertyUint32(ctx, list, 0);
-
-        DCHECK(dom_rect_is(only), "CSSOM View §9 \"Extensions to the Range Interface\"'s "
-                                  "getBoundingClientRect read a list whose one member is not a DOMRect");
-        JS_FreeValue(ctx, list);
-        return only;
-    }
-    JS_FreeValue(ctx, list);
-    DFAIL("CSSOM VIEW §9's getBoundingClientRect() steps 3 and 4 must CHOOSE for a list of more than one "
-          "rectangle — the first one when every rectangle has a zero width or height, the smallest enclosing "
-          "rectangle otherwise — and both are COMPARISONS over numbers a border area derived from the initial "
-          "containing block carries a viewport domain on. core/dom/element_view.c's `ev_bounding_box_of` is "
-          "that reduction over client rectangles in css_length.h's vocabulary; build this list in that "
-          "vocabulary and reach it from here, so the two members share one reduction rather than two");
-    return dom_rect_new(ctx, 0.0, 0.0, 0.0, 0.0);
+    for (i = 0; i < m; i++) total += rects[i].n;
+    if (total == 0) return dom_rect_new(ctx, 0.0, 0.0, 0.0, 0.0);   /* step 2 */
+    all = lexbor_malloc(total * sizeof *all);
+    CHECK(all != NULL, "CSSOM View §9's getBoundingClientRect() could not allocate its rectangle list");
+    for (i = 0; i < m; i++)
+        for (j = 0; j < rects[i].n; j++, k++) memcpy(all[k], rects[i].r[j], sizeof all[k]);
+    element_view_bounding_box_of((const CssPx (*)[4])all, total, box);   /* steps 3 and 4 */
+    free(all);
+    v = element_view_rect_mint(ctx, box);
+    return v;
 }
 
+/* CSSOM View §9's two members as one step machine, §6's getClientRects() shape over each selected element: the
+   layout an element's rectangles read is asked under a resting drive on the job the state owns, so a range
+   whose layout is wide rests between activations with its questions suspended. The selected elements are
+   walked again on each activation; the range's boundary points do not move while its flow is inside the call. */
 enum { R_CLIENT_RECTS = 0, R_BOUNDING_RECT };
+#define RRECT_STAGES(X) \
+    X(RRECT_MEASURE, "CSSOM VIEW §9 \"Extensions to the Range Interface\" getClientRects() / " \
+                     "getBoundingClientRect() (the selected elements' border areas, one resting drive per activation)")
+enum { IDL_STEP_STAGE_BASE(RRECT_STAGES) RRECT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RRECT_STEPS[] = { RRECT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-static JSValue js_range_rects(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+typedef struct {
+    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL until the first activation */
+} RangeRectsState;
+
+static void range_rects_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    RangeBounds *b = range_receiver(this_val);
+    RangeRectsState *s = st;
 
-    (void)argc; (void)argv;
-    if (magic == R_CLIENT_RECTS) return range_client_rects(ctx, b);
-    DCHECK(magic == R_BOUNDING_RECT, "a CSSOM VIEW §9 Range member was declared with a magic neither of the two "
-                                     "members the partial interface declares carries");
-    return range_bounding_rect(ctx, b);
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
 }
+
+static void range_rects_free(RangeElementRects *rects, size_t m)
+{
+    size_t i;
+
+    for (i = 0; i < m; i++) free(rects[i].r);
+    free(rects);
+}
+
+static int js_range_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    RangeRectsState *s = st;
+    lxb_dom_element_t **els = NULL;
+    RangeElementRects *rects;
+    LayoutJobDrive d;
+    size_t m;
+    bool done;
+    int rc;
+
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(RRECT_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(RRECT_MEASURE);
+    if (s->job == NULL) {
+        s->job = layout_job_new();
+        METRIC_ADD(range_rects_asks, 1);
+    }
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
+    m = range_rect_elements(range_receiver(hdr->this_val), &els);
+    rects = lexbor_calloc(m ? m : 1, sizeof *rects);
+    CHECK(rects != NULL, "CSSOM View §9's per-element rectangle list could not be allocated");
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    done = range_rects_measure(els, m, &d, rects);
+    layout_job_drive_end(&d);
+    layout_job_leave(s->job);
+    rest_unit_end();
+    free(els);
+    if (layout_job_declined(s->job)) {
+        range_rects_free(rects, m);
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
+    if (!done) {
+        range_rects_free(rects, m);
+        layout_job_rested(s->job);
+        METRIC_ADD(range_rects_rests, 1);
+        return JS_STEP_YIELD;
+    }
+    DCHECK(idl_step_magic(hdr) == R_CLIENT_RECTS || idl_step_magic(hdr) == R_BOUNDING_RECT,
+           "a CSSOM VIEW §9 Range member was declared with a magic neither of the two members the partial "
+           "interface declares carries");
+    *presult = idl_step_magic(hdr) == R_BOUNDING_RECT ? range_bounding_rect_mint(ctx, rects, m)
+                                                     : range_client_rects_mint(ctx, rects, m);
+    range_rects_free(rects, m);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl RANGE_RECTS_STEP = {
+    js_range_rects_step, sizeof(RangeRectsState), range_rects_visit, NULL,
+    "CSSOM VIEW §9 \"Extensions to the Range Interface\" getClientRects() / getBoundingClientRect()",
+    RRECT_STEPS
+};
 
 /* ---- DECLARATION AND INSTALL ---------------------------------------------------------------------------- */
 
@@ -1947,9 +2047,9 @@ void range_init(JSContext *ctx)
     idl_this_iface(range_is, "Range");
     idl_iface_brand(trusted_type_class(TRUSTED_TYPE_HTML));
     /* CSSOM VIEW §9's `partial interface Range` — neither member takes an argument. */
-    g_id_client_rects = idl_method_id(ctx, NULL, 0, js_range_rects, R_CLIENT_RECTS);
+    g_id_client_rects = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_RECTS_STEP, R_CLIENT_RECTS);
     idl_this_iface(range_is, "Range");
-    g_id_bounding_rect = idl_method_id(ctx, NULL, 0, js_range_rects, R_BOUNDING_RECT);
+    g_id_bounding_rect = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_RECTS_STEP, R_BOUNDING_RECT);
     idl_this_iface(range_is, "Range");
 
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Every one of these twenty-four

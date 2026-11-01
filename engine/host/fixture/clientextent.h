@@ -4,8 +4,11 @@
    read rests at least once (`_layoutClientExtentRests`). An `inline-block` holding children 10px to 80px wide
    with 3px of padding is 86px wide by §10.3.9's shrink-to-fit. A `span` is inline, so step 1 answers 0. §6's
    getBoundingClientRect() of the first box is its 130px border area, on a job of its own, so it rests at least
-   once too (`_layoutClientRectsRests`), and the `span`'s getClientRects() is its one line fragment.
-   Chrome 155 gives these numbers for the same markup. It ends with TF_CANVAS_INK, which test_forced.c defines
+   once too (`_layoutClientRectsRests`), and the `span`'s getClientRects() is its one line fragment. CSSOM VIEW
+   §9's Range members over the first box rest on a job of their own (`_layoutRangeRectsRests`): a range
+   selecting the box has its one 130px rectangle, and a range selecting its contents has the twelve rows', whose
+   bounding box is 120px tall. Chrome 155 gives these numbers for the same markup (the Range rows were taken on
+   Chrome 153). It ends with TF_CANVAS_INK, which test_forced.c defines
    before including it. */
 #ifndef ENGINE_HOST_FIXTURE_CLIENTEXTENT_H
 #define ENGINE_HOST_FIXTURE_CLIENTEXTENT_H
@@ -24,10 +27,15 @@ static const char HTML_CLIENTEXTENT[] =
     "<div><div id=ce2 style=\"display:inline-block;padding:3px\">" CE_COL("10") CE_COL("20") CE_COL("30")
     CE_COL("40") CE_COL("50") CE_COL("60") CE_COL("70") CE_COL("80") "</div></div>"
     "<p><span id=ce3>x</span></p>"
-    "<script>fetch('/api/cext?h=' + document.getElementById('ce1').clientHeight"
+    "<script>var rg = document.createRange(), rc = document.createRange();"
+    "rg.selectNode(document.getElementById('ce1'));"
+    "rc.selectNodeContents(document.getElementById('ce1'));"
+    "fetch('/api/cext?h=' + document.getElementById('ce1').clientHeight"
     " + '&w=' + document.getElementById('ce2').clientWidth + '&s=' + document.getElementById('ce3').clientWidth"
     " + '&bh=' + document.getElementById('ce1').getBoundingClientRect().height"
-    " + '&rl=' + document.getElementById('ce3').getClientRects().length);"
+    " + '&rl=' + document.getElementById('ce3').getClientRects().length"
+    " + '&rgh=' + rg.getBoundingClientRect().height + '&rgn=' + rg.getClientRects().length"
+    " + '&rch=' + rc.getBoundingClientRect().height + '&rcn=' + rc.getClientRects().length);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

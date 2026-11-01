@@ -251,15 +251,24 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n);
    page decide what an engine algorithm measures. `el` must be an element. */
 double element_view_scroll_position(lxb_dom_element_t *el, bool vertical);
 
-/* §6's `getClientRects()` AS THE INTERNAL ALGORITHM, which §2 is explicit is what a caller "said to call
-   another method" invokes: "the method or attribute must be invoked, and not the algorithm the specification
-   defines for it" is what it is NOT — the algorithm runs, so a page that overwrites
-   `Element.prototype.getClientRects` cannot change what its callers measure. §6's own get-the-bounding-box
-   step 1 is one caller and §9's Range members are the other, which is why this is exported rather than static.
-   The DOMRectList and the rectangles in it are minted in the ELEMENT's relevant realm — Web IDL creates a
-   `[NewObject]` in the relevant realm of `this`, which for an element is the realm of its node document, so a
-   child navigable's rectangles are instances of the CHILD's DOMRect however the call was written. */
-JSValue element_view_client_rects(lxb_dom_element_t *el);
+/* §6's `getClientRects()` AS THE INTERNAL ALGORITHM, which §2 says a caller "said to call another method"
+   invokes, so a page that overwrites `Element.prototype.getClientRects` cannot change what its callers measure.
+   §6's own members and §9's Range members are its callers, each a step machine owning a layout job:
+   - `ask` runs the box tests and step 3's layout under the caller's resting drive `d` on its entered job. False
+     ("not yet") when the activation must rest, with its questions suspended on the job.
+   - `px`, after `ask` answered true in the same activation and inside the job, stores a newly allocated array of
+     client rectangles (x, y, width, height) at `*out`, which the caller frees, and answers its count.
+   - `rect_mint` mints one such rectangle as a DOMRect in `rctx`; a list member's realm is the element's
+     relevant realm (its node document's), so a child navigable's rectangles are the child's DOMRects. */
+struct LayoutJobDrive;
+bool element_view_client_rects_ask(lxb_dom_element_t *el, struct LayoutJobDrive *d);
+size_t element_view_client_rects_px(lxb_dom_element_t *el, CssPx (**out)[4]);
+JSValue element_view_rect_mint(JSContext *rctx, const CssPx r[4]);
+
+/* §6's get the bounding box, steps 3 and 4, over `n` > 0 client rectangles (each x, y, width, height), into
+   `out` in the same order. §9's Range getBoundingClientRect() writes the same two steps out again over its own
+   list, so it reduces through this. */
+void element_view_bounding_box_of(const CssPx (*r)[4], size_t n, CssPx out[4]);
 
 /* §6's GET THE BOUNDING BOX AS THE INTERNAL ALGORITHM, answering in css_length.h's vocabulary rather than as a
  * DOMRect — `out` is filled with x, y, width and height in CLIENT COORDINATES, in that order.
@@ -276,10 +285,9 @@ JSValue element_view_client_rects(lxb_dom_element_t *el);
  * The FOUR NUMBERS are the same derivation `getBoundingClientRect` reports: one client-rect list in this
  * vocabulary and one reduction of it (element_view.c). `el` must be an element. */
 void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4]);
-/* Named residual. Not covered: these two entries and their callers (§9's Range members, paint,
-   scrollIntoView, Intersection Observer) lay out to completion in a drive of their own, so none rests where
-   the page's own `getBoundingClientRect` does. Next diff builds: an ask form of the client-rect list, which
-   element_view.c's `ev_client_rects_ask` already is, asked by each caller's step machine before it reads.
+/* Named residual. Not covered: this entry and its callers (paint, scrollIntoView, Intersection Observer) lay
+   out to completion in a drive of their own, so none rests where the page's own `getBoundingClientRect` does.
+   Next diff builds: `element_view_client_rects_ask` above, asked by each caller's step machine before it reads.
    Absence shows as: layout_job.c's nested-drive DFAIL with one of those callers on the stack, or a
    REST_UNIT_LAYOUT_DESCENDANTS unit over the quantum inside one of them. */
 

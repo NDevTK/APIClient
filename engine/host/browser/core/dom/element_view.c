@@ -90,7 +90,7 @@ typedef struct {
 } EvTarget;
 
 /* The four questions, over an ELEMENT — §2's internal-algorithm entry, which §9's Range members reach through
-   `element_view_client_rects` without a receiver to brand. */
+   `element_view_client_rects_ask` without a receiver to brand. */
 static void ev_target_of_element(lxb_dom_element_t *el, EvTarget *t)
 {
     t->node = lxb_dom_interface_node(el);
@@ -1593,6 +1593,12 @@ static bool ev_client_rects_ask(const EvTarget *t)
            used_value_padding_edge_ask(el, true, &h);
 }
 
+JSValue element_view_rect_mint(JSContext *rctx, const CssPx r[4])
+{
+    return dom_rect_new_values(rctx, ev_client_px(rctx, r[0]), ev_client_px(rctx, r[1]), ev_client_px(rctx, r[2]),
+                               ev_client_px(rctx, r[3]));
+}
+
 static JSValue ev_client_rects_mint(const EvTarget *t, CssPx (*r)[4], size_t n)
 {
     JSValue rects;
@@ -1602,26 +1608,40 @@ static JSValue ev_client_rects_mint(const EvTarget *t, CssPx (*r)[4], size_t n)
     rects = JS_NewArray(t->rctx);
     CHECK(!JS_IsException(rects), "the client-rect list could not be allocated");
     for (i = 0; i < n; i++)
-        JS_SetPropertyUint32(t->rctx, rects, (uint32_t)i,
-                             dom_rect_new_values(t->rctx, ev_client_px(t->rctx, r[i][0]),
-                                                 ev_client_px(t->rctx, r[i][1]), ev_client_px(t->rctx, r[i][2]),
-                                                 ev_client_px(t->rctx, r[i][3])));
+        JS_SetPropertyUint32(t->rctx, rects, (uint32_t)i, element_view_rect_mint(t->rctx, r[i]));
     return dom_rect_list_new(t->rctx, rects);
 }
 
-JSValue element_view_client_rects(lxb_dom_element_t *el)
+/* The box tests and then step 3's layout, under the caller's resting drive on its entered job. */
+bool element_view_client_rects_ask(lxb_dom_element_t *el, LayoutJobDrive *d)
 {
     EvTarget t;
-    CssPx (*r)[4] = NULL;
-    size_t n;
-    JSValue v;
+
+    DCHECK(el != NULL, "§6's getClientRects() was asked as an internal algorithm with no element");
+    if (!element_view_box_tests_ask(lxb_dom_interface_node(el))) {
+        DCHECK(layout_job_drive_spent(d),
+               "CSSOM VIEW §6's client rectangles' box tests parked an author match with the drive's allowance "
+               "unspent, so the next activation would ask the same thing over the same state for ever");
+        return false;
+    }
+    /* Read inside the job, so the box tests' cascade is held by the job's records across activations. */
+    ev_target_of_element(el, &t);
+    while (block_flow_drive_deferred(d)) {
+        if (ev_client_rects_ask(&t)) return true;
+        DCHECK(layout_job_drive_spent(d) || layout_job_drive_pending(d),
+               "CSSOM VIEW §6's client rectangles answered \"not yet\" with no question suspended and no "
+               "allowance spent, so the next activation would ask the same thing over the same state for ever");
+    }
+    return false;
+}
+
+size_t element_view_client_rects_px(lxb_dom_element_t *el, CssPx (**out)[4])
+{
+    EvTarget t;
 
     DCHECK(el != NULL, "§6's getClientRects() was invoked as an internal algorithm with no element");
     ev_target_of_element(el, &t);
-    n = ev_client_rects_px(&t, &r);
-    v = ev_client_rects_mint(&t, r, n);
-    free(r);
-    return v;
+    return ev_client_rects_px(&t, out);
 }
 
 /* One axis of the enclosing box (`o` 0 for x, 1 for y): its low edge and its extent. When one rectangle
@@ -1659,7 +1679,7 @@ void element_view_enclosing_box_px(const CssPx (*r)[4], size_t n, CssPx out[4])
    is not zero." The tests run on the examples, as `css_px_min`/`css_px_max` do; every rectangle's extents are
    folded into all four results (`a - a` keeps `a`'s facts at a zero example), because which step answers and
    which rectangles step 4 encloses are functions of all of them. */
-static void ev_bounding_box_of(const CssPx (*r)[4], size_t n, CssPx out[4])
+void element_view_bounding_box_of(const CssPx (*r)[4], size_t n, CssPx out[4])
 {
     CssPx facts = css_px(0.0);
     CssPx (*kept)[4];
@@ -1700,7 +1720,7 @@ void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4])
     if (n == 0)                        /* step 2 */
         out[0] = out[1] = out[2] = out[3] = css_px(0.0);
     else
-        ev_bounding_box_of((const CssPx (*)[4])r, n, out);
+        element_view_bounding_box_of((const CssPx (*)[4])r, n, out);
     free(r);
 }
 
@@ -1711,7 +1731,7 @@ static JSValue ev_bounding_rect_mint(const EvTarget *t, CssPx (*r)[4], size_t n)
     CssPx b[4];
 
     if (n == 0) return dom_rect_new(t->rctx, 0.0, 0.0, 0.0, 0.0);   /* step 2 */
-    ev_bounding_box_of((const CssPx (*)[4])r, n, b);
+    element_view_bounding_box_of((const CssPx (*)[4])r, n, b);
     return dom_rect_new_values(t->rctx, ev_client_px(t->rctx, b[0]), ev_client_px(t->rctx, b[1]),
                                ev_client_px(t->rctx, b[2]), ev_client_px(t->rctx, b[3]));
 }
@@ -1744,7 +1764,7 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     EvRectsState *s = st;
     CssPx (*r)[4] = NULL;
     size_t n = 0;
-    bool done = false, matched;
+    bool done;
     LayoutJobDrive d;
     EvTarget t;
     int rc;
@@ -1763,21 +1783,10 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
     layout_job_enter(s->job);
     layout_job_drive_begin_resting(&d);
-    matched = element_view_box_tests_ask(lxb_dom_interface_node(element_of_value(hdr->this_val)));
-    DCHECK(matched || layout_job_drive_spent(&d),
-           "CSSOM VIEW §6's client rectangles' box tests parked an author match with the drive's allowance "
-           "unspent, so the next activation would ask the same thing over the same state for ever");
-    /* Read inside the job, so the box tests' cascade is held by the job's records across activations. */
-    if (matched) ev_target(hdr->this_val, &t);
-    while (matched && block_flow_drive_deferred(&d)) {
-        if (ev_client_rects_ask(&t)) {
-            n = ev_client_rects_px(&t, &r);
-            done = true;
-            break;
-        }
-        DCHECK(layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
-               "CSSOM VIEW §6's client rectangles answered \"not yet\" with no question suspended and no "
-               "allowance spent, so the next activation would ask the same thing over the same state for ever");
+    done = element_view_client_rects_ask(element_of_value(hdr->this_val), &d);
+    if (done) {
+        ev_target(hdr->this_val, &t);
+        n = ev_client_rects_px(&t, &r);
     }
     layout_job_drive_end(&d);
     layout_job_leave(s->job);

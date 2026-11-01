@@ -14776,10 +14776,29 @@ TF_UNIT void probes_clientextent(const char *js, Probe *tab, int *n) {
     fold_row(&crect_tt, &crect_why, nrrests >= 1,
              "CSSOM VIEW §6's getBoundingClientRect() over a content height wider than one activation took no "
              "rest, so it ran to completion instead of yielding with its questions suspended");
+    /* §9's Range members over the same box, and the rests they take on their own job. */
+    const char *grests = strstr(js, "\"_layoutRangeRectsRests\":");
+    long ngrests = grests ? strtol(grests + strlen("\"_layoutRangeRectsRests\":"), NULL, 10) : -1;
+    const char *rg_why = NULL; int rg_tt = 1;
+    fold_row(&rg_tt, &rg_why, param_value_is(js, "/api/cext", "rgh", "130"),
+             "CSSOM VIEW §9: a range selecting the box does not have the box's 130px border area as its bounding "
+             "rectangle");
+    fold_row(&rg_tt, &rg_why, param_value_is(js, "/api/cext", "rgn", "1"),
+             "CSSOM VIEW §9: a range selecting one box does not have that box's one client rectangle");
+    fold_row(&rg_tt, &rg_why, param_value_is(js, "/api/cext", "rch", "120"),
+             "CSSOM VIEW §9 steps 3 and 4: the bounding rectangle of a range over twelve 10px rows is not 120px tall");
+    fold_row(&rg_tt, &rg_why, param_value_is(js, "/api/cext", "rcn", "12"),
+             "CSSOM VIEW §9: a range over twelve rows does not have one client rectangle per row");
+    fold_row(&rg_tt, &rg_why, grests != NULL,
+             "the result document carries no `_layoutRangeRectsRests` row from solver/metrics/layout.def");
+    fold_row(&rg_tt, &rg_why, ngrests >= 1,
+             "CSSOM VIEW §9's Range members over a content height wider than one activation took no rest, so they "
+             "ran to completion instead of yielding with their questions suspended");
     const Probe rows[] = {
         { "client-extent-values", cext_tt, "/api/cext", SESS_EXPLORE, cext_why },
         { "client-extent-rests", cextr_tt, "/api/cext", SESS_EXPLORE, cextr_why },
         { "client-rects-rests", crect_tt, "/api/cext", SESS_EXPLORE, crect_why },
+        { "range-rects", rg_tt, "/api/cext", SESS_EXPLORE, rg_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
