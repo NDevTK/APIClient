@@ -11,9 +11,7 @@
    3's padding edge and `_layoutClientExtentRests` the rests those reads took, a subset of `_layoutJobRests`, so
    one read takes 1 + rests/asks activations on average. `_layoutClientRectsAsks` and `_layoutClientRectsRests`
    count the same for §6's getClientRects() and getBoundingClientRect(). `_layoutPaintRests` counts the rests
-   update the rendering step 22's paint took between CSS 2.1 §E.2's offers, a subset of `_layoutJobRests`.
-   `_layoutHoldDrives` counts the computed
-   style holds that opened a run-to-completion drive because no layout job held a cascade record. */
+   update the rendering step 22's paint took between CSS 2.1 §E.2's offers, a subset of `_layoutJobRests`. */
 METRIC(bf_asks,            "_layoutBfAsks",           LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_served,          "_layoutBfServed",         LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_deferred,        "_layoutBfDeferred",       LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
@@ -29,7 +27,6 @@ METRIC(client_rects_asks,   "_layoutClientRectsAsks",   LIFETIME, "ask",  AGENT,
 METRIC(client_rects_rests,  "_layoutClientRectsRests",  LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
 METRIC(scroll_area_asks,    "_layoutScrollAreaAsks",    LIFETIME, "ask",  AGENT, "core/dom/element_view.c", INT)
 METRIC(scroll_area_rests,   "_layoutScrollAreaRests",   LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
-METRIC(hold_drives,         "_layoutHoldDrives",         LIFETIME, "drive", AGENT, "core/css/css_computed_style.c", INT)
 METRIC(paint_rests,         "_layoutPaintRests",         LIFETIME, "rest",  AGENT, "core/rendering/rendering.c", INT)
 IDENTITY_LE(bf_served,          bf_asks)
 IDENTITY_LE(bf_deferred,        bf_asks)

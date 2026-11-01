@@ -3436,7 +3436,6 @@ bool cssom_style_ask(lxb_dom_element_t *el)
    and §7.2 are written for; §7.3's cascade-dependent keywords are discharged inside the sort. */
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
 {
-    CssComputedStyleHold hold;
     CssCascadedStyle *s;
     const char *v;
     char *out;
@@ -3450,12 +3449,11 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
            "one: the answer would be the property's initial value with nothing to say the longhands that DID "
            "set it were never looked at. §6.6.1's getPropertyValue owns the shorthand step, and both paths that "
            "can be asked for one run it BEFORE reaching here; a third caller must run it too");
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     s = css_cascade_pass_cascaded_ask(el);
     if (s == NULL) s = cssd_cascaded_style_build(el);
     v = css_cascaded_style_value(s, name);
     out = v != NULL ? cssd_strdup(v) : NULL;
-    css_computed_style_hold_end(&hold);
     return out;
 }
 

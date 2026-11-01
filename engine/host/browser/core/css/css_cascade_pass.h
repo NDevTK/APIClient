@@ -6,15 +6,9 @@
  * Every answer is a function of the element and of inputs the validity argument below fixes, and layout asks
  * for each over and over: css-cascade-5 §7.2 "Inheritance" makes a read of an inherited property read the
  * parent, and css-logical-1 §4 "Flow-Relative Box Model Properties" makes `writing-mode`, `direction` and
- * `text-orientation` a prerequisite of cascading every margin, padding, border and inset. An ask made while no
- * job holds a record opens a drive on the synchronous job for its own length (css_computed_style_hold_begin),
- * so a record is held for every ask. */
-
-/* NAMED RESIDUAL, undriven asks. Not covered: an ask that no driven job or open drive holds a record for gets
- * one for its own length, so consecutive undriven asks of one element each collect and resolve its whole
- * cascade again. Next: those layout entries driving a job (layout_job.h's synchronous-job residual). How its
- * absence shows: `_cascade.resolvedLife` near half of `asksLife` on a run with no `scrollIntoView` and no
- * paint. */
+ * `text-orientation` a prerequisite of cascading every margin, padding, border and inset. Every ask is made
+ * while a job holds a record — a step machine's entered job, or the synchronous job inside a drive a layout
+ * entry opened — which css_computed_style_require_record asserts at each computed value's entry. */
 
 /* Validity. The record holds answers about the document the job's flow sees. Its inputs are asserted not to
  * move while it is held: tree and attribute writes at solver/dom_cow.c's write entries; every CSSOM write that

@@ -27,9 +27,10 @@
 /* NAMED RESIDUAL, the synchronous job. Not covered: a layout entry that is not a step machine owning a driven
  * job (as CSSOM VIEW §6's members in core/dom/element_view.c, HTML §4.8.3's img dimensions and update the
  * rendering step 22's paint are) runs on the thread's synchronous job, which never rests, so a page's flow
- * cannot be preempted while it lays out. Next: the entry the `_layoutHoldDrives` census attributes the most
- * openings to, as a step machine that owns a driven job. How its absence shows: `_layoutHoldDrives` above
- * zero, or a flow's slice overrun inside a layout member with `_layoutJobRests` flat. */
+ * cannot be preempted while it lays out; a computed value read with no job at all is refused
+ * (css_computed_style_require_record). Next: the drives the layout drive census finds with no `_ask` twin
+ * (flex_cross_size_anonymous_lines, gt_run_drive, line_box_glyphs) as asks under the caller's resting drive.
+ * How its absence shows: a flow's slice overrun inside a layout member with `_layoutJobRests` flat. */
 
 /* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
  * border-box origin through CSS 2.1 §10.1's second case and through §9.4.2's line boxes (the establishing box,

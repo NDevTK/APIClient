@@ -245,7 +245,6 @@ static void cv_text_fill(lxb_dom_element_t *el, CssPropertyId id);
 
 static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
 {
-    CssComputedStyleHold hold;
     lxb_dom_element_t *parent;
     char *out;
 
@@ -253,11 +252,10 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
     if (!cv_holds_text(name)) return cv_specified_walk(el, name);
     /* A held-text property's inherited value is the parent's computed one, so the parent's chain is derived
        first, in tree order. */
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     parent = css_parent_element(el);
     if (parent != NULL) cv_text_fill(parent, css_property_id_of(name));
     out = cv_specified_walk(el, name);
-    css_computed_style_hold_end(&hold);
     return out;
 }
 
@@ -668,14 +666,12 @@ static void cv_display_fill(lxb_dom_element_t *el)
 
 CssDisplay css_computed_display(lxb_dom_element_t *el)
 {
-    CssComputedStyleHold hold;
     CssComputedValue v;
 
     DCHECK(el != NULL, "a computed `display` was asked of no element");
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     cv_display_fill(el);
     v = css_computed_style_held(el, CSS_PROPERTY_DISPLAY);
-    css_computed_style_hold_end(&hold);
     return v.display;
 }
 
@@ -742,14 +738,13 @@ static CssAlign cv_align(lxb_dom_element_t *el, CssPropertyId id)
 CssAlign css_computed_align(lxb_dom_element_t *el, const char *name)
 {
     CssPropertyId id = css_property_id_of(name);
-    CssComputedStyleHold hold;
     CssComputedValue v;
     CvChain c;
     size_t i;
 
     DCHECKF(id != CSS_PROPERTY_INVALID && css_property_shape(id) == CSS_COMPUTED_SHAPE_ALIGN,
             "`%s`: css_computed_align was asked for a property that is none of css-align-3's six", name);
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     cv_chain(el, id, &c);
     for (i = 0; i < c.n; i++)
         if (!css_computed_style_ask(c.v[i], id, &v)) {
@@ -758,23 +753,20 @@ CssAlign css_computed_align(lxb_dom_element_t *el, const char *name)
         }
     cv_chain_free(&c);
     v = css_computed_style_held(el, id);
-    css_computed_style_hold_end(&hold);
     return v.align;
 }
 
 CssDisplay css_hypothetical_static_display(lxb_dom_element_t *el)
 {
-    CssComputedStyleHold hold;
     lxb_dom_element_t *parent;
     CssDisplay d;
 
     DCHECK(el != NULL, "CSS 2.1 §10.3.7's hypothetical `display` was asked for with no element");
     /* The hypothesis reads the same held ancestors a derivation of `display` does. */
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     parent = css_parent_element(el);
     if (parent != NULL) cv_display_fill(parent);
     d = display_blockified_if(el, cv_display_specified(el), false);
-    css_computed_style_hold_end(&hold);
     return d;
 }
 
@@ -1899,7 +1891,6 @@ static CssLength cv_length_cascaded(lxb_dom_element_t *el, CssPropertyId id)
 CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
 {
     CssPropertyId id = css_property_id_of(name);
-    CssComputedStyleHold hold;
     CssComputedValue v;
     CvChain c;
     size_t i;
@@ -1918,7 +1909,7 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
            "ONE `CssLength` with nowhere to put the second, so it would report the horizontal spacing as the "
            "whole of the property; `css_computed_border_spacing` answers the pair",
            name);
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     /* §7.2's inherited value is the parent's computed value, so the ancestors this record does not hold are
        derived first, top down, and the derivation reads its parent held. */
     cv_chain(el, id, &c);
@@ -1929,7 +1920,6 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
         }
     cv_chain_free(&c);
     v = css_computed_style_held(el, id);
-    css_computed_style_hold_end(&hold);
     return v.length;
 }
 
@@ -2023,7 +2013,6 @@ static CssKeyword cv_keyword(lxb_dom_element_t *el, CssPropertyId id)
 CssKeyword css_computed_keyword(lxb_dom_element_t *el, const char *name)
 {
     CssPropertyId id = css_property_id_of(name);
-    CssComputedStyleHold hold;
     CssComputedValue v;
     CvChain c;
     size_t i;
@@ -2032,7 +2021,7 @@ CssKeyword css_computed_keyword(lxb_dom_element_t *el, const char *name)
             "`%s`: css_computed_keyword was asked for a property whose row is not KEYWORD-shaped "
             "(core/css/css_property_id.h); ask the entry its shape names",
             name);
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     cv_chain(el, id, &c);
     for (i = 0; i < c.n; i++)
         if (!css_computed_style_ask(c.v[i], id, &v)) {
@@ -2041,7 +2030,6 @@ CssKeyword css_computed_keyword(lxb_dom_element_t *el, const char *name)
         }
     cv_chain_free(&c);
     v = css_computed_style_held(el, id);
-    css_computed_style_hold_end(&hold);
     return v.keyword;
 }
 
@@ -2227,12 +2215,11 @@ static CssTabSize cv_tab_size(lxb_dom_element_t *el)
    the inherited arm of each derivation reads its parent held. */
 CssTabSize css_computed_tab_size(lxb_dom_element_t *el)
 {
-    CssComputedStyleHold hold;
     CssComputedValue v;
     CvChain c;
     size_t i;
 
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     cv_chain(el, CSS_PROPERTY_TAB_SIZE, &c);
     for (i = 0; i < c.n; i++)
         if (!css_computed_style_ask(c.v[i], CSS_PROPERTY_TAB_SIZE, &v)) {
@@ -2241,18 +2228,16 @@ CssTabSize css_computed_tab_size(lxb_dom_element_t *el)
         }
     cv_chain_free(&c);
     v = css_computed_style_held(el, CSS_PROPERTY_TAB_SIZE);
-    css_computed_style_hold_end(&hold);
     return v.tab_size;
 }
 
 CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
 {
-    CssComputedStyleHold hold;
     CssComputedValue v;
     CvChain c;
     size_t i;
 
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     cv_chain(el, CSS_PROPERTY_LINE_HEIGHT, &c);
     for (i = 0; i < c.n; i++)
         if (!css_computed_style_ask(c.v[i], CSS_PROPERTY_LINE_HEIGHT, &v)) {
@@ -2261,7 +2246,6 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
         }
     cv_chain_free(&c);
     v = css_computed_style_held(el, CSS_PROPERTY_LINE_HEIGHT);
-    css_computed_style_hold_end(&hold);
     return v.line_height;
 }
 
@@ -2367,12 +2351,11 @@ static CssBorderSpacing cv_border_spacing(lxb_dom_element_t *el)
 
 CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
 {
-    CssComputedStyleHold hold;
     CssComputedValue v;
     CvChain c;
     size_t i;
 
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     cv_chain(el, CSS_PROPERTY_BORDER_SPACING, &c);
     for (i = 0; i < c.n; i++)
         if (!css_computed_style_ask(c.v[i], CSS_PROPERTY_BORDER_SPACING, &v)) {
@@ -2381,7 +2364,6 @@ CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
         }
     cv_chain_free(&c);
     v = css_computed_style_held(el, CSS_PROPERTY_BORDER_SPACING);
-    css_computed_style_hold_end(&hold);
     return v.border_spacing;
 }
 
@@ -2828,7 +2810,6 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
 {
     CssPropertyId id = css_property_id_of(name);
     CssComputedShape shape;
-    CssComputedStyleHold hold;
     CssComputedValue v;
     char *out;
 
@@ -2881,11 +2862,10 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
             "css_computed_keyword, or css_computed_keyword_is at a call site that tests one keyword",
             name);
     if (shape != CSS_COMPUTED_SHAPE_TEXT) return css_cv_specified(el, name);
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     cv_text_fill(el, id);
     v = css_computed_style_held(el, id);
     out = v.text != NULL ? css_cv_strdup(v.text) : NULL;
-    css_computed_style_hold_end(&hold);
     return out;
 }
 
@@ -3653,11 +3633,9 @@ bool css_resolved_ask(lxb_dom_element_t *el, const char *name)
    so an undriven getComputedStyle read resolves its element's cascade once. */
 JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
-    CssComputedStyleHold hold;
     JSValue out;
 
-    css_computed_style_hold_begin(&hold);
+    css_computed_style_require_record();
     out = css_resolved_value_held(ctx, el, name);
-    css_computed_style_hold_end(&hold);
     return out;
 }
