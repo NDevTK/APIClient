@@ -10,6 +10,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/layout/layout_job.h"   /* the job the out-of-view question is read on */
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
@@ -1049,9 +1050,8 @@ bool intersection_observer_pending(JSContext *ctx)
     return pending;
 }
 
-lxb_dom_element_t *intersection_observer_target_out_of_view(JSContext *ctx,
-                                                            bool (*skip)(void *arg, lxb_dom_element_t *t),
-                                                            void *arg)
+static lxb_dom_element_t *io_target_out_of_view(JSContext *ctx, bool (*skip)(void *arg, lxb_dom_element_t *t),
+                                                void *arg)
 {
     JSValue list = io_doc_list(ctx);
     uint32_t n = io_len(ctx, list), i, k, nt;
@@ -1089,6 +1089,24 @@ lxb_dom_element_t *intersection_observer_target_out_of_view(JSContext *ctx,
         JS_FreeValue(ctx, observer);
     }
     JS_FreeValue(ctx, list);
+    return found;
+}
+
+/* The scheduler asks this between two of a flow's steps, with no step machine holding a layout job, so the
+   targets' geometry is read on a job entered for the question. NAMED RESIDUAL. Not covered: the read runs whole,
+   with no resting drive. Next: the question asked from a step machine owning the job, resting between targets.
+   How its absence shows: a slice overrun at the scheduler's quiescence rung with `_layoutJobRests` flat. */
+lxb_dom_element_t *intersection_observer_target_out_of_view(JSContext *ctx,
+                                                            bool (*skip)(void *arg, lxb_dom_element_t *t),
+                                                            void *arg)
+{
+    LayoutJob *job = layout_job_new();
+    lxb_dom_element_t *found;
+
+    layout_job_enter(job);
+    found = io_target_out_of_view(ctx, skip, arg);
+    layout_job_leave(job);
+    layout_job_free(job);
     return found;
 }
 

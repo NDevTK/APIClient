@@ -1232,7 +1232,16 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                 s->i++;
                 continue;
             }
-            intersection_observer_update(docctx, s->ob++, s->frame_ts);
+            /* §3.2.10's geometry for one observer, on a layout job entered for the read (NAMED RESIDUAL as at
+               step 16's gather: no resting drive yet, so one observer's targets are measured whole). */
+            {
+                LayoutJob *job = layout_job_new();
+
+                layout_job_enter(job);
+                intersection_observer_update(docctx, s->ob++, s->frame_ts);
+                layout_job_leave(job);
+                layout_job_free(job);
+            }
             return JS_STEP_YIELD;
         }
     }
