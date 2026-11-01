@@ -1427,7 +1427,9 @@ QJS_EXPORT unsigned qjs_paint_bytes(void)
 }
 
 /* Whether the world `qjs_paint` last read had a painted frame: 0 is a world no rendering opportunity painted (the
-   image is NULL), 1 a frame, whose region may still be empty. Two facts a NULL image cannot separate. */
+   image is NULL), 1 a frame, whose region may still be empty. Two facts a NULL image cannot separate. Its reader
+   is test_forced.c's `abi_paint`, which says which of the two an empty image is; testing/render_raster.mjs does
+   not ask it. */
 QJS_EXPORT int qjs_paint_framed(void)
 {
     DCHECK(g_painted, "whether a frame was painted was asked before qjs_paint read one — the pair is ordered as "
