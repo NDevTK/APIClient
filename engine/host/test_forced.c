@@ -1257,6 +1257,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/clobber.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
+#include "fixture/cwmix.h"
 #include "fixture/typeoffacet.h"
 #include "fixture/sparoute.h"
 #include "fixture/envgate.h"
@@ -1859,6 +1860,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "clobber", HTML_CLOBBER },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
+    { "cwmix", HTML_CWMIX },
     { "typeoffacet", HTML_TYPEOFFACET },
     { "sparoute", HTML_SPAROUTE },
     { "envgate", HTML_ENVGATE },
@@ -17413,6 +17415,24 @@ TF_UNIT void probes_closerequest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cwmix` document (fixture/cwmix.h): a modelled close request closed the modal dialog and
+   left the parsed one open, and none closed the parsed one, whose close watcher is disabled. */
+TF_UNIT void probes_cwmix(const char *js, Probe *tab, int *n) {
+    const char *why = NULL; int tt = 1;
+    fold_row(&tt, &why, !!strstr(js, "\"/api/cwmix\""),
+             "NOT REACHED: there is no /api/cwmix record, so no modelled close request closed the modal dialog or "
+             "the document aborted");
+    fold_row(&tt, &why, param_value_is(js, "/api/cwmix", "a", "true"),
+             "HTML §6.10.2: closing the modal dialog also closed the parsed non-modal one in its group");
+    fold_row(&tt, &why, !strstr(js, "\"/api/cwmix-a\""),
+             "HTML §4.11.4: a close request closed the parsed non-modal dialog, whose close watcher's get enabled "
+             "state is false");
+    const Probe rows[] = {
+        { "cwmix-disabled-watcher", tt, "/api/cwmix", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `typeoffacet` document (fixture/typeoffacet.h): the string arm is reached, and the number arm
    inside it is not, because the first test fixed the member's type facet in that world; each loose-equality arm
    is reached and the typeof arm its outcome rules out is not, as is each ordering and call arm. */
@@ -23391,6 +23411,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_clobber(js, probes, &np);
     probes_typedinput(js, probes, &np);
     probes_closerequest(js, probes, &np);
+    probes_cwmix(js, probes, &np);
     probes_typeoffacet(js, probes, &np);
     probes_sparoute(js, probes, &np);
     probes_envgate(js, probes, &np);
