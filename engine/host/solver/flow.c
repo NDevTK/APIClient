@@ -6585,19 +6585,12 @@ int flow_is_member(const Flow *f) {
     return 0;
 }
 
-/* See flow.h. The whole column, not the tail: `script_i` is where the flow has got to, and a row behind the cursor
-   is a program of that document whose frames the flow may still be suspended inside. The question is whether any
-   member still names this document at all, so every row counts. */
-int flow_programs_for_document(uint32_t doc) {
+/* See flow.h. A started row is not counted: it is either finished, and the compile site never starts a row twice,
+   or the row the flow stands on, whose document that flow's timeline presents and so keeps its realm alive. */
+int flow_frontier_programs_unstarted_for_document(uint32_t doc) {
     int n = 0;
 
-    for (int i = 0; i < g_flows_n; i++) {
-        const Flow *f = g_flows[i];
-        /* A flow with no queue has no column: the parallel arrays are allocated together at the first row, so
-           `dyn_n` says whether `dyn_doc` is a buffer at all. */
-        for (int k = 0; k < f->dyn_n; k++)
-            if (f->dyn_doc[k] == doc) n++;
-    }
+    for (int i = 0; i < g_flows_n; i++) n += flow_programs_unstarted_for_document(g_flows[i], doc);
     return n;
 }
 

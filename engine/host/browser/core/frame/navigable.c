@@ -291,30 +291,18 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
        is the root's, or one some other part of the host made, and neither has a navigable behind it. */
     for (i = 0; i < g_realms_n; i++) {
         if (g_realms[i] != cctx) continue;
-        /* THE ASSERT THAT MAKES THE FREE SAFE, AND IT IS ABOUT THE FRONTIER RATHER THAN ABOUT THIS REALM.
-           Reaching here means the collector proved this realm unreachable, so every holder it can SEE is
-           already gone — a flow suspended inside this document holds it through COUNTED references (its
-           frames, its jobs, its parked continuation, the dups its COW delta took at each capture), so a realm
-           a flow can resume into cannot arrive here at all. That is the whole reason §7.5.10's reclamation is
-           a reference DROP and never a free, and the reason no flow is terminated or paged to make one.
-           WHAT THE COLLECTOR CANNOT SEE IS A DOCUMENT HANDLE. A flow's program queue names the document each
-           row is compiled in as a `uint32_t` (solver/flow.h's `dyn_doc`), which holds nothing and stays
-           perfectly readable after the realm behind it is gone — so it is the one way the frontier can still
-           be standing on a document the collector has just decided is garbage, and that row would later be
-           compiled through a (document -> realm) answer this teardown is about to make unanswerable.
-           THIS SAID `the doc->realm row document_free is about to clear` AND IS REWRITTEN RATHER THAN DELETED,
-           because the hazard is unchanged and a reader who re-derives it will look for that row again.
-           solver/world.c held an instance-global `JSContext *` per document, cleared by document_free, and it is
-           gone: one slot cannot answer for two timelines that each materialized a navigable's initial
-           about:blank. The answer comes from the NAVIGABLE now (core/frame/window_proxy.h's
-           window_proxy_realm_of_document), which makes this assert STRICTLY more necessary rather than less —
-           the navigable's own `realm` field is borrowed from the proxy's `window`, so a handle whose realm has
-           been torn down resolves to a freed JSContext through a row no clear ever visits. */
-        DCHECK(flow_programs_for_document(document_doc(cctx)) == 0,
-               "a realm was torn down while the frontier still held QUEUED PROGRAMS for its document — a "
-               "program row names its document by HANDLE and holds no reference, so the collector could not "
-               "see it and compiling that row afterwards asks for a realm this teardown has released. Whatever "
-               "still owns those rows has to own a reference to the document too, or drop them with it");
+        /* The collector proved this realm unreachable, so no flow is suspended inside it: frames, jobs, parked
+           continuations and COW captures all hold it by counted reference. A program row names its document by
+           `uint32_t` handle (solver/flow.h's `dyn_doc`), which holds nothing, and an unstarted row is compiled
+           through window_proxy_realm_of_document, whose answer borrows the realm. So no unstarted row of this
+           document may survive it: HTML §7.5.10 "Destroying documents" step 5 removes a document's tasks
+           "without running those tasks", and a started row is not a task but the flow's history, never compiled
+           again. */
+        DCHECK(flow_frontier_programs_unstarted_for_document(document_doc(cctx)) == 0,
+               "a realm was torn down while the frontier still held UNSTARTED PROGRAM ROWS for its document — a "
+               "row names its document by handle and holds no reference, so compiling it afterwards asks for a "
+               "realm this teardown has released. The timeline that left the document has to drop its rows "
+               "(flow_programs_remove_for_document) where it leaves");
         /* AND THE THREE-NUMBER LAW, AT THE ONE SITE THAT LOWERS THE LIVE COUNT. It is asserted at both
            mutation sites rather than in a helper the two share, because a helper would report ITS line for
            whichever of them broke and these are the only two there are: a realm is recorded in

@@ -1941,12 +1941,13 @@ Flow *flow_at(int i);
    are released). */
 int   flow_cow_entries_naming(JSValueConst v);
 
-/* How many queued programs the whole frontier holds for one document, summed over every member's `dyn_doc`.
- * A `dyn_doc` entry is a uint32 handle that keeps nothing alive and stays readable after its realm is gone,
- * unlike every counted JSValue by which a flow names a realm, so core/frame/navigable.c asserts this at the
- * moment a realm dies. Pure (no allocation, no JS value, no reference), because the realm-teardown hook runs
- * inside a collection. */
-int   flow_programs_for_document(uint32_t doc);
+/* How many unstarted programs the whole frontier holds for one document: flow_programs_unstarted_for_document
+ * summed over every member. A `dyn_doc` entry is a uint32 handle that keeps nothing alive and stays readable after
+ * its realm is gone, unlike every counted JSValue by which a flow names a realm, so core/frame/navigable.c asserts
+ * this at the moment a realm dies. A started row is the flow's history, not a queued task (HTML §7.5.10 step 5
+ * removes only tasks not yet run), and is never compiled again. Pure (no allocation, no JS value, no reference),
+ * because the realm-teardown hook runs inside a collection. */
+int   flow_frontier_programs_unstarted_for_document(uint32_t doc);
 
 /* How many programs of one document one flow has queued and not started. Per flow because HTML §7.5.10
  * "Destroying documents" runs once per timeline over its own delta, and another flow's rows for that document
