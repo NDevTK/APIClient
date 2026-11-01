@@ -149,9 +149,11 @@ typedef struct {
     char *refused_acts;
     char *composition_refused;
     /* The verifications owed: a fire under message acts the run left unknown, with every message composed,
-       re-run on this search's path with those compositions delivered (flow.h's deliveries). Each holds the
-       payload and the deliveries' text (flow_deliveries_text), owned; `vf_seeded` is the seeding cursor. */
-    struct { char *payload; char *dl; } *vf;
+       re-run on this search's path with those compositions delivered (flow.h's deliveries), and a fire whose
+       run pinned an attacker source it did not deliver, re-run with that source among the gates. Each holds
+       the payload, the deliveries' text (flow_deliveries_text, NULL for none) and how many gates the search
+       held when it was queued, owned; `vf_seeded` is the seeding cursor. */
+    struct { char *payload; char *dl; int ngate; } *vf;
     int nvf, vf_seeded;
     /* The messages a candidate of this search runs under: the data of every message act on the frozen path,
        composed from its domain at the capture (act_list_message_deliveries), with MSG_PAYLOAD_SLOT where the
@@ -160,6 +162,14 @@ typedef struct {
     /* The value a URL-carried root's base source begins with for a candidate (concolic_url_head), composed from
        the detecting flow's facets at the capture; NULL where none composes. Owned. */
     char *url_head;
+    /* The gates: each attacker source other than the root's own that the frozen path pinned, with the String
+       it was pinned to (concolic_path_gates), which every candidate of this search delivers (concolic_set_gates).
+       Taken at the capture and grown by a fire whose run pinned one more; owned. */
+    char **gate_src, **gate_val;
+    int ngate;
+    /* Fires whose run pinned an attacker source it did not deliver: each took an arm a delivery must decide,
+       so none is a PoC. Emitted as `firedUnderUndeliveredSource`. */
+    int fired_ungated;
     /* The runway position as its two halves, emitted as `runwayWalked`/`runwayOf`, so a best of 3/8000 is not
        rounded to 0 as it is in `replay_pm`. Ratcheted on itself by cross-multiplication (observe_runway), in
        integers. `replay_of` is dec_total() at that sample, not `reinject_len`: for an arm forked off a
@@ -264,7 +274,10 @@ static Cand *search_of(const char *src, int sink);
 /* `acts` is the envelope's `acts` array (record_sink), NULL for a fire verified under no engine drive or
    modelled act, and `under_act` says the fire was verified under one, so composition can assert the two agree. */
 /* `pre` is the precondition the fired run proved its bytes rest on (record_sink), owned; NULL where none. */
-typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; char *pre; } Finding;
+/* `gates` is the JSON array of the attacker sources beside the root the fired run delivered (emit_gates), NULL for
+   none. */
+typedef struct { int cls; char *source; char *root; char *poc; char *acts; int under_act; char *pre; char *gates; }
+        Finding;
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
 /* Whether the running flow's world asked anything of a declared principal (an origin's pin, or any branch its
@@ -279,13 +292,50 @@ static void queue_verification(Cand *e, const char *payload, char *dl) {
     void *grown;
 
     for (int i = 0; i < e->nvf; i++)
-        if (!strcmp(e->vf[i].payload, payload) && !strcmp(e->vf[i].dl, dl)) { free(dl); return; }
+        if (!strcmp(e->vf[i].payload, payload) && (e->vf[i].dl ? dl && !strcmp(e->vf[i].dl, dl) : !dl) &&
+            e->vf[i].ngate == e->ngate) {
+            free(dl);
+            return;
+        }
     grown = realloc(e->vf, (size_t)(e->nvf + 1) * sizeof *e->vf);
     CHECK(grown, "solve: OOM queueing a fire's verification");
     e->vf = grown;
     e->vf[e->nvf].payload = reclaim_strdup(payload);
     CHECK(e->vf[e->nvf].payload, "solve: OOM queueing a fire's verification");
+    e->vf[e->nvf].ngate = e->ngate;
     e->vf[e->nvf++].dl = dl;
+}
+
+/* One pinned attacker source, learned as a gate of search `ud` unless it holds one for that source already. */
+static void gate_learn(void *ud, const char *src, const char *equals, int composable) {
+    Cand *e = ud;
+    char **gs, **gv;
+
+    if (!composable) return;
+    for (int i = 0; i < e->ngate; i++)
+        if (!strcmp(e->gate_src[i], src)) return;
+    gs = realloc(e->gate_src, (size_t)(e->ngate + 1) * sizeof *gs);
+    CHECK(gs, "solve: OOM learning a search's gate");
+    e->gate_src = gs;
+    gv = realloc(e->gate_val, (size_t)(e->ngate + 1) * sizeof *gv);
+    CHECK(gv, "solve: OOM learning a search's gate");
+    e->gate_val = gv;
+    gs[e->ngate] = reclaim_strdup(src);
+    gv[e->ngate] = reclaim_strdup(equals);
+    CHECK(gs[e->ngate] && gv[e->ngate], "solve: OOM learning a search's gate");
+    e->ngate++;
+}
+
+/* What a fired run's own pins say about its arms: how many attacker sources it pinned and did not deliver, and
+   how many of those this file cannot deliver at all. */
+typedef struct { int n, refused; } GateTally;
+
+static void gate_tally(void *ud, const char *src, const char *equals, int composable) {
+    GateTally *t = ud;
+
+    (void)src; (void)equals;
+    t->n++;
+    t->refused += !composable;
 }
 
 /* A candidate's fire was observed (the marker called, or a request class's request leaving): a PoC when every act
@@ -322,6 +372,25 @@ static void fire_observed(Flow *f) {
     }
     DCHECK(dl == NULL, "a fire with every message delivered still composed one");
     DCHECK(refused == NULL, "a fire recorded as a PoC carries a message composition's refusal");
+    /* A pin this run made on an attacker source is an arm the replayed path decided and no delivery did, so the
+       PoC would not state the value its path needs. The source becomes a gate of the search and the payload is
+       verified again under it; a source no delivery here can carry is counted and goes no further. */
+    {
+        Cand *e = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
+        GateTally t = { 0, 0 };
+
+        CHECK(e != NULL && e->root != NULL, "an @S candidate fired for a search this session has no root for");
+        concolic_path_gates(e->root, gate_tally, &t);
+        if (t.n) {
+            e->fired_ungated++;
+            if (!t.refused) {
+                concolic_path_gates(e->root, gate_learn, e);
+                queue_verification(e, f->cand_payload, flow_deliveries_text(f));
+            }
+            free(acts);
+            return;
+        }
+    }
     record_sink(sink_class_of_name(fire_target_sink(&f->fire)), f->cand_src, f->cand_payload, acts, acts != NULL);
 }
 
@@ -870,6 +939,8 @@ static void cand_learn_path(Cand *e) {
         e->dl_tmpl = act_list_message_deliveries(flow_running(), e->src, MSG_PAYLOAD_SLOT);
     /* And the URL component the path's search facets shape, composed while they are this flow's. */
     if (e->root && !e->url_head) e->url_head = concolic_url_head(e->root);
+    /* And the other attacker sources the path pinned, which every candidate delivers. */
+    if (e->root) concolic_path_gates(e->root, gate_learn, e);
 }
 
 /* A detected sink opens its search: a single-context class states its breakouts, any other class the probes
@@ -958,14 +1029,55 @@ static void add_pending(const char *src, const char *root, int sink) {
    a declared attacker source (concolic_candidate_at_root). Named residual: not covered — a sink string that
    carries the candidate's bytes beside a precondition's piece, which the sinks skip as unreached; next diff —
    parse such a string and label it from its pieces' owners; absence shows as a search parked with
-   `sinkStrings` 0 whose candidate run concatenates the payload with stored state. */
+   `sinkStrings` 0 whose candidate run concatenates the payload with stored state.
+   The path's own arms count too: an arm the run took because app state held a value (a pinned precondition
+   source) is a link the PoC rests on, so the fire is labelled with it whatever the root is. */
 static char *fired_precondition(const char *root) {
     const char *pre = concolic_candidate_at_root(root) ? NULL : concolic_source_precondition(root);
     char *out;
 
+    if (!pre) pre = concolic_path_precondition();
     if (!pre) return NULL;
     out = reclaim_strdup(pre);
     CHECK(out != NULL, "solve: OOM recording a fired PoC's precondition");
+    return out;
+}
+
+/* One installed gate as the record states it: the source, the String its read answered on the path, and the
+   delivery a reproduction performs for it, in emit_delivery's grammar. */
+static void gate_json(void *ud, const char *src, const char *equals) {
+    JsonBuf *b = ud;
+    const char *kind = NULL, *key;
+    char prefix = 0;
+
+    CHECK(concolic_source_delivery(src, &kind, &prefix) && kind,
+          "a gate the run delivered names a source that declares no browser delivery");
+    if (b->n > 1) json_buf_raw(b, ",");
+    json_buf_raw(b, "{"); json_buf_key(b, "source"); json_buf_str(b, src);
+    json_buf_raw(b, ","); json_buf_key(b, "equals"); json_buf_str(b, equals);
+    json_buf_raw(b, ","); json_buf_key(b, "delivery"); json_buf_str(b, kind);
+    if (prefix) {
+        char p[2] = { prefix, 0 };
+
+        json_buf_raw(b, ","); json_buf_key(b, "deliveryPrefix"); json_buf_str(b, p);
+        if ((key = concolic_source_delivery_key(src)) != NULL) {
+            json_buf_raw(b, ","); json_buf_key(b, "deliveryKey"); json_buf_str(b, key);
+        }
+    }
+    json_buf_raw(b, "}");
+}
+
+/* The running flow's installed gates as a JSON array, owned, NULL for none. */
+static char *gates_json(void) {
+    JsonBuf b = { 0 };
+    char *out;
+
+    if (!concolic_gates_each(NULL, NULL)) return NULL;
+    json_buf_raw(&b, "[");
+    concolic_gates_each(gate_json, &b);
+    json_buf_raw(&b, "]");
+    out = json_buf_take(&b);
+    CHECK(out != NULL, "solve: OOM stating a fired PoC's gates");
     return out;
 }
 
@@ -983,12 +1095,12 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
            "strongest thing this half of the tool emits, and without the root §S(d)'s reproduction envelope "
            "reports it as an exploit no navigation reaches");
     /* Every source a fired PoC rides is either an attacker source with a browser delivery or a precondition
-       the report labels; the emission states which (emit_delivery).
-       Named residual: only the delivery root is asked. Not covered: a source the replayed path pinned without
-       the payload riding it (a gate on location.hash before a write fed from local storage), and a stored value
-       the application itself wrote from a declared source in an earlier flow (visit with #x, its setItem stores
-       it, a later load reads it). The next diff records the sources a candidate's path pinned and links a read
-       of a stored key to the write whose value carried a declared root, emitting the ordered steps. Its absence
+       the report labels; the emission states which (emit_delivery). An attacker source the path pinned beside
+       the root was delivered as a gate (fire_observed refuses a fire that pinned one undelivered), and a
+       precondition source it pinned labels the finding (fired_precondition).
+       Named residual. Not covered: a stored value the application itself wrote from a declared source in an
+       earlier flow (visit with #x, its setItem stores it, a later load reads it). The next diff links a read of
+       a stored key to the write whose value carried a declared root, emitting the ordered steps. Its absence
        shows as a finding labelled with a precondition on a page whose own code writes that key from its
        address. */
     {
@@ -1026,6 +1138,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
         .acts = acts,
         .under_act = under_act,
         .pre = fired_precondition(twin->root),
+        .gates = gates_json(),
     };
     /* A half-stored finding is a corrupt one, not a lost one: `solved` strcmps the source, and solve_json_array
        writes the PoC and the root straight into the report. */
@@ -2262,11 +2375,12 @@ static void observe_runway(Cand *e, const Flow *f) {
    after it, which would read the attacker's concrete string where its concolic source belongs. */
 void solve_flow_begin(Flow *f) {
     const char *root = NULL, *head = NULL;
+    const Cand *rc = NULL;
 
     /* A sink candidate is delivered through its search's root; a witness verification pins a value at its
        identity and is no search's. */
     if (f && f->cand_src && f->fire.kind == FIRE_SINK) {
-        const Cand *rc = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
+        rc = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
 
         DCHECK(rc != NULL && rc->root != NULL, "a candidate flow was switched in whose search holds no root");
         root = rc ? rc->root : NULL;
@@ -2274,6 +2388,7 @@ void solve_flow_begin(Flow *f) {
     }
     concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL, head);
     concolic_set_deliveries(f ? f->cand_dsrc : NULL, f ? f->cand_dval : NULL, f ? f->cand_dn : 0);
+    concolic_set_gates(rc ? rc->gate_src : NULL, rc ? rc->gate_val : NULL, rc ? rc->ngate : 0);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
     /* A witness verification substitutes and suppresses like a sink candidate and is no search's: its sinks
        take the exploration arm, which detect_sink then declines. */
@@ -2628,6 +2743,11 @@ char *solve_json_array(JSContext *ctx) {
         DCHECK((g_sinks[i].acts != NULL) == (g_sinks[i].under_act != 0),
                "a fire-verified PoC's acts and whether it was verified under a drive disagree — the envelope would "
                "claim a bare delivery fires, or state acts it was not verified under");
+        /* The attacker sources beside the root the fired run delivered, each a value the reproduction composes
+           into the same delivery. */
+        if (g_sinks[i].gates) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "pinnedSources"); json_buf_raw(&b, g_sinks[i].gates);
+        }
         if (g_sinks[i].acts) {
             json_buf_raw(&b, ","); json_buf_key(&b, "acts"); json_buf_raw(&b, g_sinks[i].acts);
         }
@@ -2813,6 +2933,10 @@ char *solve_json_array(JSContext *ctx) {
             json_buf_raw(&b, ","); json_buf_key(&b, "firedUnderNoAct");
             snprintf(t, sizeof t, "%d", g_pending[i].fired_no_act); json_buf_raw(&b, t);
         }
+        if (g_pending[i].fired_ungated) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "firedUnderUndeliveredSource");
+            snprintf(t, sizeof t, "%d", g_pending[i].fired_ungated); json_buf_raw(&b, t);
+        }
         if (g_pending[i].fired_unsolved_act) {
             json_buf_raw(&b, ","); json_buf_key(&b, "firedUnderUnsolvedAct");
             snprintf(t, sizeof t, "%d", g_pending[i].fired_unsolved_act); json_buf_raw(&b, t);
@@ -2854,12 +2978,18 @@ void solve_free(void) {
         free(g_pending[i].vf);
         free(g_pending[i].dl_tmpl);
         free(g_pending[i].url_head);
+        for (int k = 0; k < g_pending[i].ngate; k++) { free(g_pending[i].gate_src[k]); free(g_pending[i].gate_val[k]); }
+        free(g_pending[i].gate_src);
+        free(g_pending[i].gate_val);
         sender_pins_free(&g_pending[i].pp);
         sender_pins_free(&g_pending[i].snd);
         free(g_pending[i].src);
         free(g_pending[i].root);
     }
     free(g_pending); g_pending = NULL; g_pending_n = g_pending_cap = 0;
-    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].root); free(g_sinks[i].poc); free(g_sinks[i].acts); free(g_sinks[i].pre); }
+    for (int i = 0; i < g_sinks_n; i++) {
+        free(g_sinks[i].source); free(g_sinks[i].root); free(g_sinks[i].poc); free(g_sinks[i].acts);
+        free(g_sinks[i].pre); free(g_sinks[i].gates);
+    }
     free(g_sinks); g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
 }

@@ -1271,6 +1271,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cwmix.h"
 #include "fixture/typeoffacet.h"
 #include "fixture/sparoute.h"
+#include "fixture/pocgates.h"
 #include "fixture/envgate.h"
 #include "fixture/timegate.h"
 #include "fixture/datenum.h"
@@ -1895,6 +1896,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "cwmix", HTML_CWMIX },
     { "typeoffacet", HTML_TYPEOFFACET },
     { "sparoute", HTML_SPAROUTE },
+    { "pocgates", HTML_POCGATES },
     { "envgate", HTML_ENVGATE },
     { "timegate", HTML_TIMEGATE },
     { "datenum", HTML_DATENUM },
@@ -17854,6 +17856,48 @@ TF_UNIT void probes_sparoute(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `pocgates` document (fixture/pocgates.h): the gated sink's PoC states the fragment and the
+   second tuple its path pinned, and the stored-value sink's PoC is labelled a precondition and names no
+   storage source among its pinned sources. */
+TF_UNIT void probes_pocgates(const char *js, Probe *tab, int *n) {
+    char qs[1024] = "", ns[1024] = "";
+    int hq = s_rooted_source(js, "innerHTML", "[q]", qs, sizeof qs);
+    int hn = s_rooted_source(js, "innerHTML", "window.name", ns, sizeof ns);
+    const char *gt_why = NULL; int gt_tt = 1;
+    fold_row(&gt_tt, &gt_why, !!strstr(js, "\"/api/pg-gated\""),
+             "NOT REACHED: there is no /api/pg-gated record, so the arm where the fragment and the `mode` tuple both "
+             "matched never ran");
+    const char *gp_why = NULL; int gp_tt = 1;
+    fold_row(&gp_tt, &gp_why, hq && s_stage(js, "innerHTML", qs) == S_FIRED,
+             "the innerHTML <- the query's `q` search did not fire a PoC");
+    fold_row(&gp_tt, &gp_why,
+             hq && s_field(js, "innerHTML", qs, "{\"source\":\"location.hash\",\"equals\":\"#/r&d\""),
+             "the PoC does not state the `#/r&d` fragment its path pinned beside the query");
+    fold_row(&gp_tt, &gp_why,
+             hq && s_field(js, "innerHTML", qs,
+                           "{\"source\":\"{location.search}[mode]\",\"equals\":\"r&d\",\"delivery\":\"address\","
+                           "\"deliveryPrefix\":\"?\",\"deliveryKey\":\"mode\"}"),
+             "the PoC does not state the `mode` tuple its path pinned as a tuple of the query");
+    const char *st_why = NULL; int st_tt = 1;
+    fold_row(&st_tt, &st_why, !!strstr(js, "\"/api/pg-stored\""),
+             "NOT REACHED: there is no /api/pg-stored record, so the arm where storage holds `beta` never ran");
+    const char *sp_why = NULL; int sp_tt = 1;
+    fold_row(&sp_tt, &sp_why, hn && s_stage(js, "innerHTML", ns) == S_FIRED,
+             "the innerHTML <- window.name search did not fire a PoC");
+    fold_row(&sp_tt, &sp_why, hn && s_field(js, "innerHTML", ns, ",\"precondition\":\"same-origin\""),
+             "the PoC whose path took the arm where this origin's storage holds `beta` is not labelled with that "
+             "precondition");
+    fold_row(&sp_tt, &sp_why, !(hn && s_field(js, "innerHTML", ns, "localStorage")),
+             "the PoC names the storage source its path pinned as though an attacker delivered it");
+    const Probe rows[] = {
+        { "pg-gated", gt_tt, "/api/pg-gated", SESS_EXPLORE, gt_why },
+        { "pg-gates-poc", gp_tt, "pgParams.get('q')", SESS_EXPLORE, gp_why },
+        { "pg-stored", st_tt, "/api/pg-stored", SESS_EXPLORE, st_why },
+        { "pg-stored-pre", sp_tt, "'pgPre').innerHTML = window.name", SESS_EXPLORE, sp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `envgate` document (fixture/envgate.h): both arms of each environment gate. */
 TF_UNIT void probes_envgate(const char *js, Probe *tab, int *n) {
     const char *lg_why = NULL; int lg_tt = 1;
@@ -23958,6 +24002,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_cwmix(js, probes, &np);
     probes_typeoffacet(js, probes, &np);
     probes_sparoute(js, probes, &np);
+    probes_pocgates(js, probes, &np);
     probes_envgate(js, probes, &np);
     probes_timegate(js, probes, &np);
     probes_datenum(js, probes, &np);

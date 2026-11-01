@@ -548,6 +548,30 @@ void        concolic_search_facet(JSValueConst cond, int arm);
    every switch-in: each a cross-document message's data or origin source whose read answers the value its JSON
    text spells, the payload's own delivery included where the search injects inside that message. */
 void        concolic_set_deliveries(char *const *srcs, char *const *vals, int n);
+/* The attacker sources other than `root`'s own that the running flow's path pinned by a holding strict equality
+   under the source's own identity, each handed to `cb` with the String it was pinned to (borrowed until the
+   constraint next grows); answers how many. A principal is excluded (its pin is a sender demand,
+   concolic_principal_pins), as is a message's data or origin (the message composition states those), and a
+   keyed row's null pin, which an address that does not carry the tuple meets. `composable` is 0 for a pin this
+   file cannot deliver: a value that is not a String, a base row on the payload's own base, or a mechanism other
+   than the address and the navigable's name. `cb` may be NULL to ask only the count.
+   Named residual. Not covered: an equality over a derivation of a second source (`location.hash.slice(1) ===
+   x`), which pins nothing under the source. Next diff builds: the determination of the source's value from the
+   derivation's inverse where its operation has one. Absence shows as: a fired PoC whose path gated on a
+   derivation of a second source's read stating no value for that source. */
+int         concolic_path_gates(const char *root,
+                                void (*cb)(void *ud, const char *src, const char *equals, int composable), void *ud);
+/* The precondition token of the first declared precondition source (concolic_declare_source_precondition) the
+   running flow's path pinned a value of, or NULL: a path that took the arm where app state holds a value. */
+const char *concolic_path_precondition(void);
+/* The running flow's gates: further deliveries of the attacker sources its search's path pinned (`srcs` and the
+   Strings `vals` they were pinned to, concolic_path_gates), installed after its candidate and its deliveries at
+   every switch-in. Each is composed onto its row's base: a keyed row's tuple joins the base's other tuples
+   (the payload's own, where they share a base), and every read of a gated base answers the composed bytes
+   through the base's real transform. */
+void        concolic_set_gates(char *const *srcs, char *const *vals, int n);
+/* The installed gates as given, each handed to `cb` in installation order; answers how many. */
+int         concolic_gates_each(void (*cb)(void *ud, const char *src, const char *equals), void *ud);
 /* The running flow decided the branch `cond`, whose value a declared principal's bytes reach (a message's
    origin): latched in its constraint, so concolic_principal_decided answers whether this world asked anything of
    a principal however the predicate was spelled (`origin.indexOf(x) === -1` pins and gates nothing). */

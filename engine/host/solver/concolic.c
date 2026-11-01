@@ -2487,10 +2487,22 @@ static int deliv_find(const char *src) {
     return -1;
 }
 
-/* Whether a source read answers a delivered value rather than an unknown: the search's own bytes or a further
-   delivery. */
+/* The running flow's gates (concolic_set_gates): `g_gate_src`/`g_gate_val` as installed, and the bases they
+   compose onto, each with the bytes an attacker writes there (`g_gbase_bytes`, before the base's transform). A
+   base the payload rides is not among them: its gates join the payload's bytes. Copies, replaced at every
+   switch-in. */
+static char **g_gate_src, **g_gate_val, **g_gbase_src, **g_gbase_bytes;
+static int g_gate_n, g_gbase_n;
+
+static int gbase_find(const char *src) {
+    for (int i = 0; src && i < g_gbase_n; i++) if (!strcmp(g_gbase_src[i], src)) return i;
+    return -1;
+}
+
+/* Whether a source read answers a delivered value rather than an unknown: the search's own bytes, a further
+   delivery or a gate. */
 static int src_delivered(const char *src) {
-    return cand_matches(src) || deliv_find(src) >= 0;
+    return cand_matches(src) || deliv_find(src) >= 0 || gbase_find(src) >= 0;
 }
 
 int concolic_src_determined(const char *src) {
@@ -3216,14 +3228,52 @@ static void cand_observe_delivery(Flow *f)
     flow_mark_pinned_value();
 }
 
+/* `payload` as the page reads it after the browser carried it: `at`'s prefix (a referrer's whole attacker page),
+   then each byte percent-encoded where `encode` names it or the carrier serializes it into a URL. */
+static JSValue deliver_through(JSContext *ctx, const SourceDelivery *at, const char *encode, CarrierKind carrier,
+                               const char *payload)
+{
+    const unsigned char *p;
+    char *out;
+    size_t o = 0, n;
+
+    n = strlen(payload);
+    out = reclaim_malloc(n * 3 + 2 + strlen(concolic_attacker_page()) + 1);
+    CHECK(out != NULL, "concolic: OOM delivering a candidate");
+    if (at && at->prefix) out[o++] = at->prefix;
+    /* A referrer is the attacker page's whole URL, its address before the payload included. */
+    if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS) {
+        o = strlen(concolic_attacker_page());
+        memcpy(out, concolic_attacker_page(), o);
+    }
+    for (p = (const unsigned char *)payload; *p; p++) {
+        /* A byte outside printable US-ASCII is the mechanism's to answer for, not the row's (root_carrier). */
+        int shared = carrier_shared_byte(*p);
+
+        if ((shared && carrier == CARRIER_URL) || strchr(encode, (char)*p)) {
+            static const char HEX[] = "0123456789ABCDEF";
+            out[o++] = '%'; out[o++] = HEX[*p >> 4]; out[o++] = HEX[*p & 15];
+        } else {
+            out[o++] = (char)*p;
+        }
+    }
+    out[o] = 0;
+    /* Chrome hands a referrer longer than its limit as the attacker page's origin, so such a candidate arrives
+       without its payload. */
+    if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS && o > REFERRER_CHROME_LIMIT)
+        o = strlen(concolic_attacker_page());
+    {
+        JSValue r = JS_NewStringLen(ctx, out, o);
+        free(out);
+        return r;
+    }
+}
+
 static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *root, const char *payload)
 {
     const SourceDelivery *at = NULL;   /* the injection point's row, if it has one: the component's prefix */
     const char *encode;                /* …and the root's percent-encode set, which every derivation inherits */
     CarrierKind carrier;               /* …and what the root's mechanism does to a byte that set does not name */
-    const unsigned char *p;
-    char *out;
-    size_t o = 0, n;
     int i;
 
     /* The one point at which the attacker's bytes become a value in the page's program, so it is the
@@ -3273,37 +3323,7 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
     /* The same key as the encode set: the declared and the shared halves of one row's answer, so reading them
        from different rows would apply one mechanism's rule to another's bytes. */
     carrier = root_carrier(root);
-
-    n = strlen(payload);
-    out = reclaim_malloc(n * 3 + 2 + strlen(concolic_attacker_page()) + 1);
-    CHECK(out != NULL, "concolic: OOM delivering a candidate");
-    if (at && at->prefix) out[o++] = at->prefix;
-    /* A referrer is the attacker page's whole URL, its address before the payload included. */
-    if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS) {
-        o = strlen(concolic_attacker_page());
-        memcpy(out, concolic_attacker_page(), o);
-    }
-    for (p = (const unsigned char *)payload; *p; p++) {
-        /* A byte outside printable US-ASCII is the mechanism's to answer for, not the row's (root_carrier). */
-        int shared = carrier_shared_byte(*p);
-
-        if ((shared && carrier == CARRIER_URL) || strchr(encode, (char)*p)) {
-            static const char HEX[] = "0123456789ABCDEF";
-            out[o++] = '%'; out[o++] = HEX[*p >> 4]; out[o++] = HEX[*p & 15];
-        } else {
-            out[o++] = (char)*p;
-        }
-    }
-    out[o] = 0;
-    /* Chrome hands a referrer longer than its limit as the attacker page's origin, so such a candidate arrives
-       without its payload. */
-    if (at && at->deliver == SRC_DELIVER_REFERRING_ADDRESS && o > REFERRER_CHROME_LIMIT)
-        o = strlen(concolic_attacker_page());
-    {
-        JSValue r = JS_NewStringLen(ctx, out, o);
-        free(out);
-        return r;
-    }
+    return deliver_through(ctx, at, encode, carrier, payload);
 }
 /* The installed substitution belongs to the running flow: asserted here, where it is installed by its only
    caller, the scheduler. A mismatch would have an exploring flow read an attacker payload where its concolic
@@ -3531,6 +3551,154 @@ static JSValue deliver_structured(JSContext *ctx, int i) {
     v = JS_ParseJSON(ctx, g_dl_val[i], strlen(g_dl_val[i]), "<delivery>");
     CHECK(!JS_IsException(v), "concolic: a delivery's composed JSON did not parse — message_compose writes it");
     return v;
+}
+
+/* A row's base: the declared row whose own read carries its bytes. */
+static int row_base(int row)
+{
+    while (row >= 0 && g_srcs[row].parent) row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
+    return row;
+}
+
+/* Whether this file can deliver a pinned value at `row` as the page reads it: a String at a row whose mechanism
+   is the victim's address or the navigable's name, with no markup composition between it and its base. */
+static int gate_composable(int row, const Cons *c)
+{
+    return c->valkind == (signed char)CONCOLIC_LIT_STRING && !g_srcs[row].path &&
+           (g_srcs[row].deliver == SRC_DELIVER_ADDRESS || g_srcs[row].deliver == SRC_DELIVER_NAVIGABLE_NAME);
+}
+
+int concolic_path_gates(const char *root,
+                        void (*cb)(void *ud, const char *src, const char *equals, int composable), void *ud)
+{
+    int own_base = root ? row_base(root_declared_row(root)) : -1, found = 0;
+
+    for (int i = 0; i < g_srcs_n; i++) {
+        const Cons *c;
+        const char *p;
+        size_t n;
+        int own = 0;
+
+        if (g_srcs[i].principal || g_srcs[i].deliver == SRC_DELIVER_CROSS_DOCUMENT_MESSAGE) continue;
+        for (int m = 0; root_member(root, m, &p, &n); m++) own |= src_row(p, n) == i;
+        if (own) continue;
+        c = cons_lookup(g_srcs[i].src);
+        if (!c || !c->val) continue;
+        /* URL §5.1's parse yields no tuple for a name the list does not carry, which `get` answers null. */
+        if (g_srcs[i].key && c->valkind == (signed char)CONCOLIC_LIT_NULL) continue;
+        found++;
+        /* A whole component the payload's own bytes ride is decided by the payload, never by a second value. */
+        if (cb) cb(ud, g_srcs[i].src, c->val, gate_composable(i, c) && !(row_base(i) == own_base && !g_srcs[i].key));
+    }
+    return found;
+}
+
+const char *concolic_path_precondition(void)
+{
+    for (int j = 0; j < g_pres_n; j++) {
+        const Cons *c = cons_lookup(g_pres[j].src);
+
+        if (c && c->val) return precondition_token(g_pres[j].kind);
+    }
+    return NULL;
+}
+
+static void gates_clear(void)
+{
+    for (int i = 0; i < g_gate_n; i++) { free(g_gate_src[i]); free(g_gate_val[i]); }
+    for (int i = 0; i < g_gbase_n; i++) { free(g_gbase_src[i]); free(g_gbase_bytes[i]); }
+    free(g_gate_src); free(g_gate_val); free(g_gbase_src); free(g_gbase_bytes);
+    g_gate_src = g_gate_val = g_gbase_src = g_gbase_bytes = NULL;
+    g_gate_n = g_gbase_n = 0;
+}
+
+/* `*list` followed by `&` and `tuple` (consumed), URL §5.2 application/x-www-form-urlencoded serializing: "If
+   output is not the empty string, then append U+0026 (&) to output." */
+static void tuple_join(char **list, char *tuple)
+{
+    char *out = **list ? shapef("%s&%s", *list, tuple) : reclaim_strdup(tuple);
+
+    CHECK(out != NULL, "concolic: OOM joining a gate's tuple onto its base");
+    free(*list);
+    free(tuple);
+    *list = out;
+}
+
+void concolic_set_gates(char *const *srcs, char *const *vals, int n)
+{
+    gates_clear();
+    DCHECK(n == 0 || g_cand_src, "gates were installed for a flow carrying no candidate");
+    if (n == 0) return;
+    g_gate_src = reclaim_malloc((size_t)n * sizeof *g_gate_src);
+    g_gate_val = reclaim_malloc((size_t)n * sizeof *g_gate_val);
+    g_gbase_src = reclaim_malloc((size_t)n * sizeof *g_gbase_src);
+    g_gbase_bytes = reclaim_malloc((size_t)n * sizeof *g_gbase_bytes);
+    CHECK(g_gate_src && g_gate_val && g_gbase_src && g_gbase_bytes, "concolic: OOM installing a flow's gates");
+    for (int i = 0; i < n; i++) {
+        g_gate_src[i] = reclaim_strdup(srcs[i]);
+        g_gate_val[i] = reclaim_strdup(vals[i]);
+        CHECK(g_gate_src[i] && g_gate_val[i], "concolic: OOM installing a flow's gate");
+        g_gate_n = i + 1;
+    }
+    /* A whole component's value decides every tuple parsed from it, so whole components are placed first
+       (`whole` of them) and a tuple on a base one of them holds is not composed: re-execution decides the tuple
+       over the whole. */
+    for (int pass = 0, whole = 0; pass < 2; whole = g_gbase_n, pass++)
+        for (int i = 0; i < n; i++) {
+            int row = src_row(srcs[i], strlen(srcs[i])), base, k;
+            const char *v = vals[i];
+            char *bytes;
+
+            DCHECK(row >= 0 && !g_srcs[row].path && !g_srcs[row].principal &&
+                   (g_srcs[row].deliver == SRC_DELIVER_ADDRESS || g_srcs[row].deliver == SRC_DELIVER_NAVIGABLE_NAME),
+                   "a gate names a row concolic_path_gates does not call composable");
+            if (!!g_srcs[row].key != pass) continue;
+            if (g_srcs[row].key) {
+                bytes = reclaim_strdup(v);
+                CHECK(bytes != NULL, "concolic: OOM composing a gate's tuple");
+                base = row_chain_walk(srcs[i], &bytes, 0);
+                CHECK(bytes != NULL, "concolic: OOM composing a gate's tuple");
+            } else {
+                /* The component's value without its prefix, which the base's transform puts back. */
+                base = row;
+                bytes = reclaim_strdup(g_srcs[row].prefix && v[0] == g_srcs[row].prefix ? v + 1 : v);
+                CHECK(bytes != NULL, "concolic: OOM composing a gate's component");
+            }
+            DCHECK(base >= 0 && !g_srcs[base].parent, "a gate's chain ends at no base row");
+            if (g_cand_at && !strcmp(g_cand_at, g_srcs[base].src)) {
+                DCHECK(g_srcs[row].key && g_cand_bytes, "a gate replaces the whole component the payload rides");
+                tuple_join(&g_cand_bytes, bytes);
+            } else if ((k = gbase_find(g_srcs[base].src)) >= 0) {
+                DCHECK(g_srcs[row].key, "two gates are each a whole component of one base");
+                if (k >= whole) tuple_join(&g_gbase_bytes[k], bytes);
+                else free(bytes);
+            } else {
+                g_gbase_src[g_gbase_n] = reclaim_strdup(g_srcs[base].src);
+                CHECK(g_gbase_src[g_gbase_n] != NULL, "concolic: OOM installing a gate's base");
+                g_gbase_bytes[g_gbase_n++] = bytes;
+            }
+        }
+}
+
+int concolic_gates_each(void (*cb)(void *ud, const char *src, const char *equals), void *ud)
+{
+    for (int i = 0; cb && i < g_gate_n; i++) cb(ud, g_gate_src[i], g_gate_val[i]);
+    return g_gate_n;
+}
+
+/* A gated base's read: the composed bytes through the base's own transform. URL §6.1 URL class's search and
+   hash getters "return the empty string" for an empty component, so an empty one carries no prefix. These
+   are bytes this engine chose, as a further delivery's are. */
+static JSValue gate_read(JSContext *ctx, int k)
+{
+    int row = src_row(g_gbase_src[k], strlen(g_gbase_src[k]));
+
+    CHECK(row >= 0, "concolic: a gated base names no declared row");
+    flow_mark_forced_arm();
+    flow_mark_pinned_value();
+    if (!*g_gbase_bytes[k]) return JS_NewString(ctx, "");
+    return deliver_through(ctx, &g_srcs[row], g_srcs[row].encode ? g_srcs[row].encode : "",
+                           root_carrier(g_srcs[row].src), g_gbase_bytes[k]);
 }
 
 /* Whether the running flow's own candidate bytes have entered the program (the static above says where the
@@ -7925,6 +8093,7 @@ void concolic_free(void)
     free(g_cand_at);
     free(g_cand_bytes);
     g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = NULL;
+    gates_clear();
     /* The delivery fact goes with the pair it is about: concolic_candidate_delivered asserts a 1 never stands
        beside a NULL payload. This is the running flow's live copy; parked copies went with their blobs. */
     g_cand_delivered = 0;
@@ -8102,6 +8271,11 @@ static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const 
         JS_FreeValue(ctx, example);
         free(ident);
         return deliver_structured(ctx, deliv_find(src));
+    }
+    if (gbase_find(src) >= 0) {   /* a base the path's gates compose onto, which the payload does not ride */
+        JS_FreeValue(ctx, example);
+        free(ident);
+        return gate_read(ctx, gbase_find(src));
     }
     if (cand_matches(src)) {
         /* `example` is owned by this call whichever value comes back, and the payload replaces it: a source
