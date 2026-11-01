@@ -1034,7 +1034,20 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                            "then restarts step 16.2's loop before it gathers — which is what makes an initial "
                            "visibility determination reach the style and layout of the SAME frame. Build the "
                            "walk and 16.2.2's flag; core/dom/element_view.c's scrollIntoView wants it too");
-                    resize_observer_gather(docctx, s->rodepth);   /* STEP 16.2.5 */
+                    /* STEP 16.2.5. The gather measures each observed box, on a layout job this machine
+                       enters for the read, so the box's computed values are held in that job's record.
+                       NAMED RESIDUAL. Not covered: the measure runs whole with no resting drive, so many
+                       observations of wide boxes hold the thread for all of them. Next: RESIZE OBSERVER §3.4.1's
+                       observation sizes asked under a resting drive on a job this state owns. How its absence
+                       shows: a slice overrun inside step 16 with `_layoutJobRests` flat. */
+                    {
+                        LayoutJob *job = layout_job_new();
+
+                        layout_job_enter(job);
+                        resize_observer_gather(docctx, s->rodepth);
+                        layout_job_leave(job);
+                        layout_job_free(job);
+                    }
                     if (!resize_observer_has_active(docctx)) {    /* STEP 16.2.7: "Otherwise, break." */
                         s->ro16 = UR16_SKIPPED;
                         continue;
@@ -1050,7 +1063,13 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                        the invoke, because asking again on the resume would mint a second set of entries and
                        overwrite the lastReportedSizes step 2.3.3 has already latched. */
                     if (s->cphase == 0 && JS_IsUndefined(s->robc)) {
+                        /* Its entries' sizes are measured as the gather's are, on a job entered for the read. */
+                        LayoutJob *job = layout_job_new();
+
+                        layout_job_enter(job);
                         s->robc = resize_observer_broadcast_prepare(docctx, s->ro);
+                        layout_job_leave(job);
+                        layout_job_free(job);
                         if (JS_IsUndefined(s->robc)) { s->ro++; continue; }   /* step 2.1 */
                     }
                     {
