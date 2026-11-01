@@ -767,11 +767,13 @@ const PolicyContainer *engine_document_policy(uint32_t doc);
 long engine_unaddressed_total(void);
 /* engine_host_request for a request whose address has no bytes (core/fetch/fetch.h's FETCH_ADDRESS_UNKNOWN):
    the rendezvous is opened on the running flow and refused with PENDING_DECLINED_UNADDRESSED when the step
-   returns, before any host is shown it, so the flow takes flow_decline_fork's two arms. Returns the rendezvous
-   id. */
-uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op);
+   returns, before any host is shown it, so the flow takes flow_decline_fork's two arms. `address` is the
+   unknown the request's URL was parsed from (borrowed); the record carries it and Fetch §4.1 step 12's
+   same-origin test over it, as a park of an unknown address does. Returns the rendezvous id. */
+uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op, JSValueConst address);
 /* engine_host_request_async's form of the same refusal: the failure arm's network error is delivered. */
-uint32_t engine_host_request_unaddressed_async(JSContext *ctx, const char *op, JSValueConst deliver);
+uint32_t engine_host_request_unaddressed_async(JSContext *ctx, const char *op, JSValueConst address,
+                                              JSValueConst deliver);
 
 /* Whether the address may rest on a witness this engine chose: a second field, not a fourth provenance word,
  * because provenance grades what a reply is worth while this decides whether the act may be spent, and a

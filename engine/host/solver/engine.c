@@ -297,6 +297,18 @@ static int program_load_door(int kind, int parser_inserted)
 static long g_reply_unaddressed;
 long engine_unaddressed_total(void) { return g_reply_unaddressed; }
 
+/* Marks `e` a request to an unknown address: the class, the unknown `address` it stands for, and Fetch §4.1 Main
+   fetch step 12's same-origin test over it (fetch_main_same_origin_unknown, asked in this realm), written as one,
+   so every record of the class carries the test flow_unaddressed_same_origin asks. `current_url` as that function
+   takes it. Borrows both. */
+static void pending_mark_unaddressed(JSContext *ctx, JSValueConst e, JSValueConst address, JSValueConst current_url)
+{
+    DCHECK(concolic_is(address), "a request was marked unaddressed without the unknown its address stands for");
+    pending_set_int(e, PEND_ADDRESS, FETCH_ADDRESS_UNKNOWN);
+    pending_set(e, PEND_ADDRESS_VALUE, JS_DupValue(ctx, address));
+    pending_set(e, PEND_SAME_ORIGIN, fetch_main_same_origin_unknown(ctx, address, current_url));
+}
+
 static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
 {
     JSValue reply = JS_UNDEFINED;
@@ -452,8 +464,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
         DCHECK(concolic_is(req->address_value),
                "a request whose address is unknown reached the park without the unknown it stands for — the "
                "producer states both from the one value the page passed (core/fetch/fetch.h)");
-        pending_set(e, PEND_ADDRESS_VALUE, JS_DupValue(ctx, req->address_value));
-        pending_set(e, PEND_SAME_ORIGIN, fetch_main_same_origin_unknown(ctx, req->address_value, req->address_url));
+        pending_mark_unaddressed(ctx, e, req->address_value, req->address_url);
         pending_set(e, PEND_DECLINED, JS_NewString(ctx, PENDING_DECLINED_UNADDRESSED));
         g_reply_unaddressed++;
         free(up_url);
@@ -4258,11 +4269,12 @@ static int g_unaddressed_opened;
 /* See engine.h. The rendezvous is opened and marked; the scheduler refuses it once the step returns. A refusal
    written while the step runs lands before the step's own host-owed report, which would then hold the flow out
    of the pick with nothing left to clear it. */
-uint32_t engine_host_request_unaddressed_async(JSContext *ctx, const char *op, JSValueConst deliver) {
-    return host_request_make_async(ctx, engine_host_request_unaddressed(ctx, op), deliver);
+uint32_t engine_host_request_unaddressed_async(JSContext *ctx, const char *op, JSValueConst address,
+                                              JSValueConst deliver) {
+    return host_request_make_async(ctx, engine_host_request_unaddressed(ctx, op, address), deliver);
 }
 
-uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op) {
+uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op, JSValueConst address) {
     Flow *f = flow_running();
     uint32_t req = engine_host_request(ctx, op);
     int marked = 0;
@@ -4270,7 +4282,7 @@ uint32_t engine_host_request_unaddressed(JSContext *ctx, const char *op) {
     for (int i = 0, n = pending_count(f->pending); i < n; i++) {
         JSValue p = pending_entry(f->pending, i);
         if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ && (uint32_t)pending_get_int(p, PEND_REQ) == req) {
-            pending_set_int(p, PEND_ADDRESS, FETCH_ADDRESS_UNKNOWN);
+            pending_mark_unaddressed(ctx, p, address, JS_UNDEFINED);
             marked++;
         }
         JS_FreeValue(ctx, p);

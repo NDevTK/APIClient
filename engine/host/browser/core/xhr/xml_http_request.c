@@ -2804,7 +2804,7 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                 JSValue resume = xhr_run_closure(ctx, self, XHR_MODE_RESPONSE, XHR_ERR_NONE);
                 if (JS_IsException(resume)) { free(op); return JS_STEP_ABRUPT; }
                 d->controller = d->url_address == FETCH_ADDRESS_UNKNOWN
-                    ? engine_host_request_unaddressed_async(ctx, op, resume)
+                    ? engine_host_request_unaddressed_async(ctx, op, d->url_src, resume)
                     : engine_host_request_async(ctx, op, resume);
                 JS_FreeValue(ctx, resume);
                 free(op);
@@ -2829,8 +2829,9 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                so this is a worker's). The next diff arms the same timer over the blocking rendezvous and
                throws TimeoutError. Its absence shows as a worker's synchronous send with a timeout never
                throwing. */
-            s->req = d->url_address == FETCH_ADDRESS_UNKNOWN ? engine_host_request_unaddressed(ctx, op)
-                                                             : engine_host_request(ctx, op);
+            s->req = d->url_address == FETCH_ADDRESS_UNKNOWN
+                         ? engine_host_request_unaddressed(ctx, op, d->url_src)
+                         : engine_host_request(ctx, op);
             free(op);
             s->hdr.stage = XR_WAIT;
             return JS_STEP_YIELD;
