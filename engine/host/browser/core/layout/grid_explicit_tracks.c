@@ -154,6 +154,18 @@ bool grid_explicit_tracks(lxb_dom_element_t *container, bool vertical, bool intr
     out->repeat_hi = out->list.n;
     for (i = list.auto_at + list.auto_n; i < list.n; i++) out->list.tracks[out->list.n++] = list.tracks[i];
     out->auto_fit = list.auto_fit;
+    /* A name after the repetition moves with the tracks it follows; one before it stays. None is inside it:
+       core/css/css_grid_track_list.c refuses those by name. */
+    for (i = 0; i < list.nnames; i++) {
+        DCHECK(list.names[i].line <= list.auto_at || list.names[i].line >= list.auto_at + list.auto_n,
+               "a line name inside an <auto-repeat> reached its expansion, which the track list's parse refuses");
+        if (list.names[i].line >= list.auto_at + list.auto_n)
+            list.names[i].line = list.names[i].line - list.auto_n + count * list.auto_n;
+    }
+    out->list.names = list.names;
+    out->list.nnames = list.nnames;
+    list.names = NULL;
+    list.nnames = 0;
     css_grid_track_list_free(&list);
     return true;
 }

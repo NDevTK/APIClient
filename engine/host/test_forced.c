@@ -1286,6 +1286,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
+#include "fixture/gridnames.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
@@ -1896,6 +1897,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
+    { "gridnames", HTML_GRIDNAMES },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
@@ -18152,6 +18154,24 @@ TF_UNIT void probes_paintroot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `gridnames` document (fixture/gridnames.h): placement against named grid lines. */
+TF_UNIT void probes_gridnames(const char *js, Probe *tab, int *n) {
+    const char *gn_why = NULL; int gn_tt = 1;
+    fold_row(&gn_tt, &gn_why, !!strstr(js, "\"/api/gridnames\""),
+             "NOT REACHED: no /api/gridnames record, so a grid whose track list names its lines was not laid out");
+    fold_row(&gn_tt, &gn_why, param_value_is(js, "/api/gridnames", "a", "50,200") &&
+                              param_value_is(js, "/api/gridnames", "b", "50,200") &&
+                              param_value_is(js, "/api/gridnames", "c", "0,300") &&
+                              param_value_is(js, "/api/gridnames", "d", "100,100"),
+             "placement against css-grid-1 §7.2.2's named lines did not give a=50,200 b=50,200 c=0,300 "
+             "d=100,100: `content` names content-start/content-end, `full` the outer pair, and repeat()'s "
+             "trailing and leading names share a line");
+    const Probe rows[] = {
+        { "grid-named-lines", gn_tt, "/api/gridnames", SESS_EXPLORE, gn_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -23698,6 +23718,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
+    probes_gridnames(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);

@@ -222,35 +222,48 @@ static void gp_axis_lines(lxb_dom_element_t *el, bool rows, GpLine *start, GpLin
     free(varea);
 }
 
-/* One axis of the explicit grid (§7.1 "The Explicit Grid"): its track count and the template whose areas
-   name its lines. */
+/* One axis of the explicit grid (§7.1 "The Explicit Grid"): its track count, the template whose areas name its
+   lines, and the track list whose `<line-names>` name them (NULL for a `none` list). */
 typedef struct {
     const CssGridTemplateAreas *areas;
+    const CssGridTrackList *lines;
     bool rows;
     size_t explicit_tracks;
 } GpAxis;
 
-/* The line §7.3.2 "Implicitly-Assigned Line Names" names `name` on the axis: "For each named grid area foo,
-   four implicitly-assigned line names are created", `foo-start` on its start lines and `foo-end` on its end
-   lines. One area answers a name at most once on an axis, so a name names at most one line. */
-static bool gp_named_line(const GpAxis *ax, const char *name, long *out)
+static int gp_long_cmp(const void *a, const void *b)
 {
-    size_t i, n = strlen(name);
+    long x = *(const long *)a, y = *(const long *)b;
 
+    return (x > y) - (x < y);
+}
+
+/* Every line of the explicit grid named `name`, in line order and each once, as an owned array in `*out`;
+   returns how many. A line is named by the track list's §7.2.2 "Naming Grid Lines: the [<custom-ident>*]
+   syntax" and by §7.3.2 "Implicitly-Assigned Line Names": "For each named grid area foo, four
+   implicitly-assigned line names are created", `foo-start` on its start lines and `foo-end` on its end lines. */
+static size_t gp_named_lines(const GpAxis *ax, const char *name, long **out)
+{
+    size_t i, n = strlen(name), have = 0, cap = (ax->lines ? ax->lines->nnames : 0) + ax->areas->n, w;
+    long *at = lexbor_malloc((cap ? cap : 1) * sizeof *at);
+
+    CHECK(at != NULL, "css-grid-1 §8.3: out of memory collecting a grid line's name");
+    for (i = 0; ax->lines != NULL && i < ax->lines->nnames; i++)
+        if (strcmp(ax->lines->names[i].name, name) == 0) at[have++] = (long)ax->lines->names[i].line;
     for (i = 0; i < ax->areas->n; i++) {
         const CssGridArea *a = &ax->areas->areas[i];
         size_t k = strlen(a->name);
 
-        if (n == k + 6 && strncmp(name, a->name, k) == 0 && strcmp(name + k, "-start") == 0) {
-            *out = (long)(ax->rows ? a->row_start : a->col_start);
-            return true;
-        }
-        if (n == k + 4 && strncmp(name, a->name, k) == 0 && strcmp(name + k, "-end") == 0) {
-            *out = (long)(ax->rows ? a->row_end : a->col_end);
-            return true;
-        }
+        if (n == k + 6 && strncmp(name, a->name, k) == 0 && strcmp(name + k, "-start") == 0)
+            at[have++] = (long)(ax->rows ? a->row_start : a->col_start);
+        else if (n == k + 4 && strncmp(name, a->name, k) == 0 && strcmp(name + k, "-end") == 0)
+            at[have++] = (long)(ax->rows ? a->row_end : a->col_end);
     }
-    return false;
+    qsort(at, have, sizeof *at, gp_long_cmp);
+    for (i = 0, w = 0; i < have; i++)
+        if (w == 0 || at[w - 1] != at[i]) at[w++] = at[i];
+    *out = at;
+    return w;
 }
 
 /* `l` as a zero-based line index. A number counts from the explicit grid's start, or "in reverse, starting
@@ -260,7 +273,7 @@ static bool gp_named_line(const GpAxis *ax, const char *name, long *out)
    <custom-ident>-end (for grid-*-end)". A negative answer is a line before the explicit grid. */
 static long gp_line_at(const GpAxis *ax, const GpLine *l, bool end_side)
 {
-    long at, have;
+    long at, have, *lines;
 
     DCHECK(l->kind == GP_LINE, "a grid line index was asked of a placement that is not a line");
     if (l->name == NULL) return l->n > 0 ? l->n - 1 : (long)ax->explicit_tracks + 1 + l->n;
@@ -271,13 +284,17 @@ static long gp_line_at(const GpAxis *ax, const GpLine *l, bool end_side)
         CHECK(edge != NULL, "css-grid-1 §8.3: out of memory naming a grid area's edge");
         memcpy(edge, l->name, k);
         strcpy(edge + k, end_side ? "-end" : "-start");
-        have = gp_named_line(ax, edge, &at);
+        have = (long)gp_named_lines(ax, edge, &lines);
         free(edge);
-        if (have) return at;
+        at = have > 0 ? lines[0] : 0;
+        free(lines);
+        if (have > 0) return at;
     }
-    have = gp_named_line(ax, l->name, &at);
-    if (l->n > 0) return have >= l->n ? at : (long)ax->explicit_tracks + (l->n - have);
-    return have >= -l->n ? at : -((-l->n) - have);
+    have = (long)gp_named_lines(ax, l->name, &lines);
+    if (l->n > 0) at = have >= l->n ? lines[l->n - 1] : (long)ax->explicit_tracks + (l->n - have);
+    else at = have >= -l->n ? lines[have + l->n] : -((-l->n) - have);
+    free(lines);
+    return at;
 }
 
 /* The line a span `l` reaches from line `from`, endward or startward: "N lines from its opposite edge in the
@@ -285,11 +302,18 @@ static long gp_line_at(const GpAxis *ax, const GpLine *l, bool end_side)
    lines on the side of the explicit grid corresponding to the search direction" have that name. */
 static long gp_span_from(const GpAxis *ax, const GpLine *l, long from, bool endward)
 {
-    long at, have = 0;
+    long at = 0, have = 0, *lines;
+    size_t n, i;
 
     DCHECK(l->kind == GP_SPAN, "a grid span was asked of a placement that is not a span");
     if (l->name == NULL) return endward ? from + l->n : from - l->n;
-    if (gp_named_line(ax, l->name, &at) && (endward ? at > from : at < from)) have = 1;
+    n = gp_named_lines(ax, l->name, &lines);
+    for (i = 0; i < n && have < l->n; i++) {
+        long x = endward ? lines[i] : lines[n - 1 - i];
+
+        if (endward ? x > from : x < from) { at = x; have++; }
+    }
+    free(lines);
     if (have >= l->n) return at;
     if (endward) return (from > (long)ax->explicit_tracks ? from : (long)ax->explicit_tracks) + (l->n - have);
     return (from < 0 ? from : 0) - (l->n - have);
@@ -384,13 +408,11 @@ void grid_placement_free(GridPlacement *p)
 /* §7.1: "The size of the explicit grid is determined by the larger of the number of rows/columns defined by
    grid-template-areas and the number of rows/columns sized by grid-template-rows/grid-template-columns." */
 static size_t gp_explicit_tracks(lxb_dom_element_t *container, const CssGridTemplateAreas *areas, bool rows,
-                                 bool intrinsic)
+                                 bool intrinsic, GridExplicitTracks *t)
 {
-    GridExplicitTracks t;
     size_t n = 0, from_areas = rows ? areas->rows : areas->columns;
 
-    if (grid_explicit_tracks(container, rows, intrinsic, &t)) n = t.list.n;
-    grid_explicit_tracks_free(&t);
+    if (grid_explicit_tracks(container, rows, intrinsic, t)) n = t->list.n;
     return n > from_areas ? n : from_areas;
 }
 
@@ -399,6 +421,7 @@ void grid_placement_run(lxb_dom_element_t *container, bool intrinsic, GridPlacem
     BoxTreeChild c;
     CssGridTemplateAreas areas;
     GpAxis row_axis, col_axis;
+    GridExplicitTracks row_tracks, col_tracks;
     size_t n = 0, cap = 0, i, explicit_columns, explicit_rows, columns, rows;
     size_t cursor_row = 0, cursor_col = 0;
     lxb_dom_element_t **items = NULL;
@@ -408,9 +431,11 @@ void grid_placement_run(lxb_dom_element_t *container, bool intrinsic, GridPlacem
 
     DCHECK(out != NULL, "a grid was placed with nowhere to put it");
     (void)css_computed_grid_template_areas(container, &areas);
-    explicit_columns = gp_explicit_tracks(container, &areas, false, intrinsic);
-    explicit_rows = gp_explicit_tracks(container, &areas, true, intrinsic);
+    explicit_columns = gp_explicit_tracks(container, &areas, false, intrinsic, &col_tracks);
+    explicit_rows = gp_explicit_tracks(container, &areas, true, intrinsic, &row_tracks);
     row_axis.areas = col_axis.areas = &areas;
+    row_axis.lines = &row_tracks.list;
+    col_axis.lines = &col_tracks.list;
     row_axis.rows = true;
     col_axis.rows = false;
     row_axis.explicit_tracks = explicit_rows;
@@ -526,5 +551,7 @@ void grid_placement_run(lxb_dom_element_t *container, bool intrinsic, GridPlacem
     free(cs);
     free(row_cursor);
     free(o.bits);
+    grid_explicit_tracks_free(&row_tracks);
+    grid_explicit_tracks_free(&col_tracks);
     css_grid_template_areas_free(&areas);
 }

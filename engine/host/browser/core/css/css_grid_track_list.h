@@ -7,9 +7,9 @@
  * are answered differently, as core/css/css_transform_function.h answers them for `transform`: text outside
  * the grammar is CSS Syntax 3's invalid declaration and the parse returns false, so the property computes to
  * its initial `none`; a production §7.2 defines that is not built here crashes by name. */
-/* Named residual. Not covered: line names (§7.2.2), inside `repeat()` as outside it. Next diff builds them as
- * names on the lines between tracks, which core/layout/grid_placement.h resolves. How its absence would show: a
- * page's grid aborting at this file's refusal of `[`. */
+/* Named residual. Not covered: line names inside an `<auto-repeat>`, which §7.2.3.2 repeats with its tracks.
+ * Next diff builds them repeated by core/layout/grid_explicit_tracks.h's count. How its absence would show: a
+ * page's grid aborting at this file's refusal of a `[` inside `repeat(auto-fill, …)` or `repeat(auto-fit, …)`. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_GRID_TRACK_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_GRID_TRACK_LIST_H
 
@@ -50,10 +50,19 @@ typedef struct {
    counts its repetitions from the grid container's size: its tracks are held once, as the `auto_n` tracks from
    `auto_at`, and `auto_n` is 0 for a list without one. `auto_fit` is `auto-fit` rather than `auto-fill`.
    `tracks` is owned and released by `css_grid_track_list_free`. */
+/* One name on one line (§7.2.2 "Naming Grid Lines: the [<custom-ident>*] syntax"): line `line` is the start
+   edge of track `line`, and line `n` the end edge of the last track. `name` is owned. */
+typedef struct {
+    size_t line;
+    char  *name;
+} CssGridLineName;
+
 typedef struct {
     CssGridTrackSize *tracks;
     size_t            n, auto_at, auto_n;
     bool              auto_fit;
+    CssGridLineName  *names;    /* in line order, owned; `nnames` of them */
+    size_t            nnames;
 } CssGridTrackList;
 
 /* `text` against §7.2's `<track-list>`, lengths absolutized with `font` and `realm` as css_length.h's parse

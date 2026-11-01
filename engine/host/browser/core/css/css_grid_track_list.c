@@ -57,9 +57,71 @@ static bool gtl_push(CssGridTrackList *l, size_t *cap, CssGridTrackSize t)
     return true;
 }
 
+/* `name` (owned) on line `line` of `l`. */
+static void gtl_name_push(CssGridTrackList *l, size_t *cap, size_t line, char *name)
+{
+    if (l->nnames == *cap) {
+        size_t c = *cap ? *cap * 2 : 4;
+        CssGridLineName *grown = lexbor_realloc(l->names, c * sizeof *grown);
+
+        CHECK(grown != NULL, "css-grid-1 §7.2.2: out of memory holding a track list's line names");
+        l->names = grown;
+        *cap = c;
+    }
+    l->names[l->nnames].line = line;
+    l->names[l->nnames++].name = name;
+}
+
+/* A `<line-names>`, `'[' <custom-ident>* ']'`, over the `n` bytes at `s`, each name put on line `out->n`.
+   §7.2.2's `<custom-ident>` "excludes the keywords span and auto", and CSS Values 4 §4.2 "Unprefixed
+   Author-defined Identifiers: the <custom-ident> type" excludes the CSS-wide keywords and `default`. False for
+   text outside the grammar. */
+static bool gtl_line_names(const char *text, const char *s, size_t n, CssGridTrackList *out, size_t *ncap)
+{
+    static const char *const EXCLUDED[] = { "span", "auto", "initial", "inherit", "unset", "revert",
+                                            "revert-layer", "default" };
+    const char *end = s + n - 1;
+
+    if (n < 2 || s[0] != '[' || *end != ']') return false;
+    for (s++; s < end;) {
+        const char *e;
+        size_t k, i;
+        char *name;
+
+        while (s < end && isspace((unsigned char)*s)) s++;
+        for (e = s; e < end && !isspace((unsigned char)*e); e++)
+            if (*e == '\\')
+                DFAILF("css-grid-1 §7.2.2's line name in `%s` carries a CSS Syntax 3 escape. BUILD the "
+                       "ident's unescaping (css-syntax-3 §4.3.12 \"Consume an ident sequence\")", text);
+        k = (size_t)(e - s);
+        if (k == 0) break;
+        if (isdigit((unsigned char)s[0]) || (s[0] == '-' && k > 1 && isdigit((unsigned char)s[1])) ||
+            (s[0] == '-' && k == 1))
+            return false;
+        for (i = 0; i < k; i++)
+            if (!isalnum((unsigned char)s[i]) && s[i] != '-' && s[i] != '_' && (unsigned char)s[i] < 0x80)
+                return false;
+        for (i = 0; i < sizeof EXCLUDED / sizeof EXCLUDED[0]; i++)
+            if (strlen(EXCLUDED[i]) == k && strncasecmp(s, EXCLUDED[i], k) == 0) return false;
+        name = lexbor_malloc(k + 1);
+        CHECK(name != NULL, "css-grid-1 §7.2.2: out of memory copying a line name");
+        memcpy(name, s, k);
+        name[k] = '\0';
+        gtl_name_push(out, ncap, out->n, name);
+        s = e;
+    }
+    return true;
+}
+
 void css_grid_track_list_free(CssGridTrackList *list)
 {
+    size_t i;
+
     DCHECK(list != NULL, "a track list was released with no list");
+    for (i = 0; i < list->nnames; i++) free(list->names[i].name);
+    free(list->names);
+    list->names = NULL;
+    list->nnames = 0;
     free(list->tracks);
     list->tracks = NULL;
     list->n = list->auto_at = list->auto_n = 0;
@@ -158,9 +220,10 @@ static bool gtl_fixed_size(const CssGridTrackSize *t)
 }
 
 /* The `<track-size>`s of the space-separated `n` bytes at `s`, appended to `out`. False for text outside the
-   grammar; a line name is refused by name. */
+   grammar. Line names land on the line before the next track; inside an `<auto-repeat>` they are refused by
+   name. */
 static bool gtl_track_sizes(JSContext *realm, const CssFontMetrics *font, const char *text, const char *s, size_t n,
-                            CssGridTrackList *out, size_t *cap)
+                            CssGridTrackList *out, size_t *cap, size_t *ncap, bool autorep)
 {
     const char *end = s + n;
 
@@ -170,11 +233,16 @@ static bool gtl_track_sizes(JSContext *realm, const CssFontMetrics *font, const 
         CssGridTrackSize t;
 
         if (e == NULL) return false;
-        if (s[0] == '[')
-            DFAILF("css-grid-1 §7.2.2 \"Named Grid Lines: the [<custom-ident>*] syntax\" in the track list "
-                   "`%s`. BUILD line names", text);
-        if (!gtl_track_size(realm, font, s, (size_t)(e - s), &t)) return false;
-        gtl_push(out, cap, t);
+        if (s[0] == '[') {
+            if (autorep)
+                DFAILF("css-grid-1 §7.2.2's line names inside an `<auto-repeat>` in the track list `%s`, which "
+                       "§7.2.3.2 repeats with its tracks. BUILD them repeated by "
+                       "core/layout/grid_explicit_tracks.h's count", text);
+            if (!gtl_line_names(text, s, (size_t)(e - s), out, ncap)) return false;
+        } else {
+            if (!gtl_track_size(realm, font, s, (size_t)(e - s), &t)) return false;
+            gtl_push(out, cap, t);
+        }
         s = e;
         while (s < end && isspace((unsigned char)*s)) s++;
     }
@@ -185,10 +253,10 @@ static bool gtl_track_sizes(JSContext *realm, const CssFontMetrics *font, const 
    auto-fit ] , [ <line-names>? <track-size> ]+ <line-names>? )`. An integer count is expanded; an automatic one is
    recorded once, and "can only appear once in the track list". False for text outside the grammar. */
 static bool gtl_repeat(JSContext *realm, const CssFontMetrics *font, const char *text, const char *s, size_t n,
-                       CssGridTrackList *out, size_t *cap)
+                       CssGridTrackList *out, size_t *cap, size_t *ncap)
 {
     const char *a = s + 7, *comma = memchr(s + 7, ',', n - 8), *body;
-    size_t an, bn, first, m, k, count = 0, i;
+    size_t an, bn, first, nfirst, nbody, m, k, count = 0, i;
     char *endp, num[32];
     bool autorep = false, fit = false;
 
@@ -211,7 +279,8 @@ static bool gtl_repeat(JSContext *realm, const CssFontMetrics *font, const char 
         if (*endp != '\0' || count < 1) return false;
     }
     first = out->n;
-    if (!gtl_track_sizes(realm, font, text, body, bn, out, cap) || out->n == first) return false;
+    nfirst = out->nnames;
+    if (!gtl_track_sizes(realm, font, text, body, bn, out, cap, ncap, autorep) || out->n == first) return false;
     if (autorep) {
         if (out->auto_n != 0) return false;
         out->auto_at = first;
@@ -219,19 +288,34 @@ static bool gtl_repeat(JSContext *realm, const CssFontMetrics *font, const char 
         out->auto_fit = fit;
         return true;
     }
+    /* §7.2.3.1: the body's line names repeat with its tracks, so a trailing name of one repetition and a
+       leading name of the next share a line. Only the names the body itself wrote are repeated. */
     m = out->n - first;
-    for (k = 1; k < count; k++)
+    nbody = out->nnames - nfirst;
+    for (k = 1; k < count; k++) {
+        for (i = 0; i < nbody; i++) {
+            const CssGridLineName *b = &out->names[nfirst + i];
+            size_t len = strlen(b->name);
+            char *copy = lexbor_malloc(len + 1);
+
+            CHECK(copy != NULL, "css-grid-1 §7.2.3.1: out of memory repeating a line name");
+            memcpy(copy, b->name, len + 1);
+            gtl_name_push(out, ncap, b->line + k * m, copy);
+        }
         for (i = 0; i < m; i++) gtl_push(out, cap, out->tracks[first + i]);
+    }
     return true;
 }
 
 bool css_grid_track_list_parse(JSContext *realm, const CssFontMetrics *font, const char *text,
                                CssGridTrackList *out)
 {
-    size_t cap = 0;
+    size_t cap = 0, ncap = 0;
     const char *s = text;
 
     DCHECK(text != NULL && out != NULL, "a track list was parsed from nothing or into nothing");
+    out->names = NULL;
+    out->nnames = 0;
     out->tracks = NULL;
     out->n = out->auto_at = out->auto_n = 0;
     out->auto_fit = false;
@@ -245,11 +329,10 @@ bool css_grid_track_list_parse(JSContext *realm, const CssFontMetrics *font, con
 
         if (e == NULL) { css_grid_track_list_free(out); return false; }
         n = (size_t)(e - s);
-        if (s[0] == '[')
-            DFAILF("css-grid-1 §7.2.2 \"Named Grid Lines: the [<custom-ident>*] syntax\" in the track list "
-                   "`%s`. BUILD line names", text);
-        if (n > 8 && strncasecmp(s, "repeat(", 7) == 0 && s[n - 1] == ')') {
-            ok = gtl_repeat(realm, font, text, s, n, out, &cap);
+        if (s[0] == '[') {
+            ok = gtl_line_names(text, s, n, out, &ncap);
+        } else if (n > 8 && strncasecmp(s, "repeat(", 7) == 0 && s[n - 1] == ')') {
+            ok = gtl_repeat(realm, font, text, s, n, out, &cap, &ncap);
         } else {
             ok = gtl_track_size(realm, font, s, n, &t);
             if (ok) gtl_push(out, &cap, t);

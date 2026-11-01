@@ -2443,6 +2443,8 @@ bool css_computed_grid_track_list(lxb_dom_element_t *el, const char *name, CssGr
             "`%s` is not one of css-grid-1 §7.2's two track-list properties", name);
     out->tracks = NULL;
     out->n = 0;
+    out->names = NULL;
+    out->nnames = 0;
     cascaded = css_cv_cascaded(el, name);
     switch (css_defaulting_of(name, cascaded)) {
     case CSS_DEFAULTING_DECLARED:
