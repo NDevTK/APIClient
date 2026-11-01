@@ -55,7 +55,7 @@ static const char HTML_DOCNAMED[] =
     "      '&desc=' + dnDesc + '&wdesc=' + wnDesc + '&wglobal=' + wnGlobal + '&dset=' + dnSet + '&wset=' + wnSet);"
     "</script>"
     "<script>"
-    "var fmA = document.getElementById('fmA');"
+    "var fmA = document.querySelector('#fmA');"
     "var fmOv = fmA.action instanceof HTMLInputElement;"
     "var fmIb = typeof fmA.fmIb, fmDiv = typeof fmA.fmDiv, fmInv = typeof fmA.fmNoSuch;"
     "var fmPic = fmA.fmPic instanceof HTMLImageElement, fmExt = fmA.fmExt instanceof HTMLInputElement;"
