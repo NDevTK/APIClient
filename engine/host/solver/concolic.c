@@ -4228,6 +4228,7 @@ int concolic_value_truth(const char *ident)
     return arm;
 }
 static char *row_segment(const char *name);
+static int record_example(JSContext *ctx, const Concolic *c, JSValue *out);
 
 static uint32_t example_units(JSContext *ctx, JSValueConst ex);
 JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example);
@@ -4239,12 +4240,16 @@ static void pieces_clip(JSContext *ctx, JSValueConst r, JSValueConst s, uint32_t
 static JSValue split_element(JSContext *ctx, const Concolic *c, JSAtom atom)
 {
     uint32_t idx;
-    JSValue el;
+    JSValue ex, el;
 
-    if (!c->split_rec || !c->ex_has || !JS_IsArray(c->example) || !JS_AtomIsIndex(ctx, &idx, atom) ||
-        idx >= c->split_n)
+    if (!c->split_rec || !JS_AtomIsIndex(ctx, &idx, atom) || idx >= c->split_n)
         return JS_UNINITIALIZED;
-    el = JS_GetPropertyUint32(ctx, c->example, idx);
+    if (!record_example(ctx, c, &ex) || !JS_IsArray(ex)) {
+        JS_FreeValue(ctx, ex);
+        return JS_UNINITIALIZED;
+    }
+    el = JS_GetPropertyUint32(ctx, ex, idx);
+    JS_FreeValue(ctx, ex);
     if (!JS_IsString(el)) { JS_FreeValue(ctx, el); return JS_UNINITIALIZED; }
     DCHECKF(example_units(ctx, el) == c->split_pos[2 * idx + 1] - c->split_pos[2 * idx],
             "element %u of a split's example array is not the range the split placed it at", idx);
@@ -4347,8 +4352,8 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
        unknown object is controlled separately, hence the new injection identity, but arrives by the same route
        as the object's bytes, and a report must say so. */
     {
-        JSValue mex;
-        int held = c->ex_has && example_member(ctx, c->example, atom, &mex);
+        JSValue pex, mex = JS_UNDEFINED;
+        int held = record_example(ctx, c, &pex) && example_member(ctx, pex, atom, &mex);
         int nrow = c->root ? root_named_access_row(c->root) : -1;
         char *nsrc = NULL;
 
@@ -4368,6 +4373,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
             }
             JS_FreeCString(ctx, mname);
         }
+        JS_FreeValue(ctx, pex);
         r = nsrc ? concolic_alloc(ctx, nsrc, nsrc, nsrc, c->root_whose, ident, held ? mex : JS_UNDEFINED)
                  : concolic_alloc(ctx, shape, shape, c->root, c->root_whose, ident, held ? mex : JS_UNDEFINED);
         free(nsrc);
@@ -5395,15 +5401,14 @@ static int example_operable(JSValueConst v) {
 }
 
 static ConcolicExState example_state_of(const Concolic *c, const Cons **ppin);
+static int record_example_held(const Concolic *c);
 /* See concolic.h. concolic_example answers JS_UNDEFINED for absence too, so every site that runs an operation
    over a concolic operand's example — `"a" + x`, `x * 2`, String(x), !x, the engine's builtins through
    `example_held`, the IDL conversions — asks this rather than testing the example for `undefined`. */
 int concolic_example_present(JSValueConst v) {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
-    const Cons *pin;
-    ConcolicExState st = example_state_of(c, &pin);
 
-    return st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED;
+    return record_example_held(c);
 }
 
 /* See concolic.h. The answer is a string or absent, so no caller can read a held `undefined` as absence. */
@@ -7575,15 +7580,18 @@ static int concolic_has_own_slot(JSContext *ctx, JSValueConst obj, JSAtom atom)
 static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom atom)
 {
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
-    JSValue ev;
+    JSValue ex, ev;
     int eflags;
 
-    if (!c)
+    if (!c || !record_example(ctx, c, &ex))
         return 0;
-    if (!example_slot(ctx, c->example, atom, &ev, &eflags))
+    if (!example_slot(ctx, ex, atom, &ev, &eflags)) {
+        JS_FreeValue(ctx, ex);
         return 0;
+    }
     if (!desc) {
         JS_FreeValue(ctx, ev);
+        JS_FreeValue(ctx, ex);
         return 1;
     }
     /* The example's own bytes are not the answer: they ride the derivation as its example. An accessor member
@@ -7594,9 +7602,10 @@ static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, J
        record can be materialised (the define below moves it onto the object), so C|W is forced; a String's
        members are fixed (§10.4.3.5 step 10, §10.4.3.4 step 8), and forcing them would report a member the
        define is about to refuse. */
-    desc->flags = JS_IsString(c->example)
+    desc->flags = JS_IsString(ex)
                       ? (eflags & (JS_PROP_ENUMERABLE | JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE))
                       : ((eflags & JS_PROP_ENUMERABLE) | JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    JS_FreeValue(ctx, ex);
     desc->getter = JS_UNDEFINED;
     desc->setter = JS_UNDEFINED;
     desc->value = concolic_exotic_get(ctx, obj, atom, obj);
@@ -7631,7 +7640,7 @@ JSValue concolic_own_keys_pred(JSContext *ctx, JSValueConst record)
     /* No question for an ordinary object (its key set is its shape) or a record with an example (its key set is
        the example's, answered by the internal method below). Only an example-free record has an unknown key
        set; the condition matches the method's so the asker and the reader agree. */
-    if (!c || c->ex_has)
+    if (!c || record_example_held(c))
         return JS_UNINITIALIZED;
     return own_keys_pred(ctx, c);
 }
@@ -7676,7 +7685,7 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n)
         return 0;
     /* The same condition as concolic_own_keys_pred, written the same way: a record with an example has an
        observed key set, so no question was minted for the caller to stand on. */
-    DCHECK(!c->ex_has,
+    DCHECK(!record_example_held(c),
            "a record whose example holds its key set was asked to materialise an UNKNOWN member — its key set "
            "is an observation about the payload this visitor was served, so the caller forked over a question "
            "concolic_own_keys_pred never minted");
@@ -7723,13 +7732,14 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
 {
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
     JSPropertyEnum *tab = NULL;
+    JSValue ex;
     uint32_t n = 0;
 
     *ptab = NULL;
     *plen = 0;
     if (!c)
         return 0;
-    if (!c->ex_has) {
+    if (!record_example(ctx, c, &ex)) {
         /* No example is not an empty record: answering the empty List as a fact would decide
            `Object.keys(x).length === 0` for a record the run never saw. So it is answered as the flow's own arm.
            The question (`concolic_own_keys_pred`) is asked by the consumer, which has a resume point to fork at;
@@ -7806,13 +7816,13 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
         }
         return 0;
     }
-    if (JS_IsString(c->example)) {
+    if (JS_IsString(ex)) {
         /* §10.4.3.3 [[OwnPropertyKeys]] ( ) over a String example: step 5, "For each integer i such that
            0 ≤ i < length, in ascending order", then the other own string keys, of which a String has one,
            `length`. The empty List would be false for a non-empty string. No ordinary slot can collide: the
            define below refuses every member of a String example (§10.4.3.5 makes them non-configurable), and
            the tail assertion checks it on every walk. */
-        int64_t units = string_example_units(ctx, c->example), k;
+        int64_t units = string_example_units(ctx, ex), k;
 
         n = (uint32_t)(units + 1);
         tab = js_malloc(ctx, (size_t)n * sizeof *tab);
@@ -7827,14 +7837,17 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
         tab[units].is_enumerable = 0;      /* §10.4.3.4 step 8 */
         goto have_keys;
     }
-    if (!JS_IsObject(c->example))
+    if (!JS_IsObject(ex))
         return 0;   /* a number/boolean/bigint/null record has no own keys — `Object.keys(5)` is [] */
-    DCHECK(!JS_IsProxy(c->example),
+    DCHECK(!JS_IsProxy(ex),
            "a concolic's example is a Proxy — enumerating it is that Proxy's `ownKeys` trap, which is the "
            "page's code, and an internal method reached from C has no flow base to run one on");
-    if (JS_GetOwnPropertyNames(ctx, &tab, &n, c->example, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
+    if (JS_GetOwnPropertyNames(ctx, &tab, &n, ex, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0) {
+        JS_FreeValue(ctx, ex);
         return -1;
+    }
 have_keys:
+    JS_FreeValue(ctx, ex);
 #if APICLIENT_DEV
     {
     uint32_t i;
@@ -7868,10 +7881,14 @@ static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom p
 {
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
     JSPropertyDescriptor cur;
+    JSValue ex;
     int ret, nf = flags;
 
     if (!c || !concolic_exotic_get_own(ctx, &cur, obj, prop))
         return JS_DefineProperty(ctx, obj, prop, val, getter, setter, flags | JS_PROP_NO_EXOTIC);
+    /* The member was reported from this example, and nothing between the two reads writes a constraint. */
+    ret = record_example(ctx, c, &ex);
+    DCHECK(ret, "a member was reported from an example this flow, one line later, holds none");
 
     /* A String example's own members are not materialisable, so the define is refused. §10.4.3.2
        [[DefineOwnProperty]] ( propertyKey, propertyDesc ) step 2 sends such a member to
@@ -7884,8 +7901,9 @@ static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom p
        Next diff: that comparison over `cur.flags` and `flags`, accepting where every stated field matches, the
        `nf` merge below read as a test. How its absence shows: that call throwing a TypeError where a browser
        returns the object; never for a define carrying a value. */
-    if (JS_IsString(c->example)) {
+    if (JS_IsString(ex)) {
         JS_FreeValue(ctx, cur.value);
+        JS_FreeValue(ctx, ex);
         return JS_RefuseOrThrowTypeError(ctx, flags, "property is not configurable");
     }
     DCHECK(!(cur.flags & JS_PROP_GETSET),
@@ -7907,7 +7925,8 @@ static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom p
         }
     }
     /* Out of the example before into the shape, so no window exists in which both lists name it. */
-    ret = JS_DeleteProperty(ctx, c->example, prop, 0);
+    ret = JS_DeleteProperty(ctx, ex, prop, 0);
+    JS_FreeValue(ctx, ex);
     DCHECK(ret > 0, "a member this class reported could not be removed from the example it was read out of — "
                     "the example's own slots are the ones JSON.parse and the reply decoders build, all of them "
                     "configurable, so a refusal is a record some other path froze");
@@ -7924,23 +7943,30 @@ static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom p
 static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
-    JSValue ev;
+    JSValue ex, ev;
     int eflags, ret;
 
-    if (!c || !example_slot(ctx, c->example, prop, &ev, &eflags))
+    if (!c || !record_example(ctx, c, &ex))
         return 1;   /* nothing there to remove, which [[Delete]] reports as success */
+    if (!example_slot(ctx, ex, prop, &ev, &eflags)) {
+        JS_FreeValue(ctx, ex);
+        return 1;
+    }
     JS_FreeValue(ctx, ev);
     /* §10.1.10.1 step 4: a non-configurable member is not removed and the answer is false. Every own member of
        a String example is one (§10.4.3.5 step 10, §10.4.3.4 step 8), and a String primitive has no property to
        delete, so this is asked before the removal below. A bare false, not a throw: §13.5.1.2 Runtime
        Semantics: Evaluation step 4.f ("If deleteStatus is false and ref.[[Strict]] is true, throw a TypeError
        exception") raises the strict-mode TypeError from the operator. */
-    if (JS_IsString(c->example))
+    if (JS_IsString(ex)) {
+        JS_FreeValue(ctx, ex);
         return 0;
-    DCHECK(!JS_IsProxy(c->example),
+    }
+    DCHECK(!JS_IsProxy(ex),
            "a concolic's example is a Proxy — removing a member is that Proxy's `deleteProperty` trap, which "
            "is the page's code, and an internal method reached from C has no flow base to run one on");
-    ret = JS_DeleteProperty(ctx, c->example, prop, 0);
+    ret = JS_DeleteProperty(ctx, ex, prop, 0);
+    JS_FreeValue(ctx, ex);
     DCHECK(ret >= 0, "removing a member from a concolic's example threw — the example holds only the slots "
                      "JSON.parse and the reply decoders build and this call runs none of the page's code");
     return ret;
@@ -8530,10 +8556,15 @@ void concolic_hold_undefined(JSValueConst v) {
     c->ex_tyf = CONCOLIC_TYF_UNDEFINED;
 }
 
-JSValue concolic_example(JSContext *ctx, JSValueConst v) {
-    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+/* The record's example as this flow may believe it: 1 with `*out` owned where the decision carries bytes (HELD,
+   DETERMINED), 0 with `*out` = JS_UNDEFINED where it has none (NONE, CONTRADICTED). A held `undefined` answers 1,
+   so presence is the return and never the value. Every reader of a record's example goes through here; the
+   field itself is read only by this switch and by asserts about what a mint stored. */
+static int record_example(JSContext *ctx, const Concolic *c, JSValue *out)
+{
     const Cons *pin;
 
+    *out = JS_UNDEFINED;
     switch (example_state_of(c, &pin)) {
     /* The two dereferencing arms are asserted across the seam: their operands come from example_state_of, so
        an edit there answering DETERMINED with no entry, or HELD with no record, aborts here naming the arm. */
@@ -8542,20 +8573,39 @@ JSValue concolic_example(JSContext *ctx, JSValueConst v) {
                "the example state answered DETERMINED and handed back no constraint entry — the pin's bytes "
                "and the claim that there is one come out of ONE lookup precisely so the mint below cannot be "
                "asked to spell a determination nobody found");
-        return pin_mint(ctx, (ConcolicLit)pin->valkind, pin->val);
+        *out = pin_mint(ctx, (ConcolicLit)pin->valkind, pin->val);
+        return 1;
     case CONCOLIC_EX_HELD:
         DCHECK(c != NULL,
                "the example state answered HELD for a value that carries no concolic record — HELD is a claim "
                "about a record's own `example` field, so an operand with no record can only be NONE and this "
                "arm would be reading one that does not exist");
-        return JS_DupValue(ctx, c->example);
+        *out = JS_DupValue(ctx, c->example);
+        return 1;
     /* No bytes to show. NONE (nothing was computed) and CONTRADICTED (a gate on this path disproved it) owe a
        caller different work, which is why concolic_example_state exists; absence is the sound value for both. */
     case CONCOLIC_EX_NONE:
     case CONCOLIC_EX_CONTRADICTED:
         break;
     }
-    return JS_UNDEFINED;
+    return 0;
+}
+
+/* …and its presence alone, minting nothing, for a reader that needs no bytes. */
+static int record_example_held(const Concolic *c)
+{
+    const Cons *pin;
+    ConcolicExState st = example_state_of(c, &pin);
+
+    return st == CONCOLIC_EX_HELD || st == CONCOLIC_EX_DETERMINED;
+}
+
+JSValue concolic_example(JSContext *ctx, JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    JSValue ex;
+
+    record_example(ctx, c, &ex);
+    return ex;
 }
 
 /* …and the same decision, reported (concolic.h has the four answers and what each obliges). */

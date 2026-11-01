@@ -2,7 +2,8 @@
    arm is a String in every world (URL §6.2), so IsArray's step 1 answers false and there is no arm where it is an
    Array (ia-a1). A JSON.parse result over an unknown text may be an Array, so IsArray over it keeps both arms
    (ia-a2 and ia-b2). A reply member whose example is an Object, on the arm where `typeof` proved it a Boolean,
-   holds no example there, so IsArray answers false from its type set (ia-b3, never ia-a3). One of test_forced.c's exploring documents (TF_DOCS); it ends with TF_CANVAS_INK, which
+   holds no example there, so IsArray answers false from its type set (ia-b3, never ia-a3), and its own member
+   holds none either (ia-m3 never carries the Object's `1`). One of test_forced.c's exploring documents (TF_DOCS); it ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ISARRAYTYPE_H
 #define ENGINE_HOST_FIXTURE_ISARRAYTYPE_H
@@ -21,7 +22,8 @@ static const char HTML_ISARRAYTYPE[] =
     "} catch (e) { fetch('/api/ia-threw'); }"
     "(async function () {"
     "  var iaRec = await (await fetch('/api/iarec')).json();"
-    "  if (typeof iaRec.f === 'boolean') { if (Array.isArray(iaRec.f)) fetch('/api/ia-a3'); else fetch('/api/ia-b3'); }"
+    "  if (typeof iaRec.f === 'boolean') { if (Array.isArray(iaRec.f)) fetch('/api/ia-a3'); else fetch('/api/ia-b3');"
+    "    fetch('/api/ia-m3?x=' + iaRec.f.a); }"
     "})();"
     "</script>"
     TF_CANVAS_INK
