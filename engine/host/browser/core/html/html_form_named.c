@@ -5,7 +5,10 @@
  * elements whose form owner is the form, with an `id` or `name` equal to the name and no `input` in the Image
  * Button state; failing those, the `img` elements so owned; failing those, the past names map. A [[Get]],
  * [[HasProperty]] or [[GetOwnProperty]] walks as a step machine (fn_step) over the shared resting walk
- * (core/dom/named_walk.h), asking each element whose attribute matches for its form owner (html_form_owner_of). */
+ * (core/dom/named_walk.h), asking each element whose attribute matches for its form owner (html_form_owner_of).
+ * The IDL also declares `getter Element (unsigned long index)`, answered through core/idl_indexed.h's Web IDL
+ * §3.9 algorithms over the `elements` list; an array index never reaches the named lookup (Web IDL §3.9.1
+ * [[GetOwnProperty]] step 1). */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -16,6 +19,7 @@
 #include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/idl_args.h"
+#include "core/idl_indexed.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/named_walk.h"
 #include "core/dom/node.h"
@@ -148,6 +152,31 @@ static void fn_past_set(JSContext *ctx, JSValueConst form, JSValueConst key, JSV
     JS_FreeValue(ctx, m);
 }
 
+/* ---- the indexed property getter --------------------------------------------------------------------------- */
+
+/* HTML §4.10.3 The form element: "The supported property indices at any instant are the indices supported by the
+   object returned by the elements attribute at that instant." */
+static uint32_t fi_length(JSContext *ctx, JSValueConst self)
+{
+    JSValue list = html_form_elements(ctx, self), lv = JS_GetPropertyStr(ctx, list, "length");
+
+    DCHECK(JS_VALUE_GET_TAG(lv) == JS_TAG_INT, "a form's elements Array answered a length that is not an integer");
+    JS_FreeValue(ctx, list);
+    return (uint32_t)JS_VALUE_GET_INT(lv);
+}
+
+/* "To determine the value of an indexed property for a form element, the user agent must return the value
+   returned by the item method on the elements collection, when invoked with the given index as its argument." */
+static JSValue fi_item(JSContext *ctx, JSValueConst self, uint32_t i)
+{
+    JSValue list = html_form_elements(ctx, self), v = JS_GetPropertyUint32(ctx, list, i);
+
+    JS_FreeValue(ctx, list);
+    return v;
+}
+
+static const IdlIndexedDecl FORM_INDEXED = { "HTMLFormElement", fi_length, fi_item, NULL, 0 };
+
 /* ---- the lookup as a step machine ----------------------------------------------------------------------- */
 
 #define FN_ALGORITHM "HTML §4.10.3 The form element: determine the value of a named property"
@@ -227,10 +256,14 @@ static const IdlStepDecl FN_DECL = { fn_step, sizeof(FormNamedState), fn_walk_vi
 /* JSClassExoticMethods.get_own_property_step: the walk for a String key, JS_UNDEFINED for a Symbol. Owned. */
 static JSValue fn_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
-    JSValue pv = JS_AtomToValue(ctx, prop);
-    bool str = JS_IsString(pv);
+    JSValue pv;
+    bool str;
+    uint32_t i;
 
     (void)obj;
+    if (JS_AtomIsIndex(ctx, &i, prop)) return JS_UNDEFINED;   /* fn_get_own's indexed arm answers it */
+    pv = JS_AtomToValue(ctx, prop);
+    str = JS_IsString(pv);
     JS_FreeValue(ctx, pv);
     if (!str) return JS_UNDEFINED;
     DCHECK(g_id_fn_step >= 0, "form named access asked for its step before html_form_named_declare declared it");
@@ -250,15 +283,17 @@ static bool fn_string_name(JSContext *ctx, JSAtom prop, const char **name, size_
     return true;
 }
 
-/* Web IDL §3.9.1 [[GetOwnProperty]] from C. The lookup rests per element as fn_step, which every keyed request
-   reaches (get_own_property_step), and [[Set]] ignores named properties (set_ignores_named_properties), so a C
-   activation asking for a String key is a caller to route onto the keyed entry. */
+/* Web IDL §3.9.1 [[GetOwnProperty]] from C. Step 1, an array index, is the indexed getter and sets
+   ignoreNamedProps. The named lookup rests per element as fn_step, which every keyed request reaches
+   (get_own_property_step), and [[Set]] ignores named properties (set_ignores_named_properties), so a C activation
+   asking for any other String key is a caller to route onto the keyed entry. */
 static int fn_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
 {
     const char *name;
     size_t n;
+    uint32_t i;
 
-    (void)desc; (void)obj;
+    if (JS_AtomIsIndex(ctx, &i, prop)) return idl_indexed_own_property(ctx, desc, obj, prop, &FORM_INDEXED);
     if (!fn_string_name(ctx, prop, &name, &n)) return 0;
     JS_FreeCString(ctx, name);
     DFAIL("a C activation asked a form's named [[GetOwnProperty]]: the lookup rests per element as fn_step, so "
@@ -298,6 +333,10 @@ static bool fn_supported(JSContext *ctx, JSValueConst obj, JSAtom prop)
 static int fn_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueConst val, JSValueConst getter,
                          JSValueConst setter, int flags)
 {
+    uint32_t i;
+
+    if (JS_AtomIsIndex(ctx, &i, prop))   /* step 1, the indexed arm */
+        return idl_indexed_define_own_property(ctx, obj, prop, val, getter, setter, flags, &FORM_INDEXED);
     if (fn_supported(ctx, obj, prop))
         return JS_RefuseOrThrowTypeError(ctx, flags, "a form's named property has no setter and overrides its "
                                                      "built-ins, so it cannot be redefined");
@@ -308,7 +347,16 @@ static int fn_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueC
    quickjs reaches this only after the own properties missed, so anything else is step 4's true. */
 static int fn_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
+    uint32_t i;
+
+    if (JS_AtomIsIndex(ctx, &i, prop)) return idl_indexed_delete_property(ctx, obj, prop, &FORM_INDEXED);
     return !fn_supported(ctx, obj, prop);
+}
+
+/* Web IDL §3.9.6 [[OwnPropertyKeys]] step 2, the supported property indices; step 3 is residual (1) below. */
+static int fn_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
+{
+    return idl_indexed_own_property_names(ctx, ptab, plen, obj, &FORM_INDEXED);
 }
 
 /* Web IDL §3.9.5 [[PreventExtensions]]: "Return false." */
@@ -318,15 +366,17 @@ static int fn_prevent_extensions(JSContext *ctx, JSValueConst obj)
     return 0;
 }
 
-/* Named residuals. Not covered: (1) [[OwnPropertyKeys]]' supported property names; next diff lists HTML §4.10.3's
-   sourced names in its order; absence shows as `Reflect.ownKeys(form)` naming no control. (2) HTML §4.10.3's "if an
-   element listed in a form element's past names map changes form owner, then its entries must be removed"; next
-   diff removes them at the form owner reset; absence shows as a moved control answering its old form's name.
+/* Named residuals. Not covered: (1) [[OwnPropertyKeys]]' supported property names (step 3); next diff lists HTML
+   §4.10.3's sourced names in its order; absence shows as `Reflect.ownKeys(form)` naming no control by its name.
+   (2) HTML §4.10.3's "if an element listed in a form element's past names map changes form owner, then its
+   entries must be removed"; next diff removes them at the form owner reset; absence shows as a moved control
+   answering its old form's name.
    (3) A form holding a region of unknown markup (core/dom/unknown_markup.h) answers from the example's tree; next
    diff forks fn_step over the region as window.c's win_named_step does; absence shows as a `form.x` read after a
    sanitized innerHTML of attacker markup making no @S record. */
 static const JSClassExoticMethods FORM_NAMED_EXOTIC = {
     .get_own_property = fn_get_own,
+    .get_own_property_names = fn_own_names,
     .get_own_property_step = fn_get_own_step,
     /* Web IDL §3.9.1 step 2.1.2.6-8: no named property setter, so not writable; [LegacyUnenumerableNamedProperties],
        so not enumerable; configurable. */

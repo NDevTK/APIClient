@@ -804,11 +804,30 @@ JSValue html_form_submittable_controls(JSContext *ctx, JSValueConst form)
 
 /* A STATIC array — the same named gap childNodes and querySelectorAll carry; the live
    HTMLFormControlsCollection is its own component. */
+JSValue html_form_elements(JSContext *ctx, JSValueConst form)
+{
+    if (!form_elem_of(form)) return JS_NewArray(ctx);
+    return form_members(ctx, form, form_elements_member);
+}
+
 static JSValue js_form_elements(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)magic;
-    if (!form_elem_of(this_val)) return JS_NewArray(ctx);
-    return form_members(ctx, this_val, form_elements_member);
+    return html_form_elements(ctx, this_val);
+}
+
+/* HTML §4.10.3 The form element: "The length IDL attribute must return the number of nodes represented by the
+   elements collection." */
+static JSValue js_form_length(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue list = html_form_elements(ctx, this_val), lv;
+
+    (void)magic;
+    lv = JS_GetPropertyStr(ctx, list, "length");
+    DCHECK(JS_VALUE_GET_TAG(lv) == JS_TAG_INT, "a form's elements Array, built by form_members, answered a "
+                                               "length that is not an integer");
+    JS_FreeValue(ctx, list);
+    return lv;
 }
 
 /* ---- §4.10.22.3 "submit a form", and the two members that enter it ------------------------------------------
@@ -3005,6 +3024,7 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     DCHECK(g_id_submit >= 0, "§4.10's members were installed before they were declared");
     DCHECK(JS_IsObject(form_proto), "the form members were installed with no HTMLFormElement.prototype");
     idl_install_accessor(ctx, form_proto, "elements", js_form_elements, 0, -1);
+    idl_install_accessor(ctx, form_proto, "length", js_form_length, 0, -1);
     idl_install_step_method(ctx, form_proto, "submit", 0, g_id_submit);
     idl_install_step_method(ctx, form_proto, "requestSubmit", 0, g_id_reqsubmit);
     idl_install_accessor(ctx, input_proto, "value", js_input_get_value, 0, g_id_val_input);
