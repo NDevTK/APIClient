@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>razor control</title>
+<!-- The bench's positive control for the runtime-only column: each rung's address is assembled at run time
+     from bytes no parse of this document can state. -->
+<script>
+  /* A: a field of a fetched JSON reply, concrete once the reply arrives. */
+  fetch('/cfg.json').then((r) => r.json()).then((c) => fetch('/api/' + c.tenant + '/items.json?v=' + c.v));
+  /* B: an absent server-injected global, taken as present on one arm. */
+  if (window.__BOOT__) fetch('/api/user/' + window.__BOOT__.uid + '/settings');
+  /* C: the location fragment, an attacker source. */
+  fetch('/api/search?q=' + encodeURIComponent(location.hash.slice(1)));
+</script>

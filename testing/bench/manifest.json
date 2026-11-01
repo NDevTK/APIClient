@@ -1,0 +1,134 @@
+[
+ {
+  "id": "control-libs",
+  "url": "http://127.0.0.1:8913/?item=42&view=compact",
+  "recorded": true,
+  "from": "2026-11-01T14:20:21.961Z",
+  "to": "2026-11-01T14:20:24.571Z",
+  "replies": 12,
+  "errors": 0,
+  "bodyBytes": 211893,
+  "sha256": "2edc2609bad0869f3dc2962fe0130b6e9ab361dbbc1f16d4018ae716a8f1b38c"
+ },
+ {
+  "id": "regex101",
+  "url": "https://regex101.com/",
+  "recorded": true,
+  "from": "2026-11-01T14:50:13.715Z",
+  "to": "2026-11-01T14:50:14.648Z",
+  "replies": 8,
+  "errors": 0,
+  "bodyBytes": 2561369,
+  "sha256": "9ed9c037f25f6e3065019f3b4ee7878f79c8e742ea16d230b948467001b2a72b"
+ },
+ {
+  "id": "gitlab",
+  "url": "https://gitlab.com/explore",
+  "recorded": true,
+  "from": "2026-11-01T14:50:46.138Z",
+  "to": "2026-11-01T14:50:46.138Z",
+  "replies": 1,
+  "errors": 0,
+  "bodyBytes": 95,
+  "sha256": "cd92da904a59fca1550f6f42e173a2806c7b7cf6ee07191162af93ed7dd55f4a"
+ },
+ {
+  "id": "grafana",
+  "url": "https://play.grafana.org/",
+  "recorded": true,
+  "from": "2026-11-01T14:50:46.916Z",
+  "to": "2026-11-01T14:50:47.791Z",
+  "replies": 7,
+  "errors": 0,
+  "bodyBytes": 7726949,
+  "sha256": "6d7b4b06b0f8428573825041d071297cc9de4347c17f92d4e1c26f1a18f2bf08"
+ },
+ {
+  "id": "gitpod",
+  "url": "https://app.gitpod.io/",
+  "recorded": true,
+  "from": "2026-11-01T14:50:49.780Z",
+  "to": "2026-11-01T14:50:51.024Z",
+  "replies": 94,
+  "errors": 0,
+  "bodyBytes": 17230184,
+  "sha256": "fac30309f73e32aa6c1184f3199e444fae8fd23bed80ebdad338bdee966ea02a"
+ },
+ {
+  "id": "helix",
+  "url": "https://helixapp.com/",
+  "recorded": true,
+  "from": "2026-11-01T14:51:02.694Z",
+  "to": "2026-11-01T14:51:03.496Z",
+  "replies": 15,
+  "errors": 0,
+  "bodyBytes": 9199112,
+  "sha256": "3cec609ebbb16e254f16bab102c645da041c27f4b466d0b73853086e00789efd"
+ },
+ {
+  "id": "excalidraw",
+  "url": "https://excalidraw.com/",
+  "recorded": true,
+  "from": "2026-11-01T14:51:04.963Z",
+  "to": "2026-11-01T14:51:06.134Z",
+  "replies": 59,
+  "errors": 0,
+  "bodyBytes": 3991805,
+  "sha256": "8a160f6503faf8d806b5e686c0d4dac29c1d9958e73bf25cc42b3445b13c7096"
+ },
+ {
+  "id": "tldraw",
+  "url": "https://www.tldraw.com/",
+  "recorded": true,
+  "from": "2026-11-01T14:51:18.218Z",
+  "to": "2026-11-01T15:13:43.211Z",
+  "replies": 75,
+  "errors": 0,
+  "bodyBytes": 4199625,
+  "sha256": "22149edfa05c8125066ccfc818955b90d3c5d01f15e9c4b9d43e15cfaaf2e36b"
+ },
+ {
+  "id": "telegram",
+  "url": "https://web.telegram.org/k/",
+  "recorded": true,
+  "from": "2026-11-01T15:01:18.339Z",
+  "to": "2026-11-01T15:01:19.317Z",
+  "replies": 117,
+  "errors": 0,
+  "bodyBytes": 1379416,
+  "sha256": "834b4b2dfc597df6e04f83c64db1ea502ce8130d6690dfbd0edcec0913eac44b"
+ },
+ {
+  "id": "mdn",
+  "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+  "recorded": true,
+  "from": "2026-11-01T15:01:23.966Z",
+  "to": "2026-11-01T15:01:24.595Z",
+  "replies": 25,
+  "errors": 0,
+  "bodyBytes": 574533,
+  "sha256": "b1eef648208494017d6eab7ae45331de2d05806244ce905cb0b7e7deb698adf2"
+ },
+ {
+  "id": "astexplorer",
+  "url": "https://astexplorer.net/",
+  "recorded": true,
+  "from": "2026-11-01T15:01:29.135Z",
+  "to": "2026-11-01T15:03:50.227Z",
+  "replies": 8,
+  "errors": 0,
+  "bodyBytes": 1512234,
+  "sha256": "b56de303eedd8d4a521437f322d310dd77469f73dbc3652271d9e4ebf3f0dcd3"
+ },
+ {
+  "id": "control-razor",
+  "url": "http://127.0.0.1:8931/#needle",
+  "recorded": true,
+  "from": "2026-11-01T15:16:20.850Z",
+  "to": "2026-11-01T15:16:20.973Z",
+  "replies": 4,
+  "errors": 0,
+  "bodyBytes": 1090,
+  "sha256": "6d809f5f2a15f4262286195d237046fc4b0c10223f6c73278e493699fd3912a2"
+ }
+]

@@ -1,0 +1,20 @@
+# The scheduler benchmark's pages: id, url, why it is here. Read by testing/bench/bench.mjs.
+#
+# A page is here because it is a JS-heavy app page with logged-out traffic a run can learn from; most are rows
+# of testing/corpus/apps.tsv, whose selection tests (a reachable backend, surface behind state the bundle ships)
+# and observations are stated there. The replies each page's run fetched are recorded once by `bench.mjs
+# record` into a store outside the repository; manifest.json names each page's recording by date and digest.
+# control-libs is the instrument control: this repository's own document (testing/corpus/control/serve.mjs,
+# served on its 8913 port while recording), whose runtime-only addresses are known to be reachable natively.
+control-libs	http://127.0.0.1:8913/?item=42&view=compact	control: real libraries' requests (serve.mjs's control-libs)
+regex101	https://regex101.com/	apps.tsv: same-origin JSON backend, /api/user* routes shipped and gated
+gitlab	https://gitlab.com/explore	apps.tsv: logged-out document ships admin-console chunks
+grafana	https://play.grafana.org/	apps.tsv: same-origin JSON API, large SPA
+gitpod	https://app.gitpod.io/	apps.tsv: same-origin CONNECT/RPC backend, descriptors decoded at run time
+helix	https://helixapp.com/	apps.tsv: gRPC-web client whose paths are composed at run time
+excalidraw	https://excalidraw.com/	apps.tsv: Vite SPA
+tldraw	https://www.tldraw.com/	apps.tsv: Vite SPA
+telegram	https://web.telegram.org/k/	apps.tsv: Vite SPA, logged-out shell of a messaging app
+mdn	https://developer.mozilla.org/en-US/docs/Web/JavaScript	apps.tsv: webpack app with same-origin JSON
+astexplorer	https://astexplorer.net/	apps.tsv: webpack SPA with many parser chunks
+control-razor	http://127.0.0.1:8931/#needle	control: testing/bench/razor/ (python3 -m http.server 8931 there while recording); each rung assembles its address at run time
