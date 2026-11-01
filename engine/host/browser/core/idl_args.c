@@ -10380,8 +10380,12 @@ void idl_install_method_at(JSContext *ctx, JSValueConst target, const char *name
     /* §3.7.7's `target`. The [SecureContext] form reaches this entry, so the two ask it once; the
        [LegacyUnforgeable] form below does NOT — it is the second operation entry, not a caller of this one. */
     IDL_RECEIVER_IS_TARGET(ctx, target, name, stepid, at_file, at_line);
-    JS_SetPropertyStr(ctx, (JSValue)target, name,
-                      idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD));
+    /* Web IDL §3.7.7 Operations, define the operations: DefinePropertyOrThrow(target, id, desc) with a modifiable
+       desc, never a [[Set]], which on a [Global] target walks the prototype chain into WindowProperties. */
+    CHECK(JS_DefinePropertyValueStr(ctx, (JSValue)target, name,
+                                    idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD),
+                                    JS_PROP_C_W_E) >= 0,
+          "idl: an operation could not be defined on its target");
 }
 
 /* §3.7.7 "Operations"'s UNFORGEABLE HALF, which is the operation twin of idl_install_accessor_unforgeable and
@@ -10449,9 +10453,40 @@ void idl_install_step_method_at(JSContext *ctx, JSValueConst target, const char 
        and is stated above. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
     IDL_NOTE_MEMBER(ctx, target, name);
-    JS_SetPropertyStr(ctx, (JSValue)target, name,
-                      JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid));
+    /* §3.7.7's define the operations: a define, never a [[Set]] (see idl_install_method_at). */
+    CHECK(JS_DefinePropertyValueStr(ctx, (JSValue)target, name,
+                                    JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid),
+                                    JS_PROP_C_W_E) >= 0,
+          "idl: a step operation could not be defined on its target");
 }
+
+#if APICLIENT_DEV
+/* Whether an object on `obj`'s prototype chain holds `prop` in its own storage: what an install wrote, asked
+   without [[HasProperty]], which on a [Global] chain asks WindowProperties' named lookup. */
+static int idl_chain_installs(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    JSValue o = JS_DupValue(ctx, obj), next;
+    JSPropertyDescriptor d;
+    int r = 0;
+
+    while (JS_IsObject(o) && !r) {
+        r = JS_GetOwnSlotDesc(ctx, &d, o, prop);
+        CHECK(r >= 0, "idl: reading an installed member's slot threw");
+        if (r) {
+            JS_FreeValue(ctx, d.value);
+            JS_FreeValue(ctx, d.getter);
+            JS_FreeValue(ctx, d.setter);
+            break;
+        }
+        next = JS_GetPrototype(ctx, o);
+        CHECK(!JS_IsException(next), "idl: an install target's prototype could not be read");
+        JS_FreeValue(ctx, o);
+        o = next;
+    }
+    JS_FreeValue(ctx, o);
+    return r;
+}
+#endif
 
 /* WEB IDL SAYS THE MEMBER EXISTS; THE SPEC'S PROSE SAYS IT EXISTS ONLY UNDER A CONDITION THIS USER AGENT DOES
    NOT MEET. Both halves are true, and neither the IDL corpus nor a reader of this prototype can tell that state
@@ -10480,7 +10515,7 @@ void idl_members_excluded(JSContext *ctx, JSValueConst proto, const char *iface,
             JSAtom a = JS_NewAtom(ctx, names[i]);
             int has;
             CHECK(a != JS_ATOM_NULL, "an excluded member's name could not be interned");
-            has = JS_HasProperty(ctx, proto, a);
+            has = idl_chain_installs(ctx, proto, a);
             JS_FreeAtom(ctx, a);
             /* The interface INSTALLS a member it declares this user agent cannot have. */
             DCHECK(has == 0, names[i]);

@@ -2626,8 +2626,10 @@ void timer_install(JSContext *ctx, JSValueConst global)
     rung_entry_declare(STEP_UNIT_TIMER, TIMER_ENTRY_NAMES);
     idl_install_method(ctx, g, "clearTimeout", g_id_clear_timeout);
     idl_install_method(ctx, g, "clearInterval", g_id_clear_interval);
-    JS_SetPropertyStr(ctx, g, "queueMicrotask",
-                      JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1));
+    CHECK(JS_DefinePropertyValueStr(ctx, g, "queueMicrotask",
+                                    JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1),
+                                    JS_PROP_C_W_E) >= 0,
+          "timer: queueMicrotask could not be defined on the global");
 }
 
 void timer_free(JSRuntime *rt)

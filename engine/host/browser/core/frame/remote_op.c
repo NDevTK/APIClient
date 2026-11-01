@@ -311,6 +311,14 @@ const char *remote_op_member(const RemoteOp *op)
     return op->f[5];
 }
 
+/* One operand handed to the operation's program as a global, defined: a [[Set]] on a Window global walks into
+   WindowProperties' named lookup, which no C activation asks. Takes `v`. */
+static void remote_op_hand(JSContext *ctx, JSValueConst g, const char *name, JSValue v)
+{
+    CHECK(JS_DefinePropertyValueStr(ctx, g, name, v, JS_PROP_C_W_E) >= 0,
+          "remote op: an operand could not be handed to the operation's program");
+}
+
 const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
 {
     JSValue g;
@@ -331,17 +339,17 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
 
         CHECK(!JS_IsException(args),
               "remote op: the empty argument list for §7.2.1.3.4's getter could not be allocated");
-        JS_SetPropertyStr(ctx, g, "__apiclientGetter", window_proxy_cross_origin_getter(ctx, op->f[5]));
+        remote_op_hand(ctx, g, "__apiclientGetter", window_proxy_cross_origin_getter(ctx, op->f[5]));
         /* §7.2.1.3.4 runs the getter's steps ON O, and O is the peer document's Window — this realm's global
            object, taken from the runtime rather than read out of the realm under whatever name. */
-        JS_SetPropertyStr(ctx, g, "__apiclientThis", JS_GetGlobalObject(ctx));
-        JS_SetPropertyStr(ctx, g, "__apiclientArgs", args);
-        JS_SetPropertyStr(ctx, g, "__apiclientOp", realm_value_get(ctx, g_apply_slot));
+        remote_op_hand(ctx, g, "__apiclientThis", JS_GetGlobalObject(ctx));
+        remote_op_hand(ctx, g, "__apiclientArgs", args);
+        remote_op_hand(ctx, g, "__apiclientOp", realm_value_get(ctx, g_apply_slot));
     } else if (op->op == OP_WPCLOSE) {
         JSValue fn = JS_NewCFunction(ctx, remote_op_close, "close", 0);
 
         CHECK(!JS_IsException(fn), "remote op: the callee of a cross-agent close could not be allocated");
-        JS_SetPropertyStr(ctx, g, "__apiclientOp", fn);
+        remote_op_hand(ctx, g, "__apiclientOp", fn);
     } else {
         /* THE OBJECT IS NAMED BY (GENERATION, ID) — see remote_object.h. An id alone is an index into
            whichever of this document's sessions happens to be running when the record lands, and it is IN
@@ -360,7 +368,7 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
         DCHECK(!JS_IsUndefined(held),
                "a peer named an object this agent never lent — the name it used was minted somewhere else, or "
                "the export table was lost between the lend and the operation");
-        JS_SetPropertyStr(ctx, g, "__apiclientLent", JS_DupValue(ctx, held));
+        remote_op_hand(ctx, g, "__apiclientLent", JS_DupValue(ctx, held));
         if (op->op == OP_APPLY) {
             JSValue args = JS_NewArray(ctx);
             int i;
@@ -368,14 +376,14 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
                no second grammar for a list and no ceiling on how many may cross. */
             for (i = 7; i < op->nf; i++)
                 JS_SetPropertyUint32(ctx, args, (uint32_t)(i - 7), remote_object_decode(ctx, op->f[i]));
-            JS_SetPropertyStr(ctx, g, "__apiclientThis", remote_object_decode(ctx, op->f[6]));
-            JS_SetPropertyStr(ctx, g, "__apiclientArgs", args);
-            JS_SetPropertyStr(ctx, g, "__apiclientOp", realm_value_get(ctx, g_apply_slot));
+            remote_op_hand(ctx, g, "__apiclientThis", remote_object_decode(ctx, op->f[6]));
+            remote_op_hand(ctx, g, "__apiclientArgs", args);
+            remote_op_hand(ctx, g, "__apiclientOp", realm_value_get(ctx, g_apply_slot));
         } else {
-            JS_SetPropertyStr(ctx, g, "__apiclientKey", remote_object_decode(ctx, op->f[6]));
+            remote_op_hand(ctx, g, "__apiclientKey", remote_object_decode(ctx, op->f[6]));
             if (op->op == OP_SET) {
-                JS_SetPropertyStr(ctx, g, "__apiclientVal", remote_object_decode(ctx, op->f[7]));
-                JS_SetPropertyStr(ctx, g, "__apiclientOp", realm_value_get(ctx, g_set_slot));
+                remote_op_hand(ctx, g, "__apiclientVal", remote_object_decode(ctx, op->f[7]));
+                remote_op_hand(ctx, g, "__apiclientOp", realm_value_get(ctx, g_set_slot));
             }
         }
     }

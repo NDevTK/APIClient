@@ -6650,6 +6650,14 @@ TF_UNIT void tf_agent_init(JSContext *ctx, const char *origin, const char *top_l
     platform_agent_init(ctx, origin, top_level_url, false, OPENER_POLICY_UNSAFE_NONE);
 }
 
+/* One member of this fixture's own surface on the realm's global, defined: a [[Set]] on a Window global walks
+   into WindowProperties' named lookup, which no C activation asks. Takes `v`. */
+static void tf_global_define(JSContext *ctx, JSValueConst g, const char *name, JSValue v)
+{
+    CHECK(JS_DefinePropertyValueStr(ctx, g, name, v, JS_PROP_C_W_E) >= 0,
+          "the fixture's own global member could not be defined");
+}
+
 /* ONE DOCUMENT — run once per document including the first. THE PLATFORM FIRST, then this fixture's own
    globals: a host ADDS to the one list and cannot subtract from it, and adding afterwards is also what lets
    the `eval` sink below stand where the language's own `eval` would. */
@@ -6668,32 +6676,27 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
 
     /* THE FIXTURE'S OWN SURFACE — the @S sinks and the host-edge stand-ins the probes drive. Every one of
        these is this fixture's, which is why it is here and not in the list. */
-    JS_SetPropertyStr(ctx, g, "loadScript", JS_NewCFunction(ctx, js_load_script, "loadScript", 1));   /* lazy-chunk load */
+    tf_global_define(ctx, g, "loadScript", JS_NewCFunction(ctx, js_load_script, "loadScript", 1));   /* lazy-chunk load */
     /* `eval` is NOT installed — see the note where its stand-in used to be defined. The intrinsic is the sink. */
-    JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
-    JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
-    /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
-       site is the only thing a plain C body cannot do — MINTED and then SET, rather than installed through
-       idl_install_method. The two are the same function object (idl_install_method's own body is
-       `JS_SetPropertyStr(target, name, idl_mint_step(..., IDL_SEC_METHOD))`, which is what idl_step_function
-       mints), and what differs is the CLAIM: idl_install_method is Web IDL §3.7.7 Operations' define the
-       operations, so calling it says this name is an operation of the interface the target implements. On the
-       realm's GLOBAL that interface is `Window`, which declares no `hostRead` — so the call was making a §3.7.7
-       claim about a name this fixture invented, and core/idl_args.c's §3.7.6/§3.7.7 continue-step now DCHECKs
-       exactly that. It is a fixture's own surface, like the seven JS_SetPropertyStr lines around it, and it
-       installs the same way they do. */
-    JS_SetPropertyStr(ctx, g, "hostRead", idl_step_function(ctx, "hostRead", g_id_host_read));
-    JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
-    JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
+    tf_global_define(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
+    tf_global_define(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
+    /* THE SYNCHRONOUS HOST READ. A step member, because suspending and answering at the same call site is the
+       only thing a plain C body cannot do — minted and defined here rather than installed through
+       idl_install_method, which defines the same function object (idl_step_function's mint) but claims Web IDL
+       §3.7.7 Operations for the target's interface, and `Window` declares no `hostRead`. It is a fixture's own
+       surface, defined like the lines around it. */
+    tf_global_define(ctx, g, "hostRead", idl_step_function(ctx, "hostRead", g_id_host_read));
+    tf_global_define(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
+    tf_global_define(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
     /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
        steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
        never ran at all; nothing showed it, because the <span> it appends is neither a script nor a custom
        element. The engine asserts on exactly this now, which is what caught it. */
-    /* MINTED AND SET for the reason `hostRead` two lines up is: this is the FIXTURE's `appendChild` on the
+    /* Minted and defined for the reason `hostRead` above is: this is the FIXTURE's `appendChild` on the
        global, not Node's on Node.prototype, and Window declares no such operation — so §3.7.7's define was the
        wrong door and the step member is the only part that was wanted. Nothing about the object changes. */
-    JS_SetPropertyStr(ctx, g, "appendChild", idl_step_function(ctx, "appendChild", g_id_append_child));
-    JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
+    tf_global_define(ctx, g, "appendChild", idl_step_function(ctx, "appendChild", g_id_append_child));
+    tf_global_define(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     /* ONE LITERAL FOR THE SOURCE NAME, because this file had TWO and they disagreed. The probe that asks
        whether any predicate over this source forked composed its identity from `"state"` while the source
        is minted as `"{state}"` — the braces are part of the NAME here, not punctuation a speller adds — so
@@ -6707,7 +6710,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        claim is given back before platform_agent_free at this fixture's teardowns. */
     if (!concolic_source_precondition_declared_by("test_forced", FIXTURE_STATE_SRC))
         concolic_declare_source_precondition("test_forced", FIXTURE_STATE_SRC, SRC_PRE_APPLICATION_STATE);
-    JS_SetPropertyStr(ctx, g, "state",
+    tf_global_define(ctx, g, "state",
                       concolic_new(ctx, FIXTURE_STATE_SRC, FIXTURE_STATE_SRC, CONCOLIC_WHOSE_WORLD,
                                    JS_UNDEFINED));   /* injected/unknown app state */
     /* AN UNKNOWN CARRYING A NUMERIC EXAMPLE, which is what §13.15.3 step 1.c's arm turns on. Its display form
@@ -6721,7 +6724,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        `screen.width` HAS both halves and this synthetic source duplicates a real one. Collapsing the rows
        that use `num` onto `screen.width` is the follow-through, and it is left to whoever next runs this
        fixture rather than done blind. */
-    JS_SetPropertyStr(ctx, g, "num", concolic_new(ctx, "{num}", "{num}", CONCOLIC_WHOSE_WORLD, JS_NewInt32(ctx, 1920)));
+    tf_global_define(ctx, g, "num", concolic_new(ctx, "{num}", "{num}", CONCOLIC_WHOSE_WORLD, JS_NewInt32(ctx, 1920)));
     /* INDEXED DATABASE §2.7/§2.8's two operations, until §4.6/§4.9/§5.1 exist to state them as members. */
     JS_FreeValue(ctx, g);
 }

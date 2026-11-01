@@ -541,7 +541,8 @@ static void solve_install_fire_marker(JSContext *ctx) {
     JSValue fn = JS_NewCFunction(ctx, js_x9, "X9", 0);
 
     CHECK(!JS_IsException(fn), "solve: OOM making a realm's fire marker");
-    CHECK(JS_SetPropertyStr(ctx, g, "X9", fn) >= 0, "solve: a realm's global refused the fire marker");
+    CHECK(JS_DefinePropertyValueStr(ctx, g, "X9", fn, JS_PROP_C_W_E) >= 0,
+          "solve: a realm's global refused the fire marker");
     JS_FreeValue(ctx, g);
 }
 
