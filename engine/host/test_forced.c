@@ -14458,6 +14458,8 @@ TF_UNIT void probes_focusbox(const char *js, Probe *tab, int *n) {
              "HTML §6.6.7: the autofocus flush did not skip the unrendered candidate and focus the `input`");
     fold_row(&fb_tt, &fb_why, param_value_is(js, "/api/focusbox", "d", "db"),
              "HTML §4.11.4: the dialog's focus delegate is not the first rendered button");
+    fold_row(&fb_tt, &fb_why, param_value_is(js, "/api/focusbox", "q", "q2"),
+             "HTML §6.6.4: a parsed `<button autofocus>` is not its dialog's autofocus delegate");
     /* §6.12's popover focusing steps step 2 runs the same dialog focusing steps over a `dialog popover`. */
     const char *fp_why = NULL; int fp_tt = 1;
     fold_row(&fp_tt, &fp_why, !!strstr(js, "\"/api/focusbox\""),

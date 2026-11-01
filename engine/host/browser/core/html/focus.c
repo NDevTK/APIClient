@@ -538,7 +538,6 @@ static void delegate_search(JSContext *ctx, lxb_dom_node_t *root, bool is_dialog
         DelegateFrame *f = &stack[depth - 1];
         lxb_dom_node_t *descend = NULL;
         JSValue wrap;
-        size_t len = 0;
         bool hit;
 
         f->cur = node_next_in(f->cur, f->root);
@@ -548,7 +547,10 @@ static void delegate_search(JSContext *ctx, lxb_dom_node_t *root, bool is_dialog
             continue;
         }
         if (f->cur->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        if (f->pass == 0 && !el_attr(f->cur, "autofocus", &len)) continue;
+        /* "has the autofocus attribute" is presence; a parsed valueless one has a NULL value. */
+        if (f->pass == 0 && !lxb_dom_element_has_attribute(lxb_dom_interface_element(f->cur),
+                                                           (const lxb_char_t *)"autofocus", 9))
+            continue;
         wrap = node_wrap(ctx, f->cur);
         /* The autofocus pass takes any focusable area; the plain pass narrows to SEQUENTIALLY focusable ones
            when this level's target is a dialog, which is what stops a `<dialog>` handing its focus to a
