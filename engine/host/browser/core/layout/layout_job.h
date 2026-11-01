@@ -156,8 +156,9 @@ bool layout_job_grid_rows_sizing(const lxb_dom_element_t *container);
    asked in, though it reads only the contexts whose grid areas its percentages consult. A context is one per
    (container, enclosing context), so nested grids, each sized inside every ancestor's row sizing and outside
    it, make up to 2^depth contexts per job, and a question about an inner grid is answered once in each. Next:
-   record the contexts a body consults (`sizing`'s answers and the grid area arms of used_value.c) and memoize
-   its answer under the chain those leave, so it is answered once per context it reads.
+   record the contexts a body consults (`sizing`'s answers, served answers and record entries) and key both the
+   memo and the three records under the chain's projection onto them: an answered question vouches for the
+   record entries its body filled, so a memo shared across contexts over per-context records is read empty.
    How its absence shows: in nested grids, grid axis bodies per job growing geometrically with the nesting
    while the questions asked grow linearly. */
 
