@@ -16213,40 +16213,40 @@ TF_UNIT void probes_cascforkview(const char *js, Probe *tab, int *n) {
 
 /* The rows of the `cascforkjson` document (fixture/cascforkjson.h). Each world reports #t's width. */
 TF_UNIT void probes_cascforkjson(const char *js, Probe *tab, int *n) {
-    const char *cj_why = NULL; int cj_tt = !!strstr(js, "\"/api/cascforkjson\"");
+    const char *cj_why = NULL; int cj_tt = !!strstr(js, "\"/api/cfmember\"");
 
     fold_row(&cj_tt, &cj_why, cj_tt,
-             "NOT REACHED: there is no /api/cascforkjson record at all, so the document aborted before its fetch");
-    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cascforkjson", "w", "50"),
+             "NOT REACHED: there is no /api/cfmember record at all, so the document aborted before its fetch");
+    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cfmember", "w", "50"),
              "Selectors 4 §6.1: no world where `[data-theme=\"dark\"]` holds over a record member whose type set admits an Object");
-    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cascforkjson", "w", "30"),
+    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cfmember", "w", "30"),
              "Selectors 4 §6.1: no world where `[data-theme=\"light\"]` holds over that member");
-    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cascforkjson", "w", "10"),
+    fold_row(&cj_tt, &cj_why, param_value_is(js, "/api/cfmember", "w", "10"),
              "Selectors 4 §6.1: no world where neither equality holds");
-    fold_row(&cj_tt, &cj_why, param_value_count_of(js, "/api/cascforkjson", "w", "90") == 0,
+    fold_row(&cj_tt, &cj_why, param_value_count_of(js, "/api/cfmember", "w", "90") == 0,
              "Selectors 4 §6.1: a world where the attribute equals both `dark` and `light`, so the holding `=` determined no string the later test read");
     const Probe rows[] = {
-        { "cascade-predicate-fork-member", cj_tt, "/api/cascforkjson", SESS_EXPLORE, cj_why },
+        { "cascade-predicate-fork-member", cj_tt, "/api/cfmember", SESS_EXPLORE, cj_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
 /* The rows of the `cascforkderived` document (fixture/cascforkderived.h). Each world reports #u's width. */
 TF_UNIT void probes_cascforkderived(const char *js, Probe *tab, int *n) {
-    const char *cd_why = NULL; int cd_tt = !!strstr(js, "\"/api/cascforkderived\"");
+    const char *cd_why = NULL; int cd_tt = !!strstr(js, "\"/api/cfderived\"");
 
     fold_row(&cd_tt, &cd_why, cd_tt,
-             "NOT REACHED: there is no /api/cascforkderived record at all, so the document aborted before its fetch");
-    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cascforkderived", "w", "20"),
+             "NOT REACHED: there is no /api/cfderived record at all, so the document aborted before its fetch");
+    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cfderived", "w", "20"),
              "Selectors 4 §6.1: no world where `[data-mode=\"m-wide\"]` holds over a concatenation");
-    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cascforkderived", "w", "7"),
+    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cfderived", "w", "7"),
              "Selectors 4 §6.1: no world where `[data-mode=\"m-slim\"]` holds over that concatenation");
-    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cascforkderived", "w", "5"),
+    fold_row(&cd_tt, &cd_why, param_value_is(js, "/api/cfderived", "w", "5"),
              "Selectors 4 §6.1: no world where neither equality holds");
-    fold_row(&cd_tt, &cd_why, param_value_count_of(js, "/api/cascforkderived", "w", "90") == 0,
+    fold_row(&cd_tt, &cd_why, param_value_count_of(js, "/api/cfderived", "w", "90") == 0,
              "Selectors 4 §6.1: a world where the attribute equals both `m-wide` and `m-slim`, so the holding `=` determined no string the later test read");
     const Probe rows[] = {
-        { "cascade-predicate-fork-derived", cd_tt, "/api/cascforkderived", SESS_EXPLORE, cd_why },
+        { "cascade-predicate-fork-derived", cd_tt, "/api/cfderived", SESS_EXPLORE, cd_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

@@ -24,7 +24,7 @@ static const char HTML_CASCFORKJSON[] =
     "var st={};"
     "try{st=JSON.parse(localStorage.getItem('settings'))||{};}catch(e){}"
     "document.documentElement.setAttribute('data-theme',st.theme);"
-    "fetch('/api/cascforkjson?w='+document.getElementById('t').clientWidth);"
+    "fetch('/api/cfmember?w='+document.getElementById('t').clientWidth);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

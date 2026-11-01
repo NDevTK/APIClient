@@ -21,7 +21,7 @@ static const char HTML_CASCFORKDERIVED[] =
     "<body style=\"margin:0\"><div id=u></div>"
     "<script>"
     "document.body.setAttribute('data-mode','m-'+localStorage.getItem('mode'));"
-    "fetch('/api/cascforkderived?w='+document.getElementById('u').clientWidth);"
+    "fetch('/api/cfderived?w='+document.getElementById('u').clientWidth);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
