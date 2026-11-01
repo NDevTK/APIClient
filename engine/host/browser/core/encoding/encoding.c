@@ -33,6 +33,7 @@
  * THE RETIRED SENTENCES ARE NOT REPRODUCED HERE, and that is the same rule one turn further on: a specimen of
  * deleted prose is a COORDINATE, it teaches nothing the shape above does not, and quoted beside a spec citation
  * it is indistinguishable — to a reader and to engine/citegen.mjs alike — from a quotation of the standard. */
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -215,8 +216,19 @@ typedef struct EncDecoder {
        queue, and it is where they push back to. Three bytes is gb18030's worst case, which is the platform's. */
     uint8_t back[3], nback;
 } EncDecoder;
-/* What a decoder record owns, for its copy-on-write capture: nothing, since every field is an integer. */
-static const CowRecord ENC_DECODER_REC = { sizeof(EncDecoder), NULL, 0 };
+/* §7.2 TextDecoder's record: `this's decoder`, and the identity of the bytes that decoder holds. A sequence
+   held across `stream: true` calls is decoded by a later call, so where it came from unknown bytes that call's
+   output is derived from them. `held` is the operands (concolic_buffer_operands' spelling, in byte order) of
+   every unknown input since the decoder was last fresh, or JS_UNDEFINED when it holds nothing or holds only
+   known bytes; `held_example` says those inputs' bytes were their examples. */
+typedef struct {
+    EncDecoder dec;
+    JSValue    held;
+    uint8_t    held_example;
+} TextDecoderRec;
+/* What the record owns, for its copy-on-write capture: `held`, which gc_mark and the finalizer also walk. */
+static const uint16_t TEXT_DECODER_REC_OFF[] = { offsetof(TextDecoderRec, held) };
+static const CowRecord TEXT_DECODER_REC = { sizeof(TextDecoderRec), TEXT_DECODER_REC_OFF, 1 };
 
 static JSClassID g_dec_class;
 static JSClassID g_enc_class;
@@ -237,11 +249,20 @@ static int       g_dec_ctor_stepid = -1, g_enc_ctor_stepid = -1;
 static void decoder_finalizer(JSRuntime *rt, JSValue val)
 {
     JSClassID id = 0;
-    EncDecoder *d = JS_GetAnyOpaque(val, &id);
+    TextDecoderRec *rec = JS_GetAnyOpaque(val, &id);
 
-    (void)rt;
     (void)id;
-    enc_decoder_free(d);
+    JS_FreeValueRT(rt, rec->held);
+    free(rec);
+}
+
+static void decoder_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    JSClassID id = 0;
+    TextDecoderRec *rec = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    JS_MarkValue(rt, rec->held, mark_func);
 }
 
 static void encoder_finalizer(JSRuntime *rt, JSValue val)
@@ -841,8 +862,11 @@ enum { DEC_ENCODING = 0, DEC_FATAL, DEC_IGNORE_BOM };
 
 static JSValue js_decoder_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    EncDecoder *d = JS_GetOpaque(this_val, g_dec_class);
-    if (!d) return JS_ThrowTypeError(ctx, "not a TextDecoder");
+    TextDecoderRec *rec = JS_GetOpaque(this_val, g_dec_class);
+    const EncDecoder *d;
+
+    if (!rec) return JS_ThrowTypeError(ctx, "not a TextDecoder");
+    d = &rec->dec;
     /* §7.1 Interface mixin TextDecoderCommon: "return this's encoding's name, ASCII lowercased" — the
        LOWERCASED half of §4.2's name column, which is a different string from DOM §4.5's characterSet and is
        asked for by name so the two can never be confused at a call site. */
@@ -1066,11 +1090,44 @@ static bool decoder_is_fresh(const EncDecoder *d)
     return memcmp(&f, d, sizeof f) == 0;
 }
 
+/* §7.2 step 1's new decoder, which also forgets where the held bytes came from. */
+static void text_decoder_reset(JSContext *ctx, TextDecoderRec *rec)
+{
+    decoder_reset(&rec->dec);
+    JS_FreeValue(ctx, rec->held);
+    rec->held = JS_UNDEFINED;
+    rec->held_example = 1u;
+}
+
+/* The operand list `held` then `input` (JS_UNDEFINED for known input), in byte order. Takes `input`; borrows
+   `held`, which is an array. */
+static JSValue dec_operands_join(JSContext *ctx, JSValueConst held, JSValue input)
+{
+    JSValue out = JS_NewArray(ctx);
+    int64_t n = 0, m = 0, i;
+
+    CHECK(!JS_IsException(out), "encoding: OOM joining a decode's operand lists");
+    CHECK(JS_GetLength(ctx, held, &n) == 0, "encoding: a held operand list's length could not be read");
+    DCHECK(n >= 1, "a TextDecoder recorded an empty operand list as the identity of its held bytes");
+    for (i = 0; i < n; i++)
+        CHECK(JS_SetPropertyInt64(ctx, out, i, JS_GetPropertyInt64(ctx, held, i)) >= 0,
+              "encoding: OOM joining a decode's operand lists");
+    if (!JS_IsUndefined(input)) {
+        CHECK(JS_GetLength(ctx, input, &m) == 0, "encoding: an input operand list's length could not be read");
+        for (i = 0; i < m; i++)
+            CHECK(JS_SetPropertyInt64(ctx, out, n + i, JS_GetPropertyInt64(ctx, input, i)) >= 0,
+                  "encoding: OOM joining a decode's operand lists");
+        JS_FreeValue(ctx, input);
+    }
+    return out;
+}
+
 static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     JSDecodeState *s = st;
-    EncDecoder *d = JS_GetOpaque(hdr->this_val, g_dec_class);
+    TextDecoderRec *rec = JS_GetOpaque(hdr->this_val, g_dec_class);
+    EncDecoder *d = rec ? &rec->dec : NULL;
     uint8_t b;
     int r;
 
@@ -1108,11 +1165,12 @@ static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
            every write this member makes — the handler's held sequence, `bom seen`, the reset — is downstream of
            this line. WITHOUT IT two arms of a fork would drive ONE half-read sequence: that was already true
            ACROSS two `stream: true` calls, and resting between items would have widened it to inside one. */
-        cow_capture_host_record(hdr->this_val, d, &ENC_DECODER_REC);
+        cow_capture_host_record(hdr->this_val, rec, &TEXT_DECODER_REC);
 
         /* Step 2: "Set this's do not flush to options["stream"]." */
         s->stream = idl_dict_bool(ctx, argv[1], "stream") ? 1u : 0u;
         s->unknown = JS_UNDEFINED;
+        s->example = 1u;
         /* Step 3: "If input is given, then push a copy of input to this's I/O queue." `input` is the one
            position here declared optional with NO default, so Web IDL §3.6 "Overload resolution algorithm"
            step 15.4.2's "missing" is reachable at it and `decode()` and `decode(undefined)` are the same call.
@@ -1131,30 +1189,28 @@ static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
                 s->in_n = len;
             }
             /* Unknown input bytes make the output an unknown derived from them, whose example is this decode
-               run over the bytes the block holds. The decoder states that would carry unknownness past this
-               call are not modelled and are named here; their release arm derives anyway, which keeps the
-               provenance and shares one identity across the states it does not tell apart. */
+               run over the bytes the block holds; what a `stream: true` call leaves held carries their identity
+               to the next call (TextDecoderRec). */
             {
                 bool example = true;
 
                 s->unknown = concolic_buffer_operands(ctx, argv[0], p, len, false, &example);
                 s->example = example ? 1u : 0u;
             }
-            if (!JS_IsUndefined(s->unknown)) {
-                if (s->stream)
-                    DFAIL("§7.2 decode(input, {stream: true}) over unknown bytes leaves this's decoder holding "
-                          "state derived from them — build a decoder state that carries unknown bytes");
-                if (!decoder_is_fresh(d))
-                    DFAIL("§7.2 decode(input) over unknown bytes follows a `stream: true` call whose held state "
-                          "is not part of the result's identity — build that state into it");
-                if (d->fatal)
-                    DFAIL("§7.2 decode(input) with fatal set can throw over unknown bytes, and a builtin that "
-                          "can throw forks its success and throw arms — build that fork here");
-            }
             /* The borrowed view goes back HERE and not at the end: past this line the bytes this machine reads
                are its own copy, which is the whole of what step 3's "copy of" buys a body that rests. */
             JS_FreeValue(ctx, buf);
         }
+        /* Step 5 reads the held sequence before this input, so the output is derived from both, held first. */
+        if (!JS_IsUndefined(rec->held)) {
+            DCHECK(!decoder_is_fresh(d), "a TextDecoder records the identity of held unknown bytes while its "
+                                         "decoder holds nothing; the record's two halves were updated apart");
+            s->unknown = dec_operands_join(ctx, rec->held, s->unknown);
+            s->example = s->example && rec->held_example;
+        }
+        if (!JS_IsUndefined(s->unknown) && d->fatal)
+            DFAIL("§7.2 decode(input) with fatal set can throw over unknown bytes, and a builtin that can throw "
+                  "forks its success and throw arms — build that fork here");
         /* Step 4: "Let output be the I/O queue of scalar values « end-of-queue »." */
         s->out.ctx = ctx;
         STEP_GOTO(hdr->stage, DECODE_ITEM, NULL);
@@ -1182,7 +1238,7 @@ static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
            verifies least: §7.1 is "Interface mixin TextDecoderCommon" and holds no decode() at all, and the
            phrase "decoder error" occurs NOWHERE in the Encoding Standard. */
         dec_buf_free(&s->out);
-        decoder_reset(d);
+        text_decoder_reset(ctx, rec);
         JS_ThrowTypeError(ctx, "the encoded data was not valid %s", encoding_name(d->enc));
         return JS_STEP_ABRUPT;
     }
@@ -1216,11 +1272,16 @@ static int js_decoder_decode_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
     if (!s->stream) {
         if (decoder_flush(d, &s->out) < 0) {
             dec_buf_free(&s->out);
-            decoder_reset(d);
+            text_decoder_reset(ctx, rec);
             JS_ThrowTypeError(ctx, "the encoded data ended mid-sequence");
             return JS_STEP_ABRUPT;
         }
-        decoder_reset(d);
+        text_decoder_reset(ctx, rec);
+    } else {
+        /* What the decoder holds now came from the bytes this call read, held ones included. */
+        JS_FreeValue(ctx, rec->held);
+        rec->held = decoder_is_fresh(d) ? JS_UNDEFINED : JS_DupValue(ctx, s->unknown);
+        rec->held_example = s->example;
     }
     STEP_GOTO(hdr->stage, DECODE_SERIALIZE, NULL);
     return JS_STEP_YIELD;
@@ -1309,18 +1370,23 @@ int encoding_output_encoding(int enc)
     return enc;
 }
 
-EncDecoder *enc_decoder_new(int enc, bool fatal, bool ignore_bom)
+static void decoder_init(EncDecoder *d, int enc, bool fatal, bool ignore_bom)
 {
-    EncDecoder *d;
     DCHECK(enc >= 0 && enc < ENC_COUNT && enc != ENC_REPLACEMENT,
            "a decoder was asked for an encoding that has none — `replacement` is refused by the two "
            "constructors, and every other id in the registry decodes");
-    d = lexbor_calloc(1, sizeof *d);
-    CHECK(d, "encoding: OOM building a decoder");
     d->enc = (EncodingId)enc;
     d->fatal = fatal;
     d->ignore_bom = ignore_bom;
     decoder_reset(d);
+}
+
+EncDecoder *enc_decoder_new(int enc, bool fatal, bool ignore_bom)
+{
+    EncDecoder *d = lexbor_calloc(1, sizeof *d);
+
+    CHECK(d, "encoding: OOM building a decoder");
+    decoder_init(d, enc, fatal, ignore_bom);
     return d;
 }
 
@@ -1515,7 +1581,7 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     const char *label;
     size_t label_len;
     int id;
-    EncDecoder *d;
+    TextDecoderRec *rec;
     JSValue obj;
 
     (void)st; (void)out_cb; (void)out_argc;
@@ -1550,9 +1616,12 @@ static int js_dec_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JS_FreeValue(ctx, proto);
     }
     if (JS_IsException(obj)) return -1;
-    d = enc_decoder_new(id, idl_dict_bool(ctx, options, "fatal"),
-                        idl_dict_bool(ctx, options, "ignoreBOM"));
-    JS_SetOpaque(obj, d);
+    rec = lexbor_calloc(1, sizeof *rec);
+    CHECK(rec, "encoding: OOM building a TextDecoder");
+    decoder_init(&rec->dec, id, idl_dict_bool(ctx, options, "fatal"), idl_dict_bool(ctx, options, "ignoreBOM"));
+    rec->held = JS_UNDEFINED;
+    rec->held_example = 1u;
+    JS_SetOpaque(obj, rec);
     *presult = obj;
     return 0;
 }
@@ -1847,7 +1916,7 @@ static bool encoding_registry_consistent(void)
 
 void encoding_init(JSContext *ctx)
 {
-    JSClassDef dec_def = { "TextDecoder", .finalizer = decoder_finalizer };
+    JSClassDef dec_def = { "TextDecoder", .finalizer = decoder_finalizer, .gc_mark = decoder_gc_mark };
     JSClassDef enc_def = { "TextEncoder", .finalizer = encoder_finalizer };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType DEC_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };

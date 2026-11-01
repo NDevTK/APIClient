@@ -23277,6 +23277,17 @@ TF_UNIT void probes_decoder(const char *js, Probe *tab, int *n) {
              "(\"if byte is end-of-queue and UTF-8 bytes needed is not 0, then set UTF-8 bytes needed to 0 "
              "and return error\"), and a machine that threw from only the mid-queue arm would pass the clause "
              "above and fail this one");
+    /* ENCODING §7.2's decode() over unknown bytes held across `stream: true` calls; see the fixture row. */
+    const char *tdunk_why = NULL;
+    int tdunk_tt = 1;
+    fold_row(&tdunk_tt, &tdunk_why, !!strstr(js, "\"/api/tdunknown\""),
+             "NOT REACHED: there is no /api/tdunknown record, so a `stream: true` decode over unknown bytes "
+             "aborted or never ran");
+    fold_row(&tdunk_tt, &tdunk_why,
+             emitted_record_has(js, "/api/tdunknown", "TextDecoder(utf-8).decode") &&
+                 emitted_record_has(js, "/api/tdunknown", LOCATION_HASH_SRC),
+             "the decode that completed a sequence held from unknown bytes was not derived from the fragment, so "
+             "the held bytes' identity was lost between the two calls");
     /* ENCODING §7.1's SERIALIZE I/O QUEUE — see the fixture row for why each clause is here. They are
        INDEPENDENT clauses and not an entailed ladder, so a 0 names the clause it is about and says nothing
        about the ones below it. The first rung is the REACHABILITY WITNESS: without it an absent abort and an
@@ -23329,6 +23340,7 @@ TF_UNIT void probes_decoder(const char *js, Probe *tab, int *n) {
            algorithm's single conjunction, and a reader wants the encoding clause and its three controls to
            be readable against each other rather than spread over rows that can be scored apart. */
         { "td-bom", tdbom_tt, "/api/tdbom", SESS_EXPLORE, tdbom_why },
+        { "td-unknown-held", tdunk_tt, "/api/tdunknown", SESS_EXPLORE, tdunk_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

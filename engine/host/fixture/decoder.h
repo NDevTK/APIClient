@@ -76,6 +76,16 @@ static const char HTML_DECODER[] =
     "  ? 'isseen' : ('a' + tb1.length + 'b' + tb2.length); }"
     "fetch('/api/tdbom?gb=' + tbGb + '&u8=' + tbU8 + '&le=' + tbLe + '&be=' + tbBe"
     " + '&ig=' + tbIg + '&seen=' + tbSeen);"
+    /* ENCODING §7.2's decode() OVER UNKNOWN BYTES ACROSS `stream: true` CALLS. The first call's input is `E2 82`,
+       the first two bytes of the fragment's encoding behind a U+20AC, so the decoder holds half a sequence
+       derived from unknown bytes. The second call's input is the known `AC` that completes it, so its output is
+       derived from the fragment although its own input is known. */
+    "var tuS = 'absent';"
+    "if (typeof TextDecoder !== 'undefined') {"
+    " var tuB = new TextEncoder().encode('\\u20AC' + location.hash), tuD = new TextDecoder();"
+    " tuD.decode(tuB.subarray(0, 2), { stream: true });"
+    " tuS = tuD.decode(new Uint8Array([0xAC])); }"
+    "fetch('/api/tdunknown?u=' + encodeURIComponent(tuS));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
