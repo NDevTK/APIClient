@@ -52196,6 +52196,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             case JS_TAG_SYMBOL:
                 break;
             case JS_TAG_OBJECT:
+                /* An unknown is what §7.1.1 ToPrimitive answers for itself (do_toprim_step), so it is the key
+                   already; a tag test alone would coerce it again on every resume and never retire the opcode. */
+                if (!js_toprim_operand(sp[-1])) break;
                 sf->cur_pc = pc; tp_slot = -1; tp_op_byte = pc - 1;
                 tp_resume_at = TPR_PROPKEY; goto key_toprim;
             default:
@@ -52224,6 +52227,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             case JS_TAG_SYMBOL:
                 break;
             case JS_TAG_OBJECT:
+                if (!js_toprim_operand(sp[-1])) break;   /* an unknown is its own key, as above */
                 sf->cur_pc = pc; tp_slot = -1; tp_op_byte = pc - 1;
                 tp_resume_at = TPR_PROPKEY2; goto key_toprim;
             default:
