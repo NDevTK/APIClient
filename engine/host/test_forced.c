@@ -14898,13 +14898,13 @@ TF_UNIT void probes_isarraytype(const char *js, Probe *tab, int *n) {
     int fac_tt = 1;
 
     fold_row(&fac_tt, &fac_why, emitted_record_has(js, "/api/ia-b3", "\"door\":\"fetch\""),
-             "NOT REACHED: no /api/ia-b3 record, so no flow took the arm where `typeof iaR.f` is \"boolean\"");
+             "NOT REACHED: no /api/ia-b3 record, so no flow took the arm where `typeof iaRec.f` is \"boolean\"");
     fold_row(&fac_tt, &fac_why, !strstr(js, "\"/api/ia-a3\""),
              "a /api/ia-a3 record exists: IsArray over a member its type facet proved a Boolean took the Array arm");
     const Probe rows[] = {
         { "isarraytype-string", str_tt, "iaV", SESS_EXPLORE, str_why },
         { "isarraytype-json", obj_tt, "iaJ", SESS_EXPLORE, obj_why },
-        { "isarraytype-facet", fac_tt, "iaR", SESS_EXPLORE, fac_why },
+        { "isarraytype-facet", fac_tt, "iaRec", SESS_EXPLORE, fac_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

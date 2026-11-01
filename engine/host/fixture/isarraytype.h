@@ -20,8 +20,8 @@ static const char HTML_ISARRAYTYPE[] =
     " if (Array.isArray(iaJ)) fetch('/api/ia-a2'); else fetch('/api/ia-b2');"
     "} catch (e) { fetch('/api/ia-threw'); }"
     "(async function () {"
-    "  var iaR = await (await fetch('/api/iarec')).json();"
-    "  if (typeof iaR.f === 'boolean') { if (Array.isArray(iaR.f)) fetch('/api/ia-a3'); else fetch('/api/ia-b3'); }"
+    "  var iaRec = await (await fetch('/api/iarec')).json();"
+    "  if (typeof iaRec.f === 'boolean') { if (Array.isArray(iaRec.f)) fetch('/api/ia-a3'); else fetch('/api/ia-b3'); }"
     "})();"
     "</script>"
     TF_CANVAS_INK
