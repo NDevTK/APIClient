@@ -7,8 +7,10 @@
    once too (`_layoutClientRectsRests`), and the `span`'s getClientRects() is its one line fragment. CSSOM VIEW
    §9's Range members over the first box rest on a job of their own (`_layoutRangeRectsRests`): a range
    selecting the box has its one 130px rectangle, and a range selecting its contents has the twelve rows', whose
-   bounding box is 120px tall. Chrome 155 gives these numbers for the same markup (the Range rows were taken on
-   Chrome 153). It ends with TF_CANVAS_INK, which test_forced.c defines
+   bounding box is 120px tall. CSSOM VIEW §10's offsetX/offsetY, read in a click listener during dispatch at
+   client (50, 160), are 17 and 17 from the padding edge of the box after the first one, which sits below its
+   130px and rests on a job of its own (`_layoutMouseOffsetRests`); read outside dispatch, offsetX is pageX, 50.
+   Chrome 155 gives these numbers for the same markup (the Range and MouseEvent rows were taken on Chrome 153). It ends with TF_CANVAS_INK, which test_forced.c defines
    before including it. */
 #ifndef ENGINE_HOST_FIXTURE_CLIENTEXTENT_H
 #define ENGINE_HOST_FIXTURE_CLIENTEXTENT_H
@@ -24,10 +26,14 @@ static const char HTML_CLIENTEXTENT[] =
     "<body>"
     "<div id=ce1 style=\"padding:5px\">" CE_ROW CE_ROW CE_ROW CE_ROW CE_ROW CE_ROW CE_ROW CE_ROW CE_ROW CE_ROW
     CE_ROW CE_ROW "</div>"
+    "<div id=mo style=\"margin-left:25px;margin-top:5px;padding:3px;height:10px\"></div>"
     "<div><div id=ce2 style=\"display:inline-block;padding:3px\">" CE_COL("10") CE_COL("20") CE_COL("30")
     CE_COL("40") CE_COL("50") CE_COL("60") CE_COL("70") CE_COL("80") "</div></div>"
     "<p><span id=ce3>x</span></p>"
-    "<script>var rg = document.createRange(), rc = document.createRange();"
+    "<script>var mo = document.getElementById('mo'), mox, moy;"
+    "mo.addEventListener('click', function (e) { mox = e.offsetX; moy = e.offsetY; });"
+    "mo.dispatchEvent(new MouseEvent('click', { clientX: 50, clientY: 160 }));"
+    "var rg = document.createRange(), rc = document.createRange();"
     "rg.selectNode(document.getElementById('ce1'));"
     "rc.selectNodeContents(document.getElementById('ce1'));"
     "fetch('/api/cext?h=' + document.getElementById('ce1').clientHeight"
@@ -35,7 +41,8 @@ static const char HTML_CLIENTEXTENT[] =
     " + '&bh=' + document.getElementById('ce1').getBoundingClientRect().height"
     " + '&rl=' + document.getElementById('ce3').getClientRects().length"
     " + '&rgh=' + rg.getBoundingClientRect().height + '&rgn=' + rg.getClientRects().length"
-    " + '&rch=' + rc.getBoundingClientRect().height + '&rcn=' + rc.getClientRects().length);"
+    " + '&rch=' + rc.getBoundingClientRect().height + '&rcn=' + rc.getClientRects().length"
+    " + '&ox=' + mox + '&oy=' + moy + '&ux=' + new MouseEvent('click', { clientX: 50 }).offsetX);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

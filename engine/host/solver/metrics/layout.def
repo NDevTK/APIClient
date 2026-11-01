@@ -11,7 +11,8 @@
    3's padding edge and `_layoutClientExtentRests` the rests those reads took, a subset of `_layoutJobRests`, so
    one read takes 1 + rests/asks activations on average. `_layoutClientRectsAsks` and `_layoutClientRectsRests`
    count the same for §6's getClientRects() and getBoundingClientRect(), and `_layoutRangeRectsAsks` and
-   `_layoutRangeRectsRests` for §9's Range members. `_layoutPaintRests` counts the rests
+   `_layoutRangeRectsRests` for §9's Range members, and `_layoutMouseOffsetAsks` and `_layoutMouseOffsetRests`
+   for §10's MouseEvent offsetX/offsetY. `_layoutPaintRests` counts the rests
    update the rendering step 22's paint took between CSS 2.1 §E.2's offers, a subset of `_layoutJobRests`. */
 METRIC(bf_asks,            "_layoutBfAsks",           LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_served,          "_layoutBfServed",         LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
@@ -28,6 +29,8 @@ METRIC(client_rects_asks,   "_layoutClientRectsAsks",   LIFETIME, "ask",  AGENT,
 METRIC(client_rects_rests,  "_layoutClientRectsRests",  LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
 METRIC(range_rects_asks,    "_layoutRangeRectsAsks",    LIFETIME, "ask",  AGENT, "core/dom/range.c",        INT)
 METRIC(range_rects_rests,   "_layoutRangeRectsRests",   LIFETIME, "rest", AGENT, "core/dom/range.c",        INT)
+METRIC(mouse_offset_asks,   "_layoutMouseOffsetAsks",   LIFETIME, "ask",  AGENT, "core/events/mouse_event.c", INT)
+METRIC(mouse_offset_rests,  "_layoutMouseOffsetRests",  LIFETIME, "rest", AGENT, "core/events/mouse_event.c", INT)
 METRIC(scroll_area_asks,    "_layoutScrollAreaAsks",    LIFETIME, "ask",  AGENT, "core/dom/element_view.c", INT)
 METRIC(scroll_area_rests,   "_layoutScrollAreaRests",   LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
 METRIC(paint_rests,         "_layoutPaintRests",         LIFETIME, "rest",  AGENT, "core/rendering/rendering.c", INT)
@@ -37,5 +40,6 @@ IDENTITY_LE(served_across_rest, bf_served)
 IDENTITY_LE(client_extent_rests, job_rests)
 IDENTITY_LE(client_rects_rests, job_rests)
 IDENTITY_LE(range_rects_rests, job_rests)
+IDENTITY_LE(mouse_offset_rests, job_rests)
 IDENTITY_LE(scroll_area_rests, job_rests)
 IDENTITY_LE(paint_rests, job_rests)

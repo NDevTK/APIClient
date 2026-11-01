@@ -14816,11 +14816,27 @@ TF_UNIT void probes_clientextent(const char *js, Probe *tab, int *n) {
     fold_row(&rg_tt, &rg_why, ngrests >= 1,
              "CSSOM VIEW §9's Range members over a content height wider than one activation took no rest, so they "
              "ran to completion instead of yielding with their questions suspended");
+    /* §10's offsetX/offsetY in a listener during dispatch and outside it, and the rests step 1 takes. */
+    const char *mrests = strstr(js, "\"_layoutMouseOffsetRests\":");
+    long nmrests = mrests ? strtol(mrests + strlen("\"_layoutMouseOffsetRests\":"), NULL, 10) : -1;
+    const char *mo_why = NULL; int mo_tt = 1;
+    fold_row(&mo_tt, &mo_why, param_value_is(js, "/api/cext", "ox", "17"),
+             "CSSOM VIEW §10 step 1: offsetX during dispatch is not pageX 50 minus the target's 33px padding edge");
+    fold_row(&mo_tt, &mo_why, param_value_is(js, "/api/cext", "oy", "17"),
+             "CSSOM VIEW §10 step 1: offsetY during dispatch is not pageY 160 minus the target's 143px padding edge");
+    fold_row(&mo_tt, &mo_why, param_value_is(js, "/api/cext", "ux", "50"),
+             "CSSOM VIEW §10 step 2: offsetX outside dispatch is not the pageX 50");
+    fold_row(&mo_tt, &mo_why, mrests != NULL,
+             "the result document carries no `_layoutMouseOffsetRests` row from solver/metrics/layout.def");
+    fold_row(&mo_tt, &mo_why, nmrests >= 1,
+             "CSSOM VIEW §10's offsetY over a target below 130px of rows took no rest, so step 1's padding edge ran "
+             "to completion instead of yielding with its questions suspended");
     const Probe rows[] = {
         { "client-extent-values", cext_tt, "/api/cext", SESS_EXPLORE, cext_why },
         { "client-extent-rests", cextr_tt, "/api/cext", SESS_EXPLORE, cextr_why },
         { "client-rects-rests", crect_tt, "/api/cext", SESS_EXPLORE, crect_why },
         { "range-rects", rg_tt, "/api/cext", SESS_EXPLORE, rg_why },
+        { "mouse-offset", mo_tt, "/api/cext", SESS_EXPLORE, mo_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

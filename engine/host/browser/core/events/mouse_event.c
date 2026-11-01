@@ -158,8 +158,12 @@
 #include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/layout_job.h"
 #include "core/realm.h"
+#include "solver/metrics.h"
+#include "solver/rest_unit.h"
 
 static JSValue   g_key = JS_UNDEFINED;   /* the private Symbol this interface's own slots hang off */
 static JSClassID g_me_class;    /* the class exists for its per-REALM prototype slot; nothing wears it */
@@ -167,6 +171,7 @@ static int       g_ready;
 static int       g_ctor_stepid = -1;
 static int       g_modifier_state_id = -1;
 static int       g_init_mouse_id = -1;
+static int       g_offset_id[2] = { -1, -1 };   /* offsetX, offsetY */
 
 JSValue mouse_event_proto(JSContext *ctx)
 {
@@ -423,23 +428,57 @@ static JSValue js_md_get_page(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewFloat64(ctx, page);
 }
 
-/* CSSOM VIEW §10's `offsetX`/`offsetY` — its TWO steps, in order. `magic` names the axis the same way the page
-   pair above does. See the file comment for the target that generates no box, for why the node is the TARGET
-   and not the current target, and for the fragment an inline target's origin is read out of. */
-static JSValue js_md_get_offset(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    JSValue target;
-    lxb_dom_node_t *n;
-    double page;
-    CssPx origin_axis, off;
-    FlowPoint origin;
+/* CSSOM VIEW §10's `offsetX`/`offsetY` — its TWO steps, in order, as a getter step machine. `magic` names the
+   axis the same way the page pair above does. See the file comment for the target that generates no box, for
+   why the node is the TARGET and not the current target, and for the fragment an inline target's origin is
+   read out of. Step 1's padding edge is asked under a resting drive on the job the state owns, so a target
+   whose layout is wide rests between activations with its questions suspended, as CSSOM VIEW §6's members do;
+   the page coordinate and the target are read again on each activation, and do not move while the event's
+   flow is inside the read. */
+#define MD_OFFSET_STAGES(X) \
+    X(MD_OFFSET_MEASURE, "CSSOM VIEW §10 \"Extensions to the MouseEvent Interface\" offsetX / offsetY " \
+                         "(step 1's padding edge, one resting drive per activation)")
+enum { IDL_STEP_STAGE_BASE(MD_OFFSET_STAGES) MD_OFFSET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const MD_OFFSET_STEPS[] = { MD_OFFSET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    if (!md_page_coord(ctx, this_val, magic, &page))
-        return JS_ThrowTypeError(ctx, "a MouseEvent attribute was read on something that is not one");
+typedef struct {
+    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL before the first activation */
+} MdOffsetState;
+
+static void md_offset_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    MdOffsetState *s = st;
+
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
+}
+
+static int js_md_offset_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    MdOffsetState *s = st;
+    int magic = idl_step_magic(hdr), rc;
+    bool boxed = false, done = false;
+    lxb_dom_node_t *n;
+    LayoutJobDrive d;
+    FlowPoint origin;
+    JSValue target;
+    CssPx off;
+    double page;
+
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(MD_OFFSET_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(MD_OFFSET_MEASURE);
+    if (!md_page_coord(ctx, hdr->this_val, magic, &page)) {
+        JS_ThrowTypeError(ctx, "a MouseEvent attribute was read on something that is not one");
+        return JS_STEP_ABRUPT;
+    }
     /* Step 2, which is also step 1's minuend — the dispatch flag is the whole of what chooses between them. */
-    if (!event_dispatch_flag(ctx, this_val))
-        return JS_NewFloat64(ctx, page);
-    target = event_target(ctx, this_val);
+    if (!event_dispatch_flag(ctx, hdr->this_val)) {
+        *presult = JS_NewFloat64(ctx, page);
+        return JS_STEP_DONE;
+    }
+    target = event_target(ctx, hdr->this_val);
     n = node_of(target);
     JS_FreeValue(ctx, target);
     /* §10 states step 1 over the TARGET NODE's padding edge and states nothing for a target that has none — an
@@ -447,19 +486,69 @@ static JSValue js_md_get_offset(JSContext *ctx, JSValueConst this_val, int magic
        css-display-3 §2.5 "Box Generation: the none and contents keywords" gives no box. Step 2 is the only
        value §10 defines for any of them; the file comment derives why that is an answer and a zero would not
        be. The node test comes FIRST because core/dom/element_view.h's predicate is asked of elements only. */
-    if (n == NULL || n->type != LXB_DOM_NODE_TYPE_ELEMENT || !element_view_has_box(n))
-        return JS_NewFloat64(ctx, page);
-    origin = flow_padding_box_origin(lxb_dom_interface_element(n));
-    origin_axis = magic == MD_CLIENT_Y ? origin.y : origin.x;
+    if (n == NULL || n->type != LXB_DOM_NODE_TYPE_ELEMENT) {
+        *presult = JS_NewFloat64(ctx, page);
+        return JS_STEP_DONE;
+    }
+    if (s->job == NULL) {
+        s->job = layout_job_new();
+        METRIC_ADD(mouse_offset_asks, 1);
+    }
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    if (!element_view_box_tests_ask(n)) {
+        DCHECK(layout_job_drive_spent(&d),
+               "CSSOM VIEW §10's offset coordinate's box tests parked an author match with the drive's allowance "
+               "unspent, so its next activation would ask the same thing over the same state for ever");
+    } else if (!element_view_has_box(n)) {
+        done = true;
+    } else {
+        boxed = true;
+        while (block_flow_drive_deferred(&d)) {
+            if (flow_padding_box_origin_ask(lxb_dom_interface_element(n), &origin)) {
+                done = true;
+                break;
+            }
+            DCHECK(layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+                   "CSSOM VIEW §10's offset coordinate answered \"not yet\" with no question suspended and no "
+                   "allowance spent, so its next activation would ask the same thing over the same state for ever");
+        }
+    }
+    layout_job_drive_end(&d);
+    layout_job_leave(s->job);
+    rest_unit_end();
+    if (layout_job_declined(s->job)) {
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
+    if (!done) {
+        layout_job_rested(s->job);
+        METRIC_ADD(mouse_offset_rests, 1);
+        return JS_STEP_YIELD;
+    }
+    if (!boxed) {
+        *presult = JS_NewFloat64(ctx, page);
+        return JS_STEP_DONE;
+    }
     /* THE SUBTRACTION RUNS IN `CssPx` AND NOT IN C DOUBLES, so the padding edge's environment facts ride the
        answer out: an ancestor sized `auto` makes that origin a function of the initial containing block, and an
        `offsetX` that dropped the fact would report a coordinate as viewport-independent in exactly the world
-       where a responsive bundle branches on it. The page coordinate carries NO fact today — its two operands
-       are a stored slot and a derived scroll position, which is what `md_page_coord`'s own DCHECK is about — so
-       it enters as a bare example and the union css_px_sub forms is the origin's alone. */
-    off = css_px_sub(css_px(page), origin_axis);
-    return viewport_env_derived(off, JS_NewFloat64(ctx, off.px));
+       where a responsive bundle branches on it. The page coordinate carries no fact (`md_page_coord`'s own
+       DCHECK), so it enters as a bare example and the union css_px_sub forms is the origin's alone. */
+    off = css_px_sub(css_px(page), magic == MD_CLIENT_Y ? origin.y : origin.x);
+    *presult = viewport_env_derived(off, JS_NewFloat64(ctx, off.px));
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl MD_OFFSET_STEP = {
+    js_md_offset_step, sizeof(MdOffsetState), md_offset_visit, NULL,
+    "CSSOM VIEW §10 \"Extensions to the MouseEvent Interface\" offsetX / offsetY",
+    MD_OFFSET_STEPS
+};
 
 /* §2.2's relatedTarget, read off the EVENT — the value §2.9 step 4 retargets. */
 static JSValue js_md_get_related_target(JSContext *ctx, JSValueConst this_val, int magic)
@@ -637,10 +726,7 @@ static const JSCFunctionListEntry js_md_proto[] = {
     /* §10's page coordinates, DERIVED — the axis is named by the client coordinate each one is built on. */
     JS_CGETSET_MAGIC_DEF("pageX", js_md_get_page, NULL, MD_CLIENT_X),
     JS_CGETSET_MAGIC_DEF("pageY", js_md_get_page, NULL, MD_CLIENT_Y),
-    /* §10's offset coordinates, DERIVED from the page pair above and the target's padding edge — same axis
-       convention, and the same one getter for both so the two cannot take different roads through step 1. */
-    JS_CGETSET_MAGIC_DEF("offsetX", js_md_get_offset, NULL, MD_CLIENT_X),
-    JS_CGETSET_MAGIC_DEF("offsetY", js_md_get_offset, NULL, MD_CLIENT_Y),
+    /* §10's offset coordinates are step machines, installed in mouse_event_install_protos. */
     /* Pointer Lock 2.0 §6's two, STORED — §7 declares the dictionary members that fill them and §6 states the
        un-initialized 0 they otherwise carry, so they are slots exactly as `clientX` is. */
     JS_CGETSET_MAGIC_DEF("movementX", js_md_get, NULL, MD_MOVEMENT_X),
@@ -669,6 +755,8 @@ void mouse_event_init(JSContext *ctx)
     /* DECLARED HERE, at agent init, and not from the per-realm install: a fresh id minted per realm is a member
        being minted per realm, which idl_declared_before_seal exists to catch. */
     g_modifier_state_id = idl_method_id(ctx, MODIFIER_STATE_ARGS, 1, js_md_get_modifier_state, 0);
+    g_offset_id[0] = idl_getter_id_step(ctx, &MD_OFFSET_STEP, MD_CLIENT_X);
+    g_offset_id[1] = idl_getter_id_step(ctx, &MD_OFFSET_STEP, MD_CLIENT_Y);
     g_init_mouse_id = idl_method_id(ctx, MD_INIT_MOUSE_ARGS, 15, js_md_init_mouse_event, 0);
     idl_optional_from(1);   /* every argument but `typeArg` is optional */
     /* Pointer Events 4 §16.1 Initializers for interface MouseEvent: `optional Window? viewArg = null` and
@@ -708,6 +796,8 @@ void mouse_event_init(JSContext *ctx)
                    "Pointer Events 4 §11.1 MouseEvent interface's `getModifierState(DOMString keyArg)` — this "
                    "interface's OWN declaration of it, which is what makes calling KeyboardEvent's on a MouseEvent "
                    "a TypeError");
+    agent_state_id("event", &g_offset_id[0], "CSSOM VIEW §10's MouseEvent `offsetX` getter");
+    agent_state_id("event", &g_offset_id[1], "CSSOM VIEW §10's MouseEvent `offsetY` getter");
     agent_state_id("event", &g_init_mouse_id,
                    "Pointer Events 4 §16.1 Initializers for interface MouseEvent's `initMouseEvent(...)`");
     realm_declare_intrinsic(mouse_event_install_protos);
@@ -731,6 +821,10 @@ void mouse_event_install_protos(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, proto, js_md_proto, (int)(sizeof(js_md_proto) / sizeof(js_md_proto[0])));
     idl_install_method(ctx, proto, "getModifierState", g_modifier_state_id);
     idl_install_method(ctx, proto, "initMouseEvent", g_init_mouse_id);
+    /* §10's offset coordinates, DERIVED from the page pair and the target's padding edge — same axis convention,
+       and one machine for both so the two cannot take different roads through step 1. */
+    idl_install_accessor_step(ctx, proto, "offsetX", g_offset_id[0], -1);
+    idl_install_accessor_step(ctx, proto, "offsetY", g_offset_id[1], -1);
     JS_SetClassProto(ctx, g_me_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's interface object on THIS realm's global — see ui_event.c. */
@@ -763,5 +857,5 @@ void mouse_event_free(JSRuntime *rt)
        core/events/event.c's event_make_proto through JS_NewObjectProto — so there is no finalizer and no
        gc_mark here to owe the JS_GetAnyOpaque the zeroing costs a component whose objects do wear one. */
     g_me_class = 0;
-    g_ctor_stepid = g_modifier_state_id = g_init_mouse_id = -1;
+    g_ctor_stepid = g_modifier_state_id = g_init_mouse_id = g_offset_id[0] = g_offset_id[1] = -1;
 }
