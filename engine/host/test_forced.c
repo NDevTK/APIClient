@@ -17712,7 +17712,7 @@ TF_UNIT void probes_tt_eval(const char *js, Probe *tab, int *n) {
     const Probe rows[] = {
         { "tt-eval-rest", r_tt, "/api/te-rest", SESS_EXPLORE, r_why },
         { "tt-eval-indirect", i_tt, "/api/te-ind", SESS_EXPLORE, i_why },
-        { "tt-eval-rests", p_tt, "/api/te-rest", SESS_EXPLORE, p_why, 0, "tt-eval-rest" },
+        { "tt-eval-rests", p_tt, "/api/te-rest", SESS_EXPLORE, p_why },
         { "tt-eval-fork", f_tt, "/api/te-fork", SESS_EXPLORE, f_why },
         { "tt-eval-function", d_tt, "/api/te-fn", SESS_EXPLORE, d_why },
         { "tt-eval-timer", t_tt, "/api/te-timer", SESS_EXPLORE, t_why },
