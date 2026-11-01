@@ -1188,6 +1188,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/altbutton.h"
 #include "fixture/inputbutton.h"
 #include "fixture/pseudostate.h"
+#include "fixture/attrpres.h"
+#include "fixture/attrpreshandler.h"
 #include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
@@ -1781,6 +1783,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "altbutton", HTML_ALTBUTTON },
     { "inputbutton", HTML_INPUTBUTTON },
     { "pseudostate", HTML_PSEUDOSTATE },
+    { "attrpres", HTML_ATTRPRES },
+    { "attrpreshandler", HTML_ATTRPRESHANDLER },
     { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
@@ -14474,6 +14478,62 @@ TF_UNIT void probes_focusbox(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `attrpres` document (fixture/attrpres.h): one per engine path that reads a parsed valueless
+   attribute, each against Chrome 153's answer. */
+TF_UNIT void probes_attrpres(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *param, *want, *why; } R[] = {
+        { "attrpres-getattribute", "ga", "empty", "DOM §4.9.2: getAttribute on a parsed `<div inert>` is not \"\"" },
+        { "attrpres-inert", "inert", "0", "HTML §6.3: a button inside a parsed `<div inert>` took focus" },
+        { "attrpres-editing-host", "ce", "1", "HTML §6.6.3: a parsed `<div contenteditable>` is not focusable" },
+        { "attrpres-editing-invalid", "cb", "0",
+          "HTML §6.8.1: `contenteditable=bogus` is the inherit state, not an editing host, and took focus" },
+        { "attrpres-href", "ah", "1", "HTML §6.6.3: a parsed `<a href>` is not focusable" },
+        { "attrpres-draggable", "dr", "00",
+          "HTML §6.6.3: a `draggable` element took focus although no drag here starts without a pointing device" },
+        { "attrpres-dataset", "ds", "empty", "HTML §3.2.6.6: `dataset.x` of a parsed `<div data-x>` is not \"\"" },
+        { "attrpres-isequalnode", "eq", "11",
+          "DOM §4.4: two parsed `<span x>`, or one and setAttribute('x', ''), are not equal" },
+        { "attrpres-oldvalue", "mo", "empty-vx",
+          "DOM §4.3.2: a MutationObserver's oldValue for a parsed valueless `title` is not \"\"" },
+        { "attrpres-tokenlist", "cl", "1",
+          "DOM §7.1: DOMTokenList's update steps on a parsed `<div class>` queued no attribute mutation" },
+        { "attrpres-upgrade", "up", "null-empty",
+          "HTML §4.13.5: a custom element upgrade's attributeChangedCallback for a parsed `foo` is not (null, \"\")" },
+        { "attrpres-pattern", "pt", "10",
+          "HTML §4.10.5.3.6: a parsed `<input pattern>` compiled no pattern, so `abc` passed validation" },
+        { "attrpres-shadowroot", "sh", "11",
+          "HTML §4.12.3: the parsed `shadowrootclonable` and `shadowrootdelegatesfocus` were not read as present" },
+        { "attrpres-noahs-ark", "na", "7",
+          "HTML §13.2.4.3: the Noah's Ark clause did not pair `x` with `x=\"\"`, so a fourth `b` was reconstructed" },
+        { "attrpres-selector", "sel", "1", "Selectors §6.1: `[inert=\"\"]` did not match a parsed `<div inert>`" },
+    };
+    int i;
+
+    for (i = 0; i < (int)COUNTOF(R); i++) {
+        const char *why = NULL; int tt = 1;
+        fold_row(&tt, &why, !!strstr(js, "\"/api/attrpres\""),
+                 "NOT REACHED: there is no /api/attrpres record, so the animation frame callback never ran or the "
+                 "document aborted before it");
+        fold_row(&tt, &why, param_value_is(js, "/api/attrpres", R[i].param, R[i].want), R[i].why);
+        const Probe row[] = { { R[i].row, tt, "/api/attrpres", SESS_EXPLORE, why } };
+        probes_append(tab, n, row, 1);
+    }
+}
+
+/* The rows of the `attrpreshandler` document (fixture/attrpreshandler.h). */
+TF_UNIT void probes_attrpreshandler(const char *js, Probe *tab, int *n) {
+    const char *why = NULL; int tt = 1;
+    fold_row(&tt, &why, !!strstr(js, "\"/api/onclickattr\""),
+             "NOT REACHED: there is no /api/onclickattr record, so the document aborted before its frame");
+    fold_row(&tt, &why, param_value_is(js, "/api/onclickattr", "t", "function") &&
+                        param_value_is(js, "/api/onclickattr", "a", "empty"),
+             "HTML §8.1.8.1: a parsed `<div onclick>` is not a handler holding the empty string");
+    const Probe rows[] = {
+        { "attrpres-handler", tt, "/api/onclickattr", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `altbutton` document (fixture/altbutton.h). */
 TF_UNIT void probes_altbutton(const char *js, Probe *tab, int *n) {
     /* HTML §15.4.2's fifth rule: a button whose natural dimensions are its alternative text on one line. */
@@ -23302,6 +23362,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_altbutton(js, probes, &np);
     probes_inputbutton(js, probes, &np);
     probes_pseudostate(js, probes, &np);
+    probes_attrpres(js, probes, &np);
+    probes_attrpreshandler(js, probes, &np);
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
