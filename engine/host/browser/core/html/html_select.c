@@ -13,9 +13,18 @@
 #include "core/html/html_form.h"     /* §4.10.7's own "get the list of options" walk */
 #include "core/html/html_select.h"
 #include "core/idl_args.h"
+#include "core/idl_indexed.h"
 
 /* §4.10.7's `remove`, which is ONE declaration carrying BOTH of the section's entries — see html_select.h. */
 static int g_id_remove = -1;
+/* The class every HTML `select` element's wrapper is built with (node_wrap): a Web IDL §3.9 legacy platform
+   object, because HTML §4.10.7 The select element declares an indexed property getter. */
+static JSClassID g_select_class;
+
+JSClassID html_select_class(void)
+{
+    return g_select_class;
+}
 
 /* THE NAMESPACE IS PART OF THE QUESTION — a `select` in another namespace is a different element with a
    different interface, the same test core/html/html_progress.c makes for `<progress>`. */
@@ -58,6 +67,89 @@ static uint32_t option_list_len(JSContext *ctx, JSValueConst list)
     JS_ToUint32(ctx, &n, lv);
     JS_FreeValue(ctx, lv);
     return n;
+}
+
+/* ---- the indexed property getter and `length` ------------------------------------------------------------ */
+
+/* HTML §4.10.7 The select element: "The supported property indices at any instant are the indices supported by the
+   object returned by the options attribute at that instant." That collection's filter is the list of options, so they
+   are the list's indices, and "The length IDL attribute must return the number of nodes represented by the options
+   collection" is the list's size. */
+static uint32_t si_length(JSContext *ctx, JSValueConst self)
+{
+    lxb_dom_node_t *n = node_of(self);
+    JSValue list;
+    uint32_t len;
+
+    DCHECK(select_element_is(n), "the select indexed getter ran on a wrapper that is not a <select>'s — the hooks "
+                                 "are reached only through the select class, which node_wrap gives selects");
+    list = html_form_select_option_list(ctx, n);
+    len = option_list_len(ctx, list);
+    JS_FreeValue(ctx, list);
+    return len;
+}
+
+/* The IDL's `getter HTMLOptionElement? item(unsigned long index)`: the indexth option in the list. */
+static JSValue si_item(JSContext *ctx, JSValueConst self, uint32_t i)
+{
+    JSValue list = html_form_select_option_list(ctx, node_of(self)), v = JS_GetPropertyUint32(ctx, list, i);
+
+    JS_FreeValue(ctx, list);
+    return v;
+}
+
+static const IdlIndexedDecl SELECT_INDEXED = { "HTMLSelectElement", si_length, si_item, NULL, 0 };
+
+static int si_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
+{
+    return idl_indexed_own_property(ctx, desc, obj, prop, &SELECT_INDEXED);
+}
+
+static int si_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
+{
+    return idl_indexed_own_property_names(ctx, ptab, plen, obj, &SELECT_INDEXED);
+}
+
+static int si_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueConst val, JSValueConst getter,
+                         JSValueConst setter, int flags)
+{
+    return idl_indexed_define_own_property(ctx, obj, prop, val, getter, setter, flags, &SELECT_INDEXED);
+}
+
+static int si_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    return idl_indexed_delete_property(ctx, obj, prop, &SELECT_INDEXED);
+}
+
+/* Web IDL §3.9.5 [[PreventExtensions]]: "Return false." */
+static int si_prevent_extensions(JSContext *ctx, JSValueConst obj)
+{
+    (void)ctx; (void)obj;
+    return 0;
+}
+
+/* The indexed setter `setter undefined (unsigned long index, HTMLOptionElement? option)` is core/idl_indexed.c's
+   has_indexed_setter residual: an indexed write is refused. */
+static const JSClassExoticMethods SELECT_EXOTIC = {
+    .get_own_property = si_get_own,
+    .get_own_property_names = si_own_names,
+    .define_own_property = si_define_own,
+    .delete_property = si_delete,
+    .prevent_extensions = si_prevent_extensions,
+    .get_own_property_no_user_code = true,   /* a walk of the select's descendants: no page code */
+};
+
+/* Named residual. Not covered: the `length` setter, which HTML §4.10.7 The select element makes act like HTML
+   §2.6.4.3 The HTMLOptionsCollection interface's (append new option elements given n, or remove the last n
+   options). Next diff builds those steps as a setter over the list of options. Absence shows as
+   `select.length = 0` leaving every option in place. */
+static JSValue js_select_length(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = select_receiver(ctx, this_val, "length");
+
+    (void)magic;
+    if (!n) return JS_EXCEPTION;
+    return JS_NewUint32(ctx, si_length(ctx, this_val));
 }
 
 /* HTML §2.6.4.3 "The HTMLOptionsCollection interface"'s REMOVE AN OPTION, verbatim and in its own order:
@@ -212,12 +304,23 @@ void html_select_declare(JSContext *ctx)
        component that declared nothing produces. core/platform.c's walk over declarations that name no row
        caught it on the first dev build after this file landed. */
     agent_state_id("element", &g_id_remove, "§4.10.7's `remove` overload");
+    {
+        JSClassDef d = { "HTMLSelectElement", .exotic = &SELECT_EXOTIC };
+
+        JS_NewClassID(JS_GetRuntime(ctx), &g_select_class);
+        CHECK(JS_NewClass(JS_GetRuntime(ctx), g_select_class, &d) == 0, "the select wrapper class could not be "
+                                                                         "registered");
+        agent_state_class("element", &g_select_class,
+                          "HTML §4.10.7 The select element's wrapper class, a legacy platform object's");
+        idl_iface_implements(g_select_class, node_class_id());   /* a select wrapper is a Node wrapper */
+    }
 }
 
 void html_select_install(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_id_remove >= 0, "§4.10.7's `remove` was installed before html_select_declare declared it");
     idl_install_method(ctx, proto, "remove", g_id_remove);
+    idl_install_accessor(ctx, proto, "length", js_select_length, 0, -1);
 }
 
 void html_select_free(void)

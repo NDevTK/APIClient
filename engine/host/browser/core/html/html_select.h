@@ -41,9 +41,11 @@
 
 #include "quickjs.h"
 
-/* The AGENT's half: §4.10.7's `remove` overload, declared once per runtime. */
+/* The AGENT's half: §4.10.7's `remove` overload and the select wrapper class, declared once per runtime. */
 void html_select_declare(JSContext *ctx);
-/* §4.10.7's `remove` on HTMLSelectElement.prototype. Handed the prototype by core/html/html_element.c, which
+/* The class every HTML `select` element's wrapper is built with; 0 before html_select_declare. */
+JSClassID html_select_class(void);
+/* §4.10.7's `remove` and `length` on HTMLSelectElement.prototype. Handed the prototype by core/html/html_element.c, which
    owns the table of which interface a tag wears, for the same reason §4.10.13's progress members are. */
 void html_select_install(JSContext *ctx, JSValueConst proto);
 /* §4.10.7's half of the `element` row's release, reached from html_element_free. It gives back no

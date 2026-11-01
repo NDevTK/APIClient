@@ -86,9 +86,9 @@ static bool atom_is_string(JSContext *ctx, JSAtom prop)
  *    `setter undefined (unsigned long index, T value)` in its IDL. A grep of that spelling over the checked-out
  *    @webref IDL finds nine, in three standards: HTML §2.6.4.3 The HTMLOptionsCollection interface and §4.10.7
  *    The select element (the INTERFACE section — §15.5.16 carries the same title for the rendering), SVG's five
- *    list interfaces, and CSS Typed OM's CSSUnparsedValue and CSSTransformValue. This engine builds none of
- *    them, which is why this answers `false` for every decl rather than reading a field that no decl in the
- *    tree would write — a field with no writer is the shape CLAUDE.md's defaulted-field rule is about.
+ *    list interfaces, and CSS Typed OM's CSSUnparsedValue and CSSTransformValue. Of these this engine builds
+ *    only HTMLSelectElement's indexed GETTER (core/html/html_select.c), so this answers `false` for every
+ *    decl; `select[0] = option` is therefore refused.
  *  WHAT THE NEXT DIFF BUILDS: a `setter` callback on IdlIndexedDecl, this predicate returning `d->setter !=
  *    NULL`, and §3.9.7's invoke an indexed property setter steps (ToUint32 on P, the `creating` flag, the
  *    conversion of V to the type of the operation's second argument) called from step 1.3 of the define arm
