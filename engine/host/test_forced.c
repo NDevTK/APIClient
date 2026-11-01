@@ -17095,6 +17095,10 @@ TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
           "a read off a BigInt did not reach a named element of the Document above BigInt.prototype" },
         { "cw-spread-next", "/api/chainnamed", "spread", "TypeError", "2",
           "a spread whose array iterator lost `next` did not reach the Document above %IteratorPrototype%" },
+        { "px-has", "/api/proxynamed", "has", "true", "false",
+          "`in` through a trapless Proxy did not forward to the Document's or WindowProperties' named access" },
+        { "px-gopd", "/api/proxynamed", "gopd", "true", "false",
+          "[[GetOwnProperty]] through a trapless Proxy did not forward to the target's named access" },
     };
     Probe rows[sizeof R / sizeof R[0]];
     for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {

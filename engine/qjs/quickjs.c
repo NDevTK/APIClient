@@ -42641,7 +42641,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         if (JS_IsUndefined(method)
                             && JS_VALUE_GET_TAG(pd->target) == JS_TAG_OBJECT
                             && (JS_VALUE_GET_OBJ(pd->target)->class_id == JS_CLASS_PROXY
-                                || gp_op == GP_GET || gp_op == GP_SET)) {
+                                || gp_op == GP_GET || gp_op == GP_SET || gp_op == GP_HAS
+                                || gp_op == GP_GETOWNPROP)) {
                             /* NO TRAP. 10.5.x step 6 forwards to target.[[Get]](P, Receiver) — which IS this
                                entry — so it loops here rather than being handed to JS_GetPropertyInternal, which
                                re-entered js_proxy_get from C and cost one C activation per hop: a chain of
@@ -42656,6 +42657,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                call is what hid the target's ACCESSOR: a generator getter or setter reached
                                through a trapless proxy had its coroutine created inside JS_GetPropertyInternal /
                                JS_SetPropertyInternal2, off the chain, and a bound one ran with no flow base.
+                               §10.5.7 [[HasProperty]] ( propertyKey ) and §10.5.5 [[GetOwnProperty]] (
+                               propertyKey ) forward the same way at step 6, so a target whose class answers the
+                               key by a step runs it on this entry.
                                The other operations still spell their forward out below — their C entries do more
                                than re-dispatch (a trapless [[Delete]] reports false where the direct one throws),
                                so each is its own conversion, not a case of this one. */

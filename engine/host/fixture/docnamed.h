@@ -17,6 +17,8 @@
    A Document placed above a primitive's prototype or above %IteratorPrototype% answers a C activation's own
    lookups there by its step: JSON.stringify's toJSON read off a BigInt reaches `<img name=toJSON>`, which is no
    function, and a spread whose array iterator lost its own `next` reaches `<img name=next>`; each throws a TypeError.
+   A Proxy with no traps over the Document or WindowProperties forwards `in` and [[GetOwnProperty]] to its target's
+   named access.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_DOCNAMED_H
@@ -98,6 +100,14 @@ static const char HTML_DOCNAMED[] =
     "Object.setPrototypeOf(cwIp, Object.prototype);"
     "Object.defineProperty(cwAip, 'next', {value: cwNext, writable: true, configurable: true});"
     "fetch('/api/chainnamed?json=' + cwJ + '&get=' + cwG + '&spread=' + cwS);"
+    "</script>"
+    "<script>"
+    "var pxD = new Proxy(document, {}), pxW = new Proxy(Object.getPrototypeOf(Window.prototype), {});"
+    "var pxHas = 'dnObj' in pxD && !('dnNoSuch' in pxD) && 'dnObj' in pxW;"
+    "var pxDd = Object.getOwnPropertyDescriptor(pxD, 'dnObj'), pxWd = Object.getOwnPropertyDescriptor(pxW, 'dnObj');"
+    "var pxGopd = !!pxDd && pxDd.enumerable && pxDd.value instanceof HTMLObjectElement &&"
+    " !!pxWd && !pxWd.enumerable && pxWd.writable && Object.prototype.hasOwnProperty.call(pxD, 'dnObj');"
+    "fetch('/api/proxynamed?has=' + pxHas + '&gopd=' + pxGopd);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
