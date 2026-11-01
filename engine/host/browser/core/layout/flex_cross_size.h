@@ -82,5 +82,8 @@ CssAlign flex_cross_size_resolved_align(lxb_dom_element_t *container, lxb_dom_el
    holds a line box: §4 drops a sequence of document white space. */
 CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLineMember *m,
                                       CssPx *first_baseline, CssPx *last_baseline);
+/* The line boxes the entry above reduces, asked under a resting drive (core/layout/layout_job.h): false ("not
+   yet") with the deferred questions suspended on the current job for the caller's drive. */
+bool flex_cross_size_anonymous_lines_ask(lxb_dom_element_t *container, const FlexLineMember *m);
 
 #endif

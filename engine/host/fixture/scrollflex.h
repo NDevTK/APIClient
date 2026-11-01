@@ -7,6 +7,8 @@
    - f2 holds the text alone in a 50px container, so the item fits and the padding box is the answer.
    - f3 stretches the item to a 5px line, and its line boxes reach as far below as r3's, a `height: 0` block.
    - f4 aligns the item to the 5px line's end, so it overflows only upward and the padding box is the answer.
+   - f5 centres a 30px element item with an automatic height on a 10px line, so it reaches 20px down: the
+     item's origin is asked before its height, so the placement asks the height rather than laying it out.
    It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLFLEX_H
 #define ENGINE_HOST_FIXTURE_SCROLLFLEX_H
@@ -24,10 +26,12 @@ static const char HTML_SCROLLFLEX[] =
     "<div id=f3 style=\"display:flex;width:50px;height:5px;overflow:hidden\">x</div>"
     "<div id=r3 style=\"width:50px;height:0;overflow:hidden\">x</div>"
     "<div id=f4 style=\"display:flex;align-items:flex-end;width:50px;height:5px;overflow:hidden\">x</div>"
+    "<div id=f5 style=\"width:50px;height:5px;overflow:hidden\"><div style=\"display:flex;height:10px;"
+    "align-items:center\"><div style=\"width:20px\"><div style=\"height:30px\"></div></div></div></div>"
     "<script>"
     "function E(i){return document.getElementById(i);}"
     "var q='d1='+(E('f1').scrollWidth-E('r1').scrollWidth)+'&w2='+E('f2').scrollWidth"
-    "+'&d3='+(E('f3').scrollHeight-E('r3').scrollHeight)+'&h4='+E('f4').scrollHeight;"
+    "+'&d3='+(E('f3').scrollHeight-E('r3').scrollHeight)+'&h4='+E('f4').scrollHeight+'&h5='+E('f5').scrollHeight;"
     "fetch('/api/scrollflex?'+q);"
     "</script>"
     TF_CANVAS_INK

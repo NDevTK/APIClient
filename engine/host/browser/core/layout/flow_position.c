@@ -456,9 +456,6 @@ static bool fp_is_flex_item(lxb_dom_element_t *el)
     return parent != NULL && flex_item_display_is_flex_container(css_computed_display(parent));
 }
 
-/* A flex item's border-box origin: its container's content-box origin (its border-box origin plus the leading
-   border and padding) plus css-flexbox-1 §9.5's and §9.6's placement inside it (core/layout/flex_position.h).
-   False ("not yet") when the container's origin was deferred. */
 /* A grid item: an in-flow box-tree child of a grid container (css-grid-1 §6 "Grid Items"). */
 static bool fp_is_grid_item(lxb_dom_element_t *el)
 {
@@ -489,13 +486,16 @@ static bool fp_grid_item_origin(lxb_dom_element_t *el, FlowPoint *out)
     return true;
 }
 
+/* A flex item's border-box origin: its container's content-box origin (its border-box origin plus the leading
+   border and padding) plus css-flexbox-1 §9.5's and §9.6's placement inside it (core/layout/flex_position.h).
+   False ("not yet") when the container's origin or a placement operand was deferred. */
 static bool fp_flex_item_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     lxb_dom_element_t *container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
     FlowPoint o;
     CssPx dx, dy;
 
-    if (!flow_border_box_origin_ask(container, &o)) return false;
+    if (!flow_border_box_origin_ask(container, &o) || !flex_position_operands_ask(container)) return false;
     flex_position_item_offset(container, el, &dx, &dy);
     out->x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(container, false)), dx);
     out->y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(container, true)), dy);

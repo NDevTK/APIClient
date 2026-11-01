@@ -10,6 +10,7 @@
 #include "core/css/css_keyword.h"
 #include "core/css/css_length.h"
 #include "core/css/css_logical.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/flex_baseline.h"
@@ -404,6 +405,37 @@ void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *
                         used_value_content_px(container, !a.main_vertical));
     *x = a.main_vertical ? cross : main;
     *y = a.main_vertical ? main : cross;
+}
+
+bool flex_position_operands_ask(lxb_dom_element_t *container)
+{
+    FlexLineMember *m = NULL;
+    size_t n, i;
+    bool done = true, has;
+    CssPx px;
+
+    DCHECK(container != NULL, "a flex container's placement operands were asked with no container");
+    if (!used_value_content_ask(container, false, &px) || !used_value_content_ask(container, true, &px) ||
+        !flex_line_members_ask(container, &m, &n))
+        return false;
+    /* Every member, not only the asked item's line: a multi-line container's lines are placed over every
+       line's cross size (§9.6 step 15), and a stretched item's line is read before its own size. Operands only:
+       one member's used size can read another's, so no size is computed until all are answered. */
+    for (i = 0; done && i < n; i++) {
+        lxb_dom_element_t *el;
+
+        if (m[i].anonymous) {
+            done = flex_cross_size_anonymous_lines_ask(container, &m[i]);
+            continue;
+        }
+        el = lxb_dom_interface_element(m[i].first);
+        done = used_value_offset_operands_ask(el, false) && used_value_offset_operands_ask(el, true);
+        if (done && flex_baseline_participates(container, &m[i]))
+            done = block_flow_first_line_box_baseline_ask(el, &px, &has) &&
+                   block_flow_last_line_box_baseline_ask(el, &px, &has);
+    }
+    free(m);
+    return done;
 }
 
 /* css-align-3 §6.2's share of the free cross space before an item resolving to `align`: 0 at the line's

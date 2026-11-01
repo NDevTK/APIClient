@@ -17,6 +17,12 @@
 /* The offset of element flex item `item`'s border-box top-left corner from `container`'s content-box top-left
    corner, physical, in CSS pixels. `container` must be `item`'s flex container in the box tree (asserted). */
 void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y);
+/* The layout the entry above reads, asked under a step machine's resting drive (core/layout/layout_job.h):
+   `container`'s content box on both axes, its §9.3 line membership, each element item's used sizes' operands
+   on both axes and, for an item in a baseline-sharing group, its first and last line box baselines, and each
+   anonymous item's line boxes. True once all are answered, so the placement is then read over the memo; false
+   ("not yet") with the deferred questions suspended for the caller's drive. */
+bool flex_position_operands_ask(lxb_dom_element_t *container);
 
 /* The used value of element flex item `item`'s margin `name` (`margin-left`, `-right`, `-top` or `-bottom`):
    §9.5 step 1's share of the line's free space for an `auto` main-axis margin and §9.6 step 13's for a cross-axis

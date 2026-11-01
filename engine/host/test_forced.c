@@ -16193,7 +16193,7 @@ TF_UNIT void probes_cascforkview(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the `scrollflex` document (fixture/scrollflex.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give
-   every number they expect. */
+   every number they expect but h5, which is css-flexbox-1 §9.6 step 14's centring of a 30px item on a 10px line. */
 TF_UNIT void probes_scrollflex(const char *js, Probe *tab, int *n) {
     const char *sf_why = NULL; int sf_tt = !!strstr(js, "\"/api/scrollflex\"");
 
@@ -16207,6 +16207,8 @@ TF_UNIT void probes_scrollflex(const char *js, Probe *tab, int *n) {
              "CSSOM VIEW §2: a stretched anonymous flex item's line boxes do not reach as far down as the same text in a block");
     fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "h4", "5"),
              "CSSOM VIEW §2: an anonymous flex item aligned to its 5px line's end deepens its container's scrolling area");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "h5", "20"),
+             "CSSOM VIEW §2: an element flex item centred on a 10px line does not reach 20px down its scroller's scrolling area");
     const Probe rows[] = {
         { "scrolling-area-anonymous-flex-item", sf_tt, "/api/scrollflex", SESS_EXPLORE, sf_why },
     };

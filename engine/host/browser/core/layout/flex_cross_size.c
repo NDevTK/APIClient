@@ -220,6 +220,29 @@ static CssPx fx_outer_hypothetical_cross(lxb_dom_element_t *container, lxb_dom_e
      - Outer: zero. Anonymous, it has initial edges ("non-inherited properties have their initial value", CSS 2.2
        §9.2.1.1 "Anonymous block boxes"); reading them off the container would be the mistake core/layout/
        flex_line.c avoids in the main axis by answering zero for a NULL element. */
+/* §4's child text sequence of anonymous item `m` as core/layout/block_flow.h's half-open run, filled at the
+   item's used main size: `after` is the box-tree member before the sequence (NULL at the container's start) and
+   `end` one past its last text node, as core/layout/flex_line.c hands it to the intrinsic pass. Not
+   `first->prev`: under css-display-3 §2.5's splice that is NULL at the start of a `contents` element's
+   children, which would start the run at the container's own start. */
+static void fx_anonymous_run(lxb_dom_element_t *container, const FlexLineMember *m, BlockFlowRun *seq,
+                             LineBoxAvailableWidth *avail)
+{
+    DCHECK(m->anonymous, "an anonymous flex item's line boxes were measured for an element item");
+    seq->after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(m->first)));
+    seq->end = m->end;
+    *avail = line_box_available_width_stated(flex_line_used_main_size(container, m->first));
+}
+
+bool flex_cross_size_anonymous_lines_ask(lxb_dom_element_t *container, const FlexLineMember *m)
+{
+    BlockFlowRun seq;
+    LineBoxAvailableWidth avail;
+
+    fx_anonymous_run(container, m, &seq, &avail);
+    return line_box_atomics_ask(container, seq, avail) && line_box_extents_ask(container, seq, avail);
+}
+
 CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLineMember *m,
                                       CssPx *first_baseline, CssPx *last_baseline)
 {
@@ -231,20 +254,11 @@ CssPx flex_cross_size_anonymous_lines(lxb_dom_element_t *container, const FlexLi
     lxb_dom_node_t *first = m->first;
     char nbuf[160];
 
-    DCHECK(m->anonymous, "an anonymous flex item's line boxes were measured for an element item");
-    /* §4's child text sequence as core/layout/block_flow.h's half-open run: `after` is the box-tree member
-       before the sequence (NULL at the container's start) and `end` one past its last text node, as
-       core/layout/flex_line.c hands it to the intrinsic pass. Not `first->prev`: under css-display-3 §2.5's
-       splice that is NULL at the start of a `contents` element's children, which would start the run at the
-       container's own start. */
-    seq.after = box_tree_child_node(box_tree_prev_sibling(container, box_tree_child_of_node(first)));
-    seq.end = m->end;
-    avail = line_box_available_width_stated(flex_line_used_main_size(container, first));
     /* This entry answers synchronously, so it is a drive: the line box asks computed, with what they defer
        computed beneath it, before the reduction reads them, as `block_flow_auto_height` drives its own walk. */
     layout_job_drive_begin(&d);
-    while (!line_box_atomics_ask(container, seq, avail) || !line_box_extents_ask(container, seq, avail))
-        (void)block_flow_drive_deferred(&d);
+    while (!flex_cross_size_anonymous_lines_ask(container, m)) (void)block_flow_drive_deferred(&d);
+    fx_anonymous_run(container, m, &seq, &avail);
     inner = line_box_content_height(container, seq, avail, &any_line_box, first_baseline, last_baseline);
     layout_job_drive_end(&d);
 
