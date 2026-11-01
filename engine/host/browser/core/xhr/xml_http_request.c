@@ -93,9 +93,10 @@
 /* §3's five states, in the order the constants number them. */
 enum { XHR_UNSENT = 0, XHR_OPENED, XHR_HEADERS_RECEIVED, XHR_LOADING, XHR_DONE };
 
-/* §3's `XMLHttpRequestResponseType`, in the order the IDL lists it. */
+/* §3's `XMLHttpRequestResponseType`, in the order the IDL lists it: the setter's declared enumeration, and the
+   name of each `response_type` the getter returns. */
 enum { RT_EMPTY = 0, RT_ARRAYBUFFER, RT_BLOB, RT_DOCUMENT, RT_JSON, RT_TEXT };
-static const char *const RT_NAME[] = { "", "arraybuffer", "blob", "document", "json", "text" };
+IDL_ENUM_VALUES(RT_NAME, "", "arraybuffer", "blob", "document", "json", "text");
 
 typedef struct {
     /* §3's associated values. Every one a flow can write is a JSValue, for the reason the file comment gives. */
@@ -1413,14 +1414,15 @@ static JSValue js_xhr_set_response_type(JSContext *ctx, JSValueConst this_val, J
 
     (void)magic;
     if (!d) return JS_EXCEPTION;
+    /* Declared IDL_ENUM, so the conversion has already ignored a value outside the enumeration (Web IDL §3.7.6)
+       and forked an unknown over its values; the body sees one of RT_NAME. */
     s = JS_ToCString(ctx, val);
     if (!s) return JS_EXCEPTION;
-    for (k = 0; k < (int)(sizeof(RT_NAME) / sizeof(RT_NAME[0])); k++)
+    for (k = 0; RT_NAME[k]; k++)
         if (!strcmp(RT_NAME[k], s)) { found = k; break; }
     JS_FreeCString(ctx, s);
-    /* Web IDL §3.7.6: assigning a value outside an enumeration-typed attribute's enumeration is IGNORED, not a
-       TypeError. That is the type's rule, so it is here rather than in the algorithm. */
-    if (found < 0) return JS_UNDEFINED;
+    DCHECK(found >= 0, "the responseType setter's body was handed a value outside XMLHttpRequestResponseType — "
+                       "the IDL_ENUM conversion ignores such a value before the body runs");
     /* Step 1: "document" is ignored outside a Window. */
     if (found == RT_DOCUMENT && !xhr_global_is_window(ctx)) return JS_UNDEFINED;
     if (d->state == XHR_LOADING || d->state == XHR_DONE)
@@ -3875,7 +3877,8 @@ void xhr_init(JSContext *ctx)
     g_id_override_mime = idl_method_id(ctx, OVERRIDE_ARGS, 1, js_xhr_override_mime_type, 0);
     g_set_timeout_id = idl_setter_id(ctx, IDL_UNSIGNED_LONG, false, js_xhr_set_timeout, 0);
     g_set_with_credentials_id = idl_setter_id(ctx, IDL_BOOLEAN, false, js_xhr_set_with_credentials, 0);
-    g_set_response_type_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_xhr_set_response_type, 0);
+    g_set_response_type_id = idl_setter_id(ctx, IDL_ENUM, false, js_xhr_set_response_type, 0);
+    idl_arg_enum(0, RT_NAME);
     g_response_getter_id = idl_getter_id_step(ctx, &XHR_RESPONSE_DECL, 0);
     g_response_xml_getter_id = idl_getter_id_step(ctx, &XHR_RESPONSE_XML_DECL, 0);
     g_run_stepid = JS_RegisterStepDef(rt, &js_xhr_run_def);
