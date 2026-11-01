@@ -809,23 +809,20 @@ char *result_wfq_json(void) {
     METRIC_SET(all_sites, w.all_sites);
     METRIC_SET(all_codes, w.all_codes);
     {
-        char *rows = strdup("{\"sites\":[");
+        char *rows = strdup("{");
+        /* A census row carries numbers only (extension/bridge.js's resultDocumentRefusal), so a site is the tuple
+           [kind, key's high 32 bits, key's low 32 bits, seen, served, members], keyed by its rank "0".."4". */
         for (int k = 0; k < w.never_top_n && rows; k++) {
-            JsonBuf wb = JSON_BUF_AT_REST;
-            char *where;
-            char *next;
-
-            json_buf_str(&wb, w.never_top[k].where);
-            where = json_buf_take(&wb);
-            next = composef("%s%s{\"kind\":%d,\"key\":\"%016llx\",\"seen\":%lld,\"served\":%lld,"
-                            "\"members\":%ld,\"where\":%s}", rows, k ? "," : "", w.never_top[k].kind,
-                            (unsigned long long)w.never_top[k].key, (long long)w.never_top[k].seen,
-                            (long long)w.never_top[k].served, w.never_top[k].members, where ? where : "\"\"");
-            free(where);
+            char *next = composef("%s%s\"%d\":[%d,%llu,%llu,%lld,%lld,%ld]", rows, k ? "," : "", k,
+                                  w.never_top[k].kind,
+                                  (unsigned long long)(w.never_top[k].key >> 32),
+                                  (unsigned long long)(w.never_top[k].key & 0xffffffffu),
+                                  (long long)w.never_top[k].seen, (long long)w.never_top[k].served,
+                                  w.never_top[k].members);
             free(rows);
             rows = next;
         }
-        never_top = rows ? composef("%s]}", rows) : NULL;
+        never_top = rows ? composef("%s}", rows) : NULL;
         free(rows);
         CHECK(never_top, "result: OOM composing neverTopSites");
         METRIC_SET_OBJECT(never_top_sites, never_top);

@@ -321,7 +321,6 @@ struct FlowSite {
     int64_t served;             /* lifetime: work charged to members while they were dispatched from here */
     double offset;              /* `1/(1 + served/ENGINE_QUANTUM_WORK + seen)`, what every member here reads */
     long members;               /* live members whose `at` names it */
-    char where[160];            /* the source position a fork first stood at it (JS_RunningSiteWhere), else "" */
     /* Its node in its family's site heap, set while it holds an indexed member (`ix_bin`), and in the family's
        tail heap under the same flag (`ix_bm`), its node in the family's never-dispatched heap (`ix_bnin`), the root
        of its members' class treap, and its node in one query's queue. */
@@ -1542,11 +1541,6 @@ void flow_stand_at(Flow *f, int kind, uint64_t key) {
     DCHECK(f != NULL && f->family != NULL && f->at != NULL && (kind == FLOW_SITE_CODE || kind == FLOW_SITE_DRIVE),
            "a code site was stood at by a flow outside the frontier, or with a kind the ledger does not name");
     flow_site_move(f, flow_site_of(f->family, kind, key, f->orphan_seen));
-}
-
-void flow_site_note_where(Flow *f, const char *where) {
-    DCHECK(f != NULL && f->at != NULL && where != NULL, "a site's position was noted for no member or no text");
-    if (!f->at->where[0]) snprintf(f->at->where, sizeof f->at->where, "%s", where);
 }
 
 void flow_set_orphan_seen(Flow *f, int64_t seen) {
@@ -5485,7 +5479,6 @@ static void site_runs(const FlowSite **v, long n, long *sites, long *codes, long
             top->never_top[k].kind = v[i]->kind; top->never_top[k].key = v[i]->key;
             top->never_top[k].seen = v[i]->seen; top->never_top[k].served = v[i]->served;
             top->never_top[k].members = run;
-            top->never_top[k].where = v[i]->where;
             for (; k > 0 && top->never_top[k].members > top->never_top[k - 1].members; k--) {
                 __typeof__(top->never_top[0]) t = top->never_top[k];
                 top->never_top[k] = top->never_top[k - 1]; top->never_top[k - 1] = t;

@@ -1490,7 +1490,7 @@ typedef struct {
        how many distinct code identities (`kind`, `key`) across families, how many of those sites have received
        no service, and the five sites holding the most of them. The same two counts over every member beside. */
     long never_sites, never_codes, never_sites_unserved, all_sites, all_codes;
-    struct { int kind; uint64_t key; int64_t seen, served; long members; const char *where; } never_top[5];
+    struct { int kind; uint64_t key; int64_t seen, served; long members; } never_top[5];
     int never_top_n;
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
@@ -1766,8 +1766,6 @@ void  flow_set_orphan_seen(Flow *f, int64_t seen);
 #define FLOW_SITE_CODE  1
 #define FLOW_SITE_DRIVE 2
 void  flow_stand_at(Flow *f, int kind, uint64_t key);
-/* The source position `f`'s site was first stood at by a fork, kept for the census (WfqCensus's `never_top`). */
-void  flow_site_note_where(Flow *f, const char *where);
 /* The member's optimism denominator in work, `Q*(1 + orphan_seen) + site_served` with Q = ENGINE_QUANTUM_WORK:
    engine.c's rank assertions snapshot it. */
 int64_t flow_optimism_den(const Flow *f);

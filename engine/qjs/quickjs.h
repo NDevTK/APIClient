@@ -3318,8 +3318,6 @@ JS_EXTERN uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn);
    offset, never a pc2line resolution, which makes it reproducible within a BUILD and not across two of them.
    See the definition's named residual for what that costs and what replaces it. */
 JS_EXTERN int JS_RunningSiteHash(JSContext *ctx, uint64_t *out);
-/* The frame JS_RunningSiteHash names, as "address:line:col function pc N" for a reader of a census. */
-JS_EXTERN int JS_RunningSiteWhere(JSContext *ctx, char *buf, size_t n);
 /* The same name for a flow that is not running: the site its suspended chain stands at, the innermost bytecode
    frame of the activation `flow` (a JS_FlowClone currency), or of the parked continuation the pump resumes next
    (JS_ResumeParkedFlow's), whose realm is written to `*realm` so the caller can assert whose it is. Answers 0

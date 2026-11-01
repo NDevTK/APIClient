@@ -5198,12 +5198,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        parent where it stood. */
     {
         uint64_t site;
-        if (parent == flow_running() && JS_RunningSiteHash(ctx, &site)) {
-            char where[160];
-
-            flow_stand_at(parent, FLOW_SITE_CODE, site);
-            if (JS_RunningSiteWhere(ctx, where, sizeof where)) flow_site_note_where(parent, where);
-        }
+        if (parent == flow_running() && JS_RunningSiteHash(ctx, &site)) flow_stand_at(parent, FLOW_SITE_CODE, site);
     }
     /* Unseeded: an arm inherits its parent's sequence (copied below), so seeding would allocate the root
        document's rows onto it and leak them under the copy. */

@@ -117684,35 +117684,6 @@ int JS_RunningSiteHash(JSContext *ctx, uint64_t *out)
     return 0;
 }
 
-/* The same frame JS_RunningSiteHash names, as text a reader can find in the source: the script's address, the line
-   and column find_line_num resolves for the opcode it stands at, and the function's name. */
-int JS_RunningSiteWhere(JSContext *ctx, char *buf, size_t n)
-{
-    JSStackFrame *sf;
-
-    DCHECK(buf != NULL && n > 0, "a call-site position was asked for with nowhere to put it");
-    for (sf = ctx->rt->current_stack_frame; sf != NULL; sf = sf->prev_frame) {
-        JSFunctionBytecode *b;
-        const char *file, *name;
-        int line, col = 0;
-
-        if (sf->is_call_root)
-            continue;
-        b = JS_GetFunctionBytecode(sf->cur_func);
-        if (b == NULL)
-            continue;
-        line = find_line_num(ctx, b, js_frame_pc_pos(sf, b), &col);
-        file = b->filename ? JS_AtomToCString(ctx, b->filename) : NULL;
-        name = get_func_name(ctx, sf->cur_func);
-        snprintf(buf, n, "%s:%d:%d %s pc %u", file ? file : "?", line, col, (name && name[0]) ? name : "<anon>",
-                 (unsigned)js_frame_pc_pos(sf, b));
-        JS_FreeCString(ctx, file);
-        JS_FreeCString(ctx, name);
-        return 1;
-    }
-    return 0;
-}
-
 /* A suspended activation's site, JS_RunningSiteHash's walk over the chain the preempt stashed: innermost first
    (`tramp_top`, then each caller), each frame read where it lives (tramp_live_sf), and the base frame last. */
 static int flow_chain_site_hash(JSRuntime *rt, JSAsyncFunctionState *s, uint64_t *out)
