@@ -47,6 +47,7 @@
 #include "core/html/html_base_element.h"   /* §4.2.3's get an element's target, which step 18 runs */
 #include "core/html/html_dialog.h"
 #include "core/html/html_form.h"
+#include "core/html/html_form_named.h"
 #include "core/html/html_option.h"   /* §4.10.10's SELECTEDNESS, which §4.10.7's algorithm below is the writer of */
 #include "core/html/input_picker.h"
 #include "core/html/input_value.h"
@@ -785,13 +786,18 @@ static JSValue form_members(JSContext *ctx, JSValueConst form_wrap, FormMemberPr
 
 /* §4.10.18.4's `elements` filter: LISTED elements, "with the exception of input elements whose type attribute
    is in the Image Button state, which must, for historical reasons, be excluded from this particular
-   collection". */
+   collection". HTML §4.10.3's named properties take the same exception (html_form_is_named_listed). */
 static bool form_elements_member(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap);
 
     if (html_form_input_state(n) == INPUT_STATE_IMAGE) return false;
     return form_is_listed(ctx, wrap);
+}
+
+bool html_form_is_named_listed(JSContext *ctx, JSValueConst wrap)
+{
+    return form_elements_member(ctx, wrap);
 }
 
 JSValue html_form_submittable_controls(JSContext *ctx, JSValueConst form)
@@ -2033,15 +2039,13 @@ static JSValue form_derive_owner(JSContext *ctx, JSValueConst wrap, const char *
 {
     lxb_dom_node_t *n = node_of(wrap);
 
-    if (form_attr) {
-        /* Step 4 — a listed element with a `form` content attribute. Its ID lookup answering something that is
-           not a form leaves the owner NULL, which is what makes step 5 an "otherwise" on step 4's CONDITION
-           rather than on its result. */
-        if (node_is_connected(n)) {
-            lxb_dom_node_t *hit = form_first_by_id(node_root(n), form_attr, form_attr_len);
-            if (hit && tag_is(hit, "form")) return node_wrap(ctx, hit);
-        }
-        return JS_NULL;
+    if (form_attr && node_is_connected(n) && form_is_listed(ctx, wrap)) {
+        /* Step 4 — "If element is listed, has a form content attribute, and is connected". Its ID lookup
+           answering something that is not a form leaves the owner NULL, which is what makes step 5 an
+           "otherwise" on step 4's condition rather than on its result. An `img`, which is form-associated and
+           not listed, takes step 5 whatever its attributes. */
+        lxb_dom_node_t *hit = form_first_by_id(node_root(n), form_attr, form_attr_len);
+        return hit && tag_is(hit, "form") ? node_wrap(ctx, hit) : JS_NULL;
     }
     {
         lxb_dom_node_t *anc = form_nearest_ancestor(n);   /* step 5 */
@@ -2932,6 +2936,7 @@ void html_form_declare(JSContext *ctx)
     CHECK(!JS_IsException(g_owner_key), "the form-owner slot key allocation failed");
     g_atom_owner = JS_ValueToAtom(ctx, g_owner_key);
     CHECK(g_atom_owner != JS_ATOM_NULL, "the form-owner slot key could not be interned");
+    html_form_named_declare(ctx);   /* §4.10.3's named properties: the class every form element is wrapped with */
     /* §4.10.22.3's own per-form boolean, under a Symbol of its own for the same reason: step 5's
        non-reentrancy is state ON THE FORM, and a page must not be able to see or write it. */
     g_firing_key = JS_NewSymbol(ctx, "firingSubmissionEvents", false);
@@ -3026,6 +3031,7 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
 
 void html_form_free(JSRuntime *rt)
 {
+    html_form_named_free(rt);
     submit_event_free(rt);
     form_data_event_free(rt);
     form_entry_list_free(rt);

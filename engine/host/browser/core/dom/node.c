@@ -78,6 +78,7 @@
    re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
    boundary for the same reason. */
 #include "core/html/custom_elements.h"
+#include "core/html/html_form_named.h"   /* HTML §4.10.3's form wrapper class, a legacy platform object */
 #include "core/html/html_script.h"
 #include "core/html/nonce_attribute.h"   /* §2.5.6's cloning steps, on §4.4 step 3 beside HTML §4.12.1.1's */
 #include "solver/engine.h"
@@ -293,7 +294,27 @@ lxb_dom_node_t *node_of(JSValueConst v)
 {
     JSClassID c = JS_GetClassID(v);
 
-    return JS_GetOpaque(v, g_doc_class_wraps && c == g_type_class[LXB_DOM_NODE_TYPE_DOCUMENT] ? c : g_node_class);
+    if (g_doc_class_wraps && c == g_type_class[LXB_DOM_NODE_TYPE_DOCUMENT]) return JS_GetOpaque(v, c);
+    if (c != 0 && c == html_form_named_class()) return JS_GetOpaque(v, c);
+    return JS_GetOpaque(v, g_node_class);
+}
+
+/* The class `n`'s wrapper is built with: a Document's and an HTML `form` element's carry their legacy platform
+   object internal methods (HTML §3.1.7 and §4.10.3's named properties); every other node is the Node class. */
+static JSClassID node_wrap_class(lxb_dom_node_t *n)
+{
+    size_t len = 0;
+    const lxb_char_t *l;
+
+    if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
+        DCHECK(g_doc_class_wraps, "a Document was wrapped before document_init set its wrapper class");
+        return g_type_class[LXB_DOM_NODE_TYPE_DOCUMENT];
+    }
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML) return g_node_class;
+    l = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
+    if (!l || len != 4 || memcmp(l, "form", 4) != 0) return g_node_class;
+    DCHECK(html_form_named_class() != 0, "a form element was wrapped before html_form_declare minted its class");
+    return html_form_named_class();
 }
 
 /* §4.7: A ShadowRoot IS A DocumentFragment. Lexbor gives a shadow root its own node type — which is what makes
@@ -5369,10 +5390,7 @@ JSValue node_wrap(JSContext *ctx, lxb_dom_node_t *n)
            prototype is resolved OUTSIDE it for that reason and not for tidiness. */
         gen = JS_FlowGen();
         JS_SetFlowGen(0);
-        DCHECK(n->type != LXB_DOM_NODE_TYPE_DOCUMENT || g_doc_class_wraps,
-               "a Document was wrapped before document_init set its wrapper class");
-        obj = JS_NewObjectProtoClass(ctx, proto, n->type == LXB_DOM_NODE_TYPE_DOCUMENT
-                                                     ? g_type_class[LXB_DOM_NODE_TYPE_DOCUMENT] : g_node_class);
+        obj = JS_NewObjectProtoClass(ctx, proto, node_wrap_class(n));
         DCHECK(JS_FlowGen() == 0,
                "the flow generation MOVED inside node_wrap's baseline bracket — restoring the saved number "
                "would put back a value below the live one, and the stamp is the monotonic counter every "

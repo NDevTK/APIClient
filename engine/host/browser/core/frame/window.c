@@ -942,17 +942,19 @@ static bool win_node_within(const lxb_dom_node_t *n, const lxb_dom_node_t *regio
     return false;
 }
 
-static bool win_named_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n)
+static bool win_named_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n, const void *ud)
 {
-    (void)ctx;
+    (void)ctx; (void)ud;
     return collections_window_named_is(el, name, n);
 }
 
 /* A named element standing outside every connected region of unknown markup. */
-static bool win_named_outside_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n)
+static bool win_named_outside_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n,
+                                 const void *ud)
 {
     int nreg = unknown_markup_count(ctx);
 
+    (void)ud;
     if (!collections_window_named_is(el, name, n)) return false;
     for (int r = 0; r < nreg; r++) {
         lxb_dom_node_t *rn;
@@ -999,7 +1001,7 @@ static int win_named_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         s->phase = root ? WN_OUTSIDE : WN_REGION;
     }
     if (s->phase == WN_OUTSIDE) {
-        if (named_walk_next(ctx, &s->walk, root, win_named_outside_is, name, n)) goto rest;
+        if (named_walk_next(ctx, &s->walk, root, win_named_outside_is, name, n, NULL)) goto rest;
         if (s->walk.count) {
             s->phase = WN_VALUE;
             if (unknown_markup_count(ctx) == 0) goto value;
@@ -1020,7 +1022,7 @@ static int win_named_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         if (s->phase == WN_REGION) {
             if (!concolic_example_present(markup)) {
                 s->real = JS_OUTCOME_REAL_UNSTATED;
-            } else if (named_walk_next(ctx, &s->walk, region, win_named_is, name, n)) {
+            } else if (named_walk_next(ctx, &s->walk, region, win_named_is, name, n, NULL)) {
                 JS_FreeValue(ctx, markup);
                 goto rest;
             } else {
@@ -1043,7 +1045,7 @@ static int win_named_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         goto answer;
     }
     DCHECK(s->phase == WN_VALUE && root != NULL, "§7.2.2.3's lookup left its phases with no name found");
-    if (named_walk_next(ctx, &s->walk, root, win_named_is, name, n)) goto rest;
+    if (named_walk_next(ctx, &s->walk, root, win_named_is, name, n, NULL)) goto rest;
 value:
     v = win_named_value_of(ctx, name, s->walk.first, s->walk.count);
     goto answer;

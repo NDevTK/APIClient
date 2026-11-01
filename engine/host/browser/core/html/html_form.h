@@ -60,6 +60,10 @@ void html_form_textarea_set_raw_value(JSContext *ctx, JSValueConst wrap, JSValue
 /* THE ELEMENT'S FORM OWNER — the form element's wrapper, or JS_NULL. OWNED. */
 JSValue html_form_owner_of(JSContext *ctx, JSValueConst wrap);
 
+/* HTML §4.10.3's first candidates for a form's named property: a listed element other than an `input` in the
+   Image Button state, the same exception the `elements` filter takes. The form owner is asked apart. */
+bool html_form_is_named_listed(JSContext *ctx, JSValueConst wrap);
+
 /* COULD this element be form-associated at all — asked of the TAG, with NO WRAPPER. §4.10.2's categories are
    all built-in tags plus custom elements, so this drops nothing they contain; what it buys is that a tree walk
    over a page's own markup does not materialise a wrapper per node just to find out that a `<div>` has no form

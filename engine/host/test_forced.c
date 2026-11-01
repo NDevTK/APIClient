@@ -16467,37 +16467,63 @@ TF_UNIT void probes_indexgate(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `docnamed` document (fixture/docnamed.h): each reads one concrete answer of the Document's
-   named getter, and reads the opposite answer absent too. */
+/* The rows of the `docnamed` document (fixture/docnamed.h): each reads one concrete answer of the Document's or a
+   form's named getter, and reads the opposite answer absent too. */
 TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
-    static const struct { const char *row, *param, *want, *other, *what; } R[] = {
-        { "dn-override", "ov", "true", "false", "an img named getElementById does not shadow the Document member" },
-        { "dn-div-none", "qs", "function", "object", "a div's name shadowed a Document member: a div is no named element" },
-        { "dn-collection", "coll", "2", "-1", "two elements sharing a name did not answer a two-member HTMLCollection" },
-        { "dn-object-id", "obj", "true", "false", "an object element is not named by its id" },
-        { "dn-img-bare-none", "bare", "undefined", "object", "an img with an id and no name was named by its id" },
-        { "dn-img-id", "img", "true", "false", "an img with an id beside a non-empty name is not named by its id" },
-        { "dn-location", "loc", "string", "undefined", "an img named location shadowed the unforgeable location" },
-        { "dn-location-own", "locown", "true", "false",
+    static const struct { const char *row, *addr, *param, *want, *other, *what; } R[] = {
+        { "dn-override", "/api/docnamed", "ov", "true", "false",
+          "an img named getElementById does not shadow the Document member" },
+        { "dn-div-none", "/api/docnamed", "qs", "function", "object",
+          "a div's name shadowed a Document member: a div is no named element" },
+        { "dn-collection", "/api/docnamed", "coll", "2", "-1",
+          "two elements sharing a name did not answer a two-member HTMLCollection" },
+        { "dn-object-id", "/api/docnamed", "obj", "true", "false", "an object element is not named by its id" },
+        { "dn-img-bare-none", "/api/docnamed", "bare", "undefined", "object",
+          "an img with an id and no name was named by its id" },
+        { "dn-img-id", "/api/docnamed", "img", "true", "false",
+          "an img with an id beside a non-empty name is not named by its id" },
+        { "dn-location", "/api/docnamed", "loc", "string", "undefined",
+          "an img named location shadowed the unforgeable location" },
+        { "dn-location-own", "/api/docnamed", "locown", "true", "false",
           "location is not a non-configurable own property of the Document, or is still on Document.prototype" },
-        { "dn-no-delete", "del", "false", "true", "a named property with no deleter was deleted" },
-        { "dn-own-key", "key", "true", "false", "a supported property name is not an own key" },
-        { "dn-desc", "desc", "true", "false", "a Document named property's descriptor is not §3.9.1's" },
-        { "wn-desc", "wdesc", "true", "false", "a Window named property's descriptor is not §3.9.1's, unenumerable" },
-        { "wn-global", "wglobal", "true", "false", "a bare global name did not reach the Window's named access" },
-        { "dn-set-ignores-named", "dset", "true", "false",
+        { "dn-no-delete", "/api/docnamed", "del", "false", "true", "a named property with no deleter was deleted" },
+        { "dn-own-key", "/api/docnamed", "key", "true", "false", "a supported property name is not an own key" },
+        { "dn-desc", "/api/docnamed", "desc", "true", "false",
+          "a Document named property's descriptor is not §3.9.1's" },
+        { "wn-desc", "/api/docnamed", "wdesc", "true", "false",
+          "a Window named property's descriptor is not §3.9.1's, unenumerable" },
+        { "wn-global", "/api/docnamed", "wglobal", "true", "false",
+          "a bare global name did not reach the Window's named access" },
+        { "dn-set-ignores-named", "/api/docnamed", "dset", "true", "false",
           "a [[Set]] on the Document consulted its named properties (Web IDL §3.9.2 ignores them)" },
-        { "wn-set", "wset", "true", "false", "a write over a Window named property did not define on the Window" },
+        { "wn-set", "/api/docnamed", "wset", "true", "false",
+          "a write over a Window named property did not define on the Window" },
+        { "fm-override", "/api/formnamed", "ov", "true", "false",
+          "an input named action does not shadow HTMLFormElement's action ([LegacyOverrideBuiltIns])" },
+        { "fm-image-button-none", "/api/formnamed", "ib", "undefined", "object",
+          "an input in the Image Button state answered a form's named property" },
+        { "fm-not-listed-none", "/api/formnamed", "div", "undefined", "object",
+          "a div, no listed element, answered a form's named property" },
+        { "fm-img", "/api/formnamed", "pic", "true", "false", "an img the form owns did not answer its name" },
+        { "fm-form-attr", "/api/formnamed", "ext", "true", "false",
+          "a control outside the form whose form attribute names it did not answer its name" },
+        { "fm-past", "/api/formnamed", "past", "true", "false",
+          "a renamed control did not answer its old name from the past names map" },
+        { "fm-desc", "/api/formnamed", "desc", "true", "false",
+          "a form named property's descriptor is not §3.9.1's, unenumerable and not writable" },
+        { "fm-miss", "/api/formnamed", "inv", "undefined", "object", "a name nothing carries answered a value" },
     };
     Probe rows[sizeof R / sizeof R[0]];
     for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {
         const char *why = NULL;
         int tt = 1;
+        char quoted[64];
 
-        fold_row(&tt, &why, !!strstr(js, "\"/api/docnamed\""), "NOT REACHED: there is no /api/docnamed record");
-        fold_row(&tt, &why, param_value_is(js, "/api/docnamed", R[i].param, R[i].want) &&
-                            !param_value_is(js, "/api/docnamed", R[i].param, R[i].other), R[i].what);
-        rows[i] = (Probe){ R[i].row, tt, "/api/docnamed", SESS_EXPLORE, why };
+        snprintf(quoted, sizeof quoted, "\"%s\"", R[i].addr);
+        fold_row(&tt, &why, !!strstr(js, quoted), "NOT REACHED: there is no record of the row's address");
+        fold_row(&tt, &why, param_value_is(js, R[i].addr, R[i].param, R[i].want) &&
+                            !param_value_is(js, R[i].addr, R[i].param, R[i].other), R[i].what);
+        rows[i] = (Probe){ R[i].row, tt, R[i].addr, SESS_EXPLORE, why };
     }
     probes_append(tab, n, rows, (int)(sizeof R / sizeof R[0]));
 }

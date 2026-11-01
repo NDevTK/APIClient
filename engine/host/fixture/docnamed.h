@@ -8,6 +8,9 @@
    unenumerable and writable), and a bare global name reaches the Window's. A [[Set]] on the Document ignores its
    named properties (Web IDL §3.9.2), so `document.title = v` runs the setter an img named title shadows for a
    read; one on the Window takes WindowProperties' writable descriptor and defines on the Window.
+   A form's named getter (HTML §4.10.3, [LegacyOverrideBuiltIns]) answers `<input name=action>` over the
+   `action` member, an `img` it owns and a control whose form attribute names it, never an Image Button or a
+   div, a renamed control by its old name from the past names map, with an unenumerable, unwritable descriptor.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_DOCNAMED_H
@@ -22,6 +25,8 @@ static const char HTML_DOCNAMED[] =
     "<form name='dnDup'></form><img name='dnDup' src='/dn2.png'>"
     "<object id='dnObj'></object><img id='dnBare'><img id='dnImg' name='dnImgName' src='/dn3.png'>"
     "<img name='location' src='/dn4.png'><img name='title' src='/dn5.png'><img id='wnSetMe'>"
+    "<form id='fmA' action='/api/fmact'><input name='action'><input type='image' name='fmIb'><div id='fmDiv'></div>"
+    "<img name='fmPic' src='/dn6.png'><input id='fmOld' name='fmOld'></form><input name='fmExt' form='fmA'>"
     "<script>"
     "var dnOv = document.getElementById instanceof HTMLImageElement;"
     "var dnQs = typeof document.querySelector;"
@@ -48,6 +53,18 @@ static const char HTML_DOCNAMED[] =
     "fetch('/api/docnamed?ov=' + dnOv + '&qs=' + dnQs + '&coll=' + dnColl + '&obj=' + dnObj + '&bare=' + dnBare +"
     "      '&img=' + dnImg + '&loc=' + dnLoc + '&locown=' + dnLocOwn + '&del=' + dnDel + '&key=' + dnKey +"
     "      '&desc=' + dnDesc + '&wdesc=' + wnDesc + '&wglobal=' + wnGlobal + '&dset=' + dnSet + '&wset=' + wnSet);"
+    "</script>"
+    "<script>"
+    "var fmA = document.getElementById('fmA');"
+    "var fmOv = fmA.action instanceof HTMLInputElement;"
+    "var fmIb = typeof fmA.fmIb, fmDiv = typeof fmA.fmDiv, fmInv = typeof fmA.fmNoSuch;"
+    "var fmPic = fmA.fmPic instanceof HTMLImageElement, fmExt = fmA.fmExt instanceof HTMLInputElement;"
+    "var fmOldEl = fmA.fmOld; fmOldEl.name = 'fmNew'; fmOldEl.id = 'fmNew2';"
+    "var fmPast = fmA.fmOld === fmOldEl;"
+    "var fmD = Object.getOwnPropertyDescriptor(fmA, 'action');"
+    "var fmDesc = !!fmD && !fmD.enumerable && fmD.configurable && !fmD.writable && fmD.value instanceof HTMLInputElement;"
+    "fetch('/api/formnamed?ov=' + fmOv + '&ib=' + fmIb + '&div=' + fmDiv + '&pic=' + fmPic + '&ext=' + fmExt +"
+    "      '&past=' + fmPast + '&desc=' + fmDesc + '&inv=' + fmInv);"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

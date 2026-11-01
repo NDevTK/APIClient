@@ -76,9 +76,9 @@ bool document_named_element_is(lxb_dom_element_t *el, const char *name, size_t n
     return t == DN_OBJECT || (nv && nl > 0);    /* an object by its id; an img by its id with a non-empty name */
 }
 
-static bool dn_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n)
+static bool dn_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n, const void *ud)
 {
-    (void)ctx;
+    (void)ctx; (void)ud;
     return document_named_element_is(el, name, n);
 }
 
@@ -178,7 +178,7 @@ static int dn_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     doc = dn_document(argv[0]);
     name = JS_ToCStringLen(ctx, &n, argv[1]);
     if (!name) return JS_STEP_ABRUPT;
-    if (named_walk_next(ctx, s, doc, dn_is, name, n)) { JS_FreeCString(ctx, name); return JS_STEP_YIELD; }
+    if (named_walk_next(ctx, s, doc, dn_is, name, n, NULL)) { JS_FreeCString(ctx, name); return JS_STEP_YIELD; }
     if (op == 1) *presult = JS_NewBool(ctx, s->count > 0);
     else *presult = dn_value_of(ctx, argv[0], name, s->first, s->count);
     JS_FreeCString(ctx, name);
