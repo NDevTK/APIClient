@@ -12,6 +12,26 @@ static const char HTML_IDLINDEX[] =
     "<body>"
     "<script>"
 
+    /* WEB IDL §3.7.9 STEP 1.1 ON TWO ELEMENT INTERFACES. HTML §4.10.3 and §4.10.7 declare indexed property getters
+       on HTMLFormElement and HTMLSelectElement, so `[...form]` walks the form's controls (2 here), `for…of` over
+       a select walks its options (3), and `new URLSearchParams(form)` takes the sequence arm and throws
+       TypeError at the first control, which is not iterable. Each read is caught so an absent @@iterator
+       reports itself rather than ending the document. `i` asks both prototypes and NodeList's for the realm's
+       own %Array.prototype.values%. First in the script, so no forked statement stands between it and boot. */
+    "var _itf = document.createElement('form');"
+    "var _iti = document.createElement('input'); _iti.name = 'ia'; _itf.appendChild(_iti);"
+    "var _its = document.createElement('select');"
+    "for (var _itk = 0; _itk < 3; _itk++) {"
+    " var _ito1 = document.createElement('option'); _ito1.textContent = 'o' + _itk; _its.appendChild(_ito1); }"
+    "_itf.appendChild(_its); document.body.appendChild(_itf);"
+    "var _itn; try { _itn = '' + [..._itf].length; } catch (_ite) { _itn = _ite.name; }"
+    "var _ito; try { _ito = 0; for (var _itx of _its) { if (_itx.localName === 'option') _ito++; }"
+    " _ito = '' + _ito; } catch (_ite) { _ito = _ite.name; }"
+    "var _itu; try { _itu = 'ok:' + String(new URLSearchParams(_itf)); } catch (_ite) { _itu = _ite.name; }"
+    "var _itv = Array.prototype.values;"
+    "var _itid = [HTMLFormElement, HTMLSelectElement, NodeList].map(function (c) {"
+    " return c.prototype[Symbol.iterator] === _itv; }).join('');"
+    "fetch('/api/iterable?f=' + _itn + '&o=' + _ito + '&u=' + _itu + '&i=' + _itid);"
 
     /* ONE UNKNOWN `unsigned long index` THROUGH TWO MEMBERS OF core/idl_index_arg.c's FAMILY — whether a fork
        key names the PREDICATE or the SITE. Each `item(index)` decomposes into the elimination chain

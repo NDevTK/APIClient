@@ -19963,7 +19963,37 @@ TF_UNIT void probes_idlindex(const char *js, Probe *tab, int *n) {
              "`count == 2` — so the COUNT chain did not run and §4.10's second `unsigned long` was answered "
              "from step 3's clamp alone. That operand names no position in any collection, which is exactly "
              "the case core/idl_index_arg.c's banner had to state before it could be a member");
+    /* WEB IDL §3.7.9 STEP 1.1 ON HTMLFormElement AND HTMLSelectElement, whose indexed getters HTML §4.10.3 and
+       §4.10.7 declare: their prototypes carry %Array.prototype.values% as @@iterator (idl_interface_tag runs the
+       step from browser/idl_indexed_getters.h), and their wrappers answer the indices it walks. One row per
+       fact, each behind the same reach clause, so every fact is read on its own. */
+    const int iter_reached = !!strstr(js, "\"/api/iterable\"");
+    static const char ITER_UNREACHED[] = "NOT REACHED: there is no /api/iterable record, and the statement is "
+                                         "the script's first, so boot itself did not reach it";
+    const char *iterid_why = NULL, *iterform_why = NULL, *itersel_why = NULL, *iterusp_why = NULL;
+    int iterid_tt = 1, iterform_tt = 1, itersel_tt = 1, iterusp_tt = 1;
+    fold_row(&iterid_tt, &iterid_why, iter_reached, ITER_UNREACHED);
+    fold_row(&iterid_tt, &iterid_why, param_value_is(js, "/api/iterable", "i", "truetruetrue"),
+             "HTMLFormElement.prototype, HTMLSelectElement.prototype or NodeList.prototype does not carry the "
+             "realm's own %Array.prototype.values% as its @@iterator — Web IDL §3.7.9 step 1.1, which "
+             "idl_interface_tag performs for every row of browser/idl_indexed_getters.h");
+    fold_row(&iterform_tt, &iterform_why, iter_reached, ITER_UNREACHED);
+    fold_row(&iterform_tt, &iterform_why, param_value_is(js, "/api/iterable", "f", "2"),
+             "`[...form]` over a form owning an input and a select did not answer two — the form's indexed "
+             "getter (HTML §4.10.3, over the `elements` list) or its @@iterator is missing");
+    fold_row(&itersel_tt, &itersel_why, iter_reached, ITER_UNREACHED);
+    fold_row(&itersel_tt, &itersel_why, param_value_is(js, "/api/iterable", "o", "3"),
+             "`for…of` over a select holding three options did not walk three options — the select's indexed "
+             "getter (HTML §4.10.7, over the list of options) or its @@iterator is missing");
+    fold_row(&iterusp_tt, &iterusp_why, iter_reached, ITER_UNREACHED);
+    fold_row(&iterusp_tt, &iterusp_why, param_value_is(js, "/api/iterable", "u", "TypeError"),
+             "`new URLSearchParams(form)` did not throw TypeError: an iterable form takes the sequence arm, "
+             "and its first control is not a sequence. Chromium throws TypeError here");
     const Probe rows[] = {
+        { "idl-iterable-intrinsic", iterid_tt, "/api/iterable", SESS_EXPLORE, iterid_why },
+        { "idl-iterable-form-spread", iterform_tt, "/api/iterable", SESS_EXPLORE, iterform_why },
+        { "idl-iterable-select-forof", itersel_tt, "/api/iterable", SESS_EXPLORE, itersel_why },
+        { "idl-iterable-urlsp-form", iterusp_tt, "/api/iterable", SESS_EXPLORE, iterusp_why },
         { "idl-index-key-one-predicate", idxkey_tt, "/api/idxkey", SESS_EXPLORE, idxkey_why },
         { "outcome-key-one-predicate", pkkey_tt, "/api/pkkey", SESS_EXPLORE, pkkey_why },
         { "idl-index-one-element-two-members", nnmkey_tt, "/api/nnmkey", SESS_EXPLORE, nnmkey_why },
