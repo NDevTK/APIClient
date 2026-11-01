@@ -1222,6 +1222,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cascfork.h"
 #include "fixture/cascforkview.h"
 #include "fixture/scrollflex.h"
+#include "fixture/flexnest.h"
+#include "fixture/gridnest.h"
 #include "fixture/gridtemplate.h"
 #include "fixture/calctree.h"
 #include "fixture/svgattr.h"
@@ -1826,6 +1828,10 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "cascfork", HTML_CASCFORK },
     { "cascforkview", HTML_CASCFORKVIEW },
     { "scrollflex", HTML_SCROLLFLEX },
+    { "flexnest3", HTML_FLEXNEST3 },
+    { "flexnest6", HTML_FLEXNEST6 },
+    { "gridnest2", HTML_GRIDNEST2 },
+    { "gridnest4", HTML_GRIDNEST4 },
     { "gridtemplate", HTML_GRIDTEMPLATE },
     { "calctree", HTML_CALCTREE },
     { "svgattr", HTML_SVGATTR },
@@ -16224,6 +16230,47 @@ TF_UNIT void probes_scrollflex(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the nested flex and grid documents (fixture/flexnest.h, fixture/gridnest.h), one per document. */
+TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *addr, *key, *want, *why; } R[] = {
+        { "flex-nest-3", "/api/flexnest3", "h", "10", "css-flexbox-1 §9.6: three nested rows of 10px lines are not 10px tall" },
+        { "flex-nest-3", "/api/flexnest3", "l", "15", "css-flexbox-1 §9.7: the innermost 10px item does not start 15px in" },
+        { "flex-nest-3", "/api/flexnest3", "t", "0", "css-flexbox-1 §9.6: the innermost 10px item is not at its line's top" },
+        { "flex-nest-6", "/api/flexnest6", "h", "10", "css-flexbox-1 §9.6: six nested rows of 10px lines are not 10px tall" },
+        { "flex-nest-6", "/api/flexnest6", "l", "30", "css-flexbox-1 §9.7: the innermost 10px item does not start 30px in" },
+        { "flex-nest-6", "/api/flexnest6", "t", "0", "css-flexbox-1 §9.6: the innermost 10px item is not at its line's top" },
+        { "grid-nest-2", "/api/gridnest2", "w", "10", "CSS 2.2 §10.3.9: the outer inline-block is not its inner grid's 10px" },
+        { "grid-nest-2", "/api/gridnest2", "l", "0", "css-grid-1 §11: the innermost square does not start at the left edge" },
+        { "grid-nest-2", "/api/gridnest2", "sw", "200", "css-grid-1 §11.8: the outer grid's scrolling area is not 200px wide" },
+        { "grid-nest-4", "/api/gridnest4", "w", "10", "CSS 2.2 §10.3.9: the outer inline-block is not its inner grid's 10px" },
+        { "grid-nest-4", "/api/gridnest4", "l", "0", "css-grid-1 §11: the innermost square does not start at the left edge" },
+        { "grid-nest-4", "/api/gridnest4", "sw", "200", "css-grid-1 §11.8: the outer grid's scrolling area is not 200px wide" },
+    };
+    static const char *const ROWS[] = { "flex-nest-3", "flex-nest-6", "grid-nest-2", "grid-nest-4" };
+    Probe rows[COUNTOF(ROWS)];
+    unsigned i, j;
+
+    for (j = 0; j < COUNTOF(ROWS); j++) {
+        const char *why = NULL, *addr = NULL;
+        int tt = 1;
+
+        for (i = 0; i < COUNTOF(R); i++) {
+            char quoted[64];
+
+            if (strcmp(R[i].row, ROWS[j]) != 0) continue;
+            if (addr == NULL) {
+                addr = R[i].addr;
+                snprintf(quoted, sizeof quoted, "\"%s\"", addr);
+                fold_row(&tt, &why, !!strstr(js, quoted),
+                         "NOT REACHED: there is no record of the document's address, so it aborted before its fetch");
+            }
+            fold_row(&tt, &why, param_value_is(js, R[i].addr, R[i].key, R[i].want), R[i].why);
+        }
+        rows[j] = (Probe){ ROWS[j], tt, addr, SESS_EXPLORE, why };
+    }
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `gridtemplate` document (fixture/gridtemplate.h); Chrome 155.0.8059.84 and Firefox 158.0.1
    give every value they expect. */
 TF_UNIT void probes_gridtemplate(const char *js, Probe *tab, int *n) {
@@ -23813,6 +23860,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_cascfork(js, probes, &np);
     probes_cascforkview(js, probes, &np);
     probes_scrollflex(js, probes, &np);
+    probes_layoutnest(js, probes, &np);
     probes_gridtemplate(js, probes, &np);
     probes_calctree(js, probes, &np);
     probes_svgattr(js, probes, &np);
