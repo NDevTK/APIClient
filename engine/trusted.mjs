@@ -2106,6 +2106,21 @@ async function main() {
        THE PAYLOAD IS ASSERTED TO PARSE AND NEVER SWALLOWED, on the same ground the `@QUANTUM` arm above
        states: these composers speak one JSON grammar, so a payload this zone cannot read is the two grammars
        having parted and is a failure rather than a line to drop. */
+    /* A dev build's closing heap walk (solver/engine.c's engine_session_close, composed by result.c's
+       result_heap_walk_json): written once, at rest, before the session's `@RESULT`. It is not a census row,
+       so it is parsed, echoed and read by nothing here. */
+    if (line.startsWith('@HEAPWALK ')) {
+      let w;
+      try { w = JSON.parse(line.slice('@HEAPWALK '.length)); }
+      catch (err) {
+        throw new Error(`instance [${e.tag}] wrote a \`@HEAPWALK\` whose payload will not parse: ` +
+                        `${line.slice(0, 200)} (${err.message})`);
+      }
+      if (w === null || typeof w !== 'object' || Array.isArray(w))
+        throw new Error(`instance [${e.tag}] wrote a \`@HEAPWALK\` that is not an object: ${line.slice(0, 200)}`);
+      console.error(`[trusted] [${e.tag}] ${line}`);
+      return;
+    }
     for (const marker of CENSUS_MARKERS) {
       if (!line.startsWith(marker + ' ')) continue;
       const payload = line.slice(marker.length + 1);

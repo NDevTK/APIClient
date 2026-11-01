@@ -58,14 +58,24 @@ var _wire = (function () {
      spends on the network; a process host (engine/trusted.mjs) hands this realm its own. */
   var relay = typeof chrome === "object" && chrome !== null && !!chrome.runtime &&
               typeof chrome.runtime.connect === "function";
-  return function _wire(href, init) {
+  function sent(href, init) {
     if (relay) return _wireRelay(href, init);
     CHECK(typeof platformFetch === "function",
           "safeFetch spent a request in a realm that was given no fetch — a policy-only host loads this file " +
           "to read its decisions, and reaching the wire there means a decision it asked about fired");
     return platformFetch.call(globalThis, href, init);
+  }
+  /* Both wires reject a network error with a TypeError (Fetch §5.6); each is recorded, so the chokepoint
+     tells the network's answer from a defect of its own. By name: a process host's fetch is another realm's. */
+  return function _wire(href, init) {
+    return sent(href, init).then(null, function (e) {
+      RETHROW_FATAL(e);
+      if (e !== null && typeof e === "object" && e.name === "TypeError") _wireNetworkErrors.add(e);
+      throw e;
+    });
   };
 })();
+var _wireNetworkErrors = new WeakSet();
 
 /* Fetch §2.2.3 "Statuses"' null body statuses, whose Response has no body. */
 var _NULL_BODY_STATUSES = [101, 103, 204, 205, 304];
@@ -2280,6 +2290,17 @@ async function safeFetch(url, opts) {
          sent. */
       _sent = await _speakAs(_identity, _urlList, _method, mode, destination, _cookies, _isPageAct(_signalFacts),
                              _preflight ? _unsafeNames : null, null, init, async function (speak) {
+        /* A wire that rejects is Fetch §5.6's network error ("reject p with a TypeError"), answered as this
+           chokepoint's network refusal like every other one; an aborted send rejects to its asker, which
+           withdrew it. */
+        try { return await send(speak); }
+        catch (e) {
+          if (!_wireNetworkErrors.has(e) || (init.signal && init.signal.aborted)) throw e;
+          return { refusal: _refused("network", "network-error:" + e.message +
+                                     (e.cause === undefined ? "" : ":" + String(e.cause)), [parsed.href], {}) };
+        }
+      });
+      async function send(speak) {
         if (_preflight) {
           var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
                                          opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight,
@@ -2290,7 +2311,7 @@ async function safeFetch(url, opts) {
         if (_answered) return { resp: httpCacheResponse(_stored) };
         init.speakAs = speak === null ? null : speak.request;
         return await _wireSend(_current.href, init, _sendFacts);
-      });
+      }
       if (_sent.refusal) return _sent.refusal;
       if (_cache !== null && !_answered) {
         /* A 304 to a validation is answered from the freshened entry (§4.6: "Set response to storedResponse");
