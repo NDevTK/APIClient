@@ -14438,6 +14438,11 @@ TF_UNIT void probes_pagewrite(const char *js, Probe *tab, int *n) {
     fold_row(&same_tt, &same_why, !strstr(js, "\"/api/pw-a3\""),
              "a /api/pw-a3 record exists: `s.b` was read as an assumed unknown in the unit that wrote it, where "
              "run-to-completion leaves no code that could have changed it");
+    fold_row(&same_tt, &same_why,
+             emitted_record_graded_has(js, "/api/pw-b4", "derived", "\"door\":\"fetch\"") &&
+                 !strstr(js, "\"/api/pw-a4\""),
+             "two listeners of one `load` dispatch did not read as one unit: /api/pw-a4 exists or no derived "
+             "/api/pw-b4 — HTML dispatches an event's listeners inside one task");
     fold_row(&cross_tt, &cross_why,
              emitted_record_graded_has(js, "/api/pw-b1", "derived", "\"door\":\"fetch\"") &&
                  emitted_record_graded_has(js, "/api/pw-b2", "derived", "\"door\":\"fetch\""),
