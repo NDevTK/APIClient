@@ -1797,6 +1797,19 @@ static lxb_dom_element_t *uv_grid_item_container(lxb_dom_element_t *el)
     return box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
 }
 
+/* css-grid-1 §6.2 "Grid Item Sizing"'s partition of a grid item's inline-axis self-alignment for an automatic
+   size: `normal` and `stretch` take the stretch-fit size, and "all other values" size the item as fit-content.
+   `justify-self: auto` is `container`'s `justify-items` (css-align-3 §6.1), whose `legacy` alone behaves as
+   `normal`. One predicate for the width (`uv_grid_item_auto_width`) and for the ask of its operands. */
+static bool uv_grid_item_fits_content(lxb_dom_element_t *el, lxb_dom_element_t *container)
+{
+    CssAlign self = css_computed_align(el, "justify-self");
+
+    if (self.value == CSS_KEYWORD_AUTO) self = css_computed_align(container, "justify-items");
+    return !(self.value == CSS_KEYWORD_NORMAL || self.value == CSS_KEYWORD_STRETCH ||
+             (self.value == CSS_KEYWORD_LEGACY && !self.legacy));
+}
+
 /* THE CONTAINING BLOCK'S WIDTH — §10.1's first case answered by the viewport, its second by the CONTENT EDGE
    of the ancestor box, and §17.4's wrapper by §17.4's own sentence.
    ASKED OF THE PASS FIRST, FOR core/layout/flow_placement.h's REASON AND NOT AS AN OPTIMISATION OF THIS
@@ -2005,11 +2018,14 @@ bool used_value_width_ask(lxb_dom_element_t *el)
         return intrinsic_inline_sizes_ask(table_box_kind_generates_table_box(uv_table_box_kind(el))
                                               ? el : table_box_table_of(el));
     case UV_BOX_ITEM: {
-        /* A grid item's width is its column's, whose operands are every item's intrinsic sizes; a `row` flex
-           item's is its line's §9.7 used main size (`uv_flex_item_main_size`), whose operands are its siblings'. */
+        /* A grid item's width is its column's, whose operands are every item's intrinsic sizes, and a fit-content
+           item's `auto` width reads its own too; a `row` flex item's is its line's §9.7 used main size
+           (`uv_flex_item_main_size`), whose operands are its siblings'. */
         lxb_dom_element_t *grid = uv_grid_item_container(el), *flex;
 
-        if (grid != NULL) return grid_track_columns_ask(grid);
+        if (grid != NULL)
+            return grid_track_columns_ask(grid) &&
+                   (!uv_len_is_auto(width) || !uv_grid_item_fits_content(el, grid) || intrinsic_inline_sizes_ask(el));
         flex = uv_flex_item_container(el, UV_BOX_ITEM);
         return flex == NULL || flex_container_axis_is_vertical(flex, FLEX_AXIS_MAIN) || flex_line_lines_ask(flex);
     }
@@ -3642,12 +3658,14 @@ static CssPx uv_abs_exposed_of(lxb_dom_element_t *el, CssPx content, UvSurround 
     return css_px_add(content, uv_surround_total(s));
 }
 
-/* CSS 2.1 §10.3.7's shrink-to-fit over ITS OWN available width — "calculation of the shrink-to-fit width is
-   similar
+/* The shrink-to-fit width over a caller's available width — CSS 2.1 §10.3.7's "calculation of the shrink-to-fit
+   width is similar
    to calculating the width of a table cell using the automatic table layout algorithm … then the shrink-to-fit
    width is: min(max(preferred minimum width, available width), preferred width)". The available width is the
-   caller's, because it is the only term that differs from §10.3.5's and it differs per rule. */
-static CssPx uv_abs_shrink_to_fit(lxb_dom_element_t *el, CssPx available)
+   caller's, because it is the only term that differs from §10.3.5's: §10.3.7's differs per rule, and css-grid-1
+   §6.2's fit-content (css-sizing-3 §2.1's fit-content size, "called the “shrink-to-fit” width in
+   CSS2.1§10.3.5") is the grid area's. */
+static CssPx uv_shrink_to_fit_over(lxb_dom_element_t *el, CssPx available)
 {
     IntrinsicInlineSizes in = intrinsic_inline_sizes(el);
 
@@ -3868,7 +3886,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
             r.before = uv_abs_static_position(el, vertical, false);
             content = vertical
                           ? uv_abs_auto_height(el, size_len)
-                          : uv_abs_shrink_to_fit(
+                          : uv_shrink_to_fit_over(
                                 el, css_px_sub(css_px_sub(css_px_sub(free_space, r.before), r.m_before),
                                                r.m_after));
             r.after = css_px_sub(css_px_sub(css_px_sub(css_px_sub(free_space, r.before), r.m_before), content),
@@ -3876,7 +3894,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
         } else {
             /* "…otherwise, set `right` to the static position and apply rule number one below." */
             r.after = uv_abs_static_position(el, false, true);
-            content = uv_abs_shrink_to_fit(
+            content = uv_shrink_to_fit_over(
                 el, css_px_sub(css_px_sub(css_px_sub(free_space, r.after), r.m_before), r.m_after));
             r.before = css_px_sub(css_px_sub(css_px_sub(css_px_sub(free_space, r.m_before), content),
                                              r.m_after),
@@ -3955,7 +3973,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
                'left' (in case 1) or 'right' (in case 3) to 0" — so the term taken out for THIS rule's `auto`
                offset is a literal zero and `right` is declared. */
             content = vertical ? uv_abs_auto_height(el, size_len)
-                               : uv_abs_shrink_to_fit(el, css_px_sub(css_px_sub(free_space, fixed), r.after));
+                               : uv_shrink_to_fit_over(el, css_px_sub(css_px_sub(free_space, fixed), r.after));
             r.before = css_px_sub(css_px_sub(css_px_sub(free_space, fixed), content), r.after);
         } else if (a_before && a_after) {
             /* Rule 2: "`left` and `right` are `auto` and `width` is not `auto`, then if the `direction`
@@ -3977,7 +3995,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
                shrink-to-fit. Then solve for `right`", over the available width "found by solving for `width`
                after setting … `right` (in case 3) to 0". */
             content = vertical ? uv_abs_auto_height(el, size_len)
-                               : uv_abs_shrink_to_fit(el, css_px_sub(css_px_sub(free_space, fixed), r.before));
+                               : uv_shrink_to_fit_over(el, css_px_sub(css_px_sub(free_space, fixed), r.before));
             r.after = css_px_sub(css_px_sub(css_px_sub(free_space, r.before), fixed), content);
         } else if (a_before) {
             /* Rule 4: "`left` is `auto`, `width` and `right` are not `auto`, then solve for `left`." */
@@ -4008,8 +4026,8 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
    defined by its grid area", and for `normal` or `stretch` self-alignment a non-replaced item takes "the
    inline size calculation rules for non-replaced boxes (defined in CSS 2 § 10.3.3 Block-level, non-replaced
    elements in normal flow), i.e. the stretch-fit size": the area's width less the item's margins, borders
-   and paddings, floored at zero. `justify-self: auto` is the container's `justify-items` (css-align-3 §6.1),
-   whose `legacy` alone behaves as `normal`. */
+   and paddings, floored at zero. For "all other values" it is sized "as fit-content", the shrink-to-fit width
+   over that same available width (`uv_grid_item_fits_content` partitions the two). */
 /* css-grid-1 §6.2 "Grid Item Sizing" for `height: auto`, the block-axis twin of the width below:
    `align-self: normal` behaves as `stretch` for a non-replaced item, whose stretch-fit size fills the grid
    area's block size less the item's margins, borders and padding. */
@@ -4046,32 +4064,25 @@ static CssPx uv_grid_item_auto_height(lxb_dom_element_t *el)
 static CssPx uv_grid_item_auto_width(lxb_dom_element_t *el, UvBox box)
 {
     lxb_dom_element_t *container = uv_grid_item_container(el);
-    CssAlign self;
     UvSurround s;
-    CssPx margins, content;
+    CssPx margins, available, content;
     char buf[160];
 
     DCHECK(container != NULL, "a grid item's auto width was asked of a box no grid container holds");
-    self = css_computed_align(el, "justify-self");
-    if (self.value == CSS_KEYWORD_AUTO) self = css_computed_align(container, "justify-items");
-    if (!(self.value == CSS_KEYWORD_NORMAL || self.value == CSS_KEYWORD_STRETCH ||
-          (self.value == CSS_KEYWORD_LEGACY && !self.legacy)))
-        DFAILF("%s is a grid item whose self-alignment is not `normal` or `stretch`, which css-grid-1 §6.2 sizes "
-               "as fit-content. BUILD §10.3.5's shrink-to-fit over the grid area's width",
-               box_subject(el, buf, sizeof buf));
     if (css_computed_length_is(el, "margin-left", CSS_KEYWORD_AUTO) ||
         css_computed_length_is(el, "margin-right", CSS_KEYWORD_AUTO))
         DFAILF("%s is a grid item with an `auto` inline margin, which css-align-3 §6.1 makes absorb the free "
-               "space instead of stretching. BUILD the item's fit-content size and its margin alignment",
+               "space instead of stretching: its width is fit-content and the margins split what is left. BUILD that "
+               "margin alignment over the grid area",
                box_subject(el, buf, sizeof buf));
     s = uv_surround(el, false);
     margins = css_px_add(uv_margin(el, "margin-left", "margin-right", css_computed_length(el, "margin-left"), box,
                                    NULL),
                          uv_margin(el, "margin-right", "margin-left", css_computed_length(el, "margin-right"), box,
                                    NULL));
-    content = css_px_max(css_px_sub(css_px_sub(used_value_containing_block_width(el), uv_surround_total(s)),
-                                    margins),
-                         css_px(0.0));
+    available = css_px_sub(css_px_sub(used_value_containing_block_width(el), uv_surround_total(s)), margins);
+    content = uv_grid_item_fits_content(el, container) ? uv_shrink_to_fit_over(el, available)
+                                                       : css_px_max(available, css_px(0.0));
     if (!uv_is_border_box(el)) return content;
     return css_px_add(content, uv_surround_total(s));
 }

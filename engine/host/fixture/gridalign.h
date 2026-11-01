@@ -5,6 +5,10 @@
    from its container's content box. Covered: start, end, center and their flex aliases on both axes, `left`
    and `right`, `normal` and `stretch` on a definite size (start), `align-items` and `justify-items` inherited
    through `auto`, a 120px-wide item centred unsafely and `safe`ly, and an rtl container's start and end.
+   Rows a14-a16 are `width: auto` items holding one 30px box, which css-grid-1 §6.2 "Grid Item Sizing" sizes as
+   fit-content for a self-alignment other than `normal` or `stretch`: a block (start), and a flex container in
+   an auto row (center, and `end` through `justify-items`), whose row sizing asks its content-based height and
+   so its width under the resting job; each reports its width as `w<n>`.
    Chrome 155.0.8059.84 and Firefox 158.0.1 give every value expected. It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_GRIDALIGN_H
@@ -36,10 +40,16 @@ static const char HTML_GRIDALIGN[] =
     GRIDALIGN_ROW("a11", "direction:rtl", "justify-self:start")
     GRIDALIGN_ROW("a12", "direction:rtl", "justify-self:end")
     GRIDALIGN_ROW("a13", "", "margin:5px 3px;align-self:end;justify-self:end")
+    "<div class=g><div id=a14 style=\"justify-self:start\"><div style=\"width:30px;height:10px\"></div></div></div>"
+    "<div class=g style=\"grid-template-rows:auto\"><span id=a15 style=\"display:flex;justify-self:center\">"
+    "<span style=\"display:block;width:30px;height:10px\"></span></span></div>"
+    "<div class=g style=\"grid-template-rows:auto;justify-items:end\"><span id=a16 style=\"display:flex\">"
+    "<span style=\"display:block;width:30px;height:10px\"></span></span></div>"
     "<script>"
     "function O(i){var e=document.getElementById(i),r=e.getBoundingClientRect(),"
     "p=e.parentElement.getBoundingClientRect();return (r.left-p.left)+'_'+(r.top-p.top);}"
-    "var q='',i;for(i=1;i<=13;i++)q+=(i>1?'&':'')+'a'+i+'='+O('a'+i);"
+    "var q='',i;for(i=1;i<=16;i++)q+=(i>1?'&':'')+'a'+i+'='+O('a'+i);"
+    "for(i=14;i<=16;i++)q+='&w'+i+'='+document.getElementById('a'+i).getBoundingClientRect().width;"
     "fetch('/api/gridalign?'+q);"
     "</script>"
     TF_CANVAS_INK

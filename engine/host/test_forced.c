@@ -16556,6 +16556,12 @@ TF_UNIT void probes_gridalign(const char *js, Probe *tab, int *n) {
         { "a11", "80_0", "css-align-3 §4.1: `start` in an rtl container is not its right edge" },
         { "a12", "0_0", "css-align-3 §4.1: `end` in an rtl container is not its left edge" },
         { "a13", "77_65", "css-align-3 §6.1.5: the margin box is not what is aligned" },
+        { "a14", "0_0", "css-align-3 §4.1: a fit-content item's `start` is not flush with the area's start" },
+        { "w14", "30", "css-grid-1 §6.2: an auto-width item aligned `start` is not sized as fit-content" },
+        { "a15", "35_0", "css-align-3 §4.1: a fit-content flex container is not centred in its area" },
+        { "w15", "30", "css-grid-1 §6.2: an auto-width flex container aligned `center` is not fit-content" },
+        { "a16", "70_0", "css-align-3 §6.1: `justify-items: end` does not end-align a fit-content item" },
+        { "w16", "30", "css-grid-1 §6.2: an item aligned `end` through `auto` is not sized as fit-content" },
     };
     const char *ga_why = NULL; int ga_tt = !!strstr(js, "\"/api/gridalign\"");
     unsigned i;
