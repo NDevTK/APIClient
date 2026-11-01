@@ -995,8 +995,12 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
         DCHECK(matched || layout_job_drive_spent(&d),
                "CSSOM VIEW §6's `scrollIntoView` box tests parked an author match with the drive's allowance "
                "unspent, so the next activation would ask the same thing over the same state for ever");
-        /* Read inside the job, so the box tests' cascade is held by the job's records for step 8's walk. */
+        /* Read inside the job, so the box tests' cascade is held by the job's records for step 8's walk, and
+           the walk is begun there too: its entry asserts the target's box over the same records. */
         if (matched) ev_target(hdr->this_val, &t);
+        if (matched && t.has_box)
+            element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(t.node), s->block, s->inline_pos,
+                                              s->container);
         layout_job_drive_end(&d);
         layout_job_leave(s->job);
         rest_unit_end();
@@ -1012,8 +1016,6 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
             *presult = ev_resolved_promise(ctx);
             return JS_STEP_DONE;
         }
-        element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(t.node), s->block, s->inline_pos,
-                                          s->container);
         hdr->stage = EV_SIV_BOX;
     }
 
