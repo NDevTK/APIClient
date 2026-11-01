@@ -1836,6 +1836,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "scrollflex", HTML_SCROLLFLEX },
     { "flexnest3", HTML_FLEXNEST3 },
     { "flexnest6", HTML_FLEXNEST6 },
+    { "linecrossrest", HTML_LINECROSSREST },
     { "gridnest2", HTML_GRIDNEST2 },
     { "gridnest4", HTML_GRIDNEST4 },
     { "gridtemplate", HTML_GRIDTEMPLATE },
@@ -16331,6 +16332,9 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
         { "flex-nest-6", "/api/flexnest6", "h", "10", "css-flexbox-1 §9.6: six nested rows of 10px lines are not 10px tall" },
         { "flex-nest-6", "/api/flexnest6", "l", "30", "css-flexbox-1 §9.7: the innermost 10px item does not start 30px in" },
         { "flex-nest-6", "/api/flexnest6", "t", "0", "css-flexbox-1 §9.6: the innermost 10px item is not at its line's top" },
+        { "line-cross-rest", "/api/linecrossrest", "t", "9", "css-flexbox-1 §9.4 step 8: three 3px lines do not put the fourth 9px down" },
+        { "line-cross-rest", "/api/linecrossrest", "l", "3", "css-flexbox-1 §9.3 step 5: the fourth line does not hold #fz second" },
+        { "line-cross-rest", "/api/linecrossrest", "h", "11", "css-flexbox-1 §9.4 step 8: four lines of 3, 3, 3 and 2px are not 11px tall" },
         { "grid-nest-2", "/api/gridnest2", "w", "10", "CSS 2.2 §10.3.9: the outer inline-block is not its inner grid's 10px" },
         { "grid-nest-2", "/api/gridnest2", "l", "0", "css-grid-1 §11: the innermost square does not start at the left edge" },
         { "grid-nest-2", "/api/gridnest2", "sw", "200", "css-grid-1 §11.8: the outer grid's scrolling area is not 200px wide" },
@@ -16338,7 +16342,7 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
         { "grid-nest-4", "/api/gridnest4", "l", "0", "css-grid-1 §11: the innermost square does not start at the left edge" },
         { "grid-nest-4", "/api/gridnest4", "sw", "200", "css-grid-1 §11.8: the outer grid's scrolling area is not 200px wide" },
     };
-    static const char *const ROWS[] = { "flex-nest-3", "flex-nest-6", "grid-nest-2", "grid-nest-4" };
+    static const char *const ROWS[] = { "flex-nest-3", "flex-nest-6", "line-cross-rest", "grid-nest-2", "grid-nest-4" };
     Probe rows[COUNTOF(ROWS)];
     unsigned i, j;
 
@@ -16357,6 +16361,14 @@ TF_UNIT void probes_layoutnest(const char *js, Probe *tab, int *n) {
                          "NOT REACHED: there is no record of the document's address, so it aborted before its fetch");
             }
             fold_row(&tt, &why, param_value_is(js, R[i].addr, R[i].key, R[i].want), R[i].why);
+        }
+        if (strcmp(ROWS[j], "line-cross-rest") == 0) {
+            const char *a = strstr(js, "\"_layoutServedAcrossRest\":"), *b = strstr(js, "\"_layoutBfServed\":");
+
+            fold_row(&tt, &why, a && b && strtol(a + strlen("\"_layoutServedAcrossRest\":"), NULL, 10) >
+                                              strtol(b + strlen("\"_layoutBfServed\":"), NULL, 10),
+                     "the layout census does not show more memo answers served across a rest than §9.4.1 "
+                     "answers served, so the document no longer serves a cross size after its job rests");
         }
         rows[j] = (Probe){ ROWS[j], tt, addr, SESS_EXPLORE, why };
     }

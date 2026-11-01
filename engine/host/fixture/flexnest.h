@@ -29,6 +29,22 @@ static const char HTML_FLEXNEST6[] =
     FN_DOC("flexnest6", FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN FN_OPEN,
            FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE FN_CLOSE);
 
+/* THE WRAPPING FLEX DOCUMENT (`linecrossrest`): a multi-line `row` flex container 40px wide given forty 3px
+   items of heights 1px, 2px, 3px in turn and then `#fz`, 3px by 2px. css-flexbox-1 §9.3 "Main Size
+   Determination"' step 5 collects thirteen items (39px) per line, so the fourth line holds the fortieth item
+   (1px) and `#fz`; §9.4 "Cross Size Determination"' step 8 makes the first three lines 3px and the fourth 2px.
+   So `#fz` is 9px down and 3px in, and `#fc`'s scrolling area is 11px tall. The script builds the items, so
+   CSSOM VIEW §7's `offsetTop` lays them out under a resting drive that rests between its boxes, and the line's
+   cross size is served across those rests more often than any §9.4.1 contribution is served at all. */
+static const char HTML_LINECROSSREST[] =
+    "<!doctype html><html><body style=\"margin:0\">"
+    "<div id=fc style=\"display:flex;flex-wrap:wrap;width:40px\"></div>"
+    "<script>var c=document.getElementById('fc'),i,z;"
+    "for(i=0;i<41;i++){z=document.createElement('div');"
+    "z.style.cssText='width:3px;height:'+(i<40?1+i%3:2)+'px';c.appendChild(z);}"
+    "fetch('/api/linecrossrest?t='+z.offsetTop+'&l='+z.offsetLeft+'&h='+c.scrollHeight);"
+    "</script>" TF_CANVAS_INK "</body></html>";
+
 #undef FN_OPEN
 #undef FN_LEAF
 #undef FN_CLOSE
