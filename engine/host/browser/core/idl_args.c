@@ -2383,24 +2383,46 @@ static int idl_union_seq_arm(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, ui
     return 0;
 }
 
-/* See idl_args.h. The arms admitted follow §3.2.25's order over the type facet: an Object takes step 11.2's
-   sequence arm (an @@iterator) or, with none, step 11.5's record arm, and falls to step 15's string arm only
-   when no record arm is declared; null and undefined take step 2's null arm when the union is nullable. */
-int idl_union_unknown_arm(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, unsigned declared,
-                          const char *const ops[16], JSValue *pin, unsigned *parm)
+/* The arms of `declared` a type facet `ty` admits, in §3.2.25's order: an Object takes step 11.2's sequence arm
+   (an @@iterator) or, with none, step 11.5's record arm, and falls to step 15's string arm only when no record
+   arm is declared; null and undefined take step 2's null arm when the union is nullable. */
+static unsigned idl_union_arms_admitted(unsigned ty, unsigned declared)
 {
     const unsigned objs = CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION;
     const unsigned nullish = (declared & IDL_UNION_ARM_NULL) ? CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED : 0;
-    unsigned ty = concolic_operand_types(v), admitted = 0, arms[4];
-    int n = 0, ex_arm = -1, real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
+    unsigned admitted = 0;
 
-    DCHECK(concolic_is(v), "§3.2.25's arm was asked over unknown input of a value this flow determined");
-    DCHECK(declared & IDL_UNION_ARM_STRING, "a union over unknown input was declared without its string arm");
     if ((ty & ~objs & ~nullish) || ((ty & objs) && !(declared & IDL_UNION_ARM_RECORD)))
         admitted |= IDL_UNION_ARM_STRING;
     if ((ty & objs) && (declared & IDL_UNION_ARM_SEQUENCE)) admitted |= IDL_UNION_ARM_SEQUENCE;
     if ((ty & objs) && (declared & IDL_UNION_ARM_RECORD)) admitted |= IDL_UNION_ARM_RECORD;
     if (ty & nullish) admitted |= IDL_UNION_ARM_NULL;
+    return admitted;
+}
+
+/* See idl_args.h. */
+int idl_union_unknown_arm(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, unsigned declared,
+                          const char *const ops[16], JSValue *pin, unsigned *parm)
+{
+    const unsigned objs = CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION;
+    const unsigned nullish = (declared & IDL_UNION_ARM_NULL) ? CONCOLIC_TYF_NULL | CONCOLIC_TYF_UNDEFINED : 0;
+    unsigned ty = concolic_operand_types(v), admitted = idl_union_arms_admitted(ty, declared), arms[4];
+    int n = 0, ex_arm = -1, real = JS_OUTCOME_REAL_UNSTATED, arm = 0, r;
+
+    DCHECK(concolic_is(v), "§3.2.25's arm was asked over unknown input of a value this flow determined");
+    DCHECK(declared & IDL_UNION_ARM_STRING, "a union over unknown input was declared without its string arm");
+    /* The declaration's fork table is checked over every facet, not only this value's: the admitted set depends
+       only on which of Object, null-or-undefined and any other type the facet holds, so these seven classes
+       reach every set a later unknown can. */
+    for (unsigned c = 1; c < 8; c++) {
+        unsigned set = idl_union_arms_admitted(((c & 1) ? CONCOLIC_TYF_OBJECT : 0) |
+                                               ((c & 2) ? CONCOLIC_TYF_NULL : 0) |
+                                               ((c & 4) ? CONCOLIC_TYF_STRING : 0), declared);
+
+        DCHECKF(__builtin_popcount(set) < 2 || ops[set] != NULL,
+                "the union declared as arms 0x%x names no fork for arm set 0x%x, which a type facet reaches — "
+                "add that set's fork name to the caller's table", declared, set);
+    }
     DCHECK(admitted != 0, "an unknown reached a union with a type facet that admits no type — the flow that "
                           "excluded every type is infeasible and should have been pruned there");
     for (unsigned b = IDL_UNION_ARM_STRING; b <= IDL_UNION_ARM_NULL; b <<= 1)
@@ -2421,7 +2443,6 @@ int idl_union_unknown_arm(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, unsign
         *parm = arms[0];
         return 0;
     }
-    DCHECK(ops[admitted] != NULL, "a union over unknown input forked an arm set its declaration names no fork for");
     /* The outstanding answer is released here: the sibling's snapshot is taken at the fork's return. */
     JS_FreeValue(ctx, *pin);
     *pin = JS_UNDEFINED;
@@ -2462,7 +2483,9 @@ static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w
         static const char *const OPS[2][2][16] = {
             { { [IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE] =
                     "§3.2.25 (DOMString or sequence<DOMString>) arm: string, sequence" },
-              { [IDL_UNION_ARM_STRING | IDL_UNION_ARM_NULL] =
+              { [IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE] =
+                    "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, sequence",
+                [IDL_UNION_ARM_STRING | IDL_UNION_ARM_NULL] =
                     "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, null",
                 [IDL_UNION_ARM_STRING | IDL_UNION_ARM_SEQUENCE | IDL_UNION_ARM_NULL] =
                     "§3.2.25 (DOMString or sequence<DOMString>)? arm: string, sequence, null" } },
