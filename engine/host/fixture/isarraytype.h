@@ -1,7 +1,8 @@
 /* THE ISARRAY-TYPE DOCUMENT: ECMAScript §7.2.2 IsArray ( argument ) over unknowns. URLSearchParams get()'s found
    arm is a String in every world (URL §6.2), so IsArray's step 1 answers false and there is no arm where it is an
    Array (ia-a1). A JSON.parse result over an unknown text may be an Array, so IsArray over it keeps both arms
-   (ia-a2 and ia-b2). One of test_forced.c's exploring documents (TF_DOCS); it ends with TF_CANVAS_INK, which
+   (ia-a2 and ia-b2). A reply member whose example is an Object, on the arm where `typeof` proved it a Boolean,
+   holds no example there, so IsArray answers false from its type set (ia-b3, never ia-a3). One of test_forced.c's exploring documents (TF_DOCS); it ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_ISARRAYTYPE_H
 #define ENGINE_HOST_FIXTURE_ISARRAYTYPE_H
@@ -18,6 +19,10 @@ static const char HTML_ISARRAYTYPE[] =
     " var iaJ = JSON.parse(location.hash.slice(1));"
     " if (Array.isArray(iaJ)) fetch('/api/ia-a2'); else fetch('/api/ia-b2');"
     "} catch (e) { fetch('/api/ia-threw'); }"
+    "(async function () {"
+    "  var iaR = await (await fetch('/api/iarec')).json();"
+    "  if (typeof iaR.f === 'boolean') { if (Array.isArray(iaR.f)) fetch('/api/ia-a3'); else fetch('/api/ia-b3'); }"
+    "})();"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

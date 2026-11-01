@@ -799,6 +799,8 @@ static const TfServed TF_SERVED[] = {
       "}" },
     /* HTML_REPLYROLE's account reply: a viewer, so the document's admin arm is reachable only by forcing. */
     { "https://x.test/api/rrme", "application/json", "{\"role\":\"viewer\",\"id\":42,\"org\":\"acme\"}" },
+    /* HTML_ISARRAYTYPE's record: a member whose example is an Object, which the document tests as a Boolean. */
+    { "https://x.test/api/iarec", "application/json", "{\"f\":{\"a\":1}}" },
     /* HTML_REFLECTINT's reply: an integer, a non-numeric string and a negative integer for the reflected setters. */
     { "https://x.test/api/rint", "application/json", "{\"n\":300,\"s\":\"wide\",\"m\":-3}" },
     /* HTML_USPUNION's reply: a URLSearchParams init of each of §6.2's three arms. */
@@ -1201,6 +1203,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/splitunits.h"
 #include "fixture/xhrtext.h"
 #include "fixture/isarraytype.h"
+#include "fixture/mixinunknown.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
 #include "fixture/inlineflex.h"
@@ -1813,6 +1816,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "splitunits", HTML_SPLITUNITS },
     { "xhrtext", HTML_XHRTEXT },
     { "isarraytype", HTML_ISARRAYTYPE },
+    { "mixinunknown", HTML_MIXINUNKNOWN },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
     { "inlineflex", HTML_INLINEFLEX },
@@ -14890,9 +14894,33 @@ TF_UNIT void probes_isarraytype(const char *js, Probe *tab, int *n) {
              emitted_record_has(js, "/api/ia-a2", "\"door\":\"fetch\"") &&
                  emitted_record_has(js, "/api/ia-b2", "\"door\":\"fetch\""),
              "IsArray over a JSON.parse result, which may be an Array, lost one of its arms");
+    const char *fac_why = NULL;
+    int fac_tt = 1;
+
+    fold_row(&fac_tt, &fac_why, emitted_record_has(js, "/api/ia-b3", "\"door\":\"fetch\""),
+             "NOT REACHED: no /api/ia-b3 record, so no flow took the arm where `typeof iaR.f` is \"boolean\"");
+    fold_row(&fac_tt, &fac_why, !strstr(js, "\"/api/ia-a3\""),
+             "a /api/ia-a3 record exists: IsArray over a member its type facet proved a Boolean took the Array arm");
     const Probe rows[] = {
         { "isarraytype-string", str_tt, "iaV", SESS_EXPLORE, str_why },
         { "isarraytype-json", obj_tt, "iaJ", SESS_EXPLORE, obj_why },
+        { "isarraytype-facet", fac_tt, "iaR", SESS_EXPLORE, fac_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `mixinunknown` document: an unknown String argument of a ChildNode/ParentNode member becomes a
+   Text node, alone and inside the fragment (DOM §4.2.6 convert nodes into a node). */
+TF_UNIT void probes_mixinunknown(const char *js, Probe *tab, int *n) {
+    const char *why = NULL;
+    int tt = 1;
+
+    fold_row(&tt, &why, !!strstr(js, "\"/api/mu-done"),
+             "NOT REACHED: no /api/mu-done record, so no flow finished append and replaceChildren over the unknown");
+    fold_row(&tt, &why, param_value_is(js, "/api/mu-done", "n", "2"),
+             "DOM §4.2.6: replaceChildren('a', unknown) did not leave two children, one per converted argument");
+    const Probe rows[] = {
+        { "mixinunknown-text", tt, "muQ", SESS_EXPLORE, why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -23900,6 +23928,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_splitunits(js, probes, &np);
     probes_xhrtext(js, probes, &np);
     probes_isarraytype(js, probes, &np);
+    probes_mixinunknown(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);
     probes_inlineflex(js, probes, &np);
