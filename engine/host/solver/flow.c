@@ -5449,6 +5449,9 @@ void flow_wfq_census(WfqCensus *out) {
     /* The best-weighted member of the observed world (flow.h's `observed_ops`), recorded by the walk. */
     double observed_w = 0.0;
     const Flow *observed_holder = NULL;
+    /* And of the assumed worlds (flow.h's `assumed_ops`). */
+    double assumed_w = 0.0;
+    const Flow *assumed_holder = NULL;
     /* And the member offering that weight, the gap's far end, for its operands (flow.h's `cur_deep_ops`). */
     const Flow *cur_deep_holder = NULL;
 
@@ -5548,6 +5551,9 @@ void flow_wfq_census(WfqCensus *out) {
     out->observed_w_gap = 0.0;
     memset(&out->observed_top_ops, 0, sizeof out->observed_top_ops);
     memset(&out->observed_ops, 0, sizeof out->observed_ops);
+    out->assumed_w_gap = 0.0;
+    memset(&out->assumed_top_ops, 0, sizeof out->assumed_top_ops);
+    memset(&out->assumed_ops, 0, sizeof out->assumed_ops);
     memset(&out->never_picked_top_ops, 0, sizeof out->never_picked_top_ops);
     memset(&out->never_picked_ops, 0, sizeof out->never_picked_ops);
     for (i = 0; i < g_flows_n; i++) {
@@ -5633,6 +5639,7 @@ void flow_wfq_census(WfqCensus *out) {
             out->assumed_members++;
             out->assumed_sum += flow_assumed(f);
             if (flow_assumed(f) > out->assumed_max) out->assumed_max = flow_assumed(f);
+            if (!assumed_holder || w > assumed_w) { assumed_w = w; assumed_holder = f; }
         }
         /* And the population the row above cannot name: zero own silence is also what an emission by any arm of the
            family produces. A member never handed the thread is the population starvation is about, and `picks` is
@@ -6038,6 +6045,14 @@ void flow_wfq_census(WfqCensus *out) {
         DCHECK(out->observed_top_ops.w == out->w_top && out->observed_ops.w == observed_w,
                "the observedWGap operands were read off members whose weights are not the gap's two ends — the "
                "front and the observed world's best member are the two the walk recorded");
+    }
+    if (assumed_holder && top) {
+        out->assumed_w_gap = out->w_top - assumed_w;
+        flow_weight_operands(top, &out->assumed_top_ops);
+        flow_weight_operands(assumed_holder, &out->assumed_ops);
+        DCHECK(out->assumed_top_ops.w == out->w_top && out->assumed_ops.w == assumed_w,
+               "the assumedWGap operands were read off members whose weights are not the gap's two ends — the "
+               "front and the assumed worlds' best member are the two the walk recorded");
     }
 
     /* And how far the front stands ahead of the members that have run furthest through the document, one branch so

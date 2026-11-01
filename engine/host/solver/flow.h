@@ -1475,6 +1475,11 @@ typedef struct {
     long observed_members;
     double observed_w_gap;
     FlowWeightOperands observed_top_ops, observed_ops;
+    /* The same for the assumed worlds: the best weight among members resting on at least one assumption
+       (flow_assumed), the front's operands and that member's, so a reader sees which term holds an assumed world
+       behind the observed one. `present` 0 and gap 0.0 where no assumed member stands. */
+    double assumed_w_gap;
+    FlowWeightOperands assumed_top_ops, assumed_ops;
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 
