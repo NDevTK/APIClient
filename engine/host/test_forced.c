@@ -1297,6 +1297,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/idbkphash.h"
 #include "fixture/idbkpcycle.h"
 #include "fixture/idbkpinject.h"
+#include "fixture/xhrcred.h"
 #include "fixture/fpakey.h"
 #include "fixture/uspreckey.h"
 #include "fixture/msglang.h"
@@ -1889,6 +1890,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "idbkphash", HTML_IDBKPHASH },
     { "idbkpcycle", HTML_IDBKPCYCLE },
     { "idbkpinject", HTML_IDBKPINJECT },
+    { "xhrcred", HTML_XHRCRED },
     { "fpakey", HTML_FPAKEY },
     { "uspreckey", HTML_USPRECKEY },
     { "msglang", HTML_MSGLANG },
@@ -18123,6 +18125,25 @@ TF_UNIT void probes_fparecjson(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `xhrcred` document (fixture/xhrcred.h): XHR §3.5.1 open() completes over credentials read
+   from a reply, and the request it opened is on the surface. */
+TF_UNIT void probes_xhrcred(const char *js, Probe *tab, int *n) {
+    const char *o_why = NULL, *r_why = NULL;
+    int o_tt = 1, r_tt = 1;
+
+    fold_row(&o_tt, &o_why, !!strstr(js, "\"/api/xhrcred-opened\""),
+             "NOT REACHED: there is no /api/xhrcred-opened record, so open() never returned over the reply's "
+             "credentials");
+    fold_row(&r_tt, &r_why, !!strstr(js, "/api/xhrcred-data"),
+             "no record names /api/xhrcred-data, so the request open() built from the reply's credentials never "
+             "reached the surface");
+    const Probe rows[] = {
+        { "xhrcred-opened", o_tt, "/api/xhrcred-opened", SESS_EXPLORE, o_why },
+        { "xhrcred-request", r_tt, "/api/xhrcred-data", SESS_EXPLORE, r_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `idbkplang` document (fixture/idbkplang.h): each world of §2.5's fork keeps the equality its
    answer admits and prunes the holding arm of the one it excludes. */
 TF_UNIT void probes_idbkplang(const char *js, Probe *tab, int *n) {
@@ -23060,6 +23081,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_idbkphash(js, probes, &np);
     probes_idbkpcycle(js, probes, &np);
     probes_idbkpinject(js, probes, &np);
+    probes_xhrcred(js, probes, &np);
     probes_fpakey(js, probes, &np);
     probes_uspreckey(js, probes, &np);
     probes_msglang(js, probes, &np);
