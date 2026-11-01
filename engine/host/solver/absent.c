@@ -1495,8 +1495,10 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
             n = strlen(path) + 128;
             label = (char *)malloc(n);
             CHECK(label != NULL, "absent: OOM naming a written member's assumption");
-            snprintf(label, n, "%s written by the page at unit %llu, assumed changed by unobserved code before "
-                     "unit %llu", path, (unsigned long long)wseq, (unsigned long long)now);
+            /* The units stay out of the name: a source's name is its identity, and one member read after one
+               write must be one source however many units later it is read. */
+            snprintf(label, n, "%s as the page wrote it in an earlier task, assumed changed by unobserved code",
+                     path);
             free(path);
             src = label;
             free(shape);

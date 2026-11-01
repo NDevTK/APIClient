@@ -14451,7 +14451,7 @@ TF_UNIT void probes_pagewrite(const char *js, Probe *tab, int *n) {
     fold_row(&cross_tt, &cross_why,
              emitted_record_graded_has(js, "/api/pw-a1", "forced", "\"door\":\"fetch\"") &&
                  emitted_record_graded_has(js, "/api/pw-a2", "forced", "\"door\":\"fetch\"") &&
-                 !!strstr(js, "written by the page at unit"),
+                 !!strstr(js, "as the page wrote it in an earlier task"),
              "a member written in an earlier task lost its assumed arm, or the arm's source does not name the "
              "write it assumes unobserved code changed");
     fold_row(&served_tt, &served_why, emitted_record_graded_has(js, "/api/pw-flagadmin", "forced", "\"door\":\"fetch\""),
