@@ -239,9 +239,12 @@ typedef struct Flow {
        outside the frontier. Owned by the family root. */
     FlowSite *at;
     /* An observation no term reads: one plus the ladder rung (engine.c's NextArm) flow_next_unit answered at this
-       member's last step end, 0 before its first, and whether that answer named the site `at` was moved to. A fork
-       copies both with `at`, which they describe. */
+       member's last step end, 0 before its first, and whether that answer named the site `at` was moved to. A fork's
+       arm is born with both at 0: it stands at the decision, which no step end named. */
     int next_arm1, next_sited;
+    /* The part of the running step's work already charged to sites it moved off (flow_site_bank_running), which
+       flow_age_running leaves out of the site the step ends at. Zero between steps. */
+    int64_t site_banked;
 
     /* Interleaving state, kept while this flow is paused so the scheduler can run another flow and come back. A
        flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW delta,
@@ -1879,6 +1882,10 @@ int   flow_path_victim_act(const Flow *f);
    flow that leaves the frontier also hands what it burned to the flow that forked it, which prices a fork
    chain. */
 void  flow_age_running(int64_t us);
+/* Charge the running flow's site, mid-step, for the `us` units its step ran from there before the member moves to
+   another site (a fork stands it at the decision). flow_age_running charges the step's remainder to the site the
+   member stands at when the step ends; the aging halves are charged there whole. */
+void  flow_site_bank_running(int64_t us);
 
 /* The forked sibling takes over its parent's account: both rank terms at the instant of the branch, and the fork
    edge that sends the work the arm burns to its family. Without it an arm would read zero reward and

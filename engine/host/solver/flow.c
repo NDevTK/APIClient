@@ -1539,6 +1539,20 @@ static void flow_site_move(Flow *f, FlowSite *to) {
     frontier_rank_changed();
 }
 
+void flow_site_bank_running(int64_t us) {
+    FlowSite *st;
+
+    DCHECK(g_running != NULL && g_running->at != NULL && us >= 0,
+           "work was banked to a site with no flow running, at no site, or as a negative amount");
+    if (us == 0) return;
+    st = g_running->at;
+    st->served += us;
+    g_running->site_banked += us;
+    flow_site_reprice(st);
+    flow_ix_site_sync(st);
+    frontier_rank_changed();
+}
+
 void flow_stand_at(Flow *f, int kind, uint64_t key) {
     DCHECK(f != NULL && f->family != NULL && f->at != NULL && (kind == FLOW_SITE_CODE || kind == FLOW_SITE_DRIVE),
            "a code site was stood at by a flow outside the frontier, or with a kind the ledger does not name");
@@ -1916,12 +1930,15 @@ void flow_age_running(int64_t us) {
     /* And the site the member stands at: Level 2's UCB count is the service its code site has received, in pulls of
        one quantum (Level 1's unit, a real number). Any charge reprices the site, which re-ranks every member
        standing there at once, so the site is re-filed and the order told. */
-    if (us > 0) {
+    DCHECKF(g_running->site_banked >= 0 && g_running->site_banked <= us,
+            "a step banked %lld units to sites it moved off and ended having retired %lld — the bank reads the same "
+            "counter the step's charge is a difference of", (long long)g_running->site_banked, (long long)us);
+    if (us - g_running->site_banked > 0) {
         FlowSite *st = g_running->at;
         DCHECK(st != NULL && st->fam == g_running->family,
                "the running flow stands at no site, or at one in another family's ledger — flow_new, the fork and "
                "flow_stand_at keep `at` in the member's own family");
-        st->served += us;
+        st->served += us - g_running->site_banked;
         flow_site_reprice(st);
         flow_ix_site_sync(st);
         frontier_rank_changed();
@@ -1929,6 +1946,7 @@ void flow_age_running(int64_t us) {
     /* The same units went to both halves, which keeps them one reading at two scopes. This is the only site
        that adds to either, so the only one that could add to one alone; a charge reaching `work` and missing
        `fam_work` would make an arm's own silence outgrow its family's. */
+    g_running->site_banked = 0;
     DCHECK_AGING_ONE_WINDOW(g_running, "a slice of the thread was charged to this flow and its family");
     /* And the charge moves the member's own notch, an operand of its key in the order's index, so it is re-keyed;
        the family's half is read per family at the query and needs nothing here. */

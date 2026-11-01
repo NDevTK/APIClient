@@ -5161,6 +5161,12 @@ static int engine_reclaim_set(int v);
  * materialize the arm's segment by forking the asker's. Only the decision state differs, so it is a parameter.
  * `dec_blob` and `pin_blob` are consumed; they become the sibling's. `marks` is the parent's path marks read
  * where the blobs were taken. */
+/* The work counter (defined with engine_work_bank) and where the open step started on it, read by a fork that moves
+   the running member mid-step (engine_sibling_assemble), and the step bracket that says one is open. */
+static int64_t g_service_work;
+static int64_t g_step_open_work;
+static int g_in_step;
+
 static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
                                      void *dec_blob, void *pin_blob, FlowPathMarks marks) {
     DCHECK(parent != NULL, "a sibling was assembled with no parent flow — every field below is copied from one");
@@ -5198,7 +5204,17 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        parent where it stood. */
     {
         uint64_t site;
-        if (parent == flow_running() && JS_RunningSiteHash(ctx, &site)) flow_stand_at(parent, FLOW_SITE_CODE, site);
+        if (parent == flow_running() && JS_RunningSiteHash(ctx, &site)) {
+            /* The work this step ran from the site the parent is leaving is that site's, banked before the move;
+               the rest of the step is charged at its end to wherever the parent then stands. */
+            int64_t ran = g_service_work + (int64_t)JS_FlowPeekRetiredWork() - g_step_open_work;
+
+            DCHECK(g_in_step > 0 && ran >= parent->site_banked,
+                   "a fork moved the running member outside a step, or the step's work so far fell below what it "
+                   "already banked — both read the one work counter");
+            flow_site_bank_running(ran - parent->site_banked);
+            flow_stand_at(parent, FLOW_SITE_CODE, site);
+        }
     }
     /* Unseeded: an arm inherits its parent's sequence (copied below), so seeding would allocate the root
        document's rows onto it and leak them under the copy. */
@@ -12454,6 +12470,7 @@ static int engine_sched_slice(void) {
             /* The step's opening on the work counter: the switch-in discarded what stood in the interpreter, so
                everything banked from here to the step's close is this flow's. */
             const int64_t step_work0 = g_service_work;
+            g_step_open_work = step_work0;
             /* The same bracket in the other currency, opened on the clock's line so the two readings are of one
                span: the overrun test below compares `now - t_slice0`, and this counts the suspend points offered
                across that interval. From here rather than the turn's `t0`, because the pick, switch and delta swap
