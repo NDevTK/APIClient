@@ -14891,9 +14891,9 @@ TF_UNIT void probes_isarraytype(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the `envarm` document. The branch over Math.random() keeps its example's arm on the running flow and
-   prices the other (solver/decide.c's dec_subject_environment), so the example's world, which throws within its
-   first pull, reaches its timer's throw first; which arm that is, is read off the grades, since the example is the engine's. The branch over
-   window.name runs both arms at no price. */
+   prices the other (solver/decide.c's dec_subject_environment), so the example's world, which throws before it
+   has spent the price at its timer's code, reaches its timer's throw first; which arm that is, is read off the
+   grades, since the example is the engine's. The branch over window.name runs both arms at no price. */
 TF_UNIT void probes_envarm(const char *js, Probe *tab, int *n) {
     int lo_ex = emitted_record_graded_has(js, "/api/envarm", "derived", "envLO");
     int hi_ex = emitted_record_graded_has(js, "/api/envarm", "derived", "envHI");
@@ -14913,8 +14913,8 @@ TF_UNIT void probes_envarm(const char *js, Probe *tab, int *n) {
              "the stream did not announce both arms' timer throws, so neither world's order can be read");
     fold_row(&ord_tt, &ord_why, ex->first < other->first,
              "the arm against Math.random()'s example announced its throw before the example's arm — that arm is "
-             "priced as an assumption, so the example's world takes the first pull of its timer's code and "
-             "throws within it");
+             "priced as an assumption, so the example's world keeps its timer's code until it has spent the "
+             "price there, and throws within it");
     fold_row(&atk_tt, &atk_why,
              emitted_record_graded_has(js, "/api/envatk", "derived", "envPLAIN") &&
                  emitted_record_graded_has(js, "/api/envatk", "forced", "envNAMED"),

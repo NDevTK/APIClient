@@ -12,7 +12,7 @@ const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pull
 
 /* The terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The aging is
    split into its family half (in `coord`, with the reward) and its own half; the optimism is read off the member's
-   site (`siteServed` in quanta of `pullWork`) with each priced decision a floor of `p` pulls, and `assume` is how much
+   site (`siteServed` in quanta of `pullWork`) with each priced decision a floor of `p` work, and `assume` is how much
    of it the priced decisions took (the optimism less its unpriced reading), so `opt + assume` is the term the
    weight sums. `visits` is an operand the row carries and no term reads. */
 function termsOf(o, q, p, rungs, where) {
@@ -22,8 +22,8 @@ function termsOf(o, q, p, rungs, where) {
                       `weight_operands_json writes all of ${END_FIELDS.join(", ")}`);
   const coord = o.reward - o.coordNotch * q;
   const own = -o.ownNotch * q;
-  const pulls = o.siteServed / o.pullWork, least = (o.assumed + o.againstEnv) * p;
-  const priced = 1.0 / (1.0 + (pulls > least ? pulls : least) + o.orphanSeen);
+  const least = (o.assumed + o.againstEnv) * p;
+  const priced = 1.0 / (1.0 + (o.siteServed > least ? o.siteServed : least) / o.pullWork + o.orphanSeen);
   const opt = 1.0 / (1.0 + o.siteServed / o.pullWork + o.orphanSeen);
   const dist = (o.replay + o.surv + o.rung) / rungs;
   const assume = priced - opt;
@@ -39,11 +39,11 @@ function termsOf(o, q, p, rungs, where) {
    the gap recomposed exactly from the two weights. Null when the census carries no such row. */
 function termSplit(t, far, row, where) {
   if (t === undefined || t === null) return null;
-  if (typeof t.ageQuantum !== "number" || typeof t.pricedPulls !== "number" || typeof t.rungs !== "number" ||
+  if (typeof t.ageQuantum !== "number" || typeof t.pricedWork !== "number" || typeof t.rungs !== "number" ||
       typeof t.gap !== "number")
-    throw new Error(`${where}: ${row} carries no number ageQuantum, pricedPulls, rungs and gap`);
-  const top = termsOf(t.top, t.ageQuantum, t.pricedPulls, t.rungs, where + " (top)");
-  const end = termsOf(t[far], t.ageQuantum, t.pricedPulls, t.rungs, where + ` (${far})`);
+    throw new Error(`${where}: ${row} carries no number ageQuantum, pricedWork, rungs and gap`);
+  const top = termsOf(t.top, t.ageQuantum, t.pricedWork, t.rungs, where + " (top)");
+  const end = termsOf(t[far], t.ageQuantum, t.pricedWork, t.rungs, where + ` (${far})`);
   if (top.w - end.w !== t.gap)
     throw new Error(`${where}: the ${row} gap recomposed from its two weights (${top.w - end.w}) is not the ` +
                     `gap the census computed (${t.gap})`);
