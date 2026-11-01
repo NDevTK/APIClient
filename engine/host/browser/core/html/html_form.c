@@ -125,11 +125,8 @@ static const char *attr_of(lxb_dom_element_t *el, const char *name, size_t *plen
     return (const char *)lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), plen);
 }
 
-/* IS THE ATTRIBUTE PRESENT — asked of §4.9's attribute LIST and not of its value. This read the VALUE pointer
-   and called a NULL one absent, which is right for an attribute that is not there and wrong for one whose
-   value is EMPTY: the HTML parser stores a valueless `<x disabled>` with no value buffer, so a parsed
-   `disabled` was invisible while `setAttribute('disabled','')` (which writes a zero-length buffer) was not.
-   The two must be the same attribute, and §4.9 says presence is a question about the list. */
+/* IS THE ATTRIBUTE PRESENT — asked of §4.9's attribute LIST, which is where presence is stated: a parsed
+   `<x disabled>` and `setAttribute('disabled','')` are the same attribute. */
 static bool has_attr(lxb_dom_element_t *el, const char *name)
 {
     return dom_attr_get_ns(el, NULL, name) != NULL;
@@ -928,11 +925,9 @@ static const char *form_pick_encoding(lxb_dom_element_t *form)
    stop agreeing the first time either moved. Both may be NULL.
    THE FALL-THROUGH IS DECIDED BY PRESENCE, not by whether the attribute has a value buffer. "When omitted, they
    default to the values given on the corresponding attributes on the form element" — and `<button formaction="">`
-   is not omitted. It matters twice over: the HTML parser stores a valueless attribute with no value buffer at
-   all, so reading the VALUE pointer called an EMPTY one absent too, and every one of these five attributes then
-   answered with the form's when the submitter had explicitly overridden it with the empty string (`formmethod=""`
-   is an INVALID value, whose default is GET, and it was silently reading the form's `method=post`). NULL here
-   means the attribute is on neither element; the empty string means it is present and empty. */
+   is not omitted: a submitter that overrides with the empty string keeps it (`formmethod=""` is an INVALID
+   value, whose default is GET, never the form's `method=post`). NULL here means the attribute is on neither
+   element; the empty string means it is present and empty. */
 static const char *submitter_attr_from(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form,
                                        const char *own, const char *fallback, size_t *plen,
                                        lxb_dom_element_t **pfrom, const char **pname)

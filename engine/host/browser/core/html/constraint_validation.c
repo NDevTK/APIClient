@@ -53,8 +53,8 @@ static lxb_dom_element_t *cv_elem(JSValueConst v)
     return (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT) ? lxb_dom_interface_element(n) : NULL;
 }
 
-/* IS THE ATTRIBUTE PRESENT — asked of §4.9's attribute LIST and not of its value, so a parsed `<input required>`
-   (which the HTML parser stores with no value buffer) and `setAttribute('required','')` are the same attribute. */
+/* IS THE ATTRIBUTE PRESENT — asked of §4.9's attribute LIST, so a parsed `<input required>` and
+   `setAttribute('required','')` are the same attribute. */
 static bool cv_has(lxb_dom_element_t *el, const char *name)
 {
     return el != NULL && dom_attr_get_ns(el, NULL, name) != NULL;

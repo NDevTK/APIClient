@@ -102,8 +102,7 @@ static void ii_set_image(JSContext *ctx, JSValueConst st, ImageInputImage image)
     JS_SetPropertyStr(ctx, st, "bytes", JS_UNDEFINED);
 }
 
-/* The src attribute's value as a JS string, or JS_NULL when absent. Lexbor answers NULL for an empty value
-   too, so presence is asked separately. Owned. */
+/* The src attribute's value as a JS string, or JS_NULL when absent. Owned. */
 static JSValue ii_src(JSContext *ctx, lxb_dom_element_t *el)
 {
     size_t n = 0;

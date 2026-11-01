@@ -126,9 +126,8 @@ static void set_the_frozen_base_url(JSContext *realm, lxb_dom_element_t *element
            "NODE DOCUMENT and every node has one, so this element came from neither a parse nor a create");
     fallback = document_fallback_base_url_of(document);
     href = lxb_dom_element_get_attribute(element, (const lxb_char_t *)"href", 4, &href_len);
-    /* A VALUELESS ATTRIBUTE IS THE EMPTY STRING, not an absent one — the presence test above already decided
-       that this element HAS an href, and the HTML parser stores `<base href>` with no value buffer. */
-    if (!href) href_len = 0;
+    /* The presence test above decided that this element HAS an href, so its value is a string. */
+    DCHECK(href != NULL, "an `href` the attribute list holds read back as absent through get_attribute");
 
     /* STEP 2: "let urlRecord be the result of parsing the value of element's href content attribute with
        document's FALLBACK BASE URL … (Thus, the base element isn't affected by itself.)" — which is exactly
@@ -275,9 +274,7 @@ void html_base_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
 
 /* One attribute read for both of step 1's branches, as BORROWED BYTES — which is what this algorithm hands its
  * callers and what §7.3.1.7's rules for choosing a navigable compare. Answers NULL for an attribute that is not
- * in §4.9's list, and the empty string for one that is there with no value buffer (the HTML parser stores
- * `<a target>` that way, and `setAttribute('target','')` stores a zero-length one — §4.9 makes them the same
- * attribute, so a value-pointer test would call the parsed one absent).
+ * in §4.9's list, and the empty string for a parsed `<a target>` as for `setAttribute('target','')`.
  *
  * THE TAINT IS ASSERTED HERE BECAUSE THE BYTES CANNOT CARRY IT. core/dom/element.c's element_attr_get holds
  * this same assert for the JSValue path, and reading Lexbor's buffer directly walks around it — so the flow

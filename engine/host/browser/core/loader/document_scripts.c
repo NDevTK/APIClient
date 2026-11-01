@@ -77,11 +77,7 @@ ScriptType script_block_type(lxb_dom_element_t *el) {
     return SCRIPT_TYPE_NONE;   /* HTML's null: no script is executed */
 }
 
-/* IS THE ATTRIBUTE PRESENT — asked of the attribute LIST and never through `get_attribute`, which answers NULL
-   for an attribute whose value is absent. `<script defer>` is exactly that: lexbor's tree construction only
-   calls `attr_set_value_wo_copy` when the token had a `value_begin`, so a boolean attribute in its usual
-   valueless spelling has `attr->value == NULL` and `get_attribute` cannot distinguish it from an absent one —
-   which is the whole of what `async` and `defer` are. */
+/* IS THE ATTRIBUTE PRESENT — asked of the attribute LIST, which is the whole of what `async` and `defer` are. */
 static bool scr_has_attr(lxb_dom_element_t *el, const char *name, size_t len) {
     return lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, len);
 }

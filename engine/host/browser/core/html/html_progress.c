@@ -52,9 +52,8 @@ static lxb_dom_element_t *progress_receiver(JSContext *ctx, JSValueConst this_va
 /* §4.10.13: "If the value attribute is omitted, then the progress bar is an indeterminate progress bar.
    Otherwise, it is a determinate progress bar." It is the attribute's PRESENCE and never its value, so
    `<progress value="x">` is DETERMINATE with a value of zero while `<progress>` answers `position` −1.
-   ASKED OF THE ATTRIBUTE LIST for the reason core/dom/element.c's boolean reflection gives: lexbor leaves
-   `attr->value` NULL for a valueless attribute, so a presence test over the value pointer reads `<progress
-   value>` — which IS determinate — as the omitted case. */
+   ASKED OF THE ATTRIBUTE LIST, as core/dom/element.c's boolean reflection asks it: `<progress value>` IS
+   determinate. */
 static bool progress_determinate(lxb_dom_element_t *el)
 {
     return lxb_dom_element_has_attribute(el, (const lxb_char_t *)"value", 5);

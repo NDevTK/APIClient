@@ -113,20 +113,9 @@ void html_option_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char 
     if (ns != NULL || !local || strcmp(local, "selected") != 0) return;
     if (!opt_tag_is(lxb_dom_interface_node(el), "option")) return;
     if (html_option_dirtiness(el)) return;   /* "if its dirtiness is false" — the whole of what dirtiness does */
-    /* ADDED and REMOVED ARE READ OFF THE ELEMENT AND NOT OFF THE VALUE POINTERS, because a NULL value pointer
-       is AMBIGUOUS here and presence is not. The chokepoint's old value is `lxb_dom_attr_value`'s, which
-       answers NULL both for an attribute that was ABSENT and for one that was present carrying no value string
-       at all — which is exactly what a parser-created boolean `<option selected>` is. This hook runs AFTER the
-       write, so the element itself answers the new state exactly.
-       WHICH LEAVES ONE QUESTION THE POINTERS DO DECIDE: with the attribute present afterwards, was this an ADD
-       or a value overwrite? A non-NULL old value settles it — the attribute was there, so nothing was added
-       and the steps name nothing to do. A NULL old value is the ambiguous pair above, and both members of it
-       reach the same answer: a genuine add sets selectedness true, and an overwrite of a value-less
-       `<option selected>` on an option whose dirtiness is false has selectedness true ALREADY (the slot is
-       absent and the read falls through to the attribute), so the write below records nothing. The one state
-       that could disagree — selectedness false under a present attribute — is reachable only through this
-       file's own factory, whose step 5 writes a real empty string, and through the `selected` setter, which
-       sets dirtiness and returned above. */
+    /* The new state is read off the element (this hook runs AFTER the write), and the old one off `old_val`,
+       which is NULL exactly when the attribute was absent: present afterwards with a non-NULL old value is a
+       value overwrite, neither added nor removed, and the steps name nothing to do. */
     present = dom_attr_get_ns(el, NULL, "selected") != NULL;
     if (present && old_val != NULL) return;   /* a value overwrite: neither added nor removed */
     html_option_set_selectedness(ctx, el, present);

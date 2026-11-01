@@ -176,16 +176,9 @@ void event_handler_attribute_parsed(JSContext *ctx, lxb_dom_node_t *root)
             index = event_target_handler_attribute_index((const char *)l, llen);
             if (index < 0 || !event_target_handler_attribute_on_element(index, body_or_frameset))
                 continue;
-            /* THE VALUE IS NEVER NULL ON THIS PATH, so step 4 is unreachable from here and the DCHECK says so
-               rather than the walk silently deactivating: an attribute that is ON the element has a value —
-               `<div onclick>` is the EMPTY string, which is a handler and not a removal — and a walk that
-               handed NULL down would deactivate every handler it was meant to install. */
+            /* An attribute on the element has a string value, so §8.1.8.1's attribute change steps step 4 (a
+               removal) is unreachable from here: `<div onclick>` is the EMPTY string, which is a handler. */
             v = lxb_dom_attr_value(a, &vlen);
-            DCHECK(v != NULL,
-                   "a parsed element carries an event handler content attribute with no value at all — DOM "
-                   "§4.9's attributes hold a string, `<div onclick>` holds the EMPTY one, and a null here "
-                   "would take §8.1.8.1's attribute change steps step 4 and DEACTIVATE the handler this walk "
-                   "exists to install");
             eha_apply(ctx, el, n, index, (const char *)v, vlen);
         }
     }

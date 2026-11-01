@@ -40,8 +40,7 @@ typedef struct {
 } EnumeratedAttribute;
 
 /* §2.3.3's comparison: an ASCII case-insensitive match between one keyword and an attribute value that is NOT
-   NUL-terminated (lexbor stores a length). `value` may be NULL only when `value_len` is 0 — an attribute that
-   is present with no value at all is the empty string, which lexbor stores as a NULL pointer. */
+   NUL-terminated (lexbor stores a length). `value` may be NULL only when `value_len` is 0. */
 bool enumerated_attribute_keyword_match(const char *keyword, const char *value, size_t value_len);
 
 /* §2.3.3's DETERMINE THE STATE, in the section's own four steps. The three special states are PASSED because

@@ -218,13 +218,9 @@ static int autofire_of(const lxb_char_t *tag, size_t n) {
    §13.2.5.33 "Attribute name state" says that when a token already has an attribute of the same name "this is a
    duplicate-attribute parse error and the new attribute must be removed from the token", so a second `src`
    is discarded and the page's own one still loads. Where there is none, the escape brings its own.
-   CARRYING IT IS `lxb_dom_element_has_attribute` AND NOT A NON-NULL VALUE — the duplicate-attribute rule above
-   turns on the TOKEN having an attribute of that name and says nothing about its value, and lexbor's tree
-   construction sets a value only where the token carried one, so `<img src>` carries `src` with NO value and
-   `get_attribute` answers NULL for it exactly as for an element that has none. A candidate built off that
-   answer brings its own `src` to a token that already has one, which §13.2.5.33 discards — so the escape is
-   constructed for a resource it cannot supply and the fire is lost. core/layout/replaced_element.c states the
-   presence/emptiness split this call is the first half of. */
+   CARRYING IT IS `lxb_dom_element_has_attribute` — the duplicate-attribute rule above turns on the TOKEN
+   having an attribute of that name and says nothing about its value, so `<img src>` carries one. A candidate
+   that brings its own `src` to a token that already has one is discarded by §13.2.5.33, and its fire is lost. */
 static int has_attribute(lxb_dom_element_t *el, const char *name) {
     return el && lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, strlen(name));
 }

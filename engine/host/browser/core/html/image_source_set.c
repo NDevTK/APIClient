@@ -41,13 +41,10 @@ static char *iss_copy(const char *s, size_t n)
     return out;
 }
 
-/* An attribute's value and its length, or NULL — Lexbor answers NULL for an attribute whose VALUE is absent, so
-   `srcset=""` and no `srcset` at all are indistinguishable through this. That merge is exactly right here and
-   nowhere else in this file: every string §4.8.4.3.9 hands to §4.8.4.3.8 defaults to THE EMPTY STRING when the
-   attribute is absent, and §4.8.4.3.8's own tests are "is not an empty string" — so both answers are the same
-   answer. The questions that ask about PRESENCE (`does child have a srcset attribute`, `does el use srcset or
-   picture`) ask `lxb_dom_element_has_attribute` instead, which is the mistake core/html/html_script.c records
-   making when it ran `<script src="">`'s child text as a program. */
+/* An attribute's value and its length, or NULL when the element does not have it. Every string §4.8.4.3.9 hands
+   to §4.8.4.3.8 defaults to THE EMPTY STRING when the attribute is absent, and §4.8.4.3.8's own tests are "is
+   not an empty string", so the callers read NULL and "" alike. The questions that ask about PRESENCE (`does
+   child have a srcset attribute`, `does el use srcset or picture`) ask `lxb_dom_element_has_attribute`. */
 static const char *iss_attr(lxb_dom_element_t *el, const char *name, size_t *out_n)
 {
     size_t n = 0;

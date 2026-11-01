@@ -625,20 +625,7 @@ void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, v
             char *dim;
 
             v = lxb_dom_element_get_attribute(src, (const lxb_char_t *)name, strlen(name), &vlen);
-            /* Lexbor answers NULL both for an ABSENT attribute and for one PRESENT WITH AN EMPTY VALUE, and
-               §15.2's mapping does tell those apart — it is stated over presence, "if element has an
-               attribute attribute set". They reach the same answer here only because §2.3.4.4 step 4 fails
-               on an empty string, which is asserted rather than assumed: the day a row maps an attribute
-               whose parse ADMITS the empty string, the conflation stops being harmless. The call allocates
-               nothing on the failure path, so the condition is side-effect-free. */
-            DCHECK(html_parse_dimension_value((const lxb_char_t *)"", 0) == NULL,
-                   "HTML §2.3.4.4 \"Percentages and lengths\"' rules for parsing dimension values accepted "
-                   "the EMPTY STRING, and this row reads an absent attribute and one present with no value "
-                   "through the same NULL. Step 4 is what separated them — \"If position is past the end of "
-                   "input or the code point at position within input is not an ASCII digit, then return "
-                   "failure\" — so a parser that answers for the empty string makes "
-                   "`<img width>` and `<img>` take different §15.2 arms with one spelling between them");
-            if (v == NULL) continue;
+            if (v == NULL) continue;   /* §15.2: "if element has an attribute attribute set" */
             /* NULL is §15.2's own answer for a value that does not parse: the hint is simply not declared by
                this origin, and the property keeps what the UA sheet or its initial value gives it. */
             dim = html_parse_dimension_value(v, vlen);
@@ -651,9 +638,8 @@ void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, v
         const lxb_char_t *v;
         size_t vlen = 0;
 
-        /* Lexbor answers NULL both for an ABSENT attribute and for one present with no value, and HTML §15.3.8's
-           rules do not tell those apart either: no keyword it names is the empty string, so `align=""` takes
-           no hint by the same route an absent `align` does. */
+        /* No keyword HTML §15.3.8 names is the empty string, so `align=""` takes no hint, as an absent `align`
+           does. */
         v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"align", 5, &vlen);
         if (v == NULL) return;
         for (i = 0; i < sizeof(ALIGN_HINT) / sizeof(ALIGN_HINT[0]); i++) {

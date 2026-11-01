@@ -1184,15 +1184,8 @@ static JSValue js_el_attr_op(JSContext *ctx, JSValueConst this_val, int argc, JS
     if (!name) return JS_EXCEPTION;
     /* DOM §4.9 "Interface Element"'s hasAttribute steps end "Return true if this has an attribute whose qualified name
        is qualifiedName; otherwise false" — a PRESENCE question, which `lxb_dom_element_has_attribute` answers
-       and a non-NULL `get_attribute` does not. The two lexbor entries share ONE key lookup
-       (`lxb_dom_element_attr_by_name`, with the same HTML-namespace local-name folding), so the swap changes
-       nothing but whether the answer depends on the attribute having a VALUE.
-       Lexbor's tree construction sets a value only when the token carried one, so `<input disabled>` has the
-       attribute and NO value, and `get_attribute` answers NULL for it exactly as it does for an attribute that
-       is absent: `hasAttribute("disabled")` was FALSE for the spelling every page writes, and
-       toggleAttribute's no-force arm — `!present` — therefore SET an attribute it was asked to flip off.
-       core/layout/replaced_element.c states the same split for §4.8.3's `alt` and keeps a separate helper for
-       the EMPTINESS question; this call wants only the first of the two. */
+       by name (`lxb_dom_element_attr_by_name`, with HTML-namespace local-name folding). toggleAttribute's
+       no-force arm reads it as `!present`. */
     present = lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, strlen(name));
     switch (magic) {
     case 0:
@@ -1663,11 +1656,7 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
                   : JS_NewStringLen(ctx, "", 0);
     /* §2.2.1 a BOOLEAN reflection is the attribute's PRESENCE, not its value — `<input disabled>` and
        `<input disabled="false">` are both disabled, and a string reflection here would report "false".
-       ASKED OF THE ATTRIBUTE LIST, because `get_attribute` answers NULL for an attribute whose VALUE is absent
-       and that is the usual spelling of every one of these: lexbor's tree construction only calls
-       `attr_set_value_wo_copy` when the token carried a `value_begin`, so `<input disabled>` has
-       `attr->value == NULL` and a presence test written over the returned pointer reported FALSE for exactly
-       the markup the attribute exists to express. It read the one case it must not miss as the absent one, for
+       ASKED OF THE ATTRIBUTE LIST, where presence is stated. It read the one case it must not miss as the absent one, for
        every boolean reflection in the table above; core/loader/document_scripts.c had to make the same
        correction for `<script defer>` and says so at its own reader. */
     if (g_reflect[magic].kind == REFLECT_BOOL)

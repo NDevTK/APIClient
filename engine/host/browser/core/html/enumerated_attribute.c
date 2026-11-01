@@ -37,9 +37,8 @@ bool enumerated_attribute_keyword_match(const char *keyword, const char *value, 
                             "as the terminator, so reaching the comparison with one is a walk that ran past "
                             "the end of the table");
     DCHECK(value != NULL || value_len == 0,
-           "§2.3.3's keyword match was given a NULL attribute value with a non-zero length — lexbor stores an "
-           "attribute that is present with no value as a NULL pointer and a length of zero, so a NULL with a "
-           "length is a read of a value that was freed or never written");
+           "§2.3.3's keyword match was given a NULL attribute value with a non-zero length — a value is (bytes, "
+           "length), so a NULL with a length is a read of a value that was freed or never written");
     for (i = 0; i < value_len; i++) {
         char x = keyword[i], y = value[i];
 
@@ -95,12 +94,10 @@ int enumerated_attribute_state(const lxb_dom_element_t *el, const char *attr,
     if (!lxb_dom_element_has_attribute(e, (const lxb_char_t *)attr, alen))
         return missing;
     v = lxb_dom_element_get_attribute(e, (const lxb_char_t *)attr, alen, &len);
-    /* An attribute PRESENT with no value at all (`<div translate>`) is the empty string, which lexbor stores as
-       a NULL value pointer. STEP 2 STILL RUNS FOR IT, and that is not a detail: §2.5.5's referrer policy
-       attribute has THE EMPTY STRING AS A KEYWORD, so `referrerpolicy=""` is matched here rather than falling
-       to step 3 — an attribute may legitimately map the empty string to a state that is not its empty value
-       default. Skipping the loop on a NULL pointer would decide that by how lexbor happens to store a value. */
-    if (!v) len = 0;
+    /* An attribute present with no value (`<div translate>`) is the empty string, and STEP 2 STILL RUNS FOR IT:
+       §2.5.5's referrer policy attribute has THE EMPTY STRING AS A KEYWORD, so `referrerpolicy=""` is matched
+       here rather than falling to step 3 — an attribute may map the empty string to a state that is not its
+       empty value default. */
     for (i = 0; kw[i].keyword; i++)                             /* STEP 2 */
         if (enumerated_attribute_keyword_match(kw[i].keyword, (const char *)v, len)) return kw[i].state;
     if (len == 0) return empty;                                 /* STEP 3 */

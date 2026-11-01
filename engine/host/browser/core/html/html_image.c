@@ -230,14 +230,10 @@ static void img_abort_both(JSContext *ctx, JSValueConst st)
     img_forget_data(ctx, st);
 }
 
-/* An attribute's value, or NULL — AND NULL MEANS EITHER ABSENT OR EMPTY, which is Lexbor's answer and not this
-   function's choice: `lxb_dom_element_get_attribute` returns NULL for an attribute whose VALUE is absent, so
-   `<img src="">` and `<img>` are indistinguishable through it. That merge is exactly right for the one
-   question §4.8.4.3.5 asks with a value — "it has a src attribute specified whose value is not the empty
-   string", where both answers are "no candidate" — and exactly wrong for the two that ask about PRESENCE
-   ("the element has a src attribute", and `complete`'s "the src attribute's value is the empty string"),
-   which is why those ask `lxb_dom_element_has_attribute` instead. Reading presence off this is the mistake
-   core/html/html_script.c records making, where it ran `<script src="">`'s child text as a program. */
+/* An attribute's value, or NULL when the element does not have it. §4.8.4.3.5's value question — "it has a src
+   attribute specified whose value is not the empty string" — answers "no candidate" for NULL and "" alike; the
+   two that ask about PRESENCE ("the element has a src attribute", and `complete`'s "the src attribute's value
+   is the empty string") ask `lxb_dom_element_has_attribute`. */
 static const char *img_attr(lxb_dom_element_t *el, const char *name, size_t *out_n)
 {
     size_t n = 0;

@@ -422,8 +422,7 @@ static bool ei_is_candidate(JSContext *ctx, JSValueConst el)
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (html_form_control_is_disabled(ctx, el)) return false;
-    /* PRESENCE, asked of §4.9's attribute LIST: a parsed `<x readonly>` has no value buffer at all, so a test
-       on the VALUE pointer answers "absent" for exactly the markup that writes it. */
+    /* PRESENCE, asked of §4.9's attribute LIST. */
     if (dom_attr_get_ns(lxb_dom_interface_element(n), NULL, "readonly")) return false;
     for (a = n->parent; a; a = a->parent) {
         size_t len = 0;

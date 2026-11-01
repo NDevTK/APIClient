@@ -256,9 +256,7 @@ int autofocus_element_inserted(lxb_dom_element_t *el, JSStepHdr *h, uint8_t *ua_
                                                  "element");
     /* The algorithm is stated over "an element with the AUTOFOCUS ATTRIBUTE SPECIFIED", so the attribute is the
        first question — asked here rather than at the caller, because the caller is DOM §4.2.3's per-node walk
-       and every condition an insertion step has belongs to the step. "Specified" is presence: the parser leaves
-       a valueless `<input autofocus>`'s value NULL, which `get_attribute` answers exactly as it answers an
-       absent attribute. */
+       and every condition an insertion step has belongs to the step. "Specified" is presence. */
     if (!lxb_dom_element_has_attribute(el, (const lxb_char_t *)"autofocus", 9)) return 0;
     /* AND THE REST OF THAT SAME SENTENCE — "is INSERTED INTO A DOCUMENT" — which is a DEFINED TERM rather
        than prose, and is the condition these steps were missing. HTML §2.1.4 "DOM trees" defines it and its

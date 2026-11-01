@@ -139,8 +139,7 @@ HtmlInputValueMode input_value_mode(HtmlInputState st)
 }
 
 /* §4.10.5.4's default and default/on getters read the `value` CONTENT ATTRIBUTE. Presence is a question about
-   §4.9's attribute LIST and not about the value pointer — a parsed `<input value>` has no value buffer — and
-   the taint shadow is consulted at the attribute's own identity so a source stored through `setAttribute` is
+   §4.9's attribute LIST, and the taint shadow is consulted at the attribute's own identity so a source stored through `setAttribute` is
    still a source when it is read back. `fallback` is what an absent attribute answers. OWNED. */
 static JSValue iv_content_attr(JSContext *ctx, lxb_dom_element_t *el, const char *fallback)
 {

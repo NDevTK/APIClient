@@ -77,8 +77,8 @@ typedef enum {
 } ImgRepresents;
 
 /* Attribute presence and emptiness are two questions §4.8.3 asks separately ("set to the empty string" versus
-   "not set"). Lexbor's `get_attribute` answers NULL for both, so presence goes through `has_attribute`, as
-   core/html/html_image.c's `complete` does for `src`. */
+   "not set"), so each has its own helper; presence goes through `has_attribute`, as core/html/html_image.c's
+   `complete` does for `src`. */
 static bool rep_attr_present(lxb_dom_element_t *el, const char *name)
 {
     return lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, strlen(name));

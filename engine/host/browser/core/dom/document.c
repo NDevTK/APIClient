@@ -3951,9 +3951,8 @@ static const Origin *doc_declared_origin(lxb_dom_node_t *el, SandboxFlags docume
     bool               have_base;
     const Origin      *o;
 
-    /* "Is set" is a presence test at all three attributes: Lexbor's get_attribute answers NULL for a present empty
-       value, which would read `<iframe sandbox>` (the most restrictive spelling) as unsandboxed and `<iframe
-       srcdoc>` as loading its `src`, as core/html/html_iframe.c also distinguishes. */
+    /* "Is set" is a presence test at all three attributes: `<iframe sandbox>` is the most restrictive spelling,
+       and `<iframe srcdoc>` does not load its `src`, as core/html/html_iframe.c also distinguishes. */
     if (document_flags & SANDBOX_ORIGIN)                                    /* step 1 */
         return origin_opaque_new();
     if (lxb_dom_element_has_attribute(e, (const lxb_char_t *)"sandbox", 7)) {
@@ -4030,8 +4029,8 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
             /* §9.4 step 3's first conjunct: "if element's `allowfullscreen` attribute is specified". A boolean
                content attribute (HTML §2.3.2 "Boolean attributes": "The presence of a boolean attribute on an
                element represents the true value, and the absence of the attribute represents the false value"), so
-               presence is what counts (`allowfullscreen="false"` specifies it), asked with `has_attribute` since a
-               present empty value reads as NULL. Inside the `iframe` guard because §9.4 step 1 returns early
+               presence is what counts (`allowfullscreen="false"` specifies it), asked with `has_attribute`.
+               Inside the `iframe` guard because §9.4 step 1 returns early
                otherwise and HTML declares `allowfullscreen` on `iframe` alone. */
             allowfullscreen = lxb_dom_element_has_attribute((lxb_dom_element_t *)el,
                                                            (const lxb_char_t *)"allowfullscreen", 15);

@@ -211,8 +211,7 @@ static lxb_dom_element_t *dialog_elem_of(JSValueConst v)
     return html_dialog_is_dialog(n) ? lxb_dom_interface_element(n) : NULL;
 }
 
-/* "If subject does not have an open attribute" — asked of §4.9's attribute LIST and not of its value, because
-   the parser stores a valueless `<dialog open>` with no value buffer at all. */
+/* "If subject does not have an open attribute" — asked of §4.9's attribute LIST. */
 static bool dialog_has_open(lxb_dom_element_t *el)
 {
     return el != NULL && dom_attr_get_ns(el, NULL, "open") != NULL;

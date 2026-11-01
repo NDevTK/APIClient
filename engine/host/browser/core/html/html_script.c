@@ -384,9 +384,8 @@ static lxb_dom_node_t *script_receiver(JSContext *ctx, JSValueConst this_val, co
 
 /* §4.12.1: "The async getter steps are: 1. If this's force async is true, then return true. 2. If this's async
    content attribute is present, then return true. 3. Return false."
-   STEP 2 IS THE ATTRIBUTE'S PRESENCE and is asked of the attribute LIST, not through get_attribute, which
-   answers NULL for the valueless spelling `<script async>` — the same read document_scripts.c had to correct
-   for `defer`, and the reason the two halves of §4.12.1 must ask this one question the same way. */
+   STEP 2 IS THE ATTRIBUTE'S PRESENCE and is asked of the attribute LIST, as document_scripts.c asks it for
+   `async` and `defer`, so the two halves of §4.12.1 ask this one question the same way. */
 static JSValue js_script_async(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_node_t *n = script_receiver(ctx, this_val, "async");
@@ -888,10 +887,8 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
         endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_SCRIPT_ELEMENT);
         return;
     }
-    /* HTML §4.12.1.1's `src` BRANCH IS ENTERED ON THE ATTRIBUTE, which is the same correction the document scan needed
-       and for the same reason: `get_attribute` answers NULL for an attribute whose value is absent, so a
-       presence test written over the VALUE let `<script src="">` fall through to the child-text branch and RUN
-       it — markup a browser runs nothing for. */
+    /* HTML §4.12.1.1's `src` BRANCH IS ENTERED ON THE ATTRIBUTE's presence, as the document scan's is:
+       `<script src="">` takes this branch and runs no child text. */
     /* …AND THE CONCRETE ARM BELOW RECORDS NOTHING HERE, WHICH IS A ROUTE AND NOT AN OMISSION — the asymmetry
        with the arm above is the whole of why it is written down. A TAINTED `src` has no address to fetch, so
        nothing parks and this is the only place that sighting can be made; a concrete one PARKS, and every
@@ -906,11 +903,10 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
 
         src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &n_len);
         /* "IF SRC IS THE EMPTY STRING, THEN QUEUE AN ELEMENT TASK ON THE DOM MANIPULATION TASK SOURCE GIVEN EL
-           TO FIRE AN EVENT NAMED ERROR AT EL, AND RETURN." Both halves of that sentence run now; the return
-           alone stood here for as long as the event was a comment. A NULL from `get_attribute` is the same
-           arm: `has_src` was answered by `has_attribute`, so the attribute IS present and an absent VALUE is
-           the empty string — which is exactly what the step names. */
-        if (!src || !n_len) { html_script_queue_error(ctx, el); return; }
+           TO FIRE AN EVENT NAMED ERROR AT EL, AND RETURN." `has_src` was answered by `has_attribute`, so `src` is
+           the attribute's value and never NULL. */
+        DCHECK(src != NULL, "a `src` the attribute list holds read back as absent through get_attribute");
+        if (!n_len) { html_script_queue_error(ctx, el); return; }
         /* "ENCODING-PARSING A URL GIVEN src, RELATIVE TO EL'S NODE DOCUMENT" — §4.12.1.1's own step, and the
            realm this chokepoint was entered with IS that document (core/dom/element.c hands the inserted node's
            document, not the mutating one). It was missing: the raw ATTRIBUTE went to the host, so an injected

@@ -115,7 +115,7 @@ static JSValue nonce_get_slot(JSContext *ctx, lxb_dom_element_t *el)
     /* DOM §4.9 Interface Element: an attribute's value is a string, and `<script nonce>` with no `=` has the
        EMPTY one rather than none — which is what step 4 of the steps below would have copied, and is not
        step 3's null. */
-    return JS_NewStringLen(ctx, v ? (const char *)v : "", v ? vl : 0);
+    return JS_NewStringLen(ctx, (const char *)v, vl);
 }
 
 /* THE SLOT, WRITTEN — through the COW write, so a nonce one arm of a fork assigned is that arm's alone and its
