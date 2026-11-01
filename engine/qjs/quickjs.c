@@ -47359,7 +47359,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         }
                         JS_FreeValue(ctx, ret_val);
                         ret_val = JS_UNDEFINED;
-                        gp_obj = JS_MKPTR(JS_TAG_OBJECT, gproto);
+                        /* The record stays the operation's parked operands, so its object becomes the prototype:
+                           a park at the label below resumes from tg->obj, and the step link there would walk
+                           again. The new link is held before the old one is released. */
+                        {
+                            JSValue gstep = CONT_OWN_TAKE(&tg->obj);
+                            CONT_OWN_SET(ctx, &tg->obj, JS_MKPTR(JS_TAG_OBJECT, gproto));
+                            JS_FreeValue(ctx, gstep);
+                        }
+                        gp_obj = tg->obj;
                         goto do_getprop_tramp;
                     }
                     if (gouter_kind == CONT_TRAP_GET) {

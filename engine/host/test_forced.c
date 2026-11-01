@@ -99,6 +99,8 @@
 #include "core/rendering/rendering.h"
 #include "core/html/trusted_types.h"
 #include "core/dom/node.h"
+#include "core/dom/named_walk.h"
+#include "core/timing/thread_work.h"
 #include "core/dom/element.h"
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
@@ -5634,6 +5636,57 @@ TF_UNIT void concat_keyed_selftest(JSContext *ctx)
           "the rest point");
     CHECK(susp_on > susp_off,
           "forcing every offer produced no more suspensions than declining every one");
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+}
+
+/* A [[Get]] that misses a Document's named properties walks on to its prototype (§10.1.8.1 OrdinaryGet step 2)
+   from the keyed entry's step delivery, and that hop is an offer the scheduler may take. The parked operation
+   must resume at the prototype: each element is visited once under both schedules, so the charged element
+   count equals the document's element count. A count above it is a resume that re-ran the named walk. */
+static const char *TF_NAMED_WALKON_SRC =
+    "(function(){ return document.zqNoNamedElement === undefined ? 1 : -1; })()";
+
+TF_UNIT void named_walk_on_selftest(JSContext *ctx, lxb_html_document_t *dom)
+{
+    static const JSFlowControlHooks *const SCHED[2] = { &TF_DIFF_DECLINE, &TF_DIFF_FORCE };
+    lxb_dom_node_t *root = lxb_dom_interface_node(dom);
+    uint64_t elements = 0;
+
+    for (lxb_dom_node_t *e = named_walk_successor(root, root); e; e = named_walk_successor(e, root)) elements++;
+    CHECK(elements > 0, "the fixture's document holds no element, so a named walk over it proves nothing");
+    for (int k = 0; k < 2; k++) {
+        ThreadWorkCensus before, now;
+        JSValue *flow, res = JS_UNDEFINED;
+        int32_t got = 0;
+        int r;
+
+        thread_work_census(&before);
+        JS_SetFlowControlHooks(SCHED[k]);
+        flow = JS_FlowNew(ctx, TF_NAMED_WALKON_SRC, strlen(TF_NAMED_WALKON_SRC), "named-walk-on", 0);
+        CHECK(flow != NULL, "the named walk-on fixture could not create a flow");
+        do {
+            r = JS_FlowResume(ctx, flow, &res);
+            CHECK(r != JS_FLOW_DETACHED, "the named walk-on fixture's flow detached");
+            thread_work_census(&now);
+            CHECKF(now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK] <= elements,
+                   "a missed Document named-property [[Get]] visited %llu elements of a %llu-element document "
+                   "(schedule %s): a resume of the parked walk-on re-ran the named walk instead of continuing at "
+                   "the prototype",
+                   (unsigned long long)(now.charged_input[THREAD_WORK_DOM_WALK] -
+                                        before.charged_input[THREAD_WORK_DOM_WALK]),
+                   (unsigned long long)elements, k ? "forced" : "declined");
+        } while (r != 0);
+        CHECK(!JS_IsException(res), "the named walk-on fixture's program threw");
+        JS_ToInt32(ctx, &got, res);
+        JS_FreeValue(ctx, res);
+        JS_FlowFree(ctx, flow);
+        CHECK(got == 1, "a read of a name no element carries did not answer undefined");
+        CHECKF(now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK] == elements,
+               "a missed Document named-property [[Get]] visited %llu elements of a %llu-element document",
+               (unsigned long long)(now.charged_input[THREAD_WORK_DOM_WALK] -
+                                    before.charged_input[THREAD_WORK_DOM_WALK]),
+               (unsigned long long)elements);
+    }
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
@@ -37367,6 +37420,8 @@ int main(int argc, char **argv) {
        reach. Here rather than earlier because three of its four families need the DOCUMENT: the realm above
        is what installs `document`, `Response` and §6.12's three members. */
     union_arm_selftest(ctx);
+    /* A Document named-property miss walks on to the prototype once under both schedules; needs the document. */
+    named_walk_on_selftest(ctx, dom);
     /* HTML §4.12.5.1.16's ROUND TRIP, immediately after the union arms and for the same two reasons: it needs
        a REALM and the DOCUMENT, which the block above establishes, and it must stand BEFORE the time-travel
        hooks below so its canvas and its bitmap belong to the pre-boot baseline rather than to whichever flow
