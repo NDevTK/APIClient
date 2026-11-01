@@ -59,10 +59,12 @@ static int user_scroll_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
         DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
                "the person's scroll was built over an argument that is not an element");
-        s->job = NULL;
+        /* Begun on the job, whose cascade record the walk's entry reads to assert the target has a box. */
+        s->job = layout_job_new();
+        layout_job_enter(s->job);
         element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(n), SCROLL_LOGICAL_NEAREST,
                                           SCROLL_LOGICAL_NEAREST, NULL);
-        s->job = layout_job_new();
+        layout_job_leave(s->job);
         s->hdr.stage = USF_BOX;
     }
 
@@ -102,8 +104,7 @@ JSValue *user_scroll_flow(JSContext *ctx, lxb_dom_element_t *target)
     JSValue *base;
 
     DCHECK(dctx != NULL, "the person scrolled an element whose document has no realm");
-    DCHECK(element_view_has_box(n), "the person scrolled an element with no associated box — "
-                                         "scroll a target into view has no position to reach for it");
+    /* That the target has a box is asserted where the machine begins its walk, on its job's records. */
     if (g_user_scroll_stepid < 0) {
         g_user_scroll_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &user_scroll_def);
         CHECK(g_user_scroll_stepid >= 0, "the person's scroll machine could not be registered with this runtime");
