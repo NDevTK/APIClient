@@ -31998,27 +31998,15 @@ static inline bool tramp_can_construct(JSValueConst func) {
    the first own `atom` slot is a GETSET whose getter is a NORMAL bytecode function, else NULL (data prop / C
    getter / exotic / absent → the plain slow path). */
 static JSShapeProperty *find_own_property(JSProperty **ppr, JSObject *p, JSAtom atom);
-/* Does the ordinary [[Get]]/[[Set]] walk CONTINUE past `p` for `atom`, once no ordinary own slot was found?
-   The three walkers below all stopped at `is_exotic`, which is true only where the exotic class ANSWERS FOR THAT
-   KEY: an Array's [[Get]] is ordinary, so `Object.setPrototypeOf([], {get a(){…}}); [].a` walks to the accessor
-   — and stopping meant that read fell to JS_GetPropertyInternal and ran the getter from C. Same for a Proxy
-   above an Array, a String object or an arguments object.
-   What genuinely does not walk is a key the exotic object answers ITSELF: a fast-array element in range, ANY
-   canonical numeric index on a typed array (10.4.5.4 returns undefined for an out-of-range one and never
-   consults the prototype), and whatever a class-defined [[GetOwnProperty]] claims. Those are a different
-   algorithm, not a fallback — which is what the old bail claimed about every exotic object.
-   A PROXY stops it: its [[Get]] is the trap, not an ordinary walk, and whichever caller cares about that
-   (tramp_proto_proxy) has already answered it — the two ACCESSOR walkers must stop there rather than look past
-   it, which is also what keeps this from consulting a class lookup that could run user code.
-   WHAT THE CLASS ANSWERED IS THE OTHER HALF OF THE ANSWER, and the two accessor walkers ask for it. A class
-   whose [[GetOwnProperty]] hands back an ACCESSOR — HTML §7.2.3.5 step 3's same-origin WindowProxy hands back
-   the other document's Window's, which is how `frame.contentWindow.onunload` is reached at all — used to stop
-   the walk with nothing to show for it, and the read then fell to JS_GetPropertyInternal, whose exotic arm
-   DFAILs on exactly that descriptor. So the descriptor comes back and the getter or setter in it is routed
-   like any other, on the tramp chain, with the base as its receiver. `desc` NULL asks only whether the walk
-   continues, which is what the two non-accessor walkers want.
-   A class whose [[GetOwnProperty]] answers `atom` with a step (tramp_step_exotic) stops the walk with nothing
-   found: its answer rests or forks, so the operation is the keyed entry's, which runs the step. */
+/* Whether the ordinary [[Get]]/[[Set]] walk continues past exotic `p` for `atom` once no own slot was found.
+   An exotic object answers some keys itself and the walk stops there: a fast-array element in range, any
+   canonical numeric index on a typed array (10.4.5.4 never consults the prototype), and whatever a class's
+   [[GetOwnProperty]] claims; every other key walks on, as an Array's [[Get]] is ordinary. A Proxy stops it (its
+   trap is tramp_proto_proxy's), and so does a class that answers `atom` with a step (tramp_step_exotic): both
+   are the keyed entry's to run, and neither is asked from C here.
+   A class's answer can be an accessor (HTML §7.2.3.5 step 3's same-origin WindowProxy hands back the other
+   Window's), so with `desc` the descriptor comes back and the two accessor walkers route its getter or setter
+   on the tramp chain with the base as receiver; `desc` NULL asks only whether the walk continues. */
 static bool tramp_walk_continues_desc(JSContext *ctx, JSObject *p, JSAtom atom,
                                       JSPropertyDescriptor *desc, bool *pfound)
 {
@@ -42646,26 +42634,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             && (JS_VALUE_GET_OBJ(pd->target)->class_id == JS_CLASS_PROXY
                                 || gp_op == GP_GET || gp_op == GP_SET || gp_op == GP_HAS
                                 || gp_op == GP_GETOWNPROP)) {
-                            /* NO TRAP. 10.5.x step 6 forwards to target.[[Get]](P, Receiver) — which IS this
-                               entry — so it loops here rather than being handed to JS_GetPropertyInternal, which
-                               re-entered js_proxy_get from C and cost one C activation per hop: a chain of
-                               trapless proxies hit the stack floor and was caught into a soft RangeError, a bound
-                               wearing an error's clothes. Every operand of the request stands except the object;
-                               the RECEIVER in particular does NOT change across a forward, which is the whole
-                               reason it is an operand.
-                               For a [[Get]] or a [[Set]] the loop takes an ORDINARY target too, because the
-                               forward is the same operation either way — §10.5.8 [[Get]] ( propertyKey,
-                               receiver ) step 6 and §10.5.9 [[Set]] ( propertyKey, value, receiver ) step 6 are
-                               both `Return ? target.[[X]](…, receiver)`, with the receiver unchanged — and the C
-                               call is what hid the target's ACCESSOR: a generator getter or setter reached
-                               through a trapless proxy had its coroutine created inside JS_GetPropertyInternal /
-                               JS_SetPropertyInternal2, off the chain, and a bound one ran with no flow base.
-                               §10.5.7 [[HasProperty]] ( propertyKey ) and §10.5.5 [[GetOwnProperty]] (
-                               propertyKey ) forward the same way at step 6, so a target whose class answers the
-                               key by a step runs it on this entry.
-                               The other operations still spell their forward out below — their C entries do more
-                               than re-dispatch (a trapless [[Delete]] reports false where the direct one throws),
-                               so each is its own conversion, not a case of this one. */
+                            /* NO TRAP. ECMA-262 §10.5.8 [[Get]] ( propertyKey, receiver ), §10.5.9 [[Set]] (
+                               propertyKey, value, receiver ), §10.5.7 [[HasProperty]] ( propertyKey ) and §10.5.5
+                               [[GetOwnProperty]] ( propertyKey ) each forward at step 6 to the same internal
+                               method of the target, which is this entry: so it loops here, for an ordinary target
+                               too, rather than answering from C, where a target's accessor or a class's step
+                               [[GetOwnProperty]] would run with no flow base and a chain of trapless proxies would
+                               cost a C activation per hop. Every operand stands except the object; the receiver
+                               does not change across a forward. The other operations spell their forward out
+                               below, since their C entries do more than re-dispatch (a trapless [[Delete]]
+                               reports false where the direct one throws). */
                             gp_obj = pd->target;
                             gp_recv = gp_recv_r;
                             gp_no_throw = gp_nothrow_r;

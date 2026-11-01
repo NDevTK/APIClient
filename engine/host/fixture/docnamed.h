@@ -1,25 +1,14 @@
-/* THE DOCUMENT NAMED-PROPERTIES DOCUMENT: HTML §3.1.7 "DOM tree accessors"' named elements, read through the
-   Document's [LegacyOverrideBuiltIns] named getter, each answer sent as a concrete query parameter.
-   `<img name=getElementById>` shadows the Document member of that name; `<div name=querySelector>` does not, a
-   div being no named element. Two elements sharing a name answer a two-member HTMLCollection; an object is named
-   by its id, an img by its id only beside a non-empty name; `location`, unforgeable, is a non-configurable own
-   property of the instance and absent from the prototype, so it is never shadowed; a named property is not deleted
-   and is an own key. Both named getters answer [[GetOwnProperty]] with Web IDL §3.9.1's descriptor (the Window's
-   unenumerable and writable), and a bare global name reaches the Window's. A [[Set]] on the Document ignores its
-   named properties (Web IDL §3.9.2), so `document.title = v` runs the setter an img named title shadows for a
-   read; one on the Window takes WindowProperties' writable descriptor and defines on the Window.
-   A form's named getter (HTML §4.10.3, [LegacyOverrideBuiltIns]) answers `<input name=action>` over the
-   `action` member, an `img` it owns and a control whose form attribute names it, never an Image Button or a
-   div, a renamed control by its old name from the past names map, with an unenumerable, unwritable descriptor.
-   A computed-key write of an object (`o[k] = {}`) whose chain holds a named-properties link is OrdinarySet over
-   that link: on the Window it defines on the Window, a named element's name included; on a Document, or an
-   object inheriting from one, it defines on the receiver.
-   A Document placed above a primitive's prototype or above %IteratorPrototype% answers a C activation's own
-   lookups there by its step: JSON.stringify's toJSON read off a BigInt reaches `<img name=toJSON>`, which is no
-   function, and a spread whose array iterator lost its own `next` reaches `<img name=next>`; each throws a TypeError.
-   A Proxy with no traps over the Document or WindowProperties forwards `in` and [[GetOwnProperty]] to its target's
-   named access. Object.assign copies the Document's named properties onto its target, the receiver of each write.
-   `in` over the WindowProxy walks W's chain to WindowProperties.
+/* THE DOCUMENT NAMED-PROPERTIES DOCUMENT: HTML §3.1.7's named elements through the Document's
+   [LegacyOverrideBuiltIns] named getter, HTML §4.10.3's through a form's, and WindowProperties', each answer sent
+   as a query parameter. An img names a member it shadows, a div names nothing; a shared name is an HTMLCollection;
+   an object is named by its id, an img by its id only beside a name; the unforgeable `location` is never shadowed;
+   a named property is not deleted and is an own key, with Web IDL §3.9.1's descriptor (the Window's unenumerable
+   and writable, a form's unenumerable and unwritable). A [[Set]] on a Document ignores its named properties (Web
+   IDL §3.9.2) and one on the Window defines on the Window. A form answers the controls it owns, never an Image
+   Button or a div, and a renamed control by its past name. The later scripts reach named access from operations
+   C walks: a computed-key object write over each link, a Document above BigInt.prototype or %IteratorPrototype%
+   (each read throws a TypeError), `in` and [[GetOwnProperty]] through a trapless Proxy, Object.assign from the
+   Document, and `in` over the WindowProxy.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_DOCNAMED_H
