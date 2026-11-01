@@ -1,82 +1,30 @@
-/* WHAT A DOCUMENT LOOKS LIKE — the one entry that takes a Document to an RGBA bitmap, and the JOIN
- * core/paint/display_list_raster.h deliberately refuses to make.
+/* WHAT A DOCUMENT LOOKS LIKE — HTML §8.1.7.3 update the rendering step 22's paint ("update the rendering or user
+ * interface of doc and its node navigable to reflect the current state"), and the raster that turns what it left
+ * into an RGBA bitmap.
  *
- * IT IS A COMPONENT BECAUSE THE TWO HALVES BELOW IT EACH REFUSE THE OTHER'S OPERAND, and that refusal is
- * argued at both of them rather than assumed here. core/paint/box_paint.h paints ONE STACKING CONTEXT and
- * takes no surface: its output is CSS 2.1 §E.2 "Painting order"'s marks, and it says so by appending rather
- * than replacing, "so a caller composing several contexts into one surface keeps the order it composed them
- * in". core/paint/display_list_raster.h composites a list onto a surface the caller has ALREADY SIZED, and
- * ends the argument in one sentence: "There is deliberately no entry here that reads a viewport." So the
- * ROOT ELEMENT, the REGION and the DEVICE RATIO are three operands neither of them will assemble, and the
- * component that assembles them is a third one. Writing that assembly at each caller instead is the second
- * copy every header on this road warns about — a rasterizing caller and a painting caller would then each
- * read CSS 2.1 §2.3.1 "The canvas"'s region, and two answers to one question are free to disagree about the
- * size of the image the other one drew.
+ * It is a component because the two halves below it each refuse the other's operand: core/paint/box_paint.h
+ * paints one stacking context into a display list and takes no surface, and core/paint/display_list_raster.h
+ * composites a list onto a surface the caller has already sized and reads no viewport. The root element, CSS
+ * 2.1 §2.3.1 "The canvas"'s region and the device ratio are three operands neither assembles.
  *
- * THE REGION IS READ FIRST AND IT IS WHAT THE BOOL ANSWERS. CSS 2.1 §2.3.1 leaves the rendered area to the
- * user agent — "The canvas is infinite for each dimension of the space, but rendering generally occurs within
- * a finite region of the canvas, established by the user agent according to the target medium" — and
- * core/frame/viewport.h is where this engine establishes it. A document that NO NAVIGABLE PRESENTS has no
- * such region at all, which `viewport_canvas_region` answers false for, and that is a state rather than a
- * failure: there is no image, because there is nowhere for one to be. It is asked BEFORE the walk because the
- * walk's own step 1 asks the same component the same question, so a document with no region would otherwise
- * be walked in full to produce a list with no canvas mark in it.
+ * The paint and the raster are two entries because they happen at two moments. The paint is step 22, run by
+ * core/rendering/rendering.c inside a layout job it enters, and it reads the tree, the cascade and the viewport of
+ * the world standing at that rendering opportunity; its frame is immutable and core/paint/painted_frame.h keeps
+ * the document's last one. The raster reads the frame alone, so an image is of the frame the page's own event
+ * loop painted and never of a tree read later.
  *
- * THE BOOL ANSWERS THAT ONE QUESTION AND THE COUNT ANSWERS EVERY OTHER, which is the split
- * core/paint/box_paint.h's `offers` and core/paint/display_list_raster.h's three numbers already make one
- * level down: a bitmap with no ink on it means the walk reached no box, or reached boxes that painted
- * nothing, or was STOPPED — and a caller handed only the bitmap cannot separate them. A PAINTER THAT STOPS IS
- * NOT A FALSE ANSWER HERE, because box_paint's own contract makes it a partial picture rather than no
- * picture: "A false answer LEAVES `out` AND `offers` AS THEY STOOD — every mark already appended stays
- * appended". So a stopped walk rasterizes what it laid and reports `complete` false, and the bool stays the
- * region's alone. Two facts, two fields; one bit answering both is the shape that gets read as the other.
- *
- * `out` IS INITIALISED HERE AND FREED BY THE CALLER, ALWAYS, INCLUDING ON A FALSE ANSWER. The zero-area
- * surface core/graphics/raster_surface.h defines — NULL pixels with both dimensions zero — is what a false
- * answer leaves, so there is no arm on which a caller must remember not to free. What `out` may NOT be is a
- * surface that already holds pixels: `raster_surface_init` overwrites `px` without freeing it, so the caller
- * frees before it asks again, exactly as it would before any other initialisation.
- *
- * A ROOT THAT GENERATES NO BOX IS AN EMPTY IMAGE AND NOT AN ABSENT ONE, AND THE KEYWORD THAT REACHES IT IS
- * ONE RATHER THAN css-display-3 §2.5 "Box Generation: the none and contents keywords"' TWO. A root whose
- * computed `display` is `none` generates nothing for CSS 2.1 §E.2 "Painting order" to walk — css-display-3
- * §2.5 states it of the whole subtree, "The element and its descendants generate no boxes or text sequences"
- * — and core/paint/stacking_order.h's stacking-context test is stated over a BOX and crashes rather than
- * answering for one that does not exist. THAT CRASH IS CORRECT AND ITS OWN MESSAGE SAYS WHOSE QUESTION THIS
- * IS: `The caller's own walk is what knows the difference`. This entry is that caller, it asks BEFORE the
- * walk, and the region's own surface with nothing laid on it is the answer.
- * THE OTHER KEYWORD CANNOT REACH A ROOT AT ALL, which is css-display-3 §2.8 "The Root Element's Principal
- * Box" and is ASSERTED here rather than assumed: css-display-3 §2.8 says "Additionally, a display of contents
- * computes to block on the root element", and core/css/css_computed_value.c performs exactly that — so a
- * `contents` arriving here is this engine's own computed value disagreeing with the section it implements
- * and is never anything a page declared. `none` survives the same blockification because css-display-3 §2.7
- * "Automatic Box Type Transformations" says it does: "This has no effect on display types that generate no
- * box at all, such as none or contents".
- *
- * THE RESIDUAL THAT STOOD HERE IS RETIRED, AND IT WAS WRONG IN BOTH CLAUSES A READER ACTS ON — WHICH IS THE
- * PART WORTH KEEPING, because a residual is read once, by somebody who has already decided to build it.
- * ITS NOT-COVERED CLAUSE ENUMERATED INPUTS rather than a property — `one of css-display-3 §2.5's two
- * keywords` — and one of the two is already answered by a step that runs EARLIER than the step the residual
- * was about, so a reader building to the list would have written an arm that cannot run and would have read
- * the `contents` case as unhandled when css-display-3 §2.8 handles it. The check that catches this is one
- * question asked of each named input: WHICH STEP FIRST SEES IT.
- * ITS NEXT-DIFF CLAUSE NAMED THE WRONG COMPONENT AND THE WRONG SHAPE. It said to make `so_generates_box` an
- * entry of core/paint/stacking_order.h, which proposes a css-display-3 §2.5 predicate as a public entry of a
- * CSS 2.1 §9.9 header; and the tree ALREADY answers box generation publicly, in core/dom/element_view.h,
- * whose `element_view_has_box` is HTML's `being rendered` and therefore folds PRESENTATION into the same bit
- * — connectedness, an owner document, a viewport. THOSE TWO FACTS ROUTE TO OPPOSITE ARMS HERE: a document
- * with no rendered region answers FALSE and a document with no root box answers TRUE with an empty image, so
- * one bit for both is the shape this entry's own bool/count split exists to avoid. Neither predicate is read
- * here. What is read is the ROOT's own computed `display`, which css-display-3 §2.8 reduces to one keyword.
- * RETIREMENT: this record goes when a public entry answers css-display-3 §2.5's box generation WITHOUT also
- * answering whether the document is presented, and this file routes to it. */
+ * The region is read first. A document no navigable presents has none, and its frame holds no picture: the
+ * raster answers false with a zero-area surface. A root that generates no box (css-display-3 §2.5's `none`; §2.8
+ * computes `contents` to `block` on the root) or no document element at all is a whole, empty picture: the
+ * region's surface with no mark, `complete` true and zero offers. A painter that stops is not a false answer:
+ * box_paint keeps every mark it laid, so the frame is a partial picture with `complete` false. */
 #ifndef ENGINE_HOST_BROWSER_CORE_PAINT_DOCUMENT_PAINT_H
 #define ENGINE_HOST_BROWSER_CORE_PAINT_DOCUMENT_PAINT_H
 
 #include <stdbool.h>
 #include <stddef.h>
 
-#include <lexbor/html/html.h>
+#include <lexbor/dom/dom.h>
 
 #include "core/graphics/raster_surface.h"
 #include "core/paint/box_paint.h"   /* `BoxPaintCensus` — what became of each of CSS 2.1 §E.2's offers, and
@@ -126,18 +74,18 @@ typedef struct {
     unsigned elements;
 } DocumentPaintCount;
 
-/* RENDER THE DOCUMENT `dom` PRESENTS, in the realm `ctx`, into `out`, writing what it did to `count`.
-   ANSWERS FALSE where CSS 2.1 §2.3.1 "The canvas" establishes no rendered region for this document — which
-   core/frame/viewport.h decides and nothing here re-derives — and then `out` is a zero-area surface and every
-   field of `count` is zero. `out` is INITIALISED by this entry on every arm and is the caller's to free on
-   every arm; `count` is required for core/paint/display_list_raster.h's own reason and is written even when
-   nothing is drawn.
-   A ROOT THAT GENERATES NO BOX, OR NO DOCUMENT ELEMENT AT ALL (a page may remove it), ANSWERS TRUE WITH AN
-   EMPTY IMAGE — `out` is the region's own device size,
-   every number in `count` is zero and `complete` is TRUE, because nothing was left unpainted rather than a
-   painter having stopped. `offers` of ZERO is what tells that state from a walk that ran:
-   core/paint/paint_order.c offers CSS 2.1 §E.2 "Painting order"'s step 1 for every root it walks, so a walk
-   that happened reports at least one. */
-bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out, DocumentPaintCount *count);
+/* Step 22's output for one document: the region it painted for, CSS 2.1 §E.2's list and its census. */
+typedef struct DocumentPaintFrame DocumentPaintFrame;
+
+/* Paint `doc` in its realm `ctx`: a newly allocated frame the caller owns (document_paint_frame_free). The caller
+   has entered the layout job the walk's questions are asked on (asserted), so every computed value it reads is
+   held in that job's cascade record. */
+DocumentPaintFrame *document_paint_frame(JSContext *ctx, lxb_dom_document_t *doc);
+void document_paint_frame_free(DocumentPaintFrame *f);
+
+/* Rasterize `f` into `out`, writing what the paint and the raster did to `count`. False where the frame holds no
+   rendered region, and then `out` is a zero-area surface and every field of `count` is zero. `out` is
+   initialised on every arm and is the caller's to free on every arm; it may not already hold pixels. */
+bool document_paint_raster(const DocumentPaintFrame *f, RasterSurface *out, DocumentPaintCount *count);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_PAINT_DOCUMENT_PAINT_H */

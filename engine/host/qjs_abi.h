@@ -144,7 +144,7 @@ QJS_EXPORT void qjs_novelty_learn(const char *text);
    WHAT IS NOT COVERED — A PROPERTY AND NOT A LIST: an ABI entry whose only caller is a fixture is exercised
    at exactly the cadence the fixture is run and never at the one the product is, so the per-world reach
    `qjs_request_paint_every_world` buys is spent only by a host that already renders. §Testing rates that the
-   same as a translation unit that is in the program and in nobody's build, and the paint surface is thirteen
+   same as a translation unit that is in the program and in nobody's build, and the paint surface is fourteen
    entries in that state rather than one.
    WHAT THE NEXT DIFF BUILDS — THE CLAUSE THAT STOOD HERE WAS WRONG, AND IT IS REWRITTEN RATHER THAN DELETED
    BECAUSE IT WAS DISPATCHED AS A BRIEF BEFORE ANYBODY RE-DERIVED IT AND THE NEXT READER WILL COMPOSE IT
@@ -219,18 +219,22 @@ QJS_EXPORT void qjs_novelty_learn(const char *text);
    worse than one that never fires, because it will actually fire.
    THE CONDITION IS THEREFORE A DECISION AND NOT A CADENCE, WHICH IS THE CORRECTION: this record goes when
    the product has settled whether an image of a forced world is surface it presents — by a presenting
-   consumer existing, or by these thirteen entries being deleted as surface nobody wants. Both are landings.
+   consumer existing, or by these fourteen entries being deleted as surface nobody wants. Both are landings.
    What is neither, and what the old condition fired on, is a host rendering at a moment nobody asked for
    into a register nobody drains. */
 
 /* AN IMAGE OF THE DOCUMENT — the ONLY pair of entries in this ABI that carries BYTES outward, and two
-   entries rather than one because linear memory has no length. `qjs_paint` PERFORMS the render and answers
-   where the run starts; `qjs_paint_bytes` answers how long the run `qjs_paint` last produced is. A pointer
+   entries rather than one because linear memory has no length. `qjs_paint` rasterizes the standing world's
+   last painted frame and answers where the run starts; `qjs_paint_bytes` answers how long the run `qjs_paint` last produced is. A pointer
    and a count are answers of two different KINDS, and two of those taken from one call are free to be read
    into the variable named for the other — separate entries make that mistake a different CALL instead. The
    ownership, the lifetime and the order they must be asked in are at their bodies in main.c. */
 QJS_EXPORT const uint8_t *qjs_paint(void);
 QJS_EXPORT unsigned qjs_paint_bytes(void);
+/* …AND WHETHER THERE WAS A FRAME TO READ. `qjs_paint` reads the frame update the rendering step 22 last painted in
+   the standing world (core/paint/painted_frame.h), and a world no rendering opportunity painted has none: a NULL
+   image is that, or a frame with no rendered region, and this entry is the bit that tells the two apart. */
+QJS_EXPORT int qjs_paint_framed(void);
 
 /* AND THE FACTS THAT MAKE THOSE BYTES AN IMAGE RATHER THAN A BAG OF PIXELS. `qjs_paint_width` and
    `qjs_paint_height` are the SHAPE, which the extent does not determine — `4 * w * h` has many factorisations,

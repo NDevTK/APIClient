@@ -28,6 +28,9 @@
 #include "core/dom/render_blocking.h"
 #include "core/dom/scroll_events.h"
 #include "core/intersection_observer/intersection_observer.h"
+#include "core/layout/layout_job.h"   /* the job step 22's paint asks its layout on */
+#include "core/paint/document_paint.h"
+#include "core/paint/painted_frame.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
@@ -203,7 +206,8 @@ static JSValue rendering_collect_docs(JSContext *ctx, RenderingExclusions *ex)
                  "QUEUES A TASK on the IntersectionObserver task source; the callbacks run from that task and " \
                  "NOT from this step), one OBSERVER per rest")                                                 \
     X(UR_PAINT,  "HTML §8.1.7.3 update the rendering steps 20-23 (record rendering time; mark paint timing; "  \
-                 "update the rendering or user interface; process top layer removals)")
+                 "update the rendering or user interface, which paints doc's frame; process top layer "       \
+                 "removals), one document per rest")
 enum { UPDATE_RENDERING_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const UPDATE_RENDERING_STEPS[] = { UPDATE_RENDERING_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -469,8 +473,23 @@ static void steps_20_to_23(JSContext *docctx)
                 "core/timing/performance_observer.c — so build the interface, declare its entry type through "
                 "performance_observer_declare_entry_type, then both steps");
     /* STEP 22 — "update the rendering or user interface of doc and its node navigable to reflect the current
-       state". The paint, the only step with no headless equivalent and no scriptable result; what it leaves
-       is that doc now reflects its current state, so its pending visual update is taken. */
+       state". The paint, the only step with no scriptable result: core/paint/document_paint.h paints doc's
+       frame on a layout job this step owns, and core/paint/painted_frame.h keeps it as what doc looks like
+       until its next rendering opportunity. Doc then reflects its current state, so its pending visual update
+       is taken. */
+    {
+        LayoutJob *job = layout_job_new();
+        lxb_dom_document_t *doc = document_associated(docctx);
+        DocumentPaintFrame *frame;
+
+        DCHECK(doc != NULL, "update the rendering step 22 reached a document whose realm has none — step 2's list "
+                            "holds fully active documents");
+        layout_job_enter(job);
+        frame = document_paint_frame(docctx, doc);
+        layout_job_leave(job);
+        layout_job_free(job);
+        painted_frame_publish(docctx, frame);
+    }
     visual_update_taken(docctx);
     /* STEP 23 — "process top layer removals given doc", which is CSS Positioned Layout Level 4 §3.3 Top Layer
        Manipulation's own algorithm and whose note names this step as its ONE caller: "this is intended to be
@@ -1179,11 +1198,12 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
 
     DCHECK(s->hdr.stage == UR_PAINT,
            "update the rendering resumed into a stage §8.1.7.3 does not have");
-    /* STEPS 20-23 */
-    for (s->i = 0; s->i < s->ndocs; s->i++)
-        steps_20_to_23(doc_realm(ctx, s));
+    /* STEPS 20-23, one document per rest: step 22 paints, which is work of the document's size. */
     JS_FreeValue(ctx, cb_result);
-    return JS_STEP_DONE;
+    if (s->i >= s->ndocs) return JS_STEP_DONE;
+    steps_20_to_23(doc_realm(ctx, s));
+    s->i++;
+    return s->i >= s->ndocs ? JS_STEP_DONE : JS_STEP_YIELD;
 }
 
 static const JSTrampStepDef js_update_rendering_def = {

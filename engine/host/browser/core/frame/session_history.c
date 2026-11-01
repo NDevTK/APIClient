@@ -816,7 +816,7 @@ static bool sh_restore_persisted_state_begin(JSContext *ctx, SessionHistoryApply
         JS_ToFloat64(ctx, &a->restore_x, x);
         JS_ToFloat64(ctx, &a->restore_y, y);
         DCHECK(a->restore_job == NULL, "§7.4.6.5's restore began with a layout job still held from another");
-        a->restore_job = layout_job_new(LAYOUT_JOB_STEP);
+        a->restore_job = layout_job_new();
     }
     JS_FreeCString(ctx, m);
     JS_FreeValue(ctx, mode);

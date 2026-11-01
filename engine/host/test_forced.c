@@ -78,6 +78,7 @@
 #include "core/paint/document_paint.h"   /* and the two halves JOINED: a DOCUMENT to an image, which is
                                            the assembly neither of the two above will make — see
                                            box_paint_selftest's `@PAINT document` row */
+#include "core/layout/layout_job.h"   /* the job update the rendering step 22 paints on */
 #include "core/frame/navigator.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
@@ -31550,6 +31551,23 @@ TF_UNIT void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
     display_list_free(&dld);
 }
 
+/* update the rendering step 22's paint and the raster of its frame, as core/rendering/rendering.c and main.c's
+   `qjs_paint` perform them, over `dom` in `ctx`: the paint on a layout job entered for it. */
+static bool tf_document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out, DocumentPaintCount *count)
+{
+    LayoutJob *job = layout_job_new();
+    DocumentPaintFrame *frame;
+    bool drew;
+
+    layout_job_enter(job);
+    frame = document_paint_frame(ctx, lxb_dom_interface_document(dom));
+    layout_job_leave(job);
+    layout_job_free(job);
+    drew = document_paint_raster(frame, out, count);
+    document_paint_frame_free(frame);
+    return drew;
+}
+
 /* CORE/PAINT/BOX_PAINT.H'S ENTRY, GIVEN ITS FIRST CALLER — CSS 2.1 §E.2 "Painting order"'s walk run over a
  * document that really has a realm, a navigable and therefore a viewport, and the two numbers that separate
  * the two things a display list of zero marks can mean.
@@ -31985,7 +32003,7 @@ TF_UNIT void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
             uint8_t            apx[4];
             bool               drew;
 
-            drew = document_paint(ctx, dom, &ds, &dc);
+            drew = tf_document_paint(ctx, dom, &ds, &dc);
             CHECK(drew,
                   "core/paint/document_paint.h's entry answered that CSS 2.1 §2.3.1 \"The canvas\" "
                   "establishes no rendered region for the fixture's own active document — which the CHECK "
@@ -33609,7 +33627,7 @@ TF_UNIT void document_paint_boxless_root_selftest(JSContext *ctx)
     free(display);
 
     none_count.census.offers = TF_DP_UNWRITTEN;
-    drew = document_paint(ctx, dom, &none_surf, &none_count);
+    drew = tf_document_paint(ctx, dom, &none_surf, &none_count);
     CHECK(none_count.census.offers != TF_DP_UNWRITTEN,
           "core/paint/document_paint.h's entry returned without writing its count for a document whose root "
           "generates no box. Every field is written before any arm can return, so the sentinel surviving is a "
@@ -33665,7 +33683,7 @@ TF_UNIT void document_paint_boxless_root_selftest(JSContext *ctx)
     free(display);
 
     contents_count.census.offers = TF_DP_UNWRITTEN;
-    drew = document_paint(ctx, dom, &contents_surf, &contents_count);
+    drew = tf_document_paint(ctx, dom, &contents_surf, &contents_count);
     CHECK(drew && contents_count.census.offers != TF_DP_UNWRITTEN,
           "core/paint/document_paint.h's entry refused a document whose root css-display-3 §2.8 blockifies, or "
           "left its count unwritten. This root's computed `display` is `block`, which is an ordinary box");
@@ -35312,8 +35330,9 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
            "lines, which a newline TERMINATES — so the rest of the value would be read as header syntax and "
            "the file would describe an image with the wrong dimensions or no ENDHDR at all");
 
-    /* THE RENDER, AND THE SIX READINGS OF IT. `qjs_paint` PERFORMS it and every entry below states a fact
-       about what it just produced, so the order is the ABI's own and not a preference. */
+    /* THE RENDER, AND THE SIX READINGS OF IT. `qjs_paint` rasterizes the standing world's last painted frame
+       and every entry below states a fact about what it just produced, so the order is the ABI's own and not
+       a preference. */
     px = qjs_paint();
     n = qjs_paint_bytes();
     w = qjs_paint_width();
@@ -35379,21 +35398,21 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
            "asserts it from both ends, so a disagreement here is that pair having come apart across the ABI");
 
     if (n == 0u) {
-        /* CSS 2.1 §2.3.1 "The canvas": a document no navigable presents establishes no rendered region, and
-           core/paint/document_paint.h answers FALSE for exactly that. It is a STATE and not a failure, so it
-           is reported rather than crashed on — and it is reported rather than left silent because an absent
-           file and a run that was never asked to paint look identical on disk.
-           AND IT NAMES THE WORLD, BECAUSE THE REGION IS A FACT ABOUT THE REALM THIS TIMELINE IS STANDING IN
-           RATHER THAN ABOUT THE DOCUMENT. core/paint/document_paint.c reads it through `viewport_canvas_region`
-           at the top of the walk and says in its own words that "two arms of one fork have two viewports", so
-           one world of a document can establish a region while its sibling does not — and a line that said
-           `this document` was reporting an absence a reader could attribute to no timeline, beside a directory
-           whose every other statement is per-world. The value is in hand already: it is read with the rest of
-           the render above, and its newline is refused there. */
-        fprintf(stderr, "[abi paint] %s — no image in world %s: CSS 2.1 §2.3.1 \"The canvas\" establishes no "
-                        "rendered region for the realm this timeline is standing in, so there is nowhere for a "
-                        "picture to be. Nothing written.\n",
-                url, world);
+        /* No image, which is a state and not a failure, with two readings `qjs_paint_framed` separates: no
+           rendering opportunity of this world painted the document, or its frame was painted where CSS 2.1
+           §2.3.1 "The canvas" established no rendered region (a fact about the realm this timeline stands in,
+           since two arms of one fork can have two viewports). It is reported rather than left silent because an
+           absent file and a run never asked to paint look identical on disk, and it names the world. */
+        if (!qjs_paint_framed())
+            fprintf(stderr, "[abi paint] %s — no image in world %s: no rendering opportunity of this world has "
+                            "painted the document (HTML §8.1.7.3 update the rendering step 22). Nothing "
+                            "written.\n",
+                    url, world);
+        else
+            fprintf(stderr, "[abi paint] %s — no image in world %s: CSS 2.1 §2.3.1 \"The canvas\" established "
+                            "no rendered region for the realm this timeline stood in when it painted, so there "
+                            "is nowhere for a picture to be. Nothing written.\n",
+                    url, world);
         fflush(stderr);
         return;
     }

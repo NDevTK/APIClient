@@ -1447,7 +1447,7 @@ static int js_img_dimension_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     STEP_ARM(IMG_DIMENSION_MEASURE);
     DCHECK(img_is(hdr->this_val), "§4.8.3's determine the dimensions reached its body on a receiver that is not an "
                                   "img element — the member states img_is at its declaration");
-    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    if (s->job == NULL) s->job = layout_job_new();
     /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
     rc = layout_job_fork(ctx, hdr, s->job);
     if (rc) return rc;

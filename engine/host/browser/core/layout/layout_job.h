@@ -24,12 +24,12 @@
  * driven job rests only inside its own flow's member call, where that flow writes nothing and every other
  * flow's writes stay in that flow's delta. A host-time baseline write while a driven job is alive is
  * refused at solver/dom_cow.c for the same reason. */
-/* NAMED RESIDUAL, the synchronous job. Not covered: every layout entry but CSSOM VIEW §6's
- * `scrollIntoView`, `clientWidth` and `clientHeight` (core/dom/element_view.c) and the paint
- * (core/paint/document_paint.c) runs on the thread's synchronous job, which never rests, so a page's flow
- * cannot be preempted while one of those entries lays out. Next: CSSOM VIEW §6's `getBoundingClientRect`
- * as a step machine that owns a driven job, as `clientWidth` does. How its absence shows: a flow's slice
- * overrun inside a layout member that is not one of those three, with `_layoutJobRests` flat. */
+/* NAMED RESIDUAL, the synchronous job. Not covered: a layout entry that is not a step machine owning a driven
+ * job (as CSSOM VIEW §6's members in core/dom/element_view.c, HTML §4.8.3's img dimensions and update the
+ * rendering step 22's paint are) runs on the thread's synchronous job, which never rests, so a page's flow
+ * cannot be preempted while it lays out. Next: the entry the `_layoutHoldDrives` census attributes the most
+ * openings to, as a step machine that owns a driven job. How its absence shows: `_layoutHoldDrives` above
+ * zero, or a flow's slice overrun inside a layout member with `_layoutJobRests` flat. */
 
 /* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
  * border-box origin through CSS 2.1 §10.1's second case and through §9.4.2's line boxes (the establishing box,
@@ -89,13 +89,9 @@ typedef struct {
 
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
 
-/* A job a driver owns across its activations. `free` asserts the job is not entered, no drive is open and
-   no question is computing. */
-typedef enum {
-    LAYOUT_JOB_STEP = 1,   /* owned by a step machine's state; it may rest */
-    LAYOUT_JOB_PAINT       /* owned by a paint, which runs it to completion in one activation */
-} LayoutJobDriver;
-LayoutJob *layout_job_new(LayoutJobDriver driver);
+/* A job a step machine owns across its activations, in its state or for one of its activations. `free` asserts
+   the job is not entered, no drive is open and no question is computing. */
+LayoutJob *layout_job_new(void);
 void layout_job_free(LayoutJob *job);
 
 /* Make `job` current for one activation, and give the thread back. `enter` asserts no job's activation

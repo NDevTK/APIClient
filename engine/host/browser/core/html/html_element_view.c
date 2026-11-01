@@ -609,7 +609,7 @@ static int js_hev_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
     STEP_ARM(HEV_MEASURE);
     DCHECK(el != NULL, "a CSSOM VIEW §7 member reached its body on a receiver that is not an element — each of "
                        "the five states html_element_is at its declaration");
-    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    if (s->job == NULL) s->job = layout_job_new();
     /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
     rc = layout_job_fork(ctx, hdr, s->job);
     if (rc) return rc;

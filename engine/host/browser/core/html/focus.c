@@ -1512,7 +1512,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             DCHECK(magic == FOCUS_EL_FOCUS && s->fphase == 0 && JS_IsUndefined(s->ev),
                    "focus(options) step 4 was reached from an entry point that is not focus(), or with a focus "
                    "event still in flight");
-            if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+            if (s->job == NULL) s->job = layout_job_new();
             /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
             r = layout_job_fork(ctx, hdr, s->job);
             if (r) return r;

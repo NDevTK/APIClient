@@ -79,6 +79,7 @@
 #include "browser/core/frame/window.h"
 #include "browser/core/rendering/rendering.h"
 #include "browser/core/paint/document_paint.h"   /* CSS 2.1 §E.2's ink on CSS 2.1 §2.3.1's region */
+#include "browser/core/paint/painted_frame.h"    /* the frame update the rendering step 22 last painted */
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/dom/node_interface.h"   /* the one place a Document is made; see that header */
@@ -121,11 +122,12 @@ static char                *g_result;
  * byte value occurs in non-premultiplied RGBA; core/graphics/raster_surface.h), so the run and its length are two
  * entries. This file frees it: the previous image before a new render, the last at teardown; a host that kept the
  * address across a second `qjs_paint` would read whatever the next render allocated.
- * `g_painted` is not `g_paint.px != NULL`: a zero-area image (a document CSS 2.1 §2.3.1 "The canvas" establishes no
- * rendered region for) holds NULL pixels and zero bytes as a real answer, while an instance never asked to paint
- * holds the same values and has answered nothing. */
+ * `g_painted` is not `g_paint.px != NULL`: a zero-area image (a world never painted, or a frame CSS 2.1 §2.3.1 "The
+ * canvas" established no rendered region for) holds NULL pixels and zero bytes as a real answer, while an instance
+ * never asked to paint holds the same values and has answered nothing. `g_paint_framed` separates the first two. */
 static RasterSurface        g_paint;
 static int                  g_painted;
+static int                  g_paint_framed;
 
 /* What that render did, held beside the image because the image cannot state it. As core/paint/document_paint.h's
  * DCHECK says, "a surface with no ink on it means the walk reached no box, or every box painted nothing, or the
@@ -1298,9 +1300,9 @@ QJS_EXPORT const char *qjs_result(void)
 }
 
 /* Whose world the heap is standing in now, composed at the instant the render is taken. `flow_running()` names the
- * timeline the next `document_paint` will see: solver/engine.c's three writers of that stamp pair it with the delta
- * operation (`flow_switch_in` after `cow_apply`, `flow_switch_out` after `cow_unapply`, `flow_finish`), the DOM
- * twin travels in the same pair, and core/paint/document_paint.c reads only the Lexbor tree and the viewport.
+ * timeline whose last painted frame the next `qjs_paint` reads: solver/engine.c's three writers of that stamp pair it
+ * with the delta operation (`flow_switch_in` after `cow_apply`, `flow_switch_out` after `cow_unapply`,
+ * `flow_finish`), and core/paint/painted_frame.h's record is read through that delta.
  * It is the one mark `qjs_step` leaves up across this ABI (core/loader/document_load.c: a yielded flow's delta is
  * still applied), so it cannot be cross-checked against `cow_current()`, which is taken down between slices.
  * NULL is the baseline, which is a world: a drained session switches its last flow out, so the run stands on the
@@ -1342,23 +1344,22 @@ static const char *paint_forced_word(Flow *f)
     return flow_path_forced(f) ? "forced" : "unforced";
 }
 
-/* An image of this instance's document: CSS 2.1 §E.2 "Painting order"'s ink composited onto a surface the size CSS
-   2.1 §2.3.1 "The canvas" establishes, returned as the address of core/graphics/raster_surface.h's
-   non-premultiplied RGBA8 run (four bytes per pixel, R G B A, row-major), assembled by core/paint/document_paint.h.
-   It performs the render: asking twice renders twice. It is an output register, not per flow: it renders whichever
-   world is current, and cannot be asked for a world by name. `qjs_request_paint_every_world` (below) marks
-   timelines, and the scheduler yields the thread with each marked member standing, so a host renders each by
-   calling this; the scheduler performs no switch for a picture (`flow_switch_in` records what a member was ranked
-   on). The register holds one image: the host that asked renders and writes it before the next, and an image per
-   member would be the per-flow materialization the rules forbid (`4 * qjs_paint_width() * qjs_paint_height()`
-   bytes against thousands of members). At the end of a run the stamp is NULL and both words read `baseline`.
+/* An image of this instance's document: the frame HTML §8.1.7.3 update the rendering step 22 last painted in the
+   world the heap is standing in (core/paint/painted_frame.h), rasterized onto a surface the size CSS 2.1 §2.3.1
+   "The canvas" established at that paint, returned as the address of core/graphics/raster_surface.h's
+   non-premultiplied RGBA8 run (four bytes per pixel, R G B A, row-major). It paints nothing: what a world looks
+   like is what its own event loop last painted, so asking twice rasterizes one frame twice. It is an output
+   register, not per flow, and cannot be asked for a world by name. `qjs_request_paint_every_world` (below) marks
+   timelines, and the scheduler yields the thread with each marked member standing, so a host reads each by calling
+   this; the scheduler performs no switch for a picture (`flow_switch_in` records what a member was ranked on). The
+   register holds one image: an image per member would be the per-flow materialization the rules forbid. At the end
+   of a run the stamp is NULL and both words read `baseline`, a world no flow painted in.
    The pair is ordered: `qjs_paint_bytes` aborts if asked before a render. The address is valid until the next
-   `qjs_paint` or `qjs_teardown`, and the host never frees it. NULL is an answer, a document with no image
-   (raster_surface_bytes treats an absent run and a zero extent as one fact). Whether that is no rendered region or
-   one of no size is a fact about the viewport, which core/frame/viewport.h answers from this realm; no
-   provisioning party states a viewport (`qjs_init` takes none), so `count` is asserted rather than discarded. */
+   `qjs_paint` or `qjs_teardown`, and the host never frees it. NULL is an answer with two readings that
+   `qjs_paint_framed` separates: the world has no painted frame, or its frame holds no rendered region. */
 QJS_EXPORT const uint8_t *qjs_paint(void)
 {
+    const DocumentPaintFrame *frame;
     bool region;
     Flow *f;
 
@@ -1383,7 +1384,15 @@ QJS_EXPORT const uint8_t *qjs_paint(void)
     /* What that timeline's appearance is worth, on the adjacent line from the same read, since the two are one
        artifact. */
     g_paint_forced = paint_forced_word(f);
-    region = document_paint(g_ctx, g_dom, &g_paint, &g_paint_count);
+    frame = painted_frame_last(g_ctx);
+    g_paint_framed = frame != NULL;
+    if (frame != NULL) {
+        region = document_paint_raster(frame, &g_paint, &g_paint_count);
+    } else {
+        raster_surface_init(&g_paint, 0, 0);
+        memset(&g_paint_count, 0, sizeof g_paint_count);
+        region = false;
+    }
     g_painted = 1;
     DCHECKF(region || (g_paint_count.census.offers == 0u && g_paint_count.marks == 0u &&
                        !g_paint_count.complete),
@@ -1415,6 +1424,15 @@ QJS_EXPORT unsigned qjs_paint_bytes(void)
            "a rendered image is %zu bytes, which this ABI states lengths too narrow to carry — a host would "
            "copy a prefix of the picture and believe it had the whole of it", n);
     return (unsigned)n;
+}
+
+/* Whether the world `qjs_paint` last read had a painted frame: 0 is a world no rendering opportunity painted (the
+   image is NULL), 1 a frame, whose region may still be empty. Two facts a NULL image cannot separate. */
+QJS_EXPORT int qjs_paint_framed(void)
+{
+    DCHECK(g_painted, "whether a frame was painted was asked before qjs_paint read one — the pair is ordered as "
+                      "`qjs_paint_bytes` states");
+    return g_paint_framed;
 }
 
 /* The shape of that run, which the extent does not determine: `4 * width * height` has many factorisations (3686400
@@ -1672,6 +1690,7 @@ QJS_EXPORT void qjs_teardown(void)
        asserts non-NULL, so a surviving register would answer about the previous session's render. */
     g_paint_forced = NULL;
     g_painted = 0;
+    g_paint_framed = 0;
     g_begun = 0;
     g_done = 0;
 }

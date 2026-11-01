@@ -87,7 +87,6 @@ struct LayoutJob {
     const char *drive_file;   /* the innermost open drive's site */
     int         drive_line;
     bool      driven;
-    LayoutJobDriver driver;
     LjContext **ctxs;    /* the grid row contexts entered since the memo was last emptied, owned */
     size_t      nctx, ctx_cap;
     unsigned    ctx;     /* the current one, an index into `ctxs` plus one; 0 is none */
@@ -246,7 +245,7 @@ static bool lj_all_suspended(const LayoutJob *job)
 
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
 
-LayoutJob *layout_job_new(LayoutJobDriver driver)
+LayoutJob *layout_job_new(void)
 {
     LayoutJob *job = lexbor_calloc(1, sizeof *job);
 
@@ -255,11 +254,7 @@ LayoutJob *layout_job_new(LayoutJobDriver driver)
     job->driven = true;
     job->decline.over = JS_UNDEFINED;
     g_alive++;
-    switch (driver) {
-    case LAYOUT_JOB_STEP:  METRIC_ADD(jobs_step, 1);  break;
-    case LAYOUT_JOB_PAINT: METRIC_ADD(jobs_paint, 1); break;
-    }
-    job->driver = driver;
+    METRIC_ADD(jobs_step, 1);
     return job;
 }
 
@@ -313,8 +308,6 @@ void layout_job_rested(LayoutJob *job)
 {
     DCHECK(job != NULL && job->driven && job != g_entered,
            "a layout job was reported resting while it is entered — a driver leaves its job before it yields");
-    DCHECK(job->driver == LAYOUT_JOB_STEP,
-           "a paint's layout job was reported resting — a paint runs its job to completion");
     job->rests++;
     METRIC_ADD(job_rests, 1);
 }
@@ -329,9 +322,7 @@ static void *lj_step_clone(JSContext *ctx, void *root, void **cursors[], int ncu
            "a layout job was forked while its activation holds the thread — a job is entered only inside one "
            "step re-entry, and no fork is taken inside layout");
     /* The clone is a new job with an empty memo and records: all are re-derivable, so the arm re-derives them. */
-    DCHECK(src->driver == LAYOUT_JOB_STEP,
-           "a paint's layout job was forked — a paint is host time and holds no step state");
-    return layout_job_new(LAYOUT_JOB_STEP);
+    return layout_job_new();
 }
 
 static void lj_step_destroy(JSContext *ctx, void *root)
@@ -470,7 +461,7 @@ void layout_job_drive_begin_resting(LayoutJobDrive *d)
 {
     LayoutJob *job = g_entered;
 
-    DCHECK(job != NULL && job->driver == LAYOUT_JOB_STEP,
+    DCHECK(job != NULL,
            "a resting drive was begun with no step machine's job entered; only a driver that yields can rest");
     DCHECKF(job->drives == 0 && lj_all_suspended(job),
             "a resting drive was begun under %u open drives or over a computing question; it is its job's "

@@ -716,7 +716,7 @@ static int js_ev_scroll_to_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
 
         DCHECK(el != NULL, "a CSSOM VIEW §6 scroll member reached its body on a receiver that is not an Element "
                            "— the member states element_is at its declaration");
-        if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+        if (s->job == NULL) s->job = layout_job_new();
         /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
         rc = layout_job_fork(ctx, hdr, s->job);
         if (rc) return rc;
@@ -966,7 +966,7 @@ static int js_ev_scroll_into_view_step(JSContext *ctx, JSStepHdr *hdr, void *st,
         s->block = block;
         s->inline_pos = inline_pos;
         s->container = container;
-        s->job = layout_job_new(LAYOUT_JOB_STEP);
+        s->job = layout_job_new();
         hdr->stage = EV_SIV_TARGET;
     }
 
@@ -1164,7 +1164,7 @@ static int js_ev_client_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     STEP_ARM(EV_CLIENT_MEASURE);
     DCHECK(el != NULL, "CSSOM VIEW §6's client extent reached its body on a receiver that is not an Element — the "
                        "member states element_is at its install");
-    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    if (s->job == NULL) s->job = layout_job_new();
     /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
     rc = layout_job_fork(ctx, hdr, s->job);
     if (rc) return rc;
@@ -1752,7 +1752,7 @@ static int js_ev_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
     STEP_ARM(EV_RECTS_MEASURE);
     if (s->job == NULL) {
-        s->job = layout_job_new(LAYOUT_JOB_STEP);
+        s->job = layout_job_new();
         METRIC_ADD(client_rects_asks, 1);
     }
     /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
@@ -1877,7 +1877,7 @@ static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     STEP_ARM(EV_VIEW_MEASURE);
     DCHECK(el != NULL, "a CSSOM VIEW §6 member reached its body on a receiver that is not an Element — the "
                        "member states element_is at its install");
-    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    if (s->job == NULL) s->job = layout_job_new();
     /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
     rc = layout_job_fork(ctx, hdr, s->job);
     if (rc) return rc;

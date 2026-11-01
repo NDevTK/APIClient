@@ -108,6 +108,7 @@
 #include "core/scheduling/idle_callback.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/visual_update.h"
+#include "core/paint/painted_frame.h"
 #include "core/rendering/rendering.h"
 #include "core/resize_observer/resize_observer.h"
 #include "core/storage/storage.h"
@@ -275,6 +276,7 @@ static void d_visual_viewport(JSContext *c, const PlatformAgent *a) { (void)a; v
 static void d_scroll_events(JSContext *c, const PlatformAgent *a) { (void)a; scroll_events_init(c); }
 static void d_media_query_list(JSContext *c, const PlatformAgent *a) { (void)a; media_query_list_init(c); }
 static void d_visual_update(JSContext *c, const PlatformAgent *a) { (void)a; visual_update_init(c); }
+static void d_painted_frame(JSContext *c, const PlatformAgent *a) { (void)a; painted_frame_init(c); }
 static void d_rendering(JSContext *c, const PlatformAgent *a) { (void)a; rendering_init(c); }
 static void d_headers(JSContext *c, const PlatformAgent *a) { (void)a; headers_init(c); }
 static void d_response(JSContext *c, const PlatformAgent *a) { (void)a; response_init(c); }
@@ -522,6 +524,7 @@ static void r_animation_frame(JSRuntime *rt) { animation_frame_free(rt); }
 static void r_idle_callback(JSRuntime *rt) { idle_callback_free(rt); }
 static void r_structured_clone(JSRuntime *rt) { structured_clone_free(rt); }
 static void r_visual_update(JSRuntime *rt) { visual_update_free(rt); }
+static void r_painted_frame(JSRuntime *rt) { painted_frame_free(rt); }
 static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
 static void r_document(JSRuntime *rt) { document_agent_free(rt); }
 static void r_element(JSRuntime *rt) { element_free(rt); }
@@ -919,6 +922,8 @@ static const PlatformComponent PLATFORM[] = {
        22 takes it. It registers on DOM §4.2.3's children changed list, whose table core/dom/node.c gives back per
        agent. */
     { "visual_update",       d_visual_update,       NULL,        r_visual_update },
+    /* A document's last painted frame, before `rendering`, whose step 22 publishes it. */
+    { "painted_frame",       d_painted_frame,       NULL,        r_painted_frame },
     /* After the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL,        r_rendering },
     /* DOM §3.1 "Interface AbortController" and §3.2 "Interface AbortSignal", ahead of `request`: Fetch §5.4's

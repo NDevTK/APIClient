@@ -62,7 +62,7 @@ static int user_scroll_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->job = NULL;
         element_scrolling_into_view_begin(&s->walk, lxb_dom_interface_element(n), SCROLL_LOGICAL_NEAREST,
                                           SCROLL_LOGICAL_NEAREST, NULL);
-        s->job = layout_job_new(LAYOUT_JOB_STEP);
+        s->job = layout_job_new();
         s->hdr.stage = USF_BOX;
     }
 

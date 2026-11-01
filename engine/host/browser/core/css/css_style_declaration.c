@@ -4631,7 +4631,7 @@ static int cssd_get_run(JSContext *ctx, JSStepHdr *hdr, CssdGetState *s, const c
     }
     el = cssd_owner_element(ctx, block);
     JS_FreeValue(ctx, block);
-    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    if (s->job == NULL) s->job = layout_job_new();
     /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
     rc = layout_job_fork(ctx, hdr, s->job);
     if (rc) return rc;

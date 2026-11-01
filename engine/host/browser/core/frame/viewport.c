@@ -1119,7 +1119,7 @@ static int js_vp_scroll_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             *presult = vp_resolved_promise(ctx);
             return JS_STEP_DONE;
         }
-        s->job = layout_job_new(LAYOUT_JOB_STEP);
+        s->job = layout_job_new();
         hdr->stage = VP_SCROLL_OPEN;
     }
 
