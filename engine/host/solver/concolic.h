@@ -1184,14 +1184,14 @@ int         concolic_pin(JSValueConst cmp);
    Function (§7.1.19's ToPrimitive reaches the value's own methods, and an Array's join spells any string), and
    not where `s` is a spelling a Null, Undefined, Boolean, Number or BigInt in the set could produce; where it
    does, the value's own `src` is also pinned to the String `s` under §7.2.14's determination. A derivation
-   owns no `src` and pins nothing. Asserts `v` is a concolic with an identity, and that the flow had not
-   determined another ToString for it.
+   owns no `src` and pins nothing. Answers 1 where the source pin was written, 0 otherwise. Asserts `v` is a
+   concolic with an identity, and that the flow had not determined another ToString for it.
    Named residual. Not covered: the page's own equalities do not read the identity's determination, so after
    `[a="dark"]` holds over a value whose type set admits an Object, `v === "light"` still forks a holding arm
    the determination contradicts. Next diff: concolic_cmp's strict equality against a String literal decided
    false by a ToString determination that differs from it. Absence shows as: a world whose attribute matched
    one string while its page's own equality held for another. */
-void        concolic_pin_tostring(JSValueConst v, const char *s);
+int         concolic_pin_tostring(JSValueConst v, const char *s);
 /* AN EQUALITY THIS FLOW'S OWN DECIDED PREDICATES ENTAIL, filed as holding without a fork: its branch key decided
    true and its pin written (concolic_pin), so every later read of the compared value answers the literal —
    concretize-on-pin, as decide.c's holding arm files it. For a component whose algorithm knows the entailment

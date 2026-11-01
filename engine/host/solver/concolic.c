@@ -2188,7 +2188,7 @@ static int tostring_numeric_spelling(const char *s)
 
 static unsigned tyf_of_cty(unsigned ty);
 
-void concolic_pin_tostring(JSValueConst v, const char *s)
+int concolic_pin_tostring(JSValueConst v, const char *s)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     Cons *e;
@@ -2208,18 +2208,18 @@ void concolic_pin_tostring(JSValueConst v, const char *s)
         CHECK(e->tostr, "concolic: OOM recording a ToString determination");
     }
     /* `e` is dead from here: concolic_pin_store may grow the head by realloc. */
-    if (!c->src_self || !c->src) return;
+    if (!c->src_self || !c->src) return 0;
     ty = tyf_of_cty(c->ty) & concolic_types(c->src);
-    if (ty & (CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION)) return;
-    if ((ty & CONCOLIC_TYF_NULL) && strcmp(s, "null") == 0) return;
-    if ((ty & CONCOLIC_TYF_UNDEFINED) && strcmp(s, "undefined") == 0) return;
-    if ((ty & CONCOLIC_TYF_BOOLEAN) && (strcmp(s, "true") == 0 || strcmp(s, "false") == 0)) return;
-    if ((ty & (CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_BIGINT)) && tostring_numeric_spelling(s)) return;
-    if (!(ty & CONCOLIC_TYF_STRING)) return;
+    if (ty & (CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION)) return 0;
+    if ((ty & CONCOLIC_TYF_NULL) && strcmp(s, "null") == 0) return 0;
+    if ((ty & CONCOLIC_TYF_UNDEFINED) && strcmp(s, "undefined") == 0) return 0;
+    if ((ty & CONCOLIC_TYF_BOOLEAN) && (strcmp(s, "true") == 0 || strcmp(s, "false") == 0)) return 0;
+    if ((ty & (CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_BIGINT)) && tostring_numeric_spelling(s)) return 0;
+    if (!(ty & CONCOLIC_TYF_STRING)) return 0;
     pinned = concolic_pin_store(c->src, c->root, CONCOLIC_LIT_STRING, s, JS_CONCOLIC_EQ_STRICT);
     DCHECK(pinned, "a String pin under a strict equality was refused, and the store refuses only a BigInt, an "
                    "unspelled kind or a loose equality");
-    (void)pinned;
+    return pinned;
 }
 
 /* The bytes this flow has proved this value holds (concolic.h says who may read it and why it answers bytes

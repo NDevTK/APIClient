@@ -249,9 +249,9 @@ void selector_pred_settle(const SelectorUndet *u, bool holds)
     if (holds) {
         /* The attribute's string is the ToString of the value written into it, so this states that string
            under the value's identity whatever its type or derivation. Chosen by a fork with no real arm stated,
-           so the determination is a witness no observation confirmed. */
-        concolic_pin_tostring(u->over, u->operand);
-        flow_mark_pinned_value();
+           so a source pin it also writes is a witness no observation confirmed; the identity's determination
+           pins no source and the fork's own assumed outcome is what the witness lists for it. */
+        if (concolic_pin_tostring(u->over, u->operand)) flow_mark_pinned_value();
         return;
     }
     hole = concolic_hole_key(concolic_shape_c(u->over));
