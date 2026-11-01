@@ -347,8 +347,13 @@ bool policy_allows_inline(CspReporter reporter, const PolicyContainer *p, CspInl
    inline check: no element, no type, no §6.8.2 mapping, and §6.1.10 states that its directive lookup is
    deliberately not §6.8's fallback machinery — 'unsafe-eval' acts as a page-wide flag, so the granular
    `script-src-elem`/`script-src-attr` forms are never consulted for it. That difference is the whole reason
-   this is its own entry point rather than one more member of a shared enum. */
-bool policy_allows_string_compilation(CspReporter reporter, const PolicyContainer *p);
+   this is its own entry point rather than one more member of a shared enum.
+   This is steps 3-6, the walk over the policies; steps 1-2's Trusted Types half is the caller's
+   (core/html/ensure_can_compile_strings.h). `trusted_types_required` is step 4.2's "does sink type require
+   trusted types?" with realm, 'script' and false, and `source` (`source_len` bytes) is sourceString, which a
+   violation samples under 'report-sample'. */
+bool policy_allows_string_compilation(CspReporter reporter, const PolicyContainer *p, bool trusted_types_required,
+                                      const char *source, size_t source_len);
 
 /* CSP §4.1.2 "should request be blocked by Content Security Policy?" — Fetch's MAIN FETCH STEP 7, and the one
  * question this container answers about a URL rather than about inline content.

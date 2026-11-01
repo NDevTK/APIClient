@@ -63,14 +63,14 @@ void solve_request_parked(const FetchRequest *req);
    unconditional and is not the alternative to running the program"), and the only way a caller cannot get it
    half right is for the program text to come OUT of the announcing operation.
    WHY A HOST ALGORITHM IS A STRING-TO-CODE SINK WITHOUT BEING AN ECMAScript EVAL. HTML §8.7 Timers's timer
-   initialization steps put the whole string arm in step 9's task: substep 9.8.2 asserts the handler is a
-   string, substep 9.8.3 performs "EnsureCSPDoesNotBlockStringCompilation(realm, « », handler, handler, timer,
-   « », handler)" — the CSP gate a page opts into with `unsafe-eval` and the same one `eval` passes — and
-   substeps 9.8.7-9.8.8 create a classic script from it and run it. The spec says the equivalence itself, in the
+   initialization steps check a string handler at step 1 — 1.4's get trusted type compliant string over
+   TrustedScript, then 1.5's "EnsureCSPDoesNotBlockStringCompilation(global's relevant realm, « », handler,
+   handler, timer, « », handler)", the CSP gate a page opts into with `unsafe-eval` and the same one `eval`
+   passes — and step 9's task creates a classic script from it and runs it. The spec says the equivalence itself, in the
    note under substep 9.8.6.2: "The effect of these steps ensures that the string compilation done by
    setTimeout() and setInterval() behaves equivalently to that done by eval()." So the value is a JS-context
-   sink for the same reason `eval`'s argument is, and it is the SINK_EVAL class: same CSP question, and
-   substep 9.8.1.4's get-trusted-type-compliant-string over TrustedScript is the same Trusted Types question.
+   sink for the same reason `eval`'s argument is, and it is the SINK_EVAL class: the same CSP and Trusted Types
+   questions, asked through core/html/ensure_can_compile_strings.h.
    AND IT IS NOT THE ECMAScript SEAM, WHICH IS WHY IT IS A SEPARATE ENTRY RATHER THAN A CALL INTO ONE. What
    §19.2.1.2 HostEnsureCanCompileStrings covers is §19.2.1.1 PerformEval step 5 and §20.2.1.1.1
    CreateDynamicFunction step 11, and §8.7 performs neither — it reaches CSP directly and then runs a plain
@@ -93,8 +93,8 @@ JSValue solve_eval_sink_source(JSContext *ctx, JSValueConst handler);
    read into a local and asserted, never spelled inside a DCHECK, whose condition a release build does not
    evaluate at all and would leave raised for the next program.
    IT EXISTED BECAUSE THE ARM WAS ABOUT TO MOVE, AND THE ARM HAS MOVED — which is the case it was built for
-   and not a reason to retire it. §8.7 Timers puts the whole string arm inside step 9's task (substep 9.8.3's
-   CSP gate and substeps 9.8.7-9.8.8's create-and-run are the fire's steps, not the set's), and
+   and not a reason to retire it. §8.7 Timers puts the script's create-and-run inside step 9's task (the fire's
+   steps, not the set's), and
    core/timing/timer.c performed them at the SET, queueing the program through a host edge whose own body took
    this latch. Relocation is exactly the shape in which an announcement gets left behind — the queue call
    travels, the detector call does not, and nothing breaks: the timer still fires, the page still runs, and
@@ -428,8 +428,9 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     no interaction), "navigation" (a `javascript:` URL, when the navigation happens). ALWAYS
                     present — a PoC that does not say how it fires is not reproducible.
      `cspBlocks`    the page's serialized CSP, present only when it kills THIS vector. Absent = CSP §4.2.3
-                    "Should element's inline type behavior be blocked by Content Security Policy?" (or, for
-                    `eval`, §4.4.1 "EnsureCSPDoesNotBlockStringCompilation") returned "Allowed". The titles are
+                    "Should element's inline type behavior be blocked by Content Security Policy?" returned
+                    "Allowed", or the class has no inline check: an `eval` fires only past §4.4.1
+                    "EnsureCSPDoesNotBlockStringCompilation" at its own sink. The titles are
                     here because the numbers alone resolved to where the TERM "inline check" is DEFINED (§2.3
                     "Directives") rather than to the algorithm this sentence is about, which is exactly the
                     unfalsifiable state §Browser-half says a title exists to prevent.

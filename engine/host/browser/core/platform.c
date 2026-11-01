@@ -80,6 +80,7 @@
 #include "core/html/simple_dialogs.h"
 #include "core/html/trusted_type.h"
 #include "core/html/trusted_type_policy.h"
+#include "core/html/ensure_can_compile_strings.h"
 #include "core/html/trusted_type_policy_factory.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/html/xml_serializer.h"
@@ -216,6 +217,7 @@ static void d_trusted_types(JSContext *c, const PlatformAgent *a)
     trusted_type_policy_init(c);
     trusted_type_policy_factory_init(c);
 }
+static void d_compile_strings(JSContext *c, const PlatformAgent *a) { (void)a; ensure_can_compile_strings_init(c); }
 static void d_storage_shed(JSContext *c, const PlatformAgent *a) { (void)a; storage_shed_init(c); }
 static void d_storage(JSContext *c, const PlatformAgent *a) { (void)a; storage_init(c); }
 static void d_window_storage(JSContext *c, const PlatformAgent *a) { (void)a; window_storage_init(c); }
@@ -362,6 +364,7 @@ static void r_file_picker(JSRuntime *rt) { (void)rt; file_picker_free(); }
    Algorithm dictionary's `name`), all the agent's. An atom is a JSAtomStruct, not a GC object, so an unreleased one
    shows only in JS_FreeRuntime's atom walk. §14's release is reached through §10's, because §10 declares it. */
 static void r_crypto(JSRuntime *rt) { (void)rt; crypto_free(); }
+static void r_compile_strings(JSRuntime *rt) { ensure_can_compile_strings_free(rt); }
 static void r_trusted_types(JSRuntime *rt)
 {
     trusted_type_policy_factory_free(rt);
@@ -974,6 +977,8 @@ static const PlatformComponent PLATFORM[] = {
        `[Exposed=(Window,Worker)]` realm intrinsics, ahead of `element` and `document`: the markup sinks they
        declare brand their `(TrustedHTML or DOMString)` positions against trusted_type_class(). */
     { "trusted_types",       d_trusted_types,       NULL,        r_trusted_types },
+    /* HTML §8.1.6.2 HostEnsureCanCompileStrings, every realm's engine hook, over Trusted Types and CSP. */
+    { "compile_strings",     d_compile_strings,     NULL,        r_compile_strings },
     { "element",             d_element,             NULL,        r_element },
     /* CSSOM §8.1 "The CSS.escape() Method"'s `CSS` namespace and CSS Conditional Rules 3 §7.5 "The CSS namespace"'s
        partial namespace on it (`css_namespace`, below), after `element`, whose cssom_init creates the agent's one

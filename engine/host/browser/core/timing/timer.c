@@ -95,8 +95,8 @@
  * both its direct spellings, indirect eval, 20.2.1.1.1's `new Function` and ShadowRealm.prototype.evaluate all
  * reach the same detector without this component. What stays HERE is exactly what the engine cannot see: §8.7's
  * handler is a DOMString this component compiles LATER, at the expiry, so the value has to be
- * announced where the HOST turns it into a program, which is substep 9.8.3's own place in the algorithm — the
- * task, at the expiry — and not where some other algorithm evaluates it.
+ * announced where the HOST turns it into a program — the task, at the expiry — and not where some other
+ * algorithm evaluates it.
  * Worse, it did not merely go unnoticed: the
  * union's non-callable arm resolves to DOMString, idl_args.c passes unknown external input across the boundary
  * AS ITSELF so opacity survives the coercion, and the body's `JS_IsString` assertion then fired on it — a
@@ -111,9 +111,9 @@
 #include "core/timing/timer.h"
 #include "core/timing/event_loop.h"
 #include "core/frame/navigable.h"
-#include "core/frame/policy_container.h"   /* §8.7's substep 9.8.3 — CSP §4.4.1's walk over this
-                                             realm's own policies, which is the whole of the gate */
 #include "core/frame/window_proxy.h"
+#include "core/html/ensure_can_compile_strings.h"   /* §8.7 step 1.5, CSP §4.4.1 for compilationType timer */
+#include "core/html/trusted_types.h"   /* §8.7 step 1.4's get trusted type compliant string */
 #include "core/idl_args.h"
 #include "core/idl_name_chain.h"   /* §8.7's clearTimeout/clearInterval is a name-keyed elimination chain, and
                                       the LINK it is built out of — the composed key, its naming rule and its
@@ -820,9 +820,8 @@ enum { TT_ARG_HANDLER = 0, TT_ARG_THIS, TT_ARG_NEST, TT_ARG_ID, TT_ARG_REPEAT, T
 
 /* AND SUBSTEP 9.8 IS THE TASK'S TOO, WHICH IS WHERE THE STRING ARM CAME FROM. §8.7 splits the handler union
  * INSIDE step 9 — "If handler is a Function, then invoke handler …" at 9.7 and "Otherwise:" at 9.8, whose
- * substeps assert it is a string, run substep 9.8.3's EnsureCSPDoesNotBlockStringCompilation, take substep
- * 9.8.5's base URL, and then create (9.8.7) and run (9.8.8) a classic script. This component asked that
- * question at the SET and queued the program there, which is the placement this file's banner is about. */
+ * substeps assert it is a string, take the base URL, and then create and run a classic script. Its Trusted
+ * Types and CSP checks are step 1's, at the set (TI_STRING). */
 #define TT_STAGES(X)                                                                                          \
     X(TT_INVOKE,                                                                                              \
       "HTML §8.7 Timers timer initialization steps step 9.7 (if handler is a Function, then invoke handler "   \
@@ -861,11 +860,6 @@ typedef struct {
        SyntaxError at 9.8.7 and a throw out of 9.8.8 are one thing here, exactly as they are for a `<script>`
        element (core/html/html_script.c takes the same two paths into one report). */
     uint8_t   threw;
-    /* SUBSTEP 9.8.3 REFUSED THE COMPILATION AND "ABORT THESE STEPS" IS THEREFORE OWED — its own byte, because
-       it is not a completion: nothing threw, nothing ran, and the task simply has no steps left. It carries no
-       JSValue, so `tt_visit` is unchanged by it, which is what makes adding it a one-line obligation rather
-       than a third ownership list. */
-    uint8_t   aborted;
     JSValue   exc;
     ScriptCompile sc;   /* substep 9.8.7's classic script, compiled across the rests its parse takes */
     /* [this, handler] AND NOTHING MORE, which is timer_init's declaration read at the far end: §8.7's
@@ -1003,34 +997,10 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
         STEP_GOTO(s->hdr.stage, TT_TAIL, &s->cphase, NULL);
         return JS_STEP_YIELD;
 
-    /* §8.7's SUBSTEP 9.8 — "Otherwise:" — WHICH IS THE STRING HANDLER'S WHOLE ALGORITHM, AT THE EXPIRY.
-     *
-     * SUBSTEP 9.8.3's CSP GATE IS PERFORMED, AND THE SENTENCE THAT STOOD HERE IS RETIRED RATHER THAN DELETED
-     * BECAUSE IT WAS WRONG IN THE ONE DIRECTION NOTHING REPORTS. It said this engine has no TrustedScript and
-     * no Content Security Policy object to ask, so the steps that consult them are not reachable rather than
-     * skipped — an ABSENCE asserted as architecture, whose only reader is somebody deciding whether to build
-     * the thing, so a stale one argues against building it and no instrument anywhere says it has gone stale.
-     * BOTH HALVES WERE FALSE. core/frame/policy_container.h has declared `policy_allows_string_compilation` —
-     * CSP §4.4.1 "EnsureCSPDoesNotBlockStringCompilation(realm, parameterStrings, bodyString, codeString,
-     * compilationType, parameterArgs, bodyArg)"'s own walk — with a fixture asserting its semantics and ONE
-     * production caller, the @S verdict; and core/html/trusted_types.h has declared TRUSTED_TYPE_SCRIPT and
-     * the get-trusted-type-compliant-string algorithm with five callers. Neither was a missing capability.
-     * Both were a missing CALLER, which is the opposite kind of gap and takes the opposite work.
-     * 9.8.3 NOW RUNS AND 9.8.1's TRUSTED TYPES ARM IS THE ONE STILL OWED. NAMED RESIDUAL — WHAT IS NOT
-     * COVERED: substep 9.8.1's last step, which HTML §8.7 "Timers" writes as "Set handler to the result of
-     * invoking the get trusted type compliant string algorithm with TrustedScript, global, handler, sink,
-     * and 'script'", so a document whose policy carries `require-trusted-types-for 'script'` compiles a bare
-     * string here where a browser throws. WHAT THE NEXT DIFF BUILDS: that call, with the `sink` HTML §8.7
-     * "Timers" composes one step earlier as "a concatenation of globalName, U+0020 SPACE, and methodName" —
-     * `Window setTimeout` or `Window setInterval` — which is a stage of its own rather than a line, because
-     * the default policy it can reach is page code and the machine must be able to rest inside it. HOW ITS
-     * ABSENCE WOULD SHOW: a string handler runs under a policy that requires trusted types, and no sink name
-     * for either member appears in any violation this engine attributes.
-     * WHAT IS PERFORMED OF 9.8.3 BESIDE THE GATE is the half that belongs to this engine — the @S
-     * announcement, which solve.h explains is a JS-context sink for the same reason `eval`'s argument is and
-     * is not the ECMAScript seam. It runs FIRST and the gate cannot suppress it: a sink CSP blocks is still a
-     * REAL sink, which §@S(a) requires to be recorded as "sink REAL, CSP blocks" rather than dropped, and
-     * solver/solve.c already composes that verdict out of this same predicate.
+    /* §8.7's SUBSTEP 9.8 — "Otherwise:" — THE STRING HANDLER'S SCRIPT, AT THE EXPIRY. Its Trusted Types and CSP
+     * checks are step 1's and ran when the timer was set (TI_STRING), so the handler reaching here is one they
+     * permitted. The @S announcement is the engine's own act at the compile: solve.h explains why a string
+     * handler is a JS-context sink for the same reason `eval`'s argument is.
      *
      * SUBSTEP 9.8.4's FETCH OPTIONS AND 9.8.5's BASE URL. "Let base URL be settings object's API base URL",
      * which for a Window is its Document's document base URL, so document_base_url is the whole answer and the
@@ -1080,7 +1050,7 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                    "callable that is not a concolic to 9.7, and idl_args.c's `(DOMString or Function)` "
                    "conversion admits exactly those three values, so a fourth here is an entry of this "
                    "global's map that reached it without going through timer_set");
-            /* SUBSTEP 9.8.2's ASSERT AND THE ENGINE'S HALF OF 9.8.3, IN ONE OPERATION — the announcement and
+            /* SUBSTEP 9.8.2's ASSERT AND THE @S ANNOUNCEMENT, IN ONE OPERATION — the announcement and
                the program TEXT come out of the same call, because spelling them apart is what once made every
                candidate run invisible: the unknown handler was announced and named no bytes, the string
                handler was compiled and announced nothing, so the search's own context probe arrived here as a
@@ -1105,10 +1075,8 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                    and the TAKE below that can leave without compiling, so it is the one place the seam's latch
                    can outlive the bytes it was raised for — and a latch that survives its own program is an
                    assert that answers YES for whatever compiles next, which is the assert lying rather than
-                   firing. IT USED TO SAY "between the announcement and the COMPILE", which was the same site
-                   and a wider claim, and substep 9.8.3's gate below is what made the difference load-bearing:
-                   that gate leaves without compiling too, and it is SOUND because it stands AFTER the take. A
-                   later exit added ABOVE the take would be a second such line and would need this same call. */
+                   firing. A later exit added ABOVE the take would be a second such line and would need this same
+                   call. */
                 (void)solve_eval_sink_announced();
                 JS_FreeValue(ctx, cb_result);
                 return JS_STEP_ABRUPT;
@@ -1118,64 +1086,14 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                raised for whatever compiled next and turn a dev-only assert into a release-only divergence. */
             announced = solve_eval_sink_announced();
             DCHECK(announced,
-                   "a §8.7 Timers string handler became a program without passing the @S host seam — substep "
-                   "9.8.3 is what makes these bytes a JS-context sink, and solve_eval_sink_source is where "
-                   "they are announced AND where the program text comes from, in one operation so the two "
+                   "a §8.7 Timers string handler became a program without passing the @S host seam — "
+                   "solve_eval_sink_source is where these bytes are announced as a JS-context sink AND where the program text comes from, in one operation so the two "
                    "cannot be spelled apart again. A caller that compiles bytes it obtained some other way "
                    "fails SILENTLY in the worst direction there is: the timer fires, the page runs, the sink "
                    "is still DETECTED by the concolic arm, and every candidate run after it is invisible — no "
                    "witness is learned, no ECMAScript §12 escape is derived, and the search parks for ever "
                    "reporting that it tried. Take the text from solve_eval_sink_source; never relax this");
             (void)announced;
-            /* SUBSTEP 9.8.3 — HTML §8.7 "Timers" writes it as "Perform EnsureCSPDoesNotBlockStringCompilation(
-               realm, « », handler, handler, timer, « », handler). If this throws an exception, catch it,
-               report it for global, and abort these steps." CSP §4.4.1
-               "EnsureCSPDoesNotBlockStringCompilation(realm, parameterStrings, bodyString, codeString,
-               compilationType, parameterArgs, bodyArg)" "returns normally if string compilation is allowed,
-               and throws an \"EvalError\" if not", and its source-list walk runs whatever the compilationType
-               is: the only thing HTML's `timer` argument switches off is the TRUSTED TYPES block at the top,
-               which is 9.8.1's arm here and not this one. So a document whose `script-src` — or its
-               `default-src` fallback — does not carry `'unsafe-eval'` compiles no string handler, and
-               `setTimeout("…")` was running one on every such page.
-               IT IS ASKED THROUGH `policy_allows_string_compilation` AND NOT THROUGH AN INLINE CHECK, which is
-               CSP §6.1.10 "script-src"'s own distinction and not a shortcut: eval has no granular form, so the
-               walk reads `script-src`/`default-src` directly and the granular directives an INLINE check would
-               reach through CSP §6.8.2 "Get the effective directive for inline checks" are never consulted.
-               core/frame/policy_container.h states that at the declaration.
-               IT STANDS AFTER THE ANNOUNCEMENT, DELIBERATELY. A sink this policy blocks is still a REAL sink
-               and §@S(a) requires it to be recorded as one; suppressing the announcement here would delete the
-               finding rather than qualify it, and solver/solve.c builds `cspBlocks` out of this very predicate.
-               AND AFTER THE LATCH'S TAKE, so this exit cannot leave the seam raised for whatever compiles next
-               — see the take's own note above, which this gate is the reason for.
-               "ABORT THESE STEPS" IS THE TASK'S STEPS AND NOT 9.8's, WHICH IS A READING AND IS RECORDED AS ONE.
-               HTML §8.7 "Timers" writes the same phrase at step 9.5, "If scripting is disabled for settings
-               object, then abort these steps", and again at step 9.9, where it can only mean the substeps of
-               step 9's task; one phrase in one algorithm has one meaning, and a nested list starts no new
-               algorithm to abort. So substeps 9.9-9.12 do not run, which is what `aborted` carries to TT_TAIL —
-               and the ONE observable that turns on it is whether a blocked `setInterval(string)` RE-ARMS at
-               9.11. Under this reading it does not, and a browser that re-arms it would show as an interval
-               that fires once here and repeatedly there; that observation settles the reading and nothing in
-               this tree can make it, because no CSP directory is materialised in the WPT cone this engine runs.
-               NO ASSERT STANDS ON THE ANSWER. The policy is bytes whichever server served the document sent,
-               so a blocking one is INPUT and not an invariant this codebase computed; a DCHECK here would hand
-               any origin an abort switch for the trusted zone.
-               NAMED RESIDUAL — WHAT IS NOT COVERED: the rest of HTML §8.7 "Timers"' own sentence above, "catch
-               it, report it for global". HTML §8.1.4.6 "Runtime script errors"' report an exception is owed and
-               not performed, so the page gets no `error` event for the refusal — and this engine cannot even
-               mint the value one would carry, since `EvalError` has no entry in quickjs's public error API and
-               occurs nowhere in this tree. WHAT THE NEXT DIFF BUILDS: that entry, and then the report stage
-               TT_TAIL's own residual already names for substep 9.7's "report" — one stage driving
-               core/events/report_exception.h's report_exception_run, which both steps then share rather than
-               spelling twice. HOW ITS ABSENCE WOULD SHOW: a page whose `window.onerror` counts errors sees
-               the count unchanged across a `setTimeout` string handler its own policy refused, where a
-               browser fires one. */
-            if (!policy_allows_string_compilation(csp_reporter(ctx), document_policy(ctx))) {
-                JS_FreeCString(ctx, src);
-                s->aborted = 1;
-                JS_FreeValue(ctx, cb_result);   /* no request was made on this leg — see TT_INVOKE's arm */
-                STEP_GOTO(s->hdr.stage, TT_TAIL, &s->cphase, NULL);
-                return JS_STEP_YIELD;
-            }
             base = document_base_url(ctx);
             DCHECK(base != NULL,
                    "§8.7 Timers's substep 9.8.5 base URL is \"settings object's API base URL\" and this "
@@ -1256,19 +1174,12 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
            seen by, and it is the whole reason the entry outlives the fire: `run steps after a timeout` step
            4.5 removed only the map-of-active-timers record, so what is looked up here is the identifier the
            page still holds. */
-        /* …UNLESS SUBSTEP 9.8.3 ABORTED THEM, in which case 9.9-9.12 are steps this task no longer has. The
-           guard is on the STEPS and not on the stage, because §8.1.7.3 "Processing model" step 2.7's reset
-           below is the EVENT LOOP's own step and runs for an aborted task exactly as it runs for a finished
-           one — a second exit that skipped this stage would have needed a second copy of it, which is how one
-           event-loop step comes to be spelled twice. The observable is 9.11: a blocked `setInterval(string)`
-           does not re-arm, and 9.12's map removal does not run either, so the identifier the page holds names
-           an entry nothing will fire — which is what step 9.5's abort leaves behind too. */
         at = timer_entry_index(ctx, id);
         DCHECK(s->rphase == 0 || (at >= 0 && repeat),
                "§8.7 Timers's substeps 9.9-9.12 resumed from substep 9.11's call and no longer agree that "
                "there is a repeat to re-perform — a stage holding a request must reach the same request site "
                "on the way back in, and nothing between the two runs a line of the page's code");
-        if (!s->aborted && at >= 0 && repeat) {
+        if (at >= 0 && repeat) {
             /* SUBSTEP 9.11 — "perform the timer initialization steps again, given global, handler, timeout,
                arguments, true, and id." A CALL of that algorithm's own machine, so step 4's fork and step 5's
                fork are asked by the one implementation the page-facing setters use; the flow parks on this
@@ -1330,7 +1241,7 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                        "names an entry nothing will ever fire");
             }
             JS_FreeValue(ctx, out);
-        } else if (!s->aborted && at >= 0) {
+        } else if (at >= 0) {
             /* SUBSTEP 9.12 — "Otherwise, remove global's map of setTimeout and setInterval IDs[id]." */
             JSValue q = timer_map(ctx);
 
@@ -1666,6 +1577,11 @@ int timer_run_due(JSContext *ctx)
 #define TI_MAGIC_REARM     2   /* substep 9.11: repeat true, previousId given at position 2 */
 
 #define TI_STAGES(X)                                                                                          \
+    X(TI_STRING,                                                                                              \
+      "HTML §8.7 Timers timer initialization steps steps 1.1-1.5 (if handler is not a Function and "          \
+      "previousId was not given: the sink name, get trusted type compliant string with TrustedScript, "       \
+      "global, handler, sink and \"script\", whose default policy's createScript is the page's code, and "   \
+      "EnsureCSPDoesNotBlockStringCompilation with compilationType timer, whose throw returns 0)")            \
     X(TI_THISARG,                                                                                             \
       "HTML §8.7 Timers timer initialization steps step 1 (let thisArg be global if that is a "                \
       "WorkerGlobalScope object; otherwise let thisArg be the WindowProxy that corresponds to global)")       \
@@ -1719,12 +1635,22 @@ typedef struct {
     uint8_t placed;
     uint8_t nested;
     uint8_t has_this;
+    /* Step 1's `handler`, the one the entry is made with (owned once `has_handler`), and its Trusted Types
+       request (live once `tt_begun`). */
+    uint8_t has_handler;
+    uint8_t tt_begun;
+    JSValue handler;
+    TrustedTypesCompliantRun tt;
 } TimerInitState;
 
 static void ti_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     TimerInitState *s = st;
 
+    if (s->tt_begun)
+        trusted_types_compliant_run_visit(ctx, &s->tt, v);
+    if (s->has_handler)
+        v->val(ctx, &s->handler);
     if (s->has_this)
         v->val(ctx, &s->this_arg);
     if (s->placed)
@@ -1758,10 +1684,11 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
     JSValueConst nav = JS_UNDEFINED;
     JSContext *gctx;
 
-    (void)out_cb; (void)out_argc;
-    /* This machine makes no request that delivers a value, so nothing below reads the answer to one. Freed on
-       every entry, above the dispatch, because it belongs to no stage. */
-    JS_FreeValue(ctx, cb_result);
+    /* Only step 1's Trusted Types request delivers a value; every other stage reads none. */
+    if (hdr->stage != TI_STRING) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+    }
     *presult = JS_UNDEFINED;
     /* §3.6's ARITY CHECK (step 5) AND STEPS 15.4.1/16.1's DEFAULT ARE THE DECLARATION'S, and both are
        asserted rather than
@@ -1790,6 +1717,43 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
         return JS_STEP_ABRUPT;   /* §3.7.7 Operations' TypeError on a receiver that does not implement Window */
 
     STEP_DISPATCH(TI_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(TI_STRING);
+    /* §8.7 step 1. A concolic handler carries a [[Call]] and is still the string arm, as substep 9.8 reads it;
+       the re-arm (9.11) gives previousId and skips the step. The sink is "Window " and the method name: this
+       engine installs the members on Window globals only (TI_THISARG says so). */
+    if (magic == TI_MAGIC_REARM || (JS_IsFunction(ctx, argv[0]) && !concolic_is(argv[0]))) {
+        JS_FreeValue(ctx, cb_result);
+        s->handler = JS_DupValue(ctx, argv[0]);
+        s->has_handler = 1;
+    } else {
+        JSValue compliant;
+        int r;
+
+        if (!s->tt_begun) {
+            trusted_types_compliant_run_init(&s->tt);
+            s->tt_begun = 1;
+        }
+        /* Step 1.4, whose throw is not caught. */
+        r = trusted_types_compliant_string_run(gctx, hdr, &s->tt, TRUSTED_TYPE_SCRIPT, argv[0],
+                                               repeat ? "Window setInterval" : "Window setTimeout", cb_result,
+                                               &compliant, out_cb, out_argc);
+        if (r > 0)
+            return r;
+        if (r < 0)
+            return JS_STEP_ABRUPT;
+        s->handler = compliant;
+        s->has_handler = 1;
+        /* Step 1.5: "If this throws an exception, catch it and return 0." A handler the policy refuses is still
+           an @S JS-context sink, so it is detected here; its candidates never run, so none can fire. */
+        if (!ensure_csp_allows_string_compilation(gctx, s->handler)) {
+            solve_eval_sink(ctx, s->handler);
+            *presult = JS_NewInt32(ctx, 0);
+            return JS_STEP_DONE;
+        }
+    }
+    STEP_GOTO(hdr->stage, TI_THISARG, &s->tt.phase, NULL);
+    return JS_STEP_YIELD;
 
     STEP_ARM(TI_THISARG);
     /* §8.7 step 1: "Let thisArg be global if that is a WorkerGlobalScope object; otherwise let thisArg be the
@@ -2027,7 +1991,7 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        was `JS_IsString(argv[0])` and it FIRED on `setTimeout(location.hash)`: a canonical XSS sink took the
        document down on an assert against attacker input, which §Offensive programming names as the one thing
        that is never a @WHY. */
-    DCHECK(JS_IsString(argv[0]) || JS_IsFunction(ctx, argv[0]),
+    DCHECK(s->has_handler && (JS_IsString(s->handler) || JS_IsFunction(ctx, s->handler)),
            "§8.7 Timers's `handler` reached step 12 neither a string nor callable — `TimerHandler` is "
            "`(DOMString or Function)` and its conversion is the declaration's, not this body's; unknown "
            "external input arrives carrying a [[Call]], so a value that is neither means position 0 was never "
@@ -2054,7 +2018,7 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        step 2's `previousId` back again, so the identifier the page is holding keeps naming this timer. The
        task's own DCHECK reads that from the other end. */
     *presult = JS_NewInt32(ctx, timer_set(gctx, s->timeout, repeat, s->nest + 1, prev_id, s->this_arg,
-                                          argv[0], 0, NULL));
+                                          s->handler, 0, NULL));
     return JS_STEP_DONE;
     /* nothing is queued: the driver asks when the clock may move */
 }

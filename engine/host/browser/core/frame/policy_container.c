@@ -572,23 +572,21 @@ SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list
     return out;
 }
 
-/* §4.4.1's EnsureCSPDoesNotBlockStringCompilation, for ONE policy. Its directive lookup is written out in the
-   algorithm itself and is NOT §6.8's fallback machinery: "if policy contains a directive whose name is
-   script-src, set source-list to that directive's value; otherwise if policy contains default-src, that one."
-   §6.1.10 says why in as many words — 'unsafe-eval' acts as a global page flag, so the granular script-src-elem
-   and script-src-attr forms are never consulted for it.
-   'trusted-types-eval' is the other expression that can permit compilation, and it cannot be reached here: it
-   applies only when the code string arrived as a TrustedScript, and §2's three types do not exist in this
-   engine, so no value can be one. That is the same step-is-decided-not-skipped reading core/html/
-   trusted_types.c already relies on for §3.4 step 1, and it is why an eval sink under
-   `require-trusted-types-for 'script'` is reported through the trusted-types answer rather than this one. */
-static bool policy_permits_compilation(const CspPolicy *policy)
+/* §4.4.1's EnsureCSPDoesNotBlockStringCompilation steps 4.1-4.3, for ONE policy. Its directive lookup is
+   written out in the algorithm itself and is NOT §6.8's fallback machinery: "if policy contains a directive
+   whose name is script-src, set source-list to that directive's value; otherwise if policy contains
+   default-src, that one." §6.1.10 says why — 'unsafe-eval' acts as a global page flag, so the granular
+   script-src-elem and script-src-attr forms are never consulted for it. 'trusted-types-eval' permits it too,
+   but only where the realm requires Trusted Types for 'script' (`trusted_types_required`), since only then has
+   step 2 run the source through them. */
+static bool policy_permits_compilation(const CspPolicy *policy, bool trusted_types_required)
 {
     const CspDirective *d = csp_policy_directive(policy, "script-src");
 
     if (!d) d = csp_policy_directive(policy, "default-src");
     /* A policy with neither says nothing about compilation, which is not the same as forbidding it. */
     if (!d) return true;
+    if (trusted_types_required && csp_source_list_contains(d, "'trusted-types-eval'")) return true;
     return csp_source_list_contains(d, "'unsafe-eval'");
 }
 
@@ -650,38 +648,25 @@ bool policy_allows_inline(CspReporter reporter, const PolicyContainer *p, CspInl
 /* THE SAME SHAPE AS §4.2.3 ABOVE AND FOR §4.4.1's OWN REASON: its per-policy steps end "execute §5.5 Report
    a violation on violation. If policy's disposition is enforce then set result to Blocked", and only after
    the loop does it "if result is Blocked, throw an EvalError exception". */
-bool policy_allows_string_compilation(CspReporter reporter, const PolicyContainer *p)
+bool policy_allows_string_compilation(CspReporter reporter, const PolicyContainer *p, bool trusted_types_required,
+                                      const char *source, size_t source_len)
 {
     bool allowed = true;
     size_t i;
 
     if (!p) return true;
     for (i = 0; i < p->csp.n_policies; i++)
-        if (!policy_permits_compilation(&p->csp.policies[i])) {
-            /* §4.4.1: "let violation be the result of executing §2.4.1 … on global, policy and
-               "script-src". Set violation's resource to "eval"." The directive is the LITERAL
-               `script-src` and not §6.8's fallback answer — §6.1.10 says why in as many words, and it is the
-               same reason `policy_permits_compilation` above writes its own two-line lookup rather than
-               calling csp_policy_governing_directive. The SAMPLE is the compiled source, which this entry
-               point does not carry: see the residual below. */
+        if (!policy_permits_compilation(&p->csp.policies[i], trusted_types_required)) {
+            /* Step 4.4: §2.4.1 on global, policy and the literal "script-src", whose resource is "eval"; the
+               'report-sample' sample of sourceString is csp_violation.c's, resolved through §6.8's script-src
+               fallback list, which names the same source list step 4.1 found. */
             csp_report_violation_for_global(reporter, &p->csp.policies[i], "script-src", CSP_RESOURCE_EVAL,
-                                            NULL, 0, NULL);
+                                            source, source_len, NULL);
             /* "If policy's disposition is "enforce", then set result to "Blocked"." */
             if (csp_policy_is_enforced(&p->csp.policies[i])) allowed = false;
         }
     return allowed;
 }
-/* NAMED RESIDUAL — WHAT IS NOT COVERED: §4.4.1's sample step, "if source list contains the expression
-   'report-sample' then set violation's sample to the substring of sourceString containing its first 40
-   characters". The 40-character cut and the 'report-sample' test are core/frame/csp_violation.c's and are
-   built; what this entry point does not carry is the SOURCE. §4.4.1 takes `codeString` as an argument and
-   this one takes a policy container and nothing else, deliberately — §6.1.10 makes 'unsafe-eval' a page-wide
-   flag whose answer reads no source at all, so the decision never needed the bytes and the entry point never
-   asked for them. WHAT THE NEXT DIFF BUILDS: the two remaining parameters of §4.4.1's own signature that this
-   engine can state — `codeString` and `compilationType` — carried from core/timing/timer.c's string
-   compilation site, which is holding both, and passed through to the report. HOW ITS ABSENCE WOULD SHOW: a
-   handler on a document whose policy writes `script-src 'report-sample'` reads `e.sample` as "" for an `eval`
-   violation, where a browser gives the first forty characters of the code. */
 
 /* §6.7.2.1 "does request violate policy?" for ONE policy, over the FETCH DIRECTIVES — which is every directive
  * whose pre-request check can answer "Blocked".

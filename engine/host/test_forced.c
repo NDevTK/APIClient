@@ -1269,6 +1269,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
+#include "fixture/csp_eval.h"
+#include "fixture/tt_eval.h"
 #include "fixture/fileparsefetch.h"
 #include "fixture/fileparseslice.h"
 #include "fixture/fileparsesub.h"
@@ -1858,6 +1860,8 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
+    { "csp-eval", HTML_CSP_EVAL },
+    { "tt-eval", HTML_TT_EVAL },
     { "fileparse-fetch", HTML_FILEPARSE_FETCH },
     { "fileparse-slice", HTML_FILEPARSE_SLICE },
     { "fileparse-sub", HTML_FILEPARSE_SUB },
@@ -2472,7 +2476,7 @@ TF_UNIT void csp_url_matching_selftest(void)
               "§4.1.2 blocked a request on a REPORT policy — step 3.1 skips every one");
         CHECK(policy_allows_inline(csp_reporter_none(), none, CSP_INLINE_SCRIPT, NULL, "", 0),
               "§4.2.3 blocked inline content on a REPORT policy — it reports and sets Blocked only for enforce");
-        CHECK(policy_allows_string_compilation(csp_reporter_none(), none),
+        CHECK(policy_allows_string_compilation(csp_reporter_none(), none, false, NULL, 0),
               "§4.4.1 blocked string compilation on a REPORT policy");
         policy_container_free(none);
         /* Both halves together: the enforce policy still decides, and the report one is appended after it. */
@@ -2632,7 +2636,7 @@ TF_UNIT void policy_container_selftest(void)
     /* No policy is not an empty policy: a document with no Content-Security-Policy permits everything, which
        is the overwhelmingly common case and the one a wrong default would mis-report on every page. */
     CHECK(csp_ok(none, CSP_INLINE_SCRIPT_ATTRIBUTE), "no policy must permit an inline handler");
-    CHECK(policy_allows_string_compilation(csp_reporter_none(), none), "no policy must permit eval");
+    CHECK(policy_allows_string_compilation(csp_reporter_none(), none, false, NULL, 0), "no policy must permit eval");
 
     self_only = policy_container_new("script-src 'self'", NULL, self_origin, NULL,
                                      serialized_embedder_policy_new(), /*integrity policy*/ NULL);
@@ -2640,12 +2644,12 @@ TF_UNIT void policy_container_selftest(void)
        host source never permits inline execution — that is what 'unsafe-inline' is for. */
     CHECK(!csp_ok(self_only, CSP_INLINE_SCRIPT_ATTRIBUTE), "'self' must not permit an inline handler");
     CHECK(!csp_ok(self_only, CSP_INLINE_NAVIGATION), "'self' must not permit a javascript: URL");
-    CHECK(!policy_allows_string_compilation(csp_reporter_none(), self_only), "'self' must not permit eval");
+    CHECK(!policy_allows_string_compilation(csp_reporter_none(), self_only, false, NULL, 0), "'self' must not permit eval");
 
     inline_ok = policy_container_new("default-src 'none'; script-src 'unsafe-inline'", NULL, self_origin, NULL,
                                      serialized_embedder_policy_new(), /*integrity policy*/ NULL);
     CHECK(csp_ok(inline_ok, CSP_INLINE_SCRIPT_ATTRIBUTE), "'unsafe-inline' must permit an inline handler");
-    CHECK(!policy_allows_string_compilation(csp_reporter_none(), inline_ok), "'unsafe-inline' must not permit eval");
+    CHECK(!policy_allows_string_compilation(csp_reporter_none(), inline_ok, false, NULL, 0), "'unsafe-inline' must not permit eval");
 
     /* CSP §6.1: a nonce source makes 'unsafe-inline' be IGNORED — the rule that makes adding a nonce to a
        legacy policy actually tighten it rather than widen it. A handler can carry no nonce, so it stays dead. */
@@ -2682,7 +2686,7 @@ TF_UNIT void policy_container_selftest(void)
               "§6.8.2 maps a `navigation` inline check to script-src-elem, so script-src-attr must not touch it");
         CHECK(csp_ok(granular, CSP_INLINE_SCRIPT),
               "script-src-attr must not govern a script ELEMENT — that is script-src-elem's fallback to script-src");
-        CHECK(policy_allows_string_compilation(csp_reporter_none(), granular),
+        CHECK(policy_allows_string_compilation(csp_reporter_none(), granular, false, NULL, 0),
               "eval has no granular form and reads script-src");
         policy_container_free(granular);
     }
@@ -2787,7 +2791,7 @@ TF_UNIT void policy_container_selftest(void)
                                  serialized_embedder_policy_new(), /*integrity policy*/ NULL);
         CHECK(csp_ok(hosts, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "host and scheme sources are invisible to §6.7.3.2, so 'unsafe-inline' still allows all inline");
-        CHECK(!policy_allows_string_compilation(csp_reporter_none(), hosts), "and none of them is 'unsafe-eval'");
+        CHECK(!policy_allows_string_compilation(csp_reporter_none(), hosts, false, NULL, 0), "and none of them is 'unsafe-eval'");
         policy_container_free(hosts);
     }
     /* §2.2.1: within ONE policy a repeated directive is IGNORED, so the first wins... */
@@ -2821,15 +2825,27 @@ TF_UNIT void policy_container_selftest(void)
                                                           serialized_embedder_policy_new(),
                                                           /*integrity policy*/ NULL);
         CHECK(csp_ok(unrelated, CSP_INLINE_SCRIPT_ATTRIBUTE), "img-src must not block a handler");
-        CHECK(policy_allows_string_compilation(csp_reporter_none(), unrelated),
+        CHECK(policy_allows_string_compilation(csp_reporter_none(), unrelated, false, NULL, 0),
               "frame-ancestors must not block eval");
         policy_container_free(unrelated);
     }
 
     evals = policy_container_new("script-src 'unsafe-eval'", NULL, self_origin, NULL,
                                  serialized_embedder_policy_new(), /*integrity policy*/ NULL);
-    CHECK(policy_allows_string_compilation(csp_reporter_none(), evals), "'unsafe-eval' must permit eval");
+    CHECK(policy_allows_string_compilation(csp_reporter_none(), evals, false, NULL, 0), "'unsafe-eval' must permit eval");
     CHECK(!csp_ok(evals, CSP_INLINE_SCRIPT_ATTRIBUTE), "'unsafe-eval' must not permit an inline handler");
+    {
+        /* CSP §4.4.1 step 4.2: 'trusted-types-eval' permits compilation only where the realm requires Trusted
+           Types for 'script'. */
+        PolicyContainer *tte = policy_container_new("script-src 'trusted-types-eval'", NULL, self_origin, NULL,
+                                                    serialized_embedder_policy_new(), /*integrity policy*/ NULL);
+
+        CHECK(policy_allows_string_compilation(csp_reporter_none(), tte, true, NULL, 0),
+              "'trusted-types-eval' must permit eval where Trusted Types are required");
+        CHECK(!policy_allows_string_compilation(csp_reporter_none(), tte, false, NULL, 0),
+              "'trusted-types-eval' must not permit eval where Trusted Types are not required");
+        policy_container_free(tte);
+    }
 
     /* §7.4: the initial about:blank's container is a CLONE of its creator's — which is the whole of how a
        same-origin popup or iframe with no URL inherits CSP, and it is a deep copy so the child's answers do
@@ -5132,7 +5148,7 @@ TF_UNIT void document_policy_selftest(void)
     CHECK(!csp_ok(p, CSP_INLINE_SCRIPT_ATTRIBUTE),
           "two meta policies must INTERSECT — the second's 'self' forbids what the first's 'unsafe-inline' "
           "permits, and a scan that let the last one win would report a live handler on a page that blocks it");
-    CHECK(!policy_allows_string_compilation(csp_reporter_none(), p), "neither meta policy carries 'unsafe-eval'");
+    CHECK(!policy_allows_string_compilation(csp_reporter_none(), p, false, NULL, 0), "neither meta policy carries 'unsafe-eval'");
 
     /* A page with no CSP at all is the overwhelmingly common one, and the scan must not invent a policy for
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
@@ -17626,6 +17642,84 @@ TF_UNIT void probes_ttsink(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `csp-eval` document (fixture/csp_eval.h): every string compilation throws an EvalError or
+   returns 0, and each reports a script-src violation carrying its 'report-sample'. */
+TF_UNIT void probes_csp_eval(const char *js, Probe *tab, int *n) {
+    const char *t_why = NULL; int t_tt = 1;
+    fold_row(&t_tt, &t_why, !!strstr(js, "\"/api/ce-throws\""), "NOT REACHED: no /api/ce-throws record");
+    fold_row(&t_tt, &t_why, param_value_is(js, "/api/ce-throws", "d", "EvalError"),
+             "a direct eval under a script-src without 'unsafe-eval' did not throw an EvalError");
+    fold_row(&t_tt, &t_why, param_value_is(js, "/api/ce-throws", "i", "EvalError"),
+             "an indirect eval under a script-src without 'unsafe-eval' did not throw an EvalError");
+    fold_row(&t_tt, &t_why, param_value_is(js, "/api/ce-throws", "f", "EvalError"),
+             "a Function constructor under a script-src without 'unsafe-eval' did not throw an EvalError");
+    fold_row(&t_tt, &t_why, param_value_is(js, "/api/ce-throws", "t", "0"),
+             "setTimeout with a string handler refused by the policy did not return 0 (HTML §8.7 step 1.5)");
+    const char *v_why = NULL; int v_tt = 1;
+    fold_row(&v_tt, &v_why, !!strstr(js, "\"/api/ce-viol\""), "NOT REACHED: no /api/ce-viol record");
+    fold_row(&v_tt, &v_why, param_value_is(js, "/api/ce-viol", "n", "4"),
+             "the four refused compilations did not each queue one securitypolicyviolation event");
+    fold_row(&v_tt, &v_why, param_value_is(js, "/api/ce-viol", "dir", "script-src")
+                                && param_value_is(js, "/api/ce-viol", "uri", "eval"),
+             "the first violation is not CSP §4.4.1's script-src violation with resource \"eval\"");
+    fold_row(&v_tt, &v_why, param_value_is(js, "/api/ce-viol", "smp", "ceOne"),
+             "the first violation's sample is not the code under 'report-sample'");
+    fold_row(&v_tt, &v_why, param_value_is(js, "/api/ce-viol", "r", "false"),
+             "the refused string timer ran");
+    const Probe rows[] = {
+        { "csp-eval-throws", t_tt, "/api/ce-throws", SESS_EXPLORE, t_why },
+        { "csp-eval-violations", v_tt, "/api/ce-viol", SESS_EXPLORE, v_why, 0, "csp-eval-throws" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* One `tt-eval` statement's row: reached, its createScript ran exactly once, and its `key` param reads `val`. */
+static void tt_eval_row(const char *js, const char *url, const char *key, const char *val, int *tt,
+                        const char **why) {
+    char reach[64];
+
+    snprintf(reach, sizeof reach, "\"%s\"", url);
+    fold_row(tt, why, !!strstr(js, reach), "NOT REACHED: the statement's fetch record is absent");
+    fold_row(tt, why, param_value_is(js, url, "n", "1"),
+             "the default policy's createScript did not run for this compilation");
+    fold_row(tt, why, !param_value_is(js, url, "n", "2"),
+             "the default policy's createScript ran twice for one compilation — its answer was not carried across "
+             "a rest or a fork");
+    fold_row(tt, why, param_value_is(js, url, key, val), "the statement's own answer is not the browser's");
+}
+
+/* The rows of the `tt-eval` document (fixture/tt_eval.h): one createScript call per string compilation, across
+   a parse rest and across a fork inside createScript, with Trusted Types' sink names. */
+TF_UNIT void probes_tt_eval(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *r_why = NULL; int r_tt = 1;
+    tt_eval_row(js, "/api/te-rest", "s", "TrustedScript:eval", &r_tt, &r_why);
+    fold_row(&r_tt, &r_why, param_value_is(js, "/api/te-rest", "m", "true"), "the rested direct eval's answer");
+    const char *i_why = NULL; int i_tt = 1;
+    tt_eval_row(js, "/api/te-ind", "s", "TrustedScript:eval", &i_tt, &i_why);
+    fold_row(&i_tt, &i_why, param_value_is(js, "/api/te-ind", "m", "true"), "the rested indirect eval's answer");
+    const char *p_why = NULL; int p_tt = 1;
+    fold_row(&p_tt, &p_why, nrests >= 2, "the two long evals' parses did not each rest inside their literals");
+    const char *f_why = NULL; int f_tt = 1;
+    tt_eval_row(js, "/api/te-fork", "a", "x", &f_tt, &f_why);
+    fold_row(&f_tt, &f_why, param_value_is(js, "/api/te-fork", "a", "o"),
+             "the fork inside createScript did not carry its other arm to the eval");
+    const char *d_why = NULL; int d_tt = 1;
+    tt_eval_row(js, "/api/te-fn", "s", "TrustedScript:Function", &d_tt, &d_why);
+    const char *t_why = NULL; int t_tt = 1;
+    tt_eval_row(js, "/api/te-timer", "s", "TrustedScript:Window_setTimeout", &t_tt, &t_why);
+    const Probe rows[] = {
+        { "tt-eval-rest", r_tt, "/api/te-rest", SESS_EXPLORE, r_why },
+        { "tt-eval-indirect", i_tt, "/api/te-ind", SESS_EXPLORE, i_why },
+        { "tt-eval-rests", p_tt, "/api/te-rest", SESS_EXPLORE, p_why, 0, "tt-eval-rest" },
+        { "tt-eval-fork", f_tt, "/api/te-fork", SESS_EXPLORE, f_why },
+        { "tt-eval-function", d_tt, "/api/te-fn", SESS_EXPLORE, d_why },
+        { "tt-eval-timer", t_tt, "/api/te-timer", SESS_EXPLORE, t_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* Whether `needle` occurs inside the result document's endpoint array, the span between its key and the @S
    array's key that result_json writes after it. */
 static int fcs_has(const char *js, const char *needle) {
@@ -22900,6 +22994,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);
+    probes_csp_eval(js, probes, &np);
+    probes_tt_eval(js, probes, &np);
     probes_fileparse_fetch(js, probes, &np);
     probes_fileparse_slice(js, probes, &np);
     probes_fileparse_sub(js, probes, &np);

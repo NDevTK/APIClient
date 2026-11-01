@@ -9636,7 +9636,9 @@ typedef struct JSCompileCheck {
 /* The bound call performing `realm`'s HostEnsureCanCompileStrings over codeString `code`, owned, for the caller
    to issue on the trampoline; JS_UNDEFINED where the realm keeps the default implementation, JS_EXCEPTION on
    OOM. Issuing it hands the @S announcement over to the caller's held source: the hook can run page code, and
-   a compile there must not consume the latch the held source is restated with when its own parse begins. */
+   a compile there must not consume the latch the held source is restated with when its own parse begins.
+   The announcement precedes the check, so a source the check refuses is still a detected sink, and an @S
+   candidate there throws instead of running: it cannot fire. */
 static JSValue js_compile_check_call(JSContext *realm, const JSCompileCheck *cc, JSValueConst code)
 {
     JSValue args[6], call;
@@ -29343,7 +29345,9 @@ static bool js_callsite_running_step(JSContext *ctx, JSCallSiteData *csd)
                                   do_return, exactly as JS_CallConstructorInternal would. */
 #define CONT_SETTER        5   /* cont_state = NULL: a `set x(v){…}` bytecode-setter body runs on this chain as a
                                   1-arg method call; do_return frees the operands like a normal method call but
-                                  DISCARDS the setter's return value (a property write yields nothing). */
+                                  DISCARDS the setter's return value (a property write yields nothing). A direct
+                                  eval's HostEnsureCanCompileStrings call is the other caller whose opcode reads no
+                                  completion value, so it is issued under this kind too. */
 #define CONT_ASYNC_FROM_SYNC 10 /* cont_state = JSAsyncFromSync: `for await (x of syncGen)` — the async-from-sync
                                   wrapper's .next() drives syncGen.next() on the chain, then wraps {value,done} in
                                   Promise.resolve(value).then(unwrap) at the settle. No fork-clone yet (DFAIL-guarded). */
@@ -31908,9 +31912,10 @@ static JSObject *tramp_exotic_accessor(JSContext *ctx, const JSPropertyDescripto
    (JSStackFrame.eval_hold) while the opcode waits to re-execute. Split by what can be re-derived:
    - `operand`, `text` and `checked` are §19.2.1.1 PerformEval's prefix up to the parse: the argument, the source
      js_eval_program_source answered for it (the @S announcement), and whether step 5's HostEnsureCanCompileStrings
-     has completed normally. The check is issued as a call on the trampoline; until its completion lands back on
-     the opcode, `checked` is false. Re-running that prefix repeats host acts (page code, violation reports), so
-     a fork COPIES them and the re-execution skips it.
+     has been issued. It is issued as a call on the trampoline whose completion value is discarded and whose throw
+     drops the hold, so an opcode re-executing over a checked hold stands after its normal completion.
+     Re-running that prefix repeats host acts (page code, violation reports), so a fork COPIES them and the
+     re-execution skips it.
    - `parse` is the parse in flight (JSProgCompile), a cache over `text`: a fork SHEDS it and the sibling parses
      again from `text`. */
 typedef struct JSEvalHold {
@@ -31961,23 +31966,13 @@ static void js_eval_hold_free(JSRuntime *rt, JSStackFrame *sf)
     sf->eval_hold = NULL;
 }
 
-/* §19.2.1.1 step 5's normal completion, handed back to the eval opcode by the call it issued: the opcode pops it
-   off its stack on re-execution, and the hold goes on to the parse. Its value is §19.2.1.2's `unused`. */
-static void js_eval_hold_checked(JSContext *ctx, JSStackFrame *sf, JSValue completion)
-{
-    DCHECK(sf->eval_hold != NULL && !sf->eval_hold->checked,
-           "an eval opcode took a HostEnsureCanCompileStrings completion that no hold on its frame was waiting for");
-    JS_FreeValue(ctx, completion);
-    sf->eval_hold->checked = true;
-}
-
 /* `caller_sf` IS THE CALLER'S OWN FRAME, handed over by the opcode that is executing it, and it is the pair of
    `scope_idx`: the compiler records WHICH scope and the frame is the one that HAS it. It is a parameter and not
    a read of rt->current_stack_frame because every call on this engine trampolines onto the heap stack.
    0 with *pclo the closure, or JS_UNINITIALIZED for step 2's non-string arm (the OPERAND is the completion);
    1 when the parse rested, with the hold on `caller_sf` and the opcode to re-execute on the resume; 2 with *pclo
-   the step 5 HostEnsureCanCompileStrings call (owned) for the opcode to issue, whose completion re-executes it
-   (js_eval_hold_checked; a throw lands in the frame's exception path, which drops the hold); -1 thrown. */
+   the step 5 HostEnsureCanCompileStrings call (owned) for the opcode to issue, whose normal completion
+   re-executes it (a throw lands in the frame's exception path, which drops the hold); -1 thrown. */
 static int eval_direct_closure(JSContext *ctx, JSStackFrame *caller_sf, JSValueConst src, int scope_idx,
                                JSValue *pclo)
 {
@@ -32016,15 +32011,15 @@ static int eval_direct_closure(JSContext *ctx, JSStackFrame *caller_sf, JSValueC
             *pclo = JS_UNDEFINED;
             goto fail;
         }
+        eh->checked = true;   /* issued, or the default implementation, which returns unused */
         if (!JS_IsUndefined(*pclo))
             return 2;
-        eh->checked = true;   /* the default implementation returns unused */
     } else {
         DCHECKF(js_same_value(ctx, eh->operand, src),
                 "a direct eval re-executed over an operand that is not the one its held source was checked from "
                 "(held tag %d, on the stack tag %d) — the re-execution would parse the held, stale text",
                 (int)JS_VALUE_GET_TAG(eh->operand), (int)JS_VALUE_GET_TAG(src));
-        DCHECK(eh->checked, "a direct eval re-executed while its HostEnsureCanCompileStrings call is outstanding");
+        DCHECK(eh->checked, "a direct eval re-executed over a hold whose HostEnsureCanCompileStrings was never issued");
     }
     pc = eh->parse;
     if (!pc) {
@@ -48151,10 +48146,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 call_argc = get_u16(pc);
                 scope_idx = get_u16(pc + 2) - 1;
                 pc += 4;
-                /* The completion of the HostEnsureCanCompileStrings call this opcode issued, standing above its
-                   operands (see the issue below). */
-                if (unlikely(sf->eval_hold != NULL && !sf->eval_hold->checked))
-                    js_eval_hold_checked(ctx, sf, *--sp);
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
                 if (js_same_value(ctx, call_argv[-1], ctx->eval_obj)) {
@@ -48167,15 +48158,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JSValue eclo;
                     int er = eval_direct_closure(ctx, sf, obj, scope_idx, &eclo);
                     if (er == 2) {
-                        /* Step 5's call, issued above the operands with the plain [callee] shape: its
-                           completion is pushed there and the opcode re-executes over it. */
+                        /* Step 5's call, issued above the operands with the plain [callee] shape and its
+                           completion discarded, so the opcode re-executes over its own operands. */
                         pc -= 5;
                         sf->cur_pc = pc;
                         DCHECK(sp < TRAMP_SP_LIMIT(sf), "a direct eval's host check has no scratch slot above its operands");
                         *sp++ = eclo;
                         call_argv = sp; call_argc = 0;
                         tramp_first = -1; tramp_is_tail = 0;
-                        tramp_cont_state = NULL; tramp_cont_kind = CONT_NONE;
+                        tramp_cont_state = NULL; tramp_cont_kind = CONT_SETTER;
                         goto do_generic_callee;
                     }
                     if (er > 0) {
@@ -48223,9 +48214,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
                 scope_idx = get_u16(pc) - 1;
                 pc += 2;
-                /* The completion of the HostEnsureCanCompileStrings call this opcode issued (see OP_eval). */
-                if (unlikely(sf->eval_hold != NULL && !sf->eval_hold->checked))
-                    js_eval_hold_checked(ctx, sf, *--sp);
                 sf->cur_pc = pc;
                 if (!js_same_value(ctx, sp[-2], ctx->eval_obj)) {
                     /* `eval` that resolved to something ELSE is an ORDINARY call with a spread argument list, and
@@ -48267,13 +48255,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     int er = eval_direct_closure(ctx, sf, obj, scope_idx, &eclo);
                     if (er == 2) {
                         free_arg_list(ctx, tab, len);   /* rebuilt from the operand stack on the re-execution */
-                        pc -= 3;
+                        pc -= 3;   /* re-executed after step 5's call, as in OP_eval */
                         sf->cur_pc = pc;
                         DCHECK(sp < TRAMP_SP_LIMIT(sf), "a direct eval's host check has no scratch slot above its operands");
                         *sp++ = eclo;
                         call_argv = sp; call_argc = 0;
                         tramp_first = -1; tramp_is_tail = 0;
-                        tramp_cont_state = NULL; tramp_cont_kind = CONT_NONE;
+                        tramp_cont_state = NULL; tramp_cont_kind = CONT_SETTER;
                         goto do_generic_callee;
                     }
                     if (er > 0) {

@@ -2556,8 +2556,12 @@ char *solve_json_array(JSContext *ctx) {
                a breakout this engine composed and inserted nowhere, so no event belongs in the page's timeline
                (csp_reporter_none; see core/frame/csp_violation.h). */
             CspReporter no_report = csp_reporter_none();
+            /* A class with no inline check fired past the policy already: an eval runs only once the engine's
+               HostEnsureCanCompileStrings (core/html/ensure_can_compile_strings.h) has passed CSP §4.4.1 at the
+               sink, so under a policy forbidding string compilation its candidate throws an EvalError, never
+               fires and stays a parked search; a request fires by leaving the engine, past §4.1.2. */
             int allowed = sc->policy < 0
-                              ? policy_allows_string_compilation(no_report, pc)
+                              ? 1
                               : policy_allows_inline(no_report, pc, (CspInlineType)sc->policy, NULL, poc,
                                                      poc ? strlen(poc) : 0);
 

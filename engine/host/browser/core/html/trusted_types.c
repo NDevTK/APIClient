@@ -75,15 +75,10 @@ static bool tt_list_requires(const CspList *list, const char *quoted_group, bool
 }
 
 /* The global's CSP list: a Window realm's is its document's policy container's (built once with the
-   Document, so this question, asked at every sink, never re-parses). */
+   Document, so this question, asked at every sink, never re-parses), and a worker realm's is its environment
+   record's (core/dom/document.h, which states what that container does not yet cover). */
 static const CspList *tt_global_csp_list(JSContext *ctx)
 {
-    if (realm_global_is_worker(ctx)) {
-        DFAIL("Trusted Types asked a WorkerGlobalScope for its CSP list, which this engine does not build — "
-              "build the worker global's list from its script's response, as a Window's comes from its "
-              "document's");
-        return NULL;
-    }
     return policy_container_csp_list(document_policy(ctx));
 }
 
@@ -153,39 +148,161 @@ bool trusted_types_required_by(const char *csp_text, TrustedTypeKind expected)
     return required;
 }
 
-JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected, JSValueConst input,
-                                       const char *sink)
+/* §3.5 steps 1-3: true when they decide the answer, with *pout the compliant string (owned); false when step 4
+   runs. */
+static bool tt_compliant_decided(JSContext *ctx, TrustedTypeKind expected, JSValueConst input, const char *sink,
+                                 JSValue *pout)
 {
-    JSValue policy;
-
     DCHECK(sink != NULL, "a Trusted Types sink called §3.5 without naming itself, which is what a violation "
                          "report identifies");
-    if (trusted_type_is(input, expected))                                       /* step 1 */
-        return trusted_type_data(ctx, input, expected);
+    if (trusted_type_is(input, expected)) {                                     /* step 1 */
+        *pout = trusted_type_data(ctx, input, expected);
+        return true;
+    }
     DCHECK(JS_IsString(input) || concolic_is(input),
            "a Trusted Types sink handed §3.5 a value that is neither the expected type nor a String — its "
            "declaration's union converts every other value to a DOMString first");
-    if (!trusted_types_required(ctx, expected, /*include_report_only*/ true))   /* steps 2-3 */
-        return JS_DupValue(ctx, input);
-    /* Step 4, §3.7 steps 1-2: the default policy's function for this type, if both exist. */
-    policy = trusted_type_policy_factory_default_policy(ctx);
-    if (!JS_IsNull(policy)) {
-        JSValue fn = trusted_type_policy_function(ctx, policy, expected);
-        bool runs = !JS_IsUndefined(fn);
-
-        JS_FreeValue(ctx, fn);
-        if (runs)
-            DFAIL("Trusted Types §3.7 reached a default policy whose callback must run, which a plain C call "
-                  "cannot do: build the invocation as a request at the sink's Trusted Types stage, through "
-                  "trusted_type_policy.c's create machine with « trustedTypeName, sink » as arguments");
+    if (!trusted_types_required(ctx, expected, /*include_report_only*/ true)) { /* steps 2-3 */
+        *pout = JS_DupValue(ctx, input);
+        return true;
     }
+    return false;
+}
+
+/* §3.7 steps 1-2 as far as the callback: §3.3 Get Trusted Type policy value with throwIfMissing false answers
+   null without calling anything when there is no default policy or it holds no function for the type. The
+   function (owned), or JS_UNDEFINED for that null. */
+static JSValue tt_default_policy_function(JSContext *ctx, TrustedTypeKind expected)
+{
+    JSValue policy = trusted_type_policy_factory_default_policy(ctx), fn = JS_UNDEFINED;
+
+    if (!JS_IsNull(policy))
+        fn = trusted_type_policy_function(ctx, policy, expected);
     JS_FreeValue(ctx, policy);
-    /* §3.7 answered null, so step 6 runs: §4.2.4 (step 6.1) answers "Allowed" unless an enforce policy
-       requires the type, and step 6.2 then returns the stringified input; otherwise step 6.3 throws. */
+    return fn;
+}
+
+/* §3.5 step 6, after §3.7 answered null or undefined: §4.2.4 (step 6.1) answers "Allowed" unless an enforce
+   policy requires the type, and step 6.2 then returns the stringified input; otherwise step 6.3 throws. */
+static JSValue tt_compliant_unconverted(JSContext *ctx, TrustedTypeKind expected, JSValueConst input,
+                                        const char *sink)
+{
     if (!trusted_types_required(ctx, expected, /*include_report_only*/ false))
         return JS_DupValue(ctx, input);
     return JS_ThrowTypeError(ctx, "this document's Content-Security-Policy requires a %s at the %s sink and "
                                   "no default policy converted the value", trusted_type_name(expected), sink);
+}
+
+JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected, JSValueConst input,
+                                       const char *sink)
+{
+    JSValue out, fn;
+
+    if (tt_compliant_decided(ctx, expected, input, sink, &out))
+        return out;
+    fn = tt_default_policy_function(ctx, expected);
+    if (!JS_IsUndefined(fn))
+        DFAIL("Trusted Types §3.7 reached a default policy whose callback must run, which a plain C call "
+              "cannot do: make the sink a step machine and call trusted_types_compliant_string_run at its "
+              "Trusted Types stage");
+    JS_FreeValue(ctx, fn);
+    return tt_compliant_unconverted(ctx, expected, input, sink);
+}
+
+void trusted_types_compliant_run_init(TrustedTypesCompliantRun *r)
+{
+    int i;
+
+    r->stage = 0;
+    r->phase = 0;
+    r->call = JS_UNDEFINED;
+    r->value = JS_UNDEFINED;
+    STEP_CB_FOREACH(r->cb, i) r->cb[i] = JS_UNDEFINED;
+}
+
+void trusted_types_compliant_run_visit(JSContext *ctx, TrustedTypesCompliantRun *r, JSStepVisit *v)
+{
+    int i;
+
+    v->val(ctx, &r->call);
+    v->val(ctx, &r->value);
+    STEP_CB_FOREACH(r->cb, i) v->val(ctx, &r->cb[i]);
+}
+
+enum { TTC_BEGIN = 0, TTC_CALL, TTC_STRING };
+
+int trusted_types_compliant_string_run(JSContext *ctx, JSStepHdr *hdr, TrustedTypesCompliantRun *r,
+                                       TrustedTypeKind expected, JSValueConst input, const char *sink,
+                                       JSValue in, JSValue *pout, JSValue **out_cb, int *out_argc)
+{
+    JSValue out;
+    int c;
+
+    if (r->stage == TTC_BEGIN) {
+        JSValue fn, args[3];
+
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
+        if (tt_compliant_decided(ctx, expected, input, sink, pout))
+            return 0;
+        fn = tt_default_policy_function(ctx, expected);
+        if (JS_IsUndefined(fn)) {
+            *pout = tt_compliant_unconverted(ctx, expected, input, sink);
+            return JS_IsException(*pout) ? -1 : 0;
+        }
+        /* §3.7 step 2: §3.3 with the stringified input as value and « trustedTypeName, sink » as arguments,
+           whose step 7 invokes the function with « value » followed by them, and "rethrow". */
+        args[0] = JS_DupValue(ctx, input);
+        args[1] = JS_NewString(ctx, trusted_type_name(expected));
+        args[2] = JS_NewString(ctx, sink);
+        CHECK(!JS_IsException(args[1]) && !JS_IsException(args[2]),
+              "a default policy's callback arguments could not be allocated");
+        r->call = JS_NewBoundCall(ctx, fn, JS_UNDEFINED, 3, args);
+        JS_FreeValue(ctx, fn);
+        for (c = 0; c < 3; c++) JS_FreeValue(ctx, args[c]);
+        CHECK(!JS_IsException(r->call), "a default policy's callback call could not be allocated");
+        r->stage = TTC_CALL;
+    }
+    if (r->stage == TTC_CALL) {
+        c = step_call_run(ctx, &r->phase, STEP_CB(r->cb), r->call, JS_UNDEFINED, 0, NULL, in, &out,
+                          out_cb, out_argc);
+        if (c > 0)
+            return c;
+        in = JS_UNDEFINED;
+        JS_FreeValue(ctx, r->call);
+        r->call = JS_UNDEFINED;
+        if (JS_IsException(out))
+            return -1;                                                          /* §3.7 step 3, §3.5 step 5 */
+        if (JS_IsNull(out) || JS_IsUndefined(out)) {                            /* §3.7 step 4 */
+            *pout = tt_compliant_unconverted(ctx, expected, input, sink);
+            return JS_IsException(*pout) ? -1 : 0;
+        }
+        r->value = out;
+        r->stage = TTC_STRING;
+    }
+    /* §3.7 step 5's dataString: the callback's `DOMString?` (`USVString?` for a script URL) result converted
+       by Web IDL §3.2, unknown external input crossing as itself. Step 6's new instance carries it, and §3.5
+       step 7 returns that instance stringified, so the instance is never observed and is not made. */
+    DCHECK(r->stage == TTC_STRING, "a Trusted Types §3.5 request resumed at a stage it does not have");
+    if (concolic_is(r->value)) {
+        JS_FreeValue(ctx, in);
+        out = JS_DupValue(ctx, r->value);
+    } else {
+        c = step_tostring_run(ctx, hdr, r->value, in, &out, out_cb, out_argc);
+        if (c > 0)
+            return c;
+        if (c < 0)
+            return -1;
+        if (expected == TRUSTED_TYPE_SCRIPT_URL) {
+            out = JS_ToScalarValueString(ctx, out);
+            if (JS_IsException(out))
+                return -1;
+        }
+    }
+    JS_FreeValue(ctx, r->value);
+    r->value = JS_UNDEFINED;
+    *pout = out;
+    return 0;
 }
 
 /* THE FOUR NAMESPACES §3.10 NAMES, spelled as the URLs they are. They appear here because §3.10 tests element

@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "quickjs.h"
+#include "quickjs-step.h"
 
 /* §2.2's three types. The kind is what a sink names; it decides the brand §3.5 step 1 tests and the sink group
    §4.2.3 asks the CSP about, which is "script" for all three (the only group the standard defines). */
@@ -31,6 +32,26 @@ typedef enum {
    callback for the type, which is asserted (trusted_types.c says what to build). */
 JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected, JSValueConst input,
                                        const char *sink);
+
+/* §3.5 AS A REQUEST, for a sink that is a step machine: the same algorithm, with §3.7's default-policy callback
+   (the page's code) issued as a call on the trampoline instead of refused. The record is the machine's own,
+   zeroed by trusted_types_compliant_run_init before the first entry and walked by its `visit`; `phase` is the
+   call's cursor, for the machine's STEP_GOTO lists. `hdr` is the machine's header (the callback's DOMString?
+   conversion is its ToString request). Returns a step code for the machine to return, 0 with *pout the
+   compliant string (owned), or -1 having thrown — the callback's own throw (step 5, rethrown) or step 6.3's
+   TypeError. */
+typedef struct {
+    uint8_t stage;   /* where the record stands in §3.5/§3.7; 0 = not begun */
+    uint8_t phase;   /* the callback call's cursor */
+    JSValue call;    /* the default policy's callback bound over « input, trustedTypeName, sink » (owned) */
+    JSValue value;   /* policyValue (owned) */
+    JSValue cb[2];   /* the call's [this, call] buffer */
+} TrustedTypesCompliantRun;
+void trusted_types_compliant_run_init(TrustedTypesCompliantRun *r);
+void trusted_types_compliant_run_visit(JSContext *ctx, TrustedTypesCompliantRun *r, JSStepVisit *v);
+int trusted_types_compliant_string_run(JSContext *ctx, JSStepHdr *hdr, TrustedTypesCompliantRun *r,
+                                       TrustedTypeKind expected, JSValueConst input, const char *sink,
+                                       JSValue in, JSValue *pout, JSValue **out_cb, int *out_argc);
 
 /* §4.2.3 "Does sink type require trusted types?" over this global's CSP list. Exposed because
    it is a question about the DOCUMENT rather than about one sink, and because a report that says "sink REAL,
