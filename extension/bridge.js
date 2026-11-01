@@ -157,17 +157,18 @@ function docEndpoints(rows) {
 /* One @S entry's delivery facts, as solver/solve.c's emit_delivery writes them (solve.h's field list): `delivery`
    is absent (the source declares none) or one of the mechanism tokens, `deliveryPrefix` is the victim's address
    component, present exactly on an `address` delivery, `deliveryKey` the serialized tuple name the payload is the
-   value of, only beside the `?` component, `messageRoutes` the routes (`frame`, `opener`) a
-   `cross-document-message` delivery may take, empty when the target refuses both, `attackerPolicy` (and on a fired entry `attackerPage`) is
+   value of, only beside the `?` component, `messageRoutes` the routes (`frame`, `opener`) a `cross-document-message`
+   delivery may take, empty when the target refuses both, `attackerPolicy` (and on a fired entry `attackerPage`) is
    a `referring-address` delivery's attacker page and its referrer policy, and `precondition` labels a root no
-   attacker writes
-   (a fire-verified entry carries a delivery, a precondition, or both); `principalDemand` is absent
-   (unexamined) or one of two verdicts, with `principalPins` exactly beside `unforgeable`; `poc` is absent on a parked search and a non-empty string on a
-   fire-verified one, and `senderDemand` (the senders a parked search waits on, in the principalPins row
-   grammar) only on a parked one. `acts` (the user acts a fire was verified under, after the delivery) only on
-   a fire-verified entry, and `firedUnderNoAct` (fires verified under a drive no user act performs) only on a
-   parked one. `originCandidates` lists each message origin source with the origins its candidate runs deliver.
-   These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
+   attacker writes (a fire-verified entry carries a delivery, a precondition, or both); `principalDemand` is absent
+   (unexamined) or one of two verdicts, with `principalPins` exactly beside `unforgeable`; `poc` is absent on a
+   parked search and a non-empty string on a fire-verified one, which alone states `pinnedSources` (each other
+   attacker source its path pinned, with the String its read answered as `equals` and its delivery in this
+   grammar) and `acts` (the user acts a fire was verified under, after the delivery); `senderDemand` (the senders a
+   parked search waits on, in the principalPins row grammar), `firedUnderNoAct` (fires verified under a drive no
+   user act performs) and `firedUnderUndeliveredSource` (fires whose run pinned a source it did not deliver) only
+   on a parked one. `originCandidates` lists each message origin source with the origins its candidate runs
+   deliver. These are what the live-verify layer (offscreen-brain.js) performs a delivery from. */
 const SINK_DELIVERIES = Object.freeze(["address", "referring-address", "user-file", "cross-document-message",
                                        "user-input", "navigable-name"]);
 const SINK_PRECONDITIONS = Object.freeze(["same-origin", "application-state"]);
@@ -214,6 +215,17 @@ function docSinkAct(a, f) {
            + "and only a message carrying data or a sender origin (with who holds it), an open only of the "
            + "address and under the attacker page's activation, and typing only under input, keyup or change";
 }
+/* One of `pinnedSources`: a delivery this layer can name, with the address grammar `docSink` applies to the
+   payload's own. */
+function docSinkPinned(g, f) {
+  return docIsRecord(g) && docIsName(g.source) && typeof g.equals === "string" &&
+         (g.delivery === "address" || g.delivery === "navigable-name") &&
+         ("deliveryPrefix" in g) === (g.delivery === "address") &&
+         (!("deliveryPrefix" in g) || g.deliveryPrefix === "#" || g.deliveryPrefix === "?") &&
+         (!("deliveryKey" in g) || (g.deliveryPrefix === "?" && docIsName(g.deliveryKey)))
+    ? null : f + " is not {source, equals, delivery: address|navigable-name[, deliveryPrefix: #|?[, deliveryKey]]} "
+           + "with a prefix exactly on an address and a key only beside the query";
+}
 function docSink(e, f) {
   if (!docIsRecord(e)) return f + " is not an object";
   if ("delivery" in e && SINK_DELIVERIES.indexOf(e.delivery) < 0)
@@ -259,6 +271,15 @@ function docSink(e, f) {
                ? null : f + ".refusedFireActs is not the non-empty act list a refused fire carries") ||
             (!("compositionRefused" in e) || docIsName(e.compositionRefused) ? null
                : f + ".compositionRefused is not the reason a message's data could not be composed");
+  if (why === null && "pinnedSources" in e)
+    why = ("poc" in e ? null : f + " states pinnedSources on a parked search, which only a fire-verified entry carries") ||
+          (Array.isArray(e.pinnedSources) && e.pinnedSources.length > 0 ? null
+             : f + ".pinnedSources is not a non-empty array") ||
+          docEach(e.pinnedSources, f + ".pinnedSources", docSinkPinned);
+  if (why === null && "firedUnderUndeliveredSource" in e)
+    why = "poc" in e ? f + " states firedUnderUndeliveredSource on a fire-verified entry, which only a parked search carries"
+          : (Number.isInteger(e.firedUnderUndeliveredSource) && e.firedUnderUndeliveredSource > 0 ? null
+             : f + ".firedUnderUndeliveredSource is not a positive integer");
   if (why === null && "firedUnderNoAct" in e)
     why = "poc" in e ? f + " states firedUnderNoAct on a fire-verified entry, which only a parked search carries"
           : (Number.isInteger(e.firedUnderNoAct) && e.firedUnderNoAct > 0 ? null

@@ -1704,8 +1704,40 @@ function _messagePosts(acts, call) {
            data: msgs.map(function (a) { return mark(a.data); }) };
 }
 
+/* The page address with the attacker sources the fired path pinned beside the payload (solve.h's
+   `pinnedSources`) placed in it: a whole component through its URL setter, which strips the prefix and applies
+   the component's percent-encode set as a navigation's parse does, and the query's tuples as `key=value`
+   through the URL §5.2 serializer, which are the whole query unless a whole-query value was pinned (that value
+   decides every tuple, as the engine composes it). `tuples` is returned too, for a payload that is itself a
+   tuple of the query to lead, and `fragment`, the pinned fragment with its `#` or "" where none was pinned.
+   Answers {url, tuples, fragment} or {why}. */
+function _pinnedAddress(pageUrl, pinnedSources) {
+  var url;
+  try { url = new URL(pageUrl); }
+  catch (_) {
+    return { why: "the page this sink was observed on has no parseable address (" + JSON.stringify(pageUrl)
+                  + "), so the sources its path pinned have no address to be placed in." };
+  }
+  var tuples = [], whole = false, fragment = "";
+  for (var i = 0; i < (pinnedSources || []).length; i++) {
+    var g = pinnedSources[i];
+    if (g.delivery !== "address")
+      return { why: "the path reaching this sink pinned `" + g.source + "` to " + JSON.stringify(g.equals)
+                    + ", which the attacker sets by the `" + g.delivery + "` delivery this layer does not perform." };
+    DCHECK(g.deliveryPrefix === "#" || g.deliveryPrefix === "?",
+           "a pinned source's `address` delivery names neither the fragment nor the query — the result door "
+           + "(docSink) admits only those two");
+    if (g.deliveryKey) tuples.push(g.deliveryKey + new URLSearchParams([["", g.equals]]).toString());
+    else if (g.deliveryPrefix === "#") { url.hash = g.equals; fragment = url.hash; }
+    else { url.search = g.equals; whole = true; }
+  }
+  if (whole) tuples = [];
+  else if (tuples.length) url.search = tuples.join("&");
+  return { url: url, tuples: tuples, fragment: fragment };
+}
+
 function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deliveryKey, pageUrl, marker,
-                           principalDemand, principalPins, precondition, acts, waitMs) {
+                           principalDemand, principalPins, precondition, acts, waitMs, pinnedSources) {
   DCHECK(typeof poc === "string" && poc.length > 0,
          "an @S live-verify was started with no engine poc — solve_json_array emits `poc` on every fire-verified "
          + "entry and only on those, so a probe without one is being built for a PARKED search (sink=" + sinkName + ")");
@@ -1741,6 +1773,13 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deli
     out.why = "the engine states neither a delivery nor a precondition for source `" + (source || "?") + "`.";
     return out;
   }
+  // The page the delivery navigates is the observed one with every other source the fired path pinned.
+  var pinned = _pinnedAddress(pageUrl, pinnedSources);
+  if ("why" in pinned) {
+    out.why = pinned.why;
+    return out;
+  }
+  pageUrl = pinned.url.href;
   // A message act is a post from another document, which `_performProbeActs` cannot make, so a PoC carrying
   // one is stated rather than armed with an act that would not be performed.
   var msgWhy = _messageActsWhy(acts);
@@ -1782,12 +1821,20 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deli
               + "), so there is no document to navigate to and no origin a hit could be attributed to.";
       return out;
     }
-    base.hash = "";                       // empty string ⇒ fragment null ⇒ no trailing `#` in href
-    if (!frag) base.search = "";
     // A tuple's value is written through the browser's own URL §5.2 serializer, which the page's §5.1 parse
-    // undoes; a whole component is placed raw (below).
-    out.targetUrl = base.href + deliveryPrefix
-                  + (deliveryKey ? deliveryKey + new URLSearchParams([["", payload]]).toString() : payload);
+    // undoes; a whole component is placed raw (below). The payload's tuple leads the pinned ones, as the
+    // engine composed the query it fired under.
+    var placed = deliveryKey ? deliveryKey + new URLSearchParams([["", payload]]).toString() : payload;
+    DCHECK(frag || !!deliveryKey || pinned.tuples.length === 0,
+           "the query's pinned tuples arrived beside a payload that is the whole query — the engine composes a "
+           + "pinned tuple onto the payload's base only where the payload is itself a tuple");
+    base.hash = "";                       // empty string ⇒ fragment null ⇒ no trailing `#` in href
+    if (frag) {
+      out.targetUrl = base.href + "#" + placed;
+    } else {
+      base.search = "";
+      out.targetUrl = base.href + "?" + [placed].concat(pinned.tuples).join("&") + pinned.fragment;
+    }
     out.targetOrigin = base.origin;       // OUR expectation, compared against the browser's MessageSender.origin — never the reverse
     /* WHICH COMPONENT THE PAYLOAD WAS PLACED IN, stated here because this is the only place that knows and
        because a witness reading needs it. A delivery witness compares the FULL address, so the component never
@@ -1959,7 +2006,7 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deli
 function startExploitProbe(msg) {
   _pruneProbeSessions();
   const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix, deliveryKey, precondition,
-          principalDemand, principalPins, acts } = msg || {};
+          principalDemand, principalPins, acts, pinnedSources } = msg || {};
   if (!poc) throw new Error("need the engine's poc (the fire-verified breakout input from the @S finding)");
   DCHECK(acts === undefined || (Array.isArray(acts) && acts.length > 0 && acts.every(function (a) {
            return a && ["click", "dispatch", "input", "drop", "scroll", "close-request", "message",
@@ -2055,7 +2102,7 @@ function startExploitProbe(msg) {
   // PROBE_HIT lands on this marker and _recordProbeHit decides whether the reporting document is the one the
   // payload was delivered to.
   var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deliveryKey, session.pageUrl, marker,
-                               principalDemand, principalPins, precondition, acts, wait);
+                               principalDemand, principalPins, precondition, acts, wait, pinnedSources);
   DCHECK(!!_poc && typeof _poc === "object" && typeof _poc.payload === "string",
          "buildLiveDelivery answered with no record — it returns {pocJs, payload, context, source} on every "
          + "arm including the ones it cannot perform, so an absent one is that function having grown a path "

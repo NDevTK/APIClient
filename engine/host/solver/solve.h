@@ -191,7 +191,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       ,"searched":N[,"deliveryProbed":B][,"sourceEncodes":".."][,"sourceDelivers":".."]
                       [,"delivery":".."][,"deliveryPrefix":"#"][,"deliveryKey":".."][,"precondition":".."]
-                      [,"principalDemand":".."][,"principalPins":[..]][,"originCandidates":[..]]}`
+                      [,"principalDemand":".."][,"principalPins":[..]][,"originCandidates":[..]][,"pinnedSources":[..]]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"resumedWithdrawn":RW,
                       "reached":M,"turns":T,
                       "substituted":D,"sinkStrings":X,"runwayPerMille":R2,"survived":S,
@@ -200,7 +200,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                       "survivedBy":[..],"withdrawn":[..]
                       [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]
                       [,"deliveryKey":".."][,"precondition":".."][,"principalDemand":".."][,"principalPins":[..]]
-                      [,"originCandidates":[..]][,"senderDemand":[..]]}`
+                      [,"originCandidates":[..]][,"senderDemand":[..]][,"firedUnderUndeliveredSource":U]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
    own declaration. There is deliberately no "verified":false — the entry states what was searched, never that

@@ -950,6 +950,8 @@ function renderSecurityPanel() {
       if (item.principalDemand) probeObj.principalDemand = item.principalDemand;
       if (item.principalPins)   probeObj.principalPins = item.principalPins;
       if (item.acts)            probeObj.acts = item.acts;
+      // The other attacker sources the fired path pinned, which the delivery places beside the payload.
+      if (item.pinnedSources)   probeObj.pinnedSources = item.pinnedSources;
       var probe = JSON.stringify(probeObj);
       var verifyBtn = domElement("button", { class: "verify-btn", "data-probe": probe, "data-key": key },
                                  ["Verify in real Chrome"]);
