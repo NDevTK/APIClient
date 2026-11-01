@@ -16857,6 +16857,11 @@ TF_UNIT void probes_flexwrap(const char *js, Probe *tab, int *n) {
              "css-flexbox-1 §9.6: the third item is not beside the second on its line");
     fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "f5h", "30"),
              "css-flexbox-1 §9.6: the auto-height container is not its two lines' 30px");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "h6", "50"),
+             "css-flexbox-1 §9.4 step 11: an empty item is not stretched over the 50px line its sibling sizes");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwrap", "h7", "29"),
+             "css-flexbox-1 §9.4 step 8.1: an empty item is not stretched over the 29px line its baseline-aligned "
+             "sibling sizes");
     const Probe rows[] = {
         { "flex-wrap-placement", fw_tt, "/api/flexwrap", SESS_EXPLORE, fw_why },
     };
