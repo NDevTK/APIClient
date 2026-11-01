@@ -2919,6 +2919,12 @@ typedef struct JSConcolicHooks {
     bool (*key_domain_holds)(JSContext *ctx, JSValueConst key, const char *s, size_t n);
     /* Called where GP_KEYDOMAIN decides OrdinaryGet's miss; asserts the domain is the one `key`'s facets state. */
     void (*key_domain_missed)(JSContext *ctx, JSValueConst key);
+    /* `r` is the result of a call that replaced, in the unknown String `recv`, every character in the set the
+       `n` sorted inclusive pairs name (code points when `unicode`, else code units) by the String `rep`, and
+       kept every other character: states the facets that fixes on `r` (its type, its code-unit class and its
+       length bound). */
+    void (*string_unit_map)(JSContext *ctx, JSValueConst r, JSValueConst recv, const uint32_t *pairs, int n,
+                            int unicode, JSValueConst rep);
     /* THE NAME an unknown key denotes, as a REAL string — the concolic's own shape. A property key must be an
        atom, which a concolic cannot be, but the shape IS a string and it is stable per source: two writes
        through the same unknown source land in the SAME slot, two different sources in different ones, and a

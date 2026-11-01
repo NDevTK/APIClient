@@ -4179,6 +4179,68 @@ int lre_get_flags(const uint8_t *bc_buf)
     return get_u16(bc_buf + RE_HEADER_FLAGS);
 }
 
+/* Whether the program matches exactly one character, drawn from a fixed set, at every position where one of the
+   set stands and nowhere else: the unanchored search prefix lre_compile_begin emits for a pattern that is not
+   sticky, capture saves, one character opcode, the match. Answers the set's size in pairs, writing the first
+   `cap` sorted inclusive [lo, hi] pairs (code points under the u or v flag, code units otherwise), or -1 for
+   any other program. Named residual. Not covered: `space`, `not_space` and the case-folding `_i` opcodes.
+   Next diff builds: their sets, from lre_is_space's table and lre_canonicalize's inverse. How its absence
+   shows: `s.replace(/\s/g, "")` over an unknown states no character class on its result. */
+int lre_char_class(const uint8_t *bc_buf, uint32_t *pairs, int cap)
+{
+    static const uint32_t DOT[] = { 0, 0x09, 0x0B, 0x0C, 0x0E, 0x2027, 0x202A, 0 };
+    const uint8_t *bc = bc_buf + RE_HEADER_LEN;
+    int len = (int)get_u32(bc_buf + RE_HEADER_BYTECODE_LEN), flags = lre_get_flags(bc_buf), n = -1, pos, i, m;
+    uint32_t top = (flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) ? 0x10FFFF : 0xFFFF, lo, hi;
+    const int pre = REOP_SZ(REOP_split_goto_first) + REOP_SZ(REOP_any) + REOP_SZ(REOP_goto);
+
+    if ((flags & LRE_FLAG_STICKY) || len < pre || bc[0] != REOP_split_goto_first ||
+        bc[REOP_SZ(REOP_split_goto_first)] != REOP_any ||
+        bc[REOP_SZ(REOP_split_goto_first) + REOP_SZ(REOP_any)] != REOP_goto)
+        return -1;
+    for (pos = pre; pos < len; pos += re_ins_len(bc, pos)) {
+        int op = bc[pos];
+
+        if (op == REOP_save_start || op == REOP_save_end) continue;
+        if (op == REOP_match) return pos + REOP_SZ(REOP_match) == len ? n : -1;
+        if (n >= 0) return -1;
+        switch (op) {
+        case REOP_char: case REOP_char32:
+            lo = op == REOP_char ? get_u16(bc + pos + 1) : get_u32(bc + pos + 1);
+            n = lo <= top;   /* re_emit_range's empty class is char32 of a value past every character */
+            if (n && cap > 0) { pairs[0] = lo; pairs[1] = lo; }
+            break;
+        case REOP_range: case REOP_range32:
+            n = get_u16(bc + pos + 1);
+            for (i = 0; i < n && i < cap; i++) {
+                if (op == REOP_range) {
+                    lo = get_u16(bc + pos + 3 + 4 * i);
+                    hi = get_u16(bc + pos + 3 + 4 * i + 2);
+                    if (i == n - 1 && hi == 0xffff) hi = top;   /* re_emit_range's 0xffff is +infinity */
+                } else {
+                    lo = get_u32(bc + pos + 3 + 8 * i);
+                    hi = get_u32(bc + pos + 3 + 8 * i + 4);
+                }
+                pairs[2 * i] = lo;
+                pairs[2 * i + 1] = hi;
+            }
+            break;
+        case REOP_dot: case REOP_any:
+            /* `.`: every character, less the four line terminators unless the s flag compiled it as `any`. */
+            m = op == REOP_any ? 1 : 4;
+            for (i = 0; i < m && i < cap; i++) {
+                pairs[2 * i] = op == REOP_any ? 0 : DOT[2 * i];
+                pairs[2 * i + 1] = op == REOP_any || i == 3 ? top : DOT[2 * i + 1];
+            }
+            n = m;
+            break;
+        default:
+            return -1;
+        }
+    }
+    return -1;
+}
+
 /* Return NULL if no group names. Otherwise, return a pointer to
    'capture_count - 1' zero terminated UTF-8 strings. */
 const char *lre_get_groupnames(const uint8_t *bc_buf)

@@ -962,6 +962,10 @@ JSValue     concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueCons
 bool        concolic_key_domain_stated(JSContext *ctx, JSValueConst key);
 bool        concolic_key_domain_holds(JSContext *ctx, JSValueConst key, const char *s, size_t n);
 void        concolic_key_domain_missed(JSContext *ctx, JSValueConst key);
+/* JSConcolicHooks.string_unit_map: a replace of a set of characters over the unknown String `recv` states its
+   result's type, code-unit class and length bound. */
+void        concolic_string_unit_map(JSContext *ctx, JSValueConst r, JSValueConst recv, const uint32_t *pairs,
+                                     int n, int unicode, JSValueConst rep);
 /* JSConcolicHooks.key_name — the real string an unknown key denotes (its shape), stable per source. */
 JSValue     concolic_key_name_hook(JSContext *ctx, JSValueConst key);
 /* JSConcolicHooks.key_value — that trade UNDONE, where a property NAME is handed back to the program as a

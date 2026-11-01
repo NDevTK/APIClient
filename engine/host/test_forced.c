@@ -14741,6 +14741,16 @@ TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
     fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a7\""),
              "a /api/kd-a7 record exists: a WindowProxy none of whose Window's keys, named properties or chain "
              "keys lies in the unknown key's domain took an arm where it hit");
+    fold_row(&miss_tt, &miss_why,
+             emitted_record_has(js, "/api/kd-b12", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/kd-b13", "\"door\":\"fetch\""),
+             "NOT REACHED: no /api/kd-b12 or kd-b13 record, so the reads keyed by a replace's digits did not finish");
+    fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a12\""),
+             "a /api/kd-a12 record exists: the global `jQuery`, shorter than the expando's length bound (its prefix "
+             "and the three digits replace(/\\D/g, \"\") keeps of `3.7.1`), took an arm where it hit");
+    fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a13\""),
+             "a /api/kd-a13 record exists: the global `znNotDigits`, with a non-digit after the prefix of a key "
+             "whose tail replace(/\\D/g, \"\") left digits only, took an arm where it hit");
     /* The read's answer holds no example, so neither arm is the one this run observed and both grade derived. */
     fold_row(&keep_tt, &keep_why,
              emitted_record_has(js, "/api/kd-a4", "\"door\":\"fetch\"") &&
@@ -14755,6 +14765,9 @@ TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
     fold_row(&keep_tt, &keep_why, emitted_record_has(js, "/api/kd-a10", "\"door\":\"fetch\""),
              "a global whose name lies in the unknown key's domain did not keep the hit arm of the WindowProxy's "
              "read");
+    fold_row(&keep_tt, &keep_why, emitted_record_has(js, "/api/kd-a14", "\"door\":\"fetch\""),
+             "the global `jQuery123`, whose digits lie in the expando's domain, did not keep the hit arm of the "
+             "WindowProxy's read");
     const Probe rows[] = {
         { "keydomain-miss", miss_tt, "kdKey", SESS_EXPLORE, miss_why },
         { "keydomain-kept", keep_tt, "kdKey", SESS_EXPLORE, keep_why },

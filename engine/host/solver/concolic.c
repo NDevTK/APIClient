@@ -52,6 +52,11 @@ typedef struct {
     double *k;
     double  c;
 } ConcolicAffine;
+/* A set of UTF-16 code units: `n` sorted, disjoint, non-adjacent inclusive ranges `r[2i]..r[2i + 1]`. */
+typedef struct {
+    int      n;
+    uint16_t r[];
+} UnitClass;
 typedef struct {
     char *shape;        /* @H/@S display form */
     char *src;          /* injection identity: the source an @S candidate substitutes at */
@@ -195,6 +200,13 @@ typedef struct {
        other bytes are the page's own; NULL on every other value, whose whole shape spells one unknown. Owned. */
     int *hole_span;
     int  hole_n;
+    /* The code units each hole may hold: one class per hole, `hole_n` where `hole_span` is written and one, the
+       whole value's, where it is not. Stated by concolic_string_unit_map and carried by hole_classes_concat; a
+       NULL entry, or a NULL array, states nothing. `tail_class`, written with it at a concatenation, is the
+       class every unit after the bytes before the first hole lies in: the union of the holes' classes and the
+       page's own bytes after that prefix, NULL where a hole states none. Owned. */
+    UnitClass **hole_class;
+    UnitClass *tail_class;
     /* Which unknown owns which units of `example`: `piece_n` runs in order (JSUnknownPiece, the shape a buffer's
        runs take, here in UTF-16 code units), each owned by the operand whose example spells it. Written at a
        string concatenation whose operands' examples are both held, and on no other value; units in no piece
@@ -2384,6 +2396,10 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->str_of_shape);
     aff_free(c->aff);
     free(c->hole_span);
+    if (c->hole_class)
+        for (int i = 0; i < (c->hole_span ? c->hole_n : 1); i++) free(c->hole_class[i]);
+    free(c->hole_class);
+    free(c->tail_class);
     for (int i = 0; i < c->piece_n; i++) JS_FreeValueRT(rt, c->piece[i].unknown);
     free(c->piece);
     if (c->split_sep) JS_FreeValueRT(rt, c->split_of);
@@ -6803,9 +6819,143 @@ static int primitive_chain_misses_prefix(JSContext *ctx, JSValueConst base, cons
     return misses;
 }
 
+/* A bitmap over the 65536 code units, the working form a UnitClass is composed in. */
+typedef struct { uint64_t w[1024]; } UnitBits;
+
+static UnitBits *ub_new(void)
+{
+    UnitBits *b = reclaim_calloc(1, sizeof *b);
+
+    CHECK(b != NULL, "concolic: OOM composing a code-unit class");
+    return b;
+}
+
+static void ub_add(UnitBits *b, uint32_t lo, uint32_t hi)
+{
+    if (hi > 0xFFFF) hi = 0xFFFF;
+    while (lo <= hi) {
+        uint32_t end = (lo | 63) < hi ? (lo | 63) : hi;
+
+        b->w[lo >> 6] |= end - lo == 63 ? ~0ull : ((1ull << (end - lo + 1)) - 1) << (lo & 63);
+        lo = end + 1;
+    }
+}
+
+static int ub_has(const UnitBits *b, uint32_t u)
+{
+    return u <= 0xFFFF && (b->w[u >> 6] >> (u & 63) & 1);
+}
+
+static void ub_add_class(UnitBits *b, const UnitClass *k)
+{
+    for (int i = 0; i < k->n; i++) ub_add(b, k->r[2 * i], k->r[2 * i + 1]);
+}
+
+/* The first unit at or after `u` whose bit is `bit`, or 0x10000. */
+static uint32_t ub_next(const UnitBits *b, uint32_t u, int bit)
+{
+    while (u <= 0xFFFF) {
+        uint64_t w = (bit ? b->w[u >> 6] : ~b->w[u >> 6]) >> (u & 63);
+
+        if (w) return u + (uint32_t)__builtin_ctzll(w);
+        u = (u | 63) + 1;
+    }
+    return 0x10000;
+}
+
+/* The class the bitmap holds, or NULL where it holds every unit and so states nothing. */
+static UnitClass *uc_of_bits(const UnitBits *b)
+{
+    UnitClass *k;
+    uint32_t lo, hi;
+    int n = 0;
+
+    for (lo = ub_next(b, 0, 1); lo <= 0xFFFF; lo = ub_next(b, hi, 1), n++) hi = ub_next(b, lo, 0);
+    if (n == 1 && ub_has(b, 0) && ub_next(b, 0, 0) == 0x10000) return NULL;
+    k = reclaim_malloc(sizeof *k + sizeof k->r[0] * 2 * (size_t)n);
+    CHECK(k != NULL, "concolic: OOM recording a code-unit class");
+    k->n = n;
+    n = 0;
+    for (lo = ub_next(b, 0, 1); lo <= 0xFFFF; lo = ub_next(b, hi, 1), n++) {
+        hi = ub_next(b, lo, 0);
+        k->r[2 * n] = (uint16_t)lo;
+        k->r[2 * n + 1] = (uint16_t)(hi - 1);
+    }
+    return k;
+}
+
+static int uc_has(const UnitClass *k, uint32_t u)
+{
+    int a = 0, z = k->n - 1;
+
+    while (a <= z) {
+        int m = (a + z) / 2;
+
+        if (u < k->r[2 * m]) z = m - 1;
+        else if (u > k->r[2 * m + 1]) a = m + 1;
+        else return 1;
+    }
+    return 0;
+}
+
+static UnitClass *uc_dup(const UnitClass *k)
+{
+    size_t sz = sizeof *k + sizeof k->r[0] * 2 * (size_t)k->n;
+    UnitClass *d = reclaim_malloc(sz);
+
+    CHECK(d != NULL, "concolic: OOM copying a code-unit class");
+    memcpy(d, k, sz);
+    return d;
+}
+
+/* The code units the WTF-8 bytes at `s[*i]` spell for one character (one unit, or a surrogate pair), written to
+   `u`; answers how many and advances `*i` past the character. */
+static int wtf8_units(const char *s, size_t n, size_t *i, uint32_t u[2])
+{
+    unsigned char b = (unsigned char)s[*i];
+    int len = b < 0x80 ? 1 : b < 0xE0 ? 2 : b < 0xF0 ? 3 : 4, k;
+    uint32_t cp = len == 1 ? b : (uint32_t)(b & (0x7F >> len));
+
+    DCHECKF(*i + (size_t)len <= n, "a WTF-8 character starting at byte %zu runs past the %zu bytes it lies in",
+            *i, n);
+    for (k = 1; k < len; k++) cp = cp << 6 | ((unsigned char)s[*i + (size_t)k] & 0x3F);
+    *i += (size_t)len;
+    if (cp < 0x10000) { u[0] = cp; return 1; }
+    cp -= 0x10000;
+    u[0] = 0xD800 | cp >> 10;
+    u[1] = 0xDC00 | (cp & 0x3FF);
+    return 2;
+}
+
+/* How many holes a value's shape has: its spans, or one where its whole shape spells one unknown. */
+static int hole_count(const Concolic *c)
+{
+    return c->hole_span ? c->hole_n : 1;
+}
+
+/* Hole `i`'s code-unit class, or NULL where `c` is no concolic or states none for it. */
+static const UnitClass *hole_class_at(const Concolic *c, int i)
+{
+    return c && c->hole_class ? c->hole_class[i] : NULL;
+}
+
+/* Whether every code unit of the WTF-8 bytes `s` (`n` of them) lies in `k`. */
+static int uc_holds_all(const UnitClass *k, const char *s, size_t n)
+{
+    uint32_t u[2];
+    size_t i = 0;
+
+    while (i < n) {
+        int m = wtf8_units(s, n, &i, u);
+
+        if (!uc_has(k, u[0]) || (m == 2 && !uc_has(k, u[1]))) return 0;
+    }
+    return 1;
+}
+
 /* The domain a String key's facets state: every value begins with the `hole_span[0]` bytes of its shape the page
-   wrote before its first hole, and is at least `len_lo` code units long. Stated where those bytes are not
-   empty; NULL otherwise. */
+   wrote before its first hole, is at least `len_lo` code units long, and every unit after those bytes lies in
+   `tail_class` where it is stated. Stated where those bytes are not empty; NULL otherwise. */
 static const Concolic *key_domain_of(JSValueConst key)
 {
     const Concolic *kc = concolic_is(key) ? JS_GetOpaque(key, g_concolic_class) : NULL;
@@ -6820,7 +6970,8 @@ bool concolic_key_domain_stated(JSContext *ctx, JSValueConst key)
 }
 
 /* A name lies in the domain when it is one spent on an unknown key (keyname_find: its value is that unknown's,
-   so any), or when its bytes begin with the prefix and it is at least `len_lo` code units long. */
+   so any), or when its bytes begin with the prefix, it is at least `len_lo` code units long and its units after
+   the prefix lie in the tail class. */
 bool concolic_key_domain_holds(JSContext *ctx, JSValueConst key, const char *s, size_t n)
 {
     const Concolic *kc = key_domain_of(key);
@@ -6831,7 +6982,9 @@ bool concolic_key_domain_holds(JSContext *ctx, JSValueConst key, const char *s, 
     (void)ctx;
     DCHECK(kc != NULL && s != NULL, "a name was tested against the domain of a key whose facets state none");
     plen = (size_t)kc->hole_span[0];
-    if (n >= plen && memcmp(s, kc->shape, plen) == 0 && concolic_utf8_units(s, n) >= kc->len_lo) return true;
+    if (n >= plen && memcmp(s, kc->shape, plen) == 0 && concolic_utf8_units(s, n) >= kc->len_lo &&
+        (!kc->tail_class || uc_holds_all(kc->tail_class, s + plen, n - plen)))
+        return true;
     if (!g_keynames_n) return false;
     z = n < sizeof buf ? buf : malloc(n + 1);
     CHECK(z != NULL, "concolic: OOM spelling a name against an unknown key's domain");
@@ -6856,9 +7009,11 @@ void concolic_key_domain_missed(JSContext *ctx, JSValueConst key)
         size_t n = 0, plen = (size_t)kc->hole_span[0];
         const char *t = JS_IsString(ex) ? JS_ToCStringLen(ctx, &n, ex) : NULL;
 
-        DCHECKF(t != NULL && n >= plen && memcmp(t, kc->shape, plen) == 0 && example_units(ctx, ex) >= kc->len_lo,
+        DCHECKF(t != NULL && n >= plen && memcmp(t, kc->shape, plen) == 0 && example_units(ctx, ex) >= kc->len_lo &&
+                (!kc->tail_class || uc_holds_all(kc->tail_class, t + plen, n - plen)),
                 "a String key's domain does not hold its own example: prefix of %zu bytes over shape %s, length "
-                "bound %u, example %s", plen, kc->shape, (unsigned)kc->len_lo, t ? t : "(not a String)");
+                "bound %u, tail class %s, example %s", plen, kc->shape, (unsigned)kc->len_lo,
+                kc->tail_class ? "stated" : "none", t ? t : "(not a String)");
         if (t) JS_FreeCString(ctx, t);
         JS_FreeValue(ctx, ex);
     }
@@ -8439,6 +8594,141 @@ static void hole_spans_concat(JSValueConst r, JSValueConst a, size_t alen, JSVal
            "a concatenation's last hole ends past its own shape — the operands' shapes are the result's bytes");
 }
 
+/* `r` is the string concatenation of `a` and `b`, its holes theirs in order (hole_spans_concat): each hole keeps
+   its class, and the tail class is composed over the result's own bytes after its first hole. */
+static void hole_classes_concat(JSValueConst r, JSValueConst a, JSValueConst b)
+{
+    Concolic *c = g_concolic_class ? JS_GetOpaque(r, g_concolic_class) : NULL;
+    const Concolic *ca = g_concolic_class ? JS_GetOpaque(a, g_concolic_class) : NULL;
+    const Concolic *cb = g_concolic_class ? JS_GetOpaque(b, g_concolic_class) : NULL;
+    int na, nb, i;
+    size_t sn, at;
+    UnitBits *bits;
+
+    if (!c || !((ca && ca->hole_class) || (cb && cb->hole_class))) return;
+    na = hole_spans_of(a, 0, NULL);
+    nb = hole_spans_of(b, 0, NULL);
+    DCHECK(c->hole_span != NULL && c->hole_n == na + nb && c->hole_class == NULL,
+           "a concatenation's hole classes were composed before its holes, or twice");
+    c->hole_class = reclaim_calloc((size_t)c->hole_n, sizeof *c->hole_class);
+    CHECK(c->hole_class, "concolic: OOM recording a concatenation's hole classes");
+    for (i = 0; i < c->hole_n; i++) {
+        const UnitClass *k = i < na ? hole_class_at(ca, i) : hole_class_at(cb, i - na);
+
+        if (k) c->hole_class[i] = uc_dup(k);
+    }
+    for (i = 0; i < c->hole_n; i++)
+        if (!c->hole_class[i]) return;
+    bits = ub_new();
+    for (i = 0; i < c->hole_n; i++) ub_add_class(bits, c->hole_class[i]);
+    sn = strlen(c->shape);
+    for (at = (size_t)c->hole_span[0], i = 0; at < sn;) {
+        uint32_t u[2];
+        int m;
+
+        while (i < c->hole_n && (size_t)c->hole_span[2 * i + 1] <= at) i++;
+        if (i < c->hole_n && (size_t)c->hole_span[2 * i] <= at) { at = (size_t)c->hole_span[2 * i + 1]; continue; }
+        m = wtf8_units(c->shape, sn, &at, u);
+        ub_add(bits, u[0], u[0]);
+        if (m == 2) ub_add(bits, u[1], u[1]);
+    }
+    c->tail_class = uc_of_bits(bits);
+    free(bits);
+}
+
+/* JSConcolicHooks.string_unit_map. Each character of `recv` in the set becomes `rep`, every other is kept, so a
+   unit of `r` is one of `rep`'s, one of `recv`'s own bytes outside the set, or one a hole's class holds outside
+   it. Under the u or v flag a match is a code point, so a surrogate unit may be half of a pair the set does not
+   hold and only the set's other units are certain to be replaced. The length bound counts `recv`'s own units
+   (each kept, or replaced by `rep`'s) and its holes' (`len_lo` less its own units), these where every hole unit
+   is kept or becomes at least one unit. The call is the replace only where the receiver is a String in every
+   world, since §7.3.3 GetV reads the method off that type's prototype. */
+void concolic_string_unit_map(JSContext *ctx, JSValueConst r, JSValueConst recv, const uint32_t *pairs, int n,
+                              int unicode, JSValueConst rep)
+{
+    Concolic *c = concolic_is(r) ? JS_GetOpaque(r, g_concolic_class) : NULL;
+    const Concolic *rc = concolic_is(recv) ? JS_GetOpaque(recv, g_concolic_class) : NULL;
+    UnitBits *del, *out, *hk;
+    uint32_t u[2], rlen, own = 0, bound = 0, holes_lo;
+    unsigned char *mask;
+    const char *t;
+    size_t tn = 0, sn, i;
+    int k, j, keep = 1;
+
+    if (!c || !rc || cty_of_operand(recv) != CTY_STRING) return;
+    DCHECK(c->hole_span == NULL && c->hole_class == NULL && c->len_lo == 0,
+           "a replace's result was minted with holes, a class or a length bound before its unit map stated them");
+    del = ub_new();
+    out = ub_new();
+    for (k = 0; k < n; k++) {
+        uint32_t lo = pairs[2 * k], hi = pairs[2 * k + 1];
+
+        DCHECKF(lo <= hi && (k == 0 || pairs[2 * k - 1] < lo), "the character set's pair %d is not sorted", k);
+        if (!unicode) ub_add(del, lo, hi);
+        else {
+            if (lo <= 0xD7FF) ub_add(del, lo, hi < 0xD7FF ? hi : 0xD7FF);
+            if (hi >= 0xE000) ub_add(del, lo > 0xE000 ? lo : 0xE000, hi);
+        }
+    }
+    t = JS_ToCStringLen(ctx, &tn, rep);
+    CHECK(t != NULL, "concolic: OOM reading a replacement String");
+    rlen = concolic_utf8_units(t, tn);
+    for (i = 0; i < tn;) {
+        k = wtf8_units(t, tn, &i, u);
+        for (j = 0; j < k; j++) ub_add(out, u[j], u[j]);
+    }
+    JS_FreeCString(ctx, t);
+    mask = concolic_shape_hole_mask(recv);
+    sn = strlen(rc->shape);
+    for (i = 0; i < sn;) {
+        if (mask[i]) { i++; continue; }
+        k = wtf8_units(rc->shape, sn, &i, u);
+        for (j = 0; j < k; j++, own++) {
+            if (unicode && u[j] >= 0xD800 && u[j] <= 0xDFFF) ub_add(out, u[j], u[j]);
+            else if (ub_has(del, u[j])) bound += rlen;
+            else { ub_add(out, u[j], u[j]); bound++; }
+        }
+    }
+    free(mask);
+    hk = ub_new();
+    for (k = 0; k < hole_count(rc); k++) {
+        const UnitClass *hc = hole_class_at(rc, k);
+
+        memset(hk, 0, sizeof *hk);
+        if (hc) ub_add_class(hk, hc);
+        else ub_add(hk, 0, 0xFFFF);
+        for (j = 0; j < 1024; j++) {
+            keep &= !(hk->w[j] & del->w[j]);
+            out->w[j] |= hk->w[j] & ~del->w[j];
+        }
+        if (unicode && ub_next(hk, 0xD800, 1) <= 0xDFFF) keep = 0;
+    }
+    free(hk);
+    holes_lo = rc->len_lo > own ? rc->len_lo - own : 0;
+    if (keep || (!unicode && rlen >= 1)) bound += holes_lo;
+    c->len_lo = bound;
+    c->hole_class = reclaim_calloc(1, sizeof *c->hole_class);
+    CHECK(c->hole_class, "concolic: OOM recording a replace's code-unit class");
+    c->hole_class[0] = uc_of_bits(out);
+    free(del);
+    free(out);
+    if (!c->ty) concolic_type_state(r, CTY_STRING);
+    DCHECKF(c->ty == CTY_STRING, "a replace's result over a String receiver was typed %u", (unsigned)c->ty);
+#if APICLIENT_DEV
+    if (concolic_example_present(r)) {
+        JSValue ex = concolic_example(ctx, r);
+        const char *e = JS_IsString(ex) ? JS_ToCStringLen(ctx, &tn, ex) : NULL;
+
+        DCHECKF(e != NULL && example_units(ctx, ex) >= c->len_lo &&
+                (!c->hole_class[0] || uc_holds_all(c->hole_class[0], e, tn)),
+                "a replace's unit map does not hold its own example: length bound %u, class %s, example %s",
+                c->len_lo, c->hole_class[0] ? "stated" : "none", e ? e : "(not a String)");
+        if (e) JS_FreeCString(ctx, e);
+        JS_FreeValue(ctx, ex);
+    }
+#endif
+}
+
 unsigned char *concolic_shape_hole_mask(JSValueConst v)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
@@ -8571,7 +8861,10 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
        shape, which concolic_alloc reads as owning: an equality over it must not pin or narrow x. */
     if (concolic_is(result)) ((Concolic *)JS_GetOpaque(result, g_concolic_class))->src_own = 0;
     if (af) aff_attach(result, af);
-    if (string_arm) hole_spans_concat(result, a, strlen(sha), b);
+    if (string_arm) {
+        hole_spans_concat(result, a, strlen(sha), b);
+        hole_classes_concat(result, a, b);
+    }
     if (string_arm && hava && havb) pieces_concat(ctx, result, a, ua, b, ub);
     if (string_fixed) len_lo_concat(ctx, result, a, b);
     /* §13.15.3 answers a String, a Number or a BigInt; the numeric arm is a Number unless both operands may be
@@ -8681,6 +8974,7 @@ static JSConcolicHooks g_hooks = {
     .key_domain_stated = concolic_key_domain_stated,
     .key_domain_holds = concolic_key_domain_holds,
     .key_domain_missed = concolic_key_domain_missed,
+    .string_unit_map = concolic_string_unit_map,
     .get_value_base = concolic_get_value_base_hook,
     .key_name = concolic_key_name_hook,
     /* …and the inverse, which is not optional beside it: `key_name` is the only mechanism turning an unknown

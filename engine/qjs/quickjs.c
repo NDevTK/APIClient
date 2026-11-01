@@ -98082,6 +98082,58 @@ static JSValue js_concolic_call_replacer(JSContext *ctx, JSConcolicCall *s, JSVa
     return w;
 }
 
+/* §22.1.3.19 String.prototype.replace and §22.1.3.20 String.prototype.replaceAll over an unknown receiver, run
+   to a normal completion on the examples: where the search matches one character of a fixed set wherever one
+   stands (a builtin-protocol global RegExp whose program lre_char_class reads as such a set, or replaceAll's
+   one-unit String) and the replacement is a String with no `$` (§22.1.3.19.1 GetSubstitution copies such a
+   template as it is), every character of the set becomes the replacement and every other is kept, in every
+   world. States that map on the result through JSConcolicHooks.string_unit_map. */
+static void js_concolic_call_unit_map(JSContext *ctx, JSConcolicCall *s)
+{
+    JSObject *fp = JS_VALUE_GET_OBJ(s->cb[1]);
+    JSValueConst pat, rep;
+    uint32_t one[2], *pairs = one;
+    int all, n, m, unicode = 0;
+
+    DCHECK(g_concolic.string_unit_map != NULL, "a host installed the concolic call machine without the unit-map "
+                                               "hook, so a replace over an unknown would state no facet");
+    if (fp->u.cfunc.cproto != JS_CFUNC_step ||
+        (fp->u.cfunc.magic != STEPDEF_STR_REPLACE && fp->u.cfunc.magic != STEPDEF_STR_REPLACE_ALL) ||
+        s->hdr.argc < 2 || !g_concolic.is(s->hdr.this_val))
+        return;
+    all = fp->u.cfunc.magic == STEPDEF_STR_REPLACE_ALL;
+    pat = s->hdr.argv[0];
+    rep = s->hdr.argv[1];
+    if (g_concolic.is(pat) || !JS_IsString(rep) || string_indexof_char(JS_VALUE_GET_STRING(rep), '$', 0) >= 0)
+        return;
+    if (JS_IsString(pat)) {
+        JSString *p = JS_VALUE_GET_STRING(pat);
+
+        if (!all || p->len != 1) return;
+        one[0] = one[1] = (uint32_t)string_get(p, 0);
+        n = 1;
+    } else if (js_concolic_call_regexp_builtin(ctx, pat)) {
+        const uint8_t *bc = str8(JS_VALUE_GET_OBJ(pat)->u.regexp.bytecode);
+        int flags = lre_get_flags(bc);
+
+        if (!(flags & LRE_FLAG_GLOBAL)) return;
+        unicode = (flags & (LRE_FLAG_UNICODE | LRE_FLAG_UNICODE_SETS)) != 0;
+        n = lre_char_class(bc, one, 1);
+        if (n < 0) return;
+        if (n > 1) {
+            pairs = js_malloc(ctx, sizeof(*pairs) * 2 * (size_t)n);
+            CHECK(pairs != NULL, "OOM reading a RegExp's character class");
+            m = lre_char_class(bc, pairs, n);
+            DCHECK(m == n, "one program answered two character-class sizes");
+            (void)m;
+        }
+    } else {
+        return;
+    }
+    g_concolic.string_unit_map(ctx, s->result, s->hdr.this_val, pairs, n, unicode, rep);
+    if (pairs != one) js_free(ctx, pairs);
+}
+
 static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSConcolicCall *s = st;
@@ -98161,6 +98213,8 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         s->result = g_concolic.call(ctx, s->hdr.func_obj, s->hdr.this_val, n,
                                     (JSValueConst *)s->hdr.argv, example);
         if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return -1; }
+        if (JS_IsUndefined(s->thrown) && g_concolic.is(s->result))
+            js_concolic_call_unit_map(ctx, s);
         /* A candidate re-fire answers the attacker's payload, which is not unknown: that run takes the normal
            completion, the one a run with no forking policy takes. */
         if (JS_IsUndefined(s->thrown) || !g_concolic.is(s->result))

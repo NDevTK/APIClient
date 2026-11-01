@@ -78,6 +78,9 @@ int lre_get_alloc_count(const uint8_t *bc_buf);
 int lre_check_bytecode(const uint8_t *bc_buf, int bc_buf_len);
 int lre_get_capture_count(const uint8_t *bc_buf);
 int lre_get_flags(const uint8_t *bc_buf);
+/* The one-character set a non-sticky program matches at every position and only there, as sorted inclusive
+   pairs (the first `cap` written); its pair count, or -1 where the program is not one such class. */
+int lre_char_class(const uint8_t *bc_buf, uint32_t *pairs, int cap);
 const char *lre_get_groupnames(const uint8_t *bc_buf);
 /* ---- One MATCH, suspendably. ------------------------------------------------------------------------
    lre_exec_backtrack's interpreter loop never recursed — it has always been an explicit backtracking stack —
