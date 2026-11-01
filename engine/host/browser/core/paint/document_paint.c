@@ -68,9 +68,13 @@ struct DocumentPaintFrame {
     BoxPaintCensus census;
     bool           complete;
     unsigned       elements;
+    /* While the walk is in progress: §E.2's painter and what the element census is taken over. */
+    BoxPaintWalk      *walk;
+    JSContext         *ctx;
+    lxb_dom_element_t *root;
 };
 
-DocumentPaintFrame *document_paint_frame(JSContext *ctx, lxb_dom_document_t *doc)
+DocumentPaintFrame *document_paint_begin(JSContext *ctx, lxb_dom_document_t *doc)
 {
     DocumentPaintFrame *f;
     lxb_dom_element_t  *root;
@@ -122,21 +126,50 @@ DocumentPaintFrame *document_paint_frame(JSContext *ctx, lxb_dom_document_t *doc
         return f;
     }
     /* CSS 2.1 §E.2 "Painting order" over the root's stacking context (CSS 2.1 §9.9.1: the root element forms the
-       root stacking context). A false answer is a painter that met an operand it could not compute and stopped;
-       every mark it laid stays in the list, so the frame is a partial picture rather than none.
-       NAMED RESIDUAL. Not covered: the walk runs to completion in one activation of its caller's job, so step 22
-       never rests inside a document however large it is. Next: the walk as a cursor over CSS 2.1 §E.2's
-       stacking contexts held in step 22's arm, each box's geometry asked under a resting drive on that arm's
-       job. How its absence shows: `_layoutJobRests` does not move across a paint. */
+       root stacking context), one offer per `document_paint_step`. */
     f->walked = true;
-    f->complete = box_paint_stacking_context(ctx, root, &f->dl, &f->census);
-    f->elements = dp_element_count(ctx, root);
+    f->ctx = ctx;
+    f->root = root;
+    f->walk = box_paint_begin(ctx, root, &f->dl, &f->census);
     return f;
+}
+
+bool document_paint_step(DocumentPaintFrame *f)
+{
+    DCHECK(f != NULL, "a paint was stepped through nothing");
+    /* NAMED RESIDUAL. Not covered: an offer's own layout reads (box geometry, line boxes, intrinsic sizes) run
+       whole inside the offer on the job's nested drives, and the element census at the end is one walk, so a
+       single box or a large tree still holds the thread for its whole derivation. Next: each producer's
+       geometry asked under a resting drive on step 22's job, the offer answering "not yet" until its operands
+       are answered. How its absence shows: a flow's slice overrun inside step 22 with `_layoutJobRests` flat
+       across that one offer. */
+    return f->walk != NULL && box_paint_step(f->walk);
+}
+
+void document_paint_finish(DocumentPaintFrame *f)
+{
+    DCHECK(f != NULL, "a paint was finished through nothing");
+    if (f->walk == NULL) return;
+    /* A false answer is a painter that met an operand it could not compute and stopped; every mark it laid
+       stays in the list, so the frame is a partial picture rather than none. */
+    f->complete = box_paint_end(f->walk);
+    f->walk = NULL;
+    f->elements = dp_element_count(f->ctx, f->root);
+    f->ctx = NULL;
+    f->root = NULL;
+}
+
+bool document_paint_finished(const DocumentPaintFrame *f)
+{
+    DCHECK(f != NULL, "a paint was asked whether it finished through nothing");
+    return f->walk == NULL;
 }
 
 void document_paint_frame_free(DocumentPaintFrame *f)
 {
     DCHECK(f != NULL, "a paint frame was released through nothing");
+    /* An abandoned paint (its step machine torn down or forked away mid-walk) releases its walk unread. */
+    if (f->walk != NULL) (void)box_paint_end(f->walk);
     display_list_free(&f->dl);
     free(f);
 }
@@ -147,6 +180,7 @@ bool document_paint_raster(const DocumentPaintFrame *f, RasterSurface *out, Docu
 
     DCHECK(f != NULL && out != NULL && count != NULL,
            "a frame was rasterized from nothing, onto nothing, or with nowhere to write what the raster did");
+    DCHECK(f->walk == NULL, "a frame was rasterized while its paint is still walking");
     memset(count, 0, sizeof *count);
     raster_surface_init(out, 0, 0);
     if (!f->region) return false;

@@ -281,183 +281,6 @@ static void po_sort_by_level(PoList *l)
 
 /* ---- the walk ------------------------------------------------------------------------------------------ */
 
-static bool po_walk(JSContext *ctx, lxb_dom_element_t *ce, bool pseudo, PaintOrderVisit visit, void *user);
-
-/* CSS 2.1 §E.2's step 7, for ONE of the boxes step 7 names: "If the element is a block-level replaced element, then:
-   the replaced content, atomically." against "Otherwise, for each line box of that element:". The two are one
-   test with two answers and they are offered as two steps because they are two different sub-lists — the
-   first is a single atomic mark and the second is an enumeration this file does not yet sequence. */
-static bool po_offer_content(lxb_dom_element_t *el, PaintOrderVisit visit, void *user)
-{
-    bool replaced = replaced_element_of(el).replaced && !po_is_inline_level(el);
-
-    return visit(replaced ? PAINT_STEP_REPLACED_CONTENT : PAINT_STEP_LINE_BOXES, el, user);
-}
-
-/* ---- CSS 2.1 §E.2's TABLE ARM — the seven items of steps 2 and 4 that a `display: table` box takes --------- */
-
-/* THE ONE TABLE THE ARM IS BEING RUN FOR — the table element, the visitor and its user pointer, which is three
-   things and is written as a struct because every level below needs all three and a level that took two of
-   them would be the one that drifts. */
-typedef struct {
-    lxb_dom_element_t *table;
-    PaintOrderVisit visit;
-    void *user;
-} PoTableArm;
-
-/* ONE BACKGROUND LEVEL of CSS 2.1 §E.2's table arm, for one internal box that an element names.
-   THE DOCUMENT IS ASSERTED HERE AND NOWHERE ELSE IN THIS FILE, which is the split paint_order.h states at the
-   visitor: every other offer's box comes from core/dom/shadow_root.h's walker, which cannot leave the
-   Document by construction, and these come from core/layout/table_box.h and core/layout/table_column_box.h —
-   other components' walks, whose containment is a fact about them rather than about this file.
-   THE POSITIONED SKIP IS NOT A READING OF CSS 2.1 AND MUST NOT BE READ AS ONE. A positioned table-internal box
-   is a box CSS 2.1 §17.5.1 "Table layers and transparency" places in this sequence and CSS 2.1 §9.9.1 "Specifying the
-   stack level: the 'z-index' property" places in a positioned layer OUTSIDE it, and CSS 2.1 states no order for
-   the pair — which is why `po_takes_step_2` ABORTS on exactly that box in a dev build, naming it. So in a dev
-   build this skip is unreachable and decides nothing. What it decides is what the RELEASE arm of that abort
-   leaves behind, and it is chosen so the two arms offer such a box EXACTLY ONCE between them: the release arm
-   of `po_takes_step_2` goes on offering it at CSS 2.1 §E.2's step 3, 8 or 9 as it does today, so offering it here
-   too would paint its background once UNDER the table's content and again OVER it, which is a worse answer
-   than either arm alone and is one this diff would have introduced. The condition is `po_layer_is_positioned`
-   and not a second test, because the box reaches those steps exactly when `po_collect` reports it positioned. */
-static bool po_table_level(PoTableArm *a, lxb_dom_element_t *box, PaintStep step)
-{
-    char nbuf[160];
-
-    DCHECK(box != NULL, "CSS 2.1 §E.2's table arm was handed a level with no element to offer — the two boxes "
-                        "core/layout/table_box.h reports without one (an anonymous row, an anonymous cell) are "
-                        "answered at the call site by CSS 2.1 §9.2.1.1 \"Anonymous block boxes\" and never reach here");
-    DCHECKF(lxb_dom_interface_node(box)->owner_document ==
-                lxb_dom_interface_node(a->table)->owner_document,
-            "%s: a box offered inside CSS 2.1 §E.2's table arm belongs to a DIFFERENT Document from the table whose "
-            "arm is being run. A display list carries text runs and URLs read out of a document's DOM, so the "
-            "walk paint_order.h argues cannot leave one Document must not be able to leave it through a table "
-            "either — and this half is asserted rather than argued because the boxes come from "
-            "core/layout/table_box.h's and core/layout/table_column_box.h's walks and not from this file's",
-            box_subject(box, nbuf, sizeof nbuf));
-    if (po_layer_is_positioned(stacking_layer_of(box))) return true;
-    return a->visit(step, box, a->user);
-}
-
-/* CSS 2.1 §E.2's TABLE ARM, item by item, in CSS 2.1 §E.2's own order. `background_step` is item 1's, which is the only
-   item whose two arms differ — see the enum in paint_order.h.
-   AN ANONYMOUS ROW OR CELL IS PASSED OVER AND THAT IS NOT A NARROWING, WHICH IS WHY IT IS A DERIVATION HERE
-   AND NOT A RESIDUAL. core/layout/table_box.h reports a box CSS 2.1 §17.2.1 "Anonymous table objects"' second stage
-   generated with `element == NULL`, which is its own positive statement that no element names it; and
-   CSS 2.1 §9.2.1.1 "Anonymous block boxes" fixes what such a box is styled with — "The properties of anonymous
-   boxes are inherited from the enclosing non-anonymous box … Non-inherited properties have their initial
-   value" — so its `background-color` is the initial `transparent` and its `background-image` the initial
-   `none`. There is no ink at that level to offer, and no selector can put any there, because an anonymous box
-   has no element for a selector to match. A visitor that was handed one could therefore only be handed a NULL,
-   which is the one thing paint_order.h's visitor contract says `el` is never. */
-static bool po_offer_table_arm(PoTableArm *a, PaintStep background_step)
-{
-    TableColumnBoxMap map;
-    TableBoxRow *rows = NULL;
-    TableBoxRowGroup *groups = NULL;
-    lxb_dom_element_t *prev;
-    size_t nrows, ngroups, i, j, c;
-    bool ok;
-
-    /* CSS 2.1 §E.2's item 1 — "table backgrounds (color then image)". */
-    ok = a->visit(background_step, a->table, a->user);
-
-    /* THE GRID IS NOT BUILT AND `ngrid` IS 0 DELIBERATELY. core/layout/table_column_box.h sizes its map to the
-       GREATER of the grid's column count and `noccupied`, and `noccupied` is "grid columns the column and
-       column-group boxes together occupy" — so every column box this arm has to enumerate stands inside the
-       first `noccupied` entries whatever the grid is, and the entries a grid would add beyond them hold no
-       box by construction. Building core/layout/table_grid.h's grid to reach them would be a second walk over
-       every cell of the table for a number this arm never reads. */
-    table_column_boxes_build(a->table, 0, &map);
-    DCHECK(map.ncols == map.noccupied,
-           "core/layout/table_column_box.h sized its map to something other than what the column boxes occupy "
-           "after being asked for a zero-column grid — its own contract is that `ncols` is the greater of the "
-           "two, so the two disagreeing here means the arm is reading a map whose tail it cannot account for");
-    nrows = table_box_rows(a->table, &rows);
-    ngroups = table_box_row_groups(a->table, &groups);
-
-    /* CSS 2.1 §E.2's item 2 — "column group backgrounds (color then image)", and item 3 — "column backgrounds
-       (color then image)". The map is indexed by GRID COLUMN and a box occupying several appears in each, so
-       each box is offered at the FIRST entry that names it. A run is contiguous and needs no set to prove it:
-       core/layout/table_column_box.c places the boxes with an index that only ever moves forward, one span at
-       a time, and asserts at its own write that no grid column is reached twice. The order is CSS 2.1 §17.5
-       "Visual layout of table contents"' rule 3 — "Column boxes are placed next to each other in the order they
-       occur" — which is the only order CSS 2.1 states over these boxes; CSS 2.1 §E.2 states none within a level. */
-    for (prev = NULL, c = 0; ok && c < map.ncols; c++) {
-        lxb_dom_element_t *g = map.cols[c].column_group;
-
-        if (g != NULL && g != prev) ok = po_table_level(a, g, PAINT_STEP_COLUMN_GROUP_BACKGROUND);
-        prev = g;
-    }
-    for (prev = NULL, c = 0; ok && c < map.ncols; c++) {
-        lxb_dom_element_t *col = map.cols[c].column;
-
-        if (col != NULL && col != prev) ok = po_table_level(a, col, PAINT_STEP_COLUMN_BACKGROUND);
-        prev = col;
-    }
-
-    /* CSS 2.1 §E.2's item 4 — "row group backgrounds (color then image)", in CSS 2.1 §17.2 "The CSS table model"'s
-       display order, which is the order core/layout/table_box.h reports them in and the same order its rows
-       are in, because ONE walk produces both. */
-    for (i = 0; ok && i < ngroups; i++) {
-        DCHECK(groups[i].element != NULL,
-               "core/layout/table_box.h reported a row group box with no element. CSS 2.1 §17.2.1 \"Anonymous "
-               "table objects\" generates no anonymous row group — that header says so of its own answer — so a "
-               "NULL here is that walk having generated a box the section does not");
-        ok = po_table_level(a, groups[i].element, PAINT_STEP_ROW_GROUP_BACKGROUND);
-    }
-
-    /* CSS 2.1 §E.2's item 5 — "row backgrounds (color then image)", and item 6 — "cell backgrounds (color then
-       image)". Two passes over ONE array rather than one pass offering both, because they are two LEVELS of
-       CSS 2.1 §17.5.1 "Table layers and transparency" and every row's background goes down before any cell's. */
-    for (i = 0; ok && i < nrows; i++)
-        if (rows[i].element != NULL) ok = po_table_level(a, rows[i].element, PAINT_STEP_ROW_BACKGROUND);
-    for (i = 0; ok && i < nrows; i++)
-        for (j = 0; ok && j < rows[i].ncells; j++)
-            if (rows[i].cells[j].element != NULL)
-                ok = po_table_level(a, rows[i].cells[j].element, PAINT_STEP_CELL_BACKGROUND);
-
-    /* CSS 2.1 §E.2's item 7 — "all table borders (in tree order for separated borders)", offered WHOLE. See
-       paint_order.h's residual: the item covers the borders of the table and of every internal box in it, and
-       CSS 2.1 states an order over them for the separated model only. */
-    if (ok) ok = a->visit(PAINT_STEP_TABLE_BORDERS, a->table, a->user);
-
-    table_column_boxes_release(&map);
-    table_box_rows_free(rows, nrows);
-    free(groups);
-    return ok;
-}
-
-/* ONE BOX AT CSS 2.1 §E.2's STEP 2 OR STEP 4, routed to the arm its box type takes. The two arms are not two
-   sub-lists of one offer — they are different lengths and their third item is not the same mark — so a
-   consumer that took `PAINT_STEP_CONTEXT_BOX` for a table would lay the table's BORDER at item 3's position
-   where CSS 2.1 §E.2 puts it at item 7, after five other boxes' backgrounds. That is exactly the defect the table
-   arm exists to prevent, so the routing is here and never at the visitor. */
-static bool po_offer_box(lxb_dom_element_t *el, bool context, PaintOrderVisit visit, void *user)
-{
-    char nbuf[160];
-    TableBoxKind kind = table_box_kind(css_computed_display(el));
-    PoTableArm arm;
-
-    if (!table_box_kind_generates_table_box(kind))
-        return visit(context ? PAINT_STEP_CONTEXT_BOX : PAINT_STEP_DESCENDANT_BOX, el, user);
-
-    DCHECKF(kind == TABLE_BOX_TABLE,
-            "%s: an `inline-table` box reached CSS 2.1 §E.2's table arm, which is stated over a BLOCK-LEVEL table — "
-            "step 2's arm reads \"Otherwise, if the element is a block level table:\" and step 4's runs inside a "
-            "walk of block-level descendants, which CSS 2.1 §9.2.1 \"Block-level elements and block boxes\" closes at "
-            "\"'block', 'list-item', and 'table'\". An inline-table's own background belongs to its PARENT's step "
-            "7.2.1 as a box in a line box, so the two sites that can reach this one — `po_takes_step_2`, which "
-            "refuses an inline-level context element, and step 4's member list, which holds no inline-level box "
-            "— have disagreed with that classification and the fix is at whichever of them is wrong",
-            box_subject(el, nbuf, sizeof nbuf));
-    arm.table = el;
-    arm.visit = visit;
-    arm.user = user;
-    return po_offer_table_arm(&arm, context ? PAINT_STEP_CONTEXT_TABLE_BACKGROUND
-                                            : PAINT_STEP_DESCENDANT_TABLE_BACKGROUND);
-}
-
 /* CSS 2.1 §E.2's step 2 — does this stacking context's own element have a background and border to lay at step 2 at
    all? The step has two arms and an implicit neither: "If the element is a block, list-item, or other block
    equivalent:" and "Otherwise, if the element is a block level table:", and an INLINE-LEVEL context element
@@ -508,119 +331,417 @@ static bool po_takes_step_2(lxb_dom_element_t *ce)
     return !po_is_inline_level(ce);
 }
 
-static bool po_walk_positioned(JSContext *ctx, lxb_dom_element_t *ce, PaintOrderVisit visit, void *user,
-                               bool negative, bool level_zero, bool positive)
+/* CSS 2.1 §E.2's step 7, for ONE of the boxes step 7 names: "If the element is a block-level replaced element, then:
+   the replaced content, atomically." against "Otherwise, for each line box of that element:". The two are one
+   test with two answers and they are offered as two steps because they are two different sub-lists — the
+   first is a single atomic mark and the second is an enumeration this file does not yet sequence. */
+static PaintStep po_content_step(lxb_dom_element_t *el)
 {
-    PoList members = {NULL, 0, 0};
-    bool ok = true;
-    size_t i;
+    bool replaced = replaced_element_of(el).replaced && !po_is_inline_level(el);
 
-    po_collect(ctx, ce, PO_SET_POSITIONED, &members);
-    /* Steps 3 and 9 are "in z-index order ... then tree order" and step 8 is "in tree order" alone, so the
-       sort is applied to the list and the step-8 pass reads it back in tree order — which a stable sort by a
-       key every step-8 member shares (a stack level of 0) leaves untouched. */
-    if (negative || positive) po_sort_by_level(&members);
-    for (i = 0; ok && i < members.n; i++) {
-        lxb_dom_element_t *d = members.v[i];
-        int level = stacking_level(d);
-        bool forms = stacking_context_forms(d);
-
-        if (level < 0 ? !negative : (level > 0 ? !positive : !level_zero)) continue;
-        /* CSS 2.1 §E.2 step 8: "For those with 'z-index: auto', treat the element as if it created a new stacking
-           context, but any positioned descendants and descendants which actually create a new stacking context
-           should be considered part of the parent stacking context, not this new one. For those with
-           'z-index: 0', treat the stacking context generated atomically." `stacking_context_forms` is the
-           question that separates them, and it is not the same as "is the level 0": css-position-3 §2.2
-           "Painting Order and Stacking Contexts" makes a `fixed` or `sticky` box at `z-index: auto` form one,
-           so the atomic arm is wider than CSS 2.1's own sentence and the `auto` read alone would put such a
-           box's descendants in the wrong context. */
-        ok = po_walk(ctx, d, !forms, visit, user);
-    }
-    po_list_free(&members);
-    return ok;
+    return replaced ? PAINT_STEP_REPLACED_CONTENT : PAINT_STEP_LINE_BOXES;
 }
 
-static bool po_walk(JSContext *ctx, lxb_dom_element_t *ce, bool pseudo, PaintOrderVisit visit, void *user)
+/* Where one stacking context (or pseudo-context) of the walk stands: the CSS 2.1 §E.2 step it is at. */
+typedef enum {
+    PO_CTX_ROOT = 0,   /* step 1 */
+    PO_CTX_STEP_2,
+    PO_CTX_NEGATIVE,   /* step 3 */
+    PO_CTX_BLOCKS,     /* step 4 */
+    PO_CTX_FLOATS,     /* step 5 */
+    PO_CTX_CONTENT,    /* steps 6 and 7 */
+    PO_CTX_ZERO,       /* step 8 */
+    PO_CTX_POSITIVE,   /* step 9 */
+    PO_CTX_DONE
+} PoContextPhase;
+
+/* Where one table arm stands: CSS 2.1 §E.2's seven table items, which restate CSS 2.1 §17.5.1 "Table layers and
+   transparency"'s levels. */
+typedef enum {
+    PO_TABLE_BACKGROUND = 0,   /* item 1 */
+    PO_TABLE_COLUMN_GROUPS,    /* item 2 */
+    PO_TABLE_COLUMNS,          /* item 3 */
+    PO_TABLE_ROW_GROUPS,       /* item 4 */
+    PO_TABLE_ROWS,             /* item 5 */
+    PO_TABLE_CELLS,            /* item 6 */
+    PO_TABLE_BORDERS,          /* item 7 */
+    PO_TABLE_DONE
+} PoTablePhase;
+
+/* One frame of the walk's explicit stack. A context frame is CSS 2.1 §E.2's sequence for `el`; it pushes a child
+   frame where the sequence enters a child stacking context (steps 3, 8's `z-index: 0` arm, 9), a pseudo-context
+   (step 5, step 8's `z-index: auto` arm) or a block-level table's arm (steps 2 and 4). Every push descends. */
+typedef struct {
+    bool               table;
+    lxb_dom_element_t *el;        /* the context element, or the table */
+    /* a context frame */
+    bool               pseudo;
+    PoContextPhase     phase;
+    PoList             blocks;    /* step 4's set, read again at step 7; built on entering step 4 */
+    PoList             members;   /* the current step's positioned members (3, 8, 9) or floats (5) */
+    bool               built;     /* `members` holds the current step's list */
+    bool               self;      /* step 7 has offered the element's own content */
+    size_t             i;
+    /* a table frame */
+    PaintStep          background;
+    PoTablePhase       tphase;
+    TableColumnBoxMap  map;
+    TableBoxRow       *rows;
+    TableBoxRowGroup  *groups;
+    size_t             nrows, ngroups, c, j;
+    lxb_dom_element_t *prev;
+} PoFrame;
+
+struct PaintOrderCursor {
+    JSContext *ctx;
+    PoFrame   *stack;
+    size_t     n, cap;
+};
+
+static void po_push_frame(PaintOrderCursor *c, const PoFrame *f)
 {
-    PoList blocks = {NULL, 0, 0}, floats = {NULL, 0, 0};
-    bool ok = true;
-    size_t i;
+    if (c->n == c->cap) {
+        size_t cap = c->cap ? c->cap * 2 : 8;
+        PoFrame *v = lexbor_realloc(c->stack, cap * sizeof *v);
+
+        CHECK(v != NULL, "paint: OOM growing CSS 2.1 §E.2's walk stack");
+        c->stack = v;
+        c->cap = cap;
+    }
+    c->stack[c->n++] = *f;
+}
+
+static void po_push_context(PaintOrderCursor *c, lxb_dom_element_t *ce, bool pseudo)
+{
+    PoFrame f;
 
     DCHECK(pseudo || stacking_context_forms(ce),
            "CSS 2.1 §E.2's painting order was walked for an element that neither forms a stacking context nor "
-           "is one CSS 2.1 §E.2 says to treat as if it did. CSS 2.1 §E.2 is stated as \"The painting order for the descendants "
-           "of an element generating a stacking context\", so there is no order to state for any other box: "
-           "its marks belong to the sequence of whichever context it is IN, and a second sequence here would "
-           "offer them twice");
-
-    /* CSS 2.1 §E.2 step 1: "If the element is a root element:" — its background colour and image "over the entire
-       canvas". A pseudo-context is never the root: CSS 2.1 §E.2's two pseudo-context sentences are about a float and a
-       positioned descendant, and CSS 2.1 §9.3 makes the root element out of flow and nothing's descendant. */
-    if (!pseudo && po_is_root_element(lxb_dom_interface_node(ce)) &&
-        !visit(PAINT_STEP_ROOT_BACKGROUND, ce, user))
-        return false;
-
-    /* CSS 2.1 §E.2 step 2 — the context element's own background and border, through the arm its box type takes. */
-    if (po_takes_step_2(ce) && !po_offer_box(ce, true, visit, user)) return false;
-
-    /* CSS 2.1 §E.2 step 3: "Stacking contexts formed by positioned descendants with negative z-indices (excluding 0)
-       in z-index order (most negative first) then tree order." A pseudo-context performs none of the
-       positioned steps — its positioned descendants are the parent's, which is the sentence CSS 2.1 §E.2 states at
-       step 5 and again at step 8. */
-    if (!pseudo && !po_walk_positioned(ctx, ce, visit, user, true, false, false)) return false;
-
-    /* CSS 2.1 §E.2 step 4: "For all its in-flow, non-positioned, block-level descendants in tree order:" followed by
-       that box's background and border. */
-    po_collect(ctx, ce, PO_SET_IN_FLOW_BLOCK, &blocks);
-    for (i = 0; ok && i < blocks.n; i++) ok = po_offer_box(blocks.v[i], false, visit, user);
-
-    /* CSS 2.1 §E.2 step 5: "All non-positioned floating descendants, in tree order. For each one of these, treat the
-       element as if it created a new stacking context, but any positioned descendants and descendants which
-       actually create a new stacking context should be considered part of the parent stacking context, not
-       this new one." */
-    if (ok) {
-        po_collect(ctx, ce, PO_SET_FLOAT, &floats);
-        for (i = 0; ok && i < floats.n; i++) ok = po_walk(ctx, floats.v[i], true, visit, user);
-        po_list_free(&floats);
-    }
-
-    /* CSS 2.1 §E.2 steps 6 and 7, which are one test with two answers: "If the element is an inline element that
-       generates a stacking context, then:" its line boxes, "Otherwise: first for the element, then for all its
-       in-flow, non-positioned, block-level descendants in tree order:" their content. The set step 7 walks is
-       step 4's set, which is why it is collected once above and read twice here — two collections would be two
-       answers to one membership question, free to disagree after a cascade read. */
-    if (ok) {
-        if (po_is_inline_level(ce)) {
-            ok = visit(PAINT_STEP_INLINE_LINE_BOXES, ce, user);
-        } else {
-            ok = po_offer_content(ce, visit, user);
-            for (i = 0; ok && i < blocks.n; i++) ok = po_offer_content(blocks.v[i], visit, user);
-        }
-    }
-    po_list_free(&blocks);
-    if (!ok) return false;
-
-    /* CSS 2.1 §E.2 step 8: "All positioned descendants with 'z-index: auto' or 'z-index: 0', in tree order." */
-    if (!pseudo && !po_walk_positioned(ctx, ce, visit, user, false, true, false)) return false;
-
-    /* CSS 2.1 §E.2 step 9: "Stacking contexts formed by positioned descendants with z-indices greater than or equal to
-       1 in z-index order (smallest first) then tree order." */
-    if (!pseudo && !po_walk_positioned(ctx, ce, visit, user, false, false, true)) return false;
-
-    /* CSS 2.1 §E.2 step 10 is not offered. See paint_order.h's second residual: the step is an outline and this engine
-       has no `outline-color`, `outline-style` or `outline-width` in any registry it reads, so it cannot tell a
-       page that declared no outline from one whose outline it cannot read. */
-    return true;
+           "is one CSS 2.1 §E.2 says to treat as if it did. CSS 2.1 §E.2 is stated as \"The painting order for the "
+           "descendants of an element generating a stacking context\", so there is no order to state for any "
+           "other box: its marks belong to the sequence of whichever context it is IN");
+    memset(&f, 0, sizeof f);
+    f.el = ce;
+    f.pseudo = pseudo;
+    f.phase = PO_CTX_ROOT;
+    po_push_frame(c, &f);
 }
 
-bool paint_order_walk(JSContext *ctx, lxb_dom_element_t *context_el, PaintOrderVisit visit, void *user)
+/* One box at CSS 2.1 §E.2's step 2 or step 4, routed to the arm its box type takes: an offer at `*step`, or a
+   pushed table arm (false). The two arms are not two sub-lists of one offer — a consumer that took
+   `PAINT_STEP_CONTEXT_BOX` for a table would lay the table's border at item 3's position where CSS 2.1 §E.2 puts
+   it at item 7 — so the routing is here and never at the visitor. */
+static bool po_box(PaintOrderCursor *c, lxb_dom_element_t *el, bool context, PaintStep *step)
 {
+    char nbuf[160];
+    TableBoxKind kind = table_box_kind(css_computed_display(el));
+    PoFrame f;
+
+    if (!table_box_kind_generates_table_box(kind)) {
+        *step = context ? PAINT_STEP_CONTEXT_BOX : PAINT_STEP_DESCENDANT_BOX;
+        return true;
+    }
+    DCHECKF(kind == TABLE_BOX_TABLE,
+            "%s: an `inline-table` box reached CSS 2.1 §E.2's table arm, which is stated over a BLOCK-LEVEL table — "
+            "step 2's arm reads \"Otherwise, if the element is a block level table:\" and step 4's runs inside a "
+            "walk of block-level descendants, which CSS 2.1 §9.2.1 \"Block-level elements and block boxes\" closes at "
+            "\"'block', 'list-item', and 'table'\". An inline-table's own background belongs to its PARENT's step "
+            "7.2.1 as a box in a line box, so `po_takes_step_2` or step 4's member list has disagreed with that "
+            "classification",
+            box_subject(el, nbuf, sizeof nbuf));
+    memset(&f, 0, sizeof f);
+    f.table = true;
+    f.el = el;
+    f.background = context ? PAINT_STEP_CONTEXT_TABLE_BACKGROUND : PAINT_STEP_DESCENDANT_TABLE_BACKGROUND;
+    f.tphase = PO_TABLE_BACKGROUND;
+    po_push_frame(c, &f);
+    return false;
+}
+
+/* One level of the table arm for `box`: false when the box is positioned and so not offered here. A positioned
+   table-internal box is placed by CSS 2.1 §9.9.1 in a positioned layer, and `po_takes_step_2` aborts on it in a
+   dev build; the release arm offers it at step 3, 8 or 9, so skipping it here offers it exactly once. */
+static bool po_table_level(const PoFrame *t, lxb_dom_element_t *box)
+{
+    char nbuf[160];
+
+    DCHECK(box != NULL, "CSS 2.1 §E.2's table arm was handed a level with no element to offer — the two boxes "
+                        "core/layout/table_box.h reports without one (an anonymous row, an anonymous cell) are "
+                        "answered at the call site by CSS 2.1 §9.2.1.1 \"Anonymous block boxes\" and never reach here");
+    DCHECKF(lxb_dom_interface_node(box)->owner_document == lxb_dom_interface_node(t->el)->owner_document,
+            "%s: a box offered inside CSS 2.1 §E.2's table arm belongs to a different Document from the table whose "
+            "arm is being run; core/layout/table_box.h's and table_column_box.h's walks must not leave it",
+            box_subject(box, nbuf, sizeof nbuf));
+    return !po_layer_is_positioned(stacking_layer_of(box));
+}
+
+/* The table frame on top's next offer, or false when its arm is complete. Each item's boxes go in CSS 2.1 §17.2
+   "The CSS table model"'s display order, which is the order core/layout/table_box.h and table_column_box.h report
+   them in; a column or column group occupying several grid columns is offered at the first entry naming it. */
+static bool po_table_next(PoFrame *t, PaintStep *step, lxb_dom_element_t **el)
+{
+    lxb_dom_element_t *box;
+
+    for (;;) {
+        switch (t->tphase) {
+        case PO_TABLE_BACKGROUND:
+            /* The grid is not built: table_column_box.h sizes its map to the greater of the grid's columns and
+               `noccupied`, and every column box stands in the first `noccupied` entries. */
+            table_column_boxes_build(t->el, 0, &t->map);
+            DCHECK(t->map.ncols == t->map.noccupied,
+                   "core/layout/table_column_box.h sized its map to something other than what the column boxes "
+                   "occupy after being asked for a zero-column grid — its own contract is that `ncols` is the "
+                   "greater of the two");
+            t->nrows = table_box_rows(t->el, &t->rows);
+            t->ngroups = table_box_row_groups(t->el, &t->groups);
+            t->tphase = PO_TABLE_COLUMN_GROUPS;
+            *step = t->background;
+            *el = t->el;
+            return true;
+        case PO_TABLE_COLUMN_GROUPS:
+        case PO_TABLE_COLUMNS:
+            while (t->c < t->map.ncols) {
+                box = t->tphase == PO_TABLE_COLUMN_GROUPS ? t->map.cols[t->c].column_group : t->map.cols[t->c].column;
+                t->c++;
+                if (box == NULL || box == t->prev) { t->prev = box; continue; }
+                t->prev = box;
+                if (!po_table_level(t, box)) continue;
+                *step = t->tphase == PO_TABLE_COLUMN_GROUPS ? PAINT_STEP_COLUMN_GROUP_BACKGROUND
+                                                            : PAINT_STEP_COLUMN_BACKGROUND;
+                *el = box;
+                return true;
+            }
+            t->c = 0;
+            t->prev = NULL;
+            t->tphase = t->tphase == PO_TABLE_COLUMN_GROUPS ? PO_TABLE_COLUMNS : PO_TABLE_ROW_GROUPS;
+            break;
+        case PO_TABLE_ROW_GROUPS:
+            while (t->c < t->ngroups) {
+                box = t->groups[t->c++].element;
+                DCHECK(box != NULL,
+                       "core/layout/table_box.h reported a row group box with no element. CSS 2.1 §17.2.1 "
+                       "\"Anonymous table objects\" generates no anonymous row group, so a NULL here is that walk "
+                       "having generated a box the section does not");
+                if (!po_table_level(t, box)) continue;
+                *step = PAINT_STEP_ROW_GROUP_BACKGROUND;
+                *el = box;
+                return true;
+            }
+            t->c = 0;
+            t->tphase = PO_TABLE_ROWS;
+            break;
+        case PO_TABLE_ROWS:
+            /* Items 5 and 6 are two passes over one array: every row's background goes down before any cell's. */
+            while (t->c < t->nrows) {
+                box = t->rows[t->c++].element;
+                if (box == NULL || !po_table_level(t, box)) continue;
+                *step = PAINT_STEP_ROW_BACKGROUND;
+                *el = box;
+                return true;
+            }
+            t->c = 0;
+            t->j = 0;
+            t->tphase = PO_TABLE_CELLS;
+            break;
+        case PO_TABLE_CELLS:
+            while (t->c < t->nrows) {
+                if (t->j >= t->rows[t->c].ncells) { t->c++; t->j = 0; continue; }
+                box = t->rows[t->c].cells[t->j++].element;
+                if (box == NULL || !po_table_level(t, box)) continue;
+                *step = PAINT_STEP_CELL_BACKGROUND;
+                *el = box;
+                return true;
+            }
+            t->tphase = PO_TABLE_BORDERS;
+            break;
+        case PO_TABLE_BORDERS:
+            /* Item 7, offered whole — see paint_order.h's residual. */
+            t->tphase = PO_TABLE_DONE;
+            *step = PAINT_STEP_TABLE_BORDERS;
+            *el = t->el;
+            return true;
+        case PO_TABLE_DONE:
+            return false;
+        }
+    }
+}
+
+static void po_frame_release(PoFrame *f)
+{
+    if (f->table) {
+        if (f->tphase != PO_TABLE_BACKGROUND) {
+            table_column_boxes_release(&f->map);
+            table_box_rows_free(f->rows, f->nrows);
+            free(f->groups);
+        }
+        return;
+    }
+    po_list_free(&f->blocks);
+    po_list_free(&f->members);
+}
+
+PaintOrderCursor *paint_order_begin(JSContext *ctx, lxb_dom_element_t *context_el)
+{
+    PaintOrderCursor *c;
+
     DCHECK(ctx != NULL, "CSS 2.1 §E.2's painting order was asked for with no realm — Appendix E §E.1's tree "
                         "order is DOM §4.8 \"Interface ShadowRoot\"'s shadow-including one, whose walker reads "
                         "a per-flow association kept on an element's wrapper");
     DCHECK(context_el != NULL, "CSS 2.1 §E.2's painting order was asked about no element");
-    DCHECK(visit != NULL, "CSS 2.1 §E.2's painting order was walked with no visitor, so every offer it makes "
-                          "would be discarded — the walk derives the order and stores none of it, so a walk "
-                          "with nowhere to put its offers computes a sequence and then forgets it");
-    return po_walk(ctx, context_el, false, visit, user);
+    c = lexbor_calloc(1, sizeof *c);
+    CHECK(c != NULL, "paint: OOM allocating CSS 2.1 §E.2's walk");
+    c->ctx = ctx;
+    po_push_context(c, context_el, false);
+    return c;
+}
+
+bool paint_order_next(PaintOrderCursor *c, PaintStep *step, lxb_dom_element_t **el)
+{
+    DCHECK(c != NULL && step != NULL && el != NULL, "CSS 2.1 §E.2's walk was advanced with nowhere to put its offer");
+    while (c->n > 0) {
+        PoFrame *f = &c->stack[c->n - 1];
+        lxb_dom_element_t *ce = f->el, *d;
+
+        if (f->table) {
+            if (po_table_next(f, step, el)) return true;
+            po_frame_release(f);
+            c->n--;
+            continue;
+        }
+        switch (f->phase) {
+        case PO_CTX_ROOT:
+            /* Step 1: "If the element is a root element:" — its background "over the entire canvas". A
+               pseudo-context is never the root (CSS 2.1 §9.3 makes the root out of flow and nothing's descendant). */
+            f->phase = PO_CTX_STEP_2;
+            if (!f->pseudo && po_is_root_element(lxb_dom_interface_node(ce))) {
+                *step = PAINT_STEP_ROOT_BACKGROUND;
+                *el = ce;
+                return true;
+            }
+            break;
+        case PO_CTX_STEP_2:
+            /* Step 2: the context element's own background and border, through the arm its box type takes. */
+            f->phase = PO_CTX_NEGATIVE;
+            if (po_takes_step_2(ce) && po_box(c, ce, true, step)) {
+                *el = ce;
+                return true;
+            }
+            break;
+        case PO_CTX_NEGATIVE:
+        case PO_CTX_ZERO:
+        case PO_CTX_POSITIVE:
+            /* Steps 3, 8 and 9 over the positioned descendants, which a pseudo-context leaves to its parent.
+               Steps 3 and 9 are "in z-index order ... then tree order" and step 8 "in tree order": the stable sort
+               by level leaves step 8's members (all level 0) in the tree order they were collected in. */
+            if (f->pseudo) { f->phase = f->phase == PO_CTX_NEGATIVE ? PO_CTX_BLOCKS : PO_CTX_DONE; break; }
+            if (!f->built) {
+                po_collect(c->ctx, ce, PO_SET_POSITIONED, &f->members);
+                if (f->phase != PO_CTX_ZERO) po_sort_by_level(&f->members);
+                f->built = true;
+                f->i = 0;
+            }
+            while (f->i < f->members.n) {
+                int level;
+
+                d = f->members.v[f->i++];
+                level = stacking_level(d);
+                if (f->phase == PO_CTX_NEGATIVE ? level >= 0 : (f->phase == PO_CTX_POSITIVE ? level <= 0 : level != 0))
+                    continue;
+                /* Step 8: "For those with 'z-index: auto', treat the element as if it created a new stacking
+                   context, but any positioned descendants and descendants which actually create a new stacking
+                   context should be considered part of the parent stacking context, not this new one. For those
+                   with 'z-index: 0', treat the stacking context generated atomically." `stacking_context_forms`
+                   separates them (css-position-3 §2.2 widens the atomic arm beyond CSS 2.1's sentence). */
+                po_push_context(c, d, !stacking_context_forms(d));
+                goto pushed;
+            }
+            po_list_free(&f->members);
+            f->built = false;
+            f->phase = f->phase == PO_CTX_NEGATIVE ? PO_CTX_BLOCKS
+                     : f->phase == PO_CTX_ZERO ? PO_CTX_POSITIVE : PO_CTX_DONE;
+            break;
+        case PO_CTX_BLOCKS:
+            /* Step 4: "For all its in-flow, non-positioned, block-level descendants in tree order:" their
+               background and border. The set is kept for step 7, which walks the same set. */
+            if (!f->built) {
+                po_collect(c->ctx, ce, PO_SET_IN_FLOW_BLOCK, &f->blocks);
+                f->built = true;
+                f->i = 0;
+            }
+            if (f->i < f->blocks.n) {
+                d = f->blocks.v[f->i++];
+                if (po_box(c, d, false, step)) {
+                    *el = d;
+                    return true;
+                }
+                goto pushed;
+            }
+            f->built = false;
+            f->phase = PO_CTX_FLOATS;
+            break;
+        case PO_CTX_FLOATS:
+            /* Step 5: "All non-positioned floating descendants, in tree order. For each one of these, treat the
+               element as if it created a new stacking context, but any positioned descendants and descendants
+               which actually create a new stacking context should be considered part of the parent stacking
+               context, not this new one." */
+            if (!f->built) {
+                po_collect(c->ctx, ce, PO_SET_FLOAT, &f->members);
+                f->built = true;
+                f->i = 0;
+            }
+            if (f->i < f->members.n) {
+                po_push_context(c, f->members.v[f->i++], true);
+                goto pushed;
+            }
+            po_list_free(&f->members);
+            f->built = false;
+            f->self = false;
+            f->i = 0;
+            f->phase = PO_CTX_CONTENT;
+            break;
+        case PO_CTX_CONTENT:
+            /* Steps 6 and 7, one test with two answers: "If the element is an inline element that generates a
+               stacking context, then:" its line boxes, "Otherwise: first for the element, then for all its
+               in-flow, non-positioned, block-level descendants in tree order:" their content. */
+            if (po_is_inline_level(ce)) {
+                po_list_free(&f->blocks);
+                f->phase = PO_CTX_ZERO;
+                *step = PAINT_STEP_INLINE_LINE_BOXES;
+                *el = ce;
+                return true;
+            }
+            if (!f->self) {
+                f->self = true;
+                *step = po_content_step(ce);
+                *el = ce;
+                return true;
+            }
+            if (f->i < f->blocks.n) {
+                d = f->blocks.v[f->i++];
+                *step = po_content_step(d);
+                *el = d;
+                return true;
+            }
+            po_list_free(&f->blocks);
+            f->phase = PO_CTX_ZERO;
+            break;
+        case PO_CTX_DONE:
+            /* Step 10 is not offered: see paint_order.h's second residual. */
+            po_frame_release(f);
+            c->n--;
+            break;
+        }
+        continue;
+    pushed:
+        continue;
+    }
+    return false;
+}
+
+void paint_order_free(PaintOrderCursor *c)
+{
+    DCHECK(c != NULL, "CSS 2.1 §E.2's walk was released through nothing");
+    while (c->n > 0) po_frame_release(&c->stack[--c->n]);
+    free(c->stack);
+    free(c);
 }

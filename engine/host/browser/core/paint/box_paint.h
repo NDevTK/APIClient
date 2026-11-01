@@ -206,16 +206,28 @@ typedef struct {
    sequence, with what the walk did written to `census`.
    `out` must be an INITIALISED list and is appended to rather than replaced, so a caller composing several
    contexts into one surface keeps the order it composed them in; `census` is required for the reason the
-   header gives. `context_el` MUST FORM A STACKING CONTEXT — that is `paint_order_walk`'s own precondition and
+   header gives. `context_el` MUST FORM A STACKING CONTEXT — that is `paint_order_begin`'s own precondition and
    it crashes there, because CSS 2.1 §E.2's text is stated for "an element generating a stacking context".
    `census` IS ZEROED BY THIS ENTRY ON EVERY ARM, so a caller planting a sentinel in it reads that sentinel
    back only where the entry was never reached at all.
    ANSWERS what the walk answered: true when it ran to the end, and false when this painter met an operand it
    could not compute and stopped it. A false answer LEAVES `out` AS IT STOOD and leaves `census` describing
    the offers the walk DID make — every mark already appended stays appended, which is what paint_order.h's
-   visitor contract exists to make possible and is why a document with one unpaintable box is a partial
+   offer contract exists to make possible and is why a document with one unpaintable box is a partial
    picture rather than no picture. The offer that stopped it is the one `BOX_PAINT_STOPPED`. */
 bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
                                 BoxPaintCensus *census);
+
+/* The same walk one offer at a time, for a caller that rests between offers (update the rendering step 22).
+   `begin` takes the preconditions above and zeroes `census`; `step` paints the next offer and answers whether
+   the walk goes on (false once the sequence is complete or this painter stopped), and every step runs with a
+   cascade record held (asserted); `end` answers what the entry above answers and releases the walk. `out` and
+   `census` are the caller's and must outlive the walk. The entry above is `begin`, `step` until false, `end`,
+   inside one computed style hold. */
+typedef struct BoxPaintWalk BoxPaintWalk;
+BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
+                              BoxPaintCensus *census);
+bool box_paint_step(BoxPaintWalk *w);
+bool box_paint_end(BoxPaintWalk *w);
 
 #endif

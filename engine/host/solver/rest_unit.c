@@ -61,6 +61,11 @@
    drive's work allowance stops an activation whose rules cost more. */
 #define REST_UNIT_CASCADE_EMITS_N   1024u
 
+/* §E.2 offers step 22 paints per rest point, 16. The floor is a rest's cost, a yield and a re-entry of
+   update the rendering, which one box's marks do not amortize; most offers lay one or two rectangles. The
+   ceiling, bound (2), is not yet asserted: an offer's own layout reads run whole inside it. */
+#define REST_UNIT_PAINT_OFFERS_N   16u
+
 /* Bytes a style sheet parse tokenizes per suspension, 8192. The floor is a suspension's cost, a return out of
    lexbor's parse and a resume, which a few KiB amortize. The ceiling is bound (2): at core/timing/thread_work.h's
    490 units per KiB, 8 KiB charge 3920, under a tenth of the quantum and under the drive's work allowance. */
@@ -107,6 +112,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_CSS_PARSE_BYTES: n = REST_UNIT_CSS_PARSE_BYTES_N; break;
     case REST_UNIT_LAYOUT_WORK: n = (size_t)REST_UNIT_LAYOUT_WORK_N; break;
     case REST_UNIT_GC_WORK:     n = REST_UNIT_GC_WORK_N;     break;
+    case REST_UNIT_PAINT_OFFERS: n = REST_UNIT_PAINT_OFFERS_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a
        kind, or an integer cast into the enum, leaves `n` at zero and fails the check below. */

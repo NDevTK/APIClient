@@ -108,7 +108,13 @@ typedef enum {
        freed) in one collector step. The slice the collector holds (solver/engine.c's engine_collect_slice) asks
        for the quantum and the host's claim after each step. Cost: a few loads and a compare per unit; the
        scan and the freeing still run whole inside a collection's last step, which JSGCCycle's residual names. */
-    REST_UNIT_GC_WORK
+    REST_UNIT_GC_WORK,
+    /* One offer of CSS 2.1 §E.2 "Painting order" painted by update the rendering step 22 (core/paint/
+       document_paint.h): one (step, box) pair of core/paint/paint_order.h's cursor and the marks
+       core/paint/box_paint.h lays for it. Past this many the step rests between two offers. Cost: one box's
+       marks and the layout their geometry reads, which still runs whole inside the offer, so bound (2) is not
+       asserted (document_paint.c's residual). */
+    REST_UNIT_PAINT_OFFERS
 } RestUnitKind;
 
 /* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is

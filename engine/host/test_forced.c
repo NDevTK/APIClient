@@ -31616,7 +31616,9 @@ static bool tf_document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSu
     bool drew;
 
     layout_job_enter(job);
-    frame = document_paint_frame(ctx, lxb_dom_interface_document(dom));
+    frame = document_paint_begin(ctx, lxb_dom_interface_document(dom));
+    while (document_paint_step(frame)) {}
+    document_paint_finish(frame);
     layout_job_leave(job);
     layout_job_free(job);
     drew = document_paint_raster(frame, out, count);
@@ -31648,7 +31650,7 @@ static bool tf_document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSu
  * walk of any document could produce turns "the number is plausible" into "the write happened" — and those
  * are exactly the two readings an out-parameter nobody checks has.
  *
- * TWO IS A DERIVATION AND NOT AN OBSERVATION OF THIS DOCUMENT. `paint_order_walk` passes `pseudo` false, and
+ * TWO IS A DERIVATION AND NOT AN OBSERVATION OF THIS DOCUMENT. `paint_order_begin` enters with `pseudo` false, and
  * core/paint/paint_order.c's walk then offers CSS 2.1 §E.2's step 1 for an element that is the document's root
  * — which this one is, asked of the document — and its step 2 whenever `po_takes_step_2` holds, which is
  * `!po_is_inline_level`. So the floor is a fact about the WALK for any document whose root is not inline-level,
@@ -31752,7 +31754,7 @@ TF_UNIT void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
     CHECK(offers >= 2u,
           "CSS 2.1 §E.2 \"Painting order\"'s walk offered fewer than TWO steps for a document's ROOT element. "
           "core/paint/paint_order.c offers its step 1 for an element that is the document's root and its step "
-          "2 for one that is not inline-level, and `paint_order_walk` enters with `pseudo` false — so two is a "
+          "2 for one that is not inline-level, and `paint_order_begin` enters with `pseudo` false — so two is a "
           "floor over the WALK and not a count of this document. The one thing that lowers it is a root whose "
           "computed `display` is inline-level, which no document this fixture parses declares: if one now "
           "does, this expectation is the thing to move and the walk is not");
@@ -33361,8 +33363,8 @@ TF_UNIT void box_paint_inline_break_selftest(JSContext *ctx, lxb_html_document_t
            "would otherwise have made inline — and §E.2's step 4 and step 7 member lists each hold both once. "
            "A HIGHER number is CSS 2.2 §9.2.1.1's anonymous block boxes having become offers of the walk, "
            "which cannot name them: CSS 2.1 §E.1 \"Definitions\" says \"element\" there \"refers to actual "
-           "elements, pseudo-elements, and anonymous boxes\", and only the first of those three has a "
-           "`PaintOrderVisit` to be offered as",
+           "elements, pseudo-elements, and anonymous boxes\", and only the first of those three can be "
+           "an offer of `paint_order_next`",
            text_offers, box_offers, obase, obase + 4u);
 
     /* AND THE WALK COMPLETED FOR ALL THREE PAINTS. A false answer is the painter meeting an operand it could

@@ -35,6 +35,7 @@
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
 #include "core/paint/paint_order.h"
+#include <lexbor/core/base.h>   /* lexbor_calloc: the allocator the engine gives its refusal edge */
 #include "quickjs.h"
 
 typedef struct {
@@ -1067,9 +1068,9 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
  * `core/paint/paint_order.h's own residual (b) — that component sequences step 7.2.1, offering each box in a line box in tree order instead of offering the block once, at which point this arm becomes one offer per box and the three items ahead of the text are three arms beside this one.`
  * Its SPEC half is exact and is what landed: §E.2's step 7.2.1 IS an enumeration over the boxes in a line box
  * in tree order, and the items ahead of the text are the three this file now lays two of. Its MECHANISM half —
- * that `paint_order_walk` performs it — is not buildable, on THREE independent grounds, each checkable without
+ * that `paint_order_next` performs it — is not buildable, on THREE independent grounds, each checkable without
  * running anything.
- * FIRST, `PaintOrderVisit` NAMES AN ELEMENT AND THIS ENUMERATION'S MEMBERS ARE NOT ALL ELEMENTS. Appendix E
+ * FIRST, AN OFFER (`paint_order_next`) NAMES AN ELEMENT AND THIS ENUMERATION'S MEMBERS ARE NOT ALL ELEMENTS. Appendix E
  * §E.1 "Definitions" says outright that in §E.2 "'element' refers to actual elements, pseudo-elements, and
  * ANONYMOUS BOXES", and CSS 2.2 §9.2.2.1 "Anonymous inline boxes" makes every run of text directly inside a
  * block container one of them. So the boxes step 7.2.1 enumerates for `<p>A <span>B</span></p>` are an
@@ -1090,7 +1091,7 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
  * which line is geometry by that sentence's own classification.
  * WHAT LANDED is the enumeration HERE, in `bp_step_7_2_1`, walking the child lists §9.2.1.1's run delimits and
  * carrying ONE monotone cursor over `line_box_glyphs`' characters so the boxes and the runs of text interleave
- * in one pass. `paint_order_walk` still offers the block once, and what it gained is the CLASSIFICATION
+ * in one pass. `paint_order_next` still offers the block once, and what it gained is the CLASSIFICATION
  * `paint_order_inline_kind` — which is a question about a computed `display` and a `position`, so it is that
  * component's by the same criterion that keeps the enumeration out of it.
  *
@@ -1348,7 +1349,7 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
            which point the remedy is a mark here and not a repair to this crash. */
         DFAIL("CSS 2.1 §E.2 \"Painting order\"'s step 10 was offered to a painter that has no outline mark. "
               "core/paint/paint_order.h's own residual says the step is declared and never offered at this "
-              "revision, and it retires when `paint_order_walk` offers it — so reaching this arm means that "
+              "revision, and it retires when `paint_order_next` offers it — so reaching this arm means that "
               "diff landed and this one did not. BUILD the outline mark in core/paint/display_list.h beside "
               "the fill, over the three longhands css-ui-4 §3.1 \"Outlines Shorthand: the outline property\" "
               "defines");
@@ -1373,13 +1374,17 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
     return bp_offer_done(st, step, before, false);
 }
 
-bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
-                                BoxPaintCensus *census)
+struct BoxPaintWalk {
+    BpState           st;
+    PaintOrderCursor *order;
+    size_t            before;   /* the list's length when the walk began */
+    bool              ok;       /* false once an offer stopped the painter */
+};
+
+BoxPaintWalk *box_paint_begin(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
+                              BoxPaintCensus *census)
 {
-    BpState st;
-    size_t before;
-    unsigned i, sum = 0;
-    bool ok;
+    BoxPaintWalk *w;
 
     DCHECK(out != NULL, "CSS 2.1 §E.2's ink was asked for with no display list to lay it in");
     DCHECK(census != NULL,
@@ -1387,27 +1392,42 @@ bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, D
            "means two things a caller must tell apart — the walk ran and every box it offered was transparent, "
            "or the walk reached no box at all — and the census is the only thing that separates them, which is "
            "why it is required rather than optional");
+    w = lexbor_calloc(1, sizeof *w);
+    CHECK(w != NULL, "paint: OOM allocating CSS 2.1 §E.2's painter");
     memset(census, 0, sizeof *census);
-    st.ctx = ctx;
-    st.out = out;
-    st.census = census;
-    st.why = 0u;
-    before = out->n;
-    /* `ctx` and `context_el` are asserted by `paint_order_walk`, which owns both preconditions: the realm
-       because Appendix E §E.1's tree order is the shadow-including one, and the stacking context because CSS
-       2.1 §E.2 has no painting order for an element that forms none. Restating either here would be a second
-       copy of one rule, reported at the caller instead of at the component that depends on it. */
-    /* One computed style record for the whole walk, so every element's cascade and computed values are derived
-       once per paint rather than once per read, and an ancestor's inherited value is held when a descendant
-       reads it. */
-    {
-        CssComputedStyleHold hold;
+    w->st.ctx = ctx;
+    w->st.out = out;
+    w->st.census = census;
+    w->st.why = 0u;
+    w->before = out->n;
+    w->ok = true;
+    /* `ctx` and `context_el` are asserted by paint_order_begin, which owns both preconditions. */
+    w->order = paint_order_begin(ctx, context_el);
+    return w;
+}
 
-        css_computed_style_hold_begin(&hold);
-        ok = paint_order_walk(ctx, context_el, bp_visit, &st);
-        css_computed_style_hold_end(&hold);
-    }
+bool box_paint_step(BoxPaintWalk *w)
+{
+    PaintStep step;
+    lxb_dom_element_t *el;
 
+    DCHECK(w != NULL && w->ok, "CSS 2.1 §E.2's painter was stepped after it stopped");
+    /* Every element's cascade and computed values are held by the caller's record across the walk, so each is
+       derived once per paint and an ancestor's inherited value is held when a descendant reads it. */
+    DCHECK(css_cascade_record_is_held(),
+           "CSS 2.1 §E.2's painter was stepped with no cascade record held — its caller paints inside a layout job "
+           "or a computed style hold that spans the walk");
+    if (!paint_order_next(w->order, &step, &el)) return false;
+    w->ok = bp_visit(step, el, &w->st);
+    return w->ok;
+}
+
+bool box_paint_end(BoxPaintWalk *w)
+{
+    unsigned i, sum = 0;
+    bool ok;
+
+    DCHECK(w != NULL, "CSS 2.1 §E.2's painter was ended through nothing");
     /* THE PARTS SUM TO THE TOTAL, AND THE TWO SIDES ARE WRITTEN AT DIFFERENT SITES, which is the whole of
        what makes this a check rather than a restatement. `offers` rises at the TOP of `bp_visit`, before the
        switch; an outcome is recorded at `bp_offer_done`, which every arm must route through. A `case` added
@@ -1416,13 +1436,13 @@ bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, D
        second, and this is the line that says so. It is a DCHECK because both operands are this engine's own
        arithmetic and the release arm is a census that is short, which is a wrong NUMBER and not a wrong
        picture. */
-    for (i = 0; i < (unsigned)BOX_PAINT_OUTCOMES; i++) sum += census->outcome[i];
-    DCHECKF(sum == census->offers,
+    for (i = 0; i < (unsigned)BOX_PAINT_OUTCOMES; i++) sum += w->st.census->outcome[i];
+    DCHECKF(sum == w->st.census->offers,
             "CSS 2.1 §E.2 \"Painting order\"'s walk made %u offer(s) and recorded %u outcome(s) for them. "
             "core/paint/box_paint.h's four outcomes PARTITION the offers, so a shortfall is an arm of "
             "`bp_visit` that answered its caller without going through `bp_offer_done` — the offer was "
             "counted and what became of it was not",
-            census->offers, sum);
+            w->st.census->offers, sum);
 
     /* AND THE OFFER CENSUS AGAINST THE LIST'S OWN LENGTH, WHICH IS THE ONE OPERAND THIS FILE DOES NOT
        MAINTAIN. `BOX_PAINT_INKED` is counted by comparing that length across one offer; the length itself is
@@ -1436,23 +1456,39 @@ bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, D
        an inequality over the whole walk is off by one per composited inline image. The biconditional
        survives the nesting exactly — a mark inside a nested offer is a mark inside its parent — and it is
        the half that catches the state this census exists for. */
-    DCHECKF((out->n > before) == (census->outcome[BOX_PAINT_INKED] > 0u),
+    DCHECKF((w->st.out->n > w->before) == (w->st.census->outcome[BOX_PAINT_INKED] > 0u),
             "CSS 2.1 §E.2 \"Painting order\"'s walk laid %zu mark(s) and credited %u offer(s) with ink, and "
             "exactly one of those two is zero. Every append this component makes happens inside an offer, so "
             "ink with no inked offer is a mark laid outside the walk and an inked offer with no ink is an "
             "offer credited for a length that did not move",
-            out->n - before, census->outcome[BOX_PAINT_INKED]);
+            w->st.out->n - w->before, w->st.census->outcome[BOX_PAINT_INKED]);
 
     /* AND EVERY REASON IS BOUNDED BY THE OFFER COUNT, which is the ONE arithmetic statement the decline tally
        admits — they are NOT a partition and do not sum to anything, because one offer is one §E.2 step and a
        step's sub-list can decline twice. A reason above the offer count would be `bp_decline` having been
        counted per ITEM somewhere, which is a different population wearing this one's denominator. */
     for (i = 0; i < (unsigned)BOX_PAINT_DECLINES; i++)
-        DCHECKF(census->decline[i] <= census->offers,
+        DCHECKF(w->st.census->decline[i] <= w->st.census->offers,
                 "CSS 2.1 §E.2 \"Painting order\"'s walk made %u offer(s) and recorded reason %u against %u "
                 "of them. Each reason counts the OFFERS that met it at least once — `bp_decline` sets a bit "
                 "on a mask `bp_visit` clears per offer — so a count above the offers is that mask having "
                 "been read more than once for one offer",
-                census->offers, i, census->decline[i]);
+                w->st.census->offers, i, w->st.census->decline[i]);
+    ok = w->ok;
+    paint_order_free(w->order);
+    free(w);
     return ok;
 }
+
+bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
+                                BoxPaintCensus *census)
+{
+    CssComputedStyleHold hold;
+    BoxPaintWalk *w = box_paint_begin(ctx, context_el, out, census);
+
+    css_computed_style_hold_begin(&hold);
+    while (box_paint_step(w)) {}
+    css_computed_style_hold_end(&hold);
+    return box_paint_end(w);
+}
+

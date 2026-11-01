@@ -8,7 +8,7 @@
  * 2.1 §2.3.1 "The canvas"'s region and the device ratio are three operands neither assembles.
  *
  * The paint and the raster are two entries because they happen at two moments. The paint is step 22, run by
- * core/rendering/rendering.c inside a layout job it enters, and it reads the tree, the cascade and the viewport of
+ * core/rendering/rendering.c inside a layout job it enters and resting between offers, and it reads the tree, the cascade and the viewport of
  * the world standing at that rendering opportunity; its frame is immutable and core/paint/painted_frame.h keeps
  * the document's last one. The raster reads the frame alone, so an image is of the frame the page's own event
  * loop painted and never of a tree read later.
@@ -77,10 +77,15 @@ typedef struct {
 /* Step 22's output for one document: the region it painted for, CSS 2.1 §E.2's list and its census. */
 typedef struct DocumentPaintFrame DocumentPaintFrame;
 
-/* Paint `doc` in its realm `ctx`: a newly allocated frame the caller owns (document_paint_frame_free). The caller
-   has entered the layout job the walk's questions are asked on (asserted), so every computed value it reads is
-   held in that job's cascade record. */
-DocumentPaintFrame *document_paint_frame(JSContext *ctx, lxb_dom_document_t *doc);
+/* Paint `doc` in its realm `ctx`, resting between CSS 2.1 §E.2's offers. `begin` answers a newly allocated frame
+   the caller owns (document_paint_frame_free, which also releases a paint abandoned mid-walk); `step` paints one
+   offer and answers whether another remains; `finish` closes the walk, after which the frame is immutable. Each
+   of the three runs with the layout job the walk's questions are asked on entered (asserted at `begin`), so
+   every computed value is held in that job's cascade record; the job outlives the walk. */
+DocumentPaintFrame *document_paint_begin(JSContext *ctx, lxb_dom_document_t *doc);
+bool document_paint_step(DocumentPaintFrame *f);
+void document_paint_finish(DocumentPaintFrame *f);
+bool document_paint_finished(const DocumentPaintFrame *f);
 void document_paint_frame_free(DocumentPaintFrame *f);
 
 /* Rasterize `f` into `out`, writing what the paint and the raster did to `count`. False where the frame holds no

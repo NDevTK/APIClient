@@ -31,7 +31,7 @@
  * enumeration "and therefore this component's", with a residual naming what would build it, and that was
  * refuted when it was built: core/paint/box_paint.c holds the argument in full at `bp_step_7_2_1`, and its
  * three grounds are that step 7.2.1's members include Appendix E §E.1's ANONYMOUS BOXES, which this file's
- * visitor has no argument for; that its item 4 interleaves those boxes with RUNS OF TEXT, of which one element
+ * offer has no argument for; that its item 4 interleaves those boxes with RUNS OF TEXT, of which one element
  * has as many as it has text children and a `(step, element)` pair can name none; and that "for each line box"
  * is LINE-BREAKING GEOMETRY, which the operand criterion two paragraphs above excludes by name. What this
  * component owes step 7.2.1 is therefore not the sequence but the CLASSIFICATION `paint_order_inline_kind`,
@@ -81,10 +81,10 @@
  *
  * NOTHING HERE IS STORED, for core/layout/used_value.h's reason and stacking_order.h's: CSS 2.1 §E.2's order is a
  * function of the running flow's own tree and its own cascade, so two flows that styled one document
- * differently have two orders and a cached one would be shared state the COW delta does not swap. The walk
- * derives everything per call and hands each offer to a visitor; it allocates only the per-step member arrays
- * it frees before returning. HOW A CACHE WOULD SHOW: an order that does not move when the running flow's tree
- * or cascade does.
+ * differently have two orders and a cached one would be shared state the COW delta does not swap. The cursor
+ * derives each step's members as it reaches the step and offers one box per `next`; it holds only its stack and
+ * the current steps' member arrays, all freed with it. HOW A CACHE WOULD SHOW: an order that does not move when
+ * the running flow's tree or cascade does.
  *
  * A CASCADE VALUE IS THE PAGE'S AND IS NEVER ASSERTED ON, which this file inherits whole from
  * stacking_order.h — every read here goes through that component's entries, which already state the one
@@ -163,9 +163,8 @@ typedef enum {
     PAINT_STEP_OUTLINES           /* CSS 2.1 §E.2 step 10  — see the residual: NOT offered at this revision */
 } PaintStep;
 
-/* ONE OFFER. Returns whether the walk should go on; `false` stops it where it stands, and everything already
-   offered stays offered — which is what makes a consumer that meets an operand it cannot compute able to keep
-   its prefix instead of losing the run.
+/* ONE OFFER is a step and an element. A consumer that meets an operand it cannot compute stops asking for the
+   next one, and everything already offered stays offered — so it keeps its prefix instead of losing the run.
    `el` IS ALWAYS AN ELEMENT OF THE DOCUMENT THE WALK WAS STARTED IN, and the two halves of the walk guarantee
    that DIFFERENTLY, which is why this sentence names both rather than claiming one mechanism. The boxes
    CSS 2.1 §E.2's own steps collect come from core/dom/shadow_root.h's shadow-including walker, whose only edges
@@ -182,22 +181,24 @@ typedef enum {
    and its background is a level of its TABLE's sequence. That is the whole reason this component must
    enumerate the level — a column box is reachable from no other step of CSS 2.1 §E.2 at all, so a consumer handed
    only the boxes CSS 2.1 §E.2's steps collect could never learn that one exists. */
-typedef bool (*PaintOrderVisit)(PaintStep step, lxb_dom_element_t *el, void *user);
-
-/* CSS 2.1 §E.2's PAINTING ORDER FOR ONE STACKING CONTEXT, offered one box at a time, in CSS 2.1 §E.2's own sequence. Answers
-   true when the walk ran to the end and false when the visitor stopped it.
-   `context_el` MUST FORM A STACKING CONTEXT — CSS 2.1 §E.2's whole text is "The painting order for the descendants of
-   an element generating a stacking context (see the 'z-index' property) is:", so an element that forms none
-   has no painting order of its own and asking for one is asking a question CSS 2.1 §E.2 does not answer. It crashes
-   rather than walking the subtree anyway, because the boxes under a non-context element belong to whichever
-   context it is IN and offering them here would put them in a sequence twice.
-   THE WALK RECURSES and every recursion is one of CSS 2.1 §E.2's own: step 3, step 8's `z-index: 0` arm and step 9
-   enter a CHILD STACKING CONTEXT, which CSS 2.1 §9.9.1 makes atomic, and step 5 and step 8's `z-index: auto` arm enter
-   a PSEUDO-CONTEXT — CSS 2.1 §E.2's "treat the element as if it created a new stacking context, but any positioned
-   descendants and descendants which actually create a new stacking context should be considered part of the
-   parent stacking context, not this new one", which is the sentence CSS 2.1 §E.2 states twice and which is the whole
-   difference between the two kinds. It terminates because every recursion descends. */
-bool paint_order_walk(JSContext *ctx, lxb_dom_element_t *context_el, PaintOrderVisit visit, void *user);
+/* CSS 2.1 §E.2's PAINTING ORDER FOR ONE STACKING CONTEXT, as a cursor offering one box at a time in CSS 2.1 §E.2's
+   own sequence, so a consumer can rest between two offers (update the rendering step 22 does).
+   `context_el` MUST FORM A STACKING CONTEXT — CSS 2.1 §E.2's whole text is "The painting order for the
+   descendants of an element generating a stacking context (see the 'z-index' property) is:", so an element that
+   forms none has no painting order of its own, and its boxes belong to whichever context it is IN.
+   The cursor holds an explicit stack, and every push is one of CSS 2.1 §E.2's own: step 3, step 8's `z-index: 0`
+   arm and step 9 enter a CHILD STACKING CONTEXT, which CSS 2.1 §9.9.1 makes atomic; step 5 and step 8's
+   `z-index: auto` arm enter a PSEUDO-CONTEXT ("treat the element as if it created a new stacking context, but any
+   positioned descendants and descendants which actually create a new stacking context should be considered part
+   of the parent stacking context, not this new one"); and steps 2 and 4 enter a block-level table's arm. Every
+   push descends, so the walk terminates. Its nodes stay valid between offers because no DOM write happens while
+   the layout job the consumer paints on is alive (core/layout/layout_job.h).
+   `begin` allocates the cursor; `next` answers true with the next offer, or false once the sequence is complete;
+   `free` releases it at any point. */
+typedef struct PaintOrderCursor PaintOrderCursor;
+PaintOrderCursor *paint_order_begin(JSContext *ctx, lxb_dom_element_t *context_el);
+bool paint_order_next(PaintOrderCursor *c, PaintStep *step, lxb_dom_element_t **el);
+void paint_order_free(PaintOrderCursor *c);
 
 /* WHICH OF CSS 2.1 §E.2 STEP 7.2.1's ITEM 4 LISTS A BOX TAKES — that item is the words "For inline elements:"
    followed by THREE sibling lists, "For inline elements:", "For inline-block and inline-table elements:" and
@@ -234,7 +235,7 @@ PaintInlineKind paint_order_inline_kind(lxb_dom_element_t *el);
    tree order, it does carry that recursion, and core/layout/line_box.h's fragments are what it is built over.
    ITS MECHANISM HALF NAMED THE WRONG COMPONENT, on three grounds recorded at core/paint/box_paint.c's
    `bp_step_7_2_1`: §E.1's "element" includes ANONYMOUS BOXES, item 4 interleaves boxes with RUNS OF TEXT, and
-   "for each line box" is geometry. The enumeration landed THERE, `paint_order_walk` still offers the block
+   "for each line box" is geometry. The enumeration landed THERE, `paint_order_next` still offers the block
    once, and what this file gained is `paint_order_inline_kind`.
    WHAT IS STILL NOT COVERED IS (c) ALONE, AND IT IS NO LONGER AN ENUMERATION THIS FILE OWES. Step 6 —
    "If the element is an inline element that generates a stacking context, then: For each line box that the
@@ -322,6 +323,6 @@ PaintInlineKind paint_order_inline_kind(lxb_dom_element_t *el);
    HOW ITS ABSENCE WOULD SHOW: a document renders with no outline anywhere — no focus ring on a focused
    control, and no ink at all from a rule that declares one — while every other mark of that box is present,
    so the box is drawn and only its outermost ring is missing.
-   RETIREMENT: this record goes when `paint_order_walk` offers `PAINT_STEP_OUTLINES`. */
+   RETIREMENT: this record goes when `paint_order_next` offers `PAINT_STEP_OUTLINES`. */
 
 #endif

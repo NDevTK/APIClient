@@ -39,7 +39,8 @@ void painted_frame_publish(JSContext *docctx, DocumentPaintFrame *f)
 {
     JSValue rec, obj;
 
-    DCHECK(f != NULL, "step 22 published no frame");
+    DCHECK(f != NULL && document_paint_finished(f), "step 22 published no frame, or one whose walk is still open "
+                                                    "— a published frame is immutable");
     obj = JS_NewObjectClass(docctx, (int)g_class);
     CHECK(!JS_IsException(obj), "update the rendering step 22 could not allocate the object its frame is held by");
     JS_SetOpaque(obj, f);

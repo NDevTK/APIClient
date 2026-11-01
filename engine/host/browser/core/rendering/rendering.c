@@ -3,6 +3,7 @@
 #include <math.h>          /* HUGE_VAL — RESIZE OBSERVER §3.4.5 step 1's ∞, which step 16.2.6.1's assert reads */
 
 #include "check.h"
+#include <lexbor/core/base.h>   /* lexbor_calloc: the allocator the engine gives its refusal edge */
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/canvas/canvas_rendering_context_2d.h"
@@ -40,6 +41,7 @@
 #include "core/timing/hr_time.h"
 #include "core/timing/timer.h"
 #include "solver/engine.h"
+#include "solver/rest_unit.h"   /* how many §E.2 offers step 22 paints per rest */
 #include "solver/dom_cow.h"   /* the site-set census this half is asked from — see dom_cow_rendering_asked */
 
 /* THE UA'S REFRESH RATE. See rendering.h: the spec hands this to the user agent, so answering it is modelling
@@ -207,7 +209,7 @@ static JSValue rendering_collect_docs(JSContext *ctx, RenderingExclusions *ex)
                  "NOT from this step), one OBSERVER per rest")                                                 \
     X(UR_PAINT,  "HTML §8.1.7.3 update the rendering steps 20-23 (record rendering time; mark paint timing; "  \
                  "update the rendering or user interface, which paints doc's frame; process top layer "       \
-                 "removals), one document per rest")
+                 "removals), resting between CSS 2.1 §E.2's offers")
 enum { UPDATE_RENDERING_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const UPDATE_RENDERING_STEPS[] = { UPDATE_RENDERING_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -264,7 +266,26 @@ typedef struct JSUpdateRendering {
     ReportExceptionWork rep;
     JSValue   exc;          /* the exception being reported, taken off the context (owned) */
     uint8_t   reporting;    /* the report is in flight and must be resumed before the walk continues */
+    struct UrPaint *paint;  /* step 22's paint of docs[i] while it rests between offers (owned, a cache) */
 } JSUpdateRendering;
+
+/* Step 22's paint of one document across its rests: the layout job its offers ask on and the frame being
+   walked. A fork sheds it and the copy paints the document again from its first offer: the walk is
+   re-derivable from the tree and cascade the copy stands on, and both arms' trees are equal at the fork. */
+typedef struct UrPaint {
+    LayoutJob          *job;
+    DocumentPaintFrame *frame;
+} UrPaint;
+
+static void ur_paint_destroy(JSContext *ctx, void *p)
+{
+    UrPaint *u = p;
+
+    (void)ctx;
+    document_paint_frame_free(u->frame);
+    layout_job_free(u->job);
+    free(u);
+}
 
 static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -286,6 +307,7 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
     report_exception_work_visit(ctx, &s->rep, v);
     STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
+    v->cache(ctx, (void **)&s->paint, ur_paint_destroy);
 }
 
 static JSValue js_update_rendering_fini(JSContext *ctx, void *st, bool take_result)
@@ -442,8 +464,8 @@ static void step_18(JSContext *docctx)
    source (§3.2.4), and the observer's callback is invoked from THAT later task (§3.2.5 step 3.5). That is the
    opposite of ResizeObserver in step 16, and swapping them changes observable ordering.
 
-   Steps 20 to 23. */
-static void steps_20_to_23(JSContext *docctx)
+   Steps 20 and 21. */
+static void steps_20_and_21(JSContext *docctx)
 {
     /* THIS SAID "this build now has a performance timeline to queue them on", AND IT NEVER DID. The phrase
        "performance timeline" occurred exactly ONCE in the whole tree — in this assert, asserting its own
@@ -472,24 +494,15 @@ static void steps_20_to_23(JSContext *docctx)
                 "receives one already exists — PERFORMANCE TIMELINE §5.1 Queue a PerformanceEntry, in "
                 "core/timing/performance_observer.c — so build the interface, declare its entry type through "
                 "performance_observer_declare_entry_type, then both steps");
-    /* STEP 22 — "update the rendering or user interface of doc and its node navigable to reflect the current
-       state". The paint, the only step with no scriptable result: core/paint/document_paint.h paints doc's
-       frame on a layout job this step owns, and core/paint/painted_frame.h keeps it as what doc looks like
-       until its next rendering opportunity. Doc then reflects its current state, so its pending visual update
-       is taken. */
-    {
-        LayoutJob *job = layout_job_new();
-        lxb_dom_document_t *doc = document_associated(docctx);
-        DocumentPaintFrame *frame;
+}
 
-        DCHECK(doc != NULL, "update the rendering step 22 reached a document whose realm has none — step 2's list "
-                            "holds fully active documents");
-        layout_job_enter(job);
-        frame = document_paint_frame(docctx, doc);
-        layout_job_leave(job);
-        layout_job_free(job);
-        painted_frame_publish(docctx, frame);
-    }
+/* Step 22's close and step 23. Step 22 is "update the rendering or user interface of doc and its node navigable
+   to reflect the current state": the paint UR_PAINT walks (`frame`, finished, owned and consumed here) is kept by
+   core/paint/painted_frame.h as what doc looks like until its next rendering opportunity, and doc then reflects
+   its current state, so its pending visual update is taken. */
+static void step_22_close_and_23(JSContext *docctx, DocumentPaintFrame *frame)
+{
+    painted_frame_publish(docctx, frame);
     visual_update_taken(docctx);
     /* STEP 23 — "process top layer removals given doc", which is CSS Positioned Layout Level 4 §3.3 Top Layer
        Manipulation's own algorithm and whose note names this step as its ONE caller: "this is intended to be
@@ -1198,10 +1211,44 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
 
     DCHECK(s->hdr.stage == UR_PAINT,
            "update the rendering resumed into a stage §8.1.7.3 does not have");
-    /* STEPS 20-23, one document per rest: step 22 paints, which is work of the document's size. */
+    /* STEPS 20-23 for each doc. Step 22 paints, which is work of the document's size, so it rests between CSS 2.1
+       §E.2's offers: each activation paints rest_unit_items(REST_UNIT_PAINT_OFFERS) of them on the job the
+       paint owns, and the next activation continues at the offer the walk stopped before. */
     JS_FreeValue(ctx, cb_result);
     if (s->i >= s->ndocs) return JS_STEP_DONE;
-    steps_20_to_23(doc_realm(ctx, s));
+    docctx = doc_realm(ctx, s);
+    {
+        size_t n = rest_unit_items(REST_UNIT_PAINT_OFFERS);
+        bool more = true;
+        UrPaint *u = s->paint;
+
+        if (u == NULL) {
+            lxb_dom_document_t *doc = document_associated(docctx);
+
+            DCHECK(doc != NULL, "update the rendering step 22 reached a document whose realm has none — step 2's "
+                                "list holds fully active documents");
+            steps_20_and_21(docctx);
+            u = lexbor_calloc(1, sizeof *u);
+            CHECK(u != NULL, "update the rendering step 22 could not allocate its paint");
+            u->job = layout_job_new();
+            s->paint = u;
+            layout_job_enter(u->job);
+            u->frame = document_paint_begin(docctx, doc);
+        } else {
+            layout_job_enter(u->job);
+        }
+        while (n-- > 0 && (more = document_paint_step(u->frame))) {}
+        if (!more) document_paint_finish(u->frame);
+        layout_job_leave(u->job);
+        if (more) {
+            layout_job_rested(u->job);
+            return JS_STEP_YIELD;
+        }
+        s->paint = NULL;
+        layout_job_free(u->job);
+        step_22_close_and_23(docctx, u->frame);
+        free(u);
+    }
     s->i++;
     return s->i >= s->ndocs ? JS_STEP_DONE : JS_STEP_YIELD;
 }
