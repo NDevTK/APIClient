@@ -3982,6 +3982,8 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
             : flow_frame(f) ? FLOW_UNIT_PROGRAM
             : flow_agent_running(f)->parked ? FLOW_UNIT_PARKED
             : flow_job_microtask(f) ? FLOW_UNIT_CHECKPOINT : FLOW_UNIT_BETWEEN;
+    o->next_arm = f->next_arm1 - 1;
+    o->next_sited = f->next_sited;
     DCHECKF(flow_weight_recompose(o) == o->w,
             "a member's weight does not recompose from the operands the census publishes (weight %.17g, recomposed "
             "%.17g) — flow_order_key gained or reordered a term that flow_weight_operands does not read",

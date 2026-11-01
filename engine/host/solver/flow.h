@@ -83,6 +83,7 @@ typedef struct {
     double assume_cost;   /* FLOW_ASSUMPTION_COST, which each assumption is priced at */
     int host_owed, running;
     FlowUnitAt unit;
+    int next_arm, next_sited;   /* Flow.next_arm1 - 1 (-1: never stood by a step end) and Flow.next_sited */
 } FlowWeightOperands;
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
@@ -236,6 +237,10 @@ typedef struct Flow {
        service that site has received. Moved by flow_stand_at and flow_set_orphan_seen, copied at a fork, NULL only
        outside the frontier. Owned by the family root. */
     FlowSite *at;
+    /* An observation no term reads: one plus the ladder rung (engine.c's NextArm) flow_next_unit answered at this
+       member's last step end, 0 before its first, and whether that answer named the site `at` was moved to. A fork
+       copies both with `at`, which they describe. */
+    int next_arm1, next_sited;
 
     /* Interleaving state, kept while this flow is paused so the scheduler can run another flow and come back. A
        flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW delta,

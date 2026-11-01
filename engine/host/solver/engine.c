@@ -12744,6 +12744,8 @@ static int engine_sched_slice(void) {
                 FlowNextUnit nu = flow_next_unit(ctx, cur);
 
                 if (nu.site_kind != 0) flow_stand_at(cur, nu.site_kind, nu.site);
+                cur->next_arm1 = (int)nu.arm + 1;
+                cur->next_sited = nu.site_kind != 0;
             }
 #if APICLIENT_DEV
             /* The WFQ's monopolizer half, asserted where the charge meets the pick. Its twin, the UCB bonus that
