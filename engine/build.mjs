@@ -2788,7 +2788,7 @@ function endpointAddressClassReading(b) {
      own operand and is checked above; `unknown-unproven` is undetermined AND refused by the bar, so it
      belongs on neither side of a determined/undetermined split spelled as one name's complement. A census
      that does not state it drops out of this set and nothing changes. */
-  const UNDETERMINED = ["unknown", "unknown-unproven"];
+  const UNDETERMINED = ["unknown", "unknown-unproven", "origin-undetermined"];
   const det = rows.filter((r) => !UNDETERMINED.includes(r[0]));
   const undetOther = rows.filter((r) => r[0] !== "unknown" && UNDETERMINED.includes(r[0]));
   const detSum = det.reduce((t, r) => t + r[1], 0);

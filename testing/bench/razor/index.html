@@ -1,13 +1,23 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>razor control</title>
-<!-- The bench's positive control for the runtime-only column: each rung's address is assembled at run time
-     from bytes no parse of this document can state. -->
+<!-- The bench's controls for the runtime-only column. A to D must read runtime-only: each address is assembled
+     at run time from bytes no parse of this document can state, on an origin the run determined. E and F must
+     not: each host is read out of state no run holds an example of, so the address names no endpoint. -->
 <script>
-  /* A: a field of a fetched JSON reply, concrete once the reply arrives. */
-  fetch('/cfg.json').then((r) => r.json()).then((c) => fetch('/api/' + c.tenant + '/items.json?v=' + c.v));
-  /* B: an absent server-injected global, taken as present on one arm. */
+  fetch('/cfg.json').then((r) => r.json()).then((c) => {
+    /* A: a path segment from a field of a fetched JSON reply. */
+    fetch('/api/' + c.tenant + '/items.json?v=' + c.v);
+    /* D: a host from a field of the same reply, whose example the run holds. */
+    fetch(c.apiHost + '/v1/reply-host');
+  });
+  /* B: a path segment from an absent server-injected global, taken as present on one arm. */
   if (window.__BOOT__) fetch('/api/user/' + window.__BOOT__.uid + '/settings');
   /* C: the location fragment, an attacker source. */
   fetch('/api/search?q=' + encodeURIComponent(location.hash.slice(1)));
+  /* E: a host from an absent server-injected global. */
+  if (window.__CFG__) fetch(window.__CFG__.apiHost + '/v1/global-host');
+  /* F: a host from a cookie the page never wrote. */
+  const m = document.cookie.match(/apiHost=([^;]+)/);
+  if (m) fetch('https://' + m[1] + '/v1/cookie-host');
 </script>

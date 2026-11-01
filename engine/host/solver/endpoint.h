@@ -224,6 +224,12 @@ int         endpoint_door_bytes(int door);
        is minted unknown so a gate over it forks (a data block, a global an inline script wrote), and a      \
        value no mint could attribute (concolic.h's `UNSTATED`, or no root at all). None clears the bar. */   \
     X(EPA_UNKNOWN_UNPROVEN, "unknown-unproven")                                                              \
+    /* the run did not determine it, some root is the world's, and its origin is undetermined: no page byte \
+       ahead of the first hole decides the scheme and host against the document base (URL §4.4 "URL         \
+       parsing"), and the address holds no example to parse (concolic.h's NONE or CONTRADICTED), as in a    \
+       host read out of an absent cookie. A request whose origin no run determined names no endpoint of the  \
+       app, so it does not clear the bar. A host from a reply field the run holds an example of is `unknown`. */ \
+    X(EPA_UNKNOWN_ORIGIN_OPEN, "origin-undetermined")                                                        \
     /* the run did not determine it, and some root is one a document, a server, an attacker or the            \
        environment supplied (concolic.h's `WORLD`: the location fragment, an absent server-injected global,  \
        a reply field, a device reading). One such root suffices (`_any`, not `_all`). This row clears the    \

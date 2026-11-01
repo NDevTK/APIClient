@@ -818,7 +818,52 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
  * adjacently, but no census joins them. Next diff builds: one keyed census row joining the two, as
  * testing/corpus/site.mjs keys `door|witnessClass`. Absence shows as: a census reader bounding the `unasked`
  * concolic population from two histograms instead of reading it. */
-static int address_class_of(JSValueConst url) {
+/* Whether the run determined the origin `url` (a concolic address) requests from: the page's bytes ahead of the
+   first hole, parsed by URL §4.4 "URL parsing" against the document base, decide its scheme and host
+   (url_prefix_decides_host), or the address holds an example (concolic_example_string: HELD or DETERMINED) that
+   parses against that base, whose origin is the one this flow's world requests from.
+   Named residual. Not covered: an address whose host comes from an operand holding an example and whose later
+   segment holds none (`cfg.apiHost + "/u/" + <an absent global's member>`) reads undetermined, because an
+   example is held per value and a concatenation's pieces are recorded only where every operand holds one. Next
+   diff builds: the example of the address's bytes through the end of its authority, from the operand pieces
+   that cover it. Absence shows as: an `origin-undetermined` row whose shape begins with a reply field's hole. */
+static int address_origin_determined(JSContext *ctx, JSValueConst url) {
+    char *disp = url_display(ctx, url);
+    unsigned char *hole = concolic_shape_hole_mask(url);
+    const char *b = document_base_url(ctx);
+    UrlRecord base;
+    size_t n = 0;
+    int determined;
+
+    CHECK(disp && hole, "endpoint: OOM reading an address's page bytes");
+    while (disp[n] && !hole[n]) n++;
+    url_record_init(&base);
+    CHECKF(b && url_parse(&base, b, strlen(b), NULL),
+           "endpoint: the document base URL `%s` does not parse — HTML §2.4.1 makes it a URL record", b ? b : "");
+    determined = url_prefix_decides_host(url_prefix_state(disp, n, &base));
+    free(hole);
+    free(disp);
+    if (!determined) {
+        JSValue ex = concolic_example_string(ctx, url);
+
+        if (JS_IsString(ex)) {
+            size_t len;
+            const char *s = JS_ToCStringLen(ctx, &len, ex);
+            UrlRecord rec;
+
+            CHECK(s != NULL, "endpoint: OOM reading an address's example");
+            url_record_init(&rec);
+            determined = url_parse(&rec, s, len, &base);
+            url_record_free(&rec);
+            JS_FreeCString(ctx, s);
+        }
+        JS_FreeValue(ctx, ex);
+    }
+    url_record_free(&base);
+    return determined;
+}
+
+static int address_class_of(JSContext *ctx, JSValueConst url) {
     if (!concolic_is(url)) return EPA_CONCRETE;
     if (concolic_example_state(url) == CONCOLIC_EX_DETERMINED) return EPA_SOURCE_DETERMINED;
     /* And whose unknown it rests on: `_any`, never `_all`, since one root somebody outside this engine supplied is
@@ -828,6 +873,7 @@ static int address_class_of(JSValueConst url) {
        `!!root == !!root_whose` is asserted at `concolic_alloc`, and this answer's mapping is asserted at the one
        call site, where a door is in hand. */
     if (!concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)) return EPA_UNKNOWN_UNPROVEN;
+    if (!address_origin_determined(ctx, url)) return EPA_UNKNOWN_ORIGIN_OPEN;
     return EPA_UNKNOWN;
 }
 
@@ -2235,7 +2281,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* Whether this sighting's address was one the run had determined, read once here from the value the display
        spelling is taken from: the merge arm and the mint both need it, the value is borrowed for this call, and
        nothing below holds the JSValue. */
-    int acls = address_class_of(url);
+    int acls = address_class_of(ctx, url);
     /* The bar's claiming member maps to `runtime-only` for every door: it is `endpoint_razor_class_of`'s first
        line. Asserted here because the mapping takes a door and only a caller holds one; a door arm put in front of
        that line fires this. */

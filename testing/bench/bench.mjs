@@ -2,7 +2,7 @@
  * at fixed work budgets over several runs, so two engines are compared on one input with the spread beside it.
  *   record --store <dir> --snap <snapshot> [--pages a,b] [--work <units>]
  *   run --store <dir> --snap <snapshot> --out <dir> [--runs 3] [--budgets 10.8e6,27e6,54e6] [--pages a,b]
- *       [--jobs 1] [--backstop <s>] [--rss-cap <MiB>]
+ *       [--jobs 1] [--backstop <s>] [--rss-cap <MiB>] [--bin <binary>]
  *   table <out-dir> | ab <out-A> <out-B> | manifest --store <dir>
  * `--snap` is a frozen snapshot (engine/frozen_snapshot.sh) holding engine/trusted.mjs and a built
  * engine/host/out/qjs-native-none; its zone drives its binary over a page with the wire answered by wire.mjs.
@@ -48,12 +48,15 @@ function args(argv) {
   return o;
 }
 
-function snapshotOf(snap) {
-  const zone = join(snap, 'engine', 'trusted.mjs'), bin = join(snap, 'engine', 'host', 'out', 'qjs-native-none');
+/* The zone of snapshot `snap` and the binary it drives: the snapshot's own build, or `binOverride` (a native
+   binary with its `.build.json` stamp beside it) when an A/B holds the zone fixed and varies only the engine. */
+function snapshotOf(snap, binOverride) {
+  const zone = join(snap, 'engine', 'trusted.mjs');
+  const bin = binOverride ?? join(snap, 'engine', 'host', 'out', 'qjs-native-none');
   if (!existsSync(zone) || !existsSync(bin))
-    throw new Error(`${snap} holds no engine/trusted.mjs and built engine/host/out/qjs-native-none — build it with ` +
+    throw new Error(`${snap} holds no engine/trusted.mjs, or ${bin} does not exist — build a snapshot with ` +
                     '`engine/frozen_snapshot.sh <sha> <lane> node engine/build.mjs native`');
-  const stamp = join(dirname(bin), 'qjs-native-none.build.json');
+  const stamp = bin + '.build.json';
   const sha = createHash('sha256').update(readFileSync(bin)).digest('hex');
   let revision = null;
   try { revision = JSON.parse(readFileSync(stamp, "utf8")).head ?? null; } catch { revision = null; }
@@ -415,7 +418,7 @@ function pagesOf(o) {
    backstop. Sends already recorded are answered from the store, so a second pass adds only what earlier passes
    did not reach. */
 async function record(o) {
-  const store = resolve(o.store), snap = snapshotOf(resolve(o.snap));
+  const store = resolve(o.store), snap = snapshotOf(resolve(o.snap), o.bin ? resolve(o.bin) : undefined);
   const work = Number(o.work || 54e6), backstopS = Number(o.backstop || 1800), rssCapMiB = Number(o['rss-cap'] || 4096);
   const logDir = join(store, 'logs');
   mkdirSync(logDir, { recursive: true });
@@ -429,7 +432,7 @@ async function record(o) {
 }
 
 async function run(o) {
-  const store = resolve(o.store), snap = snapshotOf(resolve(o.snap)), out = resolve(o.out);
+  const store = resolve(o.store), snap = snapshotOf(resolve(o.snap), o.bin ? resolve(o.bin) : undefined), out = resolve(o.out);
   const budgets = (o.budgets || '10.8e6,54e6,216e6').split(',').map(Number).sort((a, b) => a - b);
   const runs = Number(o.runs || 3), jobs = Number(o.jobs || 1), backstopS = Number(o.backstop || 3600);
   const rssCapMiB = Number(o['rss-cap'] || 4096);
@@ -437,7 +440,7 @@ async function run(o) {
   const rows = manifest(store).filter((r) => pages.some((p) => p.id === r.id));
   for (const r of rows) if (!r.recorded) throw new Error(`${r.id} has no recording in ${store}`);
   mkdirSync(join(out, 'logs'), { recursive: true });
-  const meta = { revision: snap.revision, binSha256: snap.binSha256, snap: resolve(o.snap), budgets, runs,
+  const meta = { revision: snap.revision, binSha256: snap.binSha256, snap: resolve(o.snap), bin: snap.bin, budgets, runs,
                  store, storeDigest: storeDigest(manifest(store)), pages: pages.map((p) => p.id),
                  pageDigests: Object.fromEntries(rows.map((r) => [r.id, r.sha256])),
                  cores: (await import('node:os')).cpus().length, started: new Date().toISOString() };
