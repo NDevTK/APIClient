@@ -6,6 +6,7 @@
 #include "core/timing/event_loop.h"
 #include "core/timing/thread_work.h"
 #include "solver/quantum.h"
+#include "solver/rest_unit.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* Lifetime counts over the process, never reset, like the clock asks they are read beside. */
@@ -112,6 +113,7 @@ void thread_work_charge(ThreadWorkKind kind, uint64_t bytes)
     g_charged += units;
     g_charged_input[kind] += bytes;
     if (units != 0) JS_FlowRetireWork(units);
+    rest_unit_charged();
 }
 
 void thread_work_note_discarded(uint64_t units) { g_discarded += units; }

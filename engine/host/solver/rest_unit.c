@@ -156,44 +156,59 @@ void rest_unit_begin(RestUnitKind kind)
 #endif
 }
 
-void rest_unit_end(void)
-{
 #if APICLIENT_DEV
-    int64_t spent;
+/* Bound (2) over the open unit's work so far. The unit must be a choice (more than one item): at one item there
+   is no smaller number to name, so an overrun is fixed one layer down. The reading is work, a function of the
+   unit's input, so no load moves it. */
+static void ru_overrun_check(void)
+{
+    int64_t spent = engine_work_retired() - g_rest_mark_work;
     ThreadWorkCensus tw;
 
-    DCHECK(g_rest_open,
-           "a rest unit was closed with none open — rest_unit_begin and rest_unit_end are a pair around the "
-           "work of exactly one unit, and an unmatched end is a driver that returned to the frontier from "
-           "somewhere its own bracket does not cover");
-    g_rest_open = 0;
-    spent = engine_work_retired() - g_rest_mark_work;
-    /* The unit must be a choice (more than one item): at one item there is no smaller number to name, so an
-       overrun is fixed one layer down. The reading is work, a function of the unit's input, so no load moves it. */
-    if (rest_unit_items(g_rest_kind) <= 1)
+    if (spent < ENGINE_QUANTUM_WORK || rest_unit_items(g_rest_kind) <= 1)
         return;
     /* What the unit's work was, for the message: the host charges and each kind's input over the unit. The
        remainder of `spent` is retired opcodes and script parse. */
     thread_work_census(&tw);
 #define RU_IN(k) (unsigned long long)(tw.charged_input[k] - g_rest_mark_tw.charged_input[k])
-    DCHECKF(spent < ENGINE_QUANTUM_WORK,
-            "one rest unit of kind %d (%zu items) retired %lld units of work — a whole cooperative quantum is "
-            "%lld, and the entire argument for resting at a chosen granularity rather than at the substrate's "
-            "finest item is that a coarser unit DELAYS a due suspension by at most one unit's work, which is "
-            "acceptable only while that work is small against the slice the scheduler already lets a flow hold. "
-            "At this size it is not: a higher-value sibling that became runnable at the start of this unit "
-            "waited longer than the scheduler's own decision interval to be picked. LOWER THE NUMBER FOR THIS "
-            "KIND IN rest_unit.c — it is a policy input for exactly this reason and no loader changes — unless "
-            "the per-item cost itself has grown, in which case the substrate's item is what to look at. Of it, "
-            "host charges are %llu units over %llu box questions, %llu line items, %llu rule tests, %llu CSS "
-            "bytes, %llu decoded bytes, %llu HTML bytes, %llu constraint bytes and %llu orphan entries; %llu "
-            "script bytes were parsed; the rest is retired opcodes",
-            (int)g_rest_kind, rest_unit_items(g_rest_kind), (long long)spent, (long long)ENGINE_QUANTUM_WORK,
-            (unsigned long long)(tw.charged_units - g_rest_mark_tw.charged_units), RU_IN(THREAD_WORK_LAYOUT_BOX),
-            RU_IN(THREAD_WORK_LAYOUT_LINE), RU_IN(THREAD_WORK_SELECTOR_MATCH), RU_IN(THREAD_WORK_CSS_PARSE),
-            RU_IN(THREAD_WORK_DECODE), RU_IN(THREAD_WORK_HTML_PARSE), RU_IN(THREAD_WORK_CONSTRAINT),
-            RU_IN(THREAD_WORK_ORPHAN_WALK),
-            (unsigned long long)(tw.script_parse_bytes_all - g_rest_mark_tw.script_parse_bytes_all));
+    DFAILF("one rest unit of kind %d (%zu items) retired %lld units of work — a whole cooperative quantum is "
+           "%lld, and the entire argument for resting at a chosen granularity rather than at the substrate's "
+           "finest item is that a coarser unit DELAYS a due suspension by at most one unit's work, which is "
+           "acceptable only while that work is small against the slice the scheduler already lets a flow hold. "
+           "At this size it is not: a higher-value sibling that became runnable at the start of this unit "
+           "waited longer than the scheduler's own decision interval to be picked. Fired from a host charge, "
+           "the backtrace is the code that overran: work a resting drive's allowance does not count (a "
+           "computation run to completion under it) is made an ask, and the number is not what to change. "
+           "Fired from the unit's end, LOWER THE NUMBER FOR THIS KIND IN rest_unit.c unless the per-item cost "
+           "itself has grown. Of it, "
+           "host charges are %llu units over %llu box questions, %llu line items, %llu rule tests, %llu CSS "
+           "bytes, %llu decoded bytes, %llu HTML bytes, %llu constraint bytes and %llu orphan entries; %llu "
+           "script bytes were parsed; the rest is retired opcodes",
+           (int)g_rest_kind, rest_unit_items(g_rest_kind), (long long)spent, (long long)ENGINE_QUANTUM_WORK,
+           (unsigned long long)(tw.charged_units - g_rest_mark_tw.charged_units), RU_IN(THREAD_WORK_LAYOUT_BOX),
+           RU_IN(THREAD_WORK_LAYOUT_LINE), RU_IN(THREAD_WORK_SELECTOR_MATCH), RU_IN(THREAD_WORK_CSS_PARSE),
+           RU_IN(THREAD_WORK_DECODE), RU_IN(THREAD_WORK_HTML_PARSE), RU_IN(THREAD_WORK_CONSTRAINT),
+           RU_IN(THREAD_WORK_ORPHAN_WALK),
+           (unsigned long long)(tw.script_parse_bytes_all - g_rest_mark_tw.script_parse_bytes_all));
 #undef RU_IN
+}
+#endif
+
+void rest_unit_charged(void)
+{
+#if APICLIENT_DEV
+    if (g_rest_open) ru_overrun_check();
+#endif
+}
+
+void rest_unit_end(void)
+{
+#if APICLIENT_DEV
+    DCHECK(g_rest_open,
+           "a rest unit was closed with none open — rest_unit_begin and rest_unit_end are a pair around the "
+           "work of exactly one unit, and an unmatched end is a driver that returned to the frontier from "
+           "somewhere its own bracket does not cover");
+    ru_overrun_check();
+    g_rest_open = 0;
 #endif
 }

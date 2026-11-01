@@ -127,5 +127,9 @@ size_t rest_unit_items(RestUnitKind kind);
    release. A driver whose unit is fixed at 1 may leave its units unbracketed. */
 void rest_unit_begin(RestUnitKind kind);
 void rest_unit_end(void);
+/* The same bound asked at a host charge (core/timing/thread_work.h) while a unit is open, so an overrun is
+   reported from the code doing the work rather than from the driver's `end`. Nothing outside a unit or in
+   release. */
+void rest_unit_charged(void);
 
 #endif
