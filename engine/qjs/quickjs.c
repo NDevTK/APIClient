@@ -35302,8 +35302,12 @@ static _Thread_local uint8_t g_flow_yield_req __attribute__((tls_model("local-ex
 #define FLOW_YIELD_REQUEST(kind) FLOW_YIELD_SET((kind) + 1)
 void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
 
-/* The work the running flow has retired: one unit per dispatched opcode and per regexp back-edge, plus what the
- * tokenizers and the host charge in the same unit (JS_FlowRetireWork). It is a function of the flow's own path,
+/* The work the running flow has retired: one unit per dispatched opcode, per step-machine step and per regexp
+ * back-edge, plus what the tokenizers and the host charge in the same unit (JS_FlowRetireWork). A machine step
+ * that retired nothing would be free to the scheduler, whose every term is work, so a chain of machine forks with
+ * no opcode between them would hold the thread. A fork's clone is not charged: a replay or a non-forking
+ * re-fire of the same path takes the same arm without one, and the event loop's clock must read the same in
+ * both. It is a function of the flow's own path,
  * so the scheduler's one currency (aging, service, the slice) and the modelled clock are built on it, and each
  * reading is the same on every host and across a park.
  *
@@ -39672,6 +39676,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* whether THIS entry is an abrupt delivery — read before the step, because the step
                        consumes ret_val. */
                     bool abrupt_in = JS_IsException(ret_val);
+                    /* A machine step is a dispatch of a built-in and retires one unit, as an opcode does, past
+                       the offer above so a step that parks in front of it is counted once, when it runs. */
+                    FLOW_WORK_RETIRE();
                     st = h->def->step(step_realm(ctx, h), stt, ret_val, &cb, &cbn);
                     step_stage_check(h, "after");
                     step_request_check(ctx, h, st, abrupt_in);
