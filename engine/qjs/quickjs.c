@@ -2395,7 +2395,12 @@ struct JSObject {
                 double *double_ptr;     /* JS_CLASS_FLOAT64_ARRAY */
             } u;
             uint32_t count; /* <= 2^31-1. 0 for a detached typed array */
-        } array;    /* 12/20 bytes */
+            /* JS_CLASS_ARRAY only: the creation name's two halves, as JSObjectCreation states them for a
+               plain object, written by JS_NewObjectFromShape and read by JS_CreationName. They sit in the
+               padding a 64-bit build already had below JSRegExp's width; the assert after JSObject holds it. */
+            uint32_t creation_ord;
+            uint64_t site;
+        } array;
         JSRegExp regexp;    /* JS_CLASS_REGEXP: 8/16 bytes */
         JSValue object_data;    /* for JS_SetObjectData(): 8/16/16 bytes */
         /* JS_CLASS_OBJECT — the only class in this union whose member is NOT read by anything but its own
@@ -2420,6 +2425,9 @@ _Static_assert(sizeof(JSObjectCreation) <= sizeof(JSRegExp),
                "a plain object's creation name is wider than the union member that already sets this union's "
                "width, so adding it grew every JSObject in the heap — it was added on the claim that "
                "JS_CLASS_OBJECT owns no union member and therefore costs nothing, and that claim is now false");
+_Static_assert(sizeof(((JSObject *)0)->u.array) <= sizeof(JSRegExp),
+               "an array's creation name widened the union member it sits in past the member that sets this "
+               "union's width, so adding it grew every JSObject in the heap");
 _Static_assert(_Alignof(JSObjectCreation) <= _Alignof(JSValue),
                "a plain object's creation name is more strictly aligned than the JSValue member that already "
                "sets this union's alignment, so adding it padded every JSObject rather than reusing space the "
@@ -4201,10 +4209,9 @@ void JS_SetJobRemoveHook(JSJobRemoveHook h) { g_job_remove_hook = h; }
 static _Thread_local JSConcolicHooks g_concolic;
 
 /* THE ORDINAL HALF OF A PAGE-CREATED VALUE'S NAME, ASKED IN ONE PLACE — the canonical spelling of a question
-   that now has THREE carriers (`func.creation_ord` for a closure, `regexp.creation_ord` for a RegExp,
-   `object.creation_ord` for a plain object) and one contract. (It read TWO until the third landed, and the
-   count is kept current rather than dropped because it is what a reader greps to find every carrier before
-   changing the contract — a low one reads as a shorter obligation than it is.) Two right answers to one
+   that has FOUR carriers (`func.creation_ord` for a closure, `regexp.creation_ord` for a RegExp,
+   `object.creation_ord` for a plain object, `array.creation_ord` for an Array) and one contract. The count is
+   what a reader greps to find every carrier before changing the contract, so it is kept current. Two right answers to one
    question is the shape that drifts, and the thing that would drift here is
    the ASSERT rather than the hook call: a second site that minted without it would silently unname every value
    it made from the moment a host's counter reached 0.
@@ -10082,6 +10089,12 @@ static JSValue JS_NewObjectFromShape(JSContext *ctx, JSShape *sh, JSClassID clas
             p->u.array.u.values = NULL;
             p->u.array.count = 0;
             p->u.array.u1.size = 0;
+            /* The array's creation name, minted as the plain object's is above and for its reason: the site
+               exists only now, and no page frame standing means the page did not make it. */
+            p->u.array.site = 0;
+            p->u.array.creation_ord = 0;
+            if (JS_RunningSiteHash(ctx, &p->u.array.site))
+                p->u.array.creation_ord = js_mint_creation_ord(ctx);
             if (!props) {
                 /* XXX: remove */
                 /* the length property is always the first one */
@@ -118404,10 +118417,9 @@ static uint64_t regexp_site_hash(JSRegExp *re)
  * A caller that had to ask "is it a closure?" and then "is it a RegExp?" would be keeping a list of classes in
  * a file that cannot tell a bound function from a Proxy — the exact reason this function exists rather than
  * JS_OrphanHash. So there is ONE entry, it answers -1 for everything it has no site composer for, and the
- * CLASS NAMESPACE RIDES THE NAME: `fn@` for a closure, `re@` for a RegExp, `ob@` for a plain object. Two names
- * can never collide across classes, which is what lets the solver spend this answer under one tag. (This read
- * "a closure and a RegExp" while a third class was landing; the list is the thing a reader greps to find out
- * which classes are named, so a stale one reads as a gap and sends somebody to build what is here.)
+ * CLASS NAMESPACE RIDES THE NAME: `fn@` for a closure, `re@` for a RegExp, `ob@` for a plain object, `ar@` for an
+ * Array. Two names can never collide across classes, which is what lets the solver spend this answer under one
+ * tag. The list is what a reader greps to find which classes are named, so it is kept current.
  *
  * WHY -1 IS AN ANSWER AND NOT A FAILURE, AND WHY THIS FUNCTION EXISTS AT ALL BESIDE JS_OrphanHash. That
  * function composes the same locator and is handed only what JS_OrphanTakeOne chose, so it DCHECKs on a value
@@ -118459,6 +118471,14 @@ int JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
         n = snprintf(buf, buf_size, "ob@%016llx#%u",
                      (unsigned long long)p->u.object.site,
                      (unsigned)p->u.object.creation_ord);
+        goto sized;
+    }
+    /* An Array, whose site is where the page was standing, as a plain object's is. */
+    if (p->class_id == JS_CLASS_ARRAY) {
+        if (p->u.array.creation_ord == 0) return -1;
+        n = snprintf(buf, buf_size, "ar@%016llx#%u",
+                     (unsigned long long)p->u.array.site,
+                     (unsigned)p->u.array.creation_ord);
         goto sized;
     }
     /* A REGEXP, WHOSE SITE IS THE TEXT THE PAGE WROTE — asked SECOND, and this read "asked FIRST because the

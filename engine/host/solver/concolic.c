@@ -627,7 +627,7 @@ static char *registry_key(JSContext *ctx, JSValueConst v)
    creation (JSConcolicHooks.mint_ordinal, installed below) and carried by the object.
    One question over several classes, asked once: the per-class site composer lives in the engine (a closure's
    body locator, a RegExp's source and flags, an object's creating code position) and the class namespace rides
-   the returned name (`fn@`, `re@`, `ob@`), so this file keeps no list of classes.
+   the returned name (`fn@`, `re@`, `ob@`, `ar@`), so this file keeps no list of classes.
    NULL where the engine has no creation name: a class with no site composer, a session that mints no
    ordinals, and a C function, bound function or Proxy, which JS_CreationName refuses (`arr.some(f.bind(this))`
    is ordinary input, so this must not assert on it). */
@@ -666,11 +666,10 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            answers NULL, and §7.2.14 IsStrictlyEqual ( x, y ) step 1 is false for every string the solver could
            substitute. A name lets concolic_branch_decided collapse a repeated question; N distinct named
            operands still owe N questions. */
-        /* Named residual. Not covered: a page-minted `Symbol("x")`, arrays, and the exotic-state classes (Map,
-           Set, Promise), which have no site composer; a branch over one records no constraint and re-forks
-           every time. (`{}` and `Object.create(null)` are named.) Next diff: a site composer
-           for `Symbol("x")`, an atom above JS_ATOM_END that costs no object a byte; arrays need a site and
-           ordinal beside `u.array.count`, which widens every JSObject on a 32-bit build. How its absence shows:
+        /* Named residual. Not covered: a page-minted `Symbol("x")` and the exotic-state classes (Map, Set,
+           Promise), which have no site composer; a branch over one records no constraint and re-forks every
+           time. (`{}`, `Object.create(null)` and `[]` are named.) Next diff: a site composer for `Symbol("x")`,
+           an atom above JS_ATOM_END that costs no object a byte. How its absence shows:
            a rendered shape with `?` at an operand position and a `~` site row climbing while `replayHits` stays
            flat; at the sharpest, concolic_exotic_own_names' `!c->ident` arm aborting on a record whose shape is
            spelled except for one `?` argument, since an absent argument makes the whole call identity absent.
@@ -698,10 +697,10 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            made, so the ordinal is the running flow's; an ask-time mint would let two arms of one fork stamp a
            shared value from two counters.
            The tag `fn` covers every class JS_CreationName composes a site for; the class rides the returned
-           name (`fn@…#n`, `re@…#n`, `ob@…#n`), so classes cannot collide. It is not renamed to something
-           class-neutral because decide.c's decision vector stores the asked question as a content hash of
-           this string and parked flows carry it across the cold tier: a rename would orphan every parked arm
-           over a page-created value. */
+           name (`fn@…#n`, `re@…#n`, `ob@…#n`, `ar@…#n`), so classes cannot collide. It is not renamed to
+           something class-neutral because decide.c's decision vector stores the asked question as a content
+           hash of this string and parked flows carry it across the cold tier: a rename would orphan every
+           parked arm over a page-created value. */
         nm = creation_name(ctx, v);
         if (!nm) return NULL;
         nf[0] = nm;
@@ -820,7 +819,7 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
             return r;
         }
         /* A page-created value renders as the creation name literal_ident composed its identity from. The name
-           carries its class namespace (`fn@`, `re@`, `ob@`), so it cannot read as an intrinsic, a registered
+           carries its class namespace (`fn@`, `re@`, `ob@`, `ar@`), so it cannot read as an intrinsic, a registered
            symbol, a String or a Number, and a class added to JS_CreationName moves both halves at once. */
         {
             char *cn = creation_name(ctx, v);
