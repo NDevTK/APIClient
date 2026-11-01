@@ -32019,7 +32019,6 @@ static JSShapeProperty *find_own_property(JSProperty **ppr, JSObject *p, JSAtom 
    continues, which is what the two non-accessor walkers want.
    A class whose [[GetOwnProperty]] answers `atom` with a step (tramp_step_exotic) stops the walk with nothing
    found: its answer rests or forks, so the operation is the keyed entry's, which runs the step. */
-static bool tramp_step_exotic(JSContext *ctx, JSObject *p, JSAtom atom);
 static bool tramp_walk_continues_desc(JSContext *ctx, JSObject *p, JSAtom atom,
                                       JSPropertyDescriptor *desc, bool *pfound)
 {
@@ -42811,6 +42810,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSPropertyDescriptor hd;
                         JSObject *hp = JS_VALUE_GET_OBJ(hobj);
                         const JSClassExoticMethods *hem = hp->is_exotic ? rt->class_array[hp->class_id].exotic : NULL;
+                        JSObject *hnext;
                         int hres;
                         DCHECK(hp->class_id != JS_CLASS_PROXY,
                                "a Proxy reaches the trap branch above, never the ordinary walk");
@@ -42840,11 +42840,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                algorithm, so it stops here rather than walking. */
                             if (unlikely(hres < 0)) goto getprop_throw;
                             ret_val = JS_FALSE;
-                        } else if (js_walk_proto(ctx, hp)) {
+                        } else if ((hnext = js_walk_proto(ctx, hp)) != NULL) {
                             /* the next link as every ordinary walk takes it (js_walk_proto): a WindowProxy's
                                is its class's (HTML §7.2.3.1 [[GetPrototypeOf]] ( ), W's prototype), not its
                                stored one */
-                            gp_obj = JS_MKPTR(JS_TAG_OBJECT, js_walk_proto(ctx, hp));
+                            gp_obj = JS_MKPTR(JS_TAG_OBJECT, hnext);
                             gp_recv = gp_recv_r; gp_no_throw = gp_nothrow_r;
                             if (gp_trapst) { js_trapget_free(ctx, gp_trapst); gp_trapst = NULL; }
                             goto do_getprop_tramp;
