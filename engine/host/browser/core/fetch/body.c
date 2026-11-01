@@ -862,15 +862,28 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
         JS_ThrowTypeError(ctx, "body stream already read");
         return -1;
     }
+    /* §5.3's unusable test for the arm that answers without reading the stream: a stream-backed body meets it
+       when the reader is acquired, and an unknown body's built stream (if any) is asked here instead. */
+    if (unknown && !JS_IsUndefined(b->stream)) {
+        bool locked = false;
+
+        readable_stream_query(b->stream, NULL, &locked);
+        if (locked || readable_stream_disturbed(b->stream)) {
+            JS_ThrowTypeError(ctx, "the body is unusable");
+            return -1;
+        }
+    }
     cow_capture_host_state(ctx, this_val, &b->used, sizeof b->used);
     b->used = 1;
     /* §5.2's FIRST union arm: a body can BE a ReadableStream, and then there are no bytes to hand back — the
        stream is fully read first. The latch is set either way, because it is set by the CONSUME and not by the
        bytes arriving. */
-    if (!JS_IsUndefined(b->stream) && readable_stream_is(b->stream) && (!b->bytes || body_stream_errored(b)))
-        *pstream = JS_DupValue(ctx, b->stream);
-    else if (unknown)
+    /* An unknown body answers its value before its stream: the only stream it can have is the one
+       body_stream_ensure built over that value, and reading it whole yields the same unknown. */
+    if (unknown)
         *punknown = JS_DupValue(ctx, b->unknown);
+    else if (!JS_IsUndefined(b->stream) && readable_stream_is(b->stream) && (!b->bytes || body_stream_errored(b)))
+        *pstream = JS_DupValue(ctx, b->stream);
     return 0;
 }
 
@@ -1019,17 +1032,18 @@ static int body_stream_ensure(JSContext *ctx, BodyState *b)
                    "checks `has` first because that is the distinction the flag exists to keep");
     if (!JS_IsUndefined(b->stream)) return 0;
     if (body_state_content(b, &sb, &slen) == BODY_SHAPE) {
-        /* The same residual `body_take` above names, arriving through `.body` and `textStream()` instead of
-           through a reader: a stream built out of the DISPLAY SHAPE would enqueue a chunk the page can read
-           as a string it never wrote. */
-        DFAIL("Fetch §5.3 Body mixin's `body` was asked for the stream of a body that is UNKNOWN EXTERNAL "
-              "INPUT — see the residual at this file's consume-body take. The stream this owes is one whose "
-              "single chunk IS core/fetch/body.h's `unknown`, which is the same value answer that residual "
-              "names");
-        JS_ThrowTypeError(ctx, "this engine cannot yet stream a body whose bytes are unknown external input");
-        return -1;
+        /* Fetch §5.2 extracts the string arm's source as "the UTF-8 encoding of object" and its stream
+           enqueues "a Uint8Array wrapping an ArrayBuffer containing" those bytes; over an unknown object that
+           chunk is the image `bytes()` answers for this body (core/byte_reader.h), never the display shape,
+           which the page would read as characters it never wrote. */
+        JSValue chunk = byte_reader_bytes_unknown(ctx, b->unknown);
+
+        if (JS_IsException(chunk)) return -1;
+        b->stream = readable_stream_from_chunk(ctx, chunk);
+        JS_FreeValue(ctx, chunk);
+    } else {
+        b->stream = readable_stream_from_bytes(ctx, sb ? sb : "", slen);
     }
-    b->stream = readable_stream_from_bytes(ctx, sb ? sb : "", slen);
     if (JS_IsException(b->stream)) { b->stream = JS_UNDEFINED; return -1; }
     return 0;
 }

@@ -22,6 +22,9 @@ void readable_stream_free(void);
    stream whose source is not the page's. The bytes are enqueued as one chunk and the stream is closed, which is
    what "a byte sequence" means when there is nothing left to arrive. */
 JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len);
+/* The same stream over a chunk the host already built — a Uint8Array, borrowed — for bytes that are an image of
+   an unknown (core/byte_reader.h) rather than bytes the host holds. */
+JSValue readable_stream_from_chunk(JSContext *ctx, JSValueConst chunk);
 
 /* A STREAM THAT IS ALREADY CLOSED AND HAS NEVER HELD A CHUNK — Fetch §5.3 "Body mixin"'s `textStream()` step 2,
    whose three lines are "Let emptyStream be a new ReadableStream in this's relevant realm", "Set up

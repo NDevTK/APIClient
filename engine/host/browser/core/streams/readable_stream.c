@@ -436,18 +436,28 @@ static JSValue readable_stream_empty(JSContext *ctx)
 
 JSValue readable_stream_from_bytes(JSContext *ctx, const char *bytes, size_t len)
 {
-    StreamData *d;
-    JSValue obj, chunk;
+    JSValue chunk = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)(bytes ? bytes : ""), len), obj;
 
+    if (JS_IsException(chunk)) return chunk;
+    obj = readable_stream_from_chunk(ctx, chunk);
+    JS_FreeValue(ctx, chunk);
+    return obj;
+}
+
+JSValue readable_stream_from_chunk(JSContext *ctx, JSValueConst chunk)
+{
+    StreamData *d;
+    JSValue obj;
+
+    DCHECK(JS_GetTypedArrayType(chunk) == JS_TYPED_ARRAY_UINT8,
+           "a host stream was handed a chunk that is not a Uint8Array — every byte stream a spec hands a page "
+           "enqueues \"a Uint8Array wrapping an ArrayBuffer containing bytes\"");
     obj = readable_stream_empty(ctx);
     if (JS_IsException(obj)) return obj;
     d = rs_stream_data(obj);
     /* ONE CHUNK, then closed. A byte sequence the host already holds has nothing left to arrive, and §4.2's
        "close" is exactly that statement — not an empty queue, which is a stream that may still be fed. */
-    chunk = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)(bytes ? bytes : ""), len);
-    if (JS_IsException(chunk)) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     stream_enqueue(ctx, d, chunk, 1);
-    JS_FreeValue(ctx, chunk);
     /* ONE CHUNK, then CLOSE REQUESTED — which is `enqueue` followed by `close`, and not the same thing as
        the CLOSED state: §4.2 answers a read on a closed stream `done` whatever is still queued, so marking
        this one closed outright would hand back an empty body. The drain is what closes it, exactly as it is

@@ -1283,6 +1283,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxprobe.h"
 #include "fixture/textencunk.h"
 #include "fixture/cssdsetprop.h"
+#include "fixture/bodystream.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
@@ -1890,6 +1891,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "rxprobe", HTML_RXPROBE },
     { "textencunk", HTML_TEXTENCUNK },
     { "cssdsetprop", HTML_CSSDSETPROP },
+    { "bodystream", HTML_BODYSTREAM },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
@@ -18086,6 +18088,33 @@ TF_UNIT void probes_cssdsetprop(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
+TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
+    const char *rd_why = NULL; int rd_tt = 1;
+    fold_row(&rd_tt, &rd_why, !!strstr(js, "\"/api/bsread\""),
+             "NOT REACHED: no /api/bsread record, so the unknown body's stream was not read to its end");
+    fold_row(&rd_tt, &rd_why, param_value_is(js, "/api/bsread", "k", "bsU8") &&
+                              param_value_is(js, "/api/bsread", "d1", "false") &&
+                              param_value_is(js, "/api/bsread", "d2", "true"),
+             "the unknown body's stream did not answer one Uint8Array chunk and then done — Fetch §5.2's "
+             "string arm enqueues the UTF-8 encoding of its object and the stream closes");
+    const char *tx_why = NULL; int tx_tt = 1;
+    fold_row(&tx_tt, &tx_why, param_value_is(js, "/api/bstext", "w", "string") &&
+                              param_value_is(js, "/api/bstext", "s", "true"),
+             "text() over an unknown body whose stream was handed out but never read did not answer a string");
+    const char *lk_why = NULL; int lk_tt = 1;
+    fold_row(&lk_tt, &lk_why, param_value_is(js, "/api/bslock", "w", "TypeError") &&
+                              !param_value_is(js, "/api/bslock", "w", "bsREAD"),
+             "text() over an unknown body whose stream is locked to a reader did not reject with a TypeError — "
+             "§5.3's consume body refuses an unusable body");
+    const Probe rows[] = {
+        { "body-stream-unknown-read", rd_tt, "/api/bsread", SESS_EXPLORE, rd_why },
+        { "body-stream-unknown-text", tx_tt, "/api/bstext", SESS_EXPLORE, tx_why },
+        { "body-stream-unknown-locked", lk_tt, "/api/bslock", SESS_EXPLORE, lk_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -23629,6 +23658,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxprobe(js, probes, &np);
     probes_textencunk(js, probes, &np);
     probes_cssdsetprop(js, probes, &np);
+    probes_bodystream(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);
