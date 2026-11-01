@@ -54,7 +54,10 @@
    THE VALUE IS A JSValue, so a File entry holds the File ITSELF: XHR §4's `get` must hand back the same object, and
    a copy of its bytes would answer a different one. That makes a FormData a GC ROOT for its entries, which is
    what `gc_mark` below is for — the entry can hold a File whose own properties reach back. */
-typedef struct { char *name; size_t nlen; JSValue value; } FdEntry;
+/* `name` is the entry's name as UTF-8. `uname` is JS_UNDEFINED, or the unknown the name was given as, in which
+   case `name` holds that unknown's display shape: the bytes the serializers and the form submission write,
+   as they write an unknown value's (fd_entry_bytes). */
+typedef struct { char *name; size_t nlen; JSValue uname; JSValue value; } FdEntry;
 typedef struct { FdEntry *e; int n, cap; } FdList;
 typedef struct { FdList list; } FormDataObj;
 
@@ -63,6 +66,7 @@ static void fd_list_free(JSRuntime *rt, FdList *l)
     int i;
     for (i = 0; i < l->n; i++) {
         free(l->e[i].name);
+        JS_FreeValueRT(rt, l->e[i].uname);
         JS_FreeValueRT(rt, l->e[i].value);
     }
     free(l->e);
@@ -70,8 +74,8 @@ static void fd_list_free(JSRuntime *rt, FdList *l)
     l->n = l->cap = 0;
 }
 
-/* Takes ownership of `value`. */
-static void fd_list_append(FdList *l, const char *name, size_t nlen, JSValue value)
+/* Takes ownership of `uname` (JS_UNDEFINED, or the unknown `name` is the shape of) and of `value`. */
+static void fd_list_append(FdList *l, const char *name, size_t nlen, JSValue uname, JSValue value)
 {
     if (l->n == l->cap) {
         FdEntry *g = lexbor_realloc(l->e, sizeof *g * (size_t)(l->cap = l->cap ? l->cap * 2 : 8));
@@ -80,6 +84,7 @@ static void fd_list_append(FdList *l, const char *name, size_t nlen, JSValue val
     }
     l->e[l->n].name = url_encoded_strdup(name, nlen);
     l->e[l->n].nlen = nlen;
+    l->e[l->n].uname = uname;
     l->e[l->n].value = value;
     l->n++;
 }
@@ -147,8 +152,10 @@ static void form_data_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark
 
     (void)id;
     if (!d) return;
-    for (i = 0; i < d->list.n; i++)
+    for (i = 0; i < d->list.n; i++) {
+        JS_MarkValue(rt, d->list.e[i].uname, mark_func);
         JS_MarkValue(rt, d->list.e[i].value, mark_func);
+    }
 }
 
 static FormDataObj *form_data_of(JSContext *ctx, JSValueConst v)
@@ -176,7 +183,7 @@ JSValue form_data_new(JSContext *ctx, const UrlEncodedList *entries)
     d = lexbor_calloc(1, sizeof *d);
     CHECK(d, "formdata: OOM building a FormData");
     for (i = 0; entries && i < entries->n; i++)
-        fd_list_append(&d->list, entries->e[i].name, entries->e[i].nlen,
+        fd_list_append(&d->list, entries->e[i].name, entries->e[i].nlen, JS_UNDEFINED,
                        JS_NewStringLen(ctx, entries->e[i].value, entries->e[i].vlen));
     JS_SetOpaque(obj, d);
     return obj;
@@ -199,7 +206,7 @@ JSValue form_data_clone(JSContext *ctx, JSValueConst src)
     to = JS_GetOpaque(obj, g_fd_class);
     for (i = 0; from && i < from->list.n; i++)
         fd_list_append(&to->list, from->list.e[i].name, from->list.e[i].nlen,
-                       JS_DupValue(ctx, from->list.e[i].value));
+                       JS_DupValue(ctx, from->list.e[i].uname), JS_DupValue(ctx, from->list.e[i].value));
     return obj;
 }
 
@@ -318,9 +325,9 @@ JSValue form_data_parse_multipart(JSContext *ctx, const char *body, size_t len,
             JSValue f = file_new(ctx, part, part_len, ctype ? ctype : "", ctype_len,
                                  filename, filename_len, 0);
             if (JS_IsException(f)) goto fail;
-            fd_list_append(&d->list, name, name_len, f);
+            fd_list_append(&d->list, name, name_len, JS_UNDEFINED, f);
         } else {
-            fd_list_append(&d->list, name, name_len, JS_NewStringLen(ctx, part, part_len));
+            fd_list_append(&d->list, name, name_len, JS_UNDEFINED, JS_NewStringLen(ctx, part, part_len));
         }
         pos = (size_t)(next - body) + dlen;
     }
@@ -351,7 +358,7 @@ void form_data_append_entry(JSContext *ctx, JSValueConst fd, const char *name, s
 
     (void)ctx;
     DCHECK(d != NULL, "an entry was appended to something that is not a FormData — §4.10.22.4 step 4 builds one");
-    fd_list_append(&d->list, name, nlen, value);
+    fd_list_append(&d->list, name, nlen, JS_UNDEFINED, value);
 }
 
 void form_data_append_all(JSContext *ctx, JSValueConst dst, JSValueConst src)
@@ -364,7 +371,7 @@ void form_data_append_all(JSContext *ctx, JSValueConst dst, JSValueConst src)
            "runs before this");
     for (i = 0; i < from->list.n; i++)
         fd_list_append(&to->list, from->list.e[i].name, from->list.e[i].nlen,
-                       JS_DupValue(ctx, from->list.e[i].value));
+                       JS_DupValue(ctx, from->list.e[i].uname), JS_DupValue(ctx, from->list.e[i].value));
 }
 
 int form_data_entry_count(JSValueConst fd)
@@ -640,6 +647,17 @@ static JSValue fd_entry_value(JSContext *ctx, JSValueConst v, JSValueConst filen
     return r;
 }
 
+/* XHR §4's "an entry whose name is name", for a known `name`. An entry named by an unknown makes the answer a
+   question about input, which this comparison does not fork. */
+static bool fd_name_is(const FdEntry *e, const char *name, size_t nn, int magic)
+{
+    if (!JS_IsUndefined(e->uname))
+        DFAILF("XHR §4's FormData member %d compared a name with an entry whose name is UNKNOWN (%s). Build the "
+               "comparison as a fork: the arm where the unknown equals this name pins it, and the other arm "
+               "records that it does not", magic, e->name);
+    return e->nlen == nn && !memcmp(e->name, name, nn);
+}
+
 static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic)
 {
@@ -650,6 +668,24 @@ static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int ar
     int i, w;
 
     if (!d) return JS_EXCEPTION;
+    if (argc > 0 && concolic_is(argv[0]) && magic != FD_APPEND)
+        DFAILF("XHR §4's FormData member %d was given an UNKNOWN name, and its steps compare that name with each "
+               "entry's (\"an entry whose name is name\"). Build the comparison as a fork: one flow per entry the "
+               "name may equal, each pinning it, plus the arm where it equals none", magic);
+    if (argc > 0 && concolic_is(argv[0]) && magic == FD_APPEND) {
+        /* XHR §4's append over an unknown name: "creating an entry with name, value" and appending it decide
+           nothing about the name, so the entry holds the unknown and its display shape. Every other member
+           compares the name with the entries' names, which fd_name_is refuses for an unknown. */
+        const char *shape = concolic_shape_c(argv[0]);
+
+        CHECK(shape != NULL, "an unknown FormData entry name has no display shape — every concolic is minted "
+                             "with one, so the serialized part would carry no name");
+        value = fd_entry_value(ctx, argc > 1 ? argv[1] : JS_UNDEFINED, argc > 2 ? argv[2] : JS_UNDEFINED,
+                               argc > 2 && !JS_IsUndefined(argv[2]));
+        if (JS_IsException(value)) return JS_EXCEPTION;
+        fd_list_append(&d->list, shape, strlen(shape), JS_DupValue(ctx, argv[0]), value);
+        return JS_UNDEFINED;
+    }
     name = JS_ToCStringLen(ctx, &nn, argc > 0 ? argv[0] : JS_UNDEFINED);
     if (!name) return JS_EXCEPTION;
     if (magic == FD_APPEND || magic == FD_SET) {
@@ -658,16 +694,19 @@ static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int ar
                                argc > 2 && !JS_IsUndefined(argv[2]));
         if (JS_IsException(value)) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
     }
-#define FD_NAME_IS(i) (d->list.e[i].nlen == nn && !memcmp(d->list.e[i].name, name, nn))
+#define FD_NAME_IS(i) fd_name_is(&d->list.e[i], name, nn, magic)
 
     switch (magic) {
     case FD_APPEND:
-        fd_list_append(&d->list, name, nn, value);
+        fd_list_append(&d->list, name, nn, JS_UNDEFINED, value);
         value = JS_UNDEFINED;   /* the list owns it now */
         break;
     case FD_DELETE:
         for (i = 0, w = 0; i < d->list.n; i++) {
-            if (FD_NAME_IS(i)) { free(d->list.e[i].name); JS_FreeValue(ctx, d->list.e[i].value); continue; }
+            if (FD_NAME_IS(i)) {
+                free(d->list.e[i].name); JS_FreeValue(ctx, d->list.e[i].uname); JS_FreeValue(ctx, d->list.e[i].value);
+                continue;
+            }
             d->list.e[w++] = d->list.e[i];
         }
         d->list.n = w;
@@ -705,6 +744,7 @@ static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int ar
                     d->list.e[w++] = d->list.e[i];
                 } else {
                     free(d->list.e[i].name);
+                    JS_FreeValue(ctx, d->list.e[i].uname);
                     JS_FreeValue(ctx, d->list.e[i].value);
                 }
                 continue;
@@ -712,7 +752,7 @@ static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int ar
             d->list.e[w++] = d->list.e[i];
         }
         d->list.n = w;
-        if (found < 0) { fd_list_append(&d->list, name, nn, value); value = JS_UNDEFINED; }
+        if (found < 0) { fd_list_append(&d->list, name, nn, JS_UNDEFINED, value); value = JS_UNDEFINED; }
         break;
     }
     }
@@ -735,7 +775,8 @@ static void form_data_pair_at(JSContext *ctx, JSValueConst target, int i, JSValu
 {
     FormDataObj *d = JS_GetOpaque(target, g_fd_class);
     DCHECK(d != NULL && i < d->list.n, "a FormData entry was asked for past the end of the list");
-    *key = JS_NewStringLen(ctx, d->list.e[i].name, d->list.e[i].nlen);
+    *key = JS_IsUndefined(d->list.e[i].uname) ? JS_NewStringLen(ctx, d->list.e[i].name, d->list.e[i].nlen)
+                                               : JS_DupValue(ctx, d->list.e[i].uname);
     *value = JS_DupValue(ctx, d->list.e[i].value);   /* a File entry yields the File, not a copy of its bytes */
 }
 
