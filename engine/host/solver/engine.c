@@ -5174,7 +5174,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
                              "re-asked");
     DCHECK(!parent->typing_due,
            "a flow forked before performing the typing act its drive was assembled with — the act is performed at "
-           "its first switch-in, before any opcode that could fork");
+           "its first dispatch, before any opcode that could fork");
     /* A frameless sibling is safe only over a frameless parent. A parent inside a program would give a hot
        sibling (`started` is set below) with nothing to resume, and flow_step would compile the row at
        `script_i` again and replay its side effects. A parent with no frame is between programs, and so is its
@@ -11254,10 +11254,6 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
         concolic_pins_resume(f->pin_blob);   concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
     }
     flow_set_running(f);
-    if (f->typing_due) {
-        f->typing_due = 0;
-        engine_orphan_type(ctx, f->fn, f->orphan_hash, f->typing_pos);
-    }
     /* What this flow was ranked on when it took the thread: the pick compared it against every runnable member and
        found none strictly better, so from here the value yield may fire only if one of these moves. The hook's
        assertion reads them; nothing decides from them. */
@@ -12415,6 +12411,13 @@ static int engine_sched_slice(void) {
                 engine_reclaim_set(prev_reclaim);
             }
             solve_flow_begin(best);   /* the substitution is live only while its own flow runs */
+            /* A drive assembled with a typing act types now, before its first opcode and after its own
+               substitution is installed: typed text is a source read, and until solve_flow_begin the installed
+               candidate is the previous flow's, whose payload the read would answer. */
+            if (best->typing_due) {
+                best->typing_due = 0;
+                engine_orphan_type(ctx, best->fn, best->orphan_hash, best->typing_pos);
+            }
             /* The member's own record that it was chosen. The switch count below is a fact about the scheduler;
                this is a fact about the member, and tells a flow the ordering never reached from one it reached
                that made no progress, which take opposite work (flow.h's `picks`); every other candidate row is a
