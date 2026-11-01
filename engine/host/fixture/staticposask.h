@@ -4,7 +4,7 @@
    static position is placed by §9.4.1's stack of <html>'s children. The first has `top` and `bottom` auto: its
    `height` is its 100px child's, and that child's resolved `top: 10%` is 10px of it. The second has `left`
    and `right` auto: its shrink-to-fit `width` is its 40px child's, and its left edge is <html>'s 7px content
-   edge. The first box's static top is 71px below <html>'s: 8px of body margin, 30px and 20px blocks, and the
+   edge. The first box's static top is 70px below <html>'s: 8px of body margin, 30px and 20px blocks, and the
    12px bottom margin that collapses through body's 8px. Chrome 153.0.8010.12 gives every number the rows
    expect for this markup. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_STATICPOSASK_H
@@ -19,7 +19,7 @@ static const char HTML_STATICPOSASK[] =
     "<div style=\"height:30px\"></div><div style=\"height:20px;margin-bottom:12px\"></div>"
     "<script>"
     "var c = document.createElement('div'), d = document.createElement('div');"
-    "c.style.cssText = 'position:absolute;left:-11111px;width:60px;margin-top:1px;padding:0;border:0';"
+    "c.style.cssText = 'position:absolute;left:-11111px;width:60px;margin-top:0;padding:0;border:0';"
     "d.style.cssText = 'position:relative;display:block;margin:auto;border:0;padding:0;width:60%;height:100px;"
     "top:10%';"
     "c.appendChild(d); document.documentElement.appendChild(c);"

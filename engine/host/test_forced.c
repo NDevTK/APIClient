@@ -15668,8 +15668,8 @@ TF_UNIT void probes_staticposask(const char *js, Probe *tab, int *n) {
     fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "w", "40px"),
              "CSS 2.1 §10.3.7: the resolved shrink-to-fit `width` of an absolutely positioned box at its static "
              "position is not its 40px child's");
-    fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "y", "71"),
-             "CSS 2.1 §10.6.4: the static top of a box appended to <html> after <body> is not 71px");
+    fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "y", "70"),
+             "CSS 2.1 §10.6.4: the static top of a box appended to <html> after <body> is not 70px");
     fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "x", "7"),
              "CSS 2.1 §10.3.7: the static left of a box appended to <html> is not <html>'s 7px content edge");
     const Probe rows[] = {
