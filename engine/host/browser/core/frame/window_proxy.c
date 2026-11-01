@@ -2829,6 +2829,38 @@ static int proxy_prevent_extensions(JSContext *ctx, JSValueConst obj)
     return 0;
 }
 
+/* Whether a key §7.2.3.5 [[GetOwnProperty]] answers lies in the domain of the unknown String key `key`
+   (JSClassExoticMethods.key_domain). For a same-origin W, step 2's array indices of its child navigables, and
+   step 3's OrdinaryGetOwnProperty(W, P), which is W's storage, handed back in `*pstand`; §7.2.3.1 then continues
+   the walk at W's prototype. A navigable with no W answers out of §7.2.3's surface. A cross-origin W decides
+   nothing: §7.2.1.3.2 CrossOriginPropertyFallback throws for an unlisted key, which is neither a hit nor a miss,
+   and so does a W whose document another instance holds, whose child navigables this side cannot count. */
+static int proxy_key_domain(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst *pstand)
+{
+    ProxyData *p = proxy_of(obj);
+    JSValueConst w;
+    char ibuf[16];
+
+    DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
+    if (!proxy_same_origin(p)) return -1;
+    w = proxy_target_window(ctx, obj, p);
+    if (JS_IsUninitialized(w)) {
+        /* Borrowed: the realm's class-proto slot holds the surface. */
+        JSValue surface = JS_GetClassProto(ctx, g_proxy_class);
+
+        DCHECK(JS_IsObject(surface), "a WindowProxy's domain was asked in a realm with no §7.2.3 surface");
+        *pstand = surface;
+        JS_FreeValue(ctx, surface);
+        return 0;
+    }
+    if (!world_doc_hosted(p->doc)) return -1;
+    DCHECK(p->realm != NULL, "a same-origin W this agent holds has no realm to count its child navigables in");
+    for (int i = 0, n = iframe_child_navigable_count(p->realm); i < n; i++)
+        if (concolic_key_domain_holds(ctx, key, ibuf, (size_t)snprintf(ibuf, sizeof ibuf, "%d", i))) return 1;
+    *pstand = w;
+    return 0;
+}
+
 /* The six of §7.2.3's internal methods this object answers itself (§7.2.3.1 [[GetPrototypeOf]], §7.2.3.4
    [[PreventExtensions]], §7.2.3.5 [[GetOwnProperty]], §7.2.3.6 [[DefineOwnProperty]], §7.2.3.9 [[Delete]] and
    §7.2.3.10 [[OwnPropertyKeys]]), with §7.2.3.7's and §7.2.3.8's same-origin `W.[[X]]` reached through the
@@ -2846,6 +2878,7 @@ static const JSClassExoticMethods PROXY_EXOTIC = {
     .prevent_extensions = proxy_prevent_extensions,
     .get_own_property_no_user_code = true,
     .get_prototype_walkable = true,   /* W's own prototype or null: a chain that ends */
+    .key_domain = proxy_key_domain,
     .forwarded_object = proxy_forwarded_object,
 };
 

@@ -15016,52 +15016,93 @@ int JS_RecordMemberWriteSeq(JSContext *ctx, JSValueConst holder, JSAtom prop, ui
     return 1;
 }
 
-/* EVERY STRING KEY AN ORDINARY [[Get]] OF `obj` CAN REACH, read from storage: ECMAScript §10.1.8.1 OrdinaryGet
-   ( O, P, Receiver ) asks each link's [[GetOwnProperty]] and then its [[GetPrototypeOf]], and for a link whose
-   both methods are ordinary (§10.1.5.1 OrdinaryGetOwnProperty, §10.1.1.1 OrdinaryGetPrototypeOf) the keys it
-   can answer are exactly its shape's and its element storage's. `each` is called with every String key of every
-   link, receiver first, and answers nonzero to stop. Symbols are passed over: no String key equals one.
-   Answers JS_CHAIN_KEYS_ALL when every link was read so and `each` never stopped, JS_CHAIN_KEYS_STOPPED when
-   `each` stopped, and JS_CHAIN_KEYS_COMPOSED at the first link whose keys are not its storage: a Proxy, or a
-   class composing [[GetOwnProperty]], [[Get]], [[HasProperty]], its own key list or its prototype in a hook (a
-   named or indexed property, a String exotic object's indices, a module namespace's exports). Runs no page code
-   and allocates nothing; every key visited is retired as one unit of the running flow's work. */
-int JS_ForEachChainKey(JSContext *ctx, JSValueConst obj, int (*each)(JSContext *ctx, JSAtom key, void *opaque),
-                       void *opaque)
+/* How js_key_domain_walk ended (its definition states each). */
+enum { JS_CHAIN_KEYS_ALL = 1, JS_CHAIN_KEYS_STOPPED = 0, JS_CHAIN_KEYS_COMPOSED = -1, JS_CHAIN_KEYS_STEP = 2 };
+
+/* Whether a String key `p` holds in its own storage (shape and element storage) lies in the domain of the unknown
+   `key` (JSConcolicHooks.key_domain_holds). Symbols are passed over: no String key equals one. Each key visited
+   adds one to `*visited`. */
+static bool js_storage_key_in_domain(JSContext *ctx, JSObject *p, JSValueConst key, uint64_t *visited)
+{
+    JSRuntime *rt = ctx->rt;
+    JSShapeProperty *prs;
+    uint32_t i;
+    char ibuf[16];
+
+    for (i = 0, prs = get_shape_prop(p->shape); i < (uint32_t)p->shape->prop_count; i++, prs++) {
+        JSAtom a = prs->atom;
+        size_t n;
+        const char *s;
+        bool in;
+
+        if (a == JS_ATOM_NULL) continue;
+        if (!__JS_AtomIsTaggedInt(a) && rt->atom_array[a]->atom_type != JS_ATOM_TYPE_STRING) continue;
+        (*visited)++;
+        s = JS_AtomToCStringLen(ctx, &n, a);
+        CHECK(s != NULL, "quickjs: OOM spelling a chain key against an unknown key's domain");
+        in = g_concolic.key_domain_holds(ctx, key, s, n);
+        JS_FreeCString(ctx, s);
+        if (in) return true;
+    }
+    if (p->fast_array)
+        for (i = 0; i < p->u.array.count; i++) {
+            int n = snprintf(ibuf, sizeof ibuf, "%u", i);
+
+            (*visited)++;
+            if (g_concolic.key_domain_holds(ctx, key, ibuf, (size_t)n)) return true;
+        }
+    return false;
+}
+
+/* ECMAScript §10.1.8.1 OrdinaryGet ( O, P, Receiver ) for an unknown String key P, asked of P's domain rather
+   than of one key: each link's [[GetOwnProperty]] and then its [[GetPrototypeOf]], from `*plink` on. A link
+   whose both methods are ordinary answers from its storage; a class composing its keys answers through
+   JSClassExoticMethods.key_domain or key_domain_step. Answers JS_CHAIN_KEYS_ALL when no link answers a key in
+   the domain (the read misses in every world), JS_CHAIN_KEYS_STOPPED when one does, JS_CHAIN_KEYS_COMPOSED at a
+   link whose keys no domain answer states (a Proxy, any other composing class), and JS_CHAIN_KEYS_STEP with
+   `*plink` the link whose step answers next, its storage already read. Runs no page code; every storage key
+   visited is retired as one unit of the running flow's work.
+   Named residual. Not covered: a class composing its keys that declares neither hook (a form's named controls,
+   Storage, a String object, a DOMStringMap). Next diff builds: key_domain_step over the form's named walk and
+   key_domain over Storage's keys. Absence shows as an expando-shaped read on a form or on localStorage keeping
+   its hit arm while the same read on a div does not. */
+static int js_key_domain_walk(JSContext *ctx, JSObject **plink, JSValueConst key)
 {
     JSRuntime *rt = ctx->rt;
     JSObject *p;
     uint64_t visited = 0;
     int r = JS_CHAIN_KEYS_ALL;
 
-    DCHECK(each != NULL && JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT,
-           "a chain's keys were asked of something that is not an object, or with no reader to hand them to");
-    for (p = JS_VALUE_GET_OBJ(obj); p != NULL && r == JS_CHAIN_KEYS_ALL; p = p->shape->proto) {
+    DCHECK(g_concolic.key_domain_holds != NULL && g_concolic.key_domain_stated(ctx, key),
+           "an unknown key's domain walk ran over a key whose facets state no domain");
+    for (p = *plink; p != NULL; p = js_walk_proto(ctx, p)) {
         const JSClassExoticMethods *em = rt->class_array[p->class_id].exotic;
-        JSShapeProperty *prs;
-        uint32_t i;
+        JSValueConst stand = JS_UNINITIALIZED;
+        int h;
 
-        if (p->class_id == JS_CLASS_PROXY ||
-            (em && (em->get_own_property || em->get_own_property_step || em->get_own_property_names ||
-                    em->get_property || em->has_property || em->get_prototype))) {
+        if (p->class_id == JS_CLASS_PROXY) { r = JS_CHAIN_KEYS_COMPOSED; break; }
+        if (js_storage_key_in_domain(ctx, p, key, &visited)) { r = JS_CHAIN_KEYS_STOPPED; break; }
+        if (!em || !(em->get_own_property || em->get_own_property_step || em->get_own_property_names ||
+                     em->get_property || em->has_property || em->get_prototype))
+            continue;
+        if (em->get_property || em->has_property || (em->get_prototype && !em->get_prototype_walkable)) {
             r = JS_CHAIN_KEYS_COMPOSED;
             break;
         }
-        for (i = 0, prs = get_shape_prop(p->shape); i < (uint32_t)p->shape->prop_count && r == JS_CHAIN_KEYS_ALL;
-             i++, prs++) {
-            JSAtom a = prs->atom;
+        DCHECK(!(em->key_domain && em->key_domain_step),
+               "a class answers an unknown key's domain both in place and by a step");
+        if (em->key_domain_step) { *plink = p; r = JS_CHAIN_KEYS_STEP; break; }
+        if (!em->key_domain) { r = JS_CHAIN_KEYS_COMPOSED; break; }
+        h = em->key_domain(ctx, JS_MKPTR(JS_TAG_OBJECT, p), key, &stand);
+        if (h < 0) { r = JS_CHAIN_KEYS_COMPOSED; break; }
+        if (h > 0) { r = JS_CHAIN_KEYS_STOPPED; break; }
+        if (!JS_IsUninitialized(stand)) {
+            JSObject *sp = JS_VALUE_GET_OBJ(stand);
 
-            if (a == JS_ATOM_NULL) continue;
-            if (!__JS_AtomIsTaggedInt(a) && rt->atom_array[a]->atom_type != JS_ATOM_TYPE_STRING) continue;
-            visited++;
-            if (each(ctx, a, opaque)) r = JS_CHAIN_KEYS_STOPPED;
+            DCHECK(JS_VALUE_GET_TAG(stand) == JS_TAG_OBJECT && sp->class_id != JS_CLASS_PROXY,
+                   "a class's domain answer stands for something that is not an object read from storage");
+            if (js_storage_key_in_domain(ctx, sp, key, &visited)) { r = JS_CHAIN_KEYS_STOPPED; break; }
         }
-        if (p->fast_array)
-            for (i = 0; i < p->u.array.count && r == JS_CHAIN_KEYS_ALL; i++) {
-                DCHECK(i <= JS_ATOM_MAX_INT, "an element index outside the tagged-integer atom space");
-                visited++;
-                if (each(ctx, __JS_AtomFromUInt32(i), opaque)) r = JS_CHAIN_KEYS_STOPPED;
-            }
     }
     JS_FlowRetireWork(visited);
     return r;
@@ -29968,6 +30009,11 @@ CONT_RECORD_DEFINE(JSGetProp, js_getprop, JS_GETPROP_FIELDS)
 #define GP_DELETE 3   /* step code 9. copyWithin removes the target index when the source one is absent, which is
                          the page's `deleteProperty` trap on a Proxy — the same shape as has/get/set, differing
                          only in the trap name, the invariant and the absent result. */
+#define GP_KEYDOMAIN 11 /* §10.1.8.1 OrdinaryGet for an unknown String key, asked of the key's domain: `val` is the
+                         key, `recv` the base the read was written on, `atom` JS_ATOM_NULL. Issued only by the
+                         indexed-read opcode, never by a step machine; a class's step answers op 3
+                         (JSClassExoticMethods.key_domain_step). Its answer is undefined where no link answers a
+                         key in the domain, and JSConcolicHooks.key_read's unknown otherwise. */
 
 /* 10.5.11 steps 8-22 applied to the trap's result, then CreateArrayFromList over the validated keys — the
    answer GP_OWNKEYS delivers. CONSUMES prop_array. */
@@ -42486,7 +42532,47 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    and counted the extra `set`. JS_UNINITIALIZED = not a trapless proxy (JS_UNDEFINED is a real
                    target). */
                 JSValueConst gp_fwd = JS_UNINITIALIZED;
-                if (JS_VALUE_GET_TAG(gp_obj) == JS_TAG_OBJECT) {
+                if (gp_op == GP_KEYDOMAIN) {
+                    /* The walk from this link: a miss or an answer in place completes the read; a link whose
+                       class answers by a step is asked below as a step [[GetOwnProperty]] is, in a fresh
+                       record naming that link, and its delivery walks on from the link's prototype. */
+                    JSObject *klink = JS_VALUE_GET_OBJ(gp_obj);
+                    int kw;
+
+                    DCHECK(JS_VALUE_GET_TAG(gp_obj) == JS_TAG_OBJECT && g_concolic.is(gp_val)
+                           && gp_atom == JS_ATOM_NULL && gp_outer != NULL,
+                           "an unknown key's domain read reached the keyed entry with no Object link, no unknown "
+                           "key or no requester");
+                    kw = js_key_domain_walk(ctx, &klink, gp_val);
+                    if (kw == JS_CHAIN_KEYS_ALL) {
+                        g_concolic.key_domain_missed(ctx, gp_val);
+                        ret_val = JS_UNDEFINED;
+                        goto do_getprop_complete;
+                    }
+                    if (kw != JS_CHAIN_KEYS_STEP) {
+                        ret_val = g_concolic.key_read(ctx, gp_recv_r, gp_val);
+                        DCHECK(!JS_IsUninitialized(ret_val), "key_read refused an unknown key it was handed");
+                        if (unlikely(JS_IsException(ret_val))) goto getprop_throw;
+                        goto do_getprop_complete;
+                    }
+                    {
+                        JSTrapGet *ktg = js_mallocz(ctx, sizeof(*ktg));
+                        if (unlikely(!ktg)) { JS_ThrowOutOfMemory(ctx); goto getprop_throw; }
+                        CONT_OWN_SET(ctx, &ktg->obj, JS_MKPTR(JS_TAG_OBJECT, klink));
+                        CONT_OWN_SET(ctx, &ktg->val, gp_val);
+                        CONT_OWN_SET(ctx, &ktg->recv, gp_recv_r);
+                        CONT_OWN_MOVE(&ktg->method, JS_UNINITIALIZED);
+                        ktg->outer = gp_outer; ktg->outer_kind = gp_outer_kind;
+                        CONT_OWN_MOVE(&ktg->getter, JS_UNDEFINED);
+                        CONT_OWN_MOVE(&ktg->setter, JS_UNDEFINED);
+                        ktg->op = GP_KEYDOMAIN;
+                        /* the registers borrowed from a parked record until here; the fresh one holds them now */
+                        if (gp_trapst) js_trapget_free(ctx, gp_trapst);
+                        gp_trapst = ktg;
+                        gp_obj = ktg->obj; gp_val = ktg->val; gp_recv_r = ktg->recv;
+                        step_gop = true;
+                    }
+                } else if (JS_VALUE_GET_TAG(gp_obj) == JS_TAG_OBJECT) {
                     JSObject *po = JS_VALUE_GET_OBJ(gp_obj);
                     if (po->class_id == JS_CLASS_PROXY) {
                         JSProxyData *pd = JS_GetOpaque(gp_obj, JS_CLASS_PROXY);
@@ -42653,11 +42739,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        delivery either answers it or walks on to the prototype with its own operands. */
                     const JSClassExoticMethods *sem = rt->class_array[JS_VALUE_GET_OBJ(gp_obj)->class_id].exotic;
                     JSTrapGet *tg = gp_trapst;
-                    method = sem->get_own_property_step(ctx, gp_obj, gp_atom);
+                    method = gp_op == GP_KEYDOMAIN ? sem->key_domain_step(ctx, gp_obj)
+                                                   : sem->get_own_property_step(ctx, gp_obj, gp_atom);
                     DCHECK(JS_VALUE_GET_TAG(method) == JS_TAG_OBJECT,
                            "a step [[GetOwnProperty]] answered a function to the walk and not to the call one ask "
                            "later, with nothing run between");
-                    keyval = JS_AtomToValue(ctx, gp_atom);
+                    keyval = gp_op == GP_KEYDOMAIN ? js_dup(gp_val) : JS_AtomToValue(ctx, gp_atom);
                     if (JS_IsException(keyval)) { JS_FreeValue(ctx, method); goto getprop_throw; }
                     if (!tg) {
                         tg = js_mallocz(ctx, sizeof(*tg));
@@ -43163,7 +43250,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     } else if (gp_op == GP_OWNKEYS || gp_op == GP_GETPROTO
                         || gp_op == GP_ISEXT || gp_op == GP_PREVEXT) {
                         gp->nargs = 1;   /* ownKeys / getPrototypeOf / isExtensible / preventExtensions (target) */
-                    } else if (gp_op == GP_HAS || gp_op == GP_DELETE || gp_op == GP_GETOWNPROP) {
+                    } else if (gp_op == GP_HAS || gp_op == GP_DELETE || gp_op == GP_GETOWNPROP
+                               || gp_op == GP_KEYDOMAIN) {
                         gp->nargs = 2;   /* has / deleteProperty / getOwnPropertyDescriptor (target, key) */
                     } else if (gp_op == GP_DEFINE) {
                         /* defineProperty(target, key, descriptor). FromPropertyDescriptor builds the descriptor
@@ -43187,7 +43275,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         gp->cb[2] = js_dup(gp->cb[0]);
                         if (gp_op == GP_SET) { JS_FreeValue(ctx, gp->cb[4]); JS_FreeValue(ctx, gp->cb[5]); }
                         if (gp_op != GP_GET) gp->cb[4] = JS_UNDEFINED;
-                        gp->cb[5] = js_int32(gp_op == GP_GET ? 0 : gp_op == GP_HAS ? 1 : 2);
+                        gp->cb[5] = js_int32(gp_op == GP_GET ? 0 : gp_op == GP_HAS ? 1 : gp_op == GP_KEYDOMAIN ? 3 : 2);
                         gp->nargs = 4;
                     }
                 }
@@ -47294,12 +47382,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            answer, and a miss walks on to the object's prototype with the operation's own operands
                            and receiver (§10.1.8.1 OrdinaryGet step 2, §10.1.7.1 OrdinaryHasProperty step 4). */
                         JSTrapGet *tg = gouter;
-                        bool ghit = tg->op == GP_HAS ? JS_ToBool(ctx, ret_val) : !JS_IsUndefined(ret_val);
+                        bool ghit = tg->op == GP_HAS || tg->op == GP_KEYDOMAIN ? JS_ToBool(ctx, ret_val)
+                                                                               : !JS_IsUndefined(ret_val);
                         JSObject *gproto = js_walk_proto(ctx, JS_VALUE_GET_OBJ(tg->obj));
 
-                        DCHECK(tg->op == GP_GET || tg->op == GP_HAS || tg->op == GP_GETOWNPROP || tg->op == GP_SET,
+                        DCHECK(tg->op == GP_GET || tg->op == GP_HAS || tg->op == GP_GETOWNPROP || tg->op == GP_SET
+                               || tg->op == GP_KEYDOMAIN,
                                "a step [[GetOwnProperty]] answered an operation other than [[Get]], "
-                               "[[HasProperty]], [[GetOwnProperty]] or [[Set]]");
+                               "[[HasProperty]], [[GetOwnProperty]], [[Set]] or an unknown key's domain read");
+                        DCHECK(tg->op != GP_KEYDOMAIN || JS_IsBool(ret_val),
+                               "a class's domain step answered something other than true or false");
                         js_getprop_free(ctx, gp);
                         tg->gop_step = 0;
                         gp_obj = tg->obj; gp_atom = tg->atom; gp_op = tg->op; gp_val = tg->val;
@@ -47352,6 +47444,20 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             js_trapget_free(ctx, gp_trapst); gp_trapst = NULL;
                             cont_st = sr;
                             goto do_set_recv_step;
+                        }
+                        if (tg->op == GP_KEYDOMAIN && (ghit || !gproto)) {
+                            /* a supported name lies in the domain: the read is the key's unknown; past the chain's
+                               end no link answered one, and the read misses in every world */
+                            JS_FreeValue(ctx, ret_val);
+                            if (ghit) {
+                                ret_val = g_concolic.key_read(ctx, gp_recv, gp_val);
+                                DCHECK(!JS_IsUninitialized(ret_val), "key_read refused an unknown key it was handed");
+                                if (unlikely(JS_IsException(ret_val))) goto getprop_throw;
+                            } else {
+                                g_concolic.key_domain_missed(ctx, gp_val);
+                                ret_val = JS_UNDEFINED;
+                            }
+                            goto do_getprop_complete;
                         }
                         if (ghit || !gproto) {
                             if (tg->op == GP_HAS) { JS_FreeValue(ctx, ret_val); ret_val = js_bool(ghit); }
@@ -50578,6 +50684,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 }
                             }
                         }
+                    }
+                    /* An Object base and a key stating a String domain: OrdinaryGet over the chain asked of the
+                       domain, on the keyed entry, since a link's answer may be a walk that rests. */
+                    if (JS_IsUninitialized(kv) && JS_VALUE_GET_TAG(sp[-2]) == JS_TAG_OBJECT
+                        && g_concolic.key_domain_stated && g_concolic.key_domain_stated(ctx, sp[-1])) {
+                        JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
+                        if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
+                        ok->pop = 2; ok->push = 1; ok->op = (uint8_t)opcode;
+                        gp_obj = sp[-2]; gp_atom = JS_ATOM_NULL; gp_op = GP_KEYDOMAIN; gp_val = sp[-1];
+                        gp_recv = sp[-2]; gp_no_throw = 0;
+                        gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
+                        goto do_getprop_tramp;
                     }
                     if (JS_IsUninitialized(kv))
                         kv = g_concolic.key_read(ctx, sp[-2], sp[-1]);

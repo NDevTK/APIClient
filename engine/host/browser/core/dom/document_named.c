@@ -25,6 +25,7 @@
 #include "core/idl_args.h"
 #include "core/agent_state.h"
 #include "quickjs-step.h"
+#include "solver/concolic.h"
 
 enum { DN_NONE = 0, DN_EMBED, DN_FORM, DN_IFRAME, DN_IMG, DN_OBJECT };
 
@@ -59,27 +60,50 @@ static bool dn_eq(const lxb_char_t *v, size_t vl, const char *name, size_t n)
     return v && vl == n && memcmp(v, name, n) == 0;
 }
 
-bool document_named_element_is(lxb_dom_element_t *el, const char *name, size_t n)
+/* The non-empty names §3.1.7 makes `el` a named element with, into `v`/`len`: an embed, form, iframe, img or
+   object by its name content attribute, an object by its id, and an img by its id where its name is non-empty.
+   Answers how many (at most two). */
+static int dn_names(lxb_dom_element_t *el, const lxb_char_t *v[2], size_t len[2])
 {
     size_t nl = 0, il = 0;
     const lxb_char_t *nv, *iv;
-    int t;
+    int t = dn_type(el), k = 0;
 
-    if (!n) return false;                       /* "if name is not the empty string" */
-    t = dn_type(el);
-    if (t == DN_NONE) return false;
+    if (t == DN_NONE) return 0;
     nv = dn_attr(el, "name", &nl);
-    if (dn_eq(nv, nl, name, n)) return true;    /* embed, form, iframe, img or object, by its name attribute */
-    if (t != DN_OBJECT && t != DN_IMG) return false;
+    if (nv && nl > 0) { v[k] = nv; len[k++] = nl; }
+    if (t != DN_OBJECT && t != DN_IMG) return k;
     iv = dn_attr(el, "id", &il);
-    if (!dn_eq(iv, il, name, n)) return false;
-    return t == DN_OBJECT || (nv && nl > 0);    /* an object by its id; an img by its id with a non-empty name */
+    if (iv && il > 0 && (t == DN_OBJECT || (nv && nl > 0))) { v[k] = iv; len[k++] = il; }
+    return k;
+}
+
+bool document_named_element_is(lxb_dom_element_t *el, const char *name, size_t n)
+{
+    const lxb_char_t *v[2];
+    size_t len[2];
+    int k = dn_names(el, v, len);
+
+    for (int i = 0; i < k; i++)                 /* "if name is not the empty string": every name is non-empty */
+        if (dn_eq(v[i], len[i], name, n)) return true;
+    return false;
 }
 
 static bool dn_is(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n, const void *ud)
 {
     (void)ctx; (void)ud;
     return document_named_element_is(el, name, n);
+}
+
+/* Whether `el` is a named element with a name in the domain of the unknown key `*ud`. */
+static bool dn_in_domain(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n, const void *ud)
+{
+    const lxb_char_t *v[2];
+    size_t len[2];
+    int k = dn_names(el, v, len);
+
+    (void)name; (void)n;
+    return named_walk_names_in_domain(ctx, el, v, len, k, dn_is, NULL, *(const JSValueConst *)ud);
 }
 
 /* The Document node a Document wrapper stands for. */
@@ -187,6 +211,45 @@ static int dn_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 
 static const IdlStepDecl DN_DECL = { dn_step, sizeof(NamedWalk), dn_walk_visit, NULL, DN_ALGORITHM, DN_STEPS };
 
+/* ---- whether a supported name lies in an unknown key's domain, as a step machine ----------------------------
+   §3.1.7's supported property names asked of a domain rather than of one name: the same named elements, walked
+   in tree order one per entry, answering true at the first whose name lies in the domain. */
+#define DND_ALGORITHM "HTML §3.1.7 DOM tree accessors: a Document's supported property names in an unknown key's domain"
+#define DND_STAGES(X) X(DND_WALK, DND_ALGORITHM)
+enum { IDL_STEP_STAGE_BASE(DND_STAGES) DND_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DND_STEPS[] = { DND_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static int g_id_dn_domain_step = -1;
+
+/* f(obj, key, undefined, 3), the keyed entry's GP_KEYDOMAIN ask (JSClassExoticMethods.key_domain_step). */
+static int dn_domain_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv, JSValue cb_result,
+                          JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NamedWalk *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == DND_WALK && argc == 4 && concolic_key_domain_stated(ctx, argv[1]) &&
+               JS_VALUE_GET_TAG(argv[3]) == JS_TAG_INT && JS_VALUE_GET_INT(argv[3]) == 3,
+           "the Document named-name domain step was called with a shape the keyed entry does not issue");
+    if (named_walk_next(ctx, s, dn_document(argv[0]), dn_in_domain, NULL, 0, &argv[1]) && s->count == 0)
+        return JS_STEP_YIELD;
+    *presult = JS_NewBool(ctx, s->count > 0);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl DND_DECL = {
+    dn_domain_step, sizeof(NamedWalk), dn_walk_visit, NULL, DND_ALGORITHM, DND_STEPS
+};
+
+/* JSClassExoticMethods.key_domain_step. Owned. */
+static JSValue dn_key_domain_step(JSContext *ctx, JSValueConst obj)
+{
+    (void)obj;
+    DCHECK(g_id_dn_domain_step >= 0, "a Document's domain step was asked before document_named_init declared it");
+    return idl_step_function(ctx, "Document supported names in a key domain", g_id_dn_domain_step);
+}
+
 /* JSClassExoticMethods.get_own_property_step: the walk for a String key, JS_UNDEFINED for a Symbol. Owned. */
 static JSValue dn_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
@@ -204,14 +267,18 @@ void document_named_init(JSContext *ctx)
 {
     static const IdlArgType ARGS[4] = { IDL_ANY, IDL_ANY, IDL_ANY, IDL_ANY };
 
-    DCHECK(g_id_dn_step < 0, "document_named_init ran twice");
+    DCHECK(g_id_dn_step < 0 && g_id_dn_domain_step < 0, "document_named_init ran twice");
     g_id_dn_step = idl_method_id_step(ctx, ARGS, 4, NULL, 0, &DN_DECL, 0);
     agent_state_id("document", &g_id_dn_step, "HTML §3.1.7 the Document's named-access step declaration");
+    g_id_dn_domain_step = idl_method_id_step(ctx, ARGS, 4, NULL, 0, &DND_DECL, 0);
+    agent_state_id("document", &g_id_dn_domain_step,
+                   "HTML §3.1.7 the Document's supported-names-in-a-key-domain step declaration");
 }
 
 void document_named_free(void)
 {
     g_id_dn_step = -1;
+    g_id_dn_domain_step = -1;
     agent_state_reached("document");
 }
 
@@ -342,6 +409,7 @@ static const JSClassExoticMethods DOCUMENT_NAMED_EXOTIC = {
     .get_own_property = dn_get_own,
     .get_own_property_step = dn_get_own_step,
     .get_own_property_step_flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE,
+    .key_domain_step = dn_key_domain_step,
     .set_ignores_named_properties = true,
     .get_own_property_names = dn_own_names,
     .define_own_property = dn_define_own,

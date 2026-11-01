@@ -33,4 +33,14 @@ lxb_dom_node_t *named_walk_successor(lxb_dom_node_t *n, lxb_dom_node_t *root);
 bool named_walk_next(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *root, NamedWalkIs is, const char *name,
                      size_t n, const void *ud);
 
+/* Whether any of the `k` names a named-element rule gives `el` (`v[i]`, `len[i]` bytes) lies in the domain of the
+   unknown String key `key` (concolic_key_domain_holds). Every name is asserted to be one the rule's own lookup
+   `is` (with `ud`) answers for `el`, so the domain answer and the named lookup stay one fact; `file`/`line` are
+   the caller's. */
+bool named_walk_names_in_domain_at(JSContext *ctx, lxb_dom_element_t *el, const lxb_char_t *const v[],
+                                   const size_t len[], int k, NamedWalkIs is, const void *ud, JSValueConst key,
+                                   const char *file, int line);
+#define named_walk_names_in_domain(ctx, el, v, len, k, is, ud, key) \
+    named_walk_names_in_domain_at((ctx), (el), (v), (len), (k), (is), (ud), (key), __FILE__, __LINE__)
+
 #endif

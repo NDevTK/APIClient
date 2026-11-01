@@ -1041,6 +1041,16 @@ typedef struct JSClassExoticMethods {
     /* The JS_PROP_ C/W/E of the data descriptor op 2's hit is answered with (Web IDL §3.9.1's named-property
        descriptor). */
     int get_own_property_step_flags;
+    /* An unknown String key's [[Get]] (the keyed entry's GP_KEYDOMAIN) asks each link whether any key its
+       [[GetOwnProperty]] answers lies in the key's domain (JSConcolicHooks.key_domain_holds); a class whose keys
+       are not its storage answers by one of these two, or the read keeps both arms.
+       key_domain answers in place, running no page code and walking no tree: 1 a key it answers lies in the
+       domain, 0 none does, -1 the question decides nothing (the read keeps both arms). `*pstand` may be set to
+       the object whose storage this one's [[GetOwnProperty]] answers from (HTML §7.2.3.5's W), borrowed.
+       key_domain_step answers a step function f(obj, key, undefined, 3) whose answer is true or false, for a
+       class whose answer is a walk charged as work. Owned. */
+    int (*key_domain)(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst *pstand);
+    JSValue (*key_domain_step)(JSContext *ctx, JSValueConst obj);
     /* Whether [[Set]] passes over this class's get_own_property and get_own_property_step: Web IDL §3.9.2 [[Set]]
        step 2 takes a legacy platform object's ownDesc from LegacyPlatformObjectGetOwnProperty(O, P, true), its
        named properties ignored, so a class whose hooks answer only named properties declares it. */
@@ -1646,12 +1656,6 @@ JS_EXTERN int JS_GetOwnSlotDesc(JSContext *ctx, JSPropertyDescriptor *pd, JSValu
 /* Whether `obj`'s class composes [[GetOwnProperty]] in an exotic hook (a Proxy's trap excepted): the population
    whose hook the read above never asks. */
 JS_EXTERN bool JS_ClassComposesOwnProperty(JSContext *ctx, JSValueConst obj);
-/* Every String key an ordinary [[Get]] of `obj` can reach, from each link's own storage, receiver first, handed to
-   `each` until it answers nonzero. Answers which of three walks happened (the definition states each); a key
-   `each` is handed is borrowed for the call. Runs no page code, and retires one unit of work per key. */
-enum { JS_CHAIN_KEYS_ALL = 1, JS_CHAIN_KEYS_STOPPED = 0, JS_CHAIN_KEYS_COMPOSED = -1 };
-JS_EXTERN int JS_ForEachChainKey(JSContext *ctx, JSValueConst obj,
-                                 int (*each)(JSContext *ctx, JSAtom key, void *opaque), void *opaque);
 /* Its VALUE projection, for a component reading a slot IT created (an idl_slots record, a listener map, a key
    path's next step). An accessor is refused on this side — a component's own internal slot is one nothing else
    can define, so an accessor there says the read landed on an object that is not the one it named.
@@ -2908,6 +2912,13 @@ typedef struct JSConcolicHooks {
        the read yields a concolic derived from the base and the key's source, or `undefined` where the key's
        known prefix misses a primitive's whole chain. JS_UNINITIALIZED = not concolic. */
     JSValue (*key_read)(JSContext *ctx, JSValueConst obj, JSValueConst key);
+    /* Whether the unknown `key` states a String key domain (its leading bytes before the first hole and a length
+       bound), which lets an Object base's [[Get]] be decided over its chain's keys (GP_KEYDOMAIN). */
+    bool (*key_domain_stated)(JSContext *ctx, JSValueConst key);
+    /* Whether the String `s` (`n` bytes, WTF-8) lies in the domain `key` states. */
+    bool (*key_domain_holds)(JSContext *ctx, JSValueConst key, const char *s, size_t n);
+    /* Called where GP_KEYDOMAIN decides OrdinaryGet's miss; asserts the domain is the one `key`'s facets state. */
+    void (*key_domain_missed)(JSContext *ctx, JSValueConst key);
     /* THE NAME an unknown key denotes, as a REAL string — the concolic's own shape. A property key must be an
        atom, which a concolic cannot be, but the shape IS a string and it is stable per source: two writes
        through the same unknown source land in the SAME slot, two different sources in different ones, and a

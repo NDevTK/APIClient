@@ -14595,8 +14595,8 @@ TF_UNIT void probes_pagewrite(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the `keydomain` document: an unknown String key whose domain no key of the object's chain lies in
-   reads as OrdinaryGet's miss (solver/concolic.c's object_chain_misses_domain), and one whose domain a chain key
-   lies in keeps both arms. */
+   reads as OrdinaryGet's miss (quickjs.c's GP_KEYDOMAIN, Document and WindowProperties answering by a resting
+   walk), and one whose domain a chain key or a supported name lies in keeps both arms. */
 TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
     const char *miss_why = NULL, *keep_why = NULL;
     int miss_tt = 1, keep_tt = 1;
@@ -14614,12 +14614,31 @@ TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
     fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a2\""),
              "a /api/kd-a2 record exists: an element, whose chain is read from storage, took an arm where the "
              "unknown key hit");
+    fold_row(&miss_tt, &miss_why,
+             emitted_record_has(js, "/api/kd-b6", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/kd-b7", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/kd-b11", "\"door\":\"fetch\""),
+             "NOT REACHED: no /api/kd-b6, kd-b7 or kd-b11 record, so the document and window reads did not finish");
+    fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a6\"") && !strstr(js, "\"/api/kd-a11\""),
+             "a /api/kd-a6 or kd-a11 record exists: a Document none of whose supported names or chain keys lies in "
+             "the unknown key's domain took an arm where it hit");
+    fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a7\""),
+             "a /api/kd-a7 record exists: a WindowProxy none of whose Window's keys, named properties or chain "
+             "keys lies in the unknown key's domain took an arm where it hit");
     /* The read's answer holds no example, so neither arm is the one this run observed and both grade derived. */
     fold_row(&keep_tt, &keep_why,
              emitted_record_has(js, "/api/kd-a4", "\"door\":\"fetch\"") &&
                  emitted_record_has(js, "/api/kd-a5", "\"door\":\"fetch\""),
              "an object holding a key the domain contains (`kdNear`), or a name spent on another unknown key, read "
              "as a miss: its hit arm is gone");
+    fold_row(&keep_tt, &keep_why,
+             emitted_record_has(js, "/api/kd-a8", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/kd-a9", "\"door\":\"fetch\""),
+             "an `img` whose name lies in the unknown key's domain did not keep the hit arm of the Document's or "
+             "the WindowProxy's read");
+    fold_row(&keep_tt, &keep_why, emitted_record_has(js, "/api/kd-a10", "\"door\":\"fetch\""),
+             "a global whose name lies in the unknown key's domain did not keep the hit arm of the WindowProxy's "
+             "read");
     const Probe rows[] = {
         { "keydomain-miss", miss_tt, "kdKey", SESS_EXPLORE, miss_why },
         { "keydomain-kept", keep_tt, "kdKey", SESS_EXPLORE, keep_why },

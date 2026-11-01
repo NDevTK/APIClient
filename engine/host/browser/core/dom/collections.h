@@ -67,6 +67,9 @@ JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name);
 /* Whether `el` is one of HTML §7.2.2.3's named elements with the name `name` (`nlen` bytes): the filter of the
    collection above, which the Window's resting named walk (core/dom/named_walk.h) asks per element. */
 bool collections_window_named_is(lxb_dom_element_t *el, const char *name, size_t nlen);
+/* The names that filter makes `el` a named element with, into `v`/`len` (at most two: its ID, then its name
+   content attribute where its kind takes one); the filter is membership in them. Answers how many. */
+int collections_window_named_names(lxb_dom_element_t *el, const lxb_char_t *v[2], size_t len[2]);
 /* HTML §3.1.7 "DOM tree accessors"' value of a named property shared by several elements: "an HTMLCollection
    rooted at the Document node, whose filter matches only named elements with the name name". */
 JSValue collections_document_named(JSContext *ctx, JSValueConst owner, const char *name);

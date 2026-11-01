@@ -3,6 +3,7 @@
 
 #include "check.h"
 #include "core/timing/thread_work.h"
+#include "solver/concolic.h"
 
 lxb_dom_node_t *named_walk_successor(lxb_dom_node_t *n, lxb_dom_node_t *root)
 {
@@ -31,4 +32,19 @@ bool named_walk_next(JSContext *ctx, NamedWalk *w, lxb_dom_node_t *root, NamedWa
         w->count++;
     }
     return w->count < 2;
+}
+
+bool named_walk_names_in_domain_at(JSContext *ctx, lxb_dom_element_t *el, const lxb_char_t *const v[],
+                                   const size_t len[], int k, NamedWalkIs is, const void *ud, JSValueConst key,
+                                   const char *file, int line)
+{
+    DCHECK(el != NULL && is != NULL && k >= 0 && k <= 2, "a named-name domain test was handed no element or rule");
+    for (int i = 0; i < k; i++) {
+        DCHECKF(is(ctx, el, (const char *)v[i], len[i], ud),
+                "%s:%d: a name the rule's names list gives an element is not one its named lookup answers for it, "
+                "so the domain answer and the [[Get]] it stands for are two facts", file, line);
+        if (concolic_key_domain_holds(ctx, key, (const char *)v[i], len[i])) return true;
+    }
+    (void)file; (void)line;
+    return false;
 }

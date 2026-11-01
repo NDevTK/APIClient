@@ -795,8 +795,21 @@ static int win_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, 
  * and `Object.isExtensible(window)` is then false, while `Object.freeze(frames[0])` throws a TypeError and
  * `Object.isExtensible(frames[0])` stays true — one page, two answers, split exactly along which of the two
  * objects a browser would have handed the page. */
+/* Whether a supported index (§7.2.2.2, the child navigables) lies in the domain of the unknown String key `key`
+   (JSClassExoticMethods.key_domain). The Window's other own keys are its storage, which the walk reads. */
+static int win_key_domain(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst *pstand)
+{
+    char ibuf[16];
+
+    (void)obj; (void)pstand;
+    for (int i = 0, n = iframe_child_navigable_count(ctx); i < n; i++)
+        if (concolic_key_domain_holds(ctx, key, ibuf, (size_t)snprintf(ibuf, sizeof ibuf, "%d", i))) return 1;
+    return 0;
+}
+
 static const JSClassExoticMethods WINDOW_EXOTIC = {
     .get_own_property = win_get_own,
+    .key_domain = win_key_domain,
     .get_own_property_names = win_own_names,
     .delete_property = win_delete,
     .define_own_property = win_define_own,
@@ -1121,6 +1134,92 @@ static const IdlStepDecl WN_DECL = {
     win_named_step, sizeof(WinNamedState), win_named_visit, NULL, WIN_NAMED_ALGORITHM, WN_STEPS
 };
 
+/* ---- whether a supported name lies in an unknown key's domain, as a step machine ----------------------------
+   §7.2.2.3's supported property names asked of a domain rather than of one name: a child navigable's target
+   name, or a named element's name, walked in tree order one per entry. A connected region of unknown markup may
+   name anything, so it answers true; no name list is built ([[OwnPropertyKeys]] is not what is asked). */
+#define WND_ALGORITHM "HTML §7.2.2.3 Named access on the Window object: supported property names in an unknown key's domain"
+#define WND_STAGES(X) X(WND_WALK, WND_ALGORITHM)
+enum { IDL_STEP_STAGE_BASE(WND_STAGES) WND_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const WND_STEPS[] = { WND_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static int g_id_named_domain_step = -1;
+
+/* `walk` is the tree walk's resume point; `asked` is whether the navigables and regions were asked at entry. */
+typedef struct {
+    NamedWalk walk;
+    uint8_t asked;
+} WinDomainState;
+
+static void win_domain_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;
+}
+
+/* Whether `el` is a named element with a name in the domain of the unknown key `*ud`. */
+static bool win_named_in_domain(JSContext *ctx, lxb_dom_element_t *el, const char *name, size_t n, const void *ud)
+{
+    const lxb_char_t *v[2];
+    size_t len[2];
+    int k = collections_window_named_names(el, v, len);
+
+    (void)name; (void)n;
+    return named_walk_names_in_domain(ctx, el, v, len, k, win_named_is, NULL, *(const JSValueConst *)ud);
+}
+
+/* f(obj, key, undefined, 3), the keyed entry's GP_KEYDOMAIN ask (JSClassExoticMethods.key_domain_step). */
+static int win_named_domain_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    WinDomainState *s = st;
+    lxb_dom_node_t *root;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == WND_WALK && argc == 4 && concolic_key_domain_stated(ctx, argv[1]) &&
+               JS_VALUE_GET_TAG(argv[3]) == JS_TAG_INT && JS_VALUE_GET_INT(argv[3]) == 3,
+           "the named-name domain step was called with a shape the keyed entry does not issue");
+    if (!s->asked) {
+        s->asked = 1;
+        for (int i = 0, n = iframe_child_navigable_count(ctx); i < n; i++) {
+            JSValue nav = iframe_child_navigable(ctx, i);
+            const char *nm;
+            bool in;
+
+            if (JS_IsUndefined(nav)) continue;
+            nm = window_proxy_name(nav);
+            in = concolic_key_domain_holds(ctx, argv[1], nm, strlen(nm));
+            JS_FreeValue(ctx, nav);
+            if (in) { *presult = JS_TRUE; return JS_STEP_DONE; }
+        }
+        for (int r = 0, nreg = unknown_markup_count(ctx); r < nreg; r++) {
+            lxb_dom_node_t *rn;
+            JSValue m = unknown_markup_at(ctx, r, &rn);
+            bool connected = node_is_connected(rn);
+
+            JS_FreeValue(ctx, m);
+            if (connected) { *presult = JS_TRUE; return JS_STEP_DONE; }
+        }
+    }
+    root = document_root_node(ctx);
+    if (root && named_walk_next(ctx, &s->walk, root, win_named_in_domain, NULL, 0, &argv[1]) && s->walk.count == 0)
+        return JS_STEP_YIELD;
+    *presult = JS_NewBool(ctx, s->walk.count > 0);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl WND_DECL = {
+    win_named_domain_step, sizeof(WinDomainState), win_domain_visit, NULL, WND_ALGORITHM, WND_STEPS
+};
+
+/* JSClassExoticMethods.key_domain_step. Owned. */
+static JSValue win_named_key_domain_step(JSContext *ctx, JSValueConst obj)
+{
+    (void)obj;
+    DCHECK(g_id_named_domain_step >= 0, "named access's domain step was asked before window_init declared it");
+    return idl_step_function(ctx, "WindowProperties supported names in a key domain", g_id_named_domain_step);
+}
+
 /* JSClassExoticMethods.get_own_property_step: the step function for a String key, JS_UNDEFINED for a Symbol,
    which names no named property. Owned. */
 static JSValue win_named_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
@@ -1159,6 +1258,7 @@ static const JSClassExoticMethods WINDOW_PROPS_EXOTIC = {
     .get_own_property = win_named_get_own,
     .get_own_property_step = win_named_get_own_step,
     .get_own_property_step_flags = JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE,   /* [LegacyUnenumerableNamedProperties] */
+    .key_domain_step = win_named_key_domain_step,
     .prevent_extensions = win_named_prevent_extensions,
     /* The lookup is a walk of the document tree and a read of content attributes — no page code, by
        construction, which is what lets the engine's own accessor walks run it from C. */
@@ -1219,6 +1319,7 @@ void window_init(JSContext *ctx)
     {
         static const IdlArgType NAMED_ARGS[4] = { IDL_ANY, IDL_ANY, IDL_ANY, IDL_ANY };
         g_id_named_step = idl_method_id_step(ctx, NAMED_ARGS, 4, NULL, 0, &WN_DECL, 0);
+        g_id_named_domain_step = idl_method_id_step(ctx, NAMED_ARGS, 4, NULL, 0, &WND_DECL, 0);
     }
     concolic_set_markup_composer("window", win_named_markup);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
@@ -1262,6 +1363,8 @@ void window_init(JSContext *ctx)
                    "HTML §7.2.2.1 Opening and closing windows' `name` setter declaration");
     agent_state_id("window", &g_id_named_step,
                    "HTML §7.2.2.3 Named access on the Window object's step over regions of unknown markup");
+    agent_state_id("window", &g_id_named_domain_step,
+                   "HTML §7.2.2.3 Named access on the Window object's supported-names-in-a-key-domain step");
     agent_state_id("window", &g_id_status_set,
                    "HTML §7.2.2.5 Historical browser interface element APIs' `status` setter declaration");
     agent_state_id("window", &g_id_close,
@@ -1504,7 +1607,7 @@ void window_free(JSRuntime *rt)
        over, and the same consequence: a declaration is a registration in a runtime, so a carried index names an
        entry in a pool the next agent has not built, read by the first window_install that agent runs. Their
        pre-init value is -1 and not 0, because entry 0 is a real member (see the declarations above). */
-    g_id_opener_set = g_id_name_set = g_id_status_set = g_id_named_step = -1;
+    g_id_opener_set = g_id_name_set = g_id_status_set = g_id_named_step = g_id_named_domain_step = -1;
     concolic_undeclare_sources("window");   /* the named-access rows the composer's claim declared */
     concolic_set_markup_composer(NULL, NULL);
     g_id_close = g_id_stop = -1;

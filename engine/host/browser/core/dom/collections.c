@@ -209,21 +209,34 @@ static bool coll_ns_matches(const CollQuery *q, const lxb_dom_node_t *c)
    the navigable set split out of the element list. Absence shows as `window[n]` answering an element for a
    document whose only `n`-named thing is an `iframe` with no content navigable, or a namespaced or empty
    `name` attribute. */
-bool collections_window_named_is(lxb_dom_element_t *el, const char *name, size_t nlen)
+int collections_window_named_names(lxb_dom_element_t *el, const lxb_char_t *v[2], size_t len[2])
 {
     size_t vl = 0, qn = 0;
-    const lxb_char_t *v = element_id_bytes(el, &vl);
-    const lxb_char_t *q;
-    if (v && vl == nlen && memcmp(v, name, nlen) == 0) return true;
+    const lxb_char_t *q, *id = element_id_bytes(el, &vl);
+    int k = 0;
+
+    if (id) { v[k] = id; len[k++] = vl; }
     q = lxb_dom_element_qualified_name(el, &qn);
-    if (!q) return false;
+    if (!q) return k;
     if (!((qn == 5 && memcmp(q, "embed", 5) == 0) || (qn == 4 && memcmp(q, "form", 4) == 0) ||
           (qn == 3 && memcmp(q, "img", 3) == 0)   || (qn == 6 && memcmp(q, "object", 6) == 0) ||
           (qn == 6 && memcmp(q, "iframe", 6) == 0)))
-        return false;
+        return k;
     vl = 0;
-    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"name", 4, &vl);
-    return v && vl == nlen && memcmp(v, name, nlen) == 0;
+    q = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"name", 4, &vl);
+    if (q) { v[k] = q; len[k++] = vl; }
+    return k;
+}
+
+bool collections_window_named_is(lxb_dom_element_t *el, const char *name, size_t nlen)
+{
+    const lxb_char_t *v[2];
+    size_t len[2];
+    int k = collections_window_named_names(el, v, len);
+
+    for (int i = 0; i < k; i++)
+        if (len[i] == nlen && memcmp(v[i], name, nlen) == 0) return true;
+    return false;
 }
 
 static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
