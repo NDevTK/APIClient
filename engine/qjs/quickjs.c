@@ -17859,10 +17859,12 @@ static void js_free_desc(JSContext *ctx, JSPropertyDescriptor *desc)
 
    `recv_pending` is how a caller takes back 10.1.9.2 step 3 — the completion performed on the RECEIVER, whose
    two internal methods are the page's `getOwnPropertyDescriptor` and `defineProperty` traps when the receiver is
-   a Proxy. Set it to true and this returns having done nothing but the walk; the caller owns the completion and
-   has somewhere to run it (the keyed-operation entry, as CONT_SET_RECV). Passing NULL asserts the receiver
-   cannot be a Proxy, and the DCHECK at the tail holds every caller to that.
+   a Proxy, and a step when its class answers the key by one. Set it to true and this returns having done nothing
+   but the walk; the caller owns the completion and has somewhere to run it (the keyed-operation entry, as
+   CONT_SET_RECV). Passing NULL asserts the receiver is neither, and the DCHECK at the tail holds every caller to
+   that.
    */
+static bool tramp_step_exotic(JSContext *ctx, JSObject *p, JSAtom atom);
 static int JS_SetPropertyInternal2(JSContext *ctx, JSValueConst obj, JSAtom prop,
                                    JSValue val, JSValueConst this_obj, int flags,
                                    bool *recv_pending)
@@ -18100,11 +18102,13 @@ retry:
     // when plain property (not is_exotic/setter/etc.) to avoid
     // calling find_own_property() thrice?
     /* 10.1.9.2 STEP 3, on the Receiver. A Proxy receiver answers both of its internal methods with a trap, which
-       is the page's code and cannot run in this C activation — the caller that has a chain to run it on takes
-       the completion instead. Every other receiver class answers out of its own slots. */
-    if (unlikely(p->class_id == JS_CLASS_PROXY)) {
+       is the page's code, and a receiver whose class answers the key by a step (tramp_step_exotic) rests or forks;
+       neither runs in this C activation, so the caller that has a chain takes the completion instead. Every
+       other receiver class answers out of its own slots. */
+    if (unlikely(p->class_id == JS_CLASS_PROXY || tramp_step_exotic(ctx, p, prop))) {
         DCHECK(recv_pending,
-               "a [[Set]] completed step 3 on a PROXY receiver from C: route that call site through CONT_SET_RECV");
+               "a [[Set]] completed step 3 from C on a Proxy receiver or one whose [[GetOwnProperty]] answers by a "
+               "step: route that call site through CONT_SET_RECV");
         *recv_pending = true;
         JS_FreeValue(ctx, val);
         return false;   /* not the answer: the caller performs step 3 and produces one */
@@ -43008,6 +43012,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                       void *gouter0 = gp_outer;
                       gp_outer = NULL; gp_outer_kind = CONT_NONE; gp_atom = JS_ATOM_NULL;
                       gp_op = GP_GET; gp_val = JS_UNDEFINED;
+                      /* every request input the entry reads and resets, since a delivery that loaded them from
+                         its parked record (a step [[GetOwnProperty]]'s hit) completes without re-entering: a
+                         receiver left standing would be the next request's, which names none of its own. */
+                      gp_recv = JS_UNINITIALIZED; gp_no_throw = 0; gp_desc_out = NULL;
+                      gp_getter = gp_setter = JS_UNDEFINED;
+                      gp_dflags = JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE | JS_PROP_HAS_ENUMERABLE
+                                | JS_PROP_HAS_CONFIGURABLE | JS_PROP_C_W_E;
                       /* the operation just completed owns its trap read no longer; its operands were borrowed
                          from it and are done being read. */
                       if (gp_trapst) { js_trapget_free(ctx, gp_trapst); gp_trapst = NULL; }
