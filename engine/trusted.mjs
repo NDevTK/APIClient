@@ -1987,6 +1987,13 @@ async function main() {
      lines already take — two hundred-odd rows apiece, verbatim, per sample — and the alternative is the one
      this arm exists to refuse. A reader who wants only the last takes the last; a reader who wants none
      redirects stderr, and stdout is still the one document. */
+  /* The census of the sends instance `e`'s document made (lib/send-coalesce.js): sends, asks a record answered,
+     and identities. Said beside each @RESULT, so a run a backstop cuts still has the series, and at the end. */
+  const sayCoalesced = (e) => {
+    const c = ZONE.sendCoalesceCensus('engine:' + e.docId);
+    console.error(`[trusted] [${e.tag}] send coalescing for engine:${e.docId}: ` + (c === null
+      ? 'no send spoke as this document' : `sends=${c.sends} answers=${c.answers} identities=${c.identities}`));
+  };
   async function onLine(e, line) {
     if (line.startsWith('@RESULT ')) {
       const text = line.slice('@RESULT '.length);
@@ -2002,6 +2009,7 @@ async function main() {
       for (const x of ZONE.noveltyAbsorb(e.origin, doc._novelty, e.noveltyCounted).refused)
         console.error(`[trusted] [${e.tag}] a novelty line was refused (${x.reason}): ${x.line}`);
       console.error(`[trusted] [${e.tag}] @RESULT#${e.results} ${line}`);
+      sayCoalesced(e);
       return;
     }
     /* THE DENOMINATION THIS INSTANCE'S SLICE IS MEASURED IN, WHICH IS WHAT DECIDES WHETHER ANY NUMBER BELOW
@@ -2340,12 +2348,8 @@ async function main() {
     }
     e.live = false;
     e.held.clear();
-    /* The instance's document ended, and its recorded sends with it (lib/send-coalesce.js), read first: how
-       many sends its exploration made, how many asks a record answered, and how many identities it holds. */
-    const coalesced = ZONE.sendCoalesceCensus('engine:' + e.docId);
-    console.error(`[trusted] [${e.tag}] send coalescing for engine:${e.docId}: ` + (coalesced === null
-      ? 'no send spoke as this document'
-      : `sends=${coalesced.sends} answers=${coalesced.answers} identities=${coalesced.identities}`));
+    /* The instance's document ended, and its recorded sends with it (lib/send-coalesce.js), read first. */
+    sayCoalesced(e);
     ZONE.sendCoalesceDocumentEnded('engine:' + e.docId);
     ({ code: e.exit, signal: e.signal } = await e.closed);
     /* HOW THIS INSTANCE ENDED, IN ONE PHRASE, so every reader below states the same fact the same way. */
