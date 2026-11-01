@@ -16,7 +16,9 @@
 #include "core/layout/flex_line.h"
 #include "core/layout/intrinsic_block_size.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/layout_job.h"
 #include "core/layout/replaced_element.h"
+#include "core/timing/thread_work.h"
 #include "core/layout/used_value.h"
 
 /* One member of §6 "Flex Lines"' line, with every operand §9.7 reads and the two values it writes.
@@ -804,13 +806,118 @@ static size_t fl_lines_build(lxb_dom_element_t *container, FlItem **items, CssPx
     return n;
 }
 
-CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item)
+/* What LAYOUT_Q_FLEX_LINES answers, in the job's answer storage: §9.3's step 5 members in order-modified
+   document order with their lines, and each one's §9.7 used main size (`target`). */
+struct FlexLinesAnswer {
+    size_t n, lines;
+    FlexLineMember *members;
+    CssPx *target;
+};
+
+/* §9.3's steps 5 and 6 over measured operands, copied into the job's storage. */
+static const struct FlexLinesAnswer *fl_answer_of(lxb_dom_element_t *container)
 {
+    struct FlexLinesAnswer *a;
     FlItem *items;
     size_t n, i, start, lines;
-    CssPx inner_main, out;
+    CssPx inner_main;
+
+    n = fl_lines_build(container, &items, &inner_main, &lines);
+    /* §9.3's step 6, "Resolve the flexible lengths of all the flex items to find their used main size", which
+       §9.7 states per line ("To resolve the flexible lengths of the items within a flex line"). Each line is a
+       contiguous run of the reordered items. */
+    for (start = 0; start < n; ) {
+        size_t end = start;
+
+        while (end < n && items[end].line == items[start].line) end++;
+        fl_resolve(items + start, end - start, inner_main);
+        start = end;
+    }
+    DCHECK(n == 0 || items[n - 1].line + 1 == lines, "§9.3's step 5 counted a different number of lines than it wrote");
+    a = layout_job_answer_storage(sizeof *a + n * (sizeof *a->members + sizeof *a->target));
+    a->n = n;
+    a->lines = lines;
+    a->members = (FlexLineMember *)(a + 1);
+    a->target = (CssPx *)(a->members + n);
+    for (i = 0; i < n; i++) {
+        a->members[i].first = items[i].first;
+        a->members[i].anonymous = items[i].el == NULL;
+        a->members[i].end = items[i].end;
+        a->members[i].line = items[i].line;
+        a->target[i] = items[i].target;
+    }
+    free(items);
+    return a;
+}
+
+void flex_line_question_run(LayoutQuestion q, size_t at)
+{
+    LayoutAnswer a;
+    ThreadWorkSpan tw;
+    CssPx inner;
+    bool vertical;
+
+    DCHECKF(q.kind == LAYOUT_Q_FLEX_LINES && q.element != NULL && q.code == 1,
+            "a flex lines body was handed a question of kind %d with parameter %u", (int)q.kind, q.code);
+    vertical = flex_container_axis_is_vertical(q.element, FLEX_AXIS_MAIN);
+    thread_work_begin(&tw);
+    /* §9.2's step 2 reads the container's main-axis content box, whose containing-block chain can cross an
+       enclosing container's lines or a grid's columns, and step 3 each item's measurement. */
+    if (!used_value_content_ask(q.element, vertical, &inner) || !fl_measures_ask(q.element, vertical)) {
+        thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 0);
+        layout_job_suspend(at);
+        return;
+    }
+    a.flex_lines = fl_answer_of(q.element);
+    thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 1);
+    layout_job_answer(at, &a);
+}
+
+/* The lines asked of the job: true with `*out` the memoized answer, or false ("not yet") with the question
+   suspended for the caller's drive. */
+static bool fl_lines_ask(lxb_dom_element_t *container, const struct FlexLinesAnswer **out)
+{
+    LayoutQuestion q;
+    LayoutAnswer a;
+
+    DCHECK(container != NULL && out != NULL, "a flex container's lines were asked with no container or no answer");
+    q = layout_question(LAYOUT_Q_FLEX_LINES, container, NULL, 1);
+    LAYOUT_QUESTION_REPEAT_CHECK(q,
+        "A flex container's lines asked for themselves: an item's measurement or the container's main size read "
+        "an item's used main size, which these lines decide. Fix it at the rule that re-enters, never by a "
+        "limit.");
+    if (!layout_job_ask(q, &a)) return false;
+    *out = a.flex_lines;
+    return true;
+}
+
+/* The lines for a caller that cannot propagate "not yet": a drive over the ask, which takes no body when the memo
+   holds the answer. `*d` is begun here and ended by the caller once it has read the answer, since the
+   synchronous job's memo is emptied when its outermost drive ends. */
+static const struct FlexLinesAnswer *fl_lines_drive(LayoutJobDrive *d, lxb_dom_element_t *container)
+{
+    const struct FlexLinesAnswer *a;
+
+    layout_job_drive_begin(d);
+    while (!fl_lines_ask(container, &a)) (void)block_flow_drive_deferred(d);
+    return a;
+}
+
+bool flex_line_lines_ask(lxb_dom_element_t *container)
+{
+    const struct FlexLinesAnswer *a;
+
+    return fl_lines_ask(container, &a);
+}
+
+CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item)
+{
+    const struct FlexLinesAnswer *a;
+    LayoutJobDrive d;
+    CssPx out = css_px(0.0);
     char nbuf[160];
     bool found = false;
+    size_t i;
 
     DCHECK(container != NULL && item != NULL,
            "css-flexbox-1 §9.3 \"Main Size Determination\"'s used main size was asked for with no container "
@@ -822,32 +929,10 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *ite
            "flexed against a rectangle it is not in. The relation is the box tree's: css-display-3 §2.5 \"Box "
            "Generation: the none and contents keywords\" puts a `contents` element's children on this "
            "container's line, so a DOM-parent reading would refuse items `fl_collect` collects");
-    n = fl_lines_build(container, &items, &inner_main, &lines);
-    DCHECK(n > 0,
-           "css-flexbox-1 §9.7 \"Resolving Flexible Lengths\" was asked for an item of a container whose §4 "
-           "\"Flex Items\" walk found NO item at all, and the subject of the ask is one of them. §6 \"Flex "
-           "Lines\" is what makes that impossible — \"Every line contains at least one flex item, unless the "
-           "flex container itself is completely empty\" — so two readings of one child list have disagreed, "
-           "which means the list changed under the walk");
-    /* The release arm of that assert: zero is visibly not a used main size (as core/layout/
-       flex_intrinsic_size.c chooses). */
-    if (n == 0) return css_px(0.0);
-    /* §9.3's step 6, "Resolve the flexible lengths of all the flex items to find their used main size", which
-       §9.7 states per line ("To resolve the flexible lengths of the items within a flex line"). Each line is a
-       contiguous run of the reordered items. */
-    for (start = 0; start < n; ) {
-        size_t end = start;
-
-        while (end < n && items[end].line == items[start].line) end++;
-        fl_resolve(items + start, end - start, inner_main);
-        start = end;
-    }
-    DCHECK(items[n - 1].line + 1 == lines, "§9.3's step 5 counted a different number of lines than it wrote");
-
-    out = css_px(0.0);
-    for (i = 0; i < n; i++)
-        if (items[i].first == item) { out = items[i].target; found = true; break; }
-    free(items);
+    a = fl_lines_drive(&d, container);
+    for (i = 0; i < a->n; i++)
+        if (a->members[i].first == item) { out = a->target[i]; found = true; break; }
+    layout_job_drive_end(&d);
     DCHECKF(found,
             "%s: css-flexbox-1 §4 \"Flex Items\"' walk over this item's own flex container did not produce "
             "the item the used main size was asked for. Every caller establishes that it IS one before asking "
@@ -860,35 +945,36 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *ite
     return out;
 }
 
-size_t flex_line_members(lxb_dom_element_t *container, FlexLineMember **out)
+/* The answer's members copied to a calloc'd list the caller frees (NULL when there are none). */
+static size_t fl_members_copy(const struct FlexLinesAnswer *a, FlexLineMember **out)
 {
-    FlItem *items;
-    size_t n, i, lines;
-    CssPx inner_main;
-
-    DCHECK(out != NULL, "css-flexbox-1 §9.3's line membership was asked for with nowhere to put it");
-    n = fl_lines_build(container, &items, &inner_main, &lines);
     *out = NULL;
-    if (n == 0) return 0;
-    *out = (FlexLineMember *)calloc(n, sizeof **out);
+    if (a->n == 0) return 0;
+    *out = (FlexLineMember *)calloc(a->n, sizeof **out);
     CHECK(*out != NULL, "allocating css-flexbox-1 §6 \"Flex Lines\"' membership list failed — it is one record "
                         "per flex item of one container, so this is the physical RAM floor");
-    for (i = 0; i < n; i++) {
-        (*out)[i].first = items[i].first;
-        (*out)[i].anonymous = items[i].el == NULL;
-        (*out)[i].end = items[i].end;
-        (*out)[i].line = items[i].line;
-    }
-    free(items);
-    DCHECK((*out)[n - 1].line + 1 == lines, "§9.3's step 5 counted a different number of lines than it wrote");
+    memcpy(*out, a->members, a->n * sizeof **out);
+    return a->n;
+}
+
+size_t flex_line_members(lxb_dom_element_t *container, FlexLineMember **out)
+{
+    LayoutJobDrive d;
+    size_t n;
+
+    DCHECK(out != NULL, "css-flexbox-1 §9.3's line membership was asked for with nowhere to put it");
+    n = fl_members_copy(fl_lines_drive(&d, container), out);
+    layout_job_drive_end(&d);
     return n;
 }
 
 bool flex_line_members_ask(lxb_dom_element_t *container, FlexLineMember **out, size_t *n)
 {
+    const struct FlexLinesAnswer *a;
+
     DCHECK(container != NULL && out != NULL && n != NULL,
            "css-flexbox-1 §9.3's line membership was asked for with no container or nowhere to put it");
-    if (!fl_measures_ask(container, flex_container_axis_is_vertical(container, FLEX_AXIS_MAIN))) return false;
-    *n = flex_line_members(container, out);
+    if (!fl_lines_ask(container, &a)) return false;
+    *n = fl_members_copy(a, out);
     return true;
 }

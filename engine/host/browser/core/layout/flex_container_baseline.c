@@ -73,7 +73,7 @@ static bool fcb_cross_axis_ask(lxb_dom_element_t *container, bool *has, CssPx *o
 
     *has = item != NULL;
     if (item == NULL) return true;
-    if (!box_first_baseline_ask(item, &item_has, &b)) return false;
+    if (!box_first_baseline_ask(item, &item_has, &b) || !flex_position_operands_ask(container)) return false;
     flex_position_item_offset(container, item, &x, &y);
     *out = css_px_add(y, item_has ? b : used_value_border_edge_px(item, true));
     return true;
@@ -99,7 +99,7 @@ bool flex_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
         return true;
     }
     if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE) return fcb_cross_axis_ask(container, has, out);
-    n = flex_line_members(container, &m);
+    if (!flex_line_members_ask(container, &m, &n)) return false;
     *has = n > 0;
     if (n == 0) return true;
     /* "If any of the flex items on the flex container's startmost flex line participate in first baseline
@@ -123,7 +123,7 @@ bool flex_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
     if (pick == SIZE_MAX) pick = 0;
     item = fcb_element(container, &m[pick]);
     free(m);
-    if (!box_first_baseline_ask(item, &item_has, &b)) return false;
+    if (!box_first_baseline_ask(item, &item_has, &b) || !flex_position_operands_ask(container)) return false;
     flex_position_item_offset(container, item, &x, &y);
     *out = css_px_add(y, item_has ? b : used_value_border_edge_px(item, true));
     return true;

@@ -118,10 +118,12 @@ CssPx intrinsic_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_
 
 /* The place of a flex container's walk over its items (core/layout/flex_intrinsic_size.h's ask), held by the
    job's record below between activations: whether it began, the next member to ask, and whether every member
-   is answered. Created zeroed on the first call for `el`; the record owns it. */
+   is answered; and the container's pair once its read computed it (`sized`), so the job computes it once.
+   Created zeroed on the first call for `el`; the record owns it. */
 typedef struct {
-    bool begun, answered;
+    bool begun, answered, sized;
     lxb_dom_node_t *at;
+    IntrinsicInlineSizes sizes;
 } IntrinsicSizeWalk;
 IntrinsicSizeWalk *intrinsic_size_walk_of(lxb_dom_element_t *el);
 

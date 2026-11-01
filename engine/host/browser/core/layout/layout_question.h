@@ -27,7 +27,8 @@
    - LAYOUT_Q_BF_WALK: the stack of the element's own children LAYOUT_Q_BF_BOX's body asks for, run whatever
      its `height` says; parameters as LAYOUT_Q_BF_BOX.
    - LAYOUT_Q_GRID_AXIS: a grid container; `name` NULL; `code` the axis and constraint (grid_track.c's, not 0).
-   - LAYOUT_Q_FLEX_CROSS: a flex container; `name` NULL; `code` 1. */
+   - LAYOUT_Q_FLEX_CROSS: a flex container; `name` NULL; `code` 1.
+   - LAYOUT_Q_FLEX_LINES: a flex container; `name` NULL; `code` 1. */
 #define LAYOUT_QUESTIONS(X) \
     X(LAYOUT_Q_USED_VALUE_PX, "CSS 2.1 §6.1.3 \"Used values\"' used box-model length") \
     X(LAYOUT_Q_UV_SIZED, \
@@ -35,7 +36,8 @@
     X(LAYOUT_Q_BF_BOX, "CSS 2.1 §9.4.1 \"Block formatting contexts\"' stack contribution") \
     X(LAYOUT_Q_BF_WALK, "CSS 2.1 §9.4.1 \"Block formatting contexts\"' stack of a container's children") \
     X(LAYOUT_Q_GRID_AXIS, "css-grid-1 §11.3 \"Track Sizing Algorithm\"' tracks of one axis") \
-    X(LAYOUT_Q_FLEX_CROSS, "css-flexbox-1 §9.6 \"Cross-Axis Alignment\"' content-based cross size")
+    X(LAYOUT_Q_FLEX_CROSS, "css-flexbox-1 §9.6 \"Cross-Axis Alignment\"' content-based cross size") \
+    X(LAYOUT_Q_FLEX_LINES, "css-flexbox-1 §9.3 \"Main Size Determination\"' lines and used main sizes")
 
 #define LAYOUT_QUESTION_ENUM(id, label) id,
 #define LAYOUT_QUESTION_LABEL(id, label) label,

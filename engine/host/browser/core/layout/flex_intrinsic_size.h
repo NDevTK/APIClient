@@ -12,7 +12,7 @@
  * maximum), not §9.9.1.1's Ideal Algorithm, which "is not web compatible". The one arm needing lines,
  * §9.9.2's multi-line column max-content cross size ("the sum of the flex line cross sizes"), crashes there.
  *
- * Nothing is stored: layout is per-flow state, which solver/dom_cow.h does not swap for a cache. */
+ * A job's intrinsic size record (core/layout/intrinsic_size.h) holds a container's pair, so a job computes it once. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_INTRINSIC_SIZE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_INTRINSIC_SIZE_H
 

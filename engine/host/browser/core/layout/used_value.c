@@ -1982,6 +1982,8 @@ bool used_value_containing_block_is_rtl(lxb_dom_element_t *el)
  * of declarations above it, and §4.1 "Percentage Sizing"'s own worked example says so — a percentage height "is
  * itself definite because it's a percentage resolved against a definite length". A size-computing answer would
  * re-run each ancestor's layout once per level. */
+static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box);
+
 bool used_value_width_ask(lxb_dom_element_t *el)
 {
     CssLength width;
@@ -2003,10 +2005,13 @@ bool used_value_width_ask(lxb_dom_element_t *el)
         return intrinsic_inline_sizes_ask(table_box_kind_generates_table_box(uv_table_box_kind(el))
                                               ? el : table_box_table_of(el));
     case UV_BOX_ITEM: {
-        /* A grid item's width is its column's, whose operands are every item's intrinsic sizes. */
-        lxb_dom_element_t *grid = uv_grid_item_container(el);
+        /* A grid item's width is its column's, whose operands are every item's intrinsic sizes; a `row` flex
+           item's is its line's §9.7 used main size (`uv_flex_item_main_size`), whose operands are its siblings'. */
+        lxb_dom_element_t *grid = uv_grid_item_container(el), *flex;
 
-        return grid == NULL || grid_track_columns_ask(grid);
+        if (grid != NULL) return grid_track_columns_ask(grid);
+        flex = uv_flex_item_container(el, UV_BOX_ITEM);
+        return flex == NULL || flex_container_axis_is_vertical(flex, FLEX_AXIS_MAIN) || flex_line_lines_ask(flex);
     }
     case UV_BOX_INLINE:
     case UV_BOX_BLOCK_FLOW:
@@ -2620,7 +2625,6 @@ CssPx used_value_default_replaced_size(bool vertical)
  * IT IS ALSO WHY THE SECOND PASS COSTS NOTHING ON THE HEIGHT AXIS. §10.6.3's content-based height is a walk
  * over the whole subtree; the substituted pass never runs it, because the substituted value is a length. So a
  * declared `min-height` on every level of a tree adds one walk in total, not one per level. */
-static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box);
 
 static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *opposite, CssLength len, UvBox box,
                        const CssLength *size_len);

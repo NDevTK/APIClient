@@ -18,6 +18,7 @@
 #include "core/layout/layout_job.h"   /* the line box items an ask spends */
 #include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"   /* whether the container's block size is automatic */
+#include "core/timing/thread_work.h"
 
 /* css-writing-modes-4 §7.3 "Orthogonal Flows"' perpendicular case, refused ("When a box has a writing mode that
    is perpendicular to its containing block it is said to be in, or establish, an orthogonal flow."). §9.9 sums
@@ -495,12 +496,11 @@ static IntrinsicInlineSizes fis_cross_sizes(lxb_dom_element_t *el, bool multi_li
     return out;
 }
 
-IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el)
+static IntrinsicInlineSizes fis_inline_sizes(lxb_dom_element_t *el)
 {
     IntrinsicInlineSizes out;
     FisMainSizes main;
 
-    DCHECK(el != NULL, "css-flexbox-1 §9.9's intrinsic sizes were asked for with no element");
     /* §5.1's mapping run backwards (see flex_intrinsic_size.h), asked first: §9.9.1 and §9.9.2 share no step. */
     if (flex_container_main_axis(el) == FLEX_MAIN_AXIS_BLOCK)
         return fis_cross_sizes(el, flex_container_is_multi_line(el));
@@ -511,6 +511,32 @@ IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el)
     main = fis_main_sizes(el, false, flex_container_is_multi_line(el));
     out.min_content = main.min_content;
     out.max_content = main.max_content;
+    return out;
+}
+
+/* The pair, held in the job's record. A drive is opened only so the record exists for a reader no drive is
+   beneath; it takes no body, since every read inside is a drive of its own. One container sized is charged as
+   one layout question answered. */
+IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el)
+{
+    LayoutJobDrive d;
+    IntrinsicSizeWalk *w;
+    IntrinsicInlineSizes out;
+
+    DCHECK(el != NULL, "css-flexbox-1 §9.9's intrinsic sizes were asked for with no element");
+    layout_job_drive_begin(&d);
+    w = intrinsic_size_walk_of(el);
+    if (!w->sized) {
+        ThreadWorkSpan tw;
+
+        thread_work_begin(&tw);
+        w->sizes = fis_inline_sizes(el);
+        w->sized = true;
+        thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 1);
+        thread_work_charge(THREAD_WORK_LAYOUT_BOX, 1);
+    }
+    out = w->sizes;
+    layout_job_drive_end(&d);
     return out;
 }
 

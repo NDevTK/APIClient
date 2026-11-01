@@ -20,6 +20,7 @@
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/flex_line.h"
 #include "core/layout/float_placement.h"
 #include "core/layout/grid_baseline.h"
 #include "core/layout/grid_track.h"
@@ -2734,6 +2735,9 @@ bool block_flow_drive_deferred(LayoutJobDrive *d)
             break;
         case LAYOUT_Q_FLEX_CROSS:
             flex_cross_size_question_run(q, at);
+            break;
+        case LAYOUT_Q_FLEX_LINES:
+            flex_line_question_run(q, at);
             break;
         default:
             DFAIL("a drive took a layout question of a kind no body in this engine computes; layout_job.c "

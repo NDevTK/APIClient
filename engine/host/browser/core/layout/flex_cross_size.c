@@ -446,8 +446,8 @@ static CssPx fx_content_based(lxb_dom_element_t *container)
 
 /* The layout `fx_content_based` reads, asked under the job: the container's used width (§9.2's available main
    space, whose containing-block chain can cross a grid area), each in-flow child's intrinsic inline sizes (its
-   flex base size), each element item's content-based height, the baselines of the items step 8.1 collects,
-   and each anonymous item's line boxes. False ("not yet") when one was deferred. */
+   flex base size), the container's §9.3 lines, each element item's content-based height, the baselines of
+   the items step 8.1 collects, and each anonymous item's line boxes. False ("not yet") when one was deferred. */
 static bool fx_content_based_operands_ask(lxb_dom_element_t *container)
 {
     FlexLineMember *m;
@@ -471,8 +471,7 @@ static bool fx_content_based_operands_ask(lxb_dom_element_t *container)
             continue;
         done = intrinsic_inline_sizes_ask(el);
     }
-    if (!done) return false;
-    n = flex_line_members(container, &m);
+    if (!done || !flex_line_members_ask(container, &m, &n)) return false;
     for (i = 0; done && i < n; i++) {
         lxb_dom_element_t *item;
 

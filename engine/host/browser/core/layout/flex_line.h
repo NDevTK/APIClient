@@ -9,9 +9,8 @@
  * css-display-3 §3 "Display Order: the order property"'s order-modified document order, broken where the next
  * outer hypothetical main size would not fit the container's inner main size.
  *
- * Nothing is stored: layout is per-flow state and a cache would be shared state solver/dom_cow.h does not
- * swap. Asking for N items of one container therefore resolves the line N times; each item's answer depends on
- * all of them. This stops at "Set each item's used main size to its target main size."; §9.5 "Main-Axis
+ * A container's lines are one layout job question (LAYOUT_Q_FLEX_LINES, core/layout/layout_job.h), answered once
+ * per job for every item, since each item's answer depends on all of them. This stops at "Set each item's used main size to its target main size."; §9.5 "Main-Axis
  * Alignment" (positions) is not built here. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_LINE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLEX_LINE_H
@@ -22,6 +21,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/layout_question.h"
 
 /* §9.7's last step for one item, as a content-box extent in CSS pixels in `container`'s main axis.
    `item` is the item's first node: the element for `FLEX_ITEM_CHILD_ELEMENT`, or the first text node of a
@@ -54,5 +54,13 @@ size_t flex_line_members(lxb_dom_element_t *container, FlexLineMember **out);
 /* The same as an ask: true with `*out` and `*n` as above once every item's §9.2 measurement is answered, false
    ("not yet") with the deferred questions suspended on the current job for the caller's drive. */
 bool flex_line_members_ask(lxb_dom_element_t *container, FlexLineMember **out, size_t *n);
+
+/* The lines as an ask, for a body or an operand pass that can propagate "not yet": true once the container's
+   LAYOUT_Q_FLEX_LINES answer is memoized, false with it suspended on the current job for the caller's drive. */
+bool flex_line_lines_ask(lxb_dom_element_t *container);
+
+/* LAYOUT_Q_FLEX_LINES' body, which only block_flow_drive_deferred calls: the container's main size and each item's
+   measurement asked, then §9.3's steps 5 and 6. */
+void flex_line_question_run(LayoutQuestion q, size_t at);
 
 #endif
