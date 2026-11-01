@@ -3,8 +3,10 @@
    step 7 offers of the flow around them, make about two hundred offers: more than update the rendering step 22
    paints in one activation (solver/rest_unit.h's REST_UNIT_PAINT_OFFERS), so its paint rests between offers at
    least once (`_layoutPaintRests`). The page reads no layout from script, so no other step machine rests on its
-   behalf. Its one row is that count; it states no geometry, so no browser value is asserted. It ends with
-   TF_CANVAS_INK, which test_forced.c defines before including it. */
+   behalf. The boxes lay no ink: test_forced.c's box_paint_selftest walks every document and asserts the canvas
+   mark is the only one, and an offer that lays nothing is still an offer. Its one row is that count; it states
+   no geometry, so no browser value is asserted. It ends with TF_CANVAS_INK, which test_forced.c defines before
+   including it. */
 #ifndef ENGINE_HOST_FIXTURE_PAINTREST_H
 #define ENGINE_HOST_FIXTURE_PAINTREST_H
 #ifndef TF_CANVAS_INK
@@ -12,7 +14,7 @@
 #endif
 
 #define PR_BOX(x, y, z) "<div style=\"position:absolute;left:" x "px;top:" y "px;width:20px;height:20px;" \
-                        "background:#0000ff;z-index:" z "\"></div>"
+                        "z-index:" z "\"></div>"
 #define PR_ROW(y) PR_BOX("0", y, "0") PR_BOX("20", y, "1") PR_BOX("40", y, "2") PR_BOX("60", y, "3")   \
                   PR_BOX("80", y, "4") PR_BOX("100", y, "0") PR_BOX("120", y, "1") PR_BOX("140", y, "2") \
                   PR_BOX("160", y, "3") PR_BOX("180", y, "4")
