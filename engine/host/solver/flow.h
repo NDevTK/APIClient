@@ -1485,6 +1485,12 @@ typedef struct {
        behind the observed one. `present` 0 and gap 0.0 where no assumed member stands. */
     double assumed_w_gap;
     FlowWeightOperands assumed_top_ops, assumed_ops;
+    /* Where the never-dispatched members stand: how many distinct ledger sites (FlowSite, per family and `seen`),
+       how many distinct code identities (`kind`, `key`) across families, how many of those sites have received
+       no service, and the five sites holding the most of them. The same two counts over every member beside. */
+    long never_sites, never_codes, never_sites_unserved, all_sites, all_codes;
+    struct { int kind; uint64_t key; int64_t seen, served; long members; } never_top[5];
+    int never_top_n;
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 

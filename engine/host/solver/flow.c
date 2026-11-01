@@ -5415,6 +5415,67 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
  * this decides nothing and reads the order's inputs, so sharing that scan would give the pick accumulators it does
  * not need. It reports the terms and their sum (flow.h says why). `val_top` is flow_best's own reward, so the top
  * of the census and the top of the order are the same flow by construction. */
+/* WfqCensus's site rows (flow.h): sort the members' sites and count runs, by pointer for ledger sites and by
+   (kind, key) for code identity. */
+static int site_ptr_cmp(const void *a, const void *b) {
+    const FlowSite *x = *(const FlowSite *const *)a, *y = *(const FlowSite *const *)b;
+    return x < y ? -1 : x > y;
+}
+static int site_code_cmp(const void *a, const void *b) {
+    const FlowSite *x = *(const FlowSite *const *)a, *y = *(const FlowSite *const *)b;
+    if (x->kind != y->kind) return x->kind < y->kind ? -1 : 1;
+    return x->key < y->key ? -1 : x->key > y->key;
+}
+static void site_runs(const FlowSite **v, long n, long *sites, long *codes, long *unserved, WfqCensus *top) {
+    long i, run;
+
+    qsort(v, (size_t)n, sizeof *v, site_ptr_cmp);
+    *sites = 0;
+    if (unserved) *unserved = 0;
+    for (i = 0; i < n; i += run) {
+        for (run = 1; i + run < n && v[i + run] == v[i]; run++) {}
+        (*sites)++;
+        if (unserved && v[i]->served == 0) (*unserved)++;
+        if (top) {
+            int full = top->never_top_n == 5, k = full ? 4 : top->never_top_n++;
+            if (full && top->never_top[4].members >= run) continue;
+            top->never_top[k].kind = v[i]->kind; top->never_top[k].key = v[i]->key;
+            top->never_top[k].seen = v[i]->seen; top->never_top[k].served = v[i]->served;
+            top->never_top[k].members = run;
+            for (; k > 0 && top->never_top[k].members > top->never_top[k - 1].members; k--) {
+                __typeof__(top->never_top[0]) t = top->never_top[k];
+                top->never_top[k] = top->never_top[k - 1]; top->never_top[k - 1] = t;
+            }
+        }
+    }
+    qsort(v, (size_t)n, sizeof *v, site_code_cmp);
+    *codes = 0;
+    for (i = 0; i < n; i += run) {
+        for (run = 1; i + run < n && v[i + run]->kind == v[i]->kind && v[i + run]->key == v[i]->key; run++) {}
+        (*codes)++;
+    }
+}
+
+static void flow_site_census(WfqCensus *out) {
+    const FlowSite **never = reclaim_malloc(sizeof *never * (size_t)(g_flows_n + 1));
+    const FlowSite **all = reclaim_malloc(sizeof *all * (size_t)(g_flows_n + 1));
+    long nn = 0, na = 0;
+
+    CHECK(never && all, "flow: OOM collecting the members' sites for the census");
+    for (int i = 0; i < g_flows_n; i++) {
+        const Flow *f = g_flows[i];
+
+        if (!f->at) continue;
+        all[na++] = f->at;
+        if (f->picks == 0) never[nn++] = f->at;
+    }
+    out->never_top_n = 0;
+    site_runs(never, nn, &out->never_sites, &out->never_codes, &out->never_sites_unserved, out);
+    site_runs(all, na, &out->all_sites, &out->all_codes, NULL, NULL);
+    free(never);
+    free(all);
+}
+
 void flow_wfq_census(WfqCensus *out) {
     Flow *top;
     int i;
@@ -6048,6 +6109,7 @@ void flow_wfq_census(WfqCensus *out) {
                "the observedWGap operands were read off members whose weights are not the gap's two ends — the "
                "front and the observed world's best member are the two the walk recorded");
     }
+    flow_site_census(out);
     if (assumed_holder && top) {
         out->assumed_w_gap = out->w_top - assumed_w;
         flow_weight_operands(top, &out->assumed_top_ops);

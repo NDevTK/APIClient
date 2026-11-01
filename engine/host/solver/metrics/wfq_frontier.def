@@ -241,6 +241,15 @@ METRIC(observed_terms, "observedTerms", GAUGE, "operand", AGENT, "solver/flow.c"
    assumption, `assumed` in place of `observed`. Read beside `assumedMembers`. */
 METRIC(assumed_wgap, "assumedWGap", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
 METRIC(assumed_terms, "assumedTerms", GAUGE, "operand", AGENT, "solver/flow.c", OBJECT)
+/* …and where the never-dispatched members stand (solver/flow.h's `never_sites`): distinct ledger sites, distinct
+   code identities across families, sites with no service, and the five sites holding the most of them; the first
+   two over every member beside. A site count far above the code count is a key finer than the code. */
+METRIC(never_sites, "neverSites", GAUGE, "site", AGENT, "solver/flow.c", INT)
+METRIC(never_codes, "neverCodes", GAUGE, "site", AGENT, "solver/flow.c", INT)
+METRIC(never_sites_unserved, "neverSitesUnserved", GAUGE, "site", AGENT, "solver/flow.c", INT)
+METRIC(all_sites, "allSites", GAUGE, "site", AGENT, "solver/flow.c", INT)
+METRIC(all_codes, "allCodes", GAUGE, "site", AGENT, "solver/flow.c", INT)
+METRIC(never_top_sites, "neverTopSites", GAUGE, "site", AGENT, "solver/flow.c", OBJECT)
 /* …and what asking the order cost (solver/flow.h's FLOW_SCANS: three entries, counted apart,
    in counts not time). Two causes of an unreached tail: too little thread for the members
    standing, or thread spent asking. Read `scanNextWeights / steps` against `members` and

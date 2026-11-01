@@ -558,6 +558,7 @@ char *result_wfq_json(void) {
     char *never_terms = NULL;
     char *observed_terms = NULL;
     char *assumed_terms = NULL;
+    char *never_top = NULL;
     NetReachCensus nr;
     JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes this census absent */
 
@@ -801,6 +802,26 @@ char *result_wfq_json(void) {
         METRIC_ABSENT(observed_terms);
     }
     METRIC_SET_REAL(assumed_wgap, w.assumed_w_gap);
+    METRIC_SET(never_sites, w.never_sites);
+    METRIC_SET(never_codes, w.never_codes);
+    METRIC_SET(never_sites_unserved, w.never_sites_unserved);
+    METRIC_SET(all_sites, w.all_sites);
+    METRIC_SET(all_codes, w.all_codes);
+    {
+        char *rows = strdup("[");
+        for (int k = 0; k < w.never_top_n && rows; k++) {
+            char *next = composef("%s%s{\"kind\":%d,\"key\":\"%016llx\",\"seen\":%lld,\"served\":%lld,"
+                                  "\"members\":%ld}", rows, k ? "," : "", w.never_top[k].kind,
+                                  (unsigned long long)w.never_top[k].key, (long long)w.never_top[k].seen,
+                                  (long long)w.never_top[k].served, w.never_top[k].members);
+            free(rows);
+            rows = next;
+        }
+        never_top = rows ? composef("%s]", rows) : NULL;
+        free(rows);
+        CHECK(never_top, "result: OOM composing neverTopSites");
+        METRIC_SET_OBJECT(never_top_sites, never_top);
+    }
     if (w.assumed_top_ops.present) {
         char *top = weight_operands_json(&w.assumed_top_ops), *as = weight_operands_json(&w.assumed_ops);
         assumed_terms = composef("{\"ageQuantum\":%.17g,\"assumeCost\":%.17g,\"rungs\":%d,\"gap\":%.17g,"
@@ -873,6 +894,7 @@ char *result_wfq_json(void) {
     free(never_terms);
     free(observed_terms);
     free(assumed_terms);
+    free(never_top);
     return json_buf_take(&b);
 }
 
