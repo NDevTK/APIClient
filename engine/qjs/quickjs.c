@@ -1058,6 +1058,9 @@ struct JSContext {
     JSValue legacy_reflect_get[2];   /* [0] = caller, [1] = arguments */
     JSValue legacy_reflect_set;
     JSValue eval_obj;
+    /* §19.2.1.2 HostEnsureCanCompileStrings for this realm (JS_SetHostEnsureCanCompileStrings): a function the
+       compile asks on the trampoline, or JS_UNDEFINED for the default implementation. */
+    JSValue compile_strings_check;
 
     JSValue global_obj; /* global object */
     /* ECMAScript §9.1.1.4 Global Environment Records' [[GlobalThisValue]]: the global object unless the host
@@ -5257,6 +5260,7 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
     ctx->pending_gp_unwind_kind = 0;   /* CONT_NONE */
     ctx->error_prepare_stack = JS_UNDEFINED;
     ctx->error_stack_trace_limit = js_int32(10);
+    ctx->compile_strings_check = JS_UNDEFINED;
     init_list_head(&ctx->loaded_modules);
 
     if (JS_AddIntrinsicBasicObjects(ctx)) {
@@ -5467,6 +5471,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
     JS_MarkValue(rt, ctx->legacy_reflect_get[1], mark_func);
     JS_MarkValue(rt, ctx->legacy_reflect_set, mark_func);
     JS_MarkValue(rt, ctx->eval_obj, mark_func);
+    JS_MarkValue(rt, ctx->compile_strings_check, mark_func);
     for(i = 0; i < ctx->pending_close_n; i++)
         JS_MarkValue(rt, ctx->pending_close_iters[i], mark_func);
 
@@ -5570,6 +5575,7 @@ static void js_context_release_refs(JSRuntime *rt, JSContext *ctx)
     JS_FreeValue(ctx, ctx->legacy_reflect_get[1]);
     JS_FreeValue(ctx, ctx->legacy_reflect_set);
     JS_FreeValue(ctx, ctx->eval_obj);
+    JS_FreeValue(ctx, ctx->compile_strings_check);
 
     JS_FreeValue(ctx, ctx->array_proto_values);
     for(i = 0; i < JS_NATIVE_ERROR_COUNT; i++) {
@@ -9616,6 +9622,46 @@ static JSValue js_eval_program_source(JSContext *ctx, JSValueConst src)
 static void js_eval_sink_rearm(void)
 {
     g_eval_sink_announced = true;
+}
+
+/* §19.2.1.2 HostEnsureCanCompileStrings's operands as the evaluation states them (see quickjs.h's
+   JSCompilationType): parameterStrings and parameterArgs, `n_params` each; bodyString; bodyArg. Borrowed. */
+typedef struct JSCompileCheck {
+    JSCompilationType type;
+    int n_params;
+    const JSValue *params, *param_args;
+    JSValueConst body, body_arg;
+} JSCompileCheck;
+
+/* The bound call performing `realm`'s HostEnsureCanCompileStrings over codeString `code`, owned, for the caller
+   to issue on the trampoline; JS_UNDEFINED where the realm keeps the default implementation, JS_EXCEPTION on
+   OOM. Issuing it hands the @S announcement over to the caller's held source: the hook can run page code, and
+   a compile there must not consume the latch the held source is restated with when its own parse begins. */
+static JSValue js_compile_check_call(JSContext *realm, const JSCompileCheck *cc, JSValueConst code)
+{
+    JSValue args[6], call;
+
+    if (JS_IsUndefined(realm->compile_strings_check))
+        return JS_UNDEFINED;
+    DCHECK(JS_IsString(code), "HostEnsureCanCompileStrings was asked about a codeString that is not a String");
+    DCHECK(cc->n_params == 0 || cc->type == JS_COMPILATION_FUNCTION,
+           "an eval stated parameterStrings; PerformEval passes the empty List");
+    args[0] = js_create_array(realm, cc->n_params, (JSValueConst *)cc->params);
+    args[4] = js_create_array(realm, cc->n_params, (JSValueConst *)cc->param_args);
+    if (JS_IsException(args[0]) || JS_IsException(args[4])) {
+        JS_FreeValue(realm, args[0]);
+        JS_FreeValue(realm, args[4]);
+        return JS_EXCEPTION;
+    }
+    args[1] = unsafe_unconst(cc->body);
+    args[2] = unsafe_unconst(code);
+    args[3] = js_int32(cc->type);
+    args[5] = unsafe_unconst(cc->body_arg);
+    call = JS_NewBoundCall(realm, realm->compile_strings_check, JS_UNDEFINED, 6, args);
+    JS_FreeValue(realm, args[0]);
+    JS_FreeValue(realm, args[4]);
+    g_eval_sink_announced = false;
+    return call;
 }
 
 /* 7.1.1 ToPrimitive is defined over ORDINARY objects. A CONCOLIC operand is not one: it is the solver's value
@@ -13694,6 +13740,7 @@ JS_ThrowError(JSContext *ctx, JSErrorEnum error_num,
 }
 
 #define JS_ERROR_MAP(X)     \
+    X(Eval, EVAL)           \
     X(Internal, INTERNAL)   \
     X(Plain, PLAIN)         \
     X(Range, RANGE)         \
@@ -27501,9 +27548,11 @@ static int step_topropkey_run(JSContext *ctx, JSStepHdr *h, JSValueConst v, JSVa
    `(function anonymous(…){…})` source — so it is a shared sub-sequence rather than a stage each of them
    re-spells. The receiver is the GLOBAL OBJECT: an indirect eval's program is global scope whatever the code's
    strictness, so a `"use strict"` prologue must still see the global and not undefined.
+   Between the source and the parse stands the evaluation's HostEnsureCanCompileStrings, issued as a call whose
+   completion re-enters here (PROG_PH_CHECK); `cc` states its operands and is read only by the first entry.
      0 = *pout is the program's value, 3 or JS_STEP_YIELD (the parse rested) = the caller must return that step
    code, -1 = threw. */
-enum { PROG_PH_START = 0, PROG_PH_RAN, PROG_PH_PARSE };
+enum { PROG_PH_START = 0, PROG_PH_RAN, PROG_PH_PARSE, PROG_PH_CHECK };
 
 static inline bool tramp_body_is_plain(JSValueConst func);
 typedef struct JSEvalCompile JSEvalCompile;
@@ -27543,12 +27592,14 @@ static void js_prog_compile_drop(JSContext *ctx, JSStepHdr *h)
    in rather than hardcoding it here is the difference between one implementation and one implementation that
    quietly asserts both callers are the same thing; hardcoded, indirect eval reported itself as not an eval. */
 static int step_program_run(JSContext *ctx, JSStepHdr *h, JSContext *realm, JSValueConst src, JSValue in,
-                            JSValue *pout, JSValue **out_cb, int *out_argc, int origin_flags)
+                            JSValue *pout, JSValue **out_cb, int *out_argc, int origin_flags,
+                            const JSCompileCheck *cc)
 {
     if (h->prog_phase == PROG_PH_START) {
-        JSValue text;
+        JSValue text, check;
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
+        DCHECK(cc != NULL, "a program evaluation began without stating its HostEnsureCanCompileStrings operands");
         /* THE @S JS-CONTEXT SINK AND §19.2.1.1's step 2, for every algorithm that reaches this sub-sequence:
            the INDIRECT eval (19.2.1), CreateDynamicFunction (20.2.1.1.1) and ShadowRealm.prototype.evaluate.
            Both halves belong to js_eval_program_source and neither is re-decided here — the direct-eval
@@ -27560,6 +27611,44 @@ static int step_program_run(JSContext *ctx, JSStepHdr *h, JSContext *realm, JSVa
             return 0;
         }
         h->prog_src = text;
+        h->prog_phase = PROG_PH_PARSE;
+        /* PerformEval step 5 / CreateDynamicFunction's HostEnsureCanCompileStrings (Dynamic Code Brand Checks
+           §3 and §4), with the program text as codeString; an eval's bodyString (JS_UNINITIALIZED in `cc`) is
+           that text too. */
+        {
+            JSCompileCheck c = *cc;
+
+            if (JS_IsUninitialized(c.body))
+                c.body = text;
+            check = js_compile_check_call(realm, &c, text);
+        }
+        if (JS_IsException(check)) {
+            js_prog_compile_drop(ctx, h);
+            h->prog_phase = PROG_PH_START;
+            return -1;
+        }
+        if (!JS_IsUndefined(check)) {
+            DCHECK(JS_VALUE_GET_TAG(h->coerce) != JS_TAG_OBJECT,
+                   "a coercion is already in flight on this machine's header");
+            h->coerce = check;                 /* owned across the call */
+            h->cb_coerce[0] = JS_UNDEFINED;
+            h->cb_coerce[1] = h->coerce;       /* borrowed view */
+            *out_cb = h->cb_coerce; *out_argc = 0;
+            h->prog_phase = PROG_PH_CHECK;
+            return 3;
+        }
+    } else if (h->prog_phase == PROG_PH_CHECK) {
+        /* The check's normal completion. Its throw refuses the compile and is the evaluation's completion: no
+           machine running this sub-sequence declares catches_abrupt, so that throw abandons it and never
+           arrives here. */
+        DCHECK(!JS_IsException(in) && !h->def->catches_abrupt,
+               "a program machine that catches abrupt request results was handed its host check's throw");
+        JS_FreeValue(ctx, h->coerce);
+        h->coerce = JS_UNDEFINED;
+        h->cb_coerce[0] = JS_UNDEFINED;
+        h->cb_coerce[1] = JS_UNDEFINED;
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
         h->prog_phase = PROG_PH_PARSE;
     }
     if (h->prog_phase == PROG_PH_PARSE) {
@@ -31815,15 +31904,18 @@ static JSObject *tramp_exotic_accessor(JSContext *ctx, const JSPropertyDescripto
    site, so there is one body-entry question and not one per spelling.
    JS_UNINITIALIZED = step 2 took the non-string arm, so the OPERAND is the completion, unevaluated. What is
    left to each opcode is only its own operand shape and the cleanup that follows from it. */
-/* A DIRECT EVAL'S STATE ACROSS A REST OF ITS PARSE, held on the frame executing OP_eval (JSStackFrame.eval_hold)
-   while the opcode waits to re-execute. Split by what can be re-derived:
-   - `operand` and `text` are §19.2.1.1 PerformEval's prefix up to the parse: the argument and the source
-     js_eval_program_source answered for it (the @S announcement, and §19.2.1.2 HostEnsureCanCompileStrings's
-     place). Re-running that prefix repeats a host act, so a fork COPIES them and the re-execution skips it.
+/* A DIRECT EVAL'S STATE ACROSS ITS HOST CHECK AND ITS PARSE, held on the frame executing OP_eval
+   (JSStackFrame.eval_hold) while the opcode waits to re-execute. Split by what can be re-derived:
+   - `operand`, `text` and `checked` are §19.2.1.1 PerformEval's prefix up to the parse: the argument, the source
+     js_eval_program_source answered for it (the @S announcement), and whether step 5's HostEnsureCanCompileStrings
+     has completed normally. The check is issued as a call on the trampoline; until its completion lands back on
+     the opcode, `checked` is false. Re-running that prefix repeats host acts (page code, violation reports), so
+     a fork COPIES them and the re-execution skips it.
    - `parse` is the parse in flight (JSProgCompile), a cache over `text`: a fork SHEDS it and the sibling parses
      again from `text`. */
 typedef struct JSEvalHold {
     JSValue operand, text;   /* owned */
+    bool checked;
     JSProgCompile *parse;
 } JSEvalHold;
 
@@ -31838,6 +31930,7 @@ static JSEvalHold *js_eval_hold_clone(JSContext *ctx, const JSEvalHold *eh)
     CHECK(c != NULL, "out of memory copying a direct eval's checked source onto a forked frame");
     c->operand = js_dup(eh->operand);
     c->text = js_dup(eh->text);
+    c->checked = eh->checked;
     return c;
 }
 
@@ -31868,11 +31961,23 @@ static void js_eval_hold_free(JSRuntime *rt, JSStackFrame *sf)
     sf->eval_hold = NULL;
 }
 
+/* §19.2.1.1 step 5's normal completion, handed back to the eval opcode by the call it issued: the opcode pops it
+   off its stack on re-execution, and the hold goes on to the parse. Its value is §19.2.1.2's `unused`. */
+static void js_eval_hold_checked(JSContext *ctx, JSStackFrame *sf, JSValue completion)
+{
+    DCHECK(sf->eval_hold != NULL && !sf->eval_hold->checked,
+           "an eval opcode took a HostEnsureCanCompileStrings completion that no hold on its frame was waiting for");
+    JS_FreeValue(ctx, completion);
+    sf->eval_hold->checked = true;
+}
+
 /* `caller_sf` IS THE CALLER'S OWN FRAME, handed over by the opcode that is executing it, and it is the pair of
    `scope_idx`: the compiler records WHICH scope and the frame is the one that HAS it. It is a parameter and not
    a read of rt->current_stack_frame because every call on this engine trampolines onto the heap stack.
    0 with *pclo the closure, or JS_UNINITIALIZED for step 2's non-string arm (the OPERAND is the completion);
-   1 when the parse rested, with the hold on `caller_sf` and the opcode to re-execute on the resume; -1 thrown. */
+   1 when the parse rested, with the hold on `caller_sf` and the opcode to re-execute on the resume; 2 with *pclo
+   the step 5 HostEnsureCanCompileStrings call (owned) for the opcode to issue, whose completion re-executes it
+   (js_eval_hold_checked; a throw lands in the frame's exception path, which drops the hold); -1 thrown. */
 static int eval_direct_closure(JSContext *ctx, JSStackFrame *caller_sf, JSValueConst src, int scope_idx,
                                JSValue *pclo)
 {
@@ -31887,6 +31992,8 @@ static int eval_direct_closure(JSContext *ctx, JSStackFrame *caller_sf, JSValueC
     *pclo = JS_UNDEFINED;
     eh = caller_sf->eval_hold;
     if (!eh) {
+        JSCompileCheck cc;
+
         text = js_eval_program_source(ctx, src);
         if (JS_IsUninitialized(text)) {
             *pclo = JS_UNINITIALIZED;
@@ -31901,11 +32008,23 @@ static int eval_direct_closure(JSContext *ctx, JSStackFrame *caller_sf, JSValueC
         eh->operand = js_dup(src);
         eh->text = text;
         caller_sf->eval_hold = eh;
+        /* Step 5: Perform ? HostEnsureCanCompileStrings(evalRealm, « », xStr, xStr, direct-eval, « », x), in the
+           Dynamic Code Brand Checks form. evalRealm is the current realm, which for a direct eval is ctx. */
+        cc = (JSCompileCheck){ JS_COMPILATION_DIRECT_EVAL, 0, NULL, NULL, text, src };
+        *pclo = js_compile_check_call(ctx, &cc, text);
+        if (JS_IsException(*pclo)) {
+            *pclo = JS_UNDEFINED;
+            goto fail;
+        }
+        if (!JS_IsUndefined(*pclo))
+            return 2;
+        eh->checked = true;   /* the default implementation returns unused */
     } else {
         DCHECKF(js_same_value(ctx, eh->operand, src),
                 "a direct eval re-executed over an operand that is not the one its held source was checked from "
                 "(held tag %d, on the stack tag %d) — the re-execution would parse the held, stale text",
                 (int)JS_VALUE_GET_TAG(eh->operand), (int)JS_VALUE_GET_TAG(src));
+        DCHECK(eh->checked, "a direct eval re-executed while its HostEnsureCanCompileStrings call is outstanding");
     }
     pc = eh->parse;
     if (!pc) {
@@ -35614,6 +35733,14 @@ void JS_FlowBudgetArm(void) { flow_budget_arm(); }
 void JS_SetTimeTravelHooks(const JSTimeTravelHooks *h) { g_time_travel = *h; }
 void JS_SetConcolicHooks(const JSConcolicHooks *h) { g_concolic = *h; }
 void JS_SetEvalSinkHook(JSEvalSinkFunc *cb) { g_eval_sink = cb; }
+
+void JS_SetHostEnsureCanCompileStrings(JSContext *realm, JSValueConst hook)
+{
+    DCHECK(JS_IsUndefined(realm->compile_strings_check),
+           "a realm's HostEnsureCanCompileStrings was installed twice; it is a fact fixed at realm creation");
+    DCHECK(JS_IsFunction(realm, hook), "HostEnsureCanCompileStrings was installed as something that cannot be called");
+    realm->compile_strings_check = js_dup(hook);
+}
 
 /* `typeof x === "undefined"` and `=== "function"` are FUSED by the peephole into ONE opcode that never reaches
    OP_typeof or OP_strict_eq — so without this the concolic decision depended on WHICH STRING the program
@@ -48024,6 +48151,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 call_argc = get_u16(pc);
                 scope_idx = get_u16(pc + 2) - 1;
                 pc += 4;
+                /* The completion of the HostEnsureCanCompileStrings call this opcode issued, standing above its
+                   operands (see the issue below). */
+                if (unlikely(sf->eval_hold != NULL && !sf->eval_hold->checked))
+                    js_eval_hold_checked(ctx, sf, *--sp);
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
                 if (js_same_value(ctx, call_argv[-1], ctx->eval_obj)) {
@@ -48035,6 +48166,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        the source is a String, it declares its operand shape and cleans up after it. */
                     JSValue eclo;
                     int er = eval_direct_closure(ctx, sf, obj, scope_idx, &eclo);
+                    if (er == 2) {
+                        /* Step 5's call, issued above the operands with the plain [callee] shape: its
+                           completion is pushed there and the opcode re-executes over it. */
+                        pc -= 5;
+                        sf->cur_pc = pc;
+                        DCHECK(sp < TRAMP_SP_LIMIT(sf), "a direct eval's host check has no scratch slot above its operands");
+                        *sp++ = eclo;
+                        call_argv = sp; call_argc = 0;
+                        tramp_first = -1; tramp_is_tail = 0;
+                        tramp_cont_state = NULL; tramp_cont_kind = CONT_NONE;
+                        goto do_generic_callee;
+                    }
                     if (er > 0) {
                         pc -= 5;   /* the opcode and its two u16 operands: the resume re-executes OP_eval */
                         goto eval_rest;
@@ -48080,6 +48223,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
                 scope_idx = get_u16(pc) - 1;
                 pc += 2;
+                /* The completion of the HostEnsureCanCompileStrings call this opcode issued (see OP_eval). */
+                if (unlikely(sf->eval_hold != NULL && !sf->eval_hold->checked))
+                    js_eval_hold_checked(ctx, sf, *--sp);
                 sf->cur_pc = pc;
                 if (!js_same_value(ctx, sp[-2], ctx->eval_obj)) {
                     /* `eval` that resolved to something ELSE is an ORDINARY call with a spread argument list, and
@@ -48119,6 +48265,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        decision — what is left here is this opcode's own operand shape and its cleanup. */
                     JSValue eclo;
                     int er = eval_direct_closure(ctx, sf, obj, scope_idx, &eclo);
+                    if (er == 2) {
+                        free_arg_list(ctx, tab, len);   /* rebuilt from the operand stack on the re-execution */
+                        pc -= 3;
+                        sf->cur_pc = pc;
+                        DCHECK(sp < TRAMP_SP_LIMIT(sf), "a direct eval's host check has no scratch slot above its operands");
+                        *sp++ = eclo;
+                        call_argv = sp; call_argc = 0;
+                        tramp_first = -1; tramp_is_tail = 0;
+                        tramp_cont_state = NULL; tramp_cont_kind = CONT_NONE;
+                        goto do_generic_callee;
+                    }
                     if (er > 0) {
                         free_arg_list(ctx, tab, len);   /* rebuilt from the operand stack on the re-execution */
                         pc -= 3;   /* the opcode and its u16 operand: the resume re-executes OP_apply_eval */
@@ -52220,6 +52377,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
        function — so an abrupt completion always LEAVES the region, and whatever handler runs next belongs to the
        function's own strictness. Restoring here is what makes the marker's `pop` unnecessary on the throw path. */
     if (b) sf->is_strict_mode = b->is_strict_mode;
+    /* A direct eval's hold lives only while its opcode waits to re-execute, and the frame runs nothing else in
+       that time, so a throw landing here (its HostEnsureCanCompileStrings refused) ends that eval. */
+    if (b && unlikely(sf->eval_hold != NULL))
+        js_eval_hold_free(rt, sf);
     /* An arm that threw BEFORE adopting the call shape must not leave it behind: the list would leak and the
        resolved pop count would be read by the next call this frame makes (a catch resumes in this same frame).
        The same rule as the construct side's con_cargc, applied where every abrupt path converges. */
@@ -83347,7 +83508,9 @@ static const char *const js_global_eval_steps[] = { PROGEVAL_STAGES(JS_STEP_STAG
 static int js_global_eval_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSProgEval *s = st;
-    int r = step_program_run(ctx, &s->hdr, ctx, step_arg(&s->hdr, 0), cb_result, &s->result, out_cb, out_argc, 0);
+    JSCompileCheck cc = { JS_COMPILATION_INDIRECT_EVAL, 0, NULL, NULL, JS_UNINITIALIZED, step_arg(&s->hdr, 0) };
+    int r = step_program_run(ctx, &s->hdr, ctx, step_arg(&s->hdr, 0), cb_result, &s->result, out_cb, out_argc, 0,
+                             &cc);
     return r ? (r < 0 ? -1 : r) : 0;
 }
 
@@ -86436,20 +86599,29 @@ static int js_dynfunc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
             }
             s->strs[s->nstrs++] = str;
         }
-        if (js_dynfunc_check_halves(ctx, func_kind, s->strs, s->nstrs) < 0)
-            return -1;
         src = js_dynfunc_source(ctx, func_kind, s->strs, s->nstrs, DYNSRC_ALL);
         if (JS_IsException(src))
             return -1;
         s->hdr.stage = DYNF_PARSE;
-        r = step_program_run(ctx, &s->hdr, ctx, src, JS_UNDEFINED, &s->func, out_cb, out_argc,
-                             JS_EVAL_FLAG_FUNCTION_CTOR);
+        {
+            /* HostEnsureCanCompileStrings(currentRealm, parameterStrings, bodyString, sourceString, function,
+               parameterArgs, bodyArg): every argument but the last is a parameter and the last is the body; with
+               no arguments the Function constructors pass the empty String as bodyArg. */
+            JSValue empty = JS_AtomToString(ctx, JS_ATOM_empty_string);
+            int np = s->nstrs > 0 ? s->nstrs - 1 : 0;
+            JSCompileCheck cc = { JS_COMPILATION_FUNCTION, np, s->strs, s->hdr.argv,
+                                  s->nstrs > 0 ? s->strs[np] : empty, s->nstrs > 0 ? s->hdr.argv[np] : empty };
+
+            r = step_program_run(ctx, &s->hdr, ctx, src, JS_UNDEFINED, &s->func, out_cb, out_argc,
+                                 JS_EVAL_FLAG_FUNCTION_CTOR, &cc);
+            JS_FreeValue(ctx, empty);
+        }
         JS_FreeValue(ctx, src);
         if (r) return r < 0 ? -1 : r;
         created = true;
     } else if (s->hdr.stage == DYNF_PARSE) {
         r = step_program_run(ctx, &s->hdr, ctx, JS_UNDEFINED, cb_result, &s->func, out_cb, out_argc,
-                             JS_EVAL_FLAG_FUNCTION_CTOR);
+                             JS_EVAL_FLAG_FUNCTION_CTOR, NULL);
         if (r) return r < 0 ? -1 : r;
         created = true;
     }
@@ -86464,6 +86636,11 @@ static int js_dynfunc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         return 0;
     }
     if (created) {
+        /* Steps 17-20's separate parses of the parameters and the body. They follow the host check, which can
+           run page code, and they stand after the whole-source parse here: every one of them can only throw a
+           SyntaxError, and F is not yet observable, so which parse refuses first is not. */
+        if (js_dynfunc_check_halves(ctx, func_kind, s->strs, s->nstrs) < 0)
+            return -1;
         /* THE OTHER SIDE OF js_parse_fn_ctor_source'S REFUSAL. 20.2.1.1.1 returns an ECMAScript function
            object, and the only reason the value this sub-sequence hands back is one is that step 23's goal
            parse admits nothing but a FunctionExpression — so when that stopped being true, this returned
@@ -121431,8 +121608,17 @@ static int js_shadow_realm_evaluate_step(JSContext *ctx, void *st, JSValue cb_re
         /* steps 7-16 ARE the indirect-eval sub-sequence, performed in the EVAL realm: compile the program,
            then CALL it, so it runs on the trampoline and a loop in it parks. Running it to completion here
            instead would be a bytecode body entered by C recursion under the live flow. */
-        pr = step_program_run(ctx, &s->hdr, sd->realm, src, JS_UNDEFINED, &s->retval,
-                              out_cb, out_argc, 0);
+        {
+            /* PerformShadowRealmEval step 1 is HostEnsureCanCompileStrings(evalRealm, « », sourceText, false),
+               an indirect eval's in Dynamic Code Brand Checks' form. */
+            JSCompileCheck cc = { JS_COMPILATION_INDIRECT_EVAL, 0, NULL, NULL, JS_UNINITIALIZED, src };
+
+            DCHECK(JS_IsUndefined(sd->realm->compile_strings_check),
+                   "a ShadowRealm's realm carries a host HostEnsureCanCompileStrings, whose throw SE_ST_RAN would "
+                   "turn into step 17's TypeError; tell the step 1 completion from the evaluation's there first");
+            pr = step_program_run(ctx, &s->hdr, sd->realm, src, JS_UNDEFINED, &s->retval,
+                                  out_cb, out_argc, 0, &cc);
+        }
         if (pr > 0)
             return pr;
         if (pr < 0)
@@ -121449,7 +121635,7 @@ static int js_shadow_realm_evaluate_step(JSContext *ctx, void *st, JSValue cb_re
             return -1;
         }
         pr = step_program_run(ctx, &s->hdr, sd->realm, JS_UNDEFINED, cb_result, &s->retval,
-                              out_cb, out_argc, 0);
+                              out_cb, out_argc, 0, NULL);
         if (pr > 0)
             return pr;
         if (pr < 0)

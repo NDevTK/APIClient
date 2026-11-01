@@ -1332,12 +1332,14 @@ JS_EXTERN void JS_ClearUncatchableError(JSContext *ctx, JSValueConst val);
 //  JS_Throw(ctx, exc);
 JS_EXTERN void JS_ResetUncatchableError(JSContext *ctx);
 JS_EXTERN JSValue JS_NewError(JSContext *ctx);
+JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_NewEvalError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_NewInternalError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_NewPlainError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_NewRangeError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_NewReferenceError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_NewSyntaxError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_NewTypeError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
+JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_ThrowEvalError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_ThrowInternalError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_ThrowPlainError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
 JS_EXTERN JSValue JS_PRINTF_FORMAT_ATTR(2, 3) JS_ThrowRangeError(JSContext *ctx, JS_PRINTF_FORMAT const char *fmt, ...);
@@ -3101,6 +3103,26 @@ typedef void JSEvalSinkFunc(JSContext *ctx, JSValueConst src);
 /* NULL is a legitimate argument and means "no host is listening" — which is what a conformance host is, and
    what a solver host becomes once it has torn down the store the detector writes into. */
 JS_EXTERN void JS_SetEvalSinkHook(JSEvalSinkFunc *cb);
+
+/* ECMAScript §19.2.1.2 HostEnsureCanCompileStrings, with the parameter list Dynamic Code Brand Checks §2 gives it
+ * and HTML §8.1.6.2 HostEnsureCanCompileStrings(realm, parameterStrings, bodyString, codeString, compilationType,
+ * parameterArgs, bodyArg) implements. §19.2.1.1 PerformEval step 5 performs it for a direct and an indirect
+ * eval, §20.2.1.1.1 CreateDynamicFunction for the four Function constructors, and ShadowRealm §3.1.3
+ * PerformShadowRealmEval step 1 in its eval realm.
+ *
+ * The host's implementation can run page code (HTML's reaches the Trusted Types default policy's createScript),
+ * so it is a FUNCTION the engine calls on the trampoline, never a C callback:
+ *     hook(parameterStrings, bodyString, codeString, compilationType, parameterArgs, bodyArg)
+ * with the two lists as Arrays and compilationType a JSCompilationType. A normal completion permits the compile
+ * and its value is ignored; a throw refuses it and is the evaluation's completion. The engine performs it once
+ * per evaluation: a rest or a fork after it carries its answer and never asks again.
+ * `realm`'s hook, held per realm; JS_UNDEFINED (the initial value) is §19.2.1.2's default implementation. */
+typedef enum JSCompilationType {
+    JS_COMPILATION_DIRECT_EVAL = 0,
+    JS_COMPILATION_INDIRECT_EVAL,
+    JS_COMPILATION_FUNCTION,
+} JSCompilationType;
+JS_EXTERN void JS_SetHostEnsureCanCompileStrings(JSContext *realm, JSValueConst hook);
 
 /* Forced-execution FLOW API — the host CALLS these to create / drive / snapshot / free flows. (The preempt
    CALLBACK that parks a running flow lives in JSFlowControlHooks above; these are the host-driven counterpart.)
