@@ -818,7 +818,7 @@ static bool iss_source_size_value(JSContext *ctx, const char *text, size_t len, 
    case-insensitive)." The `loading` attribute is §2.5.7's enumerated lazy loading attribute, whose keywords are
    `lazy` and `eager` with Eager the missing-value and invalid-value default — so the Lazy state is the one
    spelling and every other value, including an absent attribute, is Eager. */
-static bool iss_allows_auto_sizes(lxb_dom_element_t *img)
+bool image_source_set_allows_auto_sizes(lxb_dom_element_t *img)
 {
     size_t n = 0;
     const char *v;
@@ -885,7 +885,7 @@ static double iss_parse_sizes(JSContext *ctx, const char *text, size_t len, lxb_
            BOX. The two differ under `box-sizing: border-box`, where css-sizing §5 makes the value `width`
            EXPOSES the border box's — and `* { box-sizing: border-box }` is on most of the modern web, so an
            img with padding would otherwise select its source against a box the image is not drawn into. */
-        if (is_auto && img && element_view_has_box(lxb_dom_interface_node(img)) && iss_allows_auto_sizes(img)) {
+        if (is_auto && img && element_view_has_box(lxb_dom_interface_node(img)) && image_source_set_allows_auto_sizes(img)) {
             size = used_value_content_px(img, false).px;
             is_auto = false;
         }

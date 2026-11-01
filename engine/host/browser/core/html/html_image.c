@@ -62,6 +62,7 @@ static JSAtom  g_atom_state = JS_ATOM_NULL;
 /* Declared once per AGENT; installed into every realm. */
 static int g_id_factory = -1;   /* §4.8.3's `Image(width, height)` argument declaration */
 static int g_task_stepid = -1;  /* the DOM manipulation task that fires `load` or `error` at the element */
+static int g_update_stepid = -1;   /* §4.8.4.3.5's microtask that performs the rest of the algorithm */
 /* §4.8.3's `width` and `height` SETTERS, indexed by the same magic their getters carry — 0 is the horizontal
    one — so the pair cannot be installed against each other's declaration. */
 static int g_id_set_dimension[2] = { -1, -1 };
@@ -829,15 +830,13 @@ static JSValue img_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSVa
  * That pair is the whole reason the split exists, and dropping it is not a simplification: a bundle that writes
  * `img.crossOrigin = "anonymous"; img.src = u` would issue TWO requests for one image, and every one of them
  * would fire its own event at the element.
- * It runs none of the page's code — it resolves a URL, records an endpoint and hands the request to the host —
- * so it is a data closure. func_data = [the element's wrapper, the generation this instance was started at]. */
-static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                               int magic, JSValueConst *func_data)
+ * It runs none of the page's code, but selecting the source can read layout, so the microtask is a step machine
+ * (below) and this is its tail: everything after the selection, given the generation the instance was started
+ * at and the selected set, which it releases. */
+static void img_update_rest_selected(JSContext *ctx, JSValueConst elv, int32_t started, ImageSourceSet ss)
 {
-    JSValueConst elv = func_data[0];
     lxb_dom_element_t *el = element_of_value(elv);
     JSValue st;
-    int32_t started = 0;
     const char *selected;
     size_t selected_n = 0;
     char *abs = NULL;
@@ -848,41 +847,11 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        refused by step 7 where a plain `<img src>` is upgraded and loaded; the two differ, and stating this
        is the whole of what makes them differ correctly. */
     const char *initiator;
-    ImageSourceSet ss;
     bool as_pending;
     int i;
 
-    (void)this_val; (void)argc; (void)argv; (void)magic;
-    DCHECK(el != NULL, "§4.8.4.3.5's microtask continuation was queued for something that is not an element");
-    JS_ToInt32(ctx, &started, func_data[1]);
     st = img_state(ctx, elv);
-    /* "If another instance of this algorithm for this img element was started after this instance … return." */
-    if (st_int(ctx, st, "gen") != started) { JS_FreeValue(ctx, st); return JS_UNDEFINED; }
 
-    /* "Let selected source and selected pixel density be the URL and pixel density that results from SELECTING
-       AN IMAGE SOURCE" — §4.8.4.3.7, whose first step updates the source set (§4.8.4.3.9) and whose grammar and
-       choice are core/html/image_source_set.h's whole problem. IT IS ASKED FOR EVERY `img` AND NOT ONLY FOR ONE
-       THAT USES SRCSET OR PICTURE, which is the standard's own shape and is why this file no longer reads the
-       `src` attribute for itself: for an element with a bare `src`, §4.8.4.3.9 sets default source to that
-       attribute's value, §4.8.4.3.8 step 4 appends it (there is no 1x and no width descriptor to stop it) and
-       §4.8.4.3.12 gives it a 1x — the same single candidate the hand-written branch produced, out of the
-       algorithm that is defined to produce it rather than out of a second one that agreed with it.
-       THE SELECTED PIXEL DENSITY IS STILL NOT CARRIED, AND THE REASON IS NOW THE STANDARD'S RATHER THAN THIS
-       BUILD'S. It used to be that the density "is only ever read back by the density-corrected natural
-       dimensions — a decoded image's, which this agent has none of"; those dimensions exist now
-       (core/image/image_header.h), so that argument is retired. What replaces it is a fact about §4.8.4.3.5
-       itself: the algorithm states "Set the current request's CURRENT PIXEL DENSITY to selected pixel
-       density" in exactly ONE place, the branch taken when §4.8.4.3.3's list of available images HITS, and
-       the fetch branch below states no such assignment at all. So an image this agent fetches keeps the
-       current pixel density at §4.8.4.3's own initial value — "Each image request has a current pixel
-       density, which must INITIALLY BE 1" — and img_density_corrected divides by that 1. Writing the selected
-       density here instead would be performing a step §4.8.4.3.5 does not contain.
-       NAMED RESIDUAL. WHAT IS NOT COVERED: an element whose selected source carries a non-1x density
-       descriptor (`srcset="a@2x.png 2x"`) reports natural dimensions 2x larger than a browser does. WHAT THE
-       NEXT DIFF BUILDS: §4.8.4.3.3's list of available images, whose cache-hit branch is where §4.8.4.3.5
-       DOES state the assignment and is therefore where the density stops being 1. HOW ITS ABSENCE SHOWS:
-       `naturalWidth` on a 2x srcset image answers the file's pixel count rather than half of it. */
-    image_source_set_select(ctx, el, &ss);
 
     /* EVERY IMAGE SOURCE IN THE SET IS AN ADDRESS THE BUNDLE SHIPPED, and only ONE of them is fetched. The
        others are what a browser at another device pixel ratio or another viewport requests from the same
@@ -918,7 +887,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
             endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_IMAGE_ELEMENT);
         image_source_set_release(ctx, &ss);
         JS_FreeValue(ctx, st);
-        return JS_UNDEFINED;
+        return;
     }
 
     selected = ss.selected >= 0 ? ss.items[ss.selected].url : NULL;
@@ -939,7 +908,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         if (named_a_source) img_queue_fire(ctx, elv, "error");
         image_source_set_release(ctx, &ss);
         JS_FreeValue(ctx, st);
-        return JS_UNDEFINED;
+        return;
     }
 
     /* "Let urlString be the result of encoding-parsing-and-serializing a URL given selected source, relative to
@@ -959,7 +928,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         img_queue_fire(ctx, elv, "error");
         image_source_set_release(ctx, &ss);
         JS_FreeValue(ctx, st);
-        return JS_UNDEFINED;
+        return;
     }
     /* THE SELECTED SOURCE HAS BEEN COPIED INTO `abs` AND IS NOT READ AGAIN, so the set is released here rather
        than at each return below it — `selected` points INTO the set and every read of that pointer is above
@@ -980,7 +949,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         if (same) {
             free(abs);
             JS_FreeValue(ctx, st);
-            return JS_UNDEFINED;
+            return;
         }
     }
     /* "If urlString is the same as the current request's current URL and the current request's state is
@@ -1091,7 +1060,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         img_queue_fire(ctx, elv, "error");
         free(abs);
         JS_FreeValue(ctx, st);
-        return JS_UNDEFINED;
+        return;
     }
 
     {
@@ -1181,8 +1150,132 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     }
     free(abs);
     JS_FreeValue(ctx, st);
-    return JS_UNDEFINED;
+    return;
 }
+
+/* The microtask itself. "If another instance of this algorithm for this img element was started after this
+   instance (even if it aborted and is no longer running), then return" is asked first. The selection's one
+   layout read (§4.8.4.3.11 step 3.3's concrete object size width, for an `img` that allows auto-sizes and is
+   being rendered) is asked ahead of it under a resting drive on the job the state owns, CSSOM VIEW §6
+   `clientWidth`'s shape, so a wide box rests with its questions suspended; the selection then runs inside the
+   job over the answered memo, and the tail runs after it leaves. argv = [the element's wrapper, the
+   generation]. */
+#define IMG_UPDATE_STAGES(X) \
+    X(IMGU_SELECT, "HTML §4.8.4.3.5 Updating the image data — the microtask's selection of an image source " \
+                   "(§4.8.4.3.7), its layout asked under one resting drive per activation")
+enum { IMG_UPDATE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const img_update_steps[] = { IMG_UPDATE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr  hdr;   /* FIRST — the driver writes the def and the operand bounds through it */
+    LayoutJob *job;   /* owned, declared through layout_job_step_ops; NULL before the first activation */
+} ImgUpdate;
+
+static void img_update_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    ImgUpdate *s = stp;
+
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
+}
+
+static int img_update_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    ImgUpdate *s = stp;
+    JSValueConst elv = step_arg(&s->hdr, 0);
+    lxb_dom_element_t *el = element_of_value(elv);
+    lxb_dom_node_t *node = lxb_dom_interface_node(el);
+    int32_t started = 0;
+    ImageSourceSet ss;
+    LayoutJobDrive d;
+    CssPx px;
+    JSValue st;
+    bool matched, done;
+    int rc;
+
+    (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(IMG_UPDATE_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(IMGU_SELECT);
+    DCHECK(el != NULL && img_is_node(node),
+           "§4.8.4.3.5's microtask continuation was queued for something that is not an img element");
+    JS_ToInt32(ctx, &started, step_arg(&s->hdr, 1));
+    st = img_state(ctx, elv);
+    /* "If another instance of this algorithm for this img element was started after this instance … return." */
+    if (st_int(ctx, st, "gen") != started) {
+        JS_FreeValue(ctx, st);
+        return JS_STEP_DONE;
+    }
+    JS_FreeValue(ctx, st);
+    if (s->job == NULL) s->job = layout_job_new();
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, &s->hdr, s->job);
+    if (rc) return rc;
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    matched = element_view_box_tests_ask(node);
+    DCHECK(matched || layout_job_drive_spent(&d),
+           "§4.8.4.3.5's selection's box tests parked an author match with the drive's allowance unspent, so "
+           "its next activation would ask the same thing over the same state for ever");
+    done = matched;
+    if (matched && image_source_set_allows_auto_sizes(el) && element_view_has_box(node)) {
+        done = false;
+        while (block_flow_drive_deferred(&d)) {
+            if (used_value_content_ask(el, false, &px)) {
+                done = true;
+                break;
+            }
+            DCHECK(layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+                   "§4.8.4.3.11 step 3.3's concrete object size answered \"not yet\" with no question suspended "
+                   "and no allowance spent, so its next activation would ask the same thing for ever");
+        }
+    }
+    layout_job_drive_end(&d);
+    /* "Let selected source and selected pixel density be the URL and pixel density that results from SELECTING
+       AN IMAGE SOURCE" — §4.8.4.3.7, whose first step updates the source set (§4.8.4.3.9) and whose grammar and
+       choice are core/html/image_source_set.h's whole problem. IT IS ASKED FOR EVERY `img` AND NOT ONLY FOR ONE
+       THAT USES SRCSET OR PICTURE, which is the standard's own shape and is why this file no longer reads the
+       `src` attribute for itself: for an element with a bare `src`, §4.8.4.3.9 sets default source to that
+       attribute's value, §4.8.4.3.8 step 4 appends it (there is no 1x and no width descriptor to stop it) and
+       §4.8.4.3.12 gives it a 1x — the same single candidate the hand-written branch produced, out of the
+       algorithm that is defined to produce it rather than out of a second one that agreed with it.
+       THE SELECTED PIXEL DENSITY IS STILL NOT CARRIED, AND THE REASON IS NOW THE STANDARD'S RATHER THAN THIS
+       BUILD'S. It used to be that the density "is only ever read back by the density-corrected natural
+       dimensions — a decoded image's, which this agent has none of"; those dimensions exist now
+       (core/image/image_header.h), so that argument is retired. What replaces it is a fact about §4.8.4.3.5
+       itself: the algorithm states "Set the current request's CURRENT PIXEL DENSITY to selected pixel
+       density" in exactly ONE place, the branch taken when §4.8.4.3.3's list of available images HITS, and
+       the fetch branch below states no such assignment at all. So an image this agent fetches keeps the
+       current pixel density at §4.8.4.3's own initial value — "Each image request has a current pixel
+       density, which must INITIALLY BE 1" — and img_density_corrected divides by that 1. Writing the selected
+       density here instead would be performing a step §4.8.4.3.5 does not contain.
+       NAMED RESIDUAL. WHAT IS NOT COVERED: an element whose selected source carries a non-1x density
+       descriptor (`srcset="a@2x.png 2x"`) reports natural dimensions 2x larger than a browser does. WHAT THE
+       NEXT DIFF BUILDS: §4.8.4.3.3's list of available images, whose cache-hit branch is where §4.8.4.3.5
+       DOES state the assignment and is therefore where the density stops being 1. HOW ITS ABSENCE SHOWS:
+       `naturalWidth` on a 2x srcset image answers the file's pixel count rather than half of it. */
+    if (done) image_source_set_select(ctx, el, &ss);
+    layout_job_leave(s->job);
+    rest_unit_end();
+    if (layout_job_declined(s->job)) {
+        DCHECK(!done, "§4.8.4.3.5's selection completed over a cascade the job's fork had not yet decided");
+        rc = layout_job_fork(ctx, &s->hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
+    if (!done) {
+        layout_job_rested(s->job);
+        return JS_STEP_YIELD;
+    }
+    img_update_rest_selected(ctx, elv, started, ss);
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef img_update_def = {
+    sizeof(ImgUpdate), img_update_step, NULL, 0,
+    .visit = img_update_visit,
+    .algorithm = "HTML §4.8.4.3.5 Updating the image data — the microtask that performs the rest of the algorithm",
+    .steps = img_update_steps
+};
 
 void html_image_update(JSContext *ctx, lxb_dom_element_t *el)
 {
@@ -1250,9 +1343,9 @@ void html_image_update(JSContext *ctx, lxb_dom_element_t *el)
     gv = JS_NewInt32(ctx, gen);
     data[0] = wrap;
     data[1] = gv;
-    fn = JS_NewCFunctionData(ctx, img_update_rest, 0, 0, 2, data);
+    fn = JS_NewCFunction2(ctx, NULL, "imageUpdateTheRest", 2, JS_CFUNC_step, g_update_stepid);
     CHECK(!JS_IsException(fn), "§4.8.4.3.5: OOM allocating the microtask the rest of the algorithm runs in");
-    JS_EnqueueCallJob(ctx, fn, 0, NULL);   /* a MICROTASK, which is what the standard queues */
+    JS_EnqueueCallJob(ctx, fn, 2, data);   /* a MICROTASK, which is what the standard queues */
     JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, gv);
     JS_FreeValue(ctx, st);
@@ -1720,6 +1813,7 @@ void html_image_declare(JSContext *ctx)
        reads it through idl_arg_given. Declaring a default would make every call give a width. */
     idl_optional_from(0);
     g_task_stepid = JS_RegisterStepDef(rt, &img_task_def);
+    g_update_stepid = JS_RegisterStepDef(rt, &img_update_def);
     g_ready = 1;
 }
 
@@ -1785,4 +1879,5 @@ void html_image_free(JSRuntime *rt)
     g_id_dimension[0] = -1;
     g_id_dimension[1] = -1;
     g_task_stepid = -1;
+    g_update_stepid = -1;
 }

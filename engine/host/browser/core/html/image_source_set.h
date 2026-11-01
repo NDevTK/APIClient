@@ -160,4 +160,9 @@ typedef struct {
 void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, ImageSourceSet *out);
 void image_source_set_release(JSContext *ctx, ImageSourceSet *s);
 
+/* HTML §4.8.3's "an img element ALLOWS AUTO-SIZES": the one condition under which selection reads layout (step
+   3.3 of §4.8.4.3.11 "Parsing a sizes attribute" takes the concrete object size width of an `img` that is also
+   being rendered), so a caller that asks that layout ahead of the selection asks this first. NULL answers false. */
+bool image_source_set_allows_auto_sizes(lxb_dom_element_t *img);
+
 #endif
