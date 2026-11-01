@@ -42,6 +42,7 @@
 #include "core/timing/timer.h"
 #include "solver/engine.h"
 #include "solver/rest_unit.h"   /* how many §E.2 offers step 22 paints per rest */
+#include "solver/metrics.h"     /* `_layoutPaintRests` */
 #include "solver/dom_cow.h"   /* the site-set census this half is asked from — see dom_cow_rendering_asked */
 
 /* THE UA'S REFRESH RATE. See rendering.h: the spec hands this to the user agent, so answering it is modelling
@@ -1242,6 +1243,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         layout_job_leave(u->job);
         if (more) {
             layout_job_rested(u->job);
+            METRIC_ADD(paint_rests, 1);
             return JS_STEP_YIELD;
         }
         s->paint = NULL;

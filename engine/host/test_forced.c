@@ -1190,6 +1190,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/contentsflex.h"
 #include "fixture/inlineflex.h"
 #include "fixture/clientextent.h"
+#include "fixture/paintrest.h"
 #include "fixture/deepnest.h"
 #include "fixture/contain.h"
 #include "fixture/gridsizing.h"
@@ -1770,6 +1771,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "contentsflex", HTML_CONTENTSFLEX },
     { "inlineflex", HTML_INLINEFLEX },
     { "clientextent", HTML_CLIENTEXTENT },
+    { "paintrest", HTML_PAINTREST },
     { "deepnest", HTML_DEEPNEST },
     { "contain", HTML_CONTAIN },
     { "gridsizing", HTML_GRIDSIZING },
@@ -14722,6 +14724,27 @@ TF_UNIT void probes_clientextent(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `paintrest` document (fixture/paintrest.h). */
+TF_UNIT void probes_paintrest(const char *js, Probe *tab, int *n) {
+    /* Update the rendering step 22's rests between CSS 2.1 §E.2's offers, read from the counter
+       core/rendering/rendering.c raises where its paint yields. */
+    const char *rests = strstr(js, "\"_layoutPaintRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"_layoutPaintRests\":"), NULL, 10) : -1;
+    const char *pr_why = NULL; int pr_tt = 1;
+
+    fold_row(&pr_tt, &pr_why, !!strstr(js, "\"/api/paintrest\""),
+             "NOT REACHED: there is no /api/paintrest record at all, so the document aborted before its fetch");
+    fold_row(&pr_tt, &pr_why, rests != NULL,
+             "the result document carries no `_layoutPaintRests` row from solver/metrics/layout.def");
+    fold_row(&pr_tt, &pr_why, nrests >= 1,
+             "update the rendering step 22 painted about two hundred CSS 2.1 §E.2 offers without a rest, so its "
+             "paint ran to completion in one activation instead of yielding between offers");
+    const Probe rows[] = {
+        { "paint-rests", pr_tt, "/api/paintrest", SESS_EXPLORE, pr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `contchain` document (fixture/contchain.h). */
 TF_UNIT void probes_contchain(const char *js, Probe *tab, int *n) {
     /* The waiting arm parks inside a 100000-link continuation chain and is released with the frontier; the
@@ -22887,6 +22910,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);
     probes_clientextent(js, probes, &np);
+    probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
     probes_contain(js, probes, &np);
     probes_gridsizing(js, probes, &np);
