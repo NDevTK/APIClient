@@ -239,7 +239,7 @@ console.log('[level1] ── the one index ──');
 
 console.log('[level1] ── the order carries no unit ──');
 {
-  /* The engine states pulls as its work over ENGINE_QUANTUM_WORK (main.c's qjs_level1_account), so a work unit
+  /* The engine states pulls as its work over ENGINE_PULL_WORK (main.c's qjs_level1_account), so a work unit
      k times finer multiplies both and states the same pulls; the order is then a function of counts alone. */
   const state = [['https://a.test/', 4, 23 * 54000], ['https://a.test/x', 1, 9 * 54000],
                  ['https://b.test/', 9, 80 * 54000], ['https://c.test/', 0, 3 * 54000]];
