@@ -219,6 +219,11 @@ CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx conten
    height", which `HTMLImageElement.width` reports. */
 CssPx used_value_content_px(lxb_dom_element_t *el, bool vertical);
 
+/* The entry above asked under a step machine's resting drive, as `used_value_padding_edge_ask` asks its own (the
+   content and padding extents are one derivation over one surround): false ("not yet") with `*out` unwritten
+   when an operand was deferred. */
+bool used_value_content_ask(lxb_dom_element_t *el, bool vertical, CssPx *out);
+
 /* The same extent computed as though the box were block-level in normal flow: CSS 2.1 §10.6 "Calculating
    heights and margins"' and §10.7 "Minimum and maximum heights: 'min-height' and 'max-height'"' rules with the
    box classified as §10.3.3's, as a content-box extent. Its one caller is css-flexbox-1 §9.4 "Cross Size

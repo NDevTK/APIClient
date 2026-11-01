@@ -13,6 +13,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/endpoint.h"      /* every request host-edge funnels one endpoint into the @H surface */
+#include "solver/rest_unit.h"   /* one activation of a layout step machine is one unit */
 #include "solver/engine.h"     /* the ONE composition of what a request this running code builds is evidence of */
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
@@ -21,6 +22,8 @@
 #include "core/dom/element.h"
 #include "core/dom/element_view.h"   /* §4.8.3's "being rendered", which is §6's "has an associated box" */
 #include "core/dom/document.h"
+#include "core/layout/block_flow.h"      /* the resting drive's deferred questions */
+#include "core/layout/layout_job.h"      /* the job determine the dimensions' step machine owns */
 #include "core/layout/replaced_element.h" /* HTML §15.4.2's rules, which decide whether §10 applies at all */
 #include "core/layout/used_value.h"  /* §4.8.3's "rendered width and height" — CSS 2.1 §10's used values */
 #include "core/dom/shadow_root.h"
@@ -62,6 +65,7 @@ static int g_task_stepid = -1;  /* the DOM manipulation task that fires `load` o
 /* §4.8.3's `width` and `height` SETTERS, indexed by the same magic their getters carry — 0 is the horizontal
    one — so the pair cannot be installed against each other's declaration. */
 static int g_id_set_dimension[2] = { -1, -1 };
+static int g_id_dimension[2] = { -1, -1 };   /* their getters, step machines, by the same magic */
 static int g_ready;
 
 /* §4.8.3's members this build does not have, asserted absent per realm rather than left as a silence the
@@ -1404,17 +1408,58 @@ static JSValue js_img_natural(JSContext *ctx, JSValueConst this_val, int magic)
  * the initial containing block carries that fact (core/layout/used_value.h), and `img.width < 768` is the same
  * responsive question `innerWidth < 768` is — so the number is minted as a concolic exactly as CSSOM VIEW §6's
  * extents are, through the shared conversion that also owns the rounding to an integral IDL value. */
-static JSValue js_img_dimension(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    lxb_dom_element_t *el;
-    JSValue st;
-    bool vertical = magic != 0;
+/* Step 1 is the step machine's, asked under a resting drive on the job the state owns, as CSSOM VIEW §6's
+   `clientWidth` asks its padding edge: the box tests read the author matches of the element and its ancestors,
+   which rest between rules (element_view_box_tests_ask), and the content extent is laid out with its questions
+   suspended across rests. Steps 2 and 3 read no layout and answer in the activation that reaches them. */
+#define IMG_DIMENSION_STAGES(X) \
+    X(IMG_DIMENSION_MEASURE, "HTML §4.8.3 \"The img element\" determine the dimensions (step 1's rendered " \
+                             "width and height, one resting drive per activation; then steps 2-3)")
+enum { IDL_STEP_STAGE_BASE(IMG_DIMENSION_STAGES) IMG_DIMENSION_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const IMG_DIMENSION_STEPS[] = { IMG_DIMENSION_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    if (!img_is(this_val))
-        return JS_ThrowTypeError(ctx, "%s called on something that is not an img element",
-                                 vertical ? "height" : "width");
-    el = element_of_value(this_val);
-    if (element_view_has_box(lxb_dom_interface_node(el))) {                     /* step 1 */
+typedef struct {
+    LayoutJob *job;        /* owned, declared through layout_job_step_ops; NULL before the first activation */
+    bool       rendered;   /* step 1's condition held, so its content extent is being asked */
+} ImgDimensionState;
+
+static void img_dimension_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    ImgDimensionState *s = st;
+
+    v->tree(ctx, (void **)&s->job, NULL, 0, &layout_job_step_ops);
+}
+
+static int js_img_dimension_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    ImgDimensionState *s = st;
+    bool vertical = idl_step_magic(hdr) != 0, matched, done = false;
+    lxb_dom_element_t *el = element_of_value(hdr->this_val);
+    LayoutJobDrive d;
+    CssPx px = css_px(0.0);
+    JSValue state;
+    int rc;
+
+    (void)argc; (void)argv; (void)cb_result; (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(IMG_DIMENSION_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(IMG_DIMENSION_MEASURE);
+    DCHECK(img_is(hdr->this_val), "§4.8.3's determine the dimensions reached its body on a receiver that is not an "
+                                  "img element — the member states img_is at its declaration");
+    if (s->job == NULL) s->job = layout_job_new(LAYOUT_JOB_STEP);
+    /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
+    rc = layout_job_fork(ctx, hdr, s->job);
+    if (rc) return rc;
+    rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);
+    layout_job_enter(s->job);
+    layout_job_drive_begin_resting(&d);
+    matched = element_view_box_tests_ask(lxb_dom_interface_node(el));
+    DCHECK(matched || layout_job_drive_spent(&d),
+           "§4.8.3's determine the dimensions' box tests parked an author match with the drive's allowance "
+           "unspent, so its next activation would ask the same thing over the same state for ever");
+    /* Step 1's condition, read inside the job so the box tests' cascade is held by the job's records. */
+    if (matched && !s->rendered && element_view_has_box(lxb_dom_interface_node(el))) {
         /* BEING RENDERED IS NOT THE SAME AS BEING REPLACED, and this is the one member where the difference
            reaches a page as a number. HTML §15.4.2 "Images"' third rule makes an `img` that represents text —
            a broken image with an `alt` — a NON-REPLACED PHRASING ELEMENT, which still generates a box and is
@@ -1443,25 +1488,59 @@ static JSValue js_img_dimension(JSContext *ctx, JSValueConst this_val, int magic
                   "than a read. DECIDE which edge that term names, against real Chrome per CLAUDE.md's "
                   "confirmation rule, and this member is one call. ITS ABSENCE SHOWS as this abort on "
                   "`<img src=... alt=...>` whose request broke, in any rendered document");
-        return element_view_length_long(ctx, used_value_content_px(el, vertical));
+        s->rendered = true;
     }
-    st = img_state(ctx, this_val);
+    while (matched && s->rendered && block_flow_drive_deferred(&d)) {
+        if (used_value_content_ask(el, vertical, &px)) {
+            done = true;
+            break;
+        }
+        DCHECK(layout_job_drive_spent(&d) || layout_job_drive_pending(&d),
+               "§4.8.3's determine the dimensions answered \"not yet\" with no question suspended and no "
+               "allowance spent, so its next activation would ask the same thing over the same state for ever");
+    }
+    layout_job_drive_end(&d);
+    layout_job_leave(s->job);
+    rest_unit_end();
+    if (layout_job_declined(s->job)) {
+        rc = layout_job_fork(ctx, hdr, s->job);
+        return rc ? rc : JS_STEP_YIELD;
+    }
+    if (!matched || (s->rendered && !done)) {
+        layout_job_rested(s->job);
+        return JS_STEP_YIELD;
+    }
+    if (done) {   /* step 1 */
+        *presult = element_view_length_long(ctx, px);
+        return JS_STEP_DONE;
+    }
+    state = img_state(ctx, hdr->this_val);
     /* Step 2: "If image is AVAILABLE and has density-corrected natural width and height, then return its
        density-corrected natural width and height, in CSS pixels." Both conjuncts are img_density_corrected's
        answer — being available IS having them, which is what §4.8.4.3's definitions of the two available
        states say ("obtained ... and at least the image dimensions"). */
     {
         double w = 0.0, h = 0.0;
-        bool have = img_density_corrected(ctx, st, &w, &h);
+        bool have = img_density_corrected(ctx, state, &w, &h);
 
-        JS_FreeValue(ctx, st);
-        if (have) return JS_NewInt32(ctx, (int32_t)(vertical ? h : w));
+        JS_FreeValue(ctx, state);
+        if (have) {
+            *presult = JS_NewInt32(ctx, (int32_t)(vertical ? h : w));
+            return JS_STEP_DONE;
+        }
     }
-    /* Step 3: "Return a width of 0 and a height of 0." Not a fallback and not a shrug — it is the algorithm's
-       own final step, and it is the answer for every `img` that is not being rendered: one in a document no
-       navigable presents, one whose `display` computes to `none`, one that has never been inserted. */
-    return JS_NewInt32(ctx, 0);
+    /* Step 3: "Return a width of 0 and a height of 0." It is the answer for every `img` that is not being
+       rendered: one in a document no navigable presents, one whose `display` computes to `none`, one that has
+       never been inserted. */
+    *presult = JS_NewInt32(ctx, 0);
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl IMG_DIMENSION_STEP = {
+    js_img_dimension_step, sizeof(ImgDimensionState), img_dimension_visit, NULL,
+    "HTML §4.8.3 \"The img element\" width / height getter steps (determine the dimensions)",
+    IMG_DIMENSION_STEPS
+};
 
 /* THE OTHER HALF OF `[CEReactions, ReflectSetter] attribute unsigned long width`, which is what makes these two
  * members asymmetric: the GETTER is §4.8.3's determine the dimensions above and the SETTER is an ordinary
@@ -1628,6 +1707,10 @@ void html_image_declare(JSContext *ctx)
        why they are declared rather than written as plain C setters. */
     g_id_set_dimension[0] = idl_setter_id(ctx, IDL_UNSIGNED_LONG, false, js_img_dimension_set, 0);
     g_id_set_dimension[1] = idl_setter_id(ctx, IDL_UNSIGNED_LONG, false, js_img_dimension_set, 1);
+    g_id_dimension[0] = idl_getter_id_step(ctx, &IMG_DIMENSION_STEP, 0);
+    idl_this_iface(img_is, "HTMLImageElement");
+    g_id_dimension[1] = idl_getter_id_step(ctx, &IMG_DIMENSION_STEP, 1);
+    idl_this_iface(img_is, "HTMLImageElement");
     g_id_factory = idl_method_id(ctx, FACTORY_ARGS, 2, js_image_factory, 0);
     /* `Image(optional unsigned long width, optional unsigned long height)` — BOTH optional, which is what
        makes the function object's `length` 0 (Web IDL §3.7.2 "Legacy factory functions": "the length of the
@@ -1651,8 +1734,8 @@ void html_image_install(JSContext *ctx, JSValueConst proto)
     /* `[CEReactions, ReflectSetter] attribute unsigned long width` and its `height` twin. `ReflectSetter` and
        not `Reflect` is what keeps them out of core/html/html_element.c's reflection table: only the SETTER is a
        reflection, and the getter is §4.8.3's determine the dimensions, which is a layout question. */
-    idl_install_accessor(ctx, proto, "width", js_img_dimension, 0, g_id_set_dimension[0]);
-    idl_install_accessor(ctx, proto, "height", js_img_dimension, 1, g_id_set_dimension[1]);
+    idl_install_accessor_step(ctx, proto, "width", g_id_dimension[0], g_id_set_dimension[0]);
+    idl_install_accessor_step(ctx, proto, "height", g_id_dimension[1], g_id_set_dimension[1]);
     idl_install_accessor(ctx, proto, "complete", js_img_complete, 0, -1);
     idl_install_accessor(ctx, proto, "currentSrc", js_img_current_src, 0, -1);
     idl_members_excluded(ctx, proto, "HTMLImageElement", IMG_ABSENT,
@@ -1699,5 +1782,7 @@ void html_image_free(JSRuntime *rt)
     g_id_factory = -1;
     g_id_set_dimension[0] = -1;
     g_id_set_dimension[1] = -1;
+    g_id_dimension[0] = -1;
+    g_id_dimension[1] = -1;
     g_task_stepid = -1;
 }
