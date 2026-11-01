@@ -145,22 +145,19 @@ typedef struct {
     JSValue      undecided_url;
 } ImageSourceSet;
 
-/* UPDATE THE SOURCE SET FOR `el` AND CHOOSE FROM IT: §4.8.4.3.9 (with the `<picture>` walk for an `img`), the
-   two parsers it runs (§4.8.4.3.10, §4.8.4.3.11), §4.8.4.3.12's normalization, and §4.8.4.3.7's
-   select-an-image-source-from-a-source-set.
-   For an `img` that composition IS §4.8.4.3.7 "Selecting an image source", whole. For a `link` it is
-   §4.6.8.20 Link type "preload"'s fetch-and-process step 1 plus its "to preload" step 2 — see the header for
-   why one entry serves both and where the two callers part company.
-   `el` MUST be an `img` or a `link` element — asserted.
-   `ctx` is the element's NODE DOCUMENT's realm, never the realm that performed the write, because every
-   viewport-relative length and every media query in here is answered per document (core/css/media_query.h).
-   `auto_width` is §4.8.4.3.11 step 3.3's concrete object size width of img, which the caller answers inside its
-   layout job before the selection: non-NULL only for an `img` that is being rendered and allows auto-sizes, and
-   always NULL for a `link`, whose img is null (§4.8.4.3.9 step 4). The selection itself reads no layout.
-   `out` is filled entirely; the caller releases it.
-   `out->selected` is an index into `out->items`, or -1 for "no source was chosen" — which is §4.8.4.3.7 step
-   2's null URL for an `img`, and for a `link` is the only outcome §4.2.4.3's create a link request permits
-   ("Assert: options's href is not the empty string"). `out->undecided` answers -1 too and carries the shape. */
+/* Update the source set for `el` and choose from it: §4.8.4.3.9 (with the `<picture>` walk for an `img`), its
+   parsers (§4.8.4.3.10, §4.8.4.3.11), §4.8.4.3.12's normalization and §4.8.4.3.7's select-an-image-source. For
+   an `img` that is §4.8.4.3.7 "Selecting an image source"; for a `link` it is §4.6.8.20 "preload"'s
+   fetch-and-process step 1 and its "to preload" step 2 (see the header for where the callers part).
+   `el` must be an `img` or a `link` (asserted). `ctx` is the element's node document's realm, because every
+   viewport-relative length and media query here is answered per document (core/css/media_query.h).
+   `auto_width` is §4.8.4.3.11 step 3.3's concrete object size width, answered by the caller inside its layout
+   job: non-NULL only for a rendered `img` that allows auto-sizes; NULL for a `link`, whose img is null
+   (§4.8.4.3.9 step 4). The selection reads no layout.
+   `out` is filled entirely and released by the caller. `out->selected` indexes `out->items`, or is -1 for no
+   source: §4.8.4.3.7 step 2's null URL for an `img`, and for a `link` the only outcome §4.2.4.3's create a link
+   request permits ("Assert: options's href is not the empty string"). `out->undecided` answers -1 with the
+   shape. */
 void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, const CssPx *auto_width, ImageSourceSet *out);
 void image_source_set_release(JSContext *ctx, ImageSourceSet *s);
 
