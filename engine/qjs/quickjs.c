@@ -16182,6 +16182,19 @@ int JS_GetOwnSlotDesc(JSContext *ctx, JSPropertyDescriptor *pd, JSValueConst obj
         return -1;
     }
     p = JS_VALUE_GET_OBJ(obj);
+    /* A stand-in's slot is the object it stands in for (JSClassExoticMethods.forwarded_object), the one its
+       writes land on: HTML §7.2.3's WindowProxy holds no storage of its own for a Window's member. */
+    if (p->is_exotic && !p->fast_array) {
+        const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+        if (em && em->forwarded_object) {
+            JSValueConst fwd = em->forwarded_object(ctx, obj, prop);
+            if (!JS_IsUninitialized(fwd)) {
+                DCHECK(JS_VALUE_GET_TAG(fwd) == JS_TAG_OBJECT,
+                       "a stand-in forwarded a slot read to something that is not an object");
+                p = JS_VALUE_GET_OBJ(fwd);
+            }
+        }
+    }
     DCHECK(p->class_id != JS_CLASS_PROXY,
            "a COW delta holds a Proxy: capturing or swapping it would run the page's traps mid-context-switch");
     /* The read twin refuses what the write twin refuses, and this one fires at the CAPTURE rather than at the
