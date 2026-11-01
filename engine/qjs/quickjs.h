@@ -1041,6 +1041,10 @@ typedef struct JSClassExoticMethods {
     /* The JS_PROP_ C/W/E of the data descriptor op 2's hit is answered with (Web IDL §3.9.1's named-property
        descriptor). */
     int get_own_property_step_flags;
+    /* Whether [[Set]] passes over this class's get_own_property and get_own_property_step: Web IDL §3.9.2 [[Set]]
+       step 2 takes a legacy platform object's ownDesc from LegacyPlatformObjectGetOwnProperty(O, P, true), its
+       named properties ignored, so a class whose hooks answer only named properties declares it. */
+    bool set_ignores_named_properties;
     /* Whether an ordinary lookup walk run from C (OrdinaryGet, OrdinarySetWithOwnDescriptor, OrdinaryHasProperty)
        takes its next link from get_prototype above. A class declares it when its answer is a link whose chain
        ends, as HTML §7.2.3.1's (the Window's own prototype, or null) does. A class whose answer is a fresh value

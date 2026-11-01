@@ -16475,6 +16475,9 @@ TF_UNIT void probes_docnamed(const char *js, Probe *tab, int *n) {
         { "dn-desc", "desc", "true", "false", "a Document named property's descriptor is not §3.9.1's" },
         { "wn-desc", "wdesc", "true", "false", "a Window named property's descriptor is not §3.9.1's, unenumerable" },
         { "wn-global", "wglobal", "true", "false", "a bare global name did not reach the Window's named access" },
+        { "dn-set-ignores-named", "dset", "true", "false",
+          "a [[Set]] on the Document consulted its named properties (Web IDL §3.9.2 ignores them)" },
+        { "wn-set", "wset", "true", "false", "a write over a Window named property did not define on the Window" },
     };
     Probe rows[sizeof R / sizeof R[0]];
     for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {

@@ -127,14 +127,6 @@ static JSValue dn_value_of(JSContext *ctx, JSValueConst obj, const char *name, l
     return wrap;                                                                         /* step 3 */
 }
 
-static JSValue dn_value(JSContext *ctx, JSValueConst obj, const char *name, size_t n)
-{
-    lxb_dom_node_t *first;
-    int c = dn_count(dn_document(obj), name, n, &first);
-
-    return dn_value_of(ctx, obj, name, first, c);
-}
-
 /* `prop` as a String property name in `*name`/`*n` (JS_FreeCString it); false for a Symbol, which names no named
    property. */
 static bool dn_string_name(JSContext *ctx, JSAtom prop, const char **name, size_t *n)
@@ -223,26 +215,20 @@ void document_named_free(void)
     agent_state_reached("document");
 }
 
-/* Web IDL §3.9.1 [[GetOwnProperty]] for a C walk, reached by quickjs after the object's own properties missed,
-   which is the visibility algorithm's step 2; the Document's [LegacyOverrideBuiltIns] is its step 3.
-   LegacyPlatformObjectGetOwnProperty's descriptor: no named property setter, so not writable; enumerable and
-   configurable, the step's get_own_property_step_flags. */
+/* Web IDL §3.9.1 [[GetOwnProperty]] from C. The lookup rests per element as dn_step, which every keyed request
+   reaches (get_own_property_step), and [[Set]] ignores named properties (set_ignores_named_properties), so a C
+   activation asking for a String key is a caller to route onto the keyed entry. */
 static int dn_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
 {
     const char *name;
     size_t n;
-    JSValue v;
 
+    (void)desc; (void)obj;
     if (!dn_string_name(ctx, prop, &name, &n)) return 0;
-    v = dn_value(ctx, obj, name, n);
     JS_FreeCString(ctx, name);
-    if (JS_IsUndefined(v)) return 0;
-    if (!desc) { JS_FreeValue(ctx, v); return 1; }
-    desc->flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE;
-    desc->getter = JS_UNDEFINED;
-    desc->setter = JS_UNDEFINED;
-    desc->value = v;
-    return 1;
+    DFAIL("a C activation asked a Document's named [[GetOwnProperty]]: the lookup rests per element as dn_step, so "
+          "route this caller's read through the keyed entry (get_own_property_step), never a C walk");
+    return 0;
 }
 
 /* Whether `obj` has an ordinary own property `prop`: the visibility algorithm's step 2, asked without the hooks. */
@@ -345,10 +331,10 @@ static int dn_prevent_extensions(JSContext *ctx, JSValueConst obj)
     return 0;
 }
 
-/* Named residuals. Not covered: (1) a C walk — OrdinarySet's [[GetOwnProperty]] in JS_SetPropertyInternal2,
-   the [[OwnPropertyKeys]], [[DefineOwnProperty]] and [[Delete]] hooks — runs to completion uncharged; next diff
-   routes the keyed entry's GP_SET to the step and deletes dn_get_own's walk; absence shows as such an operation's
-   host time growing with the tree while twDomWalkInput does not. (2) A Document
+/* Named residuals. Not covered: (1) the [[OwnPropertyKeys]], [[DefineOwnProperty]] and [[Delete]] hooks walk the
+   tree in C to completion, uncharged; next diff makes each a request the keyed entry answers with dn_step's
+   walk; absence shows as such an operation's host time growing with the tree while twDomWalkInput does not.
+   (2) A Document
    holding a region of unknown markup (core/dom/unknown_markup.h) answers from the example's tree; next diff forks
    dn_step over the region as window.c's win_named_step does, with markup composed for §3.1.7's element types;
    absence shows as a `document.x` read after a sanitized innerHTML of attacker markup making no @S record. */
@@ -356,6 +342,7 @@ static const JSClassExoticMethods DOCUMENT_NAMED_EXOTIC = {
     .get_own_property = dn_get_own,
     .get_own_property_step = dn_get_own_step,
     .get_own_property_step_flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE,
+    .set_ignores_named_properties = true,
     .get_own_property_names = dn_own_names,
     .define_own_property = dn_define_own,
     .delete_property = dn_delete,

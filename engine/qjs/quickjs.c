@@ -17767,7 +17767,7 @@ retry:
                         JS_FreeValue(ctx, val);
                         return ret;
                     }
-                    if (em->get_own_property) {
+                    if (em->get_own_property && !em->set_ignores_named_properties) {
                         /* get_own_property can free the prototype */
                         obj1 = js_dup(JS_MKPTR(JS_TAG_OBJECT, p1));
                         ret = em->get_own_property(ctx, &desc,
@@ -32014,13 +32014,26 @@ static inline JSObject *tramp_accessor_getter(JSContext *ctx, JSValueConst obj, 
    a fallback: an own slot answers before the parent, and an EXOTIC object's [[Get]] is its own (an integer index
    is not a chain walk at all). That is the same stopping rule tramp_accessor_getter uses, and the same narrowing:
    a proxy ABOVE an exotic object is still reached from C. */
-static inline JSObject *tramp_proto_proxy(JSContext *ctx, JSValueConst obj, JSAtom atom) {
+static bool tramp_step_exotic(JSContext *ctx, JSObject *p, JSAtom atom);
+/* Whether a [[Set]] walk passes `p` after its own slots, never asking its class's hooks
+   (JSClassExoticMethods.set_ignores_named_properties). */
+static inline bool tramp_set_passes(JSContext *ctx, JSObject *p) {
+    const JSClassExoticMethods *em = p->is_exotic ? ctx->rt->class_array[p->class_id].exotic : NULL;
+    return em && em->set_ignores_named_properties;
+}
+/* …or the first object whose class answers `atom` with a step [[GetOwnProperty]] (tramp_step_exotic), asked after
+   its own slots as JS_GetOwnPropertyInternal2 asks them: 10.1.9.1 OrdinarySet step 1's ownDesc is that answer,
+   and the keyed entry's GP_SET runs the class's step for it. */
+static inline JSObject *tramp_proto_keyed_write(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     JSObject *p = tramp_walk_base(ctx, obj, atom);
     if (!p) return NULL;
     for (;;) {
         if (p->class_id == JS_CLASS_PROXY) return p;   /* before is_exotic: a proxy IS exotic */
         if (find_own_property1(p, atom)) return NULL;
-        if (!tramp_walk_continues(ctx, p, atom)) return NULL;
+        if (!tramp_set_passes(ctx, p)) {
+            if (tramp_step_exotic(ctx, p, atom)) return p;
+            if (!tramp_walk_continues(ctx, p, atom)) return NULL;
+        }
         p = js_walk_proto(ctx, p);
         if (!p) return NULL;
     }
@@ -32152,7 +32165,7 @@ static inline JSObject *tramp_accessor_setter(JSContext *ctx, JSValueConst obj, 
                the write too, and JS_SetPropertyInternal2's own exotic arm ends in call_setter, which DFAILs. */
             JSPropertyDescriptor xd;
             bool xfound = false;
-            if (!tramp_walk_continues_desc(ctx, p, atom, &xd, &xfound)) {
+            if (!tramp_set_passes(ctx, p) && !tramp_walk_continues_desc(ctx, p, atom, &xd, &xfound)) {
                 JSObject *xa = NULL;
                 if (xfound) {
                     xa = tramp_exotic_accessor(ctx, &xd, /*want_setter*/true);
@@ -33336,7 +33349,8 @@ enum { GD_TARGET = 0, GD_TARGET_GOT, GD_EXT, GD_EXT_GOT, GD_WALK };
     F(POD, uint8_t, no_throw)         /* 1 = the bare internal method's boolean; 0 = Set(O, P, V, true) */     \
     F(FACTS, JSDescFacts, facts)      /* step 3.b's answer, as the attribute bits 3.c tests */
 CONT_RECORD_DEFINE(JSSetRecv, js_set_recv, JS_SET_RECV_FIELDS)
-enum { SR_GOPD = 0, SR_GOPD_GOT, SR_DEFINE_GOT };
+/* SR_REFUSED: 10.1.9.2 step 2.a or 2.b refused before any request on the receiver. */
+enum { SR_GOPD = 0, SR_GOPD_GOT, SR_DEFINE_GOT, SR_REFUSED };
 
 /* ---- 10.5.11 [[OwnPropertyKeys]]'s invariant, as a phased machine ----
 
@@ -41990,6 +42004,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 int sflags;
                 bool ok;
                 cont_st = NULL;
+                if (sr->phase == SR_REFUSED) {
+                    ok = false;
+                    goto do_set_recv_answer;
+                }
                 if (sr->phase == SR_GOPD) {
                     /* 3.b: existingDescriptor is ? Receiver.[[GetOwnProperty]](P). The ATTRIBUTE BITS are what
                        3.c tests, so it is asked for as a record — building a descriptor object for 3.c to take
@@ -42328,7 +42346,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            no flow base. The two answers are mutually exclusive by construction: the proxy is
                            exotic and carries no own slot, so a walk that reaches it found no accessor first. */
                         tramp_px = gp_op == GP_GET ? tramp_proto_keyed_read(ctx, JS_MKPTR(JS_TAG_OBJECT, po), gp_atom)
-                                                   : tramp_proto_proxy(ctx, JS_MKPTR(JS_TAG_OBJECT, po), gp_atom);
+                                                   : tramp_proto_keyed_write(ctx, JS_MKPTR(JS_TAG_OBJECT, po), gp_atom);
                         if (tramp_px == po) {
                             /* this object's own [[GetOwnProperty]] forks over the key, so its step function
                                answers the read from here on (JSClassExoticMethods.get_own_property_step) */
@@ -42897,9 +42915,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         gp->nargs = 3;
                     }
                     if (step_gop) {
-                        /* f(obj, key, receiver, op): op 0 is [[Get]], 1 [[HasProperty]], 2 [[GetOwnProperty]] */
+                        /* f(obj, key, receiver, op): op 0 is [[Get]], 1 [[HasProperty]], 2 [[GetOwnProperty]],
+                           which a [[Set]] asks for 10.1.9.1 OrdinarySet step 1's ownDesc */
                         JS_FreeValue(ctx, gp->cb[2]);
                         gp->cb[2] = js_dup(gp->cb[0]);
+                        if (gp_op == GP_SET) { JS_FreeValue(ctx, gp->cb[4]); JS_FreeValue(ctx, gp->cb[5]); }
                         if (gp_op != GP_GET) gp->cb[4] = JS_UNDEFINED;
                         gp->cb[5] = js_int32(gp_op == GP_GET ? 0 : gp_op == GP_HAS ? 1 : 2);
                         gp->nargs = 4;
@@ -47011,9 +47031,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         bool ghit = tg->op == GP_HAS ? JS_ToBool(ctx, ret_val) : !JS_IsUndefined(ret_val);
                         JSObject *gproto = js_walk_proto(ctx, JS_VALUE_GET_OBJ(tg->obj));
 
-                        DCHECK(tg->op == GP_GET || tg->op == GP_HAS || tg->op == GP_GETOWNPROP,
+                        DCHECK(tg->op == GP_GET || tg->op == GP_HAS || tg->op == GP_GETOWNPROP || tg->op == GP_SET,
                                "a step [[GetOwnProperty]] answered an operation other than [[Get]], "
-                               "[[HasProperty]] or [[GetOwnProperty]]");
+                               "[[HasProperty]], [[GetOwnProperty]] or [[Set]]");
                         js_getprop_free(ctx, gp);
                         tg->gop_step = 0;
                         gp_obj = tg->obj; gp_atom = tg->atom; gp_op = tg->op; gp_val = tg->val;
@@ -47041,6 +47061,31 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 }
                             }
                             goto do_getprop_complete;
+                        }
+                        if (tg->op == GP_SET && (ghit || !gproto)) {
+                            /* 10.1.9.2 OrdinarySetWithOwnDescriptor over the class's data descriptor (or step
+                               1.c's {undefined, writable} past the chain's end): a non-writable one, or a receiver
+                               that is not an Object, refuses (steps 2.a, 2.b); otherwise steps 2.c-2.g run on the
+                               receiver, as the receiver completion does for a Proxy's walk. */
+                            int wflags = ghit ? rt->class_array[JS_VALUE_GET_OBJ(tg->obj)->class_id].exotic
+                                                    ->get_own_property_step_flags
+                                              : JS_PROP_WRITABLE;
+                            JSSetRecv *sr = js_mallocz(ctx, sizeof(*sr));
+
+                            JS_FreeValue(ctx, ret_val);
+                            ret_val = JS_UNDEFINED;
+                            if (unlikely(!sr)) { JS_ThrowOutOfMemory(ctx); goto getprop_throw; }
+                            CONT_OWN_SET(ctx, &sr->recv, gp_recv);
+                            CONT_OWN_SET(ctx, &sr->val, gp_val);
+                            CONT_OWN_SET_ATOM(ctx, &sr->atom, gp_atom);
+                            sr->no_throw = (uint8_t)gp_no_throw;
+                            sr->phase = (wflags & JS_PROP_WRITABLE) && JS_IsObject(gp_recv) ? SR_GOPD : SR_REFUSED;
+                            js_desc_facts_init(&sr->facts);
+                            sr->outer = gp_outer; sr->outer_kind = gp_outer_kind;
+                            gp_outer = NULL; gp_outer_kind = CONT_NONE;
+                            js_trapget_free(ctx, gp_trapst); gp_trapst = NULL;
+                            cont_st = sr;
+                            goto do_set_recv_step;
                         }
                         if (ghit || !gproto) {
                             if (tg->op == GP_HAS) { JS_FreeValue(ctx, ret_val); ret_val = js_bool(ghit); }
@@ -49823,7 +49868,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
                     goto do_getprop_tramp;
                 }
-                if (unlikely((tramp_px = tramp_proto_proxy(ctx, obj, atom)) != NULL)) {
+                if (unlikely((tramp_px = tramp_proto_keyed_write(ctx, obj, atom)) != NULL)) {
                     /* [[Set]] on a Proxy is the `set` trap plus the READ of that trap off the handler: the one
                        keyed-operation entry's GP_SET, the same request Reflect.set issues. no_throw is the
                        WRITER's strictness — 6.2.5.6 PutValue step 6 turns a refused write into a TypeError only
@@ -50596,7 +50641,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
                         goto do_getprop_tramp;
                     }
-                    if ((tramp_px = tramp_proto_proxy(ctx, (sp[-3]), katom)) != NULL) {
+                    if ((tramp_px = tramp_proto_keyed_write(ctx, (sp[-3]), katom)) != NULL) {
                         /* the same GP_SET request as `o.x = v`, three operands instead of two. It sits HERE, not
                            at the top of the opcode where the old reshape did: the key must go through
                            key_toprim first, so the coercion runs on the tramp instead of inside JS_ValueToAtom. */
@@ -50692,7 +50737,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    on the superclass prototype was invoked by call_setter from C and a `set` trap by js_proxy_set,
                    each aborting at its first back-edge with no flow base. Same two routes as the read, with the
                    receiver taken from sp[-4] instead of sp[-3]. */
-                tramp_px = tramp_proto_proxy(ctx, (sp[-3]), atom);
+                tramp_px = tramp_proto_keyed_write(ctx, (sp[-3]), atom);
                 if (!tramp_px) {
                     JSObject *st = tramp_accessor_setter(ctx, (sp[-3]), atom);
                     if (st) {   /* bytecode setter -> 1-arg method call [receiver=this, setter, value] */

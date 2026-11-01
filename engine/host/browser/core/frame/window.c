@@ -887,52 +887,21 @@ static JSValue win_named_value_of(JSContext *ctx, const char *name, lxb_dom_node
     return v;
 }
 
-/* The value for `name` from a C walk to completion, or JS_UNDEFINED when the name is not supported. Owned. */
-static JSValue win_named_value(JSContext *ctx, const char *name)
-{
-    lxb_dom_node_t *root = document_root_node(ctx), *first = NULL;
-    size_t n = strlen(name);
-    int count = 0;
-    JSValue out;
-
-    if (!*name) return JS_UNDEFINED;   /* the empty name is no name at all, and no attribute carries it */
-    out = win_named_navigable(ctx, name);
-    if (!JS_IsUndefined(out) || !root) return out;
-    for (lxb_dom_node_t *e = named_walk_successor(root, root); e && count < 2; e = named_walk_successor(e, root))
-        if (collections_window_named_is(lxb_dom_interface_element(e), name, n)) {
-            if (!count) first = e;
-            count++;
-        }
-    return count ? win_named_value_of(ctx, name, first, count) : JS_UNDEFINED;
-}
-
+/* HTML §7.2.2.3's [[GetOwnProperty]] from C. The lookup rests per element as win_named_step, which every keyed
+   request reaches (get_own_property_step), [[Set]]'s OrdinarySet included, so a C activation asking for a String
+   key is a caller to route onto the keyed entry. A Symbol names no named property. */
 static int win_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
 {
-    const char *name;
-    JSValue v;
+    JSValue pv = JS_AtomToValue(ctx, prop);
+    bool sym = JS_IsSymbol(pv);
 
-    (void)obj;
-    /* A SYMBOL IS NOT A NAMED PROPERTY. Web IDL's named-property algorithm applies to STRING property names
-       only, and stringifying a symbol here would answer for `Symbol.toStringTag` with whatever element happened
-       to carry the id "Symbol(Symbol.toStringTag)" — and, far more often, would run a whole tree walk for every
-       symbol lookup that reaches this object. */
-    {
-        JSValue pv = JS_AtomToValue(ctx, prop);
-        bool sym = JS_IsSymbol(pv);
-        JS_FreeValue(ctx, pv);
-        if (sym) return 0;
-    }
-    name = JS_AtomToCString(ctx, prop);
-    if (!name) return 0;
-    v = win_named_value(ctx, name);
-    JS_FreeCString(ctx, name);
-    if (JS_IsUndefined(v)) return 0;
-    if (!desc) { JS_FreeValue(ctx, v); return 1; }
-    desc->flags = JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE;   /* [LegacyUnenumerableNamedProperties] */
-    desc->getter = JS_UNDEFINED;
-    desc->setter = JS_UNDEFINED;
-    desc->value = v;
-    return 1;
+    (void)desc; (void)obj;
+    JS_FreeValue(ctx, pv);
+    if (sym) return 0;
+    DFAIL("a C activation asked WindowProperties' named [[GetOwnProperty]]: §7.2.2.3's lookup rests per element "
+          "as win_named_step, so route this caller's read or write through the keyed entry "
+          "(get_own_property_step), never a C walk");
+    return 0;
 }
 
 /* ---- named access as a step machine ---------------------------------------------------------------------
@@ -940,10 +909,7 @@ static int win_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
    (get_own_property_step), which walks the tree on the shared resting walk (core/dom/named_walk.h). A region
    whose children are the parse of unknown markup (core/dom/unknown_markup.h) may or may not hold an element named
    `name`, and the step forks over each such region's markup.
-   Named residual. Not covered: a C walk — OrdinarySet's [[GetOwnProperty]] in JS_SetPropertyInternal2 (`x = 1`,
-   `window.x = 1`) and a C-side read — runs win_named_get_own's walk to completion, uncharged, answering from the
-   example's tree. Next diff routes the keyed entry's GP_SET to the step and deletes that walk. Absence shows as
-   such a write's host time growing with the tree while twDomWalkInput does not. */
+   A [[Set]]'s OrdinarySet asks it too (the keyed entry's GP_SET), so no C walk answers a named property. */
 #define WIN_NAMED_PREDICATE "HTML §7.2.2.3 Named access on the Window object (this markup's parse names"
 #define WIN_NAMED_ALGORITHM "HTML §7.2.2.3 Named access on the Window object over a region of unknown markup"
 #define WN_STAGES(X) X(WN_LOOKUP, WIN_NAMED_ALGORITHM)
