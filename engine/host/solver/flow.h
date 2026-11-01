@@ -479,10 +479,12 @@ typedef struct Flow {
     int   close_req;
     /* Whether a modelled close request in this timeline reached §6.10.1's step 9, "Otherwise, there was nothing
      * watching for a close request": the standard's statement that this flow's document has nothing for a close
-     * request to do, which lets the arrival stop being modelled without a counter. It is not a bound: the page
-     * may establish a watcher later, and a flow that closed something is asked again (§6.10.2's process close
-     * watchers takes one group at a time). Written from the task's completion value only, which is why
-     * `close_req` exists. Carried by a fork; not cold-tier state (the manager is per-flow COW state). */
+     * request to do, which lets the arrival stop being modelled without a counter. It is not a bound: it holds
+     * only until page code runs again (a resumed frame other than the request's, or a job), since only page code
+     * can establish a watcher or change a member's get enabled state, and a flow that closed something is asked
+     * again (§6.10.2's process close watchers takes one group at a time). Written from the task's completion
+     * value only, which is why `close_req` exists. Carried by a fork; not cold-tier state (the manager is per-flow
+     * COW state). */
     int   close_req_none;
     /* Has this flow written state that survives a load (engine_note_persistent_write) since the load-again act
      * was last asked? The act's precondition, cleared on both of its arms when it is asked. Carried by a fork;

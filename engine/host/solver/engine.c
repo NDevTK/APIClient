@@ -6990,8 +6990,8 @@ static int engine_user_scroll(JSContext *ctx, Flow *f) {
  * preamble queues), preemptible, parkable and forkable at step 7's history-action activation.
  * This flow, not a sibling: there is one arrival and this flow has nothing left to run. No counter or cap:
  * §6.10.2 takes the last group, so three groups are modelled three times, and step 9's "nothing watching for a
- * close request" (core/html/close_request.h) is latched on the flow. A flow that closed something is asked again
- * next step, so a page that adds a watcher in its own `close` handler keeps being modelled.
+ * close request" (core/html/close_request.h) is latched on the flow until page code runs again, the only thing
+ * that can change the groups or a member's get enabled state; a flow that closed something is asked again.
  * The request is the victim's act performed by this tool, as a drive of a listener is, so it is recorded as a
  * modelled user act before one opcode runs: flow_path_driven reads it, every park past it is graded driven, and
  * a PoC verified past it states it.
@@ -8650,6 +8650,7 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
            "Creating scripts), and flow_stack_empty, which every job arm is guarded on, answers no while it is held");
     JSValue job = flow_job_take(ctx, f);   /* the pick IS the checkpoint rule — see flow.h */
     f->unit_seq = flow_work_seq_next();    /* a job is its own unit: an await's continuation is the next job */
+    f->close_req_none = 0;                 /* page code runs: step 9's latch is released (engine_close_request_fork) */
     g_jobs_run++;
     JSValue r = flow_job_run(ctx, job);    /* the reaction runs in this flow's timeline */
     /* A job that threw is a page error, as a script that threw is: a promise reaction, a queueMicrotask callback
@@ -10544,16 +10545,19 @@ static int flow_step(JSContext *ctx, Flow *f) {
             DCHECK(!started_here || !is_call,
                    "the frame a step just compiled reports itself as a call root — JS_FlowNew builds a program base");
             g_step_unit = started_here ? STEP_UNIT_START_PROGRAM : STEP_UNIT_RESUME_PROGRAM;
+            /* Page code is about to run, so step 9's latch no longer describes the manager (see
+               engine_close_request_fork). The request's own task runs no page code that could re-arm it. */
+            if (!f->close_req) f->close_req_none = 0;
             int r = JS_FlowResume(ctx, (JSValue *)flow_frame(f), &cv);
             engine_refuse_suspension(ctx);
             /* HTML §6.10.1 Close requests' step 9, taken where a task's completion value is in hand: "Alternative
                processing: Otherwise, there was nothing watching for a close request. The user agent may instead
                interpret this interaction as some other action, instead of interpreting it as a close request."
                This engine declines the "may" (there is nothing to reinterpret the gesture as), but the fact stops
-               the arrival being modelled again in this timeline, and it is the algorithm's own answer. Latched and
-               never cleared: a path cannot un-observe it. It is the first arm of this chain, for `is_call`'s
-               reason: `close_req` is a fact about the live frame and `flow_dyn_kind` about the row at the cursor,
-               which is not the frame completing here. A `close` handler that loads a chunk or is handed a
+               the arrival being modelled again until page code runs in this timeline, and it is the algorithm's
+               own answer. It is the first arm of this chain, for `is_call`'s reason: `close_req` is a fact about
+               the live frame and `flow_dyn_kind` about the row at the cursor, which is not the frame completing
+               here. A `close` handler that loads a chunk or is handed a
                cross-agent operation moves `dyn_n` past the cursor while the task runs, so the arm below could
                claim the task: the operation's answer machinery would be handed step 9's boolean, a peer would
                resume on it, and this flow would never latch and would model close requests for ever. The arms

@@ -912,34 +912,10 @@ int close_watcher_process_run(JSContext *wctx, JSStepHdr *hdr, CloseWatcherRun *
         JSValue mgr = cw_manager(wctx);
         int32_t allowed = cw_allowed(wctx, mgr);
 
-        /* STEP 4'S ANSWER IS NOT THIS ALGORITHM'S ALONE, WHICH IS WHY IT IS ASSERTED HERE AND NOT MERELY
-           RETURNED. §6.10.1's step 8 reads it as `closedSomething` and its step 9 is the fact a caller LATCHES:
-           a task that fell through to alternative processing has established that nothing in this timeline is
-           watching, and a caller that models the arrival is entitled to stop modelling it (core/html/
-           close_request.h states the completion value). That entitlement is sound only while a FALSE answer
-           means the manager had NOTHING for a close request to do — and step 2.2.1 raises the flag for every
-           member whose get enabled state is true, which BOTH kinds in close_watcher.h's registry answer
-           unconditionally. So today a bound group implies the flag, and the day it does not, the caller's latch
-           is recording "nothing is watching" over a group that is merely DISABLED.
-           WHAT FIRING IT MEANS, IN ORDER OF WHICH IS POSSIBLE. HTML §4.11.4 The dialog element's get enabled
-           state is the one the standard has that can answer false, and the clause that makes it so is the one a
-           shortened quotation drops, so it is written out whole: "getEnabledState being to return true if
-           dialog's enable close watcher for request close is true or dialog's computed closed-by state is not
-           None; otherwise false." A disabled group is not an absent one — the page can enable it again with no
-           close request in between — so adding that kind owes the LATCH a way to be given back, and not only an
-           arm in the dispatch above. The other reading is a last group with no members at all, which HTML
-           §6.10.2 Close watcher infrastructure's destroy a close watcher step 3 is what excludes: "Remove any
-           item from manager's groups that is empty." A group that survived empty is that walk not having
-           reached it. */
-        DCHECK(r->processed || JS_IsUndefined(r->group),
-               "HTML §6.10.2 Close watcher infrastructure's process close watchers is about to answer step 4's "
-               "processedACloseWatcher FALSE while its step 2.1 bound a group. Step 2.2.1 raises that flag for "
-               "every member whose get enabled state is true and both kinds in close_watcher.h's registry "
-               "answer it unconditionally, so a false answer over a bound group is a kind whose get enabled "
-               "state can say NO — and §6.10.1 Close requests' step 9 answer that this feeds is LATCHED by "
-               "whoever models the arrival, which would then stop asking a manager whose group is disabled "
-               "rather than absent. Give that latch a way to be released when a watcher's enabled state "
-               "changes, in the same diff that adds the kind");
+        /* A FALSE ANSWER OVER A BOUND GROUP IS LEGITIMATE: it is a group whose every member's get enabled state
+           answered false at step 2.2.1, which HTML §4.11.4 "The dialog element"'s close watcher does for a dialog
+           whose computed closed-by state is None (a parsed non-modal `<dialog open>`). The group stays in the
+           manager, and the next close request asks it again. */
         JS_FreeValue(wctx, in);
         /* Step 3 — "If window's close watcher manager's allowed number of groups is greater than 1, decrement
            it by 1." This is the ONLY fall the allowance has, which is why establish's "always at least 1"
