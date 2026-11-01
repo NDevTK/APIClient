@@ -1209,6 +1209,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/contain.h"
 #include "fixture/gridsizing.h"
 #include "fixture/insetpct.h"
+#include "fixture/staticposask.h"
 #include "fixture/floatplace.h"
 #include "fixture/clearance.h"
 #include "fixture/avoidance.h"
@@ -1807,6 +1808,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "contain", HTML_CONTAIN },
     { "gridsizing", HTML_GRIDSIZING },
     { "insetpct", HTML_INSETPCT },
+    { "staticposask", HTML_STATICPOSASK },
     { "floatplace", HTML_FLOATPLACE },
     { "clearance", HTML_CLEARANCE },
     { "avoidance", HTML_AVOIDANCE },
@@ -15651,6 +15653,31 @@ TF_UNIT void probes_insetpct(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `staticposask` document (fixture/staticposask.h). */
+TF_UNIT void probes_staticposask(const char *js, Probe *tab, int *n) {
+    const char *sp_why = NULL; int sp_tt = 1;
+
+    fold_row(&sp_tt, &sp_why, !!strstr(js, "\"/api/staticposask\""),
+             "NOT REACHED: there is no /api/staticposask record at all, so the document aborted before its fetch");
+    fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "h", "100px"),
+             "CSS 2.1 §10.6.4: the resolved `height` of an absolutely positioned box at its static position is not "
+             "its 100px child's");
+    fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "t", "10px"),
+             "CSSOM §9: a relatively positioned child's resolved `top: 10%` is not 10% of its absolutely "
+             "positioned containing block's laid-out 100px");
+    fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "w", "40px"),
+             "CSS 2.1 §10.3.7: the resolved shrink-to-fit `width` of an absolutely positioned box at its static "
+             "position is not its 40px child's");
+    fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "y", "71"),
+             "CSS 2.1 §10.6.4: the static top of a box appended to <html> after <body> is not 71px");
+    fold_row(&sp_tt, &sp_why, param_value_is(js, "/api/staticposask", "x", "7"),
+             "CSS 2.1 §10.3.7: the static left of a box appended to <html> is not <html>'s 7px content edge");
+    const Probe rows[] = {
+        { "static-position-under-a-resting-drive", sp_tt, "/api/staticposask", SESS_EXPLORE, sp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `floatplace` document (fixture/floatplace.h). */
 TF_UNIT void probes_floatplace(const char *js, Probe *tab, int *n) {
     const char *fp_why = NULL; int fp_reached = !!strstr(js, "\"/api/floatplace\"");
@@ -23565,6 +23592,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_contain(js, probes, &np);
     probes_gridsizing(js, probes, &np);
     probes_insetpct(js, probes, &np);
+    probes_staticposask(js, probes, &np);
     probes_floatplace(js, probes, &np);
     probes_clearance(js, probes, &np);
     probes_avoidance(js, probes, &np);
