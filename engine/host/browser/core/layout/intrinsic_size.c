@@ -177,51 +177,46 @@ CssPx used_inline_box_edge_px(lxb_dom_element_t *el, bool trailing)
     return css_px_add(sum, is_edge_border_px(el, side[IS_EDGE_BORDER]));
 }
 
-/* css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"' cyclic percentage on one property of
-   a replaced child, refused: CSS 2.1 §10.2 "Content width: the 'width' property", §10.4 "Minimum and maximum
-   widths: 'min-width' and 'max-width'" and §8.4 resolve it against the containing block's width, which is this
-   walk's output. The property name is passed in so the message, written once and reached from a loop, names
-   it (as used_value.c's crashes name the `display`). */
+/* css-sizing-3 §5.2.1's floor on a replaced box's min-content contribution: "If the box also has a preferred
+   aspect ratio, then this min-content contribution is floored by any <length-percentage> minimum size from the
+   opposite axis—resolving any such percentage against zero—transferred through the preferred aspect ratio".
+   A `min-height` that resolves to zero floors nothing; any other is refused. */
+static void is_require_no_ratio_floor(lxb_dom_element_t *el)
+{
+    CssLength mh = css_computed_length(el, "min-height");
+    ReplacedElement rep;
+    char nbuf[160];
+
+    if (mh.kind == CSS_LENGTH_KEYWORD) return;
+    if (css_length_resolve_pct(mh, css_px(0.0)).px <= 0.0) return;
+    rep = replaced_element_of(el);
+    if (!rep.has_ratio) return;
+    DFAILF("%s: css-sizing-3 §5.2.1 floors a replaced box's min-content contribution under a cyclic `width` "
+           "by its `min-height` transferred through its preferred aspect ratio, and this box has both. BUILD "
+           "the transfer (css-sizing-3 §3.3's box-sizing on each side of the ratio) beside "
+           "used_value_content_width_as_px",
+           box_subject(el, nbuf, sizeof nbuf));
+}
+
+/* css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"' cyclic percentage on a property of a
+   replaced child other than `width`, refused: CSS 2.1 §10.4 and §8.4 resolve it against the containing block's
+   width, which is this walk's output. The property name is passed in so the message, written once and reached
+   from a loop, names it. */
 static void is_require_acyclic(lxb_dom_element_t *el, const char *name)
 {
     CssLength len = css_computed_length(el, name);
 
     if (len.kind != CSS_LENGTH_PERCENTAGE && len.kind != CSS_LENGTH_CALCULATED) return;
     DFAILF("css-sizing-3 §5.2.1 \"Intrinsic Contributions of Percentage-Sized Boxes\": this REPLACED child's "
-           "`%s` is a PERCENTAGE or a calculation carrying one, and it resolves against the containing block's "
-           "width — which for the box this walk is measuring is the number this walk is being run to produce. "
-           "CSS 2.1 §10.2, §10.4 and §8.4 each state that case and each leaves it \"undefined in CSS 2.1\"; "
-           "§5.2.1 is what defines it, so this is a SPECIFIED answer this engine has not built and not an "
-           "undefined one. WHAT §5.2.1 SAYS SPLITS THE FIVE PROPERTIES AND THAT SPLIT IS THE WHOLE OF THE "
-           "WORK. For a `min-width`, a `padding-top` or a `padding-bottom` it is one number — its summary "
-           "table gives a cyclic percentage on a min size property, a margin or a padding the value zero for "
-           "BOTH contributions — so those three are blocked only by WHERE the substitution may live: "
-           "`used_value_content_px` is core/layout/used_value.h's shared entry, and core/layout/line_box.c, "
-           "core/html/html_image.c and core/frame/viewport.c all read it from OUTSIDE any intrinsic pass, "
-           "where the same percentage is not cyclic — so a zero pushed down there would answer a question "
-           "those three did not ask. For a "
-           "`width` or a `max-width` on a REPLACED box the two contributions genuinely DIFFER — the "
-           "max-content contribution treats the whole value as that property's INITIAL value, the min-content "
-           "contribution resolves it against zero. "
-           "THE ITEM CARRIES A PAIR NOW AND THAT RETIRES NONE OF THE FIVE, WHICH IS WHAT THIS MESSAGE USED TO "
-           "SAY IT WOULD. It said `TEXT_RUN_ITEM_ATOMIC` holds ONE `size` and instructed its reader to BUILD "
-           "THE PAIR ON THE ITEM FIRST, after which \"this arm supplies §5.2.1's two numbers and the refusal "
-           "goes\". The first half was exactly right about the tree and the SECOND HALF WAS WRONG ABOUT THE "
-           "WORK, in the direction that would have had a reader delete this crash with nothing behind it. The "
-           "item was a BLOCKER for two of the five properties and was never the missing CAPABILITY for any of "
-           "them: for `min-width`, `padding-top` and `padding-bottom` it was not even the blocker, since "
-           "§5.2.1 gives those ONE number for both contributions and what stops them is WHERE that zero may "
-           "live, exactly as the sentence above this one says. "
-           "WHAT THE NEXT DIFF BUILDS, and it is the same thing for all five: an entry that runs CSS 2.1 "
-           "§10.3.2 \"Inline, replaced elements\" over a CALLER-SUPPLIED substitution rather than over the "
-           "element's own computed values. `used_value_content_px` cannot be it — its three non-intrinsic "
-           "callers named above ask a question in which these percentages are not cyclic at all — and "
-           "`is_replaced_sizes` in this file is the shape that can be: it already composes §10.3.2 through "
-           "`used_value_replaced_auto_width_px` for the case where the property states nothing. GREP BOTH "
-           "BEFORE BUILDING: neither takes a substituted value today. Then this arm calls it TWICE, once per "
-           "contribution, and hands `is_atomic_replaced`'s producer the two different numbers the item can now "
-           "hold. Until that entry exists an arm here could only pick one of §5.2.1's answers and report it as "
-           "both, which is a wrong shrink-to-fit width rather than an approximate one",
+           "`%s` is a percentage or a calculation carrying one, and it resolves against the containing block's "
+           "width, which is the number this walk is computing. §5.2.1 specifies it: a min size, margin or "
+           "padding resolves against zero for both contributions; a `max-width` is treated as its initial "
+           "value for the max-content contribution and resolves against zero for the min-content one. BUILD "
+           "it as a cyclic `width` is built in is_atomic_replaced, through a substituted §10.4 pass: "
+           "used_value_content_width_as_px substitutes only `width`, so give it the limits' substitution, and "
+           "the vertical paddings the ratio arm reads. Not `used_value_content_px`: core/layout/line_box.c, "
+           "core/html/html_image.c and core/frame/viewport.c read it outside any intrinsic pass, where the "
+           "same percentage is not cyclic",
            name);
 }
 
@@ -237,25 +232,40 @@ static void is_require_acyclic(lxb_dom_element_t *el, const char *name)
    checked they are absolute. */
 static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
 {
-    /* The five properties §10.3.2's derivation reads that resolve against the containing block's width. The
-       horizontal edges are the edge entry's; `margin-top`/`margin-bottom` are width-relative too but read by
-       no arm of §10.3.2 or §10.4. `padding-top`/`padding-bottom` are here because the intrinsic-ratio arm
+    /* The four other properties §10.3.2's derivation reads that resolve against the containing block's width.
+       The horizontal edges are the edge entry's; `margin-top`/`margin-bottom` are width-relative too but read
+       by no arm of §10.3.2 or §10.4. `padding-top`/`padding-bottom` are here because the intrinsic-ratio arm
        reads the used height and its vertical surround. */
-    static const char *const CYCLIC[] = { "width", "min-width", "max-width", "padding-top", "padding-bottom" };
-    CssPx lead, trail, outer;
+    static const char *const CYCLIC[] = { "min-width", "max-width", "padding-top", "padding-bottom" };
+    CssLength width = css_computed_length(el, "width");
+    CssPx lead, trail, min, max;
     size_t i;
 
     for (i = 0; i < sizeof CYCLIC / sizeof CYCLIC[0]; i++) is_require_acyclic(el, CYCLIC[i]);
     lead = is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false);
     trail = is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true);
-    outer = css_px_add(css_px_add(lead, used_value_content_px(el, false)), trail);
-    /* One number as both of css-sizing-3 §2.1's contributions: §5.1 separates them only by a zero or
-       infinite containing block in that axis, and no arm of CSS 2.2 §10.3.2 "Inline, replaced elements" reads
-       the containing block's inline size (see `is_replaced_sizes`). The edges resolve cyclic percentages to
-       zero, one answer for both ("For the min size properties, as well as for margins and paddings (and
-       gutters), a cyclic percentage is resolved against zero for determining intrinsic size contributions").
-       §5.2.1's replaced rule for a cyclic `width`/`max-width` would differ, and is refused above. */
-    text_run_measure_add_atomic(m, el, outer, outer);
+    if (width.kind == CSS_LENGTH_PERCENTAGE || width.kind == CSS_LENGTH_CALCULATED) {
+        /* css-sizing-3 §5.2.1 for a replaced box's cyclic `width`: the max-content contribution treats the
+           whole value "as that property's initial value", and the min-content contribution resolves the
+           percentage "against zero". Each is CSS 2.1 §10.3.2 and §10.4 run with that substitution. */
+        const CssLength as_auto = { CSS_LENGTH_KEYWORD, css_px(0.0), 0.0, CSS_KEYWORD_AUTO, NULL };
+        CssLength at_zero = { CSS_LENGTH_ABSOLUTE, css_px(0.0), 0.0, CSS_KEYWORD_INVALID, NULL };
+
+        is_require_no_ratio_floor(el);
+        at_zero.px = css_px_max(css_length_resolve_pct(width, css_px(0.0)), css_px(0.0));
+        min = used_value_content_width_as_px(el, at_zero);
+        max = used_value_content_width_as_px(el, as_auto);
+    } else {
+        /* One number as both of css-sizing-3 §2.1's contributions: §5.1 separates them only by a zero or
+           infinite containing block in that axis, and no arm of CSS 2.2 §10.3.2 "Inline, replaced elements"
+           reads the containing block's inline size (see `is_replaced_sizes`). */
+        min = max = used_value_content_px(el, false);
+    }
+    /* The edges resolve cyclic percentages to zero, one answer for both ("For the min size properties, as well
+       as for margins and paddings (and gutters), a cyclic percentage is resolved against zero for determining
+       intrinsic size contributions"). */
+    text_run_measure_add_atomic(m, el, css_px_add(css_px_add(lead, min), trail),
+                                css_px_add(css_px_add(lead, max), trail));
 }
 
 /* What `is_child` left for its caller, as core/layout/line_box.c's `lb_child` answers it: nothing more, a text

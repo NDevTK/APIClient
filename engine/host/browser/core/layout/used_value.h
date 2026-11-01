@@ -225,6 +225,12 @@ CssPx used_value_content_px(lxb_dom_element_t *el, bool vertical);
    when an operand was deferred. */
 bool used_value_content_ask(lxb_dom_element_t *el, bool vertical, CssPx *out);
 
+/* The content width CSS 2.1 §10.3 and §10.4 give `el` when its computed `width` is replaced by `width` (`auto`
+   or an absolute length), which is css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"'
+   substitution of a cyclic percentage: the initial value for a replaced box's max-content contribution, the
+   percentage resolved against zero for its min-content one. The limits are the box's own. */
+CssPx used_value_content_width_as_px(lxb_dom_element_t *el, CssLength width);
+
 /* The same extent computed as though the box were block-level in normal flow: CSS 2.1 §10.6 "Calculating
    heights and margins"' and §10.7 "Minimum and maximum heights: 'min-height' and 'max-height'"' rules with the
    box classified as §10.3.3's, as a content-box extent. Its one caller is css-flexbox-1 §9.4 "Cross Size

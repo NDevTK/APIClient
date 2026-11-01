@@ -345,13 +345,14 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
 
 /* The walks `lb_atomic_extent` reads for `el`, asked without a drive: an `inline-block`'s content-based height
    where its `height` behaves as auto (css-sizing-3 §3.2.1) and, where §10.8.1 gives it a baseline, its last
-   line box's. A replaced element reads neither. False ("not yet") when one was deferred. */
+   line box's. A replaced element reads neither, but its margin box's ratio arm and percentages read §10.1's
+   chain of widths, so that read is asked. False ("not yet") when one was deferred. */
 static bool lb_atomic_ask(lxb_dom_element_t *el)
 {
     CssPx unused;
     bool has;
 
-    if (replaced_element_of(el).replaced) return true;
+    if (replaced_element_of(el).replaced) return used_value_margin_edge_ask(el, true, &unused);
     if (used_value_height_behaves_as_auto(el) && !block_flow_auto_height_ask(el, &unused)) return false;
     if (css_computed_display_is(el, CSS_KEYWORD_INLINE_GRID)) return grid_container_first_baseline_ask(el, &has, &unused);
     if (css_computed_display_is(el, CSS_KEYWORD_INLINE_FLEX)) return flex_container_first_baseline_ask(el, &has, &unused);
@@ -631,9 +632,11 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
        single opaque box". Its height is read at the line (`lb_atomic_extent`). */
     if (replaced_element_of(el).replaced) {
         /* One used width, stated twice, for the `inline-block` arm's reason; css-sizing-3 §5.1 "Intrinsic
-           Sizes" would also give a replaced box two equal numbers, but that is not the reason that governs. */
-        CssPx used = used_value_margin_edge_px(el, false);
+           Sizes" would also give a replaced box two equal numbers, but that is not the reason that governs.
+           A percentage in it resolves against the containing block's width, so §10.1's chain is asked first. */
+        CssPx used;
 
+        if (!used_value_margin_edge_ask(el, false, &used)) return LB_CHILD_NOT_YET;
         text_run_measure_add_atomic(m, el, used, used);
         return LB_CHILD_PLACED;
     }

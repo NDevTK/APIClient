@@ -1284,6 +1284,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/textencunk.h"
 #include "fixture/cssdsetprop.h"
 #include "fixture/bodystream.h"
+#include "fixture/cyclicreplaced.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
@@ -1892,6 +1893,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "textencunk", HTML_TEXTENCUNK },
     { "cssdsetprop", HTML_CSSDSETPROP },
     { "bodystream", HTML_BODYSTREAM },
+    { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
@@ -18115,6 +18117,25 @@ TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cyclicreplaced` document (fixture/cyclicreplaced.h): a replaced box's cyclic `width`. */
+TF_UNIT void probes_cyclicreplaced(const char *js, Probe *tab, int *n) {
+    const char *cr_why = NULL; int cr_tt = 1;
+    fold_row(&cr_tt, &cr_why, !!strstr(js, "\"/api/crwidth\""),
+             "NOT REACHED: no /api/crwidth record, so the intrinsic size of an inline-block holding a replaced "
+             "box with a cyclic `width` did not return");
+    fold_row(&cr_tt, &cr_why, param_value_is(js, "/api/crwidth", "a", "50") &&
+                              param_value_is(js, "/api/crwidth", "ac", "25") &&
+                              param_value_is(js, "/api/crwidth", "b", "200") &&
+                              param_value_is(js, "/api/crwidth", "bc", "100"),
+             "css-sizing-3 §5.2.1's two contributions of a replaced box with a cyclic `width` did not give "
+             "a=50 ac=25 b=200 bc=100: the max-content one takes `width` as `auto` (the natural 200) and the "
+             "min-content one resolves the percentage against zero");
+    const Probe rows[] = {
+        { "cyclic-replaced-width", cr_tt, "/api/crwidth", SESS_EXPLORE, cr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -23659,6 +23680,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_textencunk(js, probes, &np);
     probes_cssdsetprop(js, probes, &np);
     probes_bodystream(js, probes, &np);
+    probes_cyclicreplaced(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);

@@ -2517,14 +2517,16 @@ static UvLimits uv_limits(lxb_dom_element_t *el, UvBox box, bool vertical)
  * attributes the day a DECODER gives §15.4.2 "Images"' first rule real natural dimensions. That is the case
  * that matters most, because it is what makes a narrow viewport scale a photograph's height instead of
  * leaving it at its natural one. BUILD the eleven rows. */
-static void uv_require_no_ratio_table(lxb_dom_element_t *el, const UvLimits *lim)
+/* `len` is the size the pass ran with on its own axis (`vertical`); the other axis is read as computed. */
+static void uv_require_no_ratio_table(lxb_dom_element_t *el, const UvLimits *lim, bool vertical, CssLength len)
 {
     ReplacedElement rep;
 
     /* The cheap conjuncts first, and the classification last — `replaced_element_of` reads an image request's
        state, and the table's subject is a shape that answers no to one of these two tests long before that. */
     if (!lim->has_max && !(lim->has_min && lim->min.px > 0.0)) return;
-    if (!css_computed_length_is(el, "width", CSS_KEYWORD_AUTO) || !css_computed_length_is(el, "height", CSS_KEYWORD_AUTO)) return;
+    if (!uv_len_is_auto(len) || !css_computed_length_is(el, vertical ? "width" : "height", CSS_KEYWORD_AUTO))
+        return;
     rep = replaced_element_of(el);
     if (!rep.replaced || !rep.has_ratio) return;
     DFAIL("CSS 2.1 §10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\" has a SECOND algorithm "
@@ -4516,7 +4518,9 @@ typedef struct {
     CssPx     used;  /* that pass's used value, in the box css-sizing-3 §3.3 exposes */
 } UvSized;
 
-static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
+/* `len` is the computed size step 1 runs with: the property's own, or css-sizing-3 §5.2.1's substitution for a
+   cyclic percentage (used_value_content_width_as_px). */
+static UvSized uv_sized_as(lxb_dom_element_t *el, UvBox box, bool vertical, CssLength len)
 {
 #if APICLIENT_DEV
     size_t open;   /* this question's entry on the job's stack; release stacks none */
@@ -4526,7 +4530,7 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
 
     /* The single exit below closes the question on every path; §10.4's flex and table returns are early, so
        they jump to it. A guarding forwarder would cost a C frame per ask. */
-    r.len = css_computed_length(el, vertical ? "height" : "width");
+    r.len = len;
     LAYOUT_QUESTION_OPEN(open,
                          layout_question(LAYOUT_Q_UV_SIZED, el, vertical ? "height" : "width",
                                          (unsigned) box + 1u),
@@ -4576,7 +4580,7 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
        that assert; §17.5.2 now ANSWERS for a table's width, so the return is what keeps it out. */
     if (box == UV_BOX_TABLE) goto done;
     lim = uv_limits(el, box, vertical);
-    uv_require_no_ratio_table(el, &lim);
+    uv_require_no_ratio_table(el, &lim, vertical, r.len);
     /* STEP 2 — "if the tentative used width is greater than 'max-width' … using the computed value of
        'max-width' as the computed value for 'width'". */
     if (lim.has_max && r.used.px > lim.max.px) {
@@ -4598,6 +4602,24 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
 done:
     LAYOUT_QUESTION_CLOSE(open);
     return r;
+}
+
+static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
+{
+    return uv_sized_as(el, box, vertical, css_computed_length(el, vertical ? "height" : "width"));
+}
+
+CssPx used_value_content_width_as_px(lxb_dom_element_t *el, CssLength width)
+{
+    UvSized r;
+
+    DCHECK(el != NULL, "a substituted content width was asked for with no element");
+    DCHECK(uv_len_is_auto(width) || width.kind == CSS_LENGTH_ABSOLUTE,
+           "css-sizing-3 §5.2.1 substitutes a cyclic percentage by `auto` or by a length resolved against "
+           "zero, so a substituted width that is still a percentage resolves against the size it is computing");
+    r = uv_sized_as(el, uv_box_kind(el), false, width);
+    if (!uv_is_border_box(el)) return r.used;
+    return css_px_sub(r.used, uv_surround_total(uv_surround(el, false)));
 }
 
 /* CSS 2.1 §10.6.4 "Absolutely positioned, non-replaced elements"' and §10.3.7's TWO MARGINS, SPLIT OFF FROM
