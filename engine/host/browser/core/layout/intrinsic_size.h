@@ -109,6 +109,13 @@ IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlow
 bool intrinsic_inline_sizes_ask(lxb_dom_element_t *el);
 bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run);
 
+/* The max-content inline size of supplied label characters set in `el`'s box on one line: CSS 2.2 §9.4.2's line
+   box over one anonymous inline of `len` UTF-8 bytes at `text`, borrowed for the life of the current job, which
+   sees no DOM write (an attribute value of `el`). Held in the job's record keyed by `el`. `ask` answers false
+   when a resting drive's line items are spent, and is asked ahead of a read; the plain form is the read. */
+bool intrinsic_label_width_ask(lxb_dom_element_t *el, const lxb_char_t *text, size_t len, CssPx *out);
+CssPx intrinsic_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_t len);
+
 /* The place of a flex container's walk over its items (core/layout/flex_intrinsic_size.h's ask), held by the
    job's record below between activations: whether it began, the next member to ask, and whether every member
    is answered. Created zeroed on the first call for `el`; the record owns it. */

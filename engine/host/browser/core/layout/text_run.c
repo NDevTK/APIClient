@@ -452,27 +452,15 @@ void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, Cs
     m->in_white_space_run = false;
 }
 
-void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text,
-                                 TextRunText *t)
+/* The node and supplied-character entries' shared tail: `white-space` asked once of `style`, and the bytes. */
+static void tr_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_char_t *data, size_t len,
+                          TextRunText *t)
 {
-    const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)text;
     TrWhiteSpace ws;
 
-    DCHECK(m != NULL && style != NULL && text != NULL && t != NULL,
-           "a text run was measured with no accumulator, no style element, no node or nowhere to hold it");
-    DCHECK(!m->finished, "a text node was added to a measurement that has already produced its two answers. "
+    DCHECK(!m->finished, "characters were added to a measurement that has already produced its two answers. "
                          "text_run_measure_finish_begin closed the collection those answers are derived from, "
                          "so this is one accumulator being used for two runs");
-    DCHECK(text->type == LXB_DOM_NODE_TYPE_TEXT,
-           "something that is not a TEXT node was handed to css-text-3 §4.1's white space processing. The rules "
-           "are stated over character data, and CSS 2.2 §9.2's box generation makes an element a BOX rather "
-           "than a run — a caller holding one is at the wrong arm of its own child walk");
-    DCHECK(text->parent == lxb_dom_interface_node(style),
-           "the element whose computed properties a text run was measured with is not the run's own parent. "
-           "css-text-3 §4.1.1 processes white space \"for each inline (including anonymous inlines)\" and "
-           "css-values-4 §6.1.1's advance measure is stated over \"the element on which it is used\", so a run "
-           "measured against another element's `font-size` and `white-space` is one document's text under "
-           "another one's typography");
     tr_require_no_spacing_model();
     tr_require_no_line_break_tailoring();
     /* `white-space` is asked once per node, not once per white-space character: asking only where a space
@@ -483,10 +471,39 @@ void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, co
     t->collapse = ws.collapse;
     t->preserve_breaks = ws.preserve_breaks;
     t->wraps = ws.wraps;
-    /* An empty text node (DOM §4.10's `data` may be the empty string) contributes nothing and leaves the
-       collapsing state as it was, so a collapsible run split across it collapses as one run. */
-    t->p = cd->data.data;
-    t->end = cd->data.data == NULL ? NULL : cd->data.data + cd->data.length;
+    /* An empty run (DOM §4.10's `data` may be the empty string) contributes nothing and leaves the collapsing
+       state as it was, so a collapsible run split across it collapses as one run. */
+    t->p = data;
+    t->end = data == NULL ? NULL : data + len;
+}
+
+void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text,
+                                 TextRunText *t)
+{
+    const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)text;
+
+    DCHECK(m != NULL && style != NULL && text != NULL && t != NULL,
+           "a text run was measured with no accumulator, no style element, no node or nowhere to hold it");
+    DCHECK(text->type == LXB_DOM_NODE_TYPE_TEXT,
+           "something that is not a TEXT node was handed to css-text-3 §4.1's white space processing. The rules "
+           "are stated over character data, and CSS 2.2 §9.2's box generation makes an element a BOX rather "
+           "than a run — a caller holding one is at the wrong arm of its own child walk");
+    DCHECK(text->parent == lxb_dom_interface_node(style),
+           "the element whose computed properties a text run was measured with is not the run's own parent. "
+           "css-text-3 §4.1.1 processes white space \"for each inline (including anonymous inlines)\" and "
+           "css-values-4 §6.1.1's advance measure is stated over \"the element on which it is used\", so a run "
+           "measured against another element's `font-size` and `white-space` is one document's text under "
+           "another one's typography");
+    tr_text_begin(m, style, cd->data.data, cd->data.data == NULL ? 0 : cd->data.length, t);
+}
+
+void text_run_measure_chars_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_char_t *data,
+                                  size_t len, TextRunText *t)
+{
+    DCHECK(m != NULL && style != NULL && t != NULL && (data != NULL || len == 0),
+           "supplied characters were measured with no accumulator, no style element, nowhere to hold them, or "
+           "a length with no bytes");
+    tr_text_begin(m, style, data, len, t);
 }
 
 bool text_run_measure_text_done(const TextRunText *t)

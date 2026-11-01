@@ -242,6 +242,11 @@ typedef struct {
 
 void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text,
                                  TextRunText *t);
+/* The same over supplied characters that are no text node: content a box generates for an element out of its
+   attributes (HTML §15.4.2's Image Button alternative text). `style` is the box the characters are in; the
+   `len` UTF-8 bytes at `data` are borrowed until the run is done, and the caller states how they stay valid. */
+void text_run_measure_chars_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_char_t *data,
+                                  size_t len, TextRunText *t);
 bool text_run_measure_text_done(const TextRunText *t);
 void text_run_measure_text_step(TextRunMeasure *m, TextRunText *t);
 

@@ -49,4 +49,10 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el);
    it (a replaced inline box is atomic), so it reads no containment. */
 bool replaced_element_is(lxb_dom_element_t *el);
 
+/* HTML §15.4.2's rule 5 content, asked ahead of a read under the caller's resting drive on its entered job: an
+   Image Button that represents a button labelled by its alternative text has that label measured into the job's
+   record (core/layout/intrinsic_size.h), so `replaced_element_of` reads it. False when the drive's line items
+   are spent; true at once for every other element. */
+bool replaced_element_label_ask(lxb_dom_element_t *el);
+
 #endif

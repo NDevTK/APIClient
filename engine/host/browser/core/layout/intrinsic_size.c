@@ -459,7 +459,7 @@ typedef struct {
 /* What an entry is about: one run's measurement, or the place of a walk over a container's members that
    asks each one's sizes ahead of the read (§9.4.1's stack, a flex container's items, a table's cells and
    captions). */
-typedef enum { IS_ENTRY_RUN = 0, IS_ENTRY_STACK, IS_ENTRY_FLEX, IS_ENTRY_TABLE } IsKind;
+typedef enum { IS_ENTRY_RUN = 0, IS_ENTRY_STACK, IS_ENTRY_FLEX, IS_ENTRY_TABLE, IS_ENTRY_LABEL } IsKind;
 
 /* What an entry holds, allocated apart so a pointer to it survives the table's growth under a nested ask. A
    run entry's measurement lives from its first ask until it is answered; a walk entry holds its place, and a
@@ -527,11 +527,12 @@ static void is_record_grow(IntrinsicSizeRecord *r)
     r->cap = cap;
 }
 
-static void is_measure_release(IsMeasure *k)
+/* `walked` is false for a label, whose collection is supplied characters with no walk over the tree. */
+static void is_measure_release(IsMeasure *k, bool walked)
 {
     if (!k->collected) {
         /* An abandoned collection is closed so the measurement can be released. */
-        inline_run_walk_release(&k->walk);
+        if (walked) inline_run_walk_release(&k->walk);
         text_run_measure_finish_begin(&k->m);
     }
     text_run_measure_release(&k->m);
@@ -558,7 +559,8 @@ void intrinsic_size_record_release(IntrinsicSizeRecord *r)
             "one new key", r->used, r->built);
     for (i = 0; i < r->cap; i++) {
         if (r->tab[i].el == NULL) continue;
-        if (r->tab[i].held->measuring) is_measure_release(&r->tab[i].held->meas);
+        if (r->tab[i].held->measuring)
+            is_measure_release(&r->tab[i].held->meas, r->tab[i].kind != IS_ENTRY_LABEL);
         if (r->tab[i].held->gridded) is_table_release(r->tab[i].held);
         free(r->tab[i].held);
     }
@@ -614,6 +616,72 @@ static const IsHeld *is_held_peek(lxb_dom_element_t *el, IsKind kind, BlockFlowR
     return r->tab[i].el != NULL ? r->tab[i].held : NULL;
 }
 #endif
+
+/* The label's measurement, continued from where the job's record holds it. `rests` counts each item against a
+   resting drive's line items and answers false when they are spent; otherwise it runs to the answer. */
+static bool is_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_t len, bool rests, CssPx *out)
+{
+    BlockFlowRun none;
+    IsHeld *h;
+
+    DCHECK(out != NULL, "a label's width was asked for with nowhere to put it");
+    none.after = NULL;
+    none.end = NULL;
+    h = is_held_of(el, IS_ENTRY_LABEL, none);
+    if (!h->answered && !h->measuring) {
+        text_run_measure_init(&h->meas.m);
+        text_run_measure_chars_begin(&h->meas.m, el, text, len, &h->meas.text);
+        h->measuring = true;
+    }
+    /* The characters are collected one per item and the steps after the collection take theirs, each counted
+       against a resting drive's line items, so a page-sized label rests between activations. */
+    while (h->measuring && !h->meas.collected) {
+        if (text_run_measure_text_done(&h->meas.text)) {
+            text_run_measure_finish_begin(&h->meas.m);
+            h->meas.collected = true;
+            break;
+        }
+        if (rests && !layout_job_line_items_left()) return false;
+        text_run_measure_text_step(&h->meas.m, &h->meas.text);
+        if (rests) layout_job_line_items_spend(1);
+    }
+    while (h->measuring && !text_run_measure_finish_done(&h->meas.m)) {
+        size_t took;
+
+        if (rests && !layout_job_line_items_left()) return false;
+        took = text_run_measure_finish_step(&h->meas.m);
+        if (rests) layout_job_line_items_spend(took);
+    }
+    if (h->measuring) {
+        h->sizes.min_content = text_run_measure_min_content(&h->meas.m);
+        h->sizes.max_content = text_run_measure_max_content(&h->meas.m);
+        is_measure_release(&h->meas, false);
+        h->measuring = false;
+        h->answered = true;
+    }
+    *out = h->sizes.max_content;
+    return true;
+}
+
+bool intrinsic_label_width_ask(lxb_dom_element_t *el, const lxb_char_t *text, size_t len, CssPx *out)
+{
+    return is_label_width(el, text, len, true, out);
+}
+
+CssPx intrinsic_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_t len)
+{
+    CssPx w;
+    bool answered;
+
+    /* NAMED RESIDUAL. Not covered: a label first measured here, by a reader that cannot answer "not yet",
+       runs whole on the current job. Next: intrinsic_label_width_ask under the resting drive of each step
+       machine whose layout reaches the element, ahead of its read, as html_element_view.c's members ask
+       their own target's. How its absence shows: a slice overrun inside a layout member over a page whose
+       Image Button carries a page-sized `alt`, with `_layoutJobRests` flat. */
+    answered = is_label_width(el, text, len, false, &w);
+    DCHECK(answered, "a label measure that counts no allowance answered \"not yet\"");
+    return w;
+}
 
 IntrinsicSizeWalk *intrinsic_size_walk_of(lxb_dom_element_t *el)
 {

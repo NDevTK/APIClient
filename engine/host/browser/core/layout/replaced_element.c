@@ -17,6 +17,7 @@
 #include "core/html/image_input_type.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/containment.h"
+#include "core/layout/intrinsic_size.h"
 #include "core/layout/replaced_element.h"
 
 /* Not a replaced element: every field zeroed, per replaced_element.h's contract. */
@@ -204,29 +205,75 @@ static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
    represents a control for selecting a coordinate from the image"; "Otherwise, the element represents a submit
    button whose label is given by the value of the alt attribute." Rules 3 and 4 open "If the element is an img
    element", so rules 1, 2 and 5 are the list for an `input`. */
-static ReplacedElement rep_image_button(JSContext *ctx, lxb_dom_element_t *el)
+typedef enum { REP_BUTTON_IMAGE, REP_BUTTON_BARE, REP_BUTTON_LABEL } RepButtonRule;
+
+static JSContext *rep_scripting_realm(lxb_dom_node_t *n);
+
+static RepButtonRule rep_image_button_rule(JSContext *ctx, lxb_dom_element_t *el, double *w, double *h)
 {
-    double w = 0.0, h = 0.0;
-    ImageInputImage image = image_input_image(ctx, el, &w, &h);
+    ImageInputImage image = image_input_image(ctx, el, w, h);
 
     /* Rule 1: the element represents an image; its natural dimensions are the image header's. */
-    if (image == IMAGE_INPUT_AVAILABLE && rep_attr_present(el, "src")) return rep_sized(w, h);
+    if (image == IMAGE_INPUT_AVAILABLE && rep_attr_present(el, "src")) return REP_BUTTON_IMAGE;
     /* Rule 2: "the user agent has reason to believe that the image will become available and be rendered in
        due course" (a fetch outstanding), or "the element has no alt attribute". A replaced element with no
        natural dimensions, which CSS 2.1 §10.3.2's last arm sizes 300 by 150. */
-    if (image == IMAGE_INPUT_FETCHING || !rep_attr_present(el, "alt")) return rep_bare();
+    if (image == IMAGE_INPUT_FETCHING || !rep_attr_present(el, "alt")) return REP_BUTTON_BARE;
     DCHECK(lxb_dom_interface_node(el)->owner_document->compat_mode != LXB_DOM_DOCUMENT_CMODE_QUIRKS,
            "HTML §15.4.2's second rule reached a quirks-mode Image Button and its third disjunct (\"the Document "
            "is in quirks mode, and the element already has natural dimensions\") is not asked; an Image Button "
            "supports dimension attributes. Build it with the `img` arm's");
+    return REP_BUTTON_LABEL;
+}
+
+/* Rule 5's button content, "the element's alternative text": the `alt` value, whose bytes the current job
+   borrows (no attribute is written while one holds the thread). */
+static const lxb_char_t *rep_alt(lxb_dom_element_t *el, size_t *len)
+{
+    const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"alt", 3, len);
+
+    DCHECK(v != NULL || *len == 0, "an `alt` attribute answered a length with no bytes");
+    return v;
+}
+
+static ReplacedElement rep_image_button(JSContext *ctx, lxb_dom_element_t *el)
+{
+    double w = 0.0, h = 0.0;
+    const lxb_char_t *alt;
+    size_t len = 0;
+
+    switch (rep_image_button_rule(ctx, el, &w, &h)) {
+    case REP_BUTTON_IMAGE: return rep_sized(w, h);
+    case REP_BUTTON_BARE:  return rep_bare();
+    case REP_BUTTON_LABEL: break;
+    }
     /* Rule 5: "If the element is an input element that does not represent an image and the user agent does
        not expect this to change: … a replaced element consisting of a button whose content is the element's
        alternative text. The natural dimensions of the button are expected to be about one line in height and
-       whatever width is necessary to render the text on one line." The release arm is rule 2's box. */
-    DFAIL("HTML §15.4.2's fifth rule reached an Image Button with an alt attribute and no image: its natural "
-          "width is the alt text's advance on one line, and core/layout/text_run.h measures only DOM text "
-          "nodes. Build a text_run measure over supplied characters with a style element");
-    return rep_bare();
+       whatever width is necessary to render the text on one line." The width is the text's max-content inline
+       size in the element's own font, the height its used `line-height`, CSS 2.2 §10.8's one line box. */
+    alt = rep_alt(el, &len);
+    return rep_sized(intrinsic_label_width(el, alt, len).px, css_used_line_height_px(el).px);
+}
+
+bool replaced_element_label_ask(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n;
+    JSContext *dctx;
+    double w = 0.0, h = 0.0;
+    const lxb_char_t *alt;
+    size_t len = 0;
+    CssPx px;
+
+    DCHECK(el != NULL, "HTML §15.4.2's button label was asked about no element");
+    n = lxb_dom_interface_node(el);
+    if (n->ns != LXB_NS_HTML || !lxb_html_tree_node_is(n, LXB_TAG_INPUT) ||
+        html_form_input_state(n) != INPUT_STATE_IMAGE)
+        return true;
+    dctx = rep_scripting_realm(n);
+    if (dctx == NULL || rep_image_button_rule(dctx, el, &w, &h) != REP_BUTTON_LABEL) return true;
+    alt = rep_alt(el, &len);
+    return intrinsic_label_width_ask(el, alt, len, &px);
 }
 
 /* ---- HTML §4.12.5 "The canvas element": one dimension of the element's bitmap ------------------------------

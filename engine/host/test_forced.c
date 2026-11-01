@@ -1183,6 +1183,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragbase.h"
 #include "fixture/linkimage.h"
 #include "fixture/focusbox.h"
+#include "fixture/altbutton.h"
 #include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
@@ -1773,6 +1774,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fragbase", HTML_FRAGBASE },
     { "linkimage", HTML_LINKIMAGE },
     { "focusbox", HTML_FOCUSBOX },
+    { "altbutton", HTML_ALTBUTTON },
     { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
@@ -14413,6 +14415,25 @@ TF_UNIT void probes_focusbox(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `altbutton` document (fixture/altbutton.h). */
+TF_UNIT void probes_altbutton(const char *js, Probe *tab, int *n) {
+    /* HTML §15.4.2's fifth rule: a button whose natural dimensions are its alternative text on one line. */
+    const char *ab_why = NULL; int ab_tt = 1;
+    fold_row(&ab_tt, &ab_why, !!strstr(js, "\"/api/altbutton\""),
+             "NOT REACHED: there is no /api/altbutton record, so the document aborted before its fetch");
+    fold_row(&ab_tt, &ab_why, param_value_is(js, "/api/altbutton", "w1", "55"),
+             "HTML §15.4.2 rule 5: the Image Button's natural width is not \"Go now\"'s 55.140625px advance");
+    fold_row(&ab_tt, &ab_why, param_value_is(js, "/api/altbutton", "h1", "20"),
+             "HTML §15.4.2 rule 5: the Image Button's natural height is not its one 20px line");
+    fold_row(&ab_tt, &ab_why, param_value_is(js, "/api/altbutton", "w2", "63") &&
+                              param_value_is(js, "/api/altbutton", "h2", "20"),
+             "HTML §15.4.2 rule 5: the padded Image Button is not its label's line plus 8px of padding");
+    const Probe rows[] = {
+        { "alt-button-label", ab_tt, "/api/altbutton", SESS_EXPLORE, ab_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fragdialog` document. */
 TF_UNIT void probes_fragdialog(const char *js, Probe *tab, int *n) {
     /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
@@ -23152,6 +23173,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragbase(js, probes, &np);
     probes_linkimage(js, probes, &np);
     probes_focusbox(js, probes, &np);
+    probes_altbutton(js, probes, &np);
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);

@@ -24,6 +24,7 @@
 #include "core/layout/containment.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/layout_job.h"
+#include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
 #include "solver/rest_unit.h"
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
@@ -631,7 +632,9 @@ static int js_hev_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
                                    (member == HEV_OFFSET_WIDTH || member == HEV_OFFSET_HEIGHT)
                                        ? HEV_CHAIN_EXTENT : HEV_CHAIN_POSITIONING);
         while (block_flow_drive_deferred(&d)) {
-            if (hev_member_ask(&t, member)) {
+            /* HTML §15.4.2's rule 5 label is measured ahead of the member's read, which takes it from the
+               job's record. */
+            if (replaced_element_label_ask(el) && hev_member_ask(&t, member)) {
                 done = true;
                 break;
             }
