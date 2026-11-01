@@ -6,8 +6,10 @@
  * one grid item's contribution into its track, and the item's step asks its measurement first, so a resting
  * drive can stop at any item and the next activation continues at the same one with the measurement held.
  * The track arithmetic after the last item is a constant step. Columns are sized before rows (css-grid-1 §11
- * "Grid Layout Algorithm"), so a row's item contributes at its used column width. Readers are drives over the
- * steps; an `_ask` reader returns "not yet" instead and is re-entered from its first step. */
+ * "Grid Layout Algorithm"), so a row's item contributes at its used column width. A sized axis is a layout job
+ * question (core/layout/layout_job.h's LAYOUT_Q_GRID_AXIS), keyed by the container, the axis and the
+ * constraint: the job's drive runs the steps once and memoizes the tracks, and every reader asks the memo. An
+ * `_ask` reader returns "not yet" with the question suspended; the other readers are drives over the ask. */
 /* Named residual. Not covered: a percentage gutter without a definite available grid space, content alignment
  * that moves a track, and every grid property but `display`, the two track lists (core/css/css_grid_track_list.h's
  * residual covers their grammar), `grid-template-areas`, the gaps and the placement properties
@@ -28,6 +30,7 @@
 #include "core/css/css_length.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/grid_placement.h"
+#include "core/layout/layout_question.h"
 
 /* What an axis is sized under: the available grid space (§11.2), or a min-content or max-content constraint
    (css-sizing-3 §2.1 "Auto Box Sizes"), under which §11.6's free space is zero or infinite. */
@@ -61,20 +64,19 @@ typedef struct {
     CssPx  minimum, min_content, max_content;
 } GridContribution;
 
-/* One run of §11.3 over one axis of `container`. `placement` is §8.5's area for every item. `target` is the
-   item whose tracks are wanted, or NULL; `target_index` its item number once `found`. `tracks` holds the
+/* One run of §11.3 over one axis of `container`. `placement` is §8.5's area for every item. `tracks` holds the
    explicit tracks then the implicit ones, `contribs` the items that span a track with an intrinsic or flexible
    sizing function. All three are owned and released by `grid_axis_sizing_end`. A row run holds the layout
    job's grid row context for `container` (core/layout/layout_job.h) from begin to end; `outer_ctx` is the
    context it restores. */
 typedef struct {
-    lxb_dom_element_t   *container, *target;
+    lxb_dom_element_t   *container;
     bool                 vertical;
     GridSizingConstraint constraint;
     BoxTreeChild         cursor;
-    bool                 items_done, sized, found;
+    bool                 items_done, sized;
     GridPlacement        placement;
-    size_t               items, target_index;
+    size_t               items;
     GridTrack           *tracks;
     size_t               ntracks, capacity;
     GridContribution    *contribs;
@@ -85,24 +87,31 @@ typedef struct {
 } GridAxisSizing;
 
 /* Begin §11.3 over `container`'s columns (`vertical` false) or rows. `container` must generate a grid
-   container box and `target`, when not NULL, must be one of its grid items. A row run whose container's
+   container box. A row run whose container's
    height is indefinite is sized under a max-content constraint whatever `constraint` says. Refuses, by
    name, every grid property it would otherwise read as its initial value. */
-void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb_dom_element_t *target,
-                            bool vertical, GridSizingConstraint constraint);
+void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, bool vertical,
+                            GridSizingConstraint constraint);
 /* One step: fold the next grid item, or, after the last, size the tracks. False is "not yet": the item's
    measurement is not ready under a resting drive, and the same step is retried. */
 bool grid_axis_sizing_step(GridAxisSizing *g);
 bool grid_axis_sizing_done(const GridAxisSizing *g);
 void grid_axis_sizing_end(GridAxisSizing *g);
 
+/* The body of LAYOUT_Q_GRID_AXIS question `q` at entry `at` of the current job, run by a drive
+   (core/layout/block_flow.h's `block_flow_drive_deferred`): every step, then the answer memoized, or the entry
+   suspended at the first "not yet" and re-run from its first step, its items' finished measurements served. */
+void grid_track_question_run(LayoutQuestion q, size_t at);
+
 /* §8.5's placement of `container`'s items over its explicit grid (core/layout/grid_placement.h), owned by the
    caller and released with `grid_placement_free`. */
 void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out);
-/* Whether `container`'s columns can be sized in this activation: every step run, false at the first "not yet". */
+/* Whether `container`'s columns are sized: true when the job's memo holds them, else false ("not yet") with
+   the question suspended. */
 bool grid_track_columns_ask(lxb_dom_element_t *container);
 /* The inline size of `item`'s grid area in `container`, a content-box extent in CSS pixels: the sum of the
-   used sizes of the columns it spans. `item` must be a grid item of `container`. */
+   used sizes of the columns it spans. `item` must be a grid item of `container` (checked). A drive over the
+   columns' ask: under a resting job the ask must have been answered first, since its drive may take no body. */
 CssPx grid_item_area_inline_size(lxb_dom_element_t *container, lxb_dom_element_t *item);
 /* The block size of `item`'s grid area: the sum of the rows it spans. Same contract. */
 CssPx grid_item_area_block_size(lxb_dom_element_t *container, lxb_dom_element_t *item);

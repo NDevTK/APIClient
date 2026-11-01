@@ -18,6 +18,7 @@
 #include "core/layout/replaced_element.h"
 #include "core/layout/scroll_container.h"
 #include "core/layout/used_value.h"
+#include "core/timing/thread_work.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
 /* A grid property this sizing reads as its initial value: `name` must be undeclared on `el`, or declared as
@@ -322,8 +323,8 @@ static CssPx gt_gutters(const GridAxisSizing *g, size_t start, size_t n)
     return kept > 1 ? css_px_scale(g->gap, (double)(kept - 1)) : css_px(0.0);
 }
 
-void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb_dom_element_t *target,
-                            bool vertical, GridSizingConstraint constraint)
+void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, bool vertical,
+                            GridSizingConstraint constraint)
 {
     char buf[160];
 
@@ -332,18 +333,14 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, lxb
                 css_computed_display_is(container, CSS_KEYWORD_INLINE_GRID),
             "css-grid-1 §11.3 was begun over %s, which generates no grid container box",
             box_subject(container, buf, sizeof buf));
-    DCHECK(target == NULL ||
-               box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(target))) == container,
-           "a grid track was asked for an element that is not a box-tree child of the grid container named");
     gt_require_supported_columns(container);
     gt_require_supported_rows(container);
     g->container = container;
-    g->target = target;
     g->vertical = vertical;
     g->constraint = constraint;
     g->cursor = box_tree_first_child(container);
-    g->items_done = g->sized = g->found = false;
-    g->items = g->target_index = 0;
+    g->items_done = g->sized = false;
+    g->items = 0;
     g->tracks = NULL;
     g->ntracks = g->capacity = 0;
     g->contribs = NULL;
@@ -924,8 +921,6 @@ static void gt_size(GridAxisSizing *g)
                    "against which css-grid-1 §11.6 and §11.7 redo their step. BUILD that redo",
                    box_subject(g->container, buf, sizeof buf));
     }
-    DCHECK(g->target == NULL || g->found,
-           "a grid track was sized for an item the walk over the container's grid items never reached");
     g->sized = true;
 }
 
@@ -971,10 +966,6 @@ bool grid_axis_sizing_step(GridAxisSizing *g)
             }
             g->contribs[g->ncontribs++] = rec;
         }
-        if (item == g->target) {
-            g->found = true;
-            g->target_index = g->items;
-        }
         g->items++;
     }
     g->cursor = box_tree_next_sibling(g->container, g->cursor);
@@ -998,100 +989,6 @@ void grid_axis_sizing_end(GridAxisSizing *g)
     g->contribs = NULL;
     g->ncontribs = g->contribs_cap = 0;
     grid_placement_free(&g->placement);
-}
-
-/* ---- readers -------------------------------------------------------------------------------------------- */
-
-/* Every step in this activation; false, with the tracks released, at the first "not yet". */
-static bool gt_run_ask(GridAxisSizing *g, lxb_dom_element_t *container, lxb_dom_element_t *target, bool vertical,
-                       GridSizingConstraint constraint)
-{
-    /* css-grid-1 §8's placement, which the run begins with, reads every item's style. */
-    if (!box_tree_children_style_ask(container)) return false;
-    grid_axis_sizing_begin(g, container, target, vertical, constraint);
-    while (!grid_axis_sizing_done(g))
-        if (!grid_axis_sizing_step(g)) { grid_axis_sizing_end(g); return false; }
-    return true;
-}
-
-/* Every step, driving deferred work between them. */
-static void gt_run_drive(GridAxisSizing *g, lxb_dom_element_t *container, lxb_dom_element_t *target, bool vertical)
-{
-    LayoutJobDrive d;
-
-    layout_job_drive_begin(&d);
-    grid_axis_sizing_begin(g, container, target, vertical, GRID_SIZING_AVAILABLE);
-    while (!grid_axis_sizing_done(g))
-        if (!grid_axis_sizing_step(g)) (void)block_flow_drive_deferred(&d);
-    layout_job_drive_end(&d);
-}
-
-/* The first track of the target's area and the number it spans, on the run's axis. */
-static size_t gt_target_track(const GridAxisSizing *g, size_t *span)
-{
-    const GridCell *c;
-
-    DCHECK(g->found, "a grid item's track was read from a run that never reached the item");
-    c = &g->placement.cells[g->target_index];
-    *span = g->vertical ? c->rows : c->cols;
-    return g->vertical ? c->row : c->col;
-}
-
-static CssPx gt_track_offset(const GridAxisSizing *g, size_t t);
-
-/* The target's area's extent on the run's axis: from its first track's start to its last track's end, so the
-   gutters between them carry §10.5's distributed space ("the spanning item's grid area is increased to
-   accommodate the extra space assigned to the gutters due to alignment"). */
-static CssPx gt_target_extent(const GridAxisSizing *g)
-{
-    size_t span, start = gt_target_track(g, &span), last = start + span - 1;
-
-    return css_px_sub(css_px_add(gt_track_offset(g, last), g->tracks[last].base), gt_track_offset(g, start));
-}
-
-void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out)
-{
-    DCHECK(container != NULL && out != NULL, "a grid's placement was asked for with no container or no out");
-    grid_placement_run(container, false, out);
-}
-
-bool grid_track_columns_ask(lxb_dom_element_t *container)
-{
-    GridAxisSizing g;
-
-    if (!gt_run_ask(&g, container, NULL, false, GRID_SIZING_AVAILABLE)) return false;
-    grid_axis_sizing_end(&g);
-    return true;
-}
-
-CssPx grid_item_area_inline_size(lxb_dom_element_t *container, lxb_dom_element_t *item)
-{
-    GridAxisSizing g;
-    CssPx w;
-
-    DCHECK(item != NULL, "a grid area's inline size was asked for no item");
-    gt_run_drive(&g, container, item, false);
-    w = gt_target_extent(&g);
-    grid_axis_sizing_end(&g);
-    return w;
-}
-
-CssPx grid_item_area_block_size(lxb_dom_element_t *container, lxb_dom_element_t *item)
-{
-    GridAxisSizing g;
-    CssPx h;
-    char buf[160], cbuf[160];
-
-    DCHECK(item != NULL, "a grid area's block size was asked for no item");
-    DCHECKF(!layout_job_grid_rows_sizing(container),
-            "%s's grid area block size was asked while %s's rows are being sized, which is the size those rows "
-            "compute; css-sizing-3 §5.2.1 makes a percentage cyclic through it behave as auto there, which "
-            "used_value.c's grid area arms answer before asking",
-            box_subject(item, buf, sizeof buf), box_subject(container, cbuf, sizeof cbuf));
-    gt_run_drive(&g, container, item, true);
-    h = gt_target_extent(&g);
-    grid_axis_sizing_end(&g);
-    return h;
 }
 
 /* css-grid-1 §10.5 "Aligning the Grid: the justify-content and align-content properties" over the free space
@@ -1159,84 +1056,257 @@ static void gt_alignment(const GridAxisSizing *g, CssPx *lead, CssPx *between)
     }
 }
 
-/* The space from the grid's start to track `t` and to the end of the `span` tracks from `start`: the tracks
-   ahead of it and, after each that is not collapsed, a gutter widened by §10.5's distributed space. */
-static CssPx gt_track_offset(const GridAxisSizing *g, size_t t)
-{
-    CssPx lead, between, o;
-    size_t i, kept = 0;
 
-    gt_alignment(g, &lead, &between);
-    o = lead;
-    for (i = 0; i < t; i++) {
-        o = css_px_add(o, g->tracks[i].base);
-        if (!g->tracks[i].collapsed) kept++;
-    }
-    return css_px_add(o, css_px_scale(css_px_add(g->gap, between), (double)kept));
+/* ---- the axis as a layout question ---------------------------------------------------------------------- */
+
+/* What LAYOUT_Q_GRID_AXIS answers (core/layout/layout_job.h): one axis of a container sized, as its readers
+   take it. `offset[t]` is track `t`'s start from the grid's start, with §10.5's leading space and the widened
+   gutters before it; `base[t]` its used size; `sum` §5.2's tracks and gutters. `items` are the grid items in
+   the order §8.5 placed them, each spanning `span[k]` tracks from `start[k]`. One block of the job's answer
+   storage, laid out in the order the fields name. */
+struct GridAxisAnswer {
+    size_t                    ntracks, nitems;
+    CssPx                     sum;
+    const CssPx              *base, *offset;
+    lxb_dom_element_t *const *items;
+    const size_t             *start, *span;
+};
+
+/* The question's parameter: the axis and the constraint, never zero. */
+static unsigned gt_code(bool vertical, GridSizingConstraint constraint)
+{
+    return 1u + (vertical ? 3u : 0u) + (unsigned)constraint;
 }
 
-/* The target's track's start. */
-static CssPx gt_target_offset(const GridAxisSizing *g)
+/* The finished run `g`, copied into the current job's answer storage. */
+static const struct GridAxisAnswer *gt_answer_of(const GridAxisSizing *g)
 {
-    size_t span, t = gt_target_track(g, &span);
+    size_t bytes = sizeof(struct GridAxisAnswer) + 2 * g->ntracks * sizeof(CssPx) +
+                   g->placement.n * (sizeof(lxb_dom_element_t *) + 2 * sizeof(size_t));
+    struct GridAxisAnswer *a = layout_job_answer_storage(bytes);
+    CssPx *base = (CssPx *)(a + 1), *offset = base + g->ntracks, lead, between, o;
+    lxb_dom_element_t **items = (lxb_dom_element_t **)(offset + g->ntracks);
+    size_t *start = (size_t *)(items + g->placement.n), *span = start + g->placement.n, t, k = 0;
+    BoxTreeChild c;
 
-    return gt_track_offset(g, t);
+    DCHECK(g->sized, "a grid axis was memoized before its tracks were sized");
+    gt_alignment(g, &lead, &between);
+    o = lead;
+    for (t = 0; t < g->ntracks; t++) {
+        base[t] = g->tracks[t].base;
+        offset[t] = o;
+        o = css_px_add(o, g->tracks[t].base);
+        if (!g->tracks[t].collapsed) o = css_px_add(o, css_px_add(g->gap, between));
+    }
+    /* The steps' own walk, so item `k` is placement cell `k`. */
+    for (c = box_tree_first_child(g->container); box_tree_child_exists(c); c = box_tree_next_sibling(g->container, c)) {
+        lxb_dom_element_t *it = grid_item_of(g->container, c);
+        const GridCell *cell;
+
+        if (it == NULL) continue;
+        DCHECKF(k < g->placement.n, "a grid axis met more items than its placement placed (%zu)", g->placement.n);
+        cell = &g->placement.cells[k];
+        items[k] = it;
+        start[k] = g->vertical ? cell->row : cell->col;
+        span[k] = g->vertical ? cell->rows : cell->cols;
+        DCHECK(span[k] >= 1 && start[k] + span[k] <= g->ntracks,
+               "a grid item was placed across tracks the axis does not have");
+        k++;
+    }
+    DCHECKF(k == g->placement.n, "a grid axis placed %zu items and its walk met %zu", g->placement.n, k);
+    a->ntracks = g->ntracks;
+    a->nitems = k;
+    a->sum = gt_sum(g);
+    a->base = base;
+    a->offset = offset;
+    a->items = items;
+    a->start = start;
+    a->span = span;
+    return a;
+}
+
+void grid_track_question_run(LayoutQuestion q, size_t at)
+{
+    GridAxisSizing g;
+    LayoutAnswer a;
+    ThreadWorkSpan tw;
+    bool vertical;
+    GridSizingConstraint constraint;
+    CssPx avail;
+
+    DCHECKF(q.kind == LAYOUT_Q_GRID_AXIS && q.element != NULL && q.code >= 1 && q.code <= 6,
+            "a grid axis body was handed a question of kind %d with parameter %u", (int)q.kind, q.code);
+    vertical = q.code > 3;
+    constraint = (GridSizingConstraint)((q.code - 1) % 3);
+    thread_work_begin(&tw);
+    /* css-grid-1 §8's placement, which the run begins with, reads every item's style, and §11.2's available
+       grid space is the container's content box where it is definite (`grid_axis_sizing_begin`), whose width
+       can be a shrink-to-fit over this grid's own intrinsic sizes. */
+    if (box_tree_children_style_ask(q.element) &&
+        (constraint != GRID_SIZING_AVAILABLE || (vertical && used_value_height_behaves_as_auto(q.element)) ||
+         used_value_content_ask(q.element, vertical, &avail))) {
+        grid_axis_sizing_begin(&g, q.element, vertical, constraint);
+        /* §11 sizes the columns before the rows, whose items are laid out at their used column widths; they are
+           asked inside the row context, where those items' layout reads them. */
+        if (!vertical || grid_track_columns_ask(q.element))
+            while (!grid_axis_sizing_done(&g))
+                if (!grid_axis_sizing_step(&g)) break;
+        if (grid_axis_sizing_done(&g)) {
+            a.grid = gt_answer_of(&g);
+            grid_axis_sizing_end(&g);
+            thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 1);
+            layout_job_answer(at, &a);
+            return;
+        }
+        grid_axis_sizing_end(&g);
+    }
+    thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 0);
+    layout_job_suspend(at);
+}
+
+/* The axis asked of the job: true with `*out` the memoized answer, or false ("not yet") with the question
+   suspended for the caller's drive. */
+static bool gt_axis_ask(lxb_dom_element_t *container, bool vertical, GridSizingConstraint constraint,
+                        const struct GridAxisAnswer **out)
+{
+    LayoutQuestion q = layout_question(LAYOUT_Q_GRID_AXIS, container, NULL, gt_code(vertical, constraint));
+    LayoutAnswer a;
+
+    LAYOUT_QUESTION_REPEAT_CHECK(q,
+        "A grid axis's sizing asked for its own tracks: an item's contribution read a size only the tracks "
+        "being sized answer. css-sizing-3 §5.2.1 makes such a percentage behave as auto in the contribution; "
+        "fix it at the rule that re-enters, never by a limit.");
+    if (!layout_job_ask(q, &a)) return false;
+    *out = a.grid;
+    return true;
+}
+
+/* The axis for a caller that cannot propagate "not yet": a drive over the ask, which takes no body when the
+   memo holds the answer. `*d` is begun here and ended by the caller once it has read the answer, since the
+   synchronous job's memo is emptied when its outermost drive ends. */
+static const struct GridAxisAnswer *gt_axis_drive(LayoutJobDrive *d, lxb_dom_element_t *container, bool vertical)
+{
+    const struct GridAxisAnswer *a;
+
+    layout_job_drive_begin(d);
+    while (!gt_axis_ask(container, vertical, GRID_SIZING_AVAILABLE, &a)) (void)block_flow_drive_deferred(d);
+    return a;
+}
+
+/* `item`'s number among the answer's items. */
+static size_t gt_answer_item(const struct GridAxisAnswer *a, const lxb_dom_element_t *item)
+{
+    size_t k;
+
+    for (k = 0; k < a->nitems; k++)
+        if (a->items[k] == item) return k;
+    CHECK_FAIL("a grid area was read for an element that is not one of the grid container's items");
+    return 0;
+}
+
+/* `item`'s area's start, and its extent from its first track's start to its last track's end, so the gutters
+   between them carry §10.5's distributed space ("the spanning item's grid area is increased to accommodate
+   the extra space assigned to the gutters due to alignment"). */
+static CssPx gt_area_start(const struct GridAxisAnswer *a, const lxb_dom_element_t *item)
+{
+    return a->offset[a->start[gt_answer_item(a, item)]];
+}
+
+static CssPx gt_area_extent(const struct GridAxisAnswer *a, const lxb_dom_element_t *item)
+{
+    size_t k = gt_answer_item(a, item), last = a->start[k] + a->span[k] - 1;
+
+    return css_px_sub(css_px_add(a->offset[last], a->base[last]), a->offset[a->start[k]]);
+}
+
+void grid_track_placement(lxb_dom_element_t *container, GridPlacement *out)
+{
+    DCHECK(container != NULL && out != NULL, "a grid's placement was asked for with no container or no out");
+    grid_placement_run(container, false, out);
+}
+
+bool grid_track_columns_ask(lxb_dom_element_t *container)
+{
+    const struct GridAxisAnswer *a;
+
+    return gt_axis_ask(container, false, GRID_SIZING_AVAILABLE, &a);
+}
+
+CssPx grid_item_area_inline_size(lxb_dom_element_t *container, lxb_dom_element_t *item)
+{
+    LayoutJobDrive d;
+    CssPx w;
+
+    DCHECK(item != NULL, "a grid area's inline size was asked for no item");
+    w = gt_area_extent(gt_axis_drive(&d, container, false), item);
+    layout_job_drive_end(&d);
+    return w;
+}
+
+CssPx grid_item_area_block_size(lxb_dom_element_t *container, lxb_dom_element_t *item)
+{
+    LayoutJobDrive d;
+    CssPx h;
+    char buf[160], cbuf[160];
+
+    DCHECK(item != NULL, "a grid area's block size was asked for no item");
+    DCHECKF(!layout_job_grid_rows_sizing(container),
+            "%s's grid area block size was asked while %s's rows are being sized, which is the size those rows "
+            "compute; css-sizing-3 §5.2.1 makes a percentage cyclic through it behave as auto there, which "
+            "used_value.c's grid area arms answer before asking",
+            box_subject(item, buf, sizeof buf), box_subject(container, cbuf, sizeof cbuf));
+    h = gt_area_extent(gt_axis_drive(&d, container, true), item);
+    layout_job_drive_end(&d);
+    return h;
 }
 
 bool grid_item_area_origin_ask(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y)
 {
-    GridAxisSizing c, r;
+    const struct GridAxisAnswer *c, *r;
 
     DCHECK(item != NULL && x != NULL && y != NULL, "a grid area's origin was asked for with nowhere to put it");
-    if (!gt_run_ask(&c, container, item, false, GRID_SIZING_AVAILABLE)) return false;
-    *x = gt_target_offset(&c);
-    grid_axis_sizing_end(&c);
-    if (!gt_run_ask(&r, container, item, true, GRID_SIZING_AVAILABLE)) return false;
-    *y = gt_target_offset(&r);
-    grid_axis_sizing_end(&r);
+    if (!gt_axis_ask(container, false, GRID_SIZING_AVAILABLE, &c)) return false;
+    if (!gt_axis_ask(container, true, GRID_SIZING_AVAILABLE, &r)) return false;
+    *x = gt_area_start(c, item);
+    *y = gt_area_start(r, item);
     return true;
 }
 
 bool grid_item_area_extents_ask(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *w, CssPx *h)
 {
-    GridAxisSizing c, r;
+    const struct GridAxisAnswer *c, *r;
 
     DCHECK(item != NULL && w != NULL && h != NULL, "a grid area's extents were asked for with nowhere to put them");
     DCHECK(!layout_job_grid_rows_sizing(container),
            "a grid area's block extent was asked while its container's rows are being sized, which is the size "
            "those rows compute");
-    if (!gt_run_ask(&c, container, item, false, GRID_SIZING_AVAILABLE)) return false;
-    *w = gt_target_extent(&c);
-    grid_axis_sizing_end(&c);
-    if (!gt_run_ask(&r, container, item, true, GRID_SIZING_AVAILABLE)) return false;
-    *h = gt_target_extent(&r);
-    grid_axis_sizing_end(&r);
+    if (!gt_axis_ask(container, false, GRID_SIZING_AVAILABLE, &c)) return false;
+    if (!gt_axis_ask(container, true, GRID_SIZING_AVAILABLE, &r)) return false;
+    *w = gt_area_extent(c, item);
+    *h = gt_area_extent(r, item);
     return true;
 }
 
 bool grid_container_max_content_block_size_ask(lxb_dom_element_t *container, CssPx *out)
 {
-    GridAxisSizing g;
+    const struct GridAxisAnswer *a;
 
     DCHECK(out != NULL, "a grid container's max-content block size was asked for with nowhere to put it");
-    if (!gt_run_ask(&g, container, NULL, true, GRID_SIZING_MAX_CONTENT)) return false;
-    *out = gt_sum(&g);
-    grid_axis_sizing_end(&g);
+    if (!gt_axis_ask(container, true, GRID_SIZING_MAX_CONTENT, &a)) return false;
+    *out = a->sum;
     return true;
 }
 
 bool grid_container_inline_sizes_ask(lxb_dom_element_t *container, CssPx *min_content, CssPx *max_content)
 {
-    GridAxisSizing g;
+    const struct GridAxisAnswer *mn, *mx;
 
     DCHECK(min_content != NULL && max_content != NULL,
            "a grid container's intrinsic inline sizes were asked for with nowhere to put them");
-    if (!gt_run_ask(&g, container, NULL, false, GRID_SIZING_MIN_CONTENT)) return false;
-    *min_content = gt_sum(&g);
-    grid_axis_sizing_end(&g);
-    if (!gt_run_ask(&g, container, NULL, false, GRID_SIZING_MAX_CONTENT)) return false;
-    *max_content = gt_sum(&g);
-    grid_axis_sizing_end(&g);
+    if (!gt_axis_ask(container, false, GRID_SIZING_MIN_CONTENT, &mn)) return false;
+    if (!gt_axis_ask(container, false, GRID_SIZING_MAX_CONTENT, &mx)) return false;
+    *min_content = mn->sum;
+    *max_content = mx->sum;
     return true;
 }
 

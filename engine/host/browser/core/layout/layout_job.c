@@ -43,7 +43,7 @@ typedef struct {
     unsigned                 ctx;
     uint64_t                 gen;
     uint64_t                 rest;
-    LayoutBfAnswer          *a;
+    LayoutAnswer            *a;
 } LjSlot;
 
 /* One grid row context: `container`'s rows are being sized, inside context `parent` (0 for none). A grid
@@ -78,8 +78,10 @@ struct LayoutJob {
     int64_t   work_end;     /* the engine work count at which a resting drive's activation has spent its work */
     bool      resting;   /* a resting drive is open, as the job's outermost */
     LjSlot   *memo;
-    LayoutBfAnswer **answers;   /* chunks of LJ_ANSWER_CHUNK answers, owned */
+    LayoutAnswer **answers;   /* chunks of LJ_ANSWER_CHUNK answers, owned */
     size_t    answer_chunks, answer_cap, answer_used;
+    void    **storage;   /* the answers' out-of-line parts (`layout_job_answer_storage`), owned */
+    size_t    nstorage, storage_cap;
     size_t    memo_cap;  /* a power of two, or zero before the first answer */
     size_t    memo_used;
     uint64_t  gen;       /* starts at 1, so a zeroed slot is never live */
@@ -132,10 +134,16 @@ static LjSlot *lj_probe(LjSlot *tab, size_t cap, uint64_t gen, LayoutQuestion q,
     return &tab[i];
 }
 
-/* The two kinds the memo holds and the stack suspends. */
+/* The two §9.4.1 kinds, which the `_layoutBf*` census counts. */
 static bool lj_is_bf(LayoutQuestionKind kind)
 {
     return kind == LAYOUT_Q_BF_BOX || kind == LAYOUT_Q_BF_WALK;
+}
+
+/* The kinds the memo holds and the stack suspends; every other kind is opened and closed by its own frame. */
+static bool lj_is_stacked(LayoutQuestionKind kind)
+{
+    return lj_is_bf(kind) || kind == LAYOUT_Q_GRID_AXIS;
 }
 
 static void lj_memo_grow(LayoutJob *job)
@@ -168,11 +176,21 @@ static void lj_contexts_release(LayoutJob *job, bool forget)
     if (forget) job->nctx = 0;
 }
 
-/* Emptying is a generation step, so a job reused across activations pays nothing per slot. The contexts are
-   forgotten only when none is current and no entry names one; otherwise their records are emptied. */
+static void lj_storage_free(LayoutJob *job)
+{
+    size_t i;
+
+    for (i = 0; i < job->nstorage; i++) free(job->storage[i]);
+    job->nstorage = 0;
+}
+
+/* Emptying is a generation step, so a job reused across activations pays nothing per slot, and one free per
+   answer that holds storage. The contexts are forgotten only when none is current and no entry names one;
+   otherwise their records are emptied. */
 static void lj_memo_shed(LayoutJob *job)
 {
     job->gen++;
+    lj_storage_free(job);
     job->memo_used = 0;
     job->answer_used = 0;
     lj_contexts_release(job, job->ctx == 0 && job->n == 0);
@@ -183,14 +201,14 @@ static void lj_memo_shed(LayoutJob *job)
 }
 
 /* The storage for the next memoized answer, from the job's chunks; it lives until the memo is emptied. */
-static LayoutBfAnswer *lj_answer_alloc(LayoutJob *job)
+static LayoutAnswer *lj_answer_alloc(LayoutJob *job)
 {
     size_t c = job->answer_used / LJ_ANSWER_CHUNK;
 
     if (c == job->answer_chunks) {
         if (job->answer_chunks == job->answer_cap) {
             size_t cap = job->answer_cap != 0 ? job->answer_cap * 2 : 16;
-            LayoutBfAnswer **v = lexbor_realloc(job->answers, cap * sizeof *v);
+            LayoutAnswer **v = lexbor_realloc(job->answers, cap * sizeof *v);
 
             CHECK(v != NULL, "a layout job's answer storage could not grow");
             job->answers = v;
@@ -211,6 +229,10 @@ static void lj_answers_free(LayoutJob *job)
     free(job->answers);
     job->answers = NULL;
     job->answer_chunks = job->answer_cap = job->answer_used = 0;
+    lj_storage_free(job);
+    free(job->storage);
+    job->storage = NULL;
+    job->storage_cap = 0;
 }
 
 /* ---- the stack ------------------------------------------------------------------------------------------ */
@@ -503,6 +525,13 @@ bool layout_job_drive_pending(const LayoutJobDrive *d)
     return d->job->n > d->job->base;
 }
 
+bool layout_job_deferred(void)
+{
+    const LayoutJob *job = lj_current();
+
+    return job->n > job->base && job->stack[job->n - 1].state == LJ_SUSPENDED;
+}
+
 bool layout_job_drive_spent(const LayoutJobDrive *d)
 {
     DCHECK(d->job == lj_current(), "a drive was asked about under a job other than the one it began on");
@@ -653,10 +682,10 @@ bool layout_job_drive_next(LayoutJobDrive *d, LayoutQuestion *q, size_t *at)
     DCHECK(job == lj_current(), "a drive was continued under a job other than the one it began on");
     if (job->n == job->base) return false;
     e = &job->stack[job->n - 1];
-    DCHECKF(e->state == LJ_SUSPENDED && lj_is_bf(e->q.kind),
-            "a drive found a %s entry of kind %d at the top of its stack — only a deferred CSS 2.1 §9.4.1 "
-            "contribution or stack is left above a drive's mark, because every other entry is closed by its "
-            "own frame",
+    DCHECKF(e->state == LJ_SUSPENDED && lj_is_stacked(e->q.kind),
+            "a drive found a %s entry of kind %d at the top of its stack — only a deferred stacked question "
+            "(a §9.4.1 contribution or stack, a grid axis) is left above a drive's mark, "
+            "because every other entry is closed by its own frame",
             e->state == LJ_COMPUTING ? "computing" : "suspended", (int)e->q.kind);
     DCHECK(!layout_job_drive_spent(d),
            "a resting drive was continued after it spent its boxes; its driver rests instead");
@@ -701,56 +730,76 @@ void layout_job_drive_end(LayoutJobDrive *d)
     if (job == &g_sync && job->drives == 0) lj_memo_shed(job);
 }
 
-/* ---- LAYOUT_Q_BF_BOX ------------------------------------------------------------------------------------ */
+/* ---- the stacked questions ------------------------------------------------------------------------------ */
 
-bool layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out)
+bool layout_job_ask(LayoutQuestion q, LayoutAnswer *out)
 {
     LayoutJob *job = lj_current();
+    bool bf = lj_is_bf(q.kind);
     LjSlot *s;
 
-    DCHECK(lj_is_bf(q.kind) && q.element != NULL && q.code != 0,
-           "a CSS 2.1 §9.4.1 contribution or stack was asked with a question of another kind, no element or "
-           "no pass");
+    DCHECK(lj_is_stacked(q.kind) && q.element != NULL && q.code != 0,
+           "a stacked layout question was asked with a kind the job does not stack, no element or no parameter");
     DCHECK(job->drives > 0,
-           "a CSS 2.1 §9.4.1 contribution was asked with no drive open — its asker is the stack walk, whose "
-           "callers are either a contribution body or a drive, so a drive is always beneath it");
-    METRIC_ADD(bf_asks, 1);
+           "a stacked layout question was asked with no drive open — its asker is a body or a reader, and a "
+           "reader that cannot propagate \"not yet\" is itself a drive, so a drive is always beneath it");
+    if (bf) METRIC_ADD(bf_asks, 1);
     if (job->memo_cap != 0) {
         s = lj_probe(job->memo, job->memo_cap, job->gen, q, job->ctx);
         if (s->gen == job->gen) {
-            METRIC_ADD(bf_served, 1);
+            if (bf) METRIC_ADD(bf_served, 1);
             if (s->rest < job->rests) METRIC_ADD(served_across_rest, 1);
             *out = *s->a;
             return true;
         }
     }
     (void)lj_push(job, q, LJ_SUSPENDED);
-    METRIC_ADD(bf_deferred, 1);
+    if (bf) METRIC_ADD(bf_deferred, 1);
     return false;
 }
 
-void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer)
+void *layout_job_answer_storage(size_t bytes)
+{
+    LayoutJob *job = lj_current();
+    void *p;
+
+    DCHECK(bytes > 0, "an answer asked for no storage");
+    if (job->nstorage == job->storage_cap) {
+        size_t cap = job->storage_cap != 0 ? job->storage_cap * 2 : 16;
+        void **v = lexbor_realloc(job->storage, cap * sizeof *v);
+
+        CHECK(v != NULL, "a layout job's answer storage could not grow");
+        job->storage = v;
+        job->storage_cap = cap;
+    }
+    p = lexbor_malloc(bytes);
+    CHECK(p != NULL, "a layout job's answer storage could not grow");
+    job->storage[job->nstorage++] = p;
+    return p;
+}
+
+void layout_job_answer(size_t at, const LayoutAnswer *answer)
 {
     LayoutJob *job = lj_current();
     LjEntry *e;
     LjSlot *s;
 
-    DCHECKF(at + 1 == job->n, "a CSS 2.1 §9.4.1 contribution answered at entry %zu of a stack of %zu — a "
-            "body answers only when every question it asked is closed", at, job->n);
+    DCHECKF(at + 1 == job->n, "a stacked layout question answered at entry %zu of a stack of %zu — a body "
+            "answers only when every question it asked is closed", at, job->n);
     e = &job->stack[at];
-    DCHECK(e->state == LJ_COMPUTING && lj_is_bf(e->q.kind),
-           "a CSS 2.1 §9.4.1 contribution or stack answered an entry that is neither, computing");
-    DCHECK(job->nest > 0, "a contribution body answered with no body computing above its drive");
+    DCHECK(e->state == LJ_COMPUTING && lj_is_stacked(e->q.kind),
+           "a layout body answered an entry that is not a computing stacked question");
+    DCHECK(job->nest > 0, "a layout body answered with no body computing above its drive");
     DCHECK(!e->staged,
            "a contribution body answered with a staged walk it never resumed; the body's run took a path to "
            "its answer that does not pass through the walk it stopped in");
-    DCHECKF(job->ctx == e->ctx, "a CSS 2.1 §9.4.1 body answered in grid row context %u, asked in %u; a row "
-            "sizing its body began ends before the body answers", job->ctx, e->ctx);
+    DCHECKF(job->ctx == e->ctx, "a layout body answered in grid row context %u, asked in %u; a row sizing its "
+            "body began ends before the body answers", job->ctx, e->ctx);
     if (job->memo_used * 2 >= job->memo_cap) lj_memo_grow(job);
     s = lj_probe(job->memo, job->memo_cap, job->gen, e->q, e->ctx);
     DCHECK(s->gen != job->gen,
-           "a CSS 2.1 §9.4.1 contribution was computed while the memo already held it — the ask consults the "
-           "memo before it pushes, so a second body for one question is a probe that missed its own key");
+           "a stacked layout question was computed while the memo already held it — the ask consults the memo "
+           "before it pushes, so a second body for one question is a probe that missed its own key");
     s->el = e->q.element;
     s->kind = e->q.kind;
     s->code = e->q.code;
@@ -773,8 +822,8 @@ void layout_job_suspend(size_t at)
 
     DCHECKF(at < job->n && at >= job->base, "a body suspended entry %zu outside its drive's range [%zu, %zu)",
             at, job->base, job->n);
-    DCHECK(job->stack[at].state == LJ_COMPUTING && lj_is_bf(job->stack[at].q.kind),
-           "a body suspended an entry that is not a computing CSS 2.1 §9.4.1 contribution or stack");
+    DCHECK(job->stack[at].state == LJ_COMPUTING && lj_is_stacked(job->stack[at].q.kind),
+           "a body suspended an entry that is not a computing stacked layout question");
     for (i = at + 1; i < job->n; i++)
         DCHECK(job->stack[i].state == LJ_SUSPENDED,
                "a body returned \"not yet\" while a question above it is still computing — \"not yet\" "
@@ -783,15 +832,15 @@ void layout_job_suspend(size_t at)
            "a body returned \"not yet\" with no deferred question above it, no walk staged and its drive's "
            "allowance unspent; only a walk stopped by a spent quota, or a style ask parked on one, suspends "
            "with nothing above it");
-    DCHECKF(job->ctx == job->stack[at].ctx, "a CSS 2.1 §9.4.1 body suspended in grid row context %u, asked in "
-            "%u; a row sizing its body began ends before the body returns", job->ctx, job->stack[at].ctx);
+    DCHECKF(job->ctx == job->stack[at].ctx, "a layout body suspended in grid row context %u, asked in %u; a "
+            "row sizing its body began ends before the body returns", job->ctx, job->stack[at].ctx);
     job->stack[at].state = LJ_SUSPENDED;
     job->nest--;
     job->ctx = job->stack[at].outer;
     DCHECK(job->stack[at].q.kind != LAYOUT_Q_BF_WALK || job->stack[at].staged,
            "a §9.4.1 stack returned \"not yet\" without staging its walk; every return of \"not yet\" in "
            "block_flow.c's bf_layout stages, so its next run continues rather than restarts");
-    if (!job->stack[at].staged) METRIC_ADD(bf_replays, 1);
+    if (lj_is_bf(job->stack[at].q.kind) && !job->stack[at].staged) METRIC_ADD(bf_replays, 1);
 }
 
 static LjEntry *lj_body(LayoutJob *job, size_t at, const lxb_dom_element_t *el)
@@ -842,7 +891,7 @@ bool layout_job_bf_step(size_t at)
 
 size_t layout_job_open(LayoutQuestion q)
 {
-    DCHECK(!lj_is_bf(q.kind), "a CSS 2.1 §9.4.1 contribution or stack is asked through layout_job_bf_ask");
+    DCHECK(!lj_is_stacked(q.kind), "a stacked layout question is asked through layout_job_ask");
     return lj_push(lj_current(), q, LJ_COMPUTING);
 }
 

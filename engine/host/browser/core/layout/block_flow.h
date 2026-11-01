@@ -571,9 +571,9 @@ bool block_flow_auto_height_ask(lxb_dom_element_t *el, CssPx *out);
    propagates to its drive (core/layout/layout_job.h), which asserts one is open beneath it. */
 bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out);
 
-/* Compute the contributions suspended above drive `d`'s mark, topmost first, until none is left or a resting
-   drive has spent its bodies. Answers false when it stopped because the drive is spent (questions may
-   remain); a drive that is not resting always empties its stack. */
+/* Compute the questions suspended above drive `d`'s mark, topmost first, each by its kind's body (§9.4.1's here, a
+   grid axis's in core/layout/grid_track.h), until none is left or a resting drive has spent its bodies. Answers false when it stopped because the drive is spent
+   (questions may remain); a drive that is not resting always empties its stack. */
 struct LayoutJobDrive;
 bool block_flow_drive_deferred(struct LayoutJobDrive *d);
 

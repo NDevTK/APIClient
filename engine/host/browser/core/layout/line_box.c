@@ -612,12 +612,11 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
            width its containing block has determined, so §10.3.9's shrink-to-fit is resolved and the box has one
            width here. `text_run_fill_step` asserts the atomics it is handed carry one number, which keeps
            this walk's items apart from core/layout/intrinsic_size.c's §5.2 contributions.
-           Shrink-to-fit reads the box's intrinsic sizes, so they are asked first and the read is served from
-           the job's record. */
+           Shrink-to-fit reads the box's intrinsic sizes and §10.1's chain of containing-block widths, which
+           can cross a grid area, so all of them are asked first and the read is served from the job. */
         CssPx used;
 
-        if (!used_value_width_ask(el)) return LB_CHILD_NOT_YET;
-        used = used_value_margin_edge_px(el, false);
+        if (!used_value_margin_edge_ask(el, false, &used)) return LB_CHILD_NOT_YET;
 
         text_run_measure_add_atomic(m, el, used, used);
         return LB_CHILD_PLACED;
@@ -1474,9 +1473,9 @@ static bool lb_fill_lines_pull(LbFill *f)
             n = lb_collect_step(&f->col);
             f->stepping = false;
             if (n == 0) {
-                DCHECK(!lb_left(),
-                       "an atomic inline's intrinsic sizes answered \"not yet\" with the line box items unspent; "
-                       "that ask defers nothing else, so its only \"not yet\" is the allowance");
+                DCHECK(!lb_left() || layout_job_deferred(),
+                       "an atomic inline's operands answered \"not yet\" with the line box items unspent and no "
+                       "question deferred; their \"not yet\" is the allowance or a deferred question");
                 return false;
             }
             layout_job_line_items_spend(n);

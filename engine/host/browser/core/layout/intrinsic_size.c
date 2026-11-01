@@ -790,9 +790,9 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
         }
         n = is_collect_step(k);
         if (n == 0) {
-            DCHECK(!layout_job_line_items_left(),
-                   "an atomic inline's intrinsic sizes answered \"not yet\" with the line box items unspent; the "
-                   "ask defers nothing else, so its only \"not yet\" is the allowance");
+            DCHECK(!layout_job_line_items_left() || layout_job_deferred(),
+                   "an atomic inline's intrinsic sizes answered \"not yet\" with the line box items unspent and no "
+                   "question deferred (a grid's tracks are one); their \"not yet\" is one of those two");
             return false;
         }
         layout_job_line_items_spend(n);

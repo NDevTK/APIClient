@@ -5,7 +5,7 @@
  * with no box tree to hang it on. */
 
 /* The stack replaces C frames. A question is pushed when asked. Its body either completes (the entry is
- * popped and, for LAYOUT_Q_BF_BOX, memoized) or asks a question the job defers: that question is pushed
+ * popped and its answer memoized) or asks a question the job defers: that question is pushed
  * suspended and the asking bodies return "not yet" up to the nearest drive, each leaving its entry on the
  * stack as suspended with its stack walk staged (LayoutBfCursor). The drive computes the stack from the top
  * down on a fresh C stack, each body continuing at the step it stopped at, then re-runs its own walk, which
@@ -29,7 +29,7 @@
  * rendering step 22's paint are) runs on the thread's synchronous job, which never rests, so a page's flow
  * cannot be preempted while it lays out; a computed value read with no job at all is refused
  * (css_computed_style_require_record). Next: the drives the layout drive census finds with no `_ask` twin
- * (flex_cross_size_anonymous_lines, gt_run_drive, line_box_glyphs) as asks under the caller's resting drive.
+ * (flex_cross_size_anonymous_lines, line_box_glyphs) as asks under the caller's resting drive.
  * How its absence shows: a flow's slice overrun inside a layout member with `_layoutJobRests` flat. */
 
 /* The resting drive. `scrollIntoView`'s step machine is the drive of its scrolling-area walk: a node's
@@ -87,6 +87,14 @@ typedef struct {
     bool   ifc, at_run, run_inline, escaping, placed, has_line_box;
     CssPx  pos, run_pos, run_neg, esc_pos, esc_neg, baseline;
 } LayoutBfCursor;
+
+/* What a stacked question answers, one member per kind: `bf` for LAYOUT_Q_BF_BOX and LAYOUT_Q_BF_WALK, and
+   `grid` for LAYOUT_Q_GRID_AXIS (core/layout/grid_track.c's sized axis, held in the job's answer storage). */
+struct GridAxisAnswer;
+typedef union {
+    LayoutBfAnswer               bf;
+    const struct GridAxisAnswer *grid;
+} LayoutAnswer;
 
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
 
@@ -176,6 +184,11 @@ bool layout_job_drive_spent(const LayoutJobDrive *d);
    when the drive's allowances are not what stopped it. */
 bool layout_job_drive_pending(const LayoutJobDrive *d);
 
+/* Whether an ask under the innermost open drive deferred a question: the top of the current job's stack, above
+   that drive's mark, is suspended. A body's own entry computes until it returns, so this reads the asks made
+   since. */
+bool layout_job_deferred(void);
+
 /* Whether a line box fill (core/layout/line_box.h) may take another step in this activation, and the items and
    box metrics a step took. Outside a resting drive, or under a drive nested inside a body, a fill runs to
    completion: `left` answers true and the spends count nothing. */
@@ -185,25 +198,30 @@ bool layout_job_rests_innermost(void);
 void layout_job_line_items_spend(size_t n);
 void layout_job_line_metrics_spend(size_t n);
 
-/* ---- LAYOUT_Q_BF_BOX ------------------------------------------------------------------------------------ */
+/* ---- the stacked questions --------------------------------------------------------------------------------- */
 
-/* Ask a BF_BOX or BF_WALK question. Asserts a drive is open: every ask has one beneath it on the C stack. True
-   with `*out` written when the memo holds the answer; otherwise the question is pushed suspended and the
-   caller returns "not yet". No body runs inside its asker's frame: the drive loop is the one caller of a body
-   (`layout_job_drive_next`), so the C stack a body uses does not grow with the depth of the box tree. A body
-   the drive takes takes one box (a stack counts its steps instead). A drive nested inside a resting job runs
-   to completion in the activation, so the step machine owning the job could not rest there: taking a body
-   there is a DFAIL naming the nested drive's site, whose caller is to become an ask propagated to the resting
+/* Ask a BF_BOX, BF_WALK or GRID_AXIS question. Asserts a drive is open: every ask has one beneath it on
+   the C stack. True with `*out` written when the memo holds the answer; otherwise the question is pushed suspended
+   and the caller returns "not yet". No body runs inside its asker's frame: the drive loop is the one caller of a
+   body (`layout_job_drive_next`), so the C stack a body uses does not grow with the depth of the box tree, and a
+   question is answered once per job however many readers ask it. A contribution's body takes one box; a stack counts
+   its steps, and a grid axis counts what its own asks take. A drive nested inside a
+   resting job runs to completion in the activation, so the step machine owning the job could not rest there: taking
+   a body there is a DFAIL naming the nested drive's site, whose caller is to become an ask propagated to the resting
    drive. */
-bool layout_job_bf_ask(LayoutQuestion q, LayoutBfAnswer *out);
+bool layout_job_ask(LayoutQuestion q, LayoutAnswer *out);
 
 /* The computing body at `at` completed: asserts it is the top, pops and memoizes it. */
-void layout_job_bf_answer(size_t at, const LayoutBfAnswer *answer);
+void layout_job_answer(size_t at, const LayoutAnswer *answer);
+
+/* `bytes` of storage for an answer's out-of-line parts, owned by the current job's memo and released when it
+   is emptied, which no memoized answer outlives. */
+void *layout_job_answer_storage(size_t bytes);
 
 /* The computing body at `at` returned "not yet": asserts every entry above it is suspended and suspends it.
-   A body suspends with a deferred question above it, or with a staged walk and nothing above it when its
-   walk stopped at a spent quota (`layout_job_bf_step`). A stack always stages; a contribution's body, one ask
-   of its stack, re-runs from its start (`_layoutBfReplays`). */
+   A body suspends with a deferred question above it, or with nothing above it when its drive's allowance is
+   spent (a stack's walk stages first, `layout_job_bf_step`). A stack always stages; every other body re-runs
+   from its start, its finished asks served from the memo (`_layoutBfReplays`). */
 void layout_job_suspend(size_t at);
 
 /* The computing body at `at`, whose question is about `el`, stages its walk before returning "not yet", and

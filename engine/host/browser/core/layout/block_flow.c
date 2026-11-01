@@ -2613,7 +2613,7 @@ static BfBox bf_box_unpack(const LayoutBfAnswer *a)
 static bool bf_question_run(LayoutQuestion q, size_t at, BfBox *out)
 {
     BfBaseline pass = (BfBaseline)(q.code - 1u);
-    LayoutBfAnswer a;
+    LayoutAnswer a;
     ThreadWorkSpan tw;
     bool done;
 
@@ -2631,18 +2631,18 @@ static bool bf_question_run(LayoutQuestion q, size_t at, BfBox *out)
         return false;
     }
     thread_work_end(&tw, THREAD_WORK_LAYOUT_BOX, 1);
-    bf_box_pack(out, &a);
-    layout_job_bf_answer(at, &a);
+    bf_box_pack(out, &a.bf);
+    layout_job_answer(at, &a);
     return true;
 }
 
 /* Ask `q` of the job: served from the memo, or deferred ("not yet", `*out` unwritten) for the drive to run. */
 static bool bf_question_ask(LayoutQuestion q, BfBox *out)
 {
-    LayoutBfAnswer a;
+    LayoutAnswer a;
 
-    if (!layout_job_bf_ask(q, &a)) return false;
-    *out = bf_box_unpack(&a);
+    if (!layout_job_ask(q, &a)) return false;
+    *out = bf_box_unpack(&a.bf);
     return true;
 }
 
@@ -2724,7 +2724,19 @@ bool block_flow_drive_deferred(LayoutJobDrive *d)
     while (!layout_job_drive_spent(d) && layout_job_drive_next(d, &q, &at)) {
         BfBox r;
 
-        (void)bf_question_run(q, at, &r);
+        switch (q.kind) {
+        case LAYOUT_Q_BF_BOX:
+        case LAYOUT_Q_BF_WALK:
+            (void)bf_question_run(q, at, &r);
+            break;
+        case LAYOUT_Q_GRID_AXIS:
+            grid_track_question_run(q, at);
+            break;
+        default:
+            DFAIL("a drive took a layout question of a kind no body in this engine computes; layout_job.c "
+                  "stacks only the kinds dispatched here");
+            break;
+        }
     }
     return !layout_job_drive_spent(d);
 }
