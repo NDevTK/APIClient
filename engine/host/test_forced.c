@@ -1303,6 +1303,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/spaniso.h"
 #include "fixture/fileparseset.h"
 #include "fixture/mrkeys.h"
+#include "fixture/arrname.h"
 #include "fixture/mruid.h"
 #include "fixture/mrconsole.h"
 #include "fixture/idbname.h"
@@ -1922,6 +1923,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "spaniso", HTML_SPANISO },
     { "fileparse-set", HTML_FILEPARSE_SET },
     { "mrkeys", HTML_MRKEYS },
+    { "arrname", HTML_ARRNAME },
     { "mruid", HTML_MRUID },
     { "mrconsole", HTML_MRCONSOLE },
     { "idbname", HTML_IDBNAME },
@@ -18698,6 +18700,20 @@ TF_UNIT void probes_mathrandom(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `arrname` document (fixture/arrname.h): an unknown reduced over `[]` and then enumerated
+   reaches its fetch, and the world where the stored record holds no member reports no keys. */
+TF_UNIT void probes_arrname(const char *js, Probe *tab, int *n) {
+    const char *why = NULL; int tt = 1;
+    fold_row(&tt, &why, !!strstr(js, "\"/api/arrname\""),
+             "NOT REACHED: there is no /api/arrname record, so the document aborted enumerating the reduction");
+    fold_row(&tt, &why, param_value_is(js, "/api/arrname", "n", "0"),
+             "no /api/arrname?n=0 record: the arm where the reduction's result holds no own member did not run");
+    const Probe rows[] = {
+        { "arrname", tt, "/api/arrname", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `idbname` document (fixture/idbname.h): a database opened, given a store and deleted through
    names that are unknowns reports its one store after the delete succeeds. */
 TF_UNIT void probes_idbname(const char *js, Probe *tab, int *n) {
@@ -23907,6 +23923,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_spaniso(js, probes, &np);
     probes_fileparse_set(js, probes, &np);
     probes_mathrandom(js, probes, &np);
+    probes_arrname(js, probes, &np);
     probes_idbname(js, probes, &np);
     probes_lockgrant(js, probes, &np);
     probes_protoset(js, probes, &np);
