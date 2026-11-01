@@ -6831,7 +6831,12 @@ static int key_domain_holds(JSContext *ctx, JSAtom key, void *opaque)
 
 /* Whether §10.1.8.1 OrdinaryGet ( O, P, Receiver ) over the object `obj` misses for every value of the unknown
    String key `key` (facets `kc`): JS_ForEachChainKey read every link from storage and no key lies in the domain.
-   0 where a link composes its keys in a hook (a Proxy, a named or indexed property) or a key lies in it. */
+   0 where a link composes its keys in a hook (a Proxy, a named or indexed property) or a key lies in it.
+   Named residual. Not covered: a chain with a link that composes its keys: a Document's and a Window's named
+   properties, a WindowProxy, Storage, a form's named controls, a String object. Next diff builds: each such
+   class answering whether any supported property name lies in a prefix domain, Document's as a walk charged and
+   rested as its named lookup is. How its absence shows: an expando-shaped read on `document` or `window` keeps
+   its hit arm while the same read on an element does not. */
 static int object_chain_misses_domain(JSContext *ctx, JSValueConst obj, JSValueConst key, const Concolic *kc)
 {
     KeyDomain d = { kc->shape, (size_t)kc->hole_span[0], kc->len_lo, 0 };

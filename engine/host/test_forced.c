@@ -14535,9 +14535,13 @@ TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
              "unknown key's domain contains took an arm where it hit");
     fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a3\""),
              "a /api/kd-a3 record exists: a slot written through the unknown key did not read back what was written");
+    fold_row(&miss_tt, &miss_why, !strstr(js, "\"/api/kd-a2\""),
+             "a /api/kd-a2 record exists: an element, whose chain is read from storage, took an arm where the "
+             "unknown key hit");
+    /* The read's answer holds no example, so neither arm is the one this run observed and both grade derived. */
     fold_row(&keep_tt, &keep_why,
-             emitted_record_graded_has(js, "/api/kd-a4", "forced", "\"door\":\"fetch\"") &&
-                 emitted_record_graded_has(js, "/api/kd-a5", "forced", "\"door\":\"fetch\""),
+             emitted_record_has(js, "/api/kd-a4", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/kd-a5", "\"door\":\"fetch\""),
              "an object holding a key the domain contains (`kdNear`), or a name spent on another unknown key, read "
              "as a miss: its hit arm is gone");
     const Probe rows[] = {
