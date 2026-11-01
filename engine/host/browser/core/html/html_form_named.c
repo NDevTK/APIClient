@@ -1,21 +1,11 @@
 /* HTML §4.10.3 The form element: "[Exposed=Window, LegacyOverrideBuiltIns, LegacyUnenumerableNamedProperties]
  * interface HTMLFormElement" declares `getter (RadioNodeList or Element) (DOMString name)`, so a form element is
- * a Web IDL §3.9 legacy platform object, and a named property shadows an interface member
- * (`<input name=action>` answers `form.action`). The value is §4.10.3's "determine the value of a named property":
- * the listed elements whose form owner is the form, with an `id` or `name` equal to the name and no `input` in
- * the Image Button state; failing those, the `img` elements so owned; failing those, the past names map. A
- * [[Get]], [[HasProperty]] or [[GetOwnProperty]] walks as a step machine (fn_step) over the shared resting walk
- * (core/dom/named_walk.h), asking each element whose attribute matches for its form owner (html_form_owner_of).
- *
- * Named residuals. Not covered: (1) two or more candidates, whose value is a live RadioNodeList; the next diff
- * builds RadioNodeList (DOM §4.2.10.1's NodeList with §4.10.18.4's `value`) over this file's filter, and its
- * absence shows as fn_step's DFAIL. (2) [[OwnPropertyKeys]]' supported property names; the next diff lists the
- * sourced names in §4.10.3's order; absence shows as `Reflect.ownKeys(form)` naming no control. (3) §4.10.3's
- * "if an element listed in a form element's past names map changes form owner, then its entries must be
- * removed"; the next diff removes them at the form owner reset; absence shows as a moved control still
- * answering its old form's name. (4) A form holding a region of unknown markup (core/dom/unknown_markup.h)
- * answers from the example's tree; the next diff forks fn_step over the region as window.c's win_named_step
- * does; absence shows as a `form.x` read after a sanitized innerHTML of attacker markup making no @S record. */
+ * a Web IDL §3.9 legacy platform object, and a named property shadows an interface member (`<input name=action>`
+ * answers `form.action`). The value is HTML §4.10.3's "determine the value of a named property": the listed
+ * elements whose form owner is the form, with an `id` or `name` equal to the name and no `input` in the Image
+ * Button state; failing those, the `img` elements so owned; failing those, the past names map. A [[Get]],
+ * [[HasProperty]] or [[GetOwnProperty]] walks as a step machine (fn_step) over the shared resting walk
+ * (core/dom/named_walk.h), asking each element whose attribute matches for its form owner (html_form_owner_of). */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -220,7 +210,10 @@ static int fn_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         return JS_STEP_DONE;
     }
     if (op == 1) { *presult = JS_TRUE; return JS_STEP_DONE; }
-    if (s->walk.count > 1)                               /* step 4 */
+    /* Step 4. Named residual. Not covered: two or more candidates, whose value is a live RadioNodeList. Next diff
+       builds RadioNodeList (DOM §4.2.10.1's NodeList with §4.10.18.4's value) over this file's filter. Absence
+       shows as this DFAIL. */
+    if (s->walk.count > 1)
         DFAIL("a form's named property has two or more candidates, whose value is a live RadioNodeList — build "
               "RadioNodeList (DOM §4.2.10.1's NodeList with §4.10.18.4's value) over this file's candidate filter");
     v = node_wrap(ctx, s->walk.first);                   /* steps 5-6, and the release arm of step 4 */
@@ -325,6 +318,13 @@ static int fn_prevent_extensions(JSContext *ctx, JSValueConst obj)
     return 0;
 }
 
+/* Named residuals. Not covered: (1) [[OwnPropertyKeys]]' supported property names; next diff lists HTML §4.10.3's
+   sourced names in its order; absence shows as `Reflect.ownKeys(form)` naming no control. (2) HTML §4.10.3's "if an
+   element listed in a form element's past names map changes form owner, then its entries must be removed"; next
+   diff removes them at the form owner reset; absence shows as a moved control answering its old form's name.
+   (3) A form holding a region of unknown markup (core/dom/unknown_markup.h) answers from the example's tree; next
+   diff forks fn_step over the region as window.c's win_named_step does; absence shows as a `form.x` read after a
+   sanitized innerHTML of attacker markup making no @S record. */
 static const JSClassExoticMethods FORM_NAMED_EXOTIC = {
     .get_own_property = fn_get_own,
     .get_own_property_step = fn_get_own_step,
