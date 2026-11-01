@@ -1,11 +1,11 @@
-/* The layout job census (core/layout/layout_job.h). `_layoutBfAsks` counts CSS 2.1 §9.4.1 contribution
-   questions asked; `_layoutBfServed` those the memo answered and `_layoutBfDeferred` those pushed suspended
-   for their drive; `_layoutBfReplays` counts bodies that returned "not yet" and so run again from their
+/* The layout job census (core/layout/layout_job.h). `_layoutStackedAsks` counts the stacked questions asked,
+   of every kind layout_job_ask takes; `_layoutStackedServed` those the memo answered and
+   `_layoutStackedDeferred` those pushed suspended for their drive. The `_layoutBf*` rows count the CSS 2.1
+   §9.4.1 kinds among them; `_layoutBfReplays` counts bodies that returned "not yet" and so run again from their
    start. `_layoutJobsStep` counts jobs a step machine owned (a fork's clone of one is one too),
-   `_layoutJobRests` the rest points a driver took
-   with its job alive, and `_layoutServedAcrossRest` the memo answers recorded before such a rest and served
-   after it: a nonzero value is a job that suspended and resumed with its memo. `_layoutLineItems` counts the
-   items line box fills took under a resting drive and `_layoutFillRests` the asks a fill answered "not yet"
+   `_layoutJobRests` the rest points a driver took with its job alive, and `_layoutServedAcrossRest` the memo
+   answers of any stacked kind recorded before such a rest and served after it: a nonzero value is a job that
+   suspended and resumed with its memo. `_layoutLineItems` counts the items line box fills took under a resting drive and `_layoutFillRests` the asks a fill answered "not yet"
    because those were spent: a nonzero value is a CSS 2.2 §9.4.2 context that rested inside its fill.
    `_layoutClientExtentAsks` counts the reads of CSSOM VIEW §6's `clientWidth`/`clientHeight` that reached step
    3's padding edge and `_layoutClientExtentRests` the rests those reads took, a subset of `_layoutJobRests`, so
@@ -14,6 +14,9 @@
    `_layoutRangeRectsRests` for §9's Range members, and `_layoutMouseOffsetAsks` and `_layoutMouseOffsetRests`
    for §10's MouseEvent offsetX/offsetY. `_layoutPaintRests` counts the rests
    update the rendering step 22's paint took between CSS 2.1 §E.2's offers, a subset of `_layoutJobRests`. */
+METRIC(stacked_asks,       "_layoutStackedAsks",      LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
+METRIC(stacked_served,     "_layoutStackedServed",    LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
+METRIC(stacked_deferred,   "_layoutStackedDeferred",  LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_asks,            "_layoutBfAsks",           LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_served,          "_layoutBfServed",         LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
 METRIC(bf_deferred,        "_layoutBfDeferred",       LIFETIME, "ask",  AGENT, "core/layout/layout_job.c", INT)
@@ -34,9 +37,14 @@ METRIC(mouse_offset_rests,  "_layoutMouseOffsetRests",  LIFETIME, "rest", AGENT,
 METRIC(scroll_area_asks,    "_layoutScrollAreaAsks",    LIFETIME, "ask",  AGENT, "core/dom/element_view.c", INT)
 METRIC(scroll_area_rests,   "_layoutScrollAreaRests",   LIFETIME, "rest", AGENT, "core/dom/element_view.c", INT)
 METRIC(paint_rests,         "_layoutPaintRests",         LIFETIME, "rest",  AGENT, "core/rendering/rendering.c", INT)
+IDENTITY_LE(stacked_served,     stacked_asks)
+IDENTITY_LE(stacked_deferred,   stacked_asks)
+IDENTITY_LE(bf_asks,            stacked_asks)
+IDENTITY_LE(bf_served,          stacked_served)
+IDENTITY_LE(bf_deferred,        stacked_deferred)
 IDENTITY_LE(bf_served,          bf_asks)
 IDENTITY_LE(bf_deferred,        bf_asks)
-IDENTITY_LE(served_across_rest, bf_served)
+IDENTITY_LE(served_across_rest, stacked_served)
 IDENTITY_LE(client_extent_rests, job_rests)
 IDENTITY_LE(client_rects_rests, job_rests)
 IDENTITY_LE(range_rects_rests, job_rests)

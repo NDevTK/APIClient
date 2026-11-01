@@ -134,7 +134,7 @@ static LjSlot *lj_probe(LjSlot *tab, size_t cap, uint64_t gen, LayoutQuestion q,
     return &tab[i];
 }
 
-/* The two §9.4.1 kinds, which the `_layoutBf*` census counts. */
+/* The two §9.4.1 kinds, which the `_layoutBf*` census counts among the `_layoutStacked*` asks. */
 static bool lj_is_bf(LayoutQuestionKind kind)
 {
     return kind == LAYOUT_Q_BF_BOX || kind == LAYOUT_Q_BF_WALK;
@@ -743,10 +743,12 @@ bool layout_job_ask(LayoutQuestion q, LayoutAnswer *out)
     DCHECK(job->drives > 0,
            "a stacked layout question was asked with no drive open — its asker is a body or a reader, and a "
            "reader that cannot propagate \"not yet\" is itself a drive, so a drive is always beneath it");
+    METRIC_ADD(stacked_asks, 1);
     if (bf) METRIC_ADD(bf_asks, 1);
     if (job->memo_cap != 0) {
         s = lj_probe(job->memo, job->memo_cap, job->gen, q, job->ctx);
         if (s->gen == job->gen) {
+            METRIC_ADD(stacked_served, 1);
             if (bf) METRIC_ADD(bf_served, 1);
             if (s->rest < job->rests) METRIC_ADD(served_across_rest, 1);
             *out = *s->a;
@@ -754,6 +756,7 @@ bool layout_job_ask(LayoutQuestion q, LayoutAnswer *out)
         }
     }
     (void)lj_push(job, q, LJ_SUSPENDED);
+    METRIC_ADD(stacked_deferred, 1);
     if (bf) METRIC_ADD(bf_deferred, 1);
     return false;
 }
