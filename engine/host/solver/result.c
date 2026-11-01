@@ -808,7 +808,7 @@ char *result_wfq_json(void) {
     METRIC_SET(all_sites, w.all_sites);
     METRIC_SET(all_codes, w.all_codes);
     {
-        char *rows = strdup("[");
+        char *rows = strdup("{\"sites\":[");
         for (int k = 0; k < w.never_top_n && rows; k++) {
             char *next = composef("%s%s{\"kind\":%d,\"key\":\"%016llx\",\"seen\":%lld,\"served\":%lld,"
                                   "\"members\":%ld}", rows, k ? "," : "", w.never_top[k].kind,
@@ -817,7 +817,7 @@ char *result_wfq_json(void) {
             free(rows);
             rows = next;
         }
-        never_top = rows ? composef("%s]", rows) : NULL;
+        never_top = rows ? composef("%s]}", rows) : NULL;
         free(rows);
         CHECK(never_top, "result: OOM composing neverTopSites");
         METRIC_SET_OBJECT(never_top_sites, never_top);
