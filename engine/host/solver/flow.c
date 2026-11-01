@@ -362,21 +362,23 @@ static int64_t g_charged_work = 0;
 static int64_t g_branch_retired_work = 0;
 
 /* The price of one priced decision (flow_priced: an assumption, or an arm against an environment unknown's
-   example), in pulls added to the optimism denominator of the member that rests on it. One pull is the
-   denominator's own unit, so a priced world reads its code site as if the world the page runs in had already been
-   given one quantum there: at code no member has served, that world's arm (1/1) runs before the priced arm (1/2);
-   once the code site has been served `s` pulls the two read 1/(1+s) and 1/(2+s), a gap that shrinks with the
-   service, so the priced world competes on the same terms once the site's optimism is spent, and an arm that
-   reaches unserved code still outranks a crowd at a served one. Any positive price orders unserved code that way;
-   a larger one would hold a priced world back by more pulls than that ordering needs, at every site it reaches. A
-   whole number keeps flow_optimism_den an exact integer in work. A cost and not a tier: nothing is dropped. */
+   example), in pulls: a priced member reads its code site as served at least this many pulls per priced decision,
+   `1/(1 + max(pulls, P*priced) + seen)`. At code no member has served, the world the page runs in reads 1/1 and a
+   world resting on one priced decision 1/2, so the example's world takes the first quantum there; once the code
+   site has been served P*priced pulls both read the site's own count and rank on the same terms, which is the
+   observed world's optimism being spent. A floor and not a sum: a sum leaves the priced world a fraction behind
+   at every service level, so against a crowd of observed members tied on every other term (one family, no own
+   aging since its last emission) it never ranks first, which is a tier. One pull, the scheduler's grant: the
+   example's world is owed its first quantum at each code site per priced decision, and a larger price would hold
+   the priced world behind already-served code for more quanta than that ordering needs. A whole number keeps
+   flow_optimism_den an exact integer in work. */
 #define FLOW_PRICED_PULLS 1
 
 /* The optimism of a class from its operands, the one expression flow_site_reprice stores and the census operands
    recompose. */
 static double site_optimism(int64_t served, int64_t seen, int64_t priced) {
-    return 1.0 / (1.0 + (double)served / (double)ENGINE_PULL_WORK + (double)seen
-                  + (double)(priced * FLOW_PRICED_PULLS));
+    double pulls = (double)served / (double)ENGINE_PULL_WORK, least = (double)(priced * FLOW_PRICED_PULLS);
+    return 1.0 / (1.0 + (pulls > least ? pulls : least) + (double)seen);
 }
 
 /* The optimism every member at `st` reads, asserted against the counts it is a function of, so a writer of `served`
@@ -2424,8 +2426,8 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
        what its parent is worth. It fires the moment anything enters flow_weight that a fork does not carry (a depth
        bonus, a script-index term, a separate visit counter, a "prefer flows that have run" tiebreak).
        flow_weight is `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N
-       + 1/(1+pulls+orphan_seen+P*priced) − (own_silence + fam_work)*RATE`, so a fork carries nine things: the three
-       `cand_*` (decide_fork_blob hands the sibling the parent's cursor); `work` and `work_gen`; the family tag,
+       + 1/(1+max(pulls,P*priced)+orphan_seen) − (own_silence + fam_work)*RATE`, so a fork carries nine things: the
+       three `cand_*` (decide_fork_blob hands the sibling the parent's cursor); `work` and `work_gen`; the family tag,
        joined, which carries the reward and the aging's family half (a fresh root would read 0 for both and fire);
        the code site, which carries the site's count; `orphan_seen`; and the priced decisions.
        What it cannot see: it compares the arm with the parent after the fork has written both, so a term over a
@@ -4014,16 +4016,16 @@ static double flow_queue_nonreward(const Flow *f) {
     return -(double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
 }
 
-/* The optimism term, CLAUDE.md's UCB bonus: optimism over service, `1/(1 + pulls + orphan_seen + P*priced)` read
-   off the member's class (FlowSite), so a never-served site is never starved. 1.0 at a site its family has not
+/* The optimism term, CLAUDE.md's UCB bonus: optimism over service, `1/(1 + max(pulls, P*priced) + orphan_seen)`
+   read off the member's class (FlowSite), so a never-served site is never starved. 1.0 at a site its family has not
    served, over code unexplored elsewhere, for a member resting on no priced decision: one emission's worth of
    promise, which flow_nonreward's bound prices. The service count is the family's and the code site's, not the
    member's: arms minted at one decision stand at one code site and share one count, so minting arms does not mint
    optimism, and service at the site lowers all of them at once. The aging still prices the member's own burn.
    `orphan_seen` is the product's count of drives of the same body elsewhere (flow.h): it lowers and never removes.
-   `priced` is the member's priced decisions at FLOW_PRICED_PULLS each, a fact about its executed prefix and so the
-   member's. An unserved member's reading, 1/(1 + orphan_seen + P*priced), is the floor the never-starved guards in
-   flow_pick_walk read. */
+   `priced` is the member's priced decisions, a floor of FLOW_PRICED_PULLS each under the site's pulls, a fact about
+   its executed prefix and so the member's. An unserved member's reading, 1/(1 + P*priced + orphan_seen), is the
+   floor the never-starved guards in flow_pick_walk read. */
 static double flow_optimism(const Flow *f) {
     DCHECK(f->at->seen == f->orphan_seen && f->at->priced == flow_priced(f),
            "a member stands in a class whose drive count or priced count is not its own — flow_stand_at, the fork, "
@@ -4037,10 +4039,12 @@ static double flow_optimism_unpriced(const Flow *f) {
     return site_optimism(f->at->code->served, f->at->seen, 0);
 }
 
-/* The optimism denominator in work, `Q*(1 + seen + P*priced) + served` with Q = ENGINE_PULL_WORK and
+/* The optimism denominator in work, `Q*(1 + seen) + max(served, Q*P*priced)` with Q = ENGINE_PULL_WORK and
    P = FLOW_PRICED_PULLS, one exact integer: what the census's spread rows and engine.c's rank asserts read. */
 int64_t flow_optimism_den(const Flow *f) {
-    return ENGINE_PULL_WORK * (1 + f->at->seen + f->at->priced * FLOW_PRICED_PULLS) + f->at->code->served;
+    int64_t least = ENGINE_PULL_WORK * FLOW_PRICED_PULLS * f->at->priced;
+
+    return ENGINE_PULL_WORK * (1 + f->at->seen) + (f->at->code->served > least ? f->at->code->served : least);
 }
 
 int64_t flow_site_served(const Flow *f) { return f->at->code->served; }
@@ -4094,7 +4098,7 @@ double flow_distance(const Flow *f) {
 /* The range of everything the order is made of except the reward, written as the derivation, term by term against
    flow_nonreward's summands (as wfq_accounted_spread is written against flow_weight's). Each line is one term at
    the end of its range that pushes the sum up:
-     - the optimism bonus 1/(1+pulls+orphan_seen+P*priced) decreases in counts that cannot go below zero, so its
+     - the optimism bonus 1/(1+max(pulls,P*priced)+orphan_seen) decreases in counts that cannot go below zero, so its
        maximum is its reading at an unserved site over unexplored code with nothing priced, the unit one emission
        is priced against;
      - the fitness distance is (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N with the two fractions asserted in
@@ -5217,7 +5221,7 @@ static Flow *flow_pick_walk(FlowScan why) {
        prices; each lets "never starved" stop meaning anything while every other assertion passes. */
     DCHECK(!best || !unrun || flow_weight(best) >= flow_optimism(unrun),
            "the WFQ picked a flow worth less than an untouched member of its frontier — a never-run flow at an "
-           "unserved site carries its whole optimism bonus (1.0, or 1/(1 + orphan_seen + P*priced) for a drive "
+           "unserved site carries its whole optimism bonus (1.0, or 1/(1 + P*priced + orphan_seen) for a drive "
            "explored elsewhere or a priced world) and no aging, so the pick's maximum must be at least that");
     /* The pairwise distance (`w(best) − w(unrun) <= R(best) − R(unrun) + 1.0`) is asked of one item at
        flow_nonreward, which needs no reference member. Its consequence remains: the inequality is tight in the
@@ -5509,7 +5513,7 @@ static void flow_ix_check(void) {
    assertion holds the observed spread to, written term by term so that a term added to the weight without a range
    here is visible in one place and a fired assert in the other. `val` and the fitness distance enter positively
    and contribute max−min (the distance's floor is 0, flow.h, so its maximum is its range). The optimism
-   1/(1+pulls+orphan_seen+P*priced) is decreasing, so its range is taken at the denominator's ends in that order.
+   1/(1+max(pulls,P*priced)+orphan_seen) is decreasing, so its range is taken at the denominator's ends in that order.
    The aging enters negatively at FLOW_AGE_QUANTUM per notch, and flow_silence_notch floors the sum
    `(own_silence + fam_work)` while
    the census floors the halves separately: floor(a+b) <= floor(a)+floor(b)+1, so the two spreads plus one notch

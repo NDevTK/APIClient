@@ -12,7 +12,7 @@ const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pull
 
 /* The terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The aging is
    split into its family half (in `coord`, with the reward) and its own half; the optimism is read off the member's
-   site (`siteServed` in quanta of `pullWork`) with each priced decision adding `p` pulls, and `assume` is how much
+   site (`siteServed` in quanta of `pullWork`) with each priced decision a floor of `p` pulls, and `assume` is how much
    of it the priced decisions took (the optimism less its unpriced reading), so `opt + assume` is the term the
    weight sums. `visits` is an operand the row carries and no term reads. */
 function termsOf(o, q, p, rungs, where) {
@@ -22,7 +22,8 @@ function termsOf(o, q, p, rungs, where) {
                       `weight_operands_json writes all of ${END_FIELDS.join(", ")}`);
   const coord = o.reward - o.coordNotch * q;
   const own = -o.ownNotch * q;
-  const priced = 1.0 / (1.0 + o.siteServed / o.pullWork + o.orphanSeen + (o.assumed + o.againstEnv) * p);
+  const pulls = o.siteServed / o.pullWork, least = (o.assumed + o.againstEnv) * p;
+  const priced = 1.0 / (1.0 + (pulls > least ? pulls : least) + o.orphanSeen);
   const opt = 1.0 / (1.0 + o.siteServed / o.pullWork + o.orphanSeen);
   const dist = (o.replay + o.surv + o.rung) / rungs;
   const assume = priced - opt;

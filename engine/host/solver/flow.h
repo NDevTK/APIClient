@@ -56,8 +56,8 @@ typedef struct FlowSite FlowSite;
 #define FLOW_STEP_RETIRED 3
 
 /* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
-   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/(1 + site_served/pull_work + orphan_seen
-   + (assumed + against_env)*P) + (-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N))`, with
+   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/(1 + max(site_served/pull_work, (assumed +
+   against_env)*P) + orphan_seen) + (-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N))`, with
    Q = FLOW_AGE_QUANTUM and P = FLOW_PRICED_PULLS. `coord_notch` is the family notch plus the carry bit;
    `site_served` is the work the member's code site has received in its family and `pull_work` the quantum it is
    counted in (ENGINE_PULL_WORK).
@@ -81,7 +81,7 @@ typedef struct {
     double age_quantum;   /* FLOW_AGE_QUANTUM, which the two notches are priced at */
     int64_t assumed;      /* flow_assumed */
     int64_t against_env;  /* flow_against_env */
-    int64_t priced_pulls; /* FLOW_PRICED_PULLS, the pulls each assumption and each against_env adds */
+    int64_t priced_pulls; /* FLOW_PRICED_PULLS, the service floor in pulls per assumption and per against_env */
     int host_owed, running;
     FlowUnitAt unit;
     int next_arm, next_sited;   /* Flow.next_arm1 - 1 (-1: never stood by a step end) and Flow.next_sited */
@@ -1786,7 +1786,7 @@ void  flow_set_orphan_seen(Flow *f, int64_t seen);
 #define FLOW_SITE_CODE  1
 #define FLOW_SITE_DRIVE 2
 void  flow_stand_at(Flow *f, int kind, uint64_t key);
-/* The member's optimism denominator in work, `Q*(1 + orphan_seen + P*priced) + site_served` with
+/* The member's optimism denominator in work, `Q*(1 + orphan_seen) + max(site_served, Q*P*priced)` with
    Q = ENGINE_PULL_WORK and P = FLOW_PRICED_PULLS: engine.c's rank assertions snapshot it. */
 int64_t flow_optimism_den(const Flow *f);
 /* The work the code site the member stands at has received in its family. */
