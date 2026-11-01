@@ -430,10 +430,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
      `cspBlocks`    the page's serialized CSP, present only when it kills THIS vector. Absent = CSP §4.2.3
                     "Should element's inline type behavior be blocked by Content Security Policy?" returned
                     "Allowed", or the class has no inline check: an `eval` fires only past §4.4.1
-                    "EnsureCSPDoesNotBlockStringCompilation" at its own sink. The titles are
-                    here because the numbers alone resolved to where the TERM "inline check" is DEFINED (§2.3
-                    "Directives") rather than to the algorithm this sentence is about, which is exactly the
-                    unfalsifiable state §Browser-half says a title exists to prevent.
+                    "EnsureCSPDoesNotBlockStringCompilation" at its own sink.
      `trustedTypes` the CSP sink GROUP required at this sink, present only when the document requires one — the
                     assignment throws before the markup is parsed. Absent = no requirement applies, which
                     covers both "the document requires none" and "the standard makes this no TT sink".
