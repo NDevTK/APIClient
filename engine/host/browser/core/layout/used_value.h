@@ -147,9 +147,10 @@ bool used_value_border_edge_ask(lxb_dom_element_t *el, bool vertical, CssPx *out
 bool used_value_px_ask(lxb_dom_element_t *el, const char *name, CssPx *out);
 
 /* The operands of `el`'s used insets on one axis — its own size's and its containing block's, which a
-   percentage inset and §10.3.7/§10.6.4's constraint equation read — asked under a resting drive. An absolutely
-   positioned box's static position is its placement's, which core/layout/flow_position.h's origin ask asks.
-   False ("not yet") when one was deferred. */
+   percentage inset and §10.3.7/§10.6.4's constraint equation read — asked under a resting drive, an absolutely
+   positioned size's solve among them (`used_value_abs_solve_ask`). Its offsets' static positions on both axes
+   are its placement's, which core/layout/flow_position.h's origin ask asks. False ("not yet") when one was
+   deferred. */
 bool used_value_offset_operands_ask(lxb_dom_element_t *el, bool vertical);
 
 /* CSS 2.1 §8.1 "Box dimensions"' one edge between a box's border box and its padding box on the axis's

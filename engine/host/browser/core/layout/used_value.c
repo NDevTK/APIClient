@@ -4789,7 +4789,8 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 /* The operands a used length of `el` lays out, asked so a resting drive can defer them: the intrinsic inline
    sizes every width on §10.1's containing-block chain reads (`used_value_width_ask`), since a percentage or an
    `auto` width resolves against the next one up, and for a vertical length the box's §10.6.3 content-based
-   height where its `height` behaves as auto. False ("not yet") when one was deferred. */
+   height where its `height` behaves as auto, or an absolutely positioned box's §10.6.4 solve. False ("not
+   yet") when one was deferred. */
 static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
 {
     lxb_dom_element_t *x;
