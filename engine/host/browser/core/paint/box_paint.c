@@ -1484,11 +1484,15 @@ bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, D
                                 BoxPaintCensus *census)
 {
     CssComputedStyleHold hold;
-    BoxPaintWalk *w = box_paint_begin(ctx, context_el, out, census);
+    BoxPaintWalk *w;
+    bool ok;
 
+    /* One hold over the whole walk, `begin` included: the cursor's first frame reads the context element's
+       computed values. */
     css_computed_style_hold_begin(&hold);
+    w = box_paint_begin(ctx, context_el, out, census);
     while (box_paint_step(w)) {}
+    ok = box_paint_end(w);
     css_computed_style_hold_end(&hold);
-    return box_paint_end(w);
+    return ok;
 }
-
