@@ -132,7 +132,14 @@ JSValue focus_focused_element(JSContext *ctx);
 
 /* §6.6.7 flush steps 5.9-5.10's verdict: target is the candidate, and if that is not a focusable area then the
    result of GETTING THE FOCUSABLE AREA for it — is that target non-null? A question rather than a request,
-   because §6.6.4's delegate search walks content attributes and shadow roots and runs no page code. */
+   because §6.6.4's delegate search walks content attributes and shadow roots and runs no page code.
+   It and focus_delegate below read "being rendered" through each candidate's computed `display`, so each asserts
+   its caller's step machine has entered a layout job holding a cascade record. NAMED RESIDUAL, as at focus.c's
+   focus_area_test. Not covered: the caller enters a job for the one activation and runs the walk whole with no
+   resting drive, so a page-sized author match under a candidate's box test does not rest. Next: each
+   candidate's element_view_box_tests_ask under a resting drive, with the walk's cursor on the caller's state.
+   How its absence shows: a slice overrun inside dialog show(), showPopover() or an autofocus flush with
+   `_layoutJobRests` flat. */
 bool focus_focusable_area_exists(JSContext *docctx, JSValueConst el);
 
 /* HTML §6.6.4 Processing model's FOCUS DELEGATE, 7 steps — "The focus delegate for a focusTarget, given an

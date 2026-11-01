@@ -1182,6 +1182,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragscript.h"
 #include "fixture/fragbase.h"
 #include "fixture/linkimage.h"
+#include "fixture/focusbox.h"
 #include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
@@ -1769,6 +1770,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fragscript", HTML_FRAGSCRIPT },
     { "fragbase", HTML_FRAGBASE },
     { "linkimage", HTML_LINKIMAGE },
+    { "focusbox", HTML_FOCUSBOX },
     { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
@@ -14381,6 +14383,32 @@ TF_UNIT void probes_linkimage(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `focusbox` document (fixture/focusbox.h). */
+TF_UNIT void probes_focusbox(const char *js, Probe *tab, int *n) {
+    /* HTML §6.6.7's autofocus flush, §4.11.4's dialog focusing steps and §6.12's popover focusing steps, each
+       deciding "being rendered" of its candidates on a layout job its machine enters. */
+    const char *fb_why = NULL; int fb_tt = 1;
+    fold_row(&fb_tt, &fb_why, !!strstr(js, "\"/api/focusbox\""),
+             "NOT REACHED: there is no /api/focusbox record, so the animation frame callback never ran or the "
+             "document aborted before it");
+    fold_row(&fb_tt, &fb_why, param_value_is(js, "/api/focusbox", "a", "af"),
+             "HTML §6.6.7: the autofocus flush did not skip the unrendered candidate and focus the `input`");
+    fold_row(&fb_tt, &fb_why, param_value_is(js, "/api/focusbox", "d", "db"),
+             "HTML §4.11.4: the dialog's focus delegate is not the first rendered button");
+    /* §6.12's popover focusing steps step 2 runs the same dialog focusing steps over a `dialog popover`. */
+    const char *fp_why = NULL; int fp_tt = 1;
+    fold_row(&fp_tt, &fp_why, !!strstr(js, "\"/api/focusbox\""),
+             "NOT REACHED: there is no /api/focusbox record, so showPopover() never returned");
+    fold_row(&fp_tt, &fp_why, param_value_is(js, "/api/focusbox", "p", "dpb"),
+             "HTML §6.12: a `dialog popover`'s focusing steps did not focus its button through the dialog "
+             "focusing steps");
+    const Probe rows[] = {
+        { "focus-box", fb_tt, "/api/focusbox", SESS_EXPLORE, fb_why },
+        { "popover-focus", fp_tt, "/api/focusbox", SESS_EXPLORE, fp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fragdialog` document. */
 TF_UNIT void probes_fragdialog(const char *js, Probe *tab, int *n) {
     /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
@@ -23065,6 +23093,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragscript(js, probes, &np);
     probes_fragbase(js, probes, &np);
     probes_linkimage(js, probes, &np);
+    probes_focusbox(js, probes, &np);
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);

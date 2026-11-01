@@ -69,6 +69,7 @@
 #include "core/html/enumerated_attribute.h"
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
+#include "core/layout/layout_job.h"
 #include "core/html/html_dialog.h"
 #include "core/html/html_element.h"
 #include "core/html/popover.h"
@@ -1426,7 +1427,14 @@ int html_dialog_focusing_run(JSContext *ctx, JSStepHdr *hdr, DialogFocusingRun *
         if (dom_attr_get_ns(el, NULL, "autofocus") != NULL) {
             r->control = JS_DupValue(ctx, r->subject);
         } else {
-            r->control = focus_delegate(ctx, r->subject);                                        /* step 4 */
+            /* Step 4, decided on a layout job this activation owns, so each candidate's box test reads its
+               cascade record. */
+            LayoutJob *job = layout_job_new();
+
+            layout_job_enter(job);
+            r->control = focus_delegate(ctx, r->subject);
+            layout_job_leave(job);
+            layout_job_free(job);
             if (JS_IsNull(r->control)) {
                 /* Step 5 — "If control is null, then set control to subject." A `dialog` with no focusable
                    descendant focuses ITSELF, which is what makes step 6's own note ("if control is not

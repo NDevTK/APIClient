@@ -45,6 +45,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
+#include "core/layout/layout_job.h"
 
 static JSClassID g_slot = JS_INVALID_CLASS_ID;
 static int g_id_flush = -1;
@@ -503,7 +504,9 @@ static int flush_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
 
     if (hdr->stage == AF_CANDIDATE) {
         JSContext *elctx;
+        LayoutJob *job;
         JSValue el;
+        bool exists;
 
         list = af_candidates(ctx);
         if (list_len(ctx, list) == 0) {          /* step 5's `while candidates is not empty` is over */
@@ -542,8 +545,14 @@ static int flush_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             JS_FreeValue(ctx, list);
             return JS_STEP_YIELD;
         }
-        /* STEPS 5.9-5.10: target is the element, or the focusable area it yields. */
-        if (!focus_focusable_area_exists(elctx, el)) {
+        /* STEPS 5.9-5.10: target is the element, or the focusable area it yields, decided on a layout job this
+           activation owns, so each candidate's box test reads its cascade record. */
+        job = layout_job_new();
+        layout_job_enter(job);
+        exists = focus_focusable_area_exists(elctx, el);
+        layout_job_leave(job);
+        layout_job_free(job);
+        if (!exists) {
             JS_FreeValue(ctx, el);
             JS_FreeValue(ctx, list);
             return JS_STEP_YIELD;

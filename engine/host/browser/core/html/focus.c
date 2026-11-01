@@ -633,6 +633,9 @@ JSValue focus_delegate(JSContext *ctx, JSValueConst focus_target)
            "HTML §6.6.4 Processing model's FOCUS DELEGATE was asked of something that is not an element — the "
            "standard states it over a focusTarget, and its one caller in this build is §4.11.4's dialog "
            "focusing steps step 4, whose subject is the brand-checked `dialog` receiver");
+    DCHECK(css_cascade_record_is_held(),
+           "HTML §6.6.4's FOCUS DELEGATE was asked with no layout job entered — §4.11.4's dialog focusing steps "
+           "enter one, so each candidate's box test reads that job's cascade record");
     sr = shadow_root_of_element(ctx, lxb_dom_interface_element(n));
     /* Step 1 — "If focusTarget is a shadow host and its shadow root's delegates focus is false, then return
        null." A focusTarget that is NOT a host falls through, which is the asymmetry named above. */
@@ -1789,6 +1792,9 @@ bool focus_focusable_area_exists(JSContext *ctx, JSValueConst el)
     DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "§6.6.7 step 5.9 was given a candidate that is not an element — the autofocus candidates list holds "
            "elements the insertion steps appended and nothing else");
+    DCHECK(css_cascade_record_is_held(),
+           "§6.6.7 steps 5.9-5.10 were asked with no layout job entered — the autofocus flush's machine enters "
+           "one, so each candidate's box test reads that job's cascade record");
     if (el_is_focusable_area(ctx, el)) return true;                                     /* step 5.10's test */
     get_focusable_area(ctx, FA_ELEMENT, el, &k, &v);
     JS_FreeValue(ctx, v);
