@@ -15,12 +15,10 @@
 #include "core/css/css_length.h"     /* §6's `<length>` UNIT set, to tell an unbuilt unit from an author error */
 #include "core/css/css_math.h"       /* §4.8.4.2.2 admits the MATH FUNCTIONS as a `<source-size-value>` */
 #include "core/css/media_query.h"    /* §4.8.4.3: "Other units must be interpreted the same as in Media Queries" */
-#include "core/dom/element_view.h"   /* HTML's "being rendered", which is "has any associated CSS layout boxes" */
 #include "core/frame/viewport.h"
 #include "core/html/integer_microsyntax.h"
 #include "core/html/number_microsyntax.h"
 #include "core/html/image_source_set.h"
-#include "core/layout/used_value.h"
 #include "core/mime/mime_type.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 
@@ -836,8 +834,10 @@ bool image_source_set_allows_auto_sizes(lxb_dom_element_t *img)
    IT TAKES THE VALUE AND NOT THE ELEMENT, because the standard reaches it two ways and only one of them has an
    element to read: §4.8.4.3.9 step 5.7 says "Parse CHILD's sizes attribute with img" while §4.8.4.3.8 step 3
    says "parsing SIZES with img" over a string its own caller already took off an element. `img` is the second
-   argument in both — the `img` element or null — and is what step 3.3's auto-sizes branch is about. */
-static double iss_parse_sizes(JSContext *ctx, const char *text, size_t len, lxb_dom_element_t *img)
+   argument in both — the `img` element or null — and step 3.3's auto-sizes branch is its one reader, so it
+   arrives as what that branch reads: `auto_width` is img's concrete object size width when img is not null, is
+   being rendered and allows auto-sizes, and NULL otherwise (image_source_set_select's contract). */
+static double iss_parse_sizes(JSContext *ctx, const char *text, size_t len, const CssPx *auto_width)
 {
     IssCvList cvs = { NULL, 0, 0 };
     int start = 0, i;
@@ -875,18 +875,10 @@ static double iss_parse_sizes(JSContext *ctx, const char *text, size_t len, lxb_
 
         /* Step 3.3: "If size is auto, and img is not null, and img is BEING RENDERED, and img ALLOWS
            AUTO-SIZES, then set size to the CONCRETE OBJECT SIZE WIDTH of img, in CSS pixels. If size is still
-           auto, then it will be ignored."
-           CSS Images 3 §4.5 "Sizing Objects: the object-fit property" is what that width IS under the initial
-           `fill`: "The replaced content is sized to fill the element's CONTENT BOX: the object's concrete
-           object size is the element's USED WIDTH AND HEIGHT". So the question is asked of the component that
-           owns used values, and whichever arm of CSS 2.1 §10 it cannot compute crashes there rather than being
-           guessed at here.
-           IT IS THE CONTENT EXTENT AND NOT `used_value_px`, which is the half of §4.5's sentence that names a
-           BOX. The two differ under `box-sizing: border-box`, where css-sizing §5 makes the value `width`
-           EXPOSES the border box's — and `* { box-sizing: border-box }` is on most of the modern web, so an
-           img with padding would otherwise select its source against a box the image is not drawn into. */
-        if (is_auto && img && element_view_has_box(lxb_dom_interface_node(img)) && image_source_set_allows_auto_sizes(img)) {
-            size = used_value_content_px(img, false).px;
+           auto, then it will be ignored." `auto_width` is present exactly when the three conditions on img hold,
+           and is that width. */
+        if (is_auto && auto_width != NULL) {
+            size = auto_width->px;
             is_auto = false;
         }
 
@@ -980,7 +972,7 @@ static void iss_create_source_set(JSContext *ctx, ImageSourceSet *out,
                                   const char *default_source, size_t default_n, JSValueConst default_taint,
                                   const char *srcset, size_t srcset_n, JSValueConst srcset_taint,
                                   const char *sizes, size_t sizes_n, JSValueConst sizes_taint,
-                                  lxb_dom_element_t *img)
+                                  const CssPx *auto_width)
 {
     bool has_1x = false, has_width = false;
     int i;
@@ -997,7 +989,7 @@ static void iss_create_source_set(JSContext *ctx, ImageSourceSet *out,
 
     /* Step 3: "Set source set's source size to the result of parsing sizes with img." — ALWAYS, including for
        an absent attribute, whose empty string §4.8.4.3.11 answers with `100vw`. */
-    out->source_size = iss_parse_sizes(ctx, sizes, sizes_n, img);
+    out->source_size = iss_parse_sizes(ctx, sizes, sizes_n, auto_width);
 
     /* Step 4: "If default source is not the empty string and source set does not contain an image source with a
        PIXEL DENSITY DESCRIPTOR VALUE OF 1, and NO image source with a WIDTH DESCRIPTOR, append default source
@@ -1097,13 +1089,12 @@ static bool iss_type_supported(const char *type, size_t len)
  * them as three locals is what keeps that visible — a second function per element kind would be two right
  * answers to one question, which is the shape that drifts.
  *
- * `img` IS THE ALGORITHM'S OWN FOURTH OPERAND AND IT IS NOT `el`. §4.8.4.3.9 step 4 is "Let img be el if el is
- * an img element, otherwise NULL", so a `link` hands create-a-source-set a null `img` and §4.8.4.3.11 step
- * 3.3's auto-sizes branch — the one and only reader of it — is then unreachable for a link, which is correct:
- * `allows auto-sizes` is defined in §4.8.3 "The img element" over an img's `loading` and `sizes` attributes
- * and a link element has neither. */
+ * `img`, THE ALGORITHM'S OWN FOURTH OPERAND, IS NOT `el`, and arrives as the one thing §4.8.4.3.11 step 3.3 reads
+ * of it, `auto_width`. §4.8.4.3.9 step 4 is "Let img be el if el is an img element, otherwise NULL", so a `link`
+ * always passes NULL: `allows auto-sizes` is defined in §4.8.3 "The img element" over an img's `loading` and
+ * `sizes` attributes, and a link element has neither. */
 static void iss_set_from_el(JSContext *ctx, lxb_dom_element_t *el, bool is_img,
-                            lxb_dom_element_t *img, ImageSourceSet *out)
+                            const CssPx *auto_width, ImageSourceSet *out)
 {
     const char *srcset_attr = is_img ? "srcset" : "imagesrcset";
     const char *sizes_attr = is_img ? "sizes" : "imagesizes";
@@ -1120,16 +1111,17 @@ static void iss_set_from_el(JSContext *ctx, lxb_dom_element_t *el, bool is_img,
                           src, src_n, dom_cow_attr_taint(el, default_attr),
                           srcset, srcset_n, dom_cow_attr_taint(el, srcset_attr),
                           sizes, sizes_n, dom_cow_attr_taint(el, sizes_attr),
-                          img);
+                          auto_width);
 }
 
 /* §4.8.4.3.9 "Updating the source set", which is written over "a given img or link element el". */
-static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, ImageSourceSet *out)
+static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, const CssPx *auto_width,
+                                  ImageSourceSet *out)
 {
     /* Step 4: "Let img be el if el is an img element, otherwise null." Hoisted above the walk because steps 3,
-       5.1 and 5.7 all read it and only step 3 could be mistaken for a question about the PARENT alone. */
+       5.1 and 5.7 all read it and only step 3 could be mistaken for a question about the PARENT alone; 5.1 and
+       5.7 read it through `auto_width`. */
     bool is_img = iss_is_tag(el, LXB_TAG_IMG);
-    lxb_dom_element_t *img = is_img ? el : NULL;
     lxb_dom_node_t *parent = lxb_dom_interface_node(el)->parent;
     lxb_dom_element_t *child;
 
@@ -1147,7 +1139,7 @@ static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, ImageSo
        algorithm will not run." */
     if (!is_img || !parent || parent->type != LXB_DOM_NODE_TYPE_ELEMENT ||
         !lxb_html_tree_node_is(parent, LXB_TAG_PICTURE)) {
-        iss_set_from_el(ctx, el, is_img, img, out);
+        iss_set_from_el(ctx, el, is_img, auto_width, out);
         return;
     }
 
@@ -1162,7 +1154,7 @@ static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, ImageSo
         JSValue taint;
 
         /* Step 5.1: "If child is el: … Set el's source set … Return." */
-        if (child == el) { iss_set_from_el(ctx, el, is_img, img, out); return; }
+        if (child == el) { iss_set_from_el(ctx, el, is_img, auto_width, out); return; }
         /* Step 5.2: "If child is not a source element, then continue." */
         if (!iss_is_tag(child, LXB_TAG_SOURCE)) continue;
         /* Step 5.3: "If child does not have a srcset attribute, continue to the next child." */
@@ -1207,7 +1199,7 @@ static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, ImageSo
            value." */
         taint = dom_cow_attr_taint(child, "sizes");
         sizes = iss_attr(child, "sizes", &sizes_n);
-        cand.source_size = iss_parse_sizes(ctx, sizes, sizes_n, img);
+        cand.source_size = iss_parse_sizes(ctx, sizes, sizes_n, auto_width);
 
         /* Step 5.8: "If child has a TYPE attribute, and its value is an unknown or unsupported MIME type,
            continue to the next child." */
@@ -1298,7 +1290,7 @@ static int iss_choose(JSContext *ctx, const ImageSourceSet *s)
     return best >= 0 ? best : largest;
 }
 
-void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, ImageSourceSet *out)
+void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, const CssPx *auto_width, ImageSourceSet *out)
 {
     DCHECK(out != NULL, "§4.8.4.3.7 was asked to select an image source with nowhere to report it");
     DCHECK(el != NULL, "§4.8.4.3.7 was asked to select an image source for no element");
@@ -1314,7 +1306,10 @@ void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, ImageSourceS
 
     /* Step 1: "Update the source set for el." — and for a `link` this is §4.6.8.20's fetch-and-process step 1,
        "Update the source set for el", which is the SAME algorithm reached from the other standard. */
-    iss_update_source_set(ctx, el, out);
+    DCHECK(auto_width == NULL || iss_is_tag(el, LXB_TAG_IMG),
+           "§4.8.4.3.11 step 3.3's concrete object size width was supplied for a `link`: §4.8.4.3.9 step 4 makes "
+           "img null for every element that is not an img, so no width is ever read for one");
+    iss_update_source_set(ctx, el, auto_width, out);
     /* Step 2: "If el's source set is EMPTY, return NULL as the URL and undefined as the pixel density." — and
        an UNDECIDED set answers the same way, because a choice made out of a value nobody can read is not one.
        FOR A `link` THE EMPTY CASE IS THE CALLER'S AND NOT THIS STEP'S: §4.6.8.20's "to preload" step 2 has no

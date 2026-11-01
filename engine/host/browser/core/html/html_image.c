@@ -1189,7 +1189,7 @@ static int img_update_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
     LayoutJobDrive d;
     CssPx px;
     JSValue st;
-    bool matched, done;
+    bool matched, done, auto_sized = false;
     int rc;
 
     (void)cb_result; (void)out_cb; (void)out_argc;
@@ -1218,7 +1218,9 @@ static int img_update_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
            "§4.8.4.3.5's selection's box tests parked an author match with the drive's allowance unspent, so "
            "its next activation would ask the same thing over the same state for ever");
     done = matched;
+    /* §4.8.4.3.11 step 3.3's conditions on img: being rendered and allowing auto-sizes. */
     if (matched && image_source_set_allows_auto_sizes(el) && element_view_has_box(node)) {
+        auto_sized = true;
         done = false;
         while (block_flow_drive_deferred(&d)) {
             if (used_value_content_ask(el, false, &px)) {
@@ -1254,7 +1256,7 @@ static int img_update_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
        NEXT DIFF BUILDS: §4.8.4.3.3's list of available images, whose cache-hit branch is where §4.8.4.3.5
        DOES state the assignment and is therefore where the density stops being 1. HOW ITS ABSENCE SHOWS:
        `naturalWidth` on a 2x srcset image answers the file's pixel count rather than half of it. */
-    if (done) image_source_set_select(ctx, el, &ss);
+    if (done) image_source_set_select(ctx, el, auto_sized ? &px : NULL, &ss);
     layout_job_leave(s->job);
     rest_unit_end();
     if (layout_job_declined(s->job)) {

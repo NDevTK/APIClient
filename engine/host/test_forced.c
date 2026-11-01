@@ -1181,6 +1181,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fragce.h"
 #include "fixture/fragscript.h"
 #include "fixture/fragbase.h"
+#include "fixture/linkimage.h"
 #include "fixture/fragdialog.h"
 #include "fixture/windowopenerclose.h"
 #include "fixture/xdmulti.h"
@@ -1767,6 +1768,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fragce", HTML_FRAGCE },
     { "fragscript", HTML_FRAGSCRIPT },
     { "fragbase", HTML_FRAGBASE },
+    { "linkimage", HTML_LINKIMAGE },
     { "fragdialog", HTML_FRAGDIALOG },
     { "windowopenerclose", HTML_WINDOWOPENERCLOSE },
     { "xdmulti", HTML_XDMULTI },
@@ -14359,6 +14361,26 @@ TF_UNIT void probes_fragbase(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `linkimage` document (fixture/linkimage.h). */
+TF_UNIT void probes_linkimage(const char *js, Probe *tab, int *n) {
+    /* HTML §4.6.8.20's "to preload" step 2 over a parser-inserted link and a script-inserted one: each link's
+       candidates reach the surface, which they do only once the selection has run over its source set. */
+    const char *li_why = NULL; int li_tt = 1;
+    fold_row(&li_tt, &li_why, param_value_is(js, "/api/linkimage", "n", "2"),
+             "NOT REACHED: there is no /api/linkimage record naming two links, so the document aborted before "
+             "its fetch");
+    fold_row(&li_tt, &li_why, !!strstr(js, "/lpre/p-400.png\"") && !!strstr(js, "/lpre/p-800.png\""),
+             "HTML §4.6.8.20: the parser-inserted `as=image` link's width-descriptor candidates are not recorded, "
+             "so its selection over §4.8.4.3.11's 300px source size did not run");
+    fold_row(&li_tt, &li_why, !!strstr(js, "/lpre/d-1x.png\"") && !!strstr(js, "/lpre/d-2x.png\""),
+             "HTML §4.6.8.20: the script-inserted `as=image` link's density candidates are not recorded, so its "
+             "insertion steps did not select from its source set");
+    const Probe rows[] = {
+        { "link-image-select", li_tt, "/api/linkimage", SESS_EXPLORE, li_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fragdialog` document. */
 TF_UNIT void probes_fragdialog(const char *js, Probe *tab, int *n) {
     /* `replaceChildren` removes an open dialog and inserts another: the removed one's close watcher is destroyed
@@ -23026,6 +23048,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fragce(js, probes, &np);
     probes_fragscript(js, probes, &np);
     probes_fragbase(js, probes, &np);
+    probes_linkimage(js, probes, &np);
     probes_fragdialog(js, probes, &np);
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);

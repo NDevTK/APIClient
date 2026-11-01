@@ -1057,7 +1057,8 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
         ImageSourceSet ss;
         int i;
 
-        image_source_set_select(ctx, el, &ss);
+        /* §4.8.4.3.9 step 4's img is null for a link, so no concrete object size width is read. */
+        image_source_set_select(ctx, el, NULL, &ss);
 
         /* EVERY IMAGE SOURCE IN THE SET IS AN ADDRESS THE BUNDLE SHIPPED, and only one of them is preloaded —
            the others are what a browser at another device pixel ratio or another viewport asks for from the

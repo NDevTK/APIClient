@@ -109,6 +109,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "core/css/css_length.h"
 
 /* §4.8.4.3's IMAGE SOURCE: "a URL, and optionally either a pixel density descriptor, or a width descriptor".
    The two descriptors are carried as the OPTIONS they are — `has_density`/`has_width` — because §4.8.4.3.12
@@ -153,16 +154,19 @@ typedef struct {
    `el` MUST be an `img` or a `link` element — asserted.
    `ctx` is the element's NODE DOCUMENT's realm, never the realm that performed the write, because every
    viewport-relative length and every media query in here is answered per document (core/css/media_query.h).
+   `auto_width` is §4.8.4.3.11 step 3.3's concrete object size width of img, which the caller answers inside its
+   layout job before the selection: non-NULL only for an `img` that is being rendered and allows auto-sizes, and
+   always NULL for a `link`, whose img is null (§4.8.4.3.9 step 4). The selection itself reads no layout.
    `out` is filled entirely; the caller releases it.
    `out->selected` is an index into `out->items`, or -1 for "no source was chosen" — which is §4.8.4.3.7 step
    2's null URL for an `img`, and for a `link` is the only outcome §4.2.4.3's create a link request permits
    ("Assert: options's href is not the empty string"). `out->undecided` answers -1 too and carries the shape. */
-void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, ImageSourceSet *out);
+void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, const CssPx *auto_width, ImageSourceSet *out);
 void image_source_set_release(JSContext *ctx, ImageSourceSet *s);
 
-/* HTML §4.8.3's "an img element ALLOWS AUTO-SIZES": the one condition under which selection reads layout (step
-   3.3 of §4.8.4.3.11 "Parsing a sizes attribute" takes the concrete object size width of an `img` that is also
-   being rendered), so a caller that asks that layout ahead of the selection asks this first. NULL answers false. */
+/* HTML §4.8.3's "an img element ALLOWS AUTO-SIZES": one of the conditions under which §4.8.4.3.11 "Parsing a
+   sizes attribute" step 3.3 takes the concrete object size width of an `img`, so the caller that answers
+   `auto_width` asks this first. NULL answers false. */
 bool image_source_set_allows_auto_sizes(lxb_dom_element_t *img);
 
 #endif
