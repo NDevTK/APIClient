@@ -583,7 +583,8 @@ static void fixture_route_gadget_post(JSContext *ctx);
  * silence, so a row can tell "no arm ran this program" from "an arm ran it with no element" — two facts that
  * an absent param cannot separate. */
 typedef struct { const char *at; const char *type; const char *body; } TfServed;
-/* rxmod.js's regexp literal: 327680 pattern characters by macro repetition (see fixture/rxmodule.h). */
+/* The regexp literal rxmod.js and rxworker.js each hold: 327680 pattern characters by macro repetition (see
+   fixture/rxmodule.h and fixture/rxworker.h). */
 #define RXM_A16 "aaaaaaaaaaaaaaaa"
 #define RXM_A256 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 \
                  RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16 RXM_A16
@@ -596,6 +597,10 @@ static const TfServed TF_SERVED[] = {
       "var rxmR = /" RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 "b/;"
       "export var m = rxmR.test('a'.repeat(327680) + 'b') && !rxmR.test('a'.repeat(327680))"
       " && rxmR.source.length === 327681;" },
+    { "https://x.test/chunk/rxworker.js", "text/javascript",
+      "var rxwR = /" RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 "b/;"
+      "postMessage(rxwR.test('a'.repeat(327680) + 'b') && !rxwR.test('a'.repeat(327680))"
+      " && rxwR.source.length === 327681);" },
     { "https://x.test/chunk/replyprog.js", "text/javascript",  "fetch('/api/progran');" },
     { "https://x.test/chunk/xsrow.js",     "text/javascript",  "fetch('/api/xsrow?n=' + window.__xsn);" },
     { "https://x.test/chunk/replyctl.js",  "application/json", "fetch('/api/ctlran');" },
@@ -1254,6 +1259,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxeval.h"
 #include "fixture/rxfunc.h"
 #include "fixture/rxdeval.h"
+#include "fixture/rxworker.h"
 #include "fixture/textencunk.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
@@ -1834,6 +1840,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "rxeval", HTML_RXEVAL },
     { "rxfunc", HTML_RXFUNC },
     { "rxdeval", HTML_RXDEVAL },
+    { "rxworker", HTML_RXWORKER },
     { "textencunk", HTML_TEXTENCUNK },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
@@ -17257,6 +17264,29 @@ TF_UNIT void probes_rxdeval(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxworker` document (fixture/rxworker.h): the classic worker's literal program matches, and its
+   compile rested on the worker agent's turn. The document runs no RegExp constructor or compile, so every rest
+   it counts is the literal's. */
+TF_UNIT void probes_rxworker(const char *js, Probe *tab, int *n) {
+    const char *rests = strstr(js, "\"twRegexpCompileRests\":");
+    long nrests = rests ? strtol(rests + strlen("\"twRegexpCompileRests\":"), NULL, 10) : -1;
+    const char *m_why = NULL; int m_tt = 1;
+    fold_row(&m_tt, &m_why, !!strstr(js, "\"/api/rxw\""),
+             "NOT REACHED: there is no /api/rxw record, so the worker's message never arrived");
+    fold_row(&m_tt, &m_why, param_value_is(js, "/api/rxw", "m", "true"),
+             "the worker's program compiled from its script does not post the matcher's true answer");
+    const char *r_why = NULL; int r_tt = 1;
+    fold_row(&r_tt, &r_why, rests != NULL,
+             "the result document carries no `twRegexpCompileRests` row from solver/metrics/cold.def");
+    fold_row(&r_tt, &r_why, nrests >= 1,
+             "the classic worker script's parse took no rest inside its literal");
+    const Probe rows[] = {
+        { "rxw-match", m_tt, "/api/rxw", SESS_EXPLORE, m_why },
+        { "rxw-rests", r_tt, "/api/rxw", SESS_EXPLORE, r_why, .gate = "rxw-match" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `textencunk` document (fixture/textencunk.h): both arms of the gate on the encoder output's
    length and both arms of the gate on its first byte. */
 TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
@@ -22631,6 +22661,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxeval(js, probes, &np);
     probes_rxfunc(js, probes, &np);
     probes_rxdeval(js, probes, &np);
+    probes_rxworker(js, probes, &np);
     probes_textencunk(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
