@@ -222,11 +222,15 @@ typedef struct {
        every world, as the sum of its operands' (a concrete String's own length); 0, which states nothing, on
        every other value. A slice's piece table cannot answer it: an unknown's example length is one world's. */
     uint32_t len_lo;
-    /* §22.1.3.23 String.prototype.split over a string with pieces, by a separator String of `split_sep` units
-       (0: not such a split): `split_of` is that string (owned), so element i is the range of its units the
-       example array's elements and separators place (concolic_exotic_get). */
+    /* §22.1.3.23 String.prototype.split ( separator, substringLimit ) over a string with pieces, by a separator
+       String, written where `split_rec` is set: `split_of` is that string (owned) and element i is its units
+       [split_pos[2i], split_pos[2i+1]), placed at the split from the example array it returned, so a later write
+       to the array (which takes the member out of the example) moves no other element. `split_n` elements;
+       `split_pos` owned. */
     JSValue split_of;
-    uint32_t split_sep;
+    uint32_t *split_pos;
+    uint32_t split_n;
+    uint8_t split_rec;
     /* The search an occurrence index answers (JS_FunctionSearchResult): `search_recv` is the receiver's hole,
        `search_tok` its String argument 0, `search_last` whether the last occurrence is asked. Written on the
        call result and copied onto a comparison of it with a Number (search_carry). Owned. */
@@ -2402,7 +2406,8 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->tail_class);
     for (int i = 0; i < c->piece_n; i++) JS_FreeValueRT(rt, c->piece[i].unknown);
     free(c->piece);
-    if (c->split_sep) JS_FreeValueRT(rt, c->split_of);
+    if (c->split_rec) JS_FreeValueRT(rt, c->split_of);
+    free(c->split_pos);
     free(c->search_recv);
     free(c->search_tok);
     JS_FreeValueRT(rt, c->example);
@@ -2419,7 +2424,7 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
        walks is these records pointing at each other, and an unreported one would be collected while live. */
     if (c && !JS_IsUninitialized(c->proto)) JS_MarkValue(rt, c->proto, mark_func);
     for (int i = 0; c && i < c->piece_n; i++) JS_MarkValue(rt, c->piece[i].unknown, mark_func);
-    if (c && c->split_sep) JS_MarkValue(rt, c->split_of, mark_func);
+    if (c && c->split_rec) JS_MarkValue(rt, c->split_of, mark_func);
 }
 
 /* @S candidate injection: during a verification re-run, every read of the source g_cand_at returns
@@ -3987,30 +3992,59 @@ static uint32_t example_units(JSContext *ctx, JSValueConst ex);
 JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example);
 static void pieces_clip(JSContext *ctx, JSValueConst r, JSValueConst s, uint32_t from, uint32_t to);
 
-/* Element `atom` of a recorded split (Concolic.split_of): §22.1.3.23 steps 12-14 place element i after
-   elements 0..i-1 and a separator after each, so its range of the split string is read off the example array.
-   Answers that range's slice (concolic_piece_slice), or JS_UNINITIALIZED where it is not one piece's or the
-   page's own. */
+/* Element `atom` of a recorded split (Concolic.split_of) while the example array still holds it: its range of
+   the split string (split_record) answered as that range's slice (concolic_piece_slice), or JS_UNINITIALIZED
+   where it is not one piece's or the page's own. */
 static JSValue split_element(JSContext *ctx, const Concolic *c, JSAtom atom)
 {
-    uint32_t idx, start = 0, len = 0;
-    int64_t n = 0;
+    uint32_t idx;
     JSValue el;
 
-    if (!c->split_sep || !c->ex_has || !JS_IsArray(c->example) || !JS_AtomIsIndex(ctx, &idx, atom))
+    if (!c->split_rec || !c->ex_has || !JS_IsArray(c->example) || !JS_AtomIsIndex(ctx, &idx, atom) ||
+        idx >= c->split_n)
         return JS_UNINITIALIZED;
-    CHECK(JS_GetLength(ctx, c->example, &n) >= 0, "concolic: a split's example array has no length");
-    if ((int64_t)idx >= n) return JS_UNINITIALIZED;
-    for (uint32_t j = 0; j <= idx; j++) {
-        JSValue e = JS_GetPropertyUint32(ctx, c->example, j);
+    el = JS_GetPropertyUint32(ctx, c->example, idx);
+    if (!JS_IsString(el)) { JS_FreeValue(ctx, el); return JS_UNINITIALIZED; }
+    DCHECKF(example_units(ctx, el) == c->split_pos[2 * idx + 1] - c->split_pos[2 * idx],
+            "element %u of a split's example array is not the range the split placed it at", idx);
+    return concolic_piece_slice(ctx, c->split_of, c->split_pos[2 * idx], c->split_pos[2 * idx + 1], el);
+}
 
-        DCHECK(JS_IsString(e), "a split's example array holds a non-String — §22.1.3.23 appends substrings only");
+/* `r` is §22.1.3.23 split of `s` by a separator of `sep` units, with no limit, its example the array the real
+   split returned: steps 15-17 place element i after elements 0..i-1 and a separator after each, and step 10
+   (the empty separator) places code unit i alone. Records each element's range of `s`. */
+static void split_record(JSContext *ctx, JSValueConst r, JSValueConst s, uint32_t sep)
+{
+    Concolic *rc = JS_GetOpaque(r, g_concolic_class);
+    JSValue ex = concolic_example(ctx, r), sx = concolic_example(ctx, s);
+    uint32_t start = 0, total = JS_IsString(sx) ? example_units(ctx, sx) : 0;
+    int64_t n = 0;
+
+    DCHECK(rc != NULL && !rc->split_rec, "a split was recorded on a value that is no concolic, or twice");
+    DCHECK(JS_IsArray(ex) && JS_IsString(sx), "a split's example is not an Array, or its receiver's not a String");
+    CHECK(JS_GetLength(ctx, ex, &n) >= 0 && n <= UINT32_MAX, "concolic: a split's example array has no length");
+    rc->split_pos = reclaim_malloc((size_t)(n ? n : 1) * 2 * sizeof *rc->split_pos);
+    CHECK(rc->split_pos, "concolic: OOM recording a split's element ranges");
+    for (uint32_t j = 0; j < (uint32_t)n; j++) {
+        JSValue e = JS_GetPropertyUint32(ctx, ex, j);
+        uint32_t len;
+
+        DCHECK(JS_IsString(e), "the array a split returned holds a non-String — §22.1.3.23 appends substrings");
         len = example_units(ctx, e);
-        if (j < idx) start += len + c->split_sep;
+        DCHECKF(sep > 0 || len == 1, "element %u of a split by the empty separator is %u code units — "
+                "§22.1.3.23 step 10 makes each element one code unit", j, len);
+        rc->split_pos[2 * j] = start;
+        rc->split_pos[2 * j + 1] = start + len;
+        start += len + sep;
         JS_FreeValue(ctx, e);
     }
-    el = JS_GetPropertyUint32(ctx, c->example, idx);
-    return concolic_piece_slice(ctx, c->split_of, start, start + len, el);
+    DCHECKF(n == 0 || rc->split_pos[2 * n - 1] == total, "a split's elements end at unit %u of a %u-unit receiver",
+            n ? rc->split_pos[2 * n - 1] : 0, total);
+    rc->split_n = (uint32_t)n;
+    rc->split_of = JS_DupValue(ctx, s);
+    rc->split_rec = 1;
+    JS_FreeValue(ctx, ex);
+    JS_FreeValue(ctx, sx);
 }
 
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
@@ -5200,6 +5234,7 @@ static JSValue cmp_example(JSContext *ctx, JSValueConst a, JSValueConst b, int c
     return out;
 }
 
+static int strings_differ_by_class(JSContext *ctx, JSValueConst a, JSValueConst b);
 int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
@@ -5232,6 +5267,20 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op
             return 1;
         }
         aff_free(d);
+    }
+    /* Two Strings in every world: §7.2.13 IsLooselyEqual step 1, §7.2.14 IsStrictlyEqual step 3 and §7.2.10
+       SameValueZero step 3 each reach §7.2.11 SameValueNonNumber step 4, true only where both hold the same code
+       units in the same positions. Units that cannot coincide in any world decide it. */
+    if (strings_differ_by_class(ctx, a, b)) {
+        JSValue ex = cmp_example(ctx, a, b, ca, cb, 0, op);
+
+        DCHECK(JS_IsUndefined(ex) || !JS_ToBool(ctx, ex), "two Strings whose code-unit classes cannot coincide "
+                                                          "were equal on their examples — a class does not hold "
+                                                          "its own value's example");
+        JS_FreeValue(ctx, ex);
+        JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+        sp[-2] = JS_NewBool(ctx, is_neq != 0);
+        return 1;
     }
     opq = ca ? a : b; other = ca ? b : a;
     /* A Boolean in every world compared with a Boolean: §7.2.14 step 2 and §7.2.13 step 1 both reach
@@ -5518,6 +5567,7 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
        piece's own derivation: the bytes are its owner's whatever the other pieces hold. */
     int crossing = 0;
     uint32_t cross_from = 0, cross_to = 0, split_sep = 0;
+    int split_rec = 0;
 
     if (c->member && (!strcmp(c->member, "slice") || !strcmp(c->member, "substring")) && concolic_is(this_val) &&
         concolic_example_present(this_val)) {
@@ -5540,12 +5590,19 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
             }
         }
     }
-    /* A split by a separator String, with no limit, of a string with pieces: its elements are ranges of it. */
-    if (c->member && !strcmp(c->member, "split") && concolic_is(this_val) && argc >= 1 && JS_IsString(argv[0]) &&
+    /* A split by a separator String, with no limit, of a string with pieces: its elements are ranges of it. The
+       callee is the builtin only where the receiver is a String in every world (§7.3.3 GetV reads the method off
+       %String.prototype%) and the callee's example is the builtin itself. */
+    if (concolic_is(this_val) && cty_of_operand(this_val) == CTY_STRING && argc >= 1 && JS_IsString(argv[0]) &&
         (argc < 2 || JS_IsUndefined(argv[1]))) {
         const Concolic *tc = JS_GetOpaque(this_val, g_concolic_class);
+        JSValue fex = concolic_example(ctx, func_obj);
 
-        if (tc && tc->piece_known) split_sep = example_units(ctx, argv[0]);
+        if (tc && tc->piece_known && JS_FunctionIsStringSplit(fex)) {
+            split_sep = example_units(ctx, argv[0]);
+            split_rec = 1;
+        }
+        JS_FreeValue(ctx, fex);
     }
     /* The arguments are part of the call's identity and therefore of its shape. `x.startsWith("/api")` and
        `x.startsWith("javascript:")` are two gates over one source, and a shape is also the field path an @S
@@ -5601,12 +5658,7 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
             rc->search_last = sr == JS_SEARCH_RESULT_LAST;
         }
     }
-    if (split_sep && concolic_is(r)) {
-        Concolic *rc = JS_GetOpaque(r, g_concolic_class);
-
-        rc->split_of = JS_DupValue(ctx, this_val);
-        rc->split_sep = split_sep;
-    }
+    if (split_rec && concolic_is(r) && concolic_example_present(r)) split_record(ctx, r, this_val, split_sep);
     /* The result's type set where the callee's algorithm fixes it (JSTrampStepDef.result_types: §22.1.3.22
        String.prototype.slice returns a String). The callee's example is the callee in every world only where
        the receiver is one primitive type, since §7.3.3 GetV reads the member off that type's prototype; a
@@ -8524,6 +8576,117 @@ static void pieces_clip(JSContext *ctx, JSValueConst r, JSValueConst s, uint32_t
     rc->piece_known = 1;
 }
 
+/* The class of a String with hole spans, from byte `from` of its shape on: the union of every hole's class and
+   the page's own bytes outside the holes. NULL where a hole states none, or where the union is every unit. */
+static UnitClass *shape_units_class(const Concolic *c, size_t from)
+{
+    UnitBits *bits;
+    UnitClass *k;
+    size_t sn = strlen(c->shape), at;
+    int i;
+
+    DCHECK(c->hole_span != NULL && c->hole_class != NULL, "a shape's unit class was asked of a value with no holes "
+                                                          "or no hole classes");
+    for (i = 0; i < c->hole_n; i++)
+        if (!c->hole_class[i]) return NULL;
+    bits = ub_new();
+    for (i = 0; i < c->hole_n; i++) ub_add_class(bits, c->hole_class[i]);
+    for (at = from, i = 0; at < sn;) {
+        uint32_t u[2];
+        int m;
+
+        while (i < c->hole_n && (size_t)c->hole_span[2 * i + 1] <= at) i++;
+        if (i < c->hole_n && (size_t)c->hole_span[2 * i] <= at) { at = (size_t)c->hole_span[2 * i + 1]; continue; }
+        m = wtf8_units(c->shape, sn, &at, u);
+        ub_add(bits, u[0], u[0]);
+        if (m == 2) ub_add(bits, u[1], u[1]);
+    }
+    k = uc_of_bits(bits);
+    free(bits);
+    return k;
+}
+
+/* The class every code unit of `c`'s String lies in: its one class where its shape spells one unknown, else its
+   units from byte 0 of the shape (shape_units_class). NULL where a hole states none. Owned. */
+static UnitClass *value_unit_class(const Concolic *c)
+{
+    if (!c->hole_class) return NULL;
+    if (!c->hole_span) return c->hole_class[0] ? uc_dup(c->hole_class[0]) : NULL;
+    return shape_units_class(c, 0);
+}
+
+/* Whether two classes share no code unit. */
+static int uc_disjoint(const UnitClass *x, const UnitClass *y)
+{
+    int i = 0, j = 0;
+
+    while (i < x->n && j < y->n) {
+        if (x->r[2 * i + 1] < y->r[2 * j]) i++;
+        else if (y->r[2 * j + 1] < x->r[2 * i]) j++;
+        else return 0;
+    }
+    return 1;
+}
+
+/* Whether `a` and `b`, at least one an unknown, are Strings in every world that hold different code units in
+   every world: a String with a unit outside the other's class, or two classes that share no unit where one of
+   the two is never empty. */
+static int strings_differ_by_class(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    const Concolic *ca = concolic_is(a) ? JS_GetOpaque(a, g_concolic_class) : NULL;
+    const Concolic *cb = concolic_is(b) ? JS_GetOpaque(b, g_concolic_class) : NULL;
+    UnitClass *ka, *kb;
+    int differ = 0;
+
+    DCHECK(ca || cb, "a class comparison was asked of two values neither of which is unknown");
+    if ((ca ? cty_of_operand(a) != CTY_STRING : !JS_IsString(a)) ||
+        (cb ? cty_of_operand(b) != CTY_STRING : !JS_IsString(b)))
+        return 0;
+    ka = ca ? value_unit_class(ca) : NULL;
+    kb = cb ? value_unit_class(cb) : NULL;
+    if (ca && cb) {
+        differ = ka && kb && uc_disjoint(ka, kb) && (ca->len_lo > 0 || cb->len_lo > 0);
+    } else if (ka || kb) {
+        size_t n = 0;
+        const char *t = JS_ToCStringLen(ctx, &n, ca ? b : a);
+
+        CHECK(t != NULL, "concolic: OOM reading a String compared with an unknown");
+        differ = !uc_holds_all(ka ? ka : kb, t, n);
+        JS_FreeCString(ctx, t);
+    }
+    free(ka);
+    free(kb);
+    return differ;
+}
+
+/* `r` is a slice of the String `u`, so each of its code units is one of `u`'s: it lies in `u`'s class. */
+static void slice_class_state(JSContext *ctx, JSValueConst r, JSValueConst u)
+{
+    Concolic *c = concolic_is(r) ? JS_GetOpaque(r, g_concolic_class) : NULL;
+    const Concolic *uc = concolic_is(u) ? JS_GetOpaque(u, g_concolic_class) : NULL;
+    UnitClass *k = uc ? value_unit_class(uc) : NULL;
+
+    if (!c || !k) { free(k); return; }
+    DCHECK(c->hole_span == NULL && c->hole_class == NULL, "a slice's class was stated twice, or over holes");
+    c->hole_class = reclaim_calloc(1, sizeof *c->hole_class);
+    CHECK(c->hole_class, "concolic: OOM recording a slice's code-unit class");
+    c->hole_class[0] = k;
+#if APICLIENT_DEV
+    if (concolic_example_present(r)) {
+        JSValue ex = concolic_example(ctx, r);
+        size_t n = 0;
+        const char *e = JS_IsString(ex) ? JS_ToCStringLen(ctx, &n, ex) : NULL;
+
+        DCHECKF(e != NULL && uc_holds_all(k, e, n), "a slice's example %s has a code unit outside the class of the "
+                "String it was sliced from", e ? e : "(not a String)");
+        if (e) JS_FreeCString(ctx, e);
+        JS_FreeValue(ctx, ex);
+    }
+#else
+    (void)ctx;
+#endif
+}
+
 JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint32_t to, JSValue example)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(s, g_concolic_class) : NULL;
@@ -8548,7 +8711,10 @@ JSValue concolic_piece_slice(JSContext *ctx, JSValueConst s, uint32_t from, uint
         ops[1] = JS_NewInt32(ctx, (int32_t)(p->image_pos + from - p->offset));
         ops[2] = JS_NewInt32(ctx, (int32_t)(p->image_pos + to - p->offset));
         r = concolic_new_derived(ctx, "§22.1.3.22 String.prototype.slice", ops, 3, example);
-        if (concolic_is(r)) concolic_type_state(r, CTY_STRING);
+        if (concolic_is(r)) {
+            concolic_type_state(r, CTY_STRING);
+            slice_class_state(ctx, r, p->unknown);
+        }
         return r;
     }
     /* Units no piece owns are the page's own bytes, so a range of them alone is those bytes. */
@@ -8602,8 +8768,6 @@ static void hole_classes_concat(JSValueConst r, JSValueConst a, JSValueConst b)
     const Concolic *ca = g_concolic_class ? JS_GetOpaque(a, g_concolic_class) : NULL;
     const Concolic *cb = g_concolic_class ? JS_GetOpaque(b, g_concolic_class) : NULL;
     int na, nb, i;
-    size_t sn, at;
-    UnitBits *bits;
 
     if (!c || !((ca && ca->hole_class) || (cb && cb->hole_class))) return;
     na = hole_spans_of(a, 0, NULL);
@@ -8617,23 +8781,7 @@ static void hole_classes_concat(JSValueConst r, JSValueConst a, JSValueConst b)
 
         if (k) c->hole_class[i] = uc_dup(k);
     }
-    for (i = 0; i < c->hole_n; i++)
-        if (!c->hole_class[i]) return;
-    bits = ub_new();
-    for (i = 0; i < c->hole_n; i++) ub_add_class(bits, c->hole_class[i]);
-    sn = strlen(c->shape);
-    for (at = (size_t)c->hole_span[0], i = 0; at < sn;) {
-        uint32_t u[2];
-        int m;
-
-        while (i < c->hole_n && (size_t)c->hole_span[2 * i + 1] <= at) i++;
-        if (i < c->hole_n && (size_t)c->hole_span[2 * i] <= at) { at = (size_t)c->hole_span[2 * i + 1]; continue; }
-        m = wtf8_units(c->shape, sn, &at, u);
-        ub_add(bits, u[0], u[0]);
-        if (m == 2) ub_add(bits, u[1], u[1]);
-    }
-    c->tail_class = uc_of_bits(bits);
-    free(bits);
+    c->tail_class = shape_units_class(c, (size_t)c->hole_span[0]);
 }
 
 /* JSConcolicHooks.string_unit_map. Each character of `recv` in the set becomes `rep`, every other is kept, so a

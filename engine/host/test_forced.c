@@ -1197,6 +1197,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/absentarm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
+#include "fixture/splitunits.h"
 #include "fixture/isarraytype.h"
 #include "fixture/griditem.h"
 #include "fixture/contentsflex.h"
@@ -1793,6 +1794,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "absentarm", HTML_ABSENTARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
+    { "splitunits", HTML_SPLITUNITS },
     { "isarraytype", HTML_ISARRAYTYPE },
     { "griditem", HTML_GRIDITEM },
     { "contentsflex", HTML_CONTENTSFLEX },
@@ -14775,6 +14777,38 @@ TF_UNIT void probes_keydomain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `splitunits` document: the elements of a split by the empty separator are the page's own
+   letters where its own bytes stand and digit-class unknowns where the replace's digits stand, so an equality
+   whose code units cannot coincide is decided and one between two digits keeps both arms. */
+TF_UNIT void probes_splitunits(const char *js, Probe *tab, int *n) {
+    const char *dec_why = NULL, *keep_why = NULL;
+    int dec_tt = 1, keep_tt = 1;
+
+    fold_row(&dec_tt, &dec_why,
+             emitted_record_has(js, "/api/su-b1", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/su-b6", "\"door\":\"fetch\""),
+             "NOT REACHED: no /api/su-b1 or su-b6 record, so the script comparing the split's units did not finish");
+    fold_row(&dec_tt, &dec_why, !strstr(js, "\"/api/su-a1\"") && !strstr(js, "\"/api/su-a2\""),
+             "a /api/su-a1 or su-a2 record exists: a unit of the page's own \"jQuery\" was compared as an unknown");
+    fold_row(&dec_tt, &dec_why, !strstr(js, "\"/api/su-a3\"") && !strstr(js, "\"/api/su-a4\""),
+             "a /api/su-a3 or su-a4 record exists: a unit of the replace's digits was taken equal to a letter");
+    fold_row(&dec_tt, &dec_why, !strstr(js, "\"/api/su-a6\""),
+             "a /api/su-a6 record exists: the sort comparator took a digit unit or a lone letter equal to 'Q'");
+    fold_row(&keep_tt, &keep_why,
+             emitted_record_has(js, "/api/su-a5", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/su-b5", "\"door\":\"fetch\""),
+             "two units of the replace's digits did not keep both arms of their equality");
+    fold_row(&keep_tt, &keep_why,
+             emitted_record_has(js, "/api/su-a7", "\"door\":\"fetch\"") &&
+                 emitted_record_has(js, "/api/su-b7", "\"door\":\"fetch\""),
+             "a unit of the replace's digits compared with the digit '7' did not keep both arms");
+    const Probe rows[] = {
+        { "splitunits-decided", dec_tt, "suKey", SESS_EXPLORE, dec_why },
+        { "splitunits-kept", keep_tt, "suKey", SESS_EXPLORE, keep_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `isarraytype` document: IsArray over an unknown whose type set holds no Object answers false
    (solver/concolic.c's concolic_isarray_hook), and over one that may be an Object keeps both arms. */
 TF_UNIT void probes_isarraytype(const char *js, Probe *tab, int *n) {
@@ -23402,6 +23436,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_absentarm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
+    probes_splitunits(js, probes, &np);
     probes_isarraytype(js, probes, &np);
     probes_griditem(js, probes, &np);
     probes_contentsflex(js, probes, &np);

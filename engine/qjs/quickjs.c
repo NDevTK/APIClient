@@ -95137,6 +95137,7 @@ static const JSTrampStepDef js_parseFloat_def     = { sizeof(JSParseNum), js_par
                         .steps = js_parseFloat_steps };
 static const char *const js_str_split_steps[];
 static const JSTrampStepDef js_str_split_def      = { sizeof(JSStrSplit), js_str_split_step, js_str_split_fini, 0, .visit = js_str_split_visit,
+                                                     .string_split = 1,
                                                      .algorithm = "22.1.3.23 String.prototype.split",
                                                      .steps = js_str_split_steps };
 static const char *const js_array_join_steps[];
@@ -98337,6 +98338,18 @@ int JS_FunctionSearchResult(JSValueConst f)
         (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
         return JS_SEARCH_RESULT_NONE;
     return tramp_step_def_of(f)->search_result;
+}
+
+bool JS_FunctionIsStringSplit(JSValueConst f)
+{
+    JSObject *fp;
+
+    if (JS_VALUE_GET_TAG(f) != JS_TAG_OBJECT) return false;
+    fp = JS_VALUE_GET_OBJ(f);
+    if (fp->class_id != JS_CLASS_C_FUNCTION ||
+        (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
+        return false;
+    return tramp_step_def_of(f)->string_split != 0;
 }
 
 /* the same question restricted to [[Construct]]: a plain step machine is not a constructor, so `new (arr.map)`
