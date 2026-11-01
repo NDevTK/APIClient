@@ -32012,13 +32012,17 @@ static JSShapeProperty *find_own_property(JSProperty **ppr, JSObject *p, JSAtom 
    the walk with nothing to show for it, and the read then fell to JS_GetPropertyInternal, whose exotic arm
    DFAILs on exactly that descriptor. So the descriptor comes back and the getter or setter in it is routed
    like any other, on the tramp chain, with the base as its receiver. `desc` NULL asks only whether the walk
-   continues, which is what the two non-accessor walkers want. */
+   continues, which is what the two non-accessor walkers want.
+   A class whose [[GetOwnProperty]] answers `atom` with a step (tramp_step_exotic) stops the walk with nothing
+   found: its answer rests or forks, so the operation is the keyed entry's, which runs the step. */
+static bool tramp_step_exotic(JSContext *ctx, JSObject *p, JSAtom atom);
 static bool tramp_walk_continues_desc(JSContext *ctx, JSObject *p, JSAtom atom,
                                       JSPropertyDescriptor *desc, bool *pfound)
 {
     const JSClassExoticMethods *em;
     if (!p->is_exotic) return true;
     if (p->class_id == JS_CLASS_PROXY) return false;
+    if (tramp_step_exotic(ctx, p, atom)) return false;
     if (is_typed_array(p->class_id)) {
         int r = JS_AtomIsNumericIndex(ctx, atom);
         return r == 0;   /* r < 0 threw: stop, and let the C read report it */
@@ -32379,7 +32383,8 @@ static inline JSObject *tramp_proto_keyed_read(JSContext *ctx, JSValueConst obj,
    code, and the predicate below used to look only at the IMMEDIATE object: `Reflect.set(Object.create(ta), 100,
    v, ta)` puts the typed array ONE HOP up the chain, so the coercion ran inside JS_SetPropertyInternal2 from C.
    Same stopping rule as the other two walkers — an own slot answers before the parent — plus the Proxy, which
-   the entry's own branch answers first and must not be walked past here. */
+   the entry's own branch answers first and must not be walked past here. A link whose [[Set]] ignores its named
+   properties (Web IDL §3.9.2 [[Set]], tramp_set_passes) is passed as tramp_proto_keyed_write passes it. */
 static inline JSObject *tramp_proto_typed_array(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     JSObject *p = tramp_walk_base(ctx, obj, atom);
     if (!p) return NULL;
@@ -32387,7 +32392,7 @@ static inline JSObject *tramp_proto_typed_array(JSContext *ctx, JSValueConst obj
         if (p->class_id == JS_CLASS_PROXY) return NULL;   /* before is_exotic: the proxy branch owns it */
         if (is_typed_array(p->class_id)) return p;        /* its [[Set]] owns every canonical numeric index */
         if (find_own_property1(p, atom)) return NULL;
-        if (!tramp_walk_continues(ctx, p, atom)) return NULL;
+        if (!tramp_set_passes(ctx, p) && !tramp_walk_continues(ctx, p, atom)) return NULL;
         p = js_walk_proto(ctx, p);
         if (!p) return NULL;
     }
