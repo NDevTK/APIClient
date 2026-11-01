@@ -8,12 +8,9 @@
    second item's text. An inline-block holds a `column` container whose items are 40px and 60px wide, so its
    §9.9.2 width is 60px; the same container made multi-line, with an automatic block size and with only a
    `min-height`, collects both items into one line and is 60px too (Chrome 155 and Firefox 158 agree on those
-   two). Chrome 155 gives these numbers for the same markup. The baseline-aligned items are placed too: the
-   second container's at its line's cross-start (css-flexbox-1 §8.3: the item with the largest distance to its
-   baseline is flush), and in a two-line `wrap` container with 20px lines each item on its own line, the
-   second 29px below the first (the first line is its 9px padding over one line box). Those offset queries read
-   §8.3's baseline-sharing groups (core/layout/flex_baseline.c) and §9.4 step 8's line cross sizes under the
-   resting job. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
+   two). Chrome 155 gives these numbers for the same markup. Baseline-aligned items are placed (§8.3): the
+   second container's flush with its line's cross-start, and in a `wrap` container of 20px line boxes the
+   second line's item 29px below the first's 9px of padding over one line. Ends with TF_CANVAS_INK. */
 #ifndef ENGINE_HOST_FIXTURE_INLINEFLEX_H
 #define ENGINE_HOST_FIXTURE_INLINEFLEX_H
 #ifndef TF_CANVAS_INK
