@@ -553,8 +553,9 @@ void        concolic_set_deliveries(char *const *srcs, char *const *vals, int n)
    constraint next grows); answers how many. A principal is excluded (its pin is a sender demand,
    concolic_principal_pins), as is a message's data or origin (the message composition states those), and a
    keyed row's null pin, which an address that does not carry the tuple meets. `composable` is 0 for a pin this
-   file cannot deliver: a value that is not a String, a base row on the payload's own base, or a mechanism other
-   than the address and the navigable's name. `cb` may be NULL to ask only the count.
+   file cannot deliver: a value that is not a String, a row on the payload's own base other than a tuple beside
+   the payload's own tuple, or a mechanism other than the address and the navigable's name. `cb` may be NULL to
+   ask only the count.
    Named residual. Not covered: an equality over a derivation of a second source (`location.hash.slice(1) ===
    x`), which pins nothing under the source. Next diff builds: the determination of the source's value from the
    derivation's inverse where its operation has one. Absence shows as: a fired PoC whose path gated on a

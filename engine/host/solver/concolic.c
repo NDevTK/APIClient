@@ -3571,7 +3571,8 @@ static int gate_composable(int row, const Cons *c)
 int concolic_path_gates(const char *root,
                         void (*cb)(void *ud, const char *src, const char *equals, int composable), void *ud)
 {
-    int own_base = root ? row_base(root_declared_row(root)) : -1, found = 0;
+    int own_row = root ? root_declared_row(root) : -1, own_base = row_base(own_row), found = 0;
+    int own_keyed = own_row >= 0 && g_srcs[own_row].key;
 
     for (int i = 0; i < g_srcs_n; i++) {
         const Cons *c;
@@ -3587,8 +3588,10 @@ int concolic_path_gates(const char *root,
         /* URL §5.1's parse yields no tuple for a name the list does not carry, which `get` answers null. */
         if (g_srcs[i].key && c->valkind == (signed char)CONCOLIC_LIT_NULL) continue;
         found++;
-        /* A whole component the payload's own bytes ride is decided by the payload, never by a second value. */
-        if (cb) cb(ud, g_srcs[i].src, c->val, gate_composable(i, c) && !(row_base(i) == own_base && !g_srcs[i].key));
+        /* On the payload's own base only a tuple beside the payload's own tuple composes: a whole component
+           the payload rides, or one it is a tuple of, is the payload's bytes and never a second value. */
+        if (cb) cb(ud, g_srcs[i].src, c->val,
+                   gate_composable(i, c) && (row_base(i) != own_base || (g_srcs[i].key && own_keyed)));
     }
     return found;
 }
