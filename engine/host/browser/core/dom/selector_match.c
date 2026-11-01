@@ -247,16 +247,11 @@ void selector_pred_settle(const SelectorUndet *u, bool holds)
        a flow whose pinned attribute value fails a test the same flow took as holding. */
     if (u->op != LXB_CSS_SELECTOR_MATCH_EQUAL || u->insensitive) return;
     if (holds) {
-        /* Chosen by a fork with no real arm stated, so the pin is a witness no observation confirmed. */
-        if (concolic_pin_tostring(u->over, u->operand)) {
-            flow_mark_pinned_value();
-            return;
-        }
-        DFAILF("Selectors 4 §6.1's `[%s=\"%s\"]` holds in this flow and the pin store could not state the "
-               "attribute's value: the value is a derivation, which owns no `src` to pin, or its type facet admits "
-               "another value whose ToString is the operand. A later test with another operand then forks into a "
-               "world where the attribute equals two strings. Build a determination keyed by the value's identity "
-               "that concolic_pin_bytes reads", u->attr, u->operand);
+        /* The attribute's string is the ToString of the value written into it, so this states that string
+           under the value's identity whatever its type or derivation. Chosen by a fork with no real arm stated,
+           so the determination is a witness no observation confirmed. */
+        concolic_pin_tostring(u->over, u->operand);
+        flow_mark_pinned_value();
         return;
     }
     hole = concolic_hole_key(concolic_shape_c(u->over));
@@ -314,10 +309,10 @@ bool selector_undet_key(char *out, size_t cap, const SelectorUndet *u)
  * stranger stated, and no string a page can write reaches this. The refusal itself asserts nothing at all.
  *
  * How an undetermined value is answered, in the order this function and its consumers apply it:
- *   - A flow that determined the value has a pin, read first through concolic_pin_bytes, and the matcher's own
- *     comparison then decides every operator on real bytes. The page's own `===` makes one; so does a holding
- *     `=` a consumer's fork settles (selector_pred_settle). A value the page derived before storing it
- *     (`'x-' + cfg.theme`) owns no `src` and has no pin, so it is undetermined like any other.
+ *   - A flow that determined the value's string has bytes for it, read first through concolic_pin_bytes, and
+ *     the matcher's own comparison then decides every operator on real bytes. The page's own `===` pins a
+ *     value its `src` names; a holding `=` a consumer's fork settles (selector_pred_settle) states the string
+ *     under the value's identity, derivations (`'x-' + cfg.theme`) included.
  *   - Otherwise the seam answers UNDETERMINED. lexbor's matcher carries Kleene's third value through `:not()`,
  *     `:is()`, `:has()`, `:nth-child(… of …)` and the combinators, with its one inverted arm at
  *     lxb_selectors_state_after_not; an undetermined read is no-match in control flow, so a compound abandons

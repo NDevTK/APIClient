@@ -120,9 +120,9 @@ bool selector_undet_key(char *out, size_t cap, const SelectorUndet *u);
 bool selector_pred_same(const SelectorUndet *a, const SelectorUndet *b);
 
 /* What an answered predicate establishes about the value it tests, filed in the running flow's constraint
-   (solver/concolic.h): a holding `=` determines the attribute's string, so the value is pinned
-   (concolic_pin_tostring) and every later test of it, under any operator and in any consumer, runs on the
-   pinned bytes; a failing `=` excludes its operand (concolic_exclude) and pins nothing. Asserts `u` is a
+   (solver/concolic.h): a holding `=` determines the attribute's string under the value's identity
+   (concolic_pin_tostring) and every later test of it, under any operator and in any consumer, runs on those
+   bytes; a failing `=` excludes its operand (concolic_exclude) and determines nothing. Asserts `u` is a
    forkable record. Called once per arm a consumer takes, the replayed answer included, which both writes
    allow. */
 void selector_pred_settle(const SelectorUndet *u, bool holds);

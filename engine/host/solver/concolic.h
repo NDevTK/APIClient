@@ -299,12 +299,9 @@ void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example
  * gate"; this is what the flow's OWN predicate determined — `parsed.theme === 'dark'` taken true — which is a
  * fact the run established rather than one it read. §@H draws that line by whether a VALUE was determined, and
  * this is the determined side of it.
- * WHICH DIRECTION, STATED, BECAUSE THIS LINE READ AS AN ABSOLUTE AND ONE HALF OF IT IS THE ENGINE'S JOB. An
- * EXAMPLE MAY NOT BECOME A PIN: a loaded `features.admin:false` answering a gate deletes the world the admin
- * endpoint lives in, which is the loss §Solver-half names. A PIN ANSWERING THE EXAMPLE IS THE OPPOSITE AND IS
- * WHAT concolic_example DOES: the value stays concolic, every later branch over it still forks, and what
- * changes is which bytes the page's own concatenation computes — §@H's "a param pinned by `x === 'v'`
- * concretizes to `v`", reaching a value the page materialised before the gate and therefore never re-minted.
+ * The direction: an example may not become a pin (a loaded `features.admin:false` answering a gate deletes the
+ * admin endpoint's world), while a pin answering the example is what concolic_example does — the value stays
+ * concolic, later branches still fork, and only the bytes the page's own concatenation computes change.
  *
  * WHY A CALLER MAY NOT SPELL THE KEY ITSELF, which is the whole reason this is value-keyed. A pin is stored
  * under `src`, and `src` is the INJECTION identity: a derivation inherits its first unknown operand's, so
@@ -322,9 +319,11 @@ void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example
  * already holds exactly that (literal_tok spells its token as the operand's ToString, and concolic_pin refuses
  * every kind that spelling could not round-trip). A consumer whose slot is NOT a string wants the JSValue
  * read and must not use this.
+ * Where no source pin names the value, the answer is the ToString a holding engine test filed under its
+ * identity (concolic_pin_tostring): the same slot's bytes, whatever the value's type or derivation.
  *
- * NULL is the positive statement that this flow has determined nothing about this value — not concolic, not a
- * value its own `src` names, or a source this flow has pinned nothing to — and never a failure. A caller
+ * NULL is the positive statement that this flow has determined nothing about this value — not concolic, or
+ * neither a pin under a `src` that names it nor a ToString under its identity — and never a failure. A caller
  * reads it as `the bytes I already have are all there is`, which for the cascade is the crash that says so.
  * BORROWED from the flow's constraint chain: valid until this flow pins again, is reset, or is switched away
  * from, none of which a caller running no page code can reach. */
@@ -1177,15 +1176,22 @@ int         concolic_pin_store(const char *src, const char *root, ConcolicLit ki
    two its subject is. Answers concolic_pin_store's 1 where a value was written, 0 otherwise. Only this and the
    store's own selftests call concolic_pin_store, because only they know `src` names the compared value. */
 int         concolic_pin(JSValueConst cmp);
-/* The pin a holding test over a value's §7.1.19 ToString ( argument ) makes, where the test is the engine's
-   rather than the page's: an attribute holds the ToString of the value written into it (DOM §4.9 through Web
-   IDL's DOMString), and Selectors 4 §6.1's `[att=val]` holding says that ToString is exactly `s`. That
-   determines the value only where one member of its type set spells `s`: never for an Object or a Function
-   (the page's own toString), and not where `s` is a spelling a Null, Undefined, Boolean, Number or BigInt in
-   the set could produce. Where it does, the value's own `src` is pinned to the String `s` through
-   concolic_pin_store under §7.2.14's determination; a derivation, which owns no `src`, pins nothing. Answers
-   concolic_pin_store's 1 where a value was written, 0 otherwise. */
-int         concolic_pin_tostring(JSValueConst v, const char *s);
+/* What a holding test over a value's §7.1.19 ToString ( arg ) determines, where the test is the engine's rather
+   than the page's: an attribute holds the ToString of the value written into it (DOM §4.9 through Web IDL
+   §3.2.10 DOMString's "Let x be ? ToString(V)"), and Selectors 4 §6.1's `[att=val]` holding says that ToString
+   is exactly `s`. That is filed under the value's identity, for every value, and concolic_pin_bytes reads it.
+   It determines the value itself only where one member of its type set spells `s`: never for an Object or a
+   Function (§7.1.19's ToPrimitive reaches the value's own methods, and an Array's join spells any string), and
+   not where `s` is a spelling a Null, Undefined, Boolean, Number or BigInt in the set could produce; where it
+   does, the value's own `src` is also pinned to the String `s` under §7.2.14's determination. A derivation
+   owns no `src` and pins nothing. Asserts `v` is a concolic with an identity, and that the flow had not
+   determined another ToString for it.
+   Named residual. Not covered: the page's own equalities do not read the identity's determination, so after
+   `[a="dark"]` holds over a value whose type set admits an Object, `v === "light"` still forks a holding arm
+   the determination contradicts. Next diff: concolic_cmp's strict equality against a String literal decided
+   false by a ToString determination that differs from it. Absence shows as: a world whose attribute matched
+   one string while its page's own equality held for another. */
+void        concolic_pin_tostring(JSValueConst v, const char *s);
 /* AN EQUALITY THIS FLOW'S OWN DECIDED PREDICATES ENTAIL, filed as holding without a fork: its branch key decided
    true and its pin written (concolic_pin), so every later read of the compared value answers the literal —
    concretize-on-pin, as decide.c's holding arm files it. For a component whose algorithm knows the entailment

@@ -848,8 +848,9 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    Facts are keyed by what they are about: a pin by the source's `src` (what a later read of that source looks
    up), a decided truth by the predicate's key (decide.c composes it from the tested value's identity, the
    operator and both operands), a domain row by the hole key (what the emission has; see concolic_hole_key),
-   and an example contradiction by the value's identity. One entry holds whatever its key names; every field
-   is per-flow and travels with the entry, so a fork, a suspend and a resume carry one map. */
+   and an example contradiction and a ToString determination by the value's identity. One entry holds
+   whatever its key names; every field is per-flow and travels with the entry, so a fork, a suspend and a
+   resume carry one map. */
 /* val, valkind: an EQ gate pinned the source to a concrete value on its true arm, so later reads compute the
    real @H value (`/api/admin`, never `/api/{state}.role`): concretize-on-pin. `valkind` is what the bytes
    spell, since §7.1.19 ToString ( arg ) alone cannot tell `undefined` from the nine-character string; pin_mint
@@ -858,7 +859,10 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    this flow, and bundles test one flag repeatedly; without this N tests cost 2^N flows whose siblings are
    contradicted. It prunes only a branch on the same predicate the flow already fixed.
    ex_contra: this flow took an arm the value's own example says a real session does not take
-   (concolic_contradict_example). */
+   (concolic_contradict_example).
+   tostr: the §7.1.19 ToString ( arg ) of the value at this identity, determined by an engine test over that
+   ToString which held (concolic_pin_tostring). It is not `val`: it states the String the value converts to,
+   which an Object or a derivation can produce without being that String. */
 /* ppin: the pins this flow made on values rooted at this key, kept only where the key is a declared
    principal. `event.origin`, `event.origin.toLowerCase()` and `String(event.origin)` are three identities and
    one demand on the attacker's principal. It is not `val`: writing the lowercased token under `message.origin`
@@ -903,7 +907,7 @@ typedef struct { char *key; char *val; signed char valkind; char **excl; int nex
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
                  ConcolicPrincipalPin *ppin; int nppin; char **ptok; int nptok;
                  signed char truth; signed char ex_contra;
-                 char *adec; int adec_arm; signed char adec_what; signed char adec_neg;
+                 char *adec; int adec_arm; signed char adec_what; signed char adec_neg; char *tostr;
                  unsigned short types_out, lang_in, lang_out;
                  SearchRange *srange; SubFacet *sub; int nsub; } Cons;
 
@@ -940,6 +944,7 @@ static void cons_entry_free(Cons *e) {
     for (i = 0; i < e->nptok; i++) free(e->ptok[i]);
     free(e->ptok);
     free(e->adec);
+    free(e->tostr);
     if (e->srange) { free(e->srange->ex); free(e->srange); }
     for (i = 0; i < e->nsub; i++) free(e->sub[i].tok);
     free(e->sub);
@@ -970,6 +975,7 @@ static long cons_entry_bytes(const Cons *e) {
     n += (long)e->nptok * (long)sizeof(char *);
     for (i = 0; i < e->nptok; i++) n += (long)strlen(e->ptok[i]) + 1;
     if (e->adec) n += (long)strlen(e->adec) + 1;
+    if (e->tostr) n += (long)strlen(e->tostr) + 1;
     if (e->srange) n += (long)sizeof(SearchRange) + (long)e->srange->nex * (long)sizeof(double);
     n += (long)e->nsub * (long)sizeof(SubFacet);
     for (i = 0; i < e->nsub; i++) n += (long)strlen(e->sub[i].tok) + 1;
@@ -1154,6 +1160,9 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].adec_what = below ? below->adec_what : (signed char)CONCOLIC_DECISION_NONE;
     g_pins[g_pins_n].adec_arm = below ? below->adec_arm : 0;
     g_pins[g_pins_n].adec_neg = below ? below->adec_neg : 0;
+    g_pins[g_pins_n].tostr = (below && below->tostr) ? reclaim_strdup(below->tostr) : NULL;
+    CHECK(!(below && below->tostr) || g_pins[g_pins_n].tostr,
+          "concolic: OOM copying an inherited ToString determination");
     g_pins[g_pins_n].types_out = below ? below->types_out : 0;
     g_pins[g_pins_n].lang_in = below ? below->lang_in : 0;
     g_pins[g_pins_n].lang_out = below ? below->lang_out : 0;
@@ -2179,22 +2188,38 @@ static int tostring_numeric_spelling(const char *s)
 
 static unsigned tyf_of_cty(unsigned ty);
 
-int concolic_pin_tostring(JSValueConst v, const char *s)
+void concolic_pin_tostring(JSValueConst v, const char *s)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    Cons *e;
     unsigned ty;
+    int pinned;
 
-    DCHECK(c != NULL && s != NULL, "a ToString determination was asked of a value that is not unknown input, "
-                                   "or of no spelling");
-    if (!c->src_self || !c->src) return 0;
+    DCHECK(c != NULL && c->ident != NULL && s != NULL,
+           "a ToString determination was asked of a value that is not unknown input, of one this engine cannot "
+           "name, or of no spelling — the attribute seam forks only on a value with an identity");
+    e = cons_entry(c->ident);
+    DCHECKF(e->tostr == NULL || strcmp(e->tostr, s) == 0,
+            "a holding ToString test determined `%s` for a value this flow already determined to be `%s` — the "
+            "attribute seam reads the determination before it forks, so a second test over these bytes is "
+            "decided and never asks", s, e->tostr);
+    if (e->tostr == NULL) {
+        e->tostr = reclaim_strdup(s);
+        CHECK(e->tostr, "concolic: OOM recording a ToString determination");
+    }
+    /* `e` is dead from here: concolic_pin_store may grow the head by realloc. */
+    if (!c->src_self || !c->src) return;
     ty = tyf_of_cty(c->ty) & concolic_types(c->src);
-    if (ty & (CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION)) return 0;
-    if ((ty & CONCOLIC_TYF_NULL) && strcmp(s, "null") == 0) return 0;
-    if ((ty & CONCOLIC_TYF_UNDEFINED) && strcmp(s, "undefined") == 0) return 0;
-    if ((ty & CONCOLIC_TYF_BOOLEAN) && (strcmp(s, "true") == 0 || strcmp(s, "false") == 0)) return 0;
-    if ((ty & (CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_BIGINT)) && tostring_numeric_spelling(s)) return 0;
-    if (!(ty & CONCOLIC_TYF_STRING)) return 0;
-    return concolic_pin_store(c->src, c->root, CONCOLIC_LIT_STRING, s, JS_CONCOLIC_EQ_STRICT);
+    if (ty & (CONCOLIC_TYF_OBJECT | CONCOLIC_TYF_FUNCTION)) return;
+    if ((ty & CONCOLIC_TYF_NULL) && strcmp(s, "null") == 0) return;
+    if ((ty & CONCOLIC_TYF_UNDEFINED) && strcmp(s, "undefined") == 0) return;
+    if ((ty & CONCOLIC_TYF_BOOLEAN) && (strcmp(s, "true") == 0 || strcmp(s, "false") == 0)) return;
+    if ((ty & (CONCOLIC_TYF_NUMBER | CONCOLIC_TYF_BIGINT)) && tostring_numeric_spelling(s)) return;
+    if (!(ty & CONCOLIC_TYF_STRING)) return;
+    pinned = concolic_pin_store(c->src, c->root, CONCOLIC_LIT_STRING, s, JS_CONCOLIC_EQ_STRICT);
+    DCHECK(pinned, "a String pin under a strict equality was refused, and the store refuses only a BigInt, an "
+                   "unspelled kind or a loose equality");
+    (void)pinned;
 }
 
 /* The bytes this flow has proved this value holds (concolic.h says who may read it and why it answers bytes
@@ -2203,17 +2228,21 @@ const char *concolic_pin_bytes(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     const Cons *e;
 
-    /* The precondition is this function's whole soundness, and it is checked, not asserted: a derived value is
-       ordinary page code (`el.setAttribute('t', 'x-' + cfg.theme)` carries `cfg.theme`'s `src`), so it
-       answers none and its consumer stays where it was. */
-    if (!c || !c->src_self || !c->src) return NULL;
-    e = cons_lookup(c->src);
-    if (!e || !e->val) return NULL;
-    /* Borrowed from the constraint entry, which bounds how long it may be held: only concolic_pin,
-       concolic_clear_pins and concolic_pins_resume replace or release it (a write, a fresh flow, a context
-       switch), none of which happens inside a caller that runs no page code and reaches no rest point. A
-       caller keeping it longer copies it. */
-    return e->val;
+    if (!c) return NULL;
+    /* The source's pin is read only where the value's own `src` names it, and that precondition is checked, not
+       asserted: a derived value is ordinary page code (`el.setAttribute('t', 'x-' + cfg.theme)` carries
+       `cfg.theme`'s `src`), so its pin is its operand's and answers nothing here. */
+    if (c->src_self && c->src) {
+        e = cons_lookup(c->src);
+        if (e && e->val) return e->val;
+    }
+    /* What any value with an identity can have instead: its ToString, determined by a holding test over it. */
+    e = c->ident ? cons_lookup(c->ident) : NULL;
+    /* Both answers are borrowed from the constraint entry, which bounds how long they may be held: only
+       concolic_pin, concolic_clear_pins and concolic_pins_resume replace or release one (a write, a fresh flow,
+       a context switch), none of which happens inside a caller that runs no page code and reaches no rest
+       point. A caller keeping one longer copies it. */
+    return e ? e->tostr : NULL;
 }
 
 /* The same question asked of a source path rather than a value (concolic.h says which to reach for). The same
@@ -2283,6 +2312,9 @@ static void cons_each_entry(const Cons *seg, int i, const int *hash, int cap, Co
                 "the value, and nothing clears one", e->key);
         DCHECKF(!e->adec || (seen && seen->adec),
                 "a nearer copy of `%s` dropped the assumed decision the entry under it holds", e->key);
+        DCHECKF(!e->tostr || (seen && seen->tostr && strcmp(seen->tostr, e->tostr) == 0),
+                "a nearer copy of `%s` dropped or changed the ToString determination the entry under it holds — "
+                "cons_entry's copy-up carries it and concolic_pin_tostring never rewrites one", e->key);
         return;
     }
     visit(e, ud);
