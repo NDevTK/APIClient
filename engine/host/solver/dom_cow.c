@@ -170,9 +170,8 @@ static void dom_note_created_attr(lxb_dom_attr_t *a);   /* fwd: the chokepoint i
  *   - it cannot move the APPLIED CHAIN. `g_dom_installed` is the running flow's own `g_dom_base` (dom_apply
  *     installs it, dom_unapply asserts it); every flow holds ONE counted reference on its base and every
  *     segment holds one on ITS base — dom_cow_fork hands out refcount 2, one for the running flow and one for
- *     the sibling, and transfers the running flow's reference on the old base into `seg->base`, or over an
- *     empty head gives the sibling one more reference on the running flow's own base — so a segment
- *     the running flow stands on has a refcount of at least 2 the moment any other chain reaches it, and
+ *     the sibling, and moves the running flow's old-base ref into `seg->base` (over an empty head the sibling refs
+ *     that base) — so a segment the running flow stands on has refcount >= 2 once another chain reaches it, and
  *     dom_base_release's dying prefix stops at the first segment whose refcount is not 1. dom_install_chain is
  *     therefore unreachable from inside a sale.
  * The second is a proof about refcounts, which is exactly the kind of statement that stops being true without
