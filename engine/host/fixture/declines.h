@@ -21,6 +21,10 @@ static const char HTML_DECLINES[] =
     "var dx = new XMLHttpRequest(); dx.open('patch', 'rel-xhr'); dx.send('p');"
     "var dmc = new MessageChannel(); dmc.port1.onmessage = function () {}; dmc.port2.postMessage('behind');"
     "fetch('/api/decl/redir');"
+    /* An XMLHttpRequest to an address with no bytes (`state.dest` has no example): its rendezvous is refused
+       unaddressed, and the refusal's failure arm runs §3.5.6's request error steps, firing `error`. */
+    "var ux = new XMLHttpRequest(); ux.onerror = function () { fetch('/api/decl/uxerr'); };"
+    " ux.open('GET', state.dest); ux.send();"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

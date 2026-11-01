@@ -14390,7 +14390,14 @@ TF_UNIT void probes_declines(const char *js, Probe *tab, int *n) {
              "occurrence of the same pair stood on a path nothing forced");
     fold_row(&declerr_tt, &declerr_why, !tf_err_listed(js, "pageErrorsExplored", "declINVENTED"),
              "`pageErrorsExplored` names a message no program of this document raises");
+    /* The unaddressed XMLHttpRequest's refusal forks like a fetch()'s, asking Fetch §4.1 step 12's same-origin
+       test over its unknown address first, and its failure arm fires `error`. */
+    const char *uxerr_why = NULL; int uxerr_tt = 1;
+    fold_row(&uxerr_tt, &uxerr_why, !!strstr(js, "\"/api/decl/uxerr\""),
+             "NOT REACHED: no /api/decl/uxerr record, so no failure arm of the unaddressed XMLHttpRequest's "
+             "refusal fired its error event");
     const Probe rows[] = {
+        { "declines-xhr-unaddressed", uxerr_tt, "/api/decl/uxerr", SESS_EXPLORE, uxerr_why },
         { "declines-park", declines_tt, "/api/decl/redir", SESS_EXPLORE, declines_why },
         { "declines-forced-pageerr", declerr_tt, "/api/decl/redir", SESS_EXPLORE, declerr_why },
     };
