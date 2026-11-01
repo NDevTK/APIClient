@@ -149,6 +149,14 @@ IntrinsicSizeRecord *layout_job_intrinsic_sizes(void);
 unsigned layout_job_grid_rows_enter(const lxb_dom_element_t *container);
 void layout_job_grid_rows_leave(const lxb_dom_element_t *container, unsigned outer);
 bool layout_job_grid_rows_sizing(const lxb_dom_element_t *container);
+/* NAMED RESIDUAL, the context key. Not covered: an answer is keyed by the whole chain of row contexts it was
+   asked in, though it reads only the contexts whose grid areas its percentages consult. A context is one per
+   (container, enclosing context), so nested grids, each sized inside every ancestor's row sizing and outside
+   it, make up to 2^depth contexts per job, and a question about an inner grid is answered once in each. Next:
+   record the contexts a body consults (`sizing`'s answers and the grid area arms of used_value.c) and memoize
+   its answer under the chain those leave, so it is answered once per context it reads.
+   How its absence shows: in nested grids, grid axis bodies per job growing geometrically with the nesting
+   while the questions asked grow linearly. */
 
 /* ---- the drive ------------------------------------------------------------------------------------------ */
 
