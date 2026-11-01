@@ -1282,6 +1282,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxworker.h"
 #include "fixture/rxprobe.h"
 #include "fixture/textencunk.h"
+#include "fixture/cssdsetprop.h"
 #include "fixture/framemsg.h"
 #include "fixture/lazyload.h"
 #include "fixture/ttsink.h"
@@ -1888,6 +1889,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "rxworker", HTML_RXWORKER },
     { "rxprobe", HTML_RXPROBE },
     { "textencunk", HTML_TEXTENCUNK },
+    { "cssdsetprop", HTML_CSSDSETPROP },
     { "framemsg", HTML_FRAMEMSG, OPENER_POLICY_SAME_ORIGIN },
     { "lazyload", HTML_LAZYLOAD },
     { "ttsink", HTML_TTSINK },
@@ -18046,6 +18048,44 @@ TF_UNIT void probes_textencunk(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cssdsetprop` document (fixture/cssdsetprop.h): setProperty's three completions over a value
+   with no example, and the arms steps 2 and 4 rule out. */
+TF_UNIT void probes_cssdsetprop(const char *js, Probe *tab, int *n) {
+    const char *th_why = NULL; int th_tt = 1;
+    fold_row(&th_tt, &th_why, !!strstr(js, "\"/api/csdset\""),
+             "NOT REACHED: no /api/csdset record, so setProperty over the example-less value did not return");
+    fold_row(&th_tt, &th_why, param_value_is(js, "/api/csdset", "w", "csdWROTE") &&
+                              param_value_is(js, "/api/csdset", "w", "csdLEFT") &&
+                              param_value_is(js, "/api/csdset", "w", "csdREMOVED"),
+             "setProperty over a value with no example did not reach all three of step 3's, step 6's and step "
+             "8's completions, so a feasible world was picked away");
+    const char *nm_why = NULL; int nm_tt = 1;
+    fold_row(&nm_tt, &nm_why, param_value_is(js, "/api/csdname", "w", "csdNONE"),
+             "NOT REACHED: no csdNONE on /api/csdname, so setProperty on an unsupported name did not return");
+    fold_row(&nm_tt, &nm_why, !param_value_is(js, "/api/csdname", "w", "csdDECLARED"),
+             "setProperty declared a name that is no supported CSS property — step 2 returns before the value "
+             "is looked at, so its fork ran over a name the block cannot hold");
+    const char *pr_why = NULL; int pr_tt = 1;
+    fold_row(&pr_tt, &pr_why, param_value_is(js, "/api/csdprio", "w", "csdLEFT") &&
+                              param_value_is(js, "/api/csdprio", "w", "csdREMOVED"),
+             "setProperty with the priority 'urgent' over a value with no example did not reach both step 3's "
+             "removal and step 4's return");
+    fold_row(&pr_tt, &pr_why, !param_value_is(js, "/api/csdprio", "w", "csdWROTE"),
+             "setProperty wrote a declaration under the priority 'urgent' — step 4 returns before the parse");
+    const char *co_why = NULL; int co_tt = 1;
+    fold_row(&co_tt, &co_why, param_value_is(js, "/api/csdconc", "r", "1") &&
+                              param_value_is(js, "/api/csdconc", "w", "5px"),
+             "setProperty('--csd', '', 'urgent') did not remove (step 3 precedes step 4), or "
+             "setProperty('WIDTH', '5px') did not set width (step 2 lowercases); the steps answer r=1 and w=5px");
+    const Probe rows[] = {
+        { "cssd-setprop-three", th_tt, "/api/csdset", SESS_EXPLORE, th_why },
+        { "cssd-setprop-unsupported", nm_tt, "/api/csdname", SESS_EXPLORE, nm_why },
+        { "cssd-setprop-priority", pr_tt, "/api/csdprio", SESS_EXPLORE, pr_why },
+        { "cssd-setprop-concrete", co_tt, "/api/csdconc", SESS_EXPLORE, co_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `datenum` document (fixture/datenum.h): both arms of the gate after each coercion. */
 TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
     const char *pl_why = NULL; int pl_tt = 1;
@@ -23588,6 +23628,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxworker(js, probes, &np);
     probes_rxprobe(js, probes, &np);
     probes_textencunk(js, probes, &np);
+    probes_cssdsetprop(js, probes, &np);
     probes_framemsg(js, probes, &np);
     probes_lazyload(js, probes, &np);
     probes_ttsink(js, probes, &np);

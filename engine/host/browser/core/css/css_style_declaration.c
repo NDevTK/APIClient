@@ -4331,65 +4331,23 @@ static bool cssd_value(JSContext *ctx, JSValueConst value, const char *member, c
 
 static void cssd_value_free(JSContext *ctx, CssdValue *v) { if (v->owned) JS_FreeCString(ctx, v->owned); }
 
-/* THE MEMBER THAT OWES §6.6.1's THREE-WAY FORK AND HAS NOT BEEN CONVERTED TO A STEP MACHINE, CRASHING WHERE IT
-   STANDS. It is ONE entry and not a DFAILF at each caller for the reason `member` and `property` are
-   parameters at all: an assert stamps the line it is WRITTEN at, so a message reached from several members has
-   to carry the member's own name or it reports an action with no object (§AN-ASSERT-THAT-NAMES-A-REMEDY). In a
-   RELEASE build it returns, and the caller then takes §6.6.1 step 6's own arm — the block is left exactly as
-   it was — which is the behaviour every one of these members already had.
-   `shape` IS BORROWED (solver/concolic.h's display accessor), so there is nothing to free on either arm. */
+/* The crash of a member that owes §6.6.1's three-way outcome fork over a value with no bytes and is still a
+   plain C activation, with nowhere to park one. `member` and `property` are parameters because an assert stamps
+   the line it is written at, so the message has to name the member. In a release build it returns and the
+   caller takes step 6's arm, leaving the block as it was. `shape` is borrowed (solver/concolic.h). */
 static void cssd_value_unspellable_fail(JSContext *ctx, JSValueConst value, const char *member,
                                         const char *property)
 {
     const char *shape = concolic_shape_c(value);
 
     (void)ctx;
-    DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's %s reached step 5, \"Let component value list "
-           "be the result of parsing value for property property\", for the property `%s` with a value that is "
-           "UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`) — so there are no bytes to parse and no way to decide "
-           "step 6's \"If component value list is null, then return\" — nor step 3's \"If value is the empty "
-           "string, invoke removeProperty() with property as argument and return\", two steps above it. "
-           "THERE ARE THREE FEASIBLE COMPLETIONS AND NOT TWO, and none of them may be picked: the block GAINS "
-           "this declaration (step 5 parsed something), the block LOSES it (step 3), or the block is left "
-           "exactly as it was (step 6). The third is not the second — they differ on every block that already "
-           "declares this property. "
-           "THE FORK IS BUILT AND THIS MEMBER IS NOT ON IT, WHICH IS THE WHOLE OF WHAT THIS CRASH NOW SAYS. "
-           "CSSOM §6.6.1's PER-PROPERTY IDL ATTRIBUTE SETTER is a step machine over those three outcomes — see "
-           "js_cssd_property_set, CSSD_PROP_FORK_PREDICATE and CSSD_PROP_SET_DECL — and the two members that "
-           "reach here are the ones still spelled as plain C activations, which have nowhere to park a fork. "
-           "WHAT THE NEXT DIFF BUILDS: this member as a step machine of the same shape, ONE member per diff. "
-           "Its whole content is already standing and none of it has to be invented: `cssd_value` ANSWERS the "
-           "no-bytes state instead of aborting on it (cssd_value_unspellable is that answer), "
-           "`cssd_decls_set_unspellable` is step 8 for a value with no bytes, CssdWriteKind is the three arms "
-           "with the NULL that used to answer two questions split apart, and `cssd_write_declaration` files "
-           "the record entry with NO example for the unspellable arm. Copy the machine and delete this call. "
-           "SETPROPERTY OWES TWO MORE FORKS THAT ARE NOT THIS ONE AND MUST NOT BE FOLDED INTO IT: its step-3 "
-           "emptiness test and its step-4 priority match over an unknown that HAS an example are its own "
-           "residuals, stated at its own body, and they are about a value this flow computed bytes for. A "
-           "reader arriving from one of those must not read this crash as standing in front of it. "
-           "TWO CLAUSES THAT STOOD HERE ARE RETIRED AND ARE NAMED RATHER THAN DELETED, because a reader who "
-           "re-derives them from the serialization alone will re-state them. `§6.6'S DECLARATIONS ARE TEXT, SO "
-           "THE BLOCK CANNOT HOLD A PROPERTY WITHOUT BYTES FOR IT` is false of the STORAGE: "
-           "`cssd_declarations_put` files the declarations THEMSELVES on the block's record and the backing "
-           "text is the PROJECTION. And `cssd_write_declaration STILL READS A NULL VALUE AS REMOVE AND ALL "
-           "THREE CALLERS STILL SPELL THE ARGUMENT `*v.bytes ? v.bytes : NULL`, SO AN ARM WITH NO BYTES IS THE "
-           "ARM THAT REMOVES THE DECLARATION` — which was the trap that made a fork buy nothing — is closed by "
-           "construction: the arm is a named CssdWriteKind and the write ASSERTS that the kind and the bytes "
-           "agree, so the two worlds cannot collapse into one. "
-           "AND THE OLDER REFUSAL STANDS UNCHANGED: writing `concolic_shape_c`'s shape the way "
-           "core/dom/element.c's `el_attr_value` writes it into an ATTRIBUTE is NOT the symmetric answer. An "
-           "attribute value has no grammar and a declaration's has one, and the parse here is REAL "
-           "(`cssom_parse_a_css_value` runs lexbor and answers NULL for a value the grammar refuses, which IS "
-           "step 6's arm), so the shape would parse as nothing and the write would silently become the arm "
-           "that leaves the block alone. So is the refusal of `css_pending_make`/`css_pending_is` as the "
-           "carrier: a pending-substitution value is never STORED, it is DERIVED AT EVERY PARSE from the "
-           "shorthand's own text, and a value with NO BYTES has no text to be derived from. "
-           "HOW ITS ABSENCE WOULD SHOW, as an observation: a run carries this abort at a value derived on an "
-           "arm the run FORCED rather than observed — a forced sibling drops the example its branch "
-           "contradicted, so every value computed downstream of one has no example, and a page that reads "
-           "prior-session state and styles itself from it meets that on its first write through one of these "
-           "two spellings. This is NOT the crash for an unknown that HAS an example: that one parses its own "
-           "computed bytes and keeps its domain in the block's unknown record above.",
+    DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's %s reached setProperty step 5, \"Let component "
+           "value list be the result of parsing value for property property\", for `%s` with a value that is "
+           "UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`), so there are no bytes to decide step 3's removal, "
+           "step 5's parse or step 6's return. The three completions are a fork, and this member is a plain C "
+           "activation with nowhere to park one. What to build: this member as a step machine asking "
+           "cssd_set_run's fork over its descriptor's own name. Its absence shows as this abort "
+           "at a value derived on an arm the run forced rather than observed.",
            member, property, shape ? shape : "{}");
 }
 
@@ -4767,351 +4725,252 @@ static const IdlStepDecl CSSD_PROP_GET_DECL = {
     CSSD_GET_STEPS
 };
 
-static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    JSValue block = cssd_block(ctx, this_val);
-    const char *name, *priority;
-    CssdValue v;
-    bool important;
+/* §6.6.1's three observable completions of setProperty over a value with no bytes — read against CSSOM
+ * §6.6.1 "The CSSStyleDeclaration Interface", setProperty's own list:
+ *
+ *   step 3 — "If value is the empty string, invoke removeProperty() with property as argument and return."
+ *   step 5 — "Let component value list be the result of parsing value for property property."
+ *   step 6 — "If component value list is null, then return."
+ *
+ * so the block gains the declaration (5 produced a list), loses it (3), or is left as it was (6); the last two
+ * differ on every block that already declares the property. Outcome 0 is the declaration landing, because
+ * outcome 0 is what a run with no forking policy takes (an @S candidate re-fire) and the page asked for the
+ * write. */
+enum { CSSD_PROP_WROTE = 0, CSSD_PROP_LEFT_ALONE, CSSD_PROP_REMOVED, CSSD_PROP_OUTCOMES };
 
-    (void)magic;
-    if (JS_IsException(block)) return block;
-    if (cssd_flag(ctx, block, "readOnly")) {
-        JS_FreeValue(ctx, block);
-        return cssd_readonly_throw(ctx);
+/* The predicate half of the fork's constraint key; the property is the other half, because step 5 parses "for
+   property property" and one key for every property would let `el.style.height = x` decide
+   `el.style.width = x`. The spelling is frozen: parked flows carry answers filed under it across sessions. */
+#define CSSD_PROP_FORK_PREDICATE \
+    "CSSOM §6.6.1 setProperty steps 3-6 over a value with no bytes (the property is"
+
+/* NAMED RESIDUAL — the three completions are one property-keyed ask where step 3's is a fact about the value
+ * alone. What is not covered: `el.style.height = x; el.style.width = x` asks step 3's emptiness question once
+ * per property instead of once about x, so a pair of arms can hold both that x parsed as a height and that x
+ * was the empty string; this keeps contradictory arms rather than dropping feasible ones. What the next diff
+ * builds: two sequential binary asks — step 3's emptiness over a key naming no property, then step 5's parse
+ * over this property-keyed one (core/idl_name_chain.h's shape). How its absence would show: a run's fork
+ * census carries two entries whose operation strings differ only in the property name over one source
+ * identity, for a document that assigned one unknown to two properties. */
+
+/* The composed key for one property, interned for the component's lifetime. step_fork_run borrows the key
+   until the driver reads it after the machine has returned, so it cannot be a C local, and a custom
+   property's name is whatever the page wrote, so no fixed-width state field holds it. One entry spells it for
+   every ask, so a parent's ask and its sibling's re-ask cannot differ by a character. Freed by cssom_free. */
+static char **g_prop_fork_op;
+static size_t g_prop_fork_op_n, g_prop_fork_op_cap;
+
+static const char *cssd_prop_fork_op(const char *property)
+{
+    size_t len = sizeof CSSD_PROP_FORK_PREDICATE + strlen(property) + 2, i;
+    char *op = malloc(len);
+    int wrote;
+
+    CHECK(op != NULL, "cssom: OOM composing the constraint key of setProperty's outcome fork");
+    wrote = snprintf(op, len, "%s %s)", CSSD_PROP_FORK_PREDICATE, property);
+    DCHECK(wrote > 0 && (size_t)wrote == len - 1,
+           "setProperty's constraint key was measured at one length and spelled at another");
+    for (i = 0; i < g_prop_fork_op_n; i++)
+        if (strcmp(g_prop_fork_op[i], op) == 0) { free(op); return g_prop_fork_op[i]; }
+    if (g_prop_fork_op_n == g_prop_fork_op_cap) {
+        size_t cap = g_prop_fork_op_cap ? g_prop_fork_op_cap * 2 : 16;
+        char **g = realloc(g_prop_fork_op, cap * sizeof *g);
+
+        CHECK(g != NULL, "cssom: OOM recording the constraint key of setProperty's outcome fork");
+        g_prop_fork_op = g;
+        g_prop_fork_op_cap = cap;
     }
-    DCHECK(argc >= 2, "§6.6.1's setProperty reached its body without the two arguments its IDL requires — the "
-                      "declaration's own Web IDL §3.6 Overload resolution algorithm step 5 count is what "
-                      "should have refused the call");
-    /* THE NAME denotes its SHAPE when it is unknown, exactly as it does at the three members above and for the
-       same reason; the VALUE is the one argument whose unknown has somewhere to GO, and cssd_value decides
-       what it stores and what it leaves behind. */
-    name = concolic_name_cstr(ctx, argv[0]);
-    /* THE NAME IS TAKEN BEFORE THE VALUE IS RESOLVED, because step 5 parses "for property property" and a value
-       cannot be parsed for a property this call could not name — and because the abort this member's own
-       unspellable arm raises names that property, which requires it to be in hand by then. It used to be
-       tested below in one condition with the priority conversion, which made it reachable only after the value
-       had been resolved. THAT CLAUSE SAID `THE ABORT INSIDE cssd_value` AND IS REWRITTEN RATHER THAN DELETED:
-       the abort has moved to cssd_value_unspellable_fail and is raised BY THIS MEMBER, and the reason the name
-       must be in hand first is unchanged — it is the crash's own second format argument. */
+    g_prop_fork_op[g_prop_fork_op_n++] = op;
+    return op;
+}
+
+static void cssd_prop_fork_op_free(void)
+{
+    while (g_prop_fork_op_n > 0) free(g_prop_fork_op[--g_prop_fork_op_n]);
+    free(g_prop_fork_op);
+    g_prop_fork_op = NULL;
+    g_prop_fork_op_cap = 0;
+}
+
+/* §6.6.1 step 2: a custom property keeps the page's spelling; any other name is ASCII-lowercased and must be a
+   supported CSS property, answered with the registry's own spelling (not owned). `lower` is the caller's
+   buffer, at least strlen(property) + 1 bytes. NULL is step 2's "then return". */
+static const char *cssd_set_property_name(const char *property, char *lower)
+{
+    size_t i;
+
+    if (property[0] == '-' && property[1] == '-') return property;
+    for (i = 0; property[i]; i++)
+        lower[i] = (property[i] >= 'A' && property[i] <= 'Z') ? (char)(property[i] - 'A' + 'a') : property[i];
+    lower[i] = '\0';
+    return cssom_supported_css_property_named(lower);
+}
+
+/* §6.6.1 setProperty steps 1-10 for `property` as the caller spelled it, `value` (a converted DOMString or an
+   unknown) and `priority` (NULL is the empty string). Shared by setProperty and the per-property IDL attribute
+   setter, which the standard defines as "invoke setProperty() with ... no third argument". Nothing is held
+   across the fork: the block, the flag, the name and the value are re-derived from own slots and this
+   component's tables on every entry, and re-deriving runs none of the page's code. Returns a step code. */
+static int cssd_set_run(JSContext *ctx, JSStepHdr *hdr, const char *property, JSValueConst value,
+                        const char *priority, const char *member)
+{
+    JSValue block = cssd_block(ctx, hdr->this_val);
+    char *lower;
+    const char *name;
+    CssdValue v;
+    bool important = priority != NULL && *priority != '\0', priority_ok = true;
+    int arm = CSSD_PROP_WROTE, rc;
+
+    if (JS_IsException(block)) return JS_STEP_ABRUPT;
+    if (cssd_flag(ctx, block, "readOnly")) {                      /* step 1 */
+        JS_FreeValue(ctx, block);
+        cssd_readonly_throw(ctx);
+        return JS_STEP_ABRUPT;
+    }
+    lower = malloc(strlen(property) + 1);
+    CHECK(lower != NULL, "cssom: OOM lowercasing a property name for setProperty step 2");
+    name = cssd_set_property_name(property, lower);                /* step 2 */
     if (!name) {
+        free(lower);
         JS_FreeValue(ctx, block);
-        return JS_EXCEPTION;
+        return JS_STEP_DONE;
     }
-    if (!cssd_value(ctx, argv[1], "setProperty", name, &v)) {
-        JS_FreeCString(ctx, name);
+    if (!cssd_value(ctx, value, member, name, &v)) {
+        free(lower);
         JS_FreeValue(ctx, block);
-        return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
+        return JS_HasException(ctx) ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
-    /* §6.6.1's THREE-WAY FORK OVER A VALUE WITH NO BYTES, WHICH THIS MEMBER STILL OWES. The per-property IDL
-       attribute setter below is a step machine and asks it; this member is not one yet, so it crashes naming
-       what to build — which is §Offensive-programming's category (2) and not a state to pick an arm for. In
-       release it returns and the block is left as it was, which is step 6's own answer. */
-    if (cssd_value_unspellable(&v)) {
-        cssd_value_unspellable_fail(ctx, argv[1], "setProperty", name);
-        JS_FreeCString(ctx, name);
-        cssd_value_free(ctx, &v);
-        JS_FreeValue(ctx, block);
-        return JS_UNDEFINED;
-    }
-    /* Web IDL §3.6 Overload resolution algorithm's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call
-       that stopped short of the position arrives with a shorter argc (step 16, whose 16.2 appends "the special
-       value 'missing'"), and one that reached it with `undefined` arrives with undefined in the slot (step
-       15.4, "If optionality is 'optional' and V is undefined", whose 15.4.2 appends the same).
-       THE SENTENCE QUOTED HERE BEFORE — "if the argument is optional and its value is undefined, it is absent"
-       — APPEARS NOWHERE IN WEB IDL. It is the same fabrication idl_args.c records having found at its own
-       §3.6 sites, arriving a second time in a second file, which is why the numbered steps are named here
-       instead: a fabricated quotation is the one citation error that tells the reader not to open the spec.
-       This member's IDL writes
-       `optional CSSOMString priority = ""`, so absent IS the empty string, which is a POSITIVE statement that
-       the page named no priority rather than a hole. Converting either would produce the four characters
-       "undefined" and abandon the call at step 4 below. */
-    /* AND THE PRIORITY IS NEITHER OF THOSE TWO ANSWERS, WHICH IS WHY IT CRASHES WHERE THE VALUE DOES NOT. It is
-       not a NAME — nothing is looked up by it — and it is not a value with a home: what step 4 produces is the
-       IMPORTANT FLAG, one bit on a declaration, and a bit has nowhere to carry a domain. The value's unknown is
-       taken concretely BECAUSE the record above keeps its domain; taking this one concretely would decide a
-       gate off an example with nothing anywhere recording that the other world was never explored, which is
-       the silent loss §Offensive-programming says must crash instead. It crashes for an unknown that HAS an
-       example as much as for one that has not, and that is the same rule and not a stricter one. */
-    if (argc >= 3 && concolic_is(argv[2]))
-        DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's setProperty step 4 tests the PRIORITY argument "
-               "of a write to the property `%s` against the string \"important\", and this one is UNKNOWN "
-               "EXTERNAL INPUT (`%s`). The two "
-               "outcomes are two worlds — the declaration is written IMPORTANT, or step 4 returns and the block "
-               "is left exactly as it was — and the answer decides a BIT, which has nowhere to keep the domain "
-               "the way a declaration's value does. WHAT IS MISSING is the same OUTCOME FORK the no-example "
-               "value arm above names: this member as a step machine, asking quickjs-step.h's step_fork_run "
-               "which completion the ASCII case-insensitive match reached. ITS ABSENCE WOULD SHOW as a page "
-               "that reads its priority out of injected state (`el.style.setProperty('color', c, "
-               "cfg.emphasis)`) exploring neither arm.",
-               name, concolic_shape_c(argv[2]) ? concolic_shape_c(argv[2]) : "{}");
-    priority = (argc >= 3 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
-    if (argc >= 3 && !JS_IsUndefined(argv[2]) && !priority) {
-        JS_FreeCString(ctx, name);
-        cssd_value_free(ctx, &v);
-        if (priority) JS_FreeCString(ctx, priority);
-        JS_FreeValue(ctx, block);
-        return JS_EXCEPTION;
-    }
-    /* §6.6.1's step 4: "if priority is not the empty string and is not an ASCII case-insensitive match for the
-       string 'important', then return". An unrecognised priority is not a declaration written without one — it
-       abandons the call, so `setProperty('color','red','urgent')` leaves the block alone. The match is ASCII by
-       the spec's own word, so it is spelled out rather than left to a locale-dependent library compare. */
-    important = priority && *priority != '\0';
+    /* Step 4's "not an ASCII case-insensitive match for the string 'important'", spelled out because the
+       spec's match is ASCII and a library compare is locale-dependent. It is applied after step 3 below,
+       because step 3 removes whatever the priority says. */
     if (important) {
         static const char IMPORTANT[] = "important";
         size_t i;
 
         for (i = 0; i < sizeof(IMPORTANT); i++)
             if ((char)tolower((unsigned char)priority[i]) != IMPORTANT[i]) break;
-        if (i != sizeof(IMPORTANT)) {
-            JS_FreeCString(ctx, name);
-            cssd_value_free(ctx, &v);
-            JS_FreeCString(ctx, priority);
-            JS_FreeValue(ctx, block);
-            return JS_UNDEFINED;
-        }
-    }
-    /* §6.6.1's step 3: setting the empty string invokes removeProperty and returns.
-       IT IS ASKED OF THE EXAMPLE WHEN THE VALUE IS AN UNKNOWN, AND THAT IS A NAMED RESIDUAL. The example is the
-       value THIS FLOW computed by running the real operators on real operands, so the arm it selects is the arm
-       a real session takes — right for this flow, and NARROWER than the spec, which has two feasible worlds
-       here exactly as step 4 does. THE NEXT DIFF is this member as a step machine, so step 3's emptiness test,
-       step 4's priority match and step 5's parse each ask quickjs-step.h's step_fork_run and both completions
-       run — and the machine to copy is now STANDING rather than described: js_cssd_property_set is exactly
-       that shape for the per-property IDL attribute setter, over the three outcomes CSSD_PROP_OUTCOMES names.
-       THAT CLAUSE SAID `THE NEXT DIFF IS THE ONE THE TWO DFAILs ABOVE NAME AND IS THE SAME ONE FOR ALL THREE
-       TESTS`, AND THE `SAME ONE` HALF IS RETIRED. The three tests are three KEYS and not one: whether a value
-       is the empty string is a fact about the VALUE alone, whether it matches "important" is a fact about the
-       PRIORITY, and whether it parses is a fact about the value AND the property's grammar — so one fork over
-       all three would file three propositions under one name and let a flow answer one of them with another's
-       record, which is solver/concolic.h's own worked defect. The per-property setter's fork is the third of
-       them, keyed by the property for exactly that reason, and it does NOT stand in front of these two.
-       ITS ABSENCE SHOWS as a
-       block that never loses a declaration to an unknown whose example happens to be "" — the sibling world in
-       which the same write is a removeProperty is not explored, and nothing in the emitted surface says so. */
-    /* AND THE ARM IS NAMED RATHER THAN ENCODED IN A NULL: `*v.bytes` IS step 3's own test, so an empty value
-       is a removeProperty and anything else is the write. This member does not yet reach the third arm — its
-       own DFAIL above is what an unspellable value meets here — which is why `v.bytes` is read directly and
-       not through cssd_value_unspellable: the crash is the statement that this member cannot be standing on
-       that state, and a branch beside it would be a second, silent answer to the same question. */
-    cssd_write_declaration(ctx, block, name, *v.bytes ? CSSD_WRITE_VALUE : CSSD_WRITE_REMOVE,
-                           *v.bytes ? v.bytes : NULL, important, v.taint);
-    JS_FreeCString(ctx, name);
-    cssd_value_free(ctx, &v);
-    JS_FreeCString(ctx, priority);
-    JS_FreeValue(ctx, block);
-    return JS_UNDEFINED;
-}
-
-/* IT IS A STEP MACHINE BECAUSE ITS VALUE CAN BE AN UNKNOWN WITH NO BYTES, and that is a FORK: §6.6.1's
- * setProperty has THREE feasible completions over such a value and a plain C activation has nowhere to park
- * one. The three are the OBSERVABLE outcomes of the member and not the arms of the step the decision stands at,
- * which is the enumeration that used to be got wrong here — read against the fetched maintained edition of
- * CSSOM §6.6.1 "The CSSStyleDeclaration Interface", setProperty's own list:
- *
- *   step 3 — "If value is the empty string, invoke removeProperty() with property as argument and return."
- *   step 5 — "Let component value list be the result of parsing value for property property."
- *   step 6 — "If component value list is null, then return."
- *
- * so the block GAINS the declaration (5 produced a list), LOSES it (3), or is left exactly as it was (6). The
- * third is not the second: they differ on every block that already declares this property.
- *
- * THE PER-PROPERTY SETTER IS setProperty AND NOT A RULE OF ITS OWN, which the standard states in the words the
- * install below cites: "Setting the camel-cased attribute attribute must invoke setProperty() with the first
- * argument being the result of running the IDL attribute to CSS property algorithm for camel-cased attribute,
- * as second argument the given value, and no third argument." No third argument is the empty priority, so step
- * 4 passes and the important flag is unset — which is why this machine has no priority fork and
- * js_cssd_set_property does.
- *
- * NOTHING IS HELD ACROSS THE FORK BUT THE KEY. The block, the readonly flag and the resolved value are all
- * re-derived on every entry, and re-deriving cannot answer differently: each is a read of an OWN SLOT or of
- * this component's own tables, and step_fork_run runs none of the page's code — it clones and re-enters. That
- * is §6.6.1's item(index) machine's own argument one member over, and it is what lets this state be an inline
- * array with a `visit` that names nothing. */
-#define CSSD_PROP_SET_ALGORITHM \
-    "CSSOM §6.6.1 The CSSStyleDeclaration Interface's per-property IDL attribute setter"
-
-/* OUTCOME 0 IS THE DECLARATION LANDING, which is step_fork_run's one numbering rule read against this member:
-   outcome 0 is the completion a run with NO forking policy takes, and for a page assigning to a CSS property
-   that is the world in which the assignment happened. An @S candidate re-fire runs ONE concrete path to a
-   sink, so putting the REMOVAL or the do-nothing arm at 0 would divert it off the write the page asked for. */
-enum { CSSD_PROP_WROTE = 0, CSSD_PROP_LEFT_ALONE, CSSD_PROP_REMOVED, CSSD_PROP_OUTCOMES };
-
-/* THE PREDICATE HALF OF THE CONSTRAINT KEY, and the PROPERTY is the other half because §6.6.1 step 5 parses
-   "for property property": whether an unknown parses is a question about a GRAMMAR, so one key for every
-   property would make `el.style.height = x` decide `el.style.width = x` and delete the world in which x is a
-   length but not a width. That is solver/concolic.h's own worked defect — four declarations sharing one
-   identity making a branch on `marginTop` decide `marginLeft` — arriving at a fork instead of a derivation.
-   THE SPELLING IS FROZEN THE DAY THIS LANDS. A constraint key is what a parked flow's recorded answers are
-   filed under and §Time-travel-resume carries those across a park and into the next session out of the cold
-   tier, so re-spelling it later does not rename a question, it ORPHANS every answer already recorded against
-   it and a resumed flow re-asks and re-forks what it had already decided. */
-#define CSSD_PROP_FORK_PREDICATE \
-    "CSSOM §6.6.1 setProperty steps 3-6 over a value with no bytes (the property is"
-
-/* NAMED RESIDUAL — THE THREE COMPLETIONS ARE ONE PROPERTY-KEYED ASK WHERE STEP 3's IS A FACT ABOUT THE VALUE
- * ALONE. WHAT IS NOT COVERED: step 3 tests whether the VALUE is the empty string and step 5 tests whether it
- * parses FOR THIS PROPERTY, so the two questions have different subjects and this fork files both under one
- * property-keyed name. `el.style.height = x; el.style.width = x` therefore asks step 3's question TWICE, once
- * per property, instead of once about x — and the two asks may answer differently, so a pair of arms can assert
- * both that x parsed as a height and that x was the empty string.
- *   IT IS UNSOUND IN THE DIRECTION THAT KEEPS ARMS AND NOT IN THE ONE THAT DROPS THEM, which is why it is a
- * residual and not a defect: what the split key costs is worlds that CONTRADICT each other being explored, and
- * §Solver-half's rule is that uncertainty keeps the arm and the engine errs toward MORE exploration. Nothing a
- * page can do loses a world to this.
- *   WHAT THE NEXT DIFF BUILDS: TWO sequential binary asks at TWO stages instead of one three-armed ask — step
- * 3's emptiness question over a key that names NO property, then step 5's parse question over the property-keyed
- * one — which is core/idl_name_chain.h's own shape, and its IDL_INDEX_PREDICATE carries the argument for why the
- * first key must not name the member: `index == 3` is one fact and eleven members asking it must share one key.
- * The same diff is what js_cssd_set_property's step-3 and step-4 residuals need, so the emptiness link is built
- * ONCE and both members ask it.
- *   HOW ITS ABSENCE WOULD SHOW, as an observation: a run's fork census carries TWO entries whose operation
- * strings differ only in the property name, over ONE source identity, for a document that assigned one unknown
- * to two properties — where a shared emptiness link would show one entry for that question however many
- * properties were written. */
-
-/* THE KEY'S STORAGE IS AN INLINE ARRAY AND THEREFORE NEEDS NO DECLARATION TO SURVIVE A FORK, which is the
-   argument core/idl_name_chain.h makes for the elimination chains' own key and which holds here for the same
-   reason: step_fork_run keeps a BORROWED pointer and the DRIVER reads it after this machine has returned, so
-   the string cannot be a C local — and a machine's state is what a fork byte-copies. The width is checked at
-   cssom_init over the WHOLE property space rather than asserted per call, so a registry whose name does not
-   fit refuses the install instead of truncating one key into another's at run time. */
-#define CSSD_PROP_OP_MAX 160
-typedef struct {
-    char op[CSSD_PROP_OP_MAX];
-} CssdPropSet;
-
-/* IT OWNS NOTHING. The declaration is mandatory (core/idl_args.h asserts it at the pool) and a member that owns
-   nothing writes a visit that visits nothing — an inline array holds no reference and the byte copy carries
-   it. */
-static void cssd_prop_set_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
-
-#define CSSD_PROP_SET_STAGES(X)                                                                               \
-    X(CSSD_PROP_SET_RUN, CSSD_PROP_SET_ALGORITHM " (setProperty steps 1-10: the readonly check, the value, "   \
-                                                "and which of step 3's, step 6's and step 8's completions "   \
-                                                "this world reached)")
-enum { IDL_STEP_STAGE_BASE(CSSD_PROP_SET_STAGES) CSSD_PROP_SET_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const CSSD_PROP_SET_STEPS[] = { CSSD_PROP_SET_STAGES(JS_STEP_STAGE_LABEL) NULL };
-
-/* THE COMPOSED KEY FOR ONE PROPERTY — spelled through one entry so the parent's ask and the sibling's re-ask
-   cannot differ by a character, and so the width check has one subject. Returns false when it would truncate,
-   which cssom_init is what makes impossible. */
-static bool cssd_prop_fork_op(char *out, size_t cap, const char *property)
-{
-    int wrote = snprintf(out, cap, "%s %s)", CSSD_PROP_FORK_PREDICATE, property);
-
-    return wrote > 0 && (size_t)wrote < cap;
-}
-
-static int js_cssd_property_set(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
-                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
-{
-    CssdPropSet *s = state;
-    const char *pname = cssd_property_name_of((uintptr_t)idl_step_magic(hdr));
-    JSValue block;
-    CssdValue v;
-    int arm = CSSD_PROP_WROTE, rc;
-
-    (void)out_cb; (void)out_argc;
-    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
-    *presult = JS_UNDEFINED;
-    DCHECK(hdr->stage == CSSD_PROP_SET_RUN,
-           "§6.6.1's per-property IDL attribute setter resumed into a stage the algorithm does not have — it "
-           "forwards to ONE setProperty, whose only rest point is the outcome fork over a value with no bytes");
-    /* A SETTER IS DECLARED WITH ONE POSITION AND CAN STILL ARRIVE WITH NONE, which is the count this DCHECK
-       got wrong and is why it asserts the DECLARATION rather than the call. Web IDL §3.7.6 Attributes' setter
-       is not an operation and has no §3.6 argument-count check in front of it, so
-       `Object.getOwnPropertyDescriptor(CSSStyleProperties.prototype, "color").set.call(el.style)` reaches here
-       with argc 0 and V is undefined — which is exactly what core/idl_args.c's PLAIN setter path answers at its
-       own dispatch (`s->n > 0 ? … : JS_UNDEFINED`), so the two spellings of one member agree. More than one is
-       this declaration and that dispatch disagreeing about the shape. */
-    DCHECK(argc <= 1,
-           "§6.6.1's per-property IDL attribute setter reached its body with more than one argument — a setter "
-           "is declared with ONE position and delivered as one value, so a longer vector is the declaration "
-           "and the dispatch disagreeing about the member's shape");
-    DCHECK(pname != NULL,
-           "a CSS attribute was declared with a property id the SPACE does not have. `magic` indexes the "
-           "registry's rows followed by this engine's own (cssd_property_name_of), so a NULL here is an "
-           "installer and that seam disagreeing about which properties exist");
-    /* Web IDL §3.7.6 Attributes' BRAND CHECK, re-established on EVERY entry rather than trusted from the one
-       before, exactly as §6.6.1's item(index) machine does it. */
-    block = cssd_block(ctx, hdr->this_val);
-    if (JS_IsException(block))
-        return JS_STEP_ABRUPT;
-    if (cssd_flag(ctx, block, "readOnly")) {
-        JS_FreeValue(ctx, block);
-        cssd_readonly_throw(ctx);
-        return JS_STEP_ABRUPT;
-    }
-    /* A SETTER IS DELIVERED AS ONE CONVERTED VALUE AT POSITION 0 — core/idl_args.h's IdlSetter shape, reached
-       through the step declaration instead of the plain one. `[LegacyNullToEmptyString]` is on the TYPE, so
-       `el.style.color = null` has already become the empty string by the time it arrives here. */
-    if (!cssd_value(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, "per-property IDL attribute setter", pname, &v)) {
-        JS_FreeValue(ctx, block);
-        return JS_HasException(ctx) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+        priority_ok = i == sizeof(IMPORTANT);
     }
     if (!cssd_value_unspellable(&v)) {
-        /* A VALUE WITH BYTES DECIDES ITS OWN ARM AND ASKS NOTHING: `*v.bytes` IS step 3's test, run on bytes
-           this flow really has. An unknown that HAS an example is answered from that example here, which is
-           narrower than the spec and is js_cssd_set_property's own named step-3 residual rather than this
-           crash's — see there, and do not read this machine's fork as standing in front of it. */
-        cssd_write_declaration(ctx, block, pname, *v.bytes ? CSSD_WRITE_VALUE : CSSD_WRITE_REMOVE,
-                               *v.bytes ? v.bytes : NULL, false, v.taint);
-        cssd_value_free(ctx, &v);
-        JS_FreeValue(ctx, block);
-        return JS_STEP_DONE;
+        /* Bytes decide the arm and nothing is asked. NAMED RESIDUAL: an unknown that has an example answers
+           step 3 from that example, which is the arm this flow's real session takes and narrower than the
+           spec. What the next diff builds: step 3's emptiness as its own binary ask (the residual above). How
+           its absence would show: a block never loses a declaration to an unknown whose example is non-empty. */
+        if (!*v.bytes)
+            cssd_write_declaration(ctx, block, name, CSSD_WRITE_REMOVE, NULL, false, v.taint);
+        else if (priority_ok)
+            cssd_write_declaration(ctx, block, name, CSSD_WRITE_VALUE, v.bytes, important, v.taint);
+        goto done;
     }
-    /* THE STATE IS COMPLETE-OR-EMPTY AT THE ASK, which is step_fork_run's requirement and is why the key is
-       written BEFORE the call and why nothing else is held: the sibling's snapshot is taken here, and `block`
-       and `v` are C locals this entry re-derives. The OPERAND is `v.taint`, which cssd_value set to the value
-       itself — so the fork is asked about the unknown the page assigned and not about anything derived from
-       it, which is what makes the key mean what CSSD_PROP_FORK_PREDICATE says it means. */
-    if (!cssd_prop_fork_op(s->op, sizeof s->op, pname)) {
-        cssd_value_free(ctx, &v);
-        JS_FreeValue(ctx, block);
-        DFAILF("%s could not spell its own constraint key for the property `%s` — the key is what a parked "
-               "flow's recorded answers are filed under, and a truncated one files two properties' questions "
-               "under one name so one property's recorded arm decides another's. cssom_init checks every name "
-               "in the property space against CSSD_PROP_OP_MAX, so reaching this means the space grew a name "
-               "the install did not see",
-               CSSD_PROP_SET_ALGORITHM, pname);
-        return JS_STEP_DONE;
-    }
-    /* `real` IS JS_OUTCOME_REAL_UNSTATED AND THAT IS A POSITIVE STATEMENT: this arm is reached only for a value
-       with NO example, so there is no concrete operand to run step 3's test or step 5's parse on, and the
-       machine says so rather than guessing which arm a run would have taken. Both arms still run and neither is
-       marked forced. */
-    rc = step_fork_run(ctx, hdr, v.taint, s->op, CSSD_PROP_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
+    /* The state is complete-or-empty at the ask: the sibling's snapshot is taken here and every local is
+       re-derived on re-entry. The operand is the unknown the page assigned (cssd_value's `taint`). `real` is
+       unstated because a value with no example has no bytes to run step 3 or step 5 on. */
+    rc = step_fork_run(ctx, hdr, v.taint, cssd_prop_fork_op(name), CSSD_PROP_OUTCOMES, JS_OUTCOME_REAL_UNSTATED,
+                       &arm);
     if (rc) {
+        free(lower);
         cssd_value_free(ctx, &v);
         JS_FreeValue(ctx, block);
-        return rc;   /* parked at the fork; the sibling resumes at this same stage with the other outcome */
+        return rc;
     }
     DCHECKF(arm >= 0 && arm < CSSD_PROP_OUTCOMES,
-            "%s was answered with an outcome that is not one of the three completions it declared (%d) — the "
-            "arm comes back from the flow's own decision vector, so a fourth is this engine and that record "
-            "disagreeing about how many worlds this member has",
-            CSSD_PROP_SET_ALGORITHM, arm);
-    if (arm == CSSD_PROP_LEFT_ALONE) {
-        /* §6.6.1 step 6: "If component value list is null, then return." The block is not touched at all, so
-           there is no write and no record entry — which is exactly what distinguishes this world from the
-           removal, on every block that already declares this property. */
-        cssd_value_free(ctx, &v);
-        JS_FreeValue(ctx, block);
-        return JS_STEP_DONE;
-    }
-    cssd_write_declaration(ctx, block, pname,
-                           arm == CSSD_PROP_REMOVED ? CSSD_WRITE_REMOVE : CSSD_WRITE_UNSPELLABLE,
-                           NULL, false, v.taint);
+            "%s was answered with outcome %d, which is not one of setProperty's three completions — the arm "
+            "comes from the flow's own decision vector, so this engine and that record disagree about how many "
+            "worlds the member has",
+            member, arm);
+    /* Step 6's world touches nothing; so does step 5's when step 4 refused the priority, since step 4 returns
+       before the parse whatever the value would have parsed as. */
+    if (arm == CSSD_PROP_REMOVED)
+        cssd_write_declaration(ctx, block, name, CSSD_WRITE_REMOVE, NULL, false, v.taint);
+    else if (arm == CSSD_PROP_WROTE && priority_ok)
+        cssd_write_declaration(ctx, block, name, CSSD_WRITE_UNSPELLABLE, NULL, important, v.taint);
+done:
+    free(lower);
     cssd_value_free(ctx, &v);
     JS_FreeValue(ctx, block);
     return JS_STEP_DONE;
 }
 
+/* The two members own nothing across an entry, so their state is empty and its visit names nothing. */
+static void cssd_set_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+#define CSSD_SET_STAGES(X)                                                                                     \
+    X(CSSD_SET_RUN, "CSSOM §6.6.1 setProperty steps 1-10 (the readonly check, the name, the value, and which "  \
+                    "of step 3's, step 6's and step 8's completions this world reached)")
+enum { IDL_STEP_STAGE_BASE(CSSD_SET_STAGES) CSSD_SET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CSSD_SET_STEPS[] = { CSSD_SET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_cssd_set_property(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    const char *name, *priority = NULL;
+    int rc;
+
+    (void)state; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(CSSD_SET_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+    STEP_ARM(CSSD_SET_RUN);
+    DCHECK(argc >= 2, "§6.6.1's setProperty reached its body without the two arguments its IDL requires — Web "
+                      "IDL §3.6 Overload resolution algorithm's argument count should have refused the call");
+    /* The name denotes its shape when it is unknown, as at getPropertyValue. */
+    name = concolic_name_cstr(ctx, argv[0]);
+    if (!name) return JS_STEP_ABRUPT;
+    /* The priority's unknown has nowhere to keep its domain: step 4 decides one bit on a declaration. */
+    if (argc >= 3 && concolic_is(argv[2]))
+        DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's setProperty step 4 tests the PRIORITY argument "
+               "of a write to the property `%s` against the string \"important\", and this one is UNKNOWN "
+               "EXTERNAL INPUT (`%s`). The two outcomes are two worlds — the declaration is written important, "
+               "or step 4 returns and the block is left as it was. What is missing is an outcome fork over the "
+               "ASCII case-insensitive match, asked through quickjs-step.h's step_fork_run beside this "
+               "machine's value fork. Its absence would show as a page that reads its priority out of injected "
+               "state exploring neither arm.",
+               name, concolic_shape_c(argv[2]) ? concolic_shape_c(argv[2]) : "{}");
+    /* Web IDL §3.6 step 16.2 and step 15.4.2 both make an absent optional argument "missing", and this
+       member's IDL default is "" — so a short argc and an `undefined` slot are both the empty priority, never
+       the string "undefined". */
+    if (argc >= 3 && !JS_IsUndefined(argv[2])) {
+        priority = JS_ToCString(ctx, argv[2]);
+        if (!priority) { JS_FreeCString(ctx, name); return JS_STEP_ABRUPT; }
+    }
+    rc = cssd_set_run(ctx, hdr, name, argv[1], priority, "setProperty");
+    JS_FreeCString(ctx, name);
+    if (priority) JS_FreeCString(ctx, priority);
+    return rc;
+}
+
+static int js_cssd_property_set(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    const char *pname = cssd_property_name_of((uintptr_t)idl_step_magic(hdr));
+
+    (void)state; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
+    *presult = JS_UNDEFINED;
+    STEP_DISPATCH(CSSD_SET_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+    STEP_ARM(CSSD_SET_RUN);
+    /* Web IDL §3.7.6 Attributes' setter has no §3.6 argument-count check, so a `.set.call(el.style)` arrives
+       with argc 0 and V undefined, as core/idl_args.c's plain setter path answers; more than one is the
+       declaration and the dispatch disagreeing about the member's shape. */
+    DCHECK(argc <= 1,
+           "§6.6.1's per-property IDL attribute setter reached its body with more than one argument — a setter "
+           "is declared with one position, so a longer vector is the declaration and the dispatch disagreeing");
+    DCHECK(pname != NULL,
+           "a CSS attribute was declared with a property id the space does not have. `magic` indexes the "
+           "registry's rows followed by this engine's own (cssd_property_name_of), so a NULL here is an "
+           "installer and that seam disagreeing about which properties exist");
+    /* `[LegacyNullToEmptyString]` is on the type, so `el.style.color = null` arrives as the empty string. */
+    return cssd_set_run(ctx, hdr, pname, argc > 0 ? argv[0] : JS_UNDEFINED, NULL,
+                        "per-property IDL attribute setter");
+}
+
+static const IdlStepDecl CSSD_SET_PROPERTY_DECL = {
+    js_cssd_set_property, 0, cssd_set_visit, NULL,
+    "CSSOM §6.6.1 The CSSStyleDeclaration Interface setProperty(property, value, priority)", CSSD_SET_STEPS, 0, NULL
+};
 static const IdlStepDecl CSSD_PROP_SET_DECL = {
-    js_cssd_property_set, sizeof(CssdPropSet), cssd_prop_set_visit, NULL,
-    CSSD_PROP_SET_ALGORITHM, CSSD_PROP_SET_STEPS, 0, NULL
+    js_cssd_property_set, 0, cssd_set_visit, NULL,
+    "CSSOM §6.6.1 The CSSStyleDeclaration Interface's per-property IDL attribute setter", CSSD_SET_STEPS, 0, NULL
 };
 
 /* ---- CSSOM §6.6.1's THREE PER-PROPERTY PARTIAL INTERFACES ---------------------------------------------------
@@ -5563,7 +5422,7 @@ static JSValue js_cssd_descriptor_set(JSContext *ctx, JSValueConst this_val, JSV
         JS_FreeValue(ctx, block);
         return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
     }
-    /* THE SAME FORK THIS MEMBER OWES, AND FOR THE SAME REASON — see js_cssd_set_property's call above. */
+    /* §6.6.1's three-way fork over a value with no bytes, which this member still owes (cssd_set_run). */
     if (cssd_value_unspellable(&v)) {
         cssd_value_unspellable_fail(ctx, val, "descriptor IDL attribute setter", name);
         cssd_value_free(ctx, &v);
@@ -6347,7 +6206,7 @@ void cssom_init(JSContext *ctx)
         g_get_prop_id = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &CSSD_GET_PROP_DECL, 0);
         g_remove_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 1);
         g_get_priority_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 2);
-        g_set_prop_id = idl_method_id(ctx, THREE_STR, 3, js_cssd_set_property, 0);
+        g_set_prop_id = idl_method_id_step(ctx, THREE_STR, 3, NULL, 0, &CSSD_SET_PROPERTY_DECL, 0);
         /* §6.6.1: `setProperty(CSSOMString property, CSSOMString value, optional CSSOMString priority = "")` */
         idl_optional_from(2);
         /* §6.6.1's `item` IS A MACHINE — a declaration and not a dispatch, since there is no second body for
@@ -6390,26 +6249,11 @@ void cssom_init(JSContext *ctx)
     /* BOTH HALVES ARE STEP MACHINES: the setter has a fork in it, and the getter of a computed block resolves
        a used value, whose layout rests (CSSD_PROP_GET_DECL). One machine declaration per half shared by every
        property, because §6.6.1 gives all three spellings of every property the same steps; what differs per
-       property is the `magic`, which is lexbor's own property id.
-       AND THE KEY'S WIDTH IS SETTLED HERE, OVER THE WHOLE SPACE, WHICH IS WHAT MAKES A TRUNCATED CONSTRAINT KEY
-       IMPOSSIBLE RATHER THAN MERELY CAUGHT. A truncated key files two properties' questions under ONE name, so
-       one property's recorded arm decides another's and a resumed flow answers a world it never explored — the
-       same fabricated timeline a shared derivation identity would produce. The name's width is not a compile-time
-       fact (the space is lexbor's registry followed by this engine's own list, and a `_Static_assert` could only
-       check a figure somebody typed), so it is checked against the space ITSELF, once, at the one walk that
-       already visits every row. A registry that grows a name too long for CSSD_PROP_OP_MAX refuses the install
-       and names the property, instead of composing a key that means another property's question. */
+       property is the `magic`, which is lexbor's own property id. */
     for (id = 0; id < cssd_property_id_end(); id++) {
         const char *pname = cssd_property_name_of(id);
-        char probe[CSSD_PROP_OP_MAX];
 
         if (!pname) { g_property_set_id[id] = g_property_get_id[id] = -1; continue; }
-        DCHECKF(cssd_prop_fork_op(probe, sizeof probe, pname),
-                "the CSS property `%s` cannot be spelled into the per-property setter's constraint key — the "
-                "key is what a parked flow's recorded answers are filed under, and a truncated one makes one "
-                "property's recorded arm decide another's, so raise CSSD_PROP_OP_MAX rather than shortening "
-                "the predicate until this name fits",
-                pname);
         g_property_set_id[id] = idl_setter_id_step(ctx, IDL_DOMSTRING, true, &CSSD_PROP_SET_DECL, (int)id);
         g_property_get_id[id] = idl_getter_id_step(ctx, &CSSD_PROP_GET_DECL, (int)id);
     }
@@ -6576,6 +6420,7 @@ void cssom_free(JSRuntime *rt)
        pointing at the arena it is about to free — a check that reads `g_parser` and would read it out of
        freed memory if the parser had gone first. */
     cssd_sheet_parse_free();
+    cssd_prop_fork_op_free();
     /* The selector state is released BY NAME: `lxb_css_parser_destroy` frees the parser's stack, rules, string
        buffer, log and tokenizer and does NOT touch `selectors`, so the record installed in cssom_init is this
        component's to free — and freeing it after the parser would read a pointer out of freed memory. */
