@@ -2226,9 +2226,30 @@ JSValue url_construct_unknown(JSContext *ctx, int argc, JSValueConst *argv)
     return concolic_new_derived_kept(ctx, "URL", argv, url_operand_count(argc), real);
 }
 
+/* The record of an unknown base's own page bytes ahead of its first unknown byte, into `b` (initialised by the
+   caller), where those bytes already decide the base's scheme and host: the unknown bytes after them reach its
+   path, query or fragment and no later byte returns §4.4's machine to the host states. 0 where they do not. */
+static int url_base_page_record(JSContext *ctx, JSValueConst base, UrlRecord *b)
+{
+    char *disp = reclaim_strdup(concolic_shape_c(base));
+    unsigned char *hole = concolic_shape_hole_mask(base);
+    size_t n = 0;
+    int ok;
+
+    (void)ctx;
+    CHECK(disp && hole, "url: OOM reading a base's page bytes");
+    while (disp[n] && !hole[n]) n++;
+    ok = url_prefix_decides_host(url_prefix_state(disp, n, NULL)) && url_parse(b, disp, n, NULL);
+    free(hole);
+    free(disp);
+    return ok;
+}
+
 /* Whether the attacker's bytes in `input` can pick the host of its parse against `base` (JS_UNDEFINED for
    null): the page's own bytes ahead of the first unknown byte leave §4.4's machine short of deciding it. An
-   unknown base decides the host of every input that does not decide it alone, with a null base. */
+   unknown base decides the host of every input that does not decide it alone, with a null base, unless the
+   base's own page bytes decide it (url_base_page_record): `new URL(path, location.href)` resolves against an
+   address whose unknown bytes are its query and fragment, so the input is asked against those page bytes. */
 static int url_input_host_open(JSContext *ctx, JSValueConst input, JSValueConst base)
 {
     UrlRecord b;
@@ -2259,12 +2280,14 @@ static int url_input_host_open(JSContext *ctx, JSValueConst input, JSValueConst 
         CHECK(bs != NULL, "url: OOM reading a URL base");
         have_base = url_parse(&b, bs, strlen(bs), NULL);
         JS_FreeCString(ctx, bs);
+    } else if (concolic_is(base)) {
+        have_base = url_base_page_record(ctx, base, &b);
     }
     st = url_prefix_state(disp, n, have_base ? &b : NULL);
     url_record_free(&b);
     free(hole);
     free(disp);
-    if (concolic_is(base)) return st == URL_PREFIX_FAILED || !url_prefix_decides_host(st);
+    if (concolic_is(base) && !have_base) return st == URL_PREFIX_FAILED || !url_prefix_decides_host(st);
     return !url_prefix_decides_host(st);
 }
 
