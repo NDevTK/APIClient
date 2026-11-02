@@ -5348,9 +5348,9 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        heap where the payload was already read, into the other arm. Without `cand_src` solve_flow_begin (which
        installs the running flow's substitution unconditionally) would re-read the source as an ordinary concolic
        value, solve_flow_end would never record the arm's PoC, and endpoint_suppress (keyed on the same field)
-       would let it record @H endpoints built from a breakout string. `cand_fired` travels (a fire before the
-       branch is both timelines'; record_sink dedups), unlike at the cold tier; `cand_verifying` does not, since
-       solve_flow_begin re-derives it from `cand_src` at every switch-in. */
+       would let it record @H endpoints built from a breakout string. `cand_eval_owned` travels (the eval the
+       arm is inside is the parent's write); `cand_verifying` does not, since solve_flow_begin re-derives it from
+       `cand_src` at every switch-in. */
     if (parent->cand_src) {
         DCHECK(parent->cand_payload && parent->fire.kind != FIRE_NONE,
                "a candidate session forked holding only part of its substitution — the source, the payload and "
@@ -5361,7 +5361,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         CHECK(sib->cand_src && sib->cand_payload, "engine: OOM forking an @S candidate session's substitution");
         fire_target_copy(&sib->fire, &parent->fire);
         flow_deliveries_copy(sib, parent);
-        sib->cand_fired = parent->cand_fired;
+        sib->cand_eval_owned = parent->cand_eval_owned;
         /* Where the payload came from is a fact about the bytes, so both arms have it; an arm without it would
            claim to be seeded from this session's search list with no row there, which solve.c's arrival assert
            refuses at the first branch a resumed candidate takes. */
@@ -7969,6 +7969,12 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
 void engine_queue_candidate(uint32_t doc, const char *body, size_t body_n, DynPos pos) {
     engine_queue(doc, body, body_n, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL,
                  TASK_SOURCE_SOLVER_CANDIDATE, pos);
+}
+
+int engine_running_queued_candidate(void) {
+    const Flow *f = flow_running();
+
+    return f && flow_dyn_kind(f) == DYN_CANDIDATE;
 }
 
 /* HTML §7.4.2.3.2 evaluate a javascript: URL, steps 6-7: "let script be the result of creating a classic script

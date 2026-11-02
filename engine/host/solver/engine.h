@@ -98,6 +98,8 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
    The task source is TASK_SOURCE_SOLVER_CANDIDATE, which is not an HTML §8.1.7.1 source, so the candidate is
    never ordered against the page's real tasks by a fact nobody observed. */
 void engine_queue_candidate(uint32_t doc, const char *body, size_t body_n, DynPos pos);
+/* Whether the running flow's current program is one engine_queue_candidate queued. */
+int engine_running_queued_candidate(void);
 /* The attacker sources naming the `data` and `origin` of the message chain member `k` of drive `f` delivers (a
    member whose act is a `message` act), as engine_orphan_call minted them: `message.data:<id>` and
    `message.origin:<id>`, each written into a room of `cap` bytes. Every member's origin is the attacker

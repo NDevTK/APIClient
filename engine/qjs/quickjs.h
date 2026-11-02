@@ -3352,6 +3352,11 @@ JS_EXTERN uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn);
    offset, never a pc2line resolution, which makes it reproducible within a BUILD and not across two of them.
    See the definition's named residual for what that costs and what replaces it. */
 JS_EXTERN int JS_RunningSiteHash(JSContext *ctx, uint64_t *out);
+/* The call path the page's code is standing on: JS_RunningSiteHash's (body, offset) pair for every bytecode frame
+   on the stack, innermost first, folded into one name, so one write reached through two callers is two names
+   where JS_RunningSiteHash gives it one. Answers how many frames it folded, 0 at host time, and writes `*out`
+   only when that is nonzero. Allocation-free, and reproducible within a build for JS_RunningSiteHash's reason. */
+JS_EXTERN int JS_RunningCallPathHash(JSContext *ctx, uint64_t *out);
 /* The request-site census, a measurement of reach and never an order or a result. A site is an OP_get_var in
    final bytecode whose spelling `JSConcolicHooks.global_named` or `.global_member_named` claimed as a door's
    entry (`fetch`, `window.fetch`), so dead code holds none. It cannot see a member door (`navigator.sendBeacon`,

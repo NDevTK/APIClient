@@ -543,9 +543,8 @@ void cold_census_release(ColdCensus *out);
  *                                 A refused record is NOT a residue and does not fail the parse: the flow is
  *                                 rebuilt without its substitution, so the path is replayed and the search is
  *                                 re-derived, and the refusal is counted in ColdResumed's `cands_withdrawn`.
- *                                 `cand_verifying` and `cand_fired` deliberately do NOT cross;
- *                                 see cold.c's park_rec_cand for why dropping the second is what keeps a
- *                                 recorded PoC an observation rather than an inherited claim.
+ *                                 `cand_verifying` and `cand_eval_owned` deliberately do NOT cross;
+ *                                 see cold.c's park_rec_cand for why a replay states both again.
  *                                 `root` IS THE DELIVERY PROVENANCE AND NOT A SECOND SPELLING OF `src`. The
  *                                 source is the injection IDENTITY a payload is substituted at — a DERIVED one
  *                                 (`{location.hash}.slice()`) included, because that is where the substitution

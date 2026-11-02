@@ -558,12 +558,9 @@ static char *park_unhex(const char *p, const char *end)
      - `cand_verifying` is not state at all. solve_flow_begin sets it from `cand_src` on EVERY switch-in, so it
        is a restatement of "this flow has a candidate" that the scheduler re-derives before the flow runs an
        opcode. Carrying it would be carrying a duplicate of a field already here.
-     - `cand_fired` is dropped ON PURPOSE, and dropping it is what keeps a finding an OBSERVATION. A candidate
-       can fire mid-run and be preempted before it finishes, so a parked one may well be carrying the bit. If
-       it crossed, solve_flow_end would record a PoC on the strength of a fire THIS session never saw — and a
-       replay does not have to reproduce it, because §Time-travel says a resumed flow re-derives its values
-       from CURRENT sources and a fire that depended on a reply may simply not recur. §@S is explicit that only
-       firing proves it; a carried bit is a claim. Re-run, and re-observe, or report nothing. */
+     - `cand_eval_owned` is a verdict on a write of this run, and a rebuilt candidate replays from the baseline
+       and re-runs that write, so the replay states it again. A fire is never carried either: it is recorded
+       where the marker runs, so a rebuilt flow records one only by observing it. */
 static void park_rec_cand(const Flow *f, long id)
 {
     char head[96];
@@ -2483,8 +2480,8 @@ int cold_resume(JSContext *ctx, const char *recipes)
                carrier contradicts the payload — solve.h says why those are one call and not four, and the
                third is why `tried` moves for a record this call accepts rather than for every record it reads.
                `cand_verifying` is not set here: solve_flow_begin sets it from `cand_src` on the
-               switch-in, before this flow runs an opcode. `cand_fired` is not set here either, and that is the
-               whole point — the replay has to observe the fire again or nothing is recorded.
+               switch-in, before this flow runs an opcode. Nor is `cand_eval_owned`: the replay re-runs the write
+               that states it.
                THE ROOT DOES NOT LAND ON THE FLOW, it lands on the SEARCH, which is the same asymmetry
                park_rec_cand reads it back out of: one sink's N resumed candidates hand the same root to the
                same entry and cand_learn_root asserts they agree. So this string is ours to free, and freeing

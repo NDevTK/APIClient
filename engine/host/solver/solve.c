@@ -82,6 +82,10 @@ typedef enum {
     PG_UNFORGEABLE       /* examined: it pinned one, so the sender is a document at that origin — `pp` says which */
 } PrincipalDemand;
 
+/* A sink write, named by the call path the page's code stood on when it handed the sink its value
+   (JS_RunningCallPathHash). `frames` 0 is a write at host time, which no page frame names. */
+typedef struct { int frames; uint64_t path; } WriteSite;
+
 /* One sink's search, keyed by (injection identity, sink class). Its members are three accounting units. Report
    counters (`reached`, `escaped`, `substituted`, `sink_strings`, `ends`, the runway fields) move no WFQ
    ordering. The ledger (`reach_credited`, `escape_credited` and the `surv_run` ratchet) is paid once per
@@ -264,6 +268,11 @@ typedef struct {
        detect_sink records here instead of opening the search on that path. Each entry alone satisfies its own
        path. Distinct from `pp`, which is about the one path every candidate replays. */
     SenderPins snd;
+    /* The writes this search's detections stood at. A candidate's bytes reaching a sink are this search's only at
+       one of them (candidate_write): every search over one root is delivered at that root, so its bytes reach
+       every write the page derives from it, and each such write is the search of the identity that reached it
+       there. Grown at every detection, deduped; owned. */
+    WriteSite *site; int nsite, sitecap;
 } Cand;
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 
@@ -403,14 +412,21 @@ static void fire_observed(Flow *f) {
 }
 
 /* The fire marker X9. Only firing proves a PoC, so the finding is recorded the instant the marker runs and not
-   at flow completion: a flow owes nobody completion, cold.c drops `cand_fired` on a park, and flow_remove frees
-   a sold flow's substitution without passing solve_flow_end. A call outside a candidate flow is the page's own,
-   since X9 is a global the bundle can reach, and proves nothing. */
+   at flow completion: a flow owes nobody completion, and flow_remove frees a sold flow's substitution without
+   passing solve_flow_end. A call outside a candidate flow is the page's own, since X9 is a global the bundle can
+   reach, and proves nothing. Inside one, the fire is the running search's only when the calling code came from
+   one of its own writes: a program its markup or URL oracle queued (fire_js, reached only past candidate_write),
+   or the evaluation an admitted eval write handed over in place (`cand_eval_owned`). Any other caller is running
+   bytes another write handed to its executor (the host's own navigation, an eval another search owns).
+   Named residual. Not covered: an eval write's function called after a later marker write (`new Function` kept
+   and called) answers that later write's verdict. Next diff builds: the verdict on the function the write made.
+   Absence shows as: an eval search parked with `escaped` above zero and no fire. */
 static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
     Flow *f = flow_running();
 
     (void)ctx; (void)t; (void)c; (void)v;
     if (!f || !f->cand_src) return JS_UNDEFINED;   /* the page's own call — no substitution, nothing proved */
+    if (!engine_running_queued_candidate() && !f->cand_eval_owned) return JS_UNDEFINED;
     fire_observed(f);
     return JS_UNDEFINED;
 }
@@ -1248,7 +1264,7 @@ static void park_on_sender(const char *src, const char *root, int sink) {
    injected there lands nowhere. When the identity belongs to no member of the root that declares a source and
    some member does, each declaring member is searched at its own identity with itself as the root, so each
    search states its own envelope. `pinned`: the path pinned a principal, so the detection parks on a sender. */
-typedef struct { const char *src; int owns, cls, pinned; char *owner; } DetectIds;
+typedef struct { const char *src; int owns, cls, pinned; char *owner; WriteSite at; } DetectIds;
 
 static void detect_id_owned(void *ud, const char *p, size_t n) {
     DetectIds *d = ud;
@@ -1258,9 +1274,39 @@ static void detect_id_owned(void *ud, const char *p, size_t n) {
     }
 }
 
-static void detect_open(const char *src, const char *root, int cls, int pinned) {
+/* The write the page's code stands at now. */
+static WriteSite write_site_here(JSContext *ctx) {
+    WriteSite w = { 0, 0 };
+
+    w.frames = JS_RunningCallPathHash(ctx, &w.path);
+    return w;
+}
+
+static int search_wrote_at(const Cand *e, WriteSite w) {
+    for (int i = 0; i < e->nsite; i++)
+        if (e->site[i].frames == w.frames && e->site[i].path == w.path) return 1;
+    return 0;
+}
+
+/* `at` is the write a detection of this search stood at. */
+static void search_learn_site(Cand *e, WriteSite at) {
+    if (search_wrote_at(e, at)) return;
+    if (e->nsite >= e->sitecap) {
+        e->sitecap = e->sitecap ? e->sitecap * 2 : 4;
+        e->site = realloc(e->site, (size_t)e->sitecap * sizeof *e->site);
+        CHECK(e->site, "solve: OOM recording a sink search's write");
+    }
+    e->site[e->nsite++] = at;
+}
+
+static void detect_open(const char *src, const char *root, int cls, int pinned, WriteSite at) {
+    Cand *e;
+
     if (pinned) park_on_sender(src, root, cls);
     else        add_pending(src, root, cls);
+    e = search_of(src, cls);
+    DCHECK(e != NULL, "a detection opened no search for the identity that reached the sink");
+    search_learn_site(e, at);
 }
 
 static void detect_open_member(void *ud, const char *p, size_t n) {
@@ -1268,7 +1314,7 @@ static void detect_open_member(void *ud, const char *p, size_t n) {
     char *m = strndup(p, n);
 
     CHECK(m, "solve: OOM naming a declared member's search");
-    detect_open(m, m, d->cls, d->pinned);
+    detect_open(m, m, d->cls, d->pinned, d->at);
     free(m);
 }
 
@@ -1276,14 +1322,14 @@ static void detect_open_member(void *ud, const char *p, size_t n) {
    base joins the query and fragment sources), is searched at its own identity with that member as its root:
    its candidate is delivered through that member alone and the other member's bytes stay the observed ones,
    so a member that cannot reach the sink's context (the base's fragment, which §4.4 drops) opens nothing. */
-static void detect_open_searches(const char *src, const char *root, int cls, int pinned) {
-    DetectIds d = { src, 0, cls, pinned, NULL };
+static void detect_open_searches(const char *src, const char *root, int cls, int pinned, WriteSite at) {
+    DetectIds d = { src, 0, cls, pinned, NULL, at };
     int declared = concolic_root_declared_each(root, detect_id_owned, &d);
 
     DCHECKF(declared > 0, "a search was opened over `%s`, whose root `%s` declares no source — detect_sink "
             "declines such an arrival, since no candidate can be delivered where it is read", src, root);
-    if (d.owns && concolic_root_declared_sources(root) < 2) detect_open(src, root, cls, pinned);
-    else if (d.owns) detect_open(src, d.owner, cls, pinned);
+    if (d.owns && concolic_root_declared_sources(root) < 2) detect_open(src, root, cls, pinned, at);
+    else if (d.owns) detect_open(src, d.owner, cls, pinned, at);
     else concolic_root_declared_each(root, detect_open_member, &d);
     free(d.owner);
 }
@@ -1292,7 +1338,7 @@ static void detect_open_searches(const char *src, const char *root, int cls, int
    attacker's bytes exists. The search is keyed by the value's injection identity, derived ones included,
    because that is where a substitution has to land; how the bytes arrived is asked with the value's root,
    which every concolic carries (concolic_alloc asserts provenance and root together). */
-static void detect_sink(JSValueConst arg, int cls) {
+static void detect_sink(JSContext *ctx, JSValueConst arg, int cls) {
     const char *shape, *src, *root;
 
     /* The arrival census is counted here, where the three classes converge, and the concolic test with it, so a
@@ -1342,10 +1388,10 @@ static void detect_sink(JSValueConst arg, int cls) {
        must be able to be that path. Counted, because it is a decision rather than an absence. */
     if (concolic_principal_pins(NULL, NULL)) {
         METRIC_ADD(sink_needs_sender, 1);
-        detect_open_searches(src ? src : (shape ? shape : "?"), root, cls, 1);
+        detect_open_searches(src ? src : (shape ? shape : "?"), root, cls, 1, write_site_here(ctx));
         return;
     }
-    detect_open_searches(src ? src : (shape ? shape : "?"), root, cls, 0);
+    detect_open_searches(src ? src : (shape ? shape : "?"), root, cls, 0, write_site_here(ctx));
 }
 
 /* Does this search still seed? The re-injection path is the answer: a search holds one from the moment a flow
@@ -1397,10 +1443,9 @@ static void learn_witness(Cand *e, const char *out) {
            "produced by one of this search's own candidate flows reaching the sink and solve_flow_begin counts "
            "a turn at every switch-in of one, so `turns` is not counting the flow that produced this and the "
            "parked record's scheduling half is reporting about a different quantity than it names");
-    /* The witness is credited on byte provenance: the string holds the running candidate's own substituted
-       bytes, and that candidate is this search's. A probe's bytes reach every write the page builds from the
-       value the substitution returned, through any transform that keeps them, and each such write is a parse
-       context of this search. */
+    /* The witness is credited on byte provenance at this search's own write: the string holds the running
+       candidate's own substituted bytes, that candidate is this search's, and candidate_write admitted the
+       write as one a detection of this search stood at. */
     {
         const Flow *f = flow_running();
         DCHECK(f && f->cand_src && f->cand_payload && !strcmp(f->cand_src, e->src) &&
@@ -1792,6 +1837,30 @@ static Cand *candidate_search(int sink) {
     return e;
 }
 
+/* The search a candidate's bytes reaching this write belong to: the running candidate's when one of its
+   detections stood at this write, else NULL. Every search over one root is delivered at that root, so a
+   candidate's bytes reach every write the page derives from it; a write some other identity reached at
+   detection is that search's, which runs its own candidates there, and a write no detection stood at is no
+   search's yet. A witness, an arrival or a fire taken at either would be filed under a search whose own write
+   never received the bytes.
+   Named residual. Not covered: two identities written at one call path (a loop over parameters into one
+   write) are both owners there, so either's candidate is admitted at the other's iteration; and a search
+   resumed from the cold tier holds no write until a detection of this session stands at one, since the park
+   record does not carry them. Next diff builds: the write's iteration in the name, and the sites on the 'c'
+   record. Absence shows as: a resumed search with `turns` and `substituted` above zero and `sinkStrings`
+   above `reached` while its write is reached, or a loop's record whose PoC fires another parameter's write. */
+static Cand *candidate_write(JSContext *ctx, int sink) {
+    Cand *e = candidate_search(sink);
+
+    return e && search_wrote_at(e, write_site_here(ctx)) ? e : NULL;
+}
+
+/* A string carrying the marker was handed to a sink: whether the in-place executor that may now run it is
+   this flow's own (an eval write candidate_write admitted). js_x9 reads it for code no oracle queued. */
+static void marker_handed(Flow *f, int eval_owned) {
+    f->cand_eval_owned = eval_owned;
+}
+
 
 void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {                          /* candidate run: the arg is the injected, concrete code */
@@ -1815,7 +1884,10 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
            they surface, so this is the only place that observation exists. */
         if (!(code = JS_ToCString(ctx, arg))) return;
         filter_survived(code);
-        if (!(e = candidate_search(SINK_EVAL))) { JS_FreeCString(ctx, code); return; }   /* another class's search owns this write */
+        e = candidate_write(ctx, SINK_EVAL);
+        /* Before the decline: the engine evaluates this string on return whoever owns the write. */
+        if (strstr(code, "X9")) marker_handed(flow_running(), e != NULL);
+        if (!e) { JS_FreeCString(ctx, code); return; }   /* another class's or another write's search */
         {
             /* The same partition the markup sink makes: a context probe carries the inert locator and no X9, a
                derived breakout carries X9 and no locator. It also keeps the page's own evals out of the search:
@@ -1847,7 +1919,7 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
        (solve.h), and js_eval_program_source compiles its example when it has one. The sibling sinks must not
        copy this line; detect_sink asserts the rule where all three converge. */
     if (!JS_IsString(arg) && !concolic_is(arg)) return;
-    detect_sink(arg, SINK_EVAL);   /* record the source; the breakout is searched at verify */
+    detect_sink(ctx, arg, SINK_EVAL);   /* record the source; the breakout is searched at verify */
 }
 
 /* Whether the program the host caller holds right now came out of solve_eval_sink_source: a claim about
@@ -1982,14 +2054,15 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
         /* Converted before the class partition; see solve_eval_sink. */
         if (!(url = JS_ToCString(ctx, arg))) return;
         filter_survived(url);
-        if (!(e = candidate_search(SINK_URL))) { JS_FreeCString(ctx, url); return; }   /* another class's search owns this write */
+        if (strstr(url, "X9")) marker_handed(flow_running(), 0);   /* the host's own navigation may run it */
+        if (!(e = candidate_write(ctx, SINK_URL))) { JS_FreeCString(ctx, url); return; }   /* another class's or write's */
         /* The partition the other two classes make. This class has no probe, so the marker identifies its bytes
            (both CANDS_URL vectors carry X9), and the page's own javascript: hrefs are not queued per candidate. */
         if (strstr(url, "X9")) { breakout_arrived(e); url_fire(e, ctx, url); }
         JS_FreeCString(ctx, url);
         return;
     }
-    detect_sink(arg, SINK_URL);
+    detect_sink(ctx, arg, SINK_URL);
 }
 
 /* innerHTML = arg: an HTML-context sink. Detection records the source; the candidate run re-parses the injected
@@ -2005,7 +2078,8 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
         /* Converted before the class partition; see solve_eval_sink. */
         if (!(html = JS_ToCString(ctx, arg))) return;
         filter_survived(html);
-        if (!(e = candidate_search(SINK_HTML))) { JS_FreeCString(ctx, html); return; }   /* another class's search owns this write */
+        if (strstr(html, "X9")) marker_handed(flow_running(), 0);
+        if (!(e = candidate_write(ctx, SINK_HTML))) { JS_FreeCString(ctx, html); return; }   /* another class's or write's */
         {
             /* Two candidate kinds reach this write, each told apart by bytes the other cannot contain: the context
                probe carries the inert locator and no X9, a derived breakout carries X9 and no locator. Only the
@@ -2018,7 +2092,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
         }
         return;
     }
-    detect_sink(arg, SINK_HTML);
+    detect_sink(ctx, arg, SINK_HTML);
 }
 
 /* A request whose scheme and host an attacker source decides: the request class. Detection records the source;
@@ -2032,7 +2106,7 @@ void solve_request_sink(JSContext *ctx, JSValueConst url, const char *base) {
         if (!concolic_candidate_delivered()) return;
         /* The class is asked first: a request is no other class's sink, so another class's candidate making one
            is not an observation of that search's filter. */
-        if (!(e = candidate_search(SINK_REQUEST))) return;
+        if (!(e = candidate_write(ctx, SINK_REQUEST))) return;
         if (!(s = JS_ToCString(ctx, url))) return;
         filter_survived(s);
         if (strstr(s, SOLVE_URL_LOCATOR)) {
@@ -2044,7 +2118,7 @@ void solve_request_sink(JSContext *ctx, JSValueConst url, const char *base) {
         JS_FreeCString(ctx, s);
         return;
     }
-    detect_sink(url, SINK_REQUEST);
+    detect_sink(ctx, url, SINK_REQUEST);
 }
 
 /* The request class's fire oracle: a candidate run's request leaving the engine (solver/request_observe.h) for
@@ -2054,6 +2128,11 @@ void solve_request_parked(const FetchRequest *req) {
     Cand *e;
 
     if (!is_verifying() || !concolic_candidate_delivered()) return;
+    /* Named residual. Not covered: the request is observed where it leaves, whose call path need not be its
+       door's, so it is admitted by class alone and a request another request search's door built is filed
+       under the running one. Next diff builds: the request record carrying the write its door was admitted at
+       (candidate_write in solve_request_sink). Absence shows as: a fired request record whose own door's
+       witness the search never learned. */
     if (!(e = candidate_search(SINK_REQUEST))) return;   /* another class's search owns this run */
     if (!request_observed(req, NULL, REQUEST_PIECE_HOST, NULL, concolic_attacker_site())) return;
     breakout_arrived(e);
@@ -2521,8 +2600,7 @@ void solve_flow_begin(Flow *f) {
 
 /* A candidate flow finished. The fire is recorded at the marker (js_x9), where the proof happens, and not here,
    because a flow owes nobody completion. The globals are not cleared: the next switch-in installs the next
-   flow's state, and clearing in two places is how an asymmetry gets in. This file no longer sets
-   Flow.cand_fired, so engine.c's sibling copy of it and cold.c's drop of it carry nothing. */
+   flow's state, and clearing in two places is how an asymmetry gets in. */
 void solve_flow_end(Flow *f) {
     if (!f || !f->cand_src || f->fire.kind == FIRE_REQUEST) return;   /* a verification is no search's; see solve_flow_begin */
     /* The last runway reading this candidate will offer, which switch-in sampling cannot take for a flow that
@@ -3073,6 +3151,7 @@ void solve_free(void) {
         free(g_pending[i].gate_val);
         sender_pins_free(&g_pending[i].pp);
         sender_pins_free(&g_pending[i].snd);
+        free(g_pending[i].site);
         free(g_pending[i].src);
         free(g_pending[i].root);
     }

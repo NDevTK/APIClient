@@ -118078,6 +118078,33 @@ int JS_RunningSiteHash(JSContext *ctx, uint64_t *out)
     return 0;
 }
 
+int JS_RunningCallPathHash(JSContext *ctx, uint64_t *out)
+{
+    JSRuntime *rt = ctx->rt;
+    JSStackFrame *sf;
+    uint64_t h = 0xcbf29ce484222325ULL;
+    int n = 0;
+
+    DCHECK(out != NULL, "a call-path name was asked for with nowhere to put it");
+    for (sf = rt->current_stack_frame; sf != NULL; sf = sf->prev_frame) {
+        JSFunctionBytecode *b;
+        uint64_t body;
+        if (sf->is_call_root)
+            continue;
+        b = JS_GetFunctionBytecode(sf->cur_func);
+        if (b == NULL)
+            continue;
+        body = orphan_hash_body(rt, b);
+        h = orphan_hash_u32(h, (uint32_t)(body >> 32));
+        h = orphan_hash_u32(h, (uint32_t)body);
+        h = orphan_hash_u32(h, js_frame_pc_pos(sf, b));
+        n++;
+    }
+    if (n)
+        *out = h;
+    return n;
+}
+
 /* A suspended activation's site, JS_RunningSiteHash's walk over the chain the preempt stashed: innermost first
    (`tramp_top`, then each caller), each frame read where it lives (tramp_live_sf), and the base frame last. */
 static int flow_chain_site_hash(JSRuntime *rt, JSAsyncFunctionState *s, uint64_t *out)
