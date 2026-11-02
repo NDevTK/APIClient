@@ -42,6 +42,7 @@
 #include "core/dom/attr_list.h"  /* dom_attr_get_ns — the §6.3 rows read back the EXPANDED name */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
+#include "core/permissions_policy/permissions_policy.h"   /* a framed document's §9.5 statement */
 #include "core/timing/timer.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
@@ -1319,6 +1320,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fdunkname.h"
 #include "fixture/mruid.h"
 #include "fixture/mrconsole.h"
+#include "fixture/framemargin.h"
 #include "fixture/idbname.h"
 #include "fixture/lockgrant.h"
 #include "fixture/protoset.h"
@@ -1766,7 +1768,10 @@ static const char *HTML_POPOVER =
    Cross-origin opener policies); a row that omits it gets §7.1.3's initial `unsafe-none`. `share` is the RAM
    pressure share the document's instance is configured with (solver/engine.h's engine_set_ram_share, permille),
    as a host configures an instance; a row that omits it leaves the engine's default. */
-static const struct { const char *name; const char *src; OpenerPolicyValue coop; unsigned share; } TF_DOCS[] = {
+/* `frame`, when set, roots the document as a cross-origin child: its navigable's parent is a peer's (TF_FRAME_PARENT)
+   and `frame` is HTML §15.3.2's container frame element margins that peer's container stated. */
+static const struct { const char *name; const char *src; OpenerPolicyValue coop; unsigned share; const char *frame; }
+TF_DOCS[] = {
     { "css", HTML_CSS },
     { "timers", HTML_TIMERS },
     { "idb", HTML_IDB },
@@ -1950,6 +1955,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "fdunkname", HTML_FDUNKNAME },
     { "mruid", HTML_MRUID },
     { "mrconsole", HTML_MRCONSOLE },
+    { "framemargin", HTML_FRAMEMARGIN, .frame = "20,-" },
     { "idbname", HTML_IDBNAME },
     { "lockgrant", HTML_LOCKGRANT },
     { "protoset", HTML_PROTOSET },
@@ -2021,6 +2027,54 @@ static OpenerPolicyValue tf_doc_coop(const char *name) {
     for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
         if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].coop;
     return OPENER_POLICY_UNSAFE_NONE;
+}
+
+/* The container frame element margins the member named `name` is rooted under as a cross-origin child, or NULL
+   for a top-level document. */
+static const char *tf_doc_frame(const char *name) {
+    size_t i;
+
+    for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
+        if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].frame;
+    return NULL;
+}
+
+/* The navigable of a document rooted as a cross-origin child, stated as the zone states one a peer created
+   (main.c's qjs_init): a parent in another instance, the creator's policy container, Permissions Policy §9.5's
+   answer for a container with no `allow` in a document with no policy, the ancestor list, no opener, and
+   `frame`, the container's HTML §15.3.2 margins. */
+#define TF_FRAME_PARENT_DOC "tfparent"
+#define TF_FRAME_PARENT_ORIGIN "https://a.test"
+static JSValue tf_root_framed(JSContext *ctx, const char *frame, const EmbedderPolicy *embedder) {
+    char doc_b64[64], origin_b64[64], parent[160];
+    const Origin *child_origin = origin_parse("https://x.test");
+    PermissionsPolicy *pp;
+    char *container;
+    JSValue proxy;
+
+    /* The encoder writes no terminator; its length places one. */
+    doc_b64[JS_Base64Encode(doc_b64, sizeof doc_b64 - 1, (const uint8_t *)TF_FRAME_PARENT_DOC,
+                            strlen(TF_FRAME_PARENT_DOC))] = ' ';
+    origin_b64[JS_Base64Encode(origin_b64, sizeof origin_b64 - 1, (const uint8_t *)TF_FRAME_PARENT_ORIGIN,
+                               strlen(TF_FRAME_PARENT_ORIGIN))] = ' ';
+    CHECK(child_origin != NULL, "a framed fixture's own origin did not parse");
+    /* remote_object.c's navigable identity (nav_encode): the tag `W`, then its document, origin, name, parent,
+       opener and their records, each base64 and terminated by '.'. */
+    CHECK(snprintf(parent, sizeof parent, "W%s.%s......", doc_b64, origin_b64) < (int)sizeof parent,
+          "a framed fixture's parent identity did not fit");
+    proxy = navigable_root(ctx, world_local_doc(), NULL, OPENER_POLICY_UNSAFE_NONE, parent,
+                           serialized_policy_container(NULL, NULL, TF_FRAME_PARENT_ORIGIN,
+                                                       serialized_embedder_policy_new(), NULL, NULL),
+                           embedder, 0);
+    CHECK(!JS_IsException(proxy), "a framed fixture's WindowProxy could not be allocated");
+    pp = permissions_policy_create(NULL, NULL, NULL, 0, false, NULL, child_origin);
+    container = permissions_policy_serialize(pp);
+    navigable_root_container(ctx, proxy, container);
+    navigable_root_opener(ctx, proxy, "N");
+    navigable_root_ancestor_origins(ctx, proxy, TF_FRAME_PARENT_ORIGIN);
+    free(container);
+    permissions_policy_free(pp);
+    return proxy;
 }
 
 /* The RAM pressure share the member named `name` is configured with, or 0 for the engine's default. */
@@ -18974,6 +19028,22 @@ TF_UNIT void probes_mathrandom(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The row of the `framemargin` document (fixture/framemargin.h): a cross-origin child's body takes its container
+   frame element's `marginheight` as its top margin and the 8px default for the left one. */
+TF_UNIT void probes_framemargin(const char *js, Probe *tab, int *n) {
+    const char *why = NULL; int tt = 1;
+    fold_row(&tt, &why, !!strstr(js, "\"/api/fm-margins"),
+             "NOT REACHED: there is no /api/fm-margins record, so the document aborted reading its body's margins");
+    fold_row(&tt, &why, param_value_is(js, "/api/fm-margins", "top", "20px"),
+             "the body's margin-top is not the container frame element's marginheight=20 (HTML §15.3.2)");
+    fold_row(&tt, &why, param_value_is(js, "/api/fm-margins", "left", "8px"),
+             "the body's margin-left is not §15.3.2's 8px default for a container with no marginwidth pixel length");
+    const Probe rows[] = {
+        { "frame-margins", tt, "/api/fm-margins", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `arrname` document (fixture/arrname.h): an unknown reduced over `[]` and then enumerated
    reaches its fetch, and the world where the stored record holds no member reports no keys. */
 TF_UNIT void probes_arrname(const char *js, Probe *tab, int *n) {
@@ -24316,6 +24386,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_set(js, probes, &np);
     probes_mathrandom(js, probes, &np);
     probes_arrname(js, probes, &np);
+    probes_framemargin(js, probes, &np);
     probes_propkeyunk(js, probes, &np);
     probes_fdunkname(js, probes, &np);
     probes_idbname(js, probes, &np);
@@ -38374,8 +38445,11 @@ int main(int argc, char **argv) {
                "`--ram-share` was given for a document whose TF_DOCS row states its own share");
         if (tf_ram_share_arg(argc, argv) != 0) engine_set_ram_share(tf_ram_share_arg(argc, argv));
         else if (tf_doc_share(doc_name) != 0) engine_set_ram_share(tf_doc_share(doc_name));
-        root_proxy = navigable_root(ctx, world_local_doc(), NULL, tf_doc_coop(doc_name), "u",
-                                    serialized_policy_container_none(), &root_embedder, 0);
+        if (tf_doc_frame(doc_name) == NULL)
+            root_proxy = navigable_root(ctx, world_local_doc(), NULL, tf_doc_coop(doc_name), "u",
+                                        serialized_policy_container_none(), &root_embedder, 0);
+        else
+            root_proxy = tf_root_framed(ctx, tf_doc_frame(doc_name), &root_embedder);
         embedder_policy_free(&root_embedder);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* NULL: this fixture's document is a C string literal, so it came from no response and has no
