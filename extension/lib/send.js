@@ -846,6 +846,10 @@ async function operatorSendAsFrame(sender, tabId, documentId, initiator, url, op
   if (r.refusal && r.refusal.reason.startsWith("stated-referer-not-a-url:"))
     return { error: "refused: the stated Referer is not an absolute http(s) URL as the URL parser writes it, " +
                     "with no fragment" };
+  /* A decline is this zone's own stop, where a browser would still be waiting for the reply. */
+  if (r.refusal && r.refusal.kind === "decline")
+    return { error: "declined: " + r.refusal.reason + " — no browser refuses this request; the analyser stopped " +
+                    "before the server answered it in full" };
   if (r.refusal) return { error: r.refusal.kind + ": " + r.refusal.reason };
   const ct = r.headers["content-type"] || "";
   if (_isBinaryContentType(ct))

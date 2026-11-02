@@ -238,6 +238,13 @@ const CREDENTIALED_FETCH = async (Z, url) => ({ destination: '', mode: 'cors', c
   identity: await Z.identityFor(await Z.engineIdentity(A, `${A}/page`, 'probe:page'), { url, requestInit: { credentials: 'include', mode: 'cors',
                           referrer: '', referrerPolicy: null } }, 'strict-origin-when-cross-origin') });
 const wrote = (name) => cookieWrites.find((w) => w.name === name);
+/* The person's Send-panel act (safe-fetch.js's operator tier, as lib/send.js's operatorSendAsFrame calls it),
+   from a sender this realm names as an extension document. */
+const PERSON = { origin: 'probe:person' };
+const OPERATOR = (url) => async (Z) => Z.safeFetchOperator(url, {
+  sender: PERSON, method: 'GET', headers: [], body: null, mode: 'cors', stated: { origin: null, referer: null, jar: null },
+  identity: await Z.pageRequestIdentity(A, `${A}/page`, 'probe:page', url, 'omit', 'cors',
+                                        'strict-origin-when-cross-origin', `${A}/page`) });
 const FIXTURE_ROWS = [
   { label: 'REDIRECT, harmless: /hop/1 -> /home (CONTROL: must be answered)',
     url: `${A}/hop/1`, want: 'ANSWERED', list: [`${A}/hop/1`, `${A}/home`], sent: ['/home'] },
@@ -344,6 +351,16 @@ const FIXTURE_ROWS = [
   { label: 'WIRE IDLE, the ambient seed (observed, tool) whose server sends no head',
     url: `${A}/silent/head/2`, want: 'DECLINE', reason: 'wire-idle', idleMs: 300, over: AMBIENT,
     sent: ['/silent/head/2'] },
+  /* The person's own send on a silent wire is graded as the engine's is: whose answer it is changes nothing a
+     browser does. */
+  { label: 'OPERATOR, a person\'s send that is answered (CONTROL: must be answered)',
+    url: `${A}/home-op`, want: 'ANSWERED', ask: OPERATOR(`${A}/home-op`), sent: ['/home-op'] },
+  { label: 'OPERATOR, a person\'s send whose server sends no head',
+    url: `${A}/silent/head/3`, want: 'DECLINE', reason: 'wire-idle', idleMs: 300, ask: OPERATOR(`${A}/silent/head/3`),
+    sent: ['/silent/head/3'] },
+  { label: 'OPERATOR, a person\'s send whose server sends a head and part of a body, then nothing',
+    url: `${A}/silent/body/3`, want: 'DECLINE', reason: 'wire-idle', idleMs: 300, ask: OPERATOR(`${A}/silent/body/3`),
+    sent: ['/silent/body/3'] },
   { label: 'COOKIES, an uncredentialed request stores nothing (CONTROL)',
     principal: `${D}/page`, url: `${D}/sc/1`, want: 'ANSWERED',
     over: () => ({ credentialed: false, identity: undefined }), stored: [], ignored: ['host1', 'dom1'] },
@@ -351,6 +368,7 @@ const FIXTURE_ROWS = [
 
 const z = zone(NO_EDGE);
 zf = zone(FIXTURE_EDGE);
+zf.senderIsExtensionDocument = (sender) => sender === PERSON;
 zf.safeFetchWiden(A);
 zf.safeFetchWiden(C);
 zf.safeFetchWiden(D);

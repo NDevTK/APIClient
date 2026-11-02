@@ -2733,8 +2733,9 @@ async function safeFetchOperator(url, opts) {
     /* The person's own act, speaking as a frame they picked: its reply's cookies are theirs to keep. */
     var sent = await _speakAs(identity, urlList, method, opts.mode, "", true, true, preflight ? unsafe : null, stated,
                               init, async function (speak) {
-      /* A fetch that rejects is Fetch §5.6's network error, an answer the person is shown; an invariant abort
-         travels on. */
+      /* A wire that rejects is graded as safeFetch grades it, since who reads the answer changes nothing a
+         browser does: a silent wire is this zone's `wire-idle` decline and a failed one Fetch §5.6's network
+         error. Anything else is not the wire's answer and travels on. */
       try {
         if (preflight) {
           var pf = await _corsPreflight(current.href, method, headerList, identity.credentials, false,
@@ -2746,8 +2747,9 @@ async function safeFetchOperator(url, opts) {
         return { resp: await _wire(current.href, init) };
       } catch (e) {
         RETHROW_FATAL(e);
-        return { refusal: _refused("network", "network-error:" + ((e && e.message) || String(e)),
-                                   [parsed.href], {}) };
+        if (_wireIdleErrors.has(e)) return { refusal: _refused("decline", "wire-idle", [parsed.href], {}) };
+        if (!_wireNetworkErrors.has(e)) throw e;
+        return { refusal: _refused("network", "network-error:" + e.message, [parsed.href], {}) };
       }
     });
     if (sent.refusal) return sent.refusal;
@@ -2777,13 +2779,13 @@ async function safeFetchOperator(url, opts) {
   }
   var headers = {};
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
-  /* A body the wire failed or went silent on (WIRE_IDLE_TIMEOUT_MS) is an answer the person is shown, as a
-     rejected send is. */
+  /* A body the wire failed or went silent on is graded as a rejected send is. */
   var bytes;
   try { bytes = new Uint8Array(await resp.arrayBuffer()); }
   catch (e) {
     RETHROW_FATAL(e);
-    if (!_wireNetworkErrors.has(e) && !_wireIdleErrors.has(e)) throw e;
+    if (_wireIdleErrors.has(e)) return _refused("decline", "wire-idle", _exposedUrlList(urlList), headers);
+    if (!_wireNetworkErrors.has(e)) throw e;
     return _refused("network", "network-error:" + e.message, _exposedUrlList(urlList), headers);
   }
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: bytes,
