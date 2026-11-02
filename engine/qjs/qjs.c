@@ -340,7 +340,6 @@ static const JSMallocFunctions trace_mf = {
     js_trace_malloc,
     js_trace_free,
     js_trace_realloc,
-    js__malloc_usable_size
 };
 
 #ifdef QJS_USE_MIMALLOC
@@ -371,7 +370,6 @@ static const JSMallocFunctions mi_mf = {
     js_mi_malloc,
     js_mi_free,
     js_mi_realloc,
-    mi_malloc_usable_size
 };
 #endif
 

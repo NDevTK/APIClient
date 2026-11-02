@@ -600,7 +600,6 @@ typedef struct JSMallocFunctions {
     void *(*js_malloc)(void *opaque, size_t size);
     void (*js_free)(void *opaque, void *ptr);
     void *(*js_realloc)(void *opaque, void *ptr, size_t size);
-    size_t (*js_malloc_usable_size)(const void *ptr);
 } JSMallocFunctions;
 
 // Debug trace system: the debug output will be produced to the dump stream (currently
