@@ -68,14 +68,85 @@ var _wire = (function () {
   /* Both wires reject a network error with a TypeError (Fetch §5.6); each is recorded, so the chokepoint
      tells the network's answer from a defect of its own. By name: a process host's fetch is another realm's. */
   return function _wire(href, init) {
-    return sent(href, init).then(null, function (e) {
-      RETHROW_FATAL(e);
-      if (e !== null && typeof e === "object" && e.name === "TypeError") _wireNetworkErrors.add(e);
-      throw e;
+    return _wireWatched(href, init, function (h, i) {
+      return sent(h, i).then(null, function (e) {
+        RETHROW_FATAL(e);
+        if (e !== null && typeof e === "object" && e.name === "TypeError") _wireNetworkErrors.add(e);
+        throw e;
+      });
     });
   };
 })();
 var _wireNetworkErrors = new WeakSet();
+/* How long a send's wire may be silent, while this zone waits on it for a head or for more body, before this
+   zone stops waiting. Chrome has no such timer: net/http/http_stream_parser.cc and http_network_transaction.cc
+   time out nothing once a connection is made. Firefox has one, `network.http.response.timeout` = 300
+   (modules/libpref/init/all.js: "Timeout connections if an initial response is not received after 5 mins."),
+   which nsHttpConnection::OnSocketReadable switches off at the first readable byte. So no browser fails a body
+   that has begun arriving, and the end is graded `decline` (only this tool stops waiting); the value is
+   Firefox's, so no response is given up on before a browser would give up on its head. It is the wire's answer
+   and never the scheduler's: a reply's due point waits on its wire (lib/reply-schedule.js), and without an end
+   a server holding a body open would hold its engine instance for good. */
+var WIRE_IDLE_TIMEOUT_MS = 300000;
+/* The errors a silent wire ended its send with (_wireWatched), which safeFetch answers as `wire-idle`. */
+var _wireIdleErrors = new WeakSet();
+/* `send(href, init)` with the wire's idle end: no head within WIRE_IDLE_TIMEOUT_MS rejects with an idle error,
+   and a body read pending that long errors the body with one; either aborts the send. The body is re-wrapped so
+   each read of the caller's is one read of the wire's. A body read that fails while the caller has not aborted is
+   recorded as a network error, as a rejected send is. The caller's `init.signal` still ends the send. */
+function _wireWatched(href, init, send) {
+  var end = new AbortController(), caller = init.signal, timer = null, idle = null;
+  function disarm() { if (timer !== null) { clearTimeout(timer); timer = null; } }
+  function arm(onIdle) {
+    DCHECK(timer === null, "the wire's idle timer was armed twice for " + href);
+    timer = setTimeout(function () {
+      timer = null;
+      idle = new TypeError("wire: " + href + " sent nothing for " + WIRE_IDLE_TIMEOUT_MS + " ms");
+      idle.netError = null;
+      _wireIdleErrors.add(idle);
+      onIdle(idle);
+      end.abort();
+    }, WIRE_IDLE_TIMEOUT_MS);
+  }
+  if (caller) {
+    if (caller.aborted) end.abort();
+    else caller.addEventListener("abort", function () { disarm(); end.abort(); });
+  }
+  arm(function () {});
+  return send(href, Object.assign({}, init, { signal: end.signal })).then(function (resp) {
+    disarm();
+    if (idle !== null) {
+      if (resp.body !== null) resp.body.cancel().then(null, function (e) { RETHROW_FATAL(e); });
+      throw idle;
+    }
+    if (resp.body === null) return resp;
+    var reader = resp.body.getReader();
+    var body = new ReadableStream({
+      pull: function (c) {
+        arm(function (e) { c.error(e); });
+        return reader.read().then(function (step) {
+          disarm();
+          if (idle !== null) return;
+          if (step.done) c.close(); else c.enqueue(step.value);
+        }, function (e) {
+          disarm();
+          RETHROW_FATAL(e);
+          if (idle !== null) return;
+          if (!(caller && caller.aborted) && e !== null && typeof e === "object") _wireNetworkErrors.add(e);
+          c.error(e);
+        });
+      },
+      cancel: function (why) { disarm(); return reader.cancel(why); }
+    });
+    var own = new Response(body, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+    if (_wireSetCookies.has(resp)) _wireSetCookies.set(own, _wireSetCookies.get(resp));
+    return own;
+  }, function (e) {
+    disarm();
+    if (idle !== null) throw idle;
+    throw e;
+  });
+}
 
 /* Fetch §2.2.3 "Statuses"' null body statuses, whose Response has no body. */
 var _NULL_BODY_STATUSES = [101, 103, 204, 205, 304];
@@ -673,7 +744,7 @@ function _drivenOf(opts) {
    author's first call. */
 var _SAFEFETCH_OPTIONS = ["pageOrigin", "destination", "mode", "provenance", "pinned", "driven",
                           "doc", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
-                          "identity", "signal", "onChunk"];
+                          "identity", "signal", "onChunk", "onBodyRead"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
    words `fetch_credentials_token` writes on the pending line. Written here because this zone is the other
    party to that contract. */
@@ -1996,8 +2067,10 @@ function _exposedUrlList(urlList) {
    the body, so a head delivered before the body cannot carry one.
    Chunks may come from another realm (`engine/trusted.mjs` runs this file in a vm context with the outer
    `fetch`), so they are never `instanceof`-tested; `%TypedArray%.prototype.set` reads internal slots and
-   accumulates them whatever their realm. */
-async function _readBody(resp, sink, gated) {
+   accumulates them whatever their realm.
+   `onRead` is told of each read the wire answered, with no bytes, so a host can place the read on its reply
+   schedule (lib/reply-schedule.js); having no bytes, it passes no gate and a body-gated request may state it. */
+async function _readBody(resp, sink, gated, onRead) {
   /* The entry refuses a body-gated request that asked for chunks, so this cannot fire through it; it is here
      so a later route that skips that refusal aborts at the release point instead of streaming. */
   DCHECK(!(sink !== undefined && gated),
@@ -2010,6 +2083,8 @@ async function _readBody(resp, sink, gated) {
          "safeFetch was asked for incremental delivery with an `onChunk` that is not callable — the sink is a " +
          "value this zone composes at its own call site, never one the untrusted engine states, so a " +
          "non-function is this zone's contract broken and would throw mid-body with the request already spent");
+  DCHECK(onRead === undefined || typeof onRead === "function",
+         "safeFetch was given an `onBodyRead` that is not callable — the host composes it at its own call site");
   /* No body is not an empty body. Fetch §5.3 "Body mixin"'s body getter returns null where there is none,
      which a §2.2.3 "Statuses" null body status (101, 103, 204, 205, 304) produces. The answer is the empty
      byte sequence, as `arrayBuffer()` gives, and a sink is called zero times; a sink that must tell "no body"
@@ -2017,13 +2092,11 @@ async function _readBody(resp, sink, gated) {
   if (resp.body === null) return _NO_BYTES();
   var reader = resp.body.getReader();
   var parts = [], total = 0, step, chunk, i, out, off;
-  /* No bound: no chunk cap, size cap, read count or timeout. A cap truncates a reply, and a truncated reply
-     is a wrong answer about the server rather than a smaller one; the floor is the platform's memory.
-     The wait is unbounded too, so a body the server never ends keeps this call pending for as long as the
-     server talks. A door that must stay responsive does not await it inside a scheduling round: `bridge.js`
-     issues parks through an in-flight table (`engineIssue`), delivers them on a later round, and so never
-     re-issues a request the engine re-lists while it is in flight. A sink gives a consumer the bytes in
-     time; it does not give it the head, since `computedType` needs the whole body. */
+  /* No bound: no chunk cap, size cap or read count. A cap truncates a reply, and a truncated reply is a wrong
+     answer about the server rather than a smaller one; the floor is the platform's memory. A body the server
+     keeps sending keeps this call pending for as long as the server talks; one it holds silent ends at the
+     wire's idle end (WIRE_IDLE_TIMEOUT_MS), which rejects the read. A sink gives a consumer the bytes in time;
+     it does not give it the head, since `computedType` needs the whole body. */
   for (;;) {
     step = await reader.read();
     if (step.done) break;
@@ -2039,6 +2112,7 @@ async function _readBody(resp, sink, gated) {
     /* Released before it is accumulated, because timeliness is what a sink is for. Accumulation continues
        either way, so every gate below reads the same record whether or not a sink was stated. */
     if (sink !== undefined) sink(chunk);
+    if (onRead !== undefined) onRead();
     parts.push(chunk);
     total += chunk.byteLength;
   }
@@ -2295,6 +2369,8 @@ async function safeFetch(url, opts) {
            withdrew it. */
         try { return await send(speak); }
         catch (e) {
+          if (_wireIdleErrors.has(e) && !(init.signal && init.signal.aborted))
+            return { refusal: _refused("decline", "wire-idle", [parsed.href], {}) };
           if (!_wireNetworkErrors.has(e) || (init.signal && init.signal.aborted)) throw e;
           return { refusal: _refused("network", "network-error:" + e.message +
                                      (e.cause === undefined ? "" : ":" + String(e.cause)), [parsed.href], {}) };
@@ -2423,7 +2499,19 @@ async function safeFetch(url, opts) {
      receives exactly what the server sent. It is read after the credentialed SOP/CORS check above, which needs
      only headers (Fetch §4.4 "HTTP fetch" runs the CORS check on the response before its body is delivered),
      and before CORB, the one gate that reads the body (see `_readBody`). */
-  var body = await _readBody(resp, opts.onChunk, _bodyGated(opts));
+  /* A body the wire failed after its head is Fetch §5.6's network error to every reader of this record, which
+     is answered whole; one the wire went silent on is this zone's `wire-idle` decline (WIRE_IDLE_TIMEOUT_MS).
+     An abort is the caller's, so it is the caller's to read. */
+  var body;
+  try { body = await _readBody(resp, opts.onChunk, _bodyGated(opts), opts.onBodyRead); }
+  catch (e) {
+    RETHROW_FATAL(e);
+    if (opts.signal && opts.signal.aborted) throw e;
+    if (_wireIdleErrors.has(e)) return _refused("decline", "wire-idle", _exposed, headers);
+    if (!_wireNetworkErrors.has(e)) throw e;
+    return _refused("network", "network-error:" + e.message + (e.cause === undefined ? "" : ":" + String(e.cause)),
+                    _exposed, {});
+  }
   /* The one sniff and the one type: CORB reads `protected` and the record reads `type`, so no second answer
      exists to disagree. A missing `Content-Type` is MIME Sniffing §5.1 "Interpreting the resource metadata"'s
      "the supplied MIME type is undefined", and is passed as absent. */
@@ -2678,7 +2766,15 @@ async function safeFetchOperator(url, opts) {
   }
   var headers = {};
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
-  var bytes = new Uint8Array(await resp.arrayBuffer());
+  /* A body the wire failed or went silent on (WIRE_IDLE_TIMEOUT_MS) is an answer the person is shown, as a
+     rejected send is. */
+  var bytes;
+  try { bytes = new Uint8Array(await resp.arrayBuffer()); }
+  catch (e) {
+    RETHROW_FATAL(e);
+    if (!_wireNetworkErrors.has(e) && !_wireIdleErrors.has(e)) throw e;
+    return _refused("network", "network-error:" + e.message, _exposedUrlList(urlList), headers);
+  }
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: bytes,
            urlList: _exposedUrlList(urlList), computedType: "", refusal: null };
 }

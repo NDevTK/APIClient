@@ -255,7 +255,9 @@ const RUN_PERMITS = {
    CLAUDE.md §Fix-the-ROOT is the rule, and the alternative — state it at the call site, one line later — is
    the same window one statement narrower. */
 function loadChokepoint(peerOrigin) {
-  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, Headers, Response, swRpc: processSiteRpc };
+  /* The timers, `AbortController` and `ReadableStream` are the wire's idle end (safe-fetch.js's _wireWatched). */
+  const sandbox = { console, fetch, URL, TextDecoder, TextEncoder, Headers, Response, swRpc: processSiteRpc,
+                    setTimeout, clearTimeout, AbortController, ReadableStream };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);

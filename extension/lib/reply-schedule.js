@@ -10,6 +10,8 @@
 // instances' clocks through this file, so the two hosts deliver by one rule. An instance's clock starts at its
 // origin, the point on its cluster's timeline at which it was provisioned, so the clocks of one cluster's
 // instances are comparable (engine/trusted.mjs delivers cross-instance records on them).
+// An answer the wire delivers in pieces is a stream of records (replyStream*), each due a latency after the one
+// before it, so a body that keeps arriving holds its instance only at the point each piece is due.
 
 /* The modelled network latency in engine work: 50 ms at browser/core/timing/event_loop.h's EVENT_LOOP_WORK_PER_MS
    (100000 units a ms), about 93 slices of ENGINE_QUANTUM_WORK and about 1.1 s of native dev thread time, so a
@@ -73,4 +75,76 @@ function replyClockStall(clock, dues) {
   if (next === Infinity || next <= now) return 0;
   clock.skip += next - now;
   return next - now;
+}
+
+/* A send's answer as the wire delivers it: the head and each body read safeFetch reports (`onBodyRead`), then the
+   whole answer once safeFetch returns. Record 1 is the head with the first read; each further read is a record.
+   Whether a record is the last is decided by what the wire does next (the next read, or the answer), so a
+   record's content is fixed by the wire's sequence of reads and never by when they arrived; a reply whose body is
+   one read, as a recorded one is, is one record. Record k has landed once read k+1 or the answer has arrived. A
+   read due a record that has landed and is not the last moves the entry's `due` a latency on and writes nothing;
+   the last is the whole answer, written at its due point.
+   The fields live on the caller's entry (`due`, `ordinal` and the caller's own beside them):
+   `reads`, `record` (the 1-based record now owed), `settled` and `next` (the waiter of the next landing).
+   Named residual. Not covered: the engine is handed the answer whole at its last record's due point, so the head
+   does not resolve a `fetch()` at record 1 and no body read sees a piece before the end. Next diff builds the
+   engine's non-settling delivery (a head record, then body records a park takes without being retired). Absence
+   shows as: a page reading a streamed body sees nothing until it ends, and a body held open past the wire's idle
+   end leaves the flow that awaited its head parked. */
+function replyStreamOpen(entry) {
+  DCHECK(entry.reads === undefined, "a reply stream was opened twice on one entry");
+  entry.reads = 0;
+  entry.record = 1;
+  entry.settled = false;
+  entry.next = null;
+  return entry;
+}
+
+function _replyStreamWake(entry) {
+  var w = entry.next;
+  entry.next = null;
+  if (w !== null) w.resolve();
+}
+
+/* The wire answered one more body read for this send. */
+function replyStreamRead(entry) {
+  DCHECK(!entry.settled, "a body read was reported for a send whose answer was already produced: " + entry.reads);
+  entry.reads++;
+  _replyStreamWake(entry);
+}
+
+/* The send's whole answer is produced; its last record has landed. */
+function replyStreamSettle(entry) {
+  DCHECK(!entry.settled, "a send's answer was produced twice");
+  entry.settled = true;
+  _replyStreamWake(entry);
+}
+
+/* Whether the record now owed has landed: its successor read arrived, or the answer did. */
+function replyStreamLanded(entry) {
+  return entry.settled || entry.reads > entry.record;
+}
+
+/* Whether the record now owed is the answer's last; asked only of a landed record. */
+function replyStreamLast(entry) {
+  DCHECK(replyStreamLanded(entry), "a reply record was asked whether it is the last before it landed");
+  return entry.settled && entry.reads <= entry.record;
+}
+
+/* The landed record now owed is not the last: the next one is owed, due a latency later. */
+function replyStreamAdvance(entry) {
+  DCHECK(replyStreamLanded(entry) && !replyStreamLast(entry) && Number.isSafeInteger(entry.due),
+         "a reply record was passed over that has not landed, is the answer's last, or has no due point");
+  entry.record++;
+  entry.due += REPLY_LATENCY_WORK;
+}
+
+/* A promise of the entry's next landing (a read or the answer). */
+function replyStreamNext(entry) {
+  if (entry.next === null) {
+    var w = { promise: null, resolve: null };
+    w.promise = new Promise(function (resolve) { w.resolve = resolve; });
+    entry.next = w;
+  }
+  return entry.next.promise;
 }

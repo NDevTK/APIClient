@@ -343,7 +343,7 @@ void event_source_parser_interpret(const char *bytes, size_t n,
  * that is the one failure mode a next-diff clause has: it is a claim about a tree that moves, read once, by
  * somebody who has already decided to do the work — so a wrong one is not caught, it is executed. RE-DERIVED
  * rather than repeated: `_readBody` takes the response through `resp.body.getReader()` and RELEASES each chunk
- * to an `opts.onChunk` sink as it arrives, with no chunk cap, no size cap and no timeout, sitting BELOW every
+ * to an `opts.onChunk` sink as it arrives, with no chunk cap or size cap and only a silent wire's end, BELOW every
  * gate that reads the response head and ABOVE the one that reads the body. An event stream is on the
  * streamable side of that boundary and does not have to argue for it: HTML §9.2.2's step 8 creates its request
  * "given urlRecord, the empty string, and corsAttributeState", and the empty destination is not one

@@ -819,7 +819,7 @@ async function mintDrive(minted, slices) {
                                       origin: 'https://a.test',
                                       _novelty: { spelling: null, n: 0 }, _noveltyCounted: new Map(),
                                       _replyClock: ZONE.replyClock(0),
-                                      _replyDelivery: { rounds: 0, delivered: 0, waits: 0, skipped: 0 },
+                                      _replyDelivery: { rounds: 0, delivered: 0, passed: 0, waits: 0, skipped: 0 },
                                       level1: { runnable: true, paid: 3, pulls: 2, acct: { value: 3, pulls: 2, at: 1 } } }, o);
   const refusedRun = (e) => {
     const run = ZONE.linesToAnalysis(e.lines, e.msg, 'crashed', null);

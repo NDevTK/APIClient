@@ -180,8 +180,9 @@ function speakAsHost(sandbox) {
 export function trustedZone() {
   /* `Response` is what lib/http-cache.js answers a hit with, as the wire's own fetch answers a send;
      `ReadableStream` and `AbortController` are what lib/send-coalesce.js replays a recorded reply with and ends
-     a document's sends with. */
-  const sandbox = { console, URL, TextDecoder, TextEncoder, Response, ReadableStream, AbortController, atob };
+     a document's sends with; the timers are the wire's idle end (safe-fetch.js's _wireWatched). */
+  const sandbox = { console, URL, TextDecoder, TextEncoder, Response, ReadableStream, AbortController, atob,
+                    setTimeout, clearTimeout };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
@@ -847,7 +848,7 @@ async function main() {
       inbox: [],
       /* How the answers were delivered, and the one wall-time fact this zone reports: how long polls waited for
          a due answer the wire had not produced or for a peer to pass their clock (`sayDelivery`). */
-      delivery: { polls: 0, stalls: 0, delivered: 0, pollWaits: 0, pollWaitMs: 0, skipped: 0 },
+      delivery: { polls: 0, stalls: 0, delivered: 0, records: 0, pollWaits: 0, pollWaitMs: 0, skipped: 0 },
       /* The responses this zone fetched for this instance's navigations and holds for a destination instance,
          by the token its `peer` answer named; taken by the `navigable.navigate` that names it. */
       held: new Map(),
@@ -962,7 +963,8 @@ async function main() {
     if (e.owed.has(key))
       throw new Error(`instance [${e.tag}] is owed a second answer for \`${key}\` while the first is unwritten — ` +
                       'a send is worked once per park (`answered`), so this is that dedup broken');
-    const entry = { key, ordinal: ZONE.replyClockOrdinal(e.clock), due: null, rec: null, done: null };
+    const entry = ZONE.replyStreamOpen({ key, ordinal: ZONE.replyClockOrdinal(e.clock), due: null, rec: null,
+                                         done: null });
     e.owed.set(key, entry);
     e.unstamped.push(entry);
     return entry;
@@ -971,6 +973,24 @@ async function main() {
     if (entry.rec !== null)
       throw new Error(`the send \`${entry.key}\` was answered twice — each work function settles once`);
     entry.rec = rec;
+    ZONE.replyStreamSettle(entry);
+  };
+  /* A body read the wire answered for a send (safeFetch's `onBodyRead`): it may land the record a stalled
+     instance's clock waits at. */
+  const bodyRead = (e, entry) => () => {
+    if (e.owed.get(entry.key) !== entry) return;
+    ZONE.replyStreamRead(entry);
+    flush();
+  };
+  /* Passes over every record due at `e`'s clock that has landed and is not its answer's last; each moves its
+     entry's due point a latency on and writes nothing. */
+  const passDue = (e) => {
+    for (;;) {
+      const x = dueEntries(e).find((y) => ZONE.replyStreamLanded(y) && !ZONE.replyStreamLast(y));
+      if (x === undefined) return;
+      ZONE.replyStreamAdvance(x);
+      e.delivery.records++;
+    }
   };
   /* A read's stated work: a decimal that never decreases (test_forced.c's `abi_read_work`). It stamps every send
      announced since the last read, since nothing runs between an announcement and the read that follows it. */
@@ -1095,7 +1115,7 @@ async function main() {
     e.held.delete(f[P.held]);
     return h.loaded;
   }
-  async function navigate(url, fromDocUrl, what, provenance, driven, pinned, fromDoc) {
+  async function navigate(url, fromDocUrl, what, provenance, driven, pinned, fromDoc, onBodyRead) {
     const abs = new URL(url, fromDocUrl).href;
     /* Fetch §4.3 "Scheme fetch"'s "data" arm, as bridge.js's navigationLoad takes it: the bytes are in the URL
        and the load reaches no other party, so neither the egress question below nor safeFetch is asked. */
@@ -1171,12 +1191,12 @@ async function main() {
        document that initiated it. The join names the document this load will PRODUCE, which is a different
        document and is stated where that one is provisioned. Stating the join here would answer a permission
        question about a document that does not exist yet. */
-    const rec = replyRecord(await ZONE.safeFetch(abs, { destination: 'document',
-                                                        mode: 'navigate',
-                                                        provenance, pinned, doc: fromDoc,
-                                                        actor: 'page', driven,
-                                                        credentialed: false }),
-                            `${what} ${abs}`);
+    const raw = await ZONE.safeFetch(abs, { destination: 'document', mode: 'navigate',
+                                            provenance, pinned, doc: fromDoc, actor: 'page', driven,
+                                            credentialed: false, onBodyRead });
+    /* A decline after the policy above (the wire went silent, `wire-idle`) loads nothing either. */
+    if (raw.refusal && raw.refusal.kind === 'decline') return { declined: `${what} ${abs} — ${raw.refusal.reason}` };
+    const rec = replyRecord(raw, `${what} ${abs}`);
     /* HTML §7.4.5 determines the loaded Document's ORIGIN over the RESPONSE'S URL — "set responseOrigin to the
        result of determining the origin given response's URL" — and Fetch §2.2.5 "Requests" makes that the LAST
        item of the URL list. Only this zone followed the redirect chain, so only this zone can say where the
@@ -1223,6 +1243,7 @@ async function main() {
       raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination: '',
                                         mode: q.mode, provenance: q.provenance, pinned: q.pinned, driven: q.driven,
                                         actor: 'page', doc, credentialed: false, signal: send.controller.signal,
+                                        onBodyRead: bodyRead(e, send.entry),
                                         credentials: q.credentials, useCorsPreflight: q.useCorsPreflight,
                                         headers: q.headers.length ? q.headers : undefined,
                                         identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
@@ -1358,7 +1379,7 @@ async function main() {
       raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination, mode,
                                         provenance, pinned, driven, credentials, useCorsPreflight: false,
                                         actor: 'page', signal: send.controller.signal,
-                                        doc, credentialed: false,
+                                        onBodyRead: bodyRead(e, send.entry), doc, credentialed: false,
                                         identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
                                                                            credentials, mode,
                                                                            referrerPolicy, referrer) });
@@ -1453,10 +1474,11 @@ async function main() {
     const order = (a, b) => a.x.due - b.x.due || (a.from < b.from ? -1 : a.from > b.from ? 1 : 0) ||
                             a.x.ordinal - b.x.ordinal;
     for (const { x } of [...own, ...peer].sort(order)) {
-      if (x.rec === null)
+      if (!i.inbox.includes(x) && !(ZONE.replyStreamLanded(x) && ZONE.replyStreamLast(x)))
         throw new Error(`instance [${i.tag}] was written a round at work ${i.clock.work} while its due send ` +
-                        `\`${x.key}\` has no answer — a round carries every due answer, so its caller had to ` +
-                        'wait for this one');
+                        `\`${x.key}\` owes record ${x.record}, which has not landed or is not its answer's last ` +
+                        '— a round carries every due answer and passes over the rest, so its caller had to ' +
+                        'wait for or pass over this one');
       i.say(x.rec);
       if (i.inbox.includes(x)) { i.inbox.splice(i.inbox.indexOf(x), 1); continue; }
       i.owed.delete(x.key);
@@ -1477,21 +1499,30 @@ async function main() {
      still cause an earlier record (the work it would have spent waiting), and it is paid what is due there; a
      payment already ready is written at its own clock. */
   const flush = () => {
-    let moved = false;
+    let moved = false, skipped = false;
 
     for (const i of instances) {
       if (!i.live || !i.stalled) continue;
-      const now = ZONE.replyClockNow(i.clock);
-      const next = Math.min(Infinity, ...stampedDues(i));
-      const at = i.ready.some(pays) || next <= now ? now : next;
-      if (at === Infinity || !clusterSafe(i, at)) continue;
-      if (at > now) { i.delivery.skipped += at - now; i.clock.skip += at - now; }
-      if (dueEntries(i).some((x) => x.rec === null)) continue;
-      payRound(i);
-      i.stalled = false;
-      moved = true;
+      /* Records passed over write nothing, and a round paying nothing is a refusal, so the clock moves on to the
+         next due point until a round pays or a due record has not landed. */
+      for (;;) {
+        passDue(i);
+        const now = ZONE.replyClockNow(i.clock);
+        const next = Math.min(Infinity, ...stampedDues(i));
+        const at = i.ready.some(pays) || next <= now ? now : next;
+        if (at === Infinity || !clusterSafe(i, at)) break;
+        if (at > now) { i.delivery.skipped += at - now; i.clock.skip += at - now; skipped = true; }
+        passDue(i);
+        if (dueEntries(i).some((x) => !ZONE.replyStreamLanded(x))) break;
+        if (!dueEntries(i).length && !dueInbox(i).length && !i.ready.some(pays)) continue;
+        payRound(i);
+        i.stalled = false;
+        moved = true;
+        break;
+      }
     }
-    if (moved) { clockMoved(); return; }
+    if (moved || skipped) clockMoved();
+    if (moved) return;
     if (busy) return;
     const live = instances.filter((i) => i.live);
     if (!live.length || !live.every((i) => i.stalled)) return;
@@ -2106,7 +2137,8 @@ async function main() {
   const sayDelivery = (e) => {
     const d = e.delivery;
     console.error(`[trusted] [${e.tag}] reply delivery at work ${e.clock.work} (+${e.clock.skip} skipped): polls=${d.polls} ` +
-                  `stalls=${d.stalls} delivered=${d.delivered} owed=${e.owed.size} pollWaits=${d.pollWaits} ` +
+                  `stalls=${d.stalls} delivered=${d.delivered} passed=${d.records} owed=${e.owed.size} ` +
+                  `pollWaits=${d.pollWaits} ` +
                   `pollWaitMs=${d.pollWaitMs.toFixed(1)} inbox=${e.inbox.length} ` +
                   `latencyWork=${ZONE.REPLY_LATENCY_WORK}`);
   };
@@ -2367,7 +2399,7 @@ async function main() {
                             'fields on every path, the policy possibly empty, so this zone and that job no ' +
                             'longer share a grammar');
           const loaded = await navigate(args.slice(i + 1), e.docUrl, 'document.fetch', args.slice(0, t),
-                                        args.slice(t + 1, u), args.slice(u + 1, w), doc);
+                                        args.slice(t + 1, u), args.slice(u + 1, w), doc, bodyRead(e, entry));
           if (loaded.declined) { answerOwed(entry, declineAnswer(id, loaded.declined)); return; }
           /* A RESPONSE OF ANOTHER ORIGIN NEVER REACHES THE ASKING INSTANCE. Judged by this zone's own record of
              that instance's origin and the response URL it fetched: the asker learns only the destination's
@@ -2428,8 +2460,14 @@ async function main() {
       flush();
       const t0 = performance.now();
       await clusterWait(e);
-      const waiting = dueEntries(e).filter((x) => x.rec === null);
-      if (waiting.length) await Promise.all(waiting.map((x) => x.done));
+      /* A due record not yet landed is waited for (or its work's end, should it fail); one that landed and is
+         not its answer's last is passed over, which may make the next record of the same answer due. */
+      for (;;) {
+        passDue(e);
+        const waiting = dueEntries(e).filter((x) => !ZONE.replyStreamLanded(x));
+        if (!waiting.length || fatal) break;
+        await Promise.all(waiting.map((x) => Promise.race([ZONE.replyStreamNext(x), x.done])));
+      }
       const waited = performance.now() - t0;
       if (waited >= 1) { e.delivery.pollWaits++; e.delivery.pollWaitMs += waited; }
       if (fatal) throw fatal;

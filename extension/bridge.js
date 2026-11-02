@@ -2896,7 +2896,7 @@ function navigationCredentialed(abs, principalOrigin, readerOpaque) {
    credential carries, or null when it has none, which loads without the session. Every answer states
    `credentialed`, whether this load carried the session, which the loaded document's record keeps. */
 async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, refusalArm,
-                              actor, driven, pinned, request, speakerOf, readerOpaque) {
+                              actor, driven, pinned, request, speakerOf, readerOpaque, onBodyRead) {
   DCHECK(!!request && NAVIGATION_DESTINATIONS.indexOf(request.destination) >= 0 &&
          (request.referrerPolicy === null || request.referrerPolicy === "" ||
           REFERRER_POLICIES.indexOf(request.referrerPolicy) >= 0),
@@ -3011,7 +3011,7 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
                                           destination: request.destination, mode: "navigate",
                                           provenance: provenance,
                                           doc: fromDoc, actor: actor, driven: driven,
-                                          pinned: pinned,
+                                          pinned: pinned, onBodyRead,
                                           credentials: "include", credentialed, identity });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
            "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
@@ -3356,7 +3356,7 @@ function engineReserve(cluster, docId, msg, referenced) {
                    as: two extension runs of a multi-instance page differing in census rows while single-instance
                    runs agree. */
                 _replyClock: replyClock(0),
-                _replyDelivery: { rounds: 0, delivered: 0, waits: 0, skipped: 0 },
+                _replyDelivery: { rounds: 0, delivered: 0, passed: 0, waits: 0, skipped: 0 },
                 _epoch: self.frontierEpoch(), r: null, _readyP: null,
                 /* How much of its partition of the product's known identities this instance has been handed
                    (lib/novelty-set.js's noveltyOwed advances it). */
@@ -3716,7 +3716,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, driven, credentials, mode, referrerPolicy,
-                         referrer, asked, signal) => {
+                         referrer, asked, signal, onBodyRead) => {
     DCHECK(signal instanceof AbortSignal,
            "a pending request reached the fetch relay with no abort signal — engineIssue owns one per send, and " +
            "a `fetch.cancel` notice ends the send through it");
@@ -3803,7 +3803,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          the chokepoint's `actor` row reads it. */
       const opts = { pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
-                     doc, credentialed: false, signal,
+                     doc, credentialed: false, signal, onBodyRead,
                      identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
@@ -3894,7 +3894,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* This forward serves only `rendezvous` and `none`: no consumer of it drops a work item, so a `report` would
      be honoured by the loader and then fabricated into a document by the notice that asked. A consumer that
      gains such an arm widens this list deliberately. */
-  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm, request, readerOpaque, doc) => {
+  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm, request, readerOpaque, doc,
+                                 onBodyRead) => {
     DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
            "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
            ", and this forward serves only `rendezvous` and `none` — a request that parks on a rendezvous " +
@@ -3908,7 +3909,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     const r = await navigationLoad(u, msg.sourceUrl, msg.origin, provenance, doc,
                                    refusalArm, /*actor*/"page", driven, pinned, request,
                                    documentSpeaker(msg, "engine:" + eng.docId),
-                                   readerOpaque);
+                                   readerOpaque, onBodyRead);
     /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
        `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
     DCHECK(refusalArm === "rendezvous" || r.declined === null,
@@ -3929,7 +3930,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      stamped on everything it sends) are read only by the notice router below: SECURITY.md makes this zone
      the one that knows which instance holds which document and the one that may state a sender's origin. */
   /* The XMLHttpRequest fetch, engineFetchXhr over this instance. */
-  const fetchedXhr = (rec, doc, signal) => engineFetchXhr(eng, rec, doc, signal);
+  const fetchedXhr = (rec, doc, signal, onBodyRead) => engineFetchXhr(eng, rec, doc, signal, onBodyRead);
   /* The principal is browser-stated, never parsed off the address: a page that sandboxes its own iframe gives
      that document an opaque origin while its address looks ordinary. _dispatchDocument hands over
      `_senderOrigin(sender)` (from MessageSender) as `msg.origin`, and hostNotice stamps it on every message the
@@ -4345,7 +4346,7 @@ function xhrRecordRefusal(q, raw) {
    the engine's JSON request record (method, url, headers, body); the answer is the reply shape fetch_reply_new
    builds, and a null body is the network error §3.5.6's handle errors turns into an `error` event. It is a
    function of the instance, not a closure of engineRoot, so the refusal of a record is driven in a realm. */
-async function engineFetchXhr(eng, rec, doc, signal) {
+async function engineFetchXhr(eng, rec, doc, signal, onBodyRead) {
   DCHECK(signal instanceof AbortSignal,
          "an XMLHttpRequest send reached the fetch relay with no abort signal — engineIssue owns one per send, " +
          "and a `fetch.cancel` notice naming its rendezvous ends the send through it");
@@ -4401,7 +4402,7 @@ async function engineFetchXhr(eng, rec, doc, signal) {
                                           driven: q.driven,
                                           doc, actor: "page",
                                           credentialed: false, useCorsPreflight: q.useCorsPreflight,
-                                          credentials: q.credentials, headers: q.headers, signal,
+                                          credentials: q.credentials, headers: q.headers, signal, onBodyRead,
                                           identity: await pageRequestIdentity(stampOrigin(eng.origin), eng.msg.sourceUrl, "engine:" + eng.docId, abs,
                                                                         q.credentials, q.mode,
                                                                         q.referrerPolicy, q.referrer) });
@@ -4504,8 +4505,9 @@ function pendingLineRefusal(f) {
 }
 /* The door every send is issued through without waiting: its answer is due a latency of engine work later
    (lib/reply-schedule.js), so the engine runs on while the wire answers, and the round at whose work it falls
-   due waits for it. No deadline is used: a timeout would truncate a legitimate response into a wrong answer, so
-   a response the server never ends holds its instance at that due point while every other instance runs.
+   due waits for it. Each body read the wire answers is a record of its own, due a latency after the one before
+   (replyStream*), so a body that keeps arriving holds its instance only at each record's due point, and one its
+   server holds silent ends at the wire's idle end (safe-fetch.js's WIRE_IDLE_TIMEOUT_MS) as a decline.
    The shape is engine/host/wpt_runner.c's `g_inflight` table (`wpt_issue_pending` issues without waiting;
    `wpt_request_asked` refuses to re-issue a key in flight), and engine/trusted.mjs's `track`/`answered` pair
    is the same table. A record stays until its reply is delivered, not until bytes land: a landed but
@@ -4525,19 +4527,21 @@ function engineIssue(eng, key, start, deliver) {
   /* The record enters the map before the call suspends, so the next round, re-listing the same request,
      sees it in flight. `controller` ends the send when the engine says no flow is owed it (engineCancel).
      `due` and `ordinal` are its place in the delivery order (lib/reply-schedule.js): the round that issues it
-     has read the instance's work, so its answer is due a latency after that read. */
-  const rec = { key, landed: false, value: undefined, error: null, settled: null, deliver,
-                controller: new AbortController(), cancelled: false,
-                due: replyClockDue(eng._replyClock), ordinal: replyClockOrdinal(eng._replyClock) };
+     has read the instance's work, so its first record is due a latency after that read. */
+  const rec = replyStreamOpen({ key, value: undefined, error: null, work: null, deliver,
+                                controller: new AbortController(), cancelled: false,
+                                due: replyClockDue(eng._replyClock), ordinal: replyClockOrdinal(eng._replyClock) });
   eng._inflight.set(key, rec);
-  /* `settled` never rejects; the error is carried and rethrown at delivery inside the round, so an invariant
-     abort out of `eng.fetched` still reaches hostSchedule's failure arm and there is no unhandled rejection. */
-  rec.settled = start(rec.controller.signal).then(
-    (v) => { rec.landed = true; rec.value = v; },
-    (e) => { rec.landed = true; rec.error = e; });
-  /* The round its answer falls due in waits on it (engineDeliverDue). It fails only if `start` threw
-     synchronously, which none of the callers can, since each returns an async function's promise. */
-  DCHECK(rec.settled && typeof rec.settled.then === "function",
+  /* A read the wire answers after the send was cancelled belongs to no record. */
+  const onBodyRead = () => { if (eng._inflight.get(key) === rec) replyStreamRead(rec); };
+  /* `work` never rejects; the error is carried and rethrown at delivery inside the round, so an invariant abort
+     out of `eng.fetched` still reaches hostSchedule's failure arm and there is no unhandled rejection. */
+  rec.work = start(rec.controller.signal, onBodyRead).then(
+    (v) => { rec.value = v; replyStreamSettle(rec); },
+    (e) => { rec.error = e; replyStreamSettle(rec); });
+  /* It fails only if `start` threw synchronously, which none of the callers can, since each returns an async
+     function's promise. */
+  DCHECK(rec.work && typeof rec.work.then === "function",
          "a request was issued whose starter did not answer a promise — the round its answer falls due in " +
          "waits on this, and a non-promise there delivers an answer that has not landed");
 }
@@ -4568,26 +4572,28 @@ function engineCancel(eng, identity) {
 }
 /* The delivering half, which the engine's park is waiting for. It hands over exactly the answers due at the
    instance's reply clock, in due-point then issue order (lib/reply-schedule.js), and waits on the wire for a due
-   one that has not landed, so where a reply reaches the engine is a function of its work and never of how fast
-   the wire answered. It returns how many registers it filled, progress like `wpt_net_pump`'s return. A record
-   leaves the in-flight set here, not when bytes land, so a landed reply not yet due still refuses a re-issue.
+   record that has not landed, so where a reply reaches the engine is a function of its work and never of how fast
+   the wire answered. A landed record that is not its answer's last is passed over, its next record due a latency
+   later. It returns how many registers it filled, progress like `wpt_net_pump`'s return. A record leaves the
+   in-flight set here, not when bytes land, so a landed reply not yet due still refuses a re-issue.
    Nothing else runs on this instance while the round waits: a cancel arrives only through this round's own
    notices, which are read before this, and a retirement is read after every await. */
 async function engineDeliverDue(eng) {
   let n = 0, waited = false;
-  const due = replyDueEntries(eng._replyClock, [...eng._inflight.values()]);
-  for (const rec of due) {
-    if (eng._crashed) return n;
-    if (!rec.landed) { waited = true; await rec.settled; }
-    if (eng._crashed) return n;
+  for (;;) {
+    const rec = replyDueEntries(eng._replyClock, [...eng._inflight.values()])[0];
+    if (rec === undefined || eng._crashed) break;
+    if (!replyStreamLanded(rec)) { waited = true; await replyStreamNext(rec); continue; }
     CHECK(eng._inflight.get(rec.key) === rec && !rec.cancelled,
           "a due reply left the in-flight set while its round waited on the wire — engineCancel runs only from " +
           "this instance's own notices, which its round reads before delivering");
+    if (!replyStreamLast(rec)) { replyStreamAdvance(rec); eng._replyDelivery.passed++; continue; }
     eng._inflight.delete(rec.key);
     if (rec.error) throw rec.error;
     await rec.deliver(rec.value);
     n++;
   }
+  if (eng._crashed) return n;
   eng._replyDelivery.delivered += n;
   if (waited) eng._replyDelivery.waits++;
   return n;
@@ -4618,9 +4624,12 @@ async function engineServiceFetch(eng, stalled) {   // one round: issue, act, de
   if (eng._crashed) return;
   await engineServiceHostRequests(eng);
   if (eng._crashed) return;
-  if (stalled)
+  if (!stalled) { await engineDeliverDue(eng); return; }
+  /* A record passed over delivers nothing, so a stalled instance's clock moves on until a round delivers or
+     nothing is in flight. */
+  do {
     eng._replyDelivery.skipped += replyClockStall(eng._replyClock, [...eng._inflight.values()].map((r) => r.due));
-  await engineDeliverDue(eng);
+  } while ((await engineDeliverDue(eng)) === 0 && eng._inflight.size && !eng._crashed);
 }
 async function engineIssuePending(eng) {   // issue every parked request; a later round delivers the answer
   /* The reply's metadata crosses as JSON text (as qjs_host_answer's does), so it can say `null` and carry the
@@ -4652,9 +4661,10 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     /* The ask is raised inside the starter, which `engineIssue` invokes only for a key not in flight, so a
        re-listed request is counted once and the containment with the declined histogram holds. */
     engineIssue(eng, key,
-      (signal) => { eng._egress.asked++;
+      (signal, onBodyRead) => { eng._egress.asked++;
                     return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
-                                       referrerPolicy, referrer, askerRecord(eng, askers, "asker"), signal); },
+                                       referrerPolicy, referrer, askerRecord(eng, askers, "asker"), signal,
+                                       onBodyRead); },
       (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer));
   }
 }
@@ -5734,7 +5744,7 @@ async function engineServiceHostRequests(eng) {
          beside `wpt_request_asked`): the answer is delivered against `engine_host_answer`'s id, and two
          identical questions from two flows are two ids. */
       engineIssue(eng, inflightKey([String(id)]),
-        (signal) => eng.fetchedXhr(op.slice("xhr.send\t".length), askerDoc, signal),
+        (signal, onBodyRead) => eng.fetchedXhr(op.slice("xhr.send\t".length), askerDoc, signal, onBodyRead),
         // Completion 0 is normal (ECMA-262 §6.2.4 The Completion Record Specification Type): this zone fetched
         // bytes and ran no program that could throw. A relayed cross-agent operation answers 1 with the thrown
         // value, so the asking page's `try`/`catch` runs.
@@ -5757,8 +5767,9 @@ async function engineServiceHostRequests(eng) {
     engineIssue(eng, inflightKey([String(id)]),
       /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
          parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
-      () => eng.fetchedDocument(df.url, df.provenance, df.driven, df.pinned, /*refusalArm*/"rendezvous",
-                                fetchRequest, docRecordOpaque(askerDoc), askerDoc),
+      (_signal, onBodyRead) => eng.fetchedDocument(df.url, df.provenance, df.driven, df.pinned,
+                                                   /*refusalArm*/"rendezvous", fetchRequest,
+                                                   docRecordOpaque(askerDoc), askerDoc, onBodyRead),
       /* A same-origin child's load files its landed address under its create's facts, as a cross-origin one's
          does in the `navigable.create` arm. */
       (r) => {
@@ -6453,7 +6464,8 @@ function engineHasLiveCaller(eng) {
 /* The seat for an admission whose document is still on the network, the fourth pool state. `ops.admit()` runs
    at the top of every round, so a suspension inside it would stall the whole Level-1 loop; a declared route's
    navigation and a shed residue's re-derivation therefore load on a seat, and the round returns. No deadline
-   is added: it could only truncate a slow reply.
+   is added here, since it could only truncate a slow reply; a silent wire ends at safe-fetch.js's
+   WIRE_IDLE_TIMEOUT_MS.
    A seat answers for no document: its cluster and document id are unknown until the response lands (the
    message's address is the response's after a redirect), so `hostClusterOf` and `hostHolderOf` cannot match
    it, and both kinds mint group ids nothing else keys to (`admitSeatLand` asserts that). It carries the fields
