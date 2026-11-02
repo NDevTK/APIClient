@@ -932,12 +932,13 @@ static void usp_init_append(JSContext *ctx, JSValue *vals, JSValueConst k, JSVal
         JSValue a = usp_half(ctx, *vals, i, 0), c;
         bool same;
 
-        /* The map's key test is an equality, so an unknown on either side of it is a fork this stage cannot
-           take — see USP_HOLE_WHY. A record's own keys are distinct property keys and only collide through
-           the scalar-value replacement, so the test is asked only where there is an earlier key to ask it of. */
-        DCHECK(!concolic_is(a) && !concolic_is(k),
-               USP_HOLE_WHY("record init tested an unknown KEY against an earlier one"));
-        same = JS_IsStrictEqual(ctx, a, k);
+        /* The keys come from one [[OwnPropertyKeys]] List, which holds no duplicates (ECMAScript §6.1.7.3
+           Invariants of the Essential Internal Methods), so two of them meet only through the scalar-value
+           replacement, which an unknown key crosses without.
+           Named residual. Not covered: an unknown key whose replacement would equal another key. Next diff
+           builds: §3.2.12's replacement as a derivation over unknown input, compared here as a fork. How its
+           absence shows: a record init over unknown keys holding a tuple more than a browser's list. */
+        same = !concolic_is(a) && !concolic_is(k) && JS_IsStrictEqual(ctx, a, k);
         JS_FreeValue(ctx, a);
         if (!same) continue;
         c = usp_vals_new(ctx);
