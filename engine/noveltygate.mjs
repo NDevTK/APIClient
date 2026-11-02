@@ -88,7 +88,9 @@ function run(tag, url, html, boot, late) {
         if (line.startsWith('fetch\t')) { owed.push(line.split('\t').slice(1)); continue; }
         if (line.startsWith('request\t'))
           return reject(new Error(`[${tag}] the instance asked a host operation this zone does not perform: ${line}`));
-        if (line === 'poll' || line === 'stalled') {
+        /* A read states the instance's work (test_forced.c's `abi_read_work`); this zone answers every owed
+           request at once, which a fixture with no wire may, since its answers exist before the read. */
+        if (/^(poll|stalled)\t(0|[1-9][0-9]*)$/.test(line)) {
           if (rounds++ === 0 && late !== null) say(`novelty\t${b64(late)}`);
           /* METHOD DESTINATION INITIATOR PROVENANCE PINNED DRIVEN CREDENTIALS MODE REFERRER_POLICY REFERRER
              ASKERS URL (solver/engine.h's engine_pending_split); a network error is JSON `null` and no body. */

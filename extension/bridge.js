@@ -4545,7 +4545,13 @@ function engineCancel(eng, identity) {
 }
 /* The delivering half, which the engine's park is waiting for. It returns how many registers it filled,
    progress like `wpt_net_pump`'s return. The record leaves the in-flight set here, not when bytes land, so a
-   landed reply not yet handed over still refuses a re-issue. */
+   landed reply not yet handed over still refuses a re-issue.
+   Named residual. Not covered: a round delivers every reply that has landed, so the work at which a reply
+   reaches the engine is decided by the wire's speed, where engine/trusted.mjs delivers each at the first read
+   at or after its send's work plus REPLY_LATENCY_WORK. Next diff builds: the instance's work exported on the
+   renderer's interface, a due point stamped at `engineIssue`, and this function delivering only due records
+   in due-point order, waiting on one not landed. Absence shows as: two extension runs of one page differing
+   in census rows at matching censuses while two native runs through engine/trusted.mjs agree. */
 async function engineDeliverLanded(eng) {
   let n = 0;
   for (const key of [...eng._inflight.keys()]) {

@@ -66,19 +66,14 @@
  * this zone QUEUES its answers and writes them only in reply to one. Two processes each filling the other's
  * pipe while neither drains is a hang with no symptom, and that one rule makes it impossible rather than
  * unlikely.
- * THERE ARE TWO SUCH LINES AND THEY DIFFER IN WHAT A ZERO MEANS, NOT IN THE RULE. `stalled` says the frontier
- * is out of work, so blocking denies nobody the thread and a round that pays nothing is this zone REFUSING —
- * the one thing that ends a live session. `poll` says the frontier is RUNNING and owed something, so this zone
- * answers in the same turn with whatever is READY and never waits for what is in flight; a round that pays
- * nothing there is "not landed yet" and the child steps on.
- * THIS PARAGRAPH USED TO NAME `stalled` AS THE RULE ITSELF and is rewritten rather than deleted, because the
- * narrow form is what a reader re-derives: a stall really is the obvious moment at which a blocking read is
- * free. It is also a SUFFICIENT condition stated as the necessary one, and the difference was the whole reply
- * path — `ENGINE_STEP_STALLED` is returned only where the run queue is empty (solver/engine.c), so a child
- * with any runnable member never wrote the one line that let this zone pay it. MEASURED over four archived
- * `--abi` runs of one real SPA: `replyAnswered` 1 of `replyAsked` 43, frozen across 35 consecutive censuses
- * while `forks` climbed to 6242, against 43 of 43 for the same document under the browser host, whose driver
- * has always paid at every slice boundary.
+ * There are two such lines, and each states the instance's engine work at the read. `stalled` says the
+ * frontier is out of work, so blocking denies nobody the thread and a round that pays nothing is this zone
+ * refusing, the one thing that ends a live session. `poll` says the frontier is running and owed something.
+ * Both are answered by one rule: a send's answer is due at the work of the read that followed its first
+ * announcement plus `REPLY_LATENCY_WORK`, and a read pays exactly the answers due at its work, in due-point
+ * order, waiting for any that has not arrived. So where a reply lands is a function of the engine's work and
+ * never of how fast the wire answered; at a stall the instance's clock first moves to its earliest due point,
+ * since nothing runs while it waits.
  *
  * AND IT ROUTES, WHICH IS THE ZONE'S ONE OTHER FACT: which instance holds which document. An instance is an
  * ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so a CROSS-ORIGIN child is a second PROCESS of the same binary and
@@ -331,6 +326,12 @@ function fieldLines(entries) {
 const CENSUS_MARKERS = ['@SWAP', '@COLD', '@HEAP', '@WFQ', '@FORKAT'];
 const b64 = (x) => Buffer.from(x === undefined ? '' : x).toString('base64');
 const ABSENT = '-';
+/* The modelled network latency in engine work: a send stamped at work W is answered at the first read at or
+   after W + REPLY_LATENCY_WORK. It is 50 ms of modelled time at event_loop.h's EVENT_LOOP_WORK_PER_MS (100000
+   units a ms), about 93 slices of ENGINE_QUANTUM_WORK. At thread_work.h's native dev price of 0.222 us a unit
+   it is about 1.1 s of thread time, long against a replayed or live reply, so a read rarely waits on the
+   wire. It is a calibration, not a bound: no flow runs less far under any value, only replies land elsewhere. */
+const REPLY_LATENCY_WORK = 5000000;
 /* What instance `e` is owed of its cluster's known identities, as a `novelty` record (test_forced.c's
    `abi_novelty`), written only into a round or a provisioning this zone is already writing: the record pays
    nothing, so it must never be the whole of a round a stalled child reads. */
@@ -844,6 +845,13 @@ async function main() {
       tag: `${docId}/s${++serial}`,
       say: (rec) => child.stdin.write(rec + '\n'),
       ready: [], answered: new Map(), sends: new Map(),
+      /* The answers this instance's sends are owed, by key (`owe`), the ones not yet given a due point, and the
+         instance's network clock: the work its last read stated plus the work skipped at stalls (`readAt`). */
+      owed: new Map(), unstamped: [], ordinal: 0, work: null, skip: 0,
+      /* How the answers were delivered, and the one wall-time fact this zone reports: how long a read waited for
+         a due answer the wire had not yet produced (`sayDelivery`). */
+      delivery: { polls: 0, stalls: 0, delivered: 0, pollWaits: 0, pollWaitMs: 0, stallWaits: 0, stallWaitMs: 0,
+                  skipped: 0 },
       /* The responses this zone fetched for this instance's navigations and holds for a destination instance,
          by the token its `peer` answer named; taken by the `navigable.navigate` that names it. */
       held: new Map(),
@@ -858,12 +866,6 @@ async function main() {
          which solver/cold.h declares as "live members of the frontier" — a GAUGE, so it states what was true
          at one instant and the two are never differenced into a rate. */
       census: { n: 0, byMarker: new Map(), firstLive: null, lastLive: null },
-      /* THE KEYS THE NEXT WRITE TO THIS CHILD PAYS OFF — see `track` for why a fetch key is released by the
-         WRITE and not by the work. It is a list beside `ready` rather than a field on each record because only
-         `workFetch` composes a record that answers a REQUEST key, and it composes all four of them through one
-         door (`settle`); every other producer here answers a RECORD key or nothing, and `flush` drains both
-         lists whole in the same step, so the two cannot come apart. */
-      releaseOnWrite: [],
       /* BOTH HALVES OF HOW A CHILD ENDED, BECAUSE ONE OF THEM IS THE ONLY WAY AN ABORT IS VISIBLE FROM HERE.
          Node's `close` carries `(code, signal)` and a process killed by a signal has code `null`; taking the
          first argument alone therefore reported a `SIGABRT` — which is what every DCHECK in the engine ends
@@ -951,8 +953,46 @@ async function main() {
      is built for; this host was the one that differed. */
   const track = (e, key, work) => {
     busy++;
-    e.answered.set(key, work.then((v) => v, raise).then(() => { busy--; retryHeld(); flush(); }));
+    const done = work.then((v) => v, raise).then(() => { busy--; retryHeld(); flush(); });
+    e.answered.set(key, done);
+    return done;
   };
+
+  /* The answer a send is owed, created when the send is first worked: its key, its announcement ordinal (the
+     tie-break between equal due points), its due point (null until the next read stamps it) and its record
+     (null until the work produces one). A read writes it only once it is due (`dueEntries`), so the wire's
+     speed decides only whether the read waits, never which round the answer lands in. */
+  const owe = (e, key) => {
+    if (e.owed.has(key))
+      throw new Error(`instance [${e.tag}] is owed a second answer for \`${key}\` while the first is unwritten — ` +
+                      'a send is worked once per park (`answered`), so this is that dedup broken');
+    const entry = { key, ordinal: ++e.ordinal, due: null, rec: null, done: null };
+    e.owed.set(key, entry);
+    e.unstamped.push(entry);
+    return entry;
+  };
+  const answerOwed = (entry, rec) => {
+    if (entry.rec !== null)
+      throw new Error(`the send \`${entry.key}\` was answered twice — each work function settles once`);
+    entry.rec = rec;
+  };
+  /* A read's stated work: a decimal that never decreases (test_forced.c's `abi_read_work`). It stamps every send
+     announced since the last read, since nothing runs between an announcement and the read that follows it. */
+  const readAt = (e, verb, field) => {
+    if (!/^(0|[1-9][0-9]*)$/.test(field) || !Number.isSafeInteger(Number(field)))
+      throw new Error(`instance [${e.tag}] wrote \`${verb}\` with the work \`${field}\`, which is not a ` +
+                      'decimal count — every read states the engine work it was written at');
+    const work = Number(field);
+    if (e.work !== null && work < e.work)
+      throw new Error(`instance [${e.tag}]'s work went from ${e.work} to ${work} between two reads — due points ` +
+                      'are on that clock, so a decrease would deliver a reply before the work it waits for');
+    e.work = work;
+    for (const entry of e.unstamped.splice(0)) entry.due = e.work + e.skip + REPLY_LATENCY_WORK;
+  };
+  /* The answers due at the instance's clock, in the order a read writes them: due point, then ordinal. */
+  const dueEntries = (e) => [...e.owed.values()]
+    .filter((x) => x.due !== null && x.due <= e.work + e.skip)
+    .sort((a, b) => a.due - b.due || a.ordinal - b.ordinal);
 
   /* WHICH KEYS NAME A REQUEST AND WHICH NAME A RECORD, STATED ONCE — the two have different lifetimes and the
      difference is the whole of the correction above. A `req:<id>` names ONE record (the id is the rendezvous
@@ -1100,11 +1140,11 @@ async function main() {
      policy refusal is a decline, which the engine forks into a waiting arm and a failure arm; a network
      refusal is §3.5.6's network error, an answer with no body, so the page's XHR runs its error steps. */
   const workXhr = async (e, id, doc, record, send) => {
-    /* Every answer leaves through here, so a cancelled send's never reaches the engine (`fetch.cancel`). */
+    /* Every answer leaves through here into the send's owed entry, so a cancelled send's never reaches the
+       engine (`fetch.cancel`). */
     const settle = (rec) => {
       if (send.cancelled) return;
-      send.queued = rec;
-      e.ready.push(rec);
+      answerOwed(send.entry, rec);
     };
     const q = JSON.parse(record);
     for (const k of ['method', 'url', 'credentials', 'mode', 'provenance', 'pinned', 'driven'])
@@ -1153,19 +1193,13 @@ async function main() {
   const workFetch = async (e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
                            referrerPolicy, referrer, askers, url, send) => {
     const abs = new URL(url, e.docUrl).href;
-    /* EVERY ANSWER THIS FUNCTION HAS LEAVES THROUGH ONE DOOR, AND THE DOOR IS WHAT RELEASES THE KEY. Pushing
-       the record and remembering the key are ONE act here rather than two statements a later arm could take
-       half of: this function has four exits — a method refusal, the two shapes of a firing refusal, and the
-       reply — and an arm that queued a record without naming its key would leave that pair permanently owed,
-       which is exactly the state the `track` banner above records as having cost a session. The release itself
-       happens at the WRITE (`flush` drains this list beside `ready`), because the pair is still owed while its
-       answer is only queued. */
+    /* Every answer this function has leaves through one door into the send's owed entry: a method refusal,
+       the two shapes of a firing refusal, and the reply. The key is released when a read writes the entry
+       (`payRound`), because the pair is still owed while its answer is only produced. A cancelled send's
+       answer never reaches the engine: no flow is owed it (`fetch.cancel`). */
     const settle = (rec) => {
-      /* A cancelled send's answer never reaches the engine: no flow is owed it (`fetch.cancel`). */
       if (send.cancelled) return;
-      send.queued = rec;
-      e.ready.push(rec);
-      e.releaseOnWrite.push(fetchKey(method, mode, referrerPolicy, referrer, url));
+      answerOwed(send.entry, rec);
     };
     /* THE PRODUCER'S VOCABULARY, CHECKED BEFORE IT IS ACTED ON. solver/engine.h declares exactly two initiator
        tokens and exactly three provenance tokens, and an unknown one would be routed by whichever arm of the
@@ -1346,39 +1380,42 @@ async function main() {
      cannot supply what the frontier is waiting for, and it is the same test `engine_run` makes one level down
      (`r == ENGINE_STEP_STALLED && filled == 0`). It is not a bound and it truncates nothing — every flow keeps
      its snapshot, and the reason travels as the zone's own words rather than as a guess made by the child. */
-  /* ONE ROUND, WRITTEN TO A CHILD THAT IS STANDING IN THE READ. It is a free function and not a branch of
-     `flush` because BOTH verbs write exactly this and only one of them decides a session: sharing the write
-     is what keeps a record that goes out under `stalled` and the same record under `poll` from ever differing,
-     which is the drift a second spelling would have.
-     IT ALWAYS WRITES `go`, INCLUDING WHEN NOTHING WAS READY, and that is the whole of what a round is: the
-     child is blocked in `abi_pay` until the terminator, so an empty round is this zone saying "nothing yet"
-     and withholding one is this zone hanging the child. `flush` gates on `i.ready.length` BEFORE calling here
-     for a reason that belongs to `stalled` alone — a stalled child reads an empty round as a refusal — and
-     that gate is not this function's to keep, because `poll` must be answered whether or not anything landed.
-     AND THE PAIRS THIS WRITE PAID ARE OWED NO LONGER. The child re-announces its whole bill the moment it is
-     let go, so this is the first instant at which a fresh park on one of these addresses is a request this
-     zone has not answered — see `track`. It is drained WHOLE, exactly as `ready` is and in the same step,
-     because every key on it accompanies a record that has just gone out. */
+  /* One round, written to a child standing in the read; both verbs write exactly this. It writes the due
+     answers in due-point order, then the other ready records, then `go`, which it always writes: the child is
+     blocked in `abi_pay` until the terminator. A caller writes only once every due answer has its record (the
+     poll arm awaits them; `flush` skips an instance until then), so a round carries every answer due at its
+     work or none. A written fetch key is owed no longer: the child re-announces its bill the moment it is let
+     go, so a fresh park on that pair is a request this zone has not answered (see `track`). A request id is
+     kept in `answered`, since an id names one record and is never parked again. */
   const payRound = (i) => {
     noveltyHand(i);
-    for (const rec of i.ready.splice(0, i.ready.length)) i.say(rec);
-    for (const key of i.releaseOnWrite.splice(0, i.releaseOnWrite.length)) {
-      i.answered.delete(key);
-      i.sends.delete(key);
+    for (const x of dueEntries(i)) {
+      if (x.rec === null)
+        throw new Error(`instance [${i.tag}] was written a round at work ${i.work} while its due send ` +
+                        `\`${x.key}\` has no answer — a round carries every due answer, so its caller had to ` +
+                        'wait for this one');
+      i.say(x.rec);
+      i.owed.delete(x.key);
+      i.sends.delete(x.key);
+      if (isFetchKey(x.key)) i.answered.delete(x.key);
+      i.delivery.delivered++;
     }
+    for (const rec of i.ready.splice(0, i.ready.length)) i.say(rec);
     i.say('go');
   };
 
   /* A `decline` explains a notice this zone would not act on and owes nothing, so it unparks no flow and the
      child does not count it as a payment. A stalled child reads a round that paid nothing as this zone's end of
      its session (a referenced one rests no further), so a round of declines alone is never written to one: they
-     ride with its next payment, or with the session's end below. */
+     ride with its next payment, or with the session's end below. A due answer always pays. */
   const pays = (rec) => !rec.startsWith('decline\t');
   const flush = () => {
     let moved = false;
 
     for (const i of instances) {
-      if (!i.live || !i.stalled || !i.ready.some(pays)) continue;
+      if (!i.live || !i.stalled) continue;
+      const due = dueEntries(i);
+      if (due.some((x) => x.rec === null) || (!due.length && !i.ready.some(pays))) continue;
       payRound(i);
       i.stalled = false;
       moved = true;
@@ -1940,21 +1977,15 @@ async function main() {
       const key = f.length === 2 ? `req:${f[1]}` : fetchKey(f[1], f[2], f[3], f[4], f[5]);
       const send = e.sends.get(key);
       if (send === undefined) return;
+      if (e.owed.get(key) !== send.entry)
+        throw new Error(`a cancelled send's owed answer is not its own: ${record} — payRound releases a send ` +
+                        'with its owed entry, so a send still recorded is still owed');
       send.cancelled = true;
       e.sends.delete(key);
       e.answered.delete(key);
-      /* An answer already queued for the next write is taken back with its key. */
-      if (send.queued !== undefined && isFetchKey(key)) {
-        const at = e.ready.indexOf(send.queued), ak = e.releaseOnWrite.indexOf(key);
-        if (at < 0 || ak < 0)
-          throw new Error(`a cancelled send's queued answer is not on the next write: ${record} — payRound ` +
-                          'releases a send with its key, so a send still recorded has its answer queued');
-        e.ready.splice(at, 1);
-        e.releaseOnWrite.splice(ak, 1);
-      } else if (send.queued !== undefined) {
-        const at = e.ready.indexOf(send.queued);
-        if (at >= 0) e.ready.splice(at, 1);
-      }
+      /* Its owed answer, produced or not and due or not, is taken back with its key, so no read waits on it. */
+      e.owed.delete(key);
+      if (send.entry.due === null) e.unstamped.splice(e.unstamped.indexOf(send.entry), 1);
       send.controller.abort();
       return;
     }
@@ -1994,6 +2025,16 @@ async function main() {
     console.error(`[trusted] [${e.tag}] send coalescing for engine:${e.docId}: ` + (c === null
       ? 'no send spoke as this document' : `sends=${c.sends} answers=${c.answers} identities=${c.identities}`));
   };
+  /* How instance `e`'s answers were delivered: reads, answers written, the work skipped at stalls, and the
+     wall time reads spent waiting for a due answer the wire had not produced. Said beside each @RESULT and at
+     the end, as the coalescing census is. */
+  const sayDelivery = (e) => {
+    const d = e.delivery;
+    console.error(`[trusted] [${e.tag}] reply delivery at work ${e.work} (+${e.skip} skipped): polls=${d.polls} ` +
+                  `stalls=${d.stalls} delivered=${d.delivered} owed=${e.owed.size} pollWaits=${d.pollWaits} ` +
+                  `pollWaitMs=${d.pollWaitMs.toFixed(1)} stallWaits=${d.stallWaits} ` +
+                  `stallWaitMs=${d.stallWaitMs.toFixed(1)} latencyWork=${REPLY_LATENCY_WORK}`);
+  };
   async function onLine(e, line) {
     if (line.startsWith('@RESULT ')) {
       const text = line.slice('@RESULT '.length);
@@ -2010,6 +2051,7 @@ async function main() {
         console.error(`[trusted] [${e.tag}] a novelty line was refused (${x.reason}): ${x.line}`);
       console.error(`[trusted] [${e.tag}] @RESULT#${e.results} ${line}`);
       sayCoalesced(e);
+      sayDelivery(e);
       return;
     }
     /* THE DENOMINATION THIS INSTANCE'S SLICE IS MEASURED IN, WHICH IS WHAT DECIDES WHETHER ANY NUMBER BELOW
@@ -2190,10 +2232,10 @@ async function main() {
          the answer was composed, so working it a second time would fetch one address twice for one park. Once
          the write goes out the key is released and the next announcement is a FRESH park (see `track`). */
       if (e.answered.has(key)) return;
-      const send = { controller: new AbortController(), cancelled: false, queued: undefined };
+      const send = { controller: new AbortController(), cancelled: false, entry: owe(e, key) };
       e.sends.set(key, send);
-      track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, driven, credentials, mode,
-                              referrerPolicy, referrer, askers, url, send));
+      send.entry.done = track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, driven,
+                                                credentials, mode, referrerPolicy, referrer, askers, url, send));
     } else if (f[0] === 'request') {
       /* `request<TAB>id<TAB>asker<TAB>op` (solver/engine.h's engine_host_requests). */
       if (f.length < 4 || !f[2])
@@ -2236,7 +2278,8 @@ async function main() {
            §4.4 "URL parsing" strips every ASCII tab from its input), the four tokens in front of the policy are
            ASCII lowercase words, and the policy is a Referrer Policy §3 policy or "". This host composes no
            Referer for a document load and reads the destination and policy nowhere. */
-        track(e, key, (async () => {
+        const entry = owe(e, key);
+        entry.done = track(e, key, (async () => {
           const args = op.slice('document.fetch\t'.length);
           const t = args.indexOf('\t');
           const u = t > 0 ? args.indexOf('\t', t + 1) : -1;
@@ -2252,7 +2295,7 @@ async function main() {
                             'longer share a grammar');
           const loaded = await navigate(args.slice(i + 1), e.docUrl, 'document.fetch', args.slice(0, t),
                                         args.slice(t + 1, u), args.slice(u + 1, w), doc);
-          if (loaded.declined) { e.ready.push(declineAnswer(id, loaded.declined)); return; }
+          if (loaded.declined) { answerOwed(entry, declineAnswer(id, loaded.declined)); return; }
           /* A RESPONSE OF ANOTHER ORIGIN NEVER REACHES THE ASKING INSTANCE. Judged by this zone's own record of
              that instance's origin and the response URL it fetched: the asker learns only the destination's
              origin and a token (`peer`, `held`), and the `navigable.navigate` naming that token provisions or
@@ -2262,8 +2305,8 @@ async function main() {
           if (destOrigin !== e.origin) {
             const held = `h${++heldSerial}`;
             e.held.set(held, { address: args.slice(i + 1), loaded });
-            e.ready.push(['answer', String(id), b64(JSON.stringify({ peer: stampOrigin(destOrigin), held })), '0',
-                          b64(new Uint8Array(0))].join('\t'));
+            answerOwed(entry, ['answer', String(id), b64(JSON.stringify({ peer: stampOrigin(destOrigin), held })),
+                               '0', b64(new Uint8Array(0))].join('\t'));
             return;
           }
           /* THE ANSWER IS §7.4.5's `{url, headers}` PLUS THE DOCUMENT AS BYTES: a Document is parsed from a
@@ -2276,16 +2319,16 @@ async function main() {
              Document here (`navigable.committed`) or names the token on a swap or peer record. */
           const held = `h${++heldSerial}`;
           e.held.set(held, { address: args.slice(i + 1), loaded });
-          e.ready.push(['answer', String(id),
-                        /* `setCookies` is empty: this host's loads carry no cookie jar (see the header). */
-                        b64(JSON.stringify({ url: loaded.url, headers: fieldLines(loaded.headers), setCookies: [],
-                                             held })),
-                        '0', b64(loaded.bytes)].join('\t'));
+          answerOwed(entry, ['answer', String(id),
+                             /* `setCookies` is empty: this host's loads carry no cookie jar (see the header). */
+                             b64(JSON.stringify({ url: loaded.url, headers: fieldLines(loaded.headers),
+                                                  setCookies: [], held })),
+                             '0', b64(loaded.bytes)].join('\t'));
         })());
       } else if (op.startsWith('xhr.send\t')) {
-        const send = { controller: new AbortController(), cancelled: false, queued: undefined };
+        const send = { controller: new AbortController(), cancelled: false, entry: owe(e, key) };
         e.sends.set(key, send);
-        track(e, key, workXhr(e, id, doc, op.slice('xhr.send\t'.length), send));
+        send.entry.done = track(e, key, workXhr(e, id, doc, op.slice('xhr.send\t'.length), send));
       } else {
         /* A REQUEST THIS ZONE DOES NOT CARRY IS REFUSED IN WORDS AND NOT LEFT SILENT: leaving it unanswered
            parks the asking flow for the rest of the session while the frontier reports nothing, which from
@@ -2299,33 +2342,49 @@ async function main() {
       }
     } else if (f[0] === 'notice') {
       await onNotice(e, line.slice('notice\t'.length));
-    } else if (line === 'poll') {
-      /* A RUNNING CHILD ASKING TO BE PAID, which is the round that carries the reply path on a document whose
-         frontier never empties. It is answered IN THIS TURN and with whatever is READY — see the header's
-         half-duplex paragraph for why that is the same rule `stalled` obeys and not a relaxation of it.
-         NOTHING IS AWAITED HERE, WHICH IS THE ONE DIFFERENCE THAT MATTERS AND IT IS DELIBERATE. The `stalled`
-         arm below settles every instance's outstanding work first, because at a stall there is no sibling the
-         wait stands in front of and a payment held back would be read as a refusal. At a poll there ARE
-         siblings — that is what `poll` means — so waiting for a fetch would stop a running frontier for the
-         duration of somebody else's network, which is exactly the cross-flow coupling the payment schedule
-         exists to remove. What is ready goes out; what is in flight goes out at the next poll.
-         `e.stalled` IS NOT SET AND MUST NOT BE. It is this zone's record of which children are out of work,
-         and the session-end arm in `flush` fires only when every live instance carries it; a polling child is
-         RUNNING, so setting it here would let a frontier that is busy exploring be told that nothing more is
-         coming for it. The flag answers "is this child waiting on me", and a poll is not that. */
+    } else if (f[0] === 'poll' && f.length === 2) {
+      /* A running child asking to be paid, the round that carries the reply path on a frontier that never
+         empties. It is paid exactly the answers due at its work, and this arm waits for a due answer the wire
+         has not produced: that wait is the price of a delivery point that is a function of work alone.
+         `e.stalled` is not set: it records which children are out of work, and the session-end arm in `flush`
+         reads it, so a polling child marked stalled could be told nothing more is coming while it runs. */
+      readAt(e, 'poll', f[1]);
+      e.delivery.polls++;
+      const waiting = dueEntries(e).filter((x) => x.rec === null);
+      if (waiting.length) {
+        const t0 = performance.now();
+        await Promise.all(waiting.map((x) => x.done));
+        e.delivery.pollWaits++;
+        e.delivery.pollWaitMs += performance.now() - t0;
+      }
       if (fatal) throw fatal;
       retryHeld();
       payRound(e);
-      /* AND ANY SIBLING THAT IS GENUINELY STALLED IS PAID ON THE SAME PASS, because work this instance's
-         round completed may be exactly what another one is parked on. It cannot reach the session-end arm
-         from here: that arm requires every live instance to be stalled, and this one is not. */
+      /* A stalled sibling is paid on the same pass, because work this round completed may be what it is parked
+         on. It cannot reach the session-end arm from here: that arm requires every live instance stalled. */
       flush();
-    } else if (line === 'stalled') {
+    } else if (f[0] === 'stalled' && f.length === 2) {
       e.stalled = true;
-      /* EVERYTHING OUTSTANDING ACROSS EVERY INSTANCE IS SETTLED FIRST, not just this one's: a payment held
-         back here is one the child will read as a refusal, and the work that produces it may have been
-         started by a sibling's round. */
-      await Promise.all(instances.flatMap((i) => [...i.answered.values()]));
+      readAt(e, 'stalled', f[1]);
+      e.delivery.stalls++;
+      /* Nothing runs on a stalled frontier, so its network clock moves to its earliest due point (the work it
+         would have spent waiting), and the answers due there are the ones this round carries. */
+      const owed = [...e.owed.values()];
+      if (owed.length) {
+        const next = Math.min(...owed.map((x) => x.due));
+        if (next > e.work + e.skip) { e.delivery.skipped += next - e.work - e.skip; e.skip = next - e.work; }
+      }
+      /* Everything outstanding that is not an undue answer is settled first, across every instance: a payment
+         held back here is one the child reads as a refusal, and the work that produces it (a cross-instance
+         answer, a provisioning) may have been started by a sibling's round. An answer not yet due is left in
+         flight, since this round will not carry it. */
+      const due = new Set(dueEntries(e));
+      const t0 = performance.now();
+      const unsettled = [...due].some((x) => x.rec === null);
+      await Promise.all(instances.flatMap((i) => [...i.answered]
+        .filter(([k]) => !i.owed.has(k) || due.has(i.owed.get(k)))
+        .map(([, done]) => done)));
+      if (unsettled) { e.delivery.stallWaits++; e.delivery.stallWaitMs += performance.now() - t0; }
       if (fatal) throw fatal;
       retryHeld();
       flush();
@@ -2365,6 +2424,7 @@ async function main() {
     e.held.clear();
     /* The instance's document ended, and its recorded sends with it (lib/send-coalesce.js), read first. */
     sayCoalesced(e);
+    sayDelivery(e);
     ZONE.sendCoalesceDocumentEnded('engine:' + e.docId);
     ({ code: e.exit, signal: e.signal } = await e.closed);
     /* HOW THIS INSTANCE ENDED, IN ONE PHRASE, so every reader below states the same fact the same way. */

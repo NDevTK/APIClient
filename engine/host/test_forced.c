@@ -36300,21 +36300,13 @@ static void abi_host_declined(unsigned id, const char *reason, int matched)
     free(line);
 }
 
-/* THE ROUND IN WHICH THIS HOST IS PAID. It runs after `stalled` and after `poll`, and the difference between
-   those two is not in this function — it is in WHAT A ZERO MEANS, which is the caller's to read and is why
-   this one only counts.
-   AFTER `stalled`, every member of the frontier is parked, so there is no sibling this read is standing in
-   front of and a zero is the zone DECLINING: it answers a stall with whatever it has and with the reason it
-   has nothing, so nothing more is coming.
-   AFTER `poll`, members are RUNNABLE and this read is standing in front of them — bounded, because the zone
-   answers a poll in the same turn it receives one, with whatever is READY and without waiting for what is in
-   flight. A zero there is "your bytes have not landed yet", which every run passes through; the caller drops
-   it rather than testing it, and reading it as a refusal would end a live session at the first slice whose
-   fetch had not come back.
-   THIS COMMENT USED TO SAY IT RUNS ONLY AFTER `stalled`, and that sentence was true of this tree and was
-   the whole of why a running frontier was never paid. It is rewritten rather than deleted because the
-   reasoning under it is exactly right and is what a reader re-derives — blocking at a stall denies nobody the
-   thread — and because that reasoning is a claim about what is SAFE, never about what is sufficient. */
+/* The round in which this host is paid, after `stalled` or `poll`; it counts the records it applied, and what
+   a zero means is the caller's to read.
+   After `stalled`, every member is parked and the zone answers the sends due at the earliest due point, so a
+   zero is the zone declining: nothing more is coming.
+   After `poll`, members are runnable and the zone answers exactly the sends due at or before the work the poll
+   stated (engine/trusted.mjs's `readAt`), in due-point order, waiting for any that has not arrived. A zero
+   there is "nothing is due yet", which the caller drops: reading it as a refusal would end a live session. */
 /* WHAT `abi_pay` ANSWERS WHERE THE CHANNEL ITSELF IS OVER, WHICH IS NOT A COUNT AND SO IS NOT A VALUE OF
    `paid`. The two are different facts and the callers act on them differently: a round that PAID NOTHING is
    the zone REFUSING — a statement it made, and the one thing that ends a live session — while a channel at its
@@ -36326,6 +36318,24 @@ static void abi_host_declined(unsigned id, const char *reason, int matched)
    qjs_teardown with the root's. */
 static char **g_abi_joined;
 static int    g_abi_joined_n;
+
+/* The instance's engine work at this round's read, stated on `poll` and `stalled`: the clock the zone stamps
+   each newly announced send with and compares due points against. It is the banked counter, since between
+   steps the running flow's count has been banked and what stands in the interpreter is a finished flow's
+   residue that the next switch-in discards. It never decreases across reads. */
+static int64_t g_abi_read_work = -1;
+
+static int64_t abi_read_work(void)
+{
+    int64_t w = engine_service_work();
+
+    DCHECKF(w >= 0 && w >= g_abi_read_work,
+            "the instance's work went from %lld at the last read to %lld at this one — the zone's due points are "
+            "on this clock, so a decrease would deliver a reply before the work it waits for",
+            (long long)g_abi_read_work, (long long)w);
+    g_abi_read_work = w;
+    return w;
+}
 
 static int abi_pay(void)
 {
@@ -37689,48 +37699,26 @@ TF_UNIT int abi_main(int argc, char **argv)
            was accurate and was the defect: the announcement travelled every round and the payment waited for
            a stall the run queue never reaches. */
         abi_announce();
-        /* AND THE ROUND IN WHICH A *RUNNING* FRONTIER IS PAID, WHICH IS THE HALF THIS LOOP DID NOT HAVE AND
-           WITHOUT WHICH THE ARM BELOW IS NOT MERELY LATE BUT UNREACHABLE. `ENGINE_STEP_STALLED` is returned
-           only where the run queue is EMPTY (solver/engine.c's two exits), so a frontier with any runnable
-           member never produces it and the stall arm below — the one place this host ever read its channel —
-           is never entered. The one payment that DOES land is the early stall before anything has forked, and
-           that payment is what starts the forking that prevents the next: MEASURED over four archived
-           `--abi` runs of one real SPA, `replyAnswered` reads 0 at the first two censuses and 1 at every one
-           of the 35 after it, while `forks` climbs 3 -> 435 across the same boundary and on to 6242. The
-           bytes of 42 of 43 reply-door asks were never handed over, and §Learning-from-replies makes that
-           reply path the product rather than a nicety.
-           IT IS A SECOND CONDITION ON THE SAME CHANNEL AND NOT A SECOND CHANNEL, which is what keeps
-           `abi_announce`'s deadlock argument true WORD FOR WORD rather than merely in spirit. The rule that
-           makes a hang impossible is not "the frontier is empty" — it is that THE ZONE WRITES ONLY IN ANSWER
-           TO A LINE THIS HOST WROTE ASKING TO READ, so neither end ever fills a pipe the other is not about
-           to drain. `poll` is such a line and `stalled` is such a line; what differs is the SENTENCE each one
-           makes, and only one of them is a question about whether the session is over.
-           SO A `poll` THAT PAYS NOTHING IS NOT A REFUSAL, and its count is dropped here deliberately rather
-           than tested as the stall arm tests it. The zone answers a poll with whatever is READY and does not
-           wait for what is in flight, so an empty round is "your bytes have not landed yet" — a state every
-           run passes through and which is not the zone declining anything. Reading it as one would end a live
-           session at the first slice whose fetch had not come back, which is the opposite defect and a worse
-           one. `abi_stalled`'s sentence stays where the frontier is genuinely out of work, which is the one
-           moment at which "nothing is coming" is a claim anybody can make.
-           ONLY WHEN SOMETHING IS OWED, so a host with an empty register pays for no round trip: the two
-           registers are the same pair `abi_announce` has just composed its bill from and the same pair the
-           referenced-instance arm below reads, asked here rather than remembered across the call. */
+        /* The round in which a running frontier is paid. `ENGINE_STEP_STALLED` is returned only where the run
+           queue is empty, so without this read a frontier with any runnable member is never paid. It keeps
+           `abi_announce`'s deadlock argument: the zone writes only in answer to a line this host wrote asking
+           to read, and `poll` is such a line as `stalled` is.
+           Each read states the instance's work (`abi_read_work`), and the zone answers exactly the sends due
+           at or before it, so where a reply lands is a function of the work and never of how fast the wire
+           answered. A zero is "nothing is due yet" and is dropped; `abi_stalled`'s sentence stays where the
+           frontier is out of work.
+           Only when something is owed, so a host with empty registers pays for no round trip. */
         if (step != ENGINE_STEP_STALLED &&
             (*qjs_pending() != '\0' || *qjs_host_requests() != '\0')) {
-            abi_say("poll");
-            /* AND THE ONE ANSWER THAT IS NOT A COUNT, HANDLED RATHER THAN ASSERTED UNREACHABLE. A `poll` is
-               written only where a register is non-empty and the engine does not run between that gate and
-               this call, so an end of channel reached from here is the OWED end and `abi_pay` has already
-               aborted on it — which makes this branch dead BY AN ARGUMENT, and an argument is what this file
-               distrusts wherever the alternative costs one comparison. A `paid` of zero is still dropped, for
-               the reason `abi_pay`'s own header gives: the zone answers a poll with whatever is READY, so an
-               empty round is "your bytes have not landed yet" and not a refusal. */
+            abi_say("poll\t%lld", (long long)abi_read_work());
+            /* A `poll` is written only where a register is non-empty, so an end of channel here is the owed end
+               and `abi_pay` has already aborted on it; the branch is kept because it costs one comparison. */
             if (abi_pay() == ABI_PAY_CHANNEL_ENDED) { qjs_request_park(); parking = 1; continue; }
         }
         if (step == ENGINE_STEP_STALLED) {
             int paid;
 
-            abi_say("stalled");
+            abi_say("stalled\t%lld", (long long)abi_read_work());
             /* A ROUND THAT PAID NOTHING IS THE ZONE DECLINING, which is the one thing that ends a live
                session here. A round that paid ANYTHING goes back into the step loop with no further
                condition: whether that payment unparked a flow is the frontier's answer to give on the next
