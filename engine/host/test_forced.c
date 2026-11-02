@@ -2054,9 +2054,9 @@ static JSValue tf_root_framed(JSContext *ctx, const char *frame, const EmbedderP
 
     /* The encoder writes no terminator; its length places one. */
     doc_b64[JS_Base64Encode(doc_b64, sizeof doc_b64 - 1, (const uint8_t *)TF_FRAME_PARENT_DOC,
-                            strlen(TF_FRAME_PARENT_DOC))] = ' ';
+                            strlen(TF_FRAME_PARENT_DOC))] = '\0';
     origin_b64[JS_Base64Encode(origin_b64, sizeof origin_b64 - 1, (const uint8_t *)TF_FRAME_PARENT_ORIGIN,
-                               strlen(TF_FRAME_PARENT_ORIGIN))] = ' ';
+                               strlen(TF_FRAME_PARENT_ORIGIN))] = '\0';
     CHECK(child_origin != NULL, "a framed fixture's own origin did not parse");
     /* remote_object.c's navigable identity (nav_encode): the tag `W`, then its document, origin, name, parent,
        opener and their records, each base64 and terminated by '.'. */
