@@ -162,10 +162,17 @@ static CssPx bf_run_value(BfRun r)
    repairs no number; what it repairs is which SENTENCE a reader is standing on, which is the whole of what
    §9.5's population is decided by. RETIREMENT: this note goes when no caller of `bf_no_collapse_through_edges`
    remains, since the fold is then one predicate again and there is nothing to re-derive. */
+/* CSS 2.2 §9.6 "Absolute positioning": a box whose `position` is `absolute` or `fixed`. */
+static bool bf_is_absolutely_positioned(lxb_dom_element_t *el)
+{
+    return css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+           css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED);
+}
+
 bool block_flow_is_floated(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "CSS 2 §9.5.1's float question was asked of no element");
-    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return false;
+    if (bf_is_absolutely_positioned(el)) return false;
     return !bf_computed_is(el, "float", "none");
 }
 
@@ -199,7 +206,7 @@ static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
     CssDisplay d;
     bool bfc;
 
-    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return true;
+    if (bf_is_absolutely_positioned(el)) return true;
     if (block_flow_is_floated(el)) return true;
     /* css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment": "The ... containment box
        establishes an independent formatting context", which for a block container is a block formatting
@@ -1986,8 +1993,11 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
 
     /* The box's own margins are its parent walk's operands (§8.3.1). A flex or grid item has no such parent:
        its margins are its container's (css-flexbox-1 §9.5 and §9.6, css-grid-1 §10.2), which read this walk's
-       height to resolve an `auto` one, so the runs hold only what escapes, which is nothing from a context root. */
-    if (bf_is_flex_or_grid_item(el)) {
+       height to resolve an `auto` one, so the runs hold only what escapes, which is nothing from a context root.
+       Nor does an absolutely positioned box: "Margins of absolutely positioned boxes do not collapse (not even
+       with their in-flow children)" (CSS 2.2 §8.3.1 "Collapsing margins"), and its vertical margins are solved
+       by CSS 2.2 §10.6.4 "Absolutely positioned, non-replaced elements" over this walk's height. */
+    if (bf_is_flex_or_grid_item(el) || bf_is_absolutely_positioned(el)) {
         out.top = bf_run_empty();
         out.bottom = bf_run_empty();
     } else {
