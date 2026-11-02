@@ -41,18 +41,20 @@ typedef UrlEncodedList UspList;
 #define usp_strdup       url_encoded_strdup
 
 /* The class opaque. `owner` is the URL wrapper this belongs to, or JS_UNDEFINED — see the file comment.
-   `unknown` is the unknown string the constructor parsed, or JS_UNDEFINED: when set, `list` is the parse of its
+   `vals` is §6.2's list itself: an Array of 2n USVStrings, each tuple's name then its value, where a half that
+   is unknown input is that unknown, so a read hands it back and a comparison with it forks. `list` is §5.1's
+   byte list projected from `vals` (usp_project), which the serializers read.
+   `unknown` is the unknown string the constructor parsed, or JS_UNDEFINED: when set, `vals` is the parse of its
    example (empty where it has none); get and has(name) fork over whether it holds the tuple (usp_lookup_answer)
    and every other read answers a derivation over it (usp_derive).
-   THE LIST IS PER-FLOW STATE AND IS NEVER CHANGED IN PLACE. `list` points into `list_box`, a payload whose
-   storage the box owns (usp_list_box); a write builds a changed copy in a new box (usp_list_edit), so the
-   capture restores a sibling's `list` and `list_box` together and no arm sees another's write.
-   `mutated` says a §6.2 mutation has made `unknown` the derivation it ran (usp_rederive), so the list is no
-   longer the parse of a source's own bytes. */
-typedef struct { JSValue list_box; UspList *list; JSValue owner; JSValue unknown; int unknown_example; int mutated; }
-        UspObj;
+   THE LIST IS PER-FLOW STATE AND IS NEVER CHANGED IN PLACE. A write builds a new `vals` and its projection in a
+   new box (usp_commit), so the capture restores a sibling's three fields together and no arm sees another's
+   write. `mutated` says a §6.2 mutation has made `unknown` the derivation it ran (usp_rederive), so the list
+   is no longer the parse of a source's own bytes. */
+typedef struct { JSValue list_box; UspList *list; JSValue vals; JSValue owner; JSValue unknown; int unknown_example;
+                 int mutated; } UspObj;
 #define USP_OFF(f) (uint16_t)offsetof(UspObj, f)
-static const uint16_t USP_VALS[] = { USP_OFF(list_box), USP_OFF(owner), USP_OFF(unknown) };
+static const uint16_t USP_VALS[] = { USP_OFF(list_box), USP_OFF(vals), USP_OFF(owner), USP_OFF(unknown) };
 static const CowRecord USP_REC = { sizeof(UspObj), USP_VALS, (int)(sizeof USP_VALS / sizeof *USP_VALS) };
 
 /* This component's claimant name in the source registry: core/platform.c's row for it. */
@@ -80,6 +82,7 @@ static void usp_finalizer(JSRuntime *rt, JSValue val)
     (void)id;
     if (u) {
         JS_FreeValueRT(rt, u->list_box);
+        JS_FreeValueRT(rt, u->vals);
         JS_FreeValueRT(rt, u->owner);
         JS_FreeValueRT(rt, u->unknown);
         js_free_rt(rt, u);
@@ -95,6 +98,7 @@ static void usp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     /* The URL holds this object and this object holds the URL — a real cycle, which is what gc_mark is for. */
     if (u) {
         JS_MarkValue(rt, u->list_box, mark_func);
+        JS_MarkValue(rt, u->vals, mark_func);
         JS_MarkValue(rt, u->owner, mark_func);
         JS_MarkValue(rt, u->unknown, mark_func);
     }
@@ -127,27 +131,104 @@ static UspObj *usp_rec(JSValueConst v)
     return u;
 }
 
-/* Replace the record's list with `l` (malloc'd, taken), through the record's write. */
-static void usp_list_replace(JSContext *ctx, UspObj *u, UspList *l)
+/* How many tuples the §6.2 list `vals` holds. */
+static int usp_vals_n(JSContext *ctx, JSValueConst vals)
 {
-    cow_record_set(ctx, u, &USP_REC, &u->list_box, usp_list_box(ctx, l));
-    u->list = l;
+    int64_t n = 0;
+
+    CHECK(JS_GetLength(ctx, vals, &n) == 0, "urlsearchparams: a list's length could not be read");
+    DCHECK(n % 2 == 0 && n / 2 <= INT32_MAX, "a §6.2 list holds a name with no value");
+    return (int)(n / 2);
 }
 
-/* §6.2's list as this flow may change it: a copy, held by the record from here. */
-static UspList *usp_list_edit(JSContext *ctx, UspObj *u)
+/* Half `h` (0 the name, 1 the value) of tuple `i` of `vals`: a String, or the unknown that half is. Owned. */
+static JSValue usp_half(JSContext *ctx, JSValueConst vals, int i, int h)
 {
-    UspList *l = lexbor_calloc(1, sizeof *l);
+    JSValue v = JS_GetPropertyUint32(ctx, vals, 2 * (uint32_t)i + (uint32_t)h);
+
+    DCHECK(JS_IsString(v) || concolic_is(v),
+           "a §6.2 list half is neither a USVString nor unknown input — every writer converts it first");
+    return v;
+}
+
+/* Append the tuple (`name`, `value`) (both borrowed) to the Array `vals` this write is building. */
+static void usp_vals_push(JSContext *ctx, JSValueConst vals, JSValueConst name, JSValueConst value)
+{
+    uint32_t at = 2 * (uint32_t)usp_vals_n(ctx, vals);
+
+    CHECK(JS_DefinePropertyValueUint32(ctx, vals, at, JS_DupValue(ctx, name), JS_PROP_C_W_E) >= 0 &&
+          JS_DefinePropertyValueUint32(ctx, vals, at + 1, JS_DupValue(ctx, value), JS_PROP_C_W_E) >= 0,
+          "urlsearchparams: OOM holding a tuple");
+}
+
+static JSValue usp_vals_new(JSContext *ctx)
+{
+    JSValue a = JS_NewArray(ctx);
+
+    CHECK(!JS_IsException(a), "urlsearchparams: OOM holding a list");
+    return a;
+}
+
+/* The §6.2 list of the §5.1 parse `l`, whose halves are all bytes. Owned. */
+static JSValue usp_vals_of_list(JSContext *ctx, const UspList *l)
+{
+    JSValue vals = usp_vals_new(ctx);
     int i;
 
-    CHECK(l != NULL, "urlsearchparams: OOM copying a list for a write");
-    for (i = 0; i < u->list->n; i++) {
-        const UspPair *e = &u->list->e[i];
-        usp_list_append(l, e->name, e->nlen, e->nhole, e->value, e->vlen, e->vhole);
+    for (i = 0; i < l->n; i++) {
+        JSValue n, v;
+
+        DCHECK(!l->e[i].nhole && !l->e[i].vhole, "a parse of bytes produced a half that is a hole");
+        n = JS_NewStringLen(ctx, l->e[i].name, l->e[i].nlen);
+        v = JS_NewStringLen(ctx, l->e[i].value, l->e[i].vlen);
+        CHECK(!JS_IsException(n) && !JS_IsException(v), "urlsearchparams: OOM holding a parsed tuple");
+        usp_vals_push(ctx, vals, n, v);
+        JS_FreeValue(ctx, n);
+        JS_FreeValue(ctx, v);
     }
-    usp_list_replace(ctx, u, l);
+    return vals;
+}
+
+/* §5.1's byte list of the §6.2 list `vals` (borrowed): each String half's bytes, and an unknown half's display
+   shape with its hole bit, which §5.2's serializer copies verbatim (see UrlEncodedPair). Malloc'd, owned. */
+static UspList *usp_project(JSContext *ctx, JSValueConst vals)
+{
+    UspList *l = lexbor_calloc(1, sizeof *l);
+    int i, h, n = usp_vals_n(ctx, vals);
+
+    CHECK(l != NULL, "urlsearchparams: OOM projecting a list");
+    for (i = 0; i < n; i++) {
+        const char *b[2];
+        size_t bl[2] = { 0, 0 };
+        int hole[2];
+
+        for (h = 0; h < 2; h++) {
+            JSValue v = usp_half(ctx, vals, i, h);
+
+            hole[h] = concolic_is(v);
+            b[h] = hole[h] ? concolic_name_cstr(ctx, v) : JS_ToCStringLen(ctx, &bl[h], v);
+            CHECK(b[h] != NULL, "urlsearchparams: OOM projecting a tuple's bytes");
+            if (hole[h]) bl[h] = strlen(b[h]);
+            JS_FreeValue(ctx, v);
+        }
+        usp_list_append(l, b[0], bl[0], hole[0], b[1], bl[1], hole[1]);
+        JS_FreeCString(ctx, b[0]);
+        JS_FreeCString(ctx, b[1]);
+    }
     return l;
 }
+
+/* Make `vals` (taken) the record's list, with its projection, through the record's writes; the caller's site
+   travels to the write's checks. */
+static void usp_commit_at(JSContext *ctx, UspObj *u, JSValue vals, const char *file, int line)
+{
+    UspList *l = usp_project(ctx, vals);
+
+    cow_record_set_at(ctx, u, &USP_REC, &u->vals, vals, file, line);
+    cow_record_set_at(ctx, u, &USP_REC, &u->list_box, usp_list_box(ctx, l), file, line);
+    u->list = l;
+}
+#define usp_commit(ctx_, u_, vals_) usp_commit_at((ctx_), (u_), (vals_), __FILE__, __LINE__)
 
 const UrlEncodedList *usp_list_of(JSValueConst v)
 {
@@ -194,12 +275,13 @@ static void usp_update(JSContext *ctx, UspObj *u)
     url_query_assign(ctx, u->owner, q);
 }
 
-/* A URLSearchParams over `l` (malloc'd, taken) and `unknown` (taken), initialised before the record is
+/* A URLSearchParams over the §6.2 list `vals` and `unknown` (both taken), initialised before the record is
    reachable. */
-static JSValue usp_new_with(JSContext *ctx, JSValueConst owner, UspList *l, JSValue unknown, int unknown_example)
+static JSValue usp_new_with(JSContext *ctx, JSValueConst owner, JSValue vals, JSValue unknown, int unknown_example)
 {
     UspObj *u;
     JSValue obj;
+    UspList *l;
 
     DCHECK(g_usp_class != 0, "a URLSearchParams was built before the class existed");
     DCHECK(JS_IsUndefined(unknown) || concolic_is(unknown),
@@ -213,34 +295,42 @@ static JSValue usp_new_with(JSContext *ctx, JSValueConst owner, UspList *l, JSVa
         JS_FreeValue(ctx, proto);
     }
     u = JS_IsException(obj) ? NULL : js_mallocz(ctx, sizeof(*u));
-    if (!u) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, unknown); usp_list_box_free(NULL, NULL, l); return JS_EXCEPTION; }
+    if (!u) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, unknown); JS_FreeValue(ctx, vals); return JS_EXCEPTION; }
+    l = usp_project(ctx, vals);
     u->owner = JS_DupValue(ctx, owner);
     u->unknown = unknown;
     u->unknown_example = unknown_example;
+    u->vals = vals;
     u->list = l;
     u->list_box = usp_list_box(ctx, l);
     JS_SetOpaque(obj, u);
     return obj;
 }
 
-JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t query_len)
+/* The §6.2 list §5.1's parse of `query` (`len` bytes, or NULL for none) gives. Owned. */
+static JSValue usp_vals_parse(JSContext *ctx, const char *query, size_t len)
 {
     UspList *l = lexbor_calloc(1, sizeof *l);
+    JSValue vals;
 
     CHECK(l != NULL, "urlsearchparams: OOM building a list");
-    if (query) usp_parse(l, query, query_len);
-    return usp_new_with(ctx, owner, l, JS_UNDEFINED, 0);
+    if (query) usp_parse(l, query, len);
+    vals = usp_vals_of_list(ctx, l);
+    usp_list_box_free(NULL, NULL, l);
+    return vals;
+}
+
+JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t query_len)
+{
+    return usp_new_with(ctx, owner, usp_vals_parse(ctx, query, query_len), JS_UNDEFINED, 0);
 }
 
 void usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query_len)
 {
     UspObj *u = usp_rec(usp);
-    UspList *l = lexbor_calloc(1, sizeof *l);
 
     DCHECK(u != NULL, "a URL's search setter re-initialised something that is not a URLSearchParams");
-    CHECK(l != NULL, "urlsearchparams: OOM building a list");
-    if (query) usp_parse(l, query, query_len);
-    usp_list_replace(ctx, u, l);
+    usp_commit(ctx, u, usp_vals_parse(ctx, query, query_len));
 }
 
 /* ---- §6.2's members --------------------------------------------------------------------------------------- */
@@ -250,30 +340,13 @@ enum { USP_APPEND = 0, USP_DELETE, USP_GET, USP_GETALL, USP_HAS, USP_SET, USP_SO
 /* THE AGENT'S POOL ENTRIES, one per §6.2 operation — the OBJECTS they are installed as are each realm's. */
 static int g_usp_id[USP_MEMBER_N];
 
-/* WHAT A HALF THAT IS A HOLE CANNOT DO YET, SAID ONCE. §6.2's list is a list of tuples of USVStrings and this
-   one holds their BYTES, so an unknown enters it as its display shape (see UrlEncodedPair). Bytes are enough
-   for the two things §6.2 does with a stored half that this engine can already answer — §5.2 serializing it
-   onto the associated URL, and §5.2 serializing it as a request body — because the serializer copies a hole
-   verbatim and the emission reads it by its braces.
-   THEY ARE NOT ENOUGH FOR THE OTHER TWO, and each is a WRONG ANSWER rather than a missing one, which is why
-   this crashes instead of proceeding:
-     - an EQUALITY. `USP_NAME_IS`/`USP_VALUE_IS` memcmp the halves, and a shape against real bytes compares
-       FALSE while having proven nothing — so `get(unknown)` answers null and `delete(name, unknown)` removes
-       nothing, both of them decisions this flow never made. §Solver-half's forced multi-path execution runs
-       BOTH arms of an undecided equality; a memcmp runs neither.
-     - a READ BACK AS A VALUE. §6.2's `get`, `getAll` and the pair iterator hand the page a half, and a page
-       branching on what it gets back must branch on the UNKNOWN. Answering with the shape as a real String
-       de-taints it: the value that came out of `navigator.language` is indistinguishable from a literal, and
-       every gate downstream of it is decided concretely.
-   BUILD: §6.2's list carrying the VALUE and not its bytes — a concolic rides a JSValue, and the FormData
-   entry list (core/html/form_data.c) already holds one per entry and projects to bytes at its serializers.
-   §5.1's byte list stays bytes: it is produced by a parser over bytes and consumed by a serializer over
-   bytes, and it is the INTERFACE that has USVStrings. */
-#define USP_HOLE_WHY(what)                                                                          \
-    "a URLSearchParams " what " — §6.2's list holds USVStrings and this list holds their BYTES, so " \
-    "an unknown is in it as its display shape and this operation would decide or de-taint it. Build " \
-    "the value-carrying §6.2 list (form_data.c's entry list is the worked example); §5.1's byte list " \
-    "stays bytes"
+/* WHAT AN UNKNOWN HALF CANNOT DO YET, SAID ONCE. §6.2's list holds an unknown USVString as itself (UspObj's
+   `vals`), so a read hands it back and §5.2 serializes its shape verbatim. "A tuple whose name is name" is an
+   equality, though, and over an unknown both outcomes are worlds: get and has fork it (usp_lookup_step), but
+   the other members are not step machines, and comparing the shape's bytes would decide it for the flow. */
+#define USP_HOLE_WHY(what)                                                                                 \
+    "a URLSearchParams " what " — an equality over unknown input has a world for each outcome and this "   \
+    "member cannot fork. Build it as a step machine that forks the comparison as usp_lookup_step does"
 
 /* A read of a list parsed from an unknown string, answered as the unknown that read derives — named by the
    operation, the string and the read's own arguments — with the read over the example's parse as its example
@@ -323,153 +396,181 @@ static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JS
     u->mutated = 1;   /* a POD field of the record usp_rec captured */
 }
 
+/* Whether half `h` of tuple `i` of `vals` is `want`, both Strings: §6.2's comparisons are of code units. */
+static bool usp_half_is(JSContext *ctx, JSValueConst vals, int i, int h, JSValueConst want)
+{
+    JSValue v = usp_half(ctx, vals, i, h);
+    bool eq = JS_IsStrictEqual(ctx, v, want);
+
+    JS_FreeValue(ctx, v);
+    return eq;
+}
+
+/* Whether any half of the projected list `l` is unknown input. */
+static bool usp_any_hole(const UspList *l)
+{
+    int i;
+
+    for (i = 0; i < l->n; i++)
+        if (l->e[i].nhole || l->e[i].vhole) return true;
+    return false;
+}
+
+/* §5.2's serialization of `vals` run on its halves' examples: each unknown half's example in its place, or
+   JS_UNDEFINED where one has none. Owned. */
+static JSValue usp_example_serialization(JSContext *ctx, JSValueConst vals)
+{
+    JSValue ex = usp_vals_new(ctx), r = JS_UNDEFINED;
+    int i, h, n = usp_vals_n(ctx, vals);
+    bool all = true;
+
+    for (i = 0; i < n && all; i++) {
+        JSValue half[2];
+
+        for (h = 0; h < 2; h++) {
+            JSValue v = usp_half(ctx, vals, i, h);
+
+            half[h] = concolic_is(v) ? concolic_example_string(ctx, v) : JS_DupValue(ctx, v);
+            JS_FreeValue(ctx, v);
+            all = all && !JS_IsUndefined(half[h]);
+        }
+        if (all) usp_vals_push(ctx, ex, half[0], half[1]);
+        JS_FreeValue(ctx, half[0]);
+        JS_FreeValue(ctx, half[1]);
+    }
+    if (all) {
+        UspList *l = usp_project(ctx, ex);
+        char *q = usp_serialize(l, NULL);
+
+        r = JS_NewString(ctx, q);
+        free(q);
+        usp_list_box_free(NULL, NULL, l);
+    }
+    JS_FreeValue(ctx, ex);
+    return r;
+}
+
+/* §6.2's stringification of a list holding unknown halves: §5.2's serialization is a function of every half,
+   so it is the unknown they derive, with the serialization run on their examples as its example. `r` (the
+   projection's serialization, consumed) is the answer when no half is unknown. */
+static JSValue usp_derive_halves(JSContext *ctx, UspObj *u, const char *op, JSValue r)
+{
+    JSValue d;
+
+    if (!usp_any_hole(u->list)) return r;
+    JS_FreeValue(ctx, r);
+    d = concolic_new_derived_list(ctx, op, u->vals, usp_example_serialization(ctx, u->vals));
+    DCHECK(concolic_is(d), "a URLSearchParams list holding an unknown half derived no unknown serialization");
+    return d;
+}
+
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     UspObj *u = usp_of(ctx, this_val);
-    const char *name = NULL, *value = NULL;
-    size_t nn = 0, vn = 0;
-    int nhole = 0, vhole = 0;
-    JSValue r = JS_UNDEFINED;
-    int i, w;
+    JSValueConst name = argc > 0 ? argv[0] : JS_UNDEFINED, value = JS_UNDEFINED;
+    JSValue vals = JS_UNDEFINED, r = JS_UNDEFINED;
+    bool with_value, found = false;
+    int i, n;
 
     if (!u) return JS_EXCEPTION;
-    /* §6.2's four mutations write a copy of the list (see UspObj). */
-    if (magic == USP_APPEND || magic == USP_DELETE || magic == USP_SET || magic == USP_SORT)
-        usp_list_edit(ctx, u);
-    if (magic == USP_SORT) {
-        /* §6.2 sort(): by the NAMES' code units, and STABLE — the relative order of equal names is preserved,
-           which is why this is an insertion sort and not qsort. */
-        for (i = 0; i < u->list->n; i++)
-            DCHECK(!u->list->e[i].nhole,
-                   USP_HOLE_WHY("sort() ordered a name that is a hole by its display shape's code units"));
-        for (i = 1; i < u->list->n; i++) {
-            UspPair tmp = u->list->e[i];
-            int j;
-            for (j = i - 1; j >= 0 && usp_name_cmp(&u->list->e[j], &tmp) > 0; j--)
-                u->list->e[j + 1] = u->list->e[j];
-            u->list->e[j + 1] = tmp;
-        }
-        usp_update(ctx, u);
-        if (!JS_IsUndefined(u->unknown)) usp_rederive(ctx, u, "URLSearchParams.sort", 0, NULL);
-        return JS_UNDEFINED;
-    }
+    n = usp_vals_n(ctx, u->vals);
     if (magic == USP_TOSTRING) {
         char *s = usp_serialize(u->list, NULL);
         r = JS_NewString(ctx, s);
         free(s);
-        return JS_IsUndefined(u->unknown) ? r : usp_derive(ctx, u, "URLSearchParams.toString", r, 0, NULL);
+        CHECK(!JS_IsException(r), "urlsearchparams: OOM serializing a list");
+        return JS_IsUndefined(u->unknown) ? usp_derive_halves(ctx, u, "URLSearchParams.toString", r)
+                                          : usp_derive(ctx, u, "URLSearchParams.toString", r, 0, NULL);
     }
+    if (magic == USP_SORT) {
+        /* §6.2 sort(): by the NAMES' code units, and STABLE — the relative order of equal names is preserved,
+           which is why this is an insertion sort and not qsort. It orders the projection's tuples, which are
+           the list's in the same positions. */
+        int *ord = malloc(sizeof *ord * (size_t)(n ? n : 1)), j, k;
 
-    /* §6.2's members take USVStrings, and an UNKNOWN one has no bytes to be. The Web IDL declaration passes
-       unknown external input through as itself on purpose, so a JS_ToCString here is the one thing this
-       boundary must not do (quickjs.c's js_force_tostring says so at the crash): a `const char *` cannot carry
-       a concolic, and §7.1.19 ToString ( arg ) over an unknown is the identity, so there is nothing to convert.
-       NEITHER HALF IS AN OPERATOR — none of the four members reaching this line returns the converted string.
-       `append` and `set` STORE it, and §6.2 URLSearchParams class's update steps then serialize it onto the
-       associated URL, which is
-       what `vscode.dev`'s `e.searchParams.set("vscode-lang", navigator.language.toLowerCase())` does one line
-       before it assigns `e.href` to `window.location.href`. `delete` and `has` MATCH against it. So each half
-       is a NAME in js_force_tostring's sense — an unknown denotes its own display SHAPE, a real string, stable
-       per source — and the pair records WHICH halves are holes so §5.2's serializer does not encode them out
-       of existence.
-       THE LENGTH IS strlen FOR A HOLE AND JS_ToCStringLen's FOR DATA, and the difference is not cosmetic: a
-       real USVString may contain U+0000 (`?a=b%00c` is one pair whose value is three characters), while a
-       display shape has none — which url_encoded_list_append asserts, because §5.2 copies a hole half verbatim
-       and measures it with strlen. Both spellings return an OWNED string, so there is one free path below. */
-    {
-        JSValueConst a0 = argc > 0 ? argv[0] : JS_UNDEFINED;
-        nhole = concolic_is(a0);
-        name = nhole ? concolic_name_cstr(ctx, a0) : JS_ToCStringLen(ctx, &nn, a0);
-        if (!name) return JS_EXCEPTION;
-        if (nhole) nn = strlen(name);
-    }
-#define USP_NAME_IS(i)  (u->list->e[i].nlen == nn && !memcmp(u->list->e[i].name, name, nn))
-#define USP_VALUE_IS(i) (!value || (u->list->e[i].vlen == vn && !memcmp(u->list->e[i].value, value, vn)))
-    /* §6.2: `delete` takes an OPTIONAL value, and its presence changes what it matches — `delete(name)`
-       removes every pair with that name, `delete(name, value)` only the pairs that also have that value. The
-       optional-argument rule is what tells the two apart, so undefined must reach here as undefined. */
-    if (magic == USP_APPEND || magic == USP_SET ||
-        (magic == USP_DELETE && argc > 1 && !JS_IsUndefined(argv[1]))) {
-        vhole = concolic_is(argv[1]);
-        value = vhole ? concolic_name_cstr(ctx, argv[1]) : JS_ToCStringLen(ctx, &vn, argv[1]);
-        if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
-        if (vhole) vn = strlen(value);
-    }
-    /* THE EQUALITY BARRIER. Everything but `append` memcmps the NAME against the stored halves, and
-       `delete` memcmps the VALUE too — see USP_HOLE_WHY. `set` is in the first group: it compares names
-       to find the tuple to overwrite, and only its VALUE is free to be a hole. */
-    DCHECK(!nhole || magic == USP_APPEND,
-           USP_HOLE_WHY("member matched an unknown NAME against the stored names by memcmp"));
-    DCHECK(!vhole || magic == USP_APPEND || magic == USP_SET,
-           USP_HOLE_WHY("delete() matched an unknown VALUE against the stored values by memcmp"));
-
-    switch (magic) {
-    case USP_APPEND:
-        usp_list_append(u->list, name, nn, nhole, value, vn, vhole);
-        usp_update(ctx, u);
-        break;
-    case USP_DELETE:
-        for (i = 0, w = 0; i < u->list->n; i++) {
-            int match = USP_NAME_IS(i) && USP_VALUE_IS(i);
-            if (match) { free(u->list->e[i].name); free(u->list->e[i].value); continue; }
-            u->list->e[w++] = u->list->e[i];
+        CHECK(ord != NULL, "urlsearchparams: OOM ordering a list");
+        for (i = 0; i < n; i++) {
+            DCHECK(!u->list->e[i].nhole, USP_HOLE_WHY("sort() ordered a name that is unknown"));
+            ord[i] = i;
         }
-        u->list->n = w;
+        for (i = 1; i < n; i++) {
+            k = ord[i];
+            for (j = i - 1; j >= 0 && usp_name_cmp(&u->list->e[ord[j]], &u->list->e[k]) > 0; j--)
+                ord[j + 1] = ord[j];
+            ord[j + 1] = k;
+        }
+        vals = usp_vals_new(ctx);
+        for (i = 0; i < n; i++) {
+            JSValue a = usp_half(ctx, u->vals, ord[i], 0), b = usp_half(ctx, u->vals, ord[i], 1);
+            usp_vals_push(ctx, vals, a, b);
+            JS_FreeValue(ctx, a);
+            JS_FreeValue(ctx, b);
+        }
+        free(ord);
+        usp_commit(ctx, u, vals);
         usp_update(ctx, u);
-        break;
-    case USP_GETALL: {
+        if (!JS_IsUndefined(u->unknown)) usp_rederive(ctx, u, "URLSearchParams.sort", 0, NULL);
+        return JS_UNDEFINED;
+    }
+
+    /* §6.2's members take USVStrings, and the Web IDL declaration passes UNKNOWN external input through as
+       itself (§7.1.19 ToString over an unknown is the identity), so `append` and `set` store an unknown half as
+       itself — `vscode.dev` sets `navigator.language.toLowerCase()` this way one line before it assigns the
+       URL to `location.href` — and §6.2's update steps serialize its shape. §6.2: `delete` takes an OPTIONAL
+       value, and its presence changes what it matches, so undefined must reach here as undefined. */
+    with_value = magic == USP_APPEND || magic == USP_SET ||
+                 (magic == USP_DELETE && argc > 1 && !JS_IsUndefined(argv[1]));
+    if (with_value) value = argv[1];
+    DCHECK((JS_IsString(name) || concolic_is(name)) && (!with_value || JS_IsString(value) || concolic_is(value)),
+           "a URLSearchParams member was handed an argument its USVString declaration did not convert");
+    /* THE EQUALITY BARRIER — see USP_HOLE_WHY. `set` compares names to find the tuple to overwrite, so only its
+       VALUE may be unknown; `delete` compares both. */
+    DCHECK(!concolic_is(name) || magic == USP_APPEND,
+           USP_HOLE_WHY("member matched an unknown NAME against the stored names"));
+    DCHECK(!(magic == USP_DELETE && with_value && concolic_is(value)),
+           USP_HOLE_WHY("delete() matched an unknown VALUE against the stored values"));
+
+    if (magic == USP_GETALL) {
         uint32_t k = 0;
-        r = JS_NewArray(ctx);
-        if (JS_IsException(r)) break;
-        for (i = 0; i < u->list->n; i++)
-            if (USP_NAME_IS(i)) {
-                DCHECK(!u->list->e[i].vhole,
-                       USP_HOLE_WHY("getAll() answered with a value that is a hole, as a real String"));
-                JS_SetPropertyUint32(ctx, r, k++,
-                                     JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen));
-            }
-        break;
-    }
-    default: {
-        /* §6.2 set(): the FIRST pair with this name keeps its position and takes the new value, and every
-           other pair with that name is removed. Appending after a delete would move it to the end. */
-        int found = -1;
-        DCHECK(magic == USP_SET, "a URLSearchParams member was declared with a magic this component does not answer");
-        for (i = 0, w = 0; i < u->list->n; i++) {
-            if (USP_NAME_IS(i)) {
-                if (found < 0) {
-                    found = w;
-                    free(u->list->e[i].value);
-                    u->list->e[i].value = usp_strdup(value, vn);
-                    u->list->e[i].vlen = vn;
-                    u->list->e[i].vhole = vhole ? 1u : 0u;   /* the hole bit rides the value it describes */
-                    u->list->e[w++] = u->list->e[i];
-                } else {
-                    free(u->list->e[i].name);
-                    free(u->list->e[i].value);
-                }
-                continue;
-            }
-            u->list->e[w++] = u->list->e[i];
+
+        r = usp_vals_new(ctx);
+        for (i = 0; i < n; i++) {
+            DCHECK(!u->list->e[i].nhole, USP_HOLE_WHY("getAll() matched a stored NAME that is unknown"));
+            if (!usp_half_is(ctx, u->vals, i, 0, name)) continue;
+            CHECK(JS_DefinePropertyValueUint32(ctx, r, k++, usp_half(ctx, u->vals, i, 1), JS_PROP_C_W_E) >= 0,
+                  "urlsearchparams: OOM answering getAll()");
         }
-        u->list->n = w;
-        if (found < 0) usp_list_append(u->list, name, nn, nhole, value, vn, vhole);
-        usp_update(ctx, u);
-        break;
+        return JS_IsUndefined(u->unknown) ? r : usp_derive(ctx, u, "URLSearchParams.getAll", r, argc, argv);
     }
+
+    /* Every write builds a new list (see UspObj): the tuples this member keeps, in order. */
+    vals = usp_vals_new(ctx);
+    for (i = 0; i < n; i++) {
+        JSValue a = usp_half(ctx, u->vals, i, 0), b = usp_half(ctx, u->vals, i, 1);
+        bool match = false;
+
+        if (magic != USP_APPEND) {
+            DCHECK(!concolic_is(a), USP_HOLE_WHY("delete() or set() matched a stored NAME that is unknown"));
+            DCHECK(!(magic == USP_DELETE && with_value && concolic_is(b)),
+                   USP_HOLE_WHY("delete() matched a stored VALUE that is unknown"));
+            match = JS_IsStrictEqual(ctx, a, name) &&
+                    (magic != USP_DELETE || !with_value || JS_IsStrictEqual(ctx, b, value));
+        }
+        /* §6.2 set(): the FIRST tuple with this name keeps its position and takes the new value, and every
+           other tuple with that name is removed; delete() removes every match. */
+        if (!match) usp_vals_push(ctx, vals, a, b);
+        else if (magic == USP_SET && !found) usp_vals_push(ctx, vals, a, value);
+        found = found || match;
+        JS_FreeValue(ctx, a);
+        JS_FreeValue(ctx, b);
     }
-    JS_FreeCString(ctx, name);
-    if (value) JS_FreeCString(ctx, value);
-    if (!JS_IsUndefined(u->unknown) && !JS_IsException(r)) {
-        if (magic == USP_GETALL)
-            r = usp_derive(ctx, u, "URLSearchParams.getAll", r, argc, argv);
-        else
-            usp_rederive(ctx, u, magic == USP_APPEND ? "URLSearchParams.append" : magic == USP_DELETE
-                                     ? "URLSearchParams.delete" : "URLSearchParams.set", argc, argv);
-    }
-    return r;
-#undef USP_NAME_IS
-#undef USP_VALUE_IS
+    if (magic == USP_APPEND || (magic == USP_SET && !found)) usp_vals_push(ctx, vals, name, value);
+    usp_commit(ctx, u, vals);
+    usp_update(ctx, u);
+    if (!JS_IsUndefined(u->unknown))
+        usp_rederive(ctx, u, magic == USP_APPEND ? "URLSearchParams.append" : magic == USP_DELETE
+                                 ? "URLSearchParams.delete" : "URLSearchParams.set", argc, argv);
+    return JS_UNDEFINED;
 }
 
 /* The first tuple of `l` whose name is the `nn` bytes at `name` and, where `value` is non-NULL, whose value is
@@ -479,10 +580,12 @@ static int usp_find(const UspList *l, const char *name, size_t nn, const char *v
     int i;
 
     for (i = 0; i < l->n; i++) {
-        DCHECK(!l->e[i].nhole, USP_HOLE_WHY("lookup compared a stored NAME that is a hole against real bytes"));
+        DCHECK(!l->e[i].nhole, USP_HOLE_WHY("get()/has() over an unknown string's list compared a stored NAME "
+                                            "that is unknown by its shape's bytes"));
         if (l->e[i].nlen != nn || memcmp(l->e[i].name, name, nn)) continue;
         DCHECK(!value || !l->e[i].vhole,
-               USP_HOLE_WHY("has() compared a stored VALUE that is a hole against real bytes"));
+               USP_HOLE_WHY("has() over an unknown string's list compared a stored VALUE that is unknown by its "
+                            "shape's bytes"));
         if (value && (l->e[i].vlen != vn || memcmp(l->e[i].value, value, vn))) continue;
         return i;
     }
@@ -507,13 +610,61 @@ static char *usp_serialize_value(const char *s, size_t n)
 enum { IDL_STEP_STAGE_BASE(UL_STAGES) UL_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const UL_STEPS[] = { UL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* The ask's name at step_tobool_run; the fork's key is the equality's own identity. */
+#define USP_EQUALS_OP "URL §6.2 a tuple whose name is name (and value is value) in this's list"
+
 typedef struct {
     IdlNameChainSuppliedKey key;
+    JSValue pred;    /* the equality the walk is asking, held across its fork while `asking` */
+    int     i;       /* the tuple the walk stands on */
+    uint8_t half;    /* the half of it being compared: 0 its name, 1 its value (has(name, value)) */
+    uint8_t asking;
 } UspLookupState;
 
 static void usp_lookup_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    idl_name_chain_supplied_visit(ctx, &((UspLookupState *)st)->key, v);
+    UspLookupState *s = st;
+
+    idl_name_chain_supplied_visit(ctx, &s->key, v);
+    v->val(ctx, &s->pred);
+}
+
+/* URL §6.2's get(name) and has(name, value) over a list of USVStrings: the first tuple whose name is `name`
+   and, given `value`, whose value is `value`. An unknown on either side of a comparison makes it a question
+   with a world per outcome, asked as §7.2.14 IsStrictlyEqual's own predicate (concolic_strict_equal), so the
+   holding arm pins the unknown and the other walks on. get's found arm answers the tuple's value itself, which
+   is that unknown where it is one. */
+static int usp_lookup_walk(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, UspObj *u, int magic,
+                           JSValueConst name, JSValueConst value, bool with_value, JSValue *presult)
+{
+    int n = usp_vals_n(ctx, u->vals), want = with_value ? 2 : 1;
+
+    for (; s->i < n; s->i++, s->half = 0) {
+        while (s->half < want) {
+            int arm, r;
+
+            if (!s->asking) {
+                JSValue v = usp_half(ctx, u->vals, s->i, s->half);
+
+                s->pred = concolic_strict_equal(ctx, v, s->half ? value : name);
+                s->asking = 1;
+                JS_FreeValue(ctx, v);
+            }
+            r = step_tobool_run(ctx, hdr, s->pred, USP_EQUALS_OP, &arm);
+            if (r) return r;
+            JS_FreeValue(ctx, s->pred);
+            s->pred = JS_UNDEFINED;
+            s->asking = 0;
+            if (!arm) break;
+            s->half++;
+        }
+        if (s->half == want) {
+            *presult = magic == USP_HAS ? JS_TRUE : usp_half(ctx, u->vals, s->i, 1);
+            return JS_STEP_DONE;
+        }
+    }
+    *presult = magic == USP_HAS ? JS_FALSE : JS_NULL;
+    return JS_STEP_DONE;
 }
 
 /* Over an unknown list, get's found arm answers the tuple's value as an unknown String
@@ -529,14 +680,7 @@ static int usp_lookup_answer(JSContext *ctx, JSStepHdr *hdr, UspLookupState *s, 
     bool yes = false;
     char *member;
 
-    if (JS_IsUndefined(u->unknown)) {
-        if (magic == USP_HAS) { *presult = JS_NewBool(ctx, i >= 0); return JS_STEP_DONE; }
-        if (i < 0) { *presult = JS_NULL; return JS_STEP_DONE; }
-        /* THE READ-BACK BARRIER — see USP_HOLE_WHY: a real String here would de-taint the hole it stores. */
-        DCHECK(!u->list->e[i].vhole, USP_HOLE_WHY("get() answered with a value that is a hole, as a real String"));
-        *presult = JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen);
-        return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
-    }
+    DCHECK(!JS_IsUndefined(u->unknown), "the name chain was asked of a list derived from no unknown string");
     if (value) {
         *presult = usp_derive(ctx, u, "URLSearchParams.has", JS_NewBool(ctx, i >= 0), argc, argv);
         return JS_STEP_DONE;
@@ -583,10 +727,17 @@ static int usp_lookup_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     u = usp_of(ctx, hdr->this_val);
     if (!u) return JS_STEP_ABRUPT;
     with_value = magic == USP_HAS && idl_arg_given(argc, argv, 1);
-    /* THE EQUALITY BARRIER — see USP_HOLE_WHY: both halves are matched against the stored halves by memcmp. */
-    DCHECK(!concolic_is(argv[0]), USP_HOLE_WHY("get()/has() matched an unknown NAME against the stored names"));
+    if (JS_IsUndefined(u->unknown))
+        return usp_lookup_walk(ctx, hdr, st, u, magic, argv[0], with_value ? argv[1] : JS_UNDEFINED, with_value,
+                               presult);
+    /* The name chain keys its question by the name's bytes, so over a list parsed from an unknown string an
+       unknown argument has no key to ask under. */
+    DCHECK(!concolic_is(argv[0]), "URLSearchParams get()/has() asked an unknown string's list about an unknown "
+                                  "NAME, which the name chain cannot key — build a chain keyed by the "
+                                  "argument's identity");
     DCHECK(!with_value || !concolic_is(argv[1]),
-           USP_HOLE_WHY("has() matched an unknown VALUE against the stored values"));
+           "URLSearchParams has(name, value) compared an unknown VALUE with an unknown string's list, which its "
+           "derivation names by bytes — build the derivation over the argument's identity");
     name = JS_ToCStringLen(ctx, &nn, argv[0]);
     if (!name) return JS_STEP_ABRUPT;
     if (with_value) {
@@ -662,17 +813,14 @@ static void usp_pair_of_unknown(JSContext *ctx, JSValueConst target, int i, JSVa
     *value = usp_unknown_half(ctx, u, "URLSearchParams.pairValue", i, 0);
 }
 
+/* §6.2's value pairs to iterate over: the i-th tuple's halves, an unknown one as itself. */
 static void usp_pair_at(JSContext *ctx, JSValueConst target, int i, JSValue *key, JSValue *value)
 {
     UspObj *u = usp_rec(target);
+
     DCHECK(u != NULL && i < u->list->n, "a URLSearchParams pair was asked for past the end of the list");
-    /* THE READ-BACK BARRIER, over §6.2's "value pairs to iterate over" — see USP_HOLE_WHY. `for (const [k, v]
-       of params)` hands the page both halves, and a half this list holds the display shape of would arrive as
-       a real String with its provenance gone. */
-    DCHECK(!u->list->e[i].nhole && !u->list->e[i].vhole,
-           USP_HOLE_WHY("pair iterator answered with a half that is a hole, as a real String"));
-    *key = JS_NewStringLen(ctx, u->list->e[i].name, u->list->e[i].nlen);
-    *value = JS_NewStringLen(ctx, u->list->e[i].value, u->list->e[i].vlen);
+    *key = usp_half(ctx, u->vals, i, 0);
+    *value = usp_half(ctx, u->vals, i, 1);
 }
 
 static const IdlPairIterOps USP_PAIR_OPS = { usp_pair_count, usp_pair_at, "URLSearchParams", false, false,
@@ -771,50 +919,39 @@ static int usp_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
     return 0;
 }
 
-/* Both halves are USVStrings by the time this runs, so what is left is the bytes.
-   `as_record` is Web IDL §3.2.23's MAP semantics: a record's keys are converted BEFORE they are stored, so two ES keys
-   that convert to the same USVString are ONE entry — it keeps the first's position and takes the last's value.
-   `{"\uD835x": "1", "xx": "2", "\uD83Dx": "3"}` is two pairs and not three, because both surrogate keys become
-   "\uFFFDx". A sequence has no such rule: `[["a",1],["a",2]]` is two pairs. */
-/* THE SAME QUESTION THIS COMPONENT'S MEMBERS ASK, ASKED AT ITS OTHER ENTRY. §6.2's initialize builds the list
-   from the sequence and record arms, and its Web IDL USVString conversion passes UNKNOWN external input
-   through as itself exactly as a member's does — so `new URLSearchParams({lang: navigator.language})` reaches
-   this line with a concolic. An entry that skipped the question would report the same absent capability as an
-   unrelated ToString failure one boundary away, which is why it is asked at every entry that builds a pair.
-   See js_usp_member's conversions for why each half is a NAME, and USP_HOLE_WHY for what a hole cannot do. */
-static int usp_take_pair(JSContext *ctx, UspList *out, JSValueConst k, JSValueConst v, int as_record)
+/* §6.2 initialize steps 1.2 and 2: append (name, value) to the list `vals` being built. `as_record` is Web IDL
+   §3.2.23's "Set result[typedKey] to typedValue" (step 4.2.4), a MAP's set: two ES keys that convert to one
+   USVString are one entry, which keeps the first's position and takes the last's value, so
+   `{"\uD835x": "1", "xx": "2", "\uD83Dx": "3"}` is two pairs, both surrogate keys becoming "\uFFFDx". A
+   sequence has no such rule: `[["a",1],["a",2]]` is two pairs. Both halves are borrowed. */
+static void usp_init_append(JSContext *ctx, JSValue *vals, JSValueConst k, JSValueConst v, int as_record)
 {
-    size_t nn = 0, vn = 0;
-    int nhole = concolic_is(k), vhole = concolic_is(v);
-    const char *kn = nhole ? concolic_name_cstr(ctx, k) : JS_ToCStringLen(ctx, &nn, k);
-    const char *vv;
-    int i;
+    int i, n = usp_vals_n(ctx, *vals);
 
-    if (!kn) return -1;
-    if (nhole) nn = strlen(kn);
-    vv = vhole ? concolic_name_cstr(ctx, v) : JS_ToCStringLen(ctx, &vn, v);
-    if (!vv) { JS_FreeCString(ctx, kn); return -1; }
-    if (vhole) vn = strlen(vv);
-    if (as_record) {
-        /* §6.2 initialize step 2 over Web IDL §3.2.23's MAP: the key dedup is an EQUALITY, so an unknown key
-           takes USP_HOLE_WHY's first arm — a shape against real bytes compares false having proven nothing. */
-        DCHECK(!nhole, USP_HOLE_WHY("record init deduplicated an unknown KEY against the stored names by "
-                                    "memcmp"));
-        for (i = 0; i < out->n; i++) {
-            if (out->e[i].nlen != nn || memcmp(out->e[i].name, kn, nn)) continue;
-            free(out->e[i].value);
-            out->e[i].value = usp_strdup(vv, vn);
-            out->e[i].vlen = vn;
-            out->e[i].vhole = vhole ? 1u : 0u;
-            JS_FreeCString(ctx, kn);
-            JS_FreeCString(ctx, vv);
-            return 0;
+    for (i = 0; as_record && i < n; i++) {
+        JSValue a = usp_half(ctx, *vals, i, 0), c;
+        bool same;
+
+        /* The map's key test is an equality, so an unknown on either side of it is a fork this stage cannot
+           take — see USP_HOLE_WHY. A record's own keys are distinct property keys and only collide through
+           the scalar-value replacement, so the test is asked only where there is an earlier key to ask it of. */
+        DCHECK(!concolic_is(a) && !concolic_is(k),
+               USP_HOLE_WHY("record init tested an unknown KEY against an earlier one"));
+        same = JS_IsStrictEqual(ctx, a, k);
+        JS_FreeValue(ctx, a);
+        if (!same) continue;
+        c = usp_vals_new(ctx);
+        for (int j = 0; j < n; j++) {
+            JSValue x = usp_half(ctx, *vals, j, 0), y = usp_half(ctx, *vals, j, 1);
+            usp_vals_push(ctx, c, x, j == i ? v : y);
+            JS_FreeValue(ctx, x);
+            JS_FreeValue(ctx, y);
         }
+        JS_FreeValue(ctx, *vals);
+        *vals = c;
+        return;
     }
-    usp_list_append(out, kn, nn, nhole, vv, vn, vhole);
-    JS_FreeCString(ctx, kn);
-    JS_FreeCString(ctx, vv);
-    return 0;
+    usp_vals_push(ctx, *vals, k, v);
 }
 
 static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1073,15 +1210,22 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     STEP_ARM(UC_PAIR_VALUE_STR);
     {
         int which = (hdr->stage == UC_PAIR_NAME_STR) ? 0 : 1;
-        JSValue str = JS_UNDEFINED;
 
-        r = step_tostring_run(ctx, hdr, s->item[which], in, &str, out_cb, out_argc);
-        if (r > 0) return r;
-        if (r < 0) return -1;
-        str = JS_ToScalarValueString(ctx, str);
-        if (JS_IsException(str)) return -1;
-        JS_FreeValue(ctx, s->item[which]);
-        s->item[which] = str;
+        /* §7.1.19 ToString over unknown input is the identity, so an unknown half crosses as itself and the
+           list holds it (UspObj's `vals`): the constructor's result is the platform object either way. */
+        if (concolic_is(s->item[which])) {
+            JS_FreeValue(ctx, in);
+        } else {
+            JSValue str = JS_UNDEFINED;
+
+            r = step_tostring_run(ctx, hdr, s->item[which], in, &str, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return -1;
+            str = JS_ToScalarValueString(ctx, str);
+            if (JS_IsException(str)) return -1;
+            JS_FreeValue(ctx, s->item[which]);
+            s->item[which] = str;
+        }
         if (which == 0) {
             UC_GOTO(hdr, s, UC_PAIR_VALUE_STR);
             return JS_STEP_YIELD;
@@ -1107,34 +1251,31 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     STEP_ARM(UC_DONE);
     JS_FreeValue(ctx, in);
     {
-        UspList *l = lexbor_malloc(sizeof *l);
-        JSValue unknown;
+        JSValue vals, unknown;
         uint32_t i;
 
-        CHECK(l != NULL, "urlsearchparams: OOM holding a constructed list");
-        memset(l, 0, sizeof *l);
         DCHECK(!(JS_IsString(s->src) && s->npairs),
                "a URLSearchParams init took both its USVString arm and a pair-converting arm");
         if (JS_IsString(s->src)) {
             size_t n = 0;
             const char *q = JS_ToCStringLen(ctx, &n, s->src);
 
-            if (!q) { usp_list_free(l); free(l); return -1; }
-            usp_parse(l, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
+            if (!q) return -1;
+            vals = usp_vals_parse(ctx, q[0] == '?' ? q + 1 : q, q[0] == '?' ? n - 1 : n);
             JS_FreeCString(ctx, q);
+        } else {
+            vals = usp_vals_new(ctx);
         }
         for (i = 0; i < s->npairs; i++) {
-            JSValue k = JS_GetPropertyUint32(ctx, s->pairs, 2 * i);
-            JSValue v = JS_GetPropertyUint32(ctx, s->pairs, 2 * i + 1);
-            int bad = JS_IsException(k) || JS_IsException(v) || usp_take_pair(ctx, l, k, v, s->as_record) < 0;
+            JSValue k = usp_half(ctx, s->pairs, (int)i, 0), v = usp_half(ctx, s->pairs, (int)i, 1);
 
+            usp_init_append(ctx, &vals, k, v, s->as_record);
             JS_FreeValue(ctx, k);
             JS_FreeValue(ctx, v);
-            if (bad) { usp_list_free(l); free(l); return -1; }
         }
         unknown = s->unknown;
         s->unknown = JS_UNDEFINED;
-        *presult = usp_new_with(ctx, JS_UNDEFINED, l, unknown, s->unknown_example);
+        *presult = usp_new_with(ctx, JS_UNDEFINED, vals, unknown, s->unknown_example);
     }
     if (JS_IsException(*presult)) return -1;
     return 0;
