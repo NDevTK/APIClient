@@ -12,6 +12,10 @@ struct Flow;
    compositions are appended to `*dl` (flow_deliveries_text's format, malloc'd, NULL for none) and `*refused`
    takes the first data composition's refusal (malloc'd). */
 char *act_list_json(const struct Flow *f, int *no_act, int *unsolved, char **refused, char **dl);
+/* Whether every member of `f`'s chain it has called states an act a page user can perform, so a browser reaches
+   what `f` reached through acts a person performs; 1 for a flow that called no drive. act_list_json's `*no_act` is
+   its negation. */
+int act_list_drivable(const struct Flow *f);
 /* The origin and data of every message act `f`'s chain performed, each composed from its domain
    (message_compose_origin, message_compose), with `payload` at `inject` in the message whose data `inject` is or
    is a member of: the deliveries (in flow_deliveries_text's format, malloc'd) a candidate runs under, each origin

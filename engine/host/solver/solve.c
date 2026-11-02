@@ -126,9 +126,9 @@ typedef struct {
        pair is only ever an observation; below the delivery the two agree. */
     int replay_pm;
     /* How many arms the frozen re-injection path holds, emitted as `runwayArms`. The path is frozen once per
-       search (cand_learn_path) and every candidate starts on it at cursor 0, so its length is a property of the
-       search. `runwayArms:0` means the detecting flow decided no branch, and a zero runway is then a tautology
-       about the detection; `runwayArms:N` beside `runwayPerMille:0` means N arms were offered and none was
+       route (cand_learn_path) and every candidate starts on it at cursor 0, so its length is a property of the
+       search's route. `runwayArms:0` means the detecting flow decided no branch, and a zero runway is then a
+       tautology about the detection; `runwayArms:N` beside `runwayPerMille:0` means N arms were offered and none was
        consumed. It is not the runway fraction's denominator, which is `replay_of`. It is stored at the freeze
        because record_sink releases `reinject` at the fire, so a length read at emission would be 0 for every
        search that succeeded. A size, never a distance. extension/lib/popup-security.js reads it, with
@@ -238,9 +238,9 @@ typedef struct {
        already taken rather than a second probe. It is a list because a page may write one source into a sink
        many times, each write with its own contexts. */
     SolveDelivered deliv; int deliv_seen; int deliv_runs; char **wit; int nwit, witcap;
-    /* The search's re-injection point: the decision state of the flow standing at this sink, frozen once
-       (cand_learn_path) so every candidate replays that path instead of re-forking the document's whole gate
-       tree; a pathless candidate behind K gates re-forks 2^K flows. A flow is replay(baseline, decision
+    /* The search's re-injection point: the decision state of the flow standing at this sink, frozen once per
+       route (cand_learn_path) so every candidate replays that path instead of re-forking the document's whole
+       gate tree; a pathless candidate behind K gates re-forks 2^K flows. A flow is replay(baseline, decision
        vector), so a candidate standing on a vector it did not run is what cold_resume already builds. It is
        sound under a different payload because the substituted source is concrete in a candidate run: branches
        on it run the real predicate, and the vector replays only the arms the payload does not decide.
@@ -252,6 +252,9 @@ typedef struct {
        a run that called these bodies in this order. Each candidate is seated on them (engine_orphan_wait_seat).
        Released with `reinject`; `chain_n` 0 for a detection outside any drive. */
     uint64_t *chain; int *chain_doc; int chain_n;
+    /* Whether that chain holds a member no act a page user performs calls (act_list_drivable), so every fire on
+       it counts in `fired_no_act` and none is a PoC. Such a route is the one a later detection may supersede. */
+    int route_no_act;
     /* Whether that frozen path pinned an attacker's principal, captured beside the path
        (cand_learn_principal_gates) because every candidate replays that one path; see PrincipalDemand. */
     PrincipalDemand pg_demand;
@@ -892,7 +895,7 @@ static void sender_pins_free(SenderPins *sp) {
 static void cand_learn_principal_gates(Cand *e) {
     DCHECK(e != NULL, "the demands of a path were decided for no search");
     DCHECK(e->pg_demand == PG_UNEXAMINED,
-           "a search's principal demands were decided twice — this runs past the ONE capture's own two "
+           "a search's principal demands were decided twice for one route — this runs past the capture's "
            "returns, so a second verdict describes a path this search no longer stands on, exactly as a second "
            "recorded length would");
     /* A pinned principal is stated as PG_UNFORGEABLE with its pins rather than left as an empty set. A pinned
@@ -903,17 +906,54 @@ static void cand_learn_principal_gates(Cand *e) {
     e->pg_demand = sender_pins_learn(&e->pp) ? PG_UNFORGEABLE : PG_NONE;
 }
 
-/* Take the re-injection path of the flow standing at this search's sink: the one capture, reached from two
-   doors. One is detection (add_pending). The other is this search's own context probe coming back
-   (derive_from_witness), the only door a cold-resumed session reaches, since a verifying flow does not
-   detect; without it a resumed search never held a path and queue_derived dropped every escape derived from
-   its witness. Either flow demonstrably reached this sink with this source, which is the only property a
-   replayed path needs. It cannot re-open a fired search, because the guard is the fire itself
-   (search_solved), and it pushes nothing, which keeps solve_resume_candidate's door free of seeding. */
+/* Give back the route search `e` stands on, for cand_learn_path to capture another: its frozen path, its chain of
+   drives and everything the capture composed off the flow that froze them. The cursors return to 0, so every
+   candidate and verification the search holds is seeded once on the next route; those already seeded keep
+   replaying this one, and their fires stay counts. */
+static void cand_route_release(Cand *e) {
+    DCHECK(e != NULL && e->reinject != NULL, "a route was released from a search that stands on none");
+    decide_blob_free(e->reinject);
+    e->reinject = NULL;
+    e->reinject_len = 0;
+    free(e->chain); free(e->chain_doc);
+    e->chain = NULL; e->chain_doc = NULL; e->chain_n = 0;
+    e->route_no_act = 0;
+    e->pg_demand = PG_UNEXAMINED;
+    sender_pins_free(&e->pp);
+    free(e->dl_tmpl); e->dl_tmpl = NULL;
+    free(e->url_head); e->url_head = NULL;
+    for (int k = 0; k < e->ngate; k++) { free(e->gate_src[k]); free(e->gate_val[k]); }
+    free(e->gate_src); free(e->gate_val);
+    e->gate_src = NULL; e->gate_val = NULL; e->ngate = 0;
+    e->seeded = 0; e->vf_seeded = 0;
+}
+
+/* Take the re-injection path of the flow standing at this search's sink, reached from two doors. One is detection
+   (add_pending). The other is this search's own context probe coming back (derive_from_witness), the only door a
+   cold-resumed session reaches, since a verifying flow does not detect; without it a resumed search never held a
+   path and queue_derived dropped every escape derived from its witness. Either flow demonstrably reached this sink
+   with this source, which is the only property a replayed path needs. It cannot re-open a fired search, because
+   the guard is the fire itself (search_solved), and it pushes nothing, which keeps solve_resume_candidate's door
+   free of seeding.
+   It is one capture per route. A PoC needs a route an attacker and a page user's acts can drive, and a drive of a
+   function no act calls is API learning, so a route whose chain holds such a member is superseded by the first
+   flow standing at this sink whose chain holds none, in whichever order the scheduler reached the two. A route
+   with no such member is never superseded. */
 static void cand_learn_path(Cand *e) {
+    const Flow *f = flow_running();
+    int drivable;
+
     DCHECK(e != NULL, "a re-injection point was taken for no search");
-    if (e->reinject) return;       /* the one capture has happened, at whichever door reached it first */
-    if (search_solved(e)) return;  /* a solved search seeds no further candidates — see record_sink */
+    DCHECK(f != NULL, "a re-injection point was taken with no flow standing at the sink — both doors run inside "
+                      "the flow that reached it, and the path frozen would be the last flow's");
+    drivable = f ? act_list_drivable(f) : 1;
+    if (e->reinject) {
+        if (!e->route_no_act || !drivable) return;   /* the route stands */
+        cand_route_release(e);
+    } else if (search_solved(e)) {
+        return;  /* a solved search seeds no further candidates — see record_sink */
+    }
+    e->route_no_act = !drivable;
     e->reinject = decide_freeze_path();
     /* And the path's length, taken here where the path exists: it is what `runwayArms` reports, and record_sink
        gives the blob back at the fire, so a length read later would be 0 for the searches that succeeded.
@@ -936,11 +976,11 @@ static void cand_learn_path(Cand *e) {
         e->reinject_len = (int)arms;
     }
     {
-        const Flow *f = flow_running();
         int called = f && f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0;
 
         DCHECK(e->chain == NULL && e->chain_doc == NULL && e->chain_n == 0,
-               "a search's chain of drives was frozen twice — it is taken with the one path capture above");
+               "a search's chain of drives was frozen twice for one route — it is taken with the path capture "
+               "above");
         if (called > 0) {
             e->chain = reclaim_malloc((size_t)called * sizeof *e->chain);
             e->chain_doc = reclaim_malloc((size_t)called * sizeof *e->chain_doc);
@@ -955,10 +995,12 @@ static void cand_learn_path(Cand *e) {
        already holds a path already holds that path's demands. */
     cand_learn_principal_gates(e);
     /* And the messages the path's acts posted, composed while their domains are this flow's. */
-    if (flow_running() && flow_running()->orphan)
-        e->dl_tmpl = act_list_message_deliveries(flow_running(), e->src, MSG_PAYLOAD_SLOT);
+    DCHECK(e->dl_tmpl == NULL && e->url_head == NULL,
+           "a route was captured over what an earlier route composed — cand_route_release gives both back");
+    if (f && f->orphan)
+        e->dl_tmpl = act_list_message_deliveries(f, e->src, MSG_PAYLOAD_SLOT);
     /* And the URL component the path's search facets shape, composed while they are this flow's. */
-    if (e->root && !e->url_head) e->url_head = concolic_url_head(e->root);
+    if (e->root) e->url_head = concolic_url_head(e->root);
     /* And the other attacker sources the path pinned, which every candidate delivers. */
     if (e->root) concolic_path_gates(e->root, gate_learn, e);
 }
@@ -975,8 +1017,9 @@ static void add_pending(const char *src, const char *root, int sink) {
     cand_learn_root(e, root);
     /* Opening is a property of the search, not of who made the slot. In a resuming session cold_resume runs at
        engine init and creates the slot before any detection, so a `created` test here would leave the search
-       with no probe, no vectors and no path, and the report would say `payloads:[]`. */
-    if (e->opened) return;
+       with no probe, no vectors and no path, and the report would say `payloads:[]`. An opened search still
+       offers this detection's route to the capture, which takes it where it supersedes the frozen one. */
+    if (e->opened) { cand_learn_path(e); return; }
     /* A search that already fired is not opened either. The cold tier can finish a search before this session's
        first detection, when a resumed candidate fires before any exploration flow re-reaches the sink; opening
        it would pay a credit for nothing new, push a probe nobody seeds and then assert a path record_sink has
@@ -997,7 +1040,7 @@ static void add_pending(const char *src, const char *root, int sink) {
     /* The re-injection path is taken here for every class, at the moment a flow stands at this sink holding the
        value that reached it: a candidate with no path re-forks the document's whole gate tree (2^K flows behind
        K gates) whatever seeded it. It is the detecting flow's path, sound for every candidate for the reason
-       given at Cand.reinject. cand_learn_path is the one capture; derive_from_witness is its other door. */
+       given at Cand.reinject. cand_learn_path is the capture; derive_from_witness is its other door. */
     DCHECK(flow_running() != NULL,
            "an attacker source reached a sink with no flow running — a concolic value is minted by a flow and "
            "carried by one, so there is no route to this line from outside the scheduler, and the path about to "
@@ -1447,10 +1490,10 @@ static void derive_from_witness(Cand *e) {
            "a derivation was asked to run on a search that holds no witness — the witness is the string the "
            "context probe's own run handed this sink, so without one there is no observation to read a state "
            "off and the re-derivation would be a static shape of the expression");
-    /* The second door onto the one capture (cand_learn_path): a witness means one of this search's candidate
-       flows reached this sink with this source. It is a no-op for a search this session detected; for a resumed
-       one it is the only capture, without which queue_derived would drop every escape built below. Taken before
-       the derivation, because the hand-off asserted below needs it. */
+    /* The second door onto the capture (cand_learn_path): a witness means one of this search's candidate flows
+       reached this sink with this source. For a search this session detected it changes nothing unless its route
+       supersedes the frozen one; for a resumed one it is the only capture, without which queue_derived would drop
+       every escape built below. Taken before the derivation, because the hand-off asserted below needs it. */
     cand_learn_path(e);
     derive_breakouts(e);
     if (sink_class(e->sink)->derive == SINK_DERIVE_JS) derive_joint_siblings(e);

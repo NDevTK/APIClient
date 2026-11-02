@@ -143,9 +143,26 @@ static char *message_act(const Flow *f, int k, char **refused, int *unsolved, ch
     return act;
 }
 
+/* How many members of `f`'s chain it has called: a resumed drive's members past its claim have no call yet. */
+static int act_list_called(const Flow *f)
+{
+    return !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n;
+}
+
+int act_list_drivable(const Flow *f)
+{
+    int called;
+
+    DCHECK(f != NULL, "drivability was asked of no flow");
+    called = act_list_called(f);
+    for (int k = 0; k < called; k++)
+        if (!f->orphan_acts[k]) return 0;
+    return 1;
+}
+
 char *act_list_json(const Flow *f, int *no_act, int *unsolved, char **refused, char **dl)
 {
-    int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n, k, s = 0, first = 1;
+    int called = act_list_called(f), k, s = 0, first = 1;
     JsonBuf b = { 0 };
 
     *no_act = 0;
@@ -160,8 +177,7 @@ char *act_list_json(const Flow *f, int *no_act, int *unsolved, char **refused, c
            "an act list was asked of a drive whose chain has no called member and which is not a resumed drive "
            "waiting for its first call — the mark and the chain are written together at the seed and at the claim");
     if (called == 0 && f->user_acts_n == 0) return NULL;
-    for (k = 0; k < called; k++)
-        if (!f->orphan_acts[k]) { *no_act = 1; return NULL; }
+    if (!act_list_drivable(f)) { *no_act = 1; return NULL; }
     json_buf_raw(&b, "[");
     /* In performance order: a user act performed after `user_act_at` called members stands before that member. */
     for (k = 0; k <= called; k++) {
@@ -183,7 +199,7 @@ char *act_list_json(const Flow *f, int *no_act, int *unsolved, char **refused, c
 
 char *act_list_message_deliveries(const Flow *f, const char *inject, const char *payload)
 {
-    int called = !f->orphan ? 0 : f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n;
+    int called = act_list_called(f);
     char *out = NULL;
 
     DCHECK(inject && *inject && payload && *payload, "message deliveries were composed with no injection or payload");

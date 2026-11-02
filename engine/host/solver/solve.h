@@ -275,8 +275,8 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    saturates it while the source read is still far away in program order, which is a property of the comparator
    itself and is exactly what the saturated reading above says out loud.
    `runwayArms`, `runwayWalked` AND `runwayOf` ARE WHAT MAKE THAT ZERO READABLE, and they are three different
-   questions rather than three spellings of one. `runwayArms` is the length of the path add_pending FROZE for
-   this search, so 0 says the detecting flow decided no branch at all and every candidate began on nothing —
+   questions rather than three spellings of one. `runwayArms` is the length of the path cand_learn_path FROZE
+   for the route this search stands on, so 0 says the detecting flow decided no branch at all and every candidate began on nothing —
    the fraction above is then a tautology and the work is at the DETECTION. `runwayWalked`/`runwayOf` are the
    best reading actually TAKEN, held as the two halves the thousandths round away: `(int)(frac*1000+0.5)` is 0
    below one part in two thousand and decide.h records replay depths of 8000, so `runwayWalked:3` beside
