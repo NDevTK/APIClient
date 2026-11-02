@@ -701,8 +701,6 @@ char *result_wfq_json(void) {
     METRIC_SET(svc_fam_max, w.svc_fam_max);
     METRIC_SET(svc_fam_min, w.svc_fam_min);
     METRIC_SET(families, w.families);
-    METRIC_SET(sil_phases, w.sil_phases);
-    METRIC_SET(sil_carry, w.sil_carry);
     METRIC_SET(branches, w.branches);
     METRIC_SET(br_live_max, w.br_live_max);
     METRIC_SET(br_live_min, w.br_live_min);

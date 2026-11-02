@@ -114,19 +114,6 @@ const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPicke
                    exclusion for the jobs it counts. It does not say those jobs would have run — arms stand
                    above the checkpoint too. Gauges, like every row on this line. */
                 "jobsReadyTask", "jobsReadyMicro",
-                /* …AND WHAT A SUB-LINEAR ASK WOULD HAVE TO INDEX, which is the other half of the cost scope
-                   below and which no reader in this tree had: `silCarry` occurs in ONE file, result.c, which
-                   emits it, and `silPhases` in that file and the header that declares it. Both are the key
-                   the ask's own retirement clause names — solver/flow.c: "this pair goes when the ask no
-                   longer walks the frontier — at which point the index IS its reader" — so until this line
-                   the operands of the proposed index were published and measurable nowhere but a fixture.
-                   result.c: `silPhases` is how many DISTINCT remainders the frontier stands on and
-                   `silCarry` how many members are on the far side of the carry boundary; between two
-                   frontier generations the carry is the ONLY per-member quantity in the order that moves,
-                   and members sharing a remainder flip it together. GAUGES, both: `silCarry` FALLS as the
-                   boundary sweeps downward and every member resets at once when the family's remainder
-                   wraps, and neither may be differenced — which is why they are here and not in COUNTERS. */
-                "silPhases", "silCarry",
                 "delivReady", "delivFramed", "delivOwed", "valTop", "valMin", "valMax"];
 
 /* THE BRANCH SCOPE, WHICH THE TWO LISTS ABOVE DO NOT REACH AND WHICH IS THE ONE FAMILY A PAGE-SCALE

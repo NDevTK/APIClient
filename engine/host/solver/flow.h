@@ -57,10 +57,10 @@ typedef struct FlowSite FlowSite;
 
 /* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
    flow_weight_operands): `w = (reward - coord_notch*Q) + (1/(1 + max(site_served, (assumed + against_env)*W)
-   / pull_work + orphan_seen) + (-own_notch*Q + (replay + surv + rung)/FLOW_RUNGS_N))`, with
-   Q = FLOW_AGE_QUANTUM and W = FLOW_PRICED_WORK. `coord_notch` is the family notch plus the carry bit;
-   `site_served` is the work the member's code site has received in its family and `pull_work` the quantum it is
-   counted in (ENGINE_PULL_WORK).
+   / pull_work + orphan_seen) + (replay + surv + rung)/FLOW_RUNGS_N)`, with Q = FLOW_AGE_QUANTUM and
+   W = FLOW_PRICED_WORK. `coord_notch` is the family notch; `own_notch` is the member's turn, which orders it only
+   among members level on the weight and is no summand. `site_served` is the work the member's code site has
+   received in its family and `pull_work` the quantum it is counted in (ENGINE_PULL_WORK).
    `visits` and `picks` are observations no term reads; `host_owed`, `running` and `picks` say whether the
    member could take the thread. `unit` is where its next quantum resumes, a FlowUnitAt no term reads; it is a
    number because a census row carries numbers only (extension/bridge.js's resultDocumentRefusal). */
@@ -78,7 +78,7 @@ typedef struct {
     double replay, surv;
     int rung;
     double w;
-    double age_quantum;   /* FLOW_AGE_QUANTUM, which the two notches are priced at */
+    double age_quantum;   /* FLOW_AGE_QUANTUM, which the family notch is priced at */
     int64_t assumed;      /* flow_assumed */
     int64_t against_env;  /* flow_against_env */
     int64_t priced_work;  /* FLOW_PRICED_WORK, the service floor in work per assumption and per against_env */
@@ -90,29 +90,29 @@ typedef struct {
 
 /* A node of one of the order's leftist max-heaps (flow.c's flow_ix_* banner), embedded in the record it orders so
    the index allocates nothing. It carries a copy of the order's key (flow.c's FlowOrderKey: `key` the weight, then
-   the partial sums `x` and `ikey`, then the birth sequence `seq`), and every heap is ordered by it. `s` is the
-   null-path length; `off`, the family's coordinate with no carry, and `kind` are used only by a query's queue. */
+   the partial sums `x` and `ikey`, then the turn, then the birth sequence `seq`), and every heap is ordered by it.
+   `s` is the null-path length; `off`, the family's coordinate, and `kind` are used only by a query's queue. */
 typedef struct FlowIxNode {
     struct FlowIxNode *l, *r, *up;
     double key, x, ikey, off;
+    int64_t turn;
     uint64_t seq;
     int s;
     unsigned char kind;
 } FlowIxNode;
 
 /* A member's operand tuple and, while it represents its class, its node in its branch bucket's treap (flow.c's
-   flow_ix_* banner). A class is the members of one bucket with one tuple (phase, own notch, completed units, the
-   three fitness fields), which weigh the same to the bit; the treap holds one node per class, in search order by
-   the tuple and heap order by `prio`, carrying the class's key and, over its subtree, the largest key (`max`), the
-   lowest birth sequence among the classes at it (`floor`), the largest key of a class holding a never-dispatched
-   member (`nmax`, -INFINITY when none), the smallest key (`min`) and the phase range (`lo`, `hi`). `cls` is the
+   flow_ix_* banner). A class is the members of one site with one tuple (turn, the three fitness fields), which weigh
+   the same to the bit and take one turn; the treap holds one node per class, in search order by the tuple and
+   heap order by `prio`, carrying the class's key and, over its subtree, the largest key (`max`), the least turn
+   among the classes at it (`maxturn`), the lowest birth sequence among the classes at both (`floor`), the largest
+   key of a class holding a never-dispatched member (`nmax`, -INFINITY when none) and the smallest key (`min`). `cls` is the
    class's members in a heap by birth sequence, `ncls` and `nnever` how many there are and how many were never
    dispatched; all of these are read off the representative, the class's oldest member, only. */
 typedef struct FlowIxTreap {
     struct FlowIxTreap *l, *r, *up;
     double key, max, min, nmax;
-    int64_t phase, lo, hi;
-    int64_t notch;
+    int64_t notch, maxturn;
     double replay, surv;
     int rung;
     uint64_t seq, floor;
@@ -197,15 +197,13 @@ typedef struct Flow {
        Never copied, never inherited, never read by flow_weight; flow_fork_inherit asserts it is still zero,
        because a value copied at a fork differs between two arms by birth order rather than merit. */
     double val;
-    /* The own half of the aging term: the work this flow retired since its fork family last
-       emitted, never a step or opcode count (a count is not commensurate with the reward). The exchange rate is
-       FLOW_AGE_RATE and the term steps in flow.c's FLOW_AGE_QUANTUM. int64_t because a 32-bit wasm `long`
-       overflows after about two billion units, and a negative value would rank a monopolizer first.
-       It is a reading only while `work_gen` matches the account's `emit_gen`, so every reader goes through
-       flow.c's flow_own_silence and never reads it raw. Written only for the flow holding the thread; inherited
-       at a fork. The family half (`family`) keeps a fork chain one unit against other families; this half
-       orders arms within one family, where every arm reads the same family charge. Both reset at an emission
-       credited to the account, which makes them silence rather than lifetime service. */
+    /* The member's own silence: the work this flow retired since its fork family last emitted, never a step or
+       opcode count. Its whole quanta are the member's turn (flow.c's flow_service_notch), which rotates the thread
+       among members level on every term of the weight; the aging itself is the family's (`fam_work`). int64_t
+       because a 32-bit wasm `long` overflows after about two billion units, and a negative value would give a
+       monopolizer the first turn. It is a reading only while `work_gen` matches the account's `emit_gen`, so every
+       reader goes through flow.c's flow_own_silence and never reads it raw. Written only for the flow holding the
+       thread; inherited at a fork. Reset at an emission credited to the account. */
     int64_t work;
     /* Which silence window `work` is a reading of: this flow's copy of its account's `emit_gen`. An emission
        forgives the whole family with one increment of `emit_gen` rather than a walk, because flow_weight is O(1)
@@ -715,22 +713,20 @@ typedef struct Flow {
     JSValue perform_q;
 
     /* Dev-only stamps for the assertion sub-linear ordering rests on: a member not holding the thread cannot
-       change its own half of the weight while the frontier generation stands still. flow_weight is the family's
-       coordinate plus this member's plus a carry bit; the family's half is a common offset within a family, and
-       flow.c's flow_silence_phase decomposes the carry out, leaving flow_index_key.
+       change its own half of the order while the frontier generation stands still. flow_weight is the family's
+       coordinate plus the site's optimism plus flow_index_key; the family's half is a common offset within a family.
        The walk stamps each member it weighs (it already holds the member and the key), and flow_age_running
        re-stamps the member it charges. Two operands are compared as one condition into one counter bucket,
        because key_checks_total() is asserted equal to the weighings one loop performed:
          - `ikey_last`: flow_index_key, the member half, which must stand still or the order's index holds a
            stale key;
-         - `phase_last`: flow_silence_phase, `own_silence % FLOW_SERVICE_WORK`, which the key's floor discards and
-           which is the bucket key; a sub-quantum writer would re-bucket a member without moving `ikey_last`.
+         - `turn_last`: flow_service_notch, the member's turn, an operand of its class tuple.
        `key_stamped` rather than a sentinel generation, because `g_gen` starts at zero and flow_registry_init
        resets it. Dev-only in field and check, since stamping is a call per member per scan. */
 #if APICLIENT_DEV
     unsigned key_gen;
     int      key_stamped;
-    int64_t  phase_last;
+    int64_t  turn_last;
     double   ikey_last;
 #endif
     /* This member's place in the order's index (flow.c's flow_ix_* banner): its key and operand tuple, and its
@@ -1040,8 +1036,8 @@ typedef struct {
     /* The family reward's range over the frontier, read per member. A spread above 1.0 means the optimism bonus
        can no longer reorder its ends. Aging is subtracted only from the flow being served and its family, so it
        cannot lift a member that consumes nothing: the ends meet only by the top coming down, after
-       `(val_top - val_min + 1) / FLOW_AGE_QUANTUM` quanta of the top's own plus family silence
-       (flow_silence_notch), which every emission of that family resets.
+       `(val_top - val_min + 1) / FLOW_AGE_QUANTUM` quanta of the top's family silence (flow_family_notch), which
+       every emission of that family resets.
        flow.c's flow_nonreward bounds every other term, so the reward gap is the only quantity that can put a
        never-run member behind the pick's choice; read it against `self_emit`. A one-family frontier has a
        spread of exactly zero, so a non-zero spread is a statement about several accounts (documents, @S
@@ -1082,8 +1078,8 @@ typedef struct {
        A gap of zero is not starvation: flow_pick's comparison is strict and the incumbent is the seed, so on a
        tied cohort (ordinary on a one-family page) the pick returns one of N tied maxima and the rest stand at the
        front with `picks == 0`. The tie is ended by strict demotion, not by a dispatch rule: flow_age_running
-       lowers the optimism term of every member at a site each quantum that site is served, and charges the running
-       flow's own silence by FLOW_AGE_QUANTUM steps. Relaxing the pick to `>=` would switch at every opcode.
+       lowers the optimism term of every member at a site each quantum that site is served, and raises the running
+       flow's turn a notch per quantum. Relaxing the pick to `>=` would switch at every opcode.
        The finding is in the series: `never_picked` climbing across censuses while `members` grows is the tail
        not being reached (build.mjs reads the series). */
     long never_picked;
@@ -1092,9 +1088,8 @@ typedef struct {
     /* How many never-picked members stand exactly at the front (weight == `w_top`): the N of the tie above. A
        small N is a sweep in progress; a large N is an order whose within-family terms no longer separate
        anything, so `g_flows` position decides the pick. On a one-family frontier the reward and the family
-       aging cancel, leaving the optimism bonus (the site's service, shared by every member standing there) and the
-       own silence (forgiven for the whole account at an emission); read beside `jobs_framed` to see which left
-       them tied.
+       aging cancel, leaving the optimism bonus (the site's service, shared by every member standing there); the
+       turn then orders the tie (forgiven for the whole account at an emission). Read beside `jobs_framed`.
        A gauge, never differenced. flow_wfq_census asserts `never_picked_at_top <= never_picked`, and that it is
        non-zero exactly when `never_picked_gap` is 0.0. */
     long never_picked_at_top;
@@ -1147,9 +1142,9 @@ typedef struct {
     int64_t credit_paid;
     int64_t credit_dropped;
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
-    /* The floor of the own-silence notch. `svc_max` alone reads the same for one monopolizer on an idle frontier
-       and for a frontier whose members all burned alike; `svc_max - svc_min` is the spread the ranking is made
-       of. A from-baseline family is born at zero service (flow_arrive_at_virtual_time copies no silence), so it
+    /* The floor of the own-silence notch, the members' turns. `svc_max` alone reads the same for one monopolizer
+       on an idle frontier and for a frontier whose members all burned alike; `svc_max - svc_min` is the spread the
+       turns rotate over. A from-baseline family is born at zero service (flow_arrive_at_virtual_time copies no silence), so it
        enters at the floor. The weight extrema cannot answer this: a uniform rise in service moves `w_top`,
        `w_min` and `cand_w_max` by the same amount. */
     int64_t svc_min;
@@ -1187,29 +1182,6 @@ typedef struct {
        frontier is off its base now. The cost question is `epochRebuildLifetime`, a lifetime counter. */
     long epoch_away_live;
     long epoch_away_walk;
-
-    /* How many sub-quantum residues the frontier occupies: distinct values of flow_silence_phase. The aging notch
-       `(own + fam) / S` decomposes exactly into the member's notch, the family's, and a carry bit whose
-       threshold (the family's residue) is common, so between two frontier generations only that bit moves, and
-       members sharing a phase flip it together. At 1 the bit is a common offset and one cached maximum is
-       exact; that state is reachable (a fork copies `work` and `work_gen`, an emission zeroes a family's phases)
-       but has been observed only with `members == 1`.
-       The count is capped by the clock: phases are residues of `FLOW_SERVICE_WORK` in the quantum clock's
-       currency, so a coarse clock bounds them at `FLOW_SERVICE_WORK` divided by its granularity. Read that
-       ceiling off the run (the gcd of its work accumulators) and never copy it from here: near it the
-       figure is about the clock. A structure over the fixed phase domain `[0, FLOW_SERVICE_WORK)`, whose carry
-       splits it into `[0, S-R)` and `[S-R, S)`, costs a logarithm whatever this reads, so prefer it.
-       Read it against `picks_lifetime` first (only a charged member mints a residue) and `members` second; a
-       quotient that falls monotonically as picks rise is saturation at the clock ceiling. */
-    /* Named residual. Not covered: the residue ceiling is derived by the reader, not published. Next diff
-       builds: the ceiling as a census row beside `sil_phases`. Absence shows as: a figure near the clock
-       ceiling quoted as a statement about the frontier. */
-    long sil_phases;
-    /* How many members stand on the far side of the carry boundary now. A gauge (the threshold sweeps as the
-       family burns and resets when its residue wraps), never differenced. 0 or `members` means the bit
-       contributes nothing at this instant, which is an observation about one sample, not `sil_phases: 1`'s
-       structural claim. */
-    long sil_carry;
 
     /* The third accounting scope, a fork subtree, which says what the two sides of a branch received. Within a
      * family the member and family scopes cannot see a branch, and a real page is one family. A bucket is a
@@ -1346,19 +1318,17 @@ typedef struct {
        `val_top` and a slowly earning one look alike; the silence is not monotone (flow_credit_emit zeroes
        `fam_work`), so these say whether the leader's aging is being forgiven.
        Reported separately: on a one-family frontier `top_svc_fam` is a common offset that cancels from every
-       gap. `top_svc` is the half that moves a gap: a monopolising front sinks and `top_svc` climbs, while a
-       front refilled by fresh arms keeps it low or sawtoothing while the same gap stands; those take opposite
-       work (re-price the aging, or stop the mint outranking the tail). Not flow_silence_notch, which floors
-       the sum, so the halves can differ from the weight's notch by one. Bounded by the extrema above (the
-       leader is one of the members walked) and asserted. */
+       gap. `top_svc` is the leader's turn, no summand: a front holding the thread climbs in it, while a front
+       refilled by fresh arms keeps it low or sawtoothing. Bounded by the extrema above (the leader
+       is one of the members walked) and asserted. */
     int64_t top_svc;
     int64_t top_svc_fam;
     /* How many times the leading account's within-family order has been erased: its `emit_gen`, raised once per
        credited finding by flow_credit_emit and by nothing else. `val_top` cannot stand in for it, because a
        credit is any positive amount (the @S survival ratchet credits fractions).
-       An emission zeroes both silence halves for every arm of the family at once, leaving arms in one visit tier
-       exactly tied, so flow_pick returns the tied member with the lowest birth sequence and the tier is swept from
-       its oldest member, one member per quantum of own silence; the next emission restarts the sweep. If that
+       An emission zeroes the family's silence and every arm's turn at once, leaving arms in one visit tier exactly
+       tied, so flow_pick returns the tied member with the lowest birth sequence and the tier is swept from its
+       oldest member, one member per quantum of turn; the next emission restarts the sweep. If that
        holds, `picks_max` tracks this within a small factor and `picks_live / picks_max` is the mean sweep depth;
        `val_top / top_forgiven` says whether the leader earns findings or ratchets fractions.
        A per-account lifetime count whose series may fall at a leader change: both falling is a new leader,
@@ -1683,26 +1653,14 @@ Flow *flow_next_to_run(const Flow *incumbent, FlowScan why);
  * against, hence it excludes rather than seeds. The same scan, so the hook and the pick never disagree. */
 Flow *flow_rival_of(const Flow *cur);
 
-/* Whole quanta of work this flow has consumed: the quantised own silence, a census quantity. Not itself
- * a weight term; the aging term reads its sum with the family notch in this unit. */
+/* Whole quanta of work this flow has consumed since its family last emitted: the member's turn, which orders it
+ * only among members level on every term of the weight (flow.c's flow_order_key). No summand of the weight. */
 int64_t flow_service_notch(const Flow *f);
-/* The family's notch, in the same unit; it has its own reset point (flow.c's flow_age_running). The ratio of the
-   two is the widest family's fork factor. */
+/* The family's notch, in the same unit: the aging term's quantity, priced at flow.c's FLOW_AGE_QUANTUM where it is
+   summed. Public because it is half of a rank change: between two of these notches and two completed units, a
+   weight moves only through an emission, which is the invariant engine.c's seam assertion holds the value yield
+   to. The ratio of the two notches is the widest family's fork factor. */
 int64_t flow_family_notch(const Flow *f);
-/* The aging term's quantity: whole cooperative quanta of silence, `(own + fam) / FLOW_SERVICE_WORK`. The price per
-   notch is applied where the term is summed (flow.c's FLOW_AGE_QUANTUM), since the cost of a unit of work and the
-   order's smallest step are different quantities. Public because it is half of a rank change: between two of
-   these notches and two completed units, a weight moves only through an emission, which is the invariant
-   engine.c's seam assertion holds the value yield to. */
-int64_t flow_silence_notch(const Flow *f);
-
-/* The remainder and carry of that division: `(own + fam) / S` is `own / S + fam / S` plus a carry of one notch,
-   so the three notch rows do not reconcile without these. Between two frontier generations the carry is the
-   only per-member quantity in the weight that moves, its threshold is common to the family and sweeps
-   monotonically, so members cross in descending phase and a frontier maximum is a maximum over two contiguous
-   phase ranges (flow.c states the derivation). They price an ask; no weight term reads them. */
-int64_t flow_silence_phase(const Flow *f);
-int flow_silence_carry(const Flow *f);
 
 /* The member's birth sequence, unique for the instance's life and assigned in birth order, so it names the same
    member on two runs that took the same path. */

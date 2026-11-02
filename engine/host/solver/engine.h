@@ -275,9 +275,9 @@ uint64_t engine_preempt_asks(void);
    cache is keyed on the frontier generation or the incumbent's tenure (flow_running_switches), and the two
    misses call for different work: a generation miss is the page branching, a `cur` miss a rescan over an
    unmoved generation.
-   A cached top-two fold does not answer a `cur` miss: the carry bit (solver/flow.c's flow_silence_carry)
-   reorders members with no generation bump, and flow_pick_skipped drops the excluded member before weighing,
-   so the old incumbent re-enters a population the pair never held. A sound fold retains the pair over the
+   A cached top-two fold does not answer a `cur` miss: the running family's notch moves members of other
+   families relative to its own with no generation bump, and flow_pick_skipped drops the excluded member before
+   weighing, so the old incumbent re-enters a population the pair never held. A sound fold retains the pair over the
    full eligible set and is used only when a recomputed weight strictly exceeds the retained third best, which
    bounds every other member because weights do not increase between generations. `both` counts intervals in
    which removing either invalidator alone would still have forced the walk.

@@ -61,24 +61,14 @@ METRIC(picks_departed, "picksDeparted", LIFETIME, "dispatch", PROCESS, "solver/f
 /* The seven notch rows (`svcMax`, `svcMin`, `svcFamMax`, `svcFamMin`, `candSvcMax`, `topSvc`,
    `topSvcFam`) are quotients `<work> / FLOW_SERVICE_WORK` (flow.c's flow_service_notch
    and flow_family_notch), so one increment is one quantum of unforgiven silence — never a
-   dispatch, step or unit; multiply by FLOW_AGE_QUANTUM for the points the weight
-   charges. Dispatch counts are the `picks*` rows. Gauges: silence since the account's last
+   dispatch, step or unit; the family rows times FLOW_AGE_QUANTUM are the points the weight
+   charges, and the member rows are turns, no summand. Dispatch counts are the `picks*` rows. Gauges: silence since the account's last
    forgiveness, which flow_credit_emit zeroes family-wide; `topForgiven` counts those. */
 METRIC(svc_max, "svcMax", GAUGE, "notch", AGENT, "solver/flow.c", INT)
 METRIC(svc_min, "svcMin", GAUGE, "notch", AGENT, "solver/flow.c", INT)
 METRIC(svc_fam_max, "svcFamMax", GAUGE, "notch", AGENT, "solver/flow.c", INT)
 METRIC(svc_fam_min, "svcFamMin", GAUGE, "notch", AGENT, "solver/flow.c", INT)
 METRIC(families, "families", GAUGE, "family", AGENT, "solver/flow.c", INT)
-/* …and what asking the order costs. The notches drop their remainder, but the aging term
-   divides the sum of two, whose quotient carries a carry bit. `silPhases` is how many
-   distinct remainders the frontier stands on and `silCarry` how many members are past the
-   carry boundary; between two generation bumps only that carry moves, and members sharing a
-   remainder flip together. `silPhases: 1` would mean nothing reorders between bumps, but in
-   the archived corpus it occurs only at `members == 1` (solver/flow.h). A statement about
-   what a sub-linear ask must index; no term of flow_weight reads either. `silPhases` counts
-   keys and `silCarry` is a gauge; neither may be differenced. */
-METRIC(sil_phases, "silPhases", GAUGE, "remainder", AGENT, "solver/flow.c", INT)
-METRIC(sil_carry, "silCarry", GAUGE, "member", AGENT, "solver/flow.c", INT)
 /* The fork-subtree scope between member and family. A bucket is a top-level arm (forked
    directly off a family root); deeper branches sum into it (flow.c's residual at FlowAcct
    `up`). `branches`, `brLive*` and `brDepthMax` are gauges. `brLiveMax / members` is how
@@ -293,7 +283,7 @@ METRIC(preempt_asks_lifetime, "preemptAsksLifetime", LIFETIME, "ask", PROCESS, "
    collapse into one miss at the next poll, so a rate alone cannot say which. A partition, not
    three rates: `rivalMissGen` is the order having changed; `rivalMissCur` a walk for a
    frontier whose generation stood still, which is not a frontier where nothing moved
-   (solver/engine.h; `silPhases` prices that repair); `rivalMissBoth` prices either repair,
+   (solver/engine.h); `rivalMissBoth` prices either repair,
    since removing one invalidator buys nothing where both moved. Lifetime counts in every
    build; their sum is asserted equal to `scanRivalRuns` in result_wfq_json. */
 METRIC(rival_miss_gen, "rivalMissGen", LIFETIME, "rescan", PROCESS, "solver/engine.c", INT)

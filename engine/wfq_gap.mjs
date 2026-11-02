@@ -10,8 +10,9 @@ import { fileURLToPath } from "node:url";
 const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pullWork", "visits", "orphanSeen",
                     "replay", "surv", "rung", "assumed", "againstEnv", "picks", "hostOwed", "running"];
 
-/* The terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The aging is
-   split into its family half (in `coord`, with the reward) and its own half; the optimism is read off the member's
+/* The terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The aging is the
+   family's (in `coord`, with the reward); `ownNotch` is the member's turn, which orders it only among members level
+   on the weight and is no term here. The optimism is read off the member's
    site (`siteServed` in quanta of `pullWork`) with each priced decision a floor of `p` work, and `assume` is how much
    of it the priced decisions took (the optimism less its unpriced reading), so `opt + assume` is the term the
    weight sums. `visits` is an operand the row carries and no term reads. */
@@ -21,18 +22,17 @@ function termsOf(o, q, p, rungs, where) {
       throw new Error(`${where}: a curDeepTerms end carries no number \`${k}\` — solver/result.c's ` +
                       `weight_operands_json writes all of ${END_FIELDS.join(", ")}`);
   const coord = o.reward - o.coordNotch * q;
-  const own = -o.ownNotch * q;
   const least = (o.assumed + o.againstEnv) * p;
   const priced = 1.0 / (1.0 + (o.siteServed > least ? o.siteServed : least) / o.pullWork + o.orphanSeen);
   const opt = 1.0 / (1.0 + o.siteServed / o.pullWork + o.orphanSeen);
   const dist = (o.replay + o.surv + o.rung) / rungs;
   const assume = priced - opt;
-  const w = coord + (priced + (own + dist));
+  const w = coord + (priced + dist);
   if (w !== o.w)
     throw new Error(`${where}: a curDeepTerms end does not recompose to its weight (published ${o.w}, ` +
                     `recomposed ${w}) — this reader and solver/flow.c's flow_weight_recompose compose ` +
                     `different expressions`);
-  return { coord, own, opt, dist, assume, w };
+  return { coord, opt, dist, assume, w };
 }
 
 /* The split of one gap row: each term's difference between the front (`top`) and the gap's far end (`far`), and
@@ -48,7 +48,7 @@ function termSplit(t, far, row, where) {
     throw new Error(`${where}: the ${row} gap recomposed from its two weights (${top.w - end.w}) is not the ` +
                     `gap the census computed (${t.gap})`);
   const d = {};
-  for (const k of ["coord", "own", "opt", "dist", "assume"]) d[k] = top[k] - end[k];
+  for (const k of ["coord", "opt", "dist", "assume"]) d[k] = top[k] - end[k];
   return { gap: t.gap, terms: d, top: t.top, far: t[far] };
 }
 
@@ -70,13 +70,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     let c;
     try { c = JSON.parse(m[1]); } catch { continue; }
     const f = (x) => x.toFixed(6);
-    const end = (e) => `site ${e.siteServed} visits ${e.visits} k ${e.ownNotch} K+c ${e.coordNotch} ` +
+    const end = (e) => `site ${e.siteServed} visits ${e.visits} turn ${e.ownNotch} K ${e.coordNotch} ` +
                        `assumed ${e.assumed} againstEnv ${e.againstEnv} picks ${e.picks} owed ${e.hostOwed} running ${e.running}`;
     for (const [name, r] of [["curDeep", curDeepTermSplit(c, `${path} census ${c.censusSeq}`)],
                              ["neverPicked", neverPickedTermSplit(c, `${path} census ${c.censusSeq}`)]]) {
       if (!r) continue;
-      console.log(`census ${c.censusSeq} ${name} gap ${f(r.gap)} = coord ${f(r.terms.coord)} + own ` +
-                  `${f(r.terms.own)} + opt ${f(r.terms.opt)} + dist ${f(r.terms.dist)} + assume ` +
+      console.log(`census ${c.censusSeq} ${name} gap ${f(r.gap)} = coord ${f(r.terms.coord)} + opt ` +
+                  `${f(r.terms.opt)} + dist ${f(r.terms.dist)} + assume ` +
                   `${f(r.terms.assume)} | ` +
                   `top ${end(r.top)} | far ${end(r.far)}`);
     }

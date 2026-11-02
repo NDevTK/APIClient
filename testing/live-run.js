@@ -1612,34 +1612,7 @@ const scanRowShape = () => {
   return by;
 };
 const SCAN_ENTRIES = scanRowShape();
-/* …AND THE TWO ROWS THAT PRICE THE REPAIR THE SCAN ROWS RECOMMEND, WHICH NO REAL-SITE DRIVER HAS CARRIED. The
-   lane sent to FOLD the rival scan's top two refused the brief and asked for these by name, in its own words:
-   `the hook rows alone cannot price their own recommended repair`. solver/engine.h now holds the design that
-   replaced the fold — a MARGIN rather than a quantum, the scan's third-best weight bounding every member
-   outside a retained pair for as long as the frontier generation stands — and the one quantity that says
-   whether any margin exists is the carry, because solver/flow.c calls its bit `THE ONE PART OF A NON-RUNNING
-   MEMBER'S WEIGHT THAT MOVES WITH NO GENERATION BUMP BEHIND IT`.
-   WHAT EACH ONE IS, in the producer's words. `silPhases` is how many DISTINCT sub-quantum residues the frontier
-   is standing on — the count of distinct `flow_silence_phase` values over the members — and `silCarry` is how
-   many members are on the far side of the boundary right now. Members sharing a residue flip the bit TOGETHER,
-   so `silPhases` is exactly the number of groups that can reorder between two generations: at 1 the bit is a
-   COMMON OFFSET, nothing reorders, and a single cached maximum is exact. BOTH ARE GAUGES and `silCarry` may
-   FALL between samples — the threshold sweeps downward as the family burns and resets every member at once —
-   so neither may be differenced and `census` nulls both on an empty frontier through the producer's own
-   declared kind rather than through any list here.
-   `picksLifetime` IS CARRIED FOR THESE TWO AND FOR NOTHING ELSE. solver/flow.h names the reading: a member that
-   has never held the thread carries the phase it was FORKED with, so `silPhases` far below the dispatch count
-   says the residues are INHERITED rather than EARNED — which is a different finding from a frontier that has
-   genuinely spread, and the two recommend different structures. It is the one row of this group that may be
-   differenced, and `picksLifetime == _switches` is an identity result.c checks at the one moment both terms are
-   in one hand.
-   NO FIGURE FROM EITHER HOST IS COPIED HERE. solver/flow.h carries both measurements with the corpus each was
-   taken over and the derivation as a command, and they disagree by two orders of magnitude in the ratio AND in
-   its direction — about every other member its own group on the native host and rising, against a flat 120 on
-   the vehicle while the frontier grew 4.9x. A count copied away from its derivation is a claim competing with a
-   command, and this driver's whole purpose is to take the reading rather than to quote one. */
-const WFQ_CARRY_ROWS = ["silPhases", "silCarry", "picksLifetime"];
-const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER, WFQ_SCAN_ROWS, WFQ_CARRY_ROWS);
+const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER, WFQ_SCAN_ROWS);
 const OUT_NAME = { members: "wfqMembers" };
 /* WHICH `wfq` ROWS ARE LIFETIME COUNTS, TAKEN FROM THE PRODUCER AND NEVER LISTED HERE — the set `census` gates
    on. A hand-kept list of which rows survive an empty frontier would be a second copy of a fact only the
@@ -1928,20 +1901,7 @@ function census(r) {
          the fraction of the hook's rescans whose ONLY invalidator was the excluded incumbent, and
          `rivalMissBoth` is carried unmixed because a `both` near `cur` means the repair buys nothing. Two
          numbers, one diff, two prices.
-         THE CLAUSE NAMING THAT REPAIR IS RETIRED AND IS KEPT IN ITS OWN WORDS: it read `the half a top-two fold
-         would answer without a walk`. The lane sent to build that fold refused it and solver/engine.h now
-         carries the refutation — flow_silence_carry's bit moves with no generation bump behind it, so members
-         within one FLOW_AGE_QUANTUM reorder between two rescans, and flow_pick_skipped drops the EXCLUDED member
-         before flow_weight is ever called, so a rival scan holds no reading whatever of the one member a `cur`
-         change re-admits. It is rewritten rather than deleted because a reader who re-derives it from the cache
-         key will write it again: the key is a disjunction over the generation, so a generation that stood still
-         reads as a frontier that stood still, and it is not.
-         THIS IS THE FIFTH SITE OF THAT ARGUMENT AND THE LANE REPAIRED FOUR, which is the reason it is recorded
-         here rather than silently corrected. The lane's scope was the solver and this clause is in the driver,
-         so its grep for the retired argument could not reach it — CLAUDE.md's rule that a fix's CODE DELTA is
-         not its SIZE, with the missing site one component over rather than one file over. What the share still
-         measures is unchanged and is still worth taking: `cur` is the arm whose repair is cheap IF a margin
-         exists, and `silPhases` below is the row that says whether one does. */
+         What the share measures: `cur` is the arm whose repair is cheap IF a margin exists. */
       o.avoidableRivalShare = mc / rr;
       o.avoidableRivalShareOf = "rivalMissCur / scanRivalRuns";
     }
@@ -1950,68 +1910,6 @@ function census(r) {
       o.avoidableRivalShareOf = null;
     }
   }
-  /* AND THE TWO READINGS THE CARRY ROWS EXIST FOR, WHICH ARE THE PRICE OF THE MARGIN solver/engine.h NOW
-     PRESCRIBES. Both are composed from GAUGES and are therefore statements about ONE census — never differenced,
-     never accumulated — and both are read at the TERMINAL census or not at all.
-       `phaseShare`      = silPhases / wfqMembers — how finely the frontier is split across sub-quantum residues.
-                           solver/flow.h's own instruction is to read `silPhases` against `members` and NEVER
-                           alone, because 1 at one member is the frontier being empty of the question and 1 at
-                           tens of thousands is the finding. Near 0 is a frontier standing on few residues, where
-                           the carry bit is close to a COMMON OFFSET and a margin is wide; near 1 is every member
-                           its own group, where nearly any two members may reorder between generations and no
-                           cached pair is sound at any margin.
-       `phasesPerPick`   = silPhases / picksLifetime — flow.h's INHERITED-versus-EARNED reading. A member that has
-                           never held the thread carries the phase it was FORKED with, so far below 1 says the
-                           residues came from forking rather than from being charged. The two states recommend
-                           different structures and no other row separates them.
-     AND ONE PREDICATE RATHER THAN A MAGNITUDE, because flow.h states it as a RETIREMENT CONDITION on its own
-     correction and a condition is answered yes or no: `carryCommonObserved` is `silPhases === 1` with more than
-     one member, which flow.h says has NEVER been observed in this repository except degenerately — 48
-     occurrences of `silPhases == 1` across its whole archived corpus and `members == 1` in all forty-eight. A
-     true here on a real page is the observation that would make the strongest index design available, and a
-     false is this driver declining to claim it. It is a PREDICATE and not a share for the reason CLAUDE.md gives
-     where run lengths are uncontrolled: `did this ever happen` does not depend on how far a run got, and `how
-     far did it get` is nothing but that.
-     NEITHER FIGURE IS COMPARED AGAINST A STORED ONE. flow.h's two host readings disagree by two orders of
-     magnitude AND in direction, so what is quoted from a drive is the pair plus its host's slice measure, and
-     the derivation lives there rather than here.
-     AND THE READING HAS NOW BEEN TAKEN, WHICH SETTLES WHICH OF THE TWO QUOTIENTS IS THE STABLE ONE AND PUTS
-     flow.h'S PRESCRIBED ORDER THE WRONG WAY ROUND. flow.h says to read `sil_phases` against `members` and
-     NEVER alone, and to read it against `picksLifetime` TOO — primary and secondary in that order. Over FOUR
-     runs of ONE document in FOUR fresh browsers, `phasesPerPick` held inside a narrow band while `phaseShare`
-     swung by more than a factor of two. **THE REASON IS IN THE DENOMINATORS AND IS NOT A PROPERTY OF THAT
-     DOCUMENT**: only a CHARGED member mints a new residue, so `picksLifetime` is the population that PRODUCES
-     phases, while `members` is decided by how far a run happened to get before its budget elapsed. One denominator is the cause of the numerator and the other is a lottery, which is why the
-     secondary reading is the one to quote and the primary is the one to quote WITH ITS RUN COUNT.
-     A FALLING `phasesPerPick` IS A DIFFERENT FINDING FROM A SWINGING `phaseShare`, AND THE SECOND DOCUMENT IS
-     WHAT SEPARATES THEM. Where `phasesPerPick` falls MONOTONICALLY as picks rise, the residue count is
-     SATURATING rather than the quotient being unstable. `flow_silence_phase` is `flow_own_silence(f) %
-     FLOW_SERVICE_WORK` (flow.c), a residue of exact integer work, so the count of distinct residues is bounded
-     by `sliceWork` alone and by no clock's granularity; near that ceiling the figure is about the slice's
-     width, far below it the figure is about the FRONTIER.
-     NO MAGNITUDE FROM THAT DRIVE IS WRITTEN HERE AND THE DERIVATION IS WHAT IS HANDED OVER, because a live
-     figure is a fact about a document at an hour and this file is the thing that takes it: run
-     `node testing/harness.js restart` and `node testing/live-run.js 1 <url>` per run, ONE FRESH BROWSER EACH
-     — the frontier is cross-session BY DESIGN and lives in RAM, so clearing storage does not reach it — and
-     read the pair at the terminal census with `sliceWork` beside it. */
-  const sp = num("silPhases"), sc = num("silCarry"), pk = num("picksLifetime"), mem = num("wfqMembers");
-  o.phaseShare = ratio(sp, mem);
-  o.phaseShareOf = (o.phaseShare === null) ? null : "silPhases / wfqMembers";
-  o.phasesPerPick = ratio(sp, pk);
-  o.phasesPerPickOf = (o.phasesPerPick === null) ? null : "silPhases / picksLifetime";
-  o.carryCommonObserved = (sp === null || mem === null) ? null : (sp === 1 && mem > 1);
-  /* AND WHAT `silCarry` ADDS THAT `silPhases` CANNOT, read at the same instant and refused when the two
-     disagree about the population. The carry count is how many members stand on the far side of the boundary
-     NOW, so 0 or `members` is the bit contributing nothing AT THAT SAMPLE — an observation about one census and
-     never the structural claim `silPhases: 1` makes, which is the same two-states-one-number split result.c
-     draws one scope down. A count ABOVE the member total is not a reading at all: the two are taken from one
-     walk of one frontier, so it names a second writer or a sample composed across two walks. */
-  o.carryInert = (sc === null || mem === null) ? null : (sc === 0 || sc === mem);
-  o.carryRefused = (sc !== null && mem !== null && sc > mem)
-    ? "`silCarry` " + sc + " exceeds `wfqMembers` " + mem + " — both are gauges taken from ONE walk of ONE " +
-      "frontier at this census, so the carry cannot name more members than are standing. This is a second " +
-      "writer of one accumulator or a sample composed across two walks, and every reading above is void"
-    : null;
   o.scanRefused = (o.rivalMissRate !== null && o.rivalMissRate > 1)
     ? "the hook's rescan count " + o.scanRivalRuns + " exceeds the " + o.preemptAsksLifetime +
       " asks its own policy raised — the rescan branch is INSIDE that policy and runs after it raises its " +

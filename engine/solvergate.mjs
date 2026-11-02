@@ -282,7 +282,7 @@ const policyLabel = (s) => {
 
    THE ENGINE MAKES THE ORDER A FUNCTION OF THE PATHS ON THIS HOST, and this child is what checks it. The aging
    charge (solver/engine.c's `flow_age_running(step_work)`), the notch it floors (solver/flow.c's
-   flow_silence_notch over FLOW_SERVICE_WORK) and the slice a flow parks and the loop returns on
+   flow_family_notch and flow_service_notch over FLOW_SERVICE_WORK) and the slice a flow parks and the loop returns on
    (engine_quantum_spent) are all engine work counted at dispatch, and the native host has no wall-time yield,
    so two runs of the reference pick the same flows. A difference is a decision reading something that is not
    the path (a time, an address, an iteration order over a hash) that this tree has not named.
@@ -1980,7 +1980,7 @@ for (const doc of docs) {
                     "MISMATCH row for this document is a difference between two draws of a noisy process and a " +
                     "real cross-schedule cap is indistinguishable from it." +
                     "\n           IT IS NOT EXPLAINED BY THE CLOCK. The WFQ is LICENSED to reorder on consumed " +
-                    "time (flow_silence_notch divides it by one cooperative quantum) and FORBIDDEN to change " +
+                    "time (flow_family_notch divides it by one cooperative quantum) and FORBIDDEN to change " +
                     "what a DRAINING frontier emits — so a differing set here is a flow dropped, starved, " +
                     "skipped, reordered or forgotten, with no second schedule involved. Report the two sets " +
                     "before patching anything: this is the first evidence the premise can fail.");

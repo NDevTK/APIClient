@@ -8254,11 +8254,10 @@ static int engine_quantum_spent(void) {
 }
 /* The rival is cached; the comparison is not. What is cached is the rival's identity, found by the O(flows) scan,
    and the scan reruns only when the generation or running flow changes. Both weights are recomputed at every
-   consultation, because a parked flow's weight moves without a generation bump: `flow_silence_notch` reads the
-   flow's own silence plus its family's `fam_work`, which `flow_age_running` writes after every step, and on a real
-   page the whole frontier is one family (every flow descends from the boot flow). The notch is a floor of
-   `(cpu_i + fam_work) / S`, so a step can carry the rival across a boundary while the running flow's stands still; a
-   cached weight would then yield to a flow no longer better. A fitness write cannot cause that: it is made only on
+   consultation, because a parked flow's weight moves without a generation bump: the aging reads its family's
+   `fam_work`, which `flow_age_running` writes after every step, and a rival in another family than the running
+   flow's stands still while the running family's notch moves; a cached weight would then yield to a flow no
+   longer better. A fitness write cannot cause that: it is made only on
    the running flow, through flow_observe_survival or flow_observe_rung, which both raise the generation (a fire
    with the generation equal to the ranked one is a notch straddle, not a distance write). The cached pointer is
    safe across the key: a flow leaving the frontier changes membership and raises the generation, asserted where
@@ -8274,8 +8273,8 @@ static uint64_t g_rival_miss_gen = 0, g_rival_miss_cur = 0, g_rival_miss_both = 
 /* What the rival was worth in every term the frontier generation is supposed to speak for, recorded where the
    pointer is taken and checked at every consultation until the generation moves. The mirror of `g_ranked_*`
    below: that block holds the incumbent, whose terms may move while it runs; this holds a member that is not
-   running and must not move except through the one quantity that legitimately does (flow_silence_phase: the
-   aging's carry bit, whose threshold is the family's). If a reward, completed-unit count, fitness distance or own
+   running and must not move except through the one quantity that legitimately does (its family's notch, which
+   the running flow's charge raises when they share a family). If a reward, completed-unit count, fitness distance or own
    service notch could move with the generation still, the order's index (flow.c's flow_ix_*, which holds each
    member's key exact only because every such writer re-keys) would already be wrong; this catches it cheaply on a
    member the hook holds anyway, and also checks the pointer's safety argument for more than membership. Written
@@ -8283,10 +8282,9 @@ static uint64_t g_rival_miss_gen = 0, g_rival_miss_cur = 0, g_rival_miss_both = 
    would put the assertion's operands behind a second condition. */
 static int64_t g_rival_own_notch = 0, g_rival_opt_den = 0;
 static double g_rival_val = 0.0, g_rival_dist = 0.0;
-/* The integer the rival's family coordinate prices (solver/flow.c's acct_family_coord): its family's notch plus its
-   carry bit, which is its total notch less its own. flow_age_running charges the family without a rank change, so
-   this moves between two generations, and only up: the own notch stands still and the total is a floor of a sum
-   that only grows. The fifth term, and the one-sided one. */
+/* The integer the rival's family coordinate prices (solver/flow.c's acct_family_coord): its family's notch.
+   flow_age_running charges the family without a rank change, so this moves between two generations, and only up.
+   The fifth term, and the one-sided one. */
 static int64_t g_rival_fam_coord_notch = 0;
 /* The weight itself, the one clause that survives a summand being added: the five above are fields of a computed
    value, and an assert over the accessor cannot be short a summand. It is one-sided by design: between two
@@ -8294,8 +8292,7 @@ static int64_t g_rival_fam_coord_notch = 0;
    nearest is monotone in each operand of flow_order_key's sums); equality would fire on the one movement the
    interval permits. It fires on what the five cannot see: a forgiveness of the family's silence with the generation
    unchanged (flow_credit_emit is that writer and bumps today), a summand that moves up, or a notch that decreases.
-   The direction is the precondition for any cached maximum, heap or index over flow_index_key; flow.h's
-   `sil_phases` prices the magnitude. Written in every build, read only in dev (in release the condition is inside
+   The direction is the precondition for any cached maximum, heap or index over flow_index_key. Written in every build, read only in dev (in release the condition is inside
    a `sizeof`).
    Named residual. Not covered: every member but the cached rival. solver/flow.c's walk asserts each member's own
    half equal across a generation, but nothing asserts the direction of the whole weight for the rest. Next diff
@@ -8309,9 +8306,8 @@ static double g_rival_w = 0.0;
    cost" a check. Anything summed into flow_weight belongs here, or the assertion reads a real rank change as an
    unchanged one. */
 static unsigned g_ranked_gen = 0; static double g_ranked_val = 0.0;
-/* The aging term's notch: this flow's silence (its own thread time since its last emission plus its family's since
-   any arm emitted) in whole cooperative quanta (solver/flow.h's flow_silence_notch). One snapshot, because the
-   weight reads one quantity, the sum. The unit is the quantum the thread is handed out in, so the rank can move on
+/* The aging term's notch: this flow's family's silence since any arm emitted, in whole cooperative quanta
+   (solver/flow.h's flow_family_notch). The unit is the quantum the thread is handed out in, so the rank can move on
    aging between two picks (see the charge's resolution assertion in engine_sched_slice). */
 static int64_t g_ranked_silence = 0;
 /* The optimism denominator, the UCB term's operand (solver/flow.c's FlowSite): it moves when the flow's site is
@@ -8422,12 +8418,12 @@ static int preempt_hook(int kind) {
                "the value yield cached a rival that is not in the frontier — a departure must raise the generation "
                "that invalidates the cache");
         /* The rival's own terms, frozen with the pointer after the membership assert, since they dereference it.
-           The own service notch, not the silence notch: the silence adds the family's half, which advances on
-           every step of whoever holds the thread, the one movement this interval permits. */
+           Its turn stands still while it does not hold the thread; its family's notch advances on every step of
+           whoever in that family holds it, the one movement this interval permits. */
         if (g_rival) {
             g_rival_own_notch = flow_service_notch(g_rival); g_rival_opt_den = flow_optimism_den(g_rival);
             g_rival_val = flow_reward(g_rival); g_rival_dist = flow_distance(g_rival);
-            g_rival_fam_coord_notch = flow_family_notch(g_rival) + flow_silence_carry(g_rival);
+            g_rival_fam_coord_notch = flow_family_notch(g_rival);
             g_rival_w = flow_weight(g_rival);
         }
     }
@@ -8438,9 +8434,9 @@ static int preempt_hook(int kind) {
        the rival is, and this computes what both are worth now.
        Nothing but the aging moved under the cached rival, asserted here, where the interval has elapsed: neither
        the generation nor `cur` changed, so the rival is the member the readings were taken of, and each reading
-       is a flow_weight term the generation claims to speak for. `flow_service_notch` is the member's own silence,
-       charged by flow_age_running only to `g_running`; the same charge moves the family's notch and carry with
-       no rank change, and their sum may only rise. Dev-only and O(1).
+       is a term of the order the generation claims to speak for. `flow_service_notch` is the member's turn, charged
+       by flow_age_running only to `g_running`; the same charge moves the family's notch with no rank change, and it
+       may only rise. Dev-only and O(1).
        The message names which term moved, and whether the rival is still a member: a departure the cache outlived
        reads as a moved term (a freed flow answers 0 through the early returns that ask `family`), and the two
        take opposite diffs. flow_is_member is free on the passing path, since DCHECKF evaluates its arguments only
@@ -8450,27 +8446,25 @@ static int preempt_hook(int kind) {
     DCHECKF(!g_rival ||
             (flow_service_notch(g_rival) == g_rival_own_notch && flow_optimism_den(g_rival) == g_rival_opt_den &&
              flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
-             flow_family_notch(g_rival) + flow_silence_carry(g_rival) >= g_rival_fam_coord_notch),
+             flow_family_notch(g_rival) >= g_rival_fam_coord_notch),
             "a term of the cached rival's weight moved while the frontier generation stood still (own notch %lld -> "
             "%lld, optimism denominator %lld -> %lld, reward %g -> %g, distance %g -> %g, "
-            "family notch plus carry %lld -> %lld, still a member: %d; -1 and 0 mean it departed) — raise "
+            "family notch %lld -> %lld, still a member: %d; -1 and 0 mean it departed) — raise "
             "frontier_rank_changed() at the writer that moved it",
             (long long)g_rival_own_notch, (long long)flow_service_notch(g_rival),
             (long long)g_rival_opt_den, (long long)(flow_is_member(g_rival) ? flow_optimism_den(g_rival) : -1),
             g_rival_val, flow_reward(g_rival),
             g_rival_dist, flow_distance(g_rival),
-            (long long)g_rival_fam_coord_notch, (long long)(flow_family_notch(g_rival) + flow_silence_carry(g_rival)),
-            flow_is_member(g_rival));
+            (long long)g_rival_fam_coord_notch, (long long)flow_family_notch(g_rival), flow_is_member(g_rival));
     /* The same claim over the whole weight, after the five so that a fire here is a movement the five have no
        name for: five terms in bounds and a weight that rose, which no term of today's weight can do. See the
        declaration for the state and the one-sided bound. */
     DCHECKF(!g_rival || flow_weight(g_rival) <= g_rival_w,
             "the cached rival's weight rose while the frontier generation stood still (cached %.17g, current %.17g; "
-            "family notch plus carry %lld -> %lld) — between generations a non-running member's weight may only "
+            "family notch %lld -> %lld) — between generations a non-running member's weight may only "
             "fall, so a forgiveness of its family's silence (flow_credit_emit) or another writer lost its rank-change "
             "raise, or flow_order_key composes a term that moves without a write",
-            g_rival_w, flow_weight(g_rival), (long long)g_rival_fam_coord_notch,
-            (long long)(flow_family_notch(g_rival) + flow_silence_carry(g_rival)));
+            g_rival_w, flow_weight(g_rival), (long long)g_rival_fam_coord_notch, (long long)flow_family_notch(g_rival));
     if (cur && g_rival && flow_weight(g_rival) > flow_weight(cur)) {   /* value yield */
         /* The value yield may fire only on a rank change: a flow picked to run, against which nothing has changed,
            must still be running ("a top-ranked flow runs on at ~zero switch cost"). What can change the answer is
@@ -8488,7 +8482,7 @@ static int preempt_hook(int kind) {
            The reward clause reads flow_reward, the family's account flow_weight uses, not `cur->val`, one member's
            ledger, which a sibling's emission does not move. */
         DCHECK(flow_frontier_gen() != g_ranked_gen ||
-               flow_silence_notch(cur) != g_ranked_silence ||
+               flow_family_notch(cur) != g_ranked_silence ||
                flow_optimism_den(cur) != g_ranked_opt_den || flow_reward(cur) != g_ranked_val ||
                flow_distance(cur) != g_ranked_dist,
                "the value yield fired on a flow whose rank nothing changed since it was switched in — generation, "
@@ -11292,7 +11286,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
        found none strictly better, so from here the value yield may fire only if one of these moves. The hook's
        assertion reads them; nothing decides from them. */
     g_ranked_gen = flow_frontier_gen(); g_ranked_val = flow_reward(f);   /* the reward term, the family's */
-    g_ranked_silence = flow_silence_notch(f);  /* the aging term — see the assertion in preempt_hook */
+    g_ranked_silence = flow_family_notch(f);  /* the aging term — see the assertion in preempt_hook */
     g_ranked_opt_den = flow_optimism_den(f);   /* …and the optimism term's, which is a count and not a clock */
     g_ranked_dist = flow_distance(f);          /* …and the fitness term's, which is a reading and not a payment */
 }
@@ -12736,7 +12730,7 @@ static int engine_sched_slice(void) {
                and guarded with it: check.h's release DCHECK still type-checks its condition (`(void)sizeof(cond)`),
                so an unguarded reading would be a per-step call in a build that reads nothing. */
 #if APICLIENT_DEV
-            int64_t age_notch0 = flow_silence_notch(cur);
+            int64_t age_notch0 = flow_family_notch(cur);
 #endif
             now = quantum_thread_us();
             /* The other half, from the same two readings, never a third: `t_slice0` was taken just before the
@@ -12881,10 +12875,10 @@ static int engine_sched_slice(void) {
                bound on the aging half is derived from flow_weight and catches only an edit to the formula. This is
                observability: whether retiring a whole quantum moves the flow's rank at the granularity the thread
                is handed out in, since the next statement of this loop is the pick. Under today's unit it is an
-               identity: `flow_silence_notch` divides by the cooperative quantum and the charge adds the same units
-               to both of its summands, so a full quantum moves it at least two notches. A charge under one quantum
-               is exempt: it is below anything this scheduler decides. */
-            DCHECK(step_work < ENGINE_QUANTUM_WORK || flow_silence_notch(cur) > age_notch0,
+               identity: flow_family_notch divides by the cooperative quantum and the charge adds the same units to
+               `fam_work`, so a full quantum moves it at least one notch. A charge under one quantum is exempt: it
+               is below anything this scheduler decides. */
+            DCHECK(step_work < ENGINE_QUANTUM_WORK || flow_family_notch(cur) > age_notch0,
                    "a flow consumed a whole cooperative quantum and its rank did not move — the aging term is "
                    "quantised coarser than the thread is handed over");
 #endif
