@@ -6,11 +6,10 @@
  * the flow filed on it — a pinned literal (concolic_src_pin), the types still open (concolic_types), its
  * truthiness (concolic_value_truth), the tokens an equality proved it is not (concolic_excluded), the loose
  * equalities that held, an ordering bound, the string call predicates on either arm, and the languages a
- * component decided it is in or out of (concolic_lang_admits, drawn from concolic_lang_exemplars). A node with members is
- * an object; a node the page handed to JSON.parse is the String JSON.stringify writes for its ParseJSON node's
- * value; the injection node holds the payload; any other node holds the simplest JSON value its facets
- * admit, and a node nothing constrained is left out. A facet it cannot satisfy refuses the composition, naming
- * the facet and the node.
+ * component decided it is in or out of (concolic_lang_admits, drawn from concolic_lang_exemplars). A node with
+ * members is an object; a node handed to JSON.parse is the String JSON.stringify writes for its ParseJSON node's
+ * value; the injection node holds the payload; any other node holds the simplest JSON value its facets admit,
+ * and a node nothing constrained is left out. A facet it cannot satisfy refuses, naming the facet and the node.
  *
  * The result is a candidate: the fire it is for ran with the data unknown, so only a fire with this value
  * delivered proves a sender reproduces it. */
