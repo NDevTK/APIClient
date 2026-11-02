@@ -2951,6 +2951,11 @@ int concolic_member_undeclared(const char *p, size_t n)
     return src_row(p, n) < 0 && pre_row(p, n) < 0;   /* a principal is a column of a delivery row */
 }
 
+int concolic_root_declared_sources(const char *root)
+{
+    return root_declared_count(root);
+}
+
 int concolic_root_declared_each(const char *root, void (*cb)(void *ud, const char *p, size_t n), void *ud)
 {
     const char *p;

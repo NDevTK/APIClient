@@ -827,6 +827,9 @@ int         concolic_root_delivered_any(const char *root);
 /* Calls `cb` with each member of `root` that names a declared source (a delivery, a precondition or a principal),
    as a slice of `root`, in root order; answers how many. 0 for NULL. */
 int         concolic_root_declared_each(const char *root, void (*cb)(void *ud, const char *p, size_t n), void *ud);
+/* How many members of `root` are declared attacker sources, each with its own delivery; a search's envelope
+   states one. Side-effect-free. */
+int         concolic_root_declared_sources(const char *root);
 /* Whether injection identity `src` is the source the member slice `p`/`n` names, or a hole over it: an identity
    spelled `{member}` followed by its path, or, for a member that is itself a hole, that member followed by its path. */
 int         concolic_src_within(const char *src, const char *p, size_t n);

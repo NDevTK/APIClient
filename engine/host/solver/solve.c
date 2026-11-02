@@ -1248,11 +1248,19 @@ static void park_on_sender(const char *src, const char *root, int sink) {
    injected there lands nowhere. When the identity belongs to no member of the root that declares a source and
    some member does, each declaring member is searched at its own identity with itself as the root, so each
    search states its own envelope. `pinned`: the path pinned a principal, so the detection parks on a sender. */
-typedef struct { const char *src; int owns, cls, pinned; } DetectIds;
+typedef struct { const char *src; int owns, cls, pinned; char *owner; } DetectIds;
 
 static void detect_id_owned(void *ud, const char *p, size_t n) {
     DetectIds *d = ud;
-    if (concolic_src_within(d->src, p, n)) d->owns = 1;
+    if (concolic_src_within(d->src, p, n)) {
+        d->owns = 1;
+        if (!d->owner) { d->owner = strndup(p, n); CHECK(d->owner, "solve: OOM naming a value's own member"); }
+    }
+}
+
+static void detect_open(const char *src, const char *root, int cls, int pinned) {
+    if (pinned) park_on_sender(src, root, cls);
+    else        add_pending(src, root, cls);
 }
 
 static void detect_open_member(void *ud, const char *p, size_t n) {
@@ -1260,23 +1268,24 @@ static void detect_open_member(void *ud, const char *p, size_t n) {
     char *m = strndup(p, n);
 
     CHECK(m, "solve: OOM naming a declared member's search");
-    if (d->pinned) park_on_sender(m, m, d->cls);
-    else           add_pending(m, m, d->cls);
+    detect_open(m, m, d->cls, d->pinned);
     free(m);
 }
 
+/* A value whose identity is one declared source's, joined with another (`new URL(u, location.href)`, whose
+   base joins the query and fragment sources), is searched at its own identity with that member as its root:
+   its candidate is delivered through that member alone and the other member's bytes stay the observed ones,
+   so a member that cannot reach the sink's context (the base's fragment, which §4.4 drops) opens nothing. */
 static void detect_open_searches(const char *src, const char *root, int cls, int pinned) {
-    DetectIds d = { src, 0, cls, pinned };
+    DetectIds d = { src, 0, cls, pinned, NULL };
     int declared = concolic_root_declared_each(root, detect_id_owned, &d);
 
     DCHECKF(declared > 0, "a search was opened over `%s`, whose root `%s` declares no source — detect_sink "
             "declines such an arrival, since no candidate can be delivered where it is read", src, root);
-    if (d.owns) {
-        if (pinned) park_on_sender(src, root, cls);
-        else        add_pending(src, root, cls);
-        return;
-    }
-    concolic_root_declared_each(root, detect_open_member, &d);
+    if (d.owns && concolic_root_declared_sources(root) < 2) detect_open(src, root, cls, pinned);
+    else if (d.owns) detect_open(src, d.owner, cls, pinned);
+    else concolic_root_declared_each(root, detect_open_member, &d);
+    free(d.owner);
 }
 
 /* Detection: the tail the three sink classes share, and the last point at which the value that carried the
