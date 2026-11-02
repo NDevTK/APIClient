@@ -107,8 +107,9 @@ void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method)
    `key_ok` runs on the key BEFORE the value's [[Get]] is issued, because §3.2.23 step 4.2.1 converts the key
    first and a record of {a:"b", "\uFFFF":"d"} must therefore perform five operations and not six. It runs none
    of the page's code; it is handed `key`, a String, a Symbol, or the unknown a minted name stands for, and
-   returns -1 with a throw live to stop. A consumer reads `key` for step 4.2.1's key and never `name`, which is
-   the property key the cursor looks members up by. */
+   returns -1 with a throw live to stop, or >0 (a request, such as a fork over an unknown key's conversion),
+   which the cursor returns and answers by calling `key_ok` again on the same key. A consumer reads `key` for
+   step 4.2.1's key and never `name`, which is the property key the cursor looks members up by. */
 typedef struct {
     uint8_t phase;
     int     i, n;               /* the cursor into the key list, and how many keys there are */
@@ -122,7 +123,7 @@ void record_cursor_visit(JSContext *ctx, RecordCursor *c, JSStepVisit *v);
 /* ONE PAIR per successful return: `c->done` says the keys are exhausted, otherwise `c->key` and `c->value`
    hold it (owned by the cursor). Returns >0 (the caller returns it), 0, or -1 with a throw live. */
 int  record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueConst src, JSValue in,
-                       int (*key_ok)(JSContext *ctx, JSValueConst key, void *user), void *user,
+                       int (*key_ok)(JSContext *ctx, JSStepHdr *h, JSValueConst key, void *user), void *user,
                        JSValue **out_cb, int *out_argc);
 
 /* ---- §3.7.9.1's DEFAULT ITERATOR OBJECT, for an interface declaring `iterable<K, V>` ----------------------

@@ -191,7 +191,7 @@ int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst sr
  * two different algorithms rather than merely imprecise. Every citation below names the algorithm. Steps were
  * counted off the fetched text with LIST DEPTH TRACKED: five top-level steps, the loop being step 4. */
 
-enum { RC_KEYS_ASKED = 0, RC_DESC_ASKED, RC_VALUE_ASKED, RC_NEXT_KEY };
+enum { RC_KEYS_ASKED = 0, RC_DESC_ASKED, RC_KEY_CONVERT, RC_VALUE_ASKED, RC_NEXT_KEY };
 
 void record_cursor_init(RecordCursor *c)
 {
@@ -205,7 +205,7 @@ void record_cursor_visit(JSContext *ctx, RecordCursor *c, JSStepVisit *v)
 }
 
 int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueConst src, JSValue in,
-                      int (*key_ok)(JSContext *ctx, JSValueConst key, void *user), void *user,
+                      int (*key_ok)(JSContext *ctx, JSStepHdr *h, JSValueConst key, void *user), void *user,
                       JSValue **out_cb, int *out_argc)
 {
     int r;
@@ -266,7 +266,15 @@ int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCons
             c->key = JS_EnumKeyValue(ctx, a);
             JS_FreeAtom(ctx, a);
             if (JS_IsException(c->key)) { c->key = JS_UNDEFINED; return -1; }
-            if (key_ok && key_ok(ctx, c->key, user) < 0) return -1;
+            c->phase = RC_KEY_CONVERT;
+        }
+        if (c->phase == RC_KEY_CONVERT) {
+            /* Step 4.2.1's conversion, re-asked on the key `c->key` holds when it answered with a request;
+               nothing it asks is answered through `in`, which a fork's re-entry fills with undefined. */
+            JS_FreeValue(ctx, in);
+            in = JS_UNDEFINED;
+            r = key_ok ? key_ok(ctx, h, c->key, user) : 0;
+            if (r != 0) return r;
             c->phase = RC_VALUE_ASKED;
         }
         DCHECK(c->phase == RC_VALUE_ASKED, "the record cursor was re-entered at a phase it never parks in");

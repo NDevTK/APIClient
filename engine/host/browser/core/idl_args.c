@@ -2653,9 +2653,9 @@ static int idl_union_seq_unknown(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w
    IDL value of type K". A key off [[OwnPropertyKeys]] is a String or a Symbol and nothing else, and §3.2.12
    USVString has no conversion for a Symbol: ECMAScript's ToString throws a TypeError for one. It runs none of
    the page's code, which is why the cursor takes it as a predicate rather than as a request. */
-static int idl_rec_key_usvstring(JSContext *ctx, JSValueConst key, void *user)
+static int idl_rec_key_usvstring(JSContext *ctx, JSStepHdr *h, JSValueConst key, void *user)
 {
-    (void)user;
+    (void)h; (void)user;
     if (JS_IsSymbol(key)) {
         JS_ThrowTypeError(ctx, "a Symbol is not a valid record key");
         return -1;

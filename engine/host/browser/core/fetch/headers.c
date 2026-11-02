@@ -521,14 +521,36 @@ char *header_value_normalize_valid(const char *value, size_t len, size_t *pn)
     return norm;
 }
 
+/* The value half of header_check: normalize `value`, then refuse one that is not a header value with a
+   TypeError. `*pnorm` is the normalized value (caller frees). 0 on success, -1 with a TypeError live. Called
+   alone only where the name half has already been decided, by a fork over an unknown name. */
+static int header_value_check(JSContext *ctx, const char *value, size_t value_len, char **pnorm)
+{
+    char *norm;
+    size_t norm_len;
+
+    *pnorm = NULL;
+    DCHECK(idl_is_bytestring(value, value_len),
+           "a header value reached Fetch §2.2.2 Headers' syntax check without Web IDL §3.2.11 ByteString's range");
+    norm = header_normalize_value(value, value_len, &norm_len);
+    if (!header_value_is_valid(norm, norm_len)) {
+        free(norm);
+        JS_ThrowTypeError(ctx, "invalid header value");
+        return -1;
+    }
+    /* THE LIST MAY HOLD A C STRING because of this: a value that got here has no 0x00 in it, so nothing is
+       lost by dropping the length. The assert is what keeps that true if the rule above ever changes. */
+    DCHECK(strlen(norm) == norm_len, "a header value passed validation while carrying an embedded NUL");
+    *pnorm = norm;
+    return 0;
+}
+
 /* §5.1's guard as ONE operation, because every entry point performs the same one: normalize the value, then
    reject a bad name or a bad value with a TypeError. `*pnorm` is the normalized value (caller frees), left NULL
    for the name-only members. 0 on success, -1 with a TypeError live. */
 static int header_check(JSContext *ctx, const char *name, size_t name_len,
                        const char *value, size_t value_len, char **pnorm)
 {
-    char *norm;
-    size_t norm_len;
     if (pnorm) *pnorm = NULL;
     /* §3.2.11's RANGE HAS ALREADY RUN, AT WHATEVER CONVERTED THESE BYTES — the member's declared ByteString
        for an argument, headers_bytestring for each of the fill's three. This ASSERTS that instead of
@@ -544,17 +566,7 @@ static int header_check(JSContext *ctx, const char *name, size_t name_len,
     }
     DCHECK(strlen(name) == name_len, "a header name passed validation while carrying an embedded NUL");
     if (!value) return 0;
-    norm = header_normalize_value(value, value_len, &norm_len);
-    if (!header_value_is_valid(norm, norm_len)) {
-        free(norm);
-        JS_ThrowTypeError(ctx, "invalid header value");
-        return -1;
-    }
-    /* THE LIST MAY HOLD A C STRING because of this: a value that got here has no 0x00 in it, so nothing is
-       lost by dropping the length. The assert is what keeps that true if the rule above ever changes. */
-    DCHECK(strlen(norm) == norm_len, "a header value passed validation while carrying an embedded NUL");
-    *pnorm = norm;
-    return 0;
+    return header_value_check(ctx, value, value_len, pnorm);
 }
 
 /* ---- §5.1's guard: which writes a PAGE is allowed to make -------------------------------------------------
@@ -1245,7 +1257,8 @@ static int g_pair_handle = -1;
 
 /* ---- the fill (HeadersInit -> a header list) ------------------------------------------------------------ */
 
-enum { FILL_START = 0, FILL_ITER_ASKED, FILL_SEQ_PAIR, FILL_SEQ_ITEM, FILL_KEY_PAIR, FILL_VALUE_STR };
+enum { FILL_START = 0, FILL_ITER_ASKED, FILL_SEQ_PAIR, FILL_SEQ_ITEM, FILL_KEY_PAIR, FILL_VALUE_STR,
+       FILL_NAME_VALID };
 
 /* ---- the fill's own state ---------------------------------------------------------------------------------- */
 
@@ -1270,10 +1283,39 @@ void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v)
     iter_cursor_visit(ctx, &f->inner, v);
 }
 
+/* The two questions the fill asks of an unknown name. Completion 0 is the name that passes, 1 the TypeError. */
+#define HDR_KEY_BYTESTRING_OP "Web IDL §3.2.11 ByteString step 2 (no element of x is greater than 255), over a " \
+                              "Headers record key"
+#define HDR_NAME_OP "Fetch §5.1 Headers class, validate a header step 1 (name is a header name)"
+
+static int headers_is_bytestring(const char *s, size_t n) { return idl_is_bytestring(s, n); }
+
+/* Which completion `valid` reaches on the unknown `v`'s example: 0 when its bytes pass, 1 when they fail, and
+   JS_OUTCOME_REAL_UNSTATED when the example is not a String. */
+static int headers_example_real(JSContext *ctx, JSValueConst v, int (*valid)(const char *s, size_t n))
+{
+    JSValue ex = concolic_example(ctx, v);
+    int real = JS_OUTCOME_REAL_UNSTATED;
+
+    if (JS_IsString(ex)) {
+        size_t n = 0;
+        const char *b = JS_ToCStringLen(ctx, &n, ex);
+
+        CHECK(b != NULL, "headers: could not read the bytes of a String example this engine minted");
+        real = valid(b, n) ? 0 : 1;
+        JS_FreeCString(ctx, b);
+    }
+    JS_FreeValue(ctx, ex);
+    return real;
+}
+
 /* Web IDL §3.2.23 step 4.2.1's `typedKey = key converted to K`, and K is ByteString — run BEFORE the value's [[Get]] is
    issued, which is what makes a record of {a:"b", "\uFFFF":"d"} five operations and not six. A SYMBOL cannot
-   be a ByteString, so an ENUMERABLE symbol key is a TypeError; skipping it was the older, wrong answer. */
-static int headers_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
+   be a ByteString, so an ENUMERABLE symbol key is a TypeError; skipping it was the older, wrong answer.
+   An unknown key's §3.2.11 step 2 has both completions over its domain, so it forks, the real one being step 2
+   run on the key's example; the arm that passes hands the key on as itself, and the fill asks §5.1's
+   header-name question of it. `key` is the cursor's own slot, which the fork's snapshot carries. */
+static int headers_record_key_ok(JSContext *ctx, JSStepHdr *h, JSValueConst key, void *user)
 {
     size_t kn_len = 0;
     const char *kn;
@@ -1284,11 +1326,19 @@ static int headers_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
         JS_ThrowTypeError(ctx, "a Symbol is not a valid header name");
         return -1;
     }
-    /* An unknown key's ByteString range is a partition of its domain (the throw arm and the name that passes),
-       and §5.1's name check and guard are two more; none is forked yet. */
-    DCHECK(!concolic_is(key),
-           "a Headers record key is unknown input, and Web IDL §3.2.11's ByteString range and §5.1's header-name "
-           "check have no fork over it; build both as forks over the key's domain, the name keeping its shape");
+    if (concolic_is(key)) {
+        int arm = 0;
+
+        r = step_fork_run(ctx, h, key, HDR_KEY_BYTESTRING_OP, 2,
+                          headers_example_real(ctx, key, headers_is_bytestring), &arm);
+        if (r) return r;
+        DCHECKF(arm == 0 || arm == 1, "the Headers record key's ByteString fork answered completion %d", arm);
+        if (arm == 1) {
+            JS_ThrowTypeError(ctx, "a header name is not a ByteString");
+            return -1;
+        }
+        return 0;
+    }
     kn = JS_ToCStringLen(ctx, &kn_len, key);
     if (!kn) return -1;
     r = headers_bytestring(ctx, kn, kn_len, "name");
@@ -1452,6 +1502,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
     for (;;) {
         const char *kname, *kval;
         size_t kname_len = 0, kval_len = 0;
+        bool name_decided = false;
 
         if (f->phase == FILL_KEY_PAIR) {
             r = record_cursor_run(ctx, h, &f->rec, init, in, headers_record_key_ok, NULL, out_cb, out_argc);
@@ -1469,8 +1520,11 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
            the display form the @H surface reports, and the `{hole}` in it is exactly what marks the header as a
            runtime value the reviewer has to supply. This is the same explicit projection fetch_park asks for on
            the URL, for the same reason. */
-        DCHECK(f->phase == FILL_VALUE_STR, "the headers fill was re-entered at a phase it never parks in");
-        if (concolic_is(f->value)) {
+        DCHECK(f->phase == FILL_VALUE_STR || f->phase == FILL_NAME_VALID,
+               "the headers fill was re-entered at a phase it never parks in");
+        if (f->phase == FILL_NAME_VALID) {
+            /* a fork's re-entry: its `in` is the driver's filler, and the value is already converted */
+        } else if (concolic_is(f->value)) {
             const char *sh = concolic_shape_c(f->value);
             JSValue sv = JS_NewString(ctx, sh ? sh : "{}");
             if (JS_IsException(sv)) return -1;
@@ -1488,7 +1542,34 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
             JS_FreeValue(ctx, f->value);
             f->value = s;
         }
-        kname = JS_ToCStringLen(ctx, &kname_len, f->name);
+        f->phase = FILL_NAME_VALID;
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
+        /* §5.1 Headers class's validate a header, step 1's name half, over an unknown name (one the key's ByteString fork passed)
+           has both completions, so it forks, the real one being the header-name test on the name's example.
+           The arm that passes stores the name's shape, which is the projection the value takes above.
+           Named residual. Not covered: the guard (validate steps 3-4, and append step 3 under
+           "request-no-cors") over an unknown name, which reads the shape's bytes, so such a header is never
+           forbidden and never no-CORS-safelisted. Next diff: a fork over the guard's verdict, real on the
+           example. How its absence shows: no flow sends a request without a header whose name is unknown,
+           and none sends one in "no-cors" mode with it. */
+        if (concolic_is(f->name)) {
+            int arm = 0;
+
+            r = step_fork_run(ctx, h, f->name, HDR_NAME_OP, 2,
+                              headers_example_real(ctx, f->name, header_name_is_valid), &arm);
+            if (r) return r;
+            DCHECKF(arm == 0 || arm == 1, "the Headers fill's header-name fork answered completion %d", arm);
+            if (arm == 1) {
+                JS_ThrowTypeError(ctx, "invalid header name");
+                return -1;
+            }
+            name_decided = true;
+            kname = concolic_name_cstr(ctx, f->name);
+            kname_len = kname ? strlen(kname) : 0;
+        } else {
+            kname = JS_ToCStringLen(ctx, &kname_len, f->name);
+        }
         kval = JS_ToCStringLen(ctx, &kval_len, f->value);
         if (!kname || !kval) {
             if (kname) JS_FreeCString(ctx, kname);
@@ -1508,7 +1589,8 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         }
         {
             char *knorm = NULL;
-            if (header_check(ctx, kname, kname_len, kval, kval_len, &knorm) < 0) {
+            if ((name_decided ? header_value_check(ctx, kval, kval_len, &knorm)
+                              : header_check(ctx, kname, kname_len, kval, kval_len, &knorm)) < 0) {
                 JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
                 return -1;   /* §5.1's guard already threw */
             }

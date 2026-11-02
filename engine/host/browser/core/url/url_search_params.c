@@ -1072,9 +1072,9 @@ static void js_usp_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 /* §6.2 step 5.2's key conversion is to USVString, which every String and no Symbol is. An unknown key is
    converted at UC_PAIR_NAME_STR, as an unknown value is. */
-static int usp_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
+static int usp_record_key_ok(JSContext *ctx, JSStepHdr *h, JSValueConst key, void *user)
 {
-    (void)user;
+    (void)h; (void)user;
     if (JS_IsSymbol(key)) {
         JS_ThrowTypeError(ctx, "a Symbol is not a valid URLSearchParams name");
         return -1;
