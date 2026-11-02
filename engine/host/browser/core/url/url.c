@@ -1806,7 +1806,7 @@ JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member)
     JS_FreeValue(ctx, hold);
     /* URL §4.4 URL parsing maps §4.5 URL serializing's output back to the record, which the standard's goals
        guarantee for any record the API produced; url_construct_unknown reads that back. */
-    if (member == URL_HREF) return concolic_new_serialization(ctx, "href", unknown, "URL", ex);
+    if (member == URL_HREF) return concolic_new_derived_kept(ctx, "href", &unknown, 1, ex);
     return concolic_new_derived(ctx, URL_MEMBER_NAMES[member], &unknown, 1, ex);
 }
 
@@ -2208,14 +2208,13 @@ JSValue url_construct_unknown(JSContext *ctx, int argc, JSValueConst *argv)
 {
     UrlRecord ex_rec;
     JSValue real = JS_UNDEFINED;
-    JSValueConst of;
+    const JSValue *of;
 
     DCHECK(argc >= 1 && url_any_unknown(argc, argv),
            "the URL constructor's unknown arm was asked of a call with no unknown operand — a known call is "
            "parsed, and a derivation over it would name a value the parser can state");
     /* An unknown record's href parses back to that record: it is absolute, so the base takes no part. */
-    of = concolic_parsed_operand(argv[0], "URL");
-    if (!JS_IsUndefined(of)) return JS_DupValue(ctx, of);
+    if (concolic_kept_operands(argv[0], "href", &of) == 1) return JS_DupValue(ctx, of[0]);
     /* Named residual. Not covered: an unknown input whose parse fails, where §6.1 throws a TypeError. Next diff
        builds: the failure arm forked beside this one. How its absence shows: a page's catch around
        `new URL(x)` never runs for an unknown `x`. */
@@ -2224,7 +2223,86 @@ JSValue url_construct_unknown(JSContext *ctx, int argc, JSValueConst *argv)
         url_record_free(&ex_rec);
         if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
     }
-    return concolic_new_derived(ctx, "URL", argv, url_operand_count(argc), real);
+    return concolic_new_derived_kept(ctx, "URL", argv, url_operand_count(argc), real);
+}
+
+/* Whether the attacker's bytes in `input` can pick the host of its parse against `base` (JS_UNDEFINED for
+   null): the page's own bytes ahead of the first unknown byte leave §4.4's machine short of deciding it. An
+   unknown base decides the host of every input that does not decide it alone, with a null base. */
+static int url_input_host_open(JSContext *ctx, JSValueConst input, JSValueConst base)
+{
+    UrlRecord b;
+    UrlPrefixState st;
+    char *disp;
+    unsigned char *hole = NULL;
+    const char *bs;
+    size_t n = 0;
+    int have_base = 0;
+
+    if (concolic_is(input)) {
+        disp = reclaim_strdup(concolic_shape_c(input));
+        hole = concolic_shape_hole_mask(input);
+        CHECK(disp && hole, "url: OOM reading an address's page bytes");
+        while (disp[n] && !hole[n]) n++;
+    } else {
+        const char *c = JS_ToCString(ctx, input);
+
+        CHECK(c != NULL, "url: OOM reading a known URL input");
+        disp = reclaim_strdup(c);
+        JS_FreeCString(ctx, c);
+        CHECK(disp, "url: OOM reading a known URL input");
+        n = strlen(disp);
+    }
+    url_record_init(&b);
+    if (JS_IsString(base)) {
+        bs = JS_ToCString(ctx, base);
+        CHECK(bs != NULL, "url: OOM reading a URL base");
+        have_base = url_parse(&b, bs, strlen(bs), NULL);
+        JS_FreeCString(ctx, bs);
+    }
+    st = url_prefix_state(disp, n, have_base ? &b : NULL);
+    url_record_free(&b);
+    free(hole);
+    free(disp);
+    if (concolic_is(base)) return st == URL_PREFIX_FAILED || !url_prefix_decides_host(st);
+    return !url_prefix_decides_host(st);
+}
+
+/* The same question of the unknown URL record `rec`: its parse's input and base, or for a record a setter
+   derived (url_set_unknown), the setter's: `href=` parses its value with no base, `host=` and `hostname=` set
+   the host from their value, and every other setter keeps the host of the record it was run on. */
+static int url_record_host_open(JSContext *ctx, JSValueConst rec)
+{
+    static const char *const KEEP[] = { "protocol=", "username=", "password=", "port=", "pathname=", "search=",
+                                        "hash=", "query=" };
+    const JSValue *ops;
+    int n = concolic_kept_operands(rec, "URL", &ops);
+
+    if (!concolic_is(rec)) return url_input_host_open(ctx, rec, JS_UNDEFINED);
+    if (n) return url_input_host_open(ctx, ops[0], n > 1 ? ops[1] : JS_UNDEFINED);
+    if (concolic_kept_operands(rec, "href=", &ops) == 2) return url_input_host_open(ctx, ops[1], JS_UNDEFINED);
+    if (concolic_kept_operands(rec, "host=", &ops) == 2 || concolic_kept_operands(rec, "hostname=", &ops) == 2)
+        return concolic_is(ops[1]) || url_record_host_open(ctx, ops[0]);
+    for (size_t i = 0; i < sizeof KEEP / sizeof *KEEP; i++)
+        if (concolic_kept_operands(rec, KEEP[i], &ops) == 2) return url_record_host_open(ctx, ops[0]);
+    DFAIL("an unknown URL record was minted by no derivation url.c keeps — url_construct_unknown and "
+          "url_set_unknown are its only mints, so a third must keep its operands and answer here");
+    return 1;
+}
+
+int url_unknown_host_open(JSContext *ctx, JSValueConst address, const char *base)
+{
+    const JSValue *rec;
+    JSValue b;
+    int r;
+
+    DCHECK(concolic_is(address), "the host question over unknown input was asked of a known address");
+    if (concolic_kept_operands(address, "href", &rec) == 1) return url_record_host_open(ctx, rec[0]);
+    b = base ? JS_NewString(ctx, base) : JS_UNDEFINED;
+    CHECK(!JS_IsException(b), "url: OOM spelling a URL base");
+    r = url_input_host_open(ctx, address, b);
+    JS_FreeValue(ctx, b);
+    return r;
 }
 
 static const IdlStepDecl js_url_ctor_decl = {
@@ -2368,7 +2446,7 @@ static void url_set_unknown(JSContext *ctx, UrlObj *o, const char *op, int membe
     }
     JS_FreeValue(ctx, vex);
     ops[1] = v;
-    r = concolic_new_derived(ctx, op, ops, 2, ex);
+    r = concolic_new_derived_kept(ctx, op, ops, 2, ex);
     JS_FreeValue(ctx, hold);
     DCHECK(concolic_is(r), "a URL write over an unknown operand derived a known record");
     cow_record_set(ctx, o, &URL_OBJ_REC, &o->unknown, r);

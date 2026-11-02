@@ -239,10 +239,11 @@ typedef struct {
        call result and copied onto a comparison of it with a Number (search_carry). Owned. */
     char *search_recv, *search_tok;
     uint8_t search_last;
-    /* A serialization whose parse is its operand (concolic_new_serialization): `parsed_of` is that operand and
-       `parse_op` the parsing operation's name, both owned and both set or neither. */
-    JSValue parsed_of;
-    char *parse_op;
+    /* A derivation whose operands are kept (concolic_new_derived_kept): `kept_op` its operation and `kept` its
+       `kept_n` operands, all owned, `kept_op` NULL on every other value. */
+    char *kept_op;
+    JSValue *kept;
+    int kept_n;
     /* ECMAScript §6.1 ECMAScript Language Types: the set of types this value takes in every world, as CTY_*
        bits. Stated only by a mint whose algorithm fixes its result's type (concolic_type_state), and asserted
        there against the example; 0 is unstated, never "no type", so a value no mint typed stays unknown-typed. */
@@ -2446,8 +2447,9 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->piece);
     if (c->split_rec) JS_FreeValueRT(rt, c->split_of);
     free(c->split_pos);
-    if (c->parse_op) JS_FreeValueRT(rt, c->parsed_of);
-    free(c->parse_op);
+    for (int i = 0; i < c->kept_n; i++) JS_FreeValueRT(rt, c->kept[i]);
+    free(c->kept);
+    free(c->kept_op);
     free(c->search_recv);
     free(c->search_tok);
     JS_FreeValueRT(rt, c->example);
@@ -2465,7 +2467,7 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
     if (c && !JS_IsUninitialized(c->proto)) JS_MarkValue(rt, c->proto, mark_func);
     for (int i = 0; c && i < c->piece_n; i++) JS_MarkValue(rt, c->piece[i].unknown, mark_func);
     if (c && c->split_rec) JS_MarkValue(rt, c->split_of, mark_func);
-    if (c && c->parse_op) JS_MarkValue(rt, c->parsed_of, mark_func);
+    for (int i = 0; c && i < c->kept_n; i++) JS_MarkValue(rt, c->kept[i], mark_func);
 }
 
 /* @S candidate injection: during a verification re-run, every read of the source g_cand_at returns
@@ -6602,31 +6604,31 @@ JSValue concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst 
     return r;
 }
 
-JSValue concolic_new_serialization(JSContext *ctx, const char *op, JSValueConst of, const char *parse,
-                                   JSValue example)
+JSValue concolic_new_derived_kept(JSContext *ctx, const char *op, const JSValueConst *operands, int n,
+                                  JSValue example)
 {
-    JSValue r;
-    Concolic *rc;
+    JSValue r = concolic_new_derived(ctx, op, operands, n, example);
+    Concolic *rc = JS_GetOpaque(r, g_concolic_class);
 
-    DCHECK(concolic_is(of) && parse != NULL,
-           "a serialization was minted over a known operand, or without the operation that parses it back");
-    r = concolic_new_derived(ctx, op, &of, 1, example);
-    rc = JS_GetOpaque(r, g_concolic_class);
-    /* A candidate run answers the delivered bytes at the mint, which serialize nothing this flow holds. */
+    /* A candidate run answers the delivered bytes at the mint, which keep nothing. */
     if (!rc) return r;
-    DCHECK(rc->parse_op == NULL, "a fresh derivation already records the operand it serializes");
-    rc->parse_op = reclaim_strdup(parse);
-    CHECK(rc->parse_op, "concolic: OOM naming the operation that parses a serialization back");
-    rc->parsed_of = JS_DupValue(ctx, of);
+    DCHECK(rc->kept_op == NULL, "a fresh derivation already keeps operands");
+    rc->kept_op = reclaim_strdup(op);
+    rc->kept = reclaim_malloc((size_t)n * sizeof *rc->kept);
+    CHECK(rc->kept_op && rc->kept, "concolic: OOM keeping a derivation's operands");
+    for (int i = 0; i < n; i++) rc->kept[i] = JS_DupValue(ctx, operands[i]);
+    rc->kept_n = n;
     return r;
 }
 
-JSValueConst concolic_parsed_operand(JSValueConst v, const char *parse)
+int concolic_kept_operands(JSValueConst v, const char *op, const JSValue **out)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
 
-    DCHECK(parse != NULL, "a serialization's operand was asked for with no parsing operation named");
-    return c && c->parse_op && !strcmp(c->parse_op, parse) ? c->parsed_of : JS_UNDEFINED;
+    DCHECK(op != NULL && out != NULL, "a derivation's kept operands were asked with no operation or no out");
+    if (!c || !c->kept_op || strcmp(c->kept_op, op)) return 0;
+    *out = c->kept;
+    return c->kept_n;
 }
 
 /* The claimant of keyed rows and its URL §5.2 value serializer (concolic_set_tuple_serializer). */

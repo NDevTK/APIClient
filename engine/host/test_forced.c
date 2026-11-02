@@ -19720,8 +19720,18 @@ TF_UNIT void probes_urlhref(const char *js, Probe *tab, int *n) {
     fold_row(&ev_tt, &ev_why, s_rooted_source(js, "eval", "u=", src, sizeof src),
              "no eval @S record carries a source rooted in the query's `u=`, so the reply to a URL whose host the "
              "attacker chooses did not reach new Function as attacker input searched at the page's own parse");
+    const char *hq_why = NULL; int hq_tt = 1;
+    fold_row(&hq_tt, &hq_why, !!strstr(js, "/api/uh-q") && !!strstr(js, "/api/uh-r"),
+             "NOT REACHED: there is no /api/uh-q or no /api/uh-r record, so the fragment's URL or Request was not "
+             "fetched");
+    const char *hn_why = NULL; int hn_tt = 1;
+    fold_row(&hn_tt, &hn_why, !s_rooted_source(js, "request", "location.hash", src, sizeof src),
+             "a request @S record carries a source rooted in the fragment, but `/api/uh-q` and `/api/uh-r` are "
+             "relative paths the page wrote, so the document's origin is their host and no attacker picks it");
     const Probe rows[] = {
         { "uh-built", bt_tt, "/api/uh-built", SESS_EXPLORE, bt_why },
+        { "uh-hash-fetched", hq_tt, "/api/uh-q?q=", SESS_EXPLORE, hq_why },
+        { "uh-hash-no-request", hn_tt, "/api/uh-q?q=", SESS_EXPLORE, hn_why, .reach = "uh-hash-fetched" },
         { "uh-request-query", rq_tt, "uhParam('u')", SESS_EXPLORE, rq_why, .gate = "uh-built" },
         { "uh-eval-query", ev_tt, "uhParam('u')", SESS_EXPLORE, ev_why, .gate = "uh-built" },
     };

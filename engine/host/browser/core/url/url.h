@@ -196,6 +196,11 @@ void url_query_assign_unknown(JSContext *ctx, JSValueConst url, JSValueConst que
    url_construct_unknown composes one: the derivation named by the getter, its example the getter run on the
    record's example. `href` is a serialization that url_construct_unknown parses back to `unknown`. Owned. */
 JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member);
+/* Whether the attacker's bytes in the unknown address `address` can pick the host of its parse against `base`
+   (NULL for none): the page's own bytes ahead of its first unknown byte leave §4.4 URL parsing short of
+   deciding it (url_prefix_decides_host). The href of an unknown URL record is asked of that record's own
+   parse, whose input and base the page gave. */
+int url_unknown_host_open(JSContext *ctx, JSValueConst address, const char *base);
 /* §6.1 URL class's `new URL(url, base)` over operands at least one of which is unknown: the unknown derived
    from both (`URL`, the constructor's own derivation), whose example is the real parse over the operands'
    examples. `argc` counts the operands the call has (1 or 2); both are borrowed. Fetch's §5.4 step 2 parse of

@@ -2,7 +2,9 @@
    - `?u=` is resolved with `new URL(u, location.href)` and its `href` fetched wherever it points, so the
      attacker hosts the reply, which is compiled with `new Function`: the request's and the compiled text's
      sources are rooted in the page's own parse of `u=`, which the record's `href` derives from.
-   - the fragment, after its `#`, is the query value of a same-origin `new URL('/api/uh-q?q=' + h, …).href`.
+   - the fragment, after its `#`, is the query value of a same-origin `new URL('/api/uh-q?q=' + h, …).href`
+     and of a `new Request('/api/uh-r?q=' + h)`: the page's own path decides both hosts, so neither is a
+     request @S search.
    Each witness fetch carries a constant.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
@@ -29,6 +31,7 @@ static const char HTML_URLHREF[] =
     "(function () {"
     "  var h = location.hash.slice(1);"
     "  fetch(new URL('/api/uh-q?q=' + h, location.href).href);"
+    "  fetch(new Request('/api/uh-r?q=' + h));"
     "})();"
     "</script>"
     TF_CANVAS_INK
