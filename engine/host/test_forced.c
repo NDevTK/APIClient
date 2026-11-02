@@ -19700,7 +19700,7 @@ TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
         { "rqu-refused", rf_tt, "/api/rqu-refused", SESS_EXPLORE, rf_why },
         { "rqu-pinned-reached", pr_tt, "/api/rqu-pinned", SESS_EXPLORE, pr_why },
         { "rqu-pinned-no-query", pn_tt, "rquParam('page')", SESS_EXPLORE, pn_why, .reach = "rqu-pinned-reached" },
-        { "rqu-pinned-no-request", ph_tt, "rquParam('page')", SESS_EXPLORE, ph_why, .reach = "rqu-pinned-reached" },
+        { "rqu-pinned-no-request", ph_tt, "rquParam('page')", SESS_EXPLORE, ph_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -19720,10 +19720,12 @@ TF_UNIT void probes_urlhref(const char *js, Probe *tab, int *n) {
     fold_row(&ev_tt, &ev_why, s_rooted_source(js, "eval", "u=", src, sizeof src),
              "no eval @S record carries a source rooted in the query's `u=`, so the reply to a URL whose host the "
              "attacker chooses did not reach new Function as attacker input searched at the page's own parse");
+    /* Each fragment address is an API record or, where its host is wrongly taken as the attacker's, a request
+       search instead, so the record is asserted present rather than named as the search row's premise. */
     const char *hq_why = NULL; int hq_tt = 1;
     fold_row(&hq_tt, &hq_why, !!strstr(js, "/api/uh-q") && !!strstr(js, "/api/uh-r"),
-             "NOT REACHED: there is no /api/uh-q or no /api/uh-r record, so the fragment's URL or Request was not "
-             "fetched");
+             "there is no /api/uh-q or no /api/uh-r API record: the fragment's URL or Request was not fetched, or "
+             "its relative address was taken as one whose host the attacker picks");
     const char *hn_why = NULL; int hn_tt = 1;
     fold_row(&hn_tt, &hn_why, !s_rooted_source(js, "request", "location.hash", src, sizeof src),
              "a request @S record carries a source rooted in the fragment, but `/api/uh-q` and `/api/uh-r` are "
@@ -19731,7 +19733,7 @@ TF_UNIT void probes_urlhref(const char *js, Probe *tab, int *n) {
     const Probe rows[] = {
         { "uh-built", bt_tt, "/api/uh-built", SESS_EXPLORE, bt_why },
         { "uh-hash-fetched", hq_tt, "/api/uh-q?q=", SESS_EXPLORE, hq_why },
-        { "uh-hash-no-request", hn_tt, "/api/uh-q?q=", SESS_EXPLORE, hn_why, .reach = "uh-hash-fetched" },
+        { "uh-hash-no-request", hn_tt, "/api/uh-q?q=", SESS_EXPLORE, hn_why },
         { "uh-request-query", rq_tt, "uhParam('u')", SESS_EXPLORE, rq_why, .gate = "uh-built" },
         { "uh-eval-query", ev_tt, "uhParam('u')", SESS_EXPLORE, ev_why, .gate = "uh-built" },
     };
