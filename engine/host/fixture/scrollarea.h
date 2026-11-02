@@ -9,13 +9,10 @@
    §6.6.6's focus() step 4 scrolls #fb into view, and preventScroll keeps #fa's at 0. §7's offsetTop of #oe is
    2300 and of #sa2's last block 648 (from the initial containing block, as Blink measures a non-positioned
    body offsetParent). CSSOM §9's resolved width of #sa2's first block and top of the `top: auto` #ap are
-   their used 100px. #sr1 and #sr2 hold a replaced element, an 80px `svg` around a 200px `path` and a `canvas`
-   around a wide fallback `span`, whose content CSS 2.2 §3.1 puts outside the CSS formatting model, so their
-   scrolling areas are 80 and 50 wide; those two are read from the specs, not from a browser. Chrome
-   155.0.8059.84 gives every other value expected. Cross-engine notes, left out: Chrome
-   and Firefox 158.0.1 count a zero-height block 500px wide, where §3.3 says "Border boxes with zero area do not
-   affect the scrollable overflow area", and add §3.3's end padding (a 10px-padded box over a 300 x 200 child
-   is 320 x 220), not built here. It ends with TF_CANVAS_INK, which test_forced.c defines first. */
+   their used 100px. #sr1's 80px `svg` and #sr2's `canvas` hold content outside CSS 2.2 §3.1's formatting model
+   (r1 80, r2 50; read from the specs). Chrome 155.0.8059.84 gives every other value expected. Left out: Chrome
+   and Firefox 158.0.1 count a zero-height block 500px wide (§3.3: "Border boxes with zero area do not affect
+   the scrollable overflow area") and add §3.3's end padding. It ends with TF_CANVAS_INK. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLAREA_H
 #define ENGINE_HOST_FIXTURE_SCROLLAREA_H
 #ifndef TF_CANVAS_INK

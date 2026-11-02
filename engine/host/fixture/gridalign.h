@@ -1,21 +1,16 @@
 /* THE GRID SELF-ALIGNMENT DOCUMENT: css-grid-1 §10.3 "Inline-axis Alignment: the justify-self and justify-items
    properties" and §10.4 "Block-axis Alignment: the align-self and align-items properties" placing a 20 x 10
-   margin box in a 100 x 80 grid area by css-align-3's positional keywords. One of test_forced.c's exploring
-   documents (its TF_DOCS table). Each row is one container, one item; the reported pair is the item's offset
-   from its container's content box. Covered: start, end, center and their flex aliases on both axes, `left`
-   and `right`, `normal` and `stretch` on a definite size (start), `align-items` and `justify-items` inherited
-   through `auto`, a 120px-wide item centred unsafely and `safe`ly, and an rtl container's start and end.
-   Rows a14-a16 are `width: auto` items holding one 30px box, which css-grid-1 §6.2 "Grid Item Sizing" sizes as
-   fit-content for a self-alignment other than `normal` or `stretch`: a block (start), and a flex container in
-   an auto row (center, and `end` through `justify-items`), whose row sizing asks its content-based height and
-   so its width under the resting job; each reports its width as `w<n>`.
-   Chrome 155.0.8059.84 and Firefox 158.0.1 give every value of rows a1-a16 expected. Rows a17-a21 are read from
-   css-grid-1 §6.2 and §10.2 "Aligning with auto margins", not from a browser: a17 is an `auto`-height item
-   aligned center, fit-content on the block axis (10px, centred); a18's `margin: 0 auto` sizes it to its 30px
-   content and splits the 70px left over; a19's `margin-top: auto` fits its height to 10px and takes the 70px
-   below; a20's 20px item takes the 80px as its left margin; a21's `auto` row counts the margin as zero and is
-   10px tall. Heights are `h<n>`. It ends with TF_CANVAS_INK, which
-   test_forced.c defines before including it. */
+   margin box in a 100 x 80 grid area by css-align-3's positional keywords; one of test_forced.c's TF_DOCS. Each
+   row is one container, one item, reporting the item's offset from its container's content box (`a<n>`) and
+   for some its width and height (`w<n>`, `h<n>`). a1-a13: start, end, center and their flex aliases, `left`,
+   `right`, `normal` and `stretch` on a definite size, `*-items` through `auto`, a 120px item centred unsafely
+   and `safe`ly, an rtl container. a14-a16: `width: auto` items holding a 30px box, fit-content by css-grid-1
+   §6.2 "Grid Item Sizing" when aligned start, center (a flex container in an auto row) or `end` through
+   `justify-items`. a17-a21, §6.2's block axis and §10.2 "Aligning with auto margins": an auto height aligned
+   center (10px), `margin: 0 auto` (30px wide, 35px in), `margin-top: auto` (10px tall, 70px down), a 20px
+   item's `margin-left: auto` (80px), and `margin-top: auto` in an auto row (a 10px row, margin 0).
+   Chrome 155.0.8059.84 and Firefox 158.0.1 give every value of a1-a16 expected; a17-a21 are read from the
+   specs. It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_GRIDALIGN_H
 #define ENGINE_HOST_FIXTURE_GRIDALIGN_H
 #ifndef TF_CANVAS_INK

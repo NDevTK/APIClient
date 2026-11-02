@@ -468,12 +468,10 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                paint" (core/layout/scroll_container.h's content clip, the padding edge), and css-contain-2 §3.3
                "Layout Containment" says that where `overflow` is `visible` or `clip` "any overflow must be
                treated as ink overflow". A layout or paint containment box also establishes both positioning
-               containing blocks, so every box inside it is clipped or ink by those two sentences, and below the
-               walk root it contributes its own margin edge, folded above, and nothing inside it.
-               A replaced element is "an element whose content is outside the scope of the CSS formatting
-               model" (CSS 2.2 §3.1 "Definitions"), so what is inside it generates no CSS box for this walk to
-               fold, walk root included: an outermost `svg`'s children are laid out by SVG and a `canvas`'s
-               fallback content is not rendered. Its own margin edge is folded above like any atomic box's.
+               containing blocks, so every box inside it is clipped or ink, and below the walk root it
+               contributes its own margin edge, folded above, and nothing inside it. A replaced element's content
+               is "outside the scope of the CSS formatting model" (CSS 2.2 §3.1 "Definitions"), so nothing inside
+               one is a CSS box to fold, walk root included (an `svg`'s children are laid out by SVG).
                NAMED RESIDUAL. Not covered: a box clipped by `overflow` alone is descended into whole, so what it
                clips is counted. Next: that descent keeps only the boxes whose containing-block chain leaves the
                clipping box (a positioned box whose containing block is further up escapes the clip). How its

@@ -9,11 +9,9 @@
    - f4 aligns the item to the 5px line's end, so it overflows only upward and the padding box is the answer.
    - f5 centres a 30px element item with an automatic height on a 10px line, so it reaches 20px down: the
      item's origin is asked before its height, so the placement asks the height rather than laying it out.
-   - f6 wraps the text and a 50px item holding a 30px block onto two lines of a 5px `wrap` container, so it
-     reaches as far below as r6, a `height: 0` block holding the same two: the anonymous item's place asks
-     every line's cross size, which nothing had asked before the walk reaches the container.
-   - c7 is a `flex: 1` item of a 100px `column` container beside a 30px one, read by clientHeight first: 70,
-     its §9.7 used main size, which the ask has to answer before the read.
+   - f6 wraps the text and a 30px-tall item onto two lines of a 5px `wrap` container, as deep as r6's block;
+     the anonymous item's place reads every line's cross size, unasked before the walk reaches the container.
+   - c7 is a `flex: 1` item beside a 30px one in a 100px column, read by clientHeight first: 70 (§9.7).
    It ends with TF_CANVAS_INK, which test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_SCROLLFLEX_H
 #define ENGINE_HOST_FIXTURE_SCROLLFLEX_H
