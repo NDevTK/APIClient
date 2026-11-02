@@ -5736,6 +5736,23 @@ JSValue concolic_strict_equal(JSContext *ctx, JSValueConst a, JSValueConst b) {
     return r;
 }
 
+JSValue concolic_less_than(JSContext *ctx, JSValueConst a, JSValueConst b) {
+    JSValue sp[2];
+    int holds;
+
+    DCHECK((concolic_is(a) || !JS_IsObject(a)) && (concolic_is(b) || !JS_IsObject(b)),
+           "an ordering was asked over an Object, whose ToPrimitive would run page code this caller cannot fork");
+    sp[0] = JS_DupValue(ctx, a);
+    sp[1] = JS_DupValue(ctx, b);
+    if (concolic_rel_hook(ctx, sp + 2, rel_op_opcode(REL_LT)))
+        return sp[0];
+    holds = JS_IsRelated(ctx, sp[0], sp[1], rel_op_opcode(REL_LT));
+    CHECK(holds >= 0, "§7.2.12 IsLessThan refused two operands that carry no object");
+    JS_FreeValue(ctx, sp[0]);
+    JS_FreeValue(ctx, sp[1]);
+    return JS_NewBool(ctx, holds);
+}
+
 /* Calling an unknown yields an unknown. `document.cookie.indexOf("role=admin")` reads a field off a concolic
    (another concolic) and calls it; a non-callable concolic would throw "not a function" and make every
    statement after the first method call on an unknown string unreachable. The result is concolic because

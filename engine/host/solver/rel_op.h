@@ -28,6 +28,9 @@ typedef enum { REL_NONE = 0, REL_LT, REL_LE, REL_GT, REL_GE } RelOp;
    is the reconstruction below having drifted from the table it was built from, and guessing a relation for it
    would put a WRONG bound in a report rather than an absent one. */
 RelOp rel_op_of_opcode(int op);
+/* The inverse: the interpreter's opcode for relation `r`, for a component whose own algorithm performs §7.2.12
+   IsLessThan and asks it as the predicate the page's operator mints (concolic_less_than). Aborts on REL_NONE. */
+int rel_op_opcode(RelOp r);
 
 /* THE SAME RELATION READ FROM THE OTHER OPERAND'S SIDE — `5 < x` is `x > 5`. Ordering is not symmetric, so the
    solver normalises the SUBJECT (the unknown operand) to the left exactly once, here, rather than at each of

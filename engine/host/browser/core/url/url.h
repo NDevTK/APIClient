@@ -237,8 +237,6 @@ void  url_encoded_parse(UrlEncodedList *out, const char *s, size_t len);
 /* §5.2 application/x-www-form-urlencoded serializing: `name=value` joined by `&`, each DATA half through the
    urlencoded encode set and each HOLE half verbatim. */
 char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n);
-/* §6.2's ordering, which is by UTF-16 CODE UNITS and not by UTF-8 bytes. */
-int   url_encoded_name_cmp(const UrlEncodedPair *a, const UrlEncodedPair *b);
 char *url_encoded_strdup(const char *s, size_t n);
 
 /* URL §6.1 "URL class" — the `URL` interface. This line cited §5, which is "application/x-www-form-urlencoded"

@@ -41,6 +41,19 @@ RelOp rel_op_of_opcode(int op) {
     return REL_NONE;
 }
 
+int rel_op_opcode(RelOp r) {
+    switch (r) {
+    case REL_LT: return HOST_OP_lt;
+    case REL_LE: return HOST_OP_lte;
+    case REL_GT: return HOST_OP_gt;
+    case REL_GE: return HOST_OP_gte;
+    case REL_NONE: break;
+    }
+    DFAIL("the opcode of a relation with no spelling was asked — REL_NONE is the absence of a bound, and no "
+          "operator performs it");
+    return HOST_OP_lt;
+}
+
 RelOp rel_op_mirror(RelOp r) {
     switch (r) {
     case REL_LT: return REL_GT;

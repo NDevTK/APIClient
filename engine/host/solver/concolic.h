@@ -957,6 +957,11 @@ int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq, JSConcoli
    the predicate the page's `a === b` mints (concolic_cmp_hook), so the two are one constraint entry. A Boolean
    when neither operand is unknown. Operands borrowed; owned result. */
 JSValue     concolic_strict_equal(JSContext *ctx, JSValueConst a, JSValueConst b);
+/* §7.2.12 IsLessThan ( x, y, true ) as `x < y`, for a component whose own algorithm orders two values a page
+   can also order (URL §6.2's sort() by "code unit less than", which is IsLessThan over two Strings): the
+   predicate the page's `a < b` mints (concolic_rel_hook), so the two are one constraint entry. A Boolean when
+   neither operand is unknown. Operands borrowed, and neither is an Object; owned result. */
+JSValue     concolic_less_than(JSContext *ctx, JSValueConst a, JSValueConst b);
 /* ECMAScript §22.1.3.24 String.prototype.startsWith over the unknown string `s`, for a component whose own
    algorithm decides the same question over the string's code units (Indexed Database §7.1's split): the value
    the page's `s.startsWith(prefix)` mints (concolic.c's member read and call), so the two are one constraint
