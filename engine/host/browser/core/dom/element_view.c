@@ -1986,9 +1986,13 @@ static int js_ev_view_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         done = scrolling_area_walk_done(&s->area);
         if (done && !s->area.viewport) *presult = ev_length_long(ctx, scrolling_area_walk_extent(&s->area));
         else if (done) {
+            /* Step 4's max(viewport scrolling area height, viewport height) is a real length, as the element
+               arm's area is, and crosses its `long` by the same nearest-integer conversion
+               (element_view_length_long); the viewport height is non-negative, so the tie-break is unreachable. */
+            double h = fmax(scrolling_area_walk_extent(&s->area).px, s->vp);
+
             ev_target(hdr->this_val, &t);
-            *presult = ev_env_long(ctx, &t, s->area.vertical ? "scrollHeight" : "scrollWidth",
-                                   fmax(scrolling_area_walk_extent(&s->area).px, s->vp));
+            *presult = ev_env_long(ctx, &t, s->area.vertical ? "scrollHeight" : "scrollWidth", floor(h + 0.5));
         }
         layout_job_leave(s->job);
         if (layout_job_declined(s->job)) {
