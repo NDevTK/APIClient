@@ -342,11 +342,32 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
     return concolic_source_wrap_joint(len.realm, m.shapes, m.srcs, n, computed);
 }
 
-static char *ve_spell_atom(JSContext *realm, unsigned atom, const char *const *keys);
+/* An atom spelled by its name (core/css/css_length.h's css_px_atom_name), the digest of its definition with facts
+   by index, beside the key of every fact the definition reaches, which says whose facts those indices are. The
+   name is the function's, so the spelling is one every session shares, where the atom's number is its realm's;
+   it is one definition's size however deep definitions nest, since a nested atom is in the digest by its own
+   name. Owned. */
+static char *ve_spell_atom(JSContext *realm, unsigned atom, const char *const *keys)
+{
+    CssEnvSet facts;
+    const unsigned char *name = css_px_atom_name(realm, atom, &facts);
+    const char *fields[1 + CSS_ENV_FACT_COUNT];
+    char hex[2 * CSS_PX_ATOM_NAME_SIZE + 1];
+    int i, f, nf = 0;
+
+    for (i = 0; i < CSS_PX_ATOM_NAME_SIZE; i++) snprintf(hex + 2 * i, 3, "%02x", name[i]);
+    fields[nf++] = hex;
+    for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
+        if (!(facts & CSS_ENV_BIT(f))) continue;
+        DCHECKF(keys[f] != NULL, "atom %u reaches fact %d, which is not in the set of the length holding it — a "
+                "length's set is the union of its operands', so an atom inside it cannot reach past it", atom, f);
+        fields[nf++] = keys[f];
+    }
+    return concolic_ident_compose("def", fields, nf);
+}
 
 /* A monomial's spelling over `keys`, the per-realm source key of each fact (NULL for a fact not in the length's
-   set): its facts as `key^e` joined by `*`, and, around them, the atom it holds as that atom's definition.
-   Owned. */
+   set): its facts as `key^e` joined by `*`, and, around them, the atom it holds as that atom's name. Owned. */
 static char *ve_spell_mono(JSContext *realm, const CssPxMonomial *mono, const char *const *keys)
 {
     char *facts = NULL, *atom, *out;
@@ -404,36 +425,9 @@ static char *ve_spell_poly(JSContext *realm, const char *tag, double c, const Cs
     return out;
 }
 
-/* An atom spelled by its definition (core/css/css_length.h's css_px_atom_definition): its operation over its
-   operands, each a determined number or a form spelled over `keys`. A definition is the function's, so the
-   spelling is one every session shares, where the atom's number is its realm's. Owned. */
-static char *ve_spell_atom(JSContext *realm, unsigned atom, const char *const *keys)
-{
-    const CssPxAtomArg *args;
-    int nargs, a;
-    const char *op = css_px_atom_definition(realm, atom, &nargs, &args);
-    char **sp = lexbor_calloc((size_t)nargs + 1, sizeof *sp);
-    char *out;
-
-    CHECK(sp, "viewport: OOM spelling an atom");
-    for (a = 0; a < nargs; a++) {
-        if (args[a].determined) {
-            sp[a] = lexbor_malloc(32);
-            CHECK(sp[a], "viewport: OOM spelling an atom");
-            snprintf(sp[a], 32, "%.17g", args[a].px);
-        } else {
-            sp[a] = ve_spell_poly(realm, "form", args[a].c, args[a].m, args[a].n, keys);
-        }
-    }
-    out = concolic_ident_compose(op, (const char *const *)sp, nargs);
-    for (a = 0; a < nargs; a++) free(sp[a]);
-    free(sp);
-    return out;
-}
-
 /* See viewport.h. The term is named by the form's monomials over the facts' per-realm keys and by the
    fractional constant: `round(P + r)` is one function of the facts for one (P, r). An atom in P is named by its
-   definition, so the term is one another session spells the same way. */
+   definition's digest, so the term is one another session spells the same way. */
 JSValue viewport_env_derived_long(CssPx len, JSValue computed)
 {
     ViewportEnvMembers m;

@@ -213,7 +213,8 @@ typedef unsigned CssEnvSet;
    holds at most one atom and names an atom or a fact. An atom is named by its definition, the operation over
    its operands' forms, so every derivation of one function names one atom and a sum that adds it and takes it
    away again cancels it. The name is interned in the realm's table, beside its forms; what another session
-   shares is the definition, which core/frame/viewport.c spells at the `long` boundary (css_px_atom_definition). */
+   shares is the definition's digest (css_px_atom_name), which core/frame/viewport.c spells at the `long`
+   boundary. */
 #define CSS_PX_FORM_MAX 8
 typedef struct {
     unsigned      atom;
@@ -271,12 +272,13 @@ CssPx css_px_atom(const char *op, const CssPx *args, int nargs, double px);
    `[x + lo, x + hi]` (asserted of the example). A range over a form holding the atom replaces it by `x` and
    that offset, so an extreme or a comparison the offset cannot reach is decided without it. */
 CssPx css_px_atom_enclosed(const char *op, CssPx x, double lo, double hi, double px);
-/* One operand of an atom's definition: a determined length `px`, or the polynomial `c + Σ m[0..n)` over facts by
-   index, whose monomials may name further atoms. */
-typedef struct { bool determined; double px; double c; int n; const CssPxMonomial *m; } CssPxAtomArg;
-/* The definition `atom` was interned with in `realm`: its operation, and `*nargs` operands into `*args`, all owned
-   by the realm's table. */
-const char *css_px_atom_definition(JSContext *realm, unsigned atom, int *nargs, const CssPxAtomArg **args);
+/* The size of an atom's name, a SHA-256 digest (core/crypto/secure_hash.h). */
+#define CSS_PX_ATOM_NAME_SIZE 32
+/* `atom`'s session-independent name in `realm`: the SHA-256 of its definition, the operation and its operands'
+   forms with facts by index and each nested atom by its own name, so a name is fixed-size however deep the
+   definitions nest and two sessions name one function alike. `*facts` receives every fact the definition reaches,
+   through nested atoms included. Owned by the realm's table. */
+const unsigned char *css_px_atom_name(JSContext *realm, unsigned atom, CssEnvSet *facts);
 /* The form, evaluated at its own facts' values: the number the layout computed, up to rounding. Asserts the
    form is known. */
 double css_px_form_eval(CssPx a);

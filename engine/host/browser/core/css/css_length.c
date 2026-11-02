@@ -11,6 +11,7 @@
 
 #include "check.h"
 #include "core/agent_state.h"
+#include "core/crypto/secure_hash.h"
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
 #include "core/frame/viewport.h"
@@ -36,7 +37,18 @@ typedef struct { unsigned char *key; size_t len; unsigned id; } CssPxAtomSlot;
 /* An enclosure, where the op states one: in every world the atom lies in `[x + lo, x + hi]` for its one operand
    `x` (css_px_atom_enclosed). */
 typedef struct { bool enclosed; double lo, hi; } CssPxEnclosure;
-typedef struct { char *op; int nargs; CssPxAtomArg *args; CssPxEnclosure enc; } CssPxAtomDef;
+/* One operand of an atom's definition: a determined length `px`, or the polynomial `c + Σ m[0..n)` over facts by
+   index, whose monomials may name further atoms. */
+typedef struct { bool determined; double px; double c; int n; const CssPxMonomial *m; } CssPxAtomArg;
+/* `name` is the SHA-256 of the atom's key and `facts` every fact its operands reach (css_px_atom_name). */
+typedef struct {
+    char          *op;
+    int            nargs;
+    CssPxAtomArg  *args;
+    CssPxEnclosure enc;
+    unsigned char  name[CSS_PX_ATOM_NAME_SIZE];
+    CssEnvSet      facts;
+} CssPxAtomDef;
 static const CssPxEnclosure CSS_PX_UNENCLOSED = { false, 0.0, 0.0 };
 
 typedef struct {
@@ -321,9 +333,9 @@ static int css_px_mono_cmp(const void *x, const void *y)
 /* THE ATOM'S NAME IS ITS DEFINITION: the operation and the forms of its operands, which are normal forms (sorted
    and merged), so two derivations of one function compose one key and one name wherever they run, and two
    different functions never share one. A fact enters a key as its index and never as its value, so the name is
-   of the function and not of this realm's number. Interned in the realm's table, since its operands are forms
-   over that realm's facts; the number is the realm's, and the definition it was interned with
-   (css_px_atom_definition) is what a spelling another session shares names. */
+   of the function and not of this realm's number; a nested atom enters as its own digest, so a key is the size
+   of one definition however deep definitions nest, and its digest is what another session names the atom by.
+   Interned in the realm's table, since its operands are forms over that realm's facts. */
 static size_t css_px_atom_hash(const unsigned char *k, size_t n)
 {
     size_t h = 1469598103934665603u, i;
@@ -376,8 +388,8 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
 {
     CssPxFormTable *t = css_px_realm_table(realm);
     CssPxAtomDef *d;
+    SecureHash h;
     int a;
-
     size_t i;
 
     if (2 * ((size_t)t->atoms_n + 1) > t->atoms_cap) {
@@ -425,10 +437,15 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
     d->op = reclaim_strdup(op);
     d->nargs = nargs;
     d->enc = enc;
+    d->facts = CSS_ENV_NONE;
     d->args = lexbor_calloc((size_t)(nargs > 0 ? nargs : 1), sizeof *d->args);
     CHECK(d->op && d->args, "css_length: OOM recording an atom's definition");
+    secure_hash_init(&h, SECURE_HASH_SHA256);
+    secure_hash_update(&h, key->b, key->n);
+    secure_hash_finish(&h, d->name, sizeof d->name);
     for (a = 0; a < nargs; a++) {
         CssPxMonomial *m = NULL;
+        int j, f;
 
         d->args[a] = args[a];
         if (!args[a].determined && args[a].n > 0) {
@@ -437,31 +454,40 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
             memcpy(m, args[a].m, (size_t)args[a].n * sizeof *m);
         }
         d->args[a].m = m;
+        for (j = 0; !args[a].determined && j < args[a].n; j++) {
+            /* A nested atom was interned before the definition naming it, so its set is already whole. */
+            if (args[a].m[j].atom) d->facts |= t->atom_defs[args[a].m[j].atom - 1].facts;
+            for (f = 0; f < CSS_ENV_FACT_COUNT; f++)
+                if (args[a].m[j].e[f]) d->facts |= CSS_ENV_BIT(f);
+        }
     }
     return t->atoms[i].id;
 }
 
-const char *css_px_atom_definition(JSContext *realm, unsigned atom, int *nargs, const CssPxAtomArg **args)
+const unsigned char *css_px_atom_name(JSContext *realm, unsigned atom, CssEnvSet *facts)
 {
     CssPxFormTable *t = css_px_realm_table(realm);
 
-    DCHECKF(atom >= 1 && atom <= t->atoms_n, "atom %u was asked for its definition and no atom of this realm has "
-            "that name", atom);
-    *nargs = t->atom_defs[atom - 1].nargs;
-    *args = t->atom_defs[atom - 1].args;
-    return t->atom_defs[atom - 1].op;
+    DCHECKF(atom >= 1 && atom <= t->atoms_n, "atom %u was asked for its name and no atom of this realm has it",
+            atom);
+    *facts = t->atom_defs[atom - 1].facts;
+    return t->atom_defs[atom - 1].name;
 }
 
-/* One polynomial into a key: its monomial count, the constant, and every monomial's atom, exponents and
-   coefficient, a double as its bits so the name is exact. */
-static void css_px_key_poly(CssPxKey *k, double c, const CssPxMonomial *m, int n)
+/* One polynomial of `realm` into a key: its monomial count, the constant, and every monomial's atom (whether it
+   holds one, then that atom's name), exponents and coefficient, a double as its bits so the name is exact. */
+static void css_px_key_poly(CssPxKey *k, JSContext *realm, double c, const CssPxMonomial *m, int n)
 {
     int i;
 
     css_px_key_bytes(k, &n, sizeof n);
     css_px_key_bytes(k, &c, sizeof c);
     for (i = 0; i < n; i++) {
-        css_px_key_bytes(k, &m[i].atom, sizeof m[i].atom);
+        unsigned char holds = m[i].atom != 0;
+        CssEnvSet facts;
+
+        css_px_key_bytes(k, &holds, 1);
+        if (holds) css_px_key_bytes(k, css_px_atom_name(realm, m[i].atom, &facts), CSS_PX_ATOM_NAME_SIZE);
         css_px_key_bytes(k, m[i].e, sizeof m[i].e);
         css_px_key_bytes(k, &m[i].k, sizeof m[i].k);
     }
@@ -527,7 +553,7 @@ static void css_px_form_atom(CssPx *out, const char *op, const CssPx *args, int 
 
         css_px_key_bytes(&key, &determined, 1);
         if (determined) css_px_key_bytes(&key, &args[i].px, sizeof args[i].px);
-        else css_px_key_poly(&key, args[i].form->c, args[i].form->m, args[i].form->n);
+        else css_px_key_poly(&key, out->realm, args[i].form->c, args[i].form->m, args[i].form->n);
     }
     css_px_form_atom_named(out, &key, op, def, nargs, enc);
     css_px_key_end(&key);
@@ -600,7 +626,7 @@ static bool css_px_form_normal(CssPx *out, CssPxPoly *p, CssPxForm *f)
         css_px_key_begin(&key);
         css_px_key_op(&key, "poly", 1);
         css_px_key_bytes(&key, &determined, 1);
-        css_px_key_poly(&key, p->c, p->m, n);
+        css_px_key_poly(&key, out->realm, p->c, p->m, n);
         css_px_form_atom_named(out, &key, "poly", &def, 1, CSS_PX_UNENCLOSED);
         css_px_key_end(&key);
         return false;
