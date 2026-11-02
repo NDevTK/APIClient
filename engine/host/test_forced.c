@@ -1277,6 +1277,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/requestsink.h"
 #include "fixture/requestroute.h"
 #include "fixture/clobber.h"
+#include "fixture/srcreach.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
 #include "fixture/cwmix.h"
@@ -1918,6 +1919,8 @@ TF_DOCS[] = {
     { "docnamed", HTML_DOCNAMED },
     { "windowname", HTML_WINDOWNAME },
     { "clobber", HTML_CLOBBER },
+    { "srcreach", HTML_SRCREACH },
+    { "srcreachneg", HTML_SRCREACHNEG },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
     { "cwmix", HTML_CWMIX },
@@ -9225,7 +9228,7 @@ static void fold_row(int *row, const char **why, int ok, const char *what) {
    `-sSTACK_SIZE=8388608`, which is three thousandths of the stack.
    RETIREMENT: this record goes when the caller's room is derived from the table rather than declared beside it,
    because the two are then unable to disagree and there is no relationship left for a reader to re-argue. */
-#define PROBE_MAX 1024
+#define PROBE_MAX 2048
 /* AND THE ROOM FOR THE NAMES OF THE ROWS THAT ARE 0, which is what the run's verdict SENTENCE is composed of.
    DERIVED FROM THE TABLE'S OWN CAP rather than typed, for the reason the cap above is not typed against the
    table's current length: a number sized to today's names is a number the next lane to add a longer one spends
@@ -17984,6 +17987,74 @@ static int cl_witness_without(const char *js, const char *url, const char *with,
     return 0;
 }
 
+/* A census count of the result document, or -1 where the document states none. */
+static long sr_census(const char *js, const char *key) {
+    char pat[64];
+    const char *p;
+    int k = snprintf(pat, sizeof pat, "\"%s\":", key);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat, "a census key did not fit its pattern buffer");
+    p = strstr(js, pat);
+    return p ? strtol(p + k, NULL, 10) : -1;
+}
+
+/* The rows of the `srcreach` and `srcreachneg` documents (fixture/srcreach.h). A row of the first is answered when
+   its value arm ran and an @S markup record's source identity holds the token its derivation spells, or is
+   exactly that token where `exact` is set. The two address reads whose list joins both address sources
+   (`href`, `document.URL`) derive under the first source's identity, so they share one record, and the
+   fragment's element of `String(location)` is a slice of its piece, whose identity is the fragment's own. */
+TF_UNIT void probes_srcreach(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *arm, *token; int exact; } SR[] = {
+        { "sr1-search-params", "/api/sr1-arm", "{location.search}[sra]", 1 },
+        { "sr2-url-href", "/api/sr2-arm", LOCATION_SEARCH_SRC, 1 },
+        { "sr3-hash-params", "/api/sr3-arm", "{location.hash}.slice(1)[src]", 1 },
+        { "sr4-hash-decode", "/api/sr4-arm", "{location.hash}.slice(1)", 1 },
+        { "sr5-hash-match", "/api/sr5-arm", "{location.hash}.match(", 0 },
+        { "sr6-hash-exec", "/api/sr6-arm", "{location.hash}.RegExp.exec().1", 1 },
+        { "sr7-hash-json", "/api/sr7-arm", ".JSON.parse().srf", 0 },
+        { "sr8-array-join", "/api/sr8-arm", "{location.search}[srg]", 1 },
+        { "sr9-replace-fn", "/api/sr9-arm", "{location.search}[srh]", 1 },
+        { "sr10-map", "/api/sr10-arm", "{location.search}[sri]", 1 },
+        { "sr11-set", "/api/sr11-arm", "{location.search}[srj]", 1 },
+        { "sr12-message", "/api/sr12-arm", "}.srk", 0 },
+        { "sr13-split", "/api/sr13-arm", "{location.search}.substring(1).split(", 0 },
+        { "sr14-object", "/api/sr14-arm", "{location.search}[srm]", 1 },
+        { "sr15-document-url", "/api/sr15-arm", LOCATION_SEARCH_SRC, 1 },
+        { "sr16-url-parts", "/api/sr16-arm", "[sro]", 0 },
+        { "sr17-template", "/api/sr17-arm", "{location.search}[srp]", 1 },
+        { "sr18-window-name", "/api/sr18-arm", "window.name", 1 },
+        { "sr19-referrer", "/api/sr19-arm", "document.referrer", 1 },
+        { "sr20-location-string", "/api/sr20-arm", LOCATION_HASH_SRC, 1 },
+    };
+    static char why[COUNTOF(SR)][160];
+    Probe rows[COUNTOF(SR) + 1];
+    long reached = sr_census(js, "_sinkReached"), tainted = sr_census(js, "_sinkTainted");
+    const char *ng_why = NULL; int ng_tt = 1;
+
+    for (size_t i = 0; i < COUNTOF(SR); i++) {
+        char q[48], src[1024];
+        int arm, rec;
+
+        snprintf(q, sizeof q, "\"%s\"", SR[i].arm);
+        arm = !!strstr(js, q);
+        if (SR[i].exact) {
+            char pat[160];
+
+            snprintf(pat, sizeof pat, "{\"sink\":\"innerHTML\",\"source\":\"%s\"", SR[i].token);
+            rec = !!strstr(js, pat);
+        } else {
+            rec = s_rooted_source(js, "innerHTML", SR[i].token, src, sizeof src);
+        }
+        snprintf(why[i], sizeof why[i], arm ? "the value arm ran and no markup @S record carries `%s`"
+                                            : "NOT REACHED: the value arm %s never ran", arm ? SR[i].token : SR[i].arm);
+        rows[i] = (Probe){ SR[i].row, arm && rec, "srRow('sr1'", SESS_EXPLORE, arm && rec ? NULL : why[i] };
+    }
+    fold_row(&ng_tt, &ng_why, reached > 0, "NOT REACHED: the constant markup write never reached the sink");
+    fold_row(&ng_tt, &ng_why, tainted == 0, "a constant markup write after two source reads counted as tainted");
+    rows[COUNTOF(SR)] = (Probe){ "srn-untainted", ng_tt, "srn-constant", SESS_EXPLORE, ng_why };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `clobber` document (fixture/clobber.h). */
 TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     char hs[1024] = "", us[1024] = "";
@@ -24540,6 +24611,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_storedxss(js, probes, &np);
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);
+    probes_srcreach(js, probes, &np);
     probes_typedinput(js, probes, &np);
     probes_closerequest(js, probes, &np);
     probes_cwmix(js, probes, &np);
