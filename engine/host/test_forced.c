@@ -22983,7 +22983,10 @@ TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
        therefore which spellings of an exit the source can carry. A build that fires BOTH has stopped applying
        the source's transform (the data state's only exit is `<`); a build that fires NEITHER has a derivation
        that stops at the first spelling, which is the defect this fixture was added for. */
-    DCHECK(!(st_lpark == S_FIRED),
+    /* A fact about hashpark's own writes: in another document the same search meets every write that reads the
+       fragment, and one that decodes it (srcreach's `decodeURIComponent(location.hash.slice(1))`) fires it as
+       Chrome would. */
+    DCHECK(g_doc != HTML_HASHPARK || !(st_lpark == S_FIRED),
            "the markup search over the raw fragment produced a fire-verified PoC — both of its writes "
            "(fixture/hashpark.h) are left only through `<` or `\"`, which the fragment percent-encode set holds, "
            "so a PoC there means a candidate was delivered without the source's own transform being applied");
