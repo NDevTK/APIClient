@@ -1203,21 +1203,8 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
             filled = 1;
         } else {
             filled = engine_provide(ctx, r->method, r->mode, r->referrer_policy, r->referrer, r->url, reply);
-            /* The caller's half of engine_provide's contract. It tells "answered twice" from "answered for nobody"
-               and asserts only the first; the second is the caller's, because only the caller holds the credit
-               that can excuse it (engine.h: "it is the CALLER that tells those apart"), as main.c does. An
-               unmatched reply is not silent: the record stays outstanding, the join keeps listing it, and
-               wpt_issue_pending asks again at the next slice (wpt_request_asked dedups only against requests in
-               flight), so it becomes a request loop whose progress keeps the frontier from the stall DCHECK.
-               A sale is the other way `filled == 0` happens and is not a bug: the engine sold the waiting flow to
-               the cold tier, and its recipe re-issues the request. The take consumes one credit, so it cannot live
-               in a DCHECK's condition; the `if` runs in every build and only the message is dev-only. */
-            if (filled == 0 && !engine_take_paged_owed())
-                DFAILF("a corpus reply was provided for a request no flow is parked on and none was paged "
-                       "out — the pair this runner fetched under is not the pair the frontier parked on, so "
-                       "the flow that IS parked waits for the rest of the run and this address is re-issued "
-                       "at every slice. request=%s %s %s %s %s", r->method, r->mode, r->referrer_policy,
-                       r->referrer, r->url);
+            /* A reply for a pair no flow is parked on is asserted by engine_provide; a park dropped before its
+               reply was withdrawn with `fetch.cancel`, which marks this request cancelled above. */
             /* The request record this answered, released only now: it holds the body and headers of the question,
                and a second flow parking the same pair before the answer landed is what its DCHECK catches. */
             for (i = 0; i < g_owed_n; i++)
@@ -1860,7 +1847,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        so one outside a park is a park this host did not ask for. engine_notify_worlds_gone is also called by
        solver/flow.c's flow_release whenever a flow leaves the frontier, which is ordinary traffic. */
     /* `fetch.cancel <identity>`: no flow is owed this request any more. The identity is a park's
-       `<method> <mode> <referrer policy> <referrer> <url>` (engine_pending_fetch_cancel) or a rendezvous id
+       `<method> <mode> <referrer policy> <referrer> <url>` (engine_pending_withdrawn) or a rendezvous id
        (engine_host_terminate), the key its reply would be delivered under. A send already on a connection
        finishes its bytes, since an HTTP/1.1 exchange ends only with its message or its connection, and is
        marked so its reply reaches nobody (wpt_request_finish releases a park's record). A park never sent has

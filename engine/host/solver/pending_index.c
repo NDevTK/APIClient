@@ -1,6 +1,7 @@
 /* The frontier's outstanding requests — see pending_index.h. */
 #include "solver/pending_index.h"
 #include "solver/pending.h"   /* the session's context; this file allocates no realm state of its own */
+#include "solver/engine.h"    /* engine_pending_withdrawn: the drop that empties a pair withdraws its request */
 #include "check.h"
 
 #include <stdlib.h>
@@ -23,8 +24,8 @@ typedef struct PendIndexMember {
 } PendIndexMember;
 
 /* A REQUEST — the (method, url) pair the reply seam is keyed on (engine.h), with the records still parked on it.
-   IT OUTLIVES ITS MEMBERS. `answered` is what tells a host that answered one request twice from a host whose
-   pairing is off, and both of those are silent in every other way. The count of distinct pairs a session issues
+   IT OUTLIVES ITS MEMBERS. `answered` is a lifetime count of the pair's answers, read only into
+   engine_provide's message. The count of distinct pairs a session issues
    is the endpoint surface, which this engine already keeps whole. */
 struct PendIndexNode {
     char             *method;
@@ -337,16 +338,21 @@ void pending_index_unref(JSValueConst rec)
                           "register slot, so this is a second free of one slot or a drop of a record that "
                           "was never on this register");
     if (--m->namers == 0) {
+        PendIndexNode *n = m->node;
+
         /* THE FOURTH END: THE LAST FLOW NAMING THIS RECORD IS GONE AND NO REPLY CAN EVER SETTLE IT. A record
            reaches this line when the register holding it was released — a flow that FINISHED, or one the pager
-           SOLD to the cold tier, which `pending_free`'s own comment names as the designed case ("the pager
-           credits that debt and the host still sends them"). It is neither a payment nor a refusal, and until
+           SOLD to the cold tier, the designed case `pending_free` names. It is neither a payment nor a refusal, and until
            this row existed it was the third thing hiding inside `asked - answered`: a gap that means the host
            still owes something and a gap that means the ASKER LEFT are opposite findings, and only one of them
-           is about the reply door at all. Guarded on `m->node` because an UNKEYED record never entered
+           is about the reply door at all. Guarded on the pair because an UNKEYED record never entered
            `asked`. */
-        if (m->node) g_dropped_total++;
+        if (n) g_dropped_total++;
         pend_untrack(m);
+        /* The pair's last outstanding park left unanswered, so no reply for it can be delivered: the zone is told
+           to take back the answer it owes. A pair still holding a park goes on being owed for that park. */
+        if (n && n->n_mem == 0)
+            engine_pending_withdrawn(n->method, n->mode, n->referrer_policy, n->referrer, n->url);
     }
 }
 
@@ -436,12 +442,8 @@ void pending_index_declined(JSValueConst rec)
        derivation at pending_index.h. The record entered `asked` when its pair completed and it leaves WITHOUT
        ever having been answered, which is what a refused request IS; crediting either term here would put a
        payment nobody made into a rate, and the surplus is spent by the next reply the host genuinely
-       mispaired. The per-pair `answered` is left alone for the same reason one level down: it separates a
-       reply sent TWICE from a reply for a request nobody made, and a refusal is neither.
-       SO THE PAIR'S NODE MAY NOW BE EMPTY WITH `answered` AT ZERO, and that is a fourth reading it did not
-       have — no member parked, none answered, because the zone refused them. It is not ambiguous with the
-       others: `engine_provide` tells "answered twice" from "answered for nobody" by whether ANY record
-       matched, and a refused pair matches nothing, so it takes the arm the host's own pairing assert owns.
+       mispaired. The per-pair `answered` is left alone for the same reason one level down: a refusal is not
+       an answer.
        WHAT DOES MOVE IS THE THIRD END'S OWN COUNT, and the two statements are not in tension: crediting
        `answered` here would put a payment nobody made into a rate, and crediting NOTHING left that rate's own
        GAP unattributable, which is the defect the banner records. A refusal is its own end and gets its own

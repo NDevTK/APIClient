@@ -493,30 +493,10 @@ void pending_free_ctx(JSContext *ctx);
    below, which is answered off a count the register carries rather than off this. */
 int  pending_count(JSValueConst reg);
 
-/* HOW MANY OF ONE KIND, and it is a KIND question because a departing flow takes TWO different debts with it
-   and one number cannot say which. A sold flow's fetch replies are paired by (method, mode, url) against the
-   host's own list (engine_take_paged_owed), and its synchronous requests are routed BY ID to a call site — so
-   a register counted whole spends a fetch's credit on a request's departure, and the pairing assert that
-   exists to catch a host naming a request nobody parked on is then excused by a HOSTREQ that has nothing to
-   do with it.
-   IT COUNTS ANSWERED ENTRIES TOO, AND FOR THE REQUEST DOOR THAT IS THE RIGHT NUMBER — see the arity below. */
+/* How many entries of one kind. The pager counts a sold flow's synchronous requests with it (engine.c's
+   g_paged_reqs): an answered HOSTREQ entry still awaits answers from other peer timelines, so answered entries
+   are counted too. */
 int  pending_count_kind(JSValueConst reg, int kind);
-
-/* HOW MANY REPLIES THE HOST STILL OWES THIS REGISTER — the reply door's half of the same question, and the one
-   the pager CREDITS (engine.c's g_paged_owed). It is not `pending_count_kind` with the HOSTREQ kinds taken
-   off, because the two doors have different ARITY and the answered entries are exactly where they differ:
-     - THE REPLY DOOR ANSWERS ONCE. engine_pending_fetches drops a request from the join the instant it carries
-       a value, and engine_provide DFAILs on a host that answers one twice — so an ANSWERED fetch/script/module
-       entry can never receive another reply, and crediting it tells the host a reply is owed for something
-       already delivered. The debt is then larger than the number of replies that can arrive, and the surplus is
-       spent by the next reply the host GENUINELY mispaired — silencing qjs_provide's pairing assert, which is
-       the one thing standing between a flow parked forever and a reader who can see why.
-     - THE REQUEST DOOR ANSWERS N TIMES. A peer's document state IS its flows, so one request id has one answer
-       per peer timeline (PEND_EXTRA) and an ANSWERED HOSTREQ entry is still a rendezvous more answers may
-       arrive for. That is why the request side stays a plain kind count above.
-   An entry is owed exactly when it carries no value, which is the same predicate `pending_outstanding` and the
-   join itself read — one condition, one place, so the credit and the list the host is shown cannot drift. */
-int  pending_owed_replies(JSValueConst reg);
 
 /* Entry `i`, owned by the caller. */
 JSValue pending_entry(JSValueConst reg, int i);
@@ -593,9 +573,9 @@ JSValueConst pending_owed_register(int i);
    retires it: an answered HOSTREQ reaching flow_deliver_one_reply. Its answer is TAKEN at the call site that
    asked, so a delivery that swap-removes it leaves the asking flow parked for ever — the state the paragraph
    above is about. Nothing here may be read as licence to drop the kind test.
-   WHAT IS NOT COVERED: this predicate and four others in this header — `pending_count_kind`,
-   `pending_owed_replies`, `pending_deliverable_count` and `pending_outstanding` — still WALK, over the same
-   register that only grows. This one is the hottest of the five: flow_step asks it at
+   WHAT IS NOT COVERED: this predicate and three others in this header — `pending_count_kind`,
+   `pending_deliverable_count` and `pending_outstanding` — still WALK, over the same
+   register that only grows. This one is the hottest of the four: flow_step asks it at
    the top of its arm chain on EVERY step, and again on the external-script row (once as that arm's own assert
    under -DAPICLIENT_DEV=1, once as the scheme-answered re-read). They are correct; they are not cheap, and the
    paragraph at `pending_blocked` says exactly why the cure that reached that one does not reach these.
@@ -789,8 +769,7 @@ JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, i
  * above it. It is the oldest DELIVERABLE entry and not the oldest entry: `pending_ready` walks for a
  * deliverable one rather than reading index 0, so a minimum over the whole register would order the arm by an
  * entry the arm cannot take and would starve the queue for as long as that entry stayed owed. Written here
- * beside the other walking predicates so the two cannot drift apart about what "ready" means, which is the
- * defect this file describes at pending_owed_replies. */
+ * beside the other walking predicates so the two cannot drift apart about what "ready" means. */
 /* WHICH ENTRY THE NEXT DELIVERY TAKES, and its STAMP — one selector and one reader of it, because `which
    reply is next` is ONE question and three callers ask it. pending.c states why the reader is not a minimum
    over the deliverable set, and keeps the retired version that was. −1 / 0 for a register that can deliver

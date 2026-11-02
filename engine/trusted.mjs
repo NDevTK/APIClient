@@ -948,27 +948,11 @@ async function main() {
      is what makes a re-announcement while the work is in flight cost nothing; a key is released by the write
      that pays it (`flush`), never by the work completing, because the child re-announces the moment it is let
      go and an early release would have this zone fetch the same address twice for one park.
-     THIS USED TO READ `ONE ANSWER PER REQUEST, EVER` AND IT IS REWRITTEN RATHER THAN DELETED, because the
-     reasoning under it is what a reader re-derives: it said "a pending entry stays on the register until it is
-     filled and the child re-states the whole bill whenever it changes, so without this a re-announced request
-     would be fetched again and `qjs_provide` would be called twice for one park, which is engine_provide's
-     answered-twice abort". Every clause of that is true of ONE PARK and the conclusion does not follow,
-     because a re-announced PAIR is not a re-announced PARK. solver/engine.c's join skips an entry that
-     carries a value or a refusal (`skip = (!u || PEND_HAVE_VALUE || declined)`), so a pair on the bill names a
-     record that is outstanding NOW; solver/pending_index.h holds EVERY unanswered record for a pair (a fork
-     SHARES records and refs the index — solver/pending.c's `pending_index_ref`), so `engine_provide` fills all
-     of them and none survives its own answer. A pair therefore returns to the bill only as a FRESH park, which
-     solver/engine.c names in its own words at the join ("several flows park on the same request — a candidate
-     re-fire re-runs the exploring flow's fetches"), and engine_provide's answered-twice `DFAILF` is about "a
-     host answering one it was shown ONCE, twice" — never about one it was shown twice.
-     THE COST OF THE RETIRED READING WAS THE SESSION. A permanent memo answers the first announcement and is
-     SILENT on every later one, so the frontier keeps parks this zone will not work while the zone's own queue
-     is empty — and `flush`'s all-stalled arm then tells every child that nothing more is coming, which is the
-     one thing that ends a live session. MEASURED on a mirrored real site: 91 pairs announced and answered, 85
-     of them re-announced as fresh parks one round later, none worked, and the child aborted at
-     test_forced.c's `abi_stalled` with 24 script loads still on its register. extension/bridge.js — the
-     SHIPPED pump — holds no such memo and answers every line of every bill, which is the behaviour the engine
-     is built for; this host was the one that differed. */
+     A pair returns to the bill only as a FRESH park: the join lists only unanswered records, and engine_provide
+     fills every record of the pair, so none survives its answer. A key must not be a permanent memo either, or a
+     fresh park would never be worked. A park dropped unanswered (its flow sold at the RAM floor, retired or
+     released) is withdrawn with `fetch.cancel`, which takes the key and its owed answer back, so an answer is
+     written only while a park awaits it; engine_provide asserts that. */
   const track = (e, key, work) => {
     busy++;
     const done = work.then((v) => v, raise).then(() => { busy--; retryHeld(); flush(); });
@@ -1551,6 +1535,11 @@ async function main() {
       due.sort(order);
       const { x, from } = due.shift();
       const mine = !i.inbox.includes(x);
+      /* The engine's half is engine_provide's assert over a pair with no outstanding park. */
+      if (mine && i.owed.get(x.key) !== x)
+        throw new Error(`instance [${i.tag}] was about to be written \`${x.key}\`, which it is no longer owed — ` +
+                        'a `fetch.cancel` takes an owed answer back with its key, so every answer written is ' +
+                        'one a park still awaits');
       if (mine && !(ZONE.replyStreamLanded(x) && (x.stream !== null || ZONE.replyStreamLast(x))))
         throw new Error(`instance [${i.tag}] was written a round at work ${i.clock.work} while its due send ` +
                         `\`${x.key}\` owes record ${x.record}, which has not landed or is not its answer's last ` +
@@ -2168,8 +2157,8 @@ async function main() {
       parkedWorlds.push(f[1]);
       return;
     }
-    /* `fetch.cancel <identity>` — no flow is owed this request any more: a park's five-field pair
-       (solver/engine.c's engine_pending_fetch_cancel) or a rendezvous id (engine_host_terminate), the two keys
+    /* `fetch.cancel <identity>` — no flow is owed this request any more: a park's five-field pair, sent when the
+       pair's last outstanding park leaves unanswered (solver/engine.c's engine_pending_withdrawn), or a rendezvous id (engine_host_terminate), the two keys
        its answer would be written under. Fetch §2 Infrastructure makes an aborted and a terminated controller
        both canceled, so both are one act here. The send ends through its signal and its key is released, so its
        answer is never written and a later park of the same key is worked anew. A key with no send was cancelled

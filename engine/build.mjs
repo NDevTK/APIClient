@@ -4308,7 +4308,7 @@ function censusReading(out) {
                   every entry of every live flow's register whatever state it is in — outstanding, ALREADY
                   ANSWERED and awaiting that flow's own delivery, declined, synchronous — so it stood at
                   299306 beside `owed 0` and `blocked 0` in the same census, which read as a contradiction and
-                  was not one. The debt is `pending_owed_replies` and the RATE is the `reply` pair below.
+                  was not one. The debt is `replyOutstanding` and the RATE is the `reply` pair below.
                   AND ONE OF THOSE FOUR STATES IS NOW SPLIT OUT BESIDE IT, because naming the collapse did not
                   end it: a reader still had to choose which of the four a rising `pend` was, and the two
                   answers that mattered — a host that never paid, and a frontier drowning in replies nobody

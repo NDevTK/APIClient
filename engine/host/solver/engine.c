@@ -1104,20 +1104,10 @@ static uint32_t mint_req(void)
     return id;
 }
 
-/* What a sold flow took with it, split by debt because the two settle through different doors: a fetch reply is
- * paired by (method, url) against the host's pending list, a synchronous request is routed by id. A shared count
- * would let a sold host-request entry absorb a real mispairing that main.c's provide-pairing assert exists to
- * catch. On the fetch side only what is still owed counts: an answered entry sold with a flow is a reply the host
- * already sent (pending.h, pending_owed_replies).
- *
- * A flow blocked on the host is the cheapest member to page (its recipe re-issues the request on resume), so the
- * tail is often a flow the host is mid-fetch for, and its reply arrives for a URL nobody is parked on. That is a
- * park between ask and answer, not a mispairing; it is counted so the pairing assert stays armed and is answered
- * once per reply the sale made unnecessary. */
-static long g_paged_owed;
-/* The request side, reported rather than spent: one request may still be owed N answers by N peer timelines, so
- * a per-entry credit would run out and abort under another door's message. It is stated in engine_host_answer's
- * abort and on the @COLD census line, and decides nothing. */
+/* The synchronous requests sold flows took with them, reported rather than spent: one request may still be owed N
+ * answers by N peer timelines. It is stated in engine_host_answer's abort and on the @COLD census line, and
+ * decides nothing. A sold flow's fetch parks leave no debt: the drop of a pair's last park withdraws the request
+ * (engine_pending_withdrawn), so no reply for it arrives. */
 static long g_paged_reqs;
 
 /* Flows this instance has sold. `live < flows` is equally the signature of flows finishing, and `_park`'s record
@@ -1161,22 +1151,6 @@ static uint64_t g_pressure_sold_at_collections = UINT64_MAX;
 static long g_pressure_batch, g_pressure_last;
 static uint64_t g_pressure_batch_live;
 static uint64_t g_pressure_yield;
-
-int engine_take_paged_owed(void) {
-    /* The credit counts entries the host was shown and has not answered (engine_reclaim_tail), and this is its
-       only spender, so below zero means a second spender or one reply spending two credits; after that the
-       number no longer means "replies owed for flows this instance sold". */
-    DCHECK(g_paged_owed >= 0,
-           "the paged-reply debt went negative — it counts unanswered entries that left with sold flows and this is "
-           "its only spender, so more replies were excused as sales than were sold");
-    /* Zero is an answer, not a broken invariant: qjs_provide asks this to tell a sale from the host's pairing
-       being off, and "no sale explains this reply" is the case its DFAIL exists for. Aborting here would report
-       the host's mispairing under the pager's message. */
-    if (g_paged_owed == 0)
-        return 0;
-    g_paged_owed--;
-    return 1;
-}
 
 uint32_t engine_host_request(JSContext *ctx, const char *op) {
     Flow *f = flow_running();
@@ -1512,42 +1486,34 @@ int engine_host_withdraw(JSContext *ctx, uint32_t req) {
 
 /* See engine.h. */
 void engine_cancel_entry(JSContext *ctx, Flow *f, int slot) {
-    static const int field[5] = { PEND_METHOD, PEND_MODE, PEND_REFERRER_POLICY, PEND_REFERRER, PEND_URL };
-    const char *fv[5] = { NULL, NULL, NULL, NULL, NULL };
     JSValue e = pending_entry(f->pending, slot);
     int rendezvous = pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ;
     int owed = !pending_get_int(e, PEND_HAVE_VALUE);
-    int keyed = !rendezvous && owed && pending_index_keyed(e);
     uint32_t host = rendezvous ? (uint32_t)pending_get_int(e, PEND_REQ_HOST) : 0;
 
     DCHECK(!rendezvous || pending_get_int(e, PEND_ASYNC),
            "a blocking rendezvous was cancelled — its flow is blocked and runs no code that could cancel it; "
            "its teardown is engine_host_terminate");
-    for (int k = 0; keyed && k < 5; k++) {
-        JSValue s = pending_get(e, field[k]);
-        fv[k] = JS_ToCString(ctx, s);
-        JS_FreeValue(ctx, s);
-        CHECK(fv[k] != NULL, "engine: OOM naming a cancelled request");
-    }
     JS_FreeValue(ctx, e);
+    /* A park's removal gives back this register's naming; when that was the pair's last outstanding park, the
+       outstanding set withdraws the request (engine_pending_withdrawn). */
     pending_remove(&f->pending, slot);
     if (rendezvous) {
         g_host_terminated++;
         if (owed && g_sess_live) host_cancel_notify(ctx, host);
-        return;
     }
-    if (!keyed) return;
-    {
-        PendRequestKey key = { fv[0], fv[1], fv[2], fv[3], fv[4] };
-        PendIndexNode *node = pending_index_find(&key);
+}
 
-        if ((node == NULL || pending_index_node_count(node) == 0) && g_sess_live) {
-            char *rec = engine_notice_build("fetch.cancel", fv, 5);
-            engine_host_notify(ctx, rec);
-            free(rec);
-        }
-        for (int k = 0; k < 5; k++) JS_FreeCString(ctx, fv[k]);
-    }
+/* See engine.h. */
+void engine_pending_withdrawn(const char *method, const char *mode, const char *referrer_policy,
+                              const char *referrer, const char *url) {
+    const char *fv[5] = { method, mode, referrer_policy, referrer, url };
+    char *rec;
+
+    if (!g_sess_live) return;
+    rec = engine_notice_build("fetch.cancel", fv, 5);
+    engine_host_notify(g_sess_ctx, rec);
+    free(rec);
 }
 
 /* A flow leaving the frontier unfinished (the pager's sale, a retirement) takes its async sends with it, and
@@ -4089,7 +4055,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
                    const char *referrer, const char *url, JSValueConst value) {
     PendRequestKey key = { method, mode, referrer_policy, referrer, url };
     PendIndexNode *node;
-    int n = 0, matched = 0, i, m;
+    int n = 0, i, m;
     /* The reply's own grade, joined from the records it answers (see the fill loop). `-1` is "no record read
        yet", which the tail refuses to hand on. */
     int reply_prov = -1;
@@ -4116,6 +4082,16 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
        yet), and a record leaves only when answered or when the last register naming it is gone, so nothing is
        dropped. */
     node = pending_index_find(&key);
+    m = node ? pending_index_node_count(node) : 0;
+    /* The zone answers only what it owes: a park leaves the outstanding set when it is answered, refused or
+       withdrawn (`fetch.cancel`, engine_pending_withdrawn), so a reply with no member to fill is an answer the
+       zone wrote after one of those, or for a request it was never shown. `answered` counts this pair's earlier
+       answers across every park of it, so it is evidence for the message, never the discriminator. */
+    if (m == 0)
+        DFAILF("a reply was provided for a request with no outstanding park — every park on this pair was "
+               "answered (%ld time(s)), refused or withdrawn by `fetch.cancel` before it, or none was made, so "
+               "the zone wrote an answer it did not owe. request=%s %s %s",
+               node ? pending_index_node_answered(node) : 0L, method, mode, url);
     /* A streamed head (a `stream` token on the record) opens the reply's body source before any record holds
        the value, so every member that takes the head reads the same source. */
     if (JS_IsObject(value)) {
@@ -4133,11 +4109,6 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
         }
         JS_FreeValue(ctx, tok);
     }
-    /* Taken before the fills move either: `m` is the outstanding members, `matched` adds the answered ones, so
-       "answered twice" (matched, none fillable) reads differently from "answered for nobody" (nothing matched).
-       A fill moves a record from one term to the other, so the sum is stable across the loop. */
-    m = node ? pending_index_node_count(node) : 0;
-    matched = node ? m + (int)pending_index_node_answered(node) : 0;
     /* Bounded by the count above and always taking the head, because each fill removes its own record (the
        `haveValue` write reaches pending.c, which tells the index): one per iteration, so the loop visits each
        member once whatever the writes do. The closing assert checks that assumption. */
@@ -4226,14 +4197,6 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
     /* A streamed head is learned from at its body's end, where the whole body exists (reply_body_append). */
     if (n && reply_body_streamed(ctx, value)) reply_body_set_grade(ctx, value, reply_prov, reply_driven);
     else if (n) reply_decode_learn(ctx, method, url, value, reply_prov, reply_driven);
-    /* A request answered twice, told apart from one answered for nobody. Every entry naming the request already
-       has a reply, so this call wrote none. `n == 0` with nothing matched is the host's pairing being off, the
-       caller's assert (it owns the paged-sale credit that can explain it); this case no credit excuses, since a
-       request leaves the join once answered. It catches a host with two overlapping lists, which is why facts
-       about a request travel on the request itself. */
-    if (matched && !n)
-        DFAILF("a reply was provided for a request whose every parked entry is already answered — the join drops a "
-               "request once it carries a value, so the host answered it twice. request=%s %s", method, url);
     return n;
 }
 
@@ -4304,13 +4267,12 @@ int engine_decline(JSContext *ctx, const char *method, const char *mode, const c
            "reach the index, and the host will be shown this request again on the next slice and refuse it "
            "again, one failure arm per round for the rest of the session");
     if (marked) flow_clear_host_owed_all();
-    /* Nobody is parked on it: the shapes engine_provide's caller separates, with the same credit. A refusal for
-       a pair no flow asked for is the host's pairing off by one; one for a flow paged out to the cold tier is the
-       mechanism working, and consumes that sale as a reply does. */
-    if (matched == 0 && !engine_take_paged_owed())
-        DFAILF("a refusal was recorded for a request no flow is parked on and none was paged out — the host's "
-               "pending/decline pairing is off. request=%s %s reason=%s",
-               method, url, reason);
+    /* Nobody is parked on it, engine_provide's assert for refusals: every park on the pair was answered, refused
+       or withdrawn (`fetch.cancel`) before it, or none was made. */
+    if (matched == 0)
+        DFAILF("a refusal was recorded for a request with no outstanding park — every park on this pair was "
+               "answered, refused or withdrawn by `fetch.cancel` before it, or none was made. request=%s %s "
+               "reason=%s", method, url, reason);
     return marked;
 }
 
@@ -11808,16 +11770,10 @@ static long g_park_funded;   /* lifetime: flows sold for their bulk to fund anot
 
 /* The first half of a sale: the flow leaves every query and gives back what its record does not read. */
 static void engine_sale_release(Flow *tail) {
-    /* The debt leaves with the flow, as two debts counted by kind (see g_paged_owed): a synchronous request is
-       answered by id at a call site and a fetch reply is paired by (method, url), so a register counted whole
-       would hand the fetch side a credit belonging to the request side and excuse the next reply the host
-       mispairs. The reply side counts what is still owed, since the two doors differ in arity (pending.h,
-       pending_owed_replies): the reply door answers a request once and drops it from the join when it carries a
-       value, so an answered entry sold here was already delivered, and crediting it would quiet qjs_provide's
-       pairing assert. The request door answers one id once per peer timeline, so an answered HOSTREQ entry still
-       awaits answers and stays counted. */
+    /* The synchronous requests leave with the flow, counted (see g_paged_reqs); an answered HOSTREQ entry still
+       awaits answers from other peer timelines and stays counted. Its fetch parks go back with the register at
+       flow_release_bulk, and the drop of a pair's last park withdraws the request (engine_pending_withdrawn). */
     g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
-    g_paged_owed += pending_owed_replies(tail->pending);
     /* The debt that leaves by being given back: a recipe cannot carry a rendezvous token (engine.h: it is the
        zone's name, has no generation, and does not outlive the zone's session), so the question is returned rather
        than parked. Per flow, because this is a partial park: the instance keeps running and the operation is
@@ -12363,13 +12319,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        boot flow and every cold-resumed one are created by that seeding and need their programs at creation. */
     flow_set_seed_hook(engine_seed_root_flow);
     g_parked = 0;
-    /* What a sale left behind belongs to the instance, so it is asserted rather than zeroed. The reply is owed by
-       the host that was shown the request, the sold flow is on the cold tier re-issuing next session, and a reply
-       in flight across a session boundary must find its credit there; a zero would hand the first such reply to
-       qjs_provide's pairing DFAIL. Every host opens one session per instance (main.c, wpt_runner.c's two entries,
-       test_forced.c's engine_run), so a second session on one instance crashes here rather than dropping the debt
-       it must carry. */
-    DCHECK(g_paged_owed == 0 && g_paged_reqs == 0 && g_flows_sold == 0,
+    /* What a sale left behind belongs to the instance, so it is asserted rather than zeroed. Every host opens one
+       session per instance (main.c, wpt_runner.c's two entries, test_forced.c's engine_run), so a second session
+       on one instance crashes here rather than dropping the count it must carry. */
+    DCHECK(g_paged_reqs == 0 && g_flows_sold == 0,
            "a session began on an instance whose sold-flow debt is not zero — the debt crosses sessions with the "
            "host that was shown the requests, so carry it rather than reset it");
     /* Not reset, because they are the instance's totals rather than a session's, and a rate that restarted would

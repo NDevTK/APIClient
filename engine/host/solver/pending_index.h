@@ -121,11 +121,9 @@ JSValue      pending_index_node_member(const PendIndexNode *n, int i);
 
 /* THE PAIR A REPLY ANSWERS, or NULL for one this frontier never parked on. */
 PendIndexNode *pending_index_find(const PendRequestKey *k);
-/* HOW MANY OF THIS PAIR'S RECORDS HAVE BEEN ANSWERED — which is the ONE fact that separates a reply the host
-   sent TWICE from a reply for a request nobody ever made, and the reason a node outlives its members. Those
-   are different failures with different owners (the second is excused by the pager's sale credit and the first
-   is never excused), and CLAUDE.md's rule about a search that cannot tell two gaps apart is the same rule: an
-   answer that collapses two states reports neither. */
+/* How many of this pair's records have been answered, across every park of it. A lifetime count: it cannot say
+   whether the host answered one park twice, because a fresh park of an answered pair can be withdrawn before its
+   reply. engine_provide prints it beside a reply for an empty pair, as evidence and never as the test. */
 long pending_index_node_answered(const PendIndexNode *n);
 
 /* ---- the reply door's RATE ------------------------------------------------------------------------------- */

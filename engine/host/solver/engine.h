@@ -511,12 +511,6 @@ int  engine_frontier_paged(void);
    any other reason (the host's park, a sale at the RAM floor), and "none" when nothing was written. */
 const char *engine_park_why(void);
 
-/* Take one reply that was owed to a flow this engine paged out, consuming it (a take, not a predicate). The
-   partial self-park sells the cheapest member at the RAM floor, often a blocked flow whose recipe re-issues
-   its request next session, so the reply the host was already fetching lands with nobody parked on it. That
-   is a sale, not the mispairing the provide edge asserts against, and this tells the two apart. */
-int  engine_take_paged_owed(void);
-
 /* Park the running flow on a fetch only the trusted host can make. The reply arrives later through
    engine_provide, and until then the flow cannot finish, which keeps reply-gated code reachable. The park is
    on the flow's own register because the reaction the resolve enqueues belongs to that flow and its delta. */
@@ -526,6 +520,14 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
    resolve is `deliver` leaves its register, and once no live flow owes the request the host is told with a
    `fetch.cancel` notice keyed like engine_provide. A park already answered, or absent, is left as it is. */
 void engine_pending_fetch_cancel(JSContext *ctx, JSValueConst deliver);
+/* The last outstanding park on the request `(method, mode, referrer policy, referrer, url)` left the frontier
+   unanswered: an abort, or its flow released (sold at the RAM floor, retired, finished). Fetch §2
+   Infrastructure's terminate, told to the zone as `fetch.cancel<TAB>METHOD<TAB>MODE<TAB>REFERRER_POLICY<TAB>
+   REFERRER<TAB>URL`, so the answer it owes is taken back and never written for a request no flow awaits. Called
+   by the outstanding set (solver/pending_index.c) at the drop that empties the pair; nothing outside a live
+   session, whose teardown releases every flow. */
+void engine_pending_withdrawn(const char *method, const char *mode, const char *referrer_policy,
+                              const char *referrer, const char *url);
 /* The same park for a dynamic `import()`, which is owed source text: the drain settles `resolve` with the
    reply's body, not with the reply record `fetch()` builds a Response from. A failed load settles `reject`:
    HTML §8.1.6.7.3 "HostLoadImportedModule(referrer, moduleRequest, loadState, payload)" makes a null
@@ -935,13 +937,13 @@ void engine_pending_split(char *line, const char **method, const char **destinat
                           const char **referrer_policy, const char **referrer, const char **askers,
                           const char **url);
 /* Deliver a body for one request, keyed on the (method, mode, referrer policy, referrer, url) the flow parked
-   on. Returns how many entries it filled; 0 means the host's pairing is off or the record was sold
-   (engine_take_paged_owed), which the caller tells apart because it owns the credit. */
+   on. Returns how many entries it filled. A reply for a pair with no outstanding park is the zone writing an
+   answer it does not owe (answered, refused, withdrawn or never shown), asserted here. */
 int engine_provide(JSContext *ctx, const char *method, const char *mode, const char *referrer_policy,
                    const char *referrer, const char *url, JSValueConst value);
 
-/* Refuse one request, keyed on the same five fields; returns how many records it newly refused (0 is a
- * pairing error or a sale, which this tells apart itself). It is not a network error: a refusal a real browser
+/* Refuse one request, keyed on the same five fields; returns how many records it newly refused (0 is a zone
+ * refusing what it does not owe, asserted as engine_provide asserts a reply). It is not a network error: a refusal a real browser
  * also makes (a blocked scheme, Fetch §4.3 "Scheme fetch"; a §4.10 "CORS check" failure; a CORB-blocked body)
  * arrives through engine_provide as Fetch §5.6 "Fetch methods"' network error. This is for a refusal only this
  * tool makes, where a network error would be an observation that does not exist and would spend the page's

@@ -6395,7 +6395,7 @@ static int tf_xhr_declined(const char *op, size_t len) {
 }
 
 /* The last field of every `fetch.cancel` notice the engine sent, in arrival order: a park's address
-   (solver/engine.c's engine_pending_fetch_cancel) or a rendezvous id (engine_host_terminate). */
+   (solver/engine.c's engine_pending_withdrawn) or a rendezvous id (engine_host_terminate). */
 static char **g_tf_cancel;
 static int g_tf_cancel_n;
 

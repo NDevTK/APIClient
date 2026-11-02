@@ -1757,7 +1757,6 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *re
            "at all passes the JSON `null` beside a null pointer");
     {
         JSValue v = JS_ParseJSON(g_ctx, reply, strlen(reply), "<reply>");
-        int n;
         if (JS_IsException(v)) {
             JS_FreeValue(g_ctx, JS_GetException(g_ctx));
             /* Aborts in dev: a host sending anything but its reply record is the bug. In release there is no reply,
@@ -1777,20 +1776,10 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *re
                    "one, so these bytes name a reply the trusted zone did and did not have at the same time "
                    "(§5.6 stood on this sentence and is Fetch methods, where fetch() REJECTS over a network "
                    "error rather than where one is defined)");
-        n = engine_provide(g_ctx, method, mode, referrer_policy, referrer, url, v);
+        /* A reply for a pair with no outstanding park is asserted by engine_provide: the zone answers only what
+           it owes, and a park dropped unanswered was withdrawn with `fetch.cancel`. */
+        (void)engine_provide(g_ctx, method, mode, referrer_policy, referrer, url, v);
         JS_FreeValue(g_ctx, v);
-        /* Nobody is parked on it, which happens two ways. The assert is for a host naming a request no flow asked
-           for (its pending/provide pairing off, leaving the parked flow waiting forever). The other is a sale: at
-           the RAM floor the engine paged the waiting flow out (engine_take_paged_owed), since its recipe re-issues
-           the request next session; one sale is consumed per reply it made unnecessary. The take consumes a sale,
-           so the condition runs in every build and only the message is dev-only. */
-        if (n == 0 && !engine_take_paged_owed()) {
-            /* Naming both halves: a zone that fetched the right address with the wrong verb produces this, and a
-               message naming the URL alone would send the reader to a URL that is on the list. */
-            DFAILF("a reply was provided for a request no flow is parked on and none was paged out — the "
-                   "host's pending/provide pairing is off, and resolving nothing leaves the flow that IS "
-                   "parked waiting forever. request=%s %s %s", method, mode, url);
-        }
     }
 }
 
@@ -1813,8 +1802,7 @@ QJS_EXPORT void qjs_provide_body(const char *token, const char *state, const cha
 }
 
 /* The zone refusing to ask, which is an answer, not a reply (solver/engine.h's engine_decline; safe-fetch.js
-   grades the axis). The pairing assert is engine_decline's; qjs_provide keeps its own only because it holds the
-   reply value across the paged-sale credit. */
+   grades the axis). The pairing assert is engine_decline's, as qjs_provide's is engine_provide's. */
 QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *referrer_policy,
                             const char *referrer, const char *url, const char *reason)
 {

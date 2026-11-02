@@ -4513,7 +4513,7 @@ function inflightKey(identity) {
 }
 /* Fetch §2 Infrastructure's "abort a fetch controller" or "terminate", on the zone's side: the two are one act
    here, since both leave the controller canceled and an abort's error is the page's. The engine's
-   `fetch.cancel` notice says no flow is owed the request (solver/engine.c's engine_pending_fetch_cancel for a
+   `fetch.cancel` notice says no flow is owed the request (solver/engine.c's engine_pending_withdrawn for a
    park, engine_host_terminate for a rendezvous). The send ends through its signal (safe-fetch.js disconnects
    the wire's port, and wire.js aborts the platform fetch), and it leaves the in-flight set, so a reply that
    landed meanwhile is never delivered and a later request of the same key is issued anew. A key not in flight

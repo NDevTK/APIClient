@@ -361,8 +361,7 @@ typedef struct {
        it as a debt and reported the host was never asked.
        IT IS PAIRED WITH `pend_bytes` AND THAT IS ITS JOB: the two are one row of the per-flow memory census,
        so a rising count beside a rising KiB is what says the registers are where the frontier's memory is.
-       THE DEBT IS A DIFFERENT NUMBER AND IT ALREADY HAS A FUNCTION — `pending_owed_replies` (solver/pending.h)
-       — and the RATE that says whether the debt is being paid is `pending_index_asked_total` against
+       THE DEBT IS A DIFFERENT NUMBER, and the RATE that says whether the debt is being paid is `pending_index_asked_total` against
        `pending_index_answered_total`, which is what the census publishes as `replyAsked`/`replyAnswered`.
        AND THE GAP BETWEEN THAT PAIR IS NOT A DEBT EITHER, which is the same mistake one door over and was
        made: a keyed record ends answered, REFUSED by the trusted zone, DROPPED with a flow that departed

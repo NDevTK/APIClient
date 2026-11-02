@@ -334,12 +334,11 @@ int64_t pending_get_int(JSValueConst e, int field)
 /* IS THE HOST OWED THIS ENTRY — the ONE condition the three questions below are made of, and the same one
    engine_pending_fetches and engine_host_requests skip a record on. An entry carries a value or it does not;
    what DIFFERS between the callers is which kinds they are asking about, never what "owed" means. Written once
-   here so the pager's credit and the list the host is actually shown cannot drift apart, which is the defect
-   pending.h describes at pending_owed_replies. Cheap by construction — one own-slot read of a boolean — and
+   here so the predicates and the list the host is actually shown cannot drift apart. Cheap by construction — one own-slot read of a boolean — and
    the reason that matters has MOVED rather than gone: it used to be that `pending_blocked` asked it at every
    suspend point the interpreter offers, and that path no longer reads an entry at all. What still reads it is
-   every walking predicate below (`pending_ready`, `pending_deliverable_count`, `pending_outstanding`,
-   `pending_owed_replies`), each of which pays this once per ENTRY over a register
+   every walking predicate below (`pending_ready`, `pending_deliverable_count`, `pending_outstanding`),
+   each of which pays this once per ENTRY over a register
    that only grows — so the cost of this line is multiplied by a number nothing bounds, which is the residual
    pending.h names at `pending_ready`. */
 static int pend_owed(JSValueConst e)
@@ -352,8 +351,7 @@ static int pend_owed(JSValueConst e)
    and a decline is that second thing. An entry the trusted zone has REFUSED is still unanswered — its flow is
    parked at the line that asked, so `pending_outstanding` above must go on saying so or the flow reads as
    FINISHED and its whole timeline is torn down — and the host is nonetheless owed NOTHING for it: no reply is
-   coming, the joins do not list it, and a debt credited for it could only ever be spent excusing some LATER
-   reply the host genuinely mispaired (pending.h says exactly that at pending_owed_replies).
+   coming and the joins do not list it.
    So the two diverge here and nowhere else: "is this flow still waiting" is `pend_owed`, and "can the host
    still be asked" is this. */
 int pending_entry_host_owed(JSValueConst e)
@@ -620,48 +618,6 @@ int pending_declined_outstanding(JSValueConst reg)
            "they no longer do. One of them has been edited away from `pend_owed`, which means some caller is "
            "now getting a fourth answer to a question this file states has only three");
     return hit_any;
-}
-
-int pending_owed_replies(JSValueConst reg)
-{
-    int n = pend_len(reg), i, c = 0;
-
-    for (i = 0; i < n; i++) {
-        JSValue e = pending_entry(reg, i);
-        int kind = (int)pending_get_int(e, PEND_KIND);
-        /* `pending_entry_host_owed` AND NOT `pend_owed`: A DECLINED PARK IS A REPLY THAT CANNOT ARRIVE. The zone has
-           said it will not ask, so crediting a debt for it would hand the surplus to the next reply the host
-           genuinely mispaired — which is the exact defect the paragraph below and pending.h both describe,
-           reached through the one entry kind for which no reply exists at all. */
-        /* A body piece's park is owed by the zone's open stream and answered from its source, never through
-           a pair (solver/reply_body.h), so a sale credits nothing for it. */
-        if (kind != FLOW_PENDING_HOSTREQ && kind != FLOW_PENDING_BODY && pending_entry_host_owed(e)) {
-            /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
-               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and engine_provide delivers
-               against the pair, so an owed
-               entry missing either is one the host was never shown and never will be — counting it credits a reply nobody is
-               going to send, and the credit is then spent by a reply the host genuinely mispaired. Asserted at
-               the origin of the DEBT rather than on the register's hot path: pending_blocked runs at every
-               suspend point, this runs once per flow the pager sells.
-               The OTHER half of the same contract — that an owed entry the host cannot be shown must not exist
-               at all — is engine_host_owes's `tellable`; this is the same statement said about the pair the
-               delivery is keyed on rather than about the address alone. */
-#if APICLIENT_DEV
-            JSValue uv = pending_get(e, PEND_URL);
-            JSValue mv = pending_get(e, PEND_METHOD);
-            int pair = JS_IsString(uv) && JS_IsString(mv);
-            JS_FreeValue(pend_ctx(), mv);
-            JS_FreeValue(pend_ctx(), uv);
-            DCHECK(pair,
-                   "a flow is owed a reply for an entry that names no (METHOD, URL) pair — the reply seam is "
-                   "keyed on the pair, so no host can ever answer this entry, and crediting it at a sale hands "
-                   "the reply door a credit that the next genuinely mispaired reply will spend");
-#endif
-            c++;
-        }
-        JS_FreeValue(pend_ctx(), e);
-    }
-    return c;
 }
 
 /* ---- writes -----------------------------------------------------------------------------------------------
@@ -1253,11 +1209,11 @@ void pending_remove(JSValue *reg, int i)
 void pending_free(JSContext *ctx, JSValue *reg)
 {
     /* THE NAMINGS GO BACK BEFORE THE REGISTER DOES, AND THAT IS THE HALF THE INDEX CANNOT DERIVE. A flow SOLD
-       to the cold tier is released while it is still owed replies (the pager credits that debt and the host
-       still sends them), so without this line the request it was parked on would stay in the set the host is
-       shown for the rest of the session, and the zone would fetch an address no flow is parked on — a real
-       outbound request nobody is waiting for. A record several arms share survives here on their namings,
-       which is why this is a count and not a delete. */
+       to the cold tier is released while it is still owed replies, so without this line the request it was
+       parked on would stay in the set the host is shown for the rest of the session, and the zone would fetch
+       an address no flow is parked on. The drop of a pair's last park withdraws the request
+       (engine_pending_withdrawn). A record several arms share survives here on their namings, which is why
+       this is a count and not a delete. */
     int n = pend_len(*reg), i;
 #if APICLIENT_DEV
     /* THE COUNT AUDITED AGAINST THE ENTRIES, AT A SITE THAT ALREADY WALKS THEM. This and the fork below are
