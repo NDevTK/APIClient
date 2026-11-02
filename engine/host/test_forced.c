@@ -918,6 +918,23 @@ static int tf_replytwice_hold(const char *abs, const char *const pair[5]) {
     return 1;
 }
 
+/* The provider's statement of what it holds (engine_set_provider): a bill line naming the owed pair. */
+static int tf_replytwice_holds(const char *line) {
+    const char *method, *destination, *initiator, *provenance, *pinned, *driven, *credentials, *mode, *url;
+    const char *referrer_policy, *referrer, *askers;
+    char *one = strdup(line);
+    int held;
+
+    CHECK(one != NULL, "the fixture could not read a bill line it was asked about");
+    engine_pending_split(one, &method, &destination, &initiator, &provenance, &pinned, &driven, &credentials,
+                         &mode, &referrer_policy, &referrer, &askers, &url);
+    held = g_tf_r2.owed_at >= 0 && !strcmp(method, g_tf_r2.pair[0]) && !strcmp(mode, g_tf_r2.pair[1]) &&
+           !strcmp(referrer_policy, g_tf_r2.pair[2]) && !strcmp(referrer, g_tf_r2.pair[3]) &&
+           !strcmp(url, g_tf_r2.pair[4]);
+    free(one);
+    return held;
+}
+
 /* Writes the owed answer once it is due, or drops it when a `fetch.cancel` named the pair since. The
    answer is written whether or not the pair is on this payment's bill: a zone writes what it owes. */
 static int tf_replytwice_pay(JSContext *ctx) {
@@ -39209,7 +39226,7 @@ int main(int argc, char **argv) {
     idl_args_seal();
 
     /* The trusted host's half: what it is owed, and how it pays. */
-    engine_set_provider(fixture_provide);
+    engine_set_provider(fixture_provide, tf_replytwice_holds);
     /* The root document's own response's Set-Cookie, received at the baseline before any script runs, as
        main.c's qjs_receive_cookies hands an instance its root's fields after qjs_init. */
     {

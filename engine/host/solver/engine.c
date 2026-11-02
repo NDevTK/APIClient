@@ -13886,7 +13886,31 @@ void engine_frontier_census(EngineFrontierCensus *out)
 }
 
 static int (*g_provider)(JSContext *ctx);
-void engine_set_provider(int (*provide)(JSContext *ctx)) { g_provider = provide; }
+static int (*g_provider_holds)(const char *line);
+void engine_set_provider(int (*provide)(JSContext *ctx), int (*holds)(const char *line)) {
+    g_provider = provide;
+    g_provider_holds = holds;
+}
+
+#if APICLIENT_DEV
+/* Whether every line of the bill is one the provider says it owes and will write later. */
+static int provider_holds_bill(void) {
+    const char *b = engine_pending_fetches();
+    int all = 1;
+
+    while (*b && all) {
+        const char *nl = strchr(b, '\n');
+        size_t len = nl ? (size_t)(nl - b) : strlen(b);
+        char *line = strndup(b, len);
+
+        CHECK(line != NULL, "engine: OOM reading the bill a provider was paid against");
+        all = g_provider_holds != NULL && g_provider_holds(line);
+        free(line);
+        b += len + (nl != NULL);
+    }
+    return all;
+}
+#endif
 
 /* And whether this host wants the frontier's residue (engine.h): a seam, not a policy; the answer is the host's and
    the moment the park is taken is the engine's. */
@@ -14079,9 +14103,9 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                cold-tier preview), which reads. A completion standing here belongs to the first; one reaching
                slice-entry with this silent belongs to the second. `detail` is what the payment filled. */
             ENGINE_NO_STRAY(ctx, "host-provider: the host's reply/answer/operation payment", filled);
-            /* And the payment was complete, asserted at the seam. This provider answers out of its own tables, so
-               unlike the extension's it has no asynchronous half and owes nothing once it has run: a record still
-               outstanding is one it was never handed or walked past, which `blocked` and `owed` (levels of
+            /* And the payment was complete, asserted at the seam. This provider answers out of its own tables, and
+               owes nothing once it has run but the answers it says it holds for a later payment: any other record
+               still outstanding is one it was never handed or walked past, which `blocked` and `owed` (levels of
                unanswered work) cannot distinguish from prompt payment on a frontier that keeps issuing requests.
                The two registers are named separately because they are two questions, and the check is
                unconditional, since both are empty on a slice with nothing outstanding too. */
@@ -14089,10 +14113,11 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                 DCHECK(*engine_host_requests() == '\0',
                        "the smoke host paid and a synchronous request is still outstanding — this provider answers "
                        "every record it is handed, so the blocked flow will never resume");
-                DCHECK(*engine_pending_fetches() == '\0',
-                       "the smoke host paid and a reply is still owed — the same silence one register over: the "
-                       "flow that issued this fetch keeps its snapshot and its continuation and is never handed "
-                       "the body, so everything the page does behind that reply is missing from the run");
+                DCHECK(provider_holds_bill(),
+                       "the smoke host paid and a reply is still owed that it does not hold — the same silence one "
+                       "register over: the flow that issued this fetch keeps its snapshot and its continuation and "
+                       "is never handed the body, so everything the page does behind that reply is missing from "
+                       "the run");
             }
             /* A stall the payment could not move, with nothing filled, is a frontier waiting on something outside
                this host's tables: a document another agent holds a reference into, which no reply answers. Its

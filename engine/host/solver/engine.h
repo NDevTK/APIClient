@@ -394,9 +394,10 @@ void engine_arrival_token(EngineArrival a, char *buf, size_t cap);
 /* Install how the host pays what it owes, for the one-call driver (engine_run), which has no caller to return a
    stall to. The provider fills what engine_pending_fetches and engine_host_requests name and answers how many
    entries it filled. run_scheduler calls it after every engine_sched_step and asserts nothing was left
-   outstanding, so replies settle at the next quantum as the extension bridge settles them; a stall with
-   `filled == 0` ends the run, since nothing this host holds will move it. */
-void engine_set_provider(int (*provide)(JSContext *ctx));
+   outstanding but what `holds` (NULL: nothing) says it owes and writes at a later payment, as the trusted zone
+   writes an answer at its due point; `holds` takes one engine_pending_fetches line. A stall with `filled == 0`
+   ends the run, since nothing this host holds will move it. */
+void engine_set_provider(int (*provide)(JSContext *ctx), int (*holds)(const char *line));
 
 /* Begin a stepped session over `n` scripts. `forking` is the explore/verify policy engine_session_forks
    answers. `recipes` is the parked residue the host stored for this bundle (';'-joined records, solver/cold.h),
