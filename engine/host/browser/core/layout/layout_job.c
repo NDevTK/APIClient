@@ -15,6 +15,7 @@
 #include "core/timing/thread_work.h"
 #include "solver/c_alloc.h"  /* the C heap's live bytes, which a job's activations move */
 #include "solver/engine.h"   /* the engine work count a resting drive's activation spends */
+#include "solver/flow.h"     /* the flow whose step enters a job, which a shed is ordered by */
 #include "solver/metrics.h"
 #include "solver/rest_unit.h"
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
@@ -100,8 +101,10 @@ struct LayoutJob {
     SelectorUndet       decline;     /* a resting match's unanswered decline; `undetermined` while held */
     char                fork_key[SELECTOR_UNDET_KEY_MAX];   /* step_fork_run's `op`, read after the return */
     LayoutJob          *alive_prev, *alive_next;   /* the driven jobs alive, for layout_job_held */
-    int64_t             held;        /* the C heap bytes its allocation and activations left live */
+    int64_t             own;         /* the C heap bytes of the job's own allocation */
+    int64_t             held;        /* …and with what its activations left live */
     size_t              live_at_enter;
+    const Flow         *flow;        /* the flow whose step entered it, NULL before its first activation */
 };
 
 /* The job whose activation holds the thread when a driver entered one, and the thread's synchronous job.
@@ -112,6 +115,8 @@ static LayoutJob *g_entered;
 static LayoutJob  g_sync = { .gen = 1 };
 static size_t     g_alive;
 static LayoutJob *g_alive_head;
+static long       g_sheds;
+static int64_t    g_shed_bytes;
 
 static LayoutJob *lj_current(void)
 {
@@ -282,7 +287,7 @@ LayoutJob *layout_job_new(void)
     job->gen = 1;
     job->driven = true;
     job->decline.over = JS_UNDEFINED;
-    job->held = (int64_t)c_alloc_live() - (int64_t)live;
+    job->own = job->held = (int64_t)c_alloc_live() - (int64_t)live;
     job->alive_next = g_alive_head;
     if (g_alive_head != NULL) g_alive_head->alive_prev = job;
     g_alive_head = job;
@@ -325,7 +330,11 @@ void layout_job_enter(LayoutJob *job)
     DCHECKF(g_sync.n == 0 && g_sync.drives == 0,
             "a layout job was entered while the synchronous job has %zu questions and %u drives open, so a "
             "driver was reached from inside an undriven layout entry", g_sync.n, g_sync.drives);
+    DCHECK(job->flow == NULL || job->flow == flow_running(),
+           "a layout job was entered by a flow other than the one whose step entered it before — a job lives in "
+           "one member's step state and a fork gives the arm its own, so the shed's order reads the wrong rank");
     g_entered = job;
+    job->flow = flow_running();
     job->live_at_enter = c_alloc_live();
 }
 
@@ -393,6 +402,63 @@ void layout_job_held(LayoutJobHeld *out)
     }
     DCHECKF(out->jobs == g_alive, "the list of driven jobs alive holds %zu and the count %zu — a job was made or "
             "freed past layout_job_new or layout_job_free", out->jobs, g_alive);
+    out->sheds = g_sheds;
+    out->shed_bytes = g_shed_bytes;
+}
+
+LayoutJobResting *layout_job_resting(size_t *n)
+{
+    LayoutJobResting *out;
+    LayoutJob *job;
+    size_t k = 0;
+
+    DCHECK(g_entered == NULL, "the resting layout jobs were asked for while a job's activation holds the thread");
+    *n = 0;
+    if (g_alive == 0) return NULL;
+    out = malloc(g_alive * sizeof *out);
+    CHECK(out != NULL, "the list of resting layout jobs could not be allocated");
+    for (job = g_alive_head; job != NULL; job = job->alive_next) {
+        if (job->decline.undetermined) continue;
+        out[k].job = job;
+        out[k].flow = job->flow;
+        out[k].bytes = job->held;
+        k++;
+    }
+    *n = k;
+    return out;
+}
+
+size_t layout_job_shed(LayoutJob *job)
+{
+    size_t live = c_alloc_live(), freed;
+
+    DCHECK(job != NULL && job->driven && job != g_entered, "a layout job was shed that is not a resting driven job");
+    DCHECKF(job->drives == 0 && job->ctx == 0 && !job->resting && lj_all_suspended(job),
+            "a layout job was shed with %u drives open or inside grid row context %u — a job rests only after its "
+            "driver left it", job->drives, job->ctx);
+    DCHECK(!job->decline.undetermined,
+           "a layout job was shed holding an unanswered decline, whose fork has not been taken");
+    lj_contexts_release(job, true);
+    free(job->ctxs);
+    job->ctxs = NULL;
+    job->ctx_cap = 0;
+    flow_placement_record_release(&job->placement);
+    css_cascade_record_release(&job->cascade);
+    line_box_record_release(&job->line_boxes);
+    intrinsic_size_record_release(&job->intrinsic);
+    free(job->stack);
+    job->stack = NULL;
+    job->n = job->cap = job->base = 0;
+    free(job->memo);
+    job->memo = NULL;
+    job->memo_cap = job->memo_used = 0;
+    job->gen++;
+    lj_answers_free(job);
+    freed = live - c_alloc_live();
+    job->held = job->own;
+    g_sheds++;
+    g_shed_bytes += (int64_t)freed;
+    return freed;
 }
 
 /* The job whose records are held now, or NULL; and the current grid row context of a job, or NULL. */

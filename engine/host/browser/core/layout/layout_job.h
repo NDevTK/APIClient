@@ -140,8 +140,28 @@ size_t layout_job_alive(void);
 typedef struct {
     size_t  jobs;
     int64_t bytes;
+    long    sheds;        /* lifetime: the jobs layout_job_shed emptied */
+    int64_t shed_bytes;   /* lifetime: the bytes those sheds gave back, measured */
 } LayoutJobHeld;
 void layout_job_held(LayoutJobHeld *out);
+
+/* A driven job resting between its machine's activations, which RAM pressure may shed: the flow whose step
+   entered it last (NULL before its first activation) and the bytes it holds. layout_job_resting answers every
+   driven job that holds no unanswered decline, in a malloc'd array of `*n` the caller frees (NULL with `*n` 0
+   when there is none); asserts no job's activation holds the thread. */
+typedef struct {
+    LayoutJob  *job;
+    const void *flow;
+    int64_t     bytes;
+} LayoutJobResting;
+LayoutJobResting *layout_job_resting(size_t *n);
+
+/* Empties a resting job in place to what the clone answers (an empty stack, memo and records), the
+   re-derivable state State isolation sheds: the job's machine re-asks the node its own cursor names at its next
+   activation, as a forked arm does. Asserts the job rests (not entered, no drive open, every entry suspended,
+   no grid row context) and holds no decline, whose arm is not re-derivable. Returns the C heap bytes the
+   release gave back, measured. */
+size_t layout_job_shed(LayoutJob *job);
 
 /* The placement record (core/layout/flow_placement.h) of the job that holds it now: a driven job's while it
    is entered, the synchronous job's while a drive is open, and NULL otherwise. The record is the job's and

@@ -23,6 +23,7 @@
 #include "solver/result.h"
 #include "solver/c_alloc.h"   /* the C heap's running total, RAM pressure's reading */
 #include "solver/ram_limit.h"   /* the limit RAM pressure is a share of */
+#include "core/layout/layout_job.h"   /* the resting layout jobs RAM pressure sheds before it sells */
 #include "solver/solve.h"
 #include "solver/witness_verify.h"
 #include "core/frame/open_again.h"   /* the attacker opening the page again */
@@ -69,6 +70,7 @@
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries are GC objects and are leaked by two hosts */
 #include "solver/metrics.h"     /* the agent's metrics block, released with the agent */
 #include "check.h"
+#include <math.h>
 #include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -11797,6 +11799,81 @@ static void engine_ram_limit_read(void) {
    outlives the step that opened it, because each sale waits for a collection to finish first. */
 static uint64_t g_pressure_target = UINT64_MAX;
 
+/* One resting layout job a pressure episode may shed, with the weight of the member whose step holds it. */
+typedef struct {
+    LayoutJob *job;
+    double     weight;
+    int64_t    bytes;
+    bool       running;
+} PressureShed;
+
+static int pressure_shed_by_flow(const void *a, const void *b) {
+    const LayoutJobResting *x = a, *y = b;
+    return (uintptr_t)x->flow < (uintptr_t)y->flow ? -1 : (uintptr_t)x->flow > (uintptr_t)y->flow;
+}
+
+/* The least valuable member's first, and of one member's the largest first. */
+static int pressure_shed_by_weight(const void *a, const void *b) {
+    const PressureShed *x = a, *y = b;
+    if (x->weight != y->weight) return x->weight < y->weight ? -1 : 1;
+    return x->bytes > y->bytes ? -1 : x->bytes < y->bytes;
+}
+
+/* Sheds resting layout jobs until the live bytes reach `target`, in the value order sales use: a job's memo and
+   records are re-derivable (its machine re-asks them at its next activation), so they go before any member whose
+   recipe is the only copy of its work. The running flow's are kept, as flow_worst keeps the flow; a job whose
+   flow has left the frontier waits only for its step state's collection and goes first. Joined to the members
+   by the flow pointer, which is compared and never read through, since such a flow is freed. Returns the jobs
+   shed. */
+static long engine_shed_layout_jobs(uint64_t target) {
+    size_t n = 0, i, k = 0, lo, hi;
+    LayoutJobResting *r = layout_job_resting(&n);
+    PressureShed *p;
+    const Flow *running = flow_running();
+    long shed = 0;
+
+    if (r == NULL) return 0;
+    qsort(r, n, sizeof *r, pressure_shed_by_flow);
+    p = malloc(n * sizeof *p);
+    CHECK(p != NULL, "RAM pressure could not list the layout jobs it would shed");
+    for (i = 0; i < n; i++) {
+        p[i].weight = -INFINITY;
+        p[i].running = false;
+    }
+    for (int m = 0; m < flow_count(); m++) {
+        const Flow *f = flow_at(m);
+        double w;
+        /* The first entry of `f`'s run in `r`, by bisection over the sorted flows. */
+        lo = 0; hi = n;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if ((uintptr_t)r[mid].flow < (uintptr_t)f) lo = mid + 1; else hi = mid;
+        }
+        if (lo == n || r[lo].flow != f) continue;
+        w = flow_weight(f);
+        for (i = lo; i < n && r[i].flow == f; i++) {
+            p[i].weight = w;
+            p[i].running = f == running;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        /* A job never entered holds its own allocation and nothing a shed gives back; the running flow's stay. */
+        if (r[i].flow == NULL || p[i].running) continue;
+        p[k].job = r[i].job;
+        p[k].weight = p[i].weight;
+        p[k].bytes = r[i].bytes;
+        k++;
+    }
+    free(r);
+    qsort(p, k, sizeof *p, pressure_shed_by_weight);
+    for (i = 0; i < k && (uint64_t)c_alloc_live() > target; i++) {
+        layout_job_shed(p[i].job);
+        shed++;
+    }
+    free(p);
+    return shed;
+}
+
 /* RAM pressure relocates the cold tail (engine.h): sell at rest while the allocator's footprint stands above the
    share of what the limit leaves the heap, so the frontier gives memory back before an allocation that does not
    ask the refusal edge meets the wall. It ends at the share or at the frontier's floor (engine_reclaim_at_rest's
@@ -11830,6 +11907,8 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
         g_pressure_frag = fp > live ? fp - live : 0;
         g_ram_fp_mark = fp;
     }
+    /* What is re-derivable goes first, and needs no collection: a job's records are the C heap's own blocks. */
+    if ((uint64_t)c_alloc_live() > g_pressure_target) engine_shed_layout_jobs(g_pressure_target);
     if ((uint64_t)c_alloc_live() <= g_pressure_target) {
         /* No episode, or the open one is met. */
         g_pressure_target = UINT64_MAX;
