@@ -2991,6 +2991,52 @@ TF_UNIT void policy_container_selftest(void)
     policy_container_free(child);
 }
 
+/* @MALLOCACCT: the runtime's accounting of a block it serves from the backing allocator. A large block's usable size
+   is its request rounded to the arena's alignment, and each block adds that plus one constant overhead to
+   `malloc_size`, whatever the allocator under it rounded the block to: `malloc_size` decides when a collection is
+   owed, so it must be a function of the program on every host. 1000 bytes is a glibc chunk with slack and 200000
+   is above glibc's default mmap threshold, whose blocks are page-rounded; emscripten's dlmalloc rounds neither the
+   same way. */
+TF_UNIT void malloc_accounting_selftest(void)
+{
+    static const size_t asks[] = { 1000, 200000, 3001 };
+    JSRuntime *rt = JS_NewRuntime();
+    JSLiveCounts c0, c1;
+    void *p[3];
+    size_t usable[3], acct[3];
+
+    CHECK(rt != NULL, "the accounting witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);   /* no collection moves malloc_size under the readings */
+    for (int i = 0; i < 3; i++) {
+        JS_GetLiveCounts(rt, &c0);
+        p[i] = i == 2 ? js_calloc_rt(rt, 1, asks[i]) : js_malloc_rt(rt, asks[i]);
+        CHECK(p[i] != NULL, "the accounting witness could not allocate a large block");
+        JS_GetLiveCounts(rt, &c1);
+        usable[i] = js_malloc_usable_size_rt(rt, p[i]);
+        acct[i] = c1.malloc_size - c0.malloc_size;
+    }
+    printf("@MALLOCACCT {\"usable\":[%zu,%zu,%zu],\"accounted\":[%zu,%zu,%zu]}\n", usable[0], usable[1], usable[2],
+           acct[0], acct[1], acct[2]);
+    for (int i = 0; i < 3; i++) {
+        CHECKF(usable[i] == ((asks[i] + 7) & ~(size_t)7),
+               "a large block of %zu bytes reports %zu usable — its usable size is the backing allocator's "
+               "rounding, not the request's, so malloc_size differs between hosts", asks[i], usable[i]);
+        CHECKF(acct[i] - usable[i] == acct[0] - usable[0],
+               "a large block of %zu bytes added %zu to malloc_size for %zu usable, against %zu for %zu — the "
+               "overhead per block is one constant", asks[i], acct[i], usable[i], acct[0], usable[0]);
+    }
+    JS_GetLiveCounts(rt, &c0);
+    p[0] = js_realloc_rt(rt, p[0], 5000);
+    CHECK(p[0] != NULL, "the accounting witness could not grow a large block");
+    JS_GetLiveCounts(rt, &c1);
+    CHECKF(js_malloc_usable_size_rt(rt, p[0]) == 5000 && c1.malloc_size - c0.malloc_size == 5000 - usable[0],
+           "growing a large block from %zu to 5000 bytes reports %zu usable and moves malloc_size by %zu",
+           usable[0], js_malloc_usable_size_rt(rt, p[0]), c1.malloc_size - c0.malloc_size);
+    for (int i = 0; i < 3; i++)
+        js_free_rt(rt, p[i]);
+    JS_FreeRuntime(rt);
+}
+
 /* §6.7.3.1 "Is element nonceable?" AND §6.7.3.3's NONCE ARM — the half of the inline check that cannot be
  * asked without an element, and the half that decides whether the page's OWN content runs.
  *
@@ -38106,6 +38152,7 @@ int main(int argc, char **argv) {
     secure_hash_selftest();
     hmac_selftest();
     gc_cycle_step_selftest();
+    malloc_accounting_selftest();
     concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
        and on nothing they compute, so its failure is its own — but it shares their tier, and a
