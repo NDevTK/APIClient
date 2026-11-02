@@ -633,7 +633,9 @@ int pending_owed_replies(JSValueConst reg)
            said it will not ask, so crediting a debt for it would hand the surplus to the next reply the host
            genuinely mispaired — which is the exact defect the paragraph below and pending.h both describe,
            reached through the one entry kind for which no reply exists at all. */
-        if (kind != FLOW_PENDING_HOSTREQ && pending_entry_host_owed(e)) {
+        /* A body piece's park is owed by the zone's open stream and answered from its source, never through
+           a pair (solver/reply_body.h), so a sale credits nothing for it. */
+        if (kind != FLOW_PENDING_HOSTREQ && kind != FLOW_PENDING_BODY && pending_entry_host_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
                lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>DRIVEN<TAB>CREDENTIALS<TAB>MODE<TAB>URL` and engine_provide delivers
                against the pair, so an owed
@@ -698,7 +700,7 @@ int pending_prov_compose(int kind, int path_forced, int parser_inserted)
            "\"Processing model\" makes it a BOOLEAN read off the element's `parser document`, and every "
            "caller states it from a `bool` of its own, so a third value is a caller that computed this "
            "somewhere else");
-    DCHECK(kind >= FLOW_PENDING_RESOLVE && kind <= FLOW_PENDING_RESOURCE,
+    DCHECK(kind >= FLOW_PENDING_RESOLVE && kind <= FLOW_PENDING_BODY,
            "a park stated a kind this register does not define — the provenance's asserts name it, so an "
            "unknown kind is a caller this register has no entry for");
     /* A PARSER INSERTS `script` ELEMENTS AND NOTHING ELSE THIS REGISTER PARKS ON. §4.12.1.1 gives the flag to
@@ -740,6 +742,7 @@ int pending_kind_is_program(int kind)
     case FLOW_PENDING_RESOLVE:
     case FLOW_PENDING_HOSTREQ:
     case FLOW_PENDING_RESOURCE:
+    case FLOW_PENDING_BODY:
         return 0;
     }
     DCHECKF(0, "a park stated a kind this register does not define — the kinds are this file's own "
@@ -828,8 +831,9 @@ JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, i
        carries the count of registers naming this record, so it has to begin at the ONE moment exactly one
        does — a fork adds the rest. The synchronous request kind is refused: it is keyed by a request id and
        not by a pair (pending.h), so a pair-keyed set has no place to put one and would answer one seam's
-       question through the other. */
-    if (kind != FLOW_PENDING_HOSTREQ) pending_index_track(e);
+       question through the other. A body piece's park has no pair at all (solver/reply_body.h): its source
+       answers it, so it is never a member either. */
+    if (kind != FLOW_PENDING_HOSTREQ && kind != FLOW_PENDING_BODY) pending_index_track(e);
     return e;
 }
 

@@ -93,6 +93,11 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *re
    page's failure path so the `catch` is explored without the wait being spent. */
 QJS_EXPORT void qjs_decline(const char *method, const char *mode, const char *referrer_policy,
                             const char *referrer, const char *url, const char *reason);
+/* …AND A STREAMED REPLY'S LATER RECORDS. A `qjs_provide` reply carrying a `stream` token is a response's head
+   (Fetch §5.6 resolves `fetch()` there) with the first read of its body; each further read arrives here, the
+   last stating how the body ended. */
+QJS_EXPORT void qjs_provide_body(const char *token, const char *state, const char *body, unsigned body_len,
+                                 const char *meta);
 QJS_EXPORT const char *qjs_host_requests(void);
 QJS_EXPORT const char *qjs_host_notices(void);
 QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned completion,

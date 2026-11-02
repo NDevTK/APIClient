@@ -49,12 +49,15 @@
 #include "core/idl_args.h"     /* §5.6's IDL, declared rather than hand-rolled — see fetch_init */
 #include "core/realm.h"        /* the realm-kind answer the receiver resolution and the install read */
 #include "solver/reclaim.h"
+#include "solver/reply_body.h"   /* a streamed head's body source and its parks */
 #include <lexbor/core/base.h>   /* lexbor_malloc: the allocator the engine gives its refusal edge */
 
 /* The id JS_RegisterStepDef handed this runtime, and the two IDL attribute names the machine reads by. Atoms
    belong to a runtime, and SECURITY.md gives this build one WASM instance per DOCUMENT — one runtime — so these
    are that runtime's. The DCHECK at install is what makes a second one impossible rather than merely unlikely. */
 static const FetchProvider *g_provider;
+/* The body-piece machine's id (below), which the head delivery above it mints closures of. */
+static int g_body_stepid;
 
 /* §4.4's URL parse, against HTML's API base URL. Both of Fetch's entry points that take a URL STRING come
    here, so a relative endpoint — which is how a bundle names its own API — resolves the same way from both.
@@ -753,6 +756,36 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             JS_ThrowTypeError(ctx, "Failed to fetch");
             s->value = JS_GetException(ctx);
             s->reject = 1;
+        } else if (reply_body_streamed(ctx, body_v)) {
+            /* A HEAD WHOSE BODY IS STILL ARRIVING: Fetch §5.6's processResponse runs once the response's head is
+               available, so the Response is built now over a stream with nothing in it yet, and §4.7's fetch
+               tasks feed it piece by piece through the body delivery, parked here on the reply's source. */
+            JSValue ul_v = JS_GetPropertyStr(ctx, body_v, "urlList");
+            char *stx = fetch_reply_status_text(ctx, body_v);
+            int status = fetch_reply_status(ctx, body_v);
+            HeaderList hl = { 0 };
+            JSValue stream, data[1], body_deliver;
+
+            DCHECK(JS_IsArray(ul_v) && stx != NULL,
+                   "a streamed head carries no URL list or status message — the zone states both on every head");
+            DCHECK(fetch_reply_type(ctx, body_v) != FETCH_REPLY_OPAQUE,
+                   "an opaque response was streamed — nothing may read its body, so the zone reads none");
+            fetch_reply_header_list(ctx, body_v, &hl);
+            stream = readable_stream_host_new(ctx);
+            s->value = JS_IsException(stream) ? JS_EXCEPTION
+                     : response_new_streamed(ctx, ul_v, status, stx, hl.n ? &hl : NULL, stream,
+                                             fetch_reply_type(ctx, body_v) == FETCH_REPLY_CORS);
+            header_list_free(&hl);
+            free(stx);
+            JS_FreeValue(ctx, ul_v);
+            if (JS_IsException(s->value)) { JS_FreeValue(ctx, stream); return JS_STEP_ABRUPT; }
+            data[0] = stream;
+            DCHECK(g_body_stepid >= 0, "a streamed head was delivered before the body machine was declared");
+            body_deliver = JS_NewStepClosure(ctx, g_body_stepid, 1, 1, data);
+            JS_FreeValue(ctx, stream);
+            if (JS_IsException(body_deliver)) return JS_STEP_ABRUPT;
+            reply_body_park(ctx, body_v, body_deliver, 0, document_environment_doc(ctx));
+            JS_FreeValue(ctx, body_deliver);
         } else if (fetch_reply_type(ctx, body_v) == FETCH_REPLY_OPAQUE) {
             /* A `no-cors` request to another origin: Fetch §4.1 "Main fetch" makes its response an opaque
                filtered response, and the page reads nothing of it. The trusted zone sent no bytes for it; the
@@ -860,6 +893,106 @@ bool fetch_delivery_has_reaction(JSContext *ctx, JSValueConst deliver)
     DCHECK(fetch_is_delivery(ctx, deliver), "fetch()'s promise was asked of a delivery that is not fetch()'s");
     return JS_ResolvingFunctionHasReaction(ctx, JS_StepClosureDataOf(ctx, deliver, g_deliver_stepid,
                                                                      FETCH_DELIVER_RESOLVE));
+}
+
+/* ONE PIECE OF A STREAMED RESPONSE BODY INTO ITS STREAM — Fetch §4.7 "HTTP-network fetch"'s fetch task: each
+   piece the transmission yields is enqueued into the response body's stream, which is closed when the
+   transmission is done normally and errored with a TypeError when it ends otherwise. The closure is minted per
+   Response by the head delivery below (data: [the stream]) and called with a piece from solver/reply_body.h, or
+   JS_NULL for a decline's failure arm. A stream that no longer takes pieces (the page cancelled it, or §5.6's
+   abort steps errored it) is left as it is. Each op is the controller's own (Streams §4.9.4), reached as an
+   abstract operation rather than through the page-visible members, and a call of the page's code where it
+   settles a read request, so this is a machine.
+   Named residual. Not covered: a body every flow has stopped reading (cancelled or aborted) is not cancelled
+   at the trusted zone, which reads on until the server ends it. Next diff: a `fetch.cancel` naming the
+   stream token once no park on its source remains. Absence shows as a zone send that outlives every reader
+   of its body. */
+#define FETCH_BODY_STAGES(X) \
+    X(FETCH_BODY_PIECE, "Fetch §4.7 HTTP-network fetch's fetch task (enqueue a piece into the response " \
+                        "body's stream, close it, or error it with a TypeError)")
+enum { FETCH_BODY_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const js_fetch_body_steps[] = { FETCH_BODY_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   cphase;   /* the controller call's phase, held across a suspension */
+    uint8_t   began;    /* the op and its argument are chosen */
+    uint8_t   op;       /* ReplyBodyOp */
+    JSValue   arg;      /* the chunk, or the TypeError (owned) */
+    JSValue   cb[3];    /* the call request buffer: [this, function, argument] */
+} JSFetchBodyState;
+
+static void js_fetch_body_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSFetchBodyState *s = st;
+    int k;
+    v->val(ctx, &s->arg);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+}
+
+static int js_fetch_body_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSFetchBodyState *s = st;
+    JSValueConst stream = JS_StepClosureData(&s->hdr, 0);
+    JSValue op_fn, out;
+    int r;
+
+    if (!s->began) {
+        JSValueConst piece = s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->began = 1;
+        s->arg = JS_UNDEFINED;
+        if (!readable_ctrl_can_close_or_enqueue(ctx, readable_stream_controller(stream))) return JS_STEP_DONE;
+        s->op = JS_IsNull(piece) ? REPLY_BODY_ERROR : (uint8_t)reply_body_piece_op(ctx, piece);
+        if (s->op == REPLY_BODY_ENQUEUE) {
+            JSValue ab = JS_GetPropertyStr(ctx, piece, "bytes");
+            size_t n = 0;
+            const uint8_t *b = fetch_body_bytes(ctx, ab, &n);
+
+            /* A chunk of this flow's own: the page may write into what it reads. */
+            s->arg = JS_NewUint8ArrayCopy(ctx, b, n);
+            JS_FreeValue(ctx, ab);
+            if (JS_IsException(s->arg)) { s->arg = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        } else if (s->op == REPLY_BODY_ERROR) {
+            JS_ThrowTypeError(ctx, "network error");
+            s->arg = JS_GetException(ctx);
+        }
+    }
+    DCHECK(s->hdr.stage == FETCH_BODY_PIECE, "a body piece's delivery was re-entered at a stage it does not have");
+    op_fn = readable_stream_ctrl_op(ctx, s->op == REPLY_BODY_ENQUEUE ? RS_CTRL_ENQUEUE
+                                       : s->op == REPLY_BODY_CLOSE ? RS_CTRL_CLOSE : RS_CTRL_ERROR);
+    r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), op_fn, readable_stream_controller(stream),
+                      s->op == REPLY_BODY_CLOSE ? 0 : 1, (JSValueConst *)&s->arg, cb_result, &out, out_cb,
+                      out_argc);
+    JS_FreeValue(ctx, op_fn);
+    if (r > 0) return r;
+    if (JS_IsException(out)) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, out);
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_fetch_body_def = {
+    /* the task's return value is not read, so there is no completion to state */
+    sizeof(JSFetchBodyState), js_fetch_body_step, NULL, 0,
+    .visit = js_fetch_body_visit,
+    .algorithm = "Fetch §4.7 HTTP-network fetch's fetch task over a response body's stream",
+    .steps = js_fetch_body_steps
+};
+static int g_body_stepid = -1;
+
+bool fetch_is_body_delivery(JSContext *ctx, JSValueConst deliver)
+{
+    DCHECK(g_body_stepid >= 0, "a body delivery was asked about before its machine was declared");
+    return JS_IsStepClosureOf(ctx, deliver, g_body_stepid);
+}
+
+bool fetch_body_delivery_open(JSContext *ctx, JSValueConst deliver)
+{
+    JSValueConst stream = JS_StepClosureDataOf(ctx, deliver, g_body_stepid, 0);
+
+    return readable_ctrl_can_close_or_enqueue(ctx, readable_stream_controller(stream));
 }
 
 /* Fetch §5.6 "Fetch methods" step 11's abort steps, added to requestObject's signal: set locallyAborted, then
@@ -2670,6 +2803,7 @@ void fetch_init(JSContext *ctx)
        one definition rather than a definition per request. */
     g_deliver_stepid = JS_RegisterStepDef(rt, &js_fetch_deliver_def);
     g_abort_stepid = JS_RegisterStepDef(rt, &js_fetch_abort_def);
+    g_body_stepid = JS_RegisterStepDef(rt, &js_fetch_body_def);
     /* §5.4's BODY IS A STREAM — `.body` answers one, and "clone a body" tees one — so §4 is not an
        optional neighbour of this component, it is a dependency. Each host installing it separately meant
        the dependency held only where a host had remembered: test_forced's fixture reached `res.clone()`
@@ -2713,6 +2847,7 @@ void fetch_free(JSRuntime *rt)
     g_fetch_stepid = -1;
     g_deliver_stepid = -1;
     g_abort_stepid = -1;
+    g_body_stepid = -1;
     g_fetch_rt = NULL;
 }
 

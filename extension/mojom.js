@@ -564,6 +564,22 @@
                  "is the network error — no body at all — which a zero-length body is not" }],
         reply: [WORKING_SET] },
 
+      { ordinal: 35, name: "ProvideBody",
+        params: [
+          { name: "token", type: "string", retained: false,
+            why: "the `stream` token the head's `Provide` reply carried, naming the body this record continues " +
+                 "(solver/reply_body.h); the engine DFAILs on a token naming no open body" },
+          { name: "state", type: "string", retained: false,
+            why: "`more`, or how the body ended: `end`, `network` (Fetch §4.7 HTTP-network fetch's abnormal end, " +
+                 "which errors the stream with a TypeError) or `decline` (the zone stopped waiting)" },
+          { name: "body", type: "array<uint8>", retained: false,
+            why: "this read's bytes, a byte sequence the engine enqueues as one chunk; an empty one is a record " +
+                 "that only ends the body" },
+          { name: "meta", type: "string", retained: false,
+            why: "the end's computed type (read beside the whole body, as `Provide`'s reply states it), a " +
+                 "failure's reason, or the empty string for `more`" }],
+        reply: [WORKING_SET] },
+
       /* Ordinals 10 (`GetTopWeight`) and 11 (`SetYieldFloor`) are not reused: Level 1 no longer reads a flow
          weight across documents, and its account is `GetLevel1Account` (30). */
       { ordinal: 30, name: "GetLevel1Account",

@@ -2,6 +2,7 @@
  * declared in flow.h, so their destructors belong where a Flow is freed, rather than in a scheduler that must
  * remember to sweep the survivors before the registry goes down. */
 #include "solver/flow.h"
+#include "solver/reply_body.h"   /* the open body sources released at teardown */
 #include "solver/engine.h"     /* ENGINE_QUANTUM_WORK: the scheduler's slice is this file's service quantum */
 #include "solver/cow.h"        /* a survivor's heap COW delta */
 #include "solver/dom_cow.h"    /* …and its DOM delta head + shared base segment */
@@ -2727,7 +2728,8 @@ void flow_registry_free(JSContext *ctx) {
     g_world_commit_rows = 0;
     /* And the pending register's interned field names, here for the same reason: the corpus hosts take a runtime
        down and bring another up per file, so an atom left here is a handle into a freed table the next session's
-       first push would write through. */
+       first push would write through. The open body sources go first: they hold pending records. */
+    reply_body_reset(ctx);
     pending_free_ctx(ctx);
 }
 

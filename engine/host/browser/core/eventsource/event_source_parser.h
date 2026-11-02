@@ -184,26 +184,6 @@ typedef struct {
  * suspend point, and there is no park for them to survive. The moment a chunked delivery exists they would
  * have to survive one, and that is the residual event_source_parser.c names.
  *
- * THE CLAUSE IS UNCHANGED AND ITS REASON HAS MOVED, WHICH MATTERS BECAUSE THE REASON IS THE HALF A READER
- * ACTS ON. It read that SECURITY.md's one door onto the network `reads a reply with one` arrayBuffer await,
- * `so a reply reaches this engine whole or not at all`, and that core/fetch/fetch.h's `fetch_owe` hands one
- * reply record with one body. A reader re-deriving from that goes to the CHOKEPOINT, and it is the wrong file
- * twice over. That zone's `_readBody(resp, sink, gated)` already takes a PER-CHUNK SINK, its own comment names
- * an event stream that never ends as the case it exists for, and its entry REFUSES a body-gated request that
- * asked for one — `blocked-stream-body-gated:` — rather than answering it whole, which is the refusal and not
- * a flag. All of that is landed, and NOTHING passes that sink. What is absent is downstream of it:
- * qjs_abi.h's `qjs_provide` is `ONE delivery for every parked request`, build.mjs's ABI list carries no chunk
- * entry, and neither solver/engine.c nor solver/pending.c has a receiver for a delivery that RESUMES a park
- * without RETIRING it. The door is open; the ABI and the pending register are not.
- *   AND THE `fetch_owe` HALF NAMED A DOOR THIS COMPONENT'S CALLER WILL NOT TAKE. Its only call is
- * core/fetch/fetch.c's `js_fetch_step`, the `fetch()` builtin. The three elements solver/endpoint.h names as
- * the pattern the constructor follows do not use it: core/html/html_image.c and core/html/html_link.c each say
- * at their own park that this is `WHAT fetch_owe COULD NOT`, and solver/engine.c records that
- * `The two elements USED to come through fetch_owe`. A browser algorithm's own subresource takes
- * `pending_park_request`, and a scope drawn from the retired clause prices the wrong seam.
- * RETIREMENT: this record goes when an ABI entry delivers a partial body, because the clause above is then
- * false by construction rather than reasoned about.
- *
  * AND THE CONSUMER THAT SEAM ALREADY HAS IS NOT THIS COMPONENT, WHICH IS THE ORDERING FACT A LANE SCOPING THE
  * LANDING ABOVE MOST NEEDS AND WHICH IS STATED NOWHERE ELSE. The paragraphs above make HTML §9.2.2 "The
  * EventSource interface"' constructor ONE landing and leave a reader believing it is the FIRST one. It is not:

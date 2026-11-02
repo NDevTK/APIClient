@@ -52,6 +52,7 @@
 #include "core/frame/remote_object.h"
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
+#include "solver/reply_body.h"
 #include "solver/engine.h"
 #include "solver/quantum.h"   /* quantum_set_host_turn_us: `--host-turn-us` */
 #include "solver/ram_limit.h"   /* the tightest memory cgroup limit, which native_ceiling_arm takes as a ceiling */
@@ -36605,7 +36606,8 @@ static int abi_pay(void)
                proven by its own condition instead of by the site that arrived at it. They are read one after
                the other and neither pointer is held, which is the constraint `abi_announce` states (the two
                registers answer out of buffers they reuse) and the shape the poll gate already uses. */
-            nothing_is_owed = (*qjs_pending() == '\0' && *qjs_host_requests() == '\0');
+            nothing_is_owed = (*qjs_pending() == '\0' && *qjs_host_requests() == '\0' &&
+                               reply_body_open_count() == 0);
             CHECK(nothing_is_owed,
                   "the trusted zone closed this host's channel while the frontier was still parked — every "
                   "flow's snapshot is intact and every request is still owed, so this is not a session that "
@@ -36681,6 +36683,28 @@ static int abi_pay(void)
                 free(reply);
                 free(body);
             }
+            paid++;
+        } else if (!strcmp(verb, "body")) {
+            /* `body<TAB>token<TAB>state<TAB>bytes<TAB>meta`: a streamed reply's later record (qjs_provide_body).
+               Both the bytes and the meta are base64 and never absent: an empty piece, and a middle piece's
+               meta, are the empty base64. */
+            const char *token = abi_take(&p, "body token");
+            const char *state = abi_take(&p, "body state");
+            const char *meta_f;
+            char *meta;
+            size_t meta_n = 0;
+
+            body_f = abi_take(&p, "body bytes");
+            meta_f = abi_take(&p, "body meta");
+            CHECKF(p == NULL, "a body record carries a field after its meta — this host is OLDER than the zone "
+                              "that wrote it. trailing=[%s]", p ? p : "");
+            body = abi_bytes(body_f, &body_n, "body bytes");
+            meta = abi_bytes(meta_f, &meta_n, "body meta");
+            DCHECK(meta_n == strlen(meta), "a body record's meta carries a NUL");
+            DCHECK(body_n <= (size_t)UINT_MAX, "a body record is longer than the ABI's length parameter can name");
+            qjs_provide_body(token, state, body ? body : "", (unsigned)body_n, meta);
+            free(meta);
+            free(body);
             paid++;
         } else if (!strcmp(verb, "answer")) {
             const char *id_f = abi_take(&p, "request id");

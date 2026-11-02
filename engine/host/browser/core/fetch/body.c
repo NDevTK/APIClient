@@ -368,6 +368,20 @@ BodyContent body_state_content(const BodyState *b, const char **bytes, size_t *l
     return BODY_STREAM;
 }
 
+/* A body whose stream is `stream` and which holds no bytes — see body.h. */
+void body_state_set_stream(JSContext *ctx, BodyState *b, JSValueConst stream)
+{
+    DCHECK(readable_stream_is(stream), "a body was given a stream that is not a ReadableStream");
+    JS_FreeValue(ctx, b->stream);
+    b->stream = JS_DupValue(ctx, stream);
+    /* js_free, because body_state_set allocates these with js_mallocz and body_state_free releases them with
+       js_free_rt. */
+    js_free(ctx, b->bytes);
+    b->bytes = NULL;
+    b->len = 0;
+    b->has = 1;
+}
+
 /* §5.2's STRING ARM WHERE ITS OBJECT IS UNKNOWN — see body.h's `unknown`. */
 int body_state_set_unknown(JSContext *ctx, BodyState *b, JSValueConst v)
 {
@@ -709,15 +723,7 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
                                    "locked");
             return -1;
         }
-        JS_FreeValue(ctx, b->stream);
-        b->stream = JS_DupValue(ctx, init);
-        /* js_free, because body_state_set allocates these with js_mallocz and body_state_free releases them
-           with js_free_rt — the libc `free` that stood here would have handed a quickjs allocation to the
-           wrong allocator the first time this arm ran over a state that already carried bytes. */
-        js_free(ctx, b->bytes);
-        b->bytes = NULL;
-        b->len = 0;
-        b->has = 1;
+        body_state_set_stream(ctx, b, init);
         /* §5.2's SWITCH GIVES THIS ARM NO `source` LINE, and that silence is the whole of what step 39 reads.
            "Let source be null" opens the algorithm and every other arm assigns over it; a ReadableStream body
            has no bytes to name, so its source stays null and Fetch §5.4 new Request(input, init) step 39

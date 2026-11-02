@@ -3356,7 +3356,9 @@ function engineReserve(cluster, docId, msg, referenced) {
                    as: two extension runs of a multi-instance page differing in census rows while single-instance
                    runs agree. */
                 _replyClock: replyClock(0),
-                _replyDelivery: { rounds: 0, delivered: 0, passed: 0, waits: 0, skipped: 0 },
+                _replyDelivery: { rounds: 0, delivered: 0, passed: 0, streamed: 0, waits: 0, skipped: 0 },
+                /* The `stream` tokens this instance's streamed `fetch()` heads were given (engineIssue). */
+                _streams: 0,
                 _epoch: self.frontierEpoch(), r: null, _readyP: null,
                 /* How much of its partition of the product's known identities this instance has been handed
                    (lib/novelty-set.js's noveltyOwed advances it). */
@@ -3716,7 +3718,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* The request's destination travels with it (Fetch §2.2.5 Requests): safe-fetch.js decides the CORB class
      from §2.2.5's script-like predicate over it, so it is passed through, not reduced to a boolean. */
   const fetched = async (method, u, destination, provenance, pinned, driven, credentials, mode, referrerPolicy,
-                         referrer, asked, signal, onBodyRead) => {
+                         referrer, asked, signal, onBodyRead, onHead, onChunk) => {
     DCHECK(signal instanceof AbortSignal,
            "a pending request reached the fetch relay with no abort signal — engineIssue owns one per send, and " +
            "a `fetch.cancel` notice ends the send through it");
@@ -3803,7 +3805,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          the chokepoint's `actor` row reads it. */
       const opts = { pageOrigin: eng.origin, destination, mode, provenance, pinned,
                      driven, credentials, actor: "page", useCorsPreflight: false,
-                     doc, credentialed: false, signal, onBodyRead,
+                     doc, credentialed: false, signal, onBodyRead, onHead, onChunk,
                      identity: await pageRequestIdentity(stampOrigin(eng.origin), msg.sourceUrl, "engine:" + eng.docId, abs, credentials, mode,
                                                    referrerPolicy, referrer) };
       const r = await self.safeFetch(abs, opts);
@@ -4515,7 +4517,7 @@ function pendingLineRefusal(f) {
    Two key namespaces, as in wpt_runner.c: a network park is `(method, url)` and a host request is its id,
    kept apart by prefixes, as `cold:` and `seed:` prefix group ids, so an id spelled like a method cannot dedup
    against the wrong request. */
-function engineIssue(eng, key, start, deliver) {
+function engineIssue(eng, key, start, deliver, pair) {
   DCHECK(typeof key === "string" && key !== "",
          "a request was issued with no in-flight key — the key is what refuses to re-issue a park the engine " +
          "re-lists every round, so an unkeyed issue is one request per round at somebody's server");
@@ -4523,20 +4525,32 @@ function engineIssue(eng, key, start, deliver) {
          "a request was issued with no starter or no deliverer — the pair is the whole contract: `start` is " +
          "called exactly once and only when this key is not already in flight, and `deliver` is what a later " +
          "round hands the answer to, so an issue missing either is a request nobody will ever answer");
+  DCHECK(pair === null || (Array.isArray(pair) && pair.length === 5),
+         "a request was issued stating neither a streamed fetch's five-field pair nor null — the pair is what its " +
+         "streamed head is provided under");
   if (eng._inflight.has(key)) return;
   /* The record enters the map before the call suspends, so the next round, re-listing the same request,
      sees it in flight. `controller` ends the send when the engine says no flow is owed it (engineCancel).
      `due` and `ordinal` are its place in the delivery order (lib/reply-schedule.js): the round that issues it
      has read the instance's work, so its first record is due a latency after that read. */
+  /* A `fetch()` park (`pair`) is streamed: its head and each read are records the engine takes as they fall
+     due (engineDeliverStreamRecord), under the `stream` token minted here. */
   const rec = replyStreamOpen({ key, value: undefined, error: null, work: null, deliver,
                                 controller: new AbortController(), cancelled: false,
-                                due: replyClockDue(eng._replyClock), ordinal: replyClockOrdinal(eng._replyClock) });
+                                due: replyClockDue(eng._replyClock), ordinal: replyClockOrdinal(eng._replyClock),
+                                stream: pair === null ? null : String(++eng._streams), pair, head: null,
+                                chunks: [] });
   eng._inflight.set(key, rec);
-  /* A read the wire answers after the send was cancelled belongs to no record. */
-  const onBodyRead = () => { if (eng._inflight.get(key) === rec) replyStreamRead(rec); };
+  /* A read the wire answers after the send was cancelled belongs to no record. The record's key moves once its
+     head is provided, so the test reads it off the record. */
+  const live = () => eng._inflight.get(rec.key) === rec;
+  const onBodyRead = () => { if (live()) replyStreamRead(rec); };
+  const onHead = (h) => { if (live()) rec.head = h; };
+  const onChunk = (c) => { if (live()) { rec.chunks.push(new Uint8Array(c)); replyStreamRead(rec); } };
   /* `work` never rejects; the error is carried and rethrown at delivery inside the round, so an invariant abort
      out of `eng.fetched` still reaches hostSchedule's failure arm and there is no unhandled rejection. */
-  rec.work = start(rec.controller.signal, onBodyRead).then(
+  rec.work = start(rec.controller.signal, rec.stream === null ? onBodyRead : undefined,
+                   rec.stream === null ? undefined : onHead, rec.stream === null ? undefined : onChunk).then(
     (v) => { rec.value = v; replyStreamSettle(rec); },
     (e) => { rec.error = e; replyStreamSettle(rec); });
   /* It fails only if `start` threw synchronously, which none of the callers can, since each returns an async
@@ -4587,9 +4601,31 @@ async function engineDeliverDue(eng) {
     CHECK(eng._inflight.get(rec.key) === rec && !rec.cancelled,
           "a due reply left the in-flight set while its round waited on the wire — engineCancel runs only from " +
           "this instance's own notices, which its round reads before delivering");
+    if (rec.error && replyStreamLast(rec)) throw rec.error;
+    if (rec.stream !== null && engineStreamWrites(rec)) {
+      const last = replyStreamLast(rec);
+      await engineDeliverStreamRecord(eng, rec, last);
+      if (eng._crashed) return n;
+      eng._replyDelivery.streamed++;
+      /* A record pays the round: the head fills the pair's parks, and a later one wakes the flows parked on
+         the body's next piece. */
+      n++;
+      if (!last) {
+        /* The head is provided: the pair's parks are answered, so a fresh park of it is a new send, and this
+           one stays in flight under its stream token until its last record. */
+        if (rec.record === 1) {
+          eng._inflight.delete(rec.key);
+          rec.key = "stream\n" + rec.stream;
+          eng._inflight.set(rec.key, rec);
+        }
+        replyStreamAdvance(rec);
+        continue;
+      }
+      eng._inflight.delete(rec.key);
+      continue;
+    }
     if (!replyStreamLast(rec)) { replyStreamAdvance(rec); eng._replyDelivery.passed++; continue; }
     eng._inflight.delete(rec.key);
-    if (rec.error) throw rec.error;
     await rec.deliver(rec.value);
     n++;
   }
@@ -4597,6 +4633,50 @@ async function engineDeliverDue(eng) {
   eng._replyDelivery.delivered += n;
   if (waited) eng._replyDelivery.waits++;
   return n;
+}
+/* Whether the landed record now owed of a streamed send is written as a stream record: any but the last, and
+   the last unless it is record 1 of a body that ended normally (or whose head never came), which is the whole
+   answer `rec.deliver` hands over. */
+function engineStreamWrites(rec) {
+  if (!replyStreamLast(rec)) return true;
+  return rec.record > 1 || (rec.head !== null && engineStreamEnd(rec.value).state !== "end");
+}
+/* How a streamed send's body ended, from `fetched`'s answer: a reply (`end`, with its computed type), §5.6's
+   network error (`network`), or a decline (`decline`, with the chokepoint's reason). */
+function engineStreamEnd(value) {
+  if (value === null) return { state: "network", meta: "network error" };
+  if (value.refusal) return { state: "decline", meta: value.refusal.reason };
+  DCHECK(value.meta && typeof value.meta.computedType === "string",
+         "a streamed send's answer is neither a refusal nor a reply carrying its computed type");
+  return { state: "end", meta: value.meta.computedType };
+}
+/* One record of a streamed send, through `Provide` (record 1: the head, carrying the `stream` token, with the
+   first read) and `ProvideBody` (every later read, and the end). The head is the chokepoint's (`onHead`):
+   status, status message, header map, URL list and filtered-response type, every field asserted here. */
+async function engineDeliverStreamRecord(eng, rec, last) {
+  const k = rec.record, piece = rec.chunks[k - 1] === undefined ? new Uint8Array(0) : rec.chunks[k - 1];
+  const end = last ? engineStreamEnd(rec.value) : null;
+  if (k === 1) {
+    const h = rec.head;
+    DCHECK(h !== null && typeof h.status === "number" && typeof h.statusText === "string" &&
+           h.headers && typeof h.headers === "object" && Array.isArray(h.urlList) && h.urlList.length >= 1 &&
+           (h.type === "basic" || h.type === "cors"),
+           "a streamed send's head is missing or short of a field — safeFetch's `onHead` states status, status " +
+           "message, header map, URL list and a basic or cors type before it reads the body");
+    const [method, mode, referrerPolicy, referrer, url] = rec.pair;
+    await eng.r.renderer.provide({ method, mode, referrerPolicy, referrer, url,
+                                   reply: JSON.stringify({ status: h.status, statusText: h.statusText,
+                                                           headers: Object.entries(h.headers),
+                                                           urlList: h.urlList, type: h.type,
+                                                           stream: rec.stream }),
+                                   body: piece });
+    if (last && !eng._crashed)
+      await eng.r.renderer.provideBody({ token: rec.stream, state: end.state, body: new Uint8Array(0),
+                                         meta: end.meta });
+    return;
+  }
+  await eng.r.renderer.provideBody({ token: rec.stream, state: last ? end.state : "more", body: piece,
+                                     meta: last ? end.meta : "" });
 }
 /* The instance's engine work at this round's read, onto its reply clock. The engine is untrusted, so a
    statement that is not a count, or that decreases, retires the instance; it answers whether the round goes on. */
@@ -4660,12 +4740,16 @@ async function engineIssuePending(eng) {   // issue every parked request; a late
     if (eng._inflight.has(key)) continue;
     /* The ask is raised inside the starter, which `engineIssue` invokes only for a key not in flight, so a
        re-listed request is counted once and the containment with the declined histogram holds. */
+    /* A `fetch()` (the empty destination; the engine's line states it only when every park on the pair is
+       one) is streamed: its engine resolves at the head. Every other destination's algorithm consumes the
+       body whole. */
     engineIssue(eng, key,
-      (signal, onBodyRead) => { eng._egress.asked++;
+      (signal, onBodyRead, onHead, onChunk) => { eng._egress.asked++;
                     return eng.fetched(method, url, destination, provenance, pinned, driven, credentials, mode,
                                        referrerPolicy, referrer, askerRecord(eng, askers, "asker"), signal,
-                                       onBodyRead); },
-      (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer));
+                                       onBodyRead, onHead, onChunk); },
+      (answer) => engineDeliverReply(eng, method, mode, referrerPolicy, referrer, url, answer),
+      destination === "" ? [method, mode, referrerPolicy, referrer, url] : null);
   }
 }
 /* What a landed answer means on the pending seam: the `deliver` half of one issue, closing over the request's
@@ -5748,7 +5832,8 @@ async function engineServiceHostRequests(eng) {
         // Completion 0 is normal (ECMA-262 §6.2.4 The Completion Record Specification Type): this zone fetched
         // bytes and ran no program that could throw. A relayed cross-agent operation answers 1 with the thrown
         // value, so the asking page's `try`/`catch` runs.
-        (r) => r.declined ? engineDeclineRendezvous(eng, id, r.declined) : engineAnswer(eng, id, r.meta, r.bytes));
+        (r) => r.declined ? engineDeclineRendezvous(eng, id, r.declined) : engineAnswer(eng, id, r.meta, r.bytes),
+        null);
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
@@ -5775,7 +5860,8 @@ async function engineServiceHostRequests(eng) {
       (r) => {
         childRequestAlias(df.initiator, df.url, r.url);
         return engineDeliverDocument(eng, id, r, df.url);
-      });
+      },
+      null);
     continue;
   }
 }

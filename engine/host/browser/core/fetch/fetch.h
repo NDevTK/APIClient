@@ -450,6 +450,10 @@ void fetch_cancel(JSContext *ctx, JSValueConst deliver);
    nothing can read its body either. fetch_delivery_has_reaction requires fetch_is_delivery. */
 bool fetch_is_delivery(JSContext *ctx, JSValueConst deliver);
 bool fetch_delivery_has_reaction(JSContext *ctx, JSValueConst deliver);
+/* A streamed body's delivery closure (Fetch §4.7's fetch task over one Response's stream), which
+   solver/reply_body.h's parks carry: whether `deliver` is one, and whether its stream still takes pieces. */
+bool fetch_is_body_delivery(JSContext *ctx, JSValueConst deliver);
+bool fetch_body_delivery_open(JSContext *ctx, JSValueConst deliver);
 
 /* PARSE A URL A PAGE WROTE, against HTML's API base URL — the one operation every Fetch entry point performs
    on a URL string, so `new Request("/api/users")` and `Response.redirect("/there")` resolve the same address by

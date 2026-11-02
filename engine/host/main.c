@@ -88,6 +88,7 @@
 #include "solver/cow.h"
 #include "solver/endpoint.h"
 #include "solver/novelty.h"
+#include "solver/reply_body.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/quantum.h"
@@ -1282,9 +1283,10 @@ QJS_EXPORT int qjs_step(void)
        outstanding entry is tellable through one) and for a referenced document, whose last timeline waits for a
        question arriving through qjs_perform or qjs_route and owes no register entry. The third disjunct is the
        engine's reference flag, raised by qjs_set_referenced or by the engine when this document created a
-       navigable another agent hosts. An unreferenced instance stalling with both registers empty is the failure
-       named. */
-    DCHECK(r != ENGINE_STEP_STALLED || engine_referenced() ||
+       navigable another agent hosts. The fourth is a streamed body still open: the zone that streamed its head
+       owes every later record (solver/reply_body.h), so a flow parked on its next piece is owed without a line.
+       An unreferenced instance stalling with all of them empty is the failure named. */
+    DCHECK(r != ENGINE_STEP_STALLED || engine_referenced() || reply_body_open_count() > 0 ||
            *engine_pending_fetches() != '\0' || *engine_host_requests() != '\0',
            "the scheduler asked this host to PAY and named nothing owed — a stall reaches the host as a bill "
            "over qjs_pending and qjs_host_requests, and with both empty there is no record to answer, so every "
@@ -1790,6 +1792,24 @@ QJS_EXPORT void qjs_provide(const char *method, const char *mode, const char *re
                    "parked waiting forever. request=%s %s %s", method, mode, url);
         }
     }
+}
+
+/* A streamed reply's later record (solver/reply_body.h): after `qjs_provide` delivered a head carrying the
+   `stream` token, each further read of the body is one record `(token, state, bytes)`. `state` is `more`, or
+   the body's last record: `end` (with `meta` its `computedType`), `network` (Fetch §4.7's abnormal end, `meta`
+   the reason) or `decline` (the zone stopped waiting, `meta` the reason). `bytes` may be empty but is never
+   NULL; `meta` is never NULL and is empty for `more`. A token naming no open body is a zone answering a send it
+   never streamed. */
+QJS_EXPORT void qjs_provide_body(const char *token, const char *state, const char *body, unsigned body_len,
+                                 const char *meta)
+{
+    DCHECK(g_begun, "a body record was provided to an engine that never ran");
+    DCHECK(token != NULL && state != NULL && body != NULL && meta != NULL,
+           "a body record was provided with no token, state or bytes — an empty piece passes an address and a "
+           "zero");
+    if (!reply_body_append(g_ctx, token, state, (const uint8_t *)body, (size_t)body_len, meta))
+        DFAILF("a body record was provided for the token `%s`, which names no open body — the zone writes a "
+               "body record only after the head that opened it, and never after its last", token);
 }
 
 /* The zone refusing to ask, which is an answer, not a reply (solver/engine.h's engine_decline; safe-fetch.js

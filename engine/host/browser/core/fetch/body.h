@@ -133,6 +133,9 @@ int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
 /* Fill from §5.2's string arm where the arm's object is UNKNOWN EXTERNAL INPUT — see `unknown` above. `v` is
    BORROWED. Returns -1 on OOM with an exception live. */
 int  body_state_set_unknown(JSContext *ctx, BodyState *b, JSValueConst v);
+/* A body that IS `stream` (BODY_STREAM): §5.2's ReadableStream arm, and Fetch §4.7's response body before its
+   bytes have arrived. Drops any bytes; the stream is duplicated. */
+void body_state_set_stream(JSContext *ctx, BodyState *b, JSValueConst stream);
 /* §2.2.4 Bodies' "other members are copied from body", for the two operations that copy a body's CONTENT
    rather than teeing its stream — §5.4's `clone()` and its step 41 proxy. ONE entry, because the alternative
    is every such site re-spelling §5.2's arms as `src->has ? src->bytes : NULL`, which is the union's rule

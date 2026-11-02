@@ -467,6 +467,17 @@ JSValue readable_stream_from_chunk(JSContext *ctx, JSValueConst chunk)
     return obj;
 }
 
+JSValue readable_stream_host_new(JSContext *ctx)
+{
+    JSValue obj = readable_stream_empty(ctx);
+
+    if (JS_IsException(obj)) return obj;
+    /* Streams §4.9.4 SetUpReadableStreamDefaultController runs no start algorithm for a host's stream, so
+       nothing is left for `started` to wait on. */
+    ctrl_of(rs_stream_data(obj)->controller)->started = 1;
+    return obj;
+}
+
 /* Fetch §5.3's `textStream()` step 2 — see the header for why this is not the function above with no bytes. */
 JSValue readable_stream_closed_empty(JSContext *ctx)
 {
@@ -4166,8 +4177,9 @@ typedef struct {
     JSValue reader;
     JSValue recv;          /* the object whose reader this is; `make` may need it (blob() reads its type) */
     JSValue funcs[2];      /* the capability this drain settles */
-    uint8_t *buf;
-    size_t   len, cap;
+    /* The bytes read so far, one ArrayBuffer per chunk: a JS Array, so a flow that forks while the body is
+       still arriving keeps its own bytes in its own delta (a C buffer here would be shared by both arms). */
+    JSValue parts;
     JSValue (*make)(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
 } DrainData;
 
@@ -4183,7 +4195,7 @@ static void drain_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, dr->recv);
     JS_FreeValueRT(rt, dr->funcs[0]);
     JS_FreeValueRT(rt, dr->funcs[1]);
-    free(dr->buf);
+    JS_FreeValueRT(rt, dr->parts);
     js_free_rt(rt, dr);
 }
 
@@ -4196,6 +4208,7 @@ static void drain_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     JS_MarkValue(rt, dr->recv, mark_func);
     JS_MarkValue(rt, dr->funcs[0], mark_func);
     JS_MarkValue(rt, dr->funcs[1], mark_func);
+    JS_MarkValue(rt, dr->parts, mark_func);
 }
 
 /* APPEND A CHUNK'S BYTES — Streams §9.1.2 Reading's `read-loop`, whose chunk steps are exactly two lines: "If
@@ -4249,19 +4262,49 @@ static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
     DCHECK(off <= whole && n <= whole - off,
            "a body stream's chunk reported a window outside its own buffer — JS_GetArrayBufferView and "
            "JS_GetArrayBuffer disagree about one allocation, and the copy below trusts the first");
-    if (dr->len + n > dr->cap) {
-        size_t want = dr->cap ? dr->cap * 2 : 256;
-        uint8_t *grown;
-        while (want < dr->len + n) want *= 2;
-        grown = lexbor_realloc(dr->buf, want);
-        CHECK(grown != NULL, "fully read: OOM growing a body's byte sequence");
-        dr->buf = grown;
-        dr->cap = want;
+    {
+        JSValue part = JS_NewArrayBufferCopy(ctx, base + off, n);
+        int64_t at = 0;
+
+        JS_FreeValue(ctx, buf);
+        if (JS_IsException(part)) return -1;
+        if (JS_GetLength(ctx, dr->parts, &at) < 0 ||
+            JS_SetPropertyUint32(ctx, dr->parts, (uint32_t)at, part) < 0)
+            return -1;
     }
-    memcpy(dr->buf + dr->len, base + off, n);
-    dr->len += n;
-    JS_FreeValue(ctx, buf);
     return 0;
+}
+
+/* The bytes the drain collected, joined: one allocation the caller frees. */
+static uint8_t *drain_bytes(JSContext *ctx, DrainData *dr, size_t *plen)
+{
+    int64_t n = 0, i;
+    size_t total = 0, off = 0;
+    uint8_t *all;
+
+    CHECK(JS_GetLength(ctx, dr->parts, &n) == 0, "fully read: a drain's chunk list has no length");
+    for (i = 0; i < n; i++) {
+        JSValue part = JS_GetPropertyUint32(ctx, dr->parts, (uint32_t)i);
+        size_t pn = 0;
+
+        DCHECK(JS_IsArrayBuffer(part), "a drain's chunk list holds something that is not an ArrayBuffer");
+        (void)JS_GetArrayBuffer(ctx, &pn, part);
+        total += pn;
+        JS_FreeValue(ctx, part);
+    }
+    all = lexbor_malloc(total ? total : 1);
+    CHECK(all != NULL, "fully read: OOM joining a body's byte sequence");
+    for (i = 0; i < n; i++) {
+        JSValue part = JS_GetPropertyUint32(ctx, dr->parts, (uint32_t)i);
+        size_t pn = 0;
+        uint8_t *p = JS_GetArrayBuffer(ctx, &pn, part);
+
+        if (pn) memcpy(all + off, p, pn);
+        off += pn;
+        JS_FreeValue(ctx, part);
+    }
+    *plen = total;
+    return all;
 }
 
 /* WHERE THIS MACHINE RESTS. It is Fetch §2.2.4 "Bodies"'s "fully read a body" step 5 — "read all bytes from reader" —
@@ -4377,7 +4420,11 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         }
         cb_result = JS_UNDEFINED;
         if (!s->reject) {
-            s->value = dr->make(ctx, dr->recv, dr->buf ? (const char *)dr->buf : "", dr->len);
+            size_t blen = 0;
+            uint8_t *bytes = drain_bytes(ctx, dr, &blen);
+
+            s->value = dr->make(ctx, dr->recv, (const char *)bytes, blen);
+            lexbor_free(bytes);
             if (JS_IsException(s->value)) {
                 /* §2.2.4: an abrupt completion INSIDE the read is what the promise rejects with — which is how
                    `json()`'s SyntaxError reaches the page's `.catch` rather than the call site. */
@@ -4420,8 +4467,10 @@ JSValue readable_stream_drain(JSContext *ctx, JSValueConst reader, JSValueConst 
     if (JS_IsException(obj)) return obj;
     dr = js_mallocz(ctx, sizeof *dr);
     if (!dr) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
-    dr->reader = dr->recv = dr->funcs[0] = dr->funcs[1] = JS_UNDEFINED;
+    dr->reader = dr->recv = dr->funcs[0] = dr->funcs[1] = dr->parts = JS_UNDEFINED;
     JS_SetOpaque(obj, dr);                  /* attached before anything that can fail */
+    dr->parts = JS_NewArray(ctx);
+    if (JS_IsException(dr->parts)) { dr->parts = JS_UNDEFINED; JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     dr->reader = JS_DupValue(ctx, reader);
     dr->recv = JS_DupValue(ctx, recv);
     dr->make = make;

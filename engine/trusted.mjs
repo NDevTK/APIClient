@@ -863,12 +863,13 @@ async function main() {
       ready: [], answered: new Map(), sends: new Map(),
       /* The answers this instance's sends are owed, by key (`owe`), the ones not yet given a due point, and the
          instance's network clock (extension/lib/reply-schedule.js), read at every `poll` and `stalled`. */
-      owed: new Map(), unstamped: [], clock: ZONE.replyClock(at),
+      owed: new Map(), unstamped: [], clock: ZONE.replyClock(at), streams: 0,
       /* The records other instances' reads owe this one (`crossSend`), delivered on the cluster's timeline. */
       inbox: [],
       /* How the answers were delivered, and the one wall-time fact this zone reports: how long polls waited for
          a due answer the wire had not produced or for a peer to pass their clock (`sayDelivery`). */
-      delivery: { polls: 0, stalls: 0, delivered: 0, records: 0, pollWaits: 0, pollWaitMs: 0, skipped: 0 },
+      delivery: { polls: 0, stalls: 0, delivered: 0, records: 0, streamed: 0, pollWaits: 0, pollWaitMs: 0,
+                  skipped: 0 },
       /* The responses this zone fetched for this instance's navigations and holds for a destination instance,
          by the token its `peer` answer named; taken by the `navigable.navigate` that names it. */
       held: new Map(),
@@ -984,7 +985,7 @@ async function main() {
       throw new Error(`instance [${e.tag}] is owed a second answer for \`${key}\` while the first is unwritten — ` +
                       'a send is worked once per park (`answered`), so this is that dedup broken');
     const entry = ZONE.replyStreamOpen({ key, ordinal: ZONE.replyClockOrdinal(e.clock), due: null, rec: null,
-                                         done: null });
+                                         done: null, stream: null, head: null, chunks: null, end: null });
     e.owed.set(key, entry);
     e.unstamped.push(entry);
     return entry;
@@ -1002,11 +1003,46 @@ async function main() {
     ZONE.replyStreamRead(entry);
     flush();
   };
+  /* A piece of a streamed send's body (safeFetch's `onChunk`): kept for the record it belongs to, and the read
+     may land the record a stalled instance's clock waits at. */
+  const bodyChunk = (e, entry) => (chunk) => {
+    if (e.owed.get(entry.key) !== entry) return;
+    entry.chunks.push(Buffer.from(chunk));
+    ZONE.replyStreamRead(entry);
+    flush();
+  };
+  /* Whether every record of `x` due at `e`'s clock has landed: a streamed entry writes each of them in turn. */
+  const landedNow = (e, x) => x.stream === null ? ZONE.replyStreamLanded(x)
+                                                : ZONE.replyStreamDueLanded(x, ZONE.replyClockNow(e.clock));
+  /* A streamed send's record now owed, as the lines that write it (solver/reply_body.h). Record 1 is the head
+     with the first read: a `provide` whose reply carries the `stream` token, or the whole answer when it is also
+     the last and the body ended normally (or no head arrived). Each later record is a `body` line with that
+     read's bytes, the last stating how the body ended. */
+  const streamLines = (x) => {
+    const last = ZONE.replyStreamLast(x), k = x.record;
+    const piece = x.chunks[k - 1] === undefined ? '' : b64(x.chunks[k - 1]);
+    const endMeta = () => b64(x.end.state === 'end' ? x.end.computedType : x.end.reason);
+    if (last && x.end === null)
+      throw new Error(`the streamed send \`${x.key}\` settled with no end state — workFetch states one with ` +
+                      'every answer it settles a streamed send with');
+    if (k === 1) {
+      if (last && (x.end.state === 'end' || x.head === null)) return [x.rec];
+      const head = { status: x.head.status, statusText: x.head.statusText,
+                     headers: Object.entries(x.head.headers), urlList: x.head.urlList, type: x.head.type,
+                     stream: x.stream };
+      const lines = [['provide', ...x.pair, b64(JSON.stringify(head)), piece].join('\t')];
+      if (last) lines.push(['body', x.stream, x.end.state, '', endMeta()].join('\t'));
+      return lines;
+    }
+    return [['body', x.stream, last ? x.end.state : 'more', piece, last ? endMeta() : ''].join('\t')];
+  };
   /* Passes over every record due at `e`'s clock that has landed and is not its answer's last; each moves its
-     entry's due point a latency on and writes nothing. */
+     entry's due point a latency on and writes nothing. A streamed entry's records are written instead
+     (`payRound`). */
   const passDue = (e) => {
     for (;;) {
-      const x = dueEntries(e).find((y) => ZONE.replyStreamLanded(y) && !ZONE.replyStreamLast(y));
+      const x = dueEntries(e).find((y) => y.stream === null && ZONE.replyStreamLanded(y) &&
+                                          !ZONE.replyStreamLast(y));
       if (x === undefined) return;
       ZONE.replyStreamAdvance(x);
       e.delivery.records++;
@@ -1393,13 +1429,26 @@ async function main() {
        chokepoint decides from the pair what the page may read of the reply (Fetch §4.1 "Main fetch"). */
     /* `useCorsPreflight: false`: Fetch §5.4 "Request class" sets that flag only for a ReadableStream body,
        which a GET cannot carry. */
+    /* A `fetch()` (the empty destination; the engine's line states it only when every park on the pair is
+       one) is streamed: its engine resolves at the head and reads the body as each read's record is due
+       (`streamLines`). Every other destination's algorithm consumes the body whole. */
+    const entry = send.entry;
+    if (destination === '') {
+      entry.stream = String(++e.streams);
+      entry.chunks = [];
+      entry.pair = [method, mode, referrerPolicy, referrer, url];
+    }
+    const streamed = entry.stream !== null;
     /* A send the engine cancelled mid-body throws out of safeFetch's body read; nobody is owed that answer. */
     let raw;
     try {
       raw = await ZONE.safeFetch(abs, { pageOrigin: e.origin, destination, mode,
                                         provenance, pinned, driven, credentials, useCorsPreflight: false,
                                         actor: 'page', signal: send.controller.signal,
-                                        onBodyRead: bodyRead(e, send.entry), doc, credentialed: false,
+                                        onBodyRead: streamed ? undefined : bodyRead(e, entry),
+                                        onHead: streamed ? (h) => { entry.head = h; } : undefined,
+                                        onChunk: streamed ? bodyChunk(e, entry) : undefined,
+                                        doc, credentialed: false,
                                         identity: await ZONE.pageRequestIdentity(stampOrigin(e.origin), e.docUrl, 'engine:' + e.docId, abs,
                                                                            credentials, mode,
                                                                            referrerPolicy, referrer) });
@@ -1429,6 +1478,7 @@ async function main() {
       /* THE SAME FACTS THE REQUEST ONE CALL BELOW STATES, for the reason the navigate arm gives: this is a
          question about THAT request and not about a simpler one. `credentialed: false` is what `fetched`
          passes and `headers: null` is what a park carries here. */
+      if (streamed) entry.end = { state: 'decline', reason: raw.refusal.reason };
       const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
                                                     actor: 'page', driven,
                                                     doc, credentialed: false, headers: null });
@@ -1453,6 +1503,8 @@ async function main() {
       return;
     }
     const rec = replyRecord(raw, `the ${provenance} ${destination || 'data'} load ${abs}`);
+    if (streamed) entry.end = rec ? { state: 'end', computedType: rec.meta.computedType }
+                                  : { state: 'network', reason: raw.statusText };
     settle(['provide', method, mode, referrerPolicy, referrer, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
             rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
@@ -1493,13 +1545,39 @@ async function main() {
     const peer = dueInbox(i).map((x) => ({ x, from: x.from }));
     const order = (a, b) => a.x.due - b.x.due || (a.from < b.from ? -1 : a.from > b.from ? 1 : 0) ||
                             a.x.ordinal - b.x.ordinal;
-    for (const { x } of [...own, ...peer].sort(order)) {
-      if (!i.inbox.includes(x) && !(ZONE.replyStreamLanded(x) && ZONE.replyStreamLast(x)))
+    const now = ZONE.replyClockNow(i.clock);
+    const due = [...own, ...peer];
+    while (due.length) {
+      due.sort(order);
+      const { x, from } = due.shift();
+      const mine = !i.inbox.includes(x);
+      if (mine && !(ZONE.replyStreamLanded(x) && (x.stream !== null || ZONE.replyStreamLast(x))))
         throw new Error(`instance [${i.tag}] was written a round at work ${i.clock.work} while its due send ` +
                         `\`${x.key}\` owes record ${x.record}, which has not landed or is not its answer's last ` +
                         '— a round carries every due answer and passes over the rest, so its caller had to ' +
                         'wait for or pass over this one');
-      i.say(x.rec);
+      if (mine && x.stream !== null) {
+        for (const line of streamLines(x)) i.say(line);
+        i.delivery.streamed++;
+        if (!ZONE.replyStreamLast(x)) {
+          /* The head is written: the pair's parks are answered, so a fresh park of it is a new send, and this
+             one is owed under its stream token until its last record. */
+          if (x.record === 1) {
+            const send = i.sends.get(x.key);
+            i.owed.delete(x.key);
+            i.sends.delete(x.key);
+            i.answered.delete(x.key);
+            x.key = `stream:${x.stream}`;
+            i.owed.set(x.key, x);
+            i.sends.set(x.key, send);
+          }
+          ZONE.replyStreamAdvance(x);
+          if (x.due <= now) due.push({ x, from });
+          continue;
+        }
+      } else {
+        i.say(x.rec);
+      }
       if (i.inbox.includes(x)) { i.inbox.splice(i.inbox.indexOf(x), 1); continue; }
       i.owed.delete(x.key);
       i.sends.delete(x.key);
@@ -1533,7 +1611,7 @@ async function main() {
         if (at === Infinity || !clusterSafe(i, at)) break;
         if (at > now) { i.delivery.skipped += at - now; i.clock.skip += at - now; skipped = true; }
         passDue(i);
-        if (dueEntries(i).some((x) => !ZONE.replyStreamLanded(x))) break;
+        if (dueEntries(i).some((x) => !landedNow(i, x))) break;
         if (!dueEntries(i).length && !dueInbox(i).length && !i.ready.some(pays)) continue;
         payRound(i);
         i.stalled = false;
@@ -2157,8 +2235,8 @@ async function main() {
   const sayDelivery = (e) => {
     const d = e.delivery;
     console.error(`[trusted] [${e.tag}] reply delivery at work ${e.clock.work} (+${e.clock.skip} skipped): polls=${d.polls} ` +
-                  `stalls=${d.stalls} delivered=${d.delivered} passed=${d.records} owed=${e.owed.size} ` +
-                  `pollWaits=${d.pollWaits} ` +
+                  `stalls=${d.stalls} delivered=${d.delivered} passed=${d.records} streamed=${d.streamed} ` +
+                  `owed=${e.owed.size} pollWaits=${d.pollWaits} ` +
                   `pollWaitMs=${d.pollWaitMs.toFixed(1)} inbox=${e.inbox.length} ` +
                   `latencyWork=${ZONE.REPLY_LATENCY_WORK}`);
   };
@@ -2484,7 +2562,7 @@ async function main() {
          not its answer's last is passed over, which may make the next record of the same answer due. */
       for (;;) {
         passDue(e);
-        const waiting = dueEntries(e).filter((x) => !ZONE.replyStreamLanded(x));
+        const waiting = dueEntries(e).filter((x) => !landedNow(e, x));
         if (!waiting.length || fatal) break;
         await Promise.all(waiting.map((x) => Promise.race([ZONE.replyStreamNext(x), x.done])));
       }

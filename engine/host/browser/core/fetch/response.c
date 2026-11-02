@@ -1040,6 +1040,20 @@ JSValue response_new_unknown(JSContext *ctx, JSValueConst url_list, int status, 
     return obj;
 }
 
+JSValue response_new_streamed(JSContext *ctx, JSValueConst url_list, int status, const char *status_text,
+                              const HeaderList *headers, JSValueConst stream, int cors)
+{
+    JSValue obj = response_new(ctx, url_list, status, status_text, headers, "", 0, cors);
+    ResponseData *d;
+
+    if (JS_IsException(obj))
+        return obj;
+    d = JS_GetOpaque(obj, g_response_class);
+    DCHECK(d != NULL, "response_new answered an object that is not a Response");
+    body_state_set_stream(ctx, &d->body, stream);
+    return obj;
+}
+
 JSValue response_new_opaque(JSContext *ctx)
 {
     ResponseData *d;

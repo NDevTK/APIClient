@@ -36,6 +36,10 @@ JSValue response_new_unknown(JSContext *ctx, JSValueConst url_list, int status, 
 /* Fetch §2.2.6 "Responses"' OPAQUE FILTERED RESPONSE: "a filtered response whose type is "opaque", URL list
    is « », status is 0, status message is the empty byte sequence, header list is « », body is null, and body
    info is a new response body info." It is what a `no-cors` `fetch()` of another origin resolves with. */
+/* The same, over a body whose bytes have not arrived: Fetch §5.6 "Fetch methods" resolves at the response's
+   head, and `stream` (readable_stream_host_new) is fed the body as Fetch §4.7 HTTP-network fetch receives it. */
+JSValue response_new_streamed(JSContext *ctx, JSValueConst url_list, int status, const char *status_text,
+                              const HeaderList *headers, JSValueConst stream, int cors);
 JSValue response_new_opaque(JSContext *ctx);
 
 #endif

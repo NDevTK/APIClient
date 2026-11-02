@@ -744,7 +744,7 @@ function _drivenOf(opts) {
    author's first call. */
 var _SAFEFETCH_OPTIONS = ["pageOrigin", "destination", "mode", "provenance", "pinned", "driven",
                           "doc", "actor", "credentialed", "credentials", "headers", "useCorsPreflight",
-                          "identity", "signal", "onChunk", "onBodyRead"];
+                          "identity", "signal", "onChunk", "onBodyRead", "onHead"];
 /* Fetch §2.2.5 "Requests"' credentials mode — "which is `omit`, `same-origin`, or `include`" — the same three
    words `fetch_credentials_token` writes on the pending line. Written here because this zone is the other
    party to that contract. */
@@ -2502,6 +2502,17 @@ async function safeFetch(url, opts) {
   /* A body the wire failed after its head is Fetch §5.6's network error to every reader of this record, which
      is answered whole; one the wire went silent on is this zone's `wire-idle` decline (WIRE_IDLE_TIMEOUT_MS).
      An abort is the caller's, so it is the caller's to read. */
+  /* The head, once every gate that reads only headers has run and before the body is read: Fetch §5.6 "Fetch
+     methods" resolves a `fetch()` here, and the body that follows is read below. It carries no computed type,
+     which is derived from the whole body (`_sniff`), and it is refused to a body-gated request, whose reply
+     CORB judges on the body. */
+  if (opts.onHead !== undefined) {
+    DCHECK(typeof opts.onHead === "function" && !_bodyGated(opts),
+           "safeFetch was given an `onHead` that is not callable, or for a body-gated request whose head may " +
+           "not be released before CORB has read its body — the host composes it at its own call site");
+    opts.onHead({ status: resp.status, statusText: resp.statusText, headers: headers, urlList: _exposed,
+                  type: _type });
+  }
   var body;
   try { body = await _readBody(resp, opts.onChunk, _bodyGated(opts), opts.onBodyRead); }
   catch (e) {

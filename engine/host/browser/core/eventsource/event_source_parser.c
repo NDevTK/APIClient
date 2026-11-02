@@ -348,19 +348,19 @@ void event_source_parser_interpret(const char *bytes, size_t n,
  * streamable side of that boundary and does not have to argue for it: HTML §9.2.2's step 8 creates its request
  * "given urlRecord, the empty string, and corsAttributeState", and the empty destination is not one
  * `_isScriptLike` enumerates, so `_bodyGated` is false and the entry's `blocked-stream-body-gated:` refusal
- * cannot reach it. That sink has NO CALLER anywhere in this tree, which is what it was waiting for.
+ * cannot reach it. Its callers are the two zones' streamed `fetch()` sends (engine/trusted.mjs's workFetch and
+ * extension/bridge.js's engineIssue).
  *
- * SO THE HALF THAT IS ACTUALLY MISSING IS THE ENGINE'S, AND IT IS TWO THINGS RATHER THAN ONE. First, a
- * NON-SETTLING DELIVERY: `engine/host/qjs_abi.h` declares `qjs_provide` and `qjs_decline` and nothing else
- * that carries bytes for a park, and `engine/host/solver/pending.h`'s field list holds one `body` beside one
- * `haveValue`, so the only thing the zone can say about a request is its whole answer, once — there is no
- * state in which a park has received bytes and is still owed more. Second, a HEAD DELIVERED BEFORE ITS BODY:
- * `_readBody`'s own banner states that consequence, that a sink is handed bytes while its caller still holds
- * no head and that the computed type is the sniff's, so a head cannot carry one — "enough for a consumer that
- * parses a byte stream, and not enough for one that must announce a connection before it may dispatch".
- * HTML §9.2.2's step 15 is exactly that consumer: its third arm refuses a response whose "status is not 200" or
- * whose "`Content-Type` is not `text/event-stream`", and its fourth announces the connection, and BOTH run
- * before a byte of this file's input is read.
+ * WHAT THE ENGINE NOW TAKES, AND WHAT THIS COMPONENT STILL DOES NOT. A streamed reply's head and its later
+ * reads reach the engine for a `fetch()` park: `qjs_provide` with a `stream` token resolves the fetch at the
+ * head, and each further read arrives through `qjs_provide_body` into FLOW_PENDING_BODY parks that are answered
+ * without retiring the request (solver/reply_body.h). The zone streams only a line whose destination is the
+ * empty one and whose every park is a `fetch()`.
+ * Named residual. Not covered: this component's request is not such a park, so neither the head nor the
+ * pieces reach it and it interprets one whole body. Next diff builds §9.2.2 step 15's fetch as a streamed park
+ * whose processResponse runs at the head (the status and `Content-Type` refusal, then announce the connection)
+ * and whose pieces feed this parser one at a time, with its buffers held in JS values a park survives. Its
+ * absence shows as the paragraph below states.
  *
  * HOW ITS ABSENCE WOULD SHOW: a page whose `EventSource` addresses a real streaming endpoint fires no `message`
  * event ever. Against a FINITE `text/event-stream` reply — which is what a fixture and most probes serve — this

@@ -81,16 +81,14 @@ function replyClockStall(clock, dues) {
    whole answer once safeFetch returns. Record 1 is the head with the first read; each further read is a record.
    Whether a record is the last is decided by what the wire does next (the next read, or the answer), so a
    record's content is fixed by the wire's sequence of reads and never by when they arrived; a reply whose body is
-   one read, as a recorded one is, is one record. Record k has landed once read k+1 or the answer has arrived. A
-   read due a record that has landed and is not the last moves the entry's `due` a latency on and writes nothing;
-   the last is the whole answer, written at its due point.
+   one read, as a recorded one is, is one record. Record k has landed once read k+1 or the answer has arrived.
+   A STREAMED entry (the caller's `stream` token, for a `fetch()` whose engine resolves at the head) writes every
+   record at its due point: record 1 is the head with the first read, each later one the next read, and the
+   last says how the body ended (solver/reply_body.h). Any other entry is handed its answer whole: a read due a
+   record that has landed and is not the last moves the entry's `due` a latency on and writes nothing, and the
+   last is the whole answer, written at its due point.
    The fields live on the caller's entry (`due`, `ordinal` and the caller's own beside them):
-   `reads`, `record` (the 1-based record now owed), `settled` and `next` (the waiter of the next landing).
-   Named residual. Not covered: the engine is handed the answer whole at its last record's due point, so the head
-   does not resolve a `fetch()` at record 1 and no body read sees a piece before the end. Next diff builds the
-   engine's non-settling delivery (a head record, then body records a park takes without being retired). Absence
-   shows as: a page reading a streamed body sees nothing until it ends, and a body held open past the wire's idle
-   end leaves the flow that awaited its head parked. */
+   `reads`, `record` (the 1-based record now owed), `settled` and `next` (the waiter of the next landing). */
 function replyStreamOpen(entry) {
   DCHECK(entry.reads === undefined, "a reply stream was opened twice on one entry");
   entry.reads = 0;
@@ -129,6 +127,15 @@ function replyStreamLanded(entry) {
 function replyStreamLast(entry) {
   DCHECK(replyStreamLanded(entry), "a reply record was asked whether it is the last before it landed");
   return entry.settled && entry.reads <= entry.record;
+}
+
+/* Whether every record of `entry` due at `now` has landed: the one now owed and each later one whose due point
+   (a latency apart) is at or before `now`, so a read that writes a streamed entry's records in turn never meets
+   one the wire has not produced. */
+function replyStreamDueLanded(entry, now) {
+  DCHECK(Number.isSafeInteger(entry.due) && entry.due <= now,
+         "a reply's due records were asked of an entry that is not due: " + entry.due + " at " + now);
+  return entry.settled || entry.reads > entry.record + Math.floor((now - entry.due) / REPLY_LATENCY_WORK);
 }
 
 /* The landed record now owed is not the last: the next one is owed, due a latency later. */

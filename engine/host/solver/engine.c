@@ -64,6 +64,7 @@
 #include "solver/rest_unit.h" /* the collector's step, a rest unit of its work */
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/reply_decode.h" /* …and what the reply body itself teaches — see engine_provide */
+#include "solver/reply_body.h"   /* a streamed reply's pieces after its head */
 #include "solver/pending_index.h" /* which records a reply answers, without walking the frontier to find out */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
 #include "solver/novelty.h"     /* the identity set novelty_free gives back beside the @H surface */
@@ -3893,11 +3894,14 @@ const char *engine_pending_fetches(void) {
                 prov = f_prov; pinned = f_pinned; driven = f_driven;
                 /* The initiator folds to parser-inserted if any member is. The destination folds to the
                    strictest ingestion: if any member compiles the reply the bytes must pass the code rule, so
-                   script-like (§2.2.5) wins; otherwise the line keeps what it has, since no consumer
-                   distinguishes, say, `image` from `font`. The credentials mode folds the other way (see
-                   `cred_narrower` for the rule and its residual). */
+                   script-like (§2.2.5) wins; then any member that consumes the body whole outranks the empty
+                   destination, because the zone streams a reply after its head only to a line whose every
+                   member is a `fetch()` (reply_body.h). No consumer distinguishes, say, `image` from `font`.
+                   The credentials mode folds the other way (see `cred_narrower` for the rule and its
+                   residual). */
                 parser = parser || m_parser;
-                if (destination_is_script_like(md, mdl) && !destination_is_script_like(dst, dl)) {
+                if ((destination_is_script_like(md, mdl) && !destination_is_script_like(dst, dl)) ||
+                    (dl == 0 && mdl != 0)) {
                     memcpy(dst, md, mdl); dl = mdl;
                 }
                 cred = cred_narrower(cred, m_cred);
@@ -4026,10 +4030,14 @@ int engine_host_owes(void) {
                makes the wait deliberate: the zone answered no, the joins stop listing it so it is not re-asked,
                and the flow keeps its snapshot, a parked search that fires the day the origin is widened; the
                record's `declined` reason accounts for it. */
+            /* A streamed body's park is owed by the zone that streamed its head, which writes every record of
+               the body until its last (solver/reply_body.h), so it is tellable while its source is open. */
             int tellable = pending_get_int(e, PEND_HAVE_VALUE) ||
                            pending_entry_declined(e) ||
                            JS_IsString(uv) ||
-                           pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ;
+                           pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ ||
+                           (pending_get_int(e, PEND_KIND) == FLOW_PENDING_BODY &&
+                            reply_body_entry_open(pending_ctx(), e));
             JS_FreeValue(pending_ctx(), uv);
             JS_FreeValue(pending_ctx(), e);
             DCHECK(tellable,
@@ -4094,6 +4102,23 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
        yet), and a record leaves only when answered or when the last register naming it is gone, so nothing is
        dropped. */
     node = pending_index_find(&key);
+    /* A streamed head (a `stream` token on the record) opens the reply's body source before any record holds
+       the value, so every member that takes the head reads the same source. */
+    if (JS_IsObject(value)) {
+        JSValue tok = JS_GetPropertyStr(ctx, value, "stream");
+
+        if (JS_IsString(tok)) {
+            const char *t = JS_ToCString(ctx, tok);
+
+            CHECK(t != NULL, "engine: OOM reading a streamed head's token");
+            reply_body_open(ctx, value, t, method, url);
+            JS_FreeCString(ctx, t);
+        } else {
+            DCHECK(JS_IsUndefined(tok), "a reply record's `stream` token is not a string — the zone writes its "
+                                        "token as one");
+        }
+        JS_FreeValue(ctx, tok);
+    }
     /* Taken before the fills move either: `m` is the outstanding members, `matched` adds the answered ones, so
        "answered twice" (matched, none fillable) reads differently from "answered for nobody" (nothing matched).
        A fill moves a record from one term to the other, so the sum is stable across the loop. */
@@ -4148,6 +4173,12 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
             (void)engine_driven_token(rd);
             reply_driven = reply_driven < 0 ? rd : (reply_driven && rd);
         }
+        /* Only a `fetch()` takes a head before its body: every other kind's algorithm consumes the body whole,
+           and the zone streams only a line whose destination is the empty one (the fold above). */
+        DCHECKF(!reply_body_streamed(ctx, value) || pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE,
+                "a streamed head reached a park of kind %d — only a fetch() resolves at the head (Fetch §5.6), "
+                "so the line's destination fold let a whole-body consumer through. request=%s %s",
+                (int)pending_get_int(p, PEND_KIND), method, url);
         pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
         reply_arrived(NULL, p);
         n++;
@@ -4178,7 +4209,9 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
             "a reply filled %d parked record(s) and none of them yielded a provenance — the fold runs on every "
             "record this call writes, so a fill with no grade is a record that reached the write without "
             "passing it. request=%s %s", n, method, url);
-    if (n) reply_decode_learn(ctx, method, url, value, reply_prov, reply_driven);
+    /* A streamed head is learned from at its body's end, where the whole body exists (reply_body_append). */
+    if (n && reply_body_streamed(ctx, value)) reply_body_set_grade(ctx, value, reply_prov, reply_driven);
+    else if (n) reply_decode_learn(ctx, method, url, value, reply_prov, reply_driven);
     /* A request answered twice, told apart from one answered for nobody. Every entry naming the request already
        has a reply, so this call wrote none. `n == 0` with nothing matched is the host's pairing being off, the
        caller's assert (it owns the paged-sale credit that can explain it); this case no credit excuses, since a
@@ -4507,6 +4540,60 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
 #define ENGINE_DCHECK_PARSER_SCRIPT_BEFORE_DCL(p, doc) do { } while (0)
 #endif
 
+/* A fetch() reply whose bytes are JavaScript is a program: a fetch whose body is JavaScript is always fetched
+   and executed (a lazy chunk reveals real endpoints), whether or not the page hands it to a `<script>`.
+   engine_queue_fetched_script runs it. It runs in the flow that made the fetch, switched in, so each of N flows
+   parked on one URL compiles the chunk on its own timeline, and not in reply_decode_learn, which runs on the
+   host's time where `flow_running()` names whichever flow last yielded. Its caller runs it before the page's
+   own reaction, so the row takes the networking task source's position, as the `<script src>` arm gives an
+   element-loaded chunk. The type is the host's `computedType`; sniffing belongs to the trusted zone
+   (SECURITY.md), so a type that does not parse is not a program. `sdoc` is the asking document, `url` the
+   request's address, `pv` the whole reply record. */
+static void fetch_reply_queue_program(JSContext *ctx, uint32_t sdoc, JSValueConst url, JSValueConst pv) {
+    {
+        char *ct;
+        MimeType cm;
+        /* This door was asked, recorded before any type is read: the denominator of the queue below,
+           counted ahead of the gate because declining a non-JavaScript reply is correct (solver/engine.h's
+           `net_prog_*` block). Counted only for a reply record, since the XHR door returns before its
+           program block for a network error, so both doors' denominators count one population. */
+        if (JS_IsObject(pv)) engine_note_net_prog_fetch_ask();
+        ct = fetch_reply_computed_type(ctx, pv);
+        if (mime_type_extract(&cm, ct)) {
+            if (mime_type_is_javascript(&cm)) {
+                JSValue suv = JS_DupValue(ctx, url);
+                const char *su = JS_IsString(suv) ? JS_ToCString(ctx, suv) : NULL;
+                /* The address is required: engine_queue_fetched_script refuses without one, because
+                   §8.1.4.2 creates the script with the response's URL and §8.1.4.1 keeps it as the base
+                   URL. A park that reached the network has one (pending_park_request wrote it); a
+                   value-carrying park with none never reached the network and is not a program. */
+                if (su && *su) {
+                    size_t src_n = 0;
+                    /* §8.1.4.2's decode, through the reader the script arms use. */
+                    char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_CLASSIC, doc_realm(sdoc),
+                                                  &src_n);
+                    CHECK(src, "engine: OOM decoding a fetched JavaScript reply into a program");
+                    /* Named residual. Not covered: engine_queue_fetched_script takes `const char *` and
+                       engine_queue_el copies it into a fresh DynBody, so a chunk delivered to N flows
+                       parked on one URL is decoded and copied N times. Next diff builds: an entry beside
+                       engine_queue_fetched_script taking a built DynBody (already refcounted,
+                       solver/dyn_body.h). Absence shows as: resident bytes rising with the number of
+                       flows parked on one chunk address rather than the number of distinct addresses. */
+                    engine_queue_fetched_script(sdoc, src, src_n, su);
+                    /* This door queued one; counted beside the call because the entry cannot see which
+                       transport carried the bytes. */
+                    engine_note_net_prog_fetch_queued();
+                    free(src);
+                }
+                if (su) JS_FreeCString(ctx, su);
+                JS_FreeValue(ctx, suv);
+            }
+        }
+        mime_type_free(&cm);
+        free(ct);
+    }
+}
+
 /* Delivers one answered entry, then returns; the selector finds it, nothing drains. Every delivery runs through
  * JS_CallAsFlow, a call-root flow whose resolving function can park at each re-entry: 27.5.1.3
  * CreateResolvingFunctions ( toResolve )'s resolveSteps reads `Get(resolution, "then")` (step 2.f) off an object
@@ -4577,6 +4664,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
            core/html/html_link.c's deliveries. The test stays negative so the DCHECK below can fail: a new kind
            delivered with no arm of its own crashes on it. */
         if (kind != FLOW_PENDING_RESOLVE && kind != FLOW_PENDING_RESOURCE && kind != FLOW_PENDING_HOSTREQ &&
+            kind != FLOW_PENDING_BODY &&
             (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)) ||
              (kind == FLOW_PENDING_MODULE && !module_reply_is_javascript(ctx, pv)))) {
             DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT ||
@@ -4834,6 +4922,34 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 JS_FreeValue(ctx, exc);   /* a listener's throw is the page's to observe, not this step's */
             }
             JS_FreeValue(ctx, deliver);
+        } else if (kind == FLOW_PENDING_BODY) {
+            /* One piece of a streamed body, moved into this flow's Response stream as Fetch §4.7 HTTP-network
+               fetch's fetch task does: enqueue the bytes, close at the end, or error with a TypeError on a
+               network failure. JS_NULL is a decline's failure arm (flow_decline_fork), the network failure the
+               silence ended in. The next piece is parked first, unless this one ends the stream or the stream
+               takes no more (the page cancelled it, or an abort errored it). At the end the whole body exists,
+               so its program is queued ahead of the close, as the whole-reply arm does ahead of the settle. */
+            JSValue deliver = pending_get(p, PEND_RESOLVE);
+            ReplyBodyOp op = JS_IsNull(pv) ? REPLY_BODY_ERROR : reply_body_piece_op(ctx, pv);
+
+            DCHECK(fetch_is_body_delivery(ctx, deliver),
+                   "a body park carries a delivery that is not a fetch body's — reply_body_park is handed the "
+                   "closure fetch()'s head delivery built");
+            if (!JS_IsNull(pv)) reply_body_next(ctx, p, pv, fetch_body_delivery_open(ctx, deliver));
+            if (op == REPLY_BODY_CLOSE) {
+                JSValue whole = reply_body_whole(ctx, p), buv = reply_body_url(ctx, p);
+
+                DCHECK(JS_IsObject(whole), "a body's close piece was delivered before its source assembled the "
+                                           "whole reply — reply_body_append builds it with the close");
+                fetch_reply_queue_program(ctx, (uint32_t)pending_get_int(p, PEND_DOC), buv, whole);
+                JS_FreeValue(ctx, buv);
+                JS_FreeValue(ctx, whole);
+            }
+            if (JS_CallAsFlow(ctx, deliver, pv) < 0) {
+                JSValue exc = JS_GetException(ctx);
+                JS_FreeValue(ctx, exc);   /* a reader's throw is the page's to observe, not this step's */
+            }
+            JS_FreeValue(ctx, deliver);
         } else {
             /* A synchronous answer is taken, never delivered here: the asking machine resumes through its park
                and consumes it with engine_host_take. A HOSTREQ reaching this line would be settled as a fetch,
@@ -4925,58 +5041,13 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 flow_mark_forced_arm();
                 DCHECK(flow_path_forced(f), "a flow took a reply no server sent and its path is not forced");
             }
-            /* A reply whose bytes are JavaScript is a program: a fetch whose body is JavaScript is always fetched
-               and executed (a lazy chunk reveals real endpoints), whether or not the page hands it to a
-               `<script>`. engine_queue_fetched_script runs it. Here, not in reply_decode_learn, which runs on the
-               host's time outside any flow, where `flow_running()` would name whichever flow last yielded
-               (engine_queue_el_body's DCHECK would not fire) and the row would land in an arbitrary member's
-               table. Here the flow that made the fetch is switched in, so each of N flows parked on one URL
-               compiles the chunk on its own timeline. Before the settle, so the row takes the networking task
-               source's position ahead of the page's own reaction, as the `<script src>` arm gives an
-               element-loaded chunk. The type is the host's `computedType`, stamped at fetch_reply_new; sniffing
-               belongs to the trusted zone (SECURITY.md), so a type that does not parse is not a program. */
-            {
-                uint32_t sdoc = (uint32_t)pending_get_int(p, PEND_DOC);
-                char *ct;
-                MimeType cm;
-                /* This door was asked, recorded before any type is read: the denominator of the queue below,
-                   counted ahead of the gate because declining a non-JavaScript reply is correct (solver/engine.h's
-                   `net_prog_*` block). Counted only for a reply record, since the XHR door returns before its
-                   program block for a network error, so both doors' denominators count one population. */
-                if (JS_IsObject(pv)) engine_note_net_prog_fetch_ask();
-                ct = fetch_reply_computed_type(ctx, pv);
-                if (mime_type_extract(&cm, ct)) {
-                    if (mime_type_is_javascript(&cm)) {
-                        JSValue suv = pending_get(p, PEND_URL);
-                        const char *su = JS_IsString(suv) ? JS_ToCString(ctx, suv) : NULL;
-                        /* The address is required: engine_queue_fetched_script refuses without one, because
-                           §8.1.4.2 creates the script with the response's URL and §8.1.4.1 keeps it as the base
-                           URL. A park that reached the network has one (pending_park_request wrote it); a
-                           value-carrying park with none never reached the network and is not a program. */
-                        if (su && *su) {
-                            size_t src_n = 0;
-                            /* §8.1.4.2's decode, through the reader the script arms use. */
-                            char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_CLASSIC, doc_realm(sdoc),
-                                                          &src_n);
-                            CHECK(src, "engine: OOM decoding a fetched JavaScript reply into a program");
-                            /* Named residual. Not covered: engine_queue_fetched_script takes `const char *` and
-                               engine_queue_el copies it into a fresh DynBody, so a chunk delivered to N flows
-                               parked on one URL is decoded and copied N times. Next diff builds: an entry beside
-                               engine_queue_fetched_script taking a built DynBody (already refcounted,
-                               solver/dyn_body.h). Absence shows as: resident bytes rising with the number of
-                               flows parked on one chunk address rather than the number of distinct addresses. */
-                            engine_queue_fetched_script(sdoc, src, src_n, su);
-                            /* This door queued one; counted beside the call because the entry cannot see which
-                               transport carried the bytes. */
-                            engine_note_net_prog_fetch_queued();
-                            free(src);
-                        }
-                        if (su) JS_FreeCString(ctx, su);
-                        JS_FreeValue(ctx, suv);
-                    }
-                }
-                mime_type_free(&cm);
-                free(ct);
+            /* The program a JavaScript-typed body makes, before the settle; a streamed head has no body yet,
+               and its end queues it (the FLOW_PENDING_BODY arm). */
+            if (!reply_body_streamed(ctx, pv)) {
+                JSValue puv = pending_get(p, PEND_URL);
+
+                fetch_reply_queue_program(ctx, (uint32_t)pending_get_int(p, PEND_DOC), puv, pv);
+                JS_FreeValue(ctx, puv);
             }
             if (JS_CallAsFlow(ctx, resolve, pv) < 0) {
                 JSValue exc = JS_GetException(ctx);

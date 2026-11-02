@@ -87,6 +87,12 @@
    null reply and a non-ok status are what HTML §4.6.8.12's step 14.1 fires `error` at the element FOR, and
    `link_module_deliver` reads both itself. */
 #define FLOW_PENDING_RESOURCE  5
+/* A STREAMED RESPONSE BODY'S NEXT PIECE: Fetch §5.6 "Fetch methods" resolves `fetch()` at the response's head
+   and the body's bytes arrive afterwards, each enqueued into the Response's stream by a task of the networking
+   task source. `source` is the reply's body source (solver/reply_body.h) and `item` the index of the piece this
+   park waits for; `resolve` is the stream's delivery closure (core/fetch/fetch.h's fetch_body_delivery). The
+   record is answered by the engine from the source and never listed to a host. */
+#define FLOW_PENDING_BODY      6
 
 /* WHAT THIS REQUEST IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three provenances, recorded
  * on the record at the PUSH because a park is a work item and its provenance is one of the inputs it has to
@@ -450,7 +456,10 @@ int pending_driven_compose(int kind, int path_driven);
        built by a path that does not stamp it cannot silently outrank every row and every callback of its
        flow. pending_push DCHECKs it rather than defaulting it (§Architecture: a consumer never defaults a
        producer's field). */ \
-    X(WORK_SEQ,   "workSeq",   PEND_SHARE,  JS_NewInt64(pend_ctx(), (int64_t)work_seq))
+    X(WORK_SEQ,   "workSeq",   PEND_SHARE,  JS_NewInt64(pend_ctx(), (int64_t)work_seq))       \
+    /* FLOW_PENDING_BODY's body source and the index of the piece it waits for */      \
+    X(SOURCE,     "source",    PEND_SHARE,  JS_NULL)                                   \
+    X(ITEM,       "item",      PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))
 
 enum {
 #define PEND_ENUM(id, name, copy, dflt) PEND_##id,
