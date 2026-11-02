@@ -3342,7 +3342,13 @@ function engineReserve(cluster, docId, msg, referenced) {
                 _inflight: new Map(),
                 /* This instance's reply clock (lib/reply-schedule.js), read at the top of every service round,
                    and how its answers were delivered: rounds, answers delivered, rounds that waited on the wire
-                   for a due answer, and the work skipped at stalls. */
+                   for a due answer, and the work skipped at stalls.
+                   Named residual. Not covered: a record one instance causes in another (a route, a perform, a
+                   cross-agent answer, a join) reaches the peer's renderer when this zone handles the notice, so
+                   it lands at a work point of the peer the two renderers' speeds chose. Next diff builds:
+                   engine/trusted.mjs's cluster timeline here (origins, an inbox, `clusterSafe`). Absence shows
+                   as: two extension runs of a multi-instance page differing in census rows while single-instance
+                   runs agree. */
                 _replyClock: replyClock(0),
                 _replyDelivery: { rounds: 0, delivered: 0, waits: 0, skipped: 0 },
                 _epoch: self.frontierEpoch(), r: null, _readyP: null,
