@@ -1353,6 +1353,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/uspiso.h"
 #include "fixture/boundpark.h"
 #include "fixture/bytesimage.h"
+#include "fixture/freezeunk.h"
+#include "fixture/blobunk.h"
 #include "fixture/dynfuncsink.h"
 #include "fixture/joincompose.h"
 #include "fixture/recordless.h"
@@ -1990,6 +1992,8 @@ TF_DOCS[] = {
     { "uspiso", HTML_USPISO },
     { "boundpark", HTML_BOUNDPARK },
     { "bytesimage", HTML_BYTESIMAGE },
+    { "freezeunk", HTML_FREEZEUNK },
+    { "blobunk", HTML_BLOBUNK },
     { "dynfuncsink", HTML_DYNFUNCSINK },
     { "joincompose", HTML_JOINCOMPOSE },
     { "twinread", HTML_TWINREAD },
@@ -20020,6 +20024,51 @@ TF_UNIT void probes_bytesimage(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `freezeunk` document (fixture/freezeunk.h): a record with unknown own keys, frozen before its
+   first enumeration, reports its one member frozen on the arm that holds one and none on the empty arm. */
+TF_UNIT void probes_freezeunk(const char *js, Probe *tab, int *n) {
+    const char *why = NULL; int tt = 1;
+    fold_row(&tt, &why, !!strstr(js, "\"/api/fz-keys\""),
+             "NOT REACHED: there is no /api/fz-keys record, so the document aborted freezing the record");
+    fold_row(&tt, &why, param_value_is(js, "/api/fz-keys", "n", "0"),
+             "no /api/fz-keys?n=0 record: the world where the stored record holds no member did not send");
+    fold_row(&tt, &why, param_value_is(js, "/api/fz-keys", "n", "1"),
+             "no /api/fz-keys?n=1 record: the member of a record made non-extensible by §7.3.15 step 1 was not "
+             "named by step 3's [[OwnPropertyKeys]]");
+    fold_row(&tt, &why, !param_value_is(js, "/api/fz-keys", "f", "false"),
+             "a /api/fz-keys?f=false record: Object.isFrozen answered false after Object.freeze, so §7.3.15 "
+             "step 5 did not fix a member step 3 named");
+    const Probe rows[] = {
+        { "freezeunk", tt, "/api/fz-keys", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `blobunk` document (fixture/blobunk.h): blob() over a reply of unknown bytes is a Blob whose
+   size and text are that reply's unknowns, so a gate on either forks. */
+TF_UNIT void probes_blobunk(const char *js, Probe *tab, int *n) {
+    const char *ty_why = NULL; int ty_tt = 1;
+    fold_row(&ty_tt, &ty_why, param_value_is(js, "/api/bu-type", "blob", "true"),
+             "NOT REACHED: there is no /api/bu-type?blob=true record, so blob() over the unknown reply did not "
+             "settle with a Blob");
+    int slong = !!strstr(js, "\"/api/bu-size/long\""), sshort = !!strstr(js, "\"/api/bu-size/short\"");
+    const char *sz_why = NULL; int sz_tt = 1;
+    fold_row(&sz_tt, &sz_why, slong || sshort, "NOT REACHED: neither arm of the size gate emitted");
+    fold_row(&sz_tt, &sz_why, slong && sshort,
+             "only one arm of the size gate ran: the Blob's size answered as a concrete number");
+    int tok = !!strstr(js, "\"/api/bu-text/ok\""), tother = !!strstr(js, "\"/api/bu-text/other\"");
+    const char *tx_why = NULL; int tx_tt = 1;
+    fold_row(&tx_tt, &tx_why, tok || tother, "NOT REACHED: neither arm of the text() gate emitted");
+    fold_row(&tx_tt, &tx_why, tok && tother,
+             "only one arm of the text() gate ran: the Blob's text answered as a concrete string");
+    const Probe rows[] = {
+        { "bu-type", ty_tt, "/api/bu-type", SESS_EXPLORE, ty_why },
+        { "bu-size", sz_tt, "/api/bu-size/long", SESS_EXPLORE, sz_why },
+        { "bu-text", tx_tt, "/api/bu-text/ok", SESS_EXPLORE, tx_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `inlineflex` document (fixture/inlineflex.h). */
 TF_UNIT void probes_inlineflex(const char *js, Probe *tab, int *n) {
     /* css-flexbox-1 §8.5 "Flex Container Baselines": an `inline-flex` on a line beside text. */
@@ -24423,6 +24472,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_uspiso(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_bytesimage(js, probes, &np);
+    probes_freezeunk(js, probes, &np);
+    probes_blobunk(js, probes, &np);
     probes_dynfuncsink(js, probes, &np);
     probes_joincompose(js, probes, &np);
     probes_twinread(js, probes, &np);
