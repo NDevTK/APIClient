@@ -31,11 +31,23 @@
  * would be inventing the value rather than transcribing it. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_PRESENTATIONAL_HINTS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_PRESENTATIONAL_HINTS_H
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
 
 /* Every declaration this origin gives `el`, handed to `sink` as a longhand and the text its specified value is
    read from, each borrowed for the call. A longhand is declared at most once. */
 typedef void (*CssHintSink)(void *ud, const char *longhand, const char *value);
 void css_presentational_hints_collect(lxb_dom_element_t *el, CssHintSink sink, void *ud);
+
+/* HTML §15.3.2 "The page"'s third margin source as it crosses an instance boundary: the container frame
+   element's `marginheight` then `marginwidth`, each as the digits §15.2's "maps to the pixel length property"
+   parses out of it, or `-` where the attribute is absent or does not parse, joined by a comma (`20,-`).
+   `container` is a navigable's container element, or NULL; one that is not a `frame` or `iframe` is no
+   container frame element and answers CSS_FRAME_OWNER_MARGINS_NONE. Malloc'd; the caller frees. */
+#define CSS_FRAME_OWNER_MARGINS_NONE "-,-"
+char *css_frame_owner_margins_serialize(lxb_dom_element_t *container);
+/* Whether `serialized` is in that grammar. */
+bool css_frame_owner_margins_valid(const char *serialized);
 
 #endif

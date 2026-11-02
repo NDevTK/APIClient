@@ -21,6 +21,7 @@
 #include "core/fetch/headers.h"         /* the response's header list, as the field lines it crosses the ABI in */
 #include "core/dom/document.h"
 #include "core/dom/node.h"           /* §7.3.1.3's container is an ELEMENT, and §7.1.4.2 wants its node document */
+#include "core/css/css_presentational_hints.h"   /* HTML §15.3.2's container frame element margins cross to a peer */
 #include "core/html/html_base_element.h"  /* §4.2.3 step 2's shape, which the rules below assert an element's
                                              target has already been through — see navigable_open */
 #include "core/html/html_iframe.h"   /* §7.2.2.2's document-tree child navigables — §7.1's walk descends them */
@@ -4065,6 +4066,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        RECORD, the container element — is in THIS heap, and the one that could not be sent even if the others
        were is the origin record, which is what §7.1.1's same origin decides step 10 by. See the notice below. */
     char *ancestor_origins = NULL;
+    /* And HTML §15.3.2's container frame element margins for that navigable, on the same arm: the attributes
+       are on the element in this heap. */
+    char *frame_owner = NULL;
     /* AND §7.1.5's CREATION SANDBOXING FLAG SET FOR THAT SAME NAVIGABLE, as text, on the same arm and for the
        same reason as the three above: both of that section's inputs — the `<iframe sandbox>` ELEMENT and this
        document's own active set — are in this heap, and an element crosses no instance boundary. See the
@@ -4609,6 +4613,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             container_policy = reclaim_strdup(PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
             ancestor_origins = reclaim_strdup(DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
         }
+        /* HTML §15.3.2's container frame element margins, the fourth fact the container holds: the attributes
+           are in this tree, so they are parsed here and the result crosses. */
+        frame_owner = css_frame_owner_margins_serialize(is_child ? lxb_dom_interface_element(node_of(container))
+                                                                 : NULL);
         CHECK(container_policy != NULL,
               "navigable: OOM stating §9.5's answer for this navigable's container to a peer instance");
         CHECK(ancestor_origins != NULL,
@@ -4657,6 +4665,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             [NAVIGABLE_CREATE_PARENT] = parent_id,
             [NAVIGABLE_CREATE_CONTAINER_POLICY] = container_policy,
             [NAVIGABLE_CREATE_ANCESTOR_ORIGINS] = ancestor_origins,
+            [NAVIGABLE_CREATE_FRAME_OWNER] = frame_owner,
             [NAVIGABLE_CREATE_SANDBOX_FLAGS] = sandbox_flags,
             [NAVIGABLE_CREATE_PROVENANCE] = provenance,
             [NAVIGABLE_CREATE_GROUP] = peer_in_creator_group ? "creator" : "new",
@@ -4682,6 +4691,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         free(opener_id);
         free(container_policy);
         free(ancestor_origins);
+        free(frame_owner);
         free(sandbox_flags);
         /* THROUGH THE ONE DOOR, so this navigable is the one a peer's answer resolves to. The child was just
            minted and nothing has named it yet, so this ask is the mint — but it is the ask that RECORDS it,
@@ -4859,6 +4869,25 @@ void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const c
        on which host made it, so there is no shape of caller it silently serves differently. */
     if (document_ancestor_origins_serialized_has_ancestors(ancestor_origins))
         window_proxy_set_remote_ancestor_origins(proxy, ancestor_origins);
+}
+
+/* HTML §15.3.2's container frame element margins for the navigable this instance is rooted in. A navigable with
+   no parent has no container, so it states no margins; one under a peer parent states what its container in
+   that peer answered, an `object` or `embed` container included (no container frame element, both `-`). */
+void navigable_root_frame_owner(JSContext *ctx, JSValueConst proxy, const char *frame_owner)
+{
+    JSValue parent = window_proxy_parent_navigable(ctx, proxy);
+    bool remote_parent = window_proxy_is(parent) && window_proxy_is_remote(parent);
+
+    JS_FreeValue(ctx, parent);
+    DCHECK(frame_owner != NULL && css_frame_owner_margins_valid(frame_owner),
+           "a navigable was rooted with container frame element margins outside "
+           "css_frame_owner_margins_serialize's grammar — two comma-joined parts, each a digit run or `-`");
+    DCHECK(remote_parent || strcmp(frame_owner, CSS_FRAME_OWNER_MARGINS_NONE) == 0,
+           "a navigable with no peer parent was rooted with container frame element margins — §7.3.1.3 gives "
+           "only a child navigable a container, and a container in this heap answers from its own element");
+    if (remote_parent)
+        window_proxy_set_remote_frame_owner(proxy, frame_owner);
 }
 
 /* See navigable.h. */

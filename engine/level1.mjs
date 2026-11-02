@@ -1087,7 +1087,8 @@ async function mintDrive(minted, slices) {
     op: 'navigable.create', child: 'gap-doc.1-0123456789abcdef', creator: 'gap-doc', address: 'https://b.test/f',
     origin: 'https://b.test', topLevelUrl: 'https://a.test/', cspSelfOrigin: 'https://a.test', coep: 'unsafe-none',
     coepEndpoint: '', coepReportOnly: 'unsafe-none', coepReportOnlyEndpoint: '', referrerPolicy: '', parent: 'p.x.',
-    containerPolicy: 'null', ancestorOrigins: 'https://a.test', sandboxFlags: 'none', provenance: 'derived',
+    containerPolicy: 'null', ancestorOrigins: 'https://a.test', frameOwner: '-,-', sandboxFlags: 'none',
+    provenance: 'derived',
     group: 'creator', driven: 'undriven', pinned: 'unpinned', opener: 'N', policy: '', policyReportOnly: '' }, o);
   const provision = (op, o) => tableRecord(NN.provision, { op, document: 'gap-doc.2-0123456789abcdef',
     address: 'https://b.test/n', origin: 'https://b.test', provenance: 'derived', driven: 'undriven',

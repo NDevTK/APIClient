@@ -287,7 +287,7 @@ typedef struct {
     char *inherited_csp, *inherited_csp_report_only, *inherited_csp_self_origin, *inherited_coep,
          *inherited_coep_endpoint, *inherited_coep_report_only, *inherited_coep_report_only_endpoint,
          *inherited_referrer_policy;
-    char *parent_navigable, *opener_navigable, *container_policy, *ancestor_origins, *arrival;
+    char *parent_navigable, *opener_navigable, *container_policy, *ancestor_origins, *frame_owner, *arrival;
 } QjsPendingDocument;
 
 static QjsPendingDocument *g_pending;
@@ -366,7 +366,7 @@ static void qjs_pending_free(QjsPendingDocument *p)
                        &p->inherited_csp_self_origin, &p->inherited_coep, &p->inherited_coep_endpoint,
                        &p->inherited_coep_report_only, &p->inherited_coep_report_only_endpoint,
                        &p->inherited_referrer_policy, &p->parent_navigable, &p->opener_navigable,
-                       &p->container_policy, &p->ancestor_origins, &p->arrival };
+                       &p->container_policy, &p->ancestor_origins, &p->frame_owner, &p->arrival };
     size_t i;
 
     DCHECK(p->load == NULL && p->decoded == NULL, "a pending document was freed with its load still open");
@@ -385,6 +385,7 @@ static QjsPendingDocument *qjs_pending_new(const char *url, const char *top_leve
                                            const char *inherited_referrer_policy,
                                            const char *parent_navigable, const char *opener_navigable,
                                            const char *container_policy, const char *ancestor_origins,
+                                           const char *frame_owner,
                                            SandboxFlags creation_flags, NavigationParams np)
 {
     QjsPendingDocument *p = calloc(1, sizeof *p);
@@ -404,6 +405,7 @@ static QjsPendingDocument *qjs_pending_new(const char *url, const char *top_leve
     p->opener_navigable = qjs_own(opener_navigable);
     p->container_policy = qjs_own(container_policy);
     p->ancestor_origins = qjs_own(ancestor_origins);
+    p->frame_owner = qjs_own(frame_owner);
     p->creation_flags = creation_flags;
     p->np = np;   /* moved: the pending record frees it */
     return p;
@@ -521,6 +523,9 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * origin serializes to `null`, and step 10 compares by identity), so this is the result, in core/dom/document.h's
  * grammar; "there are no ancestors" is a top-level or auxiliary document's statement. core/dom/document.c crashes
  * on its absence, since an empty list would claim this document is at the top. */
+/* `frame_owner` is HTML §15.3.2 "The page"'s container frame element margins for this document's navigable,
+ * parsed by the creating instance from the container element's attributes in core/css/css_presentational_hints.h's
+ * grammar, `-,-` for a navigable with no container frame element (navigable_root_frame_owner). */
 /* `creation_sandbox_flags` is HTML §7.1.5 "Sandboxing"'s creation sandboxing flag set for this document's
  * navigable, separate from the container (§7.3.2.1 sets them in different steps). §7.1.5 reads the embedder's
  * iframe sandboxing flag set and its node document's active sandboxing flag set, which live in the creating
@@ -539,7 +544,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_referrer_policy,
                         const char *parent_navigable, const char *opener_navigable,
                         const char *container_policy,
-                        const char *ancestor_origins, const char *creation_sandbox_flags)
+                        const char *ancestor_origins, const char *frame_owner,
+                        const char *creation_sandbox_flags)
 {
     /* §7.1.5's set, parsed before anything is built from it; see the read below. */
     SandboxFlags creation_flags = 0;
@@ -646,7 +652,7 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                                 inherited_csp_self_origin, inherited_coep, inherited_coep_endpoint,
                                 inherited_coep_report_only, inherited_coep_report_only_endpoint,
                                 inherited_referrer_policy, parent_navigable, opener_navigable, container_policy,
-                                ancestor_origins, creation_flags, np);
+                                ancestor_origins, frame_owner, creation_flags, np);
     g_pending->origin = origin;   /* taken */
     engine_parse_begin(g_pending, html, html_len, &response_headers);
     header_list_free(&response_headers);
@@ -730,6 +736,8 @@ static void qjs_init_install(QjsPendingDocument *p)
         /* §3.1.3's ancestor origins for that navigable's document, before the install, since §7.3.2.1 reads it
            there (see core/frame/navigable.h). */
         navigable_root_ancestor_origins(g_ctx, root_proxy, p->ancestor_origins);
+        /* §15.3.2's container frame element margins, which that navigable's body reads as its third source. */
+        navigable_root_frame_owner(g_ctx, root_proxy, p->frame_owner);
         /* §7.5.1's Document, from the navigation params decided above: §7.4.5's final sandboxing flag set, §7.1.7
            step 3's CSP list and §7.1.7's create-a-policy-container-from-a-fetch-response step 4 embedder item are
            `np`'s (core/frame/navigation_params.c); this file says which navigable and which realm. */
@@ -794,8 +802,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_referrer_policy,
                         const char *parent_navigable, const char *opener_navigable,
                         const char *container_policy,
-                        const char *ancestor_origins, const char *creation_sandbox_flags,
-                        const char *arrival)
+                        const char *ancestor_origins, const char *frame_owner,
+                        const char *creation_sandbox_flags, const char *arrival)
 {
     /* §7.1.5's set for this document's navigable, stated as in qjs_init. */
     SandboxFlags creation_flags = 0;
@@ -895,7 +903,7 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     p = qjs_pending_new(url, top_level_url, inherited_csp, inherited_csp_report_only, inherited_csp_self_origin,
                         inherited_coep, inherited_coep_endpoint, inherited_coep_report_only,
                         inherited_coep_report_only_endpoint, inherited_referrer_policy, parent_navigable,
-                        opener_navigable, container_policy, ancestor_origins, creation_flags, np);
+                        opener_navigable, container_policy, ancestor_origins, frame_owner, creation_flags, np);
     p->doc = doc;
     p->arrival = qjs_own(arrival);
     engine_parse_begin(p, html, html_len, &response_headers);
@@ -950,6 +958,8 @@ static void qjs_join_install(QjsPendingDocument *p)
         navigable_root_opener(cctx, proxy, p->opener_navigable);
         /* §3.1.3's ancestor origins for that navigable's document, composed in the peer that holds them. */
         navigable_root_ancestor_origins(cctx, proxy, p->ancestor_origins);
+        /* §15.3.2's container frame element margins, stated as in qjs_init. */
+        navigable_root_frame_owner(cctx, proxy, p->frame_owner);
         SerializedPolicyContainer response =
             serialized_policy_container(np->csp, np->csp_report_only, origin_serialized(origin_agent()),
                                         serialized_embedder_policy_of(&np->embedder), np->integrity_policy,

@@ -124,6 +124,7 @@ function statement(url, creationSandboxFlags) {
     openerNavigable: 'N',   // §7.2.2.4's opener, remote_object.h's null: nothing opened a page a person named
     containerPolicy: 'null',
     ancestorOrigins: 'none',
+    frameOwner: '-,-',   // HTML §15.3.2: a document nothing embeds has no container frame element
     creationSandboxFlags,
   };
 }

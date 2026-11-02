@@ -3138,7 +3138,8 @@ function embedderPolicyWhole(e) {
    one line. The renderer's name is this instance's agent cluster key: renderer-host.js takes a name and
    computes nothing, so the name this zone passes is the answer, and it identifies the frame. */
 function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
-                      openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags, referenced) {
+                      openerNavigable, containerPolicy, ancestorOrigins, frameOwner, creationSandboxFlags,
+                      referenced) {
   /* The one way to obtain an instance, asserted rather than met as a TypeError inside admit's catch (which
      would report a boot abort of an instance never built). render-process-host.js holds which agent clusters
      have an instance, mints the routing id and refuses a second for one cluster in every build;
@@ -3198,6 +3199,11 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
          "notice carries the list the creating engine composed; a document nothing embeds says `none`). An " +
          "absent one is a caller that skipped the question and a frame that would report itself as the top of " +
          "its own tree");
+  /* HTML §15.3.2's container frame element margins, parsed by the creating instance where the container
+     element is; `-,-` for a document no frame or iframe presents. */
+  DCHECK(typeof frameOwner === "string" && frameOwner !== "",
+         "an instance was started with no HTML §15.3.2 container frame element margins — a create notice " +
+         "carries the creating engine's, and a document nothing embeds says `-,-`");
   /* The creation sandboxing flag set (HTML §7.1.5 Sandboxing) for that navigable, not an item of the policy
      container (§7.3.2.1 Creating browsing contexts sets them in different steps). It reads the embedder
      element's flags, so the creating engine computes it and this carries the answer; `none` is the empty set.
@@ -3245,7 +3251,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, inherited,
       eng.r = await self.rendererLaunch(cluster);
       bootSpanMark(eng.docId, "rendererReady");
       await engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
-                       openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags);
+                       openerNavigable, containerPolicy, ancestorOrigins, frameOwner, creationSandboxFlags);
       /* A Clear that landed mid-boot is honoured here: hostClear cannot destroy a renderer with a call
          outstanding, so it marks the record and the owner of that call removes the frame. */
       if (eng._dropped) engineFrameDestroy(eng);
@@ -3455,7 +3461,7 @@ function enginePolicySettle(eng, docName, policy) {
    the pool's record is the one every question about this cluster has been answered by since provisioning
    began, and a second object would give one document two records. */
 async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
-                          openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags) {
+                          openerNavigable, containerPolicy, ancestorOrigins, frameOwner, creationSandboxFlags) {
   const rend = eng.r;
   DCHECK(rend && rend.name === eng.cluster,
          "a renderer was provisioned under a name that is not its instance's agent cluster — the frame's " +
@@ -3535,7 +3541,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
     inheritedCoepReportOnly: _initEp.reportOnlyValue,
     inheritedCoepReportOnlyEndpoint: _initEp.reportOnlyEndpoint,
     inheritedReferrerPolicy: inherited ? inherited.referrerPolicy : DEFAULT_REFERRER_POLICY,
-    parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags });
+    parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, frameOwner, creationSandboxFlags });
   /* The engine's entry CHECKs every precondition and aborts, so a non-zero return is a contract this zone does
      not speak, refused as the instance's answer. */
   if (_init.rc !== 0) {
@@ -3985,7 +3991,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
    engineCreate's. */
 async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, parentNavigable, openerNavigable,
                           containerPolicy,
-                          ancestorOrigins, creationSandboxFlags) {
+                          ancestorOrigins, frameOwner, creationSandboxFlags) {
   DCHECK(eng.state === "hot" || eng.state === "fetching",
          "a document was joined to an instance in state `" + eng.state + "` — a join ADDS a document to a LIVE " +
          "agent, and qjs_join's own asserts name the two calls that must already have happened (qjs_init roots " +
@@ -4028,6 +4034,10 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
          "`none` are the two facts a host states, so an absent one is a caller that skipped the question and " +
          "a nested document that would answer `location.ancestorOrigins` with `[]` while sitting inside " +
          "somebody else's frame tree");
+  /* The container frame element margins, on engineCreate's rule. */
+  DCHECK(typeof frameOwner === "string" && frameOwner !== "",
+         "a document was joined with no HTML §15.3.2 container frame element margins — a create notice carries " +
+         "the creating engine's, and a document nothing embeds says `-,-`");
   /* The creation sandboxing flags, on the same rule. A join is reachable with a sandbox: `<iframe
      sandbox="allow-same-origin allow-scripts" src="https://cdn/…">` keeps the child's tuple origin (so it
      clusters with that host's documents) while most HTML §7.1.5 Sandboxing flags stay set. The sandboxed
@@ -4076,7 +4086,7 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
     inheritedCoepReportOnly: inherited.embedder.reportOnlyValue,
     inheritedCoepReportOnlyEndpoint: inherited.embedder.reportOnlyEndpoint,
     inheritedReferrerPolicy: inherited.referrerPolicy,
-    parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
+    parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, frameOwner, creationSandboxFlags,
     arrival: msg.arrival });
   /* As qjs_init's: a non-zero return is a contract this zone does not speak, so the instance is refused and
      the join goes no further; the instance is finalized at its next step. */
@@ -4928,6 +4938,7 @@ function noticeRefusal(f) {
              noticeWord(f[C.group], ["creator", "new"], "group") ||
              noticeArrival(f[C.provenance], f[C.driven], f[C.pinned]) || noticeSandbox(f[C.sandboxFlags]) ||
              noticeName(f[C.ancestorOrigins], "HTML §3.1.3 ancestor origins statement") ||
+             noticeName(f[C.frameOwner], "HTML §15.3.2 container frame element margins") ||
              noticeName(f[C.containerPolicy], "HTML §7.3.1.3 container statement") ||
              noticeName(f[C.parent], "HTML §7.3.1.3 parent navigable") ||
              noticeName(f[C.opener], "HTML §7.2.2.4 opener navigable") ||
@@ -5179,6 +5190,9 @@ async function hostNotice(eng, line) {
        opaque). Entries are origin serializations joined by SPACE, which URL §3.2 Host miscellaneous forbids in
        a host, as it does TAB. */
     const ancestorOrigins = f[C.ancestorOrigins];
+    /* The container frame element margins (HTML §15.3.2 The page), parsed by the creating engine from the
+       container's attributes. Digit runs, `-` and a comma; relayed verbatim. */
+    const frameOwner = f[C.frameOwner];
     /* The creation sandboxing flag set (HTML §7.1.5 Sandboxing), not an item of the policy
        container; it reads the embedder element and its node document's active flags, so the creating engine
        computes it. Members are joined by COMMA because §7.1.5's flag names contain spaces. Relayed verbatim;
@@ -5235,7 +5249,7 @@ async function hostNotice(eng, line) {
          composed for the announced child. */
       await engineJoin(holder, msg.pageHtml, msg, f[C.child], f[C.topLevelUrl], inherited, parentNavigable,
                        openerNavigable, containerPolicy,
-                       ancestorOrigins, creationSandboxFlags);
+                       ancestorOrigins, frameOwner, creationSandboxFlags);
       return;
     }
     /* A child document joins the one pool and is ranked, sliced, parked and finalized like every other. It has
@@ -5244,7 +5258,8 @@ async function hostNotice(eng, line) {
        the instance must exist before the post is routed. Referenced, since the notice itself proves a
        WindowProxy is held for it. */
     await engineCreate("", msg.pageHtml, msg, false, f[C.child], f[C.topLevelUrl], inherited, parentNavigable,
-                       openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags, 1)._readyP;
+                       openerNavigable, containerPolicy, ancestorOrigins, frameOwner, creationSandboxFlags,
+                       1)._readyP;
     return;
   }
   /* `navigable.swap <new document> <url> <origin> <provenance>` — HTML §7.1.3.2 Browsing context group
@@ -5314,7 +5329,7 @@ async function hostNotice(eng, line) {
        and the emitting engine discards it after writing this notice, so the opener's handle answers about the
        document it had (its `closed` is true) and nothing holds a proxy for this one. */
     await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[P.document], swapped.url, null, "u", "N", "null",
-                       "none", swapMsg.sandbox, 0)._readyP;
+                       "none", "-,-", swapMsg.sandbox, 0)._readyP;
     return;
   }
   /* `navigable.navigate <new document> <url> <origin> <provenance>` — a TOP-LEVEL traversable navigated to a
@@ -5391,13 +5406,13 @@ async function hostNotice(eng, line) {
          tab's top-level navigation joining its cluster. */
       await engineJoin(navHolder, navMsg.pageHtml, navMsg, f[P.document], navd.url,
                        { csp: "", cspReportOnly: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
-                         referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", _navOpener, "null", "none",
+                         referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", _navOpener, "null", "none", "-,-",
                        navMsg.sandbox);
       return;
     }
     /* No creator: engineCreate's grammar for that is `null`, as for the swap arm. */
     await engineCreate("", navMsg.pageHtml, navMsg, false, f[P.document], navd.url, null, "u", _navOpener, "null",
-                       "none", navMsg.sandbox, 1)._readyP;
+                       "none", "-,-", navMsg.sandbox, 1)._readyP;
     return;
   }
   /* `document.seed <address> <provenance> <driven> <pinned> <issuer>` — an address the application declared is a page of itself, reached
@@ -6554,7 +6569,7 @@ async function admitSeatLand(seat) {
        no caller awaits it, so its findings merge into the cumulative store. Not referenced: nothing holds a
        WindowProxy for a merely declared route, so its frontier may drain. */
     await engineCreate("", loaded.bytes, msg, true, null, loaded.url, null, "u", "N", "null",
-                       "none", msg.sandbox, 0)._readyP;
+                       "none", "-,-", msg.sandbox, 0)._readyP;
     return null;
   }
   DCHECK(seat.what.kind === "cold",
@@ -6617,7 +6632,7 @@ async function admitSeatLand(seat) {
        `qjs_set_referenced` surviving a teardown, which is one instance's statement about itself across a park;
        here a new instance replaces one whose peers no longer exist. */
     await engineCreate(doc.code, doc.html, msg, true, null, null, null, "u", "N", "null",
-                       "none", msg.sandbox, 0)._readyP;
+                       "none", "-,-", msg.sandbox, 0)._readyP;
     return null;
   }
 }
@@ -6884,7 +6899,7 @@ const _hostOps = {
          entry asserts it carries no document), as for the admission arm's engineCreate. */
       await engineJoin(swap.cluster, swap.job.html, swap.job.msg, swap.docId, _tlu,
                        { csp: "", cspReportOnly: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY,
-                         referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none",
+                         referrerPolicy: DEFAULT_REFERRER_POLICY }, "u", "N", "null", "none", "-,-",
                        swap.job.msg.sandbox);
       await engineUnload(swap.cluster, swap.outgoing, swap.docId);
       /* `null`: this round spent its advance on the navigation and never asked the non-resident order. */
@@ -6998,7 +7013,7 @@ const _hostOps = {
            its frontier may drain. A cross-origin child created into this instance later is the join arm's
            question, refused there, since the flag can only be stated before the frontier is seeded. */
         const eng = engineCreate("", job.html, job.msg, job.persist, null, null, null, "u",
-                                 "N", "null", "none", job.msg.sandbox, 0);
+                                 "N", "null", "none", "-,-", job.msg.sandbox, 0);
         DCHECK(hostClusterOf(key) === eng,
                "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
                "the slot being taken synchronously is that the next arrival for this cluster finds it, so a " +

@@ -676,7 +676,7 @@ try {
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
     inheritedReferrerPolicy: 'strict-origin-when-cross-origin',
-    parentNavigable: 'u', openerNavigable: 'N', containerPolicy: 'null', ancestorOrigins: 'none',
+    parentNavigable: 'u', openerNavigable: 'N', containerPolicy: 'null', ancestorOrigins: 'none', frameOwner: '-,-',
     creationSandboxFlags: 'none' });
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
@@ -865,6 +865,12 @@ try {
          'created the child with `window.open` — HTML §7.3.1.7 step 8 makes that an AUXILIARY navigable, ' +
          'which has no container document, so §3.1.3\'s step 3 returns the empty list and `none` is what the ' +
          'record must say. A list here would give the peer ancestors it has none of');
+  /* And HTML §15.3.2's container frame element margins, on the same arm: a navigable no element presents has no
+     container frame element, so both margins are `-`. */
+  if (create[C.frameOwner] !== '-,-')
+    fail(`the create notice's §15.3.2 container frame element margins are \`${create[C.frameOwner]}\` for a ` +
+         'child created with `window.open` — an auxiliary navigable has no container, so `-,-` is what the ' +
+         'record must say');
   /* AND HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET, WHICH THIS PHASE PROVES THE EMPTY ARM OF AND
      PROVES BY A DIFFERENT SENTENCE FROM THE THREE ABOVE. The other three are empty because an auxiliary
      navigable has no CONTAINER; this one is empty because §7.1.5 answers a navigable with no embedder from its

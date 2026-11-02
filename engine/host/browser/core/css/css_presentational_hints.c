@@ -183,28 +183,29 @@ static bool document_is_child_navigable(const lxb_dom_node_t *doc)
     return child;
 }
 
+/* Whether `el` is a `frame` or `iframe` element, the two navigable containers §15.3.2 names. §7.3.1.3's
+   containers also include `object`, `embed` and `fencedframe`, and a document inside one of those has no
+   container frame element and takes the 8px default. */
+static bool hint_is_frame_owner(lxb_dom_element_t *el)
+{
+    const lxb_char_t *tag;
+    size_t taglen = 0;
+
+    tag = lxb_dom_element_local_name(el, &taglen);
+    DCHECK(tag != NULL, "a navigable container element has no local name");
+    return (taglen == 6 && memcmp(tag, "iframe", 6) == 0) || (taglen == 5 && memcmp(tag, "frame", 5) == 0);
+}
+
 /* HTML §15.3.2 "The page"'s CONTAINER FRAME ELEMENT, in the section's own two conjuncts: "if the body
-   element's node document's node navigable is a CHILD NAVIGABLE, and the container of that navigable is a
-   FRAME OR IFRAME element, then the container frame element of the body element is that frame or iframe
-   element. Otherwise, there is no container frame element."
-   THE SECOND CONJUNCT IS NOT DECORATION. §7.3.1.3's navigable containers are `iframe`, `object`, `embed` and
-   `fencedframe`, and §15.3.2 names two of them — so a `<body marginheight=…>`-less document inside an
-   `<object>` has NO container frame element and takes the 8px default, while the same document inside an
-   `<iframe marginheight=20>` takes 20. A test that only asked whether the navigable has a container would
-   read an `object`'s attribute that HTML never routes here.
-   NULL IS TWO DIFFERENT ANSWERS AND ONLY ONE OF THEM IS A GAP. There is genuinely no container frame element
-   for a top-level traversable and for a container HTML does not name, and §15.3.2 states the default for
-   exactly those. A container that EXISTS and cannot be reached is the third thing, and it crashes: §7.3.1.3
-   gives every child navigable a container, so a child navigable whose container reads back null is one whose
-   container element lives in another agent — the cross-origin case §15.3.2's own note says is intentional
-   ("a page can change the margins of another page, including one from another origin"). */
+   element's node document's node navigable is a child navigable, and the container of that navigable is a
+   frame or iframe element, then the container frame element of the body element is that frame or iframe
+   element. Otherwise, there is no container frame element." Asked only for a container in this heap: one in
+   another instance is answered by its stated margins (hint_remote_frame_owner). */
 static lxb_dom_element_t *hint_container_frame_element(const lxb_dom_node_t *doc)
 {
     JSContext *ctx;
     JSValue container;
     lxb_dom_node_t *n;
-    const lxb_char_t *tag;
-    size_t taglen = 0;
 
     if (!document_is_child_navigable(doc)) return NULL;
     ctx = document_active_realm_of(doc);
@@ -212,22 +213,15 @@ static lxb_dom_element_t *hint_container_frame_element(const lxb_dom_node_t *doc
            "§15.3.2's container-frame walk found a document that IS a child navigable and has no realm or no "
            "WindowProxy — the predicate above establishes both before answering true, so the two tests have "
            "come apart");
+    DCHECK(window_proxy_remote_frame_owner(document_window_proxy(ctx)) == NULL,
+           "§15.3.2's container frame element was looked for in this heap for a navigable whose container is in "
+           "another instance — its stated margins answer the third source, and the caller asks them first");
     container = window_proxy_container(ctx, document_window_proxy(ctx));
     if (JS_IsNull(container)) {
+        /* §7.3.1.3's container is "null if there is no such element", which for a child navigable of this heap
+           follows §7.3.1.6's destroy clearing the element's content navigable: there is no container frame
+           element. */
         JS_FreeValue(ctx, container);
-        DFAIL("HTML §15.3.2 \"The page\"'s THIRD SOURCE for a body margin is the body element's CONTAINER "
-              "FRAME ELEMENT's `marginheight`/`marginwidth` attribute, this document's navigable IS a child "
-              "navigable — so §7.3.1.3 \"Child navigables\" gives it a container — and that container reads "
-              "back NULL. THE REVERSE EDGE IS NOT WHAT IS MISSING: `window_proxy_container` answers it, "
-              "recorded by create-a-new-child-navigable and confirmed against the element's own content "
-              "navigable so it is per-flow. What is missing is a container in ANOTHER AGENT: a cross-origin "
-              "parent holds the `iframe` element in a different WASM instance, so there is no wrapper in this "
-              "heap to read an attribute off. HTML §15.3.2's own note says that read is intentional rather "
-              "than an oversight — \"a page can change the margins of another page (including one from another "
-              "origin)\" — and answering 8px here is a REAL NUMBER for a page whose embedder wrote "
-              "`<iframe marginheight=20>`, with nothing to say the attribute was never read. BUILD the "
-              "suspend-at-the-boundary read (a synchronous cross-instance read is a suspend point) and ask the "
-              "peer for the container's attribute");
         return NULL;
     }
     n = node_of(container);
@@ -238,11 +232,73 @@ static lxb_dom_element_t *hint_container_frame_element(const lxb_dom_node_t *doc
            "anything else is a slot written by something that is not that algorithm");
     /* The node is owned by the parent document's tree, not by the wrapper, so it outlives the reference freed
        above — an element that is a navigable's container is by definition still in that tree. */
-    tag = lxb_dom_element_local_name(lxb_dom_interface_element(n), &taglen);
-    DCHECK(tag != NULL, "a navigable container element has no local name");
-    if (taglen == 6 && memcmp(tag, "iframe", 6) == 0) return lxb_dom_interface_element(n);
-    if (taglen == 5 && memcmp(tag, "frame", 5) == 0) return lxb_dom_interface_element(n);
-    return NULL;
+    return hint_is_frame_owner(lxb_dom_interface_element(n)) ? lxb_dom_interface_element(n) : NULL;
+}
+
+/* The margins a container frame element in another instance stated for this document's navigable
+   (css_frame_owner_margins_serialize), or NULL when the container is in this heap or there is none. */
+static const char *hint_remote_frame_owner(const lxb_dom_node_t *doc)
+{
+    if (!document_is_child_navigable(doc)) return NULL;
+    return window_proxy_remote_frame_owner(document_window_proxy(document_active_realm_of(doc)));
+}
+
+/* Part `i` of stated margins, in PAGE_MARGIN's order: its first byte, with its length in `*len`. */
+static const char *frame_owner_margin_part(const char *serialized, unsigned i, size_t *len)
+{
+    const char *part = serialized;
+
+    for (; i > 0; i--) {
+        part = strchr(part, ',');
+        DCHECK(part != NULL, "stated container margins have fewer parts than PAGE_MARGIN has rows — "
+                             "navigable_root_frame_owner checks the grammar when they are stated");
+        part++;
+    }
+    *len = strcspn(part, ",");
+    return part;
+}
+
+char *css_frame_owner_margins_serialize(lxb_dom_element_t *container)
+{
+    const lxb_char_t *digits[2] = { NULL, NULL };
+    size_t dlen[2] = { 0, 0 }, total = 0;
+    char *out, *w;
+    unsigned i;
+
+    _Static_assert(sizeof(PAGE_MARGIN) / sizeof(PAGE_MARGIN[0]) == 2, "the stated margins have one part per row");
+    for (i = 0; container != NULL && hint_is_frame_owner(container) && i < 2; i++) {
+        size_t vlen = 0;
+        const lxb_char_t *v = lxb_dom_element_get_attribute(container, (const lxb_char_t *)PAGE_MARGIN[i].own,
+                                                            strlen(PAGE_MARGIN[i].own), &vlen);
+
+        if (v && !html_parse_non_negative_integer(v, vlen, &digits[i], &dlen[i])) digits[i] = NULL;
+    }
+    for (i = 0; i < 2; i++) total += digits[i] ? dlen[i] : 1;
+    out = malloc(total + 2);
+    CHECK(out != NULL, "cssom: OOM stating a container frame element's margins to another instance");
+    w = out;
+    for (i = 0; i < 2; i++) {
+        if (i) *w++ = ',';
+        if (digits[i]) { memcpy(w, digits[i], dlen[i]); w += dlen[i]; }
+        else *w++ = '-';
+    }
+    *w = '\0';
+    return out;
+}
+
+bool css_frame_owner_margins_valid(const char *serialized)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(PAGE_MARGIN) / sizeof(PAGE_MARGIN[0]); i++) {
+        size_t n = strspn(serialized, "0123456789");
+
+        if (n == 0 && *serialized == '-') n = 1;
+        else if (n == 0 || (n > 1 && *serialized == '0')) return false;   /* the parse strips leading zeros */
+        serialized += n;
+        if (i + 1 < sizeof(PAGE_MARGIN) / sizeof(PAGE_MARGIN[0]) && *serialized++ != ',') return false;
+    }
+    return *serialized == '\0';
 }
 
 /* ---- HTML §15.3.8 Tables' `align` ATTRIBUTE ---------------------------------------------------------------
@@ -427,6 +483,21 @@ static lxb_dom_element_t *img_dimension_attribute_source(lxb_dom_element_t *el)
 
 /* HTML §15.3.2's page margins for `el`, when it is its document's body element: each row's value to both of
    its properties. */
+/* §15.2's "maps to the pixel length property" for a parsed digit run: both `properties` take it as a pixel
+   length. */
+static void hint_pixel_length(const char *const properties[2], const lxb_char_t *digits, size_t dlen,
+                              CssHintSink sink, void *ud)
+{
+    char *out = lexbor_malloc(dlen + 3);
+
+    CHECK(out != NULL, "cssom: OOM building a presentational hint's pixel length");
+    memcpy(out, digits, dlen);
+    memcpy(out + dlen, "px", 3);
+    sink(ud, properties[0], out);
+    sink(ud, properties[1], out);
+    free(out);
+}
+
 static void hint_page_margins(lxb_dom_element_t *el, CssHintSink sink, void *ud)
 {
     lxb_dom_node_t *node = lxb_dom_interface_node(el), *doc;
@@ -460,6 +531,17 @@ static void hint_page_margins(lxb_dom_element_t *el, CssHintSink sink, void *ud)
             size_t vlen = 0, dlen = 0;
 
             if (k == 2) {
+                const char *stated = hint_remote_frame_owner(doc);
+
+                if (stated != NULL) {
+                    /* The container is in another instance, which parsed its attribute where it is. */
+                    digits = (const lxb_char_t *)frame_owner_margin_part(stated, i, &dlen);
+                    if (*digits != '-') {
+                        hint_pixel_length(PAGE_MARGIN[i].properties, digits, dlen, sink, ud);
+                        found = true;
+                    }
+                    break;
+                }
                 src = hint_container_frame_element(doc);
                 /* "Otherwise, there is no container frame element" — so there is no third attribute to be the
                    first that exists, and §15.3.2's default is the answer. */
@@ -471,14 +553,7 @@ static void hint_page_margins(lxb_dom_element_t *el, CssHintSink sink, void *ud)
                one that is PRESENT whether or not it parses, and an unparseable one falls to the default rather
                than on to the next source. */
             if (html_parse_non_negative_integer(v, vlen, &digits, &dlen)) {
-                char *out = lexbor_malloc(dlen + 3);
-
-                CHECK(out != NULL, "cssom: OOM building a presentational hint's pixel length");
-                memcpy(out, digits, dlen);
-                memcpy(out + dlen, "px", 3);
-                sink(ud, PAGE_MARGIN[i].properties[0], out);
-                sink(ud, PAGE_MARGIN[i].properties[1], out);
-                free(out);
+                hint_pixel_length(PAGE_MARGIN[i].properties, digits, dlen, sink, ud);
                 found = true;
             }
             break;

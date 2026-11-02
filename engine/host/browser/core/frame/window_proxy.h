@@ -746,6 +746,15 @@ const char *window_proxy_remote_container(JSValueConst proxy);
 void window_proxy_set_remote_ancestor_origins(JSValueConst proxy, const char *serialized_list);
 const char *window_proxy_remote_ancestor_origins(JSValueConst proxy);
 
+/* AND HTML §15.3.2 "The page"'s CONTAINER FRAME ELEMENT for that same navigable: the `marginheight` and
+ * `marginwidth` its container element maps to pixel lengths, as core/css/css_presentational_hints.h serializes
+ * them. The element is in the creating instance, so the creator composes the answer from it and the answer
+ * crosses; the body element's own attributes outrank it and are read here.
+ * STATED THROUGH core/frame/navigable.h's navigable_root_frame_owner. NULL from the reader means the container
+ * is in this heap or there is none. BORROWED. */
+void window_proxy_set_remote_frame_owner(JSValueConst proxy, const char *serialized_margins);
+const char *window_proxy_remote_frame_owner(JSValueConst proxy);
+
 /* AND §7.2.2.4's `opener` AS THE NAVIGABLE IT IS, for the same reason: `opener` maps this document's own
    navigable onto the GLOBAL, which is the right answer for a page reading the member and the wrong one for an
    engine walk — a Window is not a WindowProxy, so a walk handed it asks "is this a proxy", is told no, and

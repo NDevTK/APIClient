@@ -696,7 +696,7 @@ async function main() {
     [f[C.topLevelUrl], b64(navigableNoticeField(C, f, 'policy')),
      b64(navigableNoticeField(C, f, 'policyReportOnly')), f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint],
      f[C.coepReportOnly], f[C.coepReportOnlyEndpoint], f[C.referrerPolicy], f[C.parent], f[C.opener],
-     f[C.containerPolicy], f[C.ancestorOrigins], ZONE.docRecordSandbox(doc)];
+     f[C.containerPolicy], f[C.ancestorOrigins], f[C.frameOwner], ZONE.docRecordSandbox(doc)];
 
   /* PROVISION AN INSTANCE — one PROCESS per ORIGIN-KEYED AGENT CLUSTER, which is SECURITY.md's key and not
      "per document": a SAME-ORIGIN child is a second REALM in the creator's own heap and never reaches this

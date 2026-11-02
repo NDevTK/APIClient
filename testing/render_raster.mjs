@@ -384,7 +384,8 @@ async function drive(opts) {
     inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
     inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
     inheritedReferrerPolicy: 'strict-origin-when-cross-origin',
-    parentNavigable: 'u', openerNavigable: 'N', containerPolicy: 'null', ancestorOrigins: 'none', creationSandboxFlags: 'none',
+    parentNavigable: 'u', openerNavigable: 'N', containerPolicy: 'null', ancestorOrigins: 'none', frameOwner: '-,-',
+    creationSandboxFlags: 'none',
   }, cs);
   M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
   while (M.ccall('qjs_load', 'number', [], []) === 1) {}   /* the load qjs_init began, a work quantum per call */

@@ -2072,6 +2072,7 @@ static JSValue tf_root_framed(JSContext *ctx, const char *frame, const EmbedderP
     navigable_root_container(ctx, proxy, container);
     navigable_root_opener(ctx, proxy, "N");
     navigable_root_ancestor_origins(ctx, proxy, TF_FRAME_PARENT_ORIGIN);
+    navigable_root_frame_owner(ctx, proxy, frame);
     free(container);
     permissions_policy_free(pp);
     return proxy;
@@ -36640,6 +36641,7 @@ static int abi_pay(void)
             const char *jopener = abi_take(&p, "opener navigable");
             const char *jcontainer = abi_take(&p, "container permissions policy");
             const char *jancestors = abi_take(&p, "ancestor origins");
+            const char *jframe_owner = abi_take(&p, "container frame element margins");
             const char *jsandbox = abi_take(&p, "creation sandboxing flags");
             /* How the zone reached this document, a provenance word qjs_join CHECKs. */
             const char *jarrival = abi_take(&p, "arrival grade");
@@ -36661,7 +36663,7 @@ static int abi_pay(void)
                    "notice's child, which a peer holds a WindowProxy for, so this frontier may not drain");
             jr = qjs_join(jhtml, (unsigned)jb_n, jurl, jdoc, jheaders, jtlu, jcsp, jcsp_ro, jcsp_self, jcoep,
                           jcoep_ep, jcoep_ro, jcoep_ro_ep, jreferrer_policy, jparent, jopener, jcontainer,
-                          jancestors, jsandbox, jarrival);
+                          jancestors, jframe_owner, jsandbox, jarrival);
             DCHECK(jr == 0, "qjs_join refused the document this zone routed here");
             free(jheaders);
             free(jcsp);
@@ -37422,7 +37424,8 @@ TF_UNIT int abi_main(int argc, char **argv)
     const char *paint_dir = arg_val(argc, argv, "--paint-dir");
     char *rec, *p;
     const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
-    const char *coep_ro, *coep_ro_ep, *referrer_policy, *parent, *opener, *container_policy, *ancestor_origins;
+    const char *coep_ro, *coep_ro_ep, *referrer_policy, *parent, *opener, *container_policy, *ancestor_origins,
+                *frame_owner;
     const char *creation_sandbox_flags, *referenced_f, *arrival_f;
     char *headers, *html, *csp, *csp_ro;
     size_t headers_n = 0, html_n = 0, csp_n = 0, csp_ro_n = 0;
@@ -37560,6 +37563,9 @@ TF_UNIT int abi_main(int argc, char **argv)
           "the document record carries no §3.1.3 ANCESTOR ORIGINS statement — the steps return an empty output "
           "for a Document with no container document and a composed one otherwise, so an absent field is a "
           "caller that did not state which applies and this document would report itself top-level");
+    /* HTML §15.3.2 "The page"'s container frame element margins for that navigable, parsed where the container
+       element is; `-,-` for a navigable with no container frame element. */
+    frame_owner = abi_take(&p, "container frame element margins");
     /* HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for that same navigable — a FOURTH statement
        about it and not an item of the container above, since §7.1.7's container is a CSP list, an embedder
        policy, a referrer policy and two integrity policies and no flag set is among them. §7.1.5 reads the
@@ -37575,11 +37581,11 @@ TF_UNIT int abi_main(int argc, char **argv)
           "with a word of its own, so an absent field is a caller that did not state which applies and this "
           "instance would run the scripts, submit the forms and relax the `document.domain` an embedder's "
           "`sandbox` attribute forbids");
-    /* AND THE EIGHTEENTH, WHICH IS NOT A DOCUMENT FACT AT ALL. The seventeen above are HTML §7.5.1's — they
+    /* AND THE NINETEENTH, WHICH IS NOT A DOCUMENT FACT AT ALL. The eighteen above are HTML §7.5.1's — they
        describe the Document this process builds — and this one describes the INSTANCE: whether some other
        agent created the navigable this document is the active document of, and therefore still holds a
        WindowProxy for it. It is on this record because it is a fact of PROVISIONING and this record IS the
-       provisioning, so a zone that provisions a peer cannot state the seventeen and forget the one that decides
+       provisioning, so a zone that provisions a peer cannot state the eighteen and forget the one that decides
        whether the peer is still alive when the first read arrives. `abi_take` refuses an absent field, so it
        cannot be omitted by a zone that has not been updated — which is the whole reason it is a field rather
        than a second record the zone may or may not send.
@@ -37603,12 +37609,12 @@ TF_UNIT int abi_main(int argc, char **argv)
                       "wrote the record, and the trailing value crossed to a reader that never looks at it. "
                       "trailing=[%s]", p ? p : "");
 
-    /* HTML §7.5.1 "Shared document creation infrastructure"'s Document, out of the seventeen facts a document
+    /* HTML §7.5.1 "Shared document creation infrastructure"'s Document, out of the eighteen facts a document
        arrival carries — every one of them now stated by the party that HAS it. This document's OWN policy is
        not on that list at all: it arrives in the header block above, where a server put it. */
     r = qjs_init(html, (unsigned)html_n, url, doc_id, headers, top_level_url,
                  csp, csp_ro, csp_self, coep, coep_ep, coep_ro, coep_ro_ep, referrer_policy,
-                 parent, opener, container_policy, ancestor_origins, creation_sandbox_flags);
+                 parent, opener, container_policy, ancestor_origins, frame_owner, creation_sandbox_flags);
     DCHECK(r == 0, "qjs_init refused the document this process was handed");
     /* The root document's load, which the entry began, a work quantum per call (the ABI's `Load`). */
     while ((r = qjs_load()) == 1) {}

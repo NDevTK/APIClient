@@ -52,7 +52,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_referrer_policy,
                         const char *parent_navigable, const char *opener_navigable,
                         const char *container_policy,
-                        const char *ancestor_origins, const char *creation_sandbox_flags);
+                        const char *ancestor_origins, const char *frame_owner,
+                        const char *creation_sandbox_flags);
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_report_only,
@@ -63,8 +64,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                         const char *inherited_referrer_policy,
                         const char *parent_navigable, const char *opener_navigable,
                         const char *container_policy,
-                        const char *ancestor_origins, const char *creation_sandbox_flags,
-                        const char *arrival);
+                        const char *ancestor_origins, const char *frame_owner,
+                        const char *creation_sandbox_flags, const char *arrival);
 /* qjs_init returns with the root document's load begun; this fills it a work quantum per call, answering 1
    while bytes remain and 0 once the document is installed. Nothing else of the instance is called between. */
 QJS_EXPORT int qjs_load(void);

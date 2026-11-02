@@ -769,6 +769,7 @@
           inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
           inheritedReferrerPolicy: "strict-origin-when-cross-origin",
           parentNavigable: "u", openerNavigable: "N", containerPolicy: "null", ancestorOrigins: "none",
+          frameOwner: "-,-",
           creationSandboxFlags: "none" });
         /* `Init` returns with the document's load begun; `Load` fills it a work quantum at a time until 0. */
         for (var more = 1; more === 1; ) {

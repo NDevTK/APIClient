@@ -58,6 +58,7 @@
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable_notice.h"   /* the provisioning notices' field tables */
 #include "core/frame/navigable.h"
+#include "core/css/css_presentational_hints.h"   /* HTML §15.3.2's container frame element margins, `-,-` */
 #include "solver/world.h"
 #include "solver/cow.h"
 #include "solver/novelty.h"   /* the endpoint surface's identity scope, stated by this host */
@@ -1461,7 +1462,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
                             const char *referrer_policy,
                             const char *parent, const char *container_policy,
                             const char *ancestor_origins, const char *creation_sandbox_flags,
-                            const char *opener, const char *arrival)
+                            const char *opener, const char *arrival, const char *frame_owner)
 {
     int down[2], up[2];
     pid_t pid;
@@ -1494,6 +1495,10 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
            "a child document was about to be provisioned with no §3.1.3 ANCESTOR ORIGINS — the steps return an "
            "empty list for a Document with no container document and a composed one otherwise, so an absent "
            "field is a caller that did not state which applies, and the child would report itself top-level");
+    /* §15.3.2's container frame element margins likewise: `-,-` is what a navigable no frame presents sends. */
+    DCHECK(frame_owner != NULL && *frame_owner,
+           "a child document was about to be provisioned with no §15.3.2 container frame element margins — the "
+           "creator states what its container element parsed to, and a swapped-to document states `-,-`");
     /* §7.1.5's set likewise: the section's word for "no flags" is what a top-level traversable sends. */
     DCHECK(creation_sandbox_flags != NULL && *creation_sandbox_flags,
            "a child document was about to be provisioned with no §7.1.5 CREATION SANDBOXING FLAG SET — the "
@@ -1522,7 +1527,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
               coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, container_policy,
               ancestor_origins, creation_sandbox_flags, opener, arrival, referrer_policy, csp_report_only,
-              (char *)NULL);
+              frame_owner, (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1781,7 +1786,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                         WPT_CREATE(COEP_ENDPOINT), WPT_CREATE(COEP_REPORT_ONLY),
                         WPT_CREATE(COEP_REPORT_ONLY_ENDPOINT), WPT_CREATE(REFERRER_POLICY), WPT_CREATE(PARENT),
                         WPT_CREATE(CONTAINER_POLICY), WPT_CREATE(ANCESTOR_ORIGINS), WPT_CREATE(SANDBOX_FLAGS),
-                        WPT_CREATE(OPENER), arrival);
+                        WPT_CREATE(OPENER), arrival, WPT_CREATE(FRAME_OWNER));
         free(policy);
         free(policy_report_only);
         free(whole);
@@ -1815,7 +1820,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                         FETCH_DEFAULT_REFERRER_POLICY, "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival);
+                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival, CSS_FRAME_OWNER_MARGINS_NONE);
         free(whole);
         return;
     }
@@ -1834,7 +1839,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
                         FETCH_DEFAULT_REFERRER_POLICY, "u",
                         PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                         DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival);
+                        SANDBOX_FLAGS_SERIALIZED_NONE, "N", arrival, CSS_FRAME_OWNER_MARGINS_NONE);
         free(whole);
         return;
     }
@@ -2620,7 +2625,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                      const char *inherited_referrer_policy,
                                      const char *parent_navigable, const char *container_policy,
                                      const char *ancestor_origins, const char *creation_sandbox_flags,
-                                     const char *opener_navigable)
+                                     const char *opener_navigable, const char *frame_owner)
 {
     /* §7.1.5's set, parsed before anything is built from it; see the read below. */
     SandboxFlags creation_flags = 0;
@@ -2818,6 +2823,8 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            §7.3.2.1 runs those steps once per Document a navigable is given and reads this there. A third
            statement, not a field of either above (see navigable.h). */
         navigable_root_ancestor_origins(ctx, root_proxy, ancestor_origins);
+        /* §15.3.2's container frame element margins, which the parent process parsed off the element. */
+        navigable_root_frame_owner(ctx, root_proxy, frame_owner);
         /* §7.1.4's item of the response's own container: §7.1.7's create a policy container from a fetch
            response step 4, obtained where the response is read and handed to the constructor here. */
         response = serialized_policy_container(np.csp, np.csp_report_only, origin,
@@ -3010,6 +3017,8 @@ static int wpt_child_main(int argc, char **argv)
     const char *referrer_policy = argc > 18 ? argv[18] : NULL;
     /* The report policies of that container's CSP list (CSP §2.2), appended last; "" is a list with none. */
     const char *csp_report_only = argc > 19 ? argv[19] : NULL;
+    /* HTML §15.3.2's container frame element margins, parsed by the parent off the container, appended last. */
+    const char *frame_owner = argc > 20 ? argv[20] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -3074,6 +3083,10 @@ static int wpt_child_main(int argc, char **argv)
           "wpt: a child document was started with no Referrer Policy §3 value for its §7.1.7 container's "
           "referrer policy — the parent writes the creator's item, or the initial default where there is no "
           "creator, so a child without it would send referrers its creator's policy strips");
+    CHECK(frame_owner && *frame_owner,
+          "wpt: a child document was started with no §15.3.2 container frame element margins — the parent "
+          "writes what its container element parsed to, or `-,-`, so a child without it would have no answer "
+          "for its body's third margin source");
     CHECK(csp_report_only != NULL,
           "wpt: a child document was started with no report-only half of its §7.1.7 container's CSP list — the "
           "parent writes the creator's report policies or \"\", so a child without it would fire none of the "
@@ -3094,7 +3107,7 @@ static int wpt_child_main(int argc, char **argv)
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
                              csp, csp_report_only, csp_self_origin, coep, coep_endpoint, coep_report_only,
                              coep_report_only_endpoint, referrer_policy, parent_navigable, container_policy,
-                             ancestor_origins, creation_sandbox_flags, opener_navigable);
+                             ancestor_origins, creation_sandbox_flags, opener_navigable, frame_owner);
     free(html);
     header_list_free(&html_headers);
 
@@ -3241,7 +3254,7 @@ int main(int argc, char **argv)
                              "unsafe-none", "", "unsafe-none", "", FETCH_DEFAULT_REFERRER_POLICY, "u",
                              PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
                              DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE,
-                             SANDBOX_FLAGS_SERIALIZED_NONE, "N");
+                             SANDBOX_FLAGS_SERIALIZED_NONE, "N", CSS_FRAME_OWNER_MARGINS_NONE);
     /* The realm a relayed notice is delivered into. A child's notice arrives while this process is blocked inside
        wpt_child_ask, which has no ctx of its own. */
     g_wpt_ctx = ctx;

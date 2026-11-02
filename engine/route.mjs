@@ -175,7 +175,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
                           inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
                           inheritedReferrerPolicy = 'strict-origin-when-cross-origin',
                           parentNavigable = 'u', openerNavigable = 'N', containerPolicy = 'null',
-                          ancestorOrigins = 'none',
+                          ancestorOrigins = 'none', frameOwner = '-,-',
                           creationSandboxFlags = 'none') {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
@@ -233,7 +233,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, arriv
       inheritedCsp: inheritedCsp || '', inheritedCspReportOnly, inheritedCspSelfOrigin: inheritedCspSelf || '',
       inheritedCoep, inheritedCoepEndpoint,
       inheritedCoepReportOnly, inheritedCoepReportOnlyEndpoint, inheritedReferrerPolicy,
-      parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, creationSandboxFlags,
+      parentNavigable, openerNavigable, containerPolicy, ancestorOrigins, frameOwner, creationSandboxFlags,
     }, cs);
 
     M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
@@ -638,7 +638,7 @@ async function drainNotices(e) {
                                          navigableNoticeField(C, f, 'policyReportOnly'),
                                          f[C.cspSelfOrigin], f[C.coep], f[C.coepEndpoint], f[C.coepReportOnly],
                                          f[C.coepReportOnlyEndpoint], f[C.referrerPolicy], f[C.parent],
-                                         f[C.opener], f[C.containerPolicy], f[C.ancestorOrigins],
+                                         f[C.opener], f[C.containerPolicy], f[C.ancestorOrigins], f[C.frameOwner],
                                          f[C.sandboxFlags]));
     }
     /* HTML §7.1.3.2's browsing context group swap — `navigable.swap`, navigable_notice.h's provision record.

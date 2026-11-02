@@ -129,6 +129,12 @@ typedef struct {
        captures, so a parked flow's saved bytes name live memory. It is not on PROXY_VALS, which names only this
        record's JSValues. */
     char   *remote_ancestor_origins;
+    /* What the container answered to HTML §15.3.2 "The page"'s third margin source, for that same navigable only:
+       its `marginheight` and `marginwidth` as core/css/css_presentational_hints.h serializes them. The element is
+       in the creating instance, which composes the answer from it at §7.3.1.3's create. NULL means the container
+       is in this heap or there is none; navigable_root_frame_owner states it for every navigable rooted under a
+       peer parent. POD and owned like the two above. */
+    char   *remote_frame_owner;
     char   *name;      /* §7.2.2.1's name: the browsing context's, not the element's (owned; see proxy_of) */
     /* The name as the page last wrote it when that value was concolic (`window.name = window.name.replace(…)`
        over the attacker's name), so a later read returns the same unknown with its example; `name` then holds
@@ -3151,6 +3157,30 @@ const char *window_proxy_remote_container(JSValueConst proxy)
 
     DCHECK(p != NULL, "§7.3.1.3's remote container of something that is not a WindowProxy was asked for");
     return p->remote_container;
+}
+
+/* HTML §15.3.2's container frame element margins for a navigable whose container is in another WASM instance (see
+   the field). Written once, with the container link it describes. */
+void window_proxy_set_remote_frame_owner(JSValueConst proxy, const char *serialized_margins)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "§15.3.2's container margins were stated for something that is not a WindowProxy");
+    DCHECK(serialized_margins != NULL && *serialized_margins != '\0',
+           "§15.3.2's container margins for a navigable in another instance were stated as nothing — each "
+           "margin is a pixel length or `-`, and an empty field is neither");
+    DCHECK(p->remote_frame_owner == NULL,
+           "a navigable was given a second cross-instance container frame element — a navigable never changes "
+           "which element presents it");
+    p->remote_frame_owner = proxy_strdup(serialized_margins);
+}
+
+const char *window_proxy_remote_frame_owner(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "§15.3.2's remote container margins of something that is not a WindowProxy were asked for");
+    return p->remote_frame_owner;
 }
 
 /* HTML §3.1.3 "Ancestor origins"' list for a navigable whose ancestors are in another WASM instance (see the

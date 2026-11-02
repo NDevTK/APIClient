@@ -374,6 +374,12 @@
          "or is the top of its tree, and both are facts a host states. NOT retained: " +
          "window_proxy_set_remote_ancestor_origins proxy_strdup's it" };
 
+  var FRAME_OWNER = { name: "frameOwner", type: "string", retained: false,
+    why: "HTML §15.3.2's container frame element margins for this document's navigable, parsed by the renderer " +
+         "that holds its container element: `marginheight` then `marginwidth`, each the digit run §15.2's " +
+         "pixel length mapping parses or `-`, joined by a comma, and `-,-` for a navigable with no container " +
+         "frame element. NOT retained: window_proxy_set_remote_frame_owner proxy_strdup's it" };
+
   var TOP_LEVEL_URL = { name: "topLevelUrl", type: "string", retained: false,
     why: "§8.1.3.1's top-level creation URL, which §8.1.3.5 reads to decide whether this realm is a SECURE " +
          "CONTEXT and therefore which of Web IDL §3.3.13's members exist in it. The engine refuses an empty " +
@@ -401,7 +407,7 @@
                  INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, INHERITED_REFERRER_POLICY,
                  PARENT_NAVIGABLE, OPENER_NAVIGABLE,
-                 CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS],
+                 CONTAINER_POLICY, ANCESTOR_ORIGINS, FRAME_OWNER, CREATION_SANDBOX_FLAGS],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_init's own return. Its C body is a wall of CHECKs whose failures abort the instance, so " +
@@ -427,7 +433,7 @@
                  INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, INHERITED_REFERRER_POLICY,
                  PARENT_NAVIGABLE, OPENER_NAVIGABLE,
-                 CONTAINER_POLICY, ANCESTOR_ORIGINS, CREATION_SANDBOX_FLAGS, ARRIVAL],
+                 CONTAINER_POLICY, ANCESTOR_ORIGINS, FRAME_OWNER, CREATION_SANDBOX_FLAGS, ARRIVAL],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_join's own return, on Init's rule — the entry CHECKs every precondition and aborts, so a " +

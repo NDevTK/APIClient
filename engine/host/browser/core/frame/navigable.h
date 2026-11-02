@@ -761,6 +761,18 @@ void navigable_root_container(JSContext *ctx, JSValueConst proxy, const char *co
  * the definition. */
 void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const char *ancestor_origins);
 
+/* AND HTML §15.3.2 "The page"'s CONTAINER FRAME ELEMENT MARGINS FOR THAT NAVIGABLE: the `marginheight` and
+ * `marginwidth` its container element maps to pixel lengths, as core/css/css_presentational_hints.h serializes
+ * them, or CSS_FRAME_OWNER_MARGINS_NONE for a navigable with no container frame element. The element is in the
+ * creating instance and is parsed there; the body element's own attributes, which outrank it, are read here.
+ * Asserted against §7.3.1.3's parent: a navigable with no parent has no container.
+ * NAMED RESIDUAL: the margins are those the container held at §7.3.1.3's create. A later write to its
+ * `marginheight` or `marginwidth` is not stated to this instance; the next diff sends the container's restated
+ * margins from the attribute change steps of `frame` and `iframe`, as a notice the zone routes to the child's
+ * instance, which restyles the body. Its absence shows as a cross-origin frame keeping its creation-time body
+ * margins after its embedder rewrites the attribute. */
+void navigable_root_frame_owner(JSContext *ctx, JSValueConst proxy, const char *frame_owner);
+
 /* HTML §7.2.2.4's OPENER of the navigable this instance is rooted in, stated by the host as the parent is:
  * `opener_navigable` is the creator's identity in core/frame/remote_object.h's grammar, or `N` for none. An
  * auxiliary navigable opened without `noopener` is created given its opener's browsing context (§7.3.1.7), and

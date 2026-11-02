@@ -32,6 +32,7 @@
     X(PARENT, parent, TOKEN)                   /* HTML §7.3.1.3's parent navigable (remote_object.h), or `u` */  \
     X(CONTAINER_POLICY, containerPolicy, TOKEN) /* Permissions Policy §9.5's result for the container */         \
     X(ANCESTOR_ORIGINS, ancestorOrigins, TOKEN) /* HTML §3.1.3's internal ancestor origin objects list */        \
+    X(FRAME_OWNER, frameOwner, TOKEN)          /* HTML §15.3.2's container frame element margins */             \
     X(SANDBOX_FLAGS, sandboxFlags, TOKEN)      /* HTML §7.1.5's creation sandboxing flag set */                  \
     X(PROVENANCE, provenance, TOKEN)           /* what the navigation is evidence of (PENDING_PROVENANCE_*) */   \
     X(GROUP, group, TOKEN)                     /* `creator` or `new` browsing context group */                   \
