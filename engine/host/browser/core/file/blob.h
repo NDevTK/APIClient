@@ -26,6 +26,10 @@ JSValue blob_new(JSContext *ctx, const char *bytes, size_t len, const char *type
 /* The same with the type's LENGTH, for a caller holding it as a JS string: §3.1's check covers NUL, which a C
    string has already truncated at. */
 JSValue blob_new_len(JSContext *ctx, const char *bytes, size_t len, const char *type, size_t type_len);
+/* Build one whose byte sequence is unknown external input: the UTF-8 encoding of `unknown` (borrowed, a
+   concolic), the value text() over the same bytes answers. Fetch §5.3 Body mixin's blob() over a body of
+   unknown bytes. The Blob holds no bytes; its readers answer from the unknown (core/byte_reader.h). */
+JSValue blob_new_unknown(JSContext *ctx, JSValueConst unknown, const char *type);
 
 /* §4.1's File: a Blob wearing File.prototype and carrying a name. Fetch's multipart parser builds one for a
    part that names a filename, which is what a form's file control submits. */
@@ -33,8 +37,11 @@ JSValue file_new(JSContext *ctx, const char *bytes, size_t len, const char *type
                  const char *name, size_t name_len, int64_t last_modified);
 
 /* THE BLOB A VALUE IS, or NULL. The brand test Web IDL's unions perform — BlobPart's `Blob` arm, BodyInit's,
-   and FormData's `append` overload all ask exactly this. `*plen` and `*ptype` may be NULL. */
-const char *blob_bytes_of(JSValueConst v, size_t *plen, const char **ptype);
+   and FormData's `append` overload all ask exactly this. `*plen` and `*ptype` may be NULL. A Blob whose byte
+   sequence is unknown (blob_new_unknown) has no bytes to answer, and asking for them crashes naming the caller,
+   which owes that Blob an answer of its own. */
+const char *blob_bytes_of_at(JSValueConst v, size_t *plen, const char **ptype, const char *file, int line);
+#define blob_bytes_of(v, plen, ptype) blob_bytes_of_at((v), (plen), (ptype), __FILE__, __LINE__)
 bool        blob_is(JSValueConst v);
 /* THE FILE NAME one carries, or NULL when it is a plain Blob — which is the whole of what distinguishes the
    two, so this is also the "is it a File" test. */

@@ -18,8 +18,9 @@ typedef JSValue (*ByteReaderMake)(JSContext *ctx, JSValueConst recv, const char 
    every world, since text()'s UTF-8 decode undoes §5.2's UTF-8 encode of a scalar value string, and otherwise a
    String derived from it, the decode of the encoding of its ToString. CALL resolves with what `callee` (this realm's function,
    owned) returns over it, and rejects with its throw: json()'s parse JSON from bytes is %JSON.parse%. IMAGE
-   resolves with what `image` builds over it: a container whose bytes are the unknown's byte sequence, holding
-   no example bytes. NONE, the zero, is a reader with no answer, and the machine crashes naming it. */
+   resolves with what `image` builds over it and the receiver: a container whose bytes are the unknown's byte
+   sequence, holding no example bytes (the receiver is what states the container's other members, such as
+   blob()'s MIME type). NONE, the zero, is a reader with no answer, and the machine crashes naming it. */
 typedef enum {
     BYTE_READER_UNKNOWN_NONE = 0, BYTE_READER_UNKNOWN_SELF, BYTE_READER_UNKNOWN_CALL, BYTE_READER_UNKNOWN_IMAGE
 } ByteReaderUnknown;
@@ -28,7 +29,8 @@ typedef struct {
     ByteReaderMake make;
     ByteReaderUnknown unknown;
     JSValue (*callee)(JSContext *ctx);   /* CALL's function; NULL for every other answer */
-    JSValue (*image)(JSContext *ctx, JSValueConst unknown);   /* IMAGE's container; NULL for every other answer */
+    /* IMAGE's container over the receiver and the unknown (both borrowed); NULL for every other answer */
+    JSValue (*image)(JSContext *ctx, JSValueConst recv, JSValueConst unknown);
 } ByteReader;
 
 /* AN INTERFACE THAT HAS READERS: how to recognise one of its objects, how to get the bytes out, and which
@@ -87,9 +89,10 @@ JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, s
 JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
 JSValue byte_reader_array_buffer(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
 /* The same two containers over a body that is unknown input with no bytes: the image of `unknown`, the body
-   text() answers, with no example bytes, so its length and every byte are unknowns. */
-JSValue byte_reader_array_buffer_unknown(JSContext *ctx, JSValueConst unknown);
-JSValue byte_reader_bytes_unknown(JSContext *ctx, JSValueConst unknown);
+   text() answers, with no example bytes, so its length and every byte are unknowns. They state nothing but the
+   bytes, so `recv` is unread and a caller holding no receiver passes JS_UNDEFINED. */
+JSValue byte_reader_array_buffer_unknown(JSContext *ctx, JSValueConst recv, JSValueConst unknown);
+JSValue byte_reader_bytes_unknown(JSContext *ctx, JSValueConst recv, JSValueConst unknown);
 JSValue byte_reader_bytes(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
 
 #endif

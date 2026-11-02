@@ -944,6 +944,20 @@ static JSValue body_read_blob(JSContext *ctx, JSValueConst recv, const char *byt
     return r;
 }
 
+/* The same step over a body of unknown bytes: a Blob whose contents are the unknown's byte sequence. */
+static JSValue body_read_blob_unknown(JSContext *ctx, JSValueConst recv, JSValueConst unknown)
+{
+    const BodyIface *f = body_iface_of(recv);
+    char *mime;
+    JSValue r;
+
+    DCHECK(f != NULL, "blob() reached its unknown answer with a receiver of no including interface");
+    mime = f->mime ? f->mime(ctx, recv) : NULL;
+    r = blob_new_unknown(ctx, unknown, mime ? mime : "");
+    free(mime);
+    return r;
+}
+
 /* %JSON.parse%, captured per realm before its scripts run: json()'s parse JSON from bytes is Infra §6's call of
    the original function, which a page replacing `JSON.parse` does not change. */
 static JSClassID g_json_parse_slot = JS_INVALID_CLASS_ID;
@@ -968,14 +982,14 @@ static void body_install_realm(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-/* Over an unknown body (core/byte_reader.h): text() resolves with the unknown, json() parses it, and the
-   containers owe a byte sequence of unknown length, which none of them can answer yet. */
+/* Over an unknown body (core/byte_reader.h): text() resolves with the unknown, json() parses it, and the three
+   containers hold its byte sequence. formData() has no answer for one yet. */
 static const ByteReader BODY_READERS[] = {
     { "text",        byte_reader_text,         BYTE_READER_UNKNOWN_SELF, NULL },
     { "json",        byte_reader_json,         BYTE_READER_UNKNOWN_CALL, body_json_parse },
     { "arrayBuffer", byte_reader_array_buffer, BYTE_READER_UNKNOWN_IMAGE, NULL, byte_reader_array_buffer_unknown },
     { "bytes",       byte_reader_bytes,        BYTE_READER_UNKNOWN_IMAGE, NULL, byte_reader_bytes_unknown },
-    { "blob",        body_read_blob,           BYTE_READER_UNKNOWN_NONE, NULL },
+    { "blob",        body_read_blob,           BYTE_READER_UNKNOWN_IMAGE, NULL, body_read_blob_unknown },
     { "formData",    body_read_form_data,      BYTE_READER_UNKNOWN_NONE, NULL },
 };
 
@@ -1036,7 +1050,7 @@ static int body_stream_ensure(JSContext *ctx, BodyState *b)
            enqueues "a Uint8Array wrapping an ArrayBuffer containing" those bytes; over an unknown object that
            chunk is the image `bytes()` answers for this body (core/byte_reader.h), never the display shape,
            which the page would read as characters it never wrote. */
-        JSValue chunk = byte_reader_bytes_unknown(ctx, b->unknown);
+        JSValue chunk = byte_reader_bytes_unknown(ctx, JS_UNDEFINED, b->unknown);
 
         if (JS_IsException(chunk)) return -1;
         b->stream = readable_stream_from_chunk(ctx, chunk);

@@ -207,7 +207,7 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
                 STEP_GOTO(s->hdr.stage, BR_CONVERT, &s->cphase, NULL);
             } else if (rd->unknown == BYTE_READER_UNKNOWN_IMAGE) {
                 DCHECK(rd->image != NULL, "a reader answers an unknown body by a container and names no builder");
-                s->value = rd->image(ctx, unknown);
+                s->value = rd->image(ctx, s->hdr.this_val, unknown);
                 JS_FreeValue(ctx, unknown);
                 if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
             } else if (rd->unknown == BYTE_READER_UNKNOWN_SELF) {
@@ -540,12 +540,14 @@ JSValue byte_reader_bytes(JSContext *ctx, JSValueConst recv, const char *bytes, 
     return byte_reader_image(ctx, recv, bytes, len, true);
 }
 
-JSValue byte_reader_array_buffer_unknown(JSContext *ctx, JSValueConst unknown)
+JSValue byte_reader_array_buffer_unknown(JSContext *ctx, JSValueConst recv, JSValueConst unknown)
 {
+    (void)recv;
     return JS_NewArrayBufferImage(ctx, NULL, 0, unknown, BYTE_READER_IMAGE);
 }
 
-JSValue byte_reader_bytes_unknown(JSContext *ctx, JSValueConst unknown)
+JSValue byte_reader_bytes_unknown(JSContext *ctx, JSValueConst recv, JSValueConst unknown)
 {
+    (void)recv;
     return JS_NewUint8ArrayImage(ctx, NULL, 0, unknown, BYTE_READER_IMAGE);
 }

@@ -46,6 +46,7 @@
 #include <stdio.h>
 #include <lexbor/core/base.h>   /* lexbor_realloc: the allocator the engine gives its refusal edge */
 #include "solver/reclaim.h"
+#include "solver/concolic.h"      /* the unknown a byte sequence of unknown external input is */
 
 /* ONE STRUCT FOR BOTH INTERFACES, and one class id, because §4 says `interface File : Blob` — a File IS a Blob,
    so every brand test that accepts a Blob must accept it, and there is exactly one byte sequence for both to be
@@ -68,6 +69,11 @@ typedef struct {
        states the same rule for the same reason). */
     char   *src;
     char   *shape;
+    /* The unknown whose UTF-8 encoding the byte sequence is, when its bytes are unknown external input
+       (blob_new_unknown): `bytes` is then NULL and `len` 0, and every reader answers from this value instead.
+       JS_UNDEFINED for every Blob that holds its bytes. Owned and marked; fixed at creation, as §3 makes the
+       byte sequence immutable, so no write of it needs a capture. */
+    JSValue unknown;
 } BlobObj;
 
 static JSClassID g_blob_class;
@@ -97,9 +103,19 @@ static void blob_finalizer(JSRuntime *rt, JSValue val)
     JSClassID id = 0;
     BlobObj *b = JS_GetAnyOpaque(val, &id);
 
-    (void)rt;
     (void)id;
-    if (b) { free(b->bytes); free(b->type); free(b->name); free(b->src); free(b->shape); free(b); }
+    if (b) {
+        JS_FreeValueRT(rt, b->unknown);
+        free(b->bytes); free(b->type); free(b->name); free(b->src); free(b->shape); free(b);
+    }
+}
+
+static void blob_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    JSClassID id = 0;
+    BlobObj *b = JS_GetAnyOpaque(val, &id);
+
+    if (b) JS_MarkValue(rt, b->unknown, mark_func);
 }
 
 bool blob_is(JSValueConst v)
@@ -107,10 +123,16 @@ bool blob_is(JSValueConst v)
     return g_blob_class != 0 && JS_GetOpaque(v, g_blob_class) != NULL;
 }
 
-const char *blob_bytes_of(JSValueConst v, size_t *plen, const char **ptype)
+const char *blob_bytes_of_at(JSValueConst v, size_t *plen, const char **ptype, const char *file, int line)
 {
     BlobObj *b = g_blob_class ? JS_GetOpaque(v, g_blob_class) : NULL;
     if (!b) return NULL;
+    if (!JS_IsUndefined(b->unknown)) {
+        DFAILF("%s:%d read the bytes of a Blob whose byte sequence is unknown external input (Fetch §5.3's "
+               "blob() over an unknown body) — give that consumer its answer for an unknown byte sequence, as "
+               "the Blob's own readers answer from blob_take's unknown", file, line);
+        return NULL;
+    }
     if (plen)  *plen  = b->len;
     if (ptype) *ptype = b->type;
     return b->bytes ? b->bytes : "";
@@ -209,6 +231,21 @@ JSValue blob_new_len(JSContext *ctx, const char *bytes, size_t len, const char *
     }
 }
 
+JSValue blob_new_unknown(JSContext *ctx, JSValueConst unknown, const char *type)
+{
+    JSValue obj;
+    BlobObj *b;
+
+    DCHECK(concolic_is(unknown), "a Blob of unknown bytes was built over a value that is not unknown input — "
+                                 "known bytes build an ordinary Blob through blob_new");
+    obj = blob_new(ctx, NULL, 0, type);
+    if (JS_IsException(obj))
+        return obj;
+    b = JS_GetOpaque(obj, g_blob_class);
+    b->unknown = JS_DupValue(ctx, unknown);
+    return obj;
+}
+
 /* §4.1's File, which is §3.1's Blob wearing File.prototype and carrying a name. `name` is NOT optional here —
    a File without one is a Blob, and this is the one place that distinction is made. */
 JSValue file_new(JSContext *ctx, const char *bytes, size_t len, const char *type, size_t type_len,
@@ -245,6 +282,7 @@ static JSValue blob_alloc(JSContext *ctx, JSValueConst proto, const char *bytes,
         return obj;
     b = lexbor_calloc(1, sizeof *b);
     CHECK(b, "blob: OOM building a Blob");
+    b->unknown = JS_UNDEFINED;
     if (len) {
         /* +1 and a NUL past the end so the bytes can still be handed to a C string consumer; `len` is what
            every read uses, and it is what an interior NUL no longer truncates. */
@@ -443,13 +481,18 @@ JSValue blob_url_lookup(JSContext *ctx, const char *url, size_t len)
 static int blob_take(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream,
                      JSValue *punknown)
 {
-    /* A Blob's bytes are always here: §3 makes it an immutable byte sequence, never a stream or an unknown. */
+    /* §3 makes a Blob an immutable byte sequence, never a stream; it is an unknown when blob_new_unknown built
+       it, and its bytes otherwise. */
     *pstream = JS_UNDEFINED;
     *punknown = JS_UNDEFINED;
     BlobObj *b = JS_GetOpaque(v, g_blob_class);
     if (!b) {
         JS_ThrowTypeError(ctx, "not a Blob");
         return -1;
+    }
+    if (!JS_IsUndefined(b->unknown)) {
+        *punknown = JS_DupValue(ctx, b->unknown);
+        return 0;
     }
     *bytes = b->bytes ? b->bytes : "";
     *len = b->len;
@@ -594,11 +637,12 @@ static char *blob_reader_source(JSContext *ctx, JSValueConst recv, bool *attacke
    shared implementation is what asks for it. The two below answer with the real bytes: an ArrayBuffer is a
    buffer of bytes and not a value the solver's domain is over, and handing back a concolic in its place would
    break `new Uint8Array(await f.arrayBuffer())`, which is the ordinary way a page reads one. */
-/* A Blob's take never answers an unknown, so no reader has an answer for one. */
+/* Over a Blob of unknown bytes (core/byte_reader.h): the same answers the Body mixin's three readers give, since
+   File API §3.3 and Fetch §5.3 define them by one "read all bytes". */
 static const ByteReader BLOB_READERS[] = {
-    { "text",        byte_reader_text,         BYTE_READER_UNKNOWN_NONE, NULL },
-    { "arrayBuffer", byte_reader_array_buffer, BYTE_READER_UNKNOWN_NONE, NULL },
-    { "bytes",       byte_reader_bytes,        BYTE_READER_UNKNOWN_NONE, NULL },
+    { "text",        byte_reader_text,         BYTE_READER_UNKNOWN_SELF, NULL },
+    { "arrayBuffer", byte_reader_array_buffer, BYTE_READER_UNKNOWN_IMAGE, NULL, byte_reader_array_buffer_unknown },
+    { "bytes",       byte_reader_bytes,        BYTE_READER_UNKNOWN_IMAGE, NULL, byte_reader_bytes_unknown },
 };
 
 static const ByteReaderIface BLOB_READER_IFACE = {
@@ -610,12 +654,35 @@ static const ByteReaderIface BLOB_READER_IFACE = {
 
 enum { BLOB_SIZE = 0, BLOB_TYPE, FILE_NAME, FILE_LAST_MODIFIED, FILE_WEBKIT_RELATIVE_PATH };
 
+/* File API §3.2 Attributes' `size` of a byte sequence of unknown bytes: "the size of the byte sequence in number
+   of bytes", derived from `unknown` (borrowed), whose UTF-8 encoding the bytes are. Its example is that
+   encoding's length where the unknown holds a primitive example, and absent otherwise. */
+static JSValue blob_size_unknown(JSContext *ctx, JSValueConst unknown)
+{
+    JSValue ex = concolic_example_string(ctx, unknown), example = JS_UNDEFINED, r;
+
+    if (JS_IsString(ex)) {
+        size_t n = 0;
+        const char *s = JS_ToCStringLen(ctx, &n, ex);
+
+        CHECK(s != NULL, "blob: OOM encoding the example of a byte sequence of unknown bytes");
+        example = JS_NewInt64(ctx, (int64_t)n);
+        JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, ex);
+    r = concolic_new_derived(ctx, "File API §3.2 size", &unknown, 1, example);
+    DCHECK(concolic_is(r), "a Blob's unknown byte sequence derived no unknown size");
+    return r;
+}
+
 static JSValue js_blob_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     BlobObj *b = JS_GetOpaque(this_val, g_blob_class);
     if (!b) return JS_ThrowTypeError(ctx, "not a Blob");
     switch (magic) {
-    case BLOB_SIZE: return JS_NewInt64(ctx, (int64_t)b->len);
+    case BLOB_SIZE:
+        if (!JS_IsUndefined(b->unknown)) return blob_size_unknown(ctx, b->unknown);
+        return JS_NewInt64(ctx, (int64_t)b->len);
     case BLOB_TYPE: return JS_NewString(ctx, b->type);
     /* §4's two attributes are on File.prototype, so a plain Blob cannot reach them through the chain — but
        `File.prototype.name` read off a Blob can, and that is the receiver check every IDL attribute makes. */
@@ -663,6 +730,12 @@ static JSValue js_blob_slice(JSContext *ctx, JSValueConst this_val, int argc, JS
 
     (void)magic;
     if (!b) return JS_ThrowTypeError(ctx, "not a Blob");
+    if (!JS_IsUndefined(b->unknown)) {
+        DFAIL("File API §3.3.1 slice() over a Blob of unknown bytes: build a Blob whose unknown is derived from "
+              "this one's over the normalized start and end, with relativeStart and relativeEnd forked on the "
+              "unknown size");
+        return JS_ThrowTypeError(ctx, "this engine cannot yet slice a Blob of unknown bytes");
+    }
     size = (int64_t)b->len;
     end = size;
     if (argc > 0 && !JS_IsUndefined(argv[0])) {
@@ -944,7 +1017,7 @@ static const IdlDictMember FILE_OPTIONS[] = {
 
 void blob_init(JSContext *ctx)
 {
-    JSClassDef def = { "Blob", .finalizer = blob_finalizer };
+    JSClassDef def = { "Blob", .finalizer = blob_finalizer, .gc_mark = blob_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType CTOR_ARGS[2] = { IDL_SEQUENCE_BLOBPART, IDL_DICT };
     static const IdlArgType FILE_CTOR_ARGS[3] = { IDL_SEQUENCE_BLOBPART, IDL_USVSTRING, IDL_DICT };
