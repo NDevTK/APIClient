@@ -13845,9 +13845,9 @@ void engine_set_provider(int (*provide)(JSContext *ctx), int (*holds)(const char
     g_provider_holds = holds;
 }
 
-#if APICLIENT_DEV
-/* Whether every line of the bill is one the provider says it owes and will write later. */
-static int provider_holds_bill(void) {
+/* Whether every line of the bill is one the provider says it owes and will write later. Inline because release
+   type-checks a DCHECK's condition and calls nothing. */
+static inline int provider_holds_bill(void) {
     const char *b = engine_pending_fetches();
     int all = 1;
 
@@ -13863,7 +13863,6 @@ static int provider_holds_bill(void) {
     }
     return all;
 }
-#endif
 
 /* And whether this host wants the frontier's residue (engine.h): a seam, not a policy; the answer is the host's and
    the moment the park is taken is the engine's. */
