@@ -1306,9 +1306,12 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
 
 /* NO `fini`. §8.7's task has no completion value — step 9 states substeps and returns nothing — and the two
    ownership lists a teardown needs are `visit` (the two call buffers and the held exception) and nothing
-   else. */
+   else. `catches_abrupt` because substeps 9.7 and 9.8 invoke the handler with "report": its throw comes back to
+   TT_INVOKE or TT_SCRIPT, which hold it, and substeps 9.9-9.12 and §8.1.7.3 step 2.7 still run before it is
+   rethrown as the task's completion. */
 static const JSTrampStepDef TT_DEF = {
     sizeof(TimerTask), js_timer_task_step, NULL, 0,
+    .catches_abrupt = 1,
     .visit = tt_visit,
     .algorithm = "HTML §8.7 Timers timer initialization steps step 9's task",
     .steps = TT_STEPS
