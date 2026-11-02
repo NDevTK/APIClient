@@ -1203,6 +1203,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/declines.h"
 #include "fixture/absentarm.h"
 #include "fixture/envarm.h"
+#include "fixture/storearm.h"
 #include "fixture/pagewrite.h"
 #include "fixture/keydomain.h"
 #include "fixture/splitunits.h"
@@ -1832,6 +1833,7 @@ TF_DOCS[] = {
     { "declines", HTML_DECLINES },
     { "absentarm", HTML_ABSENTARM },
     { "envarm", HTML_ENVARM },
+    { "storearm", HTML_STOREARM },
     { "pagewrite", HTML_PAGEWRITE },
     { "keydomain", HTML_KEYDOMAIN },
     { "splitunits", HTML_SPLITUNITS },
@@ -6761,6 +6763,11 @@ static TfErrEdges g_tf_err_edges[] = {
        order. */
     { "envBOOMenvLO", 0, 0, 0, 0 },
     { "envBOOMenvHI", 0, 0, 0, 0 },
+    /* HTML_STOREARM's three throws, the example's world and one per arm against a stored-state example;
+       `store-example-first` reads their order. */
+    { "saBOOMsaOBS", 0, 0, 0, 0 },
+    { "saBOOMsaLS",  0, 0, 0, 0 },
+    { "saBOOMsaCK",  0, 0, 0, 0 },
 };
 /* THIS DOCUMENT'S OWN ADDRESS, TAKEN FROM THE ONE CALL THAT ESTABLISHES IT rather than spelled a sixth time.
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
@@ -15108,6 +15115,41 @@ TF_UNIT void probes_envarm(const char *js, Probe *tab, int *n) {
     const Probe rows[] = {
         { "env-example-first", ord_tt, "envBOOM", SESS_EXPLORE, ord_why },
         { "env-attacker-arms", atk_tt, "envNAMED", SESS_EXPLORE, atk_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `storearm` document. A key this run wrote reads back concrete, so its request is observed. The
+   branches over a localStorage key the area lacks and over the cookies the jar lacks keep the example's arm on the
+   running flow and price each other arm as an assumption (solver/decide.c's dec_subject_assumed), so the example's
+   world, which throws before it has served its timer's code the price, reaches its timer's throw first. */
+TF_UNIT void probes_storearm(const char *js, Probe *tab, int *n) {
+    const TfErrEdges *obs = tf_err_edges("saBOOMsaOBS");
+    const TfErrEdges *ls = tf_err_edges("saBOOMsaLS");
+    const TfErrEdges *ck = tf_err_edges("saBOOMsaCK");
+    const char *seen_why = NULL; int seen_tt = 1;
+    const char *ord_why = NULL; int ord_tt = 1;
+
+    fold_row(&seen_tt, &seen_why,
+             emitted_record_graded_has(js, "/api/saseen", "observed", "saONE") &&
+                 !emitted_record_graded_has(js, "/api/saseen", "forced", "saseen"),
+             "/api/saseen is not one observed record carrying saONE — HTML §12.2.1 getItem reads back the value "
+             "setItem stored in this run, which is a fact and not an unknown");
+    fold_row(&ord_tt, &ord_why,
+             emitted_record_graded_has(js, "/api/saarm", "derived", "saOBS") &&
+                 emitted_record_graded_has(js, "/api/saarm", "forced", "saLS") &&
+                 emitted_record_graded_has(js, "/api/saarm", "forced", "saCK"),
+             "NOT REACHED: /api/saarm does not stand at the example's arm derived and both arms against stored "
+             "state forced, so the branches did not run every arm against one example");
+    fold_row(&ord_tt, &ord_why, obs->first > 0 && ls->first > 0 && ck->first > 0,
+             "the stream did not announce all three worlds' timer throws, so their order cannot be read");
+    fold_row(&ord_tt, &ord_why, obs->first < ls->first && obs->first < ck->first,
+             "an arm against a stored-state example announced its throw before the example's world — taking a "
+             "localStorage key or a cookie the observed state lacks as present is an assumption, so the "
+             "example's world keeps its timer's code while it has served it less than the price");
+    const Probe rows[] = {
+        { "store-seen-concrete", seen_tt, "saBOOM", SESS_EXPLORE, seen_why },
+        { "store-example-first", ord_tt, "saBOOM", SESS_EXPLORE, ord_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -24444,6 +24486,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_declines(js, probes, &np);
     probes_absentarm(js, probes, &np);
     probes_envarm(js, probes, &np);
+    probes_storearm(js, probes, &np);
     probes_pagewrite(js, probes, &np);
     probes_keydomain(js, probes, &np);
     probes_splitunits(js, probes, &np);
