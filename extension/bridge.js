@@ -2804,7 +2804,8 @@ async function seedChildRequest(parentDocumentId, url) {
    challenge. */
 function seedUnavailable(loaded, asked) {
   const landed = originOf(loaded.url);
-  return loaded.unavailable !== null ? loaded.unavailable
+  return loaded.declined !== null ? { kind: "declined", detail: loaded.declined }
+       : loaded.unavailable !== null ? loaded.unavailable
        : (landed === "" || landed !== asked)
          ? { kind: "network", detail: "cross-origin-redirect:" + (landed || "unparseable") }
        : loaded.bytes.length === 0 ? { kind: "empty" } : null;
@@ -2867,7 +2868,7 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
    Two paired outcomes, never defaulted: `bytes` is a byte sequence and `unavailable` null, or `bytes` is null
    and `unavailable` names why in the closed vocabulary the popup renders (status/empty/network). `bytes: null`
    is a load that did not load: the navigable exists and shows an error page. A third outcome, `declined`, is
-   below. The chokepoint's refusals arrive as `kind: "network"` with the rule in `statusText`
+   below, and every caller has an arm for it. The chokepoint's refusals arrive as `kind: "network"` with the rule in `statusText`
    (`blocked-signal:`, `blocked-scheme:`, `blocked-local-network:`).
    Emptiness is not judged here: an OK zero-length body is an ordinary empty Document; refusing one is a seed's
    rule, stated at the seed. */
@@ -2875,18 +2876,6 @@ const NAVIGATION_DESTINATIONS = Object.freeze(["document", "embed", "frame", "if
    from `provenance` (the engine's word about this navigation act); safe-fetch.js reads both, the record as a
    floor. An omitted one is refused by `_docOf`. The produced document's record is the join of the two
    (childDocRecord), composed by whoever states that document's analyze record. */
-/* What a caller of a §7.4 load does with a refusal, as a declared word rather than a boolean, because "holds a
-   rendezvous" and "can carry a refusal" differ at the route seed:
-     `rendezvous` — the engine is parked on a request id; the refusal is routed to it (engineDeliverDocument →
-                    HostDecline → engine_host_decline) and the navigable keeps the pre-operation document HTML
-                    §7.3.1.3 Child navigables' create-a-new-child-navigable created it holding.
-     `report`     — nothing is provisioned or parked; the caller drops its work item and reports the
-                    chokepoint's reason verbatim (a route seed, via admitSeatLand's seat-drop arm).
-     `none`       — the caller has no arm that can state a load that was never attempted, so a decline aborts
-                    and the message names what each such caller would fabricate.
-   The test is written in the positive (`!== "rendezvous" && !== "report"`), so an unstated or misspelled word
-   refuses by construction. */
-const DOC_REFUSAL_ARMS = Object.freeze(["rendezvous", "report", "none"]);
 /* Whether a §7.4 load of `abs` read by an opaque (`readerOpaque`) or principal-`principalOrigin` document asks
    its speaker for the session: never for an opaque reader (an opaque origin is same-origin with nothing). */
 function navigationCredentialed(abs, principalOrigin, readerOpaque) {
@@ -2895,7 +2884,7 @@ function navigationCredentialed(abs, principalOrigin, readerOpaque) {
 /* `speakerOf` resolves the speaker (documentSpeaker's, seedSpeaker's) whose session a load the browser would
    credential carries, or null when it has none, which loads without the session. Every answer states
    `credentialed`, whether this load carried the session, which the loaded document's record keeps. */
-async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, refusalArm,
+async function navigationLoad(u, base, principalOrigin, provenance, fromDoc,
                               actor, driven, pinned, request, speakerOf, readerOpaque, onBodyRead) {
   DCHECK(!!request && NAVIGATION_DESTINATIONS.indexOf(request.destination) >= 0 &&
          (request.referrerPolicy === null || request.referrerPolicy === "" ||
@@ -2903,13 +2892,6 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
          "a §7.4 navigation was loaded with request facts " + JSON.stringify(request) + " — a navigation " +
          "request's destination is one of Fetch §2.2.5's navigation destinations and its referrer policy is a " +
          "Referrer Policy §3 policy or null for none stated");
-  /* `refusalArm` is required; an unstated word takes the refusing arm, exactly as `none` does. */
-  DCHECK(DOC_REFUSAL_ARMS.indexOf(refusalArm) >= 0,
-         "a §7.4 navigation was loaded stating the refusal arm " + JSON.stringify(refusalArm) + ", which " +
-         "is none of the three this zone declares (" + DOC_REFUSAL_ARMS.join("/") + ") — the word says what " +
-         "this caller DOES with a refusal, and a caller that does not state it would have this function pick " +
-         "for it: a rendezvous it does not hold, a report it cannot write, or an empty document for an " +
-         "address nothing ever fetched");
   /* `actor` is whose act this navigation is, stated by each caller: a child navigable is the page's, a declared
      route's load and an ambient seed are the tool's (safe-fetch.js's `_actorOf`: a request this tool composed
      at a person's direction is still `tool`). It is the signal the egress registry grades
@@ -3036,44 +3018,24 @@ async function navigationLoad(u, base, principalOrigin, provenance, fromDoc, ref
     /* Status 0 is not a reply: the chokepoint answers it when the request never went on the wire (blocked
        scheme, private target, CORB, unparseable URL), with the reason in `statusText`, which travels. */
     /* A decline is not an error page. `bytes: null` reads in the engine's `child_document` as a navigable
-       showing an error page (opaque origin), which is right where the network refused. Where this zone
-       declined, no load was attempted, and HTML §7.3.1.3 Child navigables leaves the navigable at the
-       `about:blank` it was created holding, which inherits the creator's origin; flows forked in that frame
-       differ between the two. */
+       showing an error page (opaque origin), which is right where the network refused. A decline hands the
+       navigation no response: the request was never sent, or it was sent and its wire went silent (`wire-idle`),
+       on which Chrome waits for good. Either way nothing commits, and HTML §7.3.1.3 Child navigables leaves the
+       navigable at the `about:blank` it was created holding, which inherits the creator's origin; flows forked
+       in that frame differ between the two.
+       Named residual: a navigation whose head arrived before its wire went silent is not covered. HTML §7.5.2
+       Loading HTML documents feeds the parser each body task as it arrives, so a browser shows the bytes that
+       came and never fires `load`. Next diff streams the body into the Document from its head (safeFetch's
+       `onHead` and `onChunk`). Absence shows
+       as a `wire-idle` decline of a navigation whose server had sent its response head. */
     if (r.refusal) {
       DCHECK(r.refusal.kind === "network" || r.refusal.kind === "decline",
              "safeFetch graded a §7.4 navigation's refusal `" + r.refusal.kind + "`, which is neither word it " +
              "states — and the arm an unknown grade falls to here reports the load as a page whose server " +
              "could not be reached");
-      /* The decline goes to the two arms that can state it (`rendezvous`, `report`) and aborts at `none`, whose
-         three callers would fabricate different things: the `navigable.create` and `navigable.swap` notices
-         (no request id; they would turn a null body into an empty document) and the ambient seed (it can
-         report an unavailability through `onNavigationOutcome` but has no page-source kind for a decline in
-         offscreen-brain.js's `_PAGE_SOURCE_KINDS`). The DFAIL names what to build for each. */
       if (r.refusal.kind === "decline") {
-        if (refusalArm !== "rendezvous" && refusalArm !== "report")
-          DFAIL("a §7.4 navigation was DECLINED by the chokepoint (" + r.refusal.reason + ") for a caller " +
-                "whose refusal arm is `" + String(refusalArm) + "` — it has NO arm that can state a load " +
-                "that was NEVER ATTEMPTED, so anything it is handed becomes a claim that is false. Its " +
-                "`unavailable` vocabulary is status/empty/network and every one of the three says a load was " +
-                "ATTEMPTED and failed, so answering with any of them hands the engine a navigable showing an " +
-                "error page for an address nothing ever fetched, where §7.3.1.3 \"Child navigables\" leaves " +
-                "the creator-inherited `about:blank` the navigable was created holding. THREE CALLERS STATE " +
-                "`none` AND THEY FABRICATE DIFFERENT THINGS, so the thing to build differs and this names " +
-                "which you are standing in. (1) A `navigable.create` NOTICE and (2) a `navigable.swap` " +
-                "notice: peer-provisioning records with no request id, whose own body lines turn a null " +
-                "body into an EMPTY Uint8Array — so what has to be built is a refusal the NOTICE channel " +
-                "can carry, or the creating engine's own park reached some other way. (3) The AMBIENT SEED: " +
-                "it CAN report an unavailability (`onNavigationOutcome`) and it CANNOT report a decline, " +
-                "because offscreen-brain.js's `_PAGE_SOURCE_KINDS` is `status`/`empty`/`network` and every " +
-                "one of those says a load was attempted — so what has to be built is a FOURTH page-source " +
-                "kind, through that list, its sibling asserts and the popup that renders it. A ROUTE SEED " +
-                "USED TO BE ON THIS LIST AND IS NOT: it states `report`, and `admitSeatLand`'s seat-drop arm " +
-                "is what answers it. a3a93fd widened the old boolean to all three forward consumers with a " +
-                "literal, which turned a refused child navigable into a silently empty one; fetchedDocument " +
-                "takes the word from its consumer now");
         /* The third outcome: `bytes` and `unavailable` are both null, and `declined` is the reason, the only
-           field telling "no load attempted" (creator-origin `about:blank`) from "a load failed" (opaque error
+           field telling "nothing committed" (creator-origin `about:blank`) from "a load failed" (opaque error
            page). */
         return { url: finalUrl, headers: {}, bytes: null, unavailable: null, declined: r.refusal.reason,
                  setCookies: [], credentialed };
@@ -3888,38 +3850,18 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      function (the `document.fetch` request, the `navigable.create` and `navigable.swap` notices), relayed
      and never re-derived: an address cannot tell a frame the person's session would load from one that exists
      because a gate was forced. */
-  /* `refusalArm` is the consumer's, not this function's: `document.fetch` is answered through
-     engineDeliverDocument, which routes a refusal to the rendezvous the engine is parked on, while
-     `navigable.create` and `navigable.swap` are notices with no id to refuse and state `none`. A shared
-     literal would let a notice turn a declined load into an empty document, a plausible datum for a frame
-     the chokepoint refused. */
-  /* This forward serves only `rendezvous` and `none`: no consumer of it drops a work item, so a `report` would
-     be honoured by the loader and then fabricated into a document by the notice that asked. A consumer that
-     gains such an arm widens this list deliberately. */
-  const fetchedDocument = async (u, provenance, driven, pinned, refusalArm, request, readerOpaque, doc,
-                                 onBodyRead) => {
-    DCHECK(refusalArm === "rendezvous" || refusalArm === "none",
-           "a §7.4 document load was asked for stating the refusal arm " + JSON.stringify(refusalArm) +
-           ", and this forward serves only `rendezvous` and `none` — a request that parks on a rendezvous " +
-           "and two notices that can state nothing. `report` is a word for a caller that drops a WORK ITEM, " +
-           "which none of these three does, so honouring one here would hand a declined record to a consumer " +
-           "whose only arm for it fabricates an empty document — which is the literal this parameter " +
-           "replaced");
+  /* A declined load crosses as `declined`, and each consumer has its arm: `document.fetch` routes it to the
+     rendezvous the engine is parked on (engineDeliverDocument), and the `navigable.create`, `navigable.swap`
+     and `navigable.navigate` notices provision nothing for it. */
+  const fetchedDocument = async (u, provenance, driven, pinned, request, readerOpaque, doc, onBodyRead) => {
     /* `doc` is the issuing document's record: the creator's for a create, the asker's for a load, the
        issuer's for a swap or a navigation (askerRecord). */
     DCHECK(docRecordIs(doc), "a §7.4 document load was asked for with no issuing document's record");
     const r = await navigationLoad(u, msg.sourceUrl, msg.origin, provenance, doc,
-                                   refusalArm, /*actor*/"page", driven, pinned, request,
+                                   /*actor*/"page", driven, pinned, request,
                                    documentSpeaker(msg, "engine:" + eng.docId),
                                    readerOpaque, onBodyRead);
-    /* `declined` crosses (engineDeliverDocument routes it to the rendezvous, so the navigable keeps the
-       `about:blank` it was created holding); `unavailable` does not, since nothing here reads it. */
-    DCHECK(refusalArm === "rendezvous" || r.declined === null,
-           "a §7.4 document load came back DECLINED for a consumer whose refusal arm is `" +
-           String(refusalArm) + "`" +
-           " —" + " `navigationLoad` is supposed to have aborted instead, so either its " +
-           "refusal-arm test or this forward has come apart. The arms are not interchangeable: a notice " +
-           "has no rendezvous, and the only thing such a consumer could do with a refusal is turn it into bytes");
+    /* `unavailable` does not cross, since nothing here reads it. */
     DCHECK(r.declined === null || typeof r.declined === "string",
            "a §7.4 navigation's result does not STATE whether it was declined — `r.declined` is `" +
            String(r.declined) + "`. The field used to be read as `r.declined || null`, and that default is the " +
@@ -4818,6 +4760,15 @@ function engineCountRefusal(eng, tok) {
   if (!(tok in eng._egress.declined)) eng._egress.declined[tok] = 0;
   eng._egress.declined[tok]++;
 }
+/* A provisioning notice (`what`) whose document load the chokepoint declined on `reason`: told to the person and
+   counted by the chokepoint's own token, as a declined request is. The instance did nothing wrong, so it is not
+   refused. */
+function noticeDeclined(eng, what, reason) {
+  DCHECK(typeof reason === "string" && reason !== "",
+         "a provisioning notice's load was declined with no reason — navigationLoad states the chokepoint's token");
+  console.warn("[bridge] " + what + " provisions nothing: the chokepoint declined its document load (" + reason + ")");
+  engineCountRefusal(eng, reason);
+}
 function hostHolderOf(docName) {
   for (const e of _pool) {
     if (e.docId === docName) return e;
@@ -5200,11 +5151,20 @@ async function hostNotice(eng, line) {
     if (_inCreatorGroup) eng.referenced = 1;
     /* The provenance is the engine's word for what this navigation is evidence of, beside its drive mark and
        witness mark; navigationLoad and the chokepoint decide on them, and this arm passes them through. */
-    /* `none`: a notice has no request id for a refusal, and its only arm for a bytes-less load would fabricate
-       an empty document, so navigationLoad aborts on a decline instead, naming what to build. */
     const loaded = await eng.fetchedDocument(f[C.address], f[C.provenance], f[C.driven], f[C.pinned],
-                                             /*refusalArm*/"none", DOCUMENT_REQUEST_UNSTATED,
-                                             docRecordOpaque(_childDoc), _creatorDoc);
+                                             DOCUMENT_REQUEST_UNSTATED, docRecordOpaque(_childDoc), _creatorDoc);
+    /* A declined load provisions nothing, as engine/trusted.mjs's create arm does: the creating engine's
+       navigable keeps the `about:blank` it was created holding, which is what §7.3.1.3 shows while nothing
+       commits. A notice has no rendezvous, so no failure arm is forked for it.
+       Named residual: the error-page world of a declined child is not explored. Next diff routes the decline
+       to the creating engine's navigable (a host record naming the child), whose flow forks as
+       engine_host_decline's does. Absence shows as a `provisions nothing` warning for a child whose creator
+       has no flow that sees the child fail to load. */
+    if (loaded.declined !== null) {
+      documentPolicySettle(f[C.child], null);
+      noticeDeclined(eng, "navigable.create " + f[C.child], loaded.declined);
+      return;
+    }
     childRequestAlias(f[C.creator], f[C.address], loaded.url);
     /* The child's principal is principalOf its record: a new opaque origin under the sandboxed origin flag
        (HTML §7.3.2.1 Creating browsing contexts), otherwise the origin of the response's URL (`loaded.url`,
@@ -5373,8 +5333,6 @@ async function hostNotice(eng, line) {
     /* The re-fetch is made under the same decision as the navigation's own load, since the provenance on this
        record is the load job's (core/frame/browsing_context_group.c takes it from there); a swap cannot fetch
        an address this zone declined at `document.fetch`. */
-    /* `none`, for the create arm's reason: a swap is a notice, and its `pageHtml` line turns a null body into
-       an empty Uint8Array. */
     /* The issuing document's record and the navigable's (issuedRecords) joined with the notice's words; a
        notice naming a document that is not this instance's is refused, as a request is. */
     const _swapFrom = issuedRecords(eng, f[P.issuer], f[P.document]);
@@ -5385,6 +5343,8 @@ async function hostNotice(eng, line) {
     const _swapDoc = childDocRecord(_swapFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
     const swapped = await engineProvisionLoad(eng, line, f, P, _swapDoc, _swapFrom.issuerDoc);
     if (swapped === null) return;
+    /* A declined load provisions nothing, for the create arm's reason. */
+    if (swapped.declined !== null) { noticeDeclined(eng, "navigable.swap " + f[P.document], swapped.declined); return; }
     DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
            "the swapped-to document load answered neither bytes nor the null that means it did not load");
     DCHECK(swapped.headers && typeof swapped.headers === "object",
@@ -5467,6 +5427,8 @@ async function hostNotice(eng, line) {
     }
     const navd = await engineProvisionLoad(eng, line, f, P, _navDoc, _navFrom.issuerDoc);
     if (navd === null) return;
+    /* A declined load provisions nothing, for the create arm's reason. */
+    if (navd.declined !== null) { noticeDeclined(eng, "navigable.navigate " + f[P.document], navd.declined); return; }
     DCHECK(navd && (navd.bytes === null || navd.bytes instanceof Uint8Array) &&
            navd.headers && typeof navd.headers === "object" && typeof navd.url === "string" && navd.url !== "",
            "the navigated-to document load answered without bytes-or-null, a header list and a response URL — " +
@@ -5850,10 +5812,9 @@ async function engineServiceHostRequests(eng) {
        `iframe src`, and its body may never end), keyed on the request id. The asking navigable stays parked on
        its load; every other flow keeps running. */
     engineIssue(eng, inflightKey([String(id)]),
-      /* `rendezvous`: engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is
-         parked on, so the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
-      (_signal, onBodyRead) => eng.fetchedDocument(df.url, df.provenance, df.driven, df.pinned,
-                                                   /*refusalArm*/"rendezvous", fetchRequest,
+      /* engineDeliverDocument routes `r.declined` to `hostDecline` against the id the engine is parked on, so
+         the navigable keeps the `about:blank` HTML §7.3.1.3 created it holding. */
+      (_signal, onBodyRead) => eng.fetchedDocument(df.url, df.provenance, df.driven, df.pinned, fetchRequest,
                                                    docRecordOpaque(askerDoc), askerDoc, onBodyRead),
       /* A same-origin child's load files its landed address under its create's facts, as a cross-origin one's
          does in the `navigable.create` arm. */
@@ -5959,7 +5920,7 @@ async function engineDeliverDocument(eng, id, r, address) {
    the record's own words. Null is a refusal of the instance, by name. */
 async function engineProvisionLoad(eng, line, f, P, docRecord, issuerDoc) {
   if (f[P.held] === "-")
-    return eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned], /*refusalArm*/"none",
+    return eng.fetchedDocument(f[P.address], f[P.provenance], f[P.driven], f[P.pinned],
                                DOCUMENT_REQUEST_UNSTATED, docRecordOpaque(docRecord), issuerDoc);
   const h = eng.held.get(f[P.held]);
   if (!h || (h.address !== f[P.address] && h.loaded.url !== f[P.address])) {
@@ -6610,8 +6571,8 @@ async function admitSeatLand(seat) {
        that declared it may be gone. */
     /* The bytes arrived on an earlier round (see admitLoadSeat) and are read here. */
     const loaded = seat.landed;
-    /* The refusals a seeded document owes its reader, each costing one fetch at most: a decline (no request
-       made; this caller states `report`), an unavailable load, a response that landed on another origin (a
+    /* The refusals a seeded document owes its reader, each costing one fetch at most: a decline (no response
+       taken), an unavailable load, a response that landed on another origin (a
        Document of origin B in a cluster keyed on A), and an empty body (an ordinary empty Document, but not a
        bundle to explore). The seat is already out of the pool and the `_seeds` entry was removed when picked,
        and the declaring document's residue declares the route again. The decline is tested first: it carries
@@ -6629,7 +6590,7 @@ async function admitSeatLand(seat) {
         _landed !== originOf(seed.principalUrl) || loaded.bytes.length === 0) {
       console.warn("[bridge] a declared route could not be seeded: " + seed.url + " — " +
                    (loaded.declined !== null ? "the chokepoint DECLINED it on `" + loaded.declined + "`, so no " +
-                      "request was made; the rule that refused it is named in that token"
+                      "response was taken; that token names the rule or the silent wire"
                     : loaded.unavailable !== null ? JSON.stringify(loaded.unavailable)
                     : _landed !== originOf(seed.principalUrl) ? "landed cross-origin at " + (_landed || "an unparseable URL")
                     : "the response carried no bytes"));
@@ -7065,13 +7026,6 @@ const _hostOps = {
         admitLoadSeat({ kind: "seed", seed: seed, identity: seed.identity },
                       () => navigationLoad(seed.url, seed.principalUrl, seed.principalOrigin, seed.provenance,
                                            seed.fromDoc,
-                                           /* `report`: a route seed holds no rendezvous and has an arm
-                                              (admitSeatLand drops the seat and prints the chokepoint's
-                                              reason). A decline is reachable: the notice's `_seedRefusal`
-                                              pre-screen asks `safeFetchFiringRefusal`, which is not the
-                                              destructive deny list, so a declared `/logout` passes it and
-                                              the chokepoint refuses `blocked-destructive:<token>`. */
-                                           /*refusalArm*/"report",
                                            /* `tool`: HTML §7.4.4 Non-fragment synchronous "navigations"'
                                               URL and history update steps set the document's URL and fetch
                                               nothing, so the page sent no request for this address and a
@@ -7755,22 +7709,10 @@ self.astDispatch = async function astDispatch(msg) {
        (safe-fetch.js's `_actorOf`: a request this tool composed at a person's direction is still `tool`).
        engine/trusted.mjs's command-line seed states the same word. */
     const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.origin,
-                                        /* `none`: this seed can report an unavailability through
-                                           `onNavigationOutcome` but not a decline, since offscreen-brain.js's
-                                           `_PAGE_SOURCE_KINDS` (status/empty/network) all say a load was
-                                           attempted.
-                                           Named residual: a declined ambient seed is not covered. Next diff
-                                           adds a fourth page-source kind through `_PAGE_SOURCE_KINDS`, its
-                                           pairing asserts and the popup, then this word becomes `report`.
-                                           Absence shows as this loader's `none` abort naming an ambient
-                                           seed's address. It is unreachable while both destructive gates are
-                                           scoped to `provenance !== "observed"` and the observed/observed
-                                           arm fires at every address. */
                                         PROVENANCE_OBSERVED,
                                         docRecord(PROVENANCE_OBSERVED, DRIVEN_NO, "unpinned",
                                                   NAVIGABLE_NOTICE.sandbox.none,
                                                   self.safeFetchDocumentAddressSpace(msg.sourceUrl, null)),
-                                        /*refusalArm*/"none",
                                         /*actor*/"tool", /*driven*/"unstated", /*pinned*/"unstated",
                                         DOCUMENT_REQUEST_UNSTATED, seedSpeaker(msg),
                                         /* a document the person's browser loaded states no zone flags */ false);

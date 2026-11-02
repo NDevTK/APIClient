@@ -1,8 +1,8 @@
 // WHICH REFUSALS THE CHOKEPOINT GRADES `decline` FOR A §7.4 NAVIGATION, ASKED OF `safeFetch` ITSELF.
 //
-// `extension/bridge.js`'s navigation loader aborts where a `decline` reaches a caller whose refusal arm is
-// `none` (see DOC_REFUSAL_ARMS), so "can THIS caller be declined at all?" decides what is owed at each of its
-// four call sites. `testing/egress_arm_probe.mjs` answers the FIRING question and cannot answer this one: the
+// Every caller of `extension/bridge.js`'s navigation loader has an arm for a `decline` (its `declined` field),
+// so "which producer can decline THIS caller?" says which of those arms each of its call sites can reach.
+// `testing/egress_arm_probe.mjs` answers the FIRING question and cannot answer this one: the
 // firing policy is two of seven `decline` producers in `extension/lib/safe-fetch.js`, the DESTRUCTIVE DENY
 // LIST is not a signal arm, and `wire-idle` is a sent request this zone stopped waiting on. So the question has
 // to be asked of the whole ladder, which means asking `safeFetch`; the census at the end counts every producer.
@@ -127,7 +127,7 @@ const ROWS = [
     url: 'data:text/html', want: 'REFUSE:network', ask: (Z, row) => Z.safeFetchSchemeData(row.url) },
   { label: 'safeFetch asked for a data: URL (the scheme is refused, not declined)',
     url: 'data:text/html,<p>x', want: 'REFUSE:network' },
-  /* Two producers no navigation caller can reach, asked so the census holds all six: navigationLoad sends a
+  /* Two producers no navigation caller can reach, asked so the census holds all seven: navigationLoad sends a
      GET and passes no `onChunk`. */
   { label: 'METHOD, a POST (not a navigation caller\'s: navigationLoad sends GET)',
     url: 'https://app.example.com/api', want: 'DECLINE', reason: 'blocked-method:',

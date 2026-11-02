@@ -1363,7 +1363,9 @@ function _setPageSource(doc, record) {
    producer is now bridge.js, in this same document, composing from `lib/safe-fetch.js`'s own reply record: a
    malformed one there is OUR logic being wrong, which is a DCHECK by §Offensive-programming and would be
    silently swallowed by a drop. */
-var _PAGE_SOURCE_KINDS = ["status", "empty", "network"];
+/* `declined` is the chokepoint's decline: a browser would have gone on loading the address and this tool did not,
+   either refusing to send it or ending the wait on a silent wire. The detail is that refusal's token. */
+var _PAGE_SOURCE_KINDS = ["status", "empty", "network", "declined"];
 /* THE EDGE FROM THE ZONE THAT LOADS TO THE ZONE THAT RENDERS. bridge.js calls this exactly once per seeded
    document, the instant its §7.4 navigation settles and BEFORE it seats an engine or returns — so the
    pairing that used to be asserted at the dispatch is intact one zone along: no document is analysed without
@@ -1379,7 +1381,7 @@ self.onNavigationOutcome = function onNavigationOutcome(documentId, record) {
          "analysability is simply not stated");
   if (record.state === "unavailable") {
     DCHECK(_PAGE_SOURCE_KINDS.indexOf(record.kind) >= 0,
-           "a navigation outcome was refused with kind `" + record.kind + "`, which is not one of the three " +
+           "a navigation outcome was refused with kind `" + record.kind + "`, which is not one of the four " +
            "this seam and the popup both spell out — a report that cannot say WHICH failure it was is the " +
            "silence it exists to replace wearing a field name");
     DCHECK((record.kind === "status") === (record.status !== undefined),
@@ -1391,10 +1393,10 @@ self.onNavigationOutcome = function onNavigationOutcome(documentId, record) {
            "a navigation outcome reported status `" + record.status + "`, which no HTTP response has — " +
            "safeFetch answers 0 for a request that never went on the wire and that is the `network` kind, " +
            "carrying the rule that refused it");
-    DCHECK((record.kind === "network") === (typeof record.detail === "string"),
+    DCHECK((record.kind === "network" || record.kind === "declined") === (typeof record.detail === "string"),
            "a navigation outcome of kind `" + record.kind + "` carries detail `" + record.detail + "` — the " +
-           "detail is the chokepoint's own refusal reason and rides the `network` kind alone, so this pair " +
-           "is one report's two halves disagreeing");
+           "detail is the chokepoint's own refusal reason and rides the `network` and `declined` kinds alone, " +
+           "so this pair is one report's two halves disagreeing");
   }
   /* THE DOCUMENT IS LOOKED UP, NEVER MINTED. `getDoc` creates an empty DocData for an unknown id, and a
      navigation outcome is only ever produced for a document this zone SEEDED — so a mint here would file a

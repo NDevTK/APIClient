@@ -347,17 +347,17 @@ function serializeTabData(tab) {
              "_setPageSource writes exactly two, so anything else is that writer bypassed and the popup " +
              "would render a document whose analysability it cannot state");
       if (ps.state === "delivered") return { state: "delivered" };
-      DCHECK(ps.kind === "status" || ps.kind === "empty" || ps.kind === "network",
+      DCHECK(ps.kind === "status" || ps.kind === "empty" || ps.kind === "network" || ps.kind === "declined",
              "an unavailable page source reached the popup seam with kind `" + ps.kind + "` — the arm that " +
-             "writes it admits exactly three, and a report that cannot say WHICH failure it was is the " +
+             "writes it admits exactly four, and a report that cannot say WHICH failure it was is the " +
              "silence it exists to replace wearing a field name");
       DCHECK((ps.kind === "status") === (ps.status !== undefined),
              "an unavailable page source carries kind `" + ps.kind + "` with status `" + ps.status + "` — a " +
              "status rides the `status` kind and no other, so this pair is the two halves of one report " +
              "disagreeing about which failure it describes");
-      DCHECK((ps.kind === "network") === (ps.detail !== undefined),
+      DCHECK((ps.kind === "network" || ps.kind === "declined") === (ps.detail !== undefined),
              "an unavailable page source carries kind `" + ps.kind + "` with detail `" + ps.detail + "` — a " +
-             "detail rides the `network` kind and no other");
+             "detail rides the `network` and `declined` kinds and no other");
       const out = { state: "unavailable", kind: ps.kind };
       if (ps.status !== undefined) out.status = ps.status;
       if (ps.detail !== undefined) out.detail = ps.detail;

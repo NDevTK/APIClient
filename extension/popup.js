@@ -1443,9 +1443,9 @@ function renderDeepStatus() {
          "fetched would render exactly like one that was analysed and found clean");
   if (tabData.pageSource && tabData.pageSource.state === "unavailable") {
     const ps = tabData.pageSource;
-    DCHECK(ps.kind === "status" || ps.kind === "empty" || ps.kind === "network",
+    DCHECK(ps.kind === "status" || ps.kind === "empty" || ps.kind === "network" || ps.kind === "declined",
            "an unavailable pageSource reached the popup with kind `" + ps.kind + "` — serialize.js admits " +
-           "exactly three and asserts them, so a fourth here is that seam broken and this row would state " +
+           "exactly four and asserts them, so a fifth here is that seam broken and this row would state " +
            "that the page could not be analysed without saying why, which is the silence it replaces");
     /* `detail` IS THE CHOKEPOINT'S OWN REFUSAL REASON and it is shown verbatim, not summarised. It is the one
        string that distinguishes a server that would not answer (`Failed to fetch`) from a request this tool
@@ -1454,6 +1454,8 @@ function renderDeepStatus() {
        moved to the chokepoint; it is a named rule now. */
     const reason = ps.kind === "status" ? `the server answered ${ps.status} to it`
                  : ps.kind === "empty"  ? "the server answered with an empty body"
+                 : ps.kind === "declined" ? `a browser would have gone on loading it and the analyser did not: ` +
+                                            String(ps.detail).slice(0, 160)
                  : `the load did not happen: ${String(ps.detail).slice(0, 160)}`;
     sections.push(deepRow([domElement("strong", {}, ["This page was NOT analysed."]),
       ` The analyser loaded this page's address itself — the only way to get the bundle as SHIPPED, with `
