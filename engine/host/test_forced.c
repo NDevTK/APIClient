@@ -18040,7 +18040,7 @@ TF_UNIT void probes_srcreach(const char *js, Probe *tab, int *n) {
         { "sr20-location-string", "/api/sr20-arm", LOCATION_HASH_SRC, 1 },
     };
     static char why[COUNTOF(SR)][160];
-    Probe rows[COUNTOF(SR) + 2];
+    Probe rows[COUNTOF(SR) + 3];
     long reached = sr_census(js, "_sinkReached"), tainted = sr_census(js, "_sinkTainted");
     const char *ng_why = NULL; int ng_tt = 1;
 
@@ -18080,6 +18080,16 @@ TF_UNIT void probes_srcreach(const char *js, Probe *tab, int *n) {
                  "a search whose own write receives only the percent-encoded fragment (sr5, sr6 or sr20) is recorded "
                  "fired: a fire through another search's write was credited to the running candidate's search");
         rows[COUNTOF(SR) + 1] = (Probe){ "sr-fire-own-write", fo_tt, "srRow('sr4'", SESS_EXPLORE, fo_why };
+    }
+    /* sr7's write receives a member of ParseJSON's value, so its search fires only through a delivery whose
+       fragment, sliced and decoded, is a JSON text holding the payload at that member. */
+    {
+        int f7 = sr_fired(js, ".JSON.parse().srf", 0);
+        const char *fj_why = NULL; int fj_tt = 1;
+
+        fold_row(&fj_tt, &fj_why, f7 >= 0, "NOT REACHED: no markup @S record's source holds `.JSON.parse().srf`");
+        fold_row(&fj_tt, &fj_why, f7 != 0, "the JSON member's own write (sr7) has no fire-verified record");
+        rows[COUNTOF(SR) + 2] = (Probe){ "sr7-fire-json", fj_tt, "srRow('sr7'", SESS_EXPLORE, fj_why };
     }
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
