@@ -359,7 +359,8 @@ typedef struct Flow {
        flow that is not a seeded drive, a resumed one included (its own recorded drive is the drive it resumes). */
     int64_t orphan_seen;
     /* Does this resumed drive still have a chain member whose call it has not built? Set by the cold tier's
-       rebuild and cleared when the last member's call is built. A resumed session's heap holds the closure only
+       rebuild, or by engine_orphan_wait_seat on a seeded @S candidate, and cleared when the last member's call is
+       built. A resumed session's heap holds the closure only
        once the document's own replay creates it and some flow takes it as an orphan; until then this flow
        replays like any other. `orphan_claim_fn` tells the two states apart: undefined while waiting, the re-taken
        function once handed one. The flow then builds its own call frame in its own timeline, because the

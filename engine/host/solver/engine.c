@@ -6315,11 +6315,20 @@ EngineOrphanExits engine_orphan_exits(void) {
    count is counted at the finish: a drive that finished still waiting is the loss exactly (the bundle no longer
    holds the body, or the locator does not name it), and on unchanged bytes between two sessions it is zero. */
 static long g_orphan_claims_met, g_orphan_claims_unmet;
+/* The same round trip for waits this session seated on its own @S candidates (engine_orphan_wait_seat): members
+   seated and members handed a body. Kept apart from the inherited pair, which states a residue's round trip. */
+static long g_orphan_waits_seated, g_orphan_waits_met;
 /* Whether any claim is still open: a latch set by a walk that found none, rather than a counter that flow_remove,
-   flow_release and the park would all have to decrement. Only cold_resume opens claims, before any flow is
-   picked, so once none is open none ever is. engine_orphan_born reads it at every function object the runtime
-   builds, so the latch is what makes that hook cheap; it is set at seeding (engine_orphan_claim_open). */
+   flow_release and the park would all have to decrement. cold_resume opens claims before any flow is picked, and
+   engine_orphan_wait_seat reopens the latch for a candidate it seats. engine_orphan_born reads it at every
+   function object the runtime builds, so the latch is what makes that hook cheap; it is set at seeding
+   (engine_orphan_claim_open). */
 static int g_orphan_claims_closed;
+
+/* Whether `f`'s wait was seated this session on a seeded @S candidate rather than rebuilt from a park record. */
+static int orphan_wait_seated(const Flow *f) {
+    return f->cand_src != NULL && !f->cand_resumed;
+}
 
 /* Hands this body to every resumed drive waiting for it and answers how many there were. Every one, not the first:
    a take consumes the `entered` bit, not the function, and the recording session had one function with N flows
@@ -6367,7 +6376,7 @@ static int engine_orphan_born(JSContext *ctx, JSValueConst fn, int argc, void *o
 
 static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash) {
     Flow *fl;
-    int i, open = 0, n = 0;
+    int i, open = 0, n = 0, seated = 0;
 
     for (i = 0; (fl = flow_at(i)) != NULL; i++) {
         if (!fl->orphan_want || !JS_IsUndefined(fl->orphan_claim_fn)) continue;
@@ -6385,27 +6394,48 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
         if (!engine_world_reaches_fn(fl->world, fn)) continue;
         DCHECK(fl->orphan,
                "a flow waits for an orphan's body without being marked as a drive — the mark, the locator and the "
-               "wait are written together by the cold tier's rebuild");
+               "wait are written together by the cold tier's rebuild and by engine_orphan_wait_seat");
         /* Only the function crosses here; the claimant builds its call later in its own timeline, because the
            receiver and arguments are concolic objects that, minted under this flow's stamp, would be this flow's
            private state, outside every delta. */
         fl->orphan_claim_fn = JS_DupValue(ctx, fn);
         fl->orphan_argc = argc;
         n++;
+        seated += orphan_wait_seated(fl);
     }
     /* The latch, set by the walk itself. `open` is counted before this pass satisfies anything, so a pass that
        satisfies the last claim latches on the next one. */
     if (!open) g_orphan_claims_closed = 1;
-    g_orphan_claims_met += n;
+    g_orphan_claims_met += n - seated;
+    g_orphan_waits_met += seated;
     {
         ColdResumed cr;
 
         cold_resumed(&cr);
-        DCHECK(g_orphan_claims_met <= cr.orphans,
-               "more orphan claims were satisfied than the cold tier rebuilt — a claim belongs to the one flow its "
-               "'o' record named, so a second holder is a fork that copied the wait (engine_sibling_assemble)");
+        DCHECK(g_orphan_claims_met <= cr.orphans && g_orphan_waits_met <= g_orphan_waits_seated,
+               "more orphan claims were satisfied than the cold tier rebuilt or this session seated — a claim "
+               "belongs to the one flow its 'o' record or its seat named, so a second holder is a fork that "
+               "copied the wait (engine_sibling_assemble)");
     }
     return n;
+}
+
+void engine_orphan_wait_seat(Flow *f, const uint64_t *hash, const int *doc, int n) {
+    DCHECK(f && hash && doc && n > 0 && f->cand_src && !f->cand_resumed && !f->orphan && f->orphan_chain_n == 0 &&
+               JS_IsUndefined(f->fn),
+           "a wait was seated on something other than a fresh, unseeded @S candidate holding no drive — the seat is "
+           "the candidate's whole chain, so a flow already driving would carry two");
+    DCHECK(g_sess_forking,
+           "a candidate was seated on a chain of drives in a session that does not fork — engine_orphan_resume "
+           "builds a waiting drive's call only in a forking session");
+    f->orphan = 1;
+    f->orphan_hash = 0;
+    f->orphan_want = 1;
+    f->orphan_claim_at = 0;
+    /* The act is read when the member's call is built, in the candidate's own world, as for a resumed drive. */
+    for (int i = 0; i < n; i++) flow_orphan_chain_push(f, hash[i], NULL, doc[i], 1);
+    g_orphan_waits_seated += n;
+    g_orphan_claims_closed = 0;
 }
 
 /* The call a driven orphan is: mints one concolic per declared parameter and one for the receiver, and returns the
@@ -6667,7 +6697,8 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
 
         DCHECK(f->orphan && f->orphan_claim_at < f->orphan_chain_n,
                "a flow waits to adopt an orphan without being one, or past its chain — `orphan_want` is written only "
-               "by the cold tier's rebuild, beside the mark and the chain, and clears at the chain's end");
+               "by the cold tier's rebuild and engine_orphan_wait_seat, beside the mark and the chain, and clears "
+               "at the chain's end");
         DCHECK(flow_running() == f,
                "a resumed orphan drive built its call frame while another flow was switched in — the receiver and "
                "arguments would carry that flow's generation");
@@ -6838,9 +6869,10 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
      * it from a fresh path, and the claimant, whose recorded arms are the gates that made it reachable, would
      * finish having driven nothing, a loss nothing reports. Skipped when no claim can be open. engine_orphan_born
      * asks the same walk at a body's creation; the two are doors onto one function, not alternatives.
-     * Named residual. Not covered: whether this door still fires. Claims open only in cold_resume, inside
-     * engine_sched_begin above every compile, where the born hook is installed too, so every claimed body is
-     * offered and marked `entered` at creation and never reaches a take; what is left is a body already live and
+     * Named residual. Not covered: whether this door still fires. Claims open in cold_resume, inside
+     * engine_sched_begin above every compile, where the born hook is installed too, and at a candidate's seat,
+     * before its replay compiles anything, so every claimed body is offered and marked `entered` at creation and
+     * never reaches a take; what is left is a body already live and
      * un-entered when the claim opened, which may not exist. Next diff builds: this branch deleted, with that
      * ordering asserted at the seeding. Absence shows as: `hand-a-parked-drive-its-function` in a resumed run's
      * step-unit histogram, nonzero if this door fires, zero on every run of every host if it is dead. */
@@ -10085,7 +10117,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            "engine_orphan_resume's rung returns on exactly that pair and stands above every "
                            "clock-driven source, so reaching the exit in that state means the two reads "
                            "disagree and the drive's call would be built by nobody");
-                    g_orphan_claims_unmet++;
+                    /* A seated candidate's payload may steer its replay past the body's creation, which is a
+                       legitimate miss and not a residue's loss. */
+                    if (!orphan_wait_seated(f)) g_orphan_claims_unmet++;
                 }
                 /* And it may not finish holding an un-notified rejection, the other half of the job assertion
                    above. HTML §8.1.4.7 Unhandled promise rejections' notify runs at the end of every microtask
@@ -12062,8 +12096,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     /* A residue refused whole for an older name spelling seeds the boot flow, as no residue does. */
     if (!(recipes && *recipes && cold_resume(ctx, recipes)))
         flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
-    /* The routing latch is answered here, where the answer is known: only the resume above opens a claim on an
-       orphan's body, so the frontier holds one now or none for the session. Closing it here rather than on the
+    /* The routing latch is answered here, where the answer is known: the resume above is the session's one
+       opening of an inherited claim, and a candidate's seat reopens the latch for its own. Closing it here rather than on the
        first closure a page builds makes engine_orphan_born free for every session that inherited no drive, and
        that hook is reached by every function object in this runtime. */
     if (!engine_orphan_claim_open()) g_orphan_claims_closed = 1;
@@ -13819,6 +13853,7 @@ void solver_agent_free(JSContext *ctx)
        fact about one session's residue, and the latch about one frontier's members; kept, they would report the
        first session's round trip and skip the routing walk on a frontier just rebuilt with claims in it. */
     g_orphan_claims_met = 0; g_orphan_claims_unmet = 0; g_orphan_claims_closed = 0;
+    g_orphan_waits_seated = 0; g_orphan_waits_met = 0;
     g_park_refused = 0;
     attr_shadow_free(ctx);
     endpoint_free();

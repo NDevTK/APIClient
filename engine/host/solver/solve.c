@@ -247,6 +247,11 @@ typedef struct {
        The blob holds a reference on the frozen segment. record_sink releases it at the fire, which is what
        closes the search (search_seeds), and solve_free releases what remains. */
     void *reinject;
+    /* The drives the flow standing at this sink had called (its chain's called members: each body's locator and
+       the document ordinal it was called in), frozen with `reinject` because the decisions replayed are those of
+       a run that called these bodies in this order. Each candidate is seated on them (engine_orphan_wait_seat).
+       Released with `reinject`; `chain_n` 0 for a detection outside any drive. */
+    uint64_t *chain; int *chain_doc; int chain_n;
     /* Whether that frozen path pinned an attacker's principal, captured beside the path
        (cand_learn_principal_gates) because every candidate replays that one path; see PrincipalDemand. */
     PrincipalDemand pg_demand;
@@ -930,6 +935,21 @@ static void cand_learn_path(Cand *e) {
                "the reading the whole pair turns on");
         e->reinject_len = (int)arms;
     }
+    {
+        const Flow *f = flow_running();
+        int called = f && f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0;
+
+        DCHECK(e->chain == NULL && e->chain_doc == NULL && e->chain_n == 0,
+               "a search's chain of drives was frozen twice — it is taken with the one path capture above");
+        if (called > 0) {
+            e->chain = reclaim_malloc((size_t)called * sizeof *e->chain);
+            e->chain_doc = reclaim_malloc((size_t)called * sizeof *e->chain_doc);
+            CHECK(e->chain && e->chain_doc, "solve: OOM freezing a search's chain of drives");
+            memcpy(e->chain, f->orphan_chain, (size_t)called * sizeof *e->chain);
+            memcpy(e->chain_doc, f->orphan_chain_doc, (size_t)called * sizeof *e->chain_doc);
+            e->chain_n = called;
+        }
+    }
     /* And what that path demanded of an attacker's principal, taken now because the registry name and the
        constraint rows are borrowed from this flow. It runs past the capture's two returns, so a search that
        already holds a path already holds that path's demands. */
@@ -1158,6 +1178,8 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
        solved search seeds nothing further. Clearing it is what closes the search, since search_seeds reads this
        NULL; the probe's other arms keep arriving after a fire and would otherwise be seeded again. */
     if (twin->reinject) { decide_blob_free(twin->reinject); twin->reinject = NULL; }
+    free(twin->chain); free(twin->chain_doc);
+    twin->chain = NULL; twin->chain_doc = NULL; twin->chain_n = 0;
 }
 
 /* A detection whose path pinned a principal (see detect_sink): the search learns the root the way add_pending
@@ -2201,6 +2223,9 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
         f->dec_blob = decide_blob_new((void *)decide_blob_seg(e->reinject));
         f->pin_blob = concolic_pins_blob_empty();
     }
+    /* …and on the drives that path called, which a candidate re-taking bodies on its own would call in whatever
+       order its takes found them, so its fire would state another path's acts. */
+    if (e->chain_n) engine_orphan_wait_seat(f, e->chain, e->chain_doc, e->chain_n);
     if (dl) flow_deliveries_parse(f, dl);
     else if (e->dl_tmpl) {
         JsonBuf slot = { 0 }, pay = { 0 };
@@ -2969,6 +2994,8 @@ void solve_free(void) {
         free(g_pending[i].wit);
         /* The segment reference an unsolved search still holds; the frozen chain goes with its last reference. */
         if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);
+        free(g_pending[i].chain);
+        free(g_pending[i].chain_doc);
         free(g_pending[i].refused_acts);
         free(g_pending[i].composition_refused);
         for (int k = 0; k < g_pending[i].nvf; k++) {

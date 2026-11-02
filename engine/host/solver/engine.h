@@ -1376,6 +1376,11 @@ void engine_routed_task_census(long *ends);
    nothing yields drives that call nothing and report nothing, so zero unmet on unchanged bytes is the
    feature's claim. `met` may exceed the records, since a waiting drive forks arms while it replays. */
 void engine_orphan_claims(long *met, long *unmet);
+/* Seats `f`, a freshly seeded @S candidate, on the `n` drives its search's detecting flow had called (each body's
+   locator `hash[i]` and the document ordinal `doc[i]` it was called in), in that order. The candidate waits for
+   each body as a resumed drive does (engine_orphan_route) and builds each call where its replay runs out, so it
+   stands on the detecting flow's whole path and a fire states that path's acts. Copies the arrays. */
+void engine_orphan_wait_seat(struct Flow *f, const uint64_t *hash, const int *doc, int n);
 
 /* The DOM registers the wrapper identity map's counter for the scheduler's diagnostic line, so the solver does
    not include node.h and pull in Lexbor. */

@@ -1522,8 +1522,9 @@ char *result_cold_json(void) {
            "orphan locators — `resumed` is about to be emitted as 0, which STATES that this session was handed "
            "no residue, and that would be a lie about a residue that was read back. cold_resume's own "
            "`flows > 0` is the other side of this pair");
-    /* A claim is evidence of an inherited drive, never one this session started: `orphan_want` is written only
-       at cold.c's 'o' record and spreads by fork. The comparison holds because engine_sched_begin calls
+    /* A claim counted here is evidence of an inherited drive, never one this session started: these rows count
+       only waits cold.c's 'o' record rebuilt, and a wait does not spread by fork; a candidate's seated wait is
+       counted apart (engine_orphan_wait_seat). The comparison holds because engine_sched_begin calls
        cold_resume at most once per session; met and unmet may exceed `orphans` (a drive's arms are one drive),
        so the implication runs one way. */
     DCHECK(resumed.orphans > 0 || (e.claims_met == 0 && e.claims_unmet == 0),
