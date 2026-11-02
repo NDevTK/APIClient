@@ -8,7 +8,8 @@
  * engine/host/out/qjs-native-none; its zone drives its binary over a page with the wire answered by wire.mjs.
  * A run is cut at the first census sample whose summed @COLD `stepWork` passes the largest budget, and each
  * budget is read at the first sample past it, as the union of every instance's latest @RESULT. A run that ends
- * first (abort, drain, backstop) has no reading at that budget, never a zero.
+ * first (abort, drain, backstop) has no reading at that budget, never a zero. The documents each reading is taken
+ * from, and the last sample's, are kept as logs/<page>.<run>.<budget|final>.results.json.
  * Recorded replies rather than live ones because an A/B asks what changed between two engines, and live input
  * would be a second moving subject. A recording is what the page's own sends received at a stated instant,
  * keyed by the URL each was sent to; the bytes stay outside the repository, and manifest.json names them. */
@@ -219,6 +220,7 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
                                                 load1: loadavg()[0] }) + '\n');
       while (next < budgets.length && work >= budgets[next]) {
         const docs = [...inst.values()].filter((i) => i.result !== null).map((i) => JSON.parse(i.result));
+        writeFileSync(join(logDir, `${tag}.${budgets[next]}.results.json`), JSON.stringify(docs));
         readings.push({ budget: budgets[next], stepWork: work, instances: inst.size, ...readingOf(docs),
                         ...populationOf([...inst.values()].filter((i) => i.wfq !== null).map((i) => JSON.parse(i.wfq))) });
         next++;
@@ -261,6 +263,7 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
       }
       /* The last sample the run produced, whatever ended it, kept apart from the budget readings. */
       const lastDocs = [...inst.values()].filter((i) => i.result !== null).map((i) => JSON.parse(i.result));
+      writeFileSync(join(logDir, `${tag}.final.results.json`), JSON.stringify(lastDocs));
       const final = lastDocs.length === 0 ? null : { stepWork: work, instances: inst.size, ...readingOf(lastDocs),
         ...populationOf([...inst.values()].filter((i) => i.wfq !== null).map((i) => JSON.parse(i.wfq))) };
       const wire = readFileSync(wireLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
