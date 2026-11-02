@@ -37711,12 +37711,13 @@ TF_UNIT int abi_main(int argc, char **argv)
            at or before it, so where a reply lands is a function of the work and never of how fast the wire
            answered. A zero is "nothing is due yet" and is dropped; `abi_stalled`'s sentence stays where the
            frontier is out of work.
-           Only when something is owed, so a host with empty registers pays for no round trip. */
-        if (step != ENGINE_STEP_STALLED &&
-            (*qjs_pending() != '\0' || *qjs_host_requests() != '\0')) {
+           At every slice, owed or not: a peer instance's records are delivered against every instance's clock
+           (engine/trusted.mjs's `clusterSafe`), so an instance that read only when owed would hold its peers at
+           its last read for as long as it ran. */
+        if (step != ENGINE_STEP_STALLED) {
             abi_say("poll\t%lld", (long long)abi_read_work());
-            /* A `poll` is written only where a register is non-empty, so an end of channel here is the owed end
-               and `abi_pay` has already aborted on it; the branch is kept because it costs one comparison. */
+            /* An end of channel with something owed has aborted inside `abi_pay`; with nothing owed it is the
+               zone gone, and this instance parks. */
             if (abi_pay() == ABI_PAY_CHANNEL_ENDED) { qjs_request_park(); parking = 1; continue; }
         }
         if (step == ENGINE_STEP_STALLED) {

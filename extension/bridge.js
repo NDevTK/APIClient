@@ -3343,7 +3343,7 @@ function engineReserve(cluster, docId, msg, referenced) {
                 /* This instance's reply clock (lib/reply-schedule.js), read at the top of every service round,
                    and how its answers were delivered: rounds, answers delivered, rounds that waited on the wire
                    for a due answer, and the work skipped at stalls. */
-                _replyClock: replyClock(),
+                _replyClock: replyClock(0),
                 _replyDelivery: { rounds: 0, delivered: 0, waits: 0, skipped: 0 },
                 _epoch: self.frontierEpoch(), r: null, _readyP: null,
                 /* How much of its partition of the product's known identities this instance has been handed

@@ -7,17 +7,20 @@
 // delivers exactly the answers due at or before its clock, by due point and then issue ordinal, waiting for any
 // the wire has not produced. A stalled instance runs nothing while it waits, so its clock first moves to its
 // earliest due point. bridge.js (the extension) and engine/trusted.mjs (the native host's zone) both keep their
-// instances' clocks through this file, so the two hosts deliver by one rule.
+// instances' clocks through this file, so the two hosts deliver by one rule. An instance's clock starts at its
+// origin, the point on its cluster's timeline at which it was provisioned, so the clocks of one cluster's
+// instances are comparable (engine/trusted.mjs delivers cross-instance records on them).
 
 /* The modelled network latency in engine work: 50 ms at browser/core/timing/event_loop.h's EVENT_LOOP_WORK_PER_MS
    (100000 units a ms), about 93 slices of ENGINE_QUANTUM_WORK and about 1.1 s of native dev thread time, so a
    read rarely waits on the wire. A calibration, not a bound: no flow runs less far under any value. */
 var REPLY_LATENCY_WORK = 5000000;
 
-/* One instance's clock: the work its last read stated (null before the first read), the work skipped at
-   stalls, and the issue ordinal last handed out. */
-function replyClock() {
-  return { work: null, skip: 0, ordinal: 0 };
+/* One instance's clock: its origin on the cluster's timeline, the work its last read stated (null before the
+   first read), the work skipped at stalls, and the issue ordinal last handed out. */
+function replyClock(origin) {
+  DCHECK(Number.isSafeInteger(origin) && origin >= 0, "a reply clock was made with the origin " + origin);
+  return { origin: origin, work: null, skip: 0, ordinal: 0 };
 }
 
 /* A read's stated work, taken onto the clock; the refusal is a sentence when the engine's statement is not a
@@ -31,10 +34,15 @@ function replyClockRead(clock, work) {
   return null;
 }
 
-/* The instance's network clock: its last read's work plus the work skipped at stalls. */
+/* The instance's network clock: its origin plus its last read's work plus the work skipped at stalls. */
 function replyClockNow(clock) {
   DCHECK(clock.work !== null, "a reply clock was asked for its time before any read stated the instance's work");
-  return clock.work + clock.skip;
+  return clock.origin + clock.work + clock.skip;
+}
+
+/* The earliest time the instance's next read can state: its clock, or its origin before its first read. */
+function replyClockFloor(clock) {
+  return clock.work === null ? clock.origin : replyClockNow(clock);
 }
 
 /* The due point of a send first issued at the clock's current read. */
