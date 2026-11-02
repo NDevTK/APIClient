@@ -457,6 +457,11 @@ static unsigned css_px_atom_intern(JSContext *realm, const CssPxKey *key, const 
         for (j = 0; !args[a].determined && j < args[a].n; j++) {
             /* A nested atom was interned before the definition naming it, so its set is already whole. */
             if (args[a].m[j].atom) d->facts |= t->atom_defs[args[a].m[j].atom - 1].facts;
+            DCHECKF(!enc.enclosed || !args[a].m[j].atom || !t->atom_defs[args[a].m[j].atom - 1].enc.enclosed,
+                    "the enclosed atom `%s` was minted over an operand naming the enclosed atom `%s`, and "
+                    "css_px_poly_range expands an enclosed atom's operand once per occurrence, which walks nested "
+                    "enclosures as a tree; record each atom's expansion here, once, before minting one",
+                    op, t->atom_defs[args[a].m[j].atom - 1].op);
             for (f = 0; f < CSS_ENV_FACT_COUNT; f++)
                 if (args[a].m[j].e[f]) d->facts |= CSS_ENV_BIT(f);
         }
