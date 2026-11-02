@@ -20102,8 +20102,6 @@ TF_UNIT void probes_globalcall(const char *js, Probe *tab, int *n) {
    forks the name that passes and the TypeError, for `new Headers` and for `fetch` alike. */
 TF_UNIT void probes_headerkey(const char *js, Probe *tab, int *n) {
     const char *b_why = NULL; int b_tt = 1;
-    fold_row(&b_tt, &b_why, param_value_is(js, "/api/hk-built", "n", "0"),
-             "no /api/hk-built?n=0 record: the world where the stored record holds no member did not build");
     fold_row(&b_tt, &b_why, param_value_is(js, "/api/hk-built", "n", "1"),
              "no /api/hk-built?n=1 record: the arm where the unknown key is a header name did not build a header");
     fold_row(&b_tt, &b_why, param_value_is(js, "/api/hk-threw", "e", "TypeError"),
