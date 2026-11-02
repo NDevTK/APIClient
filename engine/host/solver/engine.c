@@ -11931,7 +11931,8 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
     want = g_pressure_yield > 0 ? (long)((live - g_pressure_target + g_pressure_yield - 1) / g_pressure_yield)
                                 : (g_pressure_last > 0 ? 2 * g_pressure_last : 1);
     g_pressure_batch_live = live;
-    while (sold < want) {
+    /* What a sale frees outright (its layout jobs, its delta) shows at once, so the batch ends there too. */
+    while (sold < want && (uint64_t)c_alloc_live() > g_pressure_target) {
         if (!engine_reclaim_at_rest()) { at_floor = true; break; }
         sold++;
     }
