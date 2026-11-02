@@ -9,7 +9,10 @@
    §6.6.6's focus() step 4 scrolls #fb into view, and preventScroll keeps #fa's at 0. §7's offsetTop of #oe is
    2300 and of #sa2's last block 648 (from the initial containing block, as Blink measures a non-positioned
    body offsetParent). CSSOM §9's resolved width of #sa2's first block and top of the `top: auto` #ap are
-   their used 100px. Chrome 155.0.8059.84 gives every value expected. Cross-engine notes, left out: Chrome
+   their used 100px. #sr1 and #sr2 hold a replaced element, an 80px `svg` around a 200px `path` and a `canvas`
+   around a wide fallback `span`, whose content CSS 2.2 §3.1 puts outside the CSS formatting model, so their
+   scrolling areas are 80 and 50 wide; those two are read from the specs, not from a browser. Chrome
+   155.0.8059.84 gives every other value expected. Cross-engine notes, left out: Chrome
    and Firefox 158.0.1 count a zero-height block 500px wide, where §3.3 says "Border boxes with zero area do not
    affect the scrollable overflow area", and add §3.3's end padding (a 10px-padded box over a 300 x 200 child
    is 320 x 220), not built here. It ends with TF_CANVAS_INK, which test_forced.c defines first. */
@@ -33,6 +36,10 @@ static const char HTML_SCROLLAREA[] =
     "width:200px;height:10px;margin-right:50px\"></div></div>"
     "<div id=sa6 style=\"height:50px;width:100px;overflow:hidden;display:grid;grid-template-columns:200px\">"
     "<div style=\"margin-right:40px;height:10px\"></div></div>"
+    "<div id=sr1 style=\"position:absolute;top:0;left:300px;width:50px;height:20px;overflow:hidden\">"
+    "<svg width=\"80\" height=\"10\"><path d=\"M0 0H200V10H0Z\"/></svg></div>"
+    "<div id=sr2 style=\"position:absolute;top:0;left:400px;width:50px;height:20px;overflow:hidden\">"
+    "<canvas width=\"30\" height=\"10\"><span>fallbackfallbackfallbackfallback</span></canvas></div>"
     "<div id=sa7></div><div id=oe></div>"
     "<input id=fa style=\"position:absolute;top:1900px;left:0;width:50px;height:10px;border:0;padding:0\">"
     "<input id=fb style=\"position:absolute;top:2000px;left:0;width:50px;height:10px;border:0;padding:0\">"
@@ -54,7 +61,7 @@ static const char HTML_SCROLLAREA[] =
     "E('fb').focus();var f2=scrollY>1500?'moved':'still';"
     "fetch('/api/scrollarea?sh='+a.scrollHeight+'&sw='+a.scrollWidth+'&ch='+a.clientHeight"
     "+'&m3='+E('sa3').scrollHeight+'&m4='+E('sa4').scrollWidth+'&m5='+E('sa5').scrollWidth"
-    "+'&m6='+E('sa6').scrollWidth"
+    "+'&m6='+E('sa6').scrollWidth+'&r1='+E('sr1').scrollWidth+'&r2='+E('sr2').scrollWidth"
     "+'&lh='+b.scrollHeight+'&lw='+b.scrollWidth+'&rh='+document.documentElement.scrollHeight"
     "+'&rt='+rt+'&nt='+E('sa7').scrollTop+'&w1='+w1+'&w2='+w2+'&w3='+w3"
     "+'&f1='+f1+'&f2='+f2"

@@ -2453,6 +2453,17 @@ static bool lb_establishing_context(lxb_dom_element_t *el, LbContext *out)
             *out = ctx;
             return true;
         }
+        /* `lb_child` collects a replaced element as one atomic item and does not descend, because its content
+           is "outside the scope of the CSS formatting model" (CSS 2.2 §3.1 "Definitions"): nothing inside it
+           is on a line. */
+        if (inline_box && replaced_element_is(anc))
+            DFAILF("<%s> (display `%s`), replaced ancestor <%s>: "
+                  "CSS 2.2 §9.4.2's line fragments were asked for an element inside a REPLACED element, whose "
+                  "content generates no CSS box (CSS 2.2 §3.1). An SVG element there has an SVG layout box "
+                  "(CSSOM View §6 getClientRects() step 2) and any other element has no box at all; BUILD "
+                  "that answer in core/dom/element_view.c's box predicate so its callers stop before asking",
+                  lb_el_name(el, ebuf, sizeof ebuf), lb_el_display(el),
+                  lb_el_name(anc, abuf, sizeof abuf));
         if (inline_box) child = a;
     }
     /* The one abort on this walk whose fix is the caller's, not the box's, so it names connectedness rather

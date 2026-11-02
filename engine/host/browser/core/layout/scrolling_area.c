@@ -468,12 +468,16 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                treated as ink overflow". A layout or paint containment box also establishes both positioning
                containing blocks, so every box inside it is clipped or ink by those two sentences, and below the
                walk root it contributes its own margin edge, folded above, and nothing inside it.
+               A replaced element is "an element whose content is outside the scope of the CSS formatting
+               model" (CSS 2.2 §3.1 "Definitions"), so what is inside it generates no CSS box for this walk to
+               fold, walk root included: an outermost `svg`'s children are laid out by SVG and a `canvas`'s
+               fallback content is not rendered. Its own margin edge is folded above like any atomic box's.
                NAMED RESIDUAL. Not covered: a box clipped by `overflow` alone is descended into whole, so what it
                clips is counted. Next: that descent keeps only the boxes whose containing-block chain leaves the
                clipping box (a positioned box whose containing block is further up escapes the clip). How its
                absence shows: an ancestor's scrollWidth or scrollHeight above Chrome's where a descendant with
                `overflow` other than `visible` holds content past its padding edge. */
-            if (n != root && (containment_layout(d) || containment_paint(d))) {
+            if (replaced_element_is(d) || (n != root && (containment_layout(d) || containment_paint(d)))) {
                 descend = false;
             } else {
                 if (w->stage == SA_STAGE_CONTEXT) {
@@ -530,7 +534,7 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                   "treated as an anonymous inline element\", so a `<div>a<span>b</span></div>`'s run is on "
                   "the lines of the nearest block container ANCESTOR and was always folded there — what "
                   "was missing was the `span`'s OWN margin edge, which `sa_inline_box_edge` above now "
-                  "takes over §9.4.2's fragments. FOUR THINGS ARE KNOWN TO REACH THIS LINE AND EACH NAMES A "
+                  "takes over §9.4.2's fragments. THREE THINGS ARE KNOWN TO REACH THIS LINE AND EACH NAMES A "
                   "DIFFERENT MISSING BOX. (1) A `display: contents` parent, whose children css-display-3 "
                   "§2.5 \"Box "
                   "Generation: the none and contents keywords\" splices into the grandparent's box list — "
@@ -540,15 +544,7 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                   "container parent, whose text is not §9.2.1.1's box at all: css-grid-2 §6 \"Grid Items\" "
                   "wraps each child text sequence in an anonymous grid item, as css-flexbox-1 §4 \"Flex "
                   "Items\" does for a flex container, whose items sa_anon_flex_items_fold folds; build the "
-                  "grid item's placement and fold it the same way. (3) A REPLACED INLINE parent (`<object>x</object>`): CSS 2.2 §3.1 "
-                  "\"Definitions\" says of a replaced element that \"the content of replaced elements is "
-                  "not considered in the CSS rendering model\", so this run generates NO BOX and the "
-                  "missing thing is not a box at all but the SUPPRESSION — the walk should not have "
-                  "descended into it. core/layout/replaced_element.h answers which elements are replaced "
-                  "and in what state; BUILD the child-box suppression over it, in the ONE predicate that "
-                  "decides box existence (core/dom/element_view.h's), so this walk and "
-                  "core/layout/line_box.c's fill stop descending together rather than one at a time. "
-                  "(4) A TABLE BOX or a table-internal parent, whose text is not CSS 2.2 §9.2.1.1 "
+                  "grid item's placement and fold it the same way. (3) A TABLE BOX or a table-internal parent, whose text is not CSS 2.2 §9.2.1.1 "
                   "Anonymous block boxes' business but CSS 2.1 §17.2.1 Anonymous table objects': \"If a "
                   "child C of a 'table' or "
                   "'inline-table' box is not a proper table child, then generate an anonymous 'table-row' "
@@ -569,18 +565,14 @@ static bool sa_walk_fold(ScrollingAreaWalk *w)
                   "to the table box above the element and index the column core/layout/table_grid.h "
                   "assigned it. Until then the cell's line boxes have no available width to be filled "
                   "into. "
-                  "WHICH OF THE FOUR THIS IS, THE PARENT'S COMPUTED `display` NAMED ABOVE ALREADY SAYS, and "
+                  "WHICH OF THE THREE THIS IS, THE PARENT'S COMPUTED `display` NAMED ABOVE ALREADY SAYS, and "
                   "it says it ALONE: `contents` is (1); `grid` and `inline-grid` are "
-                  "(2); `inline` is (3), because reaching this line with `inline` means "
-                  "`sa_is_non_replaced_inline` answered FALSE for a parent whose `display` IS `inline`, "
-                  "which it can only do for a REPLACED one; and `table`, `inline-table`, `table-row`, a row "
-                  "group or `table-column`/`table-column-group` is (4). A SPELLING IN NONE OF THOSE FOUR "
+                  "(2); and `table`, `inline-table`, `table-row`, a row "
+                  "group or `table-column`/`table-column-group` is (3). A REPLACED parent cannot be one: "
+                  "the walk does not descend into a replaced element (CSS 2.2 §3.1), so an `inline` parent "
+                  "here is non-replaced and was answered above. A SPELLING IN NONE OF THOSE THREE "
                   "GROUPS IS ITSELF THE FINDING — this list is what has been reasoned about, not a proof "
-                  "that nothing else reaches here, and a fifth arrival is a fifth missing box to name. "
-                  "THE `display` IS WHY THIS ABORT ASKS NOTHING ELSE: the sentence here used to send its "
-                  "reader on to `replaced_element_of`, and asking that from a crash message would ABORT for "
-                  "an `embed`, a `video`, a `canvas`, an `object`, an `audio` or an `input` — reporting "
-                  "core/layout/replaced_element.c's own gap for exactly case (3), in place of this one",
+                  "that nothing else reaches here, and a fourth arrival is a fourth missing box to name",
                   box_subject(parent, pbuf, sizeof pbuf), box_subject(w->root, wbuf, sizeof wbuf));
     }
     w->stage = SA_STAGE_EDGE;

@@ -16728,6 +16728,8 @@ TF_UNIT void probes_scrollarea(const char *js, Probe *tab, int *n) {
         { "m4", "250", "css-overflow-3 §3.3: an inline-block's right margin area is not in its container's area" },
         { "m5", "250", "css-overflow-3 §3.3: a flex item's margin area is not in its container's area" },
         { "m6", "200", "css-overflow-3 §3.3: a grid item's margin area does not end at its 200px track" },
+        { "r1", "80", "CSS 2.2 §3.1: an svg's own children were folded into its container's scrolling area" },
+        { "r2", "50", "CSS 2.2 §3.1: a canvas's fallback content was folded into its container's scrolling area" },
         { "ch", "50", "CSSOM VIEW §6: the clipped box's clientHeight is not its 50px padding edge" },
         { "lh", "600", "CSSOM VIEW §2: the wide subtree's scrolling area is not 300 blocks of 2px" },
         { "lw", "100", "CSSOM VIEW §2: the wide subtree's scrolling area is wider than its box" },
