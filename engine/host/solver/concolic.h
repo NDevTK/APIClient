@@ -1143,11 +1143,12 @@ JSValue     concolic_new_named_access(JSContext *ctx, JSValueConst markup, JSVal
    those three, re-declared for a cold-resumed candidate; existing rows are a no-op. */
 void        concolic_declare_json_source(const char *src, const char *parent, const char *path);
 /* JSConcolicHooks.json_parse: ECMAScript §25.5.2 JSON.parse ( text [ , reviver ] ) step 4's value over the
-   unknown `text` (borrowed) with no callable reviver, `value` (consumed) its example. Where `text`'s root
-   declares one source its delivery composes (not a cross-document message's, and a derived row only as
-   `text`'s own bytes), the value roots at a JSON row over that source, and a member read off it
-   (concolic_exotic_get) roots at the row one member longer; otherwise it is concolic_new_derived over `text`.
-   Either way it is a JSON value (concolic_mark_json_value). */
+   unknown `text` (borrowed) with no callable reviver, `value` (consumed) its example. Where `text` is a
+   cross-document message's data or a member of it, the value is the ParseJSON node of that member structure
+   (concolic_members_each), rooted at the message. Where `text`'s root otherwise declares one source its delivery
+   composes (a derived row only as `text`'s own bytes), the value roots at a JSON row over that source, and a
+   member read off it (concolic_exotic_get) roots at the row one member longer. Otherwise it is
+   concolic_new_derived over `text`. Either way it is a JSON value (concolic_mark_json_value). */
 JSValue     concolic_new_json_parse(JSContext *ctx, JSValueConst text, JSValue value);
 /* `root`'s derived rows, root to base, as text concolic_declare_source_chain re-declares (owned), or NULL for a
    root with none. What a parked candidate carries so its resume re-derives the rows before install. */
@@ -1312,11 +1313,13 @@ void        concolic_type_facet_file(JSValueConst v, unsigned admitted);
 int         concolic_cmp_is_typeof(JSValueConst cond);
 unsigned    concolic_types(const char *src);
 /* A DECLARED ROOT'S MEMBER STRUCTURE, as the member reads this session minted: every read under `root` with its
-   `src`, its identity and its member path from the root (the root's own row has length 0). A fact about naming
-   rather than a world, so it answers every flow; what one flow decided about each read is asked of the
-   constraint by its `src` (a pin, concolic_typeof_rows) or its identity (concolic_value_truth). Borrowed for the
-   visit, in filing order. */
-typedef void (*ConcolicMemberVisit)(const char *src, const char *ident, const char *const *path, int n, void *ud);
+   `src`, its identity and its member path from the root (the root's own row has length 0). `parse` marks a
+   node that is ECMAScript §25.5.2.1 ParseJSON's value over its parent's String (concolic_new_json_parse), its
+   last path segment naming the operation rather than a member. A fact about naming rather than a world, so it
+   answers every flow; what one flow decided about each read is asked of the constraint by its `src` (a pin,
+   concolic_typeof_rows) or its identity (concolic_value_truth). Borrowed for the visit, in filing order. */
+typedef void (*ConcolicMemberVisit)(const char *src, const char *ident, const char *const *path, int n, int parse,
+                                    void *ud);
 void        concolic_members_each(const char *root, ConcolicMemberVisit visit, void *ud);
 /* Is `src` a member read filed under `root` in that structure? */
 int         concolic_member_of_root(const char *src, const char *root);

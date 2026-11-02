@@ -4166,8 +4166,9 @@ static void concolic_get_value_base_hook(JSContext *ctx, JSValueConst base)
    its identity. It is a fact about naming, not about a world: a member read's `src` and identity are a pure
    function of its parent's and the field, so one session-wide table answers every flow, and nothing reads a
    structure back out of a spelling. Filled at the member mint; a root's own row (path length 0) is filed with
-   its first member. */
-typedef struct { char *src, *ident, *root; char **path; int n; } MemberRow;
+   its first member. A `parse` row is ECMAScript §25.5.2.1 ParseJSON's value over its parent's String rather than
+   a member of it, its last path segment naming the operation. */
+typedef struct { char *src, *ident, *root; char **path; int n; uint8_t parse; } MemberRow;
 static MemberRow *g_members;
 static int g_members_n, g_members_cap;
 static int *g_members_ix, g_members_ix_cap;   /* open addressing over `src`, -1 empty; at most half full */
@@ -4211,7 +4212,8 @@ static void member_ix_grow(void)
     for (int r = 0; r < g_members_n; r++) member_ix_put(r);
 }
 
-static int member_row_add(const char *src, const char *ident, const char *root, const char *const *path, int n)
+static int member_row_add(const char *src, const char *ident, const char *root, const char *const *path, int n,
+                          int parse)
 {
     MemberRow *r;
 
@@ -4226,6 +4228,7 @@ static int member_row_add(const char *src, const char *ident, const char *root, 
     r->ident = ident ? reclaim_strdup(ident) : NULL;
     r->root = reclaim_strdup(root);
     r->n = n;
+    r->parse = (uint8_t)parse;
     r->path = n ? reclaim_malloc((size_t)n * sizeof *r->path) : NULL;
     CHECK(r->src && r->root && (!ident || r->ident) && (!n || r->path), "concolic: OOM filing a member's structure");
     for (int i = 0; i < n; i++) {
@@ -4238,18 +4241,20 @@ static int member_row_add(const char *src, const char *ident, const char *root, 
     return g_members_n - 1;
 }
 
-/* Files the member read `src` (identity `ident`) of the parent `c` under field `field`, where the parent is a
-   declared root's own read or a member already filed. */
-static void member_row_file(const Concolic *c, const char *src, const char *ident, const char *field)
+/* Files the member read `src` (identity `ident`) of the parent `c` under field `field`, or for `parse` the
+   ParseJSON value `src` of the String `c`, where the parent is a declared root's own read or a node already
+   filed. The parent must be the value its `src` names: a derivation carries its operand's `src`, and its
+   members are not its operand's. */
+static void member_row_file(const Concolic *c, const char *src, const char *ident, const char *field, int parse)
 {
     int p;
 
-    if (!c->src || !c->root || !field) return;
+    if (!c->src || !c->root || !field || c->src_own != 1) return;
     p = member_row_of(c->src);
     if (p < 0 && strcmp(c->src, c->root)) return;   /* neither a root's own read nor a filed member */
     if (member_row_of(src) >= 0) return;
     if (p < 0 && !strcmp(c->src, c->root) && root_declared_row(c->root) >= 0)
-        p = member_row_add(c->src, c->ident, c->root, NULL, 0);
+        p = member_row_add(c->src, c->ident, c->root, NULL, 0, 0);
     if (p < 0) return;
     {
         int n = g_members[p].n + 1;
@@ -4258,7 +4263,7 @@ static void member_row_file(const Concolic *c, const char *src, const char *iden
         CHECK(path, "concolic: OOM composing a member path");
         for (int i = 0; i < n - 1; i++) path[i] = g_members[p].path[i];
         path[n - 1] = field;
-        member_row_add(src, ident, g_members[p].root, path, n);
+        member_row_add(src, ident, g_members[p].root, path, n, parse);
         free(path);
     }
 }
@@ -4267,7 +4272,8 @@ void concolic_members_each(const char *root, ConcolicMemberVisit visit, void *ud
 {
     for (int i = 0; i < g_members_n; i++)
         if (!strcmp(g_members[i].root, root))
-            visit(g_members[i].src, g_members[i].ident, (const char *const *)g_members[i].path, g_members[i].n, ud);
+            visit(g_members[i].src, g_members[i].ident, (const char *const *)g_members[i].path, g_members[i].n,
+                  g_members[i].parse, ud);
 }
 
 int concolic_member_of_root(const char *src, const char *root)
@@ -4368,7 +4374,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     shape = shapef("%s.%s", c->shape ? c->shape : "{}", field ? field : "?");
     f[0] = c->ident; f[1] = field;                           /* a name that would not convert -> no identity */
     ident = concolic_ident_compose(".", f, 2);
-    member_row_file(c, shape, ident, field);
+    member_row_file(c, shape, ident, field, 0);
     if (field) JS_FreeCString(ctx, field);
     if (cand_matches(shape)) {                               /* candidate run: this source -> the concrete breakout */
         r = concolic_deliver(ctx, shape, c->root, g_cand_bytes);
@@ -6944,20 +6950,28 @@ static char *json_row_compose(const char *path, const char *bytes)
 }
 
 /* See concolic.h. The text's own bytes or a derivation of a base component parse to the JSON text through the
-   page's own transform, which the candidate's re-run applies and its fire verifies.
-   Named residual. Not covered: a JSON text carried by a cross-document message, whose delivery places the
-   candidate's payload in the message composition (seed_on_path) rather than through this row's transform.
-   Next diff builds: the message composer placing a JSON row's composed text at the payload slot. Absence shows
-   as: an @S record over `JSON.parse` of a message's data whose search never fires. */
+   page's own transform, which the candidate's re-run applies and its fire verifies. A cross-document message's
+   data is a structured-clone value the attacker writes whole (HTML §9.3.3 Posting messages, step 8.4), so a
+   text that is the data or one of its members is a node of the message's member structure, whose ParseJSON
+   value message_compose composes with every facet the flow filed on its members and writes back as the String.
+   Named residual. Not covered: a text derived from a message's data (`JSON.parse(e.data.trim())`), which takes
+   the derivation below and files no member structure. Next diff builds: the parse node filed under the
+   derivation's operand node, the composed text re-run through the page's transform. Absence shows as: an @S
+   record over a member of `JSON.parse()` of a derivation of `message.data` whose search delivers nothing. */
 JSValue concolic_new_json_parse(JSContext *ctx, JSValueConst text, JSValue value)
 {
+    const Concolic *tc = JS_GetOpaque(text, g_concolic_class);
     const char *root = concolic_root_c(text), *tsrc = concolic_src_c(text), *fields[2];
     int row = root && root_declared_count(root) == 1 ? root_declared_row(root) : -1;
+    int message = row >= 0 && g_srcs[row].deliver == SRC_DELIVER_CROSS_DOCUMENT_MESSAGE;
+    int node = message && tc && tc->src_own == 1 && tsrc && tc->root &&
+               (!strcmp(tsrc, tc->root) || concolic_member_of_root(tsrc, tc->root));
     char *part, *src, *ident;
     JSValue r;
 
-    DCHECK(concolic_is(text), "JSON.parse's unknown-text value was minted over a text that is not unknown");
-    if (row < 0 || g_srcs[row].path || g_srcs[row].deliver == SRC_DELIVER_CROSS_DOCUMENT_MESSAGE ||
+    DCHECK(concolic_is(text) && tc != NULL,
+           "JSON.parse's unknown-text value was minted over a text that is not unknown");
+    if (row < 0 || g_srcs[row].path || (message && !node) ||
         (g_srcs[row].parent && !(tsrc && !strcmp(tsrc, g_srcs[row].src)))) {
         r = concolic_new_derived(ctx, "JSON.parse", &text, 1, value);
         if (concolic_is(r)) concolic_mark_json_value(r);   /* a pin on the text's source answers its value */
@@ -6965,11 +6979,16 @@ JSValue concolic_new_json_parse(JSContext *ctx, JSValueConst text, JSValue value
     }
     part = derived_operand_shape(ctx, text);
     src = shapef("%s.JSON.parse()", part);
-    concolic_declare_json_source(src, g_srcs[row].src, "");
+    if (!node) concolic_declare_json_source(src, g_srcs[row].src, "");
     fields[0] = ident_of_operand(ctx, text);
     fields[1] = "JSON.parse";
     ident = concolic_ident_compose("b", fields, 2);
-    r = concolic_derived(ctx, src, src, src, root_whose_or_unstated(derived_root_whose(&text, 1)), ident, value);
+    if (node) {
+        member_row_file(tc, src, ident, "JSON.parse()", 1);
+        DCHECK(member_row_of(src) >= 0, "a message's JSON text was filed with no ParseJSON node under it");
+    }
+    r = concolic_derived(ctx, src, src, node ? tc->root : src, root_whose_or_unstated(derived_root_whose(&text, 1)),
+                         ident, value);
     if (concolic_is(r)) concolic_mark_json_value(r);
     free((char *)fields[0]);
     free(part);

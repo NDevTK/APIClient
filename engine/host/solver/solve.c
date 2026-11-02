@@ -2321,6 +2321,58 @@ static char *dl_variant(const char *tmpl, int v, int *nvar) {
     return out;
 }
 
+/* The body of the JSON String literal `lit` (quotes included): `lit` escaped once more as the inside of a
+   String, which is how it is spelled within a JSON text that itself rides a String. Consumes `lit`; malloc'd. */
+static char *slot_nest(char *lit)
+{
+    JsonBuf b = { 0 };
+    char *q;
+    size_t n;
+
+    json_buf_str(&b, lit);
+    free(lit);
+    q = json_buf_take(&b);
+    n = strlen(q);
+    DCHECK(n >= 2 && q[0] == '"' && q[n - 1] == '"', "json_buf_str wrote no String literal");
+    memmove(q, q + 1, n - 2);
+    q[n - 2] = 0;
+    return q;
+}
+
+/* `text`, a composed message's data, with its MSG_PAYLOAD_SLOT replaced by `payload`, or NULL where the text
+   holds no slot. message_compose writes the slot as a String at the injection node, inside one JSON text per
+   JSON.parse the page applied above it, so the slot and the payload are spelled at the same nesting: quoted,
+   then escaped as a String body once per enclosing text. Each nesting lengthens the spelling, so the walk ends
+   once it outgrows the text. Malloc'd. */
+static char *slot_place(const char *text, const char *payload)
+{
+    JsonBuf sb = { 0 }, pb = { 0 };
+    char *sl, *pl, *at, *out = NULL;
+
+    json_buf_str(&sb, MSG_PAYLOAD_SLOT);
+    json_buf_str(&pb, payload);
+    sl = json_buf_take(&sb);
+    pl = json_buf_take(&pb);
+    while (!(at = strstr(text, sl)) && strstr(text, MSG_PAYLOAD_SLOT) && strlen(sl) <= strlen(text)) {
+        sl = slot_nest(sl);
+        pl = slot_nest(pl);
+    }
+    DCHECK(at || !strstr(text, MSG_PAYLOAD_SLOT),
+           "a composed message holds the payload slot at no nesting of JSON texts the composer writes");
+    if (at) {
+        size_t head = (size_t)(at - text);
+
+        out = reclaim_malloc(strlen(text) - strlen(sl) + strlen(pl) + 1);
+        CHECK(out, "solve: OOM placing a candidate's payload in its message");
+        memcpy(out, text, head);
+        strcpy(out + head, pl);
+        strcat(out, at + strlen(sl));
+    }
+    free(sl);
+    free(pl);
+    return out;
+}
+
 /* A candidate flow of search `e` carrying `payload`, standing on the path its detection froze, under the
    deliveries `dl` (flow_deliveries_text's format) or, for NULL, variant `v` of the search's composed messages
    with the payload in its slot. */
@@ -2368,34 +2420,19 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
     if (e->chain_n) engine_orphan_wait_seat(f, e->chain, e->chain_doc, e->chain_n);
     if (dl) flow_deliveries_parse(f, dl);
     else if (e->dl_tmpl) {
-        JsonBuf slot = { 0 }, pay = { 0 };
-        char *qs, *qp, *chosen;
+        char *chosen;
         int nvar;
 
         chosen = dl_variant(e->dl_tmpl, v, &nvar);
         flow_deliveries_parse(f, chosen);
         free(chosen);
-        json_buf_str(&slot, MSG_PAYLOAD_SLOT);
-        json_buf_str(&pay, payload);
-        qs = json_buf_take(&slot);
-        qp = json_buf_take(&pay);
-        CHECK(qs && qp, "solve: OOM spelling a candidate's message payload");
         for (int i = 0; i < f->cand_dn; i++) {
-            char *at = strstr(f->cand_dval[i], qs), *v;
-            size_t head;
+            char *placed = slot_place(f->cand_dval[i], payload);
 
-            if (!at) continue;
-            head = (size_t)(at - f->cand_dval[i]);
-            v = reclaim_malloc(strlen(f->cand_dval[i]) - strlen(qs) + strlen(qp) + 1);
-            CHECK(v, "solve: OOM placing a candidate's payload in its message");
-            memcpy(v, f->cand_dval[i], head);
-            strcpy(v + head, qp);
-            strcat(v, at + strlen(qs));
+            if (!placed) continue;
             free(f->cand_dval[i]);
-            f->cand_dval[i] = v;
+            f->cand_dval[i] = placed;
         }
-        free(qs);
-        free(qp);
     }
     return f;
 }

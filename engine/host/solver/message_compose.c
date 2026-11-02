@@ -7,7 +7,8 @@
  * truthiness (concolic_value_truth), the tokens an equality proved it is not (concolic_excluded), the loose
  * equalities that held, an ordering bound, the string call predicates on either arm, and the languages a
  * component decided it is in or out of (concolic_lang_admits, drawn from concolic_lang_exemplars). A node with members is
- * an object; the injection node holds the payload; any other node holds the simplest JSON value its facets
+ * an object; a node the page handed to JSON.parse is the String JSON.stringify writes for its ParseJSON node's
+ * value; the injection node holds the payload; any other node holds the simplest JSON value its facets
  * admit, and a node nothing constrained is left out. A facet it cannot satisfy refuses the composition, naming
  * the facet and the node.
  *
@@ -23,10 +24,10 @@
 #include "solver/reclaim.h"
 #include "core/url/url.h"
 
-typedef struct { const char *src, *ident; const char *const *path; int n; } Node;
+typedef struct { const char *src, *ident; const char *const *path; int n, parse; } Node;
 typedef struct { Node *v; int n, cap; } Nodes;
 
-static void nodes_add(const char *src, const char *ident, const char *const *path, int n, void *ud)
+static void nodes_add(const char *src, const char *ident, const char *const *path, int n, int parse, void *ud)
 {
     Nodes *ns = ud;
 
@@ -36,7 +37,7 @@ static void nodes_add(const char *src, const char *ident, const char *const *pat
         CHECK(g, "message compose: OOM collecting a root's members");
         ns->v = g; ns->cap = nc;
     }
-    ns->v[ns->n++] = (Node){ src, ident, path, n };
+    ns->v[ns->n++] = (Node){ src, ident, path, n, parse };
 }
 
 typedef struct {
@@ -219,7 +220,7 @@ static void emit_members(Compose *c, JsonBuf *b, const Node *node)
         int omitted = 0;
         char *txt;
 
-        if (!is_child(node, ch)) continue;
+        if (!is_child(node, ch) || ch->parse) continue;
         emit_node(c, &v, ch, &omitted);
         txt = json_buf_take(&v);
         if (!omitted && txt) {
@@ -236,8 +237,37 @@ static void emit_members(Compose *c, JsonBuf *b, const Node *node)
 
 static int has_children(const Compose *c, const Node *node)
 {
-    for (int i = 0; i < c->ns.n; i++) if (is_child(node, &c->ns.v[i])) return 1;
+    for (int i = 0; i < c->ns.n; i++) if (is_child(node, &c->ns.v[i]) && !c->ns.v[i].parse) return 1;
     return 0;
+}
+
+/* The ParseJSON node filed under `node`, or NULL where the page never handed `node` to JSON.parse. */
+static const Node *parse_child(const Compose *c, const Node *node)
+{
+    for (int i = 0; i < c->ns.n; i++) if (c->ns.v[i].parse && is_child(node, &c->ns.v[i])) return &c->ns.v[i];
+    return NULL;
+}
+
+/* A JSON text node: ECMAScript §25.5.2 JSON.parse ( text [ , reviver ] ) step 1 takes ToString(text), and the
+   one String whose ParseJSON is the composed value is the text JSON.stringify writes for it (§25.5.4.3
+   QuoteJSONString makes it a JSON String inside the message). A value nothing constrained is `null`, the
+   simplest text ParseJSON accepts. The String's own members (`length`, an index) are answered by that text,
+   which the candidate's re-run checks. */
+static void emit_text(Compose *c, JsonBuf *b, const Node *node, const Node *pj, unsigned types, int truth)
+{
+    JsonBuf t = { 0 };
+    int omitted = 0;
+    char *txt;
+
+    if (!(types & CONCOLIC_TYF_STRING) || truth == 0) {
+        refuse(c, "a JSON text whose facets admit no non-empty String", node->src);
+        return;
+    }
+    emit_node(c, &t, pj, &omitted);
+    if (omitted) json_buf_raw(&t, "null");
+    txt = json_buf_take(&t);
+    json_buf_str(b, txt);
+    free(txt);
 }
 
 /* One node's value into `b`, or `*omitted` for a member the value leaves out (it reads undefined). */
@@ -273,6 +303,10 @@ static void emit_node(Compose *c, JsonBuf *b, const Node *node, int *omitted)
         default: break;
         }
         refuse(c, "a pinned value a message carries but JSON does not spell", node->src);
+        goto done;
+    }
+    if (parse_child(c, node)) {
+        emit_text(c, b, node, parse_child(c, node), types, truth);
         goto done;
     }
     if (has_children(c, node)) {
