@@ -1052,7 +1052,8 @@ void *decide_blob_on_path(const void *path) {
 
     DCHECK(g_running, "a blob was built on a frozen path while no flow's decision state was loaded — its cursor is "
                       "the loaded flow's, so there is nothing to stand at");
-    DCHECK(p != NULL && p->seg != NULL && g_c <= p->seg->below + p->seg->n,
+    /* A path that decided nothing has no segment, and continues only a history that decided nothing. */
+    DCHECK(p != NULL && g_c <= (p->seg ? p->seg->below + p->seg->n : 0),
            "a blob was built on a frozen path shorter than the loaded flow's history — the path must continue it");
 #if APICLIENT_DEV
     for (int i = 0; i < g_c; i++) {
@@ -1071,7 +1072,7 @@ void *decide_blob_on_path(const void *path) {
     b = reclaim_malloc(sizeof *b);
     CHECK(b, "decide: OOM standing a flow on a frozen path");
     b->seg = p->seg;
-    p->seg->refcount++;
+    if (p->seg) p->seg->refcount++;
     b->c = g_c;
     dec_blob_take_mints(b);
     return b;
