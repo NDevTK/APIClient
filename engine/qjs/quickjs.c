@@ -118220,6 +118220,12 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
        arrives as a property of it. */
     if (JS_VALUE_GET_TAG(ctx->global_obj) == JS_TAG_OBJECT && JS_VALUE_GET_OBJ(ctx->global_obj) == p)
         return snprintf(buf, buf_size, "%%globalThis%%");
+    /* The realm's [[GlobalThisValue]] where the host supplied one apart from the global object (HTML §7.2.3's
+       WindowProxy): ECMAScript §19.1.1 globalThis answers it, and so do `window` and `self`, so it is the
+       object a page holds where it means the global. One per realm, fixed when the document installs it. Its
+       own name, not the global object's, because the two are two objects. */
+    if (JS_VALUE_GET_TAG(ctx->global_this) == JS_TAG_OBJECT && JS_VALUE_GET_OBJ(ctx->global_this) == p)
+        return snprintf(buf, buf_size, "%%GlobalThisValue%%");
     /* A REALM BUILT WITHOUT INTRINSICS (JS_NewContextRaw) HAS NEITHER ARRAY, and it holds no intrinsic to
        name, so the walk is skipped rather than guarded per element. */
     if (!ctx->class_proto || !ctx->class_ctor) return -1;
