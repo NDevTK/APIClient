@@ -1269,7 +1269,9 @@ static void detect_open_searches(const char *src, const char *root, int cls, int
     DetectIds d = { src, 0, cls, pinned };
     int declared = concolic_root_declared_each(root, detect_id_owned, &d);
 
-    if (declared == 0 || d.owns) {
+    DCHECKF(declared > 0, "a search was opened over `%s`, whose root `%s` declares no source — detect_sink "
+            "declines such an arrival, since no candidate can be delivered where it is read", src, root);
+    if (d.owns) {
         if (pinned) park_on_sender(src, root, cls);
         else        add_pending(src, root, cls);
         return;
@@ -1315,6 +1317,15 @@ static void detect_sink(JSValueConst arg, int cls) {
     DCHECK(root != NULL,
            "an attacker value reached a sink carrying no delivery ROOT — the reproduction envelope is built "
            "from it, and without one this finding would state that nothing carries these bytes to the victim");
+    /* An @S search is over a value another party sets: an attacker source with a browser delivery, or a
+       precondition a finding is labelled with (dec_subject_input asks the same of a branch). A root that declares
+       neither (an environment unknown such as Math.random, a driven body's argument) has no delivery, so no
+       candidate can be put where the page reads it and no fire over it is a PoC (record_sink refuses one).
+       Counted, so the census still says such a value arrived. */
+    if (!concolic_root_delivered_any(root) && concolic_source_precondition(root) == NULL) {
+        METRIC_ADD(sink_undeclared, 1);
+        return;
+    }
     /* Who must be standing here, asked while the flow that arrived still exists. A path that pinned a principal
        is real: the page reaches this sink when a document at the pinned origin posts, and an attacker gets
        there through a gadget at that origin. The search records that sender and is not opened on this path,

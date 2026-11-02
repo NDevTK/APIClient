@@ -1368,6 +1368,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/msgorigin.h"
 #include "fixture/libstate.h"
 #include "fixture/mixedroot.h"
+#include "fixture/envsink.h"
 #include "fixture/msghost.h"
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
@@ -2015,6 +2016,7 @@ TF_DOCS[] = {
     { "msgorigin", HTML_MSGORIGIN },
     { "libstate", HTML_LIBSTATE },
     { "mixedroot", HTML_MIXEDROOT },
+    { "envsink", HTML_ENVSINK },
     { "msghost", HTML_MSGHOST },
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
@@ -24279,6 +24281,32 @@ TF_UNIT void probes_mixedroot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `envsink` document (fixture/envsink.h): an environment unknown and an attacker source each reach
+   the markup sink, and only the attacker source opens a search; the other arrival is counted, not searched. */
+TF_UNIT void probes_envsink(const char *js, Probe *tab, int *n) {
+    static const char head[] = "{\"sink\":\"innerHTML\"",
+                      fragment[] = "{\"sink\":\"innerHTML\",\"source\":\"{location.hash}";
+    const char *es_why = NULL, *at, *und = strstr(js, "\"_sinkUndeclared\":");
+    int es_tt = 1, searches = 0, atk = 0;
+
+    for (at = strstr(js, head); at; at = strstr(at + 1, head)) {
+        searches++;
+        atk += !strncmp(at, fragment, strlen(fragment));
+    }
+    fold_row(&es_tt, &es_why, !!strstr(js, "\"/api/es-env\"") && !!strstr(js, "\"/api/es-atk\""),
+             "NOT REACHED: there is no /api/es-env or /api/es-atk record, so the run did not pass both writes");
+    fold_row(&es_tt, &es_why, searches == 1 && atk == 1,
+             "the markup sink's @S records are not exactly one search over the fragment: a value whose root "
+             "declares no source opened a search no candidate can be delivered to, or the attacker's did not open");
+    fold_row(&es_tt, &es_why, und != NULL && strtol(und + strlen("\"_sinkUndeclared\":"), NULL, 10) >= 1,
+             "the Math.random write reached the sink and `_sinkUndeclared` does not count it, so the census reads "
+             "as though no undeclared value arrived");
+    const Probe rows[] = {
+        { "es-attacker-only", es_tt, "var esTag", SESS_EXPLORE, es_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* Whether the @S record of `sink` searched at a source ending in `member` (a `.member` path off message data)
    states exactly `origins` as its candidate list, read within that record's own object. */
 static int s_member_candidates(const char *js, const char *sink, const char *member, const char *origins)
@@ -24676,6 +24704,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_msgorigin(js, probes, &np);
     probes_libstate(js, probes, &np);
     probes_mixedroot(js, probes, &np);
+    probes_envsink(js, probes, &np);
     probes_msghost(js, probes, &np);
     probes_msgchaincoop(js, probes, &np);
     probes_clickhash(js, probes, &np);

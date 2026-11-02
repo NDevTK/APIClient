@@ -46,8 +46,8 @@
  *
  * WHAT IT DOES NOT COMPARE, and each name is here because it is a COST rather than a finding: `_switches`,
  * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_unitsDone`, `_worldSegmentsHeld`, `_worldSegmentsMade`,
- * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
- * `_sinkTainted`, `_sinkNeedsSender`), the routed-delivery TRIPLE and the four ends of the task it queues
+ * `_worldSegmentsForked`, `_park`, the five numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
+ * `_sinkTainted`, `_sinkNeedsSender`, `_sinkUndeclared`), the routed-delivery TRIPLE and the four ends of the task it queues
  * (`_routedDelivered`, `_routedRefused`, `_routedZeroDelivery`, `_routedTasksFired`,
  * `_routedTasksTargetOrigin`, `_routedTasksTargetGone`, `_routedTasksThrew`, `_routedTasksRetracted`), the orphan census
  * (`_orphansDriven`, `_orphansAsked`), the placement census's fourteen lifetime counts (`_layout`), the
@@ -57,7 +57,7 @@
  * document's frontier is empty under every schedule), and a parked search's `tried` and `turns`. `_switches` exists precisely BECAUSE it differs between an
  * interleaving scheduler and a FIFO one (result.c says so), so comparing it would fail every schedule by
  * construction. THE ARRIVAL
- * CENSUS IS ARGUED IN ON THAT SAME GROUND AND NOT WAIVED: each of its four is a count of EVENTS, and the
+ * CENSUS IS ARGUED IN ON THAT SAME GROUND AND NOT WAIVED: each of its five is a count of EVENTS, and the
  * number of events scales with how many flows and how many candidate re-runs happened — quantities this list
  * already accepts differ between schedules (`_flows`, `_candidates`). A sink executed by six flows and by
  * seven is the same DOCUMENT, and the census is about coverage rather than about what was found. What it
@@ -1005,7 +1005,7 @@ function wfqRowsMoved(a, b) {
 const DROP = new Map([
   ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                 "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park",
-                "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkNeedsSender",
+                "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkNeedsSender", "_sinkUndeclared",
                 /* Counted once per (routed record, timeline offered it), so their sum is the number of flows
                    standing when the host routed — see the header. Zero in this gate by construction: nothing
                    here calls qjs_route. */
