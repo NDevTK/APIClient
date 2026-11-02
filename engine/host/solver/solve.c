@@ -1240,6 +1240,19 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
     if (twin->reinject) { decide_blob_free(twin->reinject); twin->reinject = NULL; }
     free(twin->chain); free(twin->chain_doc);
     twin->chain = NULL; twin->chain_doc = NULL; twin->chain_n = 0;
+    /* And the search's live candidates lose their fitness now, since the finding they approach is held;
+       solve_flow_begin retires any this walk cannot see (a member rebuilt from a park record later).
+       Named residual. Not covered: a candidate of a search whose finding the product held before this session
+       fired it (another document or session) keeps its fitness until its own fire. Next diff builds: the same
+       retirement asked of the product's finding identities when a search opens. Absence shows as: a document
+       whose candidates rank on escaped rungs for a search `_novelty` reports as an unpaid finding. */
+    {
+        Flow *m;
+        for (int i = 0; (m = flow_at(i)) != NULL; i++)
+            if (m->cand_src && m->fire.kind == FIRE_SINK && !strcmp(m->cand_src, twin->src) &&
+                sink_class_of_name(fire_target_sink(&m->fire)) == cls)
+                flow_retire_fitness(m);
+    }
 }
 
 /* A detection whose path pinned a principal (see detect_sink): the search learns the root the way add_pending
@@ -2620,6 +2633,8 @@ void solve_flow_begin(Flow *f) {
                "standing over `tried:0` is a candidate assembled outside them and the parked card is about "
                "to report turns with nothing behind them");
         if (e) e->turns++;
+        /* A candidate of a fired search stands at no fitness (flow_retire_fitness), whatever door made it. */
+        if (e && search_solved(e)) flow_retire_fitness(f);
         /* And the runway this candidate had walked when it last held the thread, taken with `turns` because the two
            are one reading: `turns` says the WFQ gave this search the thread, this says how far it got. Samples are
            taken here and at the finish only, so a flow switched in once contributes the zero it had before it ran.

@@ -316,6 +316,9 @@ typedef struct Flow {
        flow_observe_rung asserts it. 0 is a positive statement: it separates a flow never served, or killed on the
        runway, from one whose bytes are in the program and were eaten by a filter. */
     int cand_rung;
+    /* Whether this candidate's search has fired (flow_retire_fitness): its ladder is zero and stays zero, because
+       its distance is a promise of a finding the product now holds. Carried by a fork. */
+    int cand_retired;
 
     /* Is this flow a driven orphan: one whose frame is a call of a function the page defined and nothing called
        (engine.c's engine_orphan_seed)? To the scheduler it is an ordinary flow. Its one consequence is that its
@@ -1808,6 +1811,9 @@ void  flow_observe_survival(Flow *f, double frac);
    Monotone and ordered: it raises `cand_rung`, never lowers it, and refuses a rung whose predecessor this flow
    has not stood on. */
 void  flow_observe_rung(Flow *f, int rung);
+/* Candidate `f`'s search has fired: its ladder goes to zero and the three observers above leave it there
+   (`cand_retired`). Idempotent; re-ranks the member. */
+void  flow_retire_fitness(Flow *f);
 /* A flow's path marks, read at one instant. `assumed_slot` is the decision slot of a fork's sibling arm when that
    arm takes absent application state as present, `env_slot` when it goes against an environment unknown's example
    (decide.c's dec_fork_here), and -1 otherwise; at most one is a slot. */

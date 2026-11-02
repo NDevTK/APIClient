@@ -1693,6 +1693,7 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
        behind this flow, and a live fraction would rank a delivered candidate whose recorded path runs on past its
        source read below an undelivered one that consumed all of its own. Asserted rather than skipped, because
        reaching here in that state means dec_replay still consumes arms for a flow whose delivery is recorded. */
+    if (f->cand_retired) return;
     if (f->cand_rung >= FLOW_RUNG_DELIVERED) {
         DCHECK(f->cand_replay == 1.0,
                "a delivered @S candidate's runway fraction is not pinned at 1.0 — flow_observe_rung pins it at the "
@@ -1738,6 +1739,7 @@ void flow_observe_survival(Flow *f, double frac) {
     DCHECK(f->cand_payload != NULL,
            "a surviving fraction was recorded for a flow carrying no payload — the fraction's denominator is the "
            "payload");
+    if (f->cand_retired) return;
     /* And the rung below this one, the ladder's order asserted from its own side. A payload says the substitution
        was installed, not that it happened, and the run about to be recorded is a run of the payload's bytes in a
        string, which the page's own text matches just as readily because a breakout is punctuation. solve.c's three
@@ -1777,6 +1779,7 @@ void flow_observe_rung(Flow *f, int rung) {
            "would put the fitness term outside [0, 1]");
     DCHECK(f->cand_payload != NULL,
            "a rung was recorded for a flow carrying no payload — a rung says where this flow's injected bytes stood");
+    if (f->cand_retired) return;
     DCHECK(rung <= f->cand_rung + 1,
            "an @S candidate skipped a rung — its bytes were recorded escaping a context they were never recorded "
            "arriving in, so the two observations are about different strings or the arrival was refused for this "
@@ -1795,6 +1798,22 @@ void flow_observe_rung(Flow *f, int rung) {
        identity only below the delivery. */
     f->cand_replay = 1.0;
     flow_ix_rekey(f);   /* as flow_observe_replay: the rung and the pinned fraction are both its operands */
+    frontier_rank_changed();
+}
+
+/* A fitness is a promise of a finding, and once the search has fired the product holds that finding, so a promise
+   of it orders nothing ("value is novelty against the product"). The member runs on; its ladder no longer lifts its
+   share, and the observers do not rebuild it. Without this, a fired search's remaining candidates, which escaped,
+   would keep the largest weight on their share for a finding the product already holds. The pair goes with the
+   fraction, so flow_observe_replay's identity still holds of what is left. */
+void flow_retire_fitness(Flow *f) {
+    DCHECK(f != NULL && f->cand_payload != NULL, "a fitness was retired from no flow, or from one with no payload");
+    if (f->cand_retired) return;
+    f->cand_retired = 1;
+    f->cand_replay = 0.0; f->cand_replay_arms = 0; f->cand_replay_of = 0;
+    f->cand_surv = 0.0;
+    f->cand_rung = 0;
+    flow_ix_rekey(f);
     frontier_rank_changed();
 }
 
@@ -2322,6 +2341,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     sib->cand_replay_of = parent->cand_replay_of;
     sib->cand_surv = parent->cand_surv;
     sib->cand_rung = parent->cand_rung;
+    sib->cand_retired = parent->cand_retired;
     /* And the family it joins: the term the aging reads and the term the reward is, which makes "a fork chain is one
        monopolizer wearing N names" true of the arithmetic. flow_new minted the arm a root (the precondition checks
        it) and this points the arm at its parent's; every unit and every finding any arm produces is then
