@@ -38637,8 +38637,10 @@ int main(int argc, char **argv) {
     printf("@RESULT %s\n", js);
     /* The turns `--host-turn-us` asked for, said beside the result they must not have moved: the positive control
        of a run that shows a turn changes nothing. Not a census row, since it is a function of elapsed time. */
-    if (arg_val(argc, argv, "--host-turn-us"))
+    if (arg_val(argc, argv, "--host-turn-us")) {
+        fflush(stdout);   /* the line is stderr's; a buffered @RESULT would otherwise be cut by it */
         fprintf(stderr, "[test-forced] host turns taken: %lld\n", engine_host_turns());
+    }
     /* The verdict: the run is over, so a row still 0 will not be reached. */
     char unanswered[PROBE_UNANSWERED_MAX], unasked[PROBE_UNANSWERED_MAX];
     /* Under --lifecycle the document's programs are never handed to the scheduler, so the probe table states
