@@ -196,9 +196,10 @@ void url_query_assign_unknown(JSContext *ctx, JSValueConst url, JSValueConst que
    url_construct_unknown composes one: the derivation named by the getter, its example the getter run on the
    record's example. `href` is a serialization that url_construct_unknown parses back to `unknown`. Owned. */
 JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member);
-/* §4.5 URL serializer over the unknown URL record `unknown` (borrowed), as url_construct_unknown composes one: the
-   `href` member where `exclude_fragment` is false, else the derivation of the serialization without the fragment,
-   whose example is the serializer run on the record's example. Fetch §5.5's `url` getter asks the second. Owned. */
+/* §4.5 URL serializing's URL serializer over the unknown URL record `unknown` (borrowed), as url_construct_unknown
+   composes one: the `href` member where `exclude_fragment` is false, else the derivation of the serialization
+   without the fragment, whose example is the serializer run on the record's example. Fetch §5.5 Response class's
+   `url` getter asks the second. Owned. */
 JSValue url_serialize_unknown(JSContext *ctx, JSValueConst unknown, bool exclude_fragment);
 /* Whether the attacker's bytes in the unknown address `address` can pick the host of its parse against `base`
    (NULL for none): the page's own bytes ahead of its first unknown byte leave §4.4 URL parsing short of

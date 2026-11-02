@@ -237,10 +237,10 @@ static JSValue response_url_of(JSContext *ctx, ResponseData *d, int64_t *psize)
     return JS_GetPropertyUint32(ctx, d->url_list, (uint32_t)(n - 1));
 }
 
-/* §5.5's `url` over a list whose last item is a SERIALIZED URL `last` (borrowed): "this's response's URL,
-   serialized with exclude fragment set to true". The exclusion is the URL PARSER'S — the parser is run back over
-   the item and asked to serialize it again without its fragment, rather than this file deciding where a
-   fragment starts.
+/* §5.5 Response class's `url` over a list whose last item is a SERIALIZED URL `last` (borrowed): "this's
+   response's URL, serialized with exclude fragment set to true". The exclusion is the URL PARSER'S — the parser
+   is run back over the item and asked to serialize it again without its fragment, rather than this file deciding
+   where a fragment starts.
    IT IS ONE ANSWER BECAUSE THERE ARE TWO READERS. The `url` getter is one; the body's SOURCE IDENTITY
    (core/fetch/reply_source.h) is the other, and a reply NAMED with a fragment the getter reports WITHOUT is
    one reply wearing two spellings. A fragment is also never sent, so two addresses differing only there are one

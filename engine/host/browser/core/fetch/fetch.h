@@ -515,14 +515,14 @@ JSValue fetch_request_current_url_unknown(JSContext *ctx, JSValueConst address, 
    serializations. An unknown boolean, or false for an opaque agent origin, which no URL's origin is same origin
    with. Borrows `current`; owned. */
 JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst current);
-/* The reply on the arm where a request whose current URL is the unknown URL record `current` (borrowed), parsed
-   from the unknown `address`, went to another origin (fetch_main_same_origin_unknown answered false), under §4.1
-   step 12's rows for `mode`: JS_UNINITIALIZED for `same-origin`, whose only completion is the network error; an
-   opaque reply for `no-cors`; for `cors` a cors reply whose body is derived from `address`, because whoever chose
+/* The reply on the arm where a request whose current URL is the unknown URL record `current` (borrowed), parsed from
+   the unknown `address`, went to another origin (fetch_main_same_origin_unknown answered false), under §4.1 Main
+   fetch step 12's rows for `mode`: JS_UNINITIALIZED for `same-origin`, whose only completion is the network error;
+   an opaque reply for `no-cors`; for `cors` a cors reply whose body is derived from `address`, because whoever chose
    the address chose the server and its headers (an exact Access-Control-Allow-Origin and
    Access-Control-Allow-Credentials: true pass the CORS check in every credentials mode). Its URL list is
-   « `current` », §4.1's clone of the request's URL list, so §5.5's `url` answers the record's serialization as a
-   derivation. Marked `unobserved`, like fetch_reply_unknown's. */
+   «current», §4.1 Main fetch's clone of the request's URL list, so §5.5 Response class's `url` answers the record's
+   serialization as a derivation. Marked `unobserved`, like fetch_reply_unknown's. */
 JSValue fetch_reply_unaddressed(JSContext *ctx, JSValueConst current, const char *mode, JSValueConst address);
 /* Whether a record is fetch_reply_unknown's, and its unknown body (owned, or JS_UNDEFINED for one of bytes). */
 bool    fetch_reply_unobserved(JSContext *ctx, JSValueConst reply);

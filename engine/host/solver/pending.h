@@ -424,9 +424,9 @@ int pending_driven_compose(int kind, int path_driven);
        it with the address, and the join lists only CONCRETE and EXAMPLE */                        \
     X(ADDRESS,    "address",   PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
     /* …and for an UNKNOWN address, the unknown it stands for, the request's current URL parsed from it (an    \
-       unknown URL record, core/fetch/fetch.h's fetch_request_current_url_unknown) and Fetch §4.1 step 12's   \
-       same-origin test over that URL (fetch_main_same_origin_unknown), which flow_decline_fork asks.         \
-       Undefined for every address that is bytes. */                                       \
+       unknown URL record, core/fetch/fetch.h's fetch_request_current_url_unknown) and Fetch §4.1 Main fetch  \
+       step 12's same-origin test over that URL (fetch_main_same_origin_unknown), which flow_decline_fork    \
+       asks. Undefined for every address that is bytes. */                                  \
     X(ADDRESS_VALUE, "addressValue", PEND_SHARE, JS_UNDEFINED)                         \
     X(ADDRESS_URL, "addressUrl", PEND_SHARE, JS_UNDEFINED)                             \
     X(SAME_ORIGIN, "sameOrigin", PEND_SHARE, JS_UNDEFINED)                             \

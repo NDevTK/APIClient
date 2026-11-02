@@ -1495,8 +1495,8 @@ JSValue fetch_reply_unaddressed(JSContext *ctx, JSValueConst current, const char
 
     DCHECK(concolic_is(address), "a reply to an unknown address was built for a known one");
     DCHECK(concolic_is(current), "a reply to an unknown address was built without the request's unknown current "
-                                 "URL — §4.1 clones the request's URL list into the response's, and the display "
-                                 "shape of the address is no URL");
+                                 "URL — §4.1 Main fetch clones the request's URL list into the response's, and "
+                                 "the display shape of the address is no URL");
     if (m == FETCH_MODE_SAME_ORIGIN)
         return JS_UNINITIALIZED;
     /* §4.1 Main fetch: "If internalResponse's URL list is empty, then set it to a clone of request's URL list",
