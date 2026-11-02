@@ -1797,15 +1797,27 @@ static lxb_dom_element_t *uv_grid_item_container(lxb_dom_element_t *el)
     return box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
 }
 
-/* css-grid-1 §6.2 "Grid Item Sizing"'s partition of a grid item's inline-axis self-alignment for an automatic
-   size: `normal` and `stretch` take the stretch-fit size, and "all other values" size the item as fit-content.
-   `justify-self: auto` is `container`'s `justify-items` (css-align-3 §6.1), whose `legacy` alone behaves as
-   `normal`. One predicate for the width (`uv_grid_item_auto_width`) and for the ask of its operands. */
-static bool uv_grid_item_fits_content(lxb_dom_element_t *el, lxb_dom_element_t *container)
+/* Whether either of a grid item's margins on one axis computes to `auto`: css-grid-1 §10.2 "Aligning with auto
+   margins" gives them the free space in its grid area. */
+static bool uv_grid_item_has_auto_margin(lxb_dom_element_t *el, bool vertical)
 {
-    CssAlign self = css_computed_align(el, "justify-self");
+    return css_computed_length_is(el, vertical ? "margin-top" : "margin-left", CSS_KEYWORD_AUTO) ||
+           css_computed_length_is(el, vertical ? "margin-bottom" : "margin-right", CSS_KEYWORD_AUTO);
+}
 
-    if (self.value == CSS_KEYWORD_AUTO) self = css_computed_align(container, "justify-items");
+/* css-grid-1 §6.2 "Grid Item Sizing"'s partition of a grid item's self-alignment for an automatic size on one
+   axis: `normal` and `stretch` take the stretch-fit size, and "all other values" size the item as fit-content.
+   css-align-3 §6.1's `stretch` stretches only when "neither of its margins (in the appropriate axis) are auto",
+   and `normal` sizes a non-replaced item "as for align-self: stretch", so an `auto` margin on the axis fits the
+   content too. `auto` self-alignment is `container`'s `*-items`, whose `legacy` alone behaves as `normal`. One
+   predicate for the sizes (`uv_grid_item_auto_width`, `uv_grid_item_auto_height`) and for the ask of their
+   operands. */
+static bool uv_grid_item_fits_content(lxb_dom_element_t *el, lxb_dom_element_t *container, bool vertical)
+{
+    CssAlign self = css_computed_align(el, vertical ? "align-self" : "justify-self");
+
+    if (uv_grid_item_has_auto_margin(el, vertical)) return true;
+    if (self.value == CSS_KEYWORD_AUTO) self = css_computed_align(container, vertical ? "align-items" : "justify-items");
     return !(self.value == CSS_KEYWORD_NORMAL || self.value == CSS_KEYWORD_STRETCH ||
              (self.value == CSS_KEYWORD_LEGACY && !self.legacy));
 }
@@ -2025,7 +2037,8 @@ bool used_value_width_ask(lxb_dom_element_t *el)
 
         if (grid != NULL)
             return grid_track_columns_ask(grid) &&
-                   (!uv_len_is_auto(width) || !uv_grid_item_fits_content(el, grid) || intrinsic_inline_sizes_ask(el));
+                   (!uv_len_is_auto(width) || !uv_grid_item_fits_content(el, grid, false) ||
+                    intrinsic_inline_sizes_ask(el));
         flex = uv_flex_item_container(el, UV_BOX_ITEM);
         return flex == NULL || flex_container_axis_is_vertical(flex, FLEX_AXIS_MAIN) || flex_line_lines_ask(flex);
     }
@@ -2690,6 +2703,32 @@ static CssPx uv_block_auto_margin(lxb_dom_element_t *el, const char *name, const
     return both ? css_px_scale(slack, 0.5) : slack;      /* rule 6, then rule 4 */
 }
 
+/* A grid item's `auto` margin on one axis, css-grid-1 §10.2 "Aligning with auto margins": "auto margins in
+   either axis absorb positive free space prior to alignment via the box alignment properties", as CSS 2.1
+   §10.3.3's rules 4 and 6 do (one takes it all, two split it equally), and "overflowing grid items resolve their
+   auto margins to zero". The free space is the grid area's extent less the item's border box and its `other`
+   margin where that one is not `auto`; the item's size reads its `auto` margins as zero, so the border box is
+   asked without this. `name` and `opposite` are the horizontal pair, NULL on the vertical axis. */
+static CssPx uv_grid_item_auto_margin(lxb_dom_element_t *el, bool vertical, CssLength other, const char *name,
+                                      const char *opposite)
+{
+    bool both = uv_len_is_auto(other), definite = true;
+    CssPx area, free_space;
+
+    DCHECK(vertical == (name == NULL) && (name == NULL) == (opposite == NULL),
+           "a grid item's auto margin was resolved with a horizontal pair on the vertical axis or none on the "
+           "horizontal one");
+    if (vertical)
+        definite = used_value_containing_block_height(el, &area);
+    else
+        area = used_value_containing_block_width(el);
+    DCHECK(definite, "a grid area's height came back indefinite; css-grid-1 §11 makes it definite");
+    free_space = css_px_sub(area, used_value_border_edge_px(el, vertical));
+    if (!both) free_space = css_px_sub(free_space, uv_margin(el, opposite, name, other, UV_BOX_ITEM, NULL));
+    if (free_space.px <= 0.0) return css_px(0.0);
+    return both ? css_px_scale(free_space, 0.5) : free_space;
+}
+
 /* `opposite` is the OTHER horizontal margin's property name — `margin-right` when this is `margin-left` and
    the reverse — or NULL when this is a vertical margin, which is also how this function knows which pair it
    is in; `name` is this margin's own and is NULL on the same axis. §10.3.3's over-constraint is a statement
@@ -2821,6 +2860,12 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
         /* A `row` container's item: css-flexbox-1 §9.6 step 13 (core/layout/flex_position.h). */
         if (box == UV_BOX_ITEM && uv_flex_item_container(el, box) != NULL)
             return flex_position_item_margin(uv_flex_item_container(el, box), el, name);
+        if (box == UV_BOX_ITEM && uv_grid_item_container(el) != NULL)
+            return uv_grid_item_auto_margin(el, true,
+                                            css_computed_length_is(el, "margin-top", CSS_KEYWORD_AUTO)
+                                                ? css_computed_length(el, "margin-bottom")
+                                                : css_computed_length(el, "margin-top"),
+                                            NULL, NULL);
         DFAIL("a VERTICAL margin computes to `auto` on a box CSS 2.1 §10.6.3 does not cover. §10.6.3 is the "
               "block-level-in-normal-flow section and it is the only one that gives `margin-top: auto` a used "
               "value of 0 outright; §10.6.1 says nothing at all about an INLINE box's vertical margins, and "
@@ -2963,8 +3008,10 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
         lxb_dom_element_t *container = uv_flex_item_container(el, box);
 
         if (container != NULL) return flex_position_item_margin(container, el, name);
-        DFAIL("a horizontal `auto` margin on a GRID ITEM: css-grid-1 §11 \"Grid Layout Algorithm\"' own "
-              "auto-margin rule is the section, over the item's grid area; build it there");
+        DCHECK(uv_grid_item_container(el) != NULL,
+               "an item box's horizontal `auto` margin belongs to neither a flex nor a grid container — "
+               "uv_box_kind classifies an item by one of the two");
+        return uv_grid_item_auto_margin(el, false, css_computed_length(el, opposite), name, opposite);
     }
     DFAIL("a HORIZONTAL `auto` margin reached the END of §10.3's per-box-type dispatch. The box types this "
           "function answers for have each returned above, and the ONE that is left — an ABSOLUTELY POSITIONED "
@@ -3344,7 +3391,8 @@ static CssPx uv_grid_item_auto_width(lxb_dom_element_t *el, UvBox box);
    stretch-fit size", and so does `normal` when "the grid item has no preferred aspect ratio, and no natural
    size in the relevant axis"; otherwise `normal` is "sized consistent with the size calculation rules for
    block-level elements", and every other value is the table's "Use natural size" — CSS 2.1 §10.3.2's and
-   §10.6.2's replaced rules either way. True with `*out` for the stretch-fit arm. */
+   §10.6.2's replaced rules either way. An `auto` margin on the axis disables both stretching arms (css-align-3
+   §6.1's `stretch`). True with `*out` for the stretch-fit arm. */
 static bool uv_grid_replaced_stretch(lxb_dom_element_t *el, const ReplacedElement *rep, UvBox box, bool vertical,
                                      CssPx *out)
 {
@@ -3356,7 +3404,8 @@ static bool uv_grid_replaced_stretch(lxb_dom_element_t *el, const ReplacedElemen
         self = css_computed_align(container, vertical ? "align-items" : "justify-items");
         if (self.value == CSS_KEYWORD_LEGACY && !self.legacy) self.value = CSS_KEYWORD_NORMAL;
     }
-    if (self.value != CSS_KEYWORD_STRETCH && !(self.value == CSS_KEYWORD_NORMAL && !rep->has_ratio && !natural))
+    if (uv_grid_item_has_auto_margin(el, vertical) ||
+        (self.value != CSS_KEYWORD_STRETCH && !(self.value == CSS_KEYWORD_NORMAL && !rep->has_ratio && !natural)))
         return false;
     *out = vertical ? uv_grid_item_auto_height(el) : uv_grid_item_auto_width(el, box);
     return true;
@@ -4022,67 +4071,62 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
     return r;
 }
 
+/* css-grid-1 §6.2 "Grid Item Sizing" for `height: auto`, the block-axis twin of the width below:
+   `align-self: normal` behaves as `stretch` for a non-replaced item, whose stretch-fit size fills the grid
+   area's block size less the item's margins, borders and padding. "All other values", and an `auto` block-axis
+   margin, size it as fit-content: css-sizing-3 §2.1's clamp of the stretch-fit size between the min-content and
+   max-content sizes, which on the block axis are both the content-based height (css-sizing-3 §5.1), so the
+   item is as tall as its content laid out as a block-level box. */
+static CssPx uv_grid_item_auto_height(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *container = uv_grid_item_container(el);
+    UvSurround s;
+    CssPx area, margins, content;
+    bool definite;
+
+    DCHECK(container != NULL, "a grid item's auto height was asked of a box no grid container holds");
+    s = uv_surround(el, true);
+    if (uv_grid_item_fits_content(el, container, true)) {
+        content = used_value_block_level_content_px(el, true);
+    } else {
+        definite = used_value_containing_block_height(el, &area);
+        DCHECK(definite, "a grid area's height came back indefinite; css-grid-1 §11 makes it definite");
+        margins = css_px_add(used_value_px(el, "margin-top"), used_value_px(el, "margin-bottom"));
+        content = css_px_max(css_px_sub(css_px_sub(area, uv_surround_total(s)), margins), css_px(0.0));
+    }
+    if (!uv_is_border_box(el)) return content;
+    return css_px_add(content, uv_surround_total(s));
+}
+
+/* One horizontal margin as the width's available space reads it: an `auto` one is the free space the width
+   leaves (css-grid-1 §10.2), so the width is sized with it as zero. */
+static CssPx uv_grid_item_sizing_margin(lxb_dom_element_t *el, const char *name, const char *opposite, UvBox box)
+{
+    CssLength len = css_computed_length(el, name);
+
+    return uv_len_is_auto(len) ? css_px(0.0) : uv_margin(el, name, opposite, len, box, NULL);
+}
+
 /* css-grid-1 §6.2 "Grid Item Sizing" for `width: auto`: "A grid item is sized within the containing block
    defined by its grid area", and for `normal` or `stretch` self-alignment a non-replaced item takes "the
    inline size calculation rules for non-replaced boxes (defined in CSS 2 § 10.3.3 Block-level, non-replaced
    elements in normal flow), i.e. the stretch-fit size": the area's width less the item's margins, borders
    and paddings, floored at zero. For "all other values" it is sized "as fit-content", the shrink-to-fit width
-   over that same available width (`uv_grid_item_fits_content` partitions the two). */
-/* css-grid-1 §6.2 "Grid Item Sizing" for `height: auto`, the block-axis twin of the width below:
-   `align-self: normal` behaves as `stretch` for a non-replaced item, whose stretch-fit size fills the grid
-   area's block size less the item's margins, borders and padding. */
-static CssPx uv_grid_item_auto_height(lxb_dom_element_t *el)
-{
-    lxb_dom_element_t *container = uv_grid_item_container(el);
-    CssAlign self;
-    UvSurround s;
-    CssPx area, margins, content;
-    bool definite;
-    char buf[160];
-
-    DCHECK(container != NULL, "a grid item's auto height was asked of a box no grid container holds");
-    self = css_computed_align(el, "align-self");
-    if (self.value == CSS_KEYWORD_AUTO) self = css_computed_align(container, "align-items");
-    if (self.value != CSS_KEYWORD_NORMAL && self.value != CSS_KEYWORD_STRETCH)
-        DFAILF("%s is a grid item whose block-axis self-alignment is not `normal` or `stretch`, which css-grid-1 "
-               "§6.2 sizes as fit-content. BUILD that size over the grid area's height",
-               box_subject(el, buf, sizeof buf));
-    if (css_computed_length_is(el, "margin-top", CSS_KEYWORD_AUTO) ||
-        css_computed_length_is(el, "margin-bottom", CSS_KEYWORD_AUTO))
-        DFAILF("%s is a grid item with an `auto` block-axis margin, which css-grid-1 §10.2 \"Aligning with auto "
-               "margins\" resolves over its grid area. BUILD that alignment",
-               box_subject(el, buf, sizeof buf));
-    definite = used_value_containing_block_height(el, &area);
-    DCHECK(definite, "a grid area's height came back indefinite; css-grid-1 §11 makes it definite");
-    s = uv_surround(el, true);
-    margins = css_px_add(used_value_px(el, "margin-top"), used_value_px(el, "margin-bottom"));
-    content = css_px_max(css_px_sub(css_px_sub(area, uv_surround_total(s)), margins), css_px(0.0));
-    if (!uv_is_border_box(el)) return content;
-    return css_px_add(content, uv_surround_total(s));
-}
-
+   over that same available width, in which an `auto` margin counts as zero (`uv_grid_item_fits_content`
+   partitions the two). */
 static CssPx uv_grid_item_auto_width(lxb_dom_element_t *el, UvBox box)
 {
     lxb_dom_element_t *container = uv_grid_item_container(el);
     UvSurround s;
     CssPx margins, available, content;
-    char buf[160];
 
     DCHECK(container != NULL, "a grid item's auto width was asked of a box no grid container holds");
-    if (css_computed_length_is(el, "margin-left", CSS_KEYWORD_AUTO) ||
-        css_computed_length_is(el, "margin-right", CSS_KEYWORD_AUTO))
-        DFAILF("%s is a grid item with an `auto` inline margin, which css-align-3 §6.1 makes absorb the free "
-               "space instead of stretching: its width is fit-content and the margins split what is left. BUILD that "
-               "margin alignment over the grid area",
-               box_subject(el, buf, sizeof buf));
     s = uv_surround(el, false);
-    margins = css_px_add(uv_margin(el, "margin-left", "margin-right", css_computed_length(el, "margin-left"), box,
-                                   NULL),
-                         uv_margin(el, "margin-right", "margin-left", css_computed_length(el, "margin-right"), box,
-                                   NULL));
+    margins = css_px_add(uv_grid_item_sizing_margin(el, "margin-left", "margin-right", box),
+                         uv_grid_item_sizing_margin(el, "margin-right", "margin-left", box));
     available = css_px_sub(css_px_sub(used_value_containing_block_width(el), uv_surround_total(s)), margins);
-    content = uv_grid_item_fits_content(el, container) ? uv_shrink_to_fit_over(el, available)
-                                                       : css_px_max(available, css_px(0.0));
+    content = uv_grid_item_fits_content(el, container, false) ? uv_shrink_to_fit_over(el, available)
+                                                              : css_px_max(available, css_px(0.0));
     if (!uv_is_border_box(el)) return content;
     return css_px_add(content, uv_surround_total(s));
 }

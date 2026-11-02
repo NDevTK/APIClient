@@ -16573,6 +16573,18 @@ TF_UNIT void probes_gridalign(const char *js, Probe *tab, int *n) {
         { "w15", "30", "css-grid-1 §6.2: an auto-width flex container aligned `center` is not fit-content" },
         { "a16", "70_0", "css-align-3 §6.1: `justify-items: end` does not end-align a fit-content item" },
         { "w16", "30", "css-grid-1 §6.2: an item aligned `end` through `auto` is not sized as fit-content" },
+        { "a17", "0_35", "css-align-3 §4.1: a fit-content-height item is not centred in its area" },
+        { "w17", "100", "css-grid-1 §6.2: an item aligned only on the block axis did not stretch its width" },
+        { "h17", "10", "css-grid-1 §6.2: an auto-height item aligned `center` is not fit-content tall" },
+        { "a18", "35_0", "css-grid-1 §10.2: two auto inline margins do not split the free space" },
+        { "w18", "30", "css-align-3 §6.1: an item with auto inline margins was stretched, not fit-content" },
+        { "h18", "80", "css-grid-1 §6.2: auto inline margins changed the item's stretched height" },
+        { "a19", "0_70", "css-grid-1 §10.2: an auto top margin does not take the free space above the item" },
+        { "h19", "10", "css-align-3 §6.1: an item with an auto block margin was stretched, not fit-content" },
+        { "a20", "80_0", "css-grid-1 §10.2: a 20px item's auto left margin does not take the 80px left over" },
+        { "h20", "10", "css-grid-1 §6.2: a declared height is not the used one beside an auto margin" },
+        { "a21", "0_0", "css-grid-1 §10.2: an auto margin was not zero while its auto row was sized" },
+        { "h21", "10", "css-grid-1 §10.2: an auto row did not size to its item's content with the margin as 0" },
     };
     const char *ga_why = NULL; int ga_tt = !!strstr(js, "\"/api/gridalign\"");
     unsigned i;

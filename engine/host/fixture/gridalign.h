@@ -9,7 +9,12 @@
    fit-content for a self-alignment other than `normal` or `stretch`: a block (start), and a flex container in
    an auto row (center, and `end` through `justify-items`), whose row sizing asks its content-based height and
    so its width under the resting job; each reports its width as `w<n>`.
-   Chrome 155.0.8059.84 and Firefox 158.0.1 give every value expected. It ends with TF_CANVAS_INK, which
+   Chrome 155.0.8059.84 and Firefox 158.0.1 give every value of rows a1-a16 expected. Rows a17-a21 are read from
+   css-grid-1 §6.2 and §10.2 "Aligning with auto margins", not from a browser: a17 is an `auto`-height item
+   aligned center, fit-content on the block axis (10px, centred); a18's `margin: 0 auto` sizes it to its 30px
+   content and splits the 70px left over; a19's `margin-top: auto` fits its height to 10px and takes the 70px
+   below; a20's 20px item takes the 80px as its left margin; a21's `auto` row counts the margin as zero and is
+   10px tall. Heights are `h<n>`. It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_GRIDALIGN_H
 #define ENGINE_HOST_FIXTURE_GRIDALIGN_H
@@ -45,11 +50,18 @@ static const char HTML_GRIDALIGN[] =
     "<span style=\"display:block;width:30px;height:10px\"></span></span></div>"
     "<div class=g style=\"grid-template-rows:auto;justify-items:end\"><span id=a16 style=\"display:flex\">"
     "<span style=\"display:block;width:30px;height:10px\"></span></span></div>"
+    "<div class=g><div id=a17 style=\"align-self:center\"><div style=\"width:30px;height:10px\"></div></div></div>"
+    "<div class=g><div id=a18 style=\"margin:0 auto\"><div style=\"width:30px;height:10px\"></div></div></div>"
+    "<div class=g><div id=a19 style=\"margin-top:auto\"><div style=\"width:30px;height:10px\"></div></div></div>"
+    GRIDALIGN_ROW("a20", "", "margin-left:auto")
+    "<div class=g style=\"grid-template-rows:auto\"><div id=a21 style=\"margin-top:auto\">"
+    "<div style=\"height:10px\"></div></div></div>"
     "<script>"
     "function O(i){var e=document.getElementById(i),r=e.getBoundingClientRect(),"
     "p=e.parentElement.getBoundingClientRect();return (r.left-p.left)+'_'+(r.top-p.top);}"
-    "var q='',i;for(i=1;i<=16;i++)q+=(i>1?'&':'')+'a'+i+'='+O('a'+i);"
-    "for(i=14;i<=16;i++)q+='&w'+i+'='+document.getElementById('a'+i).getBoundingClientRect().width;"
+    "var q='',i;for(i=1;i<=21;i++)q+=(i>1?'&':'')+'a'+i+'='+O('a'+i);"
+    "for(i=14;i<=18;i++)q+='&w'+i+'='+document.getElementById('a'+i).getBoundingClientRect().width;"
+    "for(i=17;i<=21;i++)q+='&h'+i+'='+document.getElementById('a'+i).getBoundingClientRect().height;"
     "fetch('/api/gridalign?'+q);"
     "</script>"
     TF_CANVAS_INK
