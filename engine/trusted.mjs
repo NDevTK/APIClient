@@ -1386,7 +1386,12 @@ async function main() {
      poll arm awaits them; `flush` skips an instance until then), so a round carries every answer due at its
      work or none. A written fetch key is owed no longer: the child re-announces its bill the moment it is let
      go, so a fresh park on that pair is a request this zone has not answered (see `track`). A request id is
-     kept in `answered`, since an id names one record and is never parked again. */
+     kept in `answered`, since an id names one record and is never parked again.
+     Named residual. Not covered: the records this zone writes on its own account rather than in answer to a
+     send (a `join`, a `route`, a `perform`, a cross-agent `remote` answer) go out at the first read after they
+     are ready. Next diff builds: a due point for each, stamped at the read that follows the notice causing it,
+     and for a record crossing instances a clock both instances share. Absence shows as: two runs of a
+     multi-instance session differing in census rows at matching censuses while single-document runs agree. */
   const payRound = (i) => {
     noveltyHand(i);
     for (const x of dueEntries(i)) {
