@@ -62,6 +62,7 @@
 #include "core/html/document_write.h"   /* §8.4's three members drive the parser, not the tree; see its header */
 #include "core/html/html_parse.h"       /* §13.2.7's premise: the lifecycle advances when the parse has ended */
 #include "solver/world.h"
+#include "core/frame/location.h"      /* §4.5's URL of the active Document is §7.2.4's href */
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
 #include "core/frame/location.h"
@@ -2937,13 +2938,15 @@ static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
     switch (magic) {
     /* §4.5: "The URL and documentURI getter steps are to return this's URL, serialized", so this member is the
        address and answers with the address value, whose example is that serialization (doc_addr_assert_agrees
-       checks it at both writers). A page branching on `document.URL.includes("/admin")` over a computed route forks,
-       as the same branch through `location.href` does. */
+       checks it at both writers). The realm's active Document is the one a navigation loaded, whose query and
+       fragment are the attacker's: it answers what §7.2.4's href getter answers, the same serialization with
+       those components as their sources. A Document with no browsing context has no such components. */
     case 0:
         DCHECK(!JS_IsUndefined(d->addr.value),
                "§4.5's `URL` was read off a record holding no address value — doc_rec_new writes one at the "
                "record's birth, so this is a record some other path built and the member would report a "
                "COMPUTED address as `undefined` rather than as the address it is");
+        if (d == doc_of(ctx)) return location_address_value(ctx);
         return JS_DupValue(ctx, d->addr.value);
     case 1:
         return JS_NewString(ctx, d->content_type);

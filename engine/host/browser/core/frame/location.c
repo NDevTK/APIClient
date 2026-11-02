@@ -380,6 +380,82 @@ static JSValue loc_component(JSContext *ctx, const UrlRecord *rec, bool want_que
     return loc_string(ctx, loc_concat(want_query ? "?" : "#", part));
 }
 
+/* THE TWO ATTACKER SOURCES, carrying the example the address actually has: the document was loaded from it, so
+   its query and fragment are observed facts, and the value stays concolic so a branch on it still forks. MINTED
+   PER READ, never once at the install: a candidate run substitutes a source with a breakout at mint time, so a
+   source minted once could never receive one. Both getters return a USVString (§7.2.4), so each mint is a
+   String in every world. */
+static JSValue loc_source(JSContext *ctx, const UrlRecord *rec, bool want_query)
+{
+    JSValue v = want_query
+        ? concolic_source_wrap(ctx, LOCATION_SEARCH_SHAPE, LOCATION_SEARCH_SRC, loc_component(ctx, rec, true))
+        : concolic_source_wrap(ctx, LOCATION_HASH_SHAPE, LOCATION_HASH_SRC, loc_component(ctx, rec, false));
+
+    concolic_state_string(v);
+    return v;
+}
+
+/* §7.2.4's href getter: URL §4.5 "URL serializing" of this Location's url, which §7.2.4's stringifier and
+   DOM §4.5's `URL` (location_address_value) also answer. Its steps 6 and 7 append the query and the fragment,
+   and those are the attacker's components, so the serialization is the concatenation of the address without
+   them and the two sources above: `new URL(location.href).searchParams.get(k)` reaches the same unknown that
+   `new URLSearchParams(location.search).get(k)` does, and a candidate delivered at either mint arrives
+   through it. Where both mints hold the observed components as examples, the example is the serialization
+   itself, asserted. A computed address (a route the page pushed)
+   is the run's own value and derives through loc_of_address. `rec` is borrowed. */
+static JSValue loc_href(JSContext *ctx, UrlRecord *rec)
+{
+    char *query = rec->query, *prefix;
+    JSValue addr, q, h, v;
+    int observed;
+
+    if (loc_document_is_null(ctx)) return loc_string(ctx, url_serialize(rec, /*exclude_fragment*/ false));
+    addr = document_url_value(ctx);
+    if (concolic_is(addr)) {
+        JS_FreeValue(ctx, addr);
+        return loc_of_address(ctx, url_serialize(rec, /*exclude_fragment*/ false), "href");
+    }
+    JS_FreeValue(ctx, addr);
+    rec->query = NULL;
+    prefix = url_serialize(rec, /*exclude_fragment*/ true);
+    rec->query = query;
+    q = loc_source(ctx, rec, true);
+    h = loc_source(ctx, rec, false);
+    /* A candidate run answers a mint with the delivered bytes, the attacker's address rather than this one, and
+       a world whose path the observed component contradicts holds no example of it. */
+    observed = concolic_is(q) && concolic_is(h) && concolic_example_present(q) && concolic_example_present(h);
+    v = concolic_string_concat(ctx, concolic_string_concat(ctx, loc_string(ctx, prefix), q), h);
+#if APICLIENT_DEV
+    if (observed) {
+        char *want = url_serialize(rec, /*exclude_fragment*/ false);
+        JSValue ex = concolic_is(v) ? concolic_example_string(ctx, v) : JS_DupValue(ctx, v);
+        const char *got = JS_IsString(ex) ? JS_ToCString(ctx, ex) : NULL;
+
+        DCHECKF(want && got && !strcmp(want, got),
+                "§7.2.4's href over the address `%s` composed the example `%s` out of its query and fragment "
+                "sources — the example is URL §4.5's serialization, so the composition and the serializer "
+                "disagree about steps 6 and 7", want ? want : "(null)", got ? got : "(none)");
+        if (got) JS_FreeCString(ctx, got);
+        JS_FreeValue(ctx, ex);
+        free(want);
+    }
+#endif
+    return v;
+}
+
+JSValue location_address_value(JSContext *ctx)
+{
+    UrlRecord rec;
+    JSValue v;
+
+    /* A Document whose browsing context is null keeps its URL while its Location answers about:blank. */
+    if (loc_document_is_null(ctx)) return document_url_value(ctx);
+    loc_url(ctx, &rec);
+    v = loc_href(ctx, &rec);
+    url_record_free(&rec);
+    return v;
+}
+
 /* EVERY DECLARED MEMBER'S GETTER, once, with §3.7.6 Attributes' brand check and the realm assertion in front
    of it. Its
    magic is its index; there is nothing per member to write, which is what stops a member from arriving with a
@@ -395,31 +471,8 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
                                         "index — the magic IS the index into the one member X-list");
     loc_url(ctx, &rec);
     switch ((int)magic) {
-    /* HTML §7.2.4 "The Location interface"'s href getter step 2: "Return this's url, SERIALIZED" — URL §4.5
-       "URL serializing", whose step 6 appends U+003F (?) and the query when the query is non-null and whose
-       step 7 appends U+0023 (#) and the fragment when the fragment is non-null and the exclude-fragment
-       boolean is false. That is url_serialize, which this component already owns and which §7.4.2.2's
-       navigate below calls for exactly the same string.
-       IT USED TO BE ORIGIN+PATH, on stated grounds of its own — that the query and the fragment
-       `are the attacker's and are read through their own getters, which is what keeps their source identities
-       separate`. Separate
-       identities are a real requirement and this was the wrong way to meet it: the getter is defined by §7.2.4
-       to serialize the URL, so answering with a different string is a fidelity bug in EVERY host — a
-       conformance run included, where no source is minted at all and the only thing this decided was that
-       `location.href` on `http://x/p?q#f` came back `http://x/p`. It is also not the corner it looks:
-       §7.2.4's stringifier IS this getter, so `String(location)`, `location + ""` and `new URL(rel, location)`
-       all read it, and URL §4.4's basic parser keeps the BASE's query for a fragment-only relative — so
-       `new URL("#b", location)` resolved against an address this file had already deleted the query from.
-       WHAT IT DOES NOT YET DO IS CARRY THE TWO SOURCES, and that is a different, larger subproblem than this
-       one rather than a piece of it: a string whose bytes come from two sources with two DIFFERENT
-       percent-encode sets and two different delivery prefixes (see the declarations in location_init) cannot
-       be named by the single identity concolic_add_hook's concatenation keeps, and every byte consumer of a
-       Location — url.c's base argument first — has to answer over unknown input before the composed value can
-       exist at all. Nothing here pretends otherwise: this answers what the SPEC says the member is, which is
-       what §CLAUDE assigns the browser half, and it is the step the solver half's version is built ON. */
-    case LOC_HREF:
-        v = loc_of_address(ctx, url_serialize(&rec, /*exclude_fragment*/ false), "href");
-        break;
+    /* HTML §7.2.4 "The Location interface"'s href getter step 2: "Return this's url, serialized". See loc_href. */
+    case LOC_HREF:     v = loc_href(ctx, &rec); break;
     case LOC_ORIGIN:   v = loc_string(ctx, url_serialize_origin(&rec)); break;
     case LOC_PROTOCOL: v = loc_string(ctx, loc_concat(rec.scheme, ":")); break;
     case LOC_HOST:     v = loc_string(ctx, url_serialize_host_port(&rec)); break;
@@ -429,24 +482,8 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
        (URL §4.5 "URL serializing"). It is the one member of the address a router MOVES, so it is the one this
        whole primitive exists for — see loc_of_address. */
     case LOC_PATHNAME: v = loc_of_address(ctx, url_serialize_path(&rec), "pathname"); break;
-    /* THE TWO ATTACKER SOURCES, AND THEY CARRY THE EXAMPLE THE ADDRESS ACTUALLY HAS. §solver's rule is that a
-       value is a domain plus an example when the code pins, computes or LEARNS one, and this one is learned
-       from the address the host supplied — the document was LOADED from it, so its query and fragment are
-       observed facts rather than invented ones. The value stays CONCOLIC: the domain is unconstrained and a
-       branch on it still forks, which is the whole point of the source. It simply also knows what it concretely
-       is right now.
-       MINTED PER READ, never once at the install: a candidate run substitutes a source with a breakout at MINT
-       time, so a source minted once could never receive one and its sink would be detected and never
-       fire-verified. */
-    /* Both getters return a USVString (§7.2.4), so each mint is a String in every world. */
-    case LOC_SEARCH:
-        v = concolic_source_wrap(ctx, LOCATION_SEARCH_SHAPE, LOCATION_SEARCH_SRC, loc_component(ctx, &rec, true));
-        concolic_state_string(v);
-        break;
-    case LOC_HASH:
-        v = concolic_source_wrap(ctx, LOCATION_HASH_SHAPE, LOCATION_HASH_SRC, loc_component(ctx, &rec, false));
-        concolic_state_string(v);
-        break;
+    case LOC_SEARCH:   v = loc_source(ctx, &rec, true); break;
+    case LOC_HASH:     v = loc_source(ctx, &rec, false); break;
     default:
         DFAIL("a Location member was read with a magic no member of this file declares — the magic IS the "
               "member, so an unknown one means a name was installed without a case to answer it");

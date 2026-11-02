@@ -36,6 +36,11 @@ void location_free(void);
    reach through the global with JS_GetPropertyStr, which would abort at the getter. */
 JSValue location_object(JSContext *ctx);
 
+/* §7.2.4's href getter's answer for this realm's Location: the address serialized, with its query and fragment
+   read as the two sources above (a concatenation over them, so a URL parse of it reaches the same unknowns).
+   DOM §4.5's `URL` and `documentURI` of the realm's active Document answer it too. Owned by the caller. */
+JSValue location_address_value(JSContext *ctx);
+
 /* §7.2.4's LOCATION URL IS THE DOCUMENT'S ADDRESS — "a Location object has an associated url, which is this
    Location object's relevant Document's URL" — and it is read from the DOCUMENT (document_url(ctx)) rather
    than recorded here. This component kept a module-static copy that every install overwrote, which was one
