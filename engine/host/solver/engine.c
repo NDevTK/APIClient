@@ -13097,7 +13097,11 @@ static int engine_sched_slice(int resume) {
         /* The host's turn (solver/quantum.h), answered between two steps, where no flow is mid-step: the slice
            keeps its budget and its running flow, and the host re-enters with nothing in between, so the next
            statement this engine runs is the pick it would have run here. No mark is discharged, since the host
-           sees nothing of the turn. */
+           sees nothing of the turn.
+           Named residual. Not covered: a turn inside a step; the host waits for the running step's next park, at
+           most the rest of the quantum. Next diff builds: the turn taken at the preempt point by suspending the
+           instance's stack (JSPI) instead of parking the flow. Absence shows as: a renderer frame's event loop
+           held for a quantum's wall time on a page whose flow runs a whole quantum in one step. */
         if (quantum_host_wants_thread()) {
             g_sess_cur = cur;
             g_turn_resume = 1;
