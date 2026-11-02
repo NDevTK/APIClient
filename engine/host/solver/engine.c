@@ -5401,8 +5401,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* The rank that substitution is the denominator of: flow.h's "every non-candidate stands at exactly 0",
        asserted here, where it is transiently false and made true again. flow_fork_inherit runs first and copies
        the parent's ladder position, so between that line and the copy above the sibling holds a distance and no
-       payload. It catches a candidate identity that stops being copied while the rank still is, which would carry
-       up to a full point of fitness (the comparator's whole range) into ordinary exploration. Written over
+       payload. It catches a candidate identity that stops being copied while the rank still is, which would weight
+       ordinary exploration's share of its site by up to the comparator's whole range. Written over
        flow_distance rather than a list of rungs, so a rung added to the comparator is covered the day it is
        added. */
     DCHECK(sib->cand_payload != NULL || flow_distance(sib) == 0.0,
@@ -8418,7 +8418,8 @@ static int64_t g_ranked_silence = 0;
    served across a quantum or the flow stands at another site, and a flow can be re-picked without a switch-in, so it
    can change while the silence notch stands still. */
 static int64_t g_ranked_opt_den = 0;
-/* The fitness distance, a term of the weight (`reward + dist + ucb - silence`) and so a coordinate of it. */
+/* The fitness distance, which weights the optimism (`reward + ucb(served/(1+dist)) - silence`), and so a
+   coordinate of the weight. */
 static double g_ranked_dist = 0.0;
 /* Suspend points reached: every call to this hook is one, which the seam assertion needs and quickjs's counters do
    not give (g_flow_preempt_requested counts preempts wanted, raised only where the hook returns true). A lifetime

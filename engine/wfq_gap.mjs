@@ -12,10 +12,11 @@ const END_FIELDS = ["w", "reward", "coordNotch", "ownNotch", "siteServed", "pull
 
 /* The terms of one member's weight, each as flow_order_key composes it, and the weight they sum to. The aging is the
    family's (in `coord`, with the reward); `ownNotch` is the member's turn, which orders it only among members level
-   on the weight and is no term here. The optimism is read off the member's
-   site (`siteServed` in quanta of `pullWork`) with each priced decision a floor of `p` work, and `assume` is how much
-   of it the priced decisions took (the optimism less its unpriced reading), so `opt + assume` is the term the
-   weight sums. `visits` is an operand the row carries and no term reads. */
+   on the weight and is no term here. The optimism is read off the member's site (`siteServed` in quanta of
+   `pullWork`), its service divided by one plus the member's fitness `D`, with each priced decision a floor of `p`
+   work: `opt` is the reading at no fitness and no price, `dist` what the fitness added to it, and `assume` what the
+   priced decisions took, so `opt + dist + assume` is the optimism the weight sums. `visits` is an operand the row
+   carries and no term reads. */
 function termsOf(o, q, p, rungs, where) {
   for (const k of END_FIELDS)
     if (typeof o[k] !== "number")
@@ -23,11 +24,14 @@ function termsOf(o, q, p, rungs, where) {
                       `weight_operands_json writes all of ${END_FIELDS.join(", ")}`);
   const coord = o.reward - o.coordNotch * q;
   const least = (o.assumed + o.againstEnv) * p;
-  const priced = 1.0 / (1.0 + (o.siteServed > least ? o.siteServed : least) / o.pullWork + o.orphanSeen);
+  const D = (o.replay + o.surv + o.rung) / rungs;
+  const v = o.siteServed / (1.0 + D);
+  const priced = 1.0 / (1.0 + (v > least ? v : least) / o.pullWork + o.orphanSeen);
+  const fit = 1.0 / (1.0 + v / o.pullWork + o.orphanSeen);
   const opt = 1.0 / (1.0 + o.siteServed / o.pullWork + o.orphanSeen);
-  const dist = (o.replay + o.surv + o.rung) / rungs;
-  const assume = priced - opt;
-  const w = coord + (priced + dist);
+  const dist = fit - opt;
+  const assume = priced - fit;
+  const w = coord + priced;
   if (w !== o.w)
     throw new Error(`${where}: a curDeepTerms end does not recompose to its weight (published ${o.w}, ` +
                     `recomposed ${w}) — this reader and solver/flow.c's flow_weight_recompose compose ` +

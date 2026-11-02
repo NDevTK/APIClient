@@ -40,8 +40,8 @@ typedef struct FlowSite FlowSite;
    At the delivery the runway fraction is pinned to 1.0 by definition, so the bands are disjoint and ordered:
    undelivered [0, 0.2], delivered [0.4, 0.6], arrived [0.6, 0.8], escaped [0.8, 1.0]. A survival fraction below
    the delivery is unreachable, because survival is measured only on delivered bytes; flow_observe_survival
-   asserts it. The range is exactly 1.0, which prices the distance against the optimism term so a promise never
-   outweighs a finding; flow.c's flow_silence_us_to_sink reads FLOW_RUNGS_N rather than a literal. */
+   asserts it. The range is exactly 1.0, and it is the weight of the member's share of its code site's service
+   (flow.c's site_optimism), so a promise is spent like the optimism it weights and never outweighs a finding. */
 #define FLOW_RUNG_DELIVERED 1 /* this flow's payload was substituted into the page's own program (a source read) */
 #define FLOW_RUNG_ARRIVED   2 /* this flow's breakout reached the sink its own search is for */
 #define FLOW_RUNG_ESCAPED   3 /* …and stood there in a position the sink's own language executes */
@@ -56,8 +56,8 @@ typedef struct FlowSite FlowSite;
 #define FLOW_STEP_RETIRED 3
 
 /* One member's weight as its operands, in the order flow_order_key composes them (solver/flow.c's
-   flow_weight_operands): `w = (reward - coord_notch*Q) + (1/(1 + max(site_served, (assumed + against_env)*W)
-   / pull_work + orphan_seen) + (replay + surv + rung)/FLOW_RUNGS_N)`, with Q = FLOW_AGE_QUANTUM and
+   flow_weight_operands): `w = (reward - coord_notch*Q) + 1/(1 + max(site_served/(1 + D), (assumed + against_env)*W)
+   / pull_work + orphan_seen)` with D = (replay + surv + rung)/FLOW_RUNGS_N, Q = FLOW_AGE_QUANTUM and
    W = FLOW_PRICED_WORK. `coord_notch` is the family notch; `own_notch` is the member's turn, which orders it only
    among members level on the weight and is no summand. `site_served` is the work the member's code site has
    received in its family and `pull_work` the quantum it is counted in (ENGINE_PULL_WORK).
@@ -280,8 +280,8 @@ typedef struct Flow {
        the reward. A reward is a ledger, paid at most once per observation; a fitness states where an item stands
        now and must be readable off every item, including ones standing where an earlier item stood. So the
        distance is never accumulated and never paid: each rung below is overwritten upward, flow_distance
-       composes them in [0,1], and the pick reads it. It shares the optimism term's range, so it is priced against
-       the same aging.
+       composes them in [0,1], and the pick reads it as the weight of the member's share of its site's service, so
+       it is spent with that service and priced against the same aging.
        The fire is not a rung (FLOW_RUNG_* says why). Carried by a fork, because an arm of a candidate continues
        the same payload to the same sink and must not improve its rank by branching; flow_fork_inherit's
        rank-neutrality assertion over the whole weight enforces it. It does not cross the cold tier: a distance
@@ -715,7 +715,8 @@ typedef struct Flow {
 
     /* Dev-only stamps for the assertion sub-linear ordering rests on: a member not holding the thread cannot
        change its own half of the order while the frontier generation stands still. flow_weight is the family's
-       coordinate plus the site's optimism plus flow_index_key; the family's half is a common offset within a family.
+       coordinate plus the site's optimism weighted by flow_index_key; the family's half is a common offset within a
+       family.
        The walk stamps each member it weighs (it already holds the member and the key), and flow_age_running
        re-stamps the member it charges. Two operands are compared as one condition into one counter bucket,
        because key_checks_total() is asserted equal to the weighings one loop performed:
@@ -1306,7 +1307,7 @@ typedef struct {
      * flow_arrive_at_virtual_time applies SFQ's `max{v(t), F_prev}` to from-baseline entries as a continuing
      * relation, so a created document or candidate is not placed ahead of the backlog. These weights order one
      * document's flows only: Level 1 ranks documents in the trusted zone by value per unit of work served. Every field of this struct is emitted; flow_wfq_census's accounting assertion keeps that true. */
-    /* The fitness term's range (@S distance, added by flow_weight). Its floor is the constant 0: a flow with no
+    /* The fitness's range (@S distance, the weight of a member's optimism in flow_weight). Its floor is the constant 0: a flow with no
        payload has no ladder and both fitness writers refuse to record one, so [0, dist_max] is the range. With
        `cands: 0` it is 0 by construction, which is a fact about the run's @S population. */
     double dist_max;
@@ -1339,8 +1340,8 @@ typedef struct {
        this falling while `val_top` rises is a generation going backwards. Read per sample, never differenced. */
     int64_t top_forgiven;
     /* The most every term of the order except the reward can lift one member: flow.c's FLOW_NONREWARD_MAX, the
-       bound flow_nonreward asserts, emitted because it folds three terms (the optimism ceiling, the fitness
-       ladder over FLOW_RUNGS_N, the aging's zero) and a reader's re-derivation would go stale. A member's weight
+       bound flow_nonreward asserts, emitted because it folds two terms (the optimism ceiling, which the fitness
+       weights and does not raise, and the aging's zero) and a reader's re-derivation would go stale. A member's weight
        is its account's reward plus its non-reward sum, so `(val_top - val_min) + nonreward_max` is the largest
        gap a non-negative non-reward sum can produce; a gap above it means the trailing member's own terms are net
        negative. On a one-family frontier the reward difference is zero and the bound is this row alone. */
@@ -1785,8 +1786,8 @@ int   flow_credit_emit(double v);
    value as Level 1 ranks it (the trusted zone divides it by engine_service_work). Raised on the paid arm only, so a
    credit made on host time with no flow to pay is not in it. Never falls. */
 double flow_credit_paid_value(void);
-/* Where this candidate's own bytes stand on the @S ladder: the fitness term of flow_weight, composed from the
-   rung fields rather than stored, `(cand_replay + cand_surv + cand_rung) / FLOW_RUNGS_N` in [0,1], and exactly
+/* Where this candidate's own bytes stand on the @S ladder: the fitness that weights its optimism in flow_weight,
+   composed from the rung fields rather than stored, `(cand_replay + cand_surv + cand_rung) / FLOW_RUNGS_N` in [0,1], and exactly
    0 for a flow that is not a candidate (both fitness writers assert they are asked only of one). */
 double flow_distance(const Flow *f);
 /* A candidate has replayed part of its own recorded path: rung zero. `consumed` is the arms this run has

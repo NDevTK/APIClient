@@ -324,11 +324,12 @@ struct FlowCodeSite {
 };
 
 /* One standing class at a code site: the members of one family at one code site whose own operands of the optimism
-   denominator agree, so that every member here reads one number, `offset`, and the order's index files the class as
-   one entry. The operands are `seen` (the members' `orphan_seen`: drives of the same body known elsewhere) and
-   `priced` (flow_priced: the decisions the member rests on that a world the page runs in would not take), each
-   added to the code site's pulls. A class holds nothing that outlives its members: the service is the code site's,
-   so the class is minted at its first member and freed at its last member's leaving. */
+   denominator agree, so that the order's index files the class as one entry and its members' treap orders them by
+   their fitness, the one operand of a member's optimism left (site_key). The operands are `seen` (the members'
+   `orphan_seen`: drives of the same body known elsewhere) and `priced` (flow_priced: the decisions the member rests
+   on that a world the page runs in would not take), each added to the code site's pulls. A class holds nothing that
+   outlives its members: the service is the code site's, so the class is minted at its first member and freed at its
+   last member's leaving. */
 struct FlowSite {
     FlowAcct *fam;              /* the family root whose ledger holds it; never NULL */
     FlowCodeSite *code;         /* the code site whose service it reads; never NULL */
@@ -336,7 +337,6 @@ struct FlowSite {
     struct FlowSite *cnext, *cprev;   /* its links in `code->classes` */
     int64_t seen;
     int64_t priced;
-    double offset;              /* site_optimism over the code site's service and the two operands */
     long members;               /* live members whose `at` names it */
     /* Its node in its family's site heap, set while it holds an indexed member (`ix_bin`), and in the family's
        tail heap under the same flag (`ix_bm`), its node in the family's never-dispatched heap (`ix_bnin`), the root
@@ -374,26 +374,25 @@ static int64_t g_branch_retired_work = 0;
    step separates the two at the next one. Whole work units keep flow_optimism_den an exact integer. */
 #define FLOW_PRICED_WORK ((int64_t)4500000)
 
-/* The optimism of a class from its operands, the one expression flow_site_reprice stores and the census operands
-   recompose. */
-static double site_optimism(int64_t served, int64_t seen, int64_t priced) {
-    int64_t least = priced * FLOW_PRICED_WORK;
-    return 1.0 / (1.0 + (double)(served > least ? served : least) / (double)ENGINE_PULL_WORK + (double)seen);
+/* A member's optimism from its operands: `1/(1 + max(served/(1+fit), W*priced)/Q + seen)`, the one expression the
+   order, its index and the census operands compose. `fit` is the member's @S fitness (flow_distance, in [0, 1]), the
+   weight of its share of the code site's service in WFQ's sense: a member of fitness `fit` reads the site's service
+   at 1/(1+fit) of its count, so at equal optimism its site has received (1+fit) times the service of a fitness-0
+   member's. It cannot lift a member above an unserved site (the reading stays at most 1), and the price stays a floor
+   of service the fitness does not discount. At `fit` 0 the division is exact, so every non-candidate reads the
+   unweighted count to the bit. Non-decreasing in `fit`, which is what lets the index bound a treap by its largest
+   key. */
+static double site_optimism(int64_t served, int64_t seen, int64_t priced, double fit) {
+    double v = (double)served / (1.0 + fit), least = (double)(priced * FLOW_PRICED_WORK);
+    return 1.0 / (1.0 + (v > least ? v : least) / (double)ENGINE_PULL_WORK + (double)seen);
 }
 
-/* The optimism every member at `st` reads, asserted against the counts it is a function of, so a writer of `served`
-   that skipped flow_code_reprice is caught at the next weighing. */
-static double site_offset(const FlowSite *st) {
-    DCHECKF(st->offset == site_optimism(st->code->served, st->seen, st->priced),
-            "a class's optimism offset is stale against its counts (offset %.17g, served %lld, seen %lld, priced "
-            "%lld) — flow_site_reprice is the one writer of the offset and every writer of `served` calls "
-            "flow_code_reprice",
-            st->offset, (long long)st->code->served, (long long)st->seen, (long long)st->priced);
-    return st->offset;
-}
-
-static void flow_site_reprice(FlowSite *st) {
-    st->offset = site_optimism(st->code->served, st->seen, st->priced);
+/* The site-relative half of the order for a member of fitness `fit` standing in class `st`: its optimism, read off
+   the code site's count and the class's operands. Asked of a treap's largest key it bounds every member there, and of
+   its smallest it bounds them from below. */
+static double site_key(const FlowSite *st, double fit) {
+    DCHECK(fit >= 0.0 && fit <= 1.0, "an optimism was weighted by a fitness outside [0, 1] — flow_distance's range");
+    return site_optimism(st->code->served, st->seen, st->priced, fit);
 }
 
 static size_t site_slot(int kind, uint64_t key, int64_t seen, int64_t priced, size_t cap) {
@@ -481,7 +480,6 @@ static FlowSite *flow_site_of(FlowAcct *fam, int kind, uint64_t key, int64_t see
     st = reclaim_calloc(1, sizeof *st);
     CHECK(st, "flow: OOM minting a standing class in a family's ledger");
     st->fam = fam; st->code = code; st->seen = seen; st->priced = priced;
-    flow_site_reprice(st);
     i = site_slot(kind, key, seen, priced, fam->sites_cap);
     st->hnext = fam->sites[i]; fam->sites[i] = st;
     fam->sites_n++;
@@ -1634,13 +1632,10 @@ static void flow_site_move(Flow *f, FlowSite *to) {
     frontier_rank_changed();
 }
 
-/* `us` more service at code site `c`: every class standing there reads it, so each is repriced and re-filed. */
+/* `us` more service at code site `c`: every class standing there reads it, so each is re-filed. */
 static void flow_code_charge(FlowCodeSite *c, int64_t us) {
     c->served += us;
-    for (FlowSite *st = c->classes; st; st = st->cnext) {
-        flow_site_reprice(st);
-        flow_ix_site_sync(st);
-    }
+    for (FlowSite *st = c->classes; st; st = st->cnext) flow_ix_site_sync(st);
     frontier_rank_changed();
 }
 
@@ -2408,8 +2403,8 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     /* The scheduler's one WFQ, asserted at the fork: a fork is rank-neutral, so at birth the sibling is worth exactly
        what its parent is worth. It fires the moment anything enters flow_weight that a fork does not carry (a depth
        bonus, a script-index term, a separate visit counter, a "prefer flows that have run" tiebreak).
-       flow_weight is `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N
-       + 1/(1+max(served,W*priced)/Q+orphan_seen) − fam_work*RATE` and the turn is `work` over `work_gen`, so a fork
+       flow_weight is `fam_val + 1/(1+max(served/(1+D),W*priced)/Q+orphan_seen) − fam_work*RATE` with
+       D = (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N, and the turn is `work` over `work_gen`, so a fork
        carries nine things: the three `cand_*` (decide_fork_blob hands the sibling the parent's cursor); `work` and
        `work_gen`; the family tag, joined, which carries the reward and the aging (a fresh root would read 0 and fire);
        the code site, which carries the site's count; `orphan_seen`; and the priced decisions.
@@ -2929,9 +2924,10 @@ static void flow_arrive_at_virtual_time(Flow *f) {
        nothing may not be charged for the work of the one that has.
        Written over flow_queue_weight rather than a list of fields, for flow_fork_inherit's reason: a list cannot
        fire when a term is added, and a term a newcomer cannot stand at (anything read off its own payload or
-       history) makes the two sides differ here, at the door. Two terms sit outside flow_queue_weight (see
-       flow_optimism), so this is over the tags alone: the @S distance is a fraction of a payload the newcomer does
-       not share, and the optimism bonus reads 1.0 for a flow that has completed nothing. Exact with no epsilon:
+       history) makes the two sides differ here, at the door. The optimism, which the @S distance weights, sits
+       outside flow_queue_weight (see flow_optimism), so this is over the tags alone: the distance is a fraction of a
+       payload the newcomer does not share, and the optimism bonus reads 1.0 for a flow that has completed nothing,
+       at any distance. Exact with no epsilon:
        the reward is frontier_vt() by construction (acct_family_val's unplaced arm) and the newcomer's aging notch
        is an integer division of zero, so both sides are the same float read twice. */
     DCHECK(flow_queue_weight(f) == frontier_vt(),
@@ -3956,9 +3952,10 @@ static double flow_queue_nonreward(const Flow *f) {
     return -(double)flow_family_notch(f) * FLOW_AGE_QUANTUM;
 }
 
-/* The optimism term, CLAUDE.md's UCB bonus: optimism over service, `1/(1 + max(served, W*priced)/Q + orphan_seen)`
-   read off the member's class (FlowSite), so a never-served site is never starved. 1.0 at a site its family has not
-   served, over code unexplored elsewhere, for a member resting on no priced decision: one emission's worth of
+/* The optimism term, CLAUDE.md's UCB bonus, with the @S fitness as the weight of the member's share:
+   `1/(1 + max(served/(1+D), W*priced)/Q + orphan_seen)` read off the member's class (FlowSite) and its distance D
+   (site_optimism), so a never-served site is never starved. 1.0 at a site its family has not served, over code
+   unexplored elsewhere, for a member resting on no priced decision, whatever its fitness: one emission's worth of
    promise, which flow_nonreward's bound prices. The service count is the family's and the code site's, not the
    member's: arms minted at one decision stand at one code site and share one count, so minting arms does not mint
    optimism, and service at the site lowers all of them at once. The aging still prices the member's own burn.
@@ -3970,13 +3967,13 @@ static double flow_optimism(const Flow *f) {
     DCHECK(f->at->seen == f->orphan_seen && f->at->priced == flow_priced(f),
            "a member stands in a class whose drive count or priced count is not its own — flow_stand_at, the fork, "
            "flow_set_orphan_seen and flow_priced_moved stand a member in the class of its own operands");
-    return site_offset(f->at);
+    return site_key(f->at, flow_index_key(f));
 }
 
 /* The same term as if the member rested on no priced decision: what the fork's rank-neutrality equality reads,
    since the sibling's own priced arm is the one difference a fork may make. */
 static double flow_optimism_unpriced(const Flow *f) {
-    return site_optimism(f->at->code->served, f->at->seen, 0);
+    return site_optimism(f->at->code->served, f->at->seen, 0, flow_index_key(f));
 }
 
 /* The optimism denominator in work, `Q*(1 + seen) + max(served, W*priced)` with Q = ENGINE_PULL_WORK and
@@ -4003,28 +4000,21 @@ static double flow_queue_weight(const Flow *f) {
     return acct_family_val(f) + flow_queue_nonreward(f);
 }
 
-/* The one term of the order that is a reading of the item rather than a tag on the queue: outside flow_queue_weight
-   (what an arrival is placed at) and inside flow_nonreward (what a range is asserted over). There is one comparator;
-   every caller ranks by flow_weight.
-   The @S fitness, read where a fitness is read: "The search is DISTANCE-DIRECTED (a fitness of {filter-survived,
-   sink-reached, context-escaped, handler-fires} the WFQ reads)". It is a comparator, not a ledger: a ledger is paid
-   at most once per observation, which makes every candidate that merely equals an earlier one worth what an
-   unstarted flow is worth, so a search's later breakouts would run with the order blind to how far each got. Here
-   nothing is paid or accumulated, and two flows at the same distance rank equal.
-   Bounded by the optimism term's range, for the reason that term is bounded by one emission: a fitness says how
-   promising an item is, not what it produced. At its maximum a candidate ranks with a never-run flow, enough to be
-   picked out of a saturated frontier and not enough to hold the thread against a flow that emitted; it is aged
-   like everything else. Zero for every non-candidate, since a flow with no payload has no ladder (both fitness
-   writers assert it).
-   It is the whole ladder: the survival rung alone is 1.0 for every candidate of a page that does not transform the
-   payload, so the rungs are what tell those candidates apart (flow.h's `cand_rung` says why they live on the flow).
-   With the runway fraction beneath them there are five rungs (FLOW_RUNGS_N) and the bands are [0, 0.2]
-   undelivered, [0.4, 0.6] delivered, [0.6, 0.8] arrived, [0.8, 1.0] escaped. The denominator is the macro, not a
-   literal, so a rung added beneath the others moves no arithmetic here or in flow_silence_us_to_sink; the rescale
-   is order-preserving among candidates, since every candidate with a reading has the same rungs beneath it. It is
-   held per flow and never accumulated, and the parked-candidate record ('c', cold.c) carries the substitution and
-   not the ladder (a resumed candidate re-earns every rung by replaying to its source read), so a renumbering is not
-   a format change unless a rung crosses the tier. */
+/* The one operand of the order that is a reading of the item rather than a tag on the queue: outside
+   flow_queue_weight (what an arrival is placed at). The @S fitness, read where a fitness is read: "The search is
+   DISTANCE-DIRECTED (a fitness of {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)".
+   A comparator, not a ledger: nothing is paid or accumulated, so a search's later breakouts are ordered by how far
+   each got, and two flows at the same distance rank equal.
+   It weights the member's share of its code site's service (site_optimism) rather than adding to the weight,
+   because a summand does not decay with service: inside one family, where the reward and the aging are common
+   offsets, it would rank a candidate above every member whose optimism is below it for ever, a tier. Zero for every
+   non-candidate (both fitness writers assert it).
+   It is the whole ladder, since the survival rung alone is 1.0 for every candidate of a page that does not
+   transform the payload. With the runway fraction there are five rungs (FLOW_RUNGS_N) and the bands are [0, 0.2]
+   undelivered, [0.4, 0.6] delivered, [0.6, 0.8] arrived, [0.8, 1.0] escaped. The denominator is the macro, so a rung
+   added beneath the others moves no arithmetic here; the rescale is order-preserving among candidates. The
+   parked-candidate record ('c', cold.c) carries the substitution and not the ladder (a resumed candidate re-earns
+   every rung), so a renumbering is not a format change unless a rung crosses the tier. */
 double flow_distance(const Flow *f) {
     DCHECK(f != NULL, "the fitness term was asked of no flow");
     /* The pair invariant ("a flow with no payload stands at exactly 0") is asserted at engine.c's fork rather than
@@ -4038,21 +4028,15 @@ double flow_distance(const Flow *f) {
 /* The range of everything the order is made of except the reward, written as the derivation, term by term against
    flow_nonreward's summands (as wfq_accounted_spread is written against flow_weight's). Each line is one term at
    the end of its range that pushes the sum up:
-     - the optimism bonus 1/(1+max(served,W*priced)/Q+orphan_seen) decreases in counts that cannot go below zero, so its
-       maximum is its reading at an unserved site over unexplored code with nothing priced, the unit one emission
-       is priced against;
-     - the fitness distance is (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N with the two fractions asserted in
-       [0,1] (flow_observe_replay, flow_observe_survival) and cand_rung on the ladder (flow_observe_rung), whose top
-       is FLOW_RUNGS_N - 2, so its maximum is (1 + 1 + (N-2))/N = 1 for any N;
+     - the optimism bonus 1/(1+max(served/(1+D),W*priced)/Q+orphan_seen) decreases in counts that cannot go below
+       zero, so its maximum is its reading at an unserved site over unexplored code with nothing priced, the unit
+       one emission is priced against, at any fitness D: the fitness divides the service and adds nothing;
      - the aging enters negatively at FLOW_AGE_QUANTUM per notch, and the notch is a floor of non-negative work
        counts (flow_age_running asserts the charge), so it contributes at most nothing.
    One-sided by design: a flow that burns the thread without emitting must be able to sink arbitrarily far, and a
    floor would be a clamp ("a bound truncates distinct work"). What is bounded is how far a term may lift an item,
    because that decides whether a member can be put behind something other than a finding. */
 #define FLOW_NONREWARD_MAX ( 1.0 / (1.0 + 0.0)                                          /* optimism, unserved   */ \
-                           + (1.0 + 1.0 + (double)(FLOW_RUNGS_N - 2)) / (double)FLOW_RUNGS_N /* distance: two   */ \
-                                                                                        /* fractions + the top  */ \
-                                                                                        /* boolean rung         */ \
                            - 0.0 * FLOW_AGE_QUANTUM )                                   /* aging, no silence    */
 
 
@@ -4064,13 +4048,14 @@ uint64_t flow_birth_seq(const Flow *f) {
 }
 
 
-/* The member half of the weight, the key the order's index is keyed on: every summand that is a reading of this
-   member and of nothing it shares. The weight's terms partition by scope three ways: acct_family_val and the family
-   notch are per account, the optimism is per site (one count read by every member standing there), and the fitness
-   distance is per member (`f->cand_replay`/`cand_surv`/`cand_rung`), which no other member can move. The index
-   holds each scope where it moves (family, site, member), so no write re-keys more members than it moved. A
-   member's priced decisions are read in the optimism, through the class it stands in, and its turn
-   (flow_service_notch) orders it only among members equal in all three. */
+/* The member half of the weight, the key the order's index is keyed on: every operand that is a reading of this
+   member and of nothing it shares. The weight's operands partition by scope three ways: acct_family_val and the
+   family notch are per account, the site's service is per site (one count read by every member standing there), and
+   the fitness distance, which weights the member's reading of that count, is per member (`f->cand_replay`/
+   `cand_surv`/`cand_rung`), which no other member can move. The index holds each scope where it moves (family, site,
+   member), so no write re-keys more members than it moved. A member's priced decisions are read in the optimism,
+   through the class it stands in, and its turn (flow_service_notch) orders it only among members equal in all
+   three. */
 static double flow_index_key(const Flow *f) {
     return flow_distance(f);
 }
@@ -4104,9 +4089,9 @@ static int64_t flow_site_served_elsewhere(const Flow *f) {
 /* A member's weight rebuilt from its operands, in flow_order_key's composition and order of operations, so it is
    the same double: the census publishes the operands and a reader recomputes this. */
 static double flow_weight_recompose(const FlowWeightOperands *o) {
-    double opt = site_optimism(o->site_served, o->orphan_seen, o->assumed + o->against_env);
     double dist = (o->replay + o->surv + (double)o->rung) / (double)FLOW_RUNGS_N;
-    return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + (opt + dist);
+    double opt = site_optimism(o->site_served, o->orphan_seen, o->assumed + o->against_env, dist);
+    return (o->reward - (double)o->coord_notch * FLOW_AGE_QUANTUM) + opt;
 }
 
 /* The operands of `f`'s weight, read through the accessors flow_order_key reads, and asserted to recompose to
@@ -4150,15 +4135,16 @@ static void flow_weight_operands(const Flow *f, FlowWeightOperands *o) {
    non-reward terms all stand at zero, it is asserted by nothing once that population empties (flow_pick_walk says
    when), which is the stalled frontier the never-starved guarantee is about. Asked of one item, its population is
    every flow whose weight is read. It supersedes the pairwise form `w(best) − w(unrun) <= R(best) − R(unrun) + 1.0`:
-   with N for this quantity that is `N(best) − N(u) <= 1.0`, and `N(u) = 1.0 + D_u >= 1.0`, so it says
-   `N(best) <= 2.0 + D_u`, this bound weakened by `D_u` and gated on `u` existing.
-   It catches an edit to the formula, not a state of the frontier: an optimism ceiling that stops being 1, a fitness
-   that stops being a fraction of FLOW_RUNGS_N, an aging term allowed to go negative (a freshness bonus, a credit
-   for waiting), and a summand added with no line in FLOW_NONREWARD_MAX, which fires on its first non-zero reading.
-   Exact at its corner with no epsilon: the maximum is reached by a real member (a candidate at an unserved site
-   with zero silence whose bytes survived whole and escaped), and every term is exact in binary there
-   (`1.0/(1.0+0.0)`, `(1 + 1 + (N-2))/N` as `N/N` for this small integral N, a zero notch times any price), so an epsilon would only be room for the next unranged term. The caller's address is not threaded: every
-   route in is a request to rank a flow, and the remedy is always an edit to the terms summed below, here. */
+   with N for this quantity that is `N(best) − N(u) <= 1.0`, and `N(u) = 1.0`, so it says `N(best) <= 2.0`, this
+   bound weakened and gated on `u` existing.
+   It catches an edit to the formula, not a state of the frontier: an optimism ceiling that stops being 1 (a fitness
+   added to it rather than weighting its service, say), an aging term allowed to go negative (a freshness bonus, a
+   credit for waiting), and a summand added with no line in FLOW_NONREWARD_MAX, which fires on its first non-zero
+   reading. Exact at its corner with no epsilon: the maximum is reached by a real member (any member at an unserved
+   site with zero silence and nothing priced), and every term is exact in binary there (`1.0/(1.0+0.0)`, a zero
+   notch times any price), so an epsilon would only be room for the next unranged term. The caller's address is not
+   threaded: every route in is a request to rank a flow, and the remedy is always an edit to the terms summed below,
+   here. */
 /* The family's coordinate: its reward less its whole notches of silence, the part of the weight a member reads
    through its family's pointer. A non-running member's notch only grows, so its weight only falls. The order's
    index reads the coordinate per family, through this function, so the index's bound and the weight share the
@@ -4172,11 +4158,11 @@ static double flow_family_coord(const Flow *f) {
     return f->family ? acct_family_coord(f->family) : 0.0;
 }
 
-/* The order's key. The weight is composed in the order the index bounds it: the family's coordinate, plus the
-   site's optimism plus the member's key. The partial sums are kept, because rounding can make two members with
-   unequal operands weigh one double: a tie in the weight goes to the larger site-relative sum `x`, then the larger
-   key, then the lesser turn (flow_service_notch), and only an exact tie in all four goes to the older member by
-   birth sequence, the queue's oldest-arm-first order. */
+/* The order's key. The weight is composed in the order the index bounds it: the family's coordinate plus `x`, the
+   site's optimism weighted by the member's key (site_key). The partial values are kept, because rounding can make
+   two members with unequal operands weigh one double: a tie in the weight goes to the larger site-relative `x`, then
+   the larger key, then the lesser turn (flow_service_notch), and only an exact tie in all four goes to the older
+   member by birth sequence, the queue's oldest-arm-first order. */
 typedef struct {
     double w, x, ikey;
     int64_t turn;
@@ -4186,7 +4172,7 @@ typedef struct {
 static FlowOrderKey flow_order_key(const Flow *f) {
     FlowOrderKey o;
     o.ikey = flow_index_key(f);
-    o.x = flow_optimism(f) + o.ikey;
+    o.x = flow_optimism(f);
     o.w = flow_family_coord(f) + o.x;
     o.turn = flow_service_notch(f);
     o.seq = f->ix_t.seq;
@@ -4196,7 +4182,7 @@ static FlowOrderKey flow_order_key(const Flow *f) {
 /* The weight with the priced decisions left out of the optimism, in flow_order_key's composition: what the fork's
    rank-neutrality equality compares. Mentioned only inside DCHECK conditions. */
 static double flow_weight_observed(const Flow *f) {
-    return flow_family_coord(f) + (flow_optimism_unpriced(f) + flow_index_key(f));
+    return flow_family_coord(f) + flow_optimism_unpriced(f);
 }
 
 /* Positive when `a` ranks above `b`, negative below, over everything but the birth sequence: zero for two members
@@ -4230,7 +4216,7 @@ static int flow_order_unseats(const Flow *a, const Flow *seed) {
 }
 
 static double flow_nonreward(const Flow *f) {
-    /* The weight's own composition with the reward left out: the family's aging, then the member's key. */
+    /* The weight's own composition with the reward left out: the family's aging, then the member's optimism. */
     return -(double)flow_family_notch(f) * FLOW_AGE_QUANTUM + flow_order_key(f).x;
 }
 
@@ -4239,8 +4225,7 @@ static double flow_nonreward(const Flow *f) {
 double flow_weight(const Flow *f) {
     DCHECK(flow_nonreward(f) <= FLOW_NONREWARD_MAX,
            "a term of the WFQ's order other than the reward exceeds FLOW_NONREWARD_MAX — every non-reward term must "
-           "span at most a finding; bound the term in flow_index_key or flow_distance, or state its range in "
-           "FLOW_NONREWARD_MAX");
+           "span at most a finding; bound the term in site_optimism, or state its range in FLOW_NONREWARD_MAX");
     return flow_order_key(f).w;
 }
 
@@ -4249,11 +4234,12 @@ double flow_weight(const Flow *f) {
    stand in a treap ordered by the tuple, each node holding over its subtree the largest key (`max`), the least turn
    among the classes at that key (`maxturn`), the oldest class at both (`floor`), and the largest key of a class
    holding a never-dispatched member (`nmax`); a class's members wait in a heap by birth sequence. Sites stand in two
-   leftist heaps per family, every site keyed on its optimism offset plus its treap's `max`, and the sites holding a
-   never-dispatched member on the offset plus `nmax`; families holding a site are on one list. The family's
+   leftist heaps per family, every site keyed on its optimism at its treap's `max` (site_key), and the sites holding
+   a never-dispatched member on its optimism at `nmax`; families holding a site are on one list. The family's
    coordinate is read at the query, so an emission re-keys one family and a site's service re-keys one site.
-   The bound is exact: flow_order_key composes the weight in the order the index bounds it, and rounding to nearest
-   is monotone in each operand, so the same expression over a subtree's largest key is at least every member's weight
+   The bound is exact: flow_order_key composes the weight in the order the index bounds it, the optimism is
+   non-decreasing in the key, and rounding to nearest is monotone in each operand, so the same expression over a
+   subtree's largest key is at least every member's weight
    and equals the weight of the member at it. Every heap is ordered by the order's own key (ix_above), so a query
    pops entries in the order's order and the first member it pops is the answer: one entry per family, plus the
    paths it descends. flow_ix_check asserts the answer against a walk at every census. The nodes are embedded in
@@ -4400,8 +4386,8 @@ static void ix_t_remove(FlowIxTreap **root, FlowIxTreap *x) {
 #define IX_Q_TREE   2   /* …for a class treap subtree */
 #define IX_Q_SELF   3   /* …for one member, keyed exactly */
 
-/* Re-file a site in its family's heaps after its treap or its offset moved, and the family on the list after its
-   site heap did. A site's key is the site-relative half of flow_order_key (its offset plus its treap's maximum,
+/* Re-file a site in its family's heaps after its treap or its service moved, and the family on the list after its
+   site heap did. A site's key is the site-relative half of flow_order_key (its optimism at its treap's maximum,
    with that class's turn and age), so it bounds every member standing there. */
 static void flow_ix_site_sync(FlowSite *st) {
     FlowAcct *fam = st->fam;
@@ -4411,15 +4397,15 @@ static void flow_ix_site_sync(FlowSite *st) {
     if (st->ix_bnin) { ix_unlink(&fam->ix_nsites, &st->ix_bn); st->ix_bnin = 0; }
     if (st->ix_members) {
         const FlowIxTreap *t = st->ix_members;
-        double b = site_offset(st), x = b + t->max;
+        double x = site_key(st, t->max);
         ix_set(&st->ix_b, x, x, t->max, t->maxturn, t->floor);
         ix_push(&fam->ix_sites, &st->ix_b); st->ix_bin = 1;
         /* And in the tail heap, keyed on the negated site-relative half over the treap's smallest key, so the
            max-heap's order is the ascending order of the site's least member. */
-        ix_set(&st->ix_bm, -(b + t->min), -(b + t->min), -(b + t->min), 0, 0);
+        ix_set(&st->ix_bm, -site_key(st, t->min), -site_key(st, t->min), -site_key(st, t->min), 0, 0);
         ix_push(&fam->ix_msites, &st->ix_bm);
         if (t->nmax > -INFINITY) {
-            ix_set(&st->ix_bn, b + t->nmax, 0.0, 0.0, 0, 0);
+            ix_set(&st->ix_bn, site_key(st, t->nmax), 0.0, 0.0, 0, 0);
             ix_push(&fam->ix_nsites, &st->ix_bn); st->ix_bnin = 1;
         }
     }
@@ -4586,9 +4572,9 @@ static void ix_q_push(FlowIxNode **q, FlowIxNode *n, double fc, double x, double
 
 /* A treap subtree as a query entry, bounded by its best class: its largest key, that key's least turn, and the
    oldest class at both. */
-static void ix_q_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, double b) {
+static void ix_q_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, const FlowSite *st) {
     FlowIxNode *e = &IX_TREAP_FLOW(n)->ix_qt;
-    ix_q_push(q, e, parent->off, b + n->max, n->max, n->maxturn, n->floor, IX_Q_TREE);
+    ix_q_push(q, e, parent->off, site_key(st, n->max), n->max, n->maxturn, n->floor, IX_Q_TREE);
     DCHECK(!ix_above(e, parent), "a treap subtree's bound in the order's index ranks above the entry it was opened "
                                  "from — a site's key or a parent's aggregates are stale against its treap");
 }
@@ -4640,12 +4626,11 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
         }
         if (e->kind == IX_Q_SITE) {
             FlowSite *st = (FlowSite *)((char *)e - offsetof(FlowSite, ix_q));
-            double b = site_offset(st);
-            DCHECK(st->ix_bin && st->ix_members != NULL && st->ix_b.key == b + st->ix_members->max &&
+            DCHECK(st->ix_bin && st->ix_members != NULL && st->ix_b.key == site_key(st, st->ix_members->max) &&
                        st->ix_b.turn == st->ix_members->maxturn && st->ix_b.seq == st->ix_members->floor,
-                   "a site in the order's index holds no member, or its key is not its offset plus its treap's "
+                   "a site in the order's index holds no member, or its key is not its optimism at its treap's "
                    "best class — flow_ix_site_sync files it from both, so a writer of either skipped the sync");
-            ix_q_push_tree(&q, e, st->ix_members, b);
+            ix_q_push_tree(&q, e, st->ix_members, st);
             for (int side = 0; side < 2; side++) {
                 FlowIxNode *c = side ? st->ix_b.r : st->ix_b.l;
                 FlowIxNode *ce;
@@ -4658,7 +4643,6 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
         } else {
             Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt)), *m = r;
             FlowSite *st = r->at;
-            double b = site_offset(st);
             /* The class through its oldest member that is neither the seed nor the excluded one. */
             if (m == seed || m == exclude) {
                 FlowIxNode *top = r->ix_t.cls, *l = top->l, *rt = top->r;
@@ -4667,13 +4651,14 @@ static FlowIxAnswer flow_ix_query(const Flow *seed, const Flow *exclude) {
             }
             if (m) {
                 FlowIxNode *se = &m->ix_qs;
-                ix_q_push(&q, se, e->off, b + r->ix_t.key, r->ix_t.key, r->ix_t.notch, m->ix_t.seq, IX_Q_SELF);
+                ix_q_push(&q, se, e->off, site_key(st, r->ix_t.key), r->ix_t.key, r->ix_t.notch, m->ix_t.seq,
+                          IX_Q_SELF);
                 a.weighed++;
                 DCHECK(!ix_above(se, e), "a class's own key in the order's index ranks above its subtree's bound — "
                                          "a treap aggregate is stale");
             }
-            if (r->ix_t.l) ix_q_push_tree(&q, e, r->ix_t.l, b);
-            if (r->ix_t.r) ix_q_push_tree(&q, e, r->ix_t.r, b);
+            if (r->ix_t.l) ix_q_push_tree(&q, e, r->ix_t.l, st);
+            if (r->ix_t.r) ix_q_push_tree(&q, e, r->ix_t.r, st);
         }
     }
     if (a.seeded && !a.best) { a.best = (Flow *)seed; a.bw = sw; }
@@ -4708,11 +4693,10 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
         if (e->kind == IX_Q_SITE) {
             FlowSite *st = (FlowSite *)((char *)e - offsetof(FlowSite, ix_q));
             FlowIxTreap *t = st->ix_members;
-            double b = site_offset(st);
-            DCHECK(st->ix_bnin && t != NULL && t->nmax > -INFINITY && st->ix_bn.key == b + t->nmax,
+            DCHECK(st->ix_bnin && t != NULL && t->nmax > -INFINITY && st->ix_bn.key == site_key(st, t->nmax),
                    "a site in the order's never-dispatched heap holds no never-dispatched member, or its key is not "
-                   "its offset plus its treap's `nmax` — flow_ix_site_sync files it from both");
-            ix_q_push(&q, &IX_TREAP_FLOW(t)->ix_qt, e->off, b + t->nmax, 0.0, 0, 0, IX_Q_TREE);
+                   "its optimism at its treap's `nmax` — flow_ix_site_sync files it from both");
+            ix_q_push(&q, &IX_TREAP_FLOW(t)->ix_qt, e->off, site_key(st, t->nmax), 0.0, 0, 0, IX_Q_TREE);
             if (st->ix_bn.l) ix_q_push(&q, &IX_NSITE(st->ix_bn.l)->ix_q, e->off, st->ix_bn.l->key, 0.0, 0, 0,
                                        IX_Q_SITE);
             if (st->ix_bn.r) ix_q_push(&q, &IX_NSITE(st->ix_bn.r)->ix_q, e->off, st->ix_bn.r->key, 0.0, 0, 0,
@@ -4720,15 +4704,14 @@ static int flow_ix_never_at(double bw, int64_t *entries) {
         } else {
             Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt));
             FlowSite *st = r->at;
-            double b = site_offset(st);
             FlowIxTreap *c[2] = { r->ix_t.l, r->ix_t.r };
             if (r->ix_t.nnever > 0) {
                 Flow *m = IX_CLASS_FLOW(r->ix_t.cls);
-                ix_q_push(&q, &m->ix_qs, e->off, b + r->ix_t.key, 0.0, 0, 0, IX_Q_SELF);
+                ix_q_push(&q, &m->ix_qs, e->off, site_key(st, r->ix_t.key), 0.0, 0, 0, IX_Q_SELF);
             }
             for (int i = 0; i < 2; i++)
                 if (c[i] && c[i]->nmax > -INFINITY)
-                    ix_q_push(&q, &IX_TREAP_FLOW(c[i])->ix_qt, e->off, b + c[i]->nmax, 0.0, 0, 0, IX_Q_TREE);
+                    ix_q_push(&q, &IX_TREAP_FLOW(c[i])->ix_qt, e->off, site_key(st, c[i]->nmax), 0.0, 0, 0, IX_Q_TREE);
         }
     }
     return 0;
@@ -4745,9 +4728,9 @@ static void ix_mq_push(FlowIxNode **q, FlowIxNode *n, double lb, uint64_t seq, u
 }
 
 /* A treap subtree as a tail entry, bounded below by its smallest key at its family's coordinate. */
-static void ix_mq_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, double b) {
+static void ix_mq_push_tree(FlowIxNode **q, const FlowIxNode *parent, FlowIxTreap *n, const FlowSite *st) {
     FlowIxNode *e = &IX_TREAP_FLOW(n)->ix_qt;
-    ix_mq_push(q, e, acct_family_coord(IX_TREAP_FLOW(n)->family) + (b + n->min), 0, IX_Q_TREE);
+    ix_mq_push(q, e, acct_family_coord(IX_TREAP_FLOW(n)->family) + site_key(st, n->min), 0, IX_Q_TREE);
     DCHECK(!ix_above(e, parent), "a treap subtree's lower bound in the order's tail query ranks below the entry it "
                                  "was opened from — a site's tail key or a parent's `min` is stale against its "
                                  "treap");
@@ -4783,12 +4766,11 @@ static Flow *flow_ix_tail(const Flow *exclude, int64_t *entries, int64_t *weighe
         if (e->kind == IX_Q_SITE) {
             FlowSite *br = (FlowSite *)((char *)e - offsetof(FlowSite, ix_q));
             FlowIxTreap *t = br->ix_members;
-            double b = site_offset(br);
             FlowAcct *f = IX_TREAP_FLOW(t)->family;
-            DCHECK(br->ix_bin && t != NULL && br->ix_bm.key == -(b + t->min),
-                   "a site in the order's tail heap holds no member, or its key is not its negated offset plus its "
+            DCHECK(br->ix_bin && t != NULL && br->ix_bm.key == -site_key(br, t->min),
+                   "a site in the order's tail heap holds no member, or its key is not its negated optimism at its "
                    "treap's `min` — flow_ix_site_sync files it from both");
-            ix_mq_push_tree(&q, e, t, b);
+            ix_mq_push_tree(&q, e, t, br);
             for (int side = 0; side < 2; side++) {
                 FlowIxNode *c = side ? br->ix_bm.r : br->ix_bm.l;
                 FlowIxNode *ce;
@@ -4800,7 +4782,6 @@ static Flow *flow_ix_tail(const Flow *exclude, int64_t *entries, int64_t *weighe
             }
         } else {
             Flow *r = (Flow *)((char *)e - offsetof(Flow, ix_qt)), *m = r;
-            double b = site_offset(r->at);
             /* The class through its oldest member that is not the excluded one. */
             if (m == exclude) {
                 FlowIxNode *top = r->ix_t.cls, *l = top->l, *rt = top->r;
@@ -4808,13 +4789,14 @@ static Flow *flow_ix_tail(const Flow *exclude, int64_t *entries, int64_t *weighe
                 m = n2 ? IX_CLASS_FLOW(n2) : NULL;
             }
             if (m) {
-                ix_mq_push(&q, &m->ix_qs, acct_family_coord(r->family) + (b + r->ix_t.key), m->ix_t.seq, IX_Q_SELF);
+                ix_mq_push(&q, &m->ix_qs, acct_family_coord(r->family) + site_key(r->at, r->ix_t.key), m->ix_t.seq,
+                           IX_Q_SELF);
                 (*weighed)++;
                 DCHECK(!ix_above(&m->ix_qs, e), "a class's own weight in the order's tail query ranks below its "
                                                 "subtree's bound — a treap `min` is stale");
             }
-            if (r->ix_t.l) ix_mq_push_tree(&q, e, r->ix_t.l, b);
-            if (r->ix_t.r) ix_mq_push_tree(&q, e, r->ix_t.r, b);
+            if (r->ix_t.l) ix_mq_push_tree(&q, e, r->ix_t.l, r->at);
+            if (r->ix_t.r) ix_mq_push_tree(&q, e, r->ix_t.r, r->at);
         }
     }
     return NULL;
@@ -4836,26 +4818,24 @@ static Flow *flow_tail_of(const Flow *exclude, int64_t *entries, int64_t *weighe
 /* The silence at which a flow is guaranteed to rank below any never-run sibling: the crossing the never-starved
    guarantee claims, computed from the flow's own reward rather than a fixed threshold that would fire falsely on a
    very productive flow. Compared against the family's silence, the aging the weight carries.
-   Derived from flow_weight, and redone whenever the formula moves. An unrun candidate (all its terms at zero, as
-   flow_pick_walk's `unrun` tests) weighs its reward plus its distance plus 1.0, at least 1.0, so the pick's maximum
-   is at least 1.0. For the picked flow, with `v` its site's pulls, `D` its fitness distance, `A` its silence notch in
-   quanta and `Q` the price of one quantum (FLOW_AGE_QUANTUM): `val + D + 1/(1+v) − A*Q >= 1`, and `1/(1+v) <= 1`
-   forces `A*Q <= val + D`. `D` is in [0, 1] (FLOW_NONREWARD_MAX's derivation), so `A <= (val + 1) / Q`, and since
-   `A` is a floor of `fam_work / S` with `S` the cooperative quantum, `fam_work < (val + 1) * FLOW_SILENCE_WORK + S`.
-   Neither term is slack: the extra point is the whole range of the fitness comparator doing its job, and `+ S` is
-   the width of the aging's own step, below which no bound can resolve.
-   It catches an edit, not a state: a clamped or capped aging term, an optimism term without a ceiling of 1, a
-   reward that grows with the work it is weighed against, a fitness comparator that is not a fraction, or an
-   optimism term keyed on something a never-run flow does not stand at zero of, each the shape a fix for a
+   Derived from flow_weight, and redone whenever the formula moves. An unrun member (all its terms at zero, as
+   flow_pick_walk's `unrun` tests) weighs its reward plus 1.0, at least 1.0, whatever its fitness, so the pick's
+   maximum is at least 1.0. For the picked flow, with `x` its optimism (in [0, 1] at any fitness, site_optimism), `A`
+   its silence notch in quanta and `Q` the price of one quantum (FLOW_AGE_QUANTUM): `val + x − A*Q >= 1`, and
+   `x <= 1` forces `A*Q <= val`, so `A <= val / Q`, and since `A` is a floor of `fam_work / S` with `S` the
+   cooperative quantum, `fam_work < val * FLOW_SILENCE_WORK + S`. `+ S` is the width of the aging's own step, below
+   which no bound can resolve.
+   It catches an edit, not a state: a clamped or capped aging term, an optimism term without a ceiling of 1 (a
+   fitness added to it rather than weighting its service), a reward that grows with the work it is weighed against,
+   or an optimism term keyed on something a never-run flow does not stand at zero of, each the shape a fix for a
    thrashing scheduler takes. `static inline` so release, where the DCHECK's condition is unevaluated, does not
    warn. */
 static inline int64_t flow_silence_us_to_sink(const Flow *f, double floor) {
     /* The reward is the one flow_queue_weight reads, the family's, the account the silence on the other side is
-       charged to; read off the flow, the bound would be on a quantity the weight does not contain. `+ 1.0` is the
-       fitness fraction, in [0, 1], per the derivation above. `floor` is the untouched
-       member's optimism, 1.0 unless it is a drive of code explored elsewhere or rests on a priced decision; the
-       derivation's `>= 1` becomes `>= floor`, which loosens the bound by `1 - floor`, under one point. */
-    return (int64_t)((acct_family_val(f) + 1.0 + (1.0 - floor)) * (double)FLOW_SILENCE_WORK) + FLOW_SERVICE_WORK;
+       charged to; read off the flow, the bound would be on a quantity the weight does not contain. `floor` is the
+       untouched member's optimism, 1.0 unless it is a drive of code explored elsewhere or rests on a priced decision;
+       the derivation's `>= 1` becomes `>= floor`, which loosens the bound by `1 - floor`, under one point. */
+    return (int64_t)((acct_family_val(f) + (1.0 - floor)) * (double)FLOW_SILENCE_WORK) + FLOW_SERVICE_WORK;
 }
 
 /* Host-owed marks (flow.h says what a mark means and why the flow carries one). A generation rather than a per-flow
@@ -5292,8 +5272,8 @@ static void flow_ix_check(void) {
         DCHECK(m->ix_in, "a runnable member is missing from the order's index — the runnable ask can never name it");
         in++;
         {
-            double w = flow_weight(m), k = flow_index_key(m), b = site_offset(st);
-            double bound = acct_family_coord(m->family) + (b + t->key);
+            double w = flow_weight(m), k = flow_index_key(m);
+            double bound = acct_family_coord(m->family) + site_key(st, t->key);
             DCHECKF(t->key == k && t->notch == flow_service_notch(m) && bound == w,
                     "the order's index holds a stale key or turn for a member, or its composition does not give the "
                     "member's weight (key %.17g, fresh %.17g, turn %lld, fresh %lld, weight %.17g, index %.17g) — a "
@@ -5333,31 +5313,30 @@ static void flow_ix_check(void) {
         {
             const FlowIxTreap *tr = st->ix_members;
             const FlowIxNode *n = &st->ix_b, *nn = &st->ix_bn;
-            double b = site_offset(st);
-            DCHECK(st->fam == m->family && st->ix_bin && n->key == b + tr->max && n->x == n->key &&
+            DCHECK(st->fam == m->family && st->ix_bin && n->key == site_key(st, tr->max) && n->x == n->key &&
                        n->ikey == tr->max && n->turn == tr->maxturn && n->seq == tr->floor &&
                        (!n->l || (n->l->up == n && !ix_above(n->l, n))) &&
                        (!n->r || (n->r->up == n && !ix_above(n->r, n))) &&
                        ix_s(n->l) >= ix_s(n->r) && n->s == ix_s(n->r) + 1 && m->family->ix_listed,
                    "a site of the order's index is in another family's ledger, unfiled, keyed off other than its "
-                   "offset and treap, out of order or leftist shape in its family's heap, or its family is off the "
+                   "optimism and treap, out of order or leftist shape in its family's heap, or its family is off the "
                    "list");
             DCHECK(st->ix_bnin == (tr->nmax > -INFINITY) &&
-                       (!st->ix_bnin || (nn->key == b + tr->nmax &&
+                       (!st->ix_bnin || (nn->key == site_key(st, tr->nmax) &&
                                          (!nn->l || (nn->l->up == nn && !ix_above(nn->l, nn))) &&
                                          (!nn->r || (nn->r->up == nn && !ix_above(nn->r, nn))) &&
                                          ix_s(nn->l) >= ix_s(nn->r) && nn->s == ix_s(nn->r) + 1)),
                    "a site of the order's index stands in its family's never-dispatched heap other than exactly "
-                   "while it holds a never-dispatched member, under a key other than its offset plus `nmax`, or out "
+                   "while it holds a never-dispatched member, under a key other than its optimism at `nmax`, or out "
                    "of order");
             {
                 const FlowIxNode *mn = &st->ix_bm;
-                DCHECK(mn->key == -(b + tr->min) &&
+                DCHECK(mn->key == -site_key(st, tr->min) &&
                            (!mn->l || (mn->l->up == mn && !ix_above(mn->l, mn))) &&
                            (!mn->r || (mn->r->up == mn && !ix_above(mn->r, mn))) &&
                            ix_s(mn->l) >= ix_s(mn->r) && mn->s == ix_s(mn->r) + 1,
                        "a site of the order's index stands in its family's tail heap under a key other than its "
-                       "negated offset plus its treap's `min`, or out of order or leftist shape there");
+                       "negated optimism at its treap's `min`, or out of order or leftist shape there");
             }
         }
     }
@@ -5428,11 +5407,12 @@ static void flow_ix_check(void) {
 /* How much of an order spread the census's own rows can account for: one term of flow_weight per line, each at most
    its reported range, since the range of a sum is at most the sum of the ranges. The bound flow_wfq_census's closing
    assertion holds the observed spread to, written term by term so that a term added to the weight without a range
-   here is visible in one place and a fired assert in the other. `val` and the fitness distance enter positively
-   and contribute max−min (the distance's floor is 0, flow.h, so its maximum is its range). The optimism
-   1/(1+max(served,W*priced)/Q+orphan_seen) is decreasing, so its range is taken at the denominator's ends in that
-   order. The aging enters negatively at FLOW_AGE_QUANTUM per family notch, the census's `svc_fam*` rows exactly; a
-   member's own notch is its turn and no summand. */
+   here is visible in one place and a fired assert in the other. `val` enters positively and contributes max−min.
+   The unweighted optimism 1/(1+max(served,W*priced)/Q+orphan_seen) is decreasing, so its range is taken at the
+   denominator's ends in that order; the fitness D weights the service it divides, which raises a member's reading
+   to at most (1+D) times its unweighted one and so by at most D, and never lowers it, so `dist_max` bounds its part
+   (the distance's floor is 0, flow.h). The aging enters negatively at FLOW_AGE_QUANTUM per family notch, the census's
+   `svc_fam*` rows exactly; a member's own notch is its turn and no summand. */
 static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
          + c->dist_max
