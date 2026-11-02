@@ -3,9 +3,9 @@
 // `extension/bridge.js`'s navigation loader aborts where a `decline` reaches a caller whose refusal arm is
 // `none` (see DOC_REFUSAL_ARMS), so "can THIS caller be declined at all?" decides what is owed at each of its
 // four call sites. `testing/egress_arm_probe.mjs` answers the FIRING question and cannot answer this one: the
-// firing policy is two of six `decline` producers in `extension/lib/safe-fetch.js`, and the DESTRUCTIVE DENY
-// LIST is not a signal arm — `safeFetchFiringRefusal` knows nothing about it. So the question has to be asked
-// of the whole ladder, which means asking `safeFetch`; the census at the end counts every producer.
+// firing policy is two of seven `decline` producers in `extension/lib/safe-fetch.js`, the DESTRUCTIVE DENY
+// LIST is not a signal arm, and `wire-idle` is a sent request this zone stopped waiting on. So the question has
+// to be asked of the whole ladder, which means asking `safeFetch`; the census at the end counts every producer.
 //
 // IT RESTATES NOTHING. The chokepoint is loaded VERBATIM into a realm of its own, exactly as
 // `engine/trusted.mjs` and the arm probe load it, and every verdict below is that file's own answer. A second
@@ -29,7 +29,7 @@
 //   node testing/decline_grade_probe.mjs
 "use strict";
 import { createServer } from 'node:http';
-import { createContext } from 'node:vm';
+import { createContext, runInContext } from 'node:vm';
 import { siteRegistrableDomains } from '../engine/psl.mjs';
 import { loadZone } from '../engine/zone.mjs';
 
@@ -50,7 +50,7 @@ function zone(edge, table) {
   const swRpc = (api, args) => api === 'site.registrableDomains' ? Promise.resolve(siteRegistrableDomains(args))
                                                                  : edge.swRpc(api, args);
   const sandbox = { console, URL, TextDecoder, TextEncoder, Headers, Response, ReadableStream, AbortController,
-                    fetch: edge.fetch, swRpc };
+                    setTimeout, clearTimeout, fetch: edge.fetch, swRpc };
   sandbox.self = sandbox; sandbox.globalThis = sandbox;
   createContext(sandbox);
   loadZone(sandbox);
@@ -153,6 +153,10 @@ const ROUTES = new Map();
 const server = createServer((req, res) => {
   hits.push({ path: new URL(req.url, 'http://fixture').pathname, cookie: req.headers.cookie || null,
               referer: req.headers.referer || null });
+  /* A silent wire: `/silent/head/…` never answers, `/silent/body/…` sends its head and part of a body and then
+     nothing. */
+  if (req.url.startsWith('/silent/head/')) return;
+  if (req.url.startsWith('/silent/body/')) { res.writeHead(200, { 'Content-Type': 'text/html' }); res.write('<p>'); return; }
   const route = ROUTES.get(new URL(req.url, 'http://fixture').pathname);
   if (route) { res.writeHead(route.status, route.headers); res.end(); return; }
   res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -330,6 +334,16 @@ const FIXTURE_ROWS = [
     principal: `${D}/page`, url: `${D}/hop/sc`, want: 'ANSWERED', list: [`${D}/hop/sc`, `${D}/home-sc`],
     stored: ['hopc'], ignored: [],
     check: () => hits.findIndex((h) => h.path === '/home-sc') >= wrote('hopc').before },
+  /* A request that was sent, whose wire then went silent past the zone's WIRE_IDLE_TIMEOUT_MS (lowered to
+     `idleMs` for the row): Chrome waits on it for good, so the zone's end of the wait is a decline at every
+     navigation caller, the ambient seed included. */
+  { label: 'WIRE IDLE, a route seed whose server sends no head (sent, then declined)',
+    url: `${A}/silent/head/1`, want: 'DECLINE', reason: 'wire-idle', idleMs: 300, sent: ['/silent/head/1'] },
+  { label: 'WIRE IDLE, a route seed whose server sends a head and part of a body, then nothing',
+    url: `${A}/silent/body/1`, want: 'DECLINE', reason: 'wire-idle', idleMs: 300, sent: ['/silent/body/1'] },
+  { label: 'WIRE IDLE, the ambient seed (observed, tool) whose server sends no head',
+    url: `${A}/silent/head/2`, want: 'DECLINE', reason: 'wire-idle', idleMs: 300, over: AMBIENT,
+    sent: ['/silent/head/2'] },
   { label: 'COOKIES, an uncredentialed request stores nothing (CONTROL)',
     principal: `${D}/page`, url: `${D}/sc/1`, want: 'ANSWERED',
     over: () => ({ credentialed: false, identity: undefined }), stored: [], ignored: ['host1', 'dom1'] },
@@ -351,8 +365,12 @@ async function run(Z, principal, row) {
     if (Z === zf) Z.identityThirdPartyCookiesStated(row.thirdPartyAllowed === undefined
       ? Z.identityThirdPartyCookiesRestored(null) : row.thirdPartyAllowed);
     if (Z === zf) Z.safeFetchSetSiteSetting('http://127.0.0.1', 'third-party-cookies', row.siteException || null);
-    r = row.ask ? await row.ask(Z, row)
-      : await Z.safeFetch(row.url, await navOpts(Z, row.principal || principal, row.url, over));
+    const idle = runInContext('WIRE_IDLE_TIMEOUT_MS', Z);
+    if (row.idleMs !== undefined) runInContext(`WIRE_IDLE_TIMEOUT_MS = ${row.idleMs}`, Z);
+    try {
+      r = row.ask ? await row.ask(Z, row)
+        : await Z.safeFetch(row.url, await navOpts(Z, row.principal || principal, row.url, over));
+    } finally { runInContext(`WIRE_IDLE_TIMEOUT_MS = ${idle}`, Z); }
     if (r && r.refusal) { got = r.refusal.kind === 'decline' ? 'DECLINE' : 'REFUSE:' + r.refusal.kind;
                           detail = r.refusal.reason; }
     else { got = 'ANSWERED'; detail = 'status ' + (r && r.status); }
@@ -363,7 +381,7 @@ async function run(Z, principal, row) {
   if (got === 'WIRE') wire++;
   if (got === 'DECLINE') {
     decl++;
-    const producer = detail.slice(0, detail.indexOf(':') + 1);
+    const producer = detail.indexOf(':') < 0 ? detail : detail.slice(0, detail.indexOf(':') + 1);
     census.set(producer, (census.get(producer) || 0) + 1);
   }
   const notes = [];
@@ -412,12 +430,13 @@ try {
   for (const row of ROWS) await run(z, PRINCIPAL, row);
   for (const row of FIXTURE_ROWS) await run(zf, `${A}/page`, row);
 } finally {
+  server.closeAllConnections();
   server.close();
 }
 console.log('');
 /* The decline producers safe-fetch.js holds, each counted by the token it writes. */
 const PRODUCERS = ['blocked-method:', 'blocked-stream-body-gated:', 'blocked-signal:', 'blocked-destructive:',
-                   'blocked-destructive-redirect:', 'blocked-signal-redirect:'];
+                   'blocked-destructive-redirect:', 'blocked-signal-redirect:', 'wire-idle'];
 for (const p of PRODUCERS) console.log(`  census ${p.padEnd(30)} ${census.get(p) || 0}`);
 for (const p of census.keys()) if (!PRODUCERS.includes(p)) { console.log(`  census UNLISTED ${p}`); bad++; }
 const unseen = PRODUCERS.filter((p) => !census.has(p));
