@@ -1145,10 +1145,11 @@ static long g_pressure_collects;
 /* Compositions between steps (engine_note_rest_composition), the attempts they took, and the most one took. */
 static long g_rest_compositions, g_rest_compose_attempts, g_rest_compose_attempts_max;
 static uint64_t g_pressure_sold_at_collections = UINT64_MAX;
-/* The members pressure's next batch may sell before it owes a collection, and whether the last batch sold all it
-   could (engine_relocate_under_pressure). */
-static long g_pressure_batch = 1;
-static bool g_pressure_batch_full;
+/* The last batch of pressure's sales (engine_relocate_under_pressure): how many members it sold, the live bytes
+   before it, and its yield, the bytes per member it and its collection gave back (0 before one is measured). */
+static long g_pressure_batch, g_pressure_last;
+static uint64_t g_pressure_batch_live;
+static uint64_t g_pressure_yield;
 
 int engine_take_paged_owed(void) {
     /* The credit counts entries the host was shown and has not answered (engine_reclaim_tail), and this is its
@@ -11874,71 +11875,74 @@ static long engine_shed_layout_jobs(uint64_t target) {
     return shed;
 }
 
-/* RAM pressure relocates the cold tail (engine.h): sell at rest while the allocator's footprint stands above the
-   share of what the limit leaves the heap, so the frontier gives memory back before an allocation that does not
-   ask the refusal edge meets the wall. It ends at the share or at the frontier's floor (engine_reclaim_at_rest's
-   0), never at a count. A sale frees chunks inside the footprint and the footprint does not give them back
-   (dlmalloc never trims it; glibc trims only its top), so it cannot be brought back under a line it crossed: what
-   a sale buys is free chunks later allocations reuse. So the footprint's growth past the line, or past the mark
-   where pressure last made room, opens an episode that takes live bytes down by that growth, and the mark moves
-   to the footprint. If the freed chunks cannot be reused the footprint grows again and the next step sells again.
-   A collection comes between batches of sales: what a sale gives back is mostly cycles (a child realm is one, held
-   by its own intrinsics), which only the cycle collector frees, and the allocation threshold that would owe one may
-   stand above the share. So pressure sells a batch, owes a collection and returns; the steps that follow are the
-   collector's (engine_collect_slice), and pressure reads the live bytes again only once it has finished. The batch
-   is the scheduler's rest granularity, in members: it doubles each time a full batch and its collection left the
-   episode unmet, and it starts again at one member when an episode closes. */
+/* RAM pressure relocates the cold tail (engine.h): at rest, live bytes above the share of what the limit leaves the
+   heap are given back, re-derivable layout jobs first (engine_shed_layout_jobs), then members sold from the tail.
+   The footprint never shrinks (dlmalloc never trims; glibc trims only its top), so its growth past the line, or past
+   the mark where pressure last made room, also opens an episode that takes live bytes down by that growth. A sale's
+   bytes are mostly cycles only the collector frees, so a batch of sales owes a collection and pressure reads the
+   live bytes again only once it has finished. A batch is sized in bytes: the excess over the last batch's measured
+   yield per member, since what a sold member's frame chain and private objects hold is counted by no census row.
+   With no yield to size it (the first batch, or one whose collection gave nothing back) it is twice the last. */
 static void engine_relocate_under_pressure(JSRuntime *rt) {
     uint64_t line, ref, fp, live;
-    long sold = 0;
+    long sold = 0, want;
     bool at_floor = false;
     JSGCCycleStats st;
 
     engine_ram_limit_read();
     if (g_ram_limit == 0) return;
+    JS_GCCycleStats(rt, &st);
+    live = (uint64_t)c_alloc_live();
+    /* A batch's collection has finished: what it gave back per member, read before this call's sheds. */
+    if (g_pressure_batch > 0 && st.collections != g_pressure_sold_at_collections) {
+        g_pressure_yield = g_pressure_batch_live > live ? (g_pressure_batch_live - live) / (uint64_t)g_pressure_batch
+                                                        : 0;
+        g_pressure_last = g_pressure_batch;
+        g_pressure_batch = 0;
+    }
     line = (g_ram_limit - g_ram_nonheap) / 1000 * g_ram_share;
     fp = (uint64_t)c_alloc_footprint();
     ref = line > g_ram_fp_mark ? line : g_ram_fp_mark;
     if (fp > ref) {
-        uint64_t t;
-        live = (uint64_t)c_alloc_live();
-        t = live > fp - ref ? live - (fp - ref) : 0;
+        uint64_t t = live > fp - ref ? live - (fp - ref) : 0;
         if (t < g_pressure_target) g_pressure_target = t;
         g_pressure_frag = fp > live ? fp - live : 0;
         g_ram_fp_mark = fp;
     }
+    if (live > line && line < g_pressure_target) g_pressure_target = line;
     /* What is re-derivable goes first, and needs no collection: a job's records are the C heap's own blocks. */
-    if ((uint64_t)c_alloc_live() > g_pressure_target) engine_shed_layout_jobs(g_pressure_target);
-    if ((uint64_t)c_alloc_live() <= g_pressure_target) {
+    if (live > g_pressure_target) engine_shed_layout_jobs(g_pressure_target);
+    live = (uint64_t)c_alloc_live();
+    if (live <= g_pressure_target) {
         /* No episode, or the open one is met. */
         g_pressure_target = UINT64_MAX;
-        g_pressure_batch = 1;
-        g_pressure_batch_full = false;
+        g_pressure_last = 0;
         return;
     }
-    JS_GCCycleStats(rt, &st);
-    if (st.collections == g_pressure_sold_at_collections || g_pressure_sold_at_collections == UINT64_MAX) {
+    if (g_pressure_batch > 0 || g_pressure_sold_at_collections == UINT64_MAX) {
         /* The session's first pressure, or a batch whose collection has not finished: collect before selling. */
-        g_pressure_sold_at_collections = st.collections;
-        JS_GCOwe(rt);
-        g_pressure_collects++;
+        if (g_pressure_sold_at_collections == UINT64_MAX) {
+            g_pressure_sold_at_collections = st.collections;
+            JS_GCOwe(rt);
+            g_pressure_collects++;
+        }
         return;
     }
-    if (g_pressure_batch_full)
-        g_pressure_batch *= 2;
-    while (sold < g_pressure_batch && (uint64_t)c_alloc_live() > g_pressure_target) {
+    want = g_pressure_yield > 0 ? (long)((live - g_pressure_target + g_pressure_yield - 1) / g_pressure_yield)
+                                : (g_pressure_last > 0 ? 2 * g_pressure_last : 1);
+    g_pressure_batch_live = live;
+    while (sold < want) {
         if (!engine_reclaim_at_rest()) { at_floor = true; break; }
         sold++;
     }
     g_pressure_sold += sold;
-    g_pressure_batch_full = sold == g_pressure_batch;
     if (at_floor) {
         /* The frontier's floor closes the episode: nothing is left to sell. */
         g_pressure_target = UINT64_MAX;
-        g_pressure_batch = 1;
-        g_pressure_batch_full = false;
+        g_pressure_last = 0;
     }
     if (sold == 0) return;
+    g_pressure_batch = sold;
     g_pressure_sold_at_collections = st.collections;
     JS_GCOwe(rt);
     g_pressure_collects++;
@@ -12197,8 +12201,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        engine_sched_step pays it (engine_collect_slice). */
     JS_SetGCDriven(JS_GetRuntime(ctx), true);
     g_pressure_sold_at_collections = UINT64_MAX;   /* this session's first pressure collects before it sells */
-    g_pressure_batch = 1;
-    g_pressure_batch_full = false;
+    g_pressure_batch = g_pressure_last = 0;
+    g_pressure_yield = 0;
 }
 
 void engine_host_baseline(void) {
