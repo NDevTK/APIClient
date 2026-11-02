@@ -6567,9 +6567,9 @@ function report(stages, findings) {
   if (vehicle.length)
     console.log(vbad
       ? `[build] VEHICLE — ${censusText(vpart, vehicle)}; worst: ${vbad.label} [${vbad.kind.tag}] — ` +
-        `${vbad.verdict}\n[build]   not summed into the verdict: the vehicle's slice is wall-denominated, so ` +
-        `how far its run got is a fact about the box and the hour; its disagreement with the native run is ` +
-        `the \`vehicle (<document>)\` stages', which do decide.`
+        `${vbad.verdict}\n[build]   not summed into the verdict: the vehicle is the shipped program measured ` +
+        `on another host; its disagreement with the native run is the \`vehicle (<document>)\` stages', ` +
+        `which do decide.`
       : `[build] VEHICLE — ${censusText(vpart, vehicle)}. It is summed into no verdict either way.`);
   /* AND THE LINES THAT ARE NOT STAGES AT ALL. They decide nothing and are counted in nothing; they are here
      rather than at their own push site because what a reader pastes is the tail of this run. */
@@ -8979,8 +8979,9 @@ const WASM_SMOKE = SMOKE_LINK.code
   : await runDocuments("smoke test", wasmNode(), [join(OUT, "qjs.js")],
                "the @H row printed 0 above names the statement the fixture document makes and this run did " +
                "not answer — engine/host/test_forced.c's probe table is where that row is declared. This is " +
-               "the VEHICLE's run: its slice is wall-denominated, so how far it got is a fact about the box " +
-               "and the hour, and what it is entitled to state is a DISAGREEMENT with the native run above.");
+               "the VEHICLE's run: its slice is work as the native run's is, so where it got is a function of " +
+               "the paths up to the CPU budget, and what it is entitled to state is a DISAGREEMENT with the " +
+               "native run above.");
 const WASM_HOST = NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE;
 STAGES.push(...WASM_SMOKE.map((s) => onHost(s, WASM_HOST)));
 FINDINGS.push(documentRowsText(WASM_HOST.tag, WASM_SMOKE));
@@ -9003,7 +9004,7 @@ if (NATIVE_BUILT.bin !== null) {
    both programs would answer "compiled" for a marker only the OTHER one holds, and a rung excused on that
    ground is §A-CONTROL-ARMS-ONLY-ON-A-SITE's unarmed probe deciding a verdict. One (log, artifact) pair each,
    on the host whose run it is about — the native reading DECIDES and the vehicle's is a VEHICLE fact, exactly
-   as the two smoke stages themselves are pushed, so a wall-denominated run's reach is never summed into the
+   as the two smoke stages themselves are pushed, so the vehicle run's reach is never summed into the
    verdict. THE ARTIFACT IS REQUIRED RATHER THAN OPTIONAL HERE: without it the reader prints its observations
    and UNSCORES every one of them, which would put a stage on this list that cannot fail.
    WHAT IT WILL NOT DO IS GRADE A SHORT RUN. It asserts only the two things a budget and a shorter document
