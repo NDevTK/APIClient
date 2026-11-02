@@ -10,8 +10,8 @@
    integer count, and `auto-fit` beside `auto-fill` in a 500px box with 20px gaps (four 100px repetitions, of
    which `auto-fit` collapses the two empty ones), both centred; and §10.5's content alignment: `space-between`
    (with a spanning item's area widened by the spacing), `space-evenly` and `end`. Chrome 155.0.8059.84 gives
-   every number the rows expect for this markup. It ends with TF_CANVAS_INK, which test_forced.c defines before
-   including it. */
+   every number of t1-t14. t15 and t16 are rows under a 100px `min-height` (§11.7's `1fr` takes 80px, §11.8's
+   two `auto` rows split 70px), read from the spec. It ends with TF_CANVAS_INK. */
 #ifndef ENGINE_HOST_FIXTURE_GRIDSIZING_H
 #define ENGINE_HOST_FIXTURE_GRIDSIZING_H
 #ifndef TF_CANVAS_INK
@@ -63,6 +63,10 @@ static const char HTML_GRIDSIZING[] =
     "<div id=t14a></div><div></div></div>"
     "<div><span id=t7 style=\"display:inline-grid;grid-template-columns:min-content 30px\"><div>"
     "<i style=\"display:inline-block;width:25px;height:5px\"></i></div><div></div></span></div>"
+    "<div id=t15 style=\"display:grid;grid-template-rows:auto 1fr;min-height:100px\"><div style=\"height:20px\">"
+    "</div><div id=t15b></div></div>"
+    "<div id=t16 style=\"display:grid;grid-template-rows:auto auto;min-height:100px\"><div style=\"height:20px\">"
+    "</div><div id=t16b style=\"height:10px\"></div></div>"
     "<script>"
     "function R(id){return document.getElementById(id).getBoundingClientRect();}"
     "var q='t1b='+(R('t1b').left-R('t1').left)+'&t1c='+(R('t1c').left-R('t1').left)"
@@ -76,7 +80,8 @@ static const char HTML_GRIDSIZING[] =
     "+'&t11a='+(R('t11a').left-R('t11').left)+'&t11b='+(R('t11b').left-R('t11').left)"
     "+'&t12b='+(R('t12b').left-R('t12').left)+'&t12c='+(R('t12c').left-R('t12').left)"
     "+'&t12s='+R('t12s').width+'&t13a='+(R('t13a').left-R('t13').left)"
-    "+'&t13b='+(R('t13b').left-R('t13').left)+'&t14a='+(R('t14a').left-R('t14').left);"
+    "+'&t13b='+(R('t13b').left-R('t13').left)+'&t14a='+(R('t14a').left-R('t14').left)"
+    "+'&t15b='+R('t15b').height+'&t16b='+(R('t16b').top-R('t16').top);"
     "fetch('/api/gridsizing?'+q);"
     "</script>"
     TF_CANVAS_INK

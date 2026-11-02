@@ -341,6 +341,8 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, boo
     g->contribs = NULL;
     g->ncontribs = g->contribs_cap = 0;
     g->avail = css_px(0.0);
+    g->min_definite = false;
+    g->min_avail = css_px(0.0);
     grid_placement_run(container, constraint != GRID_SIZING_AVAILABLE, &g->placement);
     /* §11.2 "Track Sizing Terminology"'s available grid space: "If the grid container's size is definite, then
        use the size of its content box." A container whose size depends on its tracks is sized under the
@@ -350,10 +352,20 @@ void grid_axis_sizing_begin(GridAxisSizing *g, lxb_dom_element_t *container, boo
             CssLength m = css_computed_length(container, "min-height");
 
             g->constraint = GRID_SIZING_MAX_CONTENT;
-            if (!(css_length_is_keyword(m, CSS_KEYWORD_AUTO) || (m.kind == CSS_LENGTH_ABSOLUTE && m.px.px == 0.0)))
-                DFAILF("%s is a grid container with an indefinite height and a `min-height`, which css-grid-1 "
-                       "§11.7 and §11.8 use for the free space. BUILD that free space",
+            /* A `min-height` length is definite; its inner size is css-sizing-3 §3.3's content box of it. */
+            if (m.kind == CSS_LENGTH_ABSOLUTE && m.px.px > 0.0) {
+                CssPx surround = used_value_border_edge_from_content_px(container, css_px(0.0), true);
+
+                g->min_definite = true;
+                g->min_avail = css_computed_keyword_is(container, "box-sizing", CSS_KEYWORD_BORDER_BOX)
+                                   ? css_px_max(css_px_sub(m.px, surround), css_px(0.0))
+                                   : m.px;
+            } else if (!(css_length_is_keyword(m, CSS_KEYWORD_AUTO) || m.kind == CSS_LENGTH_ABSOLUTE)) {
+                DFAILF("%s is a grid container with an indefinite height and a percentage or `calc()` "
+                       "`min-height`, which css-grid-1 §11.7 and §11.8 use for the free space where it is "
+                       "definite. BUILD its definiteness (CSS 2.1 §10.7 over the containing block's height)",
                        box_subject(container, buf, sizeof buf));
+            }
         } else {
             g->avail = used_value_content_px(container, vertical);
         }
@@ -426,6 +438,21 @@ static CssPx gt_sum(const GridAxisSizing *g)
     size_t i;
 
     for (i = 0; i < g->ntracks; i++) s = css_px_add(s, g->tracks[i].base);
+    return css_px_add(s, gt_gutters(g, 0, g->ntracks));
+}
+
+/* The grid's size were every flexible track's base size raised to `fraction` times its flex factor (§11.7's
+   last step), for §11.7's comparison against the container's min-height. */
+static CssPx gt_sum_at_fraction(const GridAxisSizing *g, CssPx fraction)
+{
+    CssPx s = css_px(0.0);
+    size_t i;
+
+    for (i = 0; i < g->ntracks; i++) {
+        const GridTrack *t = &g->tracks[i];
+
+        s = css_px_add(s, gt_flexible(t) ? css_px_max(t->base, css_px_scale(fraction, t->flex)) : t->base);
+    }
     return css_px_add(s, gt_gutters(g, 0, g->ntracks));
 }
 
@@ -878,6 +905,13 @@ static void gt_size(GridAxisSizing *g)
                 if (gt_crosses_flex(g, c))
                     fraction = css_px_max(fraction, gt_find_fr(g, c->start, c->start + c->span, c->max_content));
             }
+            /* "If using this flex fraction would cause the grid to be smaller than the grid container's
+               min-width/height …, then redo this step, treating the free space as definite and the available
+               grid space as equal to the grid container's inner size when it's sized to its min-width/height." */
+            if (g->min_definite && gt_sum_at_fraction(g, fraction).px < g->min_avail.px)
+                fraction = css_px_sub(g->min_avail, gt_sum(g)).px > 0.0
+                               ? gt_find_fr(g, 0, g->ntracks, g->min_avail)
+                               : css_px(0.0);
         }
         /* "For each flexible track, if the product of the used flex fraction and the track's flex factor is
            greater than the track's base size, set its base size to that product." */
@@ -890,11 +924,13 @@ static void gt_size(GridAxisSizing *g)
     }
     /* §11.8 "Stretch auto Tracks": "When the content-distribution property of the grid container is normal or
        stretch in this axis, this step expands tracks that have an auto max track sizing function by dividing any
-       remaining positive, definite free space equally amongst them." */
+       remaining positive, definite free space equally amongst them. If the free space is indefinite, but the grid
+       container has a definite min-width/height, use that size to calculate the free space for this step
+       instead." */
     content = css_computed_align(g->container, g->vertical ? "align-content" : "justify-content").value;
-    if (g->constraint == GRID_SIZING_AVAILABLE && nauto > 0 &&
+    if ((g->constraint == GRID_SIZING_AVAILABLE || g->min_definite) && nauto > 0 &&
         (content == CSS_KEYWORD_NORMAL || content == CSS_KEYWORD_STRETCH)) {
-        free_space = css_px_sub(g->avail, gt_sum(g));
+        free_space = css_px_sub(g->min_definite ? g->min_avail : g->avail, gt_sum(g));
         if (free_space.px > 0.0) {
             CssPx share = css_px_scale(free_space, 1.0 / (double)nauto);
 

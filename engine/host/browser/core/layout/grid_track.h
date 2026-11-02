@@ -82,6 +82,10 @@ typedef struct {
     GridContribution    *contribs;
     size_t               ncontribs, contribs_cap;
     CssPx                avail;
+    /* A row run of an indefinite height with a definite `min-height`: the inner height at that minimum, which
+       css-grid-1 §11.7 and §11.8 size against where the free space is indefinite. */
+    bool                 min_definite;
+    CssPx                min_avail;
     CssPx                gap;   /* the used gutter between two adjacent tracks (css-grid-1 §10.1) */
     unsigned             outer_ctx;
 } GridAxisSizing;

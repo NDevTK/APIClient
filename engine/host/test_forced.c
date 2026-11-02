@@ -15729,6 +15729,10 @@ TF_UNIT void probes_gridsizing(const char *js, Probe *tab, int *n) {
              "css-grid-1 §10.5: `space-evenly` does not put the second column at 150px");
     fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t14a", "200"),
              "css-grid-1 §10.5: `end` does not put the first of two 50px columns at 200px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t15b", "80"),
+             "css-grid-1 §11.7: a `1fr` row of an auto-height grid does not fill its 100px `min-height` beside 20px");
+    fold_row(&gs_tt, &gs_why, param_value_is(js, "/api/gridsizing", "t16b", "55"),
+             "css-grid-1 §11.8: two `auto` rows do not split the 70px a 100px `min-height` leaves (the second at 55px)");
     const Probe rows[] = {
         { "grid-track-sizing-functions", gs_tt, "/api/gridsizing", SESS_EXPLORE, gs_why },
     };
