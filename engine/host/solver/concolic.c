@@ -7781,15 +7781,18 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n)
     /* JS_PROP_NO_EXOTIC because this is the class's own materialisation, which must not ask this class what it
        reports about a member it is making. The attributes are those concolic_exotic_get_own reports, as §6.1.7.3
        Invariants of the Essential Internal Methods requires of a data property that "may return different
-       values over time". */
-    r = JS_DefinePropertyValue(ctx, record, atom, val, JS_PROP_C_W_E | JS_PROP_NO_EXOTIC);
+       values over time".
+       JS_PROP_MATERIALIZE because the member is not added here, only named: in the world this flow decided, the
+       record held it from the start. ECMAScript §7.3.15 SetIntegrityLevel ( obj, level ) runs
+       obj.[[PreventExtensions]]() at step 1 and obj.[[OwnPropertyKeys]]() at step 3, so `Object.freeze(r)`
+       enumerates a record that is already non-extensible, and its members must be named for steps 4-5 to fix. */
+    r = JS_DefinePropertyValue(ctx, record, atom, val, JS_PROP_C_W_E | JS_PROP_NO_EXOTIC | JS_PROP_MATERIALIZE);
     JS_FreeAtom(ctx, atom);
     if (r < 0)
         return -1;
     DCHECK(r == 1,
-           "materialising an unknown member was refused on a record that did not already hold it — the only "
-           "ordinary refusal is a non-extensible object, and this record's own enumeration has just decided a "
-           "member INTO it, so the two answers are about one record and disagree");
+           "materialising an unknown member was refused on a record that did not already hold it — "
+           "JS_PROP_MATERIALIZE answers [[Extensible]], and no other refusal applies to a name the record lacks");
     return 1;
 }
 

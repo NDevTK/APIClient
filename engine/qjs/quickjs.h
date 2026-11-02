@@ -519,6 +519,10 @@ static inline bool JS_VALUE_IS_NAN(JSValue v)
 #define JS_PROP_NO_EXOTIC        (1 << 17) /* internal use */
 #define JS_PROP_DEFINE_PROPERTY  (1 << 18) /* internal use */
 #define JS_PROP_REFLECT_DEFINE_PROPERTY (1 << 19) /* internal use */
+/* internal use, with JS_PROP_NO_EXOTIC: the define names a member an exotic object already holds in the running
+   world and has not named yet (an unknown record's member, JSConcolicHooks.own_key_mint), so [[Extensible]]
+   does not refuse it — a record made non-extensible before its first enumeration held the member already. */
+#define JS_PROP_MATERIALIZE      (1 << 20)
 
 #ifndef JS_DEFAULT_STACK_SIZE
 #define JS_DEFAULT_STACK_SIZE (1024 * 1024)

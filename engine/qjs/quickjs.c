@@ -18479,6 +18479,9 @@ static int JS_CreateProperty(JSContext *ctx, JSObject *p,
     JSProperty *pr;
     int ret, prop_flags;
 
+    DCHECK(!(flags & JS_PROP_MATERIALIZE) || (flags & JS_PROP_NO_EXOTIC),
+           "a member was materialised through the exotic's own [[DefineOwnProperty]] — materialising is the "
+           "class's own act and carries JS_PROP_NO_EXOTIC, so the class is never asked about a member it makes");
     /* forced-exec TIME-TRAVEL: the CREATE half of [[DefineOwnProperty]] has a SECOND entry -- 10.1.9.2 step
        3.d.i's CreateDataProperty, which JS_SetPropertyInternal2 performs on the RECEIVER. That function captures
        at its head, and what it names there is the object it WALKED: `Reflect.set(o, "x", v, receiver)` walks `o`
@@ -18568,7 +18571,7 @@ static int JS_CreateProperty(JSContext *ctx, JSObject *p,
         }
     }
 
-    if (!p->extensible) {
+    if (!p->extensible && !(flags & JS_PROP_MATERIALIZE)) {
     not_extensible:
         return JS_ThrowTypeErrorOrFalse(ctx, flags, "object is not extensible");
     }
