@@ -86,12 +86,12 @@ typedef enum {
    (JS_RunningCallPathHash). `frames` 0 is a write at host time, which no page frame names. */
 typedef struct { int frames; uint64_t path; } WriteSite;
 
-/* One sink's search, keyed by (injection identity, sink class). Its members are three accounting units. Report
-   counters (`reached`, `escaped`, `substituted`, `sink_strings`, `ends`, the runway fields) move no WFQ
-   ordering. The ledger (`reach_credited`, `escape_credited` and the `surv_run` ratchet) is paid once per
-   search per distance. The comparator that orders a search's live candidates lives on the Flow (flow.h's
-   `cand_replay`, `cand_surv`, `cand_rung`), because a ledger pays nobody twice for a rung and so cannot order
-   candidates standing at different distances. Every member whose blank is not 0 is named at sink_search. */
+/* One sink's search, keyed by (injection identity, sink class). Report counters (`reached`, `escaped`,
+   `substituted`, `sink_strings`, `ends`, the runway fields and the `surv_run` ratchet) move no WFQ ordering. A
+   rung is no ledger entry: it names no identity the product can hold, so "value is novelty against the product"
+   pays it nothing, and only the fire is paid (record_sink). The comparator that orders candidates by distance
+   lives on the Flow (flow.h's `cand_replay`, `cand_surv`, `cand_rung`). Every member whose blank is not 0 is
+   named at sink_search. */
 typedef struct {
     /* `src` is the injection identity a candidate is substituted at. `root` is the delivery provenance, read off
        the value at detection (concolic_root_c) and never re-derived from `src`: the registry matches declared
@@ -186,14 +186,8 @@ typedef struct {
        the survival fraction (filter_survived). It counts strings, not arrivals; `reached` counts a breakout
        arriving there. */
     int sink_strings;
-    /* The ledger's latch for the arrival rung, separate from the report counter `reached`. Every arrival is
-       counted, including one by a spelling the delivery table has since contradicted, but only a deliverable
-       one pays the crossing: the rung is a distance to firing, and a contradicted candidate made no progress
-       toward one. */
-    int reach_credited;
     /* The best survival fraction any candidate of this search has reached, held as its two halves so the report
-       can say "11 of 14 bytes". A ratchet: each improvement pays exactly the fraction it added, so the rung is
-       worth at most 1.0 over the search's life and needs no minimum run length. 0/0 is no observation yet. */
+       can say "11 of 14 bytes". A ratchet over the search's life; 0/0 is no observation yet. */
     int surv_run, surv_len;
     /* Where that run is: `surv_at` is its offset into the candidate (so the rest is the segment that died) and
        `surv_out` its offset in the string the sink was handed. A run at offset 0 is a payload whose tail the page
@@ -204,11 +198,6 @@ typedef struct {
     /* Report counter: arrivals at an executable position (escape_reached), contradicted spellings included. It
        separates bytes that arrived from bytes that got out. */
     int escaped;
-    /* The ledger's latch for the escape rung, for `reach_credited`'s reason. A latch read off `escaped` would
-       let a contradicted escape spend the crossing the spelling that can fire needs. The count stays outside
-       the deliverability gate so the report still says a contradicted spelling reached an executable
-       position. */
-    int escape_credited;
     /* This search's candidates in push order, and `seeded`, the cursor past which they are not yet flows. A
        derived sink learns its breakouts after detection (a probe run reads them off the sink's own parse), so
        the list grows after seeding; each drain seeds everything past the cursor, so a late breakout is picked
@@ -1660,18 +1649,12 @@ static void breakout_arrived(Cand *e) {
            "bytes got here, so they entered the program, and concolic_deliver reports every entry to "
            "solve_observe_substitution; the parked card would state that these runs never reached their own "
            "source read");
-    /* The arrival rung, written to both quantities under one question: has this search's own measurement left
-       these bytes able to arrive? Inside it the comparator is written unconditionally (flow_observe_rung, so
-       every candidate that reaches the sink outranks those of its search that have not) and the ledger is
-       latched, paid at the search's 0->1 crossing only, which is what "new" value means; later arrivals still
-       derive, fire and count. A spelling the table has since contradicted is refused both, because the rung is
-       a distance to firing; this prunes a contradicted arm and is no bound, since the table narrows only on a
-       positive observation. A crossing already paid to a then-viable candidate is not taken back: it paid for
-       an observation that was true when made. */
-    if (solve_delivered_ok(&e->deliv, f->cand_payload)) {
-        flow_observe_rung(f, FLOW_RUNG_ARRIVED);
-        if (e->reach_credited == 0) { e->reach_credited = 1; flow_credit_emit(1.0); }
-    }
+    /* The arrival rung, written to the comparator only while this search's own measurement leaves these bytes
+       able to arrive (flow_observe_rung, so every candidate that reaches the sink outranks those of its search
+       that have not). A spelling the table has since contradicted is refused it, because the rung is a distance
+       to firing; this prunes a contradicted arm and is no bound, since the table narrows only on a positive
+       observation. The report counts every arrival. */
+    if (solve_delivered_ok(&e->deliv, f->cand_payload)) flow_observe_rung(f, FLOW_RUNG_ARRIVED);
     e->reached++;
 }
 
@@ -1679,14 +1662,12 @@ static void breakout_arrived(Cand *e) {
    admitted receives during a candidate run, because the question is how much of the payload is still alive at
    this search's own sink. Below it, FLOW_RUNG_DELIVERED is observed at the source read (concolic.c), so rung 0 is
    bytes that never entered the program, a delivered flow at `cand_surv == 0` is bytes that survived to no
-   sink, and a nonzero fraction is this measurement. The search-level pair is a ratchet: an observation that
-   does not beat the best pays nothing and one that does pays the fraction it added, so the rung is worth at
-   most 1.0 per search. CHECKs, because the pointers are dereferenced below. */
+   sink, and a nonzero fraction is this measurement. The search-level pair is the report's ratchet over the
+   best observation. CHECKs, because the pointers are dereferenced below. */
 static void filter_survived(const char *out) {
     Flow *f = flow_running();
     FilterObs o;
     Cand *e;
-    double had, now;
 
     CHECK(f != NULL && f->cand_src != NULL && f->cand_payload != NULL && f->fire.kind == FIRE_SINK,
           "solve: a string reached a code-execution sink inside a candidate run while the running flow holds "
@@ -1728,10 +1709,9 @@ static void filter_survived(const char *out) {
 
     solve_filter_survival(out, f->cand_payload, &o);
     DCHECK(o.len > 0, "a candidate flow carries an empty payload — see solve_filter.c's own assert");
-    /* The fitness, written on this flow before the search-level ratchet, as a reading rather than a payment. The
-       ratchet is the ledger and pays for one distance once, so it cannot order two candidates of one search;
-       the comparator can. Taken unconditionally, above the zero return and the improvement test: a run that
-       ties the search's best is no news to the ledger and all the news to the comparator. */
+    /* The fitness, written on this flow before the search-level ratchet, as a reading. Taken unconditionally,
+       above the zero return and the improvement test: a run that ties the search's best is no news to the report
+       and all the news to the comparator. */
     flow_observe_survival(f, (double)o.run / (double)o.len);
     if (o.run == 0) return;                  /* none of this candidate is in this string: an observation of 0 */
     /* Which candidate this is, recorded before the ratchet erases the distinction. No row (idx < 0) is a
@@ -1751,12 +1731,9 @@ static void filter_survived(const char *out) {
     /* Cross-multiplied so the comparison is exact rather than a float one, and so the zero state — no
        observation yet, held as 0/0 — is the one case that falls through rather than comparing against itself. */
     if (e->surv_len != 0 && (long)o.run * e->surv_len <= (long)e->surv_run * o.len) return;
-    now = (double)o.run / (double)o.len;
-    had = e->surv_len ? (double)e->surv_run / (double)e->surv_len : 0.0;
-    DCHECK(now > had,
-           "the filter-survival ratchet is about to pay for ground it has already paid for — the comparison "
-           "one line up is the whole of what makes this rung worth at most one point, so a credit that is not "
-           "an improvement is a value leak that reorders the frontier on noise");
+    DCHECK((double)o.run / (double)o.len > (e->surv_len ? (double)e->surv_run / (double)e->surv_len : 0.0),
+           "the filter-survival ratchet is about to record a run that does not improve on its best — the "
+           "comparison one line up is the whole of the ratchet");
     e->surv_run = o.run; e->surv_len = o.len;
     /* The offsets of the run just recorded, in the same branch, because length and position are one observation
        (solve_filter_survival reports them together). solve_filter.c checks them against this observation's
@@ -1768,7 +1745,6 @@ static void filter_survived(const char *out) {
            "measured, or recorded a run with no position — the offset is into the candidate and the run is a "
            "substring of it by construction, so a segment running past its own end names bytes of some other "
            "string, and the mutation these offsets exist to aim would be aimed at them");
-    flow_credit_emit(now - had);
 }
 
 /* The context-escaped rung. Between arriving (`reached`) and firing (the marker calls, which only re-execution
@@ -1777,14 +1753,12 @@ static void filter_survived(const char *out) {
    begins an input element; the markup sink reads the marker out of an auto-firing handler in the real parse
    (HTML §8.1.1 Introduction lists "event handler content attributes" among the mechanisms that "cause
    author-provided executable code to run"); the URL sink asks whether the delivered address is still a
-   javascript: URL. The ledger is paid at the search's 0->1 crossing and the comparator once per flow, as in
-   breakout_arrived. The delivery table is asked here too; since it only narrows, a spelling deliverable here
-   was deliverable at its arrival, which keeps flow_observe_rung's ordering assert true. */
+   javascript: URL. The comparator is written once per flow, as in breakout_arrived. The delivery table is asked
+   here too; since it only narrows, a spelling deliverable here was deliverable at its arrival, which keeps
+   flow_observe_rung's ordering assert true. */
 static void escape_reached(Cand *e) {
     /* The running flow, for breakout_arrived's reason; CHECK because it is dereferenced below. */
     Flow *f = flow_running();
-    /* Asked once and held, so the gate and the assert after it see the same observation. */
-    int deliverable;
 
     DCHECK(e != NULL, "a context escape was recorded against no search — the caller resolved one to record the "
                       "arrival that must precede it");
@@ -1796,34 +1770,9 @@ static void escape_reached(Cand *e) {
            "a breakout was observed in an EXECUTABLE position at a sink its own bytes have not been recorded "
            "as ARRIVING at — every escape site runs downstream of breakout_arrived on the same string, so an "
            "escape with no arrival behind it means the two are being asked about different strings");
-    /* breakout_arrived's split, one rung up: the comparator is written inside the gate, and the ledger is
-       latched on its own field, never on the report counter `escaped`, which also counts contradicted
-       spellings. */
-    deliverable = solve_delivered_ok(&e->deliv, f->cand_payload);
-    if (deliverable) {
-        flow_observe_rung(f, FLOW_RUNG_ESCAPED);
-        if (e->escape_credited == 0) {
-            /* The ledger climbs its rungs in order. This crossing is paid only while the table still holds these
-               bytes, the table only narrows, and flow_observe_rung refuses FLOW_RUNG_ESCAPED to a flow that has
-               not stood on FLOW_RUNG_ARRIVED, so the arrival crossing is already paid. A rung added above this
-               one asserts this one in the same way. */
-            DCHECK(e->reach_credited == 1,
-                   "the @S escape crossing is about to be paid to a search whose ARRIVAL crossing never was — "
-                   "the ladder's rungs are ordered and the ledger climbs them in order, so a search standing on "
-                   "the escape rung unpaid for the arrival rung has two crossings asking different questions "
-                   "about the same delivery table, and the frontier is ranking a distance nobody travelled");
-            e->escape_credited = 1;
-            flow_credit_emit(1.0);
-        }
-    }
+    /* breakout_arrived's gate, one rung up; the report counter `escaped` also counts contradicted spellings. */
+    if (solve_delivered_ok(&e->deliv, f->cand_payload)) flow_observe_rung(f, FLOW_RUNG_ESCAPED);
     e->escaped++;
-    /* The two-sided half: a deliverable escape leaves with the crossing paid. Placed after the increment so it
-       catches a latch read off `escaped`. */
-    DCHECK(!deliverable || e->escape_credited == 1,
-           "a deliverable @S breakout stood in an executable position and the search's escape crossing is "
-           "still unpaid — the ledger's latch is being read off a REPORT counter, which counts the arrivals "
-           "the ledger refuses to pay for, so the first contradicted escape spent the crossing that the "
-           "spelling which can actually fire needed");
 }
 
 /* The search the running candidate belongs to, asked by both halves of a verifying run (the probe that derives
@@ -2512,8 +2461,7 @@ int solve_seed_candidates(JSContext *ctx) {
    that can state it, the source read, which is strictly before every sink. It is the report's copy of the
    event flow_observe_rung records as FLOW_RUNG_DELIVERED, and the two are separate quantities: the flow's rung
    is the comparator (monotone, per flow, re-earned across a park), while this is a count on the search that
-   orders nothing and outlives its flows. No credit and no crossing: paid as a ledger quantity it would reward
-   only a search's first delivery, which teaches nothing the second does not. CHECKs, because the flow's
+   orders nothing and outlives its flows. No credit: a rung is paid nothing (Cand). CHECKs, because the flow's
    source and sink are dereferenced immediately. */
 void solve_observe_substitution(Flow *f) {
     Cand *e;
