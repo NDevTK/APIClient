@@ -889,8 +889,9 @@ static int tf_seen_line(const char *prefix, const char *pinned, const char *prov
 /* The zone's latency, modelled for one address. engine/trusted.mjs owes an answer from the bill that showed it
    and writes it at a later read, unless a `fetch.cancel` takes it back first; this fixture answers every other
    address at the payment that shows it. `/api/replytwice`'s first park is answered at once and a later one is
-   owed until the payment after the growing arm's last request (`/api/replytwice-other-done`) is answered, so
-   the owed answer is for a fresh park of a pair already answered, and it stays owed across the growth. */
+   owed until the payment that answers the growing arm's last request (`/api/replytwice-other-done`), after
+   which nothing runs; so the owed answer is for a fresh park of a pair already answered, owed across the
+   growth. */
 #define TF_REPLYTWICE_URL "https://x.test/api/replytwice"
 #define TF_REPLYTWICE_DUE "https://x.test/api/replytwice-other-done"
 static struct {
@@ -943,7 +944,7 @@ static int tf_replytwice_pay(JSContext *ctx) {
     if (g_tf_r2.owed_at < 0) return 0;
     if (tf_cancelled("/api/replytwice") > g_tf_r2.cancels) {
         g_tf_r2.withdrawn++;
-    } else if (g_tf_r2.due >= 0 && g_tf_payments > g_tf_r2.due) {
+    } else if (g_tf_r2.due >= 0) {
         static const char rbody[] = "{\"region\":\"us-west-2\"}";
         const char *const list[1] = { TF_REPLYTWICE_URL };
         HeaderList eh = { 0 };
