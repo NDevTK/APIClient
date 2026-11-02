@@ -6835,7 +6835,9 @@ JSValue concolic_new_named_access(JSContext *ctx, JSValueConst markup, JSValueCo
 {
     JSValueConst ops[2] = { markup, name };
     const char *root = concolic_root_c(markup);
-    int row = root ? root_declared_row(root) : -1;
+    /* A path extends one declared row; markup two declared sources carry is a derivation over both, which the
+       derived arm below states without naming a row. */
+    int row = root && root_declared_count(root) == 1 ? root_declared_row(root) : -1;
     char *seg, *src, *ident;
     const char *fields[3];
     JSValue r;
