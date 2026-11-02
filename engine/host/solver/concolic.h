@@ -1138,6 +1138,17 @@ void        concolic_declare_named_source(const char *src, const char *parent, c
    named-access row where the markup's root is a declared, non-named row, else a derivation over (markup,
    name). A member read off it (concolic_exotic_get) roots at the row one member longer. Borrowed operands. */
 JSValue     concolic_new_named_access(JSContext *ctx, JSValueConst markup, JSValueConst name, const char *name_c);
+/* Declare the JSON row `src`: the JSON text carried by the declared row `parent` whose value at `path` (members
+   joined by `.`, each spelled as a row segment; "" for the whole value) is the payload String. A derivation of
+   those three, re-declared for a cold-resumed candidate; existing rows are a no-op. */
+void        concolic_declare_json_source(const char *src, const char *parent, const char *path);
+/* JSConcolicHooks.json_parse: ECMAScript §25.5.2 JSON.parse ( text [ , reviver ] ) step 4's value over the
+   unknown `text` (borrowed) with no callable reviver, `value` (consumed) its example. Where `text`'s root
+   declares one source its delivery composes (not a cross-document message's, and a derived row only as
+   `text`'s own bytes), the value roots at a JSON row over that source, and a member read off it
+   (concolic_exotic_get) roots at the row one member longer; otherwise it is concolic_new_derived over `text`.
+   Either way it is a JSON value (concolic_mark_json_value). */
+JSValue     concolic_new_json_parse(JSContext *ctx, JSValueConst text, JSValue value);
 /* `root`'s derived rows, root to base, as text concolic_declare_source_chain re-declares (owned), or NULL for a
    root with none. What a parked candidate carries so its resume re-derives the rows before install. */
 char       *concolic_source_chain(const char *root);

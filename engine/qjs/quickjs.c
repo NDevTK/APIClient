@@ -111471,12 +111471,10 @@ static JSValue js_json_parse_vfini(JSContext *ctx, void *st, bool take_result)
                "JSON.parse took its unknown-text arm in a host with no derivation hook — the completion has "
                "nothing to carry the source's identity, so the value would leave here as a bare parse result");
         if (take_result) {
-            r = js_concolic_derive(ctx, unknown, "JSON.parse", r);
             /* `early` is set exactly when no reviver is callable, and then step 4 returns ParseJSON's value. */
-            DCHECK(g_concolic.json_value != NULL,
+            DCHECK(g_concolic.json_parse != NULL,
                    "JSON.parse took its unknown-text arm in a host that cannot state a ParseJSON value");
-            if (s->early && g_concolic.is(r))
-                g_concolic.json_value(r);
+            r = s->early ? g_concolic.json_parse(ctx, unknown, r) : js_concolic_derive(ctx, unknown, "JSON.parse", r);
         }
         JS_FreeValue(ctx, unknown);
     }
@@ -111971,6 +111969,13 @@ static JSValue JS_ToQuotedStringFree(JSContext *ctx, JSValue val) {
     JSValue r = JS_ToQuotedString(ctx, val);
     JS_FreeValue(ctx, val);
     return r;
+}
+
+JSValue JS_QuoteJSONString(JSContext *ctx, JSValueConst value)
+{
+    DCHECK(JS_IsString(value), "QuoteJSONString was handed a non-String — §25.5.4.3 takes a String, and "
+                               "JS_ToQuotedString's ToString would run the page's code on an object");
+    return JS_ToQuotedString(ctx, value);
 }
 
 static int sj_push(JSContext *ctx, JSJsonStr *s)

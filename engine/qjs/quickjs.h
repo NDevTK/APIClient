@@ -1767,6 +1767,9 @@ JS_EXTERN JSValue JS_ParseJSON(JSContext *ctx, const char *buf, size_t buf_len,
 /* JS_JSONStringify is DELETED. Serialization runs the page's code — toJSON, the replacer, every element and
    member read, and a Proxy's ownKeys/getOwnPropertyDescriptor traps — so it is a step machine reached through
    the flow machinery, and a C entry beside it would be a second implementation of the same algorithm. */
+/* ECMAScript §25.5.4.3 QuoteJSONString ( value ): the JSON String literal JSON.stringify writes for the String
+   `value`, through the serializer's own quoting. Runs no page code. Returns a String, or an exception on OOM. */
+JS_EXTERN JSValue JS_QuoteJSONString(JSContext *ctx, JSValueConst value);
 
 typedef void JSFreeArrayBufferDataFunc(JSRuntime *rt, void *opaque, void *ptr);
 JS_EXTERN JSValue JS_NewArrayBuffer(JSContext *ctx, uint8_t *buf, size_t len,
@@ -2873,8 +2876,9 @@ typedef struct JSConcolicHooks {
        is not concolic. */
     JSValue (*is_array)(JSContext *ctx, JSValueConst v);
     /* §25.5.2 JSON.parse ( text [ , reviver ] ) over an unknown text with no callable reviver: step 4 returns
-       ParseJSON's own value, which the host states of the derived result, a concolic. */
-    void (*json_value)(JSValueConst v);
+       ParseJSON's own value. The host mints it from `text` with `value` (consumed) as its example: a concolic
+       that is a JSON value, and that names the JSON text a delivery at `text`'s source composes. */
+    JSValue (*json_parse)(JSContext *ctx, JSValueConst text, JSValue value);
     /* Whether IsCallable(Get(v, key)) is false for every value the unknown `v` can be — 1 when the host can say
        so, 0 when it cannot. 27.5.1.3 step 2.i asks it of an unknown resolution with no example for `then`. */
     int (*member_never_callable)(JSContext *ctx, JSValueConst v, JSAtom key);

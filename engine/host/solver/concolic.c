@@ -4,6 +4,7 @@
 #include "quickjs-step.h"
 #include "solver/absent.h"
 #include "solver/flow.h"
+#include "solver/pending.h"   /* the session's context, which a JSON row's quoting runs in (json_row_compose) */
 #include "solver/decide.h"    /* the one speller of a constraint key */
 #include "solver/solve.h"     /* the search is told when a candidate substitution happens (concolic_deliver) */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
@@ -2530,11 +2531,12 @@ int concolic_src_determined(const char *src) {
    claimant's release then takes the property with the row. */
 /* A derived row carries `parent`, the declared row whose bytes carry its value, and one transform from its own
    value to its parent's: `key` (with `serialize`) for a tuple of an application/x-www-form-urlencoded list,
-   or `path` for an element reached by named access over unknown markup. A row whose payload is the component's
-   own bytes has none of them. A candidate walks the chain to its base (concolic_set_candidate). */
+   `path` for an element reached by named access over unknown markup, or `json` for the member at that path of
+   a JSON text ("" for the whole value). A row whose payload is the component's own bytes has none of them. A
+   candidate walks the chain to its base (concolic_set_candidate). */
 typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver;
                  int principal; char *key; char *parent; char *(*serialize)(const char *s, size_t n);
-                 char *path; char *event; }
+                 char *path; char *json; char *event; }
         SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
@@ -2789,6 +2791,7 @@ void concolic_declare_source(const char *component, const char *src, const char 
     g_srcs[g_srcs_n].parent = NULL;
     g_srcs[g_srcs_n].serialize = NULL;
     g_srcs[g_srcs_n].path = NULL;
+    g_srcs[g_srcs_n].json = NULL;
     g_srcs[g_srcs_n].event = NULL;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
@@ -2818,6 +2821,7 @@ void concolic_undeclare_sources(const char *component)
         free(g_srcs[i].key);
         free(g_srcs[i].parent);
         free(g_srcs[i].path);
+        free(g_srcs[i].json);
         free(g_srcs[i].event);
         /* The order of the rest is preserved rather than closed with a swap: lookups are by identity, but a
            walk's order must not depend on which unrelated component released first. */
@@ -3383,8 +3387,11 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *roo
 static const char *g_markup_component;
 static char *(*g_markup_compose)(const char *path, const char *href);
 
-/* One row's transform from its value to its parent's: the tuple `key=<serialized bytes>`, or the markup whose
-   parse makes the named access along `path` reach `bytes`. Owned; NULL where the composer refuses the path. */
+static char *json_row_compose(const char *path, const char *bytes);
+
+/* One row's transform from its value to its parent's: the tuple `key=<serialized bytes>`, the JSON text whose
+   value at `json` is `bytes`, or the markup whose parse makes the named access along `path` reach `bytes`.
+   Owned; NULL where the composer refuses the path. */
 static char *row_transform(int row, const char *bytes)
 {
     char *out = NULL;
@@ -3399,8 +3406,10 @@ static char *row_transform(int row, const char *bytes)
         CHECK(out != NULL, "concolic: OOM composing a candidate's tuple");
         snprintf(out, n, "%s=%s", g_srcs[row].key, v);
         free(v);
+    } else if (g_srcs[row].json) {
+        out = json_row_compose(g_srcs[row].json, bytes);
     } else {
-        DCHECK(g_srcs[row].path && g_markup_compose, "a derived row has neither a key nor a composable path");
+        DCHECK(g_srcs[row].path && g_markup_compose, "a derived row has no key, no JSON path and no composable path");
         out = g_markup_compose(g_srcs[row].path, bytes);
     }
     return out;
@@ -3611,10 +3620,14 @@ static int row_base(int row)
 }
 
 /* Whether this file can deliver a pinned value at `row` as the page reads it: a String at a row whose mechanism
-   is the victim's address or the navigable's name, with no markup composition between it and its base. */
+   is the victim's address or the navigable's name, with no markup or JSON composition between it and its base.
+   Named residual. Not covered: a pin on a member of a JSON text the payload's own JSON row also composes,
+   which belongs in the same object as the payload's member. Next diff builds: the gate's member joined into the
+   payload's JSON text, as tuple_join joins a tuple. Absence shows as: a fire behind a check on a sibling JSON
+   member counted under `firedUngated` with no verification run. */
 static int gate_composable(int row, const Cons *c)
 {
-    return c->valkind == (signed char)CONCOLIC_LIT_STRING && !g_srcs[row].path &&
+    return c->valkind == (signed char)CONCOLIC_LIT_STRING && !g_srcs[row].path && !g_srcs[row].json &&
            (g_srcs[row].deliver == SRC_DELIVER_ADDRESS || g_srcs[row].deliver == SRC_DELIVER_NAVIGABLE_NAME);
 }
 
@@ -4418,6 +4431,25 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
 
                 nsrc = shapef("%s.%s", g_srcs[nrow].src, seg);
                 concolic_declare_named_source(nsrc, g_srcs[nrow].parent, path);
+                free(seg);
+                free(path);
+            }
+            JS_FreeCString(ctx, mname);
+        }
+        /* A member of a JSON value rooted at a JSON row is the member one segment further into the same text. */
+        int jrow = c->json_value && c->root ? src_row(c->root, strlen(c->root)) : -1;
+
+        if (jrow >= 0 && g_srcs[jrow].json && !atom_is_symbol(ctx, atom)) {
+            const char *mname = JS_AtomToCString(ctx, atom);
+
+            CHECK(mname != NULL, "concolic: OOM reading a member's name");
+            {
+                char *seg = row_segment(mname);
+                char *path = *g_srcs[jrow].json ? shapef("%s.%s", g_srcs[jrow].json, seg) : shapef("%s", seg);
+
+                DCHECK(nsrc == NULL, "a member read extended a named-access row and a JSON row at once");
+                nsrc = shapef("%s.%s", g_srcs[jrow].src, seg);
+                concolic_declare_json_source(nsrc, g_srcs[jrow].parent, path);
                 free(seg);
                 free(path);
             }
@@ -6750,7 +6782,8 @@ char *concolic_source_chain(const char *root)
     size_t len = 0;
 
     while (row >= 0 && g_srcs[row].parent) {
-        const char *kind = g_srcs[row].key ? "k" : "n", *param = g_srcs[row].key ? g_srcs[row].key : g_srcs[row].path;
+        const char *kind = g_srcs[row].key ? "k" : g_srcs[row].json ? "j" : "n";
+        const char *param = g_srcs[row].key ? g_srcs[row].key : g_srcs[row].json ? g_srcs[row].json : g_srcs[row].path;
         size_t add = strlen(g_srcs[row].src) + strlen(g_srcs[row].parent) + strlen(param) + 6;
         char *grown = realloc(out, len + add + 1);
 
@@ -6782,9 +6815,11 @@ void concolic_declare_source_chain(const char *chain)
         int k;
 
         for (k = 0; k < 4; k++) { f[k] = p; p = p ? strchr(p, '\x1f') : NULL; if (p) *p++ = 0; }
-        DCHECK(f[3] && (!strcmp(f[0], "k") || !strcmp(f[0], "n")), "a parked row chain holds a malformed row");
+        DCHECK(f[3] && (!strcmp(f[0], "k") || !strcmp(f[0], "j") || !strcmp(f[0], "n")),
+               "a parked row chain holds a malformed row");
         if (!f[3]) continue;
         if (!strcmp(f[0], "k")) concolic_declare_keyed_source(f[1], f[2], f[3]);
+        else if (!strcmp(f[0], "j")) concolic_declare_json_source(f[1], f[2], f[3]);
         else concolic_declare_named_source(f[1], f[2], f[3]);
     }
     free(copy);
@@ -6817,6 +6852,130 @@ JSValue concolic_new_named_access(JSContext *ctx, JSValueConst markup, JSValueCo
     return r;
 }
 
+
+/* The claimant of JSON rows. They are this component's own claims, given back at concolic_free. */
+#define JSON_ROW_COMPONENT "ECMAScript JSON"
+
+void concolic_declare_json_source(const char *src, const char *parent, const char *path)
+{
+    int prow;
+
+    DCHECK(src && parent && path, "a JSON row was declared with no identity, parent or path");
+    prow = src_row(parent, strlen(parent));
+    DCHECK(prow >= 0 && !g_srcs[prow].path && g_srcs[prow].deliver != SRC_DELIVER_CROSS_DOCUMENT_MESSAGE,
+           "a JSON row names a parent that is not a declared row concolic_deliver composes through");
+    if (prow < 0 || concolic_source_declared_by(JSON_ROW_COMPONENT, src)) return;
+    concolic_declare_source(JSON_ROW_COMPONENT, src, g_srcs[prow].encode, g_srcs[prow].prefix, g_srcs[prow].deliver);
+    g_srcs[g_srcs_n - 1].parent = reclaim_strdup(parent);
+    g_srcs[g_srcs_n - 1].json = reclaim_strdup(path);
+    CHECK(g_srcs[g_srcs_n - 1].parent && g_srcs[g_srcs_n - 1].json, "concolic: OOM declaring a JSON row");
+}
+
+/* A row segment's bytes: row_segment's percent-encoding undone. Owned. */
+static char *row_segment_name(const char *seg, size_t n)
+{
+    char *out = reclaim_malloc(n + 1);
+    size_t o = 0;
+
+    CHECK(out != NULL, "concolic: OOM reading a row segment");
+    for (size_t i = 0; i < n; i++) {
+        if (seg[i] == '%') {
+            unsigned v = 0;
+
+            DCHECK(i + 2 < n, "a row segment ends inside a percent-encoded byte — row_segment writes two digits");
+            for (int k = 1; k <= 2; k++) {
+                char h = seg[i + k];
+                v = v * 16 + (unsigned)(h <= '9' ? h - '0' : h - 'A' + 10);
+            }
+            out[o++] = (char)v;
+            i += 2;
+        } else {
+            out[o++] = seg[i];
+        }
+    }
+    out[o] = 0;
+    return out;
+}
+
+/* ECMAScript §25.5.4.3 QuoteJSONString of `s` (n bytes, UTF-8), by the engine's serializer. Owned. */
+static char *json_quote(JSContext *ctx, const char *s, size_t n)
+{
+    JSValue str = JS_NewStringLen(ctx, s, n), q;
+    const char *c;
+    char *out;
+
+    CHECK(!JS_IsException(str), "concolic: OOM quoting a JSON row's String");
+    q = JS_QuoteJSONString(ctx, str);
+    JS_FreeValue(ctx, str);
+    CHECK(!JS_IsException(q), "concolic: OOM quoting a JSON row's String");
+    c = JS_ToCString(ctx, q);
+    JS_FreeValue(ctx, q);
+    CHECK(c != NULL, "concolic: OOM quoting a JSON row's String");
+    out = reclaim_strdup(c);
+    JS_FreeCString(ctx, c);
+    CHECK(out != NULL, "concolic: OOM quoting a JSON row's String");
+    return out;
+}
+
+/* The JSON text whose value at `path` is the String `bytes`: §25.5.4.3 QuoteJSONString of the bytes, inside
+   §25.5.4.5 SerializeJSONObject's one-member form with an empty gap ("{", QuoteJSONString(key), ":", member,
+   "}") once per path segment, outermost first — what JSON.stringify writes for that structure. Owned. */
+static char *json_row_compose(const char *path, const char *bytes)
+{
+    JSContext *ctx = pending_ctx();
+    char *head = reclaim_strdup(""), *tail = reclaim_strdup(""), *v, *out;
+
+    DCHECK(ctx != NULL, "a JSON row was composed with no session context to run the serializer's quoting in");
+    CHECK(head && tail, "concolic: OOM composing a JSON row");
+    for (const char *p = path; *p;) {
+        const char *dot = strchr(p, '.');
+        size_t n = dot ? (size_t)(dot - p) : strlen(p);
+        char *name = row_segment_name(p, n), *q = json_quote(ctx, name, strlen(name)), *h = shapef("%s{%s:", head, q),
+             *t = shapef("}%s", tail);
+
+        free(name); free(q); free(head); free(tail);
+        head = h; tail = t;
+        p += n + (dot ? 1 : 0);
+    }
+    v = json_quote(ctx, bytes, strlen(bytes));
+    out = shapef("%s%s%s", head, v, tail);
+    free(head); free(tail); free(v);
+    return out;
+}
+
+/* See concolic.h. The text's own bytes or a derivation of a base component parse to the JSON text through the
+   page's own transform, which the candidate's re-run applies and its fire verifies.
+   Named residual. Not covered: a JSON text carried by a cross-document message, whose delivery places the
+   candidate's payload in the message composition (seed_on_path) rather than through this row's transform.
+   Next diff builds: the message composer placing a JSON row's composed text at the payload slot. Absence shows
+   as: an @S record over `JSON.parse` of a message's data whose search never fires. */
+JSValue concolic_new_json_parse(JSContext *ctx, JSValueConst text, JSValue value)
+{
+    const char *root = concolic_root_c(text), *tsrc = concolic_src_c(text), *fields[2];
+    int row = root && root_declared_count(root) == 1 ? root_declared_row(root) : -1;
+    char *part, *src, *ident;
+    JSValue r;
+
+    DCHECK(concolic_is(text), "JSON.parse's unknown-text value was minted over a text that is not unknown");
+    if (row < 0 || g_srcs[row].path || g_srcs[row].deliver == SRC_DELIVER_CROSS_DOCUMENT_MESSAGE ||
+        (g_srcs[row].parent && !(tsrc && !strcmp(tsrc, g_srcs[row].src)))) {
+        r = concolic_new_derived(ctx, "JSON.parse", &text, 1, value);
+        if (concolic_is(r)) concolic_mark_json_value(r);   /* a pin on the text's source answers its value */
+        return r;
+    }
+    part = derived_operand_shape(ctx, text);
+    src = shapef("%s.JSON.parse()", part);
+    concolic_declare_json_source(src, g_srcs[row].src, "");
+    fields[0] = ident_of_operand(ctx, text);
+    fields[1] = "JSON.parse";
+    ident = concolic_ident_compose("b", fields, 2);
+    r = concolic_derived(ctx, src, src, src, root_whose_or_unstated(derived_root_whose(&text, 1)), ident, value);
+    if (concolic_is(r)) concolic_mark_json_value(r);
+    free((char *)fields[0]);
+    free(part);
+    free(src);
+    return r;
+}
 
 /* See concolic.h. */
 JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *op, JSValueConst list, JSValueConst name,
@@ -8226,6 +8385,7 @@ void concolic_free(void)
        and its precondition rows are claims in the registry below, so it is released before that registry's
        emptiness is asserted. */
     absent_free();
+    concolic_undeclare_sources(JSON_ROW_COMPONENT);   /* this component's own claims (concolic_declare_json_source) */
 #if APICLIENT_DEV
     if (g_srcs_n != 0)
         DFAILF("%s did not give back the attacker SOURCE `%s` before the solver's agent state was released. "
@@ -9555,7 +9715,7 @@ static int compile_global_named_dispatch(const char *name, int typeof_only) {
 static JSConcolicHooks g_hooks = {
     .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
     .rel = concolic_rel_hook, .type_of = concolic_typeof_hook, .is_array = concolic_isarray_hook,
-    .json_value = concolic_mark_json_value, .member_never_callable = concolic_member_never_callable,
+    .json_parse = concolic_new_json_parse, .member_never_callable = concolic_member_never_callable,
     .has_property = concolic_has_property_hook,
     .arith = concolic_arith_hook, .to_str = concolic_tostr_hook,
     .to_bool = concolic_tobool_hook,
