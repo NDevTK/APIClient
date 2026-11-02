@@ -1243,6 +1243,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/scrollarea.h"
 #include "fixture/formchain.h"
 #include "fixture/flexwide.h"
+#include "fixture/scrollfrac.h"
 #include "fixture/replacedcontent.h"
 #include "fixture/scrollrestore.h"
 #include "fixture/travnav.h"
@@ -1865,6 +1866,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "scrollarea", HTML_SCROLLAREA },
     { "formchain", HTML_FORMCHAIN },
     { "flexwide", HTML_FLEXWIDE },
+    { "scrollfrac", HTML_SCROLLFRAC },
     { "replacedcontent", HTML_REPLACEDCONTENT },
     { "scrollrestore", HTML_SCROLLRESTORE },
     { "scrollclamp", HTML_SCROLLCLAMP },
@@ -16787,6 +16789,20 @@ TF_UNIT void probes_flexwide(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `scrollfrac` document (fixture/scrollfrac.h), read from the spec. */
+TF_UNIT void probes_scrollfrac(const char *js, Probe *tab, int *n) {
+    const char *sf_why = NULL; int sf_tt = !!strstr(js, "\"/api/scrollfrac\"");
+
+    fold_row(&sf_tt, &sf_why, sf_tt,
+             "NOT REACHED: there is no /api/scrollfrac record at all, so the document stopped before its fetch");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollfrac", "rh", "2001"),
+             "CSSOM VIEW §6 step 4: the root's 2000.5px viewport scrolling area did not cross its `long` as 2001");
+    const Probe rows[] = {
+        { "scroll-root-fraction", sf_tt, "/api/scrollfrac", SESS_EXPLORE, sf_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `replacedcontent` document (fixture/replacedcontent.h), read from the specs. */
 TF_UNIT void probes_replacedcontent(const char *js, Probe *tab, int *n) {
     static const struct { const char *key, *want, *why; } ROWS[] = {
@@ -24284,6 +24300,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_scrollarea(js, probes, &np);
     probes_formchain(js, probes, &np);
     probes_flexwide(js, probes, &np);
+    probes_scrollfrac(js, probes, &np);
     probes_replacedcontent(js, probes, &np);
     probes_scrollrestore(js, probes, &np);
     probes_travnav(js, probes, &np);
