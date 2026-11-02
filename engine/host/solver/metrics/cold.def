@@ -196,7 +196,8 @@ METRIC(paged_asks, "pagedAsks", LIFETIME, "ask", PROCESS, "solver/engine.c", INT
 METRIC(paged_unarmed, "pagedUnarmed", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
 METRIC(paged_floor, "pagedFloor", LIFETIME, "ask", PROCESS, "solver/engine.c", INT)
 /* …and the sales RAM pressure made at rest before any refusal (solver/engine.h's engine_set_ram_share), with the
-   limit, where it came from, and the share that decided them. `ramLimitSource` is a one-arm histogram naming the source (a census row is a count or counts), and its "none" arm is a process with no known
+   limit, where it came from, and the share that decided them, the limit as pressure last read it (a memory cgroup's
+   headroom moves with the other processes it charges). `ramLimitSource` is a one-arm histogram naming the source (a census row is a count or counts), and its "none" arm is a process with no known
    limit, where pressure sells nothing and `ramLimitKiB` reads 0. */
 METRIC(pressure_sold, "pressureSold", LIFETIME, "member", PROCESS, "solver/engine.c", INT)
 /* …and the cycle collections RAM pressure owed before a sale: a sold flow's cycles are freed only by one. */
@@ -209,13 +210,13 @@ METRIC(park_funded, "parkFunded", LIFETIME, "member", PROCESS, "solver/engine.c"
 METRIC(rest_compositions, "restCompositions", LIFETIME, "composition", PROCESS, "solver/engine.c", INT)
 METRIC(rest_compose_attempts, "restComposeAttempts", LIFETIME, "attempt", PROCESS, "solver/engine.c", INT)
 METRIC(rest_compose_attempts_max, "restComposeAttemptsMax", MAXIMUM, "attempt", PROCESS, "solver/engine.c", INT)
-METRIC(ram_limit_kib, "ramLimitKiB", CONSTANT, "KiB", AGENT, "solver/engine.c", INT)
-METRIC(ram_limit_source, "ramLimitSource", CONSTANT, "source", AGENT, "solver/engine.c", OBJECT)
+METRIC(ram_limit_kib, "ramLimitKiB", GAUGE, "KiB", AGENT, "solver/engine.c", INT)
+METRIC(ram_limit_source, "ramLimitSource", GAUGE, "source", AGENT, "solver/engine.c", OBJECT)
 METRIC(ram_share, "ramShare", CONSTANT, "permille", AGENT, "solver/engine.c", INT)
 /* …and the part of the limit no heap block can use (static data and stack in wasm, every non-heap mapping under
-   an address-space rlimit), subtracted before the share; and the allocator's footprint less its live bytes when
+   an address-space rlimit, the resident bytes outside the heap under a memory cgroup), subtracted before the share; and the allocator's footprint less its live bytes when
    pressure last started selling, the fragmentation the line added to live bytes then, 0 before the first sale. */
-METRIC(ram_nonheap_kib, "ramNonHeapKiB", CONSTANT, "KiB", AGENT, "solver/engine.c", INT)
+METRIC(ram_nonheap_kib, "ramNonHeapKiB", GAUGE, "KiB", AGENT, "solver/engine.c", INT)
 METRIC(pressure_frag_kib, "pressureFragKiB", GAUGE, "KiB", AGENT, "solver/engine.c", INT)
 /* …and why a park that never happened did not. These are the host asking the cold tier what a
    park would write; `previewAsks: 0` is no host consulting it, and every row below is then

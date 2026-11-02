@@ -7,12 +7,6 @@
 #include "core/file/file_system.h"         /* a drop act's user file */
 #include "core/dom/user_scroll.h"           /* a scroll act's task */
 #include "core/intersection_observer/intersection_observer.h"   /* a scroll act's target */
-#if defined(__EMSCRIPTEN__)
-#include <emscripten/heap.h>   /* emscripten_get_heap_max: the linear memory's ceiling, RAM pressure's limit */
-#else
-#include <sys/resource.h>      /* RLIMIT_AS: the native process's address-space ceiling, RAM pressure's limit */
-#include <unistd.h>            /* sysconf(_SC_PAGESIZE): the unit of /proc/self/statm's mapped size */
-#endif
 #include "core/mime/mime_type.h"   /* §4.4 "Is a JavaScript MIME type": what makes a reply a program rather
                                        than a Response, asked at the fetch delivery below */
 #include "core/fetch/scheme_fetch.h"   /* Fetch §4.3 Scheme fetch: who answers a park's address — this agent
@@ -28,6 +22,7 @@
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */
 #include "solver/result.h"
 #include "solver/c_alloc.h"   /* the C heap's running total, RAM pressure's reading */
+#include "solver/ram_limit.h"   /* the limit RAM pressure is a share of */
 #include "solver/solve.h"
 #include "solver/witness_verify.h"
 #include "core/frame/open_again.h"   /* the attacker opening the page again */
@@ -11786,34 +11781,16 @@ void engine_set_ram_share(unsigned permille) {
     g_ram_share = permille;
 }
 
-/* The ceiling an allocation meets, as this host states it, and its source for the census: the wasm build's maximum
-   linear memory, or the native process's soft RLIMIT_AS (test_forced.c's native_ceiling_arm sets it to the
-   vehicle's address space). A process with no address-space limit has none, where an allocation does not fail and
-   pressure has nothing to be a share of. */
-/* With it, the part of the limit no heap block can use: in wasm the static data and stack below `__heap_base`; under
-   an address-space rlimit the process's mapped size less the allocator's footprint at this instant (the binary, the
-   stacks, every other mapping). */
+/* The limit RAM pressure is a share of, read from the platform now (solver/ram_limit.h): at the session's begin,
+   and again at each pressure check, since a native memory cgroup's headroom moves with the other processes it
+   charges. */
 static void engine_ram_limit_read(void) {
-#if defined(__EMSCRIPTEN__)
-    extern unsigned char __heap_base;
-    g_ram_limit = (uint64_t)emscripten_get_heap_max();
-    g_ram_limit_source = "{\"wasm-heap-max\":1}";
-    g_ram_nonheap = (uint64_t)(uintptr_t)&__heap_base;
-#else
-    struct rlimit rl;
-    unsigned long pages = 0;
-    FILE *statm;
-    CHECK(getrlimit(RLIMIT_AS, &rl) == 0, "the native host could not read its address-space limit");
-    g_ram_limit = rl.rlim_cur == RLIM_INFINITY ? 0 : (uint64_t)rl.rlim_cur;
-    g_ram_limit_source = g_ram_limit ? "{\"rlimit-as\":1}" : "{\"none\":1}";
-    statm = fopen("/proc/self/statm", "r");
-    CHECK(statm && fscanf(statm, "%lu", &pages) == 1,
-          "the native host could not read its mapped size from /proc/self/statm, which RAM pressure's line subtracts");
-    fclose(statm);
-    g_ram_nonheap = (uint64_t)pages * (uint64_t)sysconf(_SC_PAGESIZE) - (uint64_t)c_alloc_footprint();
-#endif
-    CHECK(g_ram_limit == 0 || g_ram_nonheap < g_ram_limit,
-          "the instance's non-heap mappings already fill its memory limit, so no heap block could be allocated");
+    RamLimit lim;
+
+    ram_limit_read(&lim, (uint64_t)c_alloc_footprint());
+    g_ram_limit = lim.bytes;
+    g_ram_nonheap = lim.nonheap;
+    g_ram_limit_source = ram_limit_source_json(lim.source);
 }
 
 /* The live bytes the current episode of pressure sells down to, UINT64_MAX when no episode is open. An episode
@@ -11840,6 +11817,7 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
     bool at_floor = false;
     JSGCCycleStats st;
 
+    engine_ram_limit_read();
     if (g_ram_limit == 0) return;
     line = (g_ram_limit - g_ram_nonheap) / 1000 * g_ram_share;
     fp = (uint64_t)c_alloc_footprint();

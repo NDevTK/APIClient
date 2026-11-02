@@ -470,9 +470,9 @@ int engine_reclaim_at_rest(void);
 int engine_park_fund(void);
 /* RAM pressure, the scheduler's policy for when the cold tail relocates: at rest between two steps, while the
    instance's live bytes (solver/c_alloc.h's c_alloc_live) stand above `share` permille of its known limit, the lowest-value
-   flow is sold to the cold tier. The limit is the wasm build's maximum linear memory or the native process's
-   RLIMIT_AS, read when the session begins; with neither the census says `ramLimitSource` `{"none":1}` and only the
-   refusal edge sells. The margin below the wall is room for the allocations that do not ask the edge, and for
+   flow is sold to the cold tier. The limit is solver/ram_limit.h's: the wasm build's maximum linear memory, or the
+   native process's RLIMIT_AS or memory cgroup, read at each check; with none the census says `ramLimitSource`
+   `{"none":1}` and only the refusal edge sells. The margin below the wall is room for the allocations that do not ask the edge, and for
    those made where the safepoint is closed. ENGINE_RAM_SHARE_DEFAULT is the share until a host states one, 1 to
    1000; a person states it to the native host as engine/trusted.mjs's `--ram-share <permille>`.
    Named residual. Not covered: the extension's instances have no setting. Next diff builds: a qjs_set_ram_share
@@ -1180,8 +1180,8 @@ typedef struct {
     long rest_compose_attempts;     /* …the attempts they took, `>= rest_compositions` */
     long rest_compose_attempts_max; /* …and the most one composition took */
     long ram_limit_kib;     /* the limit that pressure is a share of, 0 when there is none */
-    const char *ram_limit_source; /* where it came from, as `{"source":…}`: "wasm-heap-max", "rlimit-as"
-                                     or "none" */
+    const char *ram_limit_source; /* where it came from, as `{"source":…}`: "wasm-heap-max", "rlimit-as",
+                                     "memcg" or "none" */
     long ram_share;         /* the share, in permille */
     long ram_nonheap_kib;   /* the part of the limit no heap block can use, subtracted before the share */
     long pressure_frag_kib; /* the allocator's footprint less its live bytes when pressure last started selling */

@@ -4110,17 +4110,17 @@ function censusReading(out) {
      stage. A TypeError there is not this file refusing a broken census; it is the reader falling over on the
      one input its own contract says to expect, and it names neither the marker nor the stage. */
   if (c) {
-    /* RAM pressure's limit is a named state (solver/engine.h's engine_set_ram_share): one of the three sources,
+    /* RAM pressure's limit is a named state (solver/engine.h's engine_set_ram_share): one of the four sources,
        and "none" exactly when there is no limit for the share to be of. Its sales are engine_reclaim_tail sales,
        so they never exceed `sold`; a release build compiles out the engine's own assert of that. */
     for (const x of [c.a, c.b]) {
       const arms = Object.keys(x.ramLimitSource), src = arms.length === 1 && x.ramLimitSource[arms[0]] === 1 ? arms[0] : null;
-      if (!["wasm-heap-max", "rlimit-as", "none"].includes(src) ||
+      if (!["wasm-heap-max", "rlimit-as", "memcg", "none"].includes(src) ||
           (src === "none") !== (x.ramLimitKiB === 0) || x.pressureSold > x.sold)
         throw new Error("[build] the @COLD census reports RAM pressure's limit as " +
                         `${JSON.stringify(x.ramLimitSource)} ` +
                         `at ${x.ramLimitKiB} KiB with ${x.pressureSold} pressure sale(s) of ${x.sold} — the source ` +
-                        `is one arm counting 1 of wasm-heap-max, rlimit-as or none, none exactly when the limit is 0, and every ` +
+                        `is one arm counting 1 of wasm-heap-max, rlimit-as, memcg or none, none exactly when the limit is 0, and every ` +
                         `pressure sale is one of the sales`);
     }
     /* THE MEMBER-SIDE SUBSET CHAIN, CHECKED HERE FOR THE REASON THE @WFQ PAIRS ARE CHECKED IN THEIR OWN

@@ -52,6 +52,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "solver/engine.h"
+#include "solver/ram_limit.h"   /* the tightest memory cgroup limit, which native_ceiling_arm takes as a ceiling */
 #include "solver/cow.h"
 #include "core/loader/cookie_jar.h"   /* the root document's own Set-Cookie, received at the baseline */
 #include "core/loader/document_scripts.h"
@@ -38039,42 +38040,6 @@ TF_UNIT void second_agent_selftest(const char *origin)
     printf("@A2OK\n");
 }
 
-#ifndef __EMSCRIPTEN__
-/* The tightest memory cgroup limit on this process's path, or UINT64_MAX: cgroup v1's `memory.limit_in_bytes` and
-   v2's `memory.max` at each ancestor, since a parent's limit binds its children. */
-static uint64_t native_cgroup_limit(void) {
-    uint64_t best = UINT64_MAX;
-    char line[1024];
-    FILE *cg = fopen("/proc/self/cgroup", "r");
-    if (!cg) return best;
-    while (fgets(line, sizeof line, cg)) {
-        char *c1 = strchr(line, ':'), *c2 = c1 ? strchr(c1 + 1, ':') : NULL, *nl;
-        const char *dir, *file;
-        if (!c2) continue;
-        if ((nl = strchr(c2, '\n'))) *nl = '\0';
-        *c2 = '\0';
-        if (strcmp(c1 + 1, "") == 0) { dir = "/sys/fs/cgroup"; file = "memory.max"; }
-        else if (strstr(c1 + 1, "memory")) { dir = "/sys/fs/cgroup/memory"; file = "memory.limit_in_bytes"; }
-        else continue;
-        for (char *path = c2 + 1;;) {
-            char fn[1400];
-            FILE *f;
-            unsigned long long v;
-            snprintf(fn, sizeof fn, "%s%s/%s", dir, path, file);
-            if ((f = fopen(fn, "r"))) {
-                if (fscanf(f, "%llu", &v) == 1 && v < best) best = v;   /* "max" reads nothing: no limit */
-                fclose(f);
-            }
-            char *slash = strrchr(path, '/');
-            if (!slash || slash == path) { if (path[0] && path[1]) { path[1] = '\0'; continue; } break; }
-            *slash = '\0';
-        }
-    }
-    fclose(cg);
-    return best;
-}
-#endif
-
 /* The RAM floor engine_reclaim_tail sells the frontier's tail at is an allocation that fails, and a 64-bit host
    under overcommit never fails one: a memory cgroup kills the process instead, with the tail unsold. So this
    host refuses where the shipped vehicle does: its wasm64 address space (build.mjs's WASM_ADDRESS_BYTES, its
@@ -38087,7 +38052,7 @@ static void native_ceiling_arm(void) {
     return;
 #else
     struct rlimit rl;
-    uint64_t ceiling = ENGINE_WASM_ADDRESS_BYTES, cg = native_cgroup_limit();
+    uint64_t ceiling = ENGINE_WASM_ADDRESS_BYTES, cg = ram_limit_cgroup_max();
     CHECK(getrlimit(RLIMIT_AS, &rl) == 0, "the native host could not read its address-space limit");
     if (cg < ceiling) ceiling = cg;
     if (rl.rlim_max != RLIM_INFINITY && rl.rlim_max < ceiling) ceiling = rl.rlim_max;
