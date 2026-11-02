@@ -1298,6 +1298,9 @@ void engine_note_net_prog_xhr_queued(void);
    engine_collect_slice). */
 long long engine_gc_slices(void);
 long long engine_gc_us(void);
+/* The host turns this instance answered (ENGINE_STEP_HOST), lifetime. A function of elapsed time, so no census
+   carries it: a census row is a function of the paths. */
+long long engine_host_turns(void);
 
 /* What this instance's timelines did with the routed records handed to it. `delivered` counts tasks queued
    (each is HTML §9.3.3 step 8's one global task at the receiving Window; engine_routed_task_census says how

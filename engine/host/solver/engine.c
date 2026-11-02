@@ -13264,6 +13264,8 @@ void engine_sched_end(void) {
 static long long g_gc_slices;
 static int64_t   g_gc_us;
 long long engine_gc_slices(void) { return g_gc_slices; }
+static long long g_host_turns;
+long long engine_host_turns(void) { return g_host_turns; }
 long long engine_gc_us(void) { return (long long)g_gc_us; }
 
 /* A slice the collector holds: it begins an owed collection, then takes steps of rest_unit_items(REST_UNIT_GC_WORK)
@@ -13360,6 +13362,7 @@ int engine_sched_step(void) {
     resume = g_turn_resume;
     g_turn_resume = 0;
     if (!resume) g_slices++;
+    else g_host_turns++;
     /* A collection owed or standing takes the slice (engine_collect_slice). RAM pressure waits for it: a sale frees
        objects, which would restart the trial at every step, and the collection is itself the cheapest relief. */
     DCHECK(g_sess_ctx != NULL, "a step was taken with no session context");
