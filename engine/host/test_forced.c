@@ -1273,6 +1273,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/windowname.h"
 #include "fixture/twinread.h"
 #include "fixture/requestsink.h"
+#include "fixture/requestroute.h"
 #include "fixture/clobber.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
@@ -2001,6 +2002,8 @@ TF_DOCS[] = {
     { "twinread", HTML_TWINREAD },
     { "onceread", HTML_ONCEREAD },
     { "requestsink", HTML_REQUESTSINK },
+    { "requestroute", HTML_REQUESTROUTE },
+    { "requestredrive", HTML_REQUESTREDRIVE },
     { "recordless", HTML_RECORDLESS },
     { "agenfork", HTML_AGENFORK },
     { "msgchain", HTML_MSGCHAIN },
@@ -17847,6 +17850,35 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `requestroute` and `requestredrive` documents (fixture/requestroute.h): each click-sent request
+   whose host a query value decides fires with its clicks as its whole route; in `requestroute` a chain driving a
+   function the page never calls reaches the sink in fewer drives. */
+#define RQ_CLICK(id) "{\"kind\":\"click\",\"target\":\"#" id "\",\"type\":\"click\"}"
+TF_UNIT void probes_requestroute(const char *js, Probe *tab, int *n) {
+    static const char *const acts[2] = {
+        "\"acts\":[" RQ_CLICK("rrGoBtn") "," RQ_CLICK("rrGoBtn") "," RQ_CLICK("rrGoBtn") "," RQ_CLICK("rrGoBtn") "]",
+        "\"acts\":[" RQ_CLICK("rdGoBtn") "," RQ_CLICK("rdGoBtn") "," RQ_CLICK("rdGoBtn") "," RQ_CLICK("rdGoBtn") "]",
+    };
+    const char *why[2] = { NULL, NULL };
+    int tt[2] = { 1, 1 };
+
+    for (int i = 0; i < 2; i++) {
+        char src[1024] = "";
+        int has = s_rooted_source(js, "request", "[go]", src, sizeof src);
+
+        fold_row(&tt[i], &why[i], has && s_stage(js, "request", src) == S_FIRED,
+                 "the click-sent request whose host a query value decides did not fire");
+        fold_row(&tt[i], &why[i], has && s_field(js, "request", src, acts[i]),
+                 "the click-sent request's finding does not state its clicks as its whole route");
+    }
+    const Probe rows[] = {
+        { "rr-go-fired-with-acts", tt[0], "rrGoBtn", SESS_EXPLORE, why[0] },
+        { "rd-go-fired-with-acts", tt[1], "rdGoBtn", SESS_EXPLORE, why[1] },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+#undef RQ_CLICK
+
 /* The rows of the `windowname` document (fixture/windowname.h): per sink, the write is reached tainted by
    `window.name`, and the fired PoC states a delivery for it that is not this document's address. */
 TF_UNIT void probes_windowname(const char *js, Probe *tab, int *n) {
@@ -24498,6 +24530,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_joincompose(js, probes, &np);
     probes_twinread(js, probes, &np);
     probes_requestsink(js, probes, &np);
+    probes_requestroute(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);
