@@ -1353,6 +1353,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/uspiter.h"
 #include "fixture/fileparsetext.h"
 #include "fixture/requestunk.h"
+#include "fixture/respurl.h"
 #include "fixture/urlhref.h"
 #include "fixture/uspiso.h"
 #include "fixture/boundpark.h"
@@ -1999,6 +2000,7 @@ TF_DOCS[] = {
     { "uspiter", HTML_USPITER },
     { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "requestunk", HTML_REQUESTUNK },
+    { "respurl", HTML_RESPURL },
     { "urlhref", HTML_URLHREF },
     { "uspiso", HTML_USPISO },
     { "boundpark", HTML_BOUNDPARK },
@@ -20051,6 +20053,25 @@ TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `respurl` document (fixture/respurl.h): `url` over the reply no server sent to a request whose
+   address the query names answers, and the request built from it is rooted in that query value. */
+TF_UNIT void probes_respurl(const char *js, Probe *tab, int *n) {
+    char src[1024] = "";
+    const char *rd_why = NULL; int rd_tt = 1;
+    fold_row(&rd_tt, &rd_why, !!strstr(js, "\"/api/respurl-read\""),
+             "NOT REACHED: there is no /api/respurl-read record, so `url` over the reply to the query's unknown "
+             "address did not return");
+    const char *rt_why = NULL; int rt_tt = 1;
+    fold_row(&rt_tt, &rt_why, s_rooted_source(js, "request", "ru=", src, sizeof src),
+             "no request @S record carries a source rooted in the query's `ru=`, so `url` over the reply did not "
+             "answer the serialization of the request's current URL parsed from that value");
+    const Probe rows[] = {
+        { "respurl-read", rd_tt, "/api/respurl-read", SESS_EXPLORE, rd_why },
+        { "respurl-rooted", rt_tt, "/api/respurl-url", SESS_EXPLORE, rt_why, .gate = "respurl-read" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `urlhref` document (fixture/urlhref.h): a URL record's `href` keeps its input's injection
    identity, so the request and the compiled reply are searched at the page's own parse of `u=`. */
 TF_UNIT void probes_urlhref(const char *js, Probe *tab, int *n) {
@@ -24799,6 +24820,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_uspiter(js, probes, &np);
     probes_fileparse_text(js, probes, &np);
     probes_requestunk(js, probes, &np);
+    probes_respurl(js, probes, &np);
     probes_urlhref(js, probes, &np);
     probes_uspiso(js, probes, &np);
     probes_boundpark(js, probes, &np);
