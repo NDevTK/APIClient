@@ -1240,6 +1240,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/imgpending.h"
 #include "fixture/imagebutton.h"
 #include "fixture/scrollarea.h"
+#include "fixture/formchain.h"
 #include "fixture/scrollrestore.h"
 #include "fixture/travnav.h"
 #include "fixture/custommedia.h"
@@ -1858,6 +1859,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "imgpending", HTML_IMGPENDING },
     { "imagebutton", HTML_IMAGEBUTTON },
     { "scrollarea", HTML_SCROLLAREA },
+    { "formchain", HTML_FORMCHAIN },
     { "scrollrestore", HTML_SCROLLRESTORE },
     { "scrollclamp", HTML_SCROLLCLAMP },
     { "scrollfwd", HTML_SCROLLFWD },
@@ -16737,6 +16739,29 @@ TF_UNIT void probes_imagebutton(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `formchain` document (fixture/formchain.h), read from the specs. */
+TF_UNIT void probes_formchain(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "w1", "740", "CSS 2.1 §10.4: the first block's `max-width: calc(50% + 100px)` of 1280px is not 740" },
+        { "w2", "470", "CSS 2.1 §10.4: the second block is not clamped to half of 740 plus 100" },
+        { "w3", "335", "CSS 2.1 §10.4: the third block is not clamped to half of 470 plus 100" },
+        { "w4", "268", "CSSOM VIEW §7: the fourth block's 267.5px does not cross `offsetWidth` as 268" },
+        { "wn", "200", "CSS 2.1 §10.4: the fortieth block is not within a pixel of the clamp's 200px fixed point" },
+        { "dw", "540", "CSSOM VIEW §7: the first block's offsetWidth less the fortieth's is not 540" },
+    };
+    const char *fc_why = NULL; int fc_tt = !!strstr(js, "\"/api/formchain\"");
+    unsigned i;
+
+    fold_row(&fc_tt, &fc_why, fc_tt,
+             "NOT REACHED: there is no /api/formchain record at all, so the document stopped before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&fc_tt, &fc_why, param_value_is(js, "/api/formchain", ROWS[i].key, ROWS[i].want), ROWS[i].why);
+    const Probe rows[] = {
+        { "form-chain-long", fc_tt, "/api/formchain", SESS_EXPLORE, fc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `scrollarea` document (fixture/scrollarea.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give
    every value they expect. The rest is read from the counter element_view.c raises where EV_VIEW_STEP yields
    inside the walk. */
@@ -24178,6 +24203,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_imgpending(js, probes, &np);
     probes_imagebutton(js, probes, &np);
     probes_scrollarea(js, probes, &np);
+    probes_formchain(js, probes, &np);
     probes_scrollrestore(js, probes, &np);
     probes_travnav(js, probes, &np);
     probes_svgelement(js, probes, &np);
