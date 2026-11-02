@@ -2401,6 +2401,43 @@ static unsigned idl_union_arms_admitted(unsigned ty, unsigned declared)
     return admitted;
 }
 
+/* §3.2.25 step 11's arm for an Object example, run on the example where that runs no page code: step 11.2's
+   GetMethod(V, %Symbol.iterator%) over the own data slots of a chain of ordinary objects, its absence taking
+   step 11.5's record arm, or step 15's string arm where no record arm is declared. -1 (unstated) where a link
+   is not an ordinary object or the slot is an accessor, whose answer is the page's code, and where the method
+   is present and not callable, which is GetMethod's TypeError rather than an arm. */
+static int idl_union_object_example_arm(JSContext *ctx, JSValueConst ex, unsigned declared)
+{
+    JSAtom iter = JS_WellKnownSymbolAtom(JS_WKS_ITERATOR);
+    JSValue o = JS_DupValue(ctx, ex);
+    int arm = -1;
+
+    while (JS_IsObject(o) && JS_GetClassID(o) == JS_CLASS_OBJECT) {
+        JSPropertyDescriptor d;
+        int has = JS_GetOwnSlotDesc(ctx, &d, o, iter);
+        JSValue next;
+
+        CHECK(has >= 0, "an ordinary object's own @@iterator slot could not be read back");
+        if (has) {
+            if ((d.flags & JS_PROP_TMASK) == JS_PROP_GETSET) arm = -1;
+            else if (JS_IsUndefined(d.value) || JS_IsNull(d.value))
+                arm = (declared & IDL_UNION_ARM_RECORD) ? IDL_UNION_ARM_RECORD : IDL_UNION_ARM_STRING;
+            else arm = JS_IsFunction(ctx, d.value) ? IDL_UNION_ARM_SEQUENCE : -1;
+            JS_FreeValue(ctx, d.value);
+            JS_FreeValue(ctx, d.getter);
+            JS_FreeValue(ctx, d.setter);
+            break;
+        }
+        next = JS_GetPrototype(ctx, o);
+        JS_FreeValue(ctx, o);
+        o = next;
+        if (JS_IsNull(o))
+            arm = (declared & IDL_UNION_ARM_RECORD) ? IDL_UNION_ARM_RECORD : IDL_UNION_ARM_STRING;
+    }
+    JS_FreeValue(ctx, o);
+    return arm;
+}
+
 /* See idl_args.h. */
 int idl_union_unknown_arm(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, unsigned declared,
                           const char *const ops[16], JSValue *pin, unsigned *parm)
@@ -2431,9 +2468,9 @@ int idl_union_unknown_arm(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, unsign
     if (concolic_example_present(v)) {
         JSValue ex = concolic_example(ctx, v);
 
-        /* An Object example other than an Array is unstated: its @@iterator is its own [[Get]]. */
         ex_arm = (nullish && (JS_IsNull(ex) || JS_IsUndefined(ex))) ? IDL_UNION_ARM_NULL
-               : JS_IsArray(ex) ? IDL_UNION_ARM_SEQUENCE : JS_IsObject(ex) ? -1 : IDL_UNION_ARM_STRING;
+               : JS_IsArray(ex) ? IDL_UNION_ARM_SEQUENCE
+               : JS_IsObject(ex) ? idl_union_object_example_arm(ctx, ex, declared) : IDL_UNION_ARM_STRING;
         JS_FreeValue(ctx, ex);
     }
     for (int i = 0; i < n; i++)
