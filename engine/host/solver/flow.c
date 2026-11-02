@@ -704,13 +704,11 @@ static long g_ix_never_n;     /* …of those, the ones never dispatched (`picks 
 static uint64_t g_ix_seq;     /* the last treap sequence number flow_new gave a member; never reused */
 static Flow *g_owed_head;     /* the host-owed members, out of the index; see flow_owed_link */
 
-#if APICLIENT_DEV
-/* And the member half of the weight, forward-declared for the one writer that moves it without raising the
-   statement above: flow_age_running is deliberately silent (its banner: the charge is what the aging term reads,
-   and a bump per charge would invalidate every cached rival every dispatch), so it maintains the stamp flow_best's
-   walk compares against. Defined beside the terms it is made of. */
+/* And the member half of the weight, forward-declared for the optimism readers above its definition and for the one
+   writer that moves it without raising the statement above: flow_age_running is deliberately silent (its banner:
+   the charge is what the aging term reads, and a bump per charge would invalidate every cached rival every
+   dispatch), so it maintains the stamp flow_best's walk compares against. Defined beside the terms it is made of. */
 static double flow_index_key(const Flow *f);
-#endif
 /* The weight with the assumption term left out, for flow_fork_inherit's equality; defined beside flow_order_key. */
 static double flow_weight_observed(const Flow *f);
 
