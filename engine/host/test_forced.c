@@ -1241,6 +1241,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/imagebutton.h"
 #include "fixture/scrollarea.h"
 #include "fixture/formchain.h"
+#include "fixture/replacedcontent.h"
 #include "fixture/scrollrestore.h"
 #include "fixture/travnav.h"
 #include "fixture/custommedia.h"
@@ -1860,6 +1861,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "imagebutton", HTML_IMAGEBUTTON },
     { "scrollarea", HTML_SCROLLAREA },
     { "formchain", HTML_FORMCHAIN },
+    { "replacedcontent", HTML_REPLACEDCONTENT },
     { "scrollrestore", HTML_SCROLLRESTORE },
     { "scrollclamp", HTML_SCROLLCLAMP },
     { "scrollfwd", HTML_SCROLLFWD },
@@ -16762,6 +16764,30 @@ TF_UNIT void probes_formchain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `replacedcontent` document (fixture/replacedcontent.h), read from the specs. */
+TF_UNIT void probes_replacedcontent(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "cr", "0", "CSSOM VIEW §6 getClientRects() step 1: a canvas's fallback span has client rectangles" },
+        { "cw", "0", "CSSOM VIEW §6: a canvas's fallback span has a bounding rectangle with a width" },
+        { "dw", "0", "CSSOM VIEW §7: a block in a canvas's fallback has an offsetWidth" },
+        { "vw", "0", "CSSOM VIEW §6: a span inside a video has a bounding rectangle with a width" },
+        { "or", "1", "HTML §15.4.1: a block in an object's rendered fallback has no client rectangle" },
+        { "ow", "40", "HTML §15.4.1: a 40px block in an object's rendered fallback is not 40 wide" },
+    };
+    const char *rc_why = NULL; int rc_tt = !!strstr(js, "\"/api/replacedcontent\"");
+    unsigned i;
+
+    fold_row(&rc_tt, &rc_why, rc_tt,
+             "NOT REACHED: there is no /api/replacedcontent record, so the document stopped before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&rc_tt, &rc_why, param_value_is(js, "/api/replacedcontent", ROWS[i].key, ROWS[i].want),
+                 ROWS[i].why);
+    const Probe rows[] = {
+        { "replaced-content-box", rc_tt, "/api/replacedcontent", SESS_EXPLORE, rc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `scrollarea` document (fixture/scrollarea.h); Chrome 155.0.8059.84 and Firefox 158.0.1 give
    every value they expect. The rest is read from the counter element_view.c raises where EV_VIEW_STEP yields
    inside the walk. */
@@ -24204,6 +24230,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_imagebutton(js, probes, &np);
     probes_scrollarea(js, probes, &np);
     probes_formchain(js, probes, &np);
+    probes_replacedcontent(js, probes, &np);
     probes_scrollrestore(js, probes, &np);
     probes_travnav(js, probes, &np);
     probes_svgelement(js, probes, &np);
