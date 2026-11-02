@@ -419,7 +419,7 @@ LayoutJobResting *layout_job_resting(size_t *n)
     out = malloc(g_alive * sizeof *out);
     CHECK(out != NULL, "the list of resting layout jobs could not be allocated");
     for (job = g_alive_head; job != NULL; job = job->alive_next) {
-        if (job->decline.undetermined || job->held <= job->shed_at) continue;
+        if (job->decline.undetermined || job->held < 2 * job->shed_at) continue;
         out[k].job = job;
         out[k].flow = job->flow;
         out[k].bytes = job->held;
