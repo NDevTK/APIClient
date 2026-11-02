@@ -1356,6 +1356,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/boundpark.h"
 #include "fixture/bytesimage.h"
 #include "fixture/freezeunk.h"
+#include "fixture/headerkey.h"
 #include "fixture/blobunk.h"
 #include "fixture/globalcall.h"
 #include "fixture/dynfuncsink.h"
@@ -1996,6 +1997,7 @@ TF_DOCS[] = {
     { "boundpark", HTML_BOUNDPARK },
     { "bytesimage", HTML_BYTESIMAGE },
     { "freezeunk", HTML_FREEZEUNK },
+    { "headerkey", HTML_HEADERKEY },
     { "blobunk", HTML_BLOBUNK },
     { "globalcall", HTML_GLOBALCALL },
     { "dynfuncsink", HTML_DYNFUNCSINK },
@@ -20096,6 +20098,29 @@ TF_UNIT void probes_globalcall(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `headerkey` document (fixture/headerkey.h): a Headers fill over a record whose key is unknown
+   forks the name that passes and the TypeError, for `new Headers` and for `fetch` alike. */
+TF_UNIT void probes_headerkey(const char *js, Probe *tab, int *n) {
+    const char *b_why = NULL; int b_tt = 1;
+    fold_row(&b_tt, &b_why, param_value_is(js, "/api/hk-built", "n", "0"),
+             "no /api/hk-built?n=0 record: the world where the stored record holds no member did not build");
+    fold_row(&b_tt, &b_why, param_value_is(js, "/api/hk-built", "n", "1"),
+             "no /api/hk-built?n=1 record: the arm where the unknown key is a header name did not build a header");
+    fold_row(&b_tt, &b_why, param_value_is(js, "/api/hk-threw", "e", "TypeError"),
+             "no /api/hk-threw?e=TypeError record: the arm where the unknown key is not a header name did not "
+             "throw §5.1's TypeError");
+    const char *f_why = NULL; int f_tt = 1;
+    fold_row(&f_tt, &f_why, !!strstr(js, "\"/api/hk-sent\""),
+             "no /api/hk-sent record: fetch with the record as its headers sent on no arm");
+    fold_row(&f_tt, &f_why, param_value_is(js, "/api/hk-refused", "e", "TypeError"),
+             "no /api/hk-refused?e=TypeError record: fetch's fill threw on no arm");
+    const Probe rows[] = {
+        { "hk-headers", b_tt, "/api/hk-built", SESS_EXPLORE, b_why },
+        { "hk-fetch", f_tt, "/api/hk-sent", SESS_EXPLORE, f_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `blobunk` document (fixture/blobunk.h): blob() over a reply of unknown bytes is a Blob whose
    size and text are that reply's unknowns, so a gate on either forks. */
 TF_UNIT void probes_blobunk(const char *js, Probe *tab, int *n) {
@@ -24525,6 +24550,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_boundpark(js, probes, &np);
     probes_bytesimage(js, probes, &np);
     probes_freezeunk(js, probes, &np);
+    probes_headerkey(js, probes, &np);
     probes_blobunk(js, probes, &np);
     probes_globalcall(js, probes, &np);
     probes_dynfuncsink(js, probes, &np);
