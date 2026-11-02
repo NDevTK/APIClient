@@ -6819,7 +6819,7 @@ JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *op, JSValueCon
 {
     JSValueConst ops[2] = { list, name };
     const char *psrc = concolic_src_c(list), *fields[3];
-    int row, i;
+    int row, own, i;
     char *src, *ident;
     JSValue r;
 
@@ -6832,15 +6832,22 @@ JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *op, JSValueCon
        `URL().query()` tuple naming both address sources, whose search never fires. */
     if (root_declared_count(concolic_root_c(list)) > 1) return concolic_new_derived(ctx, op, ops, 2, example);
     row = root_declared_row(concolic_root_c(list));
-    /* Named residual. Not covered: a list parsed from a derivation of a component (`location.hash.slice(1)`), or
-       from a carrier other than the query, whose reproduction this row cannot compose. Next diff builds: the
-       row for each verbatim carrier and for a fragment parsed without its `#`. Absence shows as: an @S record
-       over such a tuple whose envelope delivers the whole component, and a live verify that never hits. */
-    if (row < 0 || !psrc || strcmp(psrc, g_srcs[row].src) != 0 || g_srcs[row].deliver != SRC_DELIVER_ADDRESS ||
-        g_srcs[row].prefix != '?')
+    /* The row is keyed over the address component the list's bytes come from, and a candidate rides it as
+       `key=<value>` behind the component's prefix. URL §6.2's constructor strips a leading `?`, so a declared
+       query's own bytes parse to that tuple; a derivation of a component (`location.hash.slice(1)`, the fragment
+       parsed without its `#`) parses to it through the page's own transform, which the candidate's re-run
+       applies and its fire verifies. The fragment's own bytes are excluded, since their first name begins with
+       `#`, and so is a derivation of a derived row, since a keyed row's parent is a base component.
+       Named residual. Not covered: a derivation that is not the component's body after its prefix
+       (`location.hash.split("?")[1]`), whose delivery needs the transform inverted. Next diff builds: the
+       delivery composed through the derivation's recorded operation. Absence shows as: an @S record over such
+       a tuple whose search never fires. */
+    own = row >= 0 && psrc && !strcmp(psrc, g_srcs[row].src);
+    if (row < 0 || !psrc || g_srcs[row].deliver != SRC_DELIVER_ADDRESS || (own && g_srcs[row].prefix != '?') ||
+        (!own && g_srcs[row].parent))
         return concolic_new_derived(ctx, op, ops, 2, example);
     src = shapef("%s[%s]", concolic_shape_c(list), key);
-    concolic_declare_keyed_source(src, psrc, key);
+    concolic_declare_keyed_source(src, g_srcs[row].src, key);
     for (i = 0; i < 2; i++) fields[i] = ident_of_operand(ctx, ops[i]);
     fields[2] = op;
     ident = concolic_ident_compose("b", fields, 3);

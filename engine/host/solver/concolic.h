@@ -1111,10 +1111,10 @@ JSValue     concolic_new_derived_kept(JSContext *ctx, const char *op, const JSVa
    `v`'s), answering their count; 0 for any other value. Side-effect-free. */
 int         concolic_kept_operands(JSValueConst v, const char *op, const JSValue **out);
 /* The value of the first tuple named `name` in the application/x-www-form-urlencoded list (URL §5.1) parsed from
-   the unknown string `list`, as `op` reads it. Where `list` is a declared query's own bytes, the value is its own
-   identity and delivery root, `<list's shape>[key]`, a keyed row (concolic_declare_keyed_source): the payload
-   rides the query as that tuple's value, `key` being the name's URL §5.2 serialization. Otherwise it is
-   concolic_new_derived over (list, name). Operands borrowed, `example` consumed. */
+   the unknown string `list`, as `op` reads it. Where `list` is a declared query's own bytes or a derivation of an
+   address component, the value is its own identity and delivery root, `<list's shape>[key]`, a keyed row
+   (concolic_declare_keyed_source) over that component: the payload rides it as that tuple's value, `key` being
+   the name's URL §5.2 serialization. Otherwise it is concolic_new_derived over (list, name). Operands borrowed, `example` consumed. */
 JSValue     concolic_new_urlencoded_value(JSContext *ctx, const char *op, JSValueConst list, JSValueConst name,
                                           const char *key, JSValue example);
 /* The component that claims keyed rows and its URL §5.2 tuple-value serializer, which a candidate's delivery
