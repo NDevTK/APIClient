@@ -888,18 +888,20 @@ static int tf_seen_line(const char *prefix, const char *pinned, const char *prov
 
 /* The zone's latency, modelled for one address. engine/trusted.mjs owes an answer from the bill that showed it
    and writes it at a later read, unless a `fetch.cancel` takes it back first; this fixture answers every other
-   address at the payment that shows it. `/api/replytwice`'s first park is answered at once and each later one
-   is owed for TF_REPLYTWICE_LAG payments, so the owed answer is for a fresh park of a pair already answered. */
+   address at the payment that shows it. `/api/replytwice`'s first park is answered at once and a later one is
+   owed until the payment after the growing arm's last request (`/api/replytwice-other-done`) is answered, so
+   the owed answer is for a fresh park of a pair already answered, and it stays owed across the growth. */
 #define TF_REPLYTWICE_URL "https://x.test/api/replytwice"
-#define TF_REPLYTWICE_LAG 24
+#define TF_REPLYTWICE_DUE "https://x.test/api/replytwice-other-done"
 static struct {
     int answered;     /* answers written for the pair */
     int held;         /* parks whose answer was owed rather than written at once */
     int owed_at;      /* the payment that showed the owed park, or -1 */
+    int due;          /* the payment that answered TF_REPLYTWICE_DUE, or -1 */
     int cancels;      /* `fetch.cancel` notices naming the pair when the answer became owed */
     int withdrawn;    /* owed answers a `fetch.cancel` took back */
     char *pair[5];    /* the five-field identity the owed answer is written under */
-} g_tf_r2 = { 0, 0, -1, 0, 0, { NULL } };
+} g_tf_r2 = { 0, 0, -1, -1, 0, 0, { NULL } };
 static int g_tf_payments;
 
 /* Whether the bill's line for `abs` is held as an owed answer rather than answered now. */
@@ -916,7 +918,7 @@ static int tf_replytwice_hold(const char *abs, const char *const pair[5]) {
     return 1;
 }
 
-/* Writes the owed answer once its lag has passed, or drops it when a `fetch.cancel` named the pair since. The
+/* Writes the owed answer once it is due, or drops it when a `fetch.cancel` named the pair since. The
    answer is written whether or not the pair is on this payment's bill: a zone writes what it owes. */
 static int tf_replytwice_pay(JSContext *ctx) {
     int filled = 0;
@@ -924,7 +926,7 @@ static int tf_replytwice_pay(JSContext *ctx) {
     if (g_tf_r2.owed_at < 0) return 0;
     if (tf_cancelled("/api/replytwice") > g_tf_r2.cancels) {
         g_tf_r2.withdrawn++;
-    } else if (g_tf_payments - g_tf_r2.owed_at >= TF_REPLYTWICE_LAG) {
+    } else if (g_tf_r2.due >= 0 && g_tf_payments > g_tf_r2.due) {
         static const char rbody[] = "{\"region\":\"us-west-2\"}";
         const char *const list[1] = { TF_REPLYTWICE_URL };
         HeaderList eh = { 0 };
@@ -1090,6 +1092,7 @@ static int fixture_provide(JSContext *ctx) {
             filled += engine_provide(ctx, method, mode, referrer_policy, referrer, url, reply);
             JS_FreeValue(ctx, reply);
             if (!strcmp(abs, TF_REPLYTWICE_URL)) g_tf_r2.answered++;
+            if (!strncmp(abs, TF_REPLYTWICE_DUE, strlen(TF_REPLYTWICE_DUE))) g_tf_r2.due = g_tf_payments;
         }
         free(abs);
         free(one);
@@ -20802,8 +20805,8 @@ TF_UNIT void probes_replytwice(const char *js, Probe *tab, int *n) {
              "the answer was owed and RAM pressure sold no flow, so the holder's park was never dropped");
     fold_row(&r2_tt, &r2_why, g_tf_r2.withdrawn >= 1,
              "pressure sold a flow and no fetch.cancel took the owed answer back: either the holder was not the "
-             "flow sold within the answer's lag (it was answered instead, which the `answered` count shows), or "
-             "the drop of the pair's last park told the zone nothing");
+             "flow sold before its answer fell due (it was answered instead), or the drop of the pair's last "
+             "park told the zone nothing");
     const Probe rows[] = {
         { "reply-twice", r2_tt, "/api/replytwice", SESS_EXPLORE, r2_why },
     };
