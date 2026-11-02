@@ -559,7 +559,7 @@ char *result_wfq_json(void) {
     WfqCensus w;
     char *terms = NULL;
     char *never_terms = NULL;
-    char *observed_terms = NULL;
+    char *observed_terms = NULL, *cand_terms = NULL;
     char *assumed_terms = NULL;
     char *never_top = NULL;
     char *pick_fresh = NULL;
@@ -738,6 +738,18 @@ char *result_wfq_json(void) {
     METRIC_SET_REAL(w_top, w.w_top);
     METRIC_SET_REAL(w_min, w.w_min);
     METRIC_SET_REAL(cand_wmax, w.cand_w_max);
+    if (w.cand_top_ops.present) {
+        char *top = weight_operands_json(&w.cand_top_ops), *cand = weight_operands_json(&w.cand_ops);
+        cand_terms = composef("{\"ageQuantum\":%.17g,\"pricedWork\":%lld,\"rungs\":%d,\"gap\":%.17g,"
+                              "\"top\":%s,\"cand\":%s}",
+                              w.cand_top_ops.age_quantum, (long long)w.cand_top_ops.priced_work, FLOW_RUNGS_N,
+                              w.w_top - w.cand_w_max, top, cand);
+        CHECK(top && cand && cand_terms, "result: OOM composing the candWMax operands");
+        METRIC_SET_OBJECT(cand_terms, cand_terms);   /* borrowed until the rows are rendered below */
+        free(top); free(cand);
+    } else {
+        METRIC_ABSENT(cand_terms);
+    }
     METRIC_SET(top_svc, w.top_svc);
     METRIC_SET(top_svc_fam, w.top_svc_fam);
     METRIC_SET(top_forgiven, w.top_forgiven);
@@ -911,6 +923,7 @@ char *result_wfq_json(void) {
     free(terms);
     free(never_terms);
     free(observed_terms);
+    free(cand_terms);
     free(assumed_terms);
     free(never_top);
     free(pick_fresh);

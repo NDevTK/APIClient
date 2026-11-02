@@ -1312,6 +1312,9 @@ typedef struct {
     double w_top;         /* flow_best's weight — what holds the front of the queue */
     double w_min;         /* the lowest weight in the frontier — the other end of the same order */
     double cand_w_max;    /* the best weight any @S candidate can offer against `w_top` */
+    /* …and the operands of the front's weight and of that candidate's, so a reader recomposes `w_top - cand_w_max`
+       and reads which term holds the best candidate behind. `present` is 0 where no candidate stands. */
+    FlowWeightOperands cand_top_ops, cand_ops;
 
     /* The two halves of the leader's own silence, read off the member flow_best returned, in notches like
        `svc_max`/`svc_fam_max` (multiply by FLOW_AGE_QUANTUM for points). A ledger is monotone, so a frozen

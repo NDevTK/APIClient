@@ -5636,6 +5636,8 @@ void flow_wfq_census(WfqCensus *out) {
     long cur_deep_live = 0;
     double cur_deep_w = 0.0;
     int have_cur_deep = 0;
+    /* The best-weighted candidate (flow.h's `cand_ops`), recorded by the walk beside `cand_w_max`. */
+    const Flow *cand_holder = NULL;
     /* The best-weighted member of the observed world (flow.h's `observed_ops`), recorded by the walk. */
     double observed_w = 0.0;
     const Flow *observed_holder = NULL;
@@ -5732,6 +5734,8 @@ void flow_wfq_census(WfqCensus *out) {
     out->cur_deep = 0; out->cur_deep_live = 0; out->cur_deep_w_gap = 0.0;
     memset(&out->cur_deep_top_ops, 0, sizeof out->cur_deep_top_ops);
     memset(&out->cur_deep_ops, 0, sizeof out->cur_deep_ops);
+    memset(&out->cand_top_ops, 0, sizeof out->cand_top_ops);
+    memset(&out->cand_ops, 0, sizeof out->cand_ops);
     out->observed_members = 0;
     out->observed_w_gap = 0.0;
     memset(&out->observed_top_ops, 0, sizeof out->observed_top_ops);
@@ -6061,7 +6065,7 @@ void flow_wfq_census(WfqCensus *out) {
         /* And the same questions of the candidates alone (flow.h). `cand_src` is what a candidate session is, and
            engine.c copies it to a sibling, so this counts the search's whole live population. */
         if (f->cand_src) {
-            if (!out->cand_members || w > out->cand_w_max) out->cand_w_max = w;
+            if (!out->cand_members || w > out->cand_w_max) { out->cand_w_max = w; cand_holder = f; }
             out->cand_members++;
             if (flow_own_silence(f) == 0) out->cand_unrun++;   /* the order's quantity, as the row above */
             if (s > out->cand_svc_max) out->cand_svc_max = s;
@@ -6219,6 +6223,12 @@ void flow_wfq_census(WfqCensus *out) {
                "front and the observed world's best member are the two the walk recorded");
     }
     flow_site_census(out);
+    if (cand_holder && top) {
+        flow_weight_operands(top, &out->cand_top_ops);
+        flow_weight_operands(cand_holder, &out->cand_ops);
+        DCHECK(out->cand_top_ops.w == out->w_top && out->cand_ops.w == out->cand_w_max,
+               "the candTerms operands were read off members whose weights are not `w_top` and `cand_w_max`");
+    }
     if (assumed_holder && top) {
         out->assumed_w_gap = out->w_top - assumed_w;
         flow_weight_operands(top, &out->assumed_top_ops);

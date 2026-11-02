@@ -137,6 +137,9 @@ METRIC(dist_max, "distMax", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
 METRIC(w_top, "wTop", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
 METRIC(w_min, "wMin", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
 METRIC(cand_wmax, "candWMax", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
+/* …and the operands of `wTop` and `candWMax` (solver/flow.h's `cand_ops`), `cand` in place of `deep`, with the age
+   quantum and rung count they are priced in. Absent where no candidate stands. */
+METRIC(cand_terms, "candTerms", GAUGE, "operand", AGENT, "solver/flow.c", OBJECT)
 /* …and the event the two leader notches are a reading between: `topForgiven` counts
    forgivenesses of the front account's silence. An emission zeroes both aging halves for
    every arm of the account, collapsing the frontier into exactly tied visit tiers that
