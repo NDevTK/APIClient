@@ -27,11 +27,13 @@
    `event.origin`.
    window_message_delivery_sources names the pair for `record` (a routed record's whole text) posted by
    `sender` (the sending document's name) into `data_src`/`origin_src` and declares both rows, the origin as a
-   principal, on first sight. */
+   principal, on first sight. `sequence` is the record of the first post of the sequence `record` belongs to
+   (a driven listener's posts at every chain position), whose data source names the sequence to the product
+   (concolic_declare_source_event); NULL for a routed record, which carries no sequence. */
 #define MESSAGE_DATA_SRC     "message.data"
 #define MESSAGE_ORIGIN_SRC   "message.origin"
-void window_message_delivery_sources(const char *record, const char *sender, char *data_src, char *origin_src,
-                                     size_t cap);
+void window_message_delivery_sources(const char *record, const char *sequence, const char *sender, char *data_src,
+                                     char *origin_src, size_t cap);
 /* A routed record's identity: FNV-1a 64 over its whole text, as 16 hex digits and a NUL. The receiver names a
    delivery's sources by it and the sender its routed-post index record (solver/post_index.h). */
 void window_message_record_id(const char *record, char out[17]);

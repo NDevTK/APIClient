@@ -2900,15 +2900,6 @@ void concolic_declare_source_event(const char *component, const char *src, const
     CHECK(g_srcs[row].event != NULL, "concolic: OOM declaring a source's event identity");
 }
 
-const char *concolic_source_identity(const char *src)
-{
-    int row;
-
-    DCHECK(src != NULL, "a source's identity was asked of no source");
-    row = src_row(src, strlen(src));
-    return row >= 0 && g_srcs[row].event ? g_srcs[row].event : src;
-}
-
 /* The pins this flow made on each attacker principal (see concolic.h). A walk of the registry rather than a
  * keyed lookup, because the flow must not be taught which sources are principals; this array is the one place
  * that knows. O(declared principals), one indexed chain probe each. */
@@ -4167,8 +4158,9 @@ static void concolic_get_value_base_hook(JSContext *ctx, JSValueConst base)
    function of its parent's and the field, so one session-wide table answers every flow, and nothing reads a
    structure back out of a spelling. Filled at the member mint; a root's own row (path length 0) is filed with
    its first member. A `parse` row is ECMAScript §25.5.2.1 ParseJSON's value over its parent's String rather than
-   a member of it, its last path segment naming the operation. */
-typedef struct { char *src, *ident, *root; char **path; int n; uint8_t parse; } MemberRow;
+   a member of it, its last path segment naming the operation. `name` is the member's name to the product under
+   its root's event identity (concolic_source_identity), owned, NULL until asked. */
+typedef struct { char *src, *ident, *root; char **path; int n; uint8_t parse; char *name; } MemberRow;
 static MemberRow *g_members;
 static int g_members_n, g_members_cap;
 static int *g_members_ix, g_members_ix_cap;   /* open addressing over `src`, -1 empty; at most half full */
@@ -4229,6 +4221,7 @@ static int member_row_add(const char *src, const char *ident, const char *root, 
     r->root = reclaim_strdup(root);
     r->n = n;
     r->parse = (uint8_t)parse;
+    r->name = NULL;
     r->path = n ? reclaim_malloc((size_t)n * sizeof *r->path) : NULL;
     CHECK(r->src && r->root && (!ident || r->ident) && (!n || r->path), "concolic: OOM filing a member's structure");
     for (int i = 0; i < n; i++) {
@@ -4297,6 +4290,34 @@ int concolic_value_truth(const char *ident)
     return arm;
 }
 static char *row_segment(const char *name);
+
+/* See concolic.h. A member of a root that is one event of a sequence is that member of the sequence: the
+   event identity with the member path, each segment spelled as a row segment. */
+const char *concolic_source_identity(const char *src)
+{
+    int row, m;
+
+    DCHECK(src != NULL, "a source's identity was asked of no source");
+    row = src_row(src, strlen(src));
+    if (row >= 0) return g_srcs[row].event ? g_srcs[row].event : src;
+    m = member_row_of(src);
+    row = m >= 0 && g_members[m].n > 0 ? src_row(g_members[m].root, strlen(g_members[m].root)) : -1;
+    if (row < 0 || !g_srcs[row].event) return src;
+    if (!g_members[m].name) {
+        char *name = reclaim_strdup(g_srcs[row].event);
+
+        CHECK(name != NULL, "concolic: OOM naming a member of an event sequence");
+        for (int i = 0; i < g_members[m].n; i++) {
+            char *seg = row_segment(g_members[m].path[i]), *grown = shapef("%s.%s", name, seg);
+
+            free(seg);
+            free(name);
+            name = grown;
+        }
+        g_members[m].name = name;
+    }
+    return g_members[m].name;
+}
 static int record_example(JSContext *ctx, const Concolic *c, JSValue *out);
 
 static uint32_t example_units(JSContext *ctx, JSValueConst ex);
@@ -8389,7 +8410,7 @@ static void source_overlay_withdraw(void);
 void concolic_free(void)
 {
     for (int i = 0; i < g_members_n; i++) {
-        free(g_members[i].src); free(g_members[i].ident); free(g_members[i].root);
+        free(g_members[i].src); free(g_members[i].ident); free(g_members[i].root); free(g_members[i].name);
         for (int k = 0; k < g_members[i].n; k++) free(g_members[i].path[k]);
         free(g_members[i].path);
     }

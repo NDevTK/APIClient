@@ -25773,7 +25773,7 @@ static void fixture_post_from_peer(JSContext *ctx, const char *peer_doc, const c
     }
     /* The sources this delivery mints, named by the receiving component's own function so a row reads the
        name the engine emits. */
-    if (data_src) window_message_delivery_sources(rec, peer_doc, data_src, origin_src, TF_DELIVERY_SRC_CAP);
+    if (data_src) window_message_delivery_sources(rec, NULL, peer_doc, data_src, origin_src, TF_DELIVERY_SRC_CAP);
     /* THE ORIGIN TRAVELS BESIDE THE RECORD AND NEVER INSIDE IT (SECURITY.md): only the trusted zone may stamp
        one, and this function is standing in for that zone. */
     engine_route(ctx, rec, origin);
@@ -36044,10 +36044,10 @@ TF_UNIT void message_source_selftest(void)
        every timeline and a cold resume agree, and a different record names different data, so one message's
        pin cannot decide another's value. Its origin is its sender's: two records one document posts share it,
        and another document's record does not. */
-    window_message_delivery_sources(REC1, "tfdoc", dsrc, osrc, sizeof dsrc);
-    window_message_delivery_sources(REC1, "tfdoc", dsrc_again, osrc_again, sizeof dsrc_again);
-    window_message_delivery_sources(REC2, "tfdoc", d2, o2, sizeof d2);
-    window_message_delivery_sources(REC2, "tfpeer", d3, o3, sizeof d3);
+    window_message_delivery_sources(REC1, NULL, "tfdoc", dsrc, osrc, sizeof dsrc);
+    window_message_delivery_sources(REC1, NULL, "tfdoc", dsrc_again, osrc_again, sizeof dsrc_again);
+    window_message_delivery_sources(REC2, NULL, "tfdoc", d2, o2, sizeof d2);
+    window_message_delivery_sources(REC2, NULL, "tfpeer", d3, o3, sizeof d3);
     CHECK(!strcmp(dsrc, dsrc_again) && !strcmp(osrc, osrc_again),
           "one routed record named two different source pairs — the timelines admitting it and a cold resume "
           "rebuilding it would hold one message under several names");

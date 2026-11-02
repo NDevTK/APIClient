@@ -619,10 +619,10 @@ void window_message_record_id(const char *record, char out[17])
     snprintf(out, 17, "%016llx", (unsigned long long)h);
 }
 
-void window_message_delivery_sources(const char *record, const char *sender, char *data_src, char *origin_src,
-                                     size_t cap)
+void window_message_delivery_sources(const char *record, const char *sequence, const char *sender, char *data_src,
+                                     char *origin_src, size_t cap)
 {
-    char id[17], sid[17];
+    char id[17], sid[17], qid[17], event[sizeof MESSAGE_DATA_SRC + 18];
     int nd, no;
 
     DCHECK(record != NULL && *record && sender != NULL && *sender && data_src != NULL && origin_src != NULL,
@@ -633,8 +633,14 @@ void window_message_delivery_sources(const char *record, const char *sender, cha
     no = snprintf(origin_src, cap, MESSAGE_ORIGIN_SRC ":%s", sid);
     CHECK(nd > 0 && (size_t)nd < cap && no > 0 && (size_t)no < cap,
           "window message: a delivery's source names did not fit their room");
-    if (!concolic_source_declared_by(WM_COMPONENT, data_src))
+    if (!concolic_source_declared_by(WM_COMPONENT, data_src)) {
         concolic_declare_source(WM_COMPONENT, data_src, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
+        if (sequence) {
+            window_message_record_id(sequence, qid);
+            snprintf(event, sizeof event, MESSAGE_DATA_SRC ":%s", qid);
+            concolic_declare_source_event(WM_COMPONENT, data_src, event);
+        }
+    }
     if (!concolic_source_declared_by(WM_COMPONENT, origin_src)) {
         concolic_declare_source(WM_COMPONENT, origin_src, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
         concolic_declare_source_principal(WM_COMPONENT, origin_src);
@@ -715,7 +721,7 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
         char dsrc[64], osrc[64], oshape[68];
         JSValue org;
 
-        window_message_delivery_sources(record, sender_doc, dsrc, osrc, sizeof dsrc);
+        window_message_delivery_sources(record, NULL, sender_doc, dsrc, osrc, sizeof dsrc);
         snprintf(oshape, sizeof oshape, "{%s}", osrc);
         org = concolic_source_wrap(ctx, oshape, osrc, JS_NewString(ctx, sender_origin));
         JS_SetPropertyUint32(ctx, entry, PQ_DATA_SRC, JS_NewString(ctx, dsrc));

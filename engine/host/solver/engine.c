@@ -6536,32 +6536,39 @@ static int orphan_chain_position(const Flow *f, int k) {
    one-window PoC and all its messages read one origin source (window_message_delivery_sources). */
 #define ENGINE_ATTACKER_SENDER "attacker-document"
 
-/* The delivery record a driven message listener's call at chain position `pos` names its event after. */
+/* The delivery record a driven message listener's call at chain position `pos` names its event after; position
+   0, the body's first call, is the record that names the listener's sequence of posts. */
 static void engine_attacker_post_record(uint64_t hash, int pos, char *out, size_t cap) {
     int n = snprintf(out, cap, "attacker-post:%016llx#%d", (unsigned long long)hash, pos);
 
     CHECK(n > 0 && (size_t)n < cap, "engine: an attacker post's record name did not fit its room");
 }
 
-void engine_orphan_message_sources(const Flow *f, int k, char *data, char *origin, size_t cap) {
-    char record[64];
+/* The delivery sources of the driven listener `hash`'s post at chain position `pos`, declared one event of that
+   listener's sequence of posts. */
+static void engine_attacker_post_sources(uint64_t hash, int pos, char *data, char *origin, size_t cap) {
+    char record[64], sequence[64];
 
+    engine_attacker_post_record(hash, pos, record, sizeof record);
+    engine_attacker_post_record(hash, 0, sequence, sizeof sequence);
+    window_message_delivery_sources(record, sequence, ENGINE_ATTACKER_SENDER, data, origin, cap);
+}
+
+void engine_orphan_message_sources(const Flow *f, int k, char *data, char *origin, size_t cap) {
     DCHECK(f != NULL && f->orphan && k >= 0 && k < f->orphan_chain_n && f->orphan_acts[k] &&
            strstr(f->orphan_acts[k], "\"kind\":\"message\"") != NULL,
            "a message delivery's source was asked of a chain member that is not a driven message listener");
-    engine_attacker_post_record(f->orphan_chain[k], orphan_chain_position(f, k), record, sizeof record);
-    window_message_delivery_sources(record, ENGINE_ATTACKER_SENDER, data, origin, cap);
+    engine_attacker_post_sources(f->orphan_chain[k], orphan_chain_position(f, k), data, origin, cap);
 }
 
 /* The event an attacker document's postMessage hands a driven Window `message` listener (§9.3.3 step 8.4):
    a MessageEvent whose data and origin are the delivery's attacker sources, named after the drive's chain
    position so each event is its own delivery, with no lastEventId, no source and no ports. Owned. */
 static JSValue engine_attacker_message_event(JSContext *ctx, uint64_t hash, int pos) {
-    char record[64], dsrc[64], osrc[64], dshape[68], oshape[68];
+    char dsrc[64], osrc[64], dshape[68], oshape[68];
     JSValue data, origin, ports, noid, ev;
 
-    engine_attacker_post_record(hash, pos, record, sizeof record);
-    window_message_delivery_sources(record, ENGINE_ATTACKER_SENDER, dsrc, osrc, sizeof dsrc);
+    engine_attacker_post_sources(hash, pos, dsrc, osrc, sizeof dsrc);
     snprintf(dshape, sizeof dshape, "{%s}", dsrc);
     snprintf(oshape, sizeof oshape, "{%s}", osrc);
     data = concolic_new(ctx, dshape, dsrc, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);

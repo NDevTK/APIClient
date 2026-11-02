@@ -706,14 +706,14 @@ void        concolic_declare_source_principal(const char *component, const char 
    control), and `event` names that target's events without the ordinal: what the product calls this source.
    The component must already own `src`. */
 void        concolic_declare_source_event(const char *component, const char *src, const char *event);
-/* The name the product knows source `src` by: the event identity its row declares, else `src` itself. Two
+/* The name the product knows source `src` by: the event identity its row declares, the same member of that
+   identity where `src` is a member read under such a row (concolic_members_each), else `src` itself. Two
    ordinals of one event sequence are one source to the product, so an identity built over it (solve.c's search
    and finding identities) does not pay a listener's next event as new output. Borrowed.
-   Named residual. Not covered: a driven message listener's data source (window_message_delivery_sources) is
-   named after its record, which carries the chain position, and declares no event. Next diff builds: the
-   record's event identity passed beside it and declared here. Absence shows as: a document whose message
-   listener reaches a sink opening one @S search per re-drive, with @WFQ's creditsPaidLifetime growing with
-   them. */
+   Named residual. Not covered: a routed message (window_message_deliver_remote), whose record carries no
+   sequence, so each post a peer routes is a source of its own to the product. Next diff builds: the trusted
+   zone's sequence name carried with the routed record and declared here. Absence shows as: a document receiving
+   a peer's repeated posts opening one @S search per post, with @WFQ's creditsPaidLifetime growing with them. */
 const char *concolic_source_identity(const char *src);
 /* One pin this flow made on a principal: the sender identity a delivery must present. `tok` and `kind` are the
    operand the page compared against, `loose` whether the equality was §7.2.13 IsLooselyEqual ( x, y ) rather
