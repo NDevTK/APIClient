@@ -118,6 +118,8 @@ int  solve_seeds_owed(void);   /* whether solve_seed_candidates has a payload to
    the page's cost is most of what an @S search spends — and it is what says whether a run got slower because
    there were more searches or because each search grew. */
 int  solve_candidate_count(void);
+/* The engine work retired when this session's first fire-verified finding was recorded, or -1 before one. */
+int64_t solve_first_fire_work(void);
 /* THIS SEARCH'S BYTES JUST ENTERED THE PAGE'S OWN PROGRAM — reported by the component that performs the
    substitution (solver/concolic.c's concolic_deliver), because that is the only site on the runway that can
    state it: every other number a parked entry carries is observed AT a sink, and §@S(i) wants an observation

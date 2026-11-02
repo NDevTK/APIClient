@@ -1278,6 +1278,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/requestroute.h"
 #include "fixture/clobber.h"
 #include "fixture/srcreach.h"
+#include "fixture/cutboot.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
 #include "fixture/cwmix.h"
@@ -1923,6 +1924,7 @@ TF_DOCS[] = {
     { "clobber", HTML_CLOBBER },
     { "srcreach", HTML_SRCREACH },
     { "srcreachneg", HTML_SRCREACHNEG },
+    { "cutboot", HTML_CUTBOOT },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
     { "cwmix", HTML_CWMIX },
@@ -18128,6 +18130,24 @@ TF_UNIT void probes_srcreach(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cutboot` document (fixture/cutboot.h): the markup search over the decoded fragment fires
+   after the document's long setup. */
+TF_UNIT void probes_cutboot(const char *js, Probe *tab, int *n) {
+    char hs[1024] = "";
+    int has = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, hs, sizeof hs);
+    const char *fw_why = NULL; int fw_tt = 1;
+
+    fold_row(&fw_tt, &fw_why, has,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in location.hash, so the decoded fragment "
+             "never reached the markup write tainted");
+    fold_row(&fw_tt, &fw_why, has && s_stage(js, "innerHTML", hs) == S_FIRED,
+             "the innerHTML <- location.hash search did not fire a PoC");
+    const Probe rows[] = {
+        { "cb-fired", fw_tt, "'cbOut'", SESS_EXPLORE, fw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `clobber` document (fixture/clobber.h). */
 TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     char hs[1024] = "", us[1024] = "";
@@ -24746,6 +24766,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_windowname(js, probes, &np);
     probes_clobber(js, probes, &np);
     probes_srcreach(js, probes, &np);
+    probes_cutboot(js, probes, &np);
     probes_typedinput(js, probes, &np);
     probes_closerequest(js, probes, &np);
     probes_cwmix(js, probes, &np);

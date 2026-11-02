@@ -2247,6 +2247,8 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
                              /* …and what all of the above was denominated in: a property of the host that decides
                                 whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
+                             /* The work retired at the first finding (solve_first_fire_work, -1 before one). */
+                             "\"_firstFireWork\":%lld,"
                              "\"_novelty\":%s,"
                              "\"_quantum\":%s,\"_park\":%s,\"_parkWhy\":\"%s\"}",
                      eps, sinks, errs, errsRetracted, errsExplored, posts,
@@ -2269,6 +2271,7 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
                      place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
                      casc.asks_life, casc.served_life, casc.resolved_life,
                      casc.computed_asks_life, casc.computed_served_life, casc.computed_resolved_life,
+                     (long long)solve_first_fire_work(),
                      novelty,
                      quantum,
                      cold_park_json(), engine_park_why());

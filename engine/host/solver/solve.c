@@ -44,6 +44,11 @@ enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2, SINK_REQUEST = 3 };   /* sink
 static int g_cands_seeded;
 int solve_candidate_count(void) { return g_cands_seeded; }
 
+/* The engine work retired when this session's first finding was recorded, -1 before one: how much a search spends
+   to its first proof, comparable across builds of one fixture (`_firstFireWork`). */
+static int64_t g_first_fire_work = -1;
+int64_t solve_first_fire_work(void) { return g_first_fire_work; }
+
 /* The running flow's candidate mode, read through the running flow so a preemption cannot cross it. A NULL flow
    (baseline setup) is not verifying. */
 static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand_verifying; }
@@ -1157,6 +1162,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
        is long since concrete. Both checks are CHECK because both pointers are dereferenced below in release. */
     Cand *twin = search_of(source, cls);
     CHECK(twin != NULL, "an @S finding was recorded for a sink that was never detected as pending");
+    if (g_first_fire_work < 0) g_first_fire_work = engine_work_retired();
     /* Both doors into g_pending state the root (detection off the value, a cold resume off the park record), so
        a NULL here names a third door. */
     CHECK(twin->root != NULL,
