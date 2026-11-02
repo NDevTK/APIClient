@@ -14,13 +14,14 @@ static const char HTML_REPLYTWICE[] =
     "<!doctype html><html>"
     "<body>"
     "<script>"
-    "var _r2cfg = { grow: state.grow };"
+    "var _r2cfg = { hold: state.hold };"
     "(async function () {"
     /* The boot flow's park on the pair, answered at once. */
     " await fetch('/api/replytwice');"
-    /* Absent application state forks the two arms. The observed one parks on the same request again: a fresh
-       park of a pair the zone has answered once, whose answer the zone owes while the other arm runs. */
-    " if (!_r2cfg.grow) {"
+    /* Absent application state forks the two arms, and the assumed one runs first. It parks on the same request
+       again at once: a fresh park of a pair the zone has answered once, whose answer the zone owes while the
+       other arm runs. */
+    " if (_r2cfg.hold) {"
     "  await fetch('/api/replytwice');"
     "  fetch('/api/replytwice-resumed');"
     " } else {"
