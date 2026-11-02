@@ -65,29 +65,16 @@ static JSValue response_json_stringify(JSContext *ctx)
    trusted host had already fetched) and wrong the moment the page can build one: `new Response("", {status:
    404})` is not 200, and every `if (r.ok)` in a page that constructs its own responses forked the wrong way.
    The BODY is §5.3's mixin, whose one implementation Request includes too. */
-/* §2.2.6's URL LIST, AND WHY IT IS A JS ARRAY.
- *
- * "A response has an associated URL list (a list of zero or more URLs). Unless stated otherwise, it is « »."
- * and "A response has an associated URL. It is a pointer to the last URL in response's URL list and null if
- * response's URL list is empty." There was ONE `char *url` here, so every question that is really about the
- * LIST had to be answered by something else: `redirected` — §5.5's "The redirected getter steps are to return
- * true if this's response's URL list's size is greater than 1; otherwise false." — was the literal `false`,
- * which is not a value this file computed but a value it asserted, and a bundle's `if (r.redirected)` never
- * forked the arm that handles one.
- *
- * IT IS A JS VALUE for the reason CLAUDE.md §State-isolation gives: a list that must PARK to the cold tier and
- * FORK per-flow gets both for free from a JS Array — the snapshot machinery already carries it, and the
- * runtime's own leak walk (the gc_obj_list pass the gates count leaks with) can SEE it, which it cannot do for
- * a `char **`. It is also the shape `headers` beside it already is, so the record has ONE ownership rule for
- * its owned values rather than two. It is not mutated after the response is built — a fetch grows the list
- * (§4.5 "Append locationURL to request's URL list") and hands it over complete — so nothing here has a write
- * site to capture; it forks and parks as a value, which is what the rule is about.
- *
- * ITS ITEMS ARE SERIALIZED URLS, because that is what crosses the host bridge: a live URL record crosses
- * neither an instance, nor a session, nor a park. `url` runs the real parser back over the last one to answer
- * "serialized with exclude fragment set to true". The one other item is an UNKNOWN URL RECORD (core/url/url.h's
- * url_construct_unknown), the current URL of a request whose address is unknown input, which the engine itself
- * lists on a reply no server sent (fetch_reply_unaddressed) and which `url` answers as a derivation. */
+/* §2.2.6 Responses' URL list: "a list of zero or more URLs. Unless stated otherwise, it is « »", whose last item
+ * is the response's URL, null for an empty list; §5.5 Response class's `url` and `redirected` read nothing else.
+ * It is a JS Array so it forks per flow and parks to the cold tier as a value with the snapshot, and the runtime's
+ * leak walk sees it; `headers` beside it has the same ownership rule. It is never mutated after the response is
+ * built: a fetch grows it (Fetch §4.5 HTTP-redirect fetch's "Append locationURL to request's URL list") and hands
+ * it over complete, so it has no write site to capture.
+ * An item is a SERIALIZED URL, the form that crosses the host bridge, an instance and a park; `url` runs the real
+ * parser back over it. The one other item is an UNKNOWN URL RECORD (core/url/url.h's url_construct_unknown): the
+ * current URL of a request whose address is unknown input, which fetch_reply_unaddressed lists on a reply no
+ * server sent, and which `url` answers as a derivation. */
 typedef struct {
     JSValue url_list;         /* §2.2.6's URL list — an Array of URLs (above); « » is the empty Array */
     BodyState body;           /* §5.3's mixin, one implementation shared with Request */
