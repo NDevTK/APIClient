@@ -17998,6 +17998,19 @@ static long sr_census(const char *js, const char *key) {
     return p ? strtol(p + k, NULL, 10) : -1;
 }
 
+/* Whether the markup @S record whose source is `token` (holds it, unless `exact`) is fire-verified: 1 when it
+   carries a PoC, 0 when it is parked, -1 when there is none. */
+static int sr_fired(const char *js, const char *token, int exact) {
+    char src[1024];
+    size_t span = 0;
+    const char *rec;
+
+    if (exact) snprintf(src, sizeof src, "%s", token);
+    else if (!s_rooted_source(js, "innerHTML", token, src, sizeof src)) return -1;
+    if (!(rec = s_record(js, "innerHTML", src, &span))) return -1;
+    return memmem(rec, span, "\"poc\":\"", 7) != NULL;
+}
+
 /* The rows of the `srcreach` and `srcreachneg` documents (fixture/srcreach.h). A row of the first is answered when
    its value arm ran and an @S markup record's source identity holds the token its derivation spells, or is
    exactly that token where `exact` is set. The two address reads whose list joins both address sources
@@ -18027,7 +18040,7 @@ TF_UNIT void probes_srcreach(const char *js, Probe *tab, int *n) {
         { "sr20-location-string", "/api/sr20-arm", LOCATION_HASH_SRC, 1 },
     };
     static char why[COUNTOF(SR)][160];
-    Probe rows[COUNTOF(SR) + 1];
+    Probe rows[COUNTOF(SR) + 2];
     long reached = sr_census(js, "_sinkReached"), tainted = sr_census(js, "_sinkTainted");
     const char *ng_why = NULL; int ng_tt = 1;
 
@@ -18052,6 +18065,22 @@ TF_UNIT void probes_srcreach(const char *js, Probe *tab, int *n) {
     fold_row(&ng_tt, &ng_why, reached > 0, "NOT REACHED: the constant markup write never reached the sink");
     fold_row(&ng_tt, &ng_why, tainted == 0, "a constant markup write after two source reads counted as tainted");
     rows[COUNTOF(SR)] = (Probe){ "srn-untainted", ng_tt, "srn-constant", SESS_EXPLORE, ng_why };
+    /* A fire belongs to the search whose own write it fired through. sr5, sr6 and sr20 write the fragment without
+       decoding it, and the fragment percent-encode set (URL §1.3) holds `<`, so their writes never parse an
+       element; sr4 decodes the same bytes into its write. Every candidate over the fragment reaches sr4. */
+    {
+        int f4 = sr_fired(js, "{location.hash}.slice(1)", 1);
+        int f5 = sr_fired(js, "{location.hash}.match(", 0), f6 = sr_fired(js, "{location.hash}.RegExp.exec().1", 1);
+        int f20 = sr_fired(js, LOCATION_HASH_SRC, 1);
+        const char *fo_why = NULL; int fo_tt = 1;
+
+        fold_row(&fo_tt, &fo_why, f4 >= 0, "NOT REACHED: no markup @S record is keyed `{location.hash}.slice(1)`");
+        fold_row(&fo_tt, &fo_why, f4 != 0, "the decoded fragment's own write (sr4) has no fire-verified record");
+        fold_row(&fo_tt, &fo_why, f5 != 1 && f6 != 1 && f20 != 1,
+                 "a search whose own write receives only the percent-encoded fragment (sr5, sr6 or sr20) is recorded "
+                 "fired: a fire through another search's write was credited to the running candidate's search");
+        rows[COUNTOF(SR) + 1] = (Probe){ "sr-fire-own-write", fo_tt, "srRow('sr4'", SESS_EXPLORE, fo_why };
+    }
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
