@@ -17353,6 +17353,36 @@ static int s_rooted_source(const char *js, const char *sink, const char *root, c
     return 0;
 }
 
+/* As s_rooted_source, for a record whose source reads stored value `root` alone: one naming no attacker source
+   (the address's components, window.name, a message, the referrer), whose own record carries the delivery. A
+   page that reads one stored key out of a value an attacker source wrote has a record of each, in whatever order
+   the searches fired. */
+static int s_stored_source(const char *js, const char *sink, const char *root, char *out, size_t cap) {
+    static const char *const attacker[] = { "{location.", "{window.name}", "{message.", "{document.referrer}" };
+    char pat[96];
+    const char *e, *q;
+    int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"", sink);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat, "an @S sink pattern did not fit its buffer");
+    for (e = strstr(js, pat); e; e = strstr(e + 1, pat)) {
+        const char *b = e + k;
+        int ours = 1;
+        for (q = b; *q && *q != '"'; q++)
+            if (*q == '\\' && q[1]) q++;
+        CHECK(*q == '"', "an @S record's source string is not terminated");
+        if (!memmem(b, (size_t)(q - b), root, strlen(root))) continue;
+        for (size_t a = 0; a < sizeof attacker / sizeof *attacker; a++)
+            if (memmem(b, (size_t)(q - b), attacker[a], strlen(attacker[a]))) ours = 0;
+        if (!ours) continue;
+        CHECK((size_t)(q - b) < cap, "an @S record rooted where the row asks has a source longer than the row's "
+                                    "buffer — skipping it would read as NOT REACHED; size the buffer");
+        memcpy(out, b, (size_t)(q - b));
+        out[q - b] = 0;
+        return 1;
+    }
+    return 0;
+}
+
 /* Whether the @S record at (`sink`, `src`) names `first` and, after it, `second`: the acts a reproduction must
    perform in order, read by the handlers' own names because the record spells no step list of its own. */
 static int s_names_in_order(const char *js, const char *sink, const char *src, const char *first,
@@ -17688,7 +17718,7 @@ TF_UNIT void probes_replyrole(const char *js, Probe *tab, int *n) {
 static void sx_precondition_rows(const char *js, const char *root, int *reach, const char **reach_why, int *pre,
                                  const char **pre_why) {
     char src[1024] = "";
-    int has = s_rooted_source(js, "innerHTML", root, src, sizeof src);
+    int has = s_stored_source(js, "innerHTML", root, src, sizeof src);
 
     fold_row(reach, reach_why, has,
              "NOT REACHED: no innerHTML @S record carries a source rooted in this stored value, so the read was "
