@@ -1790,10 +1790,89 @@ static const UrlRecord *url_unknown_example(JSContext *ctx, JSValueConst unknown
     return eo ? eo->rec : NULL;
 }
 
+static int url_base_page_record(JSContext *ctx, JSValueConst base, UrlRecord *b);
+
+/* The origin of `new URL(input, base)` asked against the base's origin alone. URL §4.7 Origin gives an ftp, http,
+   https, ws or wss URL the tuple (scheme, host, port), and §4.4 URL parsing's relative, relative slash and
+   authority states take exactly those from the base or from the input, never the base's path, query or
+   fragment. So where the base's scheme, host and port are determined (a concrete base, or an unknown one whose
+   own bytes decide them), the base is replaced by its serialized origin: two records over one input and two
+   bases sharing an origin ask one question (`new URL(u, location.href).origin` and §4.1 main fetch's same-origin
+   test against the document base). JS_UNINITIALIZED where the base's origin is not so determined. Owned. */
+static JSValue url_origin_over_base_origin(JSContext *ctx, JSValueConst unknown)
+{
+    const JSValue *ops;
+    UrlRecord b;
+    JSValueConst argv[2];
+    JSValue o = JS_UNINITIALIZED;
+    int have = 0, same = 0;
+    char *bo;
+
+    if (concolic_kept_operands(unknown, "URL", &ops) != 2) return JS_UNINITIALIZED;
+    url_record_init(&b);
+    if (concolic_is(ops[1])) {
+        have = url_base_page_record(ctx, ops[1], &b);
+    } else if (JS_IsString(ops[1])) {
+        const char *bs = JS_ToCString(ctx, ops[1]);
+
+        CHECK(bs != NULL, "url: OOM reading a URL base");
+        have = url_parse(&b, bs, strlen(bs), NULL);
+        bo = have ? url_serialize_origin(&b) : NULL;
+        same = bo && !strcmp(bo, bs);   /* already the base's origin: the record is the one this asks of */
+        free(bo);
+        JS_FreeCString(ctx, bs);
+    }
+    if (!have || same || !b.scheme || !url_scheme_is_special(b.scheme) || !strcmp(b.scheme, "file")) {
+        url_record_free(&b);
+        return JS_UNINITIALIZED;
+    }
+    bo = url_serialize_origin(&b);
+    url_record_free(&b);
+    CHECK(bo != NULL, "url: OOM serializing a base's origin");
+    argv[0] = ops[0];
+    argv[1] = JS_NewString(ctx, bo);
+    CHECK(!JS_IsException(argv[1]), "url: OOM spelling a base's origin");
+    if (concolic_is(ops[0])) {
+        JSValue rec = url_construct_unknown(ctx, 2, argv);
+
+        o = url_member_unknown(ctx, rec, URL_ORIGIN);
+        JS_FreeValue(ctx, rec);
+    } else {
+        /* A concrete input over a base whose origin is determined: the origin is the real parse's. */
+        const char *in = JS_ToCString(ctx, ops[0]);
+        UrlRecord base_rec, r;
+
+        CHECK(in != NULL, "url: OOM reading a URL input");
+        url_record_init(&base_rec);
+        url_record_init(&r);
+        CHECK(url_parse(&base_rec, bo, strlen(bo), NULL), "url: a serialized tuple origin does not parse");
+        if (url_parse(&r, in, strlen(in), &base_rec)) {
+            char *ro = url_serialize_origin(&r);
+
+            CHECK(ro != NULL, "url: OOM serializing an origin");
+            o = JS_NewString(ctx, ro);
+            free(ro);
+        }
+        url_record_free(&r);
+        url_record_free(&base_rec);
+        JS_FreeCString(ctx, in);
+    }
+    JS_FreeValue(ctx, argv[1]);
+    free(bo);
+    return o;
+}
+
 JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member)
 {
     JSValue hold, ex = JS_UNDEFINED;
-    const UrlRecord *er = url_unknown_example(ctx, unknown, &hold);
+    const UrlRecord *er;
+
+    if (member == URL_ORIGIN) {
+        JSValue o = url_origin_over_base_origin(ctx, unknown);
+
+        if (!JS_IsUninitialized(o)) return o;
+    }
+    er = url_unknown_example(ctx, unknown, &hold);
 
     DCHECK(member >= URL_HREF && member <= URL_HASH, "an unknown URL record's member was asked by no URL_* index");
     if (er) {
