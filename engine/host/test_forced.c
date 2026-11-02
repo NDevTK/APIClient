@@ -1241,6 +1241,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/imagebutton.h"
 #include "fixture/scrollarea.h"
 #include "fixture/formchain.h"
+#include "fixture/flexwide.h"
 #include "fixture/replacedcontent.h"
 #include "fixture/scrollrestore.h"
 #include "fixture/travnav.h"
@@ -1861,6 +1862,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "imagebutton", HTML_IMAGEBUTTON },
     { "scrollarea", HTML_SCROLLAREA },
     { "formchain", HTML_FORMCHAIN },
+    { "flexwide", HTML_FLEXWIDE },
     { "replacedcontent", HTML_REPLACEDCONTENT },
     { "scrollrestore", HTML_SCROLLRESTORE },
     { "scrollclamp", HTML_SCROLLCLAMP },
@@ -16764,6 +16766,25 @@ TF_UNIT void probes_formchain(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexwide` document (fixture/flexwide.h), read from the specs. */
+TF_UNIT void probes_flexwide(const char *js, Probe *tab, int *n) {
+    static const struct { const char *key, *want, *why; } ROWS[] = {
+        { "sw", "2000", "css-overflow-3 §3.3: two hundred 10px flex items do not reach 2000px of overflow" },
+        { "l", "1990", "css-flexbox-1 §9.5: the two hundredth 10px item does not start 1990px along its line" },
+    };
+    const char *fw_why = NULL; int fw_tt = !!strstr(js, "\"/api/flexwide\"");
+    unsigned i;
+
+    fold_row(&fw_tt, &fw_why, fw_tt,
+             "NOT REACHED: there is no /api/flexwide record at all, so the document stopped before its fetch");
+    for (i = 0; i < COUNTOF(ROWS); i++)
+        fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/flexwide", ROWS[i].key, ROWS[i].want), ROWS[i].why);
+    const Probe rows[] = {
+        { "flex-wide-scroll", fw_tt, "/api/flexwide", SESS_EXPLORE, fw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `replacedcontent` document (fixture/replacedcontent.h), read from the specs. */
 TF_UNIT void probes_replacedcontent(const char *js, Probe *tab, int *n) {
     static const struct { const char *key, *want, *why; } ROWS[] = {
@@ -24230,6 +24251,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_imagebutton(js, probes, &np);
     probes_scrollarea(js, probes, &np);
     probes_formchain(js, probes, &np);
+    probes_flexwide(js, probes, &np);
     probes_replacedcontent(js, probes, &np);
     probes_scrollrestore(js, probes, &np);
     probes_travnav(js, probes, &np);
