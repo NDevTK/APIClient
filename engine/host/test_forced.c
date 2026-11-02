@@ -1355,6 +1355,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/bytesimage.h"
 #include "fixture/freezeunk.h"
 #include "fixture/blobunk.h"
+#include "fixture/globalcall.h"
 #include "fixture/dynfuncsink.h"
 #include "fixture/joincompose.h"
 #include "fixture/recordless.h"
@@ -1994,6 +1995,7 @@ TF_DOCS[] = {
     { "bytesimage", HTML_BYTESIMAGE },
     { "freezeunk", HTML_FREEZEUNK },
     { "blobunk", HTML_BLOBUNK },
+    { "globalcall", HTML_GLOBALCALL },
     { "dynfuncsink", HTML_DYNFUNCSINK },
     { "joincompose", HTML_JOINCOMPOSE },
     { "twinread", HTML_TWINREAD },
@@ -20044,6 +20046,23 @@ TF_UNIT void probes_freezeunk(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `globalcall` document (fixture/globalcall.h): the record a call with `window` as its this
+   value returns is enumerated in both the world where it holds no member and the one where it holds one. */
+TF_UNIT void probes_globalcall(const char *js, Probe *tab, int *n) {
+    const char *why = NULL; int tt = 1;
+    fold_row(&tt, &why, !!strstr(js, "\"/api/gc-keys\""),
+             "NOT REACHED: there is no /api/gc-keys record, so the document aborted enumerating the call's record");
+    fold_row(&tt, &why, param_value_is(js, "/api/gc-keys", "n", "0"),
+             "no /api/gc-keys?n=0 record: the world where the call's record holds no member did not send");
+    fold_row(&tt, &why, param_value_is(js, "/api/gc-keys", "n", "1"),
+             "no /api/gc-keys?n=1 record: the call's record was not forked on its own-key set, so its identity "
+             "is absent (its this value, `window`, has no name)");
+    const Probe rows[] = {
+        { "globalcall", tt, "/api/gc-keys", SESS_EXPLORE, why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `blobunk` document (fixture/blobunk.h): blob() over a reply of unknown bytes is a Blob whose
    size and text are that reply's unknowns, so a gate on either forks. */
 TF_UNIT void probes_blobunk(const char *js, Probe *tab, int *n) {
@@ -24474,6 +24493,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_bytesimage(js, probes, &np);
     probes_freezeunk(js, probes, &np);
     probes_blobunk(js, probes, &np);
+    probes_globalcall(js, probes, &np);
     probes_dynfuncsink(js, probes, &np);
     probes_joincompose(js, probes, &np);
     probes_twinread(js, probes, &np);
