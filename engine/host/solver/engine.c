@@ -6387,6 +6387,10 @@ static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64
         /* …in the load of the page the member was called in: every load builds a body of that locator, and the
            replay re-performs each fresh open, so the claimant's own count says which load it stands in now. */
         if (fl->orphan_chain_doc[fl->orphan_claim_at] != flow_document_ordinal(fl)) continue;
+        /* A listener's next event re-drives the function its flow holds (engine_orphan_resume), not another
+           closure built from the same body. */
+        if (fl->orphan_claim_at > 0 && fl->orphan_chain[fl->orphan_claim_at - 1] == hash &&
+            fl->orphan_chain_doc[fl->orphan_claim_at - 1] == fl->orphan_chain_doc[fl->orphan_claim_at]) continue;
         /* A claimant in another timeline than the one that built this closure cannot reach it; a compile of the
            same bytes in the claimant's own timeline is the body it waits for. */
         if (!engine_world_reaches_fn(fl->world, fn)) continue;
@@ -6426,6 +6430,11 @@ void engine_orphan_wait_seat(Flow *f, const uint64_t *hash, const int *doc, int 
     DCHECK(g_sess_forking,
            "a candidate was seated on a chain of drives in a session that does not fork — engine_orphan_resume "
            "builds a waiting drive's call only in a forking session");
+    for (int i = 1; i < n; i++)
+        for (int j = 0; j + 1 < i; j++)
+            DCHECK(hash[j] != hash[i] || doc[j] != doc[i] || (hash[i - 1] == hash[i] && doc[i - 1] == doc[i]),
+                   "a seated chain drives one body twice in one load with another body between — a take hands a "
+                   "body over once per timeline, so only a listener's next event repeats a member, right after it");
     f->orphan = 1;
     f->orphan_hash = 0;
     f->orphan_want = 1;
@@ -6683,6 +6692,19 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
                "a flow waiting to adopt an orphan's body is a member of a non-forking session — its recipe needs a "
                "session that forks");
         return 0;
+    }
+
+    /* A member naming the body, in the same load, that the member before it named is that listener's next event
+     * (engine_orphan_redrive), because a take hands a body over once per timeline. No birth or take hands it over
+     * again, so its function is the one this flow called last, handed over here, where the flow has run out of
+     * work as the recording drive had when it re-drove it. */
+    if (f->orphan_want && JS_IsUndefined(f->orphan_claim_fn) && f->orphan_claim_at > 0 &&
+        f->orphan_chain[f->orphan_claim_at] == f->orphan_chain[f->orphan_claim_at - 1] &&
+        f->orphan_chain_doc[f->orphan_claim_at] == f->orphan_chain_doc[f->orphan_claim_at - 1]) {
+        DCHECK(JS_IsFunction(ctx, f->fn) && f->orphan_hash == f->orphan_chain[f->orphan_claim_at - 1],
+               "a drive waiting for its listener's next event holds no function, or the one it holds is not the "
+               "body its last member called — the claim branch below writes `fn` and the hash together");
+        f->orphan_claim_fn = JS_DupValue(ctx, f->fn);
     }
 
     /* A resumed drive that has its function back builds its own call here, where the flow has nothing left to
