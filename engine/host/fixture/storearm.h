@@ -1,5 +1,7 @@
 /* THE STORED-STATE-ARM DOCUMENT: branches over application state the page's own origin stores. A key this run
-   wrote reads back concrete (HTML §12.2.1 getItem). A localStorage key the area lacks and the cookies the jar
+   wrote reads back concrete (HTML §12.2.1 getItem), and the jar holds the root document's own `rootc` cookie. The
+   page sets no cookie: a cookie write notes a persistent write on every load, so each reopened load would ask
+   engine_open_again again. A localStorage key the area lacks and the cookies the jar
    lacks are unknowns whose example is that absence (core/storage/storage.c, core/dom/document_metadata.c), so an
    arm against the example takes absent application state as present and is priced as an assumption is
    (solver/flow.c's FLOW_PRICED_WORK, a floor under its code site's service). The example's world (`saOBS`) works
@@ -16,7 +18,7 @@
 static const char HTML_STOREARM[] =
     "<!doctype html><html><body>"
     "<script>"
-    "localStorage.setItem('saSeen', 'saONE'); document.cookie = 'saCk=1';"
+    "localStorage.setItem('saSeen', 'saONE');"
     "fetch('/api/saseen?ls=' + localStorage.getItem('saSeen'));"
     "var saW = localStorage.getItem('saTok') !== null ? 'saLS'"
     " : document.cookie.indexOf('saTok=') !== -1 ? 'saCK' : 'saOBS';"

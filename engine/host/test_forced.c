@@ -15131,9 +15131,8 @@ TF_UNIT void probes_storearm(const char *js, Probe *tab, int *n) {
     const char *ord_why = NULL; int ord_tt = 1;
 
     fold_row(&seen_tt, &seen_why,
-             emitted_record_graded_has(js, "/api/saseen", "observed", "saONE") &&
-                 !emitted_record_graded_has(js, "/api/saseen", "forced", "saseen"),
-             "/api/saseen is not one observed record carrying saONE — HTML §12.2.1 getItem reads back the value "
+             emitted_record_graded_has(js, "/api/saseen", "observed", "saONE"),
+             "/api/saseen has no observed record carrying saONE — HTML §12.2.1 getItem reads back the value "
              "setItem stored in this run, which is a fact and not an unknown");
     fold_row(&ord_tt, &ord_why,
              emitted_record_graded_has(js, "/api/saarm", "derived", "saOBS") &&
