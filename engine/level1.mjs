@@ -818,6 +818,8 @@ async function mintDrive(minted, slices) {
   const inst = (o) => Object.assign({ state: 'hot', docId: 'step-doc', msg: { sourceUrl: 'https://a.test/' }, lines: [],
                                       origin: 'https://a.test',
                                       _novelty: { spelling: null, n: 0 }, _noveltyCounted: new Map(),
+                                      _replyClock: ZONE.replyClock(),
+                                      _replyDelivery: { rounds: 0, delivered: 0, waits: 0, skipped: 0 },
                                       level1: { runnable: true, paid: 3, pulls: 2, acct: { value: 3, pulls: 2, at: 1 } } }, o);
   const refusedRun = (e) => {
     const run = ZONE.linesToAnalysis(e.lines, e.msg, 'crashed', null);
@@ -885,7 +887,7 @@ async function mintDrive(minted, slices) {
     const later = (x) => (at === 'round' ? gate.p.then(() => x) : Promise.resolve(x));
     const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072,
                      r: { renderer: {
-                       step: () => later({ code: 2 }), getPending: async () => ({ requests: '' }),
+                       step: () => later({ code: 2 }), getServiceWork: async () => ({ work: 0, workingSetBytes: 65536 }), getPending: async () => ({ requests: '' }),
                        getHostNotices: async () => ({ notices: '' }), getHostRequests: () => later({ requests: '' }),
                        getLevel1Account: () => { asked++; return at === 'record' ? gate.p.then(account) : account(); },
                        checkRequestPolicy: async () => ({ verdict: v }) } } });
@@ -948,7 +950,8 @@ async function mintDrive(minted, slices) {
                      _egress: { asked: 0 },
                      records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
                      fetched: async () => { fired++; return null; },
-                     r: { renderer: { getPending: async () => ({ requests: text }), getHostNotices: async () => ({ notices: '' }),
+                     r: { renderer: { getServiceWork: async () => ({ work: 0, workingSetBytes: 65536 }), getPending: async () => ({ requests: text }),
+                                      getHostNotices: async () => ({ notices: '' }),
                                       getHostRequests: async () => ({ requests: '' }), provide: async () => ({}),
                                       getLevel1Account: account } } });
     let threw = null;
@@ -1027,7 +1030,8 @@ async function mintDrive(minted, slices) {
     let acted = 0;
     const e = inst({ docId: 'gap-doc', joinedDocIds: [], _inflight: new Map(), residentBytes: 131072, _egress: { asked: 0 },
                      records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
-                     r: { renderer: { getPending: async () => ({ requests: '' }), getHostNotices: async () => ({ notices: '' }),
+                     r: { renderer: { getServiceWork: async () => ({ work: 0, workingSetBytes: 65536 }), getPending: async () => ({ requests: '' }),
+                                      getHostNotices: async () => ({ notices: '' }),
                                       getHostRequests: async () => ({ requests: text }), getLevel1Account: account,
                                       hostDecline: async () => { acted++; return { matched: 1 }; },
                                       hostAnswer: async () => { acted++; return {}; } } } });
@@ -1150,7 +1154,8 @@ async function mintDrive(minted, slices) {
       const e = inst({ docId: 'gap-doc', joinedDocIds: rec === 'own' ? [target] : [], groupId: 'g1', _inflight: new Map(),
                        _remoteAsked: new Set(), residentBytes: 131072, _egress: { asked: 0 },
                        records: new Map([['gap-doc', ZONE.docRecord('observed', 'undriven', 'unpinned', 'none', 'public')]]),
-                       r: { renderer: { getPending: async () => ({ requests: '' }), getHostNotices: async () => ({ notices: '' }),
+                       r: { renderer: { getServiceWork: async () => ({ work: 0, workingSetBytes: 65536 }), getPending: async () => ({ requests: '' }),
+                                        getHostNotices: async () => ({ notices: '' }),
                                         getHostRequests: async () => ({ requests: '7\tgap-doc\twindowproxy.length\t' + target +
                                                                                   '\tx\tderived,undriven,unpinned' }),
                                         getLevel1Account: account, hostDecline: async () => { acted++; return { matched: 1 }; },

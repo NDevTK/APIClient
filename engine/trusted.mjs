@@ -326,12 +326,6 @@ function fieldLines(entries) {
 const CENSUS_MARKERS = ['@SWAP', '@COLD', '@HEAP', '@WFQ', '@FORKAT'];
 const b64 = (x) => Buffer.from(x === undefined ? '' : x).toString('base64');
 const ABSENT = '-';
-/* The modelled network latency in engine work: a send stamped at work W is answered at the first read at or
-   after W + REPLY_LATENCY_WORK. It is 50 ms of modelled time at event_loop.h's EVENT_LOOP_WORK_PER_MS (100000
-   units a ms), about 93 slices of ENGINE_QUANTUM_WORK. At thread_work.h's native dev price of 0.222 us a unit
-   it is about 1.1 s of thread time, long against a replayed or live reply, so a read rarely waits on the
-   wire. It is a calibration, not a bound: no flow runs less far under any value, only replies land elsewhere. */
-const REPLY_LATENCY_WORK = 5000000;
 /* What instance `e` is owed of its cluster's known identities, as a `novelty` record (test_forced.c's
    `abi_novelty`), written only into a round or a provisioning this zone is already writing: the record pays
    nothing, so it must never be the whole of a round a stalled child reads. */
@@ -846,8 +840,8 @@ async function main() {
       say: (rec) => child.stdin.write(rec + '\n'),
       ready: [], answered: new Map(), sends: new Map(),
       /* The answers this instance's sends are owed, by key (`owe`), the ones not yet given a due point, and the
-         instance's network clock: the work its last read stated plus the work skipped at stalls (`readAt`). */
-      owed: new Map(), unstamped: [], ordinal: 0, work: null, skip: 0,
+         instance's network clock (extension/lib/reply-schedule.js), read at every `poll` and `stalled`. */
+      owed: new Map(), unstamped: [], clock: ZONE.replyClock(),
       /* How the answers were delivered, and the one wall-time fact this zone reports: how long a read waited for
          a due answer the wire had not yet produced (`sayDelivery`). */
       delivery: { polls: 0, stalls: 0, delivered: 0, pollWaits: 0, pollWaitMs: 0, stallWaits: 0, stallWaitMs: 0,
@@ -966,7 +960,7 @@ async function main() {
     if (e.owed.has(key))
       throw new Error(`instance [${e.tag}] is owed a second answer for \`${key}\` while the first is unwritten — ` +
                       'a send is worked once per park (`answered`), so this is that dedup broken');
-    const entry = { key, ordinal: ++e.ordinal, due: null, rec: null, done: null };
+    const entry = { key, ordinal: ZONE.replyClockOrdinal(e.clock), due: null, rec: null, done: null };
     e.owed.set(key, entry);
     e.unstamped.push(entry);
     return entry;
@@ -982,17 +976,12 @@ async function main() {
     if (!/^(0|[1-9][0-9]*)$/.test(field) || !Number.isSafeInteger(Number(field)))
       throw new Error(`instance [${e.tag}] wrote \`${verb}\` with the work \`${field}\`, which is not a ` +
                       'decimal count — every read states the engine work it was written at');
-    const work = Number(field);
-    if (e.work !== null && work < e.work)
-      throw new Error(`instance [${e.tag}]'s work went from ${e.work} to ${work} between two reads — due points ` +
-                      'are on that clock, so a decrease would deliver a reply before the work it waits for');
-    e.work = work;
-    for (const entry of e.unstamped.splice(0)) entry.due = e.work + e.skip + REPLY_LATENCY_WORK;
+    const refusal = ZONE.replyClockRead(e.clock, Number(field));
+    if (refusal !== null) throw new Error(`instance [${e.tag}]'s \`${verb}\` ${refusal}`);
+    for (const entry of e.unstamped.splice(0)) entry.due = ZONE.replyClockDue(e.clock);
   };
   /* The answers due at the instance's clock, in the order a read writes them: due point, then ordinal. */
-  const dueEntries = (e) => [...e.owed.values()]
-    .filter((x) => x.due !== null && x.due <= e.work + e.skip)
-    .sort((a, b) => a.due - b.due || a.ordinal - b.ordinal);
+  const dueEntries = (e) => ZONE.replyDueEntries(e.clock, [...e.owed.values()]);
 
   /* WHICH KEYS NAME A REQUEST AND WHICH NAME A RECORD, STATED ONCE — the two have different lifetimes and the
      difference is the whole of the correction above. A `req:<id>` names ONE record (the id is the rendezvous
@@ -1396,7 +1385,7 @@ async function main() {
     noveltyHand(i);
     for (const x of dueEntries(i)) {
       if (x.rec === null)
-        throw new Error(`instance [${i.tag}] was written a round at work ${i.work} while its due send ` +
+        throw new Error(`instance [${i.tag}] was written a round at work ${i.clock.work} while its due send ` +
                         `\`${x.key}\` has no answer — a round carries every due answer, so its caller had to ` +
                         'wait for this one');
       i.say(x.rec);
@@ -2035,10 +2024,10 @@ async function main() {
      the end, as the coalescing census is. */
   const sayDelivery = (e) => {
     const d = e.delivery;
-    console.error(`[trusted] [${e.tag}] reply delivery at work ${e.work} (+${e.skip} skipped): polls=${d.polls} ` +
+    console.error(`[trusted] [${e.tag}] reply delivery at work ${e.clock.work} (+${e.clock.skip} skipped): polls=${d.polls} ` +
                   `stalls=${d.stalls} delivered=${d.delivered} owed=${e.owed.size} pollWaits=${d.pollWaits} ` +
                   `pollWaitMs=${d.pollWaitMs.toFixed(1)} stallWaits=${d.stallWaits} ` +
-                  `stallWaitMs=${d.stallWaitMs.toFixed(1)} latencyWork=${REPLY_LATENCY_WORK}`);
+                  `stallWaitMs=${d.stallWaitMs.toFixed(1)} latencyWork=${ZONE.REPLY_LATENCY_WORK}`);
   };
   async function onLine(e, line) {
     if (line.startsWith('@RESULT ')) {
@@ -2374,11 +2363,7 @@ async function main() {
       e.delivery.stalls++;
       /* Nothing runs on a stalled frontier, so its network clock moves to its earliest due point (the work it
          would have spent waiting), and the answers due there are the ones this round carries. */
-      const owed = [...e.owed.values()];
-      if (owed.length) {
-        const next = Math.min(...owed.map((x) => x.due));
-        if (next > e.work + e.skip) { e.delivery.skipped += next - e.work - e.skip; e.skip = next - e.work; }
-      }
+      e.delivery.skipped += ZONE.replyClockStall(e.clock, [...e.owed.values()].map((x) => x.due));
       /* Everything outstanding that is not an undue answer is settled first, across every instance: a payment
          held back here is one the child reads as a refusal, and the work that produces it (a cross-instance
          answer, a provisioning) may have been started by a sibling's round. An answer not yet due is left in

@@ -15,7 +15,7 @@ export const ZONE_SCRIPTS = Object.freeze([
   'check.js', 'lib/site.js', 'lib/referrer-policy.js', 'lib/request-identity.js', 'lib/cookie-store.js',
   'speak-as-rule.js', 'lib/speak-as.js', 'lib/navigable-notice.js', 'lib/document-record.js', 'lib/http-cache.js',
   'lib/structured-fields.js', 'lib/attacker-site.js', 'lib/send-coalesce.js', 'lib/safe-fetch.js', 'lib/boot-span.js',
-  'lib/novelty-set.js', 'lib/census-rows.js',
+  'lib/novelty-set.js', 'lib/census-rows.js', 'lib/reply-schedule.js',
 ]);
 
 const SHIPPED = [...readFileSync(join(EXT_DIR, 'ast-worker.html'), 'utf8')
