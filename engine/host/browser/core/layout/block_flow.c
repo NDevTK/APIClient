@@ -181,6 +181,18 @@ bool block_flow_float_is_right(lxb_dom_element_t *f)
     return right;
 }
 
+/* Whether `el`'s box is a flex or grid item: its box parent is a flex or grid container. */
+static bool bf_is_flex_or_grid_item(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+    CssDisplay pd;
+
+    if (parent == NULL) return false;
+    pd = css_computed_display(parent);
+    return flex_item_display_is_flex_container(pd) || css_display_spells(pd, CSS_KEYWORD_GRID) ||
+           css_display_spells(pd, CSS_KEYWORD_INLINE_GRID);
+}
+
 static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
 {
     CssDisplay d;
@@ -194,17 +206,7 @@ static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
     if (containment_layout(el) || containment_paint(el)) return true;
     /* css-flexbox-1 §4 "Flex Items": "A flex item establishes an independent formatting context for its
        contents", and css-grid-1 §6.1 "Grid Item Display" says the same of a grid item. */
-    {
-        lxb_dom_element_t *parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
-
-        if (parent != NULL) {
-            CssDisplay pd = css_computed_display(parent);
-
-            if (flex_item_display_is_flex_container(pd) || css_display_spells(pd, CSS_KEYWORD_GRID) ||
-                css_display_spells(pd, CSS_KEYWORD_INLINE_GRID))
-                return true;
-        }
-    }
+    if (bf_is_flex_or_grid_item(el)) return true;
     d = css_computed_display(el);
     bfc = css_display_spells(d, CSS_KEYWORD_INLINE_BLOCK) || css_display_spells(d, CSS_KEYWORD_FLOW_ROOT) ||
           css_display_spells(d, CSS_KEYWORD_TABLE_CELL) || css_display_spells(d, CSS_KEYWORD_TABLE_CAPTION) ||
@@ -1981,8 +1983,16 @@ static bool bf_layout(lxb_dom_element_t *el, BfBaseline pass, size_t body, BfBox
     CssPx frame_top = css_px(0.0), float_bottom = css_px(0.0);
     char nbuf[160];
 
-    out.top = bf_run_of(used_value_px(el, "margin-top"));
-    out.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
+    /* The box's own margins are its parent walk's operands (§8.3.1). A flex or grid item has no such parent:
+       its margins are its container's (css-flexbox-1 §9.5 and §9.6, css-grid-1 §10.2), which read this walk's
+       height to resolve an `auto` one, so the runs hold only what escapes, which is nothing from a context root. */
+    if (bf_is_flex_or_grid_item(el)) {
+        out.top = bf_run_empty();
+        out.bottom = bf_run_empty();
+    } else {
+        out.top = bf_run_of(used_value_px(el, "margin-top"));
+        out.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
+    }
     out.border_h = css_px(0.0);
     out.collapse_through = false;
     /* §10.8.1's pair starts where §9.4.1's stack starts and where §9.4.2's line boxes start — the top content
