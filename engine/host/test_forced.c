@@ -16374,6 +16374,10 @@ TF_UNIT void probes_scrollflex(const char *js, Probe *tab, int *n) {
              "CSSOM VIEW §2: an anonymous flex item aligned to its 5px line's end deepens its container's scrolling area");
     fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "h5", "20"),
              "CSSOM VIEW §2: an element flex item centred on a 10px line does not reach 20px down its scroller's scrolling area");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "d6", "0"),
+             "CSSOM VIEW §2: a wrapped anonymous flex item's lines do not reach as far down as the same content in a block");
+    fold_row(&sf_tt, &sf_why, param_value_is(js, "/api/scrollflex", "c7", "70"),
+             "css-flexbox-1 §9.7: a `flex: 1` column item's clientHeight is not the 70px its line leaves it");
     const Probe rows[] = {
         { "scrolling-area-anonymous-flex-item", sf_tt, "/api/scrollflex", SESS_EXPLORE, sf_why },
     };

@@ -4888,6 +4888,15 @@ static bool uv_operands_ask(lxb_dom_element_t *el, bool vertical)
         if (!uv_operands_ask(flex, vertical)) return false;
         if (flex_container_is_multi_line(flex) && !flex_cross_size_lines_ask(flex)) return false;
     }
+    /* A flex item's length on its container's main axis is its line's css-flexbox-1 §9.7 used main size
+       (`uv_flex_item_main_size`), whose operands are its siblings'; `used_value_width_ask` asks it for a `row`
+       container's width, and this for a `column` one's height. */
+    if (vertical && uv_box_kind(el) == UV_BOX_ITEM) {
+        lxb_dom_element_t *flex = uv_flex_item_container(el, UV_BOX_ITEM);
+
+        if (flex != NULL && flex_container_axis_is_vertical(flex, FLEX_AXIS_MAIN) && !flex_line_lines_ask(flex))
+            return false;
+    }
     /* A grid area's height is its rows' (used_value_containing_block_height): a grid item's auto height
        stretches over it and a percentage resolves against it, so it is asked before either is read — except
        while those rows are being sized, where it is no basis and that entry answers without it. */

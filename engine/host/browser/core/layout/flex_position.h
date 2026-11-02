@@ -28,7 +28,7 @@ bool flex_position_operands_ask(lxb_dom_element_t *container);
 /* The used value of element flex item `item`'s margin `name` (`margin-left`, `-right`, `-top` or `-bottom`):
    §9.5 step 1's share of the line's free space for an `auto` main-axis margin and §9.6 step 13's for a cross-axis
    one, as the same placement above uses them. core/layout/used_value.h answers a flex item's `auto` margin
-   through this. */
+   through this; it is a synchronous used value, so it drives the container's members once. */
 CssPx flex_position_item_margin(lxb_dom_element_t *container, lxb_dom_element_t *item, const char *name);
 
 /* css-flexbox-1 §4's anonymous flex item of `container` (the "anonymous block container flex item" wrapping a
@@ -37,7 +37,8 @@ CssPx flex_position_item_margin(lxb_dom_element_t *container, lxb_dom_element_t 
    margin and content box. The item is named by `first`, the first text node of its sequence, which is the
    identity core/layout/flex_line.h's members and used main size use; a later node of the same sequence names
    no item and is refused (asserted), so no caller reads the item's box as if it were a later run's. Built for a
-   `row` or `row-reverse` container in `horizontal-tb` without `wrap-reverse`; the others are refused by name. */
+   `row` or `row-reverse` container in `horizontal-tb` without `wrap-reverse`; the others are refused by name.
+   Its operands are `flex_position_operands_ask`'s, asked under the open drive (asserted, as above). */
 void flex_position_anonymous_box(lxb_dom_element_t *container, const lxb_dom_node_t *first,
                                  CssPx *x, CssPx *y, CssPx *w, CssPx *h);
 

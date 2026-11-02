@@ -43,7 +43,7 @@ static CssPx fp_margin(lxb_dom_element_t *el, const char *name, bool *is_auto)
 }
 
 /* §9.5 step 1's operand for one member. An anonymous item (§4) has the initial margins, border and padding,
-   so its border box is its used main size. */
+   so its border box is its used main size, read from the lines answer the caller's members came from. */
 static FpMain fp_main_terms(lxb_dom_element_t *container, const FlexLineMember *m, FpAxes a)
 {
     FpMain t = { css_px(0.0), css_px(0.0), css_px(0.0), false, false };
@@ -51,7 +51,10 @@ static FpMain fp_main_terms(lxb_dom_element_t *container, const FlexLineMember *
     char nbuf[160];
 
     if (m->anonymous) {
-        t.border = flex_line_used_main_size(container, m->first);
+        bool served = flex_line_used_main_size_ask(container, m->first, &t.border);
+
+        DCHECK(served, "an anonymous flex item's used main size was not answered while its container's members, "
+                       "read from the same lines answer, were");
         return t;
     }
     el = lxb_dom_interface_element(m->first);
@@ -90,34 +93,41 @@ static double fp_main_share(lxb_dom_element_t *container, CssKeyword v, FpAxes a
     }
 }
 
-/* The members of the flex line holding the item `first` names (flex_line_members' identity node), in order, to a
-   calloc'd `*out` the caller frees; returns how many. §9.5 and §9.6 run per line. */
-static size_t fp_line_of(lxb_dom_element_t *container, const lxb_dom_node_t *first, FlexLineMember **out)
+/* The line of the item `first` names (flex_line_members' identity node) among the container's members `m`. */
+static size_t fp_line_index(const FlexLineMember *m, size_t n, const lxb_dom_node_t *first)
 {
-    FlexLineMember *m = NULL;
-    size_t n = flex_line_members(container, &m), i, k = 0, line = 0;
-    bool found = false;
+    size_t i;
     char nbuf[160];
 
     for (i = 0; i < n; i++)
-        if (m[i].first == first) { line = m[i].line; found = true; }
-    DCHECKF(found, "%s: §9.3's step 5 collected no flex item this node names in its container — an element item "
-                   "is named by its element and an anonymous one by its sequence's first text node only",
-            box_subject_node((lxb_dom_node_t *)first, nbuf, sizeof nbuf));
+        if (m[i].first == first) return m[i].line;
+    DFAILF("%s: §9.3's step 5 collected no flex item this node names in its container — an element item is "
+           "named by its element and an anonymous one by its sequence's first text node only",
+           box_subject_node((lxb_dom_node_t *)first, nbuf, sizeof nbuf));
+    return 0;
+}
+
+/* The members of the flex line holding the item `first` names, in order, out of the container's members `m`, to
+   a calloc'd `*out` the caller frees; returns how many. §9.5 and §9.6 run per line. */
+static size_t fp_line_of(const FlexLineMember *m, size_t n, const lxb_dom_node_t *first, FlexLineMember **out)
+{
+    size_t line = fp_line_index(m, n, first), i, k = 0;
+
+    *out = n == 0 ? NULL : lexbor_calloc(n, sizeof **out);
+    CHECK(n == 0 || *out != NULL, "out of memory holding one flex line's members");
     for (i = 0; i < n; i++)
-        if (m[i].line == line) m[k++] = m[i];
-    *out = m;
+        if (m[i].line == line) (*out)[k++] = m[i];
     return k;
 }
 
 /* §9.5 for the line holding `item`, as the distance from the line's main-start edge to `item`'s border box's main-start
-   edge, with `*border` its main extent and `*ms`, `*me` its used main-start and main-end margins. Free space is
-   decided on the examples, as css_length.h's extremes are. */
-static CssPx fp_main_offset(lxb_dom_element_t *container, const lxb_dom_node_t *item, FpAxes a, CssPx *border,
-                            CssPx *ms, CssPx *me)
+   edge, with `*border` its main extent and `*ms`, `*me` its used main-start and main-end margins. `all` is the
+   container's members. Free space is decided on the examples, as css_length.h's extremes are. */
+static CssPx fp_main_offset(lxb_dom_element_t *container, const FlexLineMember *all, size_t n_all,
+                            const lxb_dom_node_t *item, FpAxes a, CssPx *border, CssPx *ms, CssPx *me)
 {
     FlexLineMember *m = NULL;
-    size_t n = fp_line_of(container, item, &m), i, nauto = 0;
+    size_t n = fp_line_of(all, n_all, item, &m), i, nauto = 0;
     FpMain *t;
     CssPx free_space = used_value_content_px(container, a.main_vertical), lead = css_px(0.0), gap = css_px(0.0);
     CssPx share = css_px(0.0), pos, at = css_px(0.0);
@@ -307,22 +317,19 @@ static FpAxes fp_require_built(lxb_dom_element_t *container, lxb_dom_element_t *
    stretch", which §9.4's step 9 has already applied). A distribution with nothing to distribute takes css-align-3
    §4.3's default fallback ("safe flow-start" for space-between, "safe center" for the other two), and §4.4's
    `safe` aligns an overflowing subject as if `start`. A single-line container's one line is its inner cross
-   size (§6 "Flex Lines"). */
-static CssPx fp_line_place(lxb_dom_element_t *container, const lxb_dom_node_t *item, FpAxes a, CssPx *start)
+   size (§6 "Flex Lines"). `m` and `n` are the container's §9.3 members. */
+static CssPx fp_line_place(lxb_dom_element_t *container, const FlexLineMember *m, size_t n,
+                           const lxb_dom_node_t *item, FpAxes a, CssPx *start)
 {
-    FlexLineMember *m = NULL;
     CssPx *sizes = NULL, inner = used_value_content_px(container, !a.main_vertical), free_space, gap = css_px(0.0);
     CssPx lead = css_px(0.0), out;
-    size_t n, lines, line = 0, i;
+    size_t lines, line, i;
     CssAlign ac;
     char nbuf[160];
 
     *start = css_px(0.0);
     if (!flex_container_is_multi_line(container)) return inner;
-    n = flex_line_members(container, &m);
-    for (i = 0; i < n; i++)
-        if (m[i].first == item) line = m[i].line;
-    free(m);
+    line = fp_line_index(m, n, item);
     lines = flex_cross_size_lines(container, &sizes);
     DCHECK(line < lines, "an item's §9.3 line is past the lines §9.4 measured over the same walk");
     free_space = inner;
@@ -378,16 +385,24 @@ static CssPx fp_physical(const char *start, CssPx offset, CssPx extent, CssPx si
 CssPx flex_position_item_margin(lxb_dom_element_t *container, lxb_dom_element_t *item, const char *name)
 {
     FpAxes a = fp_require_built(container, item);
-    CssPx border = css_px(0.0), ms = css_px(0.0), me = css_px(0.0), mt, mb, start;
+    CssPx border = css_px(0.0), ms = css_px(0.0), me = css_px(0.0), mt, mb, start, out;
+    FlexLineMember *m = NULL;
+    /* The one drive: a used margin is a synchronous used value (`used_value_px`), and its asks
+       (`uv_operands_ask`'s width and cross-line arms) leave the lines memoized for a reader under a resting job. */
+    size_t n = flex_line_members(container, &m);
 
     if (strcmp(name, a.main_start) == 0 || strcmp(name, flex_margin_opposite(a.main_start)) == 0) {
-        (void)fp_main_offset(container, lxb_dom_interface_node(item), a, &border, &ms, &me);
-        return strcmp(name, a.main_start) == 0 ? ms : me;
+        (void)fp_main_offset(container, m, n, lxb_dom_interface_node(item), a, &border, &ms, &me);
+        out = strcmp(name, a.main_start) == 0 ? ms : me;
+    } else {
+        DCHECKF(strcmp(name, a.cross_start) == 0 || strcmp(name, flex_margin_opposite(a.cross_start)) == 0,
+                "`%s`: a flex item's used margin was asked for a property that is not a margin", name);
+        (void)fp_cross_margins(item, a, fp_line_place(container, m, n, lxb_dom_interface_node(item), a, &start),
+                               &mt, &mb);
+        out = strcmp(name, a.cross_start) == 0 ? mt : mb;
     }
-    DCHECKF(strcmp(name, a.cross_start) == 0 || strcmp(name, flex_margin_opposite(a.cross_start)) == 0,
-            "`%s`: a flex item's used margin was asked for a property that is not a margin", name);
-    (void)fp_cross_margins(item, a, fp_line_place(container, lxb_dom_interface_node(item), a, &start), &mt, &mb);
-    return strcmp(name, a.cross_start) == 0 ? mt : mb;
+    free(m);
+    return out;
 }
 
 void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y)
@@ -403,10 +418,10 @@ void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *
     served = flex_line_members_ask(container, &m, &n);
     DCHECK(served, "a flex item's offset was read with its container's members unasked; every reader asks "
                    "flex_position_operands_ask first");
-    main = fp_main_offset(container, lxb_dom_interface_node(item), a, &border, &ms, &me);
+    main = fp_main_offset(container, m, n, lxb_dom_interface_node(item), a, &border, &ms, &me);
     main = fp_physical(a.main_start, main, border, used_value_content_px(container, a.main_vertical));
     /* The item's line, and where it starts in the container's content box (`fp_line_place`). */
-    line = fp_line_place(container, lxb_dom_interface_node(item), a, &start);
+    line = fp_line_place(container, m, n, lxb_dom_interface_node(item), a, &start);
     cross = fp_physical(a.cross_start, css_px_add(start, fp_cross_offset(container, m, n, item, a, line)),
                         used_value_border_edge_px(item, !a.main_vertical),
                         used_value_content_px(container, !a.main_vertical));
@@ -480,8 +495,9 @@ void flex_position_anonymous_box(lxb_dom_element_t *container, const lxb_dom_nod
     FpAxes a;
     CssPx border = css_px(0.0), ms = css_px(0.0), mend = css_px(0.0), main, line, start, cross, fb, lb, diff;
     CssAlign align;
-    size_t n, i;
+    size_t n = 0, i;
     double share;
+    bool served;
     char nbuf[160];
 
     DCHECK(x != NULL && y != NULL && w != NULL && h != NULL,
@@ -500,21 +516,23 @@ void flex_position_anonymous_box(lxb_dom_element_t *container, const lxb_dom_nod
     a.main_vertical = false;
     a.main_start = flex_container_start_margin(container, FLEX_AXIS_MAIN);
     a.cross_start = flex_container_start_margin(container, FLEX_AXIS_CROSS);
-    n = flex_line_members(container, &m);
+    served = flex_line_members_ask(container, &m, &n);
+    DCHECK(served, "an anonymous flex item's box was read with its container's members unasked; every reader asks "
+                   "flex_position_operands_ask first");
     for (i = 0; i < n; i++)
         if (m[i].first == first) me = &m[i];
     DCHECKF(me != NULL && me->anonymous,
             "%s: no anonymous flex item of this container starts at this node. A child text sequence is one item "
             "and only its first text node names it, so a later node of the sequence is not a name for the item",
             box_subject_node((lxb_dom_node_t *)first, nbuf, sizeof nbuf));
-    main = fp_main_offset(container, first, a, &border, &ms, &mend);
+    main = fp_main_offset(container, m, n, first, a, &border, &ms, &mend);
     *w = border;
     *x = fp_physical(a.main_start, main, border, used_value_content_px(container, false));
     /* §9.4 step 11: "If a flex item has align-self: stretch, its computed cross size property is auto, and
        neither of its cross-axis margins are auto, the used outer cross size is the used cross size of its flex
        line"; an anonymous item's cross size and margins are their initial `auto` and 0. Otherwise its cross
        size is step 7's hypothetical one, its line boxes' height at its used main size. */
-    line = fp_line_place(container, first, a, &start);
+    line = fp_line_place(container, m, n, first, a, &start);
     align = flex_cross_size_resolved_align(container, NULL);
     if (align.value == CSS_KEYWORD_STRETCH || align.value == CSS_KEYWORD_NORMAL) {
         cross = line;

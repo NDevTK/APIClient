@@ -345,7 +345,9 @@ static bool sa_anon_flex_items_fold(lxb_dom_element_t *c, bool vertical, bool en
     CssPx origin;
     bool ready = true;
 
-    if (!sa_content_origin(c, vertical, &origin)) return false;
+    /* The placement's operands, every member's included: an anonymous item's place on its line reads its
+       siblings' main sizes and margins, and in a multi-line container every line's cross size. */
+    if (!sa_content_origin(c, vertical, &origin) || !flex_position_operands_ask(c)) return false;
     if (!flex_line_members_ask(c, &m, &n)) return false;
     for (i = 0; ready && i < n; i++) {
         CssPx x, y, w, h, at, extent;
