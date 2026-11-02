@@ -22898,12 +22898,14 @@ TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
     int s_loc_built   = s_derived  (ss, "eval",      LOCATION_HASH_SRC,   st_loc);
     int s_park_wit    = s_witnessed(ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
     int s_park_built  = s_derived  (ss, "innerHTML", LOCATION_HASH_SRC,   st_lpark);
-    /* Which writes the `location.hash` markup search learned: its bytes reach `lhHost` directly and `lhQuoted`
-       through the page's `.slice(1)`, never `lhOther`, which carries `state.other`. A parked record carries
+    /* Which writes the two fragment searches learned: `location.hash`'s detection stood at `lhHost` and
+       `{location.hash}.slice(1)`'s at `lhQuoted`, and each candidate's bytes reach both. A parked record carries
        `witnessed`; any other stage reads -1, which the row below does not accept. */
     int st_other      = s_stage(ss, "innerHTML", "{state}.other");
     int s_park_nwit   = st_lpark >= S_SEEN && st_lpark < S_FIRED
                             ? s_num(ss, "innerHTML", LOCATION_HASH_SRC, "witnessed") : -1;
+    int s_quot_nwit   = st_attr >= S_SEEN && st_attr < S_FIRED
+                            ? s_num(ss, "innerHTML", ATTR_SRC, "witnessed") : -1;
     int s_park_kept   = st_lpark >= S_SEEN && st_lpark < S_FIRED
                             ? s_kept_undeliverable(ss, "innerHTML", LOCATION_HASH_SRC) : -1;
     int s_attr_wit    = s_witnessed(ss, "innerHTML", ATTR_SRC,            st_attr);
@@ -23142,12 +23144,13 @@ TF_UNIT void probes_hashsinks_statesinks(const char *js, Probe *tab, int *n) {
            observation that closes it: the context probe reached the write and §13.2.5.1's state was read off
            the string a real run handed it. */
         { "s-park-witnessed", s_park_wit, "lhHost.innerHTML = location.hash", SESS_EXPLORE },
-        /* WHICH WRITES THIS SEARCH LEARNS FROM, by byte provenance. Its probe's bytes reach `lhHost` directly
-           and `lhQuoted` through the page's `.slice(1)` — both are its parse contexts — and never `lhOther`, which
-           in its runs carries `state.other` unknown. Exactly two is the positive and the negative together.
-           `s-other-fired` arms the negative: `lhOther` is a live markup sink of attacker bytes in this run,
-           solved by its own search, so a credit leaking across sources had a write to land on. */
-        { "s-park-ownwrites", s_park_nwit == 2, "lhHost.innerHTML = location.hash", SESS_EXPLORE, .gate = "s-park-ran" },
+        /* WHICH WRITES EACH SEARCH LEARNS FROM: its own. Either fragment search's probe reaches both `lhHost`
+           and `lhQuoted`, and each write is the search whose detection stood there, so each learns exactly one
+           witness; a credit leaking across the two searches over one root reads two, one across sources reads
+           `lhOther`'s. `s-other-fired` arms the second: `lhOther` is a live markup sink of attacker bytes in
+           this run, solved by its own search. */
+        { "s-park-ownwrites", s_park_nwit == 1 && s_quot_nwit == 1, "lhHost.innerHTML = location.hash", SESS_EXPLORE,
+          .gate = "s-park-ran" },
         { "s-other-fired", st_other == S_FIRED, "lhOther.innerHTML", SESS_EXPLORE },
         /* WHAT IT BUILDS FROM THEM IS DELIVERABLE OR WITHDRAWN. §13.2.5.1 "Data state" is left only through
            `<` and the `lhQuoted` value only through `"`, both of which the fragment set holds. The derivation

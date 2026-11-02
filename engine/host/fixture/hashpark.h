@@ -1,14 +1,14 @@
 /* THE RAW-FRAGMENT MARKUP DOCUMENT: `location.hash` into two markup writes neither of which the fragment
-   percent-encode set (URL §1.3 "Percent-encoded bytes") lets an escape leave, so that search must park and
-   say why. A candidate is delivered once at its source and every read answers it, so the search's one value
-   reaches both writes, and both are its contexts:
-     - `lhHost` takes the raw fragment into §13.2.5.1's data state, left only through `<`;
+   percent-encode set (URL §1.3 "Percent-encoded bytes") lets an escape leave, so both searches must park and
+   say why. A candidate is delivered once at its source and every read answers it, so either search's value
+   reaches both writes, and each write is the context of the search whose identity reached it:
+     - `lhHost` takes the raw fragment (`location.hash`) into §13.2.5.1's data state, left only through `<`;
      - `lhQuoted` takes `location.hash.slice(1)` into §13.2.5.36 "Attribute value (double-quoted) state",
        left only through `"`. The set holds both bytes.
    `lhOther`, fed from `state.other`, is the negative control of the credit: in a `location.hash` candidate
    run it carries none of that search's bytes, and its own search fires.
-   It is its own document because a write whose escape the fragment can carry (hashsinks' `lhAttr`) would be
-   one more context of the same search, and that search would then rightly fire there.
+   It is its own document so that no write whose escape the fragment can carry (hashsinks' `lhAttr`) is reached
+   by these searches' candidates and fires under their delivery.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_HASHPARK_H
