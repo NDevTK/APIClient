@@ -68,12 +68,12 @@
  * unlikely.
  * There are two such lines, and each states the instance's engine work at the read. `stalled` says the
  * frontier is out of work, so blocking denies nobody the thread and a round that pays nothing is this zone
- * refusing, the one thing that ends a live session. `poll` says the frontier is running and owed something.
- * Both are answered by one rule: a send's answer is due at the work of the read that followed its first
- * announcement plus `REPLY_LATENCY_WORK`, and a read pays exactly the answers due at its work, in due-point
- * order, waiting for any that has not arrived. So where a reply lands is a function of the engine's work and
- * never of how fast the wire answered; at a stall the instance's clock first moves to its earliest due point,
- * since nothing runs while it waits.
+ * refusing, the one thing that ends a live session. `poll` says the frontier is running, at every slice.
+ * Both are answered by one rule: a send's answer, or a record a peer's read causes here, is due at the clock of
+ * the read after its cause plus `REPLY_LATENCY_WORK`, on the one timeline the cluster's clocks share; a read pays
+ * exactly what is due at its clock, in due-point order, waiting for any answer not yet arrived and for every peer
+ * to pass the point where it could still cause one. So where a record lands is a function of work, never of how
+ * fast the wire or a peer ran; a stalled instance's clock first moves to its earliest due point.
  *
  * AND IT ROUTES, WHICH IS THE ZONE'S ONE OTHER FACT: which instance holds which document. An instance is an
  * ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so a CROSS-ORIGIN child is a second PROCESS of the same binary and
@@ -803,7 +803,8 @@ async function main() {
      Access §3.5), which bridge.js states on the analyze record. */
   const createdDoc = (doc, url, creator) =>
     ZONE.docRecordWithAddressSpace(doc, ZONE.safeFetchDocumentAddressSpace(url, creator));
-  async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, creator, group, opener }) {
+  async function provision({ docId, url, origin, headers, bytes, facts, referenced, doc, creator, group, opener,
+                             at }) {
     /* The document's record, against which every request it asks is judged (askerRecord). Composed by the
        caller and recorded here, so an instance is never provisioned without one. */
     recordDocument(docId, createdDoc(doc, url, creator));
@@ -841,11 +842,12 @@ async function main() {
       ready: [], answered: new Map(), sends: new Map(),
       /* The answers this instance's sends are owed, by key (`owe`), the ones not yet given a due point, and the
          instance's network clock (extension/lib/reply-schedule.js), read at every `poll` and `stalled`. */
-      owed: new Map(), unstamped: [], clock: ZONE.replyClock(),
-      /* How the answers were delivered, and the one wall-time fact this zone reports: how long a read waited for
-         a due answer the wire had not yet produced (`sayDelivery`). */
-      delivery: { polls: 0, stalls: 0, delivered: 0, pollWaits: 0, pollWaitMs: 0, stallWaits: 0, stallWaitMs: 0,
-                  skipped: 0 },
+      owed: new Map(), unstamped: [], clock: ZONE.replyClock(at),
+      /* The records other instances' reads owe this one (`crossSend`), delivered on the cluster's timeline. */
+      inbox: [],
+      /* How the answers were delivered, and the one wall-time fact this zone reports: how long polls waited for
+         a due answer the wire had not produced or for a peer to pass their clock (`sayDelivery`). */
+      delivery: { polls: 0, stalls: 0, delivered: 0, pollWaits: 0, pollWaitMs: 0, skipped: 0 },
       /* The responses this zone fetched for this instance's navigations and holds for a destination instance,
          by the token its `peer` answer named; taken by the `navigable.navigate` that names it. */
       held: new Map(),
@@ -979,9 +981,71 @@ async function main() {
     const refusal = ZONE.replyClockRead(e.clock, Number(field));
     if (refusal !== null) throw new Error(`instance [${e.tag}]'s \`${verb}\` ${refusal}`);
     for (const entry of e.unstamped.splice(0)) entry.due = ZONE.replyClockDue(e.clock);
+    clockMoved();
   };
   /* The answers due at the instance's clock, in the order a read writes them: due point, then ordinal. */
   const dueEntries = (e) => ZONE.replyDueEntries(e.clock, [...e.owed.values()]);
+
+  /* The cluster's timeline. Every instance's clock is a point on it (its origin is where it was provisioned), so
+     a record one instance's read causes in another is due a latency after the causing read, on that one line.
+     An instance at time T may be written the records due at or before T only once no instance can still cause
+     one: every other instance's next read is at or after its floor (`clusterFloors`), and what it causes there
+     is due a latency later. */
+  /* The origin of an instance provisioned by `e`'s notice: a latency after `e`'s last read, which precedes the
+     read that follows the notice, so no record of the new instance can be due before what that read allowed. */
+  const spawnedAt = (e) => ZONE.replyClockFloor(e.clock) + ZONE.REPLY_LATENCY_WORK;
+  /* A record `from`'s notice causes in instance `to`: written at `to`'s first read at or after `from`'s next
+     read plus the latency. A record for `from` itself goes out at that next read (`ready`). */
+  const crossSend = (from, to, rec) => {
+    if (from === to) { to.ready.push(rec); return; }
+    const x = { key: `x:${from.docId}`, from: from.docId, ordinal: ZONE.replyClockOrdinal(from.clock), due: null,
+                rec };
+    /* An instance that has ended reads no more, so what it causes is due a latency after its last read. */
+    if (from.live) from.unstamped.push(x);
+    else x.due = ZONE.replyClockFloor(from.clock) + ZONE.REPLY_LATENCY_WORK;
+    to.inbox.push(x);
+  };
+  const stampedDues = (i) => [...i.owed.values(), ...i.inbox].filter((x) => x.due !== null).map((x) => x.due);
+  /* The earliest time each live instance's next read can state. A running instance reads at or after its
+     clock. A stalled one runs again only when written something: at its earliest stamped due point, or when a
+     peer's record reaches it a latency after that peer's own floor, whichever is first; and never before its
+     clock. Relaxed to the fixed point, which a positive latency reaches in at most one pass per instance. */
+  const clusterFloors = () => {
+    const live = instances.filter((i) => i.live);
+    const lb = new Map(live.map((i) => [i, i.stalled && !i.ready.some(pays) ? Infinity : ZONE.replyClockFloor(i.clock)]));
+    for (let pass = 0; pass <= live.length; pass++) {
+      let moved = false;
+      for (const s of live) {
+        if (lb.get(s) !== Infinity && !s.stalled) continue;
+        let v = Math.min(Infinity, ...stampedDues(s));
+        for (const j of live) if (j !== s) v = Math.min(v, lb.get(j) + ZONE.REPLY_LATENCY_WORK);
+        v = Math.max(v, ZONE.replyClockFloor(s.clock));
+        if (v < lb.get(s)) { lb.set(s, v); moved = true; }
+      }
+      if (!moved) break;
+    }
+    return lb;
+  };
+  /* Whether instance `t` may be written every record due at or before `at`: no other instance can still cause
+     one. */
+  const clusterSafe = (t, at) => {
+    for (const [i, v] of clusterFloors()) if (i !== t && !(v + ZONE.REPLY_LATENCY_WORK > at)) return false;
+    return true;
+  };
+  /* Reads waiting for `clusterSafe` at their own clock, re-asked whenever a clock or a stall moves; a stalled
+     instance is re-asked by `flush`. */
+  const clusterWaiters = [];
+  const clusterWait = (t) => new Promise((res) => {
+    if (clusterSafe(t, ZONE.replyClockNow(t.clock))) res(); else clusterWaiters.push({ t, res });
+  });
+  const clockMoved = () => {
+    for (let k = clusterWaiters.length - 1; k >= 0; k--) {
+      const w = clusterWaiters[k];
+      if (!w.t.live || clusterSafe(w.t, ZONE.replyClockNow(w.t.clock))) { clusterWaiters.splice(k, 1); w.res(); }
+    }
+  };
+  /* The inbox records due at `t`'s clock. */
+  const dueInbox = (t) => t.inbox.filter((x) => x.due !== null && x.due <= ZONE.replyClockNow(t.clock));
 
   /* WHICH KEYS NAME A REQUEST AND WHICH NAME A RECORD, STATED ONCE — the two have different lifetimes and the
      difference is the whole of the correction above. A `req:<id>` names ONE record (the id is the rendezvous
@@ -1369,26 +1433,32 @@ async function main() {
      cannot supply what the frontier is waiting for, and it is the same test `engine_run` makes one level down
      (`r == ENGINE_STEP_STALLED && filled == 0`). It is not a bound and it truncates nothing — every flow keeps
      its snapshot, and the reason travels as the zone's own words rather than as a guess made by the child. */
-  /* One round, written to a child standing in the read; both verbs write exactly this. It writes the due
-     answers in due-point order, then the other ready records, then `go`, which it always writes: the child is
-     blocked in `abi_pay` until the terminator. A caller writes only once every due answer has its record (the
-     poll arm awaits them; `flush` skips an instance until then), so a round carries every answer due at its
-     work or none. A written fetch key is owed no longer: the child re-announces its bill the moment it is let
-     go, so a fresh park on that pair is a request this zone has not answered (see `track`). A request id is
-     kept in `answered`, since an id names one record and is never parked again.
-     Named residual. Not covered: the records this zone writes on its own account rather than in answer to a
-     send (a `join`, a `route`, a `perform`, a cross-agent `remote` answer) go out at the first read after they
-     are ready. Next diff builds: a due point for each, stamped at the read that follows the notice causing it,
-     and for a record crossing instances a clock both instances share. Absence shows as: two runs of a
-     multi-instance session differing in census rows at matching censuses while single-document runs agree. */
+  /* One round, written to a child standing in the read; both verbs write exactly this. It writes the answers
+     due at its clock and the records peers' reads owe it (`crossSend`), ordered by due point, then the causing
+     instance's document name, then that instance's ordinal; then the other ready records; then `go`, which it
+     always writes: the child blocks in `abi_pay` until it. A caller writes once every due answer has its record
+     and no instance can still cause a record due by then (`clusterSafe`). A written fetch key is owed no longer
+     (the child re-announces its bill when let go, see `track`); a request id stays in `answered`.
+     Named residual. Not covered: a cross-agent operation or a post held for a document no instance holds yet
+     (`held`) is stamped at its causing instance's first read after the document lands, and the product's
+     identities other instances emitted (`noveltyHand`) are handed at whatever read follows their arrival.
+     Next diff builds: a held record stamped at its causing read and resolved to its holder before any
+     instance passes its due point, and the novelty hand-off as a record on the same timeline. Absence shows
+     as: two runs of a multi-instance session whose census rows differ only where a held record or a peer's
+     identity arrived. */
   const payRound = (i) => {
     noveltyHand(i);
-    for (const x of dueEntries(i)) {
+    const own = dueEntries(i).map((x) => ({ x, from: i.docId }));
+    const peer = dueInbox(i).map((x) => ({ x, from: x.from }));
+    const order = (a, b) => a.x.due - b.x.due || (a.from < b.from ? -1 : a.from > b.from ? 1 : 0) ||
+                            a.x.ordinal - b.x.ordinal;
+    for (const { x } of [...own, ...peer].sort(order)) {
       if (x.rec === null)
         throw new Error(`instance [${i.tag}] was written a round at work ${i.clock.work} while its due send ` +
                         `\`${x.key}\` has no answer — a round carries every due answer, so its caller had to ` +
                         'wait for this one');
       i.say(x.rec);
+      if (i.inbox.includes(x)) { i.inbox.splice(i.inbox.indexOf(x), 1); continue; }
       i.owed.delete(x.key);
       i.sends.delete(x.key);
       if (isFetchKey(x.key)) i.answered.delete(x.key);
@@ -1403,20 +1473,31 @@ async function main() {
      its session (a referenced one rests no further), so a round of declines alone is never written to one: they
      ride with its next payment, or with the session's end below. A due answer always pays. */
   const pays = (rec) => !rec.startsWith('decline\t');
+  /* A stalled instance runs nothing, so its clock moves to its earliest stamped due point once no peer can
+     still cause an earlier record (the work it would have spent waiting), and it is paid what is due there; a
+     payment already ready is written at its own clock. */
   const flush = () => {
     let moved = false;
 
     for (const i of instances) {
       if (!i.live || !i.stalled) continue;
-      const due = dueEntries(i);
-      if (due.some((x) => x.rec === null) || (!due.length && !i.ready.some(pays))) continue;
+      const now = ZONE.replyClockNow(i.clock);
+      const next = Math.min(Infinity, ...stampedDues(i));
+      const at = i.ready.some(pays) || next <= now ? now : next;
+      if (at === Infinity || !clusterSafe(i, at)) continue;
+      if (at > now) { i.delivery.skipped += at - now; i.clock.skip += at - now; }
+      if (dueEntries(i).some((x) => x.rec === null)) continue;
       payRound(i);
       i.stalled = false;
       moved = true;
     }
-    if (moved || busy) return;
+    if (moved) { clockMoved(); return; }
+    if (busy) return;
     const live = instances.filter((i) => i.live);
     if (!live.length || !live.every((i) => i.stalled)) return;
+    if (live.some((i) => i.inbox.length))
+      throw new Error('every live instance is stalled with a peer record still undelivered — the instance with ' +
+                      'the earliest due point is always safe to pay, so `clusterFloors` and `flush` disagree');
     /* NOTHING IN FLIGHT, NOTHING QUEUED — AND SO NOTHING MAY STILL BE OWED, WHICH IS THE ONE THING THIS ARM
        ASSERTS BEFORE IT SPEAKS. The sentence below tells every child that what it is parked on is something
        this zone WILL NOT SUPPLY, and that is a statement about POLICY. It is only true if this zone answered
@@ -1467,7 +1548,7 @@ async function main() {
      RUNNING A PROGRAM — the IDL getter HTML §7.2.1 "Security infrastructure for Window, WindowProxy, and
      Location objects" defines the member as — so the operation becomes a flow on that instance's own frontier
      and each completion arrives later, through its notices, once per live timeline. */
-  function askOperation(e, id, op, doc) {
+  function askOperation(e, id, op, doc, cause) {
     const target = op.split('\t')[1];
     const token = `${e.tag}#${id}`;
     const go = () => {
@@ -1490,7 +1571,7 @@ async function main() {
         return true;
       }
       reads.set(token, { asker: e, id, op, doc, by: [] });
-      h.ready.push(['perform', token, b64(op)].join('\t'));
+      crossSend(cause, h, ['perform', token, b64(op)].join('\t'));
       flush();
       return true;
     };
@@ -1607,8 +1688,8 @@ async function main() {
         holder.docs.push(f[C.child]);
         recordDocument(f[C.child], createdDoc(doc, loaded.url, creatorDoc));
         recordOpener(f[C.child], f[C.child], childOpener);
-        holder.ready.push(['join', loaded.url, f[C.child], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
-                           ...createFacts(f, doc), ZONE.docRecordArrival(doc)].join('\t'));
+        crossSend(e, holder, ['join', loaded.url, f[C.child], b64(fieldLines(loaded.headers)), b64(loaded.bytes),
+                              ...createFacts(f, doc), ZONE.docRecordArrival(doc)].join('\t'));
         retryHeld();
         flush();
         return;
@@ -1617,7 +1698,7 @@ async function main() {
          page already holds a WindowProxy for this navigable, which is the only reason a delivery has to be
          routed here at all. Its `w.length`, its `w.closed` and every post it makes arrive at this document,
          so this document's timelines may not run out before they do. */
-      await provision({ docId: f[C.child], url: loaded.url, origin: childOrigin, group,
+      await provision({ at: spawnedAt(e), docId: f[C.child], url: loaded.url, origin: childOrigin, group,
                         headers: loaded.headers, bytes: loaded.bytes, facts: createFacts(f, doc),
                         /* Under the creating document's record joined with the notice's words: taking the
                            notice's alone would let a child of a document this zone chose to open read as one
@@ -1659,7 +1740,7 @@ async function main() {
          open would park its last flow for a question no instance can ask. */
       /* Under the issuer's and the navigable's records joined with the notice's words (childDoc). */
       const doc = childDoc(swapFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
-      await provision({ docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
+      await provision({ at: spawnedAt(e), docId: f[P.document], url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
                         creator: swapFrom.issuerDoc, group: newGroup(), referenced: 0,
@@ -1721,13 +1802,13 @@ async function main() {
         navHolder.docs.push(f[P.document]);
         recordDocument(f[P.document], createdDoc(doc, loaded.url, navFrom.issuerDoc));
         recordOpener(f[P.document], f[P.document], navOpener);
-        navHolder.ready.push(['join', loaded.url, f[P.document], b64(fieldLines(loaded.headers)),
-                              b64(loaded.bytes), ...navFacts, ZONE.docRecordArrival(doc)].join('\t'));
+        crossSend(e, navHolder, ['join', loaded.url, f[P.document], b64(fieldLines(loaded.headers)),
+                                 b64(loaded.bytes), ...navFacts, ZONE.docRecordArrival(doc)].join('\t'));
         retryHeld();
         flush();
         return;
       }
-      await provision({ docId: f[P.document], url: loaded.url, origin: navOrigin,
+      await provision({ at: spawnedAt(e), docId: f[P.document], url: loaded.url, origin: navOrigin,
                         headers: loaded.headers, bytes: loaded.bytes, facts: navFacts, doc,
                         creator: navFrom.issuerDoc, group: e.group, referenced: 1, opener: navOpener });
       return;
@@ -1788,7 +1869,7 @@ async function main() {
          a route the bundle merely DECLARED — this zone named the document because no page ever held one. */
       /* Under the declaring document's record joined with the declaration's words. */
       const doc = childDoc(seedFrom.from, f[2], f[3], f[4]);
-      await provision({ docId: `seed${++seedSerial}`, url: loaded.url, origin: principalOf(doc, loaded.url),
+      await provision({ at: spawnedAt(e), docId: `seed${++seedSerial}`, url: loaded.url, origin: principalOf(doc, loaded.url),
                         headers: loaded.headers, bytes: loaded.bytes,
                         facts: topLevelFacts(loaded.url, ZONE.docRecordSandbox(doc)), doc,
                         creator: null, group: newGroup(), referenced: 0, opener: null });
@@ -1820,7 +1901,7 @@ async function main() {
                                `policy refuses on \`${refusal}\`, as it would a fetch with the same signals`));
           return true;
         }
-        t.ready.push(['route', stampOrigin(e.origin), b64(record)].join('\t'));
+        crossSend(e, t, ['route', stampOrigin(e.origin), b64(record)].join('\t'));
         flush();
         return true;
       };
@@ -1854,7 +1935,7 @@ async function main() {
         throw new Error('the peer answered one cross-agent operation TWICE from the SAME timeline — token ' +
                         `${f[1]}, world ${f[2]}`);
       r.by.push(f[2]);
-      r.asker.ready.push(['remote', String(r.id), f[2], f[3], b64(f.slice(4).join('\t'))].join('\t'));
+      crossSend(e, r.asker, ['remote', String(r.id), f[2], f[3], b64(f.slice(4).join('\t'))].join('\t'));
       flush();
       return;
     }
@@ -1866,7 +1947,7 @@ async function main() {
       const r = reads.get(f[1]);
       if (!r) throw new Error(`an exhausted token names no operation this zone asked: ${f[1]}`);
       reads.delete(f[1]);
-      r.asker.ready.push(['exhausted', String(r.id)].join('\t'));
+      crossSend(e, r.asker, ['exhausted', String(r.id)].join('\t'));
       flush();
       return;
     }
@@ -1885,7 +1966,7 @@ async function main() {
       const r = reads.get(f[1]);
       if (!r) throw new Error(`a retracted token names no operation this zone asked: ${f[1]}`);
       reads.delete(f[1]);
-      askOperation(r.asker, r.id, r.op, r.doc);
+      askOperation(r.asker, r.id, r.op, r.doc, e);
       return;
     }
     /* `world.gone <name>` — a world of the sending instance is finished with, so every peer holding a COW
@@ -1949,7 +2030,7 @@ async function main() {
     }
     if (f[0] === 'world.gone') {
       if (f.length < 2 || !f[1]) throw new Error(`a world.gone notice carried no world name: ${record}`);
-      for (const i of instances) if (i !== e && i.live) i.ready.push(`world-gone\t${f[1]}`);
+      for (const i of instances) if (i !== e && i.live) crossSend(e, i, `world-gone\t${f[1]}`);
       flush();
       return;
     }
@@ -2020,14 +2101,14 @@ async function main() {
       ? 'no send spoke as this document' : `sends=${c.sends} answers=${c.answers} identities=${c.identities}`));
   };
   /* How instance `e`'s answers were delivered: reads, answers written, the work skipped at stalls, and the
-     wall time reads spent waiting for a due answer the wire had not produced. Said beside each @RESULT and at
-     the end, as the coalescing census is. */
+     wall time polls spent waiting for a due answer or for a peer's clock. Said beside each @RESULT and at the
+     end, as the coalescing census is. */
   const sayDelivery = (e) => {
     const d = e.delivery;
     console.error(`[trusted] [${e.tag}] reply delivery at work ${e.clock.work} (+${e.clock.skip} skipped): polls=${d.polls} ` +
                   `stalls=${d.stalls} delivered=${d.delivered} owed=${e.owed.size} pollWaits=${d.pollWaits} ` +
-                  `pollWaitMs=${d.pollWaitMs.toFixed(1)} stallWaits=${d.stallWaits} ` +
-                  `stallWaitMs=${d.stallWaitMs.toFixed(1)} latencyWork=${ZONE.REPLY_LATENCY_WORK}`);
+                  `pollWaitMs=${d.pollWaitMs.toFixed(1)} inbox=${e.inbox.length} ` +
+                  `latencyWork=${ZONE.REPLY_LATENCY_WORK}`);
   };
   async function onLine(e, line) {
     if (line.startsWith('@RESULT ')) {
@@ -2254,7 +2335,7 @@ async function main() {
          not in who resolves it, so this is a prefix and not a list: a row added to core/frame/remote_op.c's
          OPS table reaches its instance with nothing here to remember. */
       if (op.startsWith('windowproxy.') || op.startsWith('object.')) {
-        askOperation(e, id, op, doc);
+        askOperation(e, id, op, doc, e);
       } else if (op.startsWith('document.fetch\t')) {
         /* `document.fetch<TAB><provenance><TAB><driven><TAB><pinned><TAB><destination><TAB><referrer policy><TAB><initiator><TAB><url>` —
            §7.4.5's load for a document THIS instance holds,
@@ -2342,13 +2423,15 @@ async function main() {
          reads it, so a polling child marked stalled could be told nothing more is coming while it runs. */
       readAt(e, 'poll', f[1]);
       e.delivery.polls++;
+      /* A stalled peer this read's clock made safe is paid first, since this read may wait on it; then this one
+         waits for every peer to pass the point where it could still cause a record due by its clock. */
+      flush();
+      const t0 = performance.now();
+      await clusterWait(e);
       const waiting = dueEntries(e).filter((x) => x.rec === null);
-      if (waiting.length) {
-        const t0 = performance.now();
-        await Promise.all(waiting.map((x) => x.done));
-        e.delivery.pollWaits++;
-        e.delivery.pollWaitMs += performance.now() - t0;
-      }
+      if (waiting.length) await Promise.all(waiting.map((x) => x.done));
+      const waited = performance.now() - t0;
+      if (waited >= 1) { e.delivery.pollWaits++; e.delivery.pollWaitMs += waited; }
       if (fatal) throw fatal;
       retryHeld();
       payRound(e);
@@ -2359,20 +2442,9 @@ async function main() {
       e.stalled = true;
       readAt(e, 'stalled', f[1]);
       e.delivery.stalls++;
-      /* Nothing runs on a stalled frontier, so its network clock moves to its earliest due point (the work it
-         would have spent waiting), and the answers due there are the ones this round carries. */
-      e.delivery.skipped += ZONE.replyClockStall(e.clock, [...e.owed.values()].map((x) => x.due));
-      /* Everything outstanding that is not an undue answer is settled first, across every instance: a payment
-         held back here is one the child reads as a refusal, and the work that produces it (a cross-instance
-         answer, a provisioning) may have been started by a sibling's round. An answer not yet due is left in
-         flight, since this round will not carry it. */
-      const due = new Set(dueEntries(e));
-      const t0 = performance.now();
-      const unsettled = [...due].some((x) => x.rec === null);
-      await Promise.all(instances.flatMap((i) => [...i.answered]
-        .filter(([k]) => !i.owed.has(k) || due.has(i.owed.get(k)))
-        .map(([, done]) => done)));
-      if (unsettled) { e.delivery.stallWaits++; e.delivery.stallWaitMs += performance.now() - t0; }
+      /* Nothing runs on a stalled frontier: `flush` moves its clock to its earliest due point and pays it there
+         once no peer can cause an earlier record, and a send's answer arriving later calls `flush` itself
+         (`track`). */
       if (fatal) throw fatal;
       retryHeld();
       flush();
@@ -2410,6 +2482,9 @@ async function main() {
     }
     e.live = false;
     e.held.clear();
+    /* What its last notices caused is stamped at its last read, the read they preceded never having come. */
+    for (const entry of e.unstamped.splice(0)) entry.due = ZONE.replyClockFloor(e.clock) + ZONE.REPLY_LATENCY_WORK;
+    clockMoved();
     /* The instance's document ended, and its recorded sends with it (lib/send-coalesce.js), read first. */
     sayCoalesced(e);
     sayDelivery(e);
@@ -2433,7 +2508,7 @@ async function main() {
      the run reaches is composed against it, so a root stated any other way would silently re-grade the whole
      tree beneath it. */
   const rootDoc = observedDoc(docUrl);
-  const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin,
+  const root = await provision({ docId, url: docUrl, origin: new URL(docUrl).origin, at: 0,
                                  headers: seeded.meta.headers, bytes: seeded.bytes,
                                  facts: topLevelFacts(docUrl, ZONE.docRecordSandbox(rootDoc)),
                                  doc: rootDoc, creator: null, group: newGroup(),
