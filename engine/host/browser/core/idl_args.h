@@ -1548,6 +1548,12 @@ void idl_install_accessor_unforgeable_at(JSContext *ctx, JSValueConst target, co
                                          const char *at_file, int at_line);
 #define idl_install_accessor_unforgeable(ctx, target, name, getter, magic, setter) \
     idl_install_accessor_unforgeable_at((ctx), (target), (name), (getter), (magic), (setter), IDL_SITE)
+/* The same placement for a member whose getter is a step machine (idl_getter_id_step). */
+void idl_install_accessor_unforgeable_step_at(JSContext *ctx, JSValueConst target, const char *name,
+                                              int getter_stepid, int setter_stepid, const char *at_file,
+                                              int at_line);
+#define idl_install_accessor_unforgeable_step(ctx, target, name, getter_stepid, setter_stepid) \
+    idl_install_accessor_unforgeable_step_at((ctx), (target), (name), (getter_stepid), (setter_stepid), IDL_SITE)
 
 /* Web IDL §3.7.3 "Interface prototype object"'s [Global] conditional, asked at an install: the object a
  * member goes on in this realm, given the realm's global. Owned; the caller frees.

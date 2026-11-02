@@ -365,6 +365,10 @@ int engine_frontier_settled(void);
 void engine_set_referenced(int referenced);
 /* The flag above, for the ABI's readers. It is the one copy. */
 int  engine_referenced(void);
+/* An arm forked off held snapshot `standby` (solver/source_cut.h), standing on frozen path `path` (borrowed;
+   decide_blob_on_path) at the snapshot's cursor, assembled while the standby is switched in and returned with no
+   flow switched in. Called from the scheduler's pick, where no member is switched in. */
+struct Flow *engine_cut_arm(JSContext *ctx, struct Flow *standby, const void *path);
 
 /* How another instance's flow stood when its act reached a timeline here: the navigation that produced a
    document, or the sending flow of a routed record. For a document it is stated by the host that provisioned

@@ -8284,8 +8284,9 @@ const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessor
     return buf;
 }
 
-void idl_install_accessor_step_at(JSContext *ctx, JSValueConst target, const char *name,
-                                  int getter_stepid, int setter_stepid, const char *at_file, int at_line)
+static void idl_define_accessor_step(JSContext *ctx, JSValueConst target, const char *name,
+                                     int getter_stepid, int setter_stepid, int flags, const char *at_file,
+                                     int at_line)
 {
     JSAtom a;
     JSValue g = JS_UNDEFINED, st = JS_UNDEFINED;
@@ -8309,9 +8310,24 @@ void idl_install_accessor_step_at(JSContext *ctx, JSValueConst target, const cha
         IDL_RECEIVER_IS_TARGET(ctx, target, name, setter_stepid, at_file, at_line);
         st = idl_mint_accessor(ctx, name, setter_stepid, 1);
     }
-    JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st,
-                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st, flags);
     JS_FreeAtom(ctx, a);
+}
+
+void idl_install_accessor_step_at(JSContext *ctx, JSValueConst target, const char *name,
+                                  int getter_stepid, int setter_stepid, const char *at_file, int at_line)
+{
+    idl_define_accessor_step(ctx, target, name, getter_stepid, setter_stepid,
+                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE, at_file, at_line);
+}
+
+/* Web IDL §3.4.10 [LegacyUnforgeable] for a step getter: idl_install_accessor_unforgeable's descriptor. */
+void idl_install_accessor_unforgeable_step_at(JSContext *ctx, JSValueConst target, const char *name,
+                                              int getter_stepid, int setter_stepid, const char *at_file,
+                                              int at_line)
+{
+    idl_define_accessor_step(ctx, target, name, getter_stepid, setter_stepid, JS_PROP_ENUMERABLE, at_file,
+                             at_line);
 }
 
 /* WEB IDL §3.3.7 [Exposed]'s "is exposed in realm", for the conditions this engine models — see idl_args.h for

@@ -560,6 +560,11 @@ void        decide_seg_set_park_id(const void *seg, long id);
    the flow's arms are already recorded — it replays them from the top as it re-runs the document, and forks
    normally the moment the cursor reaches the end of what the recipe knew. */
 void       *decide_blob_new(void *seg);
+/* The loaded flow's decision state moved onto `path` (a frozen path's blob, decide_freeze_path) at the loaded flow's
+   cursor: an arm of a snapshot standing on the path a descendant of that snapshot's instant froze, replaying the
+   descendant's arms from where the snapshot stood. The path's slots below the cursor are the loaded flow's own
+   history (asserted). Counts no fork: the caller mints a candidate, counted as one. */
+void       *decide_blob_on_path(const void *path);
 
 /* HOW BIG ONE FLOW'S DECISION STATE IS — the slots in it and the bytes it holds. `blob` is a parked flow's; the
    running flow's state is live in decide.c and decide_live_stats answers for that one, so neither takes NULL.

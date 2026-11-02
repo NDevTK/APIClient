@@ -494,6 +494,42 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
     return v;
 }
 
+/* The members' getter steps as one step machine, magic the member index. Its one stage rests before a member
+   that reads the attacker sources (search, hash, and href, which serializes both): the solver may ask for a
+   snapshot standing before the read (concolic_source_cut_due), which the read waits for by yielding and asking
+   again. Every other member reads at once. */
+#define LOC_GET_STAGES(X) \
+    X(LOC_GET_READ, "HTML §7.2.4 The Location interface: the attribute's getter steps")
+enum { IDL_STEP_STAGE_BASE(LOC_GET_STAGES) LOC_GET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const LOC_GET_STEPS[] = { LOC_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* No state: the stage is the whole position, and the member is the magic. */
+typedef struct { uint8_t unused; } LocGetState;
+
+static void loc_get_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int loc_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    static const char *const SRCS[] = { LOCATION_SEARCH_SRC, LOCATION_HASH_SRC };
+    int magic = idl_step_magic(hdr);
+
+    (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == LOC_GET_READ, "a Location getter resumed into a stage §7.2.4 does not have");
+    if (!loc_brand(ctx, hdr->this_val)) return -1;
+    if ((magic == LOC_HREF && concolic_source_cut_due(SRCS, 2)) ||
+        (magic == LOC_SEARCH && concolic_source_cut_due(SRCS, 1)) ||
+        (magic == LOC_HASH && concolic_source_cut_due(SRCS + 1, 1)))
+        return JS_STEP_YIELD;
+    *presult = js_loc_get(ctx, hdr->this_val, magic);
+    return JS_IsException(*presult) ? -1 : JS_STEP_DONE;
+}
+
+static const IdlStepDecl LOC_GET_DECL = { loc_get_step, sizeof(LocGetState), loc_get_visit, NULL,
+                                          "HTML §7.2.4 Location attribute getters", LOC_GET_STEPS };
+static int g_loc_get[LOC_N];
+
 /* §7.2.4's STRINGIFIER: `[LegacyUnforgeable] stringifier attribute USVString href`. Web IDL §3.7.8's
    toStringSteps are the brand check followed by "the stringification behavior of the interface", which for a
    stringifier ATTRIBUTE is that attribute's getter steps — so this is one call into the member above and not a
@@ -1420,7 +1456,7 @@ static void location_install_realm(JSContext *ctx)
        §7.2.4 declares a SETTER for every member but `origin`, and the table is what says which — the loop has
        no `if` of its own to get out of step with the IDL. */
     for (i = 0; i < LOC_N; i++)
-        idl_install_accessor_unforgeable(ctx, loc, LOC_NAME[i], js_loc_get, i, g_loc_set[i]);
+        idl_install_accessor_unforgeable_step(ctx, loc, LOC_NAME[i], g_loc_get[i], g_loc_set[i]);
     /* §7.2.4's tenth attribute, readonly, with its own getter — see the member table for why it is not in it. */
     idl_install_accessor_unforgeable(ctx, loc, "ancestorOrigins", js_loc_ancestor_origins, 0, -1);
     /* §3.7.7's UNFORGEABLE OPERATIONS: on the INSTANCE, non-writable and non-configurable, which is what
@@ -1475,9 +1511,11 @@ void location_init(JSContext *ctx)
        which is exactly the per-realm-fact-from-a-shared-place shape this file already carries a paragraph
        about. The member table's readonly column decides which get one, so the IDL and this loop cannot drift.
        `USVString url` for both assign and replace; `reload()` takes nothing, which is a NULL type list. */
-    for (i = 0; i < LOC_N; i++)
+    for (i = 0; i < LOC_N; i++) {
+        g_loc_get[i] = idl_getter_id_step(ctx, &LOC_GET_DECL, i);
         g_loc_set[i] = LOC_READONLY[i] ? -1
                                        : idl_setter_id_step(ctx, IDL_USVSTRING, false, &LOC_SET_DECL, i);
+    }
     g_loc_assign  = idl_method_id_step(ctx, URL_ARG, 1, NULL, 0, &LOC_ASSIGN_DECL, LOC_ASSIGN);
     g_loc_replace = idl_method_id_step(ctx, URL_ARG, 1, NULL, 0, &LOC_ASSIGN_DECL, LOC_REPLACE);
     g_loc_reload  = idl_method_id_step(ctx, NULL, 0, NULL, 0, &LOC_RELOAD_DECL, 0);
@@ -1542,7 +1580,7 @@ void location_free(void)
     g_obj_slot = JS_INVALID_CLASS_ID;
     g_empty_asl_slot = JS_INVALID_CLASS_ID;
     g_loc_class = 0;
-    for (i = 0; i < LOC_N; i++) g_loc_set[i] = -1;
+    for (i = 0; i < LOC_N; i++) g_loc_get[i] = g_loc_set[i] = -1;
     g_loc_assign = g_loc_replace = g_loc_reload = -1;
     g_win_location_set = -1;
     /* THE SOURCE CLAIMS, GIVEN BACK BY THE COMPONENT THAT OWNS THE SOURCES, and LAST because they are declared

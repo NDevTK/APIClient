@@ -22,6 +22,7 @@
 #include "solver/novelty.h"   /* what opening a search and proving it are worth against the product */
 #include "solver/compose.h"   /* a sender row's subject, spelled with its presence */
 #include "solver/act_list.h"   /* the acts a fire was verified under */
+#include "solver/source_cut.h" /* the snapshot a candidate forks from instead of the baseline */
 
 /* Where a composed message's payload goes until a candidate takes it (Cand.dl_tmpl): a String the injection
    member's facets admit, alphanumeric so its JSON spelling is itself between quotes. */
@@ -245,6 +246,13 @@ typedef struct {
        The blob holds a reference on the frozen segment. record_sink releases it at the fire, which is what
        closes the search (search_seeds), and solve_free releases what remains. */
     void *reinject;
+    /* The snapshot standing before the first read of the delivery's base source on the frozen path
+       (solver/source_cut.h), one reference taken and released with `reinject`; NULL where the detecting flow's
+       history holds none. `cut_seeded` counts candidates forked off it (`seededAtCut`); `cut_why` names why the
+       last candidate seeded while a route stood started from the baseline instead (`cutRefused`), NULL if none did. */
+    SourceCut *cut;
+    int cut_seeded;
+    const char *cut_why;
     /* The drives the flow standing at this sink had called (its chain's called members: each body's locator and
        the document ordinal it was called in), frozen with `reinject` because the decisions replayed are those of
        a run that called these bodies in this order. Each candidate is seated on them (engine_orphan_wait_seat).
@@ -926,6 +934,7 @@ static void cand_route_release(Cand *e) {
     decide_blob_free(e->reinject);
     e->reinject = NULL;
     e->reinject_len = 0;
+    if (e->cut) { source_cut_drop(e->cut); e->cut = NULL; }
     free(e->chain); free(e->chain_doc);
     e->chain = NULL; e->chain_doc = NULL; e->chain_n = 0;
     e->route_no_act = 0;
@@ -966,6 +975,15 @@ static void cand_learn_path(Cand *e) {
     }
     e->route_no_act = !drivable;
     e->reinject = decide_freeze_path();
+    /* And the snapshot on this path that precedes every read of the source the payload is delivered at: a
+       candidate forked off it answers each of those reads with the delivery, and replays the path from there. */
+    DCHECK(e->cut == NULL, "a search's cut was taken twice for one route — it is taken with the path");
+    {
+        const char *base = e->root ? concolic_delivery_base(e->root) : NULL;
+
+        e->cut = base && f ? source_cut_of(f, base) : NULL;
+        if (e->cut) source_cut_hold(e->cut);
+    }
     /* And the path's length, taken here where the path exists: it is what `runwayArms` reports, and record_sink
        gives the blob back at the fire, so a length read later would be 0 for the searches that succeeded.
        decide_freeze_path CHECKs its allocation and never returns NULL, so the accessor's own CHECK adds no
@@ -1233,6 +1251,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
        solved search seeds nothing further. Clearing it is what closes the search, since search_seeds reads this
        NULL; the probe's other arms keep arriving after a fire and would otherwise be seeded again. */
     if (twin->reinject) { decide_blob_free(twin->reinject); twin->reinject = NULL; }
+    if (twin->cut) { source_cut_drop(twin->cut); twin->cut = NULL; }
     free(twin->chain); free(twin->chain_doc);
     twin->chain = NULL; twin->chain_doc = NULL; twin->chain_n = 0;
     /* And the search's live candidates lose their fitness now, since the finding they approach is held;
@@ -2341,14 +2360,57 @@ static char *slot_place(const char *text, const char *payload)
     return out;
 }
 
+/* Why a candidate of `e` under deliveries `dl` cannot start at the search's cut, or NULL when it can. A cut serves
+   a world whose every delivered source is first read after it: the payload's own base is by construction
+   (source_cut.h), and each gate's base must not have been read before the snapshot. */
+static const char *cut_refusal(const Cand *e, const char *dl) {
+    const Flow *s;
+
+    if (!e->cut) return "no-cut";
+    s = source_cut_standby(e->cut);
+    if (!s) return "shed";
+    /* Named residual. Not covered: a path through drives or message acts, whose candidate is seated on the chain
+       of drives and posts the composed messages from the baseline (engine_orphan_wait_seat); next diff builds the
+       seat of the drives called after the cut onto an arm; absence shows as `cutRefused` naming these on a search
+       whose `runwayArms` is long. */
+    if (e->chain_n || s->orphan) return "drive-chain";
+    if (e->dl_tmpl || dl) return "message-deliveries";
+    for (int k = 0; k < e->ngate; k++) {
+        const char *base = concolic_delivery_base(e->gate_src[k]);
+
+        if (source_read_has(s, base ? base : e->gate_src[k])) return "gate-read-before-cut";
+    }
+    return NULL;
+}
+
 /* A candidate flow of search `e` carrying `payload`, standing on the path its detection froze, under the
    deliveries `dl` (flow_deliveries_text's format) or, for NULL, variant `v` of the search's composed messages
-   with the payload in its slot. */
+   with the payload in its slot. Where the search's cut serves it, the candidate is an arm of the snapshot
+   standing before the source's first read and replays the frozen path from there; otherwise it re-runs the
+   document from the baseline and replays the path from its start. Either way it founds its own account at the
+   frontier's virtual time. */
 static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const char *dl, int v) {
     Flow *f;
+    const char *why;
 
-    /* A candidate session runs from the baseline, and is this tool's act from its first park, so it is
-       named before its seed grades the document's program loads. */
+    DCHECK(e->reinject != NULL,
+           "a candidate is being seeded for a search that holds no re-injection point — both "
+           "doors onto a search freeze the path of the flow standing at its sink before anything "
+           "can be queued against it, so a payload list with no path behind it belongs to an "
+           "entry that acquired breakouts without either a detection or a witness");
+    why = cut_refusal(e, dl);
+    if (!why) {
+        f = engine_cut_arm(ctx, source_cut_standby(e->cut), e->reinject);
+        f->cand_src     = reclaim_strdup(e->src);
+        f->cand_payload = reclaim_strdup(payload);
+        fire_target_sink_set(&f->fire, sink_name(e->sink));
+        CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
+        e->cut_seeded++;
+        return f;
+    }
+    e->cut_why = why;
+    /* A from-baseline candidate is this tool's act from its first park, so it is named before its seed grades the
+       document's program loads. */
     f = flow_add_unseeded(ctx, JS_UNDEFINED, WORLD_NONE);
     f->cand_src     = reclaim_strdup(e->src);
     f->cand_payload = reclaim_strdup(payload);
@@ -2359,15 +2421,8 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
        document from the baseline (the payload enters at the source read), but it consumes the recorded
        arms at each branch it re-reaches instead of forking over them. decide_blob_new takes its own
        reference on the frozen segment and replays at cursor 0, forking normally once the cursor runs past
-       what the detecting flow knew, which is where this candidate's own exploration begins. It is
-       unconditional: every class needs a path, and both doors onto a search take one before anything can
-       be queued against it. */
+       what the detecting flow knew, which is where this candidate's own exploration begins. */
     {
-        DCHECK(e->reinject != NULL,
-               "a candidate is being seeded for a search that holds no re-injection point — both "
-               "doors onto a search freeze the path of the flow standing at its sink before anything "
-               "can be queued against it, so a payload list with no path behind it belongs to an "
-               "entry that acquired breakouts without either a detection or a witness");
         DCHECK(f->dec_blob == NULL && f->pin_blob == NULL && !f->started,
                "a freshly added flow already carries decision state — the re-injection install below "
                "would overwrite it and drop that segment's reference, and the flow would replay a path "
@@ -3000,6 +3055,15 @@ char *solve_json_array(JSContext *ctx) {
         snprintf(t, sizeof t, "%ld", g_pending[i].replay_arms); json_buf_raw(&b, t);
         json_buf_raw(&b, ","); json_buf_key(&b, "runwayOf");
         snprintf(t, sizeof t, "%ld", g_pending[i].replay_of); json_buf_raw(&b, t);
+        /* `seededAtCut`: candidates that started at the snapshot before the source's first read instead of the
+           baseline; `cutRefused`: why the last one seeded from the baseline did (cut_refusal), omitted when none
+           did. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "seededAtCut");
+        snprintf(t, sizeof t, "%d", g_pending[i].cut_seeded); json_buf_raw(&b, t);
+        if (g_pending[i].cut_why) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "cutRefused");
+            json_buf_str(&b, g_pending[i].cut_why);
+        }
         /* `survived`/`survivedOf`: the furthest any candidate of this search has got its own bytes through the
            page's transforms to any sink, so `turns:900,reached:0,survived:11,survivedOf:14` is a filter eating the
            candidate eleven-fourteenths of the way in. A best-so-far is silent about how often it looked, so a 0 is
@@ -3139,6 +3203,7 @@ void solve_free(void) {
         free(g_pending[i].wit);
         /* The segment reference an unsolved search still holds; the frozen chain goes with its last reference. */
         if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);
+        if (g_pending[i].cut) source_cut_drop(g_pending[i].cut);
         free(g_pending[i].chain);
         free(g_pending[i].chain_doc);
         free(g_pending[i].refused_acts);

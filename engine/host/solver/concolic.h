@@ -461,6 +461,10 @@ int concolic_own_key_mint(JSContext *ctx, JSValueConst record, int n);
    `computed` unchanged where no source overlay is installed, and a concolic carrying it as the EXAMPLE where
    one is. `computed` is consumed either way. */
 JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, JSValue computed);
+/* The seam's other half, asked by a component's reading machine before a read of declared sources `srcs`: 1 when
+   the read must first rest so the solver can take a snapshot standing before it (solver/source_cut.h); the
+   machine then returns JS_STEP_YIELD and asks again when re-entered. 0 where no source overlay explores. */
+int concolic_source_cut_due(const char *const *srcs, int n);
 
 /* A VALUE THAT IS A JOINT FUNCTION OF SEVERAL SOURCES — ONE concolic, ONE identity, a domain over the SET.
  *
@@ -843,6 +847,9 @@ const char *concolic_source_delivery_key(const char *root);
    over as-is). A PARKED @S search reports it because it is the constraint every candidate had to survive, and
    it is a FACT read from the declaration rather than a guess at why nothing fired. */
 const char *concolic_source_encodes(const char *root);
+/* The declared base source a root's candidate is delivered at (concolic_set_candidate's walk), or NULL for a root
+   no component declares. Borrowed from the registry. */
+const char *concolic_delivery_base(const char *root);
 
 /* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
    the taken arm pins/negates. An inequality is the negation of its equality (concolic_cmp_hook), so no

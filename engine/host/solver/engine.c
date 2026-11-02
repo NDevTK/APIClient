@@ -70,6 +70,7 @@
 #include "solver/novelty.h"     /* the identity set novelty_free gives back beside the @H surface */
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries are GC objects and are leaked by two hosts */
 #include "solver/metrics.h"     /* the agent's metrics block, released with the agent */
+#include "solver/source_cut.h"  /* the snapshots a first read of an attacker source leaves */
 #include "check.h"
 #include <math.h>
 #include <time.h>
@@ -2603,6 +2604,8 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
                   "live while a peer holds a WindowProxy for them");
     for (int i = 0; i < n; i++) {
         Flow *f = flow_at(i);
+        /* A held snapshot stands at an instant before this arrival; its arms are live members when they take one. */
+        if (flow_held(f)) continue;
         /* Appended, because two messages from one world are sequential: HTML §9.3.3 Posting messages ends the
            window post message steps by queueing a global task on the posted message task source, and §8.1.7.1
            Definitions gives a task a source to "group and serialize related tasks", so the page observes one
@@ -3530,6 +3533,8 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
            is not a refusal either (two forests, or a generation a park ended): uncertainty keeps the arm, so a
            wrong-agent addressee narrows nothing. */
         if (addressee != NULL && world_vec_relate_held(addressee, f->world) == WORLD_REL_CONTRADICT) continue;
+        /* A held snapshot never runs a program, so it answers nothing; its arms are live members when asked. */
+        if (flow_held(f)) continue;
         attached++;
         g_perform_attached++;
         /* Appended, because successive operations are sequential: the asking side parks on each in turn, and
@@ -5243,8 +5248,12 @@ static int64_t g_service_work;
 static int64_t g_step_open_work;
 static int g_in_step;
 
-static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
-                                     void *dec_blob, void *pin_blob, FlowPathMarks marks) {
+/* Which account an assembled arm takes: its parent's (a fork, flow_fork_inherit), or a new one at the frontier's
+   virtual time (an @S candidate forked off a held snapshot, flow_arrive_on_snapshot). */
+typedef enum { SIB_CONTINUES, SIB_ARRIVES } SibAccount;
+
+static Flow *engine_sibling_assemble_as(JSContext *ctx, Flow *parent, JSValue *clone, void *dec_blob,
+                                        void *pin_blob, FlowPathMarks marks, SibAccount account) {
     DCHECK(parent != NULL, "a sibling was assembled with no parent flow — every field below is copied from one");
     DCHECK(dec_blob != NULL, "a sibling was assembled with no decision state — every branch its parent took would be "
                              "re-asked");
@@ -5298,8 +5307,11 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     flow_assembly_begin(sib);
     parent->world = world_mint_child(fork_point);
     /* Its account is a child of the parent's too: the WFQ's two terms, taken over at the branch. First, because
-       it decides where the flow enters the queue. */
-    flow_fork_inherit(sib, parent, marks);
+       it decides where the flow enters the queue. A candidate founds its own account whichever state it starts
+       from, so an arm off a snapshot arrives as a from-baseline candidate does; its world above still continues
+       the snapshot's, which is the timeline it stands in. */
+    if (account == SIB_ARRIVES) flow_arrive_on_snapshot(sib, parent, marks);
+    else                        flow_fork_inherit(sib, parent, marks);
     sib->started = 1;                 /* hot: resume from the blobs (and the cloned frame, when there is one) */
     /* The clone is of the parent's selected agent's base, so the arm selects that agent; every other agent's
        base and parks are the parent's state too, cloned onto the arm. */
@@ -5372,6 +5384,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            refuses at the first branch a resumed candidate takes. */
         sib->cand_resumed = parent->cand_resumed;
     }
+    /* The arm's history read what its parent's did, and stands behind the same snapshots (solver/source_cut.h). */
+    source_cut_fork(sib, parent);
     /* Being a driven orphan travels: an arm of an orphan drive is that drive continued, no more reproducible from
        a decision vector than its parent, so it carries the drives its parent has called (their chain, the body
        running now in `fn` and its name) and the cold tier writes them for it. */
@@ -5583,6 +5597,11 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            "a fork finished with generator-state swaps still stashed — the sibling's cloned gen_data was never "
            "recorded on its delta");
     return sib;
+}
+
+static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
+                                     void *dec_blob, void *pin_blob, FlowPathMarks marks) {
+    return engine_sibling_assemble_as(ctx, parent, clone, dec_blob, pin_blob, marks, SIB_CONTINUES);
 }
 
 /* JSFlowControlHooks.fork: the branch's fork, the assembly above plus an arm to record. The handoff statics are
@@ -5827,6 +5846,36 @@ static void flow_answer_standby(JSContext *ctx, Flow *f, int i) {
         JS_FreeValue(ctx, wv);
         JS_FreeValue(ctx, e);
     }
+}
+
+/* The snapshot a read of an attacker source parked for (solver/source_cut.h): a sibling at the same call site,
+   assembled as flow_answer_standby assembles one, then held for good. The parent resumes into the read at its next
+   step; the sibling never runs, and @S candidates of the source fork from it (engine_cut_arm). */
+static void flow_leave_source_cut(JSContext *ctx, Flow *f) {
+    JSValue *clone;
+    void *parked;
+    int in_program, in_job;
+    Flow *sib;
+
+    DCHECK(flow_running() == f && f->parked == NULL,
+           "a cut was taken with another flow switched in, or with parked continuations off the runtime");
+    in_program = flow_frame(f) != NULL;
+    in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
+    DCHECK(in_program != in_job,
+           "a flow parked at a read for a cut is suspended in neither home or in both — the cut clones the one call "
+           "site the read is at");
+    clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(f)) : NULL;
+    parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+    CHECK(!in_program || clone != NULL, "engine: a flow parked at a source read could not be cloned for its cut");
+    CHECK(!in_job || parked != NULL,
+          "engine: a flow parked at a source read inside a job could not have its continuation cloned for its cut");
+    sib = engine_sibling_assemble(ctx, f, clone,
+                                  decide_fork_same_path("(an attacker source is about to be read for the first time "
+                                                        "on this path — no predicate was asked)"),
+                                  concolic_pins_suspend(), flow_path_marks(f));
+    DCHECK(sib->parked == NULL, "a freshly assembled cut already holds parked continuations");
+    sib->parked = parked;
+    source_cut_leave(f, sib);
 }
 
 /* Whether this flow waits on a peer request the peer has exhausted: no timeline will answer it, so the timeline
@@ -8551,6 +8600,9 @@ static int preempt_hook(int kind) {
     /* (0) Blocked beats both rankings: a flow holding an unanswered synchronous host request cannot progress, and
        the answer cannot arrive while it holds the thread (the host is asked only between steps). */
     if (cur && flow_blocked(cur)) return 1;
+    /* A read parked for a snapshot standing before it (solver/source_cut.h): the ladder's first rung takes the
+       snapshot at the flow's next step, before the frame resumes into the read. */
+    if (cur && source_cut_due(cur)) return 1;
     /* Both sides are evaluated here, which makes this the question the pick answers: the cache holds which flow
        the rival is, and this computes what both are worth now.
        Nothing but the aging moved under the cached rival, asserted here, where the interval has elapsed: neither
@@ -9392,6 +9444,7 @@ static RowClass flow_row_class(const Flow *f) {
 typedef enum {
     NEXT_AGENT,                 /* another agent of this flow may be selected */
     NEXT_RETIRE,
+    NEXT_LEAVE_SOURCE_CUT,
     NEXT_FORK_PEER_ANSWER,
     NEXT_LEAVE_STANDBY,
     NEXT_FORK_DECLINED,
@@ -9458,7 +9511,8 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
         return nu;
     }
     if (!task_done && flow_answer_exhausted(f)) { nu.arm = NEXT_RETIRE; return nu; }
-    if ((nu.index = flow_answer_fork_at(f)) >= 0) nu.arm = NEXT_FORK_PEER_ANSWER;
+    if (source_cut_due(f)) nu.arm = NEXT_LEAVE_SOURCE_CUT;
+    else if ((nu.index = flow_answer_fork_at(f)) >= 0) nu.arm = NEXT_FORK_PEER_ANSWER;
     else if ((nu.index = flow_answer_standby_at(f)) >= 0) nu.arm = NEXT_LEAVE_STANDBY;
     else if ((nu.index = flow_decline_fork_at(ctx, f)) >= 0) nu.arm = NEXT_FORK_DECLINED;
     else if ((nu.index = flow_reply_success_fork_at(ctx, f)) >= 0) nu.arm = NEXT_FORK_REPLY_SUCCESS;
@@ -9582,8 +9636,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
         /* A rung that begins a task begins a unit (Flow.unit_seq); a resumption or a fork continues the one the
            flow is in. A job mints its own at flow_run_one_job. */
         if (pass == 0 && nu.arm != NEXT_RESUME_PARKED && nu.arm != NEXT_RESUME_PROGRAM && nu.arm != NEXT_RETIRE &&
-            nu.arm != NEXT_FORK_PEER_ANSWER && nu.arm != NEXT_LEAVE_STANDBY && nu.arm != NEXT_FORK_DECLINED &&
-            nu.arm != NEXT_FORK_REPLY_SUCCESS)
+            nu.arm != NEXT_LEAVE_SOURCE_CUT && nu.arm != NEXT_FORK_PEER_ANSWER && nu.arm != NEXT_LEAVE_STANDBY &&
+            nu.arm != NEXT_FORK_DECLINED && nu.arm != NEXT_FORK_REPLY_SUCCESS)
             f->unit_seq = flow_work_seq_next();
         /* One arm per distinct answer, before anything else this flow could do: everything else consumes what the
            arm is made of. The arm clones the frame this flow is suspended in, and the first resume below takes the
@@ -9598,6 +9652,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
             g_step_unit = STEP_UNIT_RETIRE_EXHAUSTED_ASK;
             return FLOW_STEP_RETIRED;
         }
+        if (!turn_task_done) g_step_unit = STEP_UNIT_LEAVE_SOURCE_CUT;
+        if (nu.arm == NEXT_LEAVE_SOURCE_CUT) { flow_leave_source_cut(ctx, f); return 0; }
         if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_PEER_ANSWER;
         if (nu.arm == NEXT_FORK_PEER_ANSWER) { flow_answer_fork(ctx, f, nu.index); return 0; }
         if (!turn_task_done) g_step_unit = STEP_UNIT_LEAVE_ANSWER_STANDBY;
@@ -11675,9 +11731,13 @@ const char *engine_park_why(void) {
  * Not a drop and not a bound: every member is written in full, and the host stores the document under this
  * bundle's key. The teardown that follows releases the flows, which frees the RAM, and a residue coming back is
  * the same admission step, ranked by the same order. */
+static void engine_shed_cuts(JSContext *ctx, int all);
+
 static void engine_park_frontier(JSContext *ctx, Flow *cur)
 {
     if (cur) flow_switch_out(ctx, cur);
+    /* A snapshot has no recipe of its own (its path replayed is its parent's history), so it is shed, not written. */
+    engine_shed_cuts(ctx, 1);
     /* The questions this instance was asked and did not start are handed back first; they are not this instance's
        work to save. A token is the zone's name for a flow suspended in another instance, carries no generation and
        does not outlive the zone session, so it may never enter a recipe (engine.h). Returning them lets cold_park's
@@ -11797,6 +11857,8 @@ int engine_park_fund(void) {
     return 1;
 }
 
+static void engine_shed_standby(JSContext *ctx, Flow *s);
+
 static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     Flow *tail;
 
@@ -11825,6 +11887,15 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     DCHECK(!(g_reclaim_keep && flow_running()),
            "a reclaim found both a flow being switched in and a running flow — a switch-in follows the switch-out, so "
            "one of them is the flow this allocation is for and the other is stale");
+    /* A held snapshot goes before any member's work: it is re-derivable, so shedding it writes nothing. */
+    {
+        Flow *s = source_cut_next_shed(1, g_reclaim_keep ? g_reclaim_keep : flow_running());
+
+        if (s) {
+            engine_shed_standby(g_sess_ctx, s);
+            return 1;
+        }
+    }
     tail = flow_worst(g_reclaim_keep ? g_reclaim_keep : flow_running());
     if (!tail) {
         /* The floor, a reading rather than a failure: the frontier held nothing but the flow this allocation is
@@ -11870,6 +11941,55 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     DCHECK(g_sale_owed_n == 0, "the pager's owed-record count disagrees with its list once the list is empty");
     g_sale_open = 0;
     return 1;
+}
+
+Flow *engine_cut_arm(JSContext *ctx, Flow *standby, const void *path) {
+    JSValue *clone;
+    void *parked;
+    int in_program, in_job;
+    Flow *sib;
+
+    DCHECK(flow_running() == NULL && standby != NULL && flow_held(standby) && flow_is_member(standby),
+           "an arm was forked off a snapshot with a flow switched in, or off a member that is not a held standby");
+    DCHECK(path != NULL, "an arm was forked off a snapshot with no frozen path to stand on");
+    {
+        int prev_reclaim = engine_reclaim_set(1);
+        g_reclaim_keep = standby;
+        flow_switch_in(ctx, standby);
+        g_reclaim_keep = NULL;
+        engine_reclaim_set(prev_reclaim);
+    }
+    in_program = flow_frame(standby) != NULL;
+    in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
+    DCHECK(in_program != in_job, "a snapshot is suspended in neither home or in both");
+    clone = in_program ? JS_FlowClone(ctx, (JSValue *)flow_frame(standby)) : NULL;
+    parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+    CHECK(!in_program || clone != NULL, "engine: a snapshot's frame could not be cloned for an arm");
+    CHECK(!in_job || parked != NULL, "engine: a snapshot's parked continuation could not be cloned for an arm");
+    /* The arm continues the path a descendant of this instant froze, from where the snapshot stands. */
+    sib = engine_sibling_assemble_as(ctx, standby, clone, decide_blob_on_path(path), concolic_pins_suspend(),
+                                     flow_path_marks(standby), SIB_ARRIVES);
+    sib->parked = parked;
+    flow_switch_out(ctx, standby);
+    source_cut_count_arm();
+    return sib;
+}
+
+/* Release the standbys solver/source_cut.h names: those nothing refers to, or with `all` every one. A standby is
+   re-derivable (its path replayed from the baseline is the same state), so a shed costs a later candidate its
+   head start and drops nothing; it is the snapshot of a timeline that its parent continues, so its work items are
+   copies of live ones. */
+static void engine_shed_standby(JSContext *ctx, Flow *s) {
+    DCHECK(s != flow_running() && s != g_reclaim_keep && flow_held(s) && flow_is_member(s),
+           "a standby to shed is the running flow, the one being switched in, or not a held member");
+    flow_withdraw_async_sends(ctx, s);
+    flow_release(ctx, s);
+}
+
+static void engine_shed_cuts(JSContext *ctx, int all) {
+    Flow *s;
+
+    while ((s = source_cut_next_shed(all, NULL)) != NULL) engine_shed_standby(ctx, s);
 }
 
 /* See engine.h. The same edge the allocator's refusal takes (JS_ReclaimMemory's latch and collector guard, then
@@ -12482,7 +12602,8 @@ int engine_runnable(void) {
        second, not folded into the bill, which would put a refused entry back on a bill the host cannot pay. A
        frontier whose marks rest on answered entries satisfies neither, because `pend_owed` is false for an
        answered entry. */
-    DCHECK(b != NULL || flow_count() == 0 || engine_host_owes() || engine_frontier_settled() || g_referenced,
+    DCHECK(b != NULL || flow_count() == flow_held_count() || engine_host_owes() || engine_frontier_settled() ||
+               g_referenced,
            "this engine reported that nobody can take the thread while the host owes it nothing, no peer "
            "references it and no member is parked on a refusal — every member's mark rests on an answered register "
            "entry, which no host event can clear");
@@ -12593,6 +12714,9 @@ static int engine_sched_slice(int resume) {
            every slice (run_scheduler below, main.c's qjs_step at the ABI), so a flow suspended inside a read is
            answered at the next slice. */
         Flow *incumbent = cur;
+        /* The snapshots no lineage member or search refers to any more, released where no walk holds a position in
+           the frontier and before the seeding, which forks off the ones still held. A standby is never the incumbent. */
+        engine_shed_cuts(ctx, 0);
         /* A new member is seeded with no member switched in (flow_seed): its parks read the baseline document and
            credit no account. The incumbent keeps its standing in the pick and is switched back in if it wins. */
         if (cur && (solve_seeds_owed() || witness_verify_seeds_owed())) {
@@ -13225,6 +13349,9 @@ static int engine_sched_slice(int resume) {
         }
     }
     g_sess_cur = cur;
+    /* No member can run and none waits on the host or a peer: no flow will open or seed a search again, so every
+       snapshot is released before the frontier is declared exhausted or written down. */
+    if (!engine_host_owes() && !g_referenced) engine_shed_cuts(ctx, 1);
     /* The stall claim, checked of every member: the other half of the host-owed mark. The mark's own assert says a
        mark rests on something; nothing else says a mark was never laid on a flow that could still progress, a
        failure that stops exploration early and reports a frontier "waiting on the host" the host owes nothing.
@@ -13243,7 +13370,7 @@ static int engine_sched_slice(int resume) {
            reaches this walk past the two STALLED exits, and is written to the cold tier below, and its refused
            entries are still outstanding to their flows. What this walk catches is a member holding nothing at all,
            a mark laid on a flow that could still progress, which the mark's own assert cannot see. */
-        DCHECK(pending_outstanding(flow_at(i)->pending) || g_referenced,
+        DCHECK(pending_outstanding(flow_at(i)->pending) || g_referenced || flow_held(flow_at(i)),
                "the frontier reported a stall while a member waits on nothing — every entry on its register is "
                "answered and delivered, so its mark was laid while it still had work");
     }

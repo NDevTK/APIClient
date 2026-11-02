@@ -1034,6 +1034,49 @@ void *decide_blob_new(void *seg) {
     return b;
 }
 
+#if APICLIENT_DEV
+/* Slot `i` of the chain under `top`: its arm and the question it answers. */
+static void dec_chain_slot(const DecSeg *top, int i, signed char *arm, uint32_t *key) {
+    const DecSeg *s = top;
+
+    while (s && i < s->below) s = s->base;
+    DCHECK(s != NULL && i < s->below + s->n, "a decision slot was read past its chain");
+    *arm = s->e[i - s->below];
+    *key = s->k[i - s->below];
+}
+#endif
+
+void *decide_blob_on_path(const void *path) {
+    const DecideBlob *p = path;
+    DecideBlob *b;
+
+    DCHECK(g_running, "a blob was built on a frozen path while no flow's decision state was loaded — its cursor is "
+                      "the loaded flow's, so there is nothing to stand at");
+    DCHECK(p != NULL && p->seg != NULL && g_c <= p->seg->below + p->seg->n,
+           "a blob was built on a frozen path shorter than the loaded flow's history — the path must continue it");
+#if APICLIENT_DEV
+    for (int i = 0; i < g_c; i++) {
+        signed char la, pa;
+        uint32_t lk, pk;
+
+        if (i >= g_dec_below) { la = g_dec[i - g_dec_below]; lk = g_dec_k[i - g_dec_below]; }
+        else dec_chain_slot(g_dec_base, i, &la, &lk);
+        dec_chain_slot(p->seg, i, &pa, &pk);
+        DCHECKF(la == pa && lk == pk,
+                "slot %d of a frozen path differs from the loaded flow's history it is meant to continue (arm %d "
+                "against %d) — the path was not frozen by a descendant of this flow's instant", i, (int)pa,
+                (int)la);
+    }
+#endif
+    b = reclaim_malloc(sizeof *b);
+    CHECK(b, "decide: OOM standing a flow on a frozen path");
+    b->seg = p->seg;
+    p->seg->refcount++;
+    b->c = g_c;
+    dec_blob_take_mints(b);
+    return b;
+}
+
 /* See decide.h. `entries` is how many decisions the flow stands on, a property of the chain shared with every
    ancestor; `bytes` is what the flow itself owns, the blob. Together they show the sharing. `entries` is where the
    recorded path ends, not how far the flow has got (decide_blob_cursor answers that): for a flow installed by

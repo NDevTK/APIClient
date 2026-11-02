@@ -18142,8 +18142,16 @@ TF_UNIT void probes_cutboot(const char *js, Probe *tab, int *n) {
              "never reached the markup write tainted");
     fold_row(&fw_tt, &fw_why, has && s_stage(js, "innerHTML", hs) == S_FIRED,
              "the innerHTML <- location.hash search did not fire a PoC");
+    /* And its candidates started at the snapshot the setup's flow left before its first fragment read, rather
+       than at the baseline (solver/source_cut.h). */
+    const char *ac_why = NULL; int ac_tt = 1;
+    fold_row(&ac_tt, &ac_why, sr_census(js, "taken") > 0,
+             "NOT REACHED: no snapshot was taken before a first read of an attacker source");
+    fold_row(&ac_tt, &ac_why, sr_census(js, "armsSeeded") > 0,
+             "no candidate was forked off a snapshot: every candidate re-ran the setup from the baseline");
     const Probe rows[] = {
         { "cb-fired", fw_tt, "'cbOut'", SESS_EXPLORE, fw_why },
+        { "cb-from-cut", ac_tt, "cbAcc", SESS_EXPLORE, ac_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }

@@ -11,6 +11,7 @@
 #include "solver/endpoint.h"  /* the @H surface is told which globals a program names (`.global_named`) */
 #include "solver/rung_entry.h" /* the scheduler is told the arms a program asks for by name */
 #include "solver/metrics.h"   /* the attacker-source mint raises `_sourceReads` */
+#include "solver/source_cut.h" /* the attacker-source mint records the read on the flow's history */
 #include "core/timing/thread_work.h"   /* a constraint probe is priced by the bytes it hashes */
 #include "core/timing/hr_time.h"       /* the current time the engine asks for (`.clock`) */
 #include "core/crypto/secure_hash.h"   /* a long identity is the digest of its spelling */
@@ -3422,6 +3423,17 @@ static int row_chain_walk(const char *root, char **bytes, int stop_at_key)
         DCHECK(row >= 0, "a derived row's parent is no declared row");
     }
     return row;
+}
+
+const char *concolic_delivery_base(const char *root)
+{
+    int row = root ? root_declared_row(root) : -1;
+
+    while (row >= 0 && g_srcs[row].parent) {
+        row = src_row(g_srcs[row].parent, strlen(g_srcs[row].parent));
+        DCHECK(row >= 0, "a derived row's parent is no declared row");
+    }
+    return row >= 0 ? g_srcs[row].src : NULL;
 }
 
 /* `bytes` (consumed) behind the composed `head` where the walk reached the base row, owned. */
@@ -9937,9 +9949,24 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
         free(hole);
     }
 #endif
+    /* A declared row's read is one a later delivery could not re-answer, so the flow's history records it
+       (solver/source_cut.h): a snapshot taken after it serves no candidate of this source. */
+    if (src && src_row(src, strlen(src)) >= 0) source_read_note(src);
     /* A declared attacker source is the world's: its component models a channel a person or a server drives,
        which no parse of the served bytes states. This seam is that population's one door. */
     return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, computed);
+}
+
+int concolic_source_cut_due(const char *const *srcs, int n)
+{
+    DCHECK(g_source_overlay != SOURCE_OVERLAY_UNDECLARED,
+           "a reading machine asked for a cut before this host said whether it explores");
+    if (g_source_overlay != SOURCE_OVERLAY_EXPLORING) return 0;
+    for (int i = 0; i < n; i++)
+        DCHECK(src_row(srcs[i], strlen(srcs[i])) >= 0,
+               "a reading machine asked for a cut before a source no component declares — the snapshot serves a "
+               "delivery, and only a declared row has one");
+    return source_cut_ask(srcs, n);
 }
 
 /* Join `parts` in the given `order` with the joint separator, so the composed string is a property of the set

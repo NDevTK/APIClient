@@ -320,6 +320,17 @@ typedef struct Flow {
        its distance is a promise of a finding the product now holds. Carried by a fork. */
     int cand_retired;
 
+    /* Time-travel points (solver/source_cut.h). `src_read` holds the declared attacker sources this flow's
+       history has read, owned; a fork copies it and a replay re-derives it by reading again. `cuts` holds one
+       reference to each snapshot of this history standing before the first read of a source; only a member that
+       can still open a search carries them. `cut_due` holds the sources a read is parked to cut before
+       (source_cut_ask), owned, NULL between asks. `standby_of` is set on the snapshot member itself, which is
+       held out of the pick (flow_set_held) and never runs; the cut owns the member. */
+    char **src_read; int src_read_n;
+    struct SourceCut **cuts; int cuts_n;
+    char **cut_due; int cut_due_n;
+    struct SourceCut *standby_of;
+
     /* Is this flow a driven orphan: one whose frame is a call of a function the page defined and nothing called
        (engine.c's engine_orphan_seed)? To the scheduler it is an ordinary flow. Its one consequence is that its
        work is not in its recipe: re-running the document never calls the function, so the recipe also carries a
@@ -736,11 +747,13 @@ typedef struct Flow {
 #endif
     /* This member's place in the order's index (flow.c's flow_ix_* banner): its key and operand tuple, and its
        treap node while it represents its class; its two nodes in one query's best-first queue (its subtree, and
-       its class); and whether it is in the index at all, which is exactly "a member not host-owed". Owned and
-       read by flow.c alone. */
+       its class); and whether it is in the index at all, which is exactly "a member neither host-owed nor held".
+       Owned and read by flow.c alone. */
     FlowIxTreap ix_t;
     FlowIxNode ix_qt, ix_qs, ix_c;   /* …and its node in its class's heap, keyed on its birth sequence */
     unsigned char ix_in;
+    /* Held out of the pick for good (flow_set_held): a snapshot another flow forks from, never stepped itself. */
+    unsigned char held;
     /* Its links in two populations the index re-keys or re-admits as a whole: its family's away list (members
        whose own silence is non-zero in the current window, the ones an emission re-keys) and the host-owed list
        (members out of the index, re-admitted by flow_clear_host_owed_all). NULL-linked, owned by flow.c. */
@@ -1706,6 +1719,14 @@ void  flow_clear_host_owed(Flow *f);
    slot every flow parked on that script was waiting for. The only unblocking inside a slice. */
 void  flow_clear_host_owed_all(void);
 
+/* Take a just-assembled member out of the pick for the rest of its life: a snapshot other flows are forked from
+   (solver/source_cut.h), which no host event and no other flow re-admits. It keeps its weight and every work item
+   for the arms forked off it, and leaves only by release. The pager does not offer it, since it is in neither the
+   index nor the host-owed list; RAM pressure sheds it first instead (engine.c). */
+void  flow_set_held(Flow *f);
+int   flow_held(const Flow *f);
+int   flow_held_count(void);
+
 /* The image this member owes the host (`paint_owed`). Marked on two roads, the call sites of
  * `engine_request_paint_every_world`: `paint_mark_standing_members` marks the members alive at the ask, and
  * `flow_new` marks members born later; either alone misses a population (the walk misses later arms, the mint
@@ -1890,6 +1911,12 @@ void  flow_site_bank_running(int64_t us);
    the fork is rank-neutral (reasoning at the definition). `at_branch` is the parent's path marks read where the
    fork took the sibling's decision and pin blobs. */
 void  flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch);
+/* The account of an @S candidate assembled as an arm of a held snapshot (solver/source_cut.h) instead of re-run
+   from the baseline: the from-baseline candidate's own account at the frontier's virtual time, since a candidate
+   founds its account whichever state it starts from, with the facts about the prefix the snapshot executed
+   (completed units, path marks `at_cut`, priced decisions, code site) that a replay would have re-derived. Called
+   by the assembly in place of flow_fork_inherit. */
+void  flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut);
 
 /* Release a flow the scheduler is not switched into: the one teardown for a frontier member, and the primitive
  * the partial self-park to the cold tier needs. It removes the flow and returns its RAM: its suspended frames,

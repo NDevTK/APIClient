@@ -11,6 +11,7 @@
 #include "solver/cold.h"       /* …and the park document written out of all of them */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "solver/world.h"    /* …and whether two sending timelines it committed to can both be true */
+#include "solver/source_cut.h" /* …and the time-travel points its history holds */
 #include "check.h"
 #include <stdlib.h>
 #include <math.h>      /* INFINITY: the `nmax` of a treap subtree holding no never-dispatched member */
@@ -2512,8 +2513,8 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
     f->bulk_reads = flow_park_reads(f);
 #endif
     /* Out of every query first, so a sale that funds this one's record cannot pick it again. */
-    if (f->ix_in) flow_ix_remove(f);
-    else          flow_owed_unlink(f);
+    if (f->ix_in)       flow_ix_remove(f);
+    else if (!f->held)  flow_owed_unlink(f);
     /* And the parked continuations are released here, because the flow owns them: every park takes a reference that
        only the resume gives back. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn), so this calls one
        function over the set. `paged` does not excuse it: flow_release's work-item assert is about a dropped item, while
@@ -2576,13 +2577,16 @@ void flow_release(JSContext *ctx, Flow *f) {
            engine: `engine_frontier_paged` answers for the whole session, and a partial self-park writes a tail while
            flows above it run on unwritten, so only the per-flow answer is exact. A driver that stops stepping without
            the park fires this, naming the flows it threw away. */
-        DCHECK(f->paged || f->retired || (!flow_holds_parks(f) && !flow_holds_frame(f) && flow_jobs_held(f) == 0 &&
+        DCHECK(f->paged || f->retired || f->held ||
+                   (!flow_holds_parks(f) && !flow_holds_frame(f) && flow_jobs_held(f) == 0 &&
                             pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
                "a flow was released holding work (a parked continuation, a suspended frame, queued reactions, replies "
                "owed to it, or a routed message) without being written to the cold tier — nothing replays it, so the "
                "frontier just dropped those work items");
         flow_release_bulk(ctx, f);
     }
+    /* Its read sources, its references on the snapshots of its history, and, for a snapshot, the cut's hold on it. */
+    source_cut_flow_release(f);
     /* The unstarted operations: one release for the array and every [record, token] pair. That they are gone is
        asserted by the caller (flow_finish, the pager), since a dropped record is a peer suspended for ever; this is
        the release, not the check. */
@@ -2954,6 +2958,27 @@ static void flow_arrive_at_virtual_time(Flow *f) {
     /* And both halves of the aging are one reading, of nothing, which is what a member never offered the thread
        owes. Asserted at this transition like every other that can move either half. */
     DCHECK_AGING_ONE_WINDOW(f, "a newcomer entered at the frontier's virtual time");
+}
+
+void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) {
+    DCHECK(sib != NULL && snap != NULL && sib != snap && sib->assembling && !sib->ix_in && sib->acct->up == NULL,
+           "an arm off a snapshot took its account outside its assembly, from itself, or after a fork's inheritance");
+    DCHECK(snap->cand_payload == NULL && flow_distance(snap) == 0.0 && snap->orphan_seen == 0,
+           "a snapshot standing before a source read is a candidate or a drive — source_cut_ask takes none of those");
+    /* The account: the from-baseline candidate's, founded at the frontier's virtual time. */
+    flow_arrive_at_virtual_time(sib);
+    /* The facts about the executed prefix, which a from-baseline candidate re-derives by replaying to this instant:
+       the units completed, the path's marks, and the priced decisions, under which it stands at the snapshot's
+       code site in its own ledger. */
+    sib->visits = snap->visits;
+    sib->assumed_reads = snap->assumed_reads;
+    for (int i = 0; i < snap->assumed_slots_n; i++) flow_assumed_slot_push(sib, snap->assumed_slots[i]);
+    for (int i = 0; i < snap->env_slots_n; i++) flow_env_slot_push(sib, snap->env_slots[i]);
+    flow_site_move(sib, flow_site_for(sib, snap->at->code->kind, snap->at->code->key));
+    sib->path_forced = at_cut.forced;
+    sib->path_pinned = at_cut.pinned;
+    sib->path_peer_driven = at_cut.peer_driven;
+    sib->path_peer_pinned = at_cut.peer_pinned;
 }
 
 /* The programs a new flow starts with, installed by the session and asked at the one place a flow is created. The
@@ -4953,6 +4978,25 @@ void flow_clear_host_owed_all(void) {
     frontier_rank_changed();
 }
 
+/* Held members (flow.h): out of the index for good and on no list, so neither a host event nor the pager reaches
+   them; flow_ix_check and the pager's tail check skip them. */
+static int g_held_n;
+
+void flow_set_held(Flow *f) {
+    DCHECK(f != NULL && f->ix_in && !f->held && !f->assembling && !flow_host_owed(f) && f != g_running,
+           "a member was held that is not an indexed, assembled, runnable member — a snapshot is held the moment its "
+           "assembly ends and never stepped");
+    flow_ix_remove(f);
+    f->held = 1;
+    g_held_n++;
+    /* The eligible set lost a member, which is a term of the pick's answer (flow_set_host_owed says why). */
+    frontier_rank_changed();
+}
+
+int flow_held(const Flow *f) { return f->held; }
+
+int flow_held_count(void) { return g_held_n; }
+
 /* The image a member owes the host (@PERWORLD); flow.h says what the mark means and why it is a flag where the
  * host-owed mark is a generation. Neither setter nor clearer raises `frontier_rank_changed`, unlike the pair above:
  * a host-owed mark takes a member out of the eligible set, so the WFQ's answer changes when one is laid or lifted,
@@ -5255,7 +5299,7 @@ static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
     double tw = flow_weight(tail);
     int i;
     for (i = 0; i < g_flows_n; i++) {
-        if (g_flows[i] == exclude || g_flows[i] == tail) continue;
+        if (g_flows[i] == exclude || g_flows[i] == tail || g_flows[i]->held) continue;
         if (flow_weight(g_flows[i]) < tw) return 0;
     }
     return 1;
@@ -5282,6 +5326,11 @@ static void flow_ix_check(void) {
         DCHECKF(away == on_list, "a member's away state and its family's away list disagree (own silence %lld, on "
                 "the list %d) — the list and `away_n` move at the same four transitions",
                 (long long)flow_own_silence(m), on_list);
+        if (m->held) {
+            DCHECK(!m->ix_in && !flow_host_owed(m), "a held member stands in the order's index or is marked host-owed — "
+                                                   "it is out of the pick for good and on neither list");
+            continue;
+        }
         if (flow_host_owed(m)) {
             DCHECK(!m->ix_in, "a host-owed member stands in the order's index — the runnable ask would offer it");
             owed++;
@@ -5384,7 +5433,7 @@ static void flow_ix_check(void) {
         for (int i = 0; i < g_flows_n; i++) {
             const Flow *m = g_flows[i];
             double w;
-            if (m == ref || flow_host_owed(m)) continue;
+            if (m == ref || flow_host_owed(m) || m->held) continue;
             w = flow_weight(m);
             if (!ex || w > ew || (w == ew && flow_order_above(m, ex))) { ex = m; ew = w; }
         }
@@ -5412,10 +5461,11 @@ static void flow_ix_check(void) {
     {
         int64_t te = 0, tw = 0;
         const Flow *t1 = flow_tail_of(NULL, &te, &tw), *t2 = t1 ? flow_tail_of(t1, &te, &tw) : NULL;
-        DCHECK(t1 == NULL ? g_flows_n == 0 : flow_is_min_weight(t1, NULL),
+        DCHECK(t1 == NULL ? g_flows_n == flow_held_count() : flow_is_min_weight(t1, NULL),
                "the pager's tail is not the lowest-weight member of the frontier — the tail query and the order are "
                "two readings of one comparator, so a bound or a re-key is wrong");
-        DCHECK(t1 == NULL || (t2 == NULL ? g_flows_n == 1 : (t2 != t1 && flow_is_min_weight(t2, t1))),
+        DCHECK(t1 == NULL || (t2 == NULL ? g_flows_n - flow_held_count() == 1 :
+                                            (t2 != t1 && flow_is_min_weight(t2, t1))),
                "the pager's tail with a member excluded is not the lowest-weight of the rest, or is the excluded "
                "member — the query's class walk passes over the excluded representative to the class's next member");
     }
@@ -6599,7 +6649,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
            partitioning the members. Before acct_depart, which clears the bucket and family the index reads. */
         DCHECK(!f->assembling, "a sibling was removed from the frontier before its assembly ended");
         if (f->ix_in) flow_ix_remove(f);
-        else if (!f->bulk_released) flow_owed_unlink(f);   /* a sold flow left both at flow_release_bulk */
+        else if (!f->bulk_released && !f->held) flow_owed_unlink(f);   /* a sold flow left both at flow_release_bulk */
+        if (f->held) g_held_n--;
         flow_site_leave(f);
         acct_depart(f);
         free(f);

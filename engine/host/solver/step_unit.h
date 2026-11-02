@@ -68,6 +68,7 @@
     /* the member has never been stepped, and the reset flow_step enters at */    \
     X(NONE,               "none")                                                 \
     /* the arms that PERFORM work — a step here is progress by definition */      \
+    X(LEAVE_SOURCE_CUT,   "leave-a-snapshot-before-a-source-read")                \
     X(FORK_PEER_ANSWER,   "fork-over-a-peer-answer")                              \
     X(LEAVE_ANSWER_STANDBY, "leave-a-standby-for-later-peer-answers")             \
     X(RETIRE_EXHAUSTED_ASK, "retire-a-request-no-peer-timeline-answers")          \

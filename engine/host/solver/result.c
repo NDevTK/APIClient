@@ -25,6 +25,7 @@
 #include "solver/dom_cow.h"   /* the DOM half of the swap census — see result_swap_json */
 #include "solver/decide.h"    /* …and which predicate grew the frontier — see decide_fork_json */
 #include "solver/absent.h"    /* …and which names a standard owns this realm answered with silence */
+#include "solver/source_cut.h" /* …and the snapshots first reads left, which candidates forked from */
 /* …and what the order above them was denominated in, which decides whether two of these documents may be
    compared at all. Composed by its owner — see result.h and quantum.h. */
 #include "solver/quantum.h"
@@ -2049,6 +2050,7 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
     /* …and what this instance's emissions were worth against the product (solver/novelty.h): the credit census,
        and every identity it filed, which is how the trusted zone's known set grows. */
     char *novelty = novelty_json();
+    SourceCutCensus cuts = source_cut_census();
     /* No `probeResults` surface: a probe answer is the reply to a deliberately malformed request, which this
        engine cannot make (its only network edge is the pending register, and the host performs a GET through
        safeFetch). extension/lib/req2proto.js issues the probe as the page and writes
@@ -2247,7 +2249,10 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
                              /* …and what all of the above was denominated in: a property of the host that decides
                                 whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
-                             /* The work retired at the first finding (solve_first_fire_work, -1 before one). */
+                             /* The time-travel points (solver/source_cut.h): snapshots taken before a first source
+                                read, asks withdrawn unparked, snapshots shed, and candidates forked off one; and
+                                the work retired at the first finding (solve_first_fire_work, -1 before one). */
+                             "\"_sourceCuts\":{\"taken\":%ld,\"unparked\":%ld,\"shed\":%ld,\"armsSeeded\":%ld},"
                              "\"_firstFireWork\":%lld,"
                              "\"_novelty\":%s,"
                              "\"_quantum\":%s,\"_park\":%s,\"_parkWhy\":\"%s\"}",
@@ -2271,7 +2276,7 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
                      place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
                      casc.asks_life, casc.served_life, casc.resolved_life,
                      casc.computed_asks_life, casc.computed_served_life, casc.computed_resolved_life,
-                     (long long)solve_first_fire_work(),
+                     cuts.taken, cuts.unparked, cuts.shed, cuts.arms, (long long)solve_first_fire_work(),
                      novelty,
                      quantum,
                      cold_park_json(), engine_park_why());
