@@ -503,13 +503,7 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
 }
 
 static int    g_fetch_stepid = -1;
-/* §5.4's `url`, and it is the LAST of the four this component interned. The other three — `method`, `body`,
-   `headers` — were how `fetch()` read its init: three hand-written [[Get]]s standing in for Web IDL §3.2.17
-   Dictionary types' conversion of `RequestInit`, which has SEVENTEEN members. They are gone with the reads, and
-   this one survives because it is not a dictionary member at all: it is §5.4 step 6's read of the `url`
-   ATTRIBUTE off a `RequestInfo` that took the interface arm of its union. */
-static JSAtom g_atom_url;
-static JSRuntime *g_fetch_rt;
+static JSRuntime *g_fetch_rt;   /* the runtime §5.6's step definitions are registered in */
 
 typedef struct JSFetchState JSFetchState;
 struct JSFetchState {
@@ -1928,7 +1922,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst req_url
  * step 27 runs in one stage that cannot park. */
 #define FETCH_STAGES(X) \
     X(FETCH_URL = IDL_STEP_FIRST, \
-      "Fetch §5.4 new Request(input, init) steps 5-6 (the request's URL: the input Request's `url`, or the " \
+      "Fetch §5.4 new Request(input, init) steps 5-6 (the request's URL: the input Request's own, or the " \
       "USVString input itself)") \
     X(FETCH_URL_STR,  "Web IDL §3.2.12 USVString (converting a non-Request `input` to its USVString — the " \
                       "union's other member, which runs the page's own toString)") \
@@ -2014,11 +2008,9 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            built" question where a zeroed JSValue slot is not, which is the distinction the flag's own note
            makes: js_mallocz leaves this NULL and nothing but this line writes it. */
         if (!s->hdrs) s->hdrs = header_list_step_new(ctx);
-        /* THE ONE-TIME CAPTURE, GATED ON A FLAG AND NOT ON A SLOT. This stage can PARK — §5.4 step 6's read of
-           the input Request's `url` is the page's code — and a parked stage is re-entered at its first line, so
-           without the flag every `fetch(req)` would take a SECOND reference to the input and lose the first. A
-           zeroed step state's JSValue is the INTEGER 0 and not JS_UNDEFINED, so "is this slot filled" is never
-           the question; the flag is.
+        /* THE ONE-TIME CAPTURE, GATED ON A FLAG AND NOT ON A SLOT: the flag is also what the release reads to
+           pair endpoint_fetch_edge_began with its teardown row. A zeroed step state's JSValue is the INTEGER 0
+           and not JS_UNDEFINED, so "is this slot filled" is never the question; the flag is.
            THE INPUT IS KEPT rather than read back off the arguments later, because a Request carries a captured
            blob URL entry that its `url` string cannot express. */
         if (!s->captured) {
@@ -2042,28 +2034,13 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                thing it does for `input`. */
             request_record_init(&s->rec);
         }
-        /* §5.4: a USVString names the URL directly; a Request names it through its `url` attribute, and THAT is
-           the read that has to be a request.
-           WHICH ONE IT IS, IS A BRAND — Web IDL §3.2's union resolution for `RequestInfo = Request or
-           USVString` matches the interface member against a PLATFORM OBJECT OF THAT INTERFACE, and sends every
-           other value to the string member. This asked `JS_IsObject`, which is a SHAPE test, and the two
-           disagree about the most important argument this engine ever sees: a CONCOLIC value is carried as an
-           object, so `fetch('/api/u?uid=' + state.id)` — a URL built out of unknown external input, which is
-           the whole surface this tool exists to report — took the Request arm. The `url` read is
-           opaque-infectious, so it answered with a NEW concolic one field deeper, and the address this flow
-           parked on and recorded was `/api/u?uid={state}.id.url`: an endpoint no page ever requested. */
-        if (request_is(input)) {
-            r = step_getprop_run(ctx, hdr, input, g_atom_url, cb_result, &s->url, out_cb, out_argc);
-            if (r > 0) return r;
-            if (r < 0) return -1;
-        } else {
-            JS_FreeValue(ctx, cb_result);
-            s->url = JS_DupValue(ctx, input);
-        }
-        /* THE DELIVERED VALUE IS CONSUMED HERE. Either branch above has taken it — the request answers with it
-           and the other frees it — so the local must be cleared before the next stage, which hands it to
-           another request. */
+        /* Fetch §5.4 Request class step 5 takes a USVString input as the URL to parse; step 6.2 takes a Request
+           input's request, whose URL is read off the record (request_url) and not through the page-visible `url`
+           attribute. Which arm runs is a brand, Web IDL §3.2.25 Union types' resolution of `RequestInfo = Request
+           or USVString`, never a shape test: a concolic URL is carried as an object and is the string member. */
+        JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
+        s->url = request_is(input) ? request_url(ctx, input) : JS_DupValue(ctx, input);
         hdr->stage = FETCH_URL_STR;
     }
     if (hdr->stage == FETCH_URL_STR) {
@@ -2670,14 +2647,10 @@ void fetch_init(JSContext *ctx)
     JSRuntime *rt = JS_GetRuntime(ctx);
 
     DCHECK(g_fetch_rt == NULL || g_fetch_rt == rt,
-           "fetch was declared into a second runtime — its atoms and step id belong to the first, and one WASM "
+           "fetch was declared into a second runtime — its step ids belong to the first, and one WASM "
            "instance is one document");
-    /* NOT `if (g_fetch_stepid >= 0) return;`. fetch has exactly ONE declaration site — core/platform.c's row —
-       so this test could never be true, and what it DID do was turn the release below forgetting this latch
-       into a silent wrong answer instead of a crash: a second agent in one process reached here, was told it
-       had already been declared, and went on with the atom handle below reading JS_ATOM_NULL — which is a VALID
-       atom id, so §5.4 step 6's read of a Request input's `url` would have answered `<null>` with nothing
-       anywhere to say so. See core/agent_state.h. */
+    /* A crash, not an early return: fetch has one declaration site (core/platform.c's row), so a second entry is
+       a release that forgot its latch (core/agent_state.h). */
     DCHECK(g_fetch_stepid < 0, "fetch_init ran twice — §5's machines are declared once per AGENT");
     /* THIS MACHINE'S STAGE TABLE, HANDED TO THE @H SURFACE'S EDGE CENSUS. It is `js_fetch_steps[]` itself and
        never a copy — a table of literals with static storage, so the surface may key rows on it for the life
@@ -2706,7 +2679,6 @@ void fetch_init(JSContext *ctx)
     response_init(ctx);
     headers_init(ctx);
     request_init(ctx);
-    g_atom_url    = JS_NewAtom(ctx, "url");
     /* Fetch §5.6 "Fetch methods"' `[NewObject] Promise<Response> fetch(RequestInfo input, optional RequestInit init = {})`, AS
        ITS IDL — and the dictionary is §5.4's OWN TABLE, borrowed from the component that declares it rather
        than restated here. That is the whole of the fix: a second hand-written member list is exactly how
@@ -2727,32 +2699,18 @@ void fetch_init(JSContext *ctx)
     }
     agent_state_id("fetch", &g_fetch_stepid, "Fetch §5.6 Fetch methods' machine, and the declaration latch");
     agent_state_id("fetch", &g_deliver_stepid, "the reply-delivery machine every parked fetch closes over");
-    agent_state_ptr("fetch", &g_fetch_rt, "the runtime §5.4's `url` was interned in");
-    agent_state_atom("fetch", &g_atom_url, "§5.4 step 6's `url` attribute name");
+    agent_state_ptr("fetch", &g_fetch_rt, "the runtime §5.6's step definitions are registered in");
     /* After `worker_global_scope` in core/platform.c's list: the install below reads §3.7.3's object that
        component builds, and per-realm intrinsics run in declaration order. */
     realm_declare_intrinsic(fetch_install_realm);
 }
 
-/* §5.4 STEP 6'S ONE FIELD NAME, given back. This component had NO release at all — it was one of the
-   forty-three rows on core/platform.h's list with a declare and an empty third column — so the names it
-   interns once per agent were held for the runtime's whole life and reported by JS_FreeRuntime's atom walk on
-   118 files of `css/cssom`, which is a CSSOM area that touches fetch only incidentally. There were FOUR of
-   them; `method`, `body` and `headers` went with the hand-rolled dictionary reads that were the only callers.
-   WHAT IS NOT FREED HERE is the four components fetch_init DECLARES (§4's ReadableStream, and §5's Response,
-   Headers and Request): each is its own component with its own release, and those are still hand-written into
-   the three host teardowns. They are present in all three, so they are not a divergence — they are the next
-   rows for this column, and freeing them from here would make this component the owner of state it does not
-   own. This releases exactly what fetch.c interned. */
+/* The agent-wide handles fetch_init set, given back; core/agent_state.h asserts each at the end of the release
+   column. The components fetch_init declares (§4's ReadableStream, §5's Response, Headers and Request) have
+   their own releases, which the host teardowns call. */
 void fetch_free(JSRuntime *rt)
 {
-    JS_FreeAtomRT(rt, g_atom_url);
-    g_atom_url = JS_ATOM_NULL;
-    /* AND THE THREE HANDLES THE DECLARATION SET, which this release did not touch while fetch_init opened by
-       reading one of them to decide it had nothing to do. Giving the four names back and keeping the latch is
-       strictly worse than keeping both: the next agent then finds a fetch that says it is declared and whose
-       every name is JS_ATOM_NULL. core/agent_state.h asserts all seven of these at the end of the release
-       column, which is what makes this a crash rather than a wrong answer an agent later. */
+    (void)rt;
     g_fetch_stepid = -1;
     g_deliver_stepid = -1;
     g_abort_stepid = -1;

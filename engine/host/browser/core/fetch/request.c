@@ -256,6 +256,21 @@ JSValueConst request_blob_entry(JSValueConst v)
     return d ? d->blob_entry : JS_UNDEFINED;
 }
 
+JSValue request_url(JSContext *ctx, JSValueConst v)
+{
+    RequestData *d = g_request_class ? JS_GetOpaque(v, g_request_class) : NULL;
+    JSValue r;
+
+    CHECK(d != NULL, "a Request's URL was asked of a value that is not a Request");
+    if (JS_IsUndefined(d->url_unknown)) return JS_NewString(ctx, d->url);
+    /* URL §4.5 URL serializing over the unknown record; its example is that serializer run on the example's
+       parse, which `url` holds where the input's example parsed. */
+    r = concolic_new_derived(ctx, "href", &d->url_unknown, 1,
+                             d->url_grounded ? JS_NewString(ctx, d->url) : JS_UNDEFINED);
+    DCHECK(concolic_is(r), "a Request's unknown URL record serialized to a known value");
+    return r;
+}
+
 JSValueConst request_url_unknown(JSValueConst v, const char **pgrounded)
 {
     RequestData *d = g_request_class ? JS_GetOpaque(v, g_request_class) : NULL;
@@ -394,9 +409,7 @@ static JSValue js_request_get(JSContext *ctx, JSValueConst this_val, int magic)
        — which is the same thing `headers` below has always done for the same reason, and is what makes
        `request.method` answer the unknown itself the day §5.4 step 25 can store one. */
     case REQ_METHOD:          return JS_DupValue(ctx, d->rec.method);
-    /* An unknown URL's serialization is its `href`, the member read a page's `new URL(x, base).href` performs. */
-    case REQ_URL:             return JS_IsUndefined(d->url_unknown) ? JS_NewString(ctx, d->url)
-                                                                    : JS_GetPropertyStr(ctx, d->url_unknown, "href");
+    case REQ_URL:             return request_url(ctx, this_val);   /* "this's request's URL, serialized" */
     case REQ_HEADERS:         return JS_DupValue(ctx, d->headers);   /* [SameObject] */
     case REQ_DESTINATION:     return JS_DupValue(ctx, d->rec.destination);
     case REQ_REFERRER:        return JS_DupValue(ctx, d->rec.referrer);

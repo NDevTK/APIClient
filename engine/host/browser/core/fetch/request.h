@@ -28,6 +28,13 @@ bool request_is(JSValueConst v);
    revoking the URL afterwards does not stop that request. Borrowed. */
 JSValueConst request_blob_entry(JSValueConst v);
 
+/* Fetch §5.4 Request class: the request's URL, serialized, which is the `url` getter's answer and the URL that
+   §5.6 Fetch methods' fetch() takes from a Request input: its step 2 runs the constructor, whose step 6.2 ("set
+   request to input's request") reads no attribute.
+   Over an unknown input it is a derivation of the unknown URL record, so its injection identity is the input's:
+   the serialization is a function of the input and the base, and a candidate lands at the input. Owned. */
+JSValue request_url(JSContext *ctx, JSValueConst v);
+
 /* §5.4 step 5's parsed URL of a Request built from an unknown input string: the unknown URL record, or
    JS_UNDEFINED where the URL is stated. `*pgrounded` is the URL a fetch of it sends where the input's example
    parsed, else NULL. Both borrowed. */
