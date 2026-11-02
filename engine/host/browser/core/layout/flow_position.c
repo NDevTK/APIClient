@@ -467,22 +467,24 @@ static bool fp_is_grid_item(lxb_dom_element_t *el)
 
 /* css-grid-1 §3.3 "Grid Areas": the item is laid out in its grid area, so its border-box origin is the
    container's content-box origin, plus the area's offset (core/layout/grid_track.h), plus the margin box's
-   self-alignment offset in the area (core/layout/grid_item_alignment.h), plus the item's own leading margin. */
+   self-alignment offset in the area (core/layout/grid_item_alignment.h), plus the item's own leading margin,
+   asked: an `auto` one is §10.2's share of the area the item's size leaves. */
 static bool fp_grid_item_origin(lxb_dom_element_t *el, FlowPoint *out)
 {
     lxb_dom_element_t *container = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
     FlowPoint o;
-    CssPx ax, ay, aw, ah, dx, dy;
+    CssPx ax, ay, aw, ah, dx, dy, ml, mt;
 
     if (!flow_border_box_origin_ask(container, &o) || !grid_item_area_origin_ask(container, el, &ax, &ay) ||
         !grid_item_area_extents_ask(container, el, &aw, &ah) ||
         !grid_item_self_alignment_offset_ask(container, el, aw, false, &dx) ||
-        !grid_item_self_alignment_offset_ask(container, el, ah, true, &dy))
+        !grid_item_self_alignment_offset_ask(container, el, ah, true, &dy) ||
+        !used_value_px_ask(el, "margin-left", &ml) || !used_value_px_ask(el, "margin-top", &mt))
         return false;
     out->x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(container, false)),
-                        css_px_add(css_px_add(ax, dx), used_value_px(el, "margin-left")));
+                        css_px_add(css_px_add(ax, dx), ml));
     out->y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(container, true)),
-                        css_px_add(css_px_add(ay, dy), used_value_px(el, "margin-top")));
+                        css_px_add(css_px_add(ay, dy), mt));
     return true;
 }
 
