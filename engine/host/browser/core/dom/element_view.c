@@ -262,6 +262,30 @@ static bool ev_in_presented_document(const lxb_dom_node_t *n)
     return dctx != NULL && viewport_exists(dctx);
 }
 
+/* Whether `n` is content of a replaced element, which CSS 2 §3.1 "Definitions" places outside the formatting
+   model ("The content of replaced elements is not considered in the CSS rendering model"), so it generates no
+   CSS box: HTML §15.4.1 "Embedded content"'s canvas fallback, or anything inside an `img` or `video`. The one
+   content of a replaced element that has a box is an SVG element reached from an outermost `svg` through SVG
+   elements only, whose SVG layout box CSSOM View §6 getClientRects() step 2 answers. A `foreignObject` (SVG 2
+   §12.4 "The 'foreignObject' element") renders its children "using other user agent processes", so the walk
+   restarts there: its content is in the formatting model if the `foreignObject` itself has a box. */
+static bool ev_in_replaced_content(const lxb_dom_node_t *n)
+{
+    const lxb_dom_node_t *a;
+    bool svg_chain = n->ns == LXB_NS_SVG;
+
+    for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+        lxb_dom_element_t *el = lxb_dom_interface_element((lxb_dom_node_t *)a);
+        size_t len = 0;
+        const lxb_char_t *name = lxb_dom_element_local_name(el, &len);
+
+        if (replaced_element_is(el) && !(a->ns == LXB_NS_SVG && svg_chain)) return true;
+        if (a->ns == LXB_NS_SVG && len == 13 && memcmp(name, "foreignObject", 13) == 0) svg_chain = true;
+        else svg_chain = svg_chain && a->ns == LXB_NS_SVG;
+    }
+    return false;
+}
+
 bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *a;
@@ -284,7 +308,7 @@ bool element_view_subtree_has_boxes(const lxb_dom_node_t *n)
         none = css_display_spells(d, CSS_KEYWORD_NONE);
         if (none) return false;
     }
-    return true;
+    return !ev_in_replaced_content(n);
 }
 
 /* The author matches element_view_has_box reads, each inclusive ancestor's for its computed `display`, asked
