@@ -182,9 +182,9 @@ typedef struct {
     long replay_arms, replay_of;
     /* How many strings a code-execution sink was handed while this search's substitution was live: the
        observation count `surv_run` is the best of. It separates `surv_run:0` with no sink run from S sinks run
-       with none of the payload in them, which take opposite work. Class-independent and attributed to the
-       running flow's search, like the survival fraction (filter_survived). It counts strings, not arrivals;
-       `reached` counts a breakout at its own sink. */
+       with none of the payload in them, which take opposite work. Counted at this search's own writes, like
+       the survival fraction (filter_survived). It counts strings, not arrivals; `reached` counts a breakout
+       arriving there. */
     int sink_strings;
     /* The ledger's latch for the arrival rung, separate from the report counter `reached`. Every arrival is
        counted, including one by a spelling the delivery table has since contradicted, but only a deliverable
@@ -499,7 +499,8 @@ static const SinkClass SINKS[] = {
 /* The delivery probe's token. The context probe answers which state the attacker's bytes land in, and is ASCII
    alphanumeric so it cannot change the parse it measures; this probe answers which bytes arrive at all, so it
    carries `<` and has to be a separate probe. It is this file's and not a class's, because byte provenance has
-   no language: one token serves every class and is read at the class-independent point (filter_survived). */
+   no language: one token serves every class and is read at the one point every class's sink reaches
+   (filter_survived). */
 #define SOLVE_BYTES_LOCATOR "apiclientbytes"
 
 /* The probe's index for the K'th declared byte: one character, so the byte after it is read exactly. A digit
@@ -1661,10 +1662,9 @@ static void breakout_arrived(Cand *e) {
     e->reached++;
 }
 
-/* The filter-survived rung, the one sink rung that is class-independent: asked of every string any
-   code-execution sink receives during a candidate run, before the class partition, because the question is
-   how much of the payload is still alive wherever it surfaces. It is credited to the running flow's search,
-   never the sink's. Below it, FLOW_RUNG_DELIVERED is observed at the source read (concolic.c), so rung 0 is
+/* The filter-survived rung, the one sink rung with no language: asked of every string a write candidate_write
+   admitted receives during a candidate run, because the question is how much of the payload is still alive at
+   this search's own sink. Below it, FLOW_RUNG_DELIVERED is observed at the source read (concolic.c), so rung 0 is
    bytes that never entered the program, a delivered flow at `cand_surv == 0` is bytes that survived to no
    sink, and a nonzero fraction is this measurement. The search-level pair is a ratchet: an observation that
    does not beat the best pays nothing and one that does pays the fraction it added, so the rung is worth at
@@ -1708,8 +1708,8 @@ static void filter_survived(const char *out) {
            "solve_observe_substitution, so this is a second door into the substitution that does not report "
            "one, and the parked card is about to state that these runs never reached their own source read");
 
-    /* The delivery probe is read here, at the same class-independent point, because it observes the running
-       flow's own bytes wherever they surface. Its token is the partition; nothing else carries it. */
+    /* The delivery probe is read here, at the same point, because it observes which of the running flow's own
+       bytes reach this search's sink. Its token is the partition; nothing else carries it. */
     if (!strncmp(f->cand_payload, SOLVE_BYTES_LOCATOR, sizeof SOLVE_BYTES_LOCATOR - 1))
         observe_delivery(e, out);
 
@@ -1847,8 +1847,8 @@ static Cand *candidate_search(int sink) {
    write) are both owners there, so either's candidate is admitted at the other's iteration; and a search
    resumed from the cold tier holds no write until a detection of this session stands at one, since the park
    record does not carry them. Next diff builds: the write's iteration in the name, and the sites on the 'c'
-   record. Absence shows as: a resumed search with `turns` and `substituted` above zero and `sinkStrings`
-   above `reached` while its write is reached, or a loop's record whose PoC fires another parameter's write. */
+   record. Absence shows as: a resumed search parked with `substituted` above zero and `sinkStrings` 0 on a
+   document whose exploration reaches its write, or a loop's record whose PoC fires another parameter's write. */
 static Cand *candidate_write(JSContext *ctx, int sink) {
     Cand *e = candidate_search(sink);
 
@@ -1880,14 +1880,14 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
            copy this, since a URL or markup sink runs ToString and `location = { toString(){ return
            "javascript:…" } }` is a real vector. */
         if (!JS_IsString(arg)) return;
-        /* Converted before the class partition: the survival rung is about the running flow's own bytes wherever
-           they surface, so this is the only place that observation exists. */
         if (!(code = JS_ToCString(ctx, arg))) return;
-        filter_survived(code);
         e = candidate_write(ctx, SINK_EVAL);
         /* Before the decline: the engine evaluates this string on return whoever owns the write. */
         if (strstr(code, "X9")) marker_handed(flow_running(), e != NULL);
         if (!e) { JS_FreeCString(ctx, code); return; }   /* another class's or another write's search */
+        /* The survival rung is a distance to this search's own sink, so it is measured only at a write
+           candidate_write admitted: bytes surviving into another search's write bring this one no nearer. */
+        filter_survived(code);
         {
             /* The same partition the markup sink makes: a context probe carries the inert locator and no X9, a
                derived breakout carries X9 and no locator. It also keeps the page's own evals out of the search:
@@ -2051,11 +2051,10 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
            probe, so the marker alone identifies its bytes, and a page that builds a URL containing a minified
            `X9` would otherwise raise the arrival rung and fire its own address. */
         if (!concolic_candidate_delivered()) return;
-        /* Converted before the class partition; see solve_eval_sink. */
         if (!(url = JS_ToCString(ctx, arg))) return;
-        filter_survived(url);
         if (strstr(url, "X9")) marker_handed(flow_running(), 0);   /* the host's own navigation may run it */
         if (!(e = candidate_write(ctx, SINK_URL))) { JS_FreeCString(ctx, url); return; }   /* another class's or write's */
+        filter_survived(url);   /* at this search's own write; see solve_eval_sink */
         /* The partition the other two classes make. This class has no probe, so the marker identifies its bytes
            (both CANDS_URL vectors carry X9), and the page's own javascript: hrefs are not queued per candidate. */
         if (strstr(url, "X9")) { breakout_arrived(e); url_fire(e, ctx, url); }
@@ -2075,11 +2074,10 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
         /* The half that test cannot say (see solve_eval_sink): "not concolic" is also true of every literal the
            page writes. */
         if (!concolic_candidate_delivered()) return;
-        /* Converted before the class partition; see solve_eval_sink. */
         if (!(html = JS_ToCString(ctx, arg))) return;
-        filter_survived(html);
         if (strstr(html, "X9")) marker_handed(flow_running(), 0);
         if (!(e = candidate_write(ctx, SINK_HTML))) { JS_FreeCString(ctx, html); return; }   /* another class's or write's */
+        filter_survived(html);   /* at this search's own write; see solve_eval_sink */
         {
             /* Two candidate kinds reach this write, each told apart by bytes the other cannot contain: the context
                probe carries the inert locator and no X9, a derived breakout carries X9 and no locator. Only the
