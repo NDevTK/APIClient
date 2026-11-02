@@ -2937,6 +2937,7 @@ static void wpt_child_run(JSContext *ctx, const char *token)
     for (;;) {
         int r = engine_sched_step();
         int did;
+        DCHECK(r != ENGINE_STEP_HOST, "the WPT runner states no host turn (solver/quantum.h), so no step hands it one");
         wpt_child_emit_notices(token);
         if (r == ENGINE_STEP_YIELD) continue;
         /* What this host owes, at the same boundary as the top-level half pays it: a child document fetches too,
@@ -3347,6 +3348,7 @@ int main(int argc, char **argv)
         int r = engine_sched_step();
         int did;
 
+        DCHECK(r != ENGINE_STEP_HOST, "the WPT runner states no host turn (solver/quantum.h), so no step hands it one");
         /* The step after a park request takes it (engine.h's engine_request_park: at the next boundary with no
            flow switched in, the top of the next slice), so the run is over when it returns. Still owed are the
            park's own announcements, emitted between writing the residue and closing the session. Requests are not

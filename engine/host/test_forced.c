@@ -52,6 +52,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "solver/engine.h"
+#include "solver/quantum.h"   /* quantum_set_host_turn_us: `--host-turn-us` */
 #include "solver/ram_limit.h"   /* the tightest memory cgroup limit, which native_ceiling_arm takes as a ceiling */
 #include "solver/cow.h"
 #include "core/loader/cookie_jar.h"   /* the root document's own Set-Cookie, received at the baseline */
@@ -37589,7 +37590,10 @@ TF_UNIT int abi_main(int argc, char **argv)
        assert); the step that takes the park answers DONE, as wpt_runner.c's park does. */
     int parking = 0;
     for (;;) {
-        int step = qjs_step();
+        int step;
+
+        /* The host's turn is taken and the same slice resumed, with nothing of this host's between (engine.h). */
+        do step = qjs_step(); while (step == ENGINE_STEP_HOST);
 
         /* THE NOTICES ARE DRAINED ON EVERY ROUND, including the one that ends the session: an emission the
            last step produced is exactly the one a drain placed before the terminator would lose. */
@@ -38059,6 +38063,18 @@ int main(int argc, char **argv) {
     {
         const char *site = arg_val(argc, argv, "--attacker-site");
         if (site) concolic_set_attacker_site(site);
+    }
+    /* A host turn every N wall microseconds (solver/quantum.h), as a renderer frame states one: this process needs
+       no turn, so it is asked for only to show that answering one moves nothing, and each ENGINE_STEP_HOST is
+       re-entered at once by engine_run and by the ABI arm below. */
+    {
+        const char *turn = arg_val(argc, argv, "--host-turn-us");
+        if (turn) {
+            char *end;
+            long long us = strtoll(turn, &end, 10);
+            CHECK(*turn != '\0' && *end == '\0' && us > 0, "--host-turn-us takes a positive count of microseconds");
+            quantum_set_host_turn_us((int64_t)us);
+        }
     }
     /* THE ABI ARM IS TAKEN FIRST, BEFORE ANY OF THE FIXTURE'S OWN STATE EXISTS. `qjs_init` roots an agent —
        its runtime, its class registrations, its world namespace and its frontier — and the selftests below

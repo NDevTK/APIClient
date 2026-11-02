@@ -5,7 +5,8 @@
  * counted at dispatch, so it is a function of the flow's path and the same on every host and across a resume.
  * This component owns three things beside it:
  *   - the bracket: whether a slice is open, asserted by every entry that may run only inside or only outside one;
- *   - the host yield: whether the host wants its thread back on elapsed time, which ranks and accounts nothing;
+ *   - the host turn: whether the host wants its thread back on elapsed time, answered between two steps of a
+ *     slice (solver/engine.h's ENGINE_STEP_HOST), which moves no rank, account or slice boundary;
  *   - the pricing clock: this host's thread time, read by censuses that price work (core/timing/thread_work.c,
  *     solver/engine.c's step census) and by no scheduling, ranking, accounting or assert.
  * The slice is a floor on sharing, never a cap: a flow parks as a COW snapshot and resumes byte-identically. */
@@ -21,11 +22,12 @@ void quantum_end(void);
    may return to the host only outside one (main.c's qjs_step asserts it). An assertion's operand, never a branch:
    a caller that branches on it is choosing between a scheduled and an unscheduled path. */
 int quantum_slice_open(void);
-/* Whether the host wants its thread back now, on elapsed time since the slice opened. Asked only inside a slice
-   (asserted). It moves no rank and no account: the slice's budget is work, and this only hands the thread to the
-   host's own event loop. On the emscripten host it answers after QUANTUM_HOST_YIELD_MS, because the renderer
-   frame's event loop runs only between two qjs_step calls. On native it never answers: a native engine is its
-   own process, the OS shares the machine between processes, and every native host steps straight back in. */
+/* The host's turn, in wall microseconds a slice may hold the thread (0, the default, is never), stated by the host
+   between steps: a renderer frame, whose event loop runs only between two qjs_step calls, states one; a native
+   driver is its own process and states none. */
+void quantum_set_host_turn_us(int64_t us);
+/* Whether the host wants its thread back now, on elapsed wall time since the slice opened or last resumed. Asked
+   only inside a slice (asserted), by the scheduler between two steps; it moves no rank and no account. */
 int quantum_host_wants_thread(void);
 /* The pricing clock: this thread's CPU in microseconds where the host has a thread CPU clock, its monotonic wall
    clock where it does not (quantum_measure says which). Censuses only. */
@@ -33,7 +35,7 @@ int64_t quantum_thread_us(void);
 /* What the pricing clock is on this host, as a string a diagnostic prints, and the same fact as a predicate. */
 const char *quantum_measure(void);
 int quantum_measure_is_cpu(void);
-/* `{"sliceWork":…,"hostYieldMs":…,"price":…,"priceIsCpu":…}`, malloc'd, caller frees; NULL only on allocation
+/* `{"sliceWork":…,"price":…,"priceIsCpu":…}`, malloc'd, caller frees; NULL only on allocation
    failure. Compile-time constants of this host, so askable inside a slice or out; result.c composes it as
    `_quantum`, and quantum.c prints it once per instance as the `@QUANTUM` line at the first slice. */
 char *quantum_json(void);

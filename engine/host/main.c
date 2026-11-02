@@ -1221,12 +1221,13 @@ QJS_EXPORT void qjs_begin(const char *recipes)
     g_begun = 1;
 }
 
-/* One cooperative quantum of the one dispatch loop, answering the scheduler's three codes, which are three
+/* One cooperative quantum of the one dispatch loop, answering the scheduler's four codes, which are four
  * different things to do next. ENGINE_STEP_YIELD leaves every flow where it was and the frontier runnable: the
  * thread is asked for, so a host with nothing else to do steps straight back in. ENGINE_STEP_DONE means the frontier
  * is empty and the session's hooks are uninstalled. ENGINE_STEP_STALLED means every member is parked on something
  * only this host can supply: a yield asks to be outranked and a stall asks to be paid, and stepping again before
- * paying converts nothing into work (a driver that treats a stall as a yield spins). */
+ * paying converts nothing into work (a driver that treats a stall as a yield spins). ENGINE_STEP_HOST is the
+ * host's own turn (qjs_set_host_turn): the host takes it and steps again with no other entry in between. */
 QJS_EXPORT int qjs_step(void)
 {
     int r;
@@ -1263,9 +1264,9 @@ QJS_EXPORT int qjs_step(void)
            "context switch deletes them, so the reply arrives at its delivery stripped to an empty object");
     /* Three values, and this entry is where that holds: the membership check stops a fourth from reaching a host
        whose branches are written against these three. */
-    DCHECK(r == ENGINE_STEP_DONE || r == ENGINE_STEP_YIELD || r == ENGINE_STEP_STALLED,
+    DCHECK(r == ENGINE_STEP_DONE || r == ENGINE_STEP_YIELD || r == ENGINE_STEP_STALLED || r == ENGINE_STEP_HOST,
            "the scheduler answered a step with a code this ABI does not carry — the host branches on DONE, "
-           "YIELD and STALLED, so a fourth value reaches it as whichever branch happens to be the fallback");
+           "YIELD, STALLED and HOST, so a fifth value reaches it as whichever branch happens to be the fallback");
     /* A stall is a bill, so it names what is owed: the two registers this ABI's host can read. There are two stall
        causes. engine_sched_step stalls for engine_host_owes (both registers' union; its dev walk asserts every
        outstanding entry is tellable through one) and for a referenced document, whose last timeline waits for a
@@ -1984,6 +1985,14 @@ QJS_EXPORT const char *qjs_level1_account(void)
     CHECK(n > 0 && (size_t)n < sizeof buf, "the Level-1 account did not fit its buffer — the zone would parse a "
                                            "truncated record");
     return buf;
+}
+
+/* The host's turn: wall milliseconds a slice may hold this thread before qjs_step answers ENGINE_STEP_HOST between
+   two steps, 0 for never (solver/quantum.h). The renderer frame states it once at boot, because its event loop runs
+   only between two qjs_step calls; the trusted zone never sees the code, since the frame re-enters on its own. */
+QJS_EXPORT void qjs_set_host_turn(unsigned ms)
+{
+    quantum_set_host_turn_us((int64_t)ms * 1000);
 }
 
 /* This instance's engine work, the banked counter engine_service_work reads: the clock the trusted zone stamps a

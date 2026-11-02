@@ -367,7 +367,6 @@ function docWfq(w) {
 function docQuantum(q) {
   return docObject(q, "_quantum") ||
     (Number.isSafeInteger(q.sliceWork) && q.sliceWork > 0 ? null : "_quantum.sliceWork is not a positive integer") ||
-    (Number.isSafeInteger(q.hostYieldMs) && q.hostYieldMs >= 0 ? null : "_quantum.hostYieldMs is not a count") ||
     (docIsName(q.price) && typeof q.priceIsCpu === "boolean" ? null
       : "_quantum carries no `price` string or boolean `priceIsCpu`");
 }
@@ -773,12 +772,10 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         /* Standard-owned names the document read and this realm did not answer, with the population of global
            reads they are drawn from. */
         absent: result._absent,
-        /* What the order above was denominated in, relayed whole. It is a property of the host and build,
-           constant for the session. With no `-pthread` in the link, linear memory is an ordinary ArrayBuffer
-           and no second thread can raise the yield request, so the aging charge is billed in wall time and the
-           OS's descheduling decides part of the order; two runs of one build can differ, and the popup renders
-           this beside the order so that is not read as an engine change. solver/quantum.c's #error keeps the
-           link and this denomination in step. */
+        /* What the order above was denominated in, relayed whole: the slice in engine work and the clock the
+           census's microsecond rows are priced on, a property of the host and build constant for the session.
+           No wall clock ends a slice (this frame's turns are taken between steps, solver/engine.h's
+           ENGINE_STEP_HOST), so the order is a function of the paths. */
         quantum: result._quantum,
         /* What this zone's egress policy did, which the engine's counters cannot say: a page with no API
            surface is either one the engine never derived requests for or one whose requests this tool refused,

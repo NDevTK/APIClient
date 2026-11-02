@@ -125,6 +125,8 @@ QJS_EXPORT void qjs_host_answers_exhausted(unsigned req);
 
 /* Level 1's account of this instance, RAM pressure, and the streamed partial. */
 QJS_EXPORT const char *qjs_level1_account(void);
+/* The host's turn inside a slice, in wall milliseconds, 0 for never (main.c). */
+QJS_EXPORT void qjs_set_host_turn(unsigned ms);
 /* The instance's engine work, the clock its replies are delivered against (main.c). */
 QJS_EXPORT double qjs_service_work(void);
 QJS_EXPORT void qjs_request_park(void);

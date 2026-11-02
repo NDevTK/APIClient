@@ -24,14 +24,14 @@ const VERDICTS = [["PASS:", "PASS"], ["FAIL:", "FAIL"], ["[test-forced] NOT ASKE
                   ["LIFECYCLE:", "LIFECYCLE"]];
 
 /* The slice an `@QUANTUM` line announces (solver/quantum.c's quantum_json), as the text two hosts compare: the work
-   budget and the wall-time host yield, which ends a slice early on the emscripten host. `price` and `priceIsCpu`
-   name the clock census rows are priced on, which is not the slice, so they are left out. */
+   budget, which is the whole slice on every host (a host turn ends none). `price` and `priceIsCpu` name the clock
+   census rows are priced on, which is not the slice, so they are left out. */
 function sliceOf(text, where) {
   const j = JSON.parse(text);
-  if (!Number.isInteger(j.sliceWork) || !Number.isInteger(j.hostYieldMs))
-    throw new Error(`${where}: an @QUANTUM line carries no integer \`sliceWork\` and \`hostYieldMs\`: ${text} — ` +
-                    `solver/quantum.c's quantum_json composes both, so the composer and this reader disagree`);
-  return `${j.sliceWork} work units` + (j.hostYieldMs > 0 ? `, ended early by a ${j.hostYieldMs} ms host yield` : ``);
+  if (!Number.isInteger(j.sliceWork))
+    throw new Error(`${where}: an @QUANTUM line carries no integer \`sliceWork\`: ${text} — ` +
+                    `solver/quantum.c's quantum_json composes it, so the composer and this reader disagree`);
+  return `${j.sliceWork} work units`;
 }
 
 /* One run's reading. `out` is the run's whole captured output, `signal` its terminating signal or null, and

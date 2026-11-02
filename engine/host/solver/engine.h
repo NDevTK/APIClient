@@ -294,8 +294,8 @@ EngineRivalMiss engine_rival_miss(void);
 
 /* The session: the same dispatch loop, stepped by its host instead of drained, so a host with other work
    between quanta (its message port, other engines, streamed findings) gets the cooperative-quantum return and
-   then resumes the byte-identical frontier. engine_run is these entries in a loop. A step answers one of three
-   values and every host keeps all three apart: a yield and a stall ask for opposite things, and only the
+   then resumes the byte-identical frontier. engine_run is these entries in a loop. A step answers one of four
+   values and every host keeps them apart: a yield and a stall ask for opposite things, and only the
    engine knows which it meant.
    ENGINE_STEP_DONE: the frontier is empty and the session's hooks are uninstalled.
    ENGINE_STEP_YIELD: the session is live and every flow is where it was. */
@@ -307,6 +307,12 @@ EngineRivalMiss engine_rival_miss(void);
    paying converts nothing into work, so a driver treats an unpaid stall as its terminator, never a step
    count. */
 #define ENGINE_STEP_STALLED 3
+/* ENGINE_STEP_HOST: the host asked for its thread inside a slice (solver/quantum.h's quantum_set_host_turn_us), and
+   the slice handed it over between two steps with nothing moved. The host takes its turn and calls
+   engine_sched_step again with no other entry in between (no payment, park request or ABI call), and the same
+   slice resumes with its budget and running flow, so a turn changes no rank, account or slice boundary. A host
+   that sets no turn never sees it. */
+#define ENGINE_STEP_HOST 4
 /* The cooperative slice, in engine work: retired opcodes and regexp back-edges plus host work charged in the
    opcode unit by its input (core/timing/thread_work.h). A thread-sharing floor, never a cap: nothing is dropped
    across it. 54000 units is about 12 ms of the native dev build at thread_work.h's 0.222 us per opcode, and it

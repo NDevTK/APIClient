@@ -12,14 +12,36 @@ static int g_slice_open;
 
 int quantum_slice_open(void) { return g_slice_open; }
 
-/* ── Emscripten: the renderer frame's event loop runs only between two qjs_step calls ─────────────────── */
+/* The host's turn: wall microseconds a slice may hold the thread before the host is handed it between two steps,
+   0 for never, and the wall reading the current hold began at (the slice's open or its last resume). */
+static int64_t g_turn_us;
+static int64_t g_turn_open_us;
+
+/* CLOCK_MONOTONIC on every host: the turn is about elapsed time, whichever clock prices work. */
+static int64_t quantum_wall_us(void)
+{
+    struct timespec t;
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &t) == 0,
+          "quantum: the host has no monotonic clock, so a host turn cannot be answered on time");
+    return (int64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
+}
+
+void quantum_set_host_turn_us(int64_t us)
+{
+    DCHECKF(us >= 0, "a host turn of %lld us was set — 0 is never, and a turn is a duration", (long long)us);
+    DCHECK(!g_slice_open, "a host turn was set inside a slice — it is the host's policy, stated between steps");
+    g_turn_us = us;
+}
+
+int quantum_host_wants_thread(void)
+{
+    DCHECK(g_slice_open, "the host's claim on the thread was asked outside an open slice — whoever is running "
+                         "this flow is not the scheduler");
+    return g_turn_us > 0 && quantum_wall_us() - g_turn_open_us >= g_turn_us;
+}
+
+/* ── Emscripten: the pricing clock is the wall clock ─────────────────────────────────────────────────────── */
 #if defined(__EMSCRIPTEN__)
-
-/* Wall milliseconds a slice may hold the renderer frame's thread before the host gets it back: a
-   responsiveness policy for the frame's own event loop, not a share of anything. */
-#define QUANTUM_HOST_YIELD_MS 12
-
-static int64_t g_slice_open_us;
 
 /* CLOCK_MONOTONIC, named for what it is: emscripten answers every WASI clock, the CPU-time ones included, from
    emscripten_get_now(), so asking for CLOCK_THREAD_CPUTIME_ID would return this same number under a CPU name. */
@@ -27,13 +49,12 @@ int64_t quantum_thread_us(void)
 {
     struct timespec t;
     CHECK(clock_gettime(CLOCK_MONOTONIC, &t) == 0,
-          "quantum: the host has no monotonic clock, so the renderer frame cannot be handed back on time");
+          "quantum: the host has no monotonic clock, so the census has no clock to price work on");
     return (int64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
 }
 
 const char *quantum_measure(void) { return "wall (emscripten answers every WASI clock from emscripten_get_now)"; }
 int quantum_measure_is_cpu(void) { return 0; }
-static int quantum_host_yield_ms(void) { return QUANTUM_HOST_YIELD_MS; }
 
 /* The label above, checked once per instance: a CPU-time reading taken between two monotonic readings lands
    between them only if both come from one clock. A toolchain with a real thread CPU clock fails this, and the
@@ -59,16 +80,9 @@ static void quantum_check_clock(void)
 #endif
 }
 
-static void quantum_slice_mark(void) { quantum_check_clock(); g_slice_open_us = quantum_thread_us(); }
+static void quantum_slice_mark(void) { quantum_check_clock(); }
 
-int quantum_host_wants_thread(void)
-{
-    DCHECK(g_slice_open, "the host's claim on the thread was asked outside an open slice — whoever is running "
-                         "this flow is not the scheduler");
-    return quantum_thread_us() - g_slice_open_us >= (int64_t)QUANTUM_HOST_YIELD_MS * 1000;
-}
-
-/* ── Native: one engine per process, so the OS shares the machine and no host waits on a step ───────────── */
+/* ── Native: the pricing clock is this thread's CPU ─────────────────────────────────────────────────────── */
 #elif defined(__linux__) || defined(__APPLE__)
 
 int64_t quantum_thread_us(void)
@@ -81,19 +95,11 @@ int64_t quantum_thread_us(void)
 
 const char *quantum_measure(void) { return "thread-cpu (CLOCK_THREAD_CPUTIME_ID)"; }
 int quantum_measure_is_cpu(void) { return 1; }
-static int quantum_host_yield_ms(void) { return 0; }
 
 static void quantum_slice_mark(void) {}
 
-int quantum_host_wants_thread(void)
-{
-    DCHECK(g_slice_open, "the host's claim on the thread was asked outside an open slice — whoever is running "
-                         "this flow is not the scheduler");
-    return 0;
-}
-
 #else
-#error "solver/quantum.c: name this host's pricing clock and say whether a host event loop waits on a step"
+#error "solver/quantum.c: name this host's pricing clock"
 #endif
 
 /* Interpolated into JSON unescaped, so the string must carry no quote, backslash or control byte; both values
@@ -107,9 +113,8 @@ char *quantum_json(void)
         DCHECK(*p != '"' && *p != '\\' && *p >= 0x20,
                "quantum_measure() returned a string that is not a bare JSON string body");
 #endif
-    return composef("{\"sliceWork\":%lld,\"hostYieldMs\":%d,\"price\":\"%s\",\"priceIsCpu\":%s}",
-                    (long long)ENGINE_QUANTUM_WORK, quantum_host_yield_ms(), measure,
-                    quantum_measure_is_cpu() ? "true" : "false");
+    return composef("{\"sliceWork\":%lld,\"price\":\"%s\",\"priceIsCpu\":%s}",
+                    (long long)ENGINE_QUANTUM_WORK, measure, quantum_measure_is_cpu() ? "true" : "false");
 }
 
 /* Printed once per instance, at its first slice: the line reports that a stage opened a slice, the `_quantum`
@@ -133,6 +138,7 @@ void quantum_begin(void)
     DCHECK(!g_slice_open, "quantum_begin inside an open slice — the scheduler's bracket is unbalanced");
     quantum_announce();
     quantum_slice_mark();
+    if (g_turn_us > 0) g_turn_open_us = quantum_wall_us();
     g_slice_open = 1;
 }
 

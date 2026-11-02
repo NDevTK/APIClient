@@ -1919,8 +1919,7 @@ function census(r) {
 
   /* WHAT EVERY ORDERING FIGURE ABOVE WAS SERVED IN: the run's `_quantum` (solver/quantum.c's `quantum_json`,
      relayed by bridge.js as `quantum`). The slice and the aging charge are engine work, so `sliceWork` is the
-     budget a turn is judged against; `hostYieldMs` says whether a wall clock also ends a slice on this host;
-     `price` is the clock the microsecond rows are read on. bridge.js DCHECKs each, which a release artifact
+     budget a turn is judged against; `price` is the clock the microsecond rows are read on. bridge.js DCHECKs each, which a release artifact
      compiles out, so this is the check on the artifact a live drive measures. `null` means the run stated no
      quantum; `sliceRefused` means it did and a field is not the kind the producer composes. */
   {
@@ -1929,12 +1928,10 @@ function census(r) {
     const bad = [];
     if (q) {
       if (!Number.isSafeInteger(q.sliceWork) || q.sliceWork <= 0) bad.push("`sliceWork` is not a positive integer");
-      if (!Number.isSafeInteger(q.hostYieldMs) || q.hostYieldMs < 0) bad.push("`hostYieldMs` is not a count");
       if (typeof q.price !== "string" || q.price === "") bad.push("`price` is not a non-empty string");
     }
     const ok = q !== null && bad.length === 0;
     o.sliceWork = ok ? q.sliceWork : null;
-    o.hostYieldMs = ok ? q.hostYieldMs : null;
     o.slicePrice = ok ? q.price : null;
     o.sliceRefused = (q !== null && bad.length)
       ? "the run stated a `_quantum` this driver cannot resolve — " + bad.join(", ") + "; solver/quantum.c " +

@@ -1233,7 +1233,7 @@ async function mintDrive(minted, slices) {
   const doc = (sinks) => {
     const d = { fetchCallSites: [], securitySinks: sinks, pageErrors: [], pageErrorsRetracted: [], pageErrorsExplored: [],
                 routedPosts: [], ...Object.fromEntries(Object.keys(censusRows).map((f) => [f, declaredCensus(f)])),
-                _quantum: { sliceWork: 1, hostYieldMs: 0, price: 'work', priceIsCpu: false },
+                _quantum: { sliceWork: 1, price: 'work', priceIsCpu: false },
                 _absent: { rows: 0 }, _forkAt: {}, _park: [],
                 _parkWhy: 'none', _metricsSchema: { families: [{ family: 'scensus', identities: [],
                   rows: scensus.map((key) => ({ key, kind: 'lifetime', unit: 'reads', scope: 'session', owner: 'level1' })) }] } };

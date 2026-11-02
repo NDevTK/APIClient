@@ -432,20 +432,15 @@ function devEngineRunsSection(runs) {
         + Object.keys(m.wfq).filter((k) => k !== "members")
                 .map((k) => String(k) + " " + String(m.wfq[k])).join(" · ");
     /* The slice the order was served in (solver/quantum.h's `_quantum`), directly under it because it decides
-       whether two runs' orders may be compared. The slice and the aging charge are engine work, so the order is
-       a function of the paths; this realm's host yield also ends a slice on wall time, which makes the order
-       one interleaving until solver/engine.c's named residual is built. */
+       whether two runs' orders may be compared. The slice and the aging charge are engine work and no wall clock
+       ends a slice, so the order is a function of the paths. */
     DCHECK(m.quantum && typeof m.quantum === "object" && typeof m.quantum.sliceWork === "number"
-           && typeof m.quantum.hostYieldMs === "number" && typeof m.quantum.price === "string",
+           && typeof m.quantum.price === "string",
            "an engine run record reached the diagnostics page with no `quantum` — solver/quantum.c composes it " +
            "into every document result.c builds and bridge.js asserts its fields before relaying it whole, so " +
            "a record that has an @RESULT document and no `quantum` is that relay broken");
     const denom = label([`scheduler slice ${m.quantum.sliceWork} units of engine work`
-      + (m.quantum.hostYieldMs > 0
-          ? ` — this realm also hands its thread back every ${m.quantum.hostYieldMs} ms of wall time, which ends `
-            + `the slice, so two runs of this build over this page can take different orders: compare two runs `
-            + `of one build before reading a difference between two builds.`
-          : ` — no wall clock ends a slice, so the order is a function of the paths.`)
+      + ` — no wall clock ends a slice, so the order is a function of the paths.`
       + ` Census microseconds are priced on ${m.quantum.price}.`]);
     /* The subsystem censuses, relayed whole by bridge.js and rendered generically: `_cold`, `_heap`, `_swap`
        (solver/result.c) and `_absent` (solver/absent.c: names a standard owns that the document read and this

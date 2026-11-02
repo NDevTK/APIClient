@@ -2069,12 +2069,10 @@ async function main() {
                         'composes it with the same JSON grammar `@COLD`, `@HEAP` and `@SWAP` use, so a ' +
                         `payload this zone cannot read is the two grammars having parted (${err.message})`);
       }
-      /* Asserted, not defaulted, each field by name: `sliceWork` is the budget, `hostYieldMs` whether a wall
-         clock also ends a slice, and `price`/`priceIsCpu` what the census's microsecond rows are read on. */
+      /* Asserted, not defaulted, each field by name: `sliceWork` is the budget, and `price`/`priceIsCpu` what
+         the census's microsecond rows are read on. */
       if (!(Number.isSafeInteger(q.sliceWork) && q.sliceWork > 0))
         throw new Error(`the host announced a quantum with no positive integer \`sliceWork\`: ${line}`);
-      if (!(Number.isSafeInteger(q.hostYieldMs) && q.hostYieldMs >= 0))
-        throw new Error(`the host announced a quantum with no \`hostYieldMs\`: ${line}`);
       if (typeof q.price !== 'string' || !q.price || typeof q.priceIsCpu !== 'boolean')
         throw new Error(`the host announced a quantum with no \`price\` string or boolean \`priceIsCpu\`: ${line}`);
       /* ONCE PER INSTANCE IS THE PRODUCER'S CONTRACT (`g_announced`), so a second line from one instance is
@@ -2557,12 +2555,8 @@ async function main() {
     else
       console.error(`[trusted] quantum ${announced[0].quantum.sliceWork} units of engine work, priced on ` +
                     `\`${announced[0].quantum.price}\` across ${announced.length} of ${instances.length} ` +
-                    `instance(s). ` +
-                    (announced[0].quantum.hostYieldMs > 0
-                       ? `A ${announced[0].quantum.hostYieldMs} ms wall-time host yield also ends a slice, so ` +
-                         'the order below is one interleaving.'
-                       : 'No wall clock ends a slice, so the order is a function of the paths; where the run ' +
-                         'was cut is still the CPU budget\'s.'));
+                    `instance(s). No wall clock ends a slice, so the order is a function of the paths; where ` +
+                    'the run was cut is still the CPU budget\'s.');
   }
   /* WHAT EACH INSTANCE WAS DOING WHILE IT RAN, WHICH IS THE ONLY THING A KILLED RUN LEAVES BEHIND.
      `@RESULT` is composed when the frontier DRAINS or STALLS and a real page's frontier does neither inside

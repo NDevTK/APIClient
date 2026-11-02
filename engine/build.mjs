@@ -325,7 +325,7 @@ const loadNow = () => {
    The window is the same absolute window, for the same reason: one WFQ re-ranking pause is not a freeze. */
 /* THE ROW SET IS THE CONTRACT AND THE READING IS A SUBSET OF IT, AND THE SET IS DERIVED — this reader's last
    hand-kept copy closed rather than extended by three more names. Its job is not that every row is compared
-   (`hungCause` reads five of them): it is that a row solver/result.c STOPS EMITTING, or renames, fails the
+   (`hungCauseCensus` reads five of them): it is that a row solver/result.c STOPS EMITTING, or renames, fails the
    build at this line instead of being compared as `undefined` — which is FALSE for every input, so the arm
    reading it can never fire again — and that a row ADDED over there does not join the unchecked half by
    default, which a required-PRESENCE loop over a typed-out list structurally cannot deliver.
@@ -800,7 +800,7 @@ function probeFlips(out) {
   return probeTables(out, "the run's own output");
 }
 /* WHERE THE RUN GOT TO, IN THE FIXTURE'S OWN UNITS — AND THE ONE NUMBER THE VERDICT USED TO THROW AWAY.
-   `hungCause` has always computed this (its `zero` list) and the verdict line has always cut it off:
+   `hungCauseCensus` has always computed this (its `zero` list) and the verdict line has always cut it off:
    the verdict kept the cause's NAME and dropped everything in parentheses, which is exactly where
    every number lives. So the stage table read `HUNG — a HEALTHY FRONTIER THAT WANTED MORE BUDGET` on six
    consecutive builds of six different revisions, while underneath it the fixture answered 93/135, 96/138,
@@ -1086,7 +1086,7 @@ const wfqFields = sourceFact(() => censusDefFields(["wfq", "wfq_frontier"],
   "the @WFQ reader states which rows it requires of a census that claims an order, and it takes that set " +
   "from the composer's declaration rather than from a list beside it").numeric);
 /* A CONSTANT OF THE ENGINE IS READ FROM THE ENGINE, NEVER RESTATED HERE — the rule `ageQuantum` was written
-   for and which now has a second reader (`hungCause`'s census cadence), so it is one function rather than two
+   for and which now has a second reader (`hungCauseCensus`'s census cadence), so it is one function rather than two
    copies of one regex. Throws on an absent or unparseable define, because the alternative is this reader
    quietly pricing something at a rate the engine stopped charging — the same class of defect as comparing an
    absent census field as undefined, and caught the same way. `HOST` is initialised long before any stage calls
@@ -1263,7 +1263,7 @@ const abiPointerSignatures = sourceFact(() => {
 });
 const progressEvery = sourceFact(() =>
   hostDefine("solver/engine.c", "ENGINE_PROGRESS_WORK",
-             "hungCause states its window as an absolute span of engine work and the census cadence is " +
+             "hungCauseCensus states its window as an absolute span of engine work and the census cadence is " +
              "what converts censuses to work units"));
 const hworkFields = sourceFact(() =>
   censusComposerFields("test_forced.c", 'printf("@HEVENTS {', '}\\n"',
@@ -3845,7 +3845,7 @@ function coldRoundTrip(v1, v2, store) {
 
 /* WHAT THE HEAP, THE DELTA CHAINS AND THE FORK TABLE WERE DOING — the @HEAP, @SWAP and @FORKAT censuses, which
    are emitted at the SAME cadence as @COLD and, until they rode solver/result.c's document, were printed only
-   by `run_scheduler`, a loop `qjs_step` never enters. So `hungCause` below has always ended with "the frontier
+   by `run_scheduler`, a loop `qjs_step` never enters. So `hungCauseCensus` below has always ended with "the frontier
    is doing something this discriminator does not model" while three streams that model exactly those things
    existed and no reader took them.
    EACH ROW HERE ANSWERS A CAUSE THE FRONTIER COUNTS STRUCTURALLY CANNOT.
@@ -4697,21 +4697,19 @@ function engineRecords(out, kind) {
 }
 
 /* The engine's own statement of its slice, from solver/quantum.c's `@QUANTUM` line (the same document
-   extension/bridge.js asserts as `_quantum`): the slice in engine work, the host's wall-time yield (0 where no
-   host event loop waits on a step), and the pricing clock the census's microsecond rows are read on. A run that
+   extension/bridge.js asserts as `_quantum`): the slice in engine work and the pricing clock the census's
+   microsecond rows are read on. A run that
    printed `@COLD` drove `engine_sched_step`, whose first `quantum_begin` announces, so `@COLD` without
    `@QUANTUM` is a broken contract and throws. Fields are asked for by name and type, so a rename fails here
    rather than reading as a run with no denomination. */
 function quantumDenomination(out) {
   const rows = engineRecords(out, "@QUANTUM").map(({ tag, json: j }) => {
-    if (typeof j.sliceWork !== "number" || typeof j.hostYieldMs !== "number" || typeof j.price !== "string" ||
-        typeof j.priceIsCpu !== "boolean")
-      throw new Error(`[build] an @QUANTUM line is missing a field of {sliceWork:number, hostYieldMs:number, ` +
+    if (typeof j.sliceWork !== "number" || typeof j.price !== "string" || typeof j.priceIsCpu !== "boolean")
+      throw new Error(`[build] an @QUANTUM line is missing a field of {sliceWork:number, ` +
                       `price:string, priceIsCpu:boolean}: ${JSON.stringify(j)}. That object is solver/quantum.c's ` +
                       `quantum_json and the shape extension/bridge.js asserts as \`_quantum\`; fix the composer ` +
                       `or both readers, never one.`);
-    return { sliceWork: j.sliceWork, hostYieldMs: j.hostYieldMs, price: j.price.trim(), priceIsCpu: j.priceIsCpu,
-             tag };
+    return { sliceWork: j.sliceWork, price: j.price.trim(), priceIsCpu: j.priceIsCpu, tag };
   });
   if (!rows.length) {
     if (/^@COLD \{/m.test(out))
@@ -4722,7 +4720,7 @@ function quantumDenomination(out) {
   }
   /* Two instances of one binary on one host must agree: the line states compile-time constants of the host. */
   for (const r of rows)
-    if (r.sliceWork !== rows[0].sliceWork || r.hostYieldMs !== rows[0].hostYieldMs || r.price !== rows[0].price)
+    if (r.sliceWork !== rows[0].sliceWork || r.price !== rows[0].price)
       throw new Error(`[build] two @QUANTUM lines in one run disagree — ${JSON.stringify(rows[0])} against ` +
                       `${JSON.stringify(r)}. They state constants of one binary on one host, so the capture ` +
                       `holds two stages' output; the \`tag\` names which instance wrote each.`);
@@ -4730,7 +4728,7 @@ function quantumDenomination(out) {
 }
 /* Printed at every outcome, pass included. The slice and the aging charge are engine work, so the order is a
    function of the paths and the same on every host; what a host still chooses is where a run is cut (the CPU
-   budget and the deadlock backstop), and on a host with a wall-time yield, where each slice ends. */
+   budget and the deadlock backstop). */
 const quantumText = (q) =>
   q === null
     ? `[build]   no @QUANTUM line — this stage opened no engine slice, so it has no scheduler denomination ` +
@@ -4738,11 +4736,8 @@ const quantumText = (q) =>
     : `[build]   the engine's slice is ${q.sliceWork} units of engine work and the WFQ's aging charge is ` +
       `work too; the census's microsecond rows are priced on ${q.price}` +
       (q.instances > 1 ? ` — ${q.instances} instances, all agreeing` : ``) +
-      (q.hostYieldMs > 0
-        ? `\n[build]   this host also hands its thread back every ${q.hostYieldMs} ms of wall time and that ` +
-          `ends the slice (solver/engine.c's named residual), so its order is one interleaving of many.`
-        : `\n[build]   no host yield on this host, so the order is a function of the paths: two runs of one ` +
-          `artifact over one fixture pick the same flows.`) +
+      `\n[build]   no wall clock ends a slice, so the order is a function of the paths: two runs of one ` +
+      `artifact over one fixture pick the same flows.` +
       `\n[build]   what a repeat can still move is where the run was CUT — the CPU budget and the deadlock ` +
       `backstop end it at a point this box's speed chose — so compare totals only between runs cut alike.`;
 
@@ -5309,33 +5304,6 @@ function hungCauseCensus(out) {
          `measurement to start from, and the streams above are the rest of what this run said.`;
 }
 
-/* …AND THE CAUSE CARRIES THE CURRENCY ITS EVIDENCE WAS TAKEN IN. Every arm above is a comparison of census
-   SAMPLES, and on a host with no CPU clock which samples exist — and in which ORDER the frontier reached them
-   — is decided by a wall-time aging charge, so the discriminator's own inputs move between two runs of one
-   artifact. That does not make an arm wrong: a stall is a stall. It makes the DIFFERENCE between two runs
-   unreadable, which is the comparison this file's verdicts are used for.
-   THE MARK RIDES THE NAME, not the parenthetical, and that is deliberate: `causeName` ends a name at the first
-   " (" or " — ", so this file's own record says a fact behind either is a fact the one line anybody reads does
-   not carry. The separator is "; " for exactly the reason the landmarks use it — it is neither cut. The full
-   sentence goes to the detail line, which `runNumbers` prints at EVERY outcome including the pass.
-   ONLY WHERE IT IS FALSE, AND NARROWER THAN IT WAS. The argument that stood here — "a mark on every verdict
-   is a mark that stops being read" — was written when this was the ONLY mark a verdict carried, and it has
-   stopped being the standing rule: `runDependenceText` marks EVERY arm now, because the three readings that
-   cost this project a session were all taken off the stage table while the unconditional instruction sat in a
-   detail line beneath it. What that mark cannot say is what THIS one says, which is why this one stays and is
-   not a second copy of it: every arm of `hungCauseCensus` is a comparison of census SAMPLES, so this names the
-   currency the DIAGNOSIS's own evidence was taken in, where the verdict mark names what the line's TOTALS are
-   a reading of. `cpu=1` is a positive statement that this narrower caveat does not apply — the wall-time
-   charge landing on whichever flow the OS left running — and it is stated in the detail rather than in
-   silence.
-   The mark names a host whose slices end on wall time (`hostYieldMs` above 0), where the samples this
-   discriminator compares are one interleaving; where the slice is work alone they are a function of the paths. */
-function hungCause(out) {
-  const cause = hungCauseCensus(out);
-  const q = quantumDenomination(out);
-  return q && q.hostYieldMs > 0 ? `WALL-SLICED; ${cause}` : cause;
-}
-
 /* ONE WAY TO RUN A CHILD, and it hands the run's own bytes to the reporter that judges it. The five call sites
    this replaced each open-coded `spawnSync(..., { stdio: "inherit", timeout })` and then asked `runOutcome`
    about a run it had never seen — five copies of the same three options, and every one of them a place for the
@@ -5527,7 +5495,7 @@ const runNumbers = (t, q, stand) => {
                     `with no @H probe stream, and anything else is a caller that has stopped passing it.`);
   if (q !== null && (typeof q !== "object" || typeof q.sliceWork !== "number" || typeof q.price !== "string"))
     throw new Error(`[build] runNumbers was handed ${JSON.stringify(q)} where quantumDenomination's reading ` +
-                    `belongs — that function returns either its {sliceWork, hostYieldMs, price, priceIsCpu, ` +
+                    `belongs — that function returns either its {sliceWork, price, priceIsCpu, ` +
                     `instances} record ` +
                     `or \`null\` for a stage that opened no engine slice, and anything else is a caller that ` +
                     `has stopped passing it rather than a run with nothing to say.`);
@@ -5563,9 +5531,7 @@ const runNumbers = (t, q, stand) => {
    compares are the ones that finished, so a caveat carried only by the failures is a caveat absent from
    precisely the comparison it is about. That is `quantumText`'s own argument, applied one line up rather than
    restated.
-   AND IT IS NOT A CONSTANT STAMP, which is the one real argument against marking every verdict (`hungCause`
-   states it, and its paragraph is rewritten to the rule that now holds rather than left asserting the old
-   one). Two of the mark's three parts are READ OFF THE ARTIFACT and not written here — the engine's own word
+   AND IT IS NOT A CONSTANT STAMP, which is the one real argument against marking every verdict. Two of the mark's three parts are READ OFF THE ARTIFACT and not written here — the engine's own word
    for its denomination and its own slice, both off the `@QUANTUM` line solver/quantum.c composes, so a fork
    that changes either moves this text by itself. The third VARIES BY ARM, which is the half a reader can act
    on: what survives a repeat is the fixture's own denominator, plus an assertion's IDENTITY on the arms that
@@ -5593,7 +5559,7 @@ const runDependenceText = (q, stand, aborted) =>
     ? `  [NO DENOMINATION STATED — this stage printed no @QUANTUM line, so nothing in its own output says ` +
       `what its numbers are a reading OF. That is an absence, and an absence is not a licence to read them ` +
       `across two runs.]`
-    : `  [ONE CUT (${q.sliceWork}-unit work slice${q.hostYieldMs > 0 ? `, ${q.hostYieldMs} ms host yield` : ``}) — WHICH terminal event this line ` +
+    : `  [ONE CUT (${q.sliceWork}-unit work slice) — WHICH terminal event this line ` +
       `names, and any total it carries, is a reading of THIS RUN and not of this revision: a repeat of this ` +
       `same artifact moves them and can end somewhere else entirely. Surviving a repeat: ` +
       `${survivesRepeat(stand, aborted)}.]`;
@@ -5934,13 +5900,12 @@ const STAGE_KIND = {
    THE OBJECT THIS SEPARATES IS THE ENGINE'S SLICE AND NOT THE RUN BUDGET, and conflating those two has
    already cost a brief. The RUN BUDGET is `RLIMIT_CPU` and the kernel's SIGXCPU, installed by CPU_BUDGET_SH
    around EVERY child this file spawns on BOTH hosts - identical here, and therefore not the discriminator.
-   What differs is the ENGINE'S OWN cooperative SLICE (solver/quantum.h): engine work on both hosts, plus a
-   wall-time host yield on the vehicle that ends a slice early, which is what decides how far a flow replays
-   before a peer answers and therefore what every census series below is a reading of. solver/quantum.c states it per run on its
-   `@QUANTUM` line, `quantumDenomination` parses it, and `runDependenceText` already marks every verdict with
-   it. What was missing was the word for WHOSE RUN the row was - and a host tag is NOT a second denomination
-   claim beside `hostYieldMs`: the denomination stays the engine's own word for itself, read off the artifact, and
-   this says only who ran.
+   The ENGINE'S OWN cooperative SLICE (solver/quantum.h) is engine work on both hosts too, since a host turn
+   ends no slice (solver/engine.h's ENGINE_STEP_HOST). solver/quantum.c states it per run on its `@QUANTUM`
+   line, `quantumDenomination` parses it, and `runDependenceText` already marks every verdict with it. What
+   was missing was the word for WHOSE RUN the row was - and a host tag is NOT a second denomination claim
+   beside the slice: the denomination stays the engine's own word for itself, read off the artifact, and this
+   says only who ran.
    FOUR VALUES, BECAUSE "not the vehicle" IS NOT ONE CLAIM. A source census spawns no engine at all, so it has
    no slice to be denominated and its finding is about the REVISION on every host. The emcc compile and link,
    and the JS host layers driven over the artifact they produce, are the vehicle's OWN MACHINERY - nothing
@@ -5954,8 +5919,8 @@ const STAGE_KIND = {
    `report()` REFUSES a stage that states none rather than guessing, because an unstated host would land in
    whichever population a default picked and read as a deliberate answer. */
 const STAGE_HOST = {
-  /* THE VERDICT HOST - a work slice with no wall-time host yield (solver/quantum.c's native arm), a real
-     fork(), and the sanitizers §Architecture prescribes by name and which wasm32 cannot run. */
+  /* THE VERDICT HOST - a work slice, a real fork(), and the sanitizers §Architecture prescribes by name and
+     which wasm32 cannot run. */
   NATIVE:  { tag: "native",  vehicle: false },
   /* THE VEHICLE'S OWN MACHINERY - the emcc compile and link, and the JS layers driven over what they produce.
      A fact about the revision: if it does not build, or its host layer refuses, nothing ships. IT DECIDES. */
@@ -6151,7 +6116,7 @@ function runOutcome(label, t, hint) {
      CPU this file agreed to spend, which is a fact about the tree and is why the census's cause and the
      fixture's own standing both belong in the verdict rather than in a hint under it. */
   if (t.signal === "SIGXCPU") {
-    const cause = hungCause(t.captured);
+    const cause = hungCauseCensus(t.captured);
     return bad(`CPU BUDGET SPENT — ${standingText(stand)} — ${causeName(cause)}`, 2, STAGE_KIND.TERMINAL,
       `SPENT ITS WHOLE ${RUN_CPU_BUDGET_S / 60} min CPU BUDGET — killed by the KERNEL at the rlimit, which is ` +
       `the verdict measure and is invariant to what else this box was doing.\n` +
@@ -6162,7 +6127,7 @@ function runOutcome(label, t, hint) {
      tells the two apart in the one case they blur: a child that consumed most of its budget in this many wall
      minutes was STARVED of the thread rather than deadlocked on it, and the reader can see which. */
   if (t.error && t.error.code === "ETIMEDOUT") {
-    const cause = hungCause(t.captured);
+    const cause = hungCauseCensus(t.captured);
     return bad(`DEADLOCK BACKSTOP — ${standingText(stand)} — ${causeName(cause)}`, 4, STAGE_KIND.TERMINAL,
       `RAN ${RUN_DEADLOCK_MS / 60000} min OF WALL CLOCK WITHOUT REACHING ITS ${RUN_CPU_BUDGET_S / 60} min CPU ` +
       `BUDGET — killed by the harness, NOT by the kernel. Read the CPU figure below: near the budget means ` +
@@ -8396,7 +8361,7 @@ const QJS_ABI = ["qjs_init", "qjs_load", "qjs_join", "qjs_unload", "qjs_check_re
                  "qjs_bundle_id", "qjs_begin",
                  "qjs_step",
                  "qjs_result", "qjs_teardown",
-                 "qjs_pending", "qjs_provide", "qjs_decline", "qjs_level1_account", "qjs_service_work",
+                 "qjs_pending", "qjs_provide", "qjs_decline", "qjs_level1_account", "qjs_service_work", "qjs_set_host_turn",
                  "qjs_request_park", "qjs_emit_partial", "qjs_novelty_learn", "qjs_request_dump", "qjs_dumps",
                  "qjs_host_requests", "qjs_host_answer", "qjs_host_decline", "qjs_host_notices", "qjs_route",
                  "qjs_set_referenced", "qjs_set_arrival", "qjs_set_attacker_site", "qjs_receive_cookies", "qjs_referenced", "qjs_perform", "qjs_host_answer_remote", "qjs_host_answers_exhausted", "qjs_world_gone",
@@ -8878,10 +8843,10 @@ const FINDINGS = [];
    and this frontier measures 5.2 GiB of live allocation. None of that is a reason to stop running the
    vehicle - §Testing calls that the inverted failure, measuring a program nobody ships - and all of it is a
    reason not to take a verdict from it.
-   THE SLICE IS WHAT MOVED AND THE BUDGET IS NOT. Both children run under the same `RLIMIT_CPU` and die on the
-   same kernel SIGXCPU; what differs is the ENGINE'S OWN cooperative slice, work alone here and work with a
-   wall-time host yield on the vehicle, which solver/quantum.c states per run on its `@QUANTUM` line and which every verdict in this file
-   already carries. Nothing here adds a second denomination tag beside that one. */
+   NEITHER THE SLICE NOR THE BUDGET MOVED. Both children run under the same `RLIMIT_CPU` and die on the same
+   kernel SIGXCPU, and the ENGINE'S OWN cooperative slice is work alone on both hosts, which solver/quantum.c
+   states per run on its `@QUANTUM` line and which every verdict in this file already carries. Nothing here
+   adds a second denomination tag beside that one. */
 /* `"dev"` IS A LITERAL HERE AND NOT THE ARGV READ THE `native` TARGET MAKES, WHICH IS A DECISION AND NOT AN
    OVERSIGHT. §Testing's rule is that the DCHECKs ARE the gate, so the build's VERDICT is taken from a program
    whose invariants are armed — and reading `release` from argv at this call site would let `node
@@ -8987,9 +8952,8 @@ console.log("[build] DO NOT WAIT FOR THIS. Asking was the whole of your involvem
 const NATIVE_SMOKE = NATIVE_BUILT.bin === null
   ? [skipped("native smoke test", "the native program did not link")]
   : await runDocuments("native smoke test", NATIVE_BUILT.bin, [],
-             "THIS IS THE VERDICT RUN. Its cooperative slice and the WFQ's aging charge are engine work with " +
-             "no wall-time host yield (solver/quantum.c's native arm), so its order is a function of the " +
-             "paths. The @H row printed 0 above names a statement engine/host/test_forced.c's " +
+             "THIS IS THE VERDICT RUN. Its cooperative slice and the WFQ's aging charge are engine work, " +
+             "so its order is a function of the paths. The @H row printed 0 above names a statement engine/host/test_forced.c's " +
              "probe table declares and this run did not answer.");
 STAGES.push(...NATIVE_SMOKE.map((s) => onHost(s, STAGE_HOST.NATIVE)));
 STAGES.push(...bridgeAcceptanceStages(NATIVE_SMOKE));
