@@ -13,17 +13,23 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/layout_question.h"
 
 /* The offset of element flex item `item`'s border-box top-left corner from `container`'s content-box top-left
    corner, physical, in CSS pixels. `container` must be `item`'s flex container in the box tree (asserted), and
-   its operands asked (`flex_position_operands_ask`) under the open drive, which asserts its members served. */
+   its placement asked (`flex_position_operands_ask`) under the open drive, which asserts it served: a read of
+   the memoized answer. */
 void flex_position_item_offset(lxb_dom_element_t *container, lxb_dom_element_t *item, CssPx *x, CssPx *y);
 /* The layout the entry above reads, asked under a step machine's resting drive (core/layout/layout_job.h):
    `container`'s content box on both axes, its §9.3 line membership, each element item's used sizes' operands
    on both axes and, for an item in a baseline-sharing group, its first and last line box baselines, and each
-   anonymous item's line boxes. True once all are answered, so the placement is then read over the memo; false
-   ("not yet") with the deferred questions suspended for the caller's drive. */
+   anonymous item's line boxes, and then the placement of every element item over them. One layout job
+   question per container (LAYOUT_Q_FLEX_PLACE), answered once per job however many of its items are read:
+   true once memoized; false ("not yet") with it suspended for the caller's drive. */
 bool flex_position_operands_ask(lxb_dom_element_t *container);
+/* LAYOUT_Q_FLEX_PLACE's body, which only block_flow_drive_deferred calls: the asks above, each member's, then
+   §9.5 once per line and §9.6 once per line and item. */
+void flex_position_question_run(LayoutQuestion q, size_t at);
 
 /* The used value of element flex item `item`'s margin `name` (`margin-left`, `-right`, `-top` or `-bottom`):
    §9.5 step 1's share of the line's free space for an `auto` main-axis margin and §9.6 step 13's for a cross-axis

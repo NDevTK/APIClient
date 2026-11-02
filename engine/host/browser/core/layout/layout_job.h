@@ -90,15 +90,18 @@ typedef struct {
 
 /* What a stacked question answers, one member per kind: `bf` for LAYOUT_Q_BF_BOX and LAYOUT_Q_BF_WALK, `grid`
    for LAYOUT_Q_GRID_AXIS (core/layout/grid_track.c's sized axis, held in the job's answer storage),
-   `flex_cross` for LAYOUT_Q_FLEX_CROSS (a content-box extent) and `flex_lines` for LAYOUT_Q_FLEX_LINES
-   (core/layout/flex_line.c's members and used main sizes, in the answer storage). */
+   `flex_cross` for LAYOUT_Q_FLEX_CROSS (a content-box extent), `flex_lines` for LAYOUT_Q_FLEX_LINES
+   (core/layout/flex_line.c's members and used main sizes, in the answer storage), and `flex_place` for
+   LAYOUT_Q_FLEX_PLACE (core/layout/flex_position.c's placement of every element item, in the answer storage). */
 struct GridAxisAnswer;
 struct FlexLinesAnswer;
+struct FlexPlaceAnswer;
 typedef union {
     LayoutBfAnswer                bf;
     const struct GridAxisAnswer  *grid;
     CssPx                         flex_cross;
     const struct FlexLinesAnswer *flex_lines;
+    const struct FlexPlaceAnswer *flex_place;
 } LayoutAnswer;
 
 /* ---- driven jobs ---------------------------------------------------------------------------------------- */
@@ -214,7 +217,7 @@ void layout_job_line_metrics_spend(size_t n);
 
 /* ---- the stacked questions --------------------------------------------------------------------------------- */
 
-/* Ask a BF_BOX, BF_WALK, GRID_AXIS, FLEX_CROSS or FLEX_LINES question. Asserts a drive is open: every ask has one beneath it on
+/* Ask a BF_BOX, BF_WALK, GRID_AXIS, FLEX_CROSS, FLEX_LINES or FLEX_PLACE question. Asserts a drive is open: every ask has one beneath it on
    the C stack. True with `*out` written when the memo holds the answer; otherwise the question is pushed suspended
    and the caller returns "not yet". No body runs inside its asker's frame: the drive loop is the one caller of a
    body (`layout_job_drive_next`), so the C stack a body uses does not grow with the depth of the box tree, and a
