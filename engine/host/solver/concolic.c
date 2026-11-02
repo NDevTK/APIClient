@@ -2624,6 +2624,19 @@ static int root_declared_row(const char *root)
     return found;
 }
 
+/* How many members of `root` a component declares: root_declared_row's question, asked without its refusal of
+   a second, by a caller whose answer for several is a derivation that names no row. */
+static int root_declared_count(const char *root)
+{
+    const char *p;
+    size_t n;
+    int i, found = 0;
+
+    for (i = 0; root && root_member(root, i, &p, &n); i++)
+        if (src_row(p, n) >= 0) found++;
+    return found;
+}
+
 /* Composed below, beside the mint whose identity rule it states; declared here because the derivations that
    read it run above it. */
 static char *concolic_joint_join(const char *const *parts, const int *order, int n);
@@ -6812,6 +6825,12 @@ JSValue concolic_new_urlencoded_value(JSContext *ctx, const char *op, JSValueCon
 
     DCHECK(concolic_is(list) && !concolic_is(name) && key != NULL && *key,
            "a tuple's value was minted over a list that is not unknown, a name that is, or no spelled key");
+    /* Named residual. Not covered: a list whose root names two declaring components (the query of
+       `new URL(location.href)`, whose address joins the query and the fragment sources), where the tuple rides
+       the one component the list's bytes are parsed from. Next diff builds: URL §6.1's members over an unknown
+       record rooted at the sources their component is parsed from. Absence shows as: an @S record over a
+       `URL().query()` tuple naming both address sources, whose search never fires. */
+    if (root_declared_count(concolic_root_c(list)) > 1) return concolic_new_derived(ctx, op, ops, 2, example);
     row = root_declared_row(concolic_root_c(list));
     /* Named residual. Not covered: a list parsed from a derivation of a component (`location.hash.slice(1)`), or
        from a carrier other than the query, whose reproduction this row cannot compose. Next diff builds: the
