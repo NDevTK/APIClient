@@ -1371,6 +1371,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/mixedroot.h"
 #include "fixture/envsink.h"
 #include "fixture/msghost.h"
+#include "fixture/msgjson.h"
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
 #include "fixture/flagflow.h"
@@ -2021,6 +2022,7 @@ TF_DOCS[] = {
     { "mixedroot", HTML_MIXEDROOT },
     { "envsink", HTML_ENVSINK },
     { "msghost", HTML_MSGHOST },
+    { "msgjson", HTML_MSGJSON },
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
     { "flagflow", HTML_FLAGFLOW },
@@ -24475,6 +24477,25 @@ TF_UNIT void probes_msghost(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, N);
 }
 
+/* The rows of the `msgjson` document (fixture/msgjson.h): the listener's search fires under a message whose data
+   is a String holding the JSON text of an object with `kind` 'render' beside the payload. */
+TF_UNIT void probes_msgjson(const char *js, Probe *tab, int *n) {
+    static const char *const FIRED[] = { ".JSON.parse().markup\"", "\"handler\":\"mjRender\"", "\"data\":\"{",
+                                         "\\\"kind\\\":\\\"render\\\"" };
+    const char *why = NULL;
+    int tt = 1;
+
+    fold_row(&tt, &why, !!strstr(js, ".JSON.parse().markup\""),
+             "NOT REACHED: no @S record searches the listener's parsed markup member, so its write was never "
+             "detected");
+    fold_row(&tt, &why, s_fired_with(js, "innerHTML", FIRED, 4),
+             "the listener's search fired no PoC whose message data is a String holding `kind` 'render': the "
+             "payload was not placed in the JSON text the page parses, or the text was composed without its "
+             "sibling member");
+    const Probe rows[] = { { "mj-json-fired", tt, "function mjRender", SESS_EXPLORE, why } };
+    probes_append(tab, n, rows, 1);
+}
+
 /* The rows of the `msgorigin` document (fixture/msgorigin.h): an origin a substring or a bare suffix check
    admits is composed and fires; a dotted suffix, an exact match on another site's origin, or a chain whose
    messages need two different origins never does. */
@@ -24823,6 +24844,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_mixedroot(js, probes, &np);
     probes_envsink(js, probes, &np);
     probes_msghost(js, probes, &np);
+    probes_msgjson(js, probes, &np);
     probes_msgchaincoop(js, probes, &np);
     probes_clickhash(js, probes, &np);
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
