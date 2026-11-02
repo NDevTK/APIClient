@@ -164,8 +164,28 @@ function speakAsHost(sandbox) {
         if (h.operation === 'remove') headers.delete(h.header); else headers.set(h.header, h.value);
     const rest = Object.assign({}, init, { headers });
     delete rest.speakAs;
-    return fetch(u.href, rest);
+    return wireAgent().then((dispatcher) => fetch(u.href, dispatcher === null ? rest
+                                                                             : Object.assign(rest, { dispatcher })));
   };
+}
+/* Node's fetch ends a send by itself after 300 s with no head or no body bytes (undici's headersTimeout and
+   bodyTimeout). Chrome has no such timer, and when to stop waiting on a silent wire is the zone's own decision
+   (safe-fetch.js's WIRE_IDLE_TIMEOUT_MS), so this host's sends go through an agent with neither; otherwise the
+   two clocks race and a silent wire ends as either answer. The agent's class is the one Node's fetch installs as
+   its global dispatcher on its first use. A `fetch` that is not Node's own (testing/bench/wire.mjs's stand-in)
+   answers on its own terms and is given none. */
+let wireAgentMade = null;
+function wireAgent() {
+  if (wireAgentMade === null) wireAgentMade = (async () => {
+    if (fetch.name !== 'fetch') return null;
+    await (await fetch('data:,')).arrayBuffer();
+    const installed = globalThis[Symbol.for('undici.globalDispatcher.1')];
+    if (!installed || typeof installed.constructor !== 'function')
+      throw new Error("Node's fetch installed no global dispatcher on its first use, so this host cannot send " +
+                      'through an agent without its own 300 s timers');
+    return new installed.constructor({ headersTimeout: 0, bodyTimeout: 0 });
+  })();
+  return wireAgentMade;
 }
 
 /* THE CHOKEPOINT, LOADED VERBATIM INTO A REALM OF ITS OWN. The isolated context is `engine/route.mjs`'s
