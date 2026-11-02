@@ -475,20 +475,24 @@ typedef struct {
    captions). */
 typedef enum { IS_ENTRY_RUN = 0, IS_ENTRY_STACK, IS_ENTRY_FLEX, IS_ENTRY_TABLE, IS_ENTRY_LABEL } IsKind;
 
+/* A table's grid and captions, held while its members are asked. */
+typedef struct {
+    TableGrid grid;
+    lxb_dom_element_t **captions;
+    size_t ncaptions, at;        /* the next member: a cell index, then `ncells` plus a caption index */
+} IsTable;
+
 /* What an entry holds, allocated apart so a pointer to it survives the table's growth under a nested ask. A
-   run entry's measurement lives from its first ask until it is answered; a walk entry holds its place, and a
-   table's its grid and captions until every member is answered. */
+   run's or a label's measurement and a table's grid are allocated apart again, from their begin until they are
+   released, so an answered entry holds its answer and not the state that computed it: the record keeps an
+   entry per container and run for the job's life. */
 typedef struct {
     bool answered;
-    bool measuring;              /* a run's `meas` is begun and not yet released */
-    IsMeasure meas;
+    IsMeasure *meas;             /* a run's or a label's measurement while begun and not released; owned */
     IntrinsicInlineSizes sizes;  /* a run's answer, once `answered` */
     lxb_dom_node_t *prev;        /* a stack's last break whose run and child are answered */
     IntrinsicSizeWalk walk;      /* a flex container's place */
-    bool gridded;                /* a table's `grid` and `captions` are built and not yet released */
-    TableGrid grid;
-    lxb_dom_element_t **captions;
-    size_t ncaptions, at;        /* a table's next member: a cell index, then `ncells` plus a caption index */
+    IsTable *table;              /* a table's, while built and not released; owned */
 } IsHeld;
 
 typedef struct IsEntry {
@@ -552,12 +556,28 @@ static void is_measure_release(IsMeasure *k, bool walked)
     text_run_measure_release(&k->m);
 }
 
+/* Ends `h`'s measurement; `walked` as is_measure_release's. */
+static void is_measure_end(IsHeld *h, bool walked)
+{
+    is_measure_release(h->meas, walked);
+    free(h->meas);
+    h->meas = NULL;
+}
+
+static IsMeasure *is_measure_new(void)
+{
+    IsMeasure *k = lexbor_calloc(1, sizeof *k);
+
+    CHECK(k != NULL, "out of memory beginning one intrinsic inline size measurement");
+    return k;
+}
+
 static void is_table_release(IsHeld *h)
 {
-    table_grid_release(&h->grid);
-    free(h->captions);
-    h->captions = NULL;
-    h->gridded = false;
+    table_grid_release(&h->table->grid);
+    free(h->table->captions);
+    free(h->table);
+    h->table = NULL;
 }
 
 void intrinsic_size_record_release(IntrinsicSizeRecord *r)
@@ -573,9 +593,8 @@ void intrinsic_size_record_release(IntrinsicSizeRecord *r)
             "one new key", r->used, r->built);
     for (i = 0; i < r->cap; i++) {
         if (r->tab[i].el == NULL) continue;
-        if (r->tab[i].held->measuring)
-            is_measure_release(&r->tab[i].held->meas, r->tab[i].kind != IS_ENTRY_LABEL);
-        if (r->tab[i].held->gridded) is_table_release(r->tab[i].held);
+        if (r->tab[i].held->meas != NULL) is_measure_end(r->tab[i].held, r->tab[i].kind != IS_ENTRY_LABEL);
+        if (r->tab[i].held->table != NULL) is_table_release(r->tab[i].held);
         free(r->tab[i].held);
     }
     free(r->tab);
@@ -642,35 +661,34 @@ static bool is_label_width(lxb_dom_element_t *el, const lxb_char_t *text, size_t
     none.after = NULL;
     none.end = NULL;
     h = is_held_of(el, IS_ENTRY_LABEL, none);
-    if (!h->answered && !h->measuring) {
-        text_run_measure_init(&h->meas.m);
-        text_run_measure_chars_begin(&h->meas.m, el, text, len, &h->meas.text);
-        h->measuring = true;
+    if (!h->answered && h->meas == NULL) {
+        h->meas = is_measure_new();
+        text_run_measure_init(&h->meas->m);
+        text_run_measure_chars_begin(&h->meas->m, el, text, len, &h->meas->text);
     }
     /* The characters are collected one per item and the steps after the collection take theirs, each counted
        against a resting drive's line items, so a page-sized label rests between activations. */
-    while (h->measuring && !h->meas.collected) {
-        if (text_run_measure_text_done(&h->meas.text)) {
-            text_run_measure_finish_begin(&h->meas.m);
-            h->meas.collected = true;
+    while (h->meas != NULL && !h->meas->collected) {
+        if (text_run_measure_text_done(&h->meas->text)) {
+            text_run_measure_finish_begin(&h->meas->m);
+            h->meas->collected = true;
             break;
         }
         if (rests && !layout_job_line_items_left()) return false;
-        text_run_measure_text_step(&h->meas.m, &h->meas.text);
+        text_run_measure_text_step(&h->meas->m, &h->meas->text);
         if (rests) layout_job_line_items_spend(1);
     }
-    while (h->measuring && !text_run_measure_finish_done(&h->meas.m)) {
+    while (h->meas != NULL && !text_run_measure_finish_done(&h->meas->m)) {
         size_t took;
 
         if (rests && !layout_job_line_items_left()) return false;
-        took = text_run_measure_finish_step(&h->meas.m);
+        took = text_run_measure_finish_step(&h->meas->m);
         if (rests) layout_job_line_items_spend(took);
     }
-    if (h->measuring) {
-        h->sizes.min_content = text_run_measure_min_content(&h->meas.m);
-        h->sizes.max_content = text_run_measure_max_content(&h->meas.m);
-        is_measure_release(&h->meas, false);
-        h->measuring = false;
+    if (h->meas != NULL) {
+        h->sizes.min_content = text_run_measure_min_content(&h->meas->m);
+        h->sizes.max_content = text_run_measure_max_content(&h->meas->m);
+        is_measure_end(h, false);
         h->answered = true;
     }
     *out = h->sizes.max_content;
@@ -763,21 +781,23 @@ static size_t is_collect_step(IsMeasure *k)
 bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
 {
     IsHeld *h = is_held_of(el, IS_ENTRY_RUN, run);
-    IsMeasure *k = &h->meas;
+    IsMeasure *k;
 
     if (h->answered) return true;
-    if (!h->measuring) {
+    if (h->meas == NULL) {
         /* Collected before any of it is measured: [UAX14]'s rules read forward past the boundary they decide
            (LB25 by three characters, LB9 across any number of marks); see core/layout/text_run.h. */
         if (!layout_job_line_items_left()) return false;
+        h->meas = is_measure_new();
+        k = h->meas;
         text_run_measure_init(&k->m);
         inline_run_walk_begin(&k->walk, el, run);
         k->in_text = false;
         k->collected = false;
         k->floats.left = k->floats.right = k->floats.below = false;
         k->floats.row = k->floats.rows = k->floats.min = css_px(0.0);
-        h->measuring = true;
     }
+    k = h->meas;
     while (!k->collected) {
         size_t n;
 
@@ -803,9 +823,8 @@ bool intrinsic_inline_run_sizes_ask(lxb_dom_element_t *el, BlockFlowRun run)
     }
     h->sizes.min_content = css_px_max(text_run_measure_min_content(&k->m), k->floats.min);
     h->sizes.max_content = css_px_max(text_run_measure_max_content(&k->m), k->floats.rows);
-    /* §5.1's answer is two numbers, so the collection is freed once they are read. */
-    text_run_measure_release(&k->m);
-    h->measuring = false;
+    /* §5.1's answer is two numbers, so the measurement is freed once they are read. */
+    is_measure_end(h, true);
     h->answered = true;
     return true;
 }
@@ -1212,29 +1231,31 @@ static bool is_table_ask(lxb_dom_element_t *el)
 {
     BlockFlowRun none;
     IsHeld *h;
+    IsTable *t;
 
     none.after = NULL;
     none.end = NULL;
     h = is_held_of(el, IS_ENTRY_TABLE, none);
     if (h->answered) return true;
-    if (!h->gridded) {
+    if (h->table == NULL) {
         if (!layout_job_line_items_left()) return false;
-        table_grid_build(el, &h->grid);
-        h->ncaptions = table_box_captions(el, &h->captions);
-        DCHECK(h->captions != NULL || h->ncaptions == 0,
+        h->table = lexbor_calloc(1, sizeof *h->table);
+        CHECK(h->table != NULL, "out of memory holding one table's grid for its intrinsic inline sizes");
+        table_grid_build(el, &h->table->grid);
+        h->table->ncaptions = table_box_captions(el, &h->table->captions);
+        DCHECK(h->table->captions != NULL || h->table->ncaptions == 0,
                "CSS 2.1 §17.4's caption boxes came back as a non-zero count with no array");
-        h->gridded = true;
-        h->at = 0;
-        layout_job_line_items_spend(h->grid.ncells + h->ncaptions + 1);
+        layout_job_line_items_spend(h->table->grid.ncells + h->table->ncaptions + 1);
     }
-    while (h->at < h->grid.ncells + h->ncaptions) {
+    t = h->table;
+    while (t->at < t->grid.ncells + t->ncaptions) {
         lxb_dom_element_t *box;
 
         if (!layout_job_line_items_left()) return false;
-        box = h->at < h->grid.ncells ? h->grid.cells[h->at].element : h->captions[h->at - h->grid.ncells];
+        box = t->at < t->grid.ncells ? t->grid.cells[t->at].element : t->captions[t->at - t->grid.ncells];
         /* §17.2.1's anonymous cell has no element and holds nothing to measure; the read answers for it. */
         if (box != NULL && !intrinsic_inline_sizes_ask(box)) return false;
-        h->at++;
+        t->at++;
         layout_job_line_items_spend(1);
     }
     is_table_release(h);
