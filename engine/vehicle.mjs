@@ -238,20 +238,25 @@ async function main() {
     }
   };
   await Promise.all(Array.from({ length: Math.min(o.jobs, jobs.length) }, worker));
-  let defects = 0;
+  let defects = 0, unasked = 0;
   for (const d of o.docs) {
     const n = runs.get(`${d}.native`), w = runs.get(`${d}.wasm`);
     const c = compareVehicle(d, n.r, w.r);
+    /* build.mjs's vehicleStage reads the comparison the same way: a pair with neither both crashes nor both
+       final tables answered nothing, so it is not an agreement. */
     if (c.defect !== null) defects++;
-    console.log(`[vehicle] ${d}: ${c.defect === null ? "AGREE" : "DEFECT — " + c.defect}`);
+    else if (!c.answered) unasked++;
+    console.log(`[vehicle] ${d}: ${c.defect !== null ? "DEFECT — " + c.defect
+                                  : c.answered ? "AGREE"
+                                  : "NOT ASKED — neither both crashes nor both final tables exist to compare"}`);
     console.log(`[vehicle]   compared: ${c.compared.join("; ") || "nothing"}`);
     if (c.uncompared.length) console.log(`[vehicle]   not compared: ${c.uncompared.join("; ")}`);
     console.log(`[vehicle]   work: ${c.work}`);
     console.log(`[vehicle]   cpu: native ${n.t.cpuSeconds.toFixed(2)} s (${n.t.signal ?? "exit " + n.t.status}); ` +
                 `wasm ${w.t.cpuSeconds.toFixed(2)} s (${w.t.signal ?? "exit " + w.t.status})`);
   }
-  console.log(`[vehicle] ${defects} DEFECT(S) over ${o.docs.length} document(s)`);
-  process.exit(defects ? 1 : 0);
+  console.log(`[vehicle] ${defects} DEFECT(S) and ${unasked} NOT ASKED over ${o.docs.length} document(s)`);
+  process.exit(defects || unasked ? 1 : 0);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
