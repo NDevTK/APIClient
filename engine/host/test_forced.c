@@ -24475,7 +24475,8 @@ static int s_member_candidates(const char *js, const char *sink, const char *mem
 
 /* The rows of the `msghost` document (fixture/msghost.h): a constant that is no host spells no label of a
    composed origin, so each of the first four listeners' searches delivers the attacker's site alone; the IPv4
-   constant's labels join the site, and no candidate is a name the URL parser reads as an address. */
+   constant's labels join the site, and no candidate is a name the URL parser reads as an address. The JSON
+   listener's search fires under a message whose data is a String holding its `kind` beside the payload. */
 TF_UNIT void probes_msghost(const char *js, Probe *tab, int *n) {
     static const char *const MEMBER[] = { "atMarkup", "hashMarkup", "portMarkup", "dotsMarkup", "ipMarkup" };
     static const char *const ROW[] = { "mh-at-refused", "mh-hash-refused", "mh-port-refused", "mh-dots-refused",
@@ -24505,6 +24506,22 @@ TF_UNIT void probes_msghost(const char *js, Probe *tab, int *n) {
         rows[i] = (Probe){ ROW[i], tt[i], FN[i], SESS_EXPLORE, why[i] };
     }
     probes_append(tab, n, rows, N);
+    {
+        static const char *const JSON_FIRED[] = { ".JSON.parse().jsonMarkup\"", "\"handler\":\"mhJson\"",
+                                                  "\"data\":\"{", "\\\"kind\\\":\\\"render\\\"" };
+        const char *jf_why = NULL;
+        int jf_tt = 1;
+
+        fold_row(&jf_tt, &jf_why, !!strstr(js, ".JSON.parse().jsonMarkup\""),
+                 "NOT REACHED: no @S record searches the JSON listener's markup member, so its write was never "
+                 "detected");
+        fold_row(&jf_tt, &jf_why, s_fired_with(js, "innerHTML", JSON_FIRED, 4),
+                 "the JSON listener's search fired no PoC whose message data is a String holding `kind` 'render': "
+                 "the payload was not placed in the JSON text the page parses, or the text was composed without "
+                 "its sibling member");
+        const Probe jrow[] = { { "mh-json-fired", jf_tt, "function mhJson", SESS_EXPLORE, jf_why } };
+        probes_append(tab, n, jrow, 1);
+    }
 }
 
 /* The rows of the `msgjson` document (fixture/msgjson.h): the listener's search fires under a message whose data
