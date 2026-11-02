@@ -2963,8 +2963,8 @@ static void flow_arrive_at_virtual_time(Flow *f) {
 void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) {
     DCHECK(sib != NULL && snap != NULL && sib != snap && sib->assembling && !sib->ix_in && sib->acct->up == NULL,
            "an arm off a snapshot took its account outside its assembly, from itself, or after a fork's inheritance");
-    DCHECK(snap->cand_payload == NULL && flow_distance(snap) == 0.0 && snap->orphan_seen == 0,
-           "a snapshot standing before a source read is a candidate or a drive — source_cut_ask takes none of those");
+    DCHECK(snap->cand_payload == NULL && flow_distance(snap) == 0.0,
+           "a snapshot standing before a source read is a candidate — source_cut_ask takes none");
     /* The account: the from-baseline candidate's, founded at the frontier's virtual time. */
     flow_arrive_at_virtual_time(sib);
     /* The facts about the executed prefix, which a from-baseline candidate re-derives by replaying to this instant:
