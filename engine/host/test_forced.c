@@ -488,6 +488,8 @@ static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int arg
    the live harness's business. The two exceptions are the addresses whose TYPE is the thing under test — see
    TF_SERVED below, which is the whole of what this host serves as anything other than JSON. */
 static int hostreq_answer_all(JSContext *ctx);   /* the SYNCHRONOUS half — see the machine below */
+static void tf_notices_drain(void);
+static int tf_cancelled(const char *path);
 
 /* THE PEER THIS FIXTURE STANDS IN FOR — declared here and defined beside the park moment it belongs to, which
    is the one thing that decides when the question is asked.
@@ -884,9 +886,72 @@ static int tf_seen_line(const char *prefix, const char *pinned, const char *prov
     return 0;
 }
 
+/* The zone's latency, modelled for one address. engine/trusted.mjs owes an answer from the bill that showed it
+   and writes it at a later read, unless a `fetch.cancel` takes it back first; this fixture answers every other
+   address at the payment that shows it. `/api/replytwice`'s first park is answered at once and each later one
+   is owed for TF_REPLYTWICE_LAG payments, so the owed answer is for a fresh park of a pair already answered. */
+#define TF_REPLYTWICE_URL "https://x.test/api/replytwice"
+#define TF_REPLYTWICE_LAG 24
+static struct {
+    int answered;     /* answers written for the pair */
+    int held;         /* parks whose answer was owed rather than written at once */
+    int owed_at;      /* the payment that showed the owed park, or -1 */
+    int cancels;      /* `fetch.cancel` notices naming the pair when the answer became owed */
+    int withdrawn;    /* owed answers a `fetch.cancel` took back */
+    char *pair[5];    /* the five-field identity the owed answer is written under */
+} g_tf_r2 = { 0, 0, -1, 0, 0, { NULL } };
+static int g_tf_payments;
+
+/* Whether the bill's line for `abs` is held as an owed answer rather than answered now. */
+static int tf_replytwice_hold(const char *abs, const char *const pair[5]) {
+    if (strcmp(abs, TF_REPLYTWICE_URL) || g_tf_r2.answered == 0) return 0;
+    if (g_tf_r2.owed_at >= 0) return 1;
+    g_tf_r2.owed_at = g_tf_payments;
+    g_tf_r2.held++;
+    g_tf_r2.cancels = tf_cancelled("/api/replytwice");
+    for (int k = 0; k < 5; k++) {
+        g_tf_r2.pair[k] = strdup(pair[k]);
+        CHECK(g_tf_r2.pair[k] != NULL, "the fixture could not record the request it owes an answer for");
+    }
+    return 1;
+}
+
+/* Writes the owed answer once its lag has passed, or drops it when a `fetch.cancel` named the pair since. The
+   answer is written whether or not the pair is on this payment's bill: a zone writes what it owes. */
+static int tf_replytwice_pay(JSContext *ctx) {
+    int filled = 0;
+
+    if (g_tf_r2.owed_at < 0) return 0;
+    if (tf_cancelled("/api/replytwice") > g_tf_r2.cancels) {
+        g_tf_r2.withdrawn++;
+    } else if (g_tf_payments - g_tf_r2.owed_at >= TF_REPLYTWICE_LAG) {
+        static const char rbody[] = "{\"region\":\"us-west-2\"}";
+        const char *const list[1] = { TF_REPLYTWICE_URL };
+        HeaderList eh = { 0 };
+        JSValue reply;
+
+        header_list_append(&eh, "x-echo-method", g_tf_r2.pair[0]);
+        reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody), list, 1, "application/json", "basic");
+        header_list_free(&eh);
+        filled = engine_provide(ctx, g_tf_r2.pair[0], g_tf_r2.pair[1], g_tf_r2.pair[2], g_tf_r2.pair[3],
+                                g_tf_r2.pair[4], reply);
+        JS_FreeValue(ctx, reply);
+        g_tf_r2.answered++;
+    } else {
+        return 0;
+    }
+    for (int k = 0; k < 5; k++) { free(g_tf_r2.pair[k]); g_tf_r2.pair[k] = NULL; }
+    g_tf_r2.owed_at = -1;
+    return filled;
+}
+
 static int fixture_provide(JSContext *ctx) {
     const char *urls = engine_pending_fetches();
     int filled = 0;
+
+    /* The zone's order: the notices since the last read, then the bill, then the payment. */
+    g_tf_payments++;
+    tf_notices_drain();
     UrlRecord base;
 
     /* THE HOST RESOLVES THE REQUEST'S ADDRESS, which is what makes the reply's URL list a list of URLs. A page
@@ -977,7 +1042,9 @@ static int fixture_provide(JSContext *ctx) {
            to that question and free to disagree with it. */
         if (!strcmp(abs, "https://x.test/api/xdready")) g_xd_ready = 1;
         if (!strcmp(abs, "https://x.test/api/xdmready")) g_xdm_ready = 1;
-        if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
+        if (tf_replytwice_hold(abs, (const char *const[5]){ method, mode, referrer_policy, referrer, url })) {
+            /* Owed, and written by tf_replytwice_pay below once its lag has passed. */
+        } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
             filled += engine_decline(ctx, method, mode, referrer_policy, referrer, url,
                                      "blocked-signal: this origin has not been widened for a program load "
                                      "at this address, so the act is derived and reported and not spent");
@@ -1022,6 +1089,7 @@ static int fixture_provide(JSContext *ctx) {
             header_list_free(&eh);
             filled += engine_provide(ctx, method, mode, referrer_policy, referrer, url, reply);
             JS_FreeValue(ctx, reply);
+            if (!strcmp(abs, TF_REPLYTWICE_URL)) g_tf_r2.answered++;
         }
         free(abs);
         free(one);
@@ -1029,6 +1097,7 @@ static int fixture_provide(JSContext *ctx) {
         urls = nl + 1;
     }
     url_record_free(&base);
+    filled += tf_replytwice_pay(ctx);
     /* THE PEER'S POST IS NOT ROUTED HERE ANY MORE, AND THE MOVE IS A REPAIR RATHER THAN A TIDY-UP — the
        reasoning that put it here is kept because it is what a reader re-derives. It said: a commitment is
        written when a timeline RECEIVES, so the record has to be in the document before the moment can ever be
@@ -1179,6 +1248,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/platform.h"
 #include "fixture/windowclose.h"
 #include "fixture/realmsell.h"
+#include "fixture/replytwice.h"
 #include "fixture/realmsellclose.h"
 #include "fixture/adoptexpando.h"
 #include "fixture/reflectint.h"
@@ -1815,6 +1885,7 @@ TF_DOCS[] = {
     { "platform", HTML_PLATFORM },
     { "windowclose", HTML_WINDOWCLOSE },
     { "realmsell", HTML_REALMSELL, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "replytwice", HTML_REPLYTWICE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "realmsellclose", HTML_REALMSELLCLOSE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "adoptexpando", HTML_ADOPTEXPANDO },
     { "reflectint", HTML_REFLECTINT },
@@ -6353,13 +6424,12 @@ static int tf_cancelled(const char *path)
     return c;
 }
 
-/* Child document ids this fixture has handed out. Starts above the fixture's own document (1). */
-static int hostreq_answer_all(JSContext *ctx)
+/* The engine's one-way notices, drained whole. The zone reads them before the bill and the payment that follow
+   them (engine/trusted.mjs reads each line as it arrives), so a `fetch.cancel` takes back an owed answer before
+   any payment could write it; fixture_provide drains here first for that order. */
+static void tf_notices_drain(void)
 {
-    const char *reqs = engine_host_requests();
-    const char *p = reqs;
     const char *nz;
-    int n = 0;
 
     /* NOTICES ARE ONE-WAY. `navigable.create` announces a document the engine named itself, so there is nothing
        to answer; draining it is the whole of this fixture's obligation, and a read that needs the child's
@@ -6438,6 +6508,16 @@ static int hostreq_answer_all(JSContext *ctx)
         if (!end) break;
         nz = end + 1;
     }
+}
+
+/* Child document ids this fixture has handed out. Starts above the fixture's own document (1). */
+static int hostreq_answer_all(JSContext *ctx)
+{
+    const char *reqs = engine_host_requests();
+    const char *p = reqs;
+    int n = 0;
+
+    tf_notices_drain();
 
     while (*p) {
         /* `tab` is the TAB before the operation, past the asking document, which this fixture judges nothing by. */
@@ -20708,6 +20788,28 @@ TF_UNIT void probes_realmsell(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `replytwice` document. RAM pressure sells the one arm parked on a fresh park of a pair the
+   zone answered once, while the zone still owes that park's answer: the drop of the pair's last park withdraws
+   the request (`fetch.cancel`), so the owed answer is taken back and never written for a request nobody is
+   parked on. Ladder: the answer was owed, pressure sold a flow, and the cancel took the answer back. */
+TF_UNIT void probes_replytwice(const char *js, Probe *tab, int *n) {
+    const char *r2_why = NULL;
+    int r2_tt = 1;
+    fold_row(&r2_tt, &r2_why, g_tf_r2.held >= 1,
+             "NOT REACHED: no second park of /api/replytwice was shown while the first had been answered, so "
+             "the holder arm never parked again on the pair and nothing was owed");
+    fold_row(&r2_tt, &r2_why, tf_census_row(js, "_cold", "soldFlows") >= 1,
+             "the answer was owed and RAM pressure sold no flow, so the holder's park was never dropped");
+    fold_row(&r2_tt, &r2_why, g_tf_r2.withdrawn >= 1,
+             "pressure sold a flow and no fetch.cancel took the owed answer back: either the holder was not the "
+             "flow sold within the answer's lag (it was answered instead, which the `answered` count shows), or "
+             "the drop of the pair's last park told the zone nothing");
+    const Probe rows[] = {
+        { "reply-twice", r2_tt, "/api/replytwice", SESS_EXPLORE, r2_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `realmsellclose` document: realm-sell's ladder over a popup its holder closed before parking,
    with HTML §7.5.10's destroy as the rung between the realm's making and its holder's sale. */
 TF_UNIT void probes_realmsellclose(const char *js, Probe *tab, int *n) {
@@ -24934,6 +25036,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_visualupdate(js, probes, &np);
     probes_windowclose(js, probes, &np);
     probes_realmsell(js, probes, &np);
+    probes_replytwice(js, probes, &np);
     probes_realmsellclose(js, probes, &np);
     probes_adoptexpando(js, probes, &np);
     probes_reflectint(js, probes, &np);
