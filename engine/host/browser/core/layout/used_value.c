@@ -2708,21 +2708,28 @@ static CssPx uv_block_auto_margin(lxb_dom_element_t *el, const char *name, const
    §10.3.3's rules 4 and 6 do (one takes it all, two split it equally), and "overflowing grid items resolve their
    auto margins to zero". The free space is the grid area's extent less the item's border box and its `other`
    margin where that one is not `auto`; the item's size reads its `auto` margins as zero, so the border box is
-   asked without this. `name` and `opposite` are the horizontal pair, NULL on the vertical axis. */
+   asked without this. "During calculations of grid track sizes, auto margins are treated as 0": the area's
+   height is no basis while its rows are sized (`used_value_containing_block_height`), and that is when a row's
+   contribution reads the margin. `name` and `opposite` are the horizontal pair, NULL on the vertical axis. */
 static CssPx uv_grid_item_auto_margin(lxb_dom_element_t *el, bool vertical, CssLength other, const char *name,
                                       const char *opposite)
 {
-    bool both = uv_len_is_auto(other), definite = true;
+    bool both = uv_len_is_auto(other);
     CssPx area, free_space;
 
     DCHECK(vertical == (name == NULL) && (name == NULL) == (opposite == NULL),
            "a grid item's auto margin was resolved with a horizontal pair on the vertical axis or none on the "
            "horizontal one");
-    if (vertical)
-        definite = used_value_containing_block_height(el, &area);
-    else
+    if (vertical) {
+        if (!used_value_containing_block_height(el, &area)) {
+            DCHECK(layout_job_grid_rows_sizing(uv_grid_item_container(el)),
+                   "a grid area's height came back indefinite outside its rows' sizing; css-grid-1 §11 makes "
+                   "it definite once they are sized");
+            return css_px(0.0);
+        }
+    } else {
         area = used_value_containing_block_width(el);
-    DCHECK(definite, "a grid area's height came back indefinite; css-grid-1 §11 makes it definite");
+    }
     free_space = css_px_sub(area, used_value_border_edge_px(el, vertical));
     if (!both) free_space = css_px_sub(free_space, uv_margin(el, opposite, name, other, UV_BOX_ITEM, NULL));
     if (free_space.px <= 0.0) return css_px(0.0);

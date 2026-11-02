@@ -119,13 +119,6 @@ static CssPx gt_minimum_contribution(lxb_dom_element_t *item, IntrinsicInlineSiz
    maximum one as its initial value and resolves a minimum one against zero: the row context this runs in
    gives the item's grid area no block size, so used_value.c's percentage arms answer both. A `calc()`
    minimum mixing a length is refused by name. False is "not yet". */
-/* One block-axis margin as a row's contribution reads it: css-grid-1 §10.2 "Aligning with auto margins":
-   "During calculations of grid track sizes, auto margins are treated as 0." */
-static CssPx gt_sizing_margin(lxb_dom_element_t *item, const char *name)
-{
-    return css_computed_length_is(item, name, CSS_KEYWORD_AUTO) ? css_px(0.0) : used_value_px(item, name);
-}
-
 static bool gt_row_contribution_ask(lxb_dom_element_t *item, CssPx *out)
 {
     static const char *const SIZES[] = { "height", "min-height", "max-height" };
@@ -158,7 +151,7 @@ static bool gt_row_contribution_ask(lxb_dom_element_t *item, CssPx *out)
         content = used_value_block_level_content_px(item, true);
     }
     *out = css_px_add(used_value_border_edge_from_content_px(item, content, true),
-                      css_px_add(gt_sizing_margin(item, "margin-top"), gt_sizing_margin(item, "margin-bottom")));
+                      css_px_add(used_value_px(item, "margin-top"), used_value_px(item, "margin-bottom")));
     return true;
 }
 
