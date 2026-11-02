@@ -15,8 +15,8 @@
 #include "solver/reclaim.h"
 
 typedef struct {
-    char               *name;         /* owned; a longhand */
-    char               *value;        /* owned; never NULL */
+    const char         *name;         /* a longhand; owned when `owned` */
+    const char         *value;        /* never NULL; owned when `owned` */
     const CssLayerNode *layer;        /* borrowed from the layer order */
     uint32_t            specificity;
     uint32_t            seq;
@@ -24,6 +24,7 @@ typedef struct {
     CssOrigin           origin;
     bool                important;
     bool                element_attached;
+    bool                owned;
 } CsdDecl;
 
 /* A declaration's place in the by-name order: its name, then its position in the collection. */
@@ -78,8 +79,9 @@ void css_cascaded_style_free(CssCascadedStyle *s)
            "a cascaded style was released in the middle of its resolution — the record goes with its job, and "
            "an element's resolution finishes inside the hold of the ask that started it");
     for (i = 0; i < s->n; i++) {
-        free(s->v[i].name);
-        free(s->v[i].value);
+        if (!s->v[i].owned) continue;
+        free((char *)s->v[i].name);
+        free((char *)s->v[i].value);
     }
     for (i = 0; i < s->tab_cap; i++) free(s->tab[i].value);
     free(s->v);
@@ -101,9 +103,9 @@ static char *csd_strdup(const char *t)
     return out;
 }
 
-void css_cascaded_style_add(CssCascadedStyle *s, const char *name, CssOrigin origin, bool important,
-                            bool element_attached, const CssLayerNode *layer, uint32_t specificity, uint32_t seq,
-                            uint32_t decl_order, const char *value)
+static void csd_add(CssCascadedStyle *s, const char *name, CssOrigin origin, bool important, bool element_attached,
+                    const CssLayerNode *layer, uint32_t specificity, uint32_t seq, uint32_t decl_order,
+                    const char *value, bool owned)
 {
     CsdDecl *d;
 
@@ -118,8 +120,9 @@ void css_cascaded_style_add(CssCascadedStyle *s, const char *name, CssOrigin ori
         s->cap = cap;
     }
     d = &s->v[s->n++];
-    d->name = csd_strdup(name);
-    d->value = csd_strdup(value);
+    d->name = owned ? csd_strdup(name) : name;
+    d->value = owned ? csd_strdup(value) : value;
+    d->owned = owned;
     d->layer = layer;
     d->specificity = specificity;
     d->seq = seq;
@@ -127,6 +130,20 @@ void css_cascaded_style_add(CssCascadedStyle *s, const char *name, CssOrigin ori
     d->origin = origin;
     d->important = important;
     d->element_attached = element_attached;
+}
+
+void css_cascaded_style_add(CssCascadedStyle *s, const char *name, CssOrigin origin, bool important,
+                            bool element_attached, const CssLayerNode *layer, uint32_t specificity, uint32_t seq,
+                            uint32_t decl_order, const char *value)
+{
+    csd_add(s, name, origin, important, element_attached, layer, specificity, seq, decl_order, value, true);
+}
+
+void css_cascaded_style_add_held(CssCascadedStyle *s, const char *name, CssOrigin origin, bool important,
+                                 bool element_attached, const CssLayerNode *layer, uint32_t specificity,
+                                 uint32_t seq, uint32_t decl_order, const char *value)
+{
+    csd_add(s, name, origin, important, element_attached, layer, specificity, seq, decl_order, value, false);
 }
 
 static int csd_ref_cmp(const void *a, const void *b)

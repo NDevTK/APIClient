@@ -119,7 +119,8 @@ void css_cascade_record_release(CssCascadeRecord *r)
 {
     size_t i;
 
-    /* A cascaded style and a match result borrow a held sheet set's layer nodes, so they go first. */
+    /* A cascaded style and a match result borrow a held sheet set's layer nodes, so they go first; a cascaded
+       style borrows its author declarations from its element's match result, so it goes before that. */
     for (i = 0; i < r->elem_cap; i++) {
         if (r->elem[i].el == NULL) continue;
         if (r->elem[i].cascaded != NULL) css_cascaded_style_free(r->elem[i].cascaded);

@@ -34,6 +34,11 @@ lxb_dom_element_t *css_cascaded_style_element(const CssCascadedStyle *s);
 void css_cascaded_style_add(CssCascadedStyle *s, const char *name, CssOrigin origin, bool important,
                             bool element_attached, const CssLayerNode *layer, uint32_t specificity, uint32_t seq,
                             uint32_t decl_order, const char *value);
+/* The same with `name` and `value` borrowed, for strings that outlive the record: a static table's, or the
+   element's author match result, which its cascade record releases after its cascaded style. */
+void css_cascaded_style_add_held(CssCascadedStyle *s, const char *name, CssOrigin origin, bool important,
+                                 bool element_attached, const CssLayerNode *layer, uint32_t specificity,
+                                 uint32_t seq, uint32_t decl_order, const char *value);
 
 /* Close the collection and resolve every declared property in no logical group. The record must already be
    findable by its element: phase two's pairing asks this element's phase-one values back. */

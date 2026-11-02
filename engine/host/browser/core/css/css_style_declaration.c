@@ -1626,8 +1626,8 @@ static uint32_t cssd_author_collect(const CssMatchResult *m, CssCascadedStyle *s
     for (i = 0; i < css_match_result_count(m); i++) {
         const CssMatchedDeclaration *d = css_match_result_at(m, i);
 
-        css_cascaded_style_add(s, d->name, CSS_ORIGIN_AUTHOR, d->important, false, d->layer, d->specificity,
-                               d->seq, d->decl_order, d->value);
+        css_cascaded_style_add_held(s, d->name, CSS_ORIGIN_AUTHOR, d->important, false, d->layer,
+                                    d->specificity, d->seq, d->decl_order, d->value);
     }
     return css_match_result_span(m);
 }
@@ -2947,20 +2947,23 @@ static void cssd_ua_collect(lxb_dom_element_t *el, CssCascadedStyle *s, uint32_t
         for (j = 0; j < nform && strcmp(prop, form[j].prop) != 0; j++) {}
         if (j < nform) continue;
         table_display = table_display || is_display;
-        css_cascaded_style_add(s, prop, CSS_ORIGIN_UA, is_display && strcmp(UA_DEFAULT[i].tag, "noscript") == 0,
-                               false, NULL, 0, seq, k++, UA_DEFAULT[i].value);
+        css_cascaded_style_add_held(s, prop, CSS_ORIGIN_UA,
+                                    is_display && strcmp(UA_DEFAULT[i].tag, "noscript") == 0, false, NULL, 0, seq,
+                                    k++, UA_DEFAULT[i].value);
     }
+    /* The values below are the static tables' too. */
     if (display != NULL)
-        css_cascaded_style_add(s, "display", CSS_ORIGIN_UA, display_important, false, NULL, 0, seq, k++, display);
+        css_cascaded_style_add_held(s, "display", CSS_ORIGIN_UA, display_important, false, NULL, 0, seq, k++,
+                                    display);
     else if (!table_display)
-        css_cascaded_style_add(s, "display", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++, "inline");
+        css_cascaded_style_add_held(s, "display", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++, "inline");
     if (font_size != NULL)
-        css_cascaded_style_add(s, "font-size", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++, font_size);
+        css_cascaded_style_add_held(s, "font-size", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++, font_size);
     if (margin_block != NULL) {
-        css_cascaded_style_add(s, "margin-block-start", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++,
-                               margin_block);
-        css_cascaded_style_add(s, "margin-block-end", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++,
-                               margin_block);
+        css_cascaded_style_add_held(s, "margin-block-start", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++,
+                                    margin_block);
+        css_cascaded_style_add_held(s, "margin-block-end", CSS_ORIGIN_UA, false, false, NULL, 0, seq, k++,
+                                    margin_block);
     }
     for (j = 0; j < nform; j++)
         css_cascaded_style_add(s, form[j].prop, CSS_ORIGIN_UA, form[j].important, false, NULL, 0, seq, k++,
