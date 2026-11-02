@@ -529,7 +529,7 @@ typedef struct Flow {
        by flow_take_peer_marks alone; monotone, fork-carried, not cold-tier state. */
     int   path_peer_driven;
     int   path_peer_pinned;
-    /* The assumed application state this path rests on (solver/absent.c's injected-state arm): reads of an absent
+    /* The assumed application state this path rests on (decide.c's dec_subject_assumed): reads of an absent
        global or member the session throws at and this flow read past (`assumed_reads`), and the decision slots
        whose arm took such a value as present against its example (`assumed_slots`, ascending slot indices,
        malloc'd and owned). Their sum is flow_assumed, a weight term. Fork-carried; not cold-tier state, since a

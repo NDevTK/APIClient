@@ -3,7 +3,6 @@
 #include "solver/concolic.h"
 #include "solver/flow.h"
 #include "solver/engine.h"
-#include "solver/absent.h"    /* which roots are absent application state: an arm against their example assumes */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include "core/json_buf.h"   /* json_buf_block: the fork census's block is counted in the census's footprint */
@@ -1299,10 +1298,13 @@ static int dec_replay(uint32_t asked) {
    sibling's resume point (engine_prepare_fork). The parent's own arm is constrained by decide_arm's tail, so
    the constraint is applied in one place for all three ways a decision is reached, and the seam, which may
    assemble the sibling before this returns, sees the parent's constraint as the sibling's frozen copy left it. */
-/* Does an arm over `v` against its example take absent application state as present: is every root of `v` a read
-   absent.c answered at its injected-state arm? An attacker source's root is never one, so its arms assume nothing. */
+/* Does an arm over `v` against its example take absent application state as present: does every root of `v` name a
+   precondition row its minter marked absent (concolic_source_precondition_absent)? Those are absent.c's
+   injected-state misses, a localStorage key the area lacks and the cookies the jar lacks, each with the observed
+   absence as its example. A held member, whose example is a value, is not marked. An attacker source's root is
+   never a precondition row, so its arms assume nothing. */
 static int dec_subject_assumed(JSValueConst v) {
-    return concolic_root_every(v, absent_assumed_member);
+    return concolic_root_every(v, concolic_member_absent_state);
 }
 
 /* Is `v` an environment unknown: a value the page reads that no party is declared to set? Every root member is the

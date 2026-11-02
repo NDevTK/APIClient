@@ -2540,8 +2540,9 @@ static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
 /* The precondition rows (concolic.h): a second array beside the delivery rows rather than a column of them,
    because every delivery reader (the encode set, the prefix, the carrier, concolic_deliver) matches a row by
-   source and would otherwise read a precondition as a mechanism. Same claimant and give-back as g_srcs. */
-typedef struct { const char *component; char *src; SourcePreconditionKind kind; } SourcePrecondition;
+   source and would otherwise read a precondition as a mechanism. Same claimant and give-back as g_srcs.
+   `absent` is concolic_source_precondition_absent's mark. */
+typedef struct { const char *component; char *src; SourcePreconditionKind kind; int absent; } SourcePrecondition;
 static SourcePrecondition *g_pres;
 static int g_pres_n, g_pres_cap;
 
@@ -2926,6 +2927,12 @@ static int pre_row(const char *p, size_t n)
     return -1;
 }
 
+int concolic_member_absent_state(const char *p, size_t n)
+{
+    int j = pre_row(p, n);
+    return j >= 0 && g_pres[j].absent;
+}
+
 int concolic_member_undeclared(const char *p, size_t n)
 {
     return src_row(p, n) < 0 && pre_row(p, n) < 0;   /* a principal is a column of a delivery row */
@@ -3028,6 +3035,7 @@ void concolic_declare_source_precondition(const char *component, const char *src
     g_pres[g_pres_n].component = component;
     g_pres[g_pres_n].src = reclaim_strdup(src);
     g_pres[g_pres_n].kind = kind;
+    g_pres[g_pres_n].absent = 0;
     CHECK(g_pres[g_pres_n].src != NULL, "concolic: OOM declaring a precondition source");
     g_pres_n++;
 }
@@ -3045,6 +3053,21 @@ int concolic_source_precondition_declared_by(const char *component, const char *
             return 1;
         }
     return 0;
+}
+
+void concolic_source_precondition_absent(const char *component, const char *src)
+{
+    DCHECK(component != NULL && src != NULL, "a precondition row was marked absent with no claimant or no source");
+    for (int i = 0; i < g_pres_n; i++)
+        if (!strcmp(g_pres[i].src, src)) {
+            DCHECKF(strcmp(g_pres[i].component, component) == 0, "%s marked the precondition source `%s` "
+                    "absent, and %s declared it — one source is described by the component that mints it",
+                    component, src, g_pres[i].component);
+            g_pres[i].absent = 1;
+            return;
+        }
+    DCHECKF(0, "%s marked `%s` absent before declaring it a precondition source — the mark is a column of the "
+               "row, so there is no row to carry it", component, src);
 }
 
 const char *concolic_source_precondition(const char *root)

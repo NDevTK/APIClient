@@ -262,9 +262,12 @@ static JSValue st_absent_value(JSContext *ctx, JSValueConst slots, JSAtom key)
     snprintf(shape, (size_t)n + 3, "{%s}", src);
     JS_FreeCString(ctx, k);
     /* Not an attacker source: only script of this origin writes this area, so a finding rooted here is labelled
-       with that precondition rather than reported as a delivery. */
-    if (!concolic_source_precondition_declared_by("storage", src))
+       with that precondition rather than reported as a delivery. The key is absent from the observed area and
+       `null` is that absence, so an arm against the example takes the key as present (an assumption). */
+    if (!concolic_source_precondition_declared_by("storage", src)) {
         concolic_declare_source_precondition("storage", src, SRC_PRE_SAME_ORIGIN_STORE);
+        concolic_source_precondition_absent("storage", src);
+    }
     r = concolic_source_wrap(ctx, shape, src, JS_NULL);
     /* §12.2.1's `getter DOMString? getItem(DOMString key)`: a prior session's value is a String or null in every
        world. */

@@ -268,8 +268,11 @@ void document_metadata_init(JSContext *ctx)
        states. The next diff gives the carrier a byte map for such a substitution. Its absence shows as a
        referrer PoC with a backslash that fires in the model and not in Chrome.
        A COOKIE is application state, not an attacker source: only the application's Set-Cookie or its own
-       script writes the jar, so a finding rooted there is labelled with that precondition. */
+       script writes the jar, so a finding rooted there is labelled with that precondition. The source is the
+       cookies the observed jar lacks and its example is the empty string, so an arm against the example takes
+       such a cookie as present (an assumption). */
     concolic_declare_source_precondition(DM_COMPONENT, "document.cookie", SRC_PRE_APPLICATION_STATE);
+    concolic_source_precondition_absent(DM_COMPONENT, "document.cookie");
     concolic_declare_source(DM_COMPONENT, "document.referrer", " \"#<>?^`{}|", 0, SRC_DELIVER_REFERRING_ADDRESS);
     /* §3.1.1's `attribute USVString cookie` — the only read-write member here, and its type is what performs
        §3.2.12's scalar value conversion before the body ever sees the string. */

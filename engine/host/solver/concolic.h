@@ -758,6 +758,13 @@ typedef enum {
 void        concolic_declare_source_precondition(const char *component, const char *src,
                                                  SourcePreconditionKind kind);
 int         concolic_source_precondition_declared_by(const char *component, const char *src);
+/* Marks the precondition row `component` declared for `src` as application state the observed world lacks: the
+   unknown's example is that absence, so an arm against the example takes the state as present. Idempotent; the
+   mark goes with the row at the claimant's release. */
+void        concolic_source_precondition_absent(const char *component, const char *src);
+/* Does the member slice `p`/`n` name a precondition row so marked? The member property concolic_root_every asks
+   to learn whether an arm against a value's example rests on assumed application state (decide.c). */
+int         concolic_member_absent_state(const char *p, size_t n);
 /* The attacker's own site and page: the host the person verifying controls, set by the trusted zone that
    provisions this instance (concolic_set_attacker_site), and unset a name no victim lists (RFC 2606's `.test`,
    `attacker.test`). A referring-address delivery serves the page as concolic_attacker_page() + payload under
