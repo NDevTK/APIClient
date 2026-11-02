@@ -47,7 +47,7 @@ typedef UrlEncodedList UspList;
    `unknown` is the unknown string the constructor parsed, or JS_UNDEFINED: when set, `vals` is the parse of its
    example (empty where it has none); get and has(name) fork over whether it holds the tuple (usp_lookup_answer)
    and every other read answers a derivation over it (usp_derive).
-   THE LIST IS PER-FLOW STATE AND IS NEVER CHANGED IN PLACE. A write builds a new `vals` and its projection in a
+   The list is per-flow state and is never changed in place: a write builds a new `vals` and its projection in a
    new box (usp_commit), so the capture restores a sibling's three fields together and no arm sees another's
    write. `mutated` says a §6.2 mutation has made `unknown` the derivation it ran (usp_rederive), so the list
    is no longer the parse of a source's own bytes. */
@@ -340,7 +340,7 @@ enum { USP_APPEND = 0, USP_DELETE, USP_GET, USP_GETALL, USP_HAS, USP_SET, USP_SO
 /* THE AGENT'S POOL ENTRIES, one per §6.2 operation — the OBJECTS they are installed as are each realm's. */
 static int g_usp_id[USP_MEMBER_N];
 
-/* WHAT AN UNKNOWN HALF CANNOT DO YET, SAID ONCE. §6.2's list holds an unknown USVString as itself (UspObj's
+/* What an unknown half cannot do yet, said once. §6.2's list holds an unknown USVString as itself (UspObj's
    `vals`), so a read hands it back and §5.2 serializes its shape verbatim. "A tuple whose name is name" is an
    equality, though, and over an unknown both outcomes are worlds: get and has fork it (usp_lookup_step), but
    the other members are not step machines, and comparing the shape's bytes would decide it for the flow. */
@@ -523,7 +523,7 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     if (with_value) value = argv[1];
     DCHECK((JS_IsString(name) || concolic_is(name)) && (!with_value || JS_IsString(value) || concolic_is(value)),
            "a URLSearchParams member was handed an argument its USVString declaration did not convert");
-    /* THE EQUALITY BARRIER — see USP_HOLE_WHY. `set` compares names to find the tuple to overwrite, so only its
+    /* The equality barrier (USP_HOLE_WHY): `set` compares names to find the tuple to overwrite, so only its
        VALUE may be unknown; `delete` compares both. */
     DCHECK(!concolic_is(name) || magic == USP_APPEND,
            USP_HOLE_WHY("member matched an unknown NAME against the stored names"));
