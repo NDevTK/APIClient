@@ -15119,7 +15119,8 @@ TF_UNIT void probes_envarm(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `storearm` document. A key this run wrote reads back concrete, so its request is observed. The
+/* The rows of the `storearm` document. A key this run wrote reads back the value it stored (the page's own
+   requests grade `derived` at best: engine_prov_of_running_path never answers `observed`). The
    branches over a localStorage key the area lacks and over the cookies the jar lacks keep the example's arm on the
    running flow and price each other arm as an assumption (solver/decide.c's dec_subject_assumed), so the example's
    world, which throws before it has served its timer's code the price, reaches its timer's throw first. */
@@ -15131,9 +15132,9 @@ TF_UNIT void probes_storearm(const char *js, Probe *tab, int *n) {
     const char *ord_why = NULL; int ord_tt = 1;
 
     fold_row(&seen_tt, &seen_why,
-             emitted_record_graded_has(js, "/api/saseen", "observed", "saONE"),
-             "/api/saseen has no observed record carrying saONE — HTML §12.2.1 getItem reads back the value "
-             "setItem stored in this run, which is a fact and not an unknown");
+             emitted_record_graded_has(js, "/api/saseen", "derived", "saONE"),
+             "/api/saseen has no record of the page's own world carrying saONE — HTML §12.2.1 getItem reads back "
+             "the value setItem stored in this run");
     fold_row(&ord_tt, &ord_why,
              emitted_record_graded_has(js, "/api/saarm", "derived", "saOBS") &&
                  emitted_record_graded_has(js, "/api/saarm", "forced", "saLS") &&
@@ -15147,7 +15148,7 @@ TF_UNIT void probes_storearm(const char *js, Probe *tab, int *n) {
              "localStorage key or a cookie the observed state lacks as present is an assumption, so the "
              "example's world keeps its timer's code while it has served it less than the price");
     const Probe rows[] = {
-        { "store-seen-concrete", seen_tt, "saBOOM", SESS_EXPLORE, seen_why },
+        { "store-seen-value", seen_tt, "saBOOM", SESS_EXPLORE, seen_why },
         { "store-example-first", ord_tt, "saBOOM", SESS_EXPLORE, ord_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
