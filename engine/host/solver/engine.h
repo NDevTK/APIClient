@@ -1245,6 +1245,7 @@ typedef struct {
     long host_answered;      /* …and the one delivery that settled each: `answered <= asked` is asserted */
     long answer_standbys;    /* standbys left before a peer answer was taken (flow_answer_standby) */
     long answer_standbys_retired; /* flows retired on a peer's exhaustion (engine_host_exhausted) */
+    long cuts_shed;               /* held snapshots released (engine_shed_standby, solver/source_cut.h) */
     long perform_exhausted;  /* `remoteop.exhausted` notices this instance sent (perform_token_spent) */
     long host_exhausted;     /* exhaustions this instance was delivered (engine_host_exhausted) */
     long host_answers_extra; /* answers landing on an already-settled request, one per extra peer timeline;

@@ -1068,6 +1068,8 @@ static long g_host_answered;
 static long g_host_answers_extra;
 /* Standbys left before a peer answer was taken, and those the peer's exhaustion retired. */
 static long g_answer_standbys, g_answer_standbys_retired;
+/* Held snapshots released by engine_shed_standby: the fifth cause of a departure. */
+static long g_cuts_shed;
 /* Exhaustions this instance sent as the answering side, and those it was delivered as the asking side. */
 static long g_perform_exhausted, g_host_exhausted;
 /* Answers that arrived when nothing was left to consume them. A peer answers by running a program on its own
@@ -11984,6 +11986,7 @@ static void engine_shed_standby(JSContext *ctx, Flow *s) {
            "a standby to shed is the running flow, the one being switched in, or not a held member");
     flow_withdraw_async_sends(ctx, s);
     flow_release(ctx, s);
+    g_cuts_shed++;
 }
 
 static void engine_shed_cuts(JSContext *ctx, int all) {
@@ -13742,6 +13745,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->host_answers_extra = g_host_answers_extra;
     out->answer_standbys    = g_answer_standbys;
     out->answer_standbys_retired = g_answer_standbys_retired;
+    out->cuts_shed = g_cuts_shed;
     out->perform_exhausted = g_perform_exhausted;
     out->host_exhausted = g_host_exhausted;
     out->host_answers_late  = g_host_answers_late;
@@ -13788,19 +13792,19 @@ void engine_frontier_census(EngineFrontierCensus *out)
        count and this file's retirement totals are three numbers in two censuses with no identity between them, and
        "this engine retires nothing" is a subtraction across them. Exact by construction: solver/flow.c's
        `flow_remove` is the one line a member leaves the frontier on, `flow_release` its one caller, and that has
-       four callers on a live instance: flow_finish (raising `g_finished`), engine_reclaim_tail (raising
-       `g_flows_sold`), the FLOW_STEP_RETIRED arm (raising `g_answer_standbys_retired`) and flow_registry_free's
-       drain (raising the fourth arm). None is reset by a session boundary
-       (the sale totals carry at engine_sched_begin, and flow_registry_init does not reset arrivals and
-       departures). The third term reads 0 at every census hosts take today, since the drain runs after the report,
+       five callers on a live instance: flow_finish (raising `g_finished`), engine_reclaim_tail (raising
+       `g_flows_sold`), the FLOW_STEP_RETIRED arm (raising `g_answer_standbys_retired`), engine_shed_standby
+       (raising `g_cuts_shed`) and flow_registry_free's drain (raising the last arm). None is reset by a session
+       boundary (the sale totals carry at engine_sched_begin, and flow_registry_init does not reset arrivals and
+       departures). The last term reads 0 at every census hosts take today, since the drain runs after the report,
        but keeps the identity true at every instant. It catches a departure path added later without an arm, which
        any reclamation gated on something other than completion would be. */
-    DCHECKF(out->finished + out->sold + out->answer_standbys_retired + (long)flow_departures_teardown() ==
-            (long)flow_departures(),
+    DCHECKF(out->finished + out->sold + out->answer_standbys_retired + out->cuts_shed +
+                (long)flow_departures_teardown() == (long)flow_departures(),
             "the frontier's departure causes do not partition its departures (%ld finished + %ld sold + %ld retired "
-            "+ %lld with the registry against %lld) — flow_release is flow_remove's one caller, so a fifth exit moved "
-            "the total",
-            out->finished, out->sold, out->answer_standbys_retired,
+            "+ %ld shed + %lld with the registry against %lld) — flow_release is flow_remove's one caller, so a sixth "
+            "exit moved the total",
+            out->finished, out->sold, out->answer_standbys_retired, out->cuts_shed,
             (long long)flow_departures_teardown(), (long long)flow_departures());
     /* And the seed table's partition, about a table built once per session: `held` is a row whose source text this
        instance has, `awaited` one whose bytes the reply door still owes, `refused` one whose `src` did not
