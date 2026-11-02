@@ -1179,6 +1179,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/adoptexpando.h"
 #include "fixture/reflectint.h"
 #include "fixture/uspunion.h"
+#include "fixture/uspwalk.h"
 #include "fixture/fragfork.h"
 #include "fixture/fragplace.h"
 #include "fixture/fragxml.h"
@@ -1796,6 +1797,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "adoptexpando", HTML_ADOPTEXPANDO },
     { "reflectint", HTML_REFLECTINT },
     { "uspunion", HTML_USPUNION },
+    { "uspwalk", HTML_USPWALK },
     { "fragfork", HTML_FRAGFORK },
     { "fragplace", HTML_FRAGPLACE },
     { "fragxml", HTML_FRAGXML },
@@ -20235,6 +20237,36 @@ TF_UNIT void probes_uspunion(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `uspwalk` document (fixture/uspwalk.h): URL §6.2's four list walks over an unknown name, one
+   row per method, each the world only that method's own comparison over the unknown can reach. */
+TF_UNIT void probes_uspwalk(const char *js, Probe *tab, int *n) {
+    static const struct { const char *row, *url, *want, *why; } ROWS[] = {
+        { "usp-delete-unknown", "/api/uspwd", "2",
+          "URL §6.2 delete(name): no world removed both `a` tuples, so the name was not compared as a fork" },
+        { "usp-set-unknown", "/api/uspws", "x-2",
+          "URL §6.2 set(name, value): no world set the first `a` and removed the other" },
+        { "usp-getall-unknown", "/api/uspwg", "1-3",
+          "URL §6.2 getAll(name): no world answered both `a` values in list order" },
+        { "usp-sort-unknown", "/api/uspwo", "1-2",
+          "URL §6.2 sort(): no world ordered `m` before a name that is not code unit less than it" },
+    };
+    unsigned i;
+
+    for (i = 0; i < COUNTOF(ROWS); i++) {
+        const char *why = NULL;
+        int tt = 1;
+
+        fold_row(&tt, &why, !!strstr(js, ROWS[i].url),
+                 "NOT REACHED: the method's witness sent no record, so the document stopped before it");
+        fold_row(&tt, &why, param_value_is(js, ROWS[i].url, "v", ROWS[i].want), ROWS[i].why);
+        if (strcmp(ROWS[i].row, "usp-sort-unknown") == 0)
+            fold_row(&tt, &why, param_value_is(js, ROWS[i].url, "v", "2-1"),
+                     "URL §6.2 sort(): no world ordered a name that is code unit less than `m` before it");
+        const Probe rows[] = { { ROWS[i].row, tt, ROWS[i].url, SESS_EXPLORE, why } };
+        probes_append(tab, n, rows, 1);
+    }
+}
+
 /* The rows of the `windowopenerclose` document. */
 TF_UNIT void probes_windowopenerclose(const char *js, Probe *tab, int *n) {
     /* And over a cross-origin popup, which the incumbent is familiar with only through its opener link. */
@@ -24267,6 +24299,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_adoptexpando(js, probes, &np);
     probes_reflectint(js, probes, &np);
     probes_uspunion(js, probes, &np);
+    probes_uspwalk(js, probes, &np);
     probes_windowopenerclose(js, probes, &np);
     probes_timers(js, probes, &np);
     probes_idlindex(js, probes, &np);
