@@ -1240,16 +1240,16 @@ const forkSiteKeySlots = sourceFact(() =>
              "full, which is the condition Space-Saving's bound holds under — the same check the predicate " +
              "table gets, over its own size"));
 /* Each `QJS_EXPORT` prototype in engine/host/qjs_abi.h as an emscripten conversion signature: the return,
-   then each parameter, `p` for a pointer and `_` for an `int`, an `unsigned` or `void`. Every scalar of this
-   ABI is one of those i32 types; any other scalar type throws, because a 64-bit scalar would also need `p`
-   and this reading would have to guess which it is. */
+   then each parameter, `p` for a pointer and `_` (no conversion) for an `int`, an `unsigned`, a `double` or
+   `void`: an i32 or an f64 crosses as itself on wasm64. Any other scalar type throws, because a 64-bit integer
+   would also need a conversion and this reading would have to guess which. */
 const abiPointerSignatures = sourceFact(() => {
   const src = hostSource("qjs_abi.h", "the wasm64 ABI link states each entry's pointer parameters to emscripten");
   const kind = (decl, where) => {
     if (decl.includes("*")) return "p";
     const type = decl.trim().split(/\s+/).filter((w) => !/^qjs_\w+$/.test(w));
     const scalar = type.length > 1 ? type.slice(0, -1).join(" ") : type.join(" ");
-    if (["void", "int", "unsigned", "unsigned int"].includes(scalar)) return "_";
+    if (["void", "int", "unsigned", "unsigned int", "double"].includes(scalar)) return "_";
     throw new Error(`[build] ${where} in engine/host/qjs_abi.h is \`${decl.trim()}\`, neither a pointer nor ` +
                     `an i32 scalar; state its wasm64 conversion here before it crosses the ABI`);
   };
