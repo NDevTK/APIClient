@@ -103,6 +103,7 @@ struct LayoutJob {
     LayoutJob          *alive_prev, *alive_next;   /* the driven jobs alive, for layout_job_held */
     int64_t             own;         /* the C heap bytes of the job's own allocation */
     int64_t             held;        /* …and with what its activations left live */
+    int64_t             shed_at;     /* `held` when it was last shed, 0 before */
     size_t              live_at_enter;
     const Flow         *flow;        /* the flow whose step entered it, NULL before its first activation */
 };
@@ -418,7 +419,7 @@ LayoutJobResting *layout_job_resting(size_t *n)
     out = malloc(g_alive * sizeof *out);
     CHECK(out != NULL, "the list of resting layout jobs could not be allocated");
     for (job = g_alive_head; job != NULL; job = job->alive_next) {
-        if (job->decline.undetermined) continue;
+        if (job->decline.undetermined || job->held <= job->shed_at) continue;
         out[k].job = job;
         out[k].flow = job->flow;
         out[k].bytes = job->held;
@@ -455,6 +456,7 @@ size_t layout_job_shed(LayoutJob *job)
     job->gen++;
     lj_answers_free(job);
     freed = live - c_alloc_live();
+    job->shed_at = job->held;
     job->held = job->own;
     g_sheds++;
     g_shed_bytes += (int64_t)freed;

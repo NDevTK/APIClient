@@ -147,8 +147,11 @@ void layout_job_held(LayoutJobHeld *out);
 
 /* A driven job resting between its machine's activations, which RAM pressure may shed: the flow whose step
    entered it last (NULL before its first activation) and the bytes it holds. layout_job_resting answers every
-   driven job that holds no unanswered decline, in a malloc'd array of `*n` the caller frees (NULL with `*n` 0
-   when there is none); asserts no job's activation holds the thread. */
+   driven job that holds no unanswered decline and holds more than it held when it was last shed, in a malloc'd
+   array of `*n` the caller frees (NULL with `*n` 0 when there is none); asserts no job's activation holds the
+   thread. A shed job re-derives what it held before it goes further, so each shed of a job comes later in its
+   machine's walk than the one before, and a walk whose working set does not fit is sold rather than re-derived
+   for ever. */
 typedef struct {
     LayoutJob  *job;
     const void *flow;
