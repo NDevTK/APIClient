@@ -3232,7 +3232,7 @@ char *endpoint_xhr_edge_rows(void) {
 
 /* Serialize the @H surface directly to a JSON string in C (caller frees), with core/json_buf.h's writer. */
 char *endpoint_json_array(void) {
-    JsonBuf b = { 0 };
+    JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes it absent */
     int wrote_one = 0;
     json_buf_raw(&b, "[");
     for (int i = 0; i < g_eps_n; i++) {

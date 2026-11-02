@@ -1972,8 +1972,9 @@ char *result_json(JSContext *ctx) { return result_json_census(ctx, NULL); }
    attempt the allocator refused is dropped whole, flows are sold at rest until that attempt's measured ask fits,
    and it is composed again, until it fits or nothing is left to sell. The ask is the attempt's allocation span
    (c_alloc_span_take), every entry of the malloc family counted, and `need` is the last fitted composition's,
-   proved available before the next composes. A refusal after a proven ask must ask for more, so the attempts are
-   bounded by the composition's growth rather than by the sales. */
+   proved available before the next composes. The probe proves one block of the ask, which the composition's
+   many blocks need not fit into (a growing buffer holds its old and new block at once), so an attempt refused at
+   an ask already proven sells one more member: every retry sells, and the attempts end at the floor. */
 char *result_json_at_rest(JSContext *ctx, const ResultCensus *c) {
     static size_t need;
     size_t proven = 0;   /* the last refused attempt's ask, proven to fit before this attempt */
@@ -1987,12 +1988,9 @@ char *result_json_at_rest(JSContext *ctx, const ResultCensus *c) {
         js = result_json_census(ctx, c);
         ask = c_alloc_span_take();
         if (js) { need = ask; break; }
-        DCHECKF(ask > proven,
-                "a composition was refused asking %zu bytes after %zu bytes were proven to fit — the headroom probe "
-                "proves a block the composition's allocations do not fit into, so the retry cannot be tied to its "
-                "growth", ask, proven);
-        if (ask <= proven || !engine_headroom_at_rest(ask)) break;   /* the floor: the caller's CHECK answers */
-        proven = ask;
+        /* The floor: the caller's CHECK answers. */
+        if (ask <= proven ? !engine_reclaim_at_rest() : !engine_headroom_at_rest(ask)) break;
+        if (ask > proven) proven = ask;
         /* A sale changed the frontier the borrowed census describes, so the retry composes its own. */
         c = NULL;
     }

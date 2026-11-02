@@ -243,7 +243,7 @@ static void json_value(JsonBuf *b, double v) {
 }
 
 char *novelty_json(void) {
-    JsonBuf b = { 0 };
+    JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes it absent */
     long asks = 0, paid = 0, wrote = 0;
     json_buf_raw(&b, "{"); json_buf_key(&b, "spelling"); json_buf_str(&b, NOVELTY_SPELLING);
     json_buf_raw(&b, ","); json_buf_key(&b, "scope");

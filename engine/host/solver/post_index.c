@@ -72,7 +72,7 @@ void post_index_record(const PostIndexHead *h, const PostIndexSymbol *syms, size
 
 char *post_index_json(void)
 {
-    JsonBuf b = { 0 };
+    JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes it absent */
     size_t i;
 
     json_buf_raw(&b, "[");

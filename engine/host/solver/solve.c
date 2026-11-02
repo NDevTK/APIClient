@@ -2696,7 +2696,7 @@ static void emit_delivery(JsonBuf *b, JSContext *ctx, const Cand *e, const char 
    `location.hash` the fragment set contains `<`, which is a constraint and not a claim that the sink is safe,
    since a page that decodes its fragment breaks out with the same candidate. */
 char *solve_json_array(JSContext *ctx) {
-    JsonBuf b = { 0 };
+    JsonBuf b = JSON_BUF_AT_REST;   /* composed between steps: a refusal makes it absent */
     int n = 0;
     json_buf_raw(&b, "[");
     for (int i = 0; i < g_sinks_n; i++) {
