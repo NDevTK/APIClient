@@ -415,7 +415,7 @@ static void r_data_transfer(JSRuntime *rt) { data_transfer_free(rt); }
    reads a URLSearchParams body through), runtime handles and pool indices, with no JSValue or JSAtom, so neither
    takes the runtime. These are the third and fourth rows, so reverse declaration order runs them last but for
    `console` and `hr_time`, after every component that reads either (Fetch's body extractor through usp_list_of,
-   §6.1's `searchParams`). No release in this agent calls either: every caller of url_record_of, usp_new,
+   §6.1's `searchParams`). No release in this agent calls either: every caller of url_member_unknown, usp_new,
    usp_reset and usp_list_of outside core/url/ is a member body or a per-realm install. */
 static void r_url(JSRuntime *rt) { (void)rt; url_free(); }
 static void r_usp(JSRuntime *rt) { (void)rt; usp_free(); }

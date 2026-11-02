@@ -43,7 +43,8 @@ typedef UrlEncodedList UspList;
    `vals` is §6.2's list itself: an Array of 2n USVStrings, each tuple's name then its value, where a half that
    is unknown input is that unknown, so a read hands it back and a comparison with it forks. `list` is §5.1's
    byte list projected from `vals` (usp_project), which the serializers read.
-   `unknown` is the unknown string the constructor parsed, or JS_UNDEFINED: when set, `vals` is the parse of its
+   `unknown` is the unknown string the constructor parsed, or the query of an associated URL whose record is
+   unknown (usp_new_unknown), or JS_UNDEFINED: when set, `vals` is the parse of its
    example (empty where it has none); get and has(name) fork over whether it holds the tuple (usp_lookup_answer)
    and every other read answers a derivation over it (usp_derive).
    The list is per-flow state and is never changed in place: a write builds a new `vals` and its projection in a
@@ -268,7 +269,8 @@ static void usp_update(JSContext *ctx, UspObj *u)
     size_t n = 0;
     char *q;
 
-    if (JS_IsUndefined(u->owner)) return;
+    /* A list derived from unknown input writes its update as a derivation (usp_rederive). */
+    if (JS_IsUndefined(u->owner) || !JS_IsUndefined(u->unknown)) return;
     q = usp_serialize(u->list, &n);
     if (!n) { free(q); q = NULL; }
     url_query_assign(ctx, u->owner, q);
@@ -329,7 +331,51 @@ void usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query
     UspObj *u = usp_rec(usp);
 
     DCHECK(u != NULL, "a URL's search setter re-initialised something that is not a URLSearchParams");
+    DCHECK(JS_IsUndefined(u->unknown), "a known query re-initialised a list derived from an unknown record — a "
+                                       "URL whose record is unknown stays unknown, so its setters re-derive");
     usp_commit(ctx, u, usp_vals_parse(ctx, query, query_len));
+}
+
+/* The §6.2 list parsed from the unknown query `q` (taken): its example's parse, which is empty without one. */
+static JSValue usp_vals_unknown(JSContext *ctx, JSValueConst q, int *has_example)
+{
+    JSValue ex = concolic_example_string(ctx, q), vals;
+    size_t n = 0;
+    const char *b;
+
+    *has_example = JS_IsString(ex);
+    if (!*has_example) {
+        JS_FreeValue(ctx, ex);
+        return usp_vals_parse(ctx, NULL, 0);
+    }
+    b = JS_ToCStringLen(ctx, &n, ex);
+    CHECK(b != NULL, "urlsearchparams: OOM reading an unknown query's example");
+    vals = usp_vals_parse(ctx, b, n);
+    JS_FreeCString(ctx, b);
+    JS_FreeValue(ctx, ex);
+    return vals;
+}
+
+JSValue usp_new_unknown(JSContext *ctx, JSValueConst owner, JSValue query)
+{
+    int has_example;
+    JSValue vals;
+
+    DCHECK(concolic_is(query), "a URLSearchParams over an unknown query was handed a known one");
+    vals = usp_vals_unknown(ctx, query, &has_example);
+    return usp_new_with(ctx, owner, vals, query, has_example);
+}
+
+void usp_reset_unknown(JSContext *ctx, JSValueConst usp, JSValue query)
+{
+    UspObj *u = usp_rec(usp);
+    int has_example;
+
+    DCHECK(u != NULL && concolic_is(query), "an unknown query re-initialised no URLSearchParams, or is known");
+    usp_commit(ctx, u, usp_vals_unknown(ctx, query, &has_example));
+    cow_record_set(ctx, u, &USP_REC, &u->unknown, query);
+    u->unknown_example = has_example;
+    u->mutated = 0;
 }
 
 /* ---- §6.2's members --------------------------------------------------------------------------------------- */
@@ -359,18 +405,14 @@ static JSValue usp_derive(JSContext *ctx, UspObj *u, const char *op, JSValue r, 
 /* §6.2's mutations over a list parsed from an unknown string: the real operation has run on the example's parse,
    and the list becomes the unknown that operation derives — named by the operation, the previous list and the
    arguments — with the updated example list's serialization as its example. Every later read derives from it,
-   so a read after a mutation is about the mutated list. The list has no associated URL (only the constructor's
-   string arm sets `unknown`, and that arm makes none), so §6.2's update steps have nothing to write. */
+   so a read after a mutation is about the mutated list. §6.2's update steps then write the list's serialization,
+   that list's derivation, onto an associated URL (url_query_assign_unknown). */
 static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JSValueConst *argv)
 {
     JSValueConst ops[3];
     JSValue ex = JS_UNDEFINED, d;
     int n = 1, i;
 
-    DCHECK(JS_IsUndefined(u->owner),
-           "a URLSearchParams list derived from unknown input has an associated URL — only the constructor's "
-           "string arm sets `unknown`, and it creates no URL object, so §6.2's update steps would write the "
-           "example's serialization onto a URL as if it were the input");
     ops[0] = u->unknown;
     for (i = 0; i < argc && n < 3; i++) if (!JS_IsUndefined(argv[i])) ops[n++] = argv[i];
     if (u->unknown_example) {
@@ -385,6 +427,14 @@ static void usp_rederive(JSContext *ctx, UspObj *u, const char *op, int argc, JS
            "needs the list re-parsed from the delivered value and made concrete; build that rather than store it");
     cow_record_set(ctx, u, &USP_REC, &u->unknown, d);
     u->mutated = 1;   /* a POD field of the record usp_rec captured */
+    if (!JS_IsUndefined(u->owner)) {
+        char *q = usp_serialize(u->list, NULL);
+        JSValue ser = usp_derive(ctx, u, "URLSearchParams.toString", JS_NewString(ctx, q), 0, NULL);
+
+        free(q);
+        url_query_assign_unknown(ctx, u->owner, ser);
+        JS_FreeValue(ctx, ser);
+    }
 }
 
 /* Whether any half of the projected list `l` is unknown input. */

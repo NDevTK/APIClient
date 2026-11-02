@@ -263,10 +263,8 @@ JSValue request_url(JSContext *ctx, JSValueConst v)
 
     CHECK(d != NULL, "a Request's URL was asked of a value that is not a Request");
     if (JS_IsUndefined(d->url_unknown)) return JS_NewString(ctx, d->url);
-    /* URL §4.5 URL serializing over the unknown record; its example is that serializer run on the example's
-       parse, which `url` holds where the input's example parsed. */
-    r = concolic_new_derived(ctx, "href", &d->url_unknown, 1,
-                             d->url_grounded ? JS_NewString(ctx, d->url) : JS_UNDEFINED);
+    /* URL §4.5 URL serializing over the unknown record, as a page's `new URL(input, base).href` reads it. */
+    r = url_member_unknown(ctx, d->url_unknown, URL_HREF);
     DCHECK(concolic_is(r), "a Request's unknown URL record serialized to a known value");
     return r;
 }

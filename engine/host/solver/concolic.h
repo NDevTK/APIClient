@@ -1094,6 +1094,14 @@ JSValue     concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op
  * for a known operand: the caller already computed the answer and there is nothing to derive. */
 JSValue     concolic_new_derived(JSContext *ctx, const char *op, const JSValueConst *operands, int n,
                                  JSValue example);
+/* concolic_new_derived over the one unknown operand `of`, for a serialization `op` that the operation `parse`
+   maps back to `of` exactly, as URL §4.5 URL serializing and §4.4 URL parsing do for a URL record; the result
+   records both for concolic_parsed_operand. Operand borrowed, `example` consumed. */
+JSValue     concolic_new_serialization(JSContext *ctx, const char *op, JSValueConst of, const char *parse,
+                                       JSValue example);
+/* The operand `v` is a serialization of (concolic_new_serialization) where `parse` names the operation that
+   maps it back, else JS_UNDEFINED. Borrowed; side-effect-free. */
+JSValueConst concolic_parsed_operand(JSValueConst v, const char *parse);
 /* The value of the first tuple named `name` in the application/x-www-form-urlencoded list (URL §5.1) parsed from
    the unknown string `list`, as `op` reads it. Where `list` is a declared query's own bytes, the value is its own
    identity and delivery root, `<list's shape>[key]`, a keyed row (concolic_declare_keyed_source): the payload

@@ -1613,10 +1613,12 @@ static int       g_url_ctor_stepid = -1;
    §6.2 URLSearchParams class's update steps back onto this record). A real cycle, which is what gc_mark is for.
    THE RECORD IS PER-FLOW STATE AND IS NEVER CHANGED IN PLACE. `rec` points into `rec_box`, a payload whose
    storage the box owns (url_rec_box); a write builds a changed copy in a new box (url_rec_edit), so the
-   capture below restores a sibling's `rec` and `rec_box` together and no arm sees another's write. */
-typedef struct { JSValue rec_box; UrlRecord *rec; JSValue params; } UrlObj;
+   capture below restores a sibling's `rec` and `rec_box` together and no arm sees another's write.
+   `unknown` is the unknown URL record this object's URL is (url_construct_unknown), JS_UNDEFINED for a known
+   one; where it is set, `rec` is NULL and `rec_box` undefined, and every member derives from it. */
+typedef struct { JSValue rec_box; UrlRecord *rec; JSValue params; JSValue unknown; } UrlObj;
 #define URL_OBJ_OFF(f) (uint16_t)offsetof(UrlObj, f)
-static const uint16_t URL_OBJ_VALS[] = { URL_OBJ_OFF(rec_box), URL_OBJ_OFF(params) };
+static const uint16_t URL_OBJ_VALS[] = { URL_OBJ_OFF(rec_box), URL_OBJ_OFF(params), URL_OBJ_OFF(unknown) };
 static const CowRecord URL_OBJ_REC = { sizeof(UrlObj), URL_OBJ_VALS,
                                        (int)(sizeof URL_OBJ_VALS / sizeof *URL_OBJ_VALS) };
 
@@ -1654,7 +1656,12 @@ static void url_finalizer(JSRuntime *rt, JSValue val)
     UrlObj *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
-    if (u) { JS_FreeValueRT(rt, u->rec_box); JS_FreeValueRT(rt, u->params); free(u); }
+    if (u) {
+        JS_FreeValueRT(rt, u->rec_box);
+        JS_FreeValueRT(rt, u->params);
+        JS_FreeValueRT(rt, u->unknown);
+        free(u);
+    }
 }
 
 static void url_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
@@ -1663,7 +1670,11 @@ static void url_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     UrlObj *u = JS_GetAnyOpaque(val, &id);
 
     (void)id;
-    if (u) { JS_MarkValue(rt, u->rec_box, mark_func); JS_MarkValue(rt, u->params, mark_func); }
+    if (u) {
+        JS_MarkValue(rt, u->rec_box, mark_func);
+        JS_MarkValue(rt, u->params, mark_func);
+        JS_MarkValue(rt, u->unknown, mark_func);
+    }
 }
 
 /* The record's accessor and therefore its capture point: a flow that reaches the record may write it. */
@@ -1680,6 +1691,7 @@ static UrlRecord *url_rec_edit(JSContext *ctx, UrlObj *u)
 {
     UrlRecord *r = lexbor_malloc(sizeof *r);
 
+    DCHECK(JS_IsUndefined(u->unknown), "a known URL record's write was asked of a URL whose record is unknown");
     CHECK(r != NULL, "url: OOM copying a URL record for a write");
     url_record_init(r);
     CHECK(url_record_copy(r, u->rec), "url: OOM copying a URL record for a write");
@@ -1688,18 +1700,14 @@ static UrlRecord *url_rec_edit(JSContext *ctx, UrlObj *u)
     return r;
 }
 
-const UrlRecord *url_record_of(JSValueConst v)
-{
-    UrlObj *u = url_obj_of(v);
-    return u ? u->rec : NULL;
-}
-
 void url_query_assign(JSContext *ctx, JSValueConst url, char *query)
 {
     UrlObj *u = url_obj_of(url);
     UrlRecord *r;
 
     DCHECK(u != NULL, "a URLSearchParams' associated URL stopped being one");
+    DCHECK(JS_IsUndefined(u->unknown), "a URLSearchParams wrote known bytes onto a URL whose record is unknown — "
+                                       "its list derives from that record, so its update is url_query_assign_unknown");
     r = url_rec_edit(ctx, u);
     free(r->query);
     r->query = query;
@@ -1714,13 +1722,6 @@ void url_query_assign(JSContext *ctx, JSValueConst url, char *query)
 static bool url_is(JSValueConst v)
 {
     return JS_GetOpaque(v, g_url_class) != NULL;
-}
-
-static const UrlRecord *url_of(JSContext *ctx, JSValueConst v)
-{
-    UrlObj *u = url_obj_of(v);
-    if (!u) JS_ThrowTypeError(ctx, "not a URL");
-    return u ? u->rec : NULL;
 }
 
 static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
@@ -1742,8 +1743,88 @@ static JSValue url_wrap(JSContext *ctx, UrlRecord *rec)
     url_record_init(rec);   /* the wrapper owns it now */
     held->rec_box = url_rec_box(ctx, held->rec);
     held->params = JS_UNDEFINED;
+    held->unknown = JS_UNDEFINED;
     JS_SetOpaque(obj, held);
     return obj;
+}
+
+/* A URL object whose URL is the unknown record `unknown` (taken). */
+static JSValue url_wrap_unknown(JSContext *ctx, JSValue unknown)
+{
+    UrlObj *held;
+    JSValue proto = JS_GetClassProto(ctx, g_url_class);
+    JSValue obj;
+
+    DCHECK(concolic_is(unknown), "a URL object over an unknown record was handed a known value");
+    DCHECK(!JS_IsNull(proto), "a URL was minted in a realm that never ran its install");
+    obj = JS_NewObjectProtoClass(ctx, proto, g_url_class);
+    JS_FreeValue(ctx, proto);
+    if (JS_IsException(obj)) {
+        JS_FreeValue(ctx, unknown);
+        return obj;
+    }
+    held = lexbor_malloc(sizeof *held);
+    CHECK(held, "url: OOM holding a URL record");
+    held->rec = NULL;
+    held->rec_box = JS_UNDEFINED;
+    held->params = JS_UNDEFINED;
+    held->unknown = unknown;
+    JS_SetOpaque(obj, held);
+    return obj;
+}
+
+/* URL §6.1 URL class's getters' names, by URL_* member: an unknown record's member is the derivation its getter
+   names. */
+static const char *const URL_MEMBER_NAMES[] = { "href", "origin", "protocol", "username", "password", "host",
+                                                "hostname", "port", "pathname", "search", "hash" };
+
+/* The example record of the unknown URL record `unknown`: its example's own record, or NULL where it holds none.
+   `*hold` keeps the example alive and is the caller's to free. */
+static const UrlRecord *url_unknown_example(JSContext *ctx, JSValueConst unknown, JSValue *hold)
+{
+    const UrlObj *eo;
+
+    *hold = concolic_example(ctx, unknown);
+    eo = JS_GetOpaque(*hold, g_url_class);
+    DCHECK(!eo || JS_IsUndefined(eo->unknown), "an unknown URL record's example is a URL whose record is unknown");
+    return eo ? eo->rec : NULL;
+}
+
+JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member)
+{
+    JSValue hold, ex = JS_UNDEFINED;
+    const UrlRecord *er = url_unknown_example(ctx, unknown, &hold);
+
+    DCHECK(member >= URL_HREF && member <= URL_HASH, "an unknown URL record's member was asked by no URL_* index");
+    if (er) {
+        char *m = url_member_get(er, member);
+
+        ex = JS_NewString(ctx, m);
+        free(m);
+        CHECK(!JS_IsException(ex), "url: OOM spelling an unknown record's member example");
+    }
+    JS_FreeValue(ctx, hold);
+    /* URL §4.4 URL parsing maps §4.5 URL serializing's output back to the record, which the standard's goals
+       guarantee for any record the API produced; url_construct_unknown reads that back. */
+    if (member == URL_HREF) return concolic_new_serialization(ctx, "href", unknown, "URL", ex);
+    return concolic_new_derived(ctx, URL_MEMBER_NAMES[member], &unknown, 1, ex);
+}
+
+/* The query of the unknown URL record `unknown`, which §6.1's searchParams initializes its list with: the
+   derivation `query`, with the example's query (the empty string for null, whose list is the same). Owned. */
+static JSValue url_query_unknown(JSContext *ctx, JSValueConst unknown)
+{
+    JSValue hold, ex = JS_UNDEFINED, r;
+    const UrlRecord *er = url_unknown_example(ctx, unknown, &hold);
+
+    if (er) {
+        ex = JS_NewString(ctx, er->query ? er->query : "");
+        CHECK(!JS_IsException(ex), "url: OOM spelling an unknown record's query example");
+    }
+    JS_FreeValue(ctx, hold);
+    r = concolic_new_derived(ctx, "query", &unknown, 1, ex);
+    DCHECK(concolic_is(r), "an unknown URL record's query derived a known value");
+    return r;
 }
 
 
@@ -1756,7 +1837,9 @@ static JSValue js_url_get_params(JSContext *ctx, JSValueConst this_val, int magi
     (void)magic;
     if (!u) return JS_ThrowTypeError(ctx, "not a URL");
     if (JS_IsUndefined(u->params)) {
-        p = usp_new(ctx, this_val, u->rec->query, u->rec->query ? strlen(u->rec->query) : 0);
+        p = !JS_IsUndefined(u->unknown)
+                ? usp_new_unknown(ctx, this_val, url_query_unknown(ctx, u->unknown))
+                : usp_new(ctx, this_val, u->rec->query, u->rec->query ? strlen(u->rec->query) : 0);
         if (JS_IsException(p)) return JS_EXCEPTION;
         cow_record_set(ctx, u, &URL_OBJ_REC, &u->params, p);
     }
@@ -1769,6 +1852,10 @@ static void url_params_resync(JSContext *ctx, JSValueConst this_val)
 {
     UrlObj *u = url_obj_of(this_val);
     if (!u || JS_IsUndefined(u->params)) return;
+    if (!JS_IsUndefined(u->unknown)) {
+        usp_reset_unknown(ctx, u->params, url_query_unknown(ctx, u->unknown));
+        return;
+    }
     usp_reset(ctx, u->params, u->rec->query, u->rec->query ? strlen(u->rec->query) : 0);
 }
 
@@ -1809,12 +1896,13 @@ char *url_member_get(const UrlRecord *u, int magic)
 
 static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    const UrlRecord *u = url_of(ctx, this_val);
+    UrlObj *o = url_obj_of(this_val);
     char *s;
     JSValue r;
 
-    if (!u) return JS_EXCEPTION;
-    s = url_member_get(u, magic);
+    if (!o) return JS_ThrowTypeError(ctx, "not a URL");
+    if (!JS_IsUndefined(o->unknown)) return url_member_unknown(ctx, o->unknown, magic);
+    s = url_member_get(o->rec, magic);
     r = JS_NewString(ctx, s);
     free(s);
     return r;
@@ -2075,9 +2163,8 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     }
     /* §6.1 URL class's `constructor(USVString url, optional USVString base)` OVER UNKNOWN INPUT. The parser
        needs real bytes and the coercion below owes C them, so a concolic operand can only crash there; the
-       constructor answers instead with an unknown derived from the source. Reading `.href`/`.pathname` off the
-       result then yields further unknowns tied to the same source, which is what a later branch forks on and a
-       later sink solves for.
+       constructor's URL is instead the unknown record derived from the operands, and each getter derives from
+       that record (url_member_unknown), so `.href` keeps the source's injection identity.
        THAT THE BASE IS AN OPERAND is url_any_unknown's — the same question the two statics ask, asked once.
        `new URL(rel, base)` resolves the input AGAINST the base (§4.4), so an unknown base decides the result
        exactly as an unknown address does, and this arm used to test only the address: an unknown base fell
@@ -2085,8 +2172,8 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        The example is the real parse over the operands' own concretes, through the SAME helper §6.1's statics
        use — one algorithm, one answer, and no second copy of it to drift. */
     if (url_any_unknown(argc, argv)) {
-        *presult = url_construct_unknown(ctx, argc, argv);
-        return 0;
+        *presult = url_wrap_unknown(ctx, url_construct_unknown(ctx, argc, argv));
+        return JS_IsException(*presult) ? -1 : 0;
     }
     in = JS_ToCStringLen(ctx, &in_len, argv[0]);
     if (!in) return -1;
@@ -2121,10 +2208,17 @@ JSValue url_construct_unknown(JSContext *ctx, int argc, JSValueConst *argv)
 {
     UrlRecord ex_rec;
     JSValue real = JS_UNDEFINED;
+    JSValueConst of;
 
     DCHECK(argc >= 1 && url_any_unknown(argc, argv),
            "the URL constructor's unknown arm was asked of a call with no unknown operand — a known call is "
            "parsed, and a derivation over it would name a value the parser can state");
+    /* An unknown record's href parses back to that record: it is absolute, so the base takes no part. */
+    of = concolic_parsed_operand(argv[0], "URL");
+    if (!JS_IsUndefined(of)) return JS_DupValue(ctx, of);
+    /* Named residual. Not covered: an unknown input whose parse fails, where §6.1 throws a TypeError. Next diff
+       builds: the failure arm forked beside this one. How its absence shows: a page's catch around
+       `new URL(x)` never runs for an unknown `x`. */
     if (url_example_parse(ctx, argv[0], argc, argv, &ex_rec) == 1) {
         real = url_wrap(ctx, &ex_rec);
         url_record_free(&ex_rec);
@@ -2235,6 +2329,70 @@ int url_member_set(UrlRecord *u, int magic, const char *v, size_t vlen)
     return 0;
 }
 
+/* `o`'s URL becomes the unknown record `op` derives from its URL and the value `v`, where either is unknown:
+   `apply` is the algorithm run on the examples (url_member_set's signature), whose result is the new record's
+   example. The record operand is the unknown record, or a known URL's serialization. */
+static void url_set_unknown(JSContext *ctx, UrlObj *o, const char *op, int member, JSValueConst v,
+                            int (*apply)(UrlRecord *u, int member, const char *v, size_t vlen))
+{
+    JSValue hold = JS_UNDEFINED, vex, ex = JS_UNDEFINED, r;
+    JSValueConst ops[2];
+    const UrlRecord *er;
+    UrlRecord nr;
+
+    DCHECK(!JS_IsUndefined(o->unknown) || concolic_is(v), "an unknown URL write was asked with nothing unknown");
+    if (!JS_IsUndefined(o->unknown)) {
+        ops[0] = o->unknown;
+        er = url_unknown_example(ctx, o->unknown, &hold);
+    } else {
+        char *h = url_serialize(o->rec, false);
+
+        hold = JS_NewString(ctx, h);
+        free(h);
+        CHECK(!JS_IsException(hold), "url: OOM spelling a URL's serialization");
+        ops[0] = hold;
+        er = o->rec;
+    }
+    vex = concolic_is(v) ? concolic_example_string(ctx, v) : JS_DupValue(ctx, v);
+    if (er && JS_IsString(vex)) {
+        size_t n = 0;
+        const char *b = JS_ToCStringLen(ctx, &n, vex);
+
+        CHECK(b != NULL, "url: OOM reading a setter value's example");
+        url_record_init(&nr);
+        CHECK(url_record_copy(&nr, er), "url: OOM copying a URL record for a write");
+        if (apply(&nr, member, b, n) == 0) ex = url_wrap(ctx, &nr);
+        url_record_free(&nr);
+        JS_FreeCString(ctx, b);
+        CHECK(!JS_IsException(ex), "url: OOM wrapping an unknown record's example");
+    }
+    JS_FreeValue(ctx, vex);
+    ops[1] = v;
+    r = concolic_new_derived(ctx, op, ops, 2, ex);
+    JS_FreeValue(ctx, hold);
+    DCHECK(concolic_is(r), "a URL write over an unknown operand derived a known record");
+    cow_record_set(ctx, o, &URL_OBJ_REC, &o->unknown, r);
+    cow_record_set(ctx, o, &URL_OBJ_REC, &o->rec_box, JS_UNDEFINED);
+    o->rec = NULL;
+}
+
+/* URL §6.2 URLSearchParams class's update steps' query write: the empty serialization is a null query. */
+static int url_query_set(UrlRecord *u, int member, const char *v, size_t vlen)
+{
+    (void)member;
+    free(u->query);
+    u->query = vlen ? url_encoded_strdup(v, vlen) : NULL;
+    return 0;
+}
+
+void url_query_assign_unknown(JSContext *ctx, JSValueConst url, JSValueConst query)
+{
+    UrlObj *u = url_obj_of(url);
+
+    DCHECK(u != NULL && concolic_is(query), "a URLSearchParams' unknown update reached no URL, or a known query");
+    url_set_unknown(ctx, u, "query=", 0, query, url_query_set);
+}
+
 static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     UrlObj *o = url_obj_of(this_val);
@@ -2243,6 +2401,16 @@ static JSValue js_url_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
     int rc;
 
     if (!o) return JS_ThrowTypeError(ctx, "not a URL");
+    /* §6.1's setter steps over an unknown record or value: the record they produce is unknown too. */
+    if (!JS_IsUndefined(o->unknown) || concolic_is(val)) {
+        char op[16];
+
+        snprintf(op, sizeof op, "%s=", URL_MEMBER_NAMES[magic]);
+        url_set_unknown(ctx, o, op, magic, val, url_member_set);
+        if (magic == URL_HREF || magic == URL_SEARCH)
+            url_params_resync(ctx, this_val);
+        return JS_UNDEFINED;
+    }
     v = JS_ToCStringLen(ctx, &vlen, val);
     if (!v) return JS_EXCEPTION;
     rc = url_member_set(url_rec_edit(ctx, o), magic, v, vlen);

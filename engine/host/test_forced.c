@@ -1345,6 +1345,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/uspiter.h"
 #include "fixture/fileparsetext.h"
 #include "fixture/requestunk.h"
+#include "fixture/urlhref.h"
 #include "fixture/uspiso.h"
 #include "fixture/boundpark.h"
 #include "fixture/bytesimage.h"
@@ -1977,6 +1978,7 @@ static const struct { const char *name; const char *src; OpenerPolicyValue coop;
     { "uspiter", HTML_USPITER },
     { "fileparse-text", HTML_FILEPARSE_TEXT },
     { "requestunk", HTML_REQUESTUNK },
+    { "urlhref", HTML_URLHREF },
     { "uspiso", HTML_USPISO },
     { "boundpark", HTML_BOUNDPARK },
     { "bytesimage", HTML_BYTESIMAGE },
@@ -19687,12 +19689,41 @@ TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
     fold_row(&pn_tt, &pn_why, !has_pinned,
              "an eval @S record carries a source rooted in the query's `page=`, but that Request only reaches "
              "this document's own origin, whose bytes no attacker writes");
+    const char *ph_why = NULL; int ph_tt = 1;
+    fold_row(&ph_tt, &ph_why, !s_rooted_source(js, "request", "page=", pinned_src, sizeof pinned_src),
+             "a request @S record carries a source rooted in the query's `page=`, but the page sends that Request "
+             "only after its own origin check pinned the URL record to this document's origin, so no attacker "
+             "picks its host");
     const Probe rows[] = {
         { "rqu-built", bt_tt, "/api/rqu-built", SESS_EXPLORE, bt_why },
         { "rqu-sink-query", sq_tt, "rquParam('src')", SESS_EXPLORE, sq_why, .gate = "rqu-built" },
         { "rqu-refused", rf_tt, "/api/rqu-refused", SESS_EXPLORE, rf_why },
         { "rqu-pinned-reached", pr_tt, "/api/rqu-pinned", SESS_EXPLORE, pr_why },
         { "rqu-pinned-no-query", pn_tt, "rquParam('page')", SESS_EXPLORE, pn_why, .reach = "rqu-pinned-reached" },
+        { "rqu-pinned-no-request", ph_tt, "rquParam('page')", SESS_EXPLORE, ph_why, .reach = "rqu-pinned-reached" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `urlhref` document (fixture/urlhref.h): a URL record's `href` keeps its input's injection
+   identity, so the request and the compiled reply are searched at the page's own parse of `u=`. */
+TF_UNIT void probes_urlhref(const char *js, Probe *tab, int *n) {
+    char src[1024] = "";
+    const char *bt_why = NULL; int bt_tt = 1;
+    fold_row(&bt_tt, &bt_why, !!strstr(js, "\"/api/uh-built\""),
+             "NOT REACHED: there is no /api/uh-built record, so new URL() over the query's `u=` did not return");
+    const char *rq_why = NULL; int rq_tt = 1;
+    fold_row(&rq_tt, &rq_why, s_rooted_source(js, "request", "u=", src, sizeof src),
+             "no request @S record carries a source rooted in the query's `u=`: the fetched `href` was read with "
+             "an identity of its own, so the search opened at the whole query, whose candidate has no `u=`");
+    const char *ev_why = NULL; int ev_tt = 1;
+    fold_row(&ev_tt, &ev_why, s_rooted_source(js, "eval", "u=", src, sizeof src),
+             "no eval @S record carries a source rooted in the query's `u=`, so the reply to a URL whose host the "
+             "attacker chooses did not reach new Function as attacker input searched at the page's own parse");
+    const Probe rows[] = {
+        { "uh-built", bt_tt, "/api/uh-built", SESS_EXPLORE, bt_why },
+        { "uh-request-query", rq_tt, "uhParam('u')", SESS_EXPLORE, rq_why, .gate = "uh-built" },
+        { "uh-eval-query", ev_tt, "uhParam('u')", SESS_EXPLORE, ev_why, .gate = "uh-built" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -24256,6 +24287,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_uspiter(js, probes, &np);
     probes_fileparse_text(js, probes, &np);
     probes_requestunk(js, probes, &np);
+    probes_urlhref(js, probes, &np);
     probes_uspiso(js, probes, &np);
     probes_boundpark(js, probes, &np);
     probes_bytesimage(js, probes, &np);

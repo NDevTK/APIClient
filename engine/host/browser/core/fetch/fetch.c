@@ -1327,10 +1327,9 @@ JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address, JSV
         current = url_construct_unknown(ctx, base ? 2 : 1, argv);
         JS_FreeValue(ctx, base_v);
     }
-    /* The member read the page's `.origin` performs (concolic_exotic_get), so the two are one value. */
-    origin = JS_GetPropertyStr(ctx, current, "origin");
+    /* URL §6.1's origin getter over the record, as a page's `new URL(address, base).origin` reads it. */
+    origin = url_member_unknown(ctx, current, URL_ORIGIN);
     JS_FreeValue(ctx, current);
-    CHECK(!JS_IsException(origin), "fetch: reading an unknown URL's origin threw");
     mine = JS_NewString(ctx, origin_serialized(self));
     CHECK(!JS_IsException(mine), "fetch: OOM spelling this agent's origin");
     same = concolic_strict_equal(ctx, origin, mine);

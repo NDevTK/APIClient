@@ -2147,8 +2147,8 @@ static int door_sends_request(int door) {
 /* Can the attacker's bytes in `url` (a concolic address) pick its host? Two facts, both computed: the page's own
    bytes ahead of the first hole, parsed by URL §4.4 "URL parsing" against the document base, leave the host open
    (url_prefix_decides_host), and Fetch's same-origin test over the unknown address
-   (fetch_main_same_origin_unknown, the test the reply is decided by) is not true on this path, which a page-side
-   origin check the path took would have made it. */
+   (fetch_main_same_origin_unknown, the test the reply is decided by) is not true on this path: a page-side
+   origin check over the same URL record is that predicate, and this flow's decision of it is read back. */
 static int address_host_open(JSContext *ctx, JSValueConst url) {
     char *disp = url_display(ctx, url);
     unsigned char *hole = concolic_shape_hole_mask(url);
@@ -2168,8 +2168,15 @@ static int address_host_open(JSContext *ctx, JSValueConst url) {
     free(disp);
     if (r) {
         JSValue same = fetch_main_same_origin_unknown(ctx, url, JS_UNDEFINED);
+        int t;
 
-        r = !(JS_IsBool(same) && JS_ToBool(ctx, same));
+        if (JS_IsBool(same)) {
+            t = JS_ToBool(ctx, same);
+        } else {
+            t = concolic_value_truth(concolic_branch_ident_c(same));
+            if (t >= 0 && concolic_branch_neg(same)) t = !t;
+        }
+        r = t != 1;
         JS_FreeValue(ctx, same);
     }
     return r;

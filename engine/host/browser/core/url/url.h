@@ -185,13 +185,17 @@ char *url_percent_encode(const char *s, size_t len, int set);
    it will read as text — an overlong `%C1%A1` spelled the host `a.com` until §3.5 ran its decode. */
 char *url_percent_decode(const char *s, size_t len, size_t *out_n);
 
-/* The RECORD behind a `URL` wrapper as this flow sees it, or NULL when `v` is not one. Read-only: the record
-   is shared by every flow that has not written it, and url_query_assign is the write. */
-const UrlRecord *url_record_of(JSValueConst v);
 /* §6.2 URLSearchParams class's update steps' last step, "Set query's URL object's URL's query to
    serializedQuery": `query` (owned, NULL for null) becomes the query of a copy of `url`'s record, which this
-   flow's delta then holds. `url` must be a URL wrapper. */
+   flow's delta then holds. `url` must be a URL wrapper whose record is known. */
 void url_query_assign(JSContext *ctx, JSValueConst url, char *query);
+/* The same step where the serialized query is the unknown `query` (borrowed): `url`'s record becomes the
+   unknown record derived from its record and `query`. */
+void url_query_assign_unknown(JSContext *ctx, JSValueConst url, JSValueConst query);
+/* §6.1 URL class's getter steps for URL_* `member` over the unknown URL record `unknown` (borrowed), as
+   url_construct_unknown composes one: the derivation named by the getter, its example the getter run on the
+   record's example. `href` is a serialization that url_construct_unknown parses back to `unknown`. Owned. */
+JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member);
 /* §6.1 URL class's `new URL(url, base)` over operands at least one of which is unknown: the unknown derived
    from both (`URL`, the constructor's own derivation), whose example is the real parse over the operands'
    examples. `argc` counts the operands the call has (1 or 2); both are borrowed. Fetch's §5.4 step 2 parse of

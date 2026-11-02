@@ -27,6 +27,10 @@ JSValue usp_new(JSContext *ctx, JSValueConst owner, const char *query, size_t qu
 /* §6.1 URL class's `search` setter re-initialises the object's query, which §6.2 says re-initialises
    the list. */
 void    usp_reset(JSContext *ctx, JSValueConst usp, const char *query, size_t query_len);
+/* The two over an associated URL whose record is unknown: the list is parsed from that record's unknown query
+   `query` (taken), and every read and mutation derives from it. */
+JSValue usp_new_unknown(JSContext *ctx, JSValueConst owner, JSValue query);
+void    usp_reset_unknown(JSContext *ctx, JSValueConst usp, JSValue query);
 
 /* THE LIST one holds, or NULL when the value is not a URLSearchParams. The brand test Fetch §5.2 "BodyInit
    unions" performs — URLSearchParams is an arm of `XMLHttpRequestBodyInit` — and what it serialises the body
