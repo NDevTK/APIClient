@@ -4269,7 +4269,7 @@ function censusReading(out) {
     parts.push(`frontier weight: ${c.b.perFlowKiB} KiB per-flow (largest ` +
                shareText([["decKiB", c.b.decKiB], ["headKiB", c.b.headKiB],
                           ["domHeadKiB", c.b.domHeadKiB], ["pendKiB", c.b.pendKiB],
-                          ["miscKiB", c.b.miscKiB]], c.b.perFlowKiB) +
+                          ["miscKiB", c.b.miscKiB], ["layoutJobKiB", c.b.layoutJobKiB]], c.b.perFlowKiB) +
                `) + ${c.b.sharedKiB} KiB shared (largest ` +
                shareText([["segKiB", c.b.segKiB], ["domSegKiB", c.b.domSegKiB],
                           ["pinSegKiB", c.b.pinSegKiB], ["decSegKiB", c.b.decSegKiB],

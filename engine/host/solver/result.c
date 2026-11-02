@@ -35,6 +35,7 @@
 #include "core/frame/navigable.h"
 #include "core/css/css_cascade_pass.h"   /* what the run spent on css-cascade-5 §4.2's values — see the `_cascade` block */
 #include "core/layout/flow_placement.h"   /* what the render spent on CSS 2.1 §9.4.1's positions — see the `_layout` block */
+#include "core/layout/layout_job.h"   /* what the driven layout jobs hold — the `layoutJob*` rows */
 #include "core/frame/window_proxy.h"   /* the ask behind the realm census — see window_proxy_destroy_releases */
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
 #include "core/events/error_event.h"   /* errorInfo's five values, read off the event step 6.2 fired */
@@ -1689,7 +1690,15 @@ char *result_cold_json(void) {
     METRIC_SET(can_deliver, c.can_deliver);
     METRIC_SET(pend_kib, c.pend_bytes / 1024);
     METRIC_SET(misc_kib, c.misc_bytes / 1024);
-    METRIC_SET(per_flow_kib, (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.misc_bytes) / 1024);
+    {
+        LayoutJobHeld lj;
+
+        layout_job_held(&lj);
+        METRIC_SET(layout_jobs, (long)lj.jobs);
+        METRIC_SET(layout_job_kib, (long)(lj.bytes / 1024));
+        METRIC_SET(per_flow_kib, (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.misc_bytes +
+                                  (long)lj.bytes) / 1024);
+    }
     METRIC_SET(seg_kib, c.seg_bytes / 1024);
     METRIC_SET(dom_seg_kib, c.dom_seg_bytes / 1024);
     METRIC_SET(pin_segs, c.pin_seg_count);

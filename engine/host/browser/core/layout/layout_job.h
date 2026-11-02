@@ -133,6 +133,16 @@ extern const JSStepTreeOps layout_job_step_ops;
 bool layout_job_holds_thread(void);
 size_t layout_job_alive(void);
 
+/* What the driven jobs alive hold: how many, and the C heap bytes (solver/c_alloc.h's chunk bytes) their own
+   allocation and their activations left live. A job's activations allocate only for its stack, memo and records,
+   up to what the member a machine computes allocates for its answer, so the sum is the jobs' share of `cLiveKiB`
+   to within those answers. A gauge. */
+typedef struct {
+    size_t  jobs;
+    int64_t bytes;
+} LayoutJobHeld;
+void layout_job_held(LayoutJobHeld *out);
+
 /* The placement record (core/layout/flow_placement.h) of the job that holds it now: a driven job's while it
    is entered, the synchronous job's while a drive is open, and NULL otherwise. The record is the job's and
    is released with its memo. */

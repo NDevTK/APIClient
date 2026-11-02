@@ -13,6 +13,7 @@
 #include "core/layout/layout_job.h"
 #include "core/layout/layout_question.h"
 #include "core/timing/thread_work.h"
+#include "solver/c_alloc.h"  /* the C heap's live bytes, which a job's activations move */
 #include "solver/engine.h"   /* the engine work count a resting drive's activation spends */
 #include "solver/metrics.h"
 #include "solver/rest_unit.h"
@@ -98,6 +99,9 @@ struct LayoutJob {
     IntrinsicSizeRecord intrinsic;   /* core/layout/intrinsic_size.h's measurements, for this job */
     SelectorUndet       decline;     /* a resting match's unanswered decline; `undetermined` while held */
     char                fork_key[SELECTOR_UNDET_KEY_MAX];   /* step_fork_run's `op`, read after the return */
+    LayoutJob          *alive_prev, *alive_next;   /* the driven jobs alive, for layout_job_held */
+    int64_t             held;        /* the C heap bytes its allocation and activations left live */
+    size_t              live_at_enter;
 };
 
 /* The job whose activation holds the thread when a driver entered one, and the thread's synchronous job.
@@ -107,6 +111,7 @@ struct LayoutJob {
 static LayoutJob *g_entered;
 static LayoutJob  g_sync = { .gen = 1 };
 static size_t     g_alive;
+static LayoutJob *g_alive_head;
 
 static LayoutJob *lj_current(void)
 {
@@ -270,12 +275,17 @@ static bool lj_all_suspended(const LayoutJob *job)
 
 LayoutJob *layout_job_new(void)
 {
+    size_t live = c_alloc_live();
     LayoutJob *job = lexbor_calloc(1, sizeof *job);
 
     CHECK(job != NULL, "a layout job could not be allocated");
     job->gen = 1;
     job->driven = true;
     job->decline.over = JS_UNDEFINED;
+    job->held = (int64_t)c_alloc_live() - (int64_t)live;
+    job->alive_next = g_alive_head;
+    if (g_alive_head != NULL) g_alive_head->alive_prev = job;
+    g_alive_head = job;
     g_alive++;
     METRIC_ADD(jobs_step, 1);
     return job;
@@ -290,6 +300,9 @@ void layout_job_free(LayoutJob *job)
             "frees its job only after leaving it, and leaving asserts neither", job->n, job->drives);
     DCHECK(g_alive > 0, "a layout job was freed with no driven job alive");
     g_alive--;
+    if (job->alive_prev != NULL) job->alive_prev->alive_next = job->alive_next;
+    else g_alive_head = job->alive_next;
+    if (job->alive_next != NULL) job->alive_next->alive_prev = job->alive_prev;
     DCHECKF(job->ctx == 0, "a layout job was freed inside grid row context %u", job->ctx);
     lj_contexts_release(job, true);
     free(job->ctxs);
@@ -313,6 +326,7 @@ void layout_job_enter(LayoutJob *job)
             "a layout job was entered while the synchronous job has %zu questions and %u drives open, so a "
             "driver was reached from inside an undriven layout entry", g_sync.n, g_sync.drives);
     g_entered = job;
+    job->live_at_enter = c_alloc_live();
 }
 
 void layout_job_leave(LayoutJob *job)
@@ -325,6 +339,7 @@ void layout_job_leave(LayoutJob *job)
     DCHECKF(job->ctx == 0, "a layout job was left inside grid row context %u; a row sizing ends in the frame "
             "that began it", job->ctx);
     g_entered = NULL;
+    job->held += (int64_t)c_alloc_live() - (int64_t)job->live_at_enter;
 }
 
 void layout_job_rested(LayoutJob *job)
@@ -364,6 +379,20 @@ bool layout_job_holds_thread(void)
 size_t layout_job_alive(void)
 {
     return g_alive;
+}
+
+void layout_job_held(LayoutJobHeld *out)
+{
+    const LayoutJob *job;
+
+    out->jobs = 0;
+    out->bytes = 0;
+    for (job = g_alive_head; job != NULL; job = job->alive_next) {
+        out->jobs++;
+        out->bytes += job->held;
+    }
+    DCHECKF(out->jobs == g_alive, "the list of driven jobs alive holds %zu and the count %zu — a job was made or "
+            "freed past layout_job_new or layout_job_free", out->jobs, g_alive);
 }
 
 /* The job whose records are held now, or NULL; and the current grid row context of a job, or NULL. */

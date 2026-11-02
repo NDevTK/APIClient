@@ -255,6 +255,11 @@ METRIC(stack_empty, "stackEmpty", GAUGE, "member", AGENT, "solver/cold.c", INT)
 METRIC(can_deliver, "canDeliver", GAUGE, "member", AGENT, "solver/cold.c", INT)
 METRIC(pend_kib, "pendKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
 METRIC(misc_kib, "miscKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
+/* …and the driven layout jobs alive, each in the step state of a member parked inside a layout member, with the
+   C heap bytes their allocation and activations left live (core/layout/layout_job.h's layout_job_held). A job is
+   per-flow, so `layoutJobKiB` is a part of `perFlowKiB`. */
+METRIC(layout_jobs, "layoutJobs", GAUGE, "job", AGENT, "core/layout/layout_job.c", INT)
+METRIC(layout_job_kib, "layoutJobKiB", GAUGE, "KiB", AGENT, "core/layout/layout_job.c", INT)
 METRIC(per_flow_kib, "perFlowKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
 METRIC(seg_kib, "segKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
 METRIC(dom_seg_kib, "domSegKiB", GAUGE, "KiB", AGENT, "solver/cold.c", INT)
