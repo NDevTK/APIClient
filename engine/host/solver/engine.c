@@ -295,16 +295,21 @@ static int program_load_door(int kind, int parser_inserted)
 static long g_reply_unaddressed;
 long engine_unaddressed_total(void) { return g_reply_unaddressed; }
 
-/* Marks `e` a request to an unknown address: the class, the unknown `address` it stands for, and Fetch §4.1 Main
-   fetch step 12's same-origin test over it (fetch_main_same_origin_unknown, asked in this realm), written as one,
-   so every record of the class carries the test flow_unaddressed_same_origin asks. `current_url` as that function
-   takes it. Borrows both. */
+/* Marks `e` a request to an unknown address: the class, the unknown `address` it stands for, the request's
+   current URL parsed from it and Fetch §4.1 Main fetch step 12's same-origin test over that URL (both asked in this
+   realm, whose base URL and origin they read), written as one, so every record of the class carries the test
+   flow_unaddressed_same_origin asks and the URL flow_success_arm's reply lists. `current_url` as
+   fetch_request_current_url_unknown takes it. Borrows both. */
 static void pending_mark_unaddressed(JSContext *ctx, JSValueConst e, JSValueConst address, JSValueConst current_url)
 {
+    JSValue current;
+
     DCHECK(concolic_is(address), "a request was marked unaddressed without the unknown its address stands for");
+    current = fetch_request_current_url_unknown(ctx, address, current_url);
     pending_set_int(e, PEND_ADDRESS, FETCH_ADDRESS_UNKNOWN);
     pending_set(e, PEND_ADDRESS_VALUE, JS_DupValue(ctx, address));
-    pending_set(e, PEND_SAME_ORIGIN, fetch_main_same_origin_unknown(ctx, address, current_url));
+    pending_set(e, PEND_SAME_ORIGIN, fetch_main_same_origin_unknown(ctx, current));
+    pending_set(e, PEND_ADDRESS_URL, current);
 }
 
 static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
@@ -5870,22 +5875,26 @@ static int flow_success_arm(JSContext *ctx, Flow *f, int i, int in_program, int 
         JS_FreeValue(ctx, e);
         return 0;
     }
-    uv = pending_get(e, PEND_URL);
     mv = pending_get(e, PEND_MODE);
-    u = JS_ToCString(ctx, uv);
     m = JS_ToCString(ctx, mv);
-    CHECK(u != NULL && m != NULL, "engine: OOM reading a declined fetch's address and mode");
+    CHECK(m != NULL, "engine: OOM reading a declined fetch's mode");
     if (unaddressed) {
-        JSValue av = pending_get(e, PEND_ADDRESS_VALUE);
+        /* The record's URL is the address's display shape, which names the request and is no URL; the reply
+           lists the request's current URL. */
+        JSValue av = pending_get(e, PEND_ADDRESS_VALUE), cv = pending_get(e, PEND_ADDRESS_URL);
 
-        reply = fetch_reply_unaddressed(ctx, u, m, av);
+        reply = fetch_reply_unaddressed(ctx, cv, m, av);
+        JS_FreeValue(ctx, cv);
         JS_FreeValue(ctx, av);
     } else {
+        uv = pending_get(e, PEND_URL);
+        u = JS_ToCString(ctx, uv);
+        CHECK(u != NULL, "engine: OOM reading a declined fetch's address");
         reply = fetch_reply_unknown(ctx, u, m);
+        JS_FreeCString(ctx, u);
+        JS_FreeValue(ctx, uv);
     }
-    JS_FreeCString(ctx, u);
     JS_FreeCString(ctx, m);
-    JS_FreeValue(ctx, uv);
     JS_FreeValue(ctx, mv);
     JS_FreeValue(ctx, e);
     if (JS_IsUninitialized(reply))

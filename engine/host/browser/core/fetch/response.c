@@ -20,6 +20,7 @@
 #include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "solver/cow.h"
+#include "solver/concolic.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/response.h"
 #include "core/fetch/headers.h"
@@ -84,9 +85,11 @@ static JSValue response_json_stringify(JSContext *ctx)
  *
  * ITS ITEMS ARE SERIALIZED URLS, because that is what crosses the host bridge: a live URL record crosses
  * neither an instance, nor a session, nor a park. `url` runs the real parser back over the last one to answer
- * "serialized with exclude fragment set to true". */
+ * "serialized with exclude fragment set to true". The one other item is an UNKNOWN URL RECORD (core/url/url.h's
+ * url_construct_unknown), the current URL of a request whose address is unknown input, which the engine itself
+ * lists on a reply no server sent (fetch_reply_unaddressed) and which `url` answers as a derivation. */
 typedef struct {
-    JSValue url_list;         /* §2.2.6's URL list — an Array of serialized URLs; « » is the empty Array */
+    JSValue url_list;         /* §2.2.6's URL list — an Array of URLs (above); « » is the empty Array */
     BodyState body;           /* §5.3's mixin, one implementation shared with Request */
     int     status;
     char   *status_text;      /* the response's "status message" */
@@ -205,7 +208,8 @@ static JSValue response_url_list_copy(JSContext *ctx, JSValueConst src)
     for (i = 0; i < n; i++) {
         JSValue u = JS_GetPropertyUint32(ctx, src, (uint32_t)i);
         if (JS_IsException(u)) { JS_FreeValue(ctx, out); return JS_EXCEPTION; }
-        DCHECK(JS_IsString(u), "a response's URL list held something that is not a serialized URL");
+        DCHECK(JS_IsString(u) || concolic_is(u),
+               "a response's URL list held something that is neither a serialized URL nor an unknown URL record");
         if (JS_SetPropertyUint32(ctx, out, (uint32_t)i, u) < 0) {
             JS_FreeValue(ctx, out);
             return JS_EXCEPTION;
@@ -218,7 +222,8 @@ static JSValue response_url_list_copy(JSContext *ctx, JSValueConst src)
    response's URL list is empty." — the ONE place that reads the list's end, so `url` and anything after it
    agree by construction. Returns the list's size through `*psize` because §5.5's `redirected` is the SAME
    read ("this's response's URL list's size is greater than 1") and a second walk could disagree with this one.
-   The returned value is JS_NULL for the null URL, otherwise the owned serialized-URL string. */
+   The returned value is JS_NULL for the null URL, otherwise the owned item: a serialized-URL string or an
+   unknown URL record. */
 static JSValue response_url_of(JSContext *ctx, ResponseData *d, int64_t *psize)
 {
     int64_t n = 0;
@@ -232,42 +237,35 @@ static JSValue response_url_of(JSContext *ctx, ResponseData *d, int64_t *psize)
     return JS_GetPropertyUint32(ctx, d->url_list, (uint32_t)(n - 1));
 }
 
-/* §5.5's `url`, AS THE C STRING BOTH ITS READERS NEED: "this's response's URL, serialized with exclude
-   fragment set to true". The exclusion is the URL PARSER'S — the list holds serialized URLs, so the parser is
-   run back over the last one and asked to serialize it again without its fragment, rather than this file
-   deciding where a fragment starts.
+/* §5.5's `url` over a list whose last item is a SERIALIZED URL `last` (borrowed): "this's response's URL,
+   serialized with exclude fragment set to true". The exclusion is the URL PARSER'S — the parser is run back over
+   the item and asked to serialize it again without its fragment, rather than this file deciding where a
+   fragment starts.
    IT IS ONE ANSWER BECAUSE THERE ARE TWO READERS. The `url` getter is one; the body's SOURCE IDENTITY
    (core/fetch/reply_source.h) is the other, and a reply NAMED with a fragment the getter reports WITHOUT is
-   one reply wearing two spellings — every predicate over the value read under one of them deciding nothing
-   about the other. A fragment is also never sent, so two addresses differing only there are one reply.
-   Returns MALLOC'D, or NULL for §2.2.6's null URL — which is a statement (this response has no address),
-   never a hole. */
-static char *response_url_serialized(JSContext *ctx, ResponseData *d)
+   one reply wearing two spellings. A fragment is also never sent, so two addresses differing only there are one
+   reply. Returns MALLOC'D, or NULL where the item is not a URL (the release arm under the DCHECK). */
+static char *response_url_serialized(JSContext *ctx, JSValueConst last)
 {
-    int64_t n = 0;
-    JSValue last = response_url_of(ctx, d, &n);
     const char *s;
     size_t len = 0;
     UrlRecord rec;
     char *ser;
     bool ok;
 
-    CHECK(!JS_IsException(last), "response: OOM reading the end of a response's URL list");
-    if (JS_IsNull(last))
-        return NULL;                                  /* the response's URL is null */
+    DCHECK(JS_IsString(last), "the serialized-URL reader was handed a URL list item that is not one");
     s = JS_ToCStringLen(ctx, &len, last);
-    JS_FreeValue(ctx, last);
     CHECK(s != NULL, "response: OOM reading a response's URL");
     url_record_init(&rec);
     /* NO BASE, because every item of a response's URL list is ABSOLUTE by the time it is in one. */
     ok = url_parse(&rec, s, len, NULL);
     JS_FreeCString(ctx, s);
     DCHECK(ok, "a response's URL list held a string the URL parser refuses — §2.2.6's list is a list of URLs, "
-               "so the host that filled it reported a relative reference, a concolic display shape or an empty "
-               "string where a serialized absolute URL belongs");
+               "so the host that filled it reported a relative reference or an empty string where a serialized "
+               "absolute URL belongs");
     if (!ok) {
         /* A response whose address is not a URL has no address, and §5.5 already spells what that answers:
-           the empty string. Saying so is the same statement the null-URL arm above makes. */
+           the empty string. Saying so is the same statement the null-URL arm makes. */
         url_record_free(&rec);
         return NULL;
     }
@@ -286,13 +284,23 @@ static char *response_body_source(JSContext *ctx, JSValueConst v)
 {
     ResponseData *d = JS_GetOpaque(v, g_response_class);
     char *url, *name;
+    int64_t n = 0;
+    JSValue last;
 
     DCHECK(d != NULL, "a Response was asked where its bytes came from and is not a Response — the mixin's own "
                       "receiver check has already answered for that, so a NULL here is its `of` and this "
                       "interface's opaque disagreeing");
     if (!d)
         return NULL;
-    url = response_url_serialized(ctx, d);
+    last = response_url_of(ctx, d, &n);
+    CHECK(!JS_IsException(last), "response: OOM reading the end of a response's URL list");
+    if (JS_IsNull(last))
+        return NULL;                                  /* the response's URL is null */
+    /* An unknown URL names no reply source, which reply_source.h spells from an address's bytes. A response at
+       one is fetch_reply_unaddressed's, whose body is an unknown derived from the address, so bytes a reader holds
+       of it are that unknown's example and its provenance is the derivation's: there is nothing to add. */
+    url = concolic_is(last) ? NULL : response_url_serialized(ctx, last);
+    JS_FreeValue(ctx, last);
     if (!url)
         return NULL;
     name = reply_source_name(url, strlen(url));
@@ -401,13 +409,24 @@ static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
     case 1: return JS_NewInt32(ctx, d->status);
     case 2: return JS_NewString(ctx, d->status_text ? d->status_text : "");
     /* §5.5 `url`: "return the empty string if this's response's URL is null; otherwise this's response's URL,
-       serialized with exclude fragment set to true" — response_url_serialized performs the whole of that, and
-       is the SAME answer the body's source identity is named from. */
+       serialized with exclude fragment set to true" — response_url_serialized performs that for a serialized
+       URL, and is the SAME answer the body's source identity is named from; an unknown URL record's
+       serialization is the derivation url_serialize_unknown composes. */
     case 3: {
-        char *ser = response_url_serialized(ctx, d);
-        JSValue out;
+        int64_t n = 0;
+        JSValue last = response_url_of(ctx, d, &n), out;
+        char *ser;
 
-        if (!ser) return JS_NewString(ctx, "");   /* the response's URL is null */
+        if (JS_IsException(last)) return last;
+        if (JS_IsNull(last)) return JS_NewString(ctx, "");   /* the response's URL is null */
+        if (concolic_is(last)) {
+            out = url_serialize_unknown(ctx, last, /*exclude_fragment*/ true);
+            JS_FreeValue(ctx, last);
+            return out;
+        }
+        ser = response_url_serialized(ctx, last);
+        JS_FreeValue(ctx, last);
+        if (!ser) return JS_NewString(ctx, "");
         out = JS_NewString(ctx, ser);
         free(ser);
         return out;

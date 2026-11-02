@@ -1889,6 +1889,27 @@ JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member)
     return concolic_new_derived(ctx, URL_MEMBER_NAMES[member], &unknown, 1, ex);
 }
 
+JSValue url_serialize_unknown(JSContext *ctx, JSValueConst unknown, bool exclude_fragment)
+{
+    JSValue hold, ex = JS_UNDEFINED, r;
+    const UrlRecord *er;
+
+    if (!exclude_fragment) return url_member_unknown(ctx, unknown, URL_HREF);
+    er = url_unknown_example(ctx, unknown, &hold);
+    if (er) {
+        char *ser = url_serialize(er, /*exclude_fragment*/ true);
+
+        CHECK(ser != NULL, "url: OOM serializing an unknown record's example");
+        ex = JS_NewString(ctx, ser);
+        free(ser);
+        CHECK(!JS_IsException(ex), "url: OOM spelling an unknown record's serialization example");
+    }
+    JS_FreeValue(ctx, hold);
+    r = concolic_new_derived(ctx, "serialize(excludeFragment)", &unknown, 1, ex);
+    DCHECK(concolic_is(r), "an unknown URL record's serialization derived a known value");
+    return r;
+}
+
 /* The query of the unknown URL record `unknown`, which §6.1's searchParams initializes its list with: the
    derivation `query`, with the example's query (the empty string for null, whose list is the same). Owned. */
 static JSValue url_query_unknown(JSContext *ctx, JSValueConst unknown)

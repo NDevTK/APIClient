@@ -1199,10 +1199,11 @@ const uint8_t *fetch_body_bytes(JSContext *ctx, JSValueConst body, size_t *out_n
    `url_list` is §2.2.6's URL list, and it is a PARAMETER rather than a field this function invents: a host
    that followed a redirect saw a list of more than one, a host that did not saw the request's own URL, and
    only the host knows which. It is the same shape the trusted zone's JSON reply carries, so there is ONE reply
-   record and not one per host. */
-JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
-                        const char *body, size_t body_len, const char *const *url_list, int url_list_n,
-                        const char *computed_type, const char *type)
+   record and not one per host. This builder takes the list as the Array it is (taken), so a reply no server sent
+   can carry a request's unknown current URL in it; fetch_reply_new below builds it from serialized URLs. */
+static JSValue fetch_reply_with_list(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
+                                     const char *body, size_t body_len, JSValue url_list,
+                                     const char *computed_type, const char *type)
 {
     JSValue o = JS_NewObject(ctx), h, v;
     int i;
@@ -1253,17 +1254,14 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
      * sentence, different file. A define creates an OWN data property: no chain walk, no setter, no consult,
      * nothing for a page to reach. JS_PROP_C_W_E is exactly the shape a plain assignment would have produced,
      * so every reader — including engine.c's own provide-side field census — sees what it saw before. */
-    DCHECK(url_list_n >= 1,
-           "a host built a reply with an empty URL list — §4.1 gives a fetched response at least a clone of "
-           "the request's URL list, and `url`/`redirected` are read off nothing else");
-    /* §2.2.6's URL LIST FIRST, and checked on its own line, because it is the field the delivery reads before
-       any other and the one a host cannot invent (fetch.h). A list that failed to build must never reach the
-       record as `undefined`. */
-    v = response_url_list(ctx, url_list, url_list_n);
-    CHECK(!JS_IsException(v), "fetch: OOM building a reply's §2.2.6 URL list — `url` and `redirected` are read "
-                              "off nothing else, so the Response would report a different address than the one "
-                              "that was fetched");
-    CHECK(JS_DefinePropertyValueStr(ctx, o, "urlList", v, JS_PROP_C_W_E) >= 0, "fetch: a reply record refused its URL list");
+    /* §2.2.6's URL LIST FIRST, because it is the field the delivery reads before any other and the one a host
+       cannot invent (fetch.h). A list that failed to build must never reach the record as `undefined`. */
+    CHECK(!JS_IsException(url_list), "fetch: OOM building a reply's §2.2.6 URL list — `url` and `redirected` are "
+                                     "read off nothing else, so the Response would report a different address "
+                                     "than the one that was fetched");
+    DCHECK(JS_IsArray(url_list), "a reply's §2.2.6 URL list was built as something other than a list");
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "urlList", url_list, JS_PROP_C_W_E) >= 0,
+          "fetch: a reply record refused its URL list");
     CHECK(JS_DefinePropertyValueStr(ctx, o, "status", JS_NewInt32(ctx, status), JS_PROP_C_W_E) >= 0,
           "fetch: a reply record refused its status");
     v = JS_NewString(ctx, status_text ? status_text : "");
@@ -1367,17 +1365,28 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     return o;
 }
 
-/* A reply no server sent, of filtered type `type`, at `url`: no body for JS_UNDEFINED (an opaque reply), an
-   unknown body for a concolic, or the bytes of a String a candidate re-fire substituted. `body` is consumed. */
-static JSValue fetch_reply_forced(JSContext *ctx, const char *url, const char *type, JSValue body)
+JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
+                        const char *body, size_t body_len, const char *const *url_list, int url_list_n,
+                        const char *computed_type, const char *type)
 {
-    const char *list[1] = { url };
+    DCHECK(url_list_n >= 1,
+           "a host built a reply with an empty URL list — §4.1 gives a fetched response at least a clone of "
+           "the request's URL list, and `url`/`redirected` are read off nothing else");
+    return fetch_reply_with_list(ctx, status, status_text, headers, body, body_len,
+                                 response_url_list(ctx, url_list, url_list_n), computed_type, type);
+}
+
+/* A reply no server sent, of filtered type `type`, with the URL list `url_list` (taken): no body for JS_UNDEFINED
+   (an opaque reply), an unknown body for a concolic, or the bytes of a String a candidate re-fire substituted.
+   `body` is consumed. */
+static JSValue fetch_reply_forced(JSContext *ctx, JSValue url_list, const char *type, JSValue body)
+{
     JSValue o;
 
     if (JS_IsUndefined(body)) {
-        o = fetch_reply_new(ctx, 200, "", NULL, "", 0, list, 1, "", type);
+        o = fetch_reply_with_list(ctx, 200, "", NULL, "", 0, url_list, "", type);
     } else if (concolic_is(body)) {
-        o = fetch_reply_new(ctx, 200, "", NULL, "", 0, list, 1, "", type);
+        o = fetch_reply_with_list(ctx, 200, "", NULL, "", 0, url_list, "", type);
         /* Whatever bytes a server sends, text() makes a String of them. */
         concolic_mark_json_value(body);
         CHECK(JS_DefinePropertyValueStr(ctx, o, "unknownBody", body, JS_PROP_C_W_E) >= 0,
@@ -1389,7 +1398,7 @@ static JSValue fetch_reply_forced(JSContext *ctx, const char *url, const char *t
         DCHECK(JS_IsString(body), "an unknown reply body's source answered neither an unknown nor bytes");
         bs = JS_ToCStringLen(ctx, &bl, body);
         CHECK(bs != NULL, "fetch: OOM reading a candidate's reply body");
-        o = fetch_reply_new(ctx, 200, "", NULL, bs, bl, list, 1, "", type);
+        o = fetch_reply_with_list(ctx, 200, "", NULL, bs, bl, url_list, "", type);
         JS_FreeCString(ctx, bs);
         JS_FreeValue(ctx, body);
     }
@@ -1402,7 +1411,7 @@ JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
 {
     FetchMode m = fetch_mode_of_token(mode);
     UrlRecord u;
-    const char *type;
+    const char *type, *list[1] = { url };
     JSValue body = JS_UNDEFINED;
     bool same;
 
@@ -1431,38 +1440,45 @@ JSValue fetch_reply_unknown(JSContext *ctx, const char *url, const char *mode)
         free(shape);
         free(src);
     }
-    return fetch_reply_forced(ctx, url, type, body);
+    return fetch_reply_forced(ctx, response_url_list(ctx, list, 1), type, body);
 }
 
-JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address, JSValueConst current_url)
+JSValue fetch_request_current_url_unknown(JSContext *ctx, JSValueConst address, JSValueConst current_url)
 {
-    const Origin *self = origin_agent();
     const char *base = document_base_url(ctx);
     JSValueConst argv[2];
-    JSValue base_v = JS_UNDEFINED, current, origin, mine, same;
+    JSValue base_v = JS_UNDEFINED, current;
 
-    DCHECK(concolic_is(address), "the same-origin test over an unknown address was asked of a known one — a "
-                                 "known address is parsed and compared (fetch_reply_unknown)");
+    DCHECK(concolic_is(address), "the current URL of an unknown address was asked of a known one — a known "
+                                 "address is parsed (fetch_reply_unknown)");
     DCHECK(JS_IsUndefined(current_url) || concolic_is(current_url),
            "a request's already-parsed current URL is neither absent nor an unknown URL record");
+    if (!JS_IsUndefined(current_url))
+        return JS_DupValue(ctx, current_url);
+    argv[0] = address;
+    if (base) {
+        base_v = JS_NewString(ctx, base);
+        CHECK(!JS_IsException(base_v), "fetch: OOM spelling the document base URL");
+        argv[1] = base_v;
+    }
+    current = url_construct_unknown(ctx, base ? 2 : 1, argv);
+    JS_FreeValue(ctx, base_v);
+    CHECK(!JS_IsException(current), "fetch: OOM composing an unknown address's current URL");
+    return current;
+}
+
+JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst current)
+{
+    const Origin *self = origin_agent();
+    JSValue origin, mine, same;
+
+    DCHECK(concolic_is(current), "the same-origin test over an unknown current URL was asked of a known one — a "
+                                 "known address is parsed and compared (fetch_reply_unknown)");
     /* §7.1.1 step 1: an opaque origin is same origin only with itself, and a URL's origin is a new one. */
     if (origin_is_opaque(self))
         return JS_FALSE;
-    if (!JS_IsUndefined(current_url)) {
-        current = JS_DupValue(ctx, current_url);
-    } else {
-        argv[0] = address;
-        if (base) {
-            base_v = JS_NewString(ctx, base);
-            CHECK(!JS_IsException(base_v), "fetch: OOM spelling the document base URL");
-            argv[1] = base_v;
-        }
-        current = url_construct_unknown(ctx, base ? 2 : 1, argv);
-        JS_FreeValue(ctx, base_v);
-    }
     /* URL §6.1's origin getter over the record, as a page's `new URL(address, base).origin` reads it. */
     origin = url_member_unknown(ctx, current, URL_ORIGIN);
-    JS_FreeValue(ctx, current);
     mine = JS_NewString(ctx, origin_serialized(self));
     CHECK(!JS_IsException(mine), "fetch: OOM spelling this agent's origin");
     same = concolic_strict_equal(ctx, origin, mine);
@@ -1471,20 +1487,31 @@ JSValue fetch_main_same_origin_unknown(JSContext *ctx, JSValueConst address, JSV
     return same;
 }
 
-JSValue fetch_reply_unaddressed(JSContext *ctx, const char *url, const char *mode, JSValueConst address)
+JSValue fetch_reply_unaddressed(JSContext *ctx, JSValueConst current, const char *mode, JSValueConst address)
 {
     FetchMode m = fetch_mode_of_token(mode);
     JSValueConst operand[1];
+    JSValue list;
 
     DCHECK(concolic_is(address), "a reply to an unknown address was built for a known one");
+    DCHECK(concolic_is(current), "a reply to an unknown address was built without the request's unknown current "
+                                 "URL — §4.1 clones the request's URL list into the response's, and the display "
+                                 "shape of the address is no URL");
     if (m == FETCH_MODE_SAME_ORIGIN)
         return JS_UNINITIALIZED;
+    /* §4.1 Main fetch: "If internalResponse's URL list is empty, then set it to a clone of request's URL list",
+       which is « current URL » for a request no redirect grew. Defined, never [[Set]], for response_url_list's
+       reason: the Array's prototype is the page's. */
+    list = JS_NewArray(ctx);
+    CHECK(!JS_IsException(list), "fetch: OOM building an unaddressed reply's URL list");
+    CHECK(JS_DefinePropertyValueUint32(ctx, list, 0, JS_DupValue(ctx, current), JS_PROP_C_W_E) >= 0,
+          "fetch: an unaddressed reply's URL list refused the request's current URL");
     if (m == FETCH_MODE_NO_CORS)
-        return fetch_reply_forced(ctx, url, "opaque", JS_UNDEFINED);
+        return fetch_reply_forced(ctx, list, "opaque", JS_UNDEFINED);
     DCHECK(m == FETCH_MODE_CORS, "a fetch() reached §4.1 step 12 in a mode §5.4's constructor cannot set — "
                                  "`navigate` and `websocket` are refused there");
     operand[0] = address;
-    return fetch_reply_forced(ctx, url, "cors",
+    return fetch_reply_forced(ctx, list, "cors",
                               concolic_new_derived(ctx, "Response.body", operand, 1, JS_UNDEFINED));
 }
 
