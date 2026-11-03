@@ -710,33 +710,22 @@ static double flow_index_key(const Flow *f);
 /* The weight with the assumption term left out, for flow_fork_inherit's equality; defined beside flow_order_key. */
 static double flow_weight_observed(const Flow *f);
 
-/* The frontier's virtual time: SFQ's v(t), the service tag of the item in service, stored as a scalar because it
- * must be readable when nothing is in service (the frontier persists across slices and sessions, so a definition
- * that answers only while `g_running` is set would place every newcomer differently depending on whether the host
- * was between two dispatches).
+/* The frontier's virtual time: SFQ's v(t), stored as a scalar because it must be readable when nothing is in service
+ * (the frontier persists across slices and sessions).
  *
- * It is the most any account standing on its own ledger has produced: the largest `earned` of an account past its first
- * turn, raised at two events, an emission by the item in service and the end of an account's first turn. An account
- * still owed its first turn stands on the clock (acct_root_val), so its ledger is not a term of the clock: read twice
- * it would lift the account by its own findings once more. Between those events it is constant, as SFQ says, so a
- * newcomer's placement is a fact rather than a race with its creation instant. It reads ledgers and not coordinates
- * (`base + earned`): a coordinate carries the clock its account was placed at, so a clock following coordinates hands
- * each newcomer every earlier newcomer's placement too, and placements compound into a lead no account produced, above
- * an account that produced more. A dispatch does not write it: moving the clock to the winner's own coordinate would
- * lift every unplaced account the pick compared it against to that coordinate, where a full optimism bonus puts them
- * above it, and the pick would un-choose its own winner (see flow_set_running). The clock follows what accounts
- * produce, never which member holds the thread.
+ * It is the largest `earned` ledger of an account standing on its own ledger (acct_on_ledger), raised where such an
+ * account emits and where an account's first turn ends; between those events it is constant, so a newcomer's
+ * placement is a fact rather than a race with its creation instant. An account owed its first turn reads the clock,
+ * so its own ledger is not a term of it. It reads ledgers and not coordinates (`base + earned`): a clock following
+ * coordinates would hand each newcomer every earlier newcomer's placement, compounding into a lead no account
+ * produced. A dispatch does not write it: moving it to the winner's coordinate would lift every account the pick
+ * compared against above the winner (see flow_set_running). It does not follow the aging down: a member given nothing
+ * owes nothing for the work of the one being served.
  *
- * Every write raises the frontier generation at the writer: the clock is a term of every unplaced account's
- * weight, and the preempt hook's rival cache is correct only if such a move arrives through the generation.
- *
- * It does not follow the aging down: the item in service sinks as it burns, and following it would charge every
- * never-served member for the work of the one being served. A member given nothing owes nothing.
- *
- * Its origin is zero: the first flow enters at v(0) = 0, and a ledger is a sum of positive credits.
- *
- * Read-only and O(1) at every reader, because acct_family_val is called once per member per pick and inside DCHECK
- * conditions. */
+ * Every write raises the frontier generation, since the clock is a term of every account that reads it and the
+ * preempt hook's rival cache is correct only if such a move arrives through the generation. Its origin is zero, and
+ * it is read-only and O(1) at every reader, because acct_family_val is called once per member per pick and inside
+ * DCHECK conditions. */
 static double g_vt;
 
 static double frontier_vt(void) {
