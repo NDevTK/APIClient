@@ -1469,6 +1469,9 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/clickhash.h"
 #include "fixture/msgchaincoop.h"
 #include "fixture/flagflow.h"
+#include "fixture/swapfn.h"
+#include "fixture/closureflag.h"
+#include "fixture/tworoot.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2124,6 +2127,9 @@ TF_DOCS[] = {
     { "clickhash", HTML_CLICKHASH },
     { "msgchaincoop", HTML_MSGCHAINCOOP, OPENER_POLICY_SAME_ORIGIN },
     { "flagflow", HTML_FLAGFLOW },
+    { "swapfn", HTML_SWAPFN },
+    { "closureflag", HTML_CLOSUREFLAG },
+    { "tworoot", HTML_TWOROOT },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -17553,6 +17559,163 @@ TF_UNIT void probes_flagflow(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `swapfn` document (fixture/swapfn.h): each helper's markup write exists only in a world where
+   the handler that replaces it was driven before the handler that calls it. */
+TF_UNIT void probes_swapfn(const char *js, Probe *tab, int *n) {
+    char src[1024] = "", src2[1024] = "";
+    int has = s_rooted_source(js, "innerHTML", "slice(1)", src, sizeof src);
+    int has2 = s_rooted_source(js, "innerHTML", "substring(1)", src2, sizeof src2);
+    const char *gu_why = NULL, *gs_why = NULL, *gk_why = NULL, *gp_why = NULL;
+    int gu_tt = 1, gs_tt = 1, gk_tt = 1, gp_tt = 1;
+    fold_row(&gu_tt, &gu_why, !!strstr(js, "\"/api/sw-text\""),
+             "NOT REACHED: there is no /api/sw-text record, so swShowClick was never driven in a world without "
+             "the replacement");
+    fold_row(&gs_tt, &gs_why, !!strstr(js, "\"/api/sw-markup\""),
+             "NOT REACHED: there is no /api/sw-markup record, so swShowClick was never driven in a world where "
+             "swSwapClick had already replaced `render`");
+    fold_row(&gk_tt, &gk_why, has,
+             "NOT REACHED: no innerHTML @S record's source is the fragment's `slice(1)`, so the replaced "
+             "`render`'s markup write was never reached tainted");
+    fold_row(&gp_tt, &gp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the replaced `render`'s markup write fired no PoC");
+    fold_row(&gp_tt, &gp_why, has && s_field(js, "innerHTML", src, "\"deliveryPrefix\":\"#\""),
+             "the replaced `render`'s PoC does not state its fragment delivery");
+    fold_row(&gp_tt, &gp_why,
+             has && s_names_in_order(js, "innerHTML", src, "\"handler\":\"swSwapClick\"",
+                                     "\"handler\":\"swShowClick\""),
+             "the replaced `render`'s PoC does not name the click on swSwapClick followed by the click on "
+             "swShowClick, so it cannot be reproduced by delivering the fragment alone");
+    const char *ou_why = NULL, *os_why = NULL, *ok_why = NULL, *op_why = NULL;
+    int ou_tt = 1, os_tt = 1, ok_tt = 1, op_tt = 1;
+    fold_row(&ou_tt, &ou_why, !!strstr(js, "\"/api/sw2-text\""),
+             "NOT REACHED: there is no /api/sw2-text record, so sw2ShowClick was never driven in a world without "
+             "the replacement");
+    fold_row(&os_tt, &os_why, !!strstr(js, "\"/api/sw2-markup\""),
+             "NOT REACHED: there is no /api/sw2-markup record, so sw2ShowClick was never driven in a world where "
+             "sw2SwapClick had already replaced the closure's `ui.render`");
+    fold_row(&ok_tt, &ok_why, has2,
+             "NOT REACHED: no innerHTML @S record's source is the fragment's `substring(1)`, so the replaced "
+             "`ui.render`'s markup write was never reached tainted");
+    fold_row(&op_tt, &op_why, has2 && s_stage(js, "innerHTML", src2) == S_FIRED,
+             "the replaced `ui.render`'s markup write fired no PoC");
+    fold_row(&op_tt, &op_why, has2 && s_field(js, "innerHTML", src2, "\"deliveryPrefix\":\"#\""),
+             "the replaced `ui.render`'s PoC does not state its fragment delivery");
+    fold_row(&op_tt, &op_why,
+             has2 && s_names_in_order(js, "innerHTML", src2, "\"handler\":\"sw2SwapClick\"",
+                                      "\"handler\":\"sw2ShowClick\""),
+             "the replaced `ui.render`'s PoC does not name the click on sw2SwapClick followed by the click on "
+             "sw2ShowClick, so it cannot be reproduced by delivering the fragment alone");
+    const Probe rows[] = {
+        { "sw-global-unswapped", gu_tt, "swShowClick", SESS_EXPLORE, gu_why },
+        { "sw-global-swapped", gs_tt, "swShowClick", SESS_EXPLORE, gs_why },
+        { "sw-global-sink", gk_tt, "swShowClick", SESS_EXPLORE, gk_why },
+        { "sw-global-poc", gp_tt, "swShowClick", SESS_EXPLORE, gp_why, .gate = "sw-global-sink" },
+        { "sw-closure-unswapped", ou_tt, "sw2ShowClick", SESS_EXPLORE, ou_why },
+        { "sw-closure-swapped", os_tt, "sw2ShowClick", SESS_EXPLORE, os_why },
+        { "sw-closure-sink", ok_tt, "sw2ShowClick", SESS_EXPLORE, ok_why },
+        { "sw-closure-poc", op_tt, "sw2ShowClick", SESS_EXPLORE, op_why, .gate = "sw-closure-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `closureflag` document (fixture/closureflag.h): the query parameter reaches markup only in a
+   world where the message that sets the closure's flag precedes the click. */
+TF_UNIT void probes_closureflag(const char *js, Probe *tab, int *n) {
+    char src[1024] = "";
+    int has = s_rooted_source(js, "innerHTML", LOCATION_SEARCH_SRC, src, sizeof src);
+    const char *ca_why = NULL, *cs_why = NULL, *cu_why = NULL, *ck_why = NULL, *cp_why = NULL;
+    int ca_tt = 1, cs_tt = 1, cu_tt = 1, ck_tt = 1, cp_tt = 1;
+    fold_row(&ca_tt, &ca_why, !!strstr(js, "\"/api/cf-armed\""),
+             "NOT REACHED: there is no /api/cf-armed record, so no message whose data equals 'cf-unlock' reached "
+             "cfMessage");
+    fold_row(&cs_tt, &cs_why, !!strstr(js, "\"/api/cf-show-armed\""),
+             "NOT REACHED: there is no /api/cf-show-armed record, so cfShowClick was never driven in a world where "
+             "the message had already set the closure's flag");
+    fold_row(&cu_tt, &cu_why, !!strstr(js, "\"/api/cf-show-unarmed\""),
+             "NOT REACHED: there is no /api/cf-show-unarmed record, so cfShowClick was never driven in a world "
+             "without the message");
+    fold_row(&ck_tt, &ck_why, has,
+             "NOT REACHED: no innerHTML @S record's source is rooted in location.search, so the write in "
+             "cfShowClick was never reached tainted");
+    fold_row(&cp_tt, &cp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the innerHTML <- location.search search did not fire a PoC");
+    fold_row(&cp_tt, &cp_why,
+             has && s_field(js, "innerHTML", src, "\"deliveryPrefix\":\"?\"") &&
+             s_field(js, "innerHTML", src, "\"deliveryKey\":\"q\""),
+             "the PoC does not state its delivery as the query's `q` parameter");
+    fold_row(&cp_tt, &cp_why,
+             has && s_names_in_order(js, "innerHTML", src, "\"data\":\"cf-unlock\"", "\"handler\":\"cfShowClick\""),
+             "the PoC does not state a message whose data is 'cf-unlock' followed by the click on cfShowClick, so "
+             "it cannot be reproduced by delivering the query alone");
+    const Probe rows[] = {
+        { "cf-msg-armed", ca_tt, "cfMessage", SESS_EXPLORE, ca_why },
+        { "cf-click-after-msg", cs_tt, "cfMessage", SESS_EXPLORE, cs_why, .gate = "cf-msg-armed" },
+        { "cf-click-without-msg", cu_tt, "cfMessage", SESS_EXPLORE, cu_why },
+        { "cf-sink", ck_tt, "cfMessage", SESS_EXPLORE, ck_why },
+        { "cf-poc", cp_tt, "cfMessage", SESS_EXPLORE, cp_why, .gate = "cf-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `tworoot` document (fixture/tworoot.h): one markup value joins the fragment with one message's
+   data, and another joins a prior message's data, the fragment and a later message's data; each PoC states
+   every source it rode. */
+TF_UNIT void probes_tworoot(const char *js, Probe *tab, int *n) {
+    char src[1024] = "", src2[1024] = "";
+    int has = s_rooted_source(js, "innerHTML", ".trTail", src, sizeof src);
+    int has2 = s_rooted_source(js, "innerHTML", ".trPost", src2, sizeof src2);
+    const char *tl_why = NULL, *tj_why = NULL, *tk_why = NULL, *tp_why = NULL;
+    const char *tx_why = NULL, *te_why = NULL, *tq_why = NULL, *tr_why = NULL;
+    int tl_tt = 1, tj_tt = 1, tk_tt = 1, tp_tt = 1, tx_tt = 1, te_tt = 1, tq_tt = 1, tr_tt = 1;
+    fold_row(&tl_tt, &tl_why, !!strstr(js, "\"/api/tr-listen\""),
+             "NOT REACHED: no flow took the arm where the query's `mode` is 'dev', so neither listener was "
+             "registered");
+    fold_row(&tj_tt, &tj_why, !!strstr(js, "\"/api/tr-join\""),
+             "NOT REACHED: there is no /api/tr-join record, so no message whose data holds a String `trTail` "
+             "reached trJoin");
+    fold_row(&tk_tt, &tk_why, has,
+             "NOT REACHED: no innerHTML @S record's source names `trTail`, so trJoin's write of the fragment "
+             "joined with message data was never searched");
+    fold_row(&tp_tt, &tp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "trJoin's write, rooted in the fragment and a message, fired no PoC");
+    fold_row(&tp_tt, &tp_why, has && s_field(js, "innerHTML", src, "\"deliveryPrefix\":\"#\""),
+             "trJoin's PoC does not state the fragment's delivery");
+    fold_row(&tp_tt, &tp_why,
+             has && s_field(js, "innerHTML", src, "\"kind\":\"message\"") &&
+             s_field(js, "innerHTML", src, "\"trTail\""),
+             "trJoin's PoC does not state the message whose data carries `trTail`");
+    fold_row(&tp_tt, &tp_why,
+             has && s_field(js, "innerHTML", src, "\"deliveryKey\":\"mode\"") &&
+             s_field(js, "innerHTML", src, "\"equals\":\"dev\""),
+             "trJoin's PoC does not state the query's `mode=dev`, without which the listener is never registered");
+    fold_row(&tx_tt, &tx_why, !!strstr(js, "\"/api/tr-prefix\""),
+             "NOT REACHED: there is no /api/tr-prefix record, so no message whose data holds a String `trPre` "
+             "reached trStage");
+    fold_row(&te_tt, &te_why, !!strstr(js, "\"/api/tr-emit\""),
+             "NOT REACHED: there is no /api/tr-emit record, so no flow delivered a `trPost` message after its own "
+             "`trPre` message");
+    fold_row(&tq_tt, &tq_why, has2,
+             "NOT REACHED: no innerHTML @S record's source names `trPost`, so trStage's write of the kept prefix, "
+             "the fragment and a later message's data was never searched");
+    fold_row(&tr_tt, &tr_why, has2 && s_stage(js, "innerHTML", src2) == S_FIRED,
+             "trStage's write, rooted in two messages and the fragment, fired no PoC");
+    fold_row(&tr_tt, &tr_why, has2 && s_field(js, "innerHTML", src2, "\"deliveryPrefix\":\"#\""),
+             "trStage's PoC does not state the fragment's delivery");
+    fold_row(&tr_tt, &tr_why, has2 && s_names_in_order(js, "innerHTML", src2, "\"trPre\"", "\"trPost\""),
+             "trStage's PoC does not state the message carrying `trPre` followed by the message carrying `trPost`");
+    const Probe rows[] = {
+        { "tr-listen", tl_tt, "trJoin", SESS_EXPLORE, tl_why },
+        { "tr-join-reached", tj_tt, "trJoin", SESS_EXPLORE, tj_why, .gate = "tr-listen" },
+        { "tr-join-sink", tk_tt, "trJoin", SESS_EXPLORE, tk_why, .gate = "tr-join-reached" },
+        { "tr-join-poc", tp_tt, "trJoin", SESS_EXPLORE, tp_why, .gate = "tr-join-sink" },
+        { "tr-stage-prefix", tx_tt, "trJoin", SESS_EXPLORE, tx_why, .gate = "tr-listen" },
+        { "tr-stage-emit", te_tt, "trJoin", SESS_EXPLORE, te_why, .gate = "tr-stage-prefix" },
+        { "tr-stage-sink", tq_tt, "trJoin", SESS_EXPLORE, tq_why, .gate = "tr-stage-emit" },
+        { "tr-stage-poc", tr_tt, "trJoin", SESS_EXPLORE, tr_why, .gate = "tr-stage-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `histreload` document (fixture/histreload.h): `history.go(0)` reloads, which the page's
    `navigate` listener observes as a "reload" navigation, and the member returns to the script that called it. */
 TF_UNIT void probes_histreload(const char *js, Probe *tab, int *n) {
@@ -25011,6 +25174,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
     probes_flagflow(js, probes, &np);
+    probes_swapfn(js, probes, &np);
+    probes_closureflag(js, probes, &np);
+    probes_tworoot(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
