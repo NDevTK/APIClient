@@ -2,7 +2,7 @@
  * at fixed work budgets over several runs, so two engines are compared on one input with the spread beside it.
  *   record --store <dir> --snap <snapshot> [--pages a,b] [--work <units>]
  *   run --store <dir> --snap <snapshot> --out <dir> [--runs 3] [--budgets 10.8e6,27e6,54e6] [--pages a,b]
- *       [--jobs 1] [--backstop <s>] [--rss-cap <MiB>] [--bin <binary>]
+ *       [--jobs 1] [--backstop <s>] [--mem-cap <MiB>] [--bin <binary>]
  *   table <out-dir> | ab <out-A> <out-B> | manifest --store <dir>
  * `--snap` is a frozen snapshot (engine/frozen_snapshot.sh) holding engine/trusted.mjs and a built
  * engine/host/out/qjs-native-none; its zone drives its binary over a page with the wire answered by wire.mjs.
@@ -12,6 +12,10 @@
  * from, and the last sample's, are kept as logs/<page>.<run>.<budget|final>.results.json, and every @COLD and @WFQ
  * census line the run printed is kept verbatim as logs/<page>.<run>.census.tsv.gz (instance tag, marker, payload),
  * so where a page's work went between readings is read from the engine's own census rather than re-run.
+ * Each run lives in a memory cgroup of its own, made under this process's, whose limit is `--mem-cap`: the engine
+ * reads its RAM limit from the cgroups it stands in (solver/ram_limit.c), so every instance of the page sells to
+ * its cold tier against the cap the run is held to, and the kernel enforces it; a run the kernel OOM-kills there
+ * ends `memcg-oom`.
  * Recorded replies rather than live ones because an A/B asks what changed between two engines, and live input
  * would be a second moving subject. A recording is what the page's own sends received at a stated instant,
  * keyed by the URL each was sent to; the bytes stay outside the repository, and manifest.json names them. */
@@ -179,10 +183,51 @@ function populationOf(wfqs) {
   return o;
 }
 
+/* This process's memory cgroup, as the directory and the file names of its hierarchy's version (cgroup v1's
+   `memory` controller, or v2's unified tree). A host with neither has no way to hold a run to a cap, so it throws. */
+function ownMemcg() {
+  for (const line of readFileSync('/proc/self/cgroup', 'utf8').split('\n')) {
+    const [, ctl, path] = line.split(':');
+    if (path === undefined) continue;
+    if (ctl.split(',').includes('memory'))
+      return { dir: join('/sys/fs/cgroup/memory', path), limit: 'memory.limit_in_bytes', peak: 'memory.max_usage_in_bytes',
+               oom: ['memory.oom_control', /^oom_kill (\d+)$/m] };
+    if (ctl === '' && existsSync(join('/sys/fs/cgroup', path, 'memory.max')))
+      return { dir: join('/sys/fs/cgroup', path), limit: 'memory.max', peak: 'memory.peak',
+               oom: ['memory.events', /^oom_kill (\d+)$/m] };
+  }
+  throw new Error('this process stands in no memory cgroup this bench can make a child of (/proc/self/cgroup), so a ' +
+                  'run could not be held to --mem-cap, and the engine would read a limit the harness does not enforce');
+}
+
+/* A fresh child memory cgroup holding `capMiB`, for one run; `release` kills whatever still stands in it and
+   removes it, so an aborted run leaves no process and no directory behind. */
+function runMemcg(tag, capMiB) {
+  const m = ownMemcg();
+  const dir = join(m.dir, `bench-${process.pid}-${tag.replace(/[^a-z0-9.-]/g, '_')}`);
+  mkdirSync(dir);
+  writeFileSync(join(dir, m.limit), String(capMiB * 1024 * 1024));
+  const read = (f) => readFileSync(join(dir, f), 'utf8');
+  return {
+    procs: join(dir, 'cgroup.procs'),
+    peakMiB: () => Math.round(Number(read(m.peak).trim()) / 1048576),
+    oomKills: () => { const x = m.oom[1].exec(read(m.oom[0])); return x === null ? 0 : Number(x[1]); },
+    release: () => {
+      for (let i = 0; ; i++) {
+        const pids = read('cgroup.procs').split('\n').filter(Boolean);
+        for (const pid of pids) try { process.kill(Number(pid), 'SIGKILL'); } catch { /* already gone */ }
+        if (pids.length === 0) { spawnSync('rmdir', [dir]); if (!existsSync(dir)) return; }
+        if (i === 100) throw new Error(`the run's memory cgroup ${dir} still holds ${pids.join(',')} after 100 kills`);
+        spawnSync('sleep', ['0.1']);
+      }
+    },
+  };
+}
+
 const LINE = /^\[trusted\] \[([^\]]+)\] (@COLD|@WFQ|@RESULT)#(\d+) \2 (.*)$/;
 const ABORT = /^@(?:WHY|E) (?:\{"phase":"assert"|.*\([^()]*:\d+\)$)/;
 
-function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runIx, wire = 'replay' }) {
+function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runIx, wire = 'replay' }) {
   return new Promise((resolveRun) => {
     const tag = `${page.id}.${runIx}`;
     const wireLog = join(logDir, `${tag}.wire.jsonl`);
@@ -190,7 +235,10 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
     writeFileSync(wireLog, '');
     const load0 = loadavg()[0];
     const t0 = Date.now();
-    const child = spawn(process.execPath, ['--import', WIRE, snap.zone, page.url, snap.bin], {
+    const memcg = runMemcg(tag, memCapMiB);
+    /* The zone enters the cgroup before it runs, so every engine it spawns is born there. */
+    const child = spawn('/bin/sh', ['-c', 'echo $$ > "$0" && exec "$@"', memcg.procs,
+                                    process.execPath, '--import', WIRE, snap.zone, page.url, snap.bin], {
       cwd: dirname(dirname(snap.zone)), detached: true, stdio: ['ignore', 'ignore', 'pipe'],
       env: { ...process.env, ...(wire === 'record' ? { NODE_USE_ENV_PROXY: '1' } : {}), BENCH_WIRE: wire,
              BENCH_STORE: store, BENCH_PAGE: page.id, BENCH_WIRE_LOG: wireLog },
@@ -205,16 +253,6 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
       try { process.kill(-child.pid, 'SIGKILL'); } catch { /* the group has already exited */ }
     };
     const backstop = setTimeout(() => kill('backstop'), backstopS * 1000);
-    /* The session's resident memory, summed over its process group, polled; past `rssCapMiB` the run is ended
-       with its own signal, because the machine is shared and the kernel's OOM killer would pick any lane's
-       process. */
-    let rssPeakMiB = 0;
-    const rssPoll = setInterval(() => {
-      const ps = spawnSync('ps', ['-o', 'rss=', '-g', String(child.pid)], { encoding: 'utf8' });
-      const mib = ps.stdout.split('\n').filter(Boolean).reduce((n, x) => n + Number(x), 0) / 1024;
-      rssPeakMiB = Math.max(rssPeakMiB, Math.round(mib));
-      if (mib > rssCapMiB) kill('rss-backstop');
-    }, 2000);
     const progress = join(logDir, `${tag}.progress.jsonl`);
     writeFileSync(progress, '');
     const census = createGzip();
@@ -223,7 +261,7 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
     const sample = () => {
       let work = 0;
       for (const i of inst.values()) work += i.work;
-      appendFileSync(progress, JSON.stringify({ stepWork: work, wallS: (Date.now() - t0) / 1000, rssPeakMiB,
+      appendFileSync(progress, JSON.stringify({ stepWork: work, wallS: (Date.now() - t0) / 1000, memPeakMiB: memcg.peakMiB(),
                                                 load1: loadavg()[0] }) + '\n');
       while (next < budgets.length && work >= budgets[next]) {
         const docs = [...inst.values()].filter((i) => i.result !== null).map((i) => JSON.parse(i.result));
@@ -256,10 +294,11 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
     child.on('exit', async (code, signal) => {
       clearTimeout(backstop);
       rl.close();
-      clearInterval(rssPoll);
       census.end();
       await censusDone;
-      const endedBy = cut ? cut
+      const memPeakMiB = memcg.peakMiB(), oomKills = memcg.oomKills();
+      memcg.release();
+      const endedBy = cut ? cut : oomKills > 0 ? 'memcg-oom'
         : abort !== null ? 'abort' : code === 0 ? 'drained' : `exit ${code}${signal ? ' ' + signal : ''}`;
       let work = 0;
       for (const i of inst.values()) work += i.work;
@@ -283,7 +322,7 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
         instances: inst.size, readings, final,
         wireSends: wire.length, wireMisses: wire.filter((w) => !w.hit).length,
         wireMissed: [...new Set(wire.filter((w) => !w.hit).map((w) => `${w.method} ${w.url}`))].slice(0, 20),
-        load1: [load0, loadavg()[0]], wallS: (Date.now() - t0) / 1000, rssPeakMiB,
+        load1: [load0, loadavg()[0]], wallS: (Date.now() - t0) / 1000, memPeakMiB, memCapMiB,
       });
     });
   });
@@ -378,6 +417,9 @@ function ab(dirA, dirB) {
   const lines = [`# A ${ma.revision} (${dirA})  vs  B ${mb.revision} (${dirB})`,
                  'cell: A min/med/max -> B min/med/max, then "+"/"-" when B\'s range lies wholly above/below A\'s, ' +
                  '"~" when the ranges overlap'];
+  if (ma.memCapMiB !== mb.memCapMiB)
+    throw new Error(`the two arms were held to different memory caps (${ma.memCapMiB} and ${mb.memCapMiB} MiB), and the ` +
+                    'cap is where each engine sells to its cold tier, so their readings are of two different hosts');
   const budgets = ma.budgets.filter((b) => mb.budgets.includes(b));
   for (const b of budgets) {
     lines.push('', `## budget ${b / 1e6}M stepWork`, ['page', 'nA', 'nB', ...METRICS.map((m) => SHORT[m])].join('\t'));
@@ -432,15 +474,15 @@ function pagesOf(o) {
    did not reach. */
 async function record(o) {
   const store = resolve(o.store), snap = snapshotOf(resolve(o.snap), o.bin ? resolve(o.bin) : undefined);
-  const work = Number(o.work || 54e6), backstopS = Number(o.backstop || 1800), rssCapMiB = Number(o['rss-cap'] || 4096);
+  const work = Number(o.work || 54e6), backstopS = Number(o.backstop || 1800), memCapMiB = Number(o['mem-cap'] || 4096);
   const logDir = join(store, 'logs');
   mkdirSync(logDir, { recursive: true });
   for (const page of pagesOf(o)) {
     const runIx = 'rec' + new Date().toISOString().replace(/[:.]/g, '');
-    const r = await runOne({ page, store, snap, budgets: [work], backstopS, rssCapMiB, logDir, runIx, wire: 'record' });
+    const r = await runOne({ page, store, snap, budgets: [work], backstopS, memCapMiB, logDir, runIx, wire: 'record' });
     appendFileSync(join(logDir, 'record.jsonl'), JSON.stringify({ ...r, readings: undefined }) + '\n');
     console.log(`${page.id} ${r.endedBy} work=${r.stepWorkReached} sends=${r.wireSends} new=${r.wireMisses} ` +
-                `rss=${r.rssPeakMiB}MiB wall=${r.wallS.toFixed(0)}s${r.abort ? ' ABORT ' + r.abort.slice(0, 200) : ''}`);
+                `mem=${r.memPeakMiB}MiB wall=${r.wallS.toFixed(0)}s${r.abort ? ' ABORT ' + r.abort.slice(0, 200) : ''}`);
   }
 }
 
@@ -448,12 +490,12 @@ async function run(o) {
   const store = resolve(o.store), snap = snapshotOf(resolve(o.snap), o.bin ? resolve(o.bin) : undefined), out = resolve(o.out);
   const budgets = (o.budgets || '10.8e6,54e6,216e6').split(',').map(Number).sort((a, b) => a - b);
   const runs = Number(o.runs || 3), jobs = Number(o.jobs || 1), backstopS = Number(o.backstop || 3600);
-  const rssCapMiB = Number(o['rss-cap'] || 4096);
+  const memCapMiB = Number(o['mem-cap'] || 4096);
   const pages = pagesOf(o);
   const rows = manifest(store).filter((r) => pages.some((p) => p.id === r.id));
   for (const r of rows) if (!r.recorded) throw new Error(`${r.id} has no recording in ${store}`);
   mkdirSync(join(out, 'logs'), { recursive: true });
-  const meta = { revision: snap.revision, binSha256: snap.binSha256, snap: resolve(o.snap), bin: snap.bin, budgets, runs,
+  const meta = { revision: snap.revision, binSha256: snap.binSha256, snap: resolve(o.snap), bin: snap.bin, budgets, runs, memCapMiB,
                  store, storeDigest: storeDigest(manifest(store)), pages: pages.map((p) => p.id),
                  pageDigests: Object.fromEntries(rows.map((r) => [r.id, r.sha256])),
                  cores: (await import('node:os')).cpus().length, started: new Date().toISOString() };
@@ -465,7 +507,7 @@ async function run(o) {
   const worker = async () => {
     while (queue.length) {
       const { page, runIx } = queue.shift();
-      const r = await runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir: join(out, 'logs'), runIx });
+      const r = await runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir: join(out, 'logs'), runIx });
       appendFileSync(join(out, 'runs.jsonl'), JSON.stringify(r) + '\n');
       const last = r.readings[r.readings.length - 1];
       console.log(`${page.id}.${runIx} ${r.endedBy} work=${r.stepWorkReached} readings=${r.readings.length} ` +
