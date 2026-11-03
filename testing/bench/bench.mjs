@@ -6,19 +6,13 @@
  *   table <out-dir> | ab <out-A> <out-B> | manifest --store <dir>
  * `--snap` is a frozen snapshot (engine/frozen_snapshot.sh) holding engine/trusted.mjs and a built
  * engine/host/out/qjs-native-none; its zone drives its binary over a page with the wire answered by wire.mjs.
- * A run is cut at the first census sample whose summed @COLD `stepWork` passes the largest budget, and each
- * budget is read at the first sample past it, as the union of every instance's latest @RESULT. A run that ends
- * first (abort, drain, backstop) has no reading at that budget, never a zero. The documents each reading is taken
- * from, and the last sample's, are kept as logs/<page>.<run>.<budget|final>.results.json, and every @COLD and @WFQ
- * census line the run printed is kept verbatim as logs/<page>.<run>.census.tsv.gz (instance tag, marker, payload),
- * so where a page's work went between readings is read from the engine's own census rather than re-run.
- * Each run lives in a memory cgroup of its own, made under this process's, whose limit is `--mem-cap`: the engine
- * reads its RAM limit from the cgroups it stands in (solver/ram_limit.c), so every instance of the page sells to
- * its cold tier against the cap the run is held to, and the kernel enforces it; a run the kernel OOM-kills there
- * ends `memcg-oom`.
- * Recorded replies rather than live ones because an A/B asks what changed between two engines, and live input
- * would be a second moving subject. A recording is what the page's own sends received at a stated instant,
- * keyed by the URL each was sent to; the bytes stay outside the repository, and manifest.json names them. */
+ * A run is cut at the first census sample whose summed @COLD `stepWork` passes the largest budget; each budget is
+ * read at the first sample past it, as the union of every instance's latest @RESULT, and a run that ends first has
+ * no reading there, never a zero. Kept per run in logs/: <page>.<run>.<budget|final>.results.json, and every @COLD
+ * and @WFQ line verbatim in <page>.<run>.census.tsv.gz. Each run is held to `--mem-cap` by a memory cgroup the
+ * engine reads its RAM limit from (runMemcg). Replies are recorded, since live input would be a second moving
+ * subject in an A/B: a recording is what the page's own sends received at a stated instant, keyed by URL; the
+ * bytes stay outside the repository, and manifest.json names them. */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -200,8 +194,9 @@ function ownMemcg() {
                   'run could not be held to --mem-cap, and the engine would read a limit the harness does not enforce');
 }
 
-/* A fresh child memory cgroup holding `capMiB`, for one run; `release` kills whatever still stands in it and
-   removes it, so an aborted run leaves no process and no directory behind. */
+/* A fresh child memory cgroup holding `capMiB`, for one run. The engine arms its RAM limit from the cgroups it
+   stands in (solver/ram_limit.c), so every instance of the page sells to its cold tier at the cap the kernel
+   enforces; a run OOM-killed there ends `memcg-oom`. `release` kills what still stands in it and removes it. */
 function runMemcg(tag, capMiB) {
   const m = ownMemcg();
   const dir = join(m.dir, `bench-${process.pid}-${tag.replace(/[^a-z0-9.-]/g, '_')}`);
