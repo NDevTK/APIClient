@@ -1279,6 +1279,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/clobber.h"
 #include "fixture/srcreach.h"
 #include "fixture/cutboot.h"
+#include "fixture/cutshed.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
 #include "fixture/cwmix.h"
@@ -1925,6 +1926,7 @@ TF_DOCS[] = {
     { "srcreach", HTML_SRCREACH },
     { "srcreachneg", HTML_SRCREACHNEG },
     { "cutboot", HTML_CUTBOOT },
+    { "cutshed", HTML_CUTSHED, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
     { "cwmix", HTML_CWMIX },
@@ -18156,6 +18158,25 @@ TF_UNIT void probes_cutboot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cutshed` document (fixture/cutshed.h). The allocator's refusals reach the pager while the
+   boot's snapshot is held, and the pager sheds it; engine_frontier_census asserts at every census that the shed
+   is one of the refusal edge's five counted exits. Ladder: a snapshot was taken, the edge shed one. */
+static long tf_census_row(const char *js, const char *census, const char *key);
+TF_UNIT void probes_cutshed(const char *js, Probe *tab, int *n) {
+    const char *cs_why = NULL; int cs_tt = 1;
+
+    fold_row(&cs_tt, &cs_why, sr_census(js, "taken") > 0,
+             "NOT REACHED: no snapshot was taken before the boot's read of location.hash");
+    fold_row(&cs_tt, &cs_why, tf_census_row(js, "_cold", "pagedAsks") > 0,
+             "a snapshot was held and the allocator never refused this instance, so the pager was never asked");
+    fold_row(&cs_tt, &cs_why, tf_census_row(js, "_cold", "pagedShed") > 0,
+             "the pager was asked and shed no snapshot: every refusal was answered another way");
+    const Probe rows[] = {
+        { "cut-shed", cs_tt, "csOut", SESS_EXPLORE, cs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `clobber` document (fixture/clobber.h). */
 TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     char hs[1024] = "", us[1024] = "";
@@ -24775,6 +24796,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_clobber(js, probes, &np);
     probes_srcreach(js, probes, &np);
     probes_cutboot(js, probes, &np);
+    probes_cutshed(js, probes, &np);
     probes_typedinput(js, probes, &np);
     probes_closerequest(js, probes, &np);
     probes_cwmix(js, probes, &np);
