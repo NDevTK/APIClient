@@ -46,6 +46,8 @@ void source_cut_flow_release(Flow *f);
 /* The cut on `f`'s path that precedes every read of `src`, or NULL. */
 SourceCut *source_cut_of(const Flow *f, const char *src);
 void source_cut_hold(SourceCut *c);
+/* A search's reference (solve.c's cand_learn_path): source_cut_hold, and the cut is counted as served once. */
+void source_cut_hold_search(SourceCut *c);
 void source_cut_drop(SourceCut *c);
 /* The held member, or NULL once shed. */
 Flow *source_cut_standby(const SourceCut *c);
@@ -56,9 +58,10 @@ Flow *source_cut_next_shed(int all, const Flow *keep);
 
 /* An arm was forked off a standby for a candidate (engine_cut_arm). */
 void source_cut_count_arm(void);
-/* Lifetime counts: cuts taken, asks withdrawn because the read was re-entered unparked, standbys shed, and
-   candidate arms forked off a standby. */
-typedef struct { long taken, unparked, shed, arms; } SourceCutCensus;
+/* Lifetime counts: cuts taken, asks withdrawn because the read was re-entered unparked, standbys shed, candidate
+   arms forked off a standby, and cuts a search ever held (`served`); and the high-water of standbys held at once
+   (`heldPeak`), whose live count is taken minus shed. */
+typedef struct { long taken, unparked, shed, arms, served, held_peak; } SourceCutCensus;
 SourceCutCensus source_cut_census(void);
 
 #endif

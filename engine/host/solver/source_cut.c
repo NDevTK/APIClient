@@ -11,6 +11,7 @@
 struct SourceCut {
     Flow *standby;
     int refs;
+    int served;   /* a search has held it (source_cut_hold_search) */
     char **srcs;
     int n;
     struct SourceCut *prev, *next;
@@ -131,6 +132,7 @@ void source_cut_leave(Flow *f, Flow *standby) {
         c->refs = 1;
     }
     g_census.taken++;
+    if (g_census.taken - g_census.shed > g_census.held_peak) g_census.held_peak = g_census.taken - g_census.shed;
 }
 
 void source_cut_fork(Flow *sib, const Flow *parent) {
@@ -185,6 +187,12 @@ void source_cut_flow_release(Flow *f) {
 void source_cut_hold(SourceCut *c) {
     DCHECK(c != NULL && c->refs > 0, "a cut was held that nothing refers to — it may already have been shed");
     c->refs++;
+}
+
+void source_cut_hold_search(SourceCut *c) {
+    source_cut_hold(c);
+    if (!c->served) g_census.served++;
+    c->served = 1;
 }
 
 void source_cut_drop(SourceCut *c) {

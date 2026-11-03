@@ -987,7 +987,7 @@ static void cand_learn_path(Cand *e) {
         const char *base = e->root ? concolic_delivery_base(e->root) : NULL;
 
         e->cut = base && f ? source_cut_of(f, base) : NULL;
-        if (e->cut) source_cut_hold(e->cut);
+        if (e->cut) source_cut_hold_search(e->cut);
     }
     /* And the path's length, taken here where the path exists: it is what `runwayArms` reports, and record_sink
        gives the blob back at the fire, so a length read later would be 0 for the searches that succeeded.
