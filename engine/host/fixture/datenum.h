@@ -1,8 +1,9 @@
 /* THE DATE-NUMBER DOCUMENT: the session clock's unknown (`Date.now()`) after an addition and a subtraction,
    coerced back with ECMAScript §13.5.4 Unary + Operator and §21.1.1.1 Number ( value ), and stored by §21.4.4.27
-   Date.prototype.setTime ( time ), each gating a branch. §7.1.4 ToNumber of a Number is the Number itself, so
-   each coercion answers the unknown it was given, the Date's [[DateValue]] becomes TimeClip of it, and both
-   arms of each gate run. Each witness fetch carries a constant.
+   Date.prototype.setTime ( time ), each gating a branch, and that Date's year handed to §21.4.3.4 Date.UTC.
+   §7.1.4 ToNumber of a Number is the Number itself, so each coercion answers the unknown it was given, the
+   Date's [[DateValue]] becomes TimeClip of it, Date.UTC's time value is derived from its year, and both arms of
+   each gate run. Each witness fetch carries a constant.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_DATENUM_H
@@ -22,6 +23,8 @@ static const char HTML_DATENUM[] =
     "var dnDate = new Date(0);"
     "dnDate.setTime(Date.now() + 1310);"
     "fetch('/api/dn-settime?w=' + (dnDate.getUTCFullYear() >= 2027 ? 'dnFUTURE' : 'dnPRESENT'));"
+    "var dnUtc = Date.UTC(dnDate.getUTCFullYear(), 0, 1);"
+    "fetch('/api/dn-utc?w=' + (dnUtc >= 1798761600000 ? 'dnFUTURE' : 'dnPRESENT'));"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

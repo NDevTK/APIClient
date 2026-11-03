@@ -19417,10 +19417,18 @@ TF_UNIT void probes_datenum(const char *js, Probe *tab, int *n) {
                               param_value_is(js, "/api/dn-settime", "w", "dnPRESENT"),
              "only one arm of the gate on the year after setTime ran, so the Date's [[DateValue]] was a number "
              "and not TimeClip of the clock's unknown");
+    const char *ut_why = NULL; int ut_tt = 1;
+    fold_row(&ut_tt, &ut_why, param_value_is(js, "/api/dn-utc", "w", "dnFUTURE") ||
+                              param_value_is(js, "/api/dn-utc", "w", "dnPRESENT"),
+             "NOT REACHED: no /api/dn-utc record, so Date.UTC over the clock's year did not return");
+    fold_row(&ut_tt, &ut_why, param_value_is(js, "/api/dn-utc", "w", "dnFUTURE") &&
+                              param_value_is(js, "/api/dn-utc", "w", "dnPRESENT"),
+             "only one arm of the gate on Date.UTC's time value ran, so its ToNumber collapsed the clock's year");
     const Probe rows[] = {
         { "dn-plus-both", pl_tt, "/api/dn-plus", SESS_EXPLORE, pl_why },
         { "dn-number-both", nm_tt, "/api/dn-number", SESS_EXPLORE, nm_why },
         { "dn-settime-both", st_tt, "/api/dn-settime", SESS_EXPLORE, st_why },
+        { "dn-utc-both", ut_tt, "/api/dn-utc", SESS_EXPLORE, ut_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
