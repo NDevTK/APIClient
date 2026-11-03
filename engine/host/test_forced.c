@@ -1472,6 +1472,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/swapfn.h"
 #include "fixture/closureflag.h"
 #include "fixture/tworoot.h"
+#include "fixture/msgimgload.h"
+#include "fixture/xwinfwd.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2130,6 +2132,8 @@ TF_DOCS[] = {
     { "swapfn", HTML_SWAPFN },
     { "closureflag", HTML_CLOSUREFLAG },
     { "tworoot", HTML_TWOROOT },
+    { "msgimgload", HTML_MSGIMGLOAD },
+    { "xwinfwd", HTML_XWINFWD },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -17716,6 +17720,77 @@ TF_UNIT void probes_tworoot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `msgimgload` document (fixture/msgimgload.h): message data a listener kept reaches markup in
+   the image's `load` handler, which the page's own load task runs. */
+TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
+    char src[1024] = "";
+    int has = s_rooted_source(js, "innerHTML", "message.data", src, sizeof src);
+    const char *ml_why = NULL, *mo_why = NULL, *ms_why = NULL, *mk_why = NULL, *mp_why = NULL;
+    int ml_tt = 1, mo_tt = 1, ms_tt = 1, mk_tt = 1, mp_tt = 1;
+    fold_row(&ml_tt, &ml_why, !!strstr(js, "\"/api/mi-load\""),
+             "NOT REACHED: there is no /api/mi-load record, so the image's load handler never ran");
+    fold_row(&mo_tt, &mo_why, cl_witness_without(js, "/api/mi-load", "\"acts\":[]", "\"acts\":[{"),
+             "no witness of /api/mi-load states an empty act list: the handler ran only under a drive, so the "
+             "image's own load task never fired it");
+    fold_row(&ms_tt, &ms_why, !!strstr(js, "\"/api/mi-stash\""),
+             "NOT REACHED: there is no /api/mi-stash record, so no message whose data holds a String `v` reached "
+             "miMessage");
+    fold_row(&mk_tt, &mk_why, has,
+             "NOT REACHED: no innerHTML @S record's source is rooted in message data, so the load handler never "
+             "wrote the kept message data in a world where the message preceded the load");
+    fold_row(&mp_tt, &mp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the load handler's write of the kept message data fired no PoC");
+    fold_row(&mp_tt, &mp_why, has && s_field(js, "innerHTML", src, "\"delivery\":\"cross-document-message\""),
+             "the PoC does not state a cross-document-message delivery");
+    fold_row(&mp_tt, &mp_why, has && s_field(js, "innerHTML", src, "\"handler\":\"miMessage\""),
+             "the PoC does not state the message act that runs miMessage");
+    fold_row(&mp_tt, &mp_why, has && !s_field(js, "innerHTML", src, "\"handler\":\"miOnLoad\""),
+             "the PoC states an act for miOnLoad, but the image's load is the page's own task and no user act");
+    const Probe rows[] = {
+        { "mi-load-ran", ml_tt, "miOnLoad", SESS_EXPLORE, ml_why },
+        { "mi-load-own-task", mo_tt, "miOnLoad", SESS_EXPLORE, mo_why, .gate = "mi-load-ran" },
+        { "mi-msg-stash", ms_tt, "miOnLoad", SESS_EXPLORE, ms_why },
+        { "mi-sink", mk_tt, "miOnLoad", SESS_EXPLORE, mk_why },
+        { "mi-poc", mp_tt, "miOnLoad", SESS_EXPLORE, mp_why, .gate = "mi-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `xwinfwd` document (fixture/xwinfwd.h): an attacker's message to A, forwarded by A to its
+   same-origin frame B, reaches B's markup; the PoC states the chain back to the attacker's delivery to A. */
+TF_UNIT void probes_xwinfwd(const char *js, Probe *tab, int *n) {
+    char src[1024] = "";
+    int has = s_rooted_source(js, "innerHTML", "xwFwd", src, sizeof src);
+    const char *xr_why = NULL, *xa_why = NULL, *xb_why = NULL, *xk_why = NULL, *xp_why = NULL;
+    int xr_tt = 1, xa_tt = 1, xb_tt = 1, xk_tt = 1, xp_tt = 1;
+    fold_row(&xr_tt, &xr_why, !!strstr(js, "\"https://x.test/api/xw-b-ready\""),
+             "NOT REACHED: there is no /api/xw-b-ready record, so the srcdoc frame's script never ran");
+    fold_row(&xa_tt, &xa_why, !!strstr(js, "\"/api/xw-a-recv\""),
+             "NOT REACHED: there is no /api/xw-a-recv record, so no message whose data is a String reached "
+             "xwARecv");
+    fold_row(&xb_tt, &xb_why, !!strstr(js, "\"https://x.test/api/xw-b-recv\""),
+             "NOT REACHED: there is no /api/xw-b-recv record, so A's forwarded message never reached xwBRecv "
+             "past its origin check");
+    fold_row(&xk_tt, &xk_why, has,
+             "NOT REACHED: no innerHTML @S record's source names `xwFwd`, so B's write of the forwarded data was "
+             "never searched");
+    fold_row(&xp_tt, &xp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "B's write of the forwarded data fired no PoC");
+    fold_row(&xp_tt, &xp_why, has && s_field(js, "innerHTML", src, "\"handler\":\"xwARecv\""),
+             "B's PoC does not name the attacker's message to A (xwARecv), so it states no chain back to an "
+             "attacker source");
+    fold_row(&xp_tt, &xp_why, has && s_field(js, "innerHTML", src, "\"originOwned\":\"attacker-site\""),
+             "B's PoC does not state a message sent from an origin the attacker owns");
+    const Probe rows[] = {
+        { "xw-frame-ran", xr_tt, "xwARecv", SESS_EXPLORE, xr_why },
+        { "xw-a-recv", xa_tt, "xwARecv", SESS_EXPLORE, xa_why },
+        { "xw-b-recv", xb_tt, "xwARecv", SESS_EXPLORE, xb_why, .gate = "xw-a-recv" },
+        { "xw-sink", xk_tt, "xwARecv", SESS_EXPLORE, xk_why },
+        { "xw-poc-chain", xp_tt, "xwARecv", SESS_EXPLORE, xp_why, .gate = "xw-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `histreload` document (fixture/histreload.h): `history.go(0)` reloads, which the page's
    `navigate` listener observes as a "reload" navigation, and the member returns to the script that called it. */
 TF_UNIT void probes_histreload(const char *js, Probe *tab, int *n) {
@@ -25177,6 +25252,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_swapfn(js, probes, &np);
     probes_closureflag(js, probes, &np);
     probes_tworoot(js, probes, &np);
+    probes_msgimgload(js, probes, &np);
+    probes_xwinfwd(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
