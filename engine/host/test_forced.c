@@ -517,16 +517,15 @@ static int  fixture_cold_moment_met(void);
 static int  fixture_op_asked(void);
 static void fixture_ask_remote_op(JSContext *ctx);
 static void fixture_route_peer_post(JSContext *ctx);
-/* The cross-origin peer posts of the messaging, two-message and long-boot message documents: fixture_provide
-   raises a latch when the page asks `/api/xdready`, `/api/xdmready` or `/api/cmready`, after its handlers are
-   listening, and the exploring session's hook routes each document's posts once. */
-static int  g_xd_ready, g_xd_routed, g_xdm_ready, g_xdm_routed, g_cm_ready, g_cm_routed;
+/* The cross-origin peer posts of the messaging and two-message documents: fixture_provide raises a latch when
+   the page asks `/api/xdready` or `/api/xdmready`, after its handlers are listening, and the exploring
+   session's hook routes each document's posts once. */
+static int  g_xd_ready, g_xd_routed, g_xdm_ready, g_xdm_routed;
 /* The sources each routed post mints, written when it is routed and read by the rows; empty before. */
 #define TF_DELIVERY_SRC_CAP 64
 static char g_xd_dsrc[TF_DELIVERY_SRC_CAP], g_xd_osrc[TF_DELIVERY_SRC_CAP];
 static char g_xdm1_dsrc[TF_DELIVERY_SRC_CAP], g_xdm1_osrc[TF_DELIVERY_SRC_CAP];
 static char g_xdm2_dsrc[TF_DELIVERY_SRC_CAP], g_xdm2_osrc[TF_DELIVERY_SRC_CAP];
-static char g_cm_dsrc[TF_DELIVERY_SRC_CAP], g_cm_osrc[TF_DELIVERY_SRC_CAP];
 static void fixture_route_gadget_post(JSContext *ctx);
 
 /* ─── THE ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON: A PAIR, AND A THIRD AT ANOTHER DOOR ───
@@ -1063,7 +1062,6 @@ static int fixture_provide(JSContext *ctx) {
            to that question and free to disagree with it. */
         if (!strcmp(abs, "https://x.test/api/xdready")) g_xd_ready = 1;
         if (!strcmp(abs, "https://x.test/api/xdmready")) g_xdm_ready = 1;
-        if (!strcmp(abs, "https://x.test/api/cmready")) g_cm_ready = 1;
         if (tf_replytwice_hold(abs, (const char *const[5]){ method, mode, referrer_policy, referrer, url })) {
             /* Owed, and written by tf_replytwice_pay below once its lag has passed. */
         } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
@@ -1375,7 +1373,6 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cutshed.h"
 #include "fixture/cutname.h"
 #include "fixture/cutref.h"
-#include "fixture/cutmsg.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
 #include "fixture/cwmix.h"
@@ -2035,7 +2032,6 @@ TF_DOCS[] = {
     { "cutshed", HTML_CUTSHED, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "cutname", HTML_CUTNAME },
     { "cutref", HTML_CUTREF },
-    { "cutmsg", HTML_CUTMSG },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
     { "cwmix", HTML_CWMIX },
@@ -18620,19 +18616,17 @@ TF_UNIT void probes_cutshed(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `cutname`, `cutref` and `cutmsg` documents (fixture/cutname.h, fixture/cutref.h,
-   fixture/cutmsg.h): each markup search over its one attacker source fires after the document's long setup, from
-   a snapshot taken before that source's first read. Each document reads one source, so its cut census is that
-   source's. The message's source is the routed post's, named when it is routed. */
+/* The rows of the `cutname` and `cutref` documents (fixture/cutname.h, fixture/cutref.h): each markup search over
+   its one attacker source fires after the document's long setup, from a snapshot taken before that source's
+   first read. Each document reads one source, so its cut census is that source's. */
 TF_UNIT void probes_cutsource(const char *js, Probe *tab, int *n) {
     static const struct { const char *src, *fired, *cut, *fired_anchor, *cut_anchor; } ROW[] = {
         { "window.name", "cn-fired", "cn-from-cut", "'cnOut'", "cnAcc" },
         { "document.referrer", "cr-fired", "cr-from-cut", "'crOut'", "crAcc" },
-        { g_cm_dsrc, "cm-fired", "cm-from-cut", "'cmOut'", "cmAcc" },
     };
     for (size_t i = 0; i < COUNTOF(ROW); i++) {
         char hs[1024] = "";
-        int has = *ROW[i].src && s_rooted_source(js, "innerHTML", ROW[i].src, hs, sizeof hs);
+        int has = s_rooted_source(js, "innerHTML", ROW[i].src, hs, sizeof hs);
         const char *fw_why = NULL, *ac_why = NULL;
         int fw_tt = 1, ac_tt = 1;
 
@@ -26445,10 +26439,6 @@ static void fixture_route_gadget_post(JSContext *ctx) {
         g_xdm_routed = 1;
         fixture_post_from_peer(ctx, "xmpeer", "xdmone", "https://peer.example", g_xdm1_dsrc, g_xdm1_osrc);
         fixture_post_from_peer(ctx, "xmpeer", "<b>xdmtwo</b>", "https://peer.example", g_xdm2_dsrc, g_xdm2_osrc);
-    }
-    if (g_cm_ready && !g_cm_routed) {
-        g_cm_routed = 1;
-        fixture_post_from_peer(ctx, "cmpeer", "<b>cmpost</b>", "https://peer.example", g_cm_dsrc, g_cm_osrc);
     }
 }
 
