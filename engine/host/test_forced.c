@@ -18165,7 +18165,7 @@ static long tf_census_row(const char *js, const char *census, const char *key);
 TF_UNIT void probes_cutshed(const char *js, Probe *tab, int *n) {
     const char *cs_why = NULL; int cs_tt = 1;
 
-    fold_row(&cs_tt, &cs_why, sr_census(js, "taken") > 0,
+    fold_row(&cs_tt, &cs_why, tf_census_row(js, "_sourceCuts", "taken") > 0,
              "NOT REACHED: no snapshot was taken before the boot's read of location.hash");
     fold_row(&cs_tt, &cs_why, tf_census_row(js, "_cold", "pagedAsks") > 0,
              "a snapshot was held and the allocator never refused this instance, so the pager was never asked");
