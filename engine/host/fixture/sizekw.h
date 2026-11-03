@@ -16,13 +16,13 @@
                "<span style=\"display:inline-block;width:40px;height:5px\"></span>"
 
 static const char HTML_SIZEKW[] =
-    "<!doctype html><html><body style=\"margin:0;font-size:0\">"
-    "<div id=kwo style=\"display:inline-flex;flex-direction:column;align-items:flex-start\">"
+    "<!doctype html><html><body style=\"margin:0\">"
+    "<div id=kwo style=\"display:inline-flex;flex-direction:column;align-items:flex-start;font-size:0\">"
     "<div id=kw1 style=\"width:max-content\">" KW_TWO "</div>"
     "<div id=kw2 style=\"width:min-content\">" KW_TWO "</div>"
     "<div id=kw3 style=\"width:fit-content\">" KW_TWO "</div>"
     "</div>"
-    "<div style=\"width:50px\">"
+    "<div style=\"width:50px;font-size:0\">"
     "<div id=kw4 style=\"width:fit-content\">" KW_TWO "</div>"
     "<div id=kw5 style=\"width:max-content\">" KW_TWO "</div>"
     "</div>"
