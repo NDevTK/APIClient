@@ -17774,40 +17774,56 @@ TF_UNIT void probes_msgprefix(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `msgimgload` document (fixture/msgimgload.h): message data a listener kept reaches markup in
-   the image's `load` handler, which the page's own load task runs. */
-TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
-    char src[1024] = "";
-    int has = s_rooted_source(js, "innerHTML", "message.data", src, sizeof src);
-    const char *ml_why = NULL, *mo_why = NULL, *ms_why = NULL, *mk_why = NULL, *mp_why = NULL;
-    int ml_tt = 1, mo_tt = 1, ms_tt = 1, mk_tt = 1, mp_tt = 1;
-    fold_row(&ml_tt, &ml_why, !!strstr(js, "\"/api/mi-load\""),
-             "NOT REACHED: there is no /api/mi-load record, so the image's load handler never ran");
-    fold_row(&mo_tt, &mo_why, cl_witness_without(js, "/api/mi-load", "\"acts\":[]", "\"acts\":[{"),
-             "no witness of /api/mi-load states an empty act list: the handler ran only under a drive, so the "
-             "image's own load task never fired it");
-    fold_row(&ms_tt, &ms_why, !!strstr(js, "\"/api/mi-stash\""),
-             "NOT REACHED: there is no /api/mi-stash record, so no message whose data holds a String `v` reached "
-             "miMessage");
-    fold_row(&mk_tt, &mk_why, has,
-             "NOT REACHED: no innerHTML @S record's source is rooted in message data, so the load handler never "
-             "wrote the kept message data in a world where the message preceded the load");
-    fold_row(&mp_tt, &mp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
-             "the load handler's write of the kept message data fired no PoC");
-    fold_row(&mp_tt, &mp_why, has && s_field(js, "innerHTML", src, "\"delivery\":\"cross-document-message\""),
-             "the PoC does not state a cross-document-message delivery");
-    fold_row(&mp_tt, &mp_why, has && s_field(js, "innerHTML", src, "\"handler\":\"miMessage\""),
-             "the PoC does not state the message act that runs miMessage");
-    fold_row(&mp_tt, &mp_why, has && !s_field(js, "innerHTML", src, "\"handler\":\"miOnLoad\""),
-             "the PoC states an act for miOnLoad, but the image's load is the page's own task and no user act");
+/* The rows of one image of the `msgimgload` document (fixture/msgimgload.h): `load` is its witness address,
+   `member` the message member its binding keeps, `onload` its load listener's name. */
+static void msgimgload_rows(const char *js, const char *load, const char *member, const char *onload,
+                            const char *const names[5], Probe *tab, int *n) {
+    char src[1024] = "", h[64];
+    int has = s_rooted_source(js, "innerHTML", member, src, sizeof src);
+    const char *why[5] = { NULL, NULL, NULL, NULL, NULL };
+    int tt[5] = { 1, 1, 1, 1, 1 };
+
+    snprintf(h, sizeof h, "\"handler\":\"%s\"", onload);
+    fold_row(&tt[0], &why[0], param_value_is(js, load, "v", "initial"),
+             "NOT REACHED: no witness of the load handler states `initial`, so no world ran the image's load before "
+             "a message: the control is missing");
+    fold_row(&tt[1], &why[1], cl_witness_without(js, load, "\"acts\":[]", "\"acts\":[{"),
+             "no witness of the load handler states an empty act list: it ran only under a drive, so the image's "
+             "own load task never fired it");
+    fold_row(&tt[2], &why[2], param_value_is(js, load, "v", "stashed"),
+             "NOT REACHED: no witness of the load handler states `stashed`, so no world delivered the attacker's "
+             "message before the image's load task ran");
+    fold_row(&tt[3], &why[3], has,
+             "NOT REACHED: no innerHTML @S record's source is the kept message member, so the load handler never "
+             "wrote attacker data");
+    fold_row(&tt[4], &why[4], has && s_stage(js, "innerHTML", src) == S_FIRED,
+             "the load handler's write of the kept message member fired no PoC");
+    fold_row(&tt[4], &why[4], has && s_field(js, "innerHTML", src, "\"delivery\":\"cross-document-message\"") &&
+             s_field(js, "innerHTML", src, "\"handler\":\"miMessage\""),
+             "the PoC does not state the message delivery to miMessage");
+    fold_row(&tt[4], &why[4], has && !s_field(js, "innerHTML", src, h),
+             "the PoC states an act for the load listener, but the image's load is the page's own networking "
+             "task, which no user act performs");
     const Probe rows[] = {
-        { "mi-load-ran", ml_tt, "miOnLoad", SESS_EXPLORE, ml_why },
-        { "mi-load-own-task", mo_tt, "miOnLoad", SESS_EXPLORE, mo_why, .gate = "mi-load-ran" },
-        { "mi-msg-stash", ms_tt, "miOnLoad", SESS_EXPLORE, ms_why },
-        { "mi-sink", mk_tt, "miOnLoad", SESS_EXPLORE, mk_why },
-        { "mi-poc", mp_tt, "miOnLoad", SESS_EXPLORE, mp_why, .gate = "mi-sink" },
+        { names[0], tt[0], "miMessage", SESS_EXPLORE, why[0] },
+        { names[1], tt[1], "miMessage", SESS_EXPLORE, why[1] },
+        { names[2], tt[2], "miMessage", SESS_EXPLORE, why[2] },
+        { names[3], tt[3], "miMessage", SESS_EXPLORE, why[3] },
+        { names[4], tt[4], "miMessage", SESS_EXPLORE, why[4], .gate = names[3] },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `msgimgload` document: each image's load writes a binding a message listener keeps, and the
+   sink is tainted only in a world where the message is delivered before the image's load task. */
+TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
+    static const char *const script_img[5] = { "mi-load-first", "mi-load-own-task", "mi-msg-first", "mi-sink",
+                                               "mi-poc" };
+    static const char *const markup_img[5] = { "mi2-load-first", "mi2-load-own-task", "mi2-msg-first", "mi2-sink",
+                                               "mi2-poc" };
+
+    msgimgload_rows(js, "/api/mi-load", "}.v", "miOnLoad", script_img, tab, n);
+    msgimgload_rows(js, "/api/mi-load2", "}.w", "miMarkupLoad", markup_img, tab, n);
 }
 
 /* The rows of the `xwinfwd` document (fixture/xwinfwd.h): an attacker's message to A, forwarded by A to its
