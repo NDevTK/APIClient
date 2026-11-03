@@ -17661,13 +17661,48 @@ TF_UNIT void probes_closureflag(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* Whether some fired @S record of `sink` holds every one of `needles` and, where `first` is given, `first` and
+   after it `second`: the record the run composed, found by what its PoC states rather than by the identity the
+   search was keyed at, since a joined value is searched at whichever member owns its identity. */
+static int s_fired_stating(const char *js, const char *sink, const char *const *needles, int nn, const char *first,
+                           const char *second) {
+    char head[64];
+    const char *at;
+
+    snprintf(head, sizeof head, "{\"sink\":\"%s\",\"source\":\"", sink);
+    for (at = strstr(js, head); at; at = strstr(at + 1, head)) {
+        const char *b = at + strlen(head), *q, *a;
+        char one[1024];
+        size_t span;
+        int all = 1;
+
+        for (q = b; *q && *q != '"'; q++)
+            if (*q == '\\' && q[1]) q++;
+        CHECK(*q == '"' && (size_t)(q - b) < sizeof one, "an @S record's source is unterminated or too long");
+        memcpy(one, b, (size_t)(q - b));
+        one[q - b] = 0;
+        if (s_stage(js, sink, one) != S_FIRED) continue;
+        const char *e = s_record(js, sink, one, &span);
+        for (int i = 0; i < nn && all; i++) all = memmem(e, span, needles[i], strlen(needles[i])) != NULL;
+        if (all && first) {
+            a = memmem(e, span, first, strlen(first));
+            all = a && memmem(a + strlen(first), span - (size_t)(a + strlen(first) - e), second, strlen(second));
+        }
+        if (all) return 1;
+    }
+    return 0;
+}
+
 /* The rows of the `tworoot` document (fixture/tworoot.h): one markup value joins the fragment with one message's
    data, and another joins a prior message's data, the fragment and a later message's data; each PoC states
-   every source it rode. */
+   every source the value is a function of, whichever member carries the payload. */
 TF_UNIT void probes_tworoot(const char *js, Probe *tab, int *n) {
-    char src[1024] = "", src2[1024] = "";
-    int has = s_rooted_source(js, "innerHTML", ".trTail", src, sizeof src);
-    int has2 = s_rooted_source(js, "innerHTML", ".trPost", src2, sizeof src2);
+    char src[1024] = "";
+    static const char *const join_needles[] = { "\"handler\":\"trJoin\"", "\"trTail\"", "\"equals\":\"dev\"" };
+    static const char *const stage_needles[] = { "\"handler\":\"trStage\"", "\"equals\":\"dev\"" };
+    int has = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, src, sizeof src);
+    int has2 = s_rooted_source(js, "innerHTML", ".trPre", src, sizeof src) ||
+               s_rooted_source(js, "innerHTML", ".trPost", src, sizeof src);
     const char *tl_why = NULL, *tj_why = NULL, *tk_why = NULL, *tp_why = NULL;
     const char *tx_why = NULL, *te_why = NULL, *tq_why = NULL, *tr_why = NULL;
     int tl_tt = 1, tj_tt = 1, tk_tt = 1, tp_tt = 1, tx_tt = 1, te_tt = 1, tq_tt = 1, tr_tt = 1;
@@ -17678,20 +17713,11 @@ TF_UNIT void probes_tworoot(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/tr-join record, so no message whose data holds a String `trTail` "
              "reached trJoin");
     fold_row(&tk_tt, &tk_why, has,
-             "NOT REACHED: no innerHTML @S record's source names `trTail`, so trJoin's write of the fragment "
-             "joined with message data was never searched");
-    fold_row(&tp_tt, &tp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
-             "trJoin's write, rooted in the fragment and a message, fired no PoC");
-    fold_row(&tp_tt, &tp_why, has && s_field(js, "innerHTML", src, "\"deliveryPrefix\":\"#\""),
-             "trJoin's PoC does not state the fragment's delivery");
-    fold_row(&tp_tt, &tp_why,
-             has && s_field(js, "innerHTML", src, "\"kind\":\"message\"") &&
-             s_field(js, "innerHTML", src, "\"trTail\""),
-             "trJoin's PoC does not state the message whose data carries `trTail`");
-    fold_row(&tp_tt, &tp_why,
-             has && s_field(js, "innerHTML", src, "\"deliveryKey\":\"mode\"") &&
-             s_field(js, "innerHTML", src, "\"equals\":\"dev\""),
-             "trJoin's PoC does not state the query's `mode=dev`, without which the listener is never registered");
+             "NOT REACHED: no innerHTML @S record's source is rooted in the fragment, so trJoin's write of the "
+             "fragment joined with message data was never searched");
+    fold_row(&tp_tt, &tp_why, s_fired_stating(js, "innerHTML", join_needles, 3, NULL, NULL),
+             "no fired innerHTML PoC states the message to trJoin carrying `trTail` and the query's `mode=dev`: "
+             "trJoin's value is a function of the fragment and the message, behind the query's gate");
     fold_row(&tx_tt, &tx_why, !!strstr(js, "\"/api/tr-prefix\""),
              "NOT REACHED: there is no /api/tr-prefix record, so no message whose data holds a String `trPre` "
              "reached trStage");
@@ -17699,14 +17725,11 @@ TF_UNIT void probes_tworoot(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/tr-emit record, so no flow delivered a `trPost` message after its own "
              "`trPre` message");
     fold_row(&tq_tt, &tq_why, has2,
-             "NOT REACHED: no innerHTML @S record's source names `trPost`, so trStage's write of the kept prefix, "
-             "the fragment and a later message's data was never searched");
-    fold_row(&tr_tt, &tr_why, has2 && s_stage(js, "innerHTML", src2) == S_FIRED,
-             "trStage's write, rooted in two messages and the fragment, fired no PoC");
-    fold_row(&tr_tt, &tr_why, has2 && s_field(js, "innerHTML", src2, "\"deliveryPrefix\":\"#\""),
-             "trStage's PoC does not state the fragment's delivery");
-    fold_row(&tr_tt, &tr_why, has2 && s_names_in_order(js, "innerHTML", src2, "\"trPre\"", "\"trPost\""),
-             "trStage's PoC does not state the message carrying `trPre` followed by the message carrying `trPost`");
+             "NOT REACHED: no innerHTML @S record's source names `trPre` or `trPost`, so trStage's write of the "
+             "kept prefix, the fragment and a later message's data was never searched");
+    fold_row(&tr_tt, &tr_why, s_fired_stating(js, "innerHTML", stage_needles, 2, "\"trPre\"", "\"trPost\""),
+             "no fired innerHTML PoC states the message carrying `trPre` followed by the message carrying `trPost` "
+             "to trStage, under the query's `mode=dev`");
     const Probe rows[] = {
         { "tr-listen", tl_tt, "trJoin", SESS_EXPLORE, tl_why },
         { "tr-join-reached", tj_tt, "trJoin", SESS_EXPLORE, tj_why, .gate = "tr-listen" },
