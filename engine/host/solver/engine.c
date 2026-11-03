@@ -4086,12 +4086,15 @@ int engine_provide(JSContext *ctx, const char *method, const char *mode, const c
     /* The zone answers only what it owes: a park leaves the outstanding set when it is answered, refused or
        withdrawn (`fetch.cancel`, engine_pending_withdrawn), so a reply with no member to fill is an answer the
        zone wrote after one of those, or for a request it was never shown. `answered` counts this pair's earlier
-       answers across every park of it, so it is evidence for the message, never the discriminator. */
-    if (m == 0)
+       answers across every park of it, so it is evidence for the message, never the discriminator. Release
+       writes nothing for it: no body source is opened and nothing is learned from a reply no park asked for. */
+    if (m == 0) {
         DFAILF("a reply was provided for a request with no outstanding park — every park on this pair was "
                "answered (%ld time(s)), refused or withdrawn by `fetch.cancel` before it, or none was made, so "
                "the zone wrote an answer it did not owe. request=%s %s %s",
                node ? pending_index_node_answered(node) : 0L, method, mode, url);
+        return 0;
+    }
     /* A streamed head (a `stream` token on the record) opens the reply's body source before any record holds
        the value, so every member that takes the head reads the same source. */
     if (JS_IsObject(value)) {
