@@ -9,14 +9,18 @@
  * A run is cut at the first census sample whose summed @COLD `stepWork` passes the largest budget, and each
  * budget is read at the first sample past it, as the union of every instance's latest @RESULT. A run that ends
  * first (abort, drain, backstop) has no reading at that budget, never a zero. The documents each reading is taken
- * from, and the last sample's, are kept as logs/<page>.<run>.<budget|final>.results.json.
+ * from, and the last sample's, are kept as logs/<page>.<run>.<budget|final>.results.json, and every @COLD and @WFQ
+ * census line the run printed is kept verbatim as logs/<page>.<run>.census.tsv.gz (instance tag, marker, payload),
+ * so where a page's work went between readings is read from the engine's own census rather than re-run.
  * Recorded replies rather than live ones because an A/B asks what changed between two engines, and live input
  * would be a second moving subject. A recording is what the page's own sends received at a stated instant,
  * keyed by the URL each was sent to; the bytes stay outside the repository, and manifest.json names them. */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, appendFileSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, appendFileSync, statSync,
+         createWriteStream } from 'node:fs';
+import { createGzip } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -213,6 +217,9 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
     }, 2000);
     const progress = join(logDir, `${tag}.progress.jsonl`);
     writeFileSync(progress, '');
+    const census = createGzip();
+    const censusDone = new Promise((ok, fail) =>
+      census.pipe(createWriteStream(join(logDir, `${tag}.census.tsv.gz`))).on('finish', ok).on('error', fail));
     const sample = () => {
       let work = 0;
       for (const i of inst.values()) work += i.work;
@@ -239,16 +246,19 @@ function runOne({ page, store, snap, budgets, backstopS, rssCapMiB, logDir, runI
       if (!inst.has(itag)) inst.set(itag, { work: 0, result: null, wfq: null });
       const i = inst.get(itag);
       if (marker === '@RESULT') { i.result = payload; results++; sample(); return; }
+      census.write(`${itag}\t${marker}\t${payload}\n`);
       if (marker === '@WFQ') { i.wfq = payload; return; }
       const c = JSON.parse(payload);
       if (!Number.isSafeInteger(c.stepWork))
         throw new Error(`[${itag}] @COLD carries no integer stepWork: ${payload.slice(0, 200)}`);
       i.work = c.stepWork;
     });
-    child.on('exit', (code, signal) => {
+    child.on('exit', async (code, signal) => {
       clearTimeout(backstop);
       rl.close();
       clearInterval(rssPoll);
+      census.end();
+      await censusDone;
       const endedBy = cut ? cut
         : abort !== null ? 'abort' : code === 0 ? 'drained' : `exit ${code}${signal ? ' ' + signal : ''}`;
       let work = 0;
