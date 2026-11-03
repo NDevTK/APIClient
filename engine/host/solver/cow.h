@@ -97,6 +97,10 @@ int cow_entries_naming_in(JSValueConst v, void *const *ds, int n);
    widened back and a slot the flow created non-configurable could not be removed at all. See CowEntry in
    cow.c. */
 void      cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom prop);
+/* Bracket flow_release_bulk's teardown of a parked flow, inside which the write hooks refuse a write: the flow
+   is not switched in, so a write would land in another world. */
+void      cow_release_scope_begin(void);
+void      cow_release_scope_end(void);
 
 /* Install as JSTimeTravelHooks.cell_write: called before a write to a shared CLOSURE CELL; captures it into the
    current delta so a snapshot-forked sibling that shares the cell stays isolated on write. */

@@ -260,6 +260,21 @@ static int g_swapping;    /* one of this file's own heap operations (apply / una
    the page's hook, never the page's write, so it is dropped — the single test every hook here opens with. */
 static int cow_hooks_off(void) { return g_capturing > 0 || g_swapping > 0; }
 
+/* A parked flow's teardown runs while that flow is not switched in: the world current then is the running
+   flow's, or the baseline at a rest point. Whatever the freed flow wrote lives in its own delta and goes with
+   it, so its teardown writes no slot of any world. Counted so the write hooks below can refuse one. */
+static int g_releasing;
+void cow_release_scope_begin(void) { g_releasing++; }
+void cow_release_scope_end(void)
+{
+    DCHECK(g_releasing > 0, "a flow-release scope was closed that was never opened");
+    g_releasing--;
+}
+#define COW_REFUSE_RELEASE_WRITE(what)                                                                      \
+    DCHECK(g_releasing == 0, "a parked flow's teardown wrote " what " — it runs in another flow's world, or " \
+                             "in the baseline at a rest point, never its own; what it entered goes with its "  \
+                             "delta, so the teardown gives back references and writes nothing")
+
 static void cow_capture_begin(void) { g_capturing++; }
 static void cow_capture_end(void) {
     DCHECK(g_capturing > 0,
@@ -914,6 +929,7 @@ const char *cow_composing_capture_row(uint32_t i, long *n)
 uint32_t cow_composing_capture_rows(void) { return g_composing_cap; }
 
 void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
+    COW_REFUSE_RELEASE_WRITE("a property slot");
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     /* FLOW-PRIVATE skip — the O(shared-state) invariant. An object created AFTER this flow's fork (flow_gen >
@@ -968,6 +984,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
    capture uses. The flow-private skip is still applied (a post-fork private array — e.g. a per-flow accumulator
    built after the fork — is not captured). */
 void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
+    COW_REFUSE_RELEASE_WRITE("an array element");
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
@@ -1747,6 +1764,7 @@ void cow_record_set_at(JSContext *ctx, void *p, const CowRecord *rec, JSValue *s
 }
 
 void cow_capture_varref(JSContext *ctx, void *vref) {
+    COW_REFUSE_RELEASE_WRITE("a closure cell");
     if (cow_hooks_off() || !g_current || !vref) return;
     CowDelta *d = g_current;
     if (cow_hash_find(d, cow_key_cell(vref)) >= 0) return;   /* capture each cell ONCE (O(1)) */

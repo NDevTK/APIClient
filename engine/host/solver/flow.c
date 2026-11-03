@@ -2507,6 +2507,7 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
        bytes, so the memory is this flow's to give back either way. It is released through the engine's entry because it
        holds the descent's state (every frame's atoms, the chunk array, the token and the JSFunctionDef chain). A no-op
        on a NULL slot. */
+    cow_release_scope_begin();
     JS_FlowCompileDrop(ctx, &f->compile);
     JS_FreeParkedFlows(f->parked);
     f->parked = NULL;
@@ -2527,6 +2528,7 @@ void flow_release_bulk(JSContext *ctx, Flow *f) {
     /* The replies it was still owed: the register is one JS value, so its resolve capabilities, reply values and
        strings go with one release. */
     pending_free(ctx, &f->pending);
+    cow_release_scope_end();
     cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
     /* The head before the chain below it: a head node inserted under a segment's node is that node's child, and a
        child is freed before its parent is freed deep. */

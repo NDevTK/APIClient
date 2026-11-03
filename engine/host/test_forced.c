@@ -1404,6 +1404,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/flexsvg.h"
 #include "fixture/ceupsale.h"
 #include "fixture/flexnone.h"
+#include "fixture/errsale.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2065,6 +2066,7 @@ TF_DOCS[] = {
     { "flexsvg", HTML_FLEXSVG },
     { "ceupsale", HTML_CEUPSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "flexnone", HTML_FLEXNONE },
+    { "errsale", HTML_ERRSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19427,6 +19429,23 @@ TF_UNIT void probes_flexnone(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `errsale` document (fixture/errsale.h): a flow sold while parked inside a report's `error`
+   dispatch takes its error reporting mode with its own world. */
+TF_UNIT void probes_errsale(const char *js, Probe *tab, int *n) {
+    const char *es_why = NULL; int es_tt = 1;
+    fold_row(&es_tt, &es_why, tf_census_row(js, "_cold", "soldFlows") >= 1,
+             "NOT REACHED: RAM pressure sold no flow, so the arm parked inside the report's dispatch was never freed");
+    fold_row(&es_tt, &es_why, (param_value_is(js, "/api/essell", "m", "free") ||
+                               param_value_is(js, "/api/essell", "m", "held")) &&
+                              param_value_is(js, "/api/essell", "c", "1"),
+             "the surviving arm's listener did not run exactly once: HTML §8.1.4.6 step 6 skips a report while its "
+             "global is in error reporting mode, so a second run means that arm's mode was cleared under it");
+    const Probe rows[] = {
+        { "error-report-sale", es_tt, "/api/essell", SESS_EXPLORE, es_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25421,6 +25440,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_flexsvg(js, probes, &np);
     probes_ceupsale(js, probes, &np);
     probes_flexnone(js, probes, &np);
+    probes_errsale(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
