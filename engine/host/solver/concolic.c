@@ -8760,7 +8760,13 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
         }
         /* A co-source of the candidate's search answers the bytes it holds in this world: the value an
            attacker's reproduction leaves it at. Pinned, so every later read and branch agrees with them, and so
-           the fire states them as a gate and verifies under it (solve.c's fire_observed). */
+           the fire states them as a gate and verifies under it (solve.c's fire_observed). A co-source the path
+           pinned is a gate already and never reaches here.
+           Named residual. Not covered: a co-source whose path filed a domain short of a pin (a substring or
+           range facet), which is read here as its example rather than composed from that domain. Next diff
+           builds: the detecting flow's composition of each co-source (concolic_url_head over its row) learned as
+           its gate at the capture. Absence shows as: a parked search with co-sources whose candidates' runway
+           stops at a branch over a co-source. */
         if (co_find(src) >= 0) {
             size_t len;
             const char *b;
