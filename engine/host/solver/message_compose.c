@@ -240,6 +240,20 @@ static int has_children(const Compose *c, const Node *node)
     return 0;
 }
 
+/* Whether the injection is a member of `node` at any depth. */
+static int inject_under(const Compose *c, const Node *node)
+{
+    for (int i = 0; i < c->ns.n; i++) {
+        const Node *d = &c->ns.v[i];
+        int k;
+
+        if (d->n <= node->n || strcmp(d->src, c->inject)) continue;
+        for (k = 0; k < node->n && !strcmp(node->path[k], d->path[k]); k++) {}
+        if (k == node->n) return 1;
+    }
+    return 0;
+}
+
 /* The ParseJSON node filed under `node`, or NULL where the page never handed `node` to JSON.parse. */
 static const Node *parse_child(const Compose *c, const Node *node)
 {
@@ -308,13 +322,19 @@ static void emit_node(Compose *c, JsonBuf *b, const Node *node, int *omitted)
         emit_text(c, b, node, parse_child(c, node), types, truth);
         goto done;
     }
+    /* The member structure is session-wide (concolic.c's member table is a fact about naming, not a world), so
+       members another world read say nothing of this one: a value whose facets admit no object is composed by
+       those facets below, and re-execution answers any member this world reads of it. Only the payload cannot
+       ride under such a value. */
     if (has_children(c, node)) {
-        if (!(types & CONCOLIC_TYF_OBJECT) || truth == 0) {
-            refuse(c, "members were read of a value whose facets admit no object", node->src);
+        if ((types & CONCOLIC_TYF_OBJECT) && truth != 0) {
+            emit_members(c, b, node);
             goto done;
         }
-        emit_members(c, b, node);
-        goto done;
+        if (inject_under(c, node)) {
+            refuse(c, "the injection is a member of a value whose facets admit no object", node->src);
+            goto done;
+        }
     }
     /* A loose equality that held (§7.2.13 IsLooselyEqual ( x, y )) is answered by its own operand, which step 1
        makes equal whenever its type is still open; every other one that held must spell the same operand.
