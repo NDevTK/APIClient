@@ -177,6 +177,11 @@ typedef struct {
        Taken at the capture and grown by a fire whose run pinned one more; owned. */
     char **gate_src, **gate_val;
     int ngate;
+    /* The co-sources: the base rows of the other attacker sources the searched value is a function of
+       (concolic_root_cobases), which every candidate of this search reads as the bytes they hold in its world
+       (concolic_set_cosources). The union over this search's detections; owned. */
+    char **co_src;
+    int nco;
     /* Fires whose run pinned an attacker source it did not deliver: each took an arm a delivery must decide,
        so none is a PoC. Emitted as `firedUnderUndeliveredSource`. */
     int fired_ungated;
@@ -1292,7 +1297,7 @@ static void park_on_sender(const char *src, const char *root, int sink) {
    injected there lands nowhere. When the identity belongs to no member of the root that declares a source and
    some member does, each declaring member is searched at its own identity with itself as the root, so each
    search states its own envelope. `pinned`: the path pinned a principal, so the detection parks on a sender. */
-typedef struct { const char *src; int owns, cls, pinned; char *owner; WriteSite at; } DetectIds;
+typedef struct { const char *src, *root; int owns, cls, pinned; char *owner; WriteSite at; } DetectIds;
 
 static void detect_id_owned(void *ud, const char *p, size_t n) {
     DetectIds *d = ud;
@@ -1327,7 +1332,23 @@ static void search_learn_site(Cand *e, WriteSite at) {
     e->site[e->nsite++] = at;
 }
 
-static void detect_open(const char *src, const char *root, int cls, int pinned, WriteSite at) {
+/* One co-source of search `ud`, learned unless it holds that base already. */
+static void cosource_learn(void *ud, const char *src) {
+    Cand *e = ud;
+    char **grown;
+
+    for (int i = 0; i < e->nco; i++)
+        if (!strcmp(e->co_src[i], src)) return;
+    grown = realloc(e->co_src, (size_t)(e->nco + 1) * sizeof *grown);
+    CHECK(grown, "solve: OOM learning a search's co-source");
+    e->co_src = grown;
+    e->co_src[e->nco] = reclaim_strdup(src);
+    CHECK(e->co_src[e->nco], "solve: OOM learning a search's co-source");
+    e->nco++;
+}
+
+/* `joint` is the root of the value that reached the sink; `root` the member this search is delivered through. */
+static void detect_open(const char *src, const char *root, const char *joint, int cls, int pinned, WriteSite at) {
     Cand *e;
 
     if (pinned) park_on_sender(src, root, cls);
@@ -1335,6 +1356,7 @@ static void detect_open(const char *src, const char *root, int cls, int pinned, 
     e = search_of(src, cls);
     DCHECK(e != NULL, "a detection opened no search for the identity that reached the sink");
     search_learn_site(e, at);
+    concolic_root_cobases(joint, root, cosource_learn, e);
 }
 
 static void detect_open_member(void *ud, const char *p, size_t n) {
@@ -1342,7 +1364,7 @@ static void detect_open_member(void *ud, const char *p, size_t n) {
     char *m = strndup(p, n);
 
     CHECK(m, "solve: OOM naming a declared member's search");
-    detect_open(m, m, d->cls, d->pinned, d->at);
+    detect_open(m, m, d->root, d->cls, d->pinned, d->at);
     free(m);
 }
 
@@ -1351,13 +1373,13 @@ static void detect_open_member(void *ud, const char *p, size_t n) {
    its candidate is delivered through that member alone and the other member's bytes stay the observed ones,
    so a member that cannot reach the sink's context (the base's fragment, which §4.4 drops) opens nothing. */
 static void detect_open_searches(const char *src, const char *root, int cls, int pinned, WriteSite at) {
-    DetectIds d = { src, 0, cls, pinned, NULL, at };
+    DetectIds d = { src, root, 0, cls, pinned, NULL, at };
     int declared = concolic_root_declared_each(root, detect_id_owned, &d);
 
     DCHECKF(declared > 0, "a search was opened over `%s`, whose root `%s` declares no source — detect_sink "
             "declines such an arrival, since no candidate can be delivered where it is read", src, root);
-    if (d.owns && concolic_root_declared_sources(root) < 2) detect_open(src, root, cls, pinned, at);
-    else if (d.owns) detect_open(src, d.owner, cls, pinned, at);
+    if (d.owns && concolic_root_declared_sources(root) < 2) detect_open(src, root, root, cls, pinned, at);
+    else if (d.owns) detect_open(src, d.owner, root, cls, pinned, at);
     else concolic_root_declared_each(root, detect_open_member, &d);
     free(d.owner);
 }
@@ -2613,6 +2635,7 @@ void solve_flow_begin(Flow *f) {
     concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL, head);
     concolic_set_deliveries(f ? f->cand_dsrc : NULL, f ? f->cand_dval : NULL, f ? f->cand_dn : 0);
     concolic_set_gates(rc ? rc->gate_src : NULL, rc ? rc->gate_val : NULL, rc ? rc->ngate : 0);
+    concolic_set_cosources(rc ? rc->co_src : NULL, rc ? rc->nco : 0);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
     /* A witness verification substitutes and suppresses like a sink candidate and is no search's: its sinks
        take the exploration arm, which detect_sink then declines. */
@@ -3218,6 +3241,8 @@ void solve_free(void) {
         for (int k = 0; k < g_pending[i].ngate; k++) { free(g_pending[i].gate_src[k]); free(g_pending[i].gate_val[k]); }
         free(g_pending[i].gate_src);
         free(g_pending[i].gate_val);
+        for (int k = 0; k < g_pending[i].nco; k++) free(g_pending[i].co_src[k]);
+        free(g_pending[i].co_src);
         sender_pins_free(&g_pending[i].pp);
         sender_pins_free(&g_pending[i].snd);
         free(g_pending[i].site);

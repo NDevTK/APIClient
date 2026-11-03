@@ -2510,6 +2510,16 @@ static int gbase_find(const char *src) {
     return -1;
 }
 
+/* The running flow's co-sources (concolic_set_cosources): base rows its search's value is also a function of.
+   Copies, replaced at every switch-in. */
+static char **g_co_src;
+static int g_co_n;
+
+static int co_find(const char *src) {
+    for (int i = 0; src && i < g_co_n; i++) if (!strcmp(g_co_src[i], src)) return i;
+    return -1;
+}
+
 /* Whether a source read answers a delivered value rather than an unknown: the search's own bytes, a further
    delivery or a gate. */
 static int src_delivered(const char *src) {
@@ -3757,6 +3767,56 @@ int concolic_gates_each(void (*cb)(void *ud, const char *src, const char *equals
 {
     for (int i = 0; cb && i < g_gate_n; i++) cb(ud, g_gate_src[i], g_gate_val[i]);
     return g_gate_n;
+}
+
+static void cosources_clear(void)
+{
+    for (int i = 0; i < g_co_n; i++) free(g_co_src[i]);
+    free(g_co_src);
+    g_co_src = NULL;
+    g_co_n = 0;
+}
+
+/* Whether `row` is a base row a co-source may name: one whose whole value a gate can carry (concolic_set_gates'
+   own precondition), so the pin its read makes becomes a delivery the PoC states. */
+static int cobase_row(int row)
+{
+    return row >= 0 && !g_srcs[row].parent && !g_srcs[row].path && !g_srcs[row].json && !g_srcs[row].principal &&
+           (g_srcs[row].deliver == SRC_DELIVER_ADDRESS || g_srcs[row].deliver == SRC_DELIVER_NAVIGABLE_NAME);
+}
+
+int concolic_root_cobases(const char *root, const char *own, void (*cb)(void *ud, const char *src), void *ud)
+{
+    int own_base = row_base(root_declared_row(own)), found = 0;
+    const char *p;
+    size_t n;
+
+    DCHECK(root && own && own_base >= 0, "co-sources were asked of no root, or beside an own root no row declares");
+    for (int i = 0; root_member(root, i, &p, &n); i++) {
+        int base = row_base(src_row(p, n));
+
+        if (base == own_base || !cobase_row(base)) continue;
+        found++;
+        if (cb) cb(ud, g_srcs[base].src);
+    }
+    return found;
+}
+
+void concolic_set_cosources(char *const *srcs, int n)
+{
+    cosources_clear();
+    DCHECK(n == 0 || g_cand_src, "co-sources were installed for a flow carrying no candidate");
+    if (n == 0) return;
+    g_co_src = reclaim_malloc((size_t)n * sizeof *g_co_src);
+    CHECK(g_co_src, "concolic: OOM installing a flow's co-sources");
+    for (int i = 0; i < n; i++) {
+        DCHECK(cobase_row(src_row(srcs[i], strlen(srcs[i]))),
+               "a co-source names a row that is not a base an address or navigable-name gate can carry — "
+               "concolic_root_cobases hands out no other");
+        g_co_src[i] = reclaim_strdup(srcs[i]);
+        CHECK(g_co_src[i], "concolic: OOM installing a flow's co-source");
+        g_co_n = i + 1;
+    }
 }
 
 /* A gated base's read: the composed bytes through the base's own transform. URL §6.1 URL class's search and
@@ -8471,6 +8531,7 @@ void concolic_free(void)
     free(g_cand_bytes);
     g_cand_src = g_cand_payload = g_cand_at = g_cand_bytes = NULL;
     gates_clear();
+    cosources_clear();
     /* The delivery fact goes with the pair it is about: concolic_candidate_delivered asserts a 1 never stands
        beside a NULL payload. This is the running flow's live copy; parked copies went with their blobs. */
     g_cand_delivered = 0;
@@ -8696,6 +8757,27 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
         if (!JS_IsUninitialized(pv)) {
             JS_FreeValue(ctx, example);
             return pv;
+        }
+        /* A co-source of the candidate's search answers the bytes it holds in this world: the value an
+           attacker's reproduction leaves it at. Pinned, so every later read and branch agrees with them, and so
+           the fire states them as a gate and verifies under it (solve.c's fire_observed). */
+        if (co_find(src) >= 0) {
+            size_t len;
+            const char *b;
+            int wrote;
+
+            DCHECK(JS_IsString(example),
+                   "a co-source's read carries an example that is not a String — cobase_row admits address "
+                   "components and the navigable's name only, whose getters answer Strings");
+            b = JS_ToCStringLen(ctx, &len, example);
+            CHECK(b != NULL, "concolic: OOM reading a co-source's bytes");
+            DCHECK(strlen(b) == len, "a co-source's bytes hold a NUL, which a pin's spelling cannot carry");
+            wrote = concolic_pin_store(src, src, CONCOLIC_LIT_STRING, b, JS_CONCOLIC_EQ_STRICT);
+            JS_FreeCString(ctx, b);
+            DCHECK(wrote, "a co-source's strict String pin wrote nothing");
+            (void)wrote;
+            JS_FreeValue(ctx, example);
+            return pin_of(ctx, src);
         }
     }
     /* The tie `concolic_exotic_get`'s pin arm asserts. A candidate re-fire skips the arm deliberately, so a

@@ -578,6 +578,15 @@ const char *concolic_path_precondition(void);
 void        concolic_set_gates(char *const *srcs, char *const *vals, int n);
 /* The installed gates as given, each handed to `cb` in installation order; answers how many. */
 int         concolic_gates_each(void (*cb)(void *ud, const char *src, const char *equals), void *ud);
+/* The base rows of `root`'s declared members other than `own`'s base whose whole value a gate can carry (an
+   address component or the navigable's name), each handed to `cb`; answers how many. A value joined from
+   several attacker sources is searched at one member (`own`), and these are the others it is a function of. */
+int         concolic_root_cobases(const char *root, const char *own, void (*cb)(void *ud, const char *src), void *ud);
+/* The running flow's co-sources (concolic_root_cobases of its search's value), installed with its gates at
+   every switch-in. A co-source no candidate, delivery or gate answers is read as the bytes it holds in this
+   world, pinned: a delivery composed from every declared source the value depends on, the others left as an
+   attacker's reproduction leaves them. */
+void        concolic_set_cosources(char *const *srcs, int n);
 /* The running flow decided the branch `cond`, whose value a declared principal's bytes reach (a message's
    origin): latched in its constraint, so concolic_principal_decided answers whether this world asked anything of
    a principal however the predicate was spelled (`origin.indexOf(x) === -1` pins and gates nothing). */
