@@ -687,6 +687,7 @@ char *result_wfq_json(void) {
     METRIC_SET(val_unplaced, w.val_unplaced);
     METRIC_SET(self_emit, w.self_emit);
     METRIC_SET(unrun, w.unrun);
+    METRIC_SET(held_members, w.held_members);
     METRIC_SET(never_picked, w.never_picked);
     METRIC_SET_REAL(never_picked_gap, w.never_picked_gap);
     METRIC_SET(never_picked_at_top, w.never_picked_at_top);

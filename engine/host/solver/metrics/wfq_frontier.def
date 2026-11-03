@@ -24,6 +24,9 @@ METRIC(val_arrived, "valArrived", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(val_unplaced, "valUnplaced", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(self_emit, "selfEmit", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(unrun, "unrun", GAUGE, "member", AGENT, "solver/flow.c", INT)
+/* …and the members held out of the order (a source cut's standby): `neverPicked`, the gap
+   rows and `wTop`/`wMin` are taken over the other `members - heldMembers`. */
+METRIC(held_members, "heldMembers", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(never_picked, "neverPicked", GAUGE, "member", AGENT, "solver/flow.c", INT)
 METRIC(never_picked_gap, "neverPickedGap", GAUGE, "point", AGENT, "solver/flow.c", FIXED3)
 /* …and how wide the plateau is. `neverPickedGap` reads 0.0 for the best of a wide tie and for

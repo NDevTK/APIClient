@@ -1051,6 +1051,10 @@ void flow_credit_pick(Flow *f);
  * nothing. A single sample characterises an instant, never a run. */
 typedef struct {
     long members;      /* live members of the frontier — the denominator for every count below */
+    /* The members held out of the order for good (flow_set_held: a source cut's standby, never stepped). The
+       front, the floor, every gap's holder and `never_picked` are taken over the other `members - held_members`,
+       the members a dispatch can reach. */
+    long held_members;
     /* The family reward's range over the frontier, read per member. A spread above 1.0 means the optimism bonus
        can no longer reorder its ends. Aging is subtracted only from the flow being served and its family, so it
        cannot lift a member that consumes nothing: the ends meet only by the top coming down, after
@@ -1090,8 +1094,9 @@ typedef struct {
                           just produced (`never_picked` counts the never-dispatched). A superset of flow_pick's
                           `unrun`, which needs every non-reward term at zero; read against `vis_max` it separates
                           "nothing charged yet" from "nothing finished". */
-    /* Members never handed the thread, and how far the best of them stands behind the front in the order's own
-       points (the gap is 0.0 when the population is empty). `picks == 0` is the starved population: unlike
+    /* Members of the order never handed the thread (a held member is never handed it by design and is not one),
+       and how far the best of them stands behind the front in the order's own points (the gap is 0.0 when the
+       population is empty). `picks == 0` is the starved population: unlike
        `unrun`, `vis_zero` or `svc_min`, nothing the member did can move it.
        A gap of zero is not starvation: flow_pick's comparison is strict and the incumbent is the seed, so on a
        tied cohort (ordinary on a one-family page) the pick returns one of N tied maxima and the rest stand at the
@@ -1652,9 +1657,9 @@ long flow_plateau_held(void);
 long flow_plateau_runs(void);
 long flow_plateau_held_idle(void);
 
-/* The highest-priority flow in the frontier, or NULL if empty: every member, whether or not it can currently
-   make progress. It answers the census's question; the scheduler's own pick is flow_next_to_run below. Does not
-   remove it. */
+/* The highest-priority member of the order, or NULL if it has none: every member but the held ones (flow_set_held),
+   whether or not it can currently make progress. It answers the census's question; the scheduler's own pick is
+   flow_next_to_run below. Does not remove it. */
 Flow *flow_best(void);
 
 /* Which flow should hold the thread, given the one that holds it now (NULL when nobody does): the dispatch

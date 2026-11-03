@@ -5077,6 +5077,9 @@ static Flow *flow_pick_walk(FlowScan why) {
                "member on exactly one line and loses one on exactly one line, so the two writers of this "
                "relation have come apart, and flow_remove will swap-remove at the handle's slot and drop "
                "whichever member is standing there");
+        /* A held member is out of the order for good (flow_set_held): a front no dispatch can reach is not the
+           order's front. */
+        if (g_flows[i]->held) continue;
         /* Counted where the weight is taken, so the count is what the scan cost. */
         w = flow_weight(g_flows[i]); g_scan_weights[why]++;
         /* And the precondition of every sub-linear order, asked of every member: engine.c's preempt hook holds it
@@ -5624,7 +5627,7 @@ static void flow_site_census(WfqCensus *out) {
 
         if (!f->at) continue;
         all[na++] = f->at;
-        if (f->picks == 0) never[nn++] = f->at;
+        if (f->picks == 0 && !f->held) never[nn++] = f->at;
     }
     out->never_top_n = 0;
     site_runs(never, nn, &out->never_sites, &out->never_codes, &out->never_sites_unserved, out);
@@ -5666,6 +5669,8 @@ void flow_wfq_census(WfqCensus *out) {
     long cur_deep_live = 0;
     double cur_deep_w = 0.0;
     int have_cur_deep = 0;
+    /* Whether the walk has met a member of the order yet, which `w_min`'s floor is taken over. */
+    int have_ordered = 0;
     /* The best-weighted candidate (flow.h's `cand_ops`), recorded by the walk beside `cand_w_max`. */
     const Flow *cand_holder = NULL;
     /* The best-weighted member of the observed world (flow.h's `observed_ops`), recorded by the walk. */
@@ -5687,6 +5692,7 @@ void flow_wfq_census(WfqCensus *out) {
     g_scan_runs[FLOW_SCAN_CENSUS]++;
     other_before = g_scan_weights[FLOW_SCAN_OTHER];
     out->members = g_flows_n;
+    out->held_members = 0;
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
     out->val_arrived = out->val_unplaced = 0;
@@ -5790,12 +5796,18 @@ void flow_wfq_census(WfqCensus *out) {
            quantity. This walk skips nothing, so its count is the frontier's size per sample, which makes the
            identity below an assertion. */
         g_scan_weights[FLOW_SCAN_CENSUS]++;
+        /* A held member is a snapshot out of the order for good (flow_set_held), so the front, the floor, every
+           holder a gap is taken from and the never-dispatched population are the order's members; the held ones
+           are counted apart. */
+        const int ordered = !f->held;
+        if (!ordered) out->held_members++;
         /* And where this member stands in the document's program table, kept for the deepest row anybody is at
            (flow.h). Rewritten when a deeper member is met and accumulated on an equal one, because the population
            is the members at the maximum. It costs no weighing. `Flow.script_i`, the field cold.c's
            `program_cursors` histogram buckets on, so this maximum can be checked against that histogram's top
            non-empty index. */
-        if (!have_cur_deep || f->script_i > cur_deep) {
+        if (!ordered) {
+        } else if (!have_cur_deep || f->script_i > cur_deep) {
             have_cur_deep = 1; cur_deep = f->script_i; cur_deep_live = 1; cur_deep_w = w; cur_deep_holder = f;
         } else if (f->script_i == cur_deep) {
             cur_deep_live++;
@@ -5858,7 +5870,7 @@ void flow_wfq_census(WfqCensus *out) {
             out->assumed_members++;
             out->assumed_sum += flow_assumed(f);
             if (flow_assumed(f) > out->assumed_max) out->assumed_max = flow_assumed(f);
-            if (!assumed_holder || w > assumed_w) { assumed_w = w; assumed_holder = f; }
+            if (ordered && (!assumed_holder || w > assumed_w)) { assumed_w = w; assumed_holder = f; }
         }
         /* And the population the row above cannot name: zero own silence is also what an emission by any arm of the
            family produces. A member never handed the thread is the population starvation is about, and `picks` is
@@ -5866,9 +5878,9 @@ void flow_wfq_census(WfqCensus *out) {
            starved member stands behind the pick is the reading, which the count cannot make (flow.h). */
         if (!flow_path_forced(f) && flow_assumed(f) == 0 && !f->orphan && f->cand_payload == NULL) {
             out->observed_members++;
-            if (!observed_holder || w > observed_w) { observed_w = w; observed_holder = f; }
+            if (ordered && (!observed_holder || w > observed_w)) { observed_w = w; observed_holder = f; }
         }
-        if (f->picks == 0) {
+        if (f->picks == 0 && ordered) {
             out->never_picked++;
             /* The maximum and its width in one pass, without a second weighing: the width resets with the maximum,
                and every later member at exactly that weight joins it. Exact `==` with no epsilon, this file's idiom
@@ -5965,7 +5977,7 @@ void flow_wfq_census(WfqCensus *out) {
                     out->jobs_ready_micro += jm;
                     /* The best of them, against which `job_w_gap` is taken: how far the backlog's best claim stands
                        from the front of the queue. */
-                    if (!have_job_holder || w > job_w_max) { job_w_max = w; have_job_holder = 1; }
+                    if (ordered && (!have_job_holder || w > job_w_max)) { job_w_max = w; have_job_holder = 1; }
                 }
             }
         }
@@ -5979,7 +5991,7 @@ void flow_wfq_census(WfqCensus *out) {
             else {
                 out->deliv_ready++;
                 /* The best of them, against which `deliv_w_gap` is taken, a maximum for the job holder's reason. */
-                if (!have_deliv_holder || w > deliv_w_max) {
+                if (ordered && (!have_deliv_holder || w > deliv_w_max)) {
                     deliv_w_max = w; have_deliv_holder = 1; deliv_holder = f;
                 }
             }
@@ -6088,14 +6100,14 @@ void flow_wfq_census(WfqCensus *out) {
         /* The floor, over every member (flow.h): a frontier holding one never-run flow reads 0, and that is the
            answer, the case the aging term was priced for. `svc_max` read the other way, same scan and unit. */
         if (i == 0 || s < out->svc_min) out->svc_min = s;
-        if (i == 0 || w < out->w_min) out->w_min = w;
+        if (ordered && (!have_ordered || w < out->w_min)) { out->w_min = w; have_ordered = 1; }
         /* The fitness term's range: its floor is 0 by the type (flow.h), so the maximum is the range. Over every
            member, because the bound below is over every member's weight. */
         { double d = flow_distance(f); if (d > out->dist_max) out->dist_max = d; }
         /* And the same questions of the candidates alone (flow.h). `cand_src` is what a candidate session is, and
            engine.c copies it to a sibling, so this counts the search's whole live population. */
         if (f->cand_src) {
-            if (!out->cand_members || w > out->cand_w_max) { out->cand_w_max = w; cand_holder = f; }
+            if (ordered && (!cand_holder || w > out->cand_w_max)) { out->cand_w_max = w; cand_holder = f; }
             out->cand_members++;
             if (flow_own_silence(f) == 0) out->cand_unrun++;   /* the order's quantity, as the row above */
             if (s > out->cand_svc_max) out->cand_svc_max = s;
@@ -6156,15 +6168,22 @@ void flow_wfq_census(WfqCensus *out) {
     }
     g_wfq_census_minter = NULL;
     top = flow_best();
-    /* A non-empty frontier has a front. flow_best is flow_pick_walk with no exclusion over every member,
-       so it skips nothing; a NULL with members standing would be the pick hiding part of the frontier from its own
-       maximum. Every row derived from `top` stays at zero without a top, and a zero turn is an ordinary reading
-       for a leader that just emitted, so the assert makes the zeros below mean only an empty frontier. The `if`
-       stays because it keeps these reads off a NULL in release, where the DCHECK is compiled out. */
-    DCHECK(top != NULL || g_flows_n == 0,
-           "the WFQ census walked a non-empty frontier and flow_best returned no front — flow_best takes every "
-           "member with no filter, so this is the pick having gained one that hides a member from its own "
-           "maximum, and every row this census derives from the top would silently read as a zero");
+    /* The held count two ways: this walk's, against the one flow_set_held maintains. Every row above that
+       excludes a held member is a reading of the order only while the two agree. */
+    DCHECKF(out->held_members == flow_held_count(),
+            "the WFQ census walked %ld held member(s) and flow_set_held counts %d — the held flag and its count "
+            "have come apart, so the order's rows are taken over a population nothing else agrees on",
+            out->held_members, flow_held_count());
+    /* A frontier with a member of the order has a front. flow_best is flow_pick_walk over every member but the
+       held ones, which no dispatch can reach; a NULL with such a member standing would be the pick hiding part of
+       the order from its own maximum. Every row derived from `top` stays at zero without a top, and a zero turn is
+       an ordinary reading for a leader that just emitted, so the assert makes the zeros below mean only an order
+       with no member. The `if` stays because it keeps these reads off a NULL in release, where the DCHECK is
+       compiled out. */
+    DCHECK((top != NULL) == (g_flows_n > out->held_members) && (top == NULL || !top->held),
+           "the WFQ census's front is a held member, or it is absent while a member of the order stands — "
+           "flow_best excludes exactly the held members, so every row derived from the top would describe a "
+           "member no dispatch can pick, or silently read as a zero");
     if (top) {
         /* And the front of the order, in the order's quantity: the reward flow_queue_weight reads, the top flow's
            family's. `top->val` is one member's own ledger, which the pick never consults. */
@@ -6280,15 +6299,15 @@ void flow_wfq_census(WfqCensus *out) {
                "and the best member at the deepest row are the two the walk recorded");
     }
 
-    /* What a sample cost: this function weighs the frontier exactly twice, in its own walk and inside flow_best, so
-       flow_best's weighings must equal the members enumerated. A filter added to flow_best or a `continue` added to
-       the walk would make the census's price and population differ. A reader of `scanCensusWeights` alone prices a
+    /* What a sample cost: this function weighs every member in its own walk and the order's members again inside
+       flow_best, so flow_best's weighings must equal the members enumerated less the held ones. Another filter added
+       to flow_best or a `continue` added to the walk would make the census's price and population differ. A reader of `scanCensusWeights` alone prices a
        sample at one frontier; the second is charged to the shared OTHER entry (the host's read and the pager's tail
        run under it), which is why `other_before` brackets the call. */
-    DCHECK(g_scan_weights[FLOW_SCAN_OTHER] - other_before == (long)g_flows_n,
-           "the census and the flow_best inside it weighed different numbers of members — a sample weighs the "
-           "frontier exactly twice, so one of the walks acquired a filter");
-    /* And non-negative by the same construction: `w_top` is flow_best's maximum over every member, and a
+    DCHECK(g_scan_weights[FLOW_SCAN_OTHER] - other_before == (long)(g_flows_n - out->held_members),
+           "the census and the flow_best inside it weighed different numbers of members — a sample weighs every "
+           "member once and the order's members a second time, so one of the walks acquired a filter");
+    /* And non-negative by the same construction: `w_top` is flow_best's maximum over the order's members, and a
        never-dispatched member is one, read through the same flow_weight in the same scan. The row answers whether a
        starved member is outranked or merely unchosen, which a wrong sign inverts. */
     DCHECK(out->never_picked_gap >= 0.0,
