@@ -1405,6 +1405,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/ceupsale.h"
 #include "fixture/flexnone.h"
 #include "fixture/errsale.h"
+#include "fixture/sizekw.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2067,6 +2068,7 @@ TF_DOCS[] = {
     { "ceupsale", HTML_CEUPSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "flexnone", HTML_FLEXNONE },
     { "errsale", HTML_ERRSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "sizekw", HTML_SIZEKW },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19446,6 +19448,28 @@ TF_UNIT void probes_errsale(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `sizekw` document (fixture/sizekw.h): css-sizing-3 §3.2's intrinsic size keywords as a
+   `width`, in a contribution and as a used width. */
+TF_UNIT void probes_sizekw(const char *js, Probe *tab, int *n) {
+    const char *kw_why = NULL; int kw_tt = 1;
+    fold_row(&kw_tt, &kw_why, !!strstr(js, "\"/api/sizekw\""),
+             "NOT REACHED: no /api/sizekw record, so the document aborted before its fetch");
+    fold_row(&kw_tt, &kw_why, param_value_is(js, "/api/sizekw", "a", "70") &&
+                              param_value_is(js, "/api/sizekw", "b", "40") &&
+                              param_value_is(js, "/api/sizekw", "c", "70") &&
+                              param_value_is(js, "/api/sizekw", "o", "70"),
+             "css-sizing-3 §3.2: the column's `max-content`, `min-content` and `fit-content` items are not 70, 40 "
+             "and 70px, or the `inline-flex` column is not their 70px max-content contribution");
+    fold_row(&kw_tt, &kw_why, param_value_is(js, "/api/sizekw", "d", "50") &&
+                              param_value_is(js, "/api/sizekw", "e", "70"),
+             "css-sizing-3 §3.2: in 50px, `fit-content` is not min(70, max(40, 50)) = 50px or `max-content` is "
+             "not 70px");
+    const Probe rows[] = {
+        { "sizing-keyword-width", kw_tt, "/api/sizekw", SESS_EXPLORE, kw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25441,6 +25465,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_ceupsale(js, probes, &np);
     probes_flexnone(js, probes, &np);
     probes_errsale(js, probes, &np);
+    probes_sizekw(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
