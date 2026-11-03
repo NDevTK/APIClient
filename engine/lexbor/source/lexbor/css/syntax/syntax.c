@@ -25,6 +25,7 @@ lxb_css_syntax_parse_list_rules(lxb_css_parser_t *parser,
                                 const lxb_css_syntax_cb_list_rules_t *cb,
                                 const lxb_char_t *data, size_t length)
 {
+    lxb_status_t status;
     lxb_css_rule_list_t *list;
     lxb_css_syntax_rule_t *rule;
 
@@ -51,13 +52,16 @@ lxb_css_syntax_parse_list_rules(lxb_css_parser_t *parser,
     parser->tkz->with_comment = false;
     parser->stage = LXB_CSS_PARSER_RUN;
 
-    parser->status = lxb_css_syntax_parser_run(parser);
-    if (parser->status == LXB_STATUS_SUSPENDED) {
+    /* A suspension is the run's answer, never the parser's status: the run
+     * answers `parser->status` when its loop ends, so a SUSPENDED stored there
+     * would be answered again by the resumed run that completes the parse. */
+    status = lxb_css_syntax_parser_run(parser);
+    if (status == LXB_STATUS_SUSPENDED) {
         /* The stage stays RUN; lxb_css_syntax_parser_resume continues it. */
         return list;
     }
 
-    if (parser->status != LXB_STATUS_OK) {
+    if (status != LXB_STATUS_OK) {
         goto failed;
     }
 

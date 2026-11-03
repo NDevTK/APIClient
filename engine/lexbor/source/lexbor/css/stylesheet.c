@@ -112,8 +112,9 @@ lxb_css_stylesheet_parse(lxb_css_stylesheet_t *sst, lxb_css_parser_t *parser,
 
     sst->root = &list->rule;
 
-    return parser->status == LXB_STATUS_SUSPENDED ? LXB_STATUS_SUSPENDED
-                                                  : LXB_STATUS_OK;
+    /* A list handed back with the stage still RUN is a suspended run. */
+    return lxb_css_parser_is_running(parser) ? LXB_STATUS_SUSPENDED
+                                             : LXB_STATUS_OK;
 }
 
 lxb_status_t
