@@ -9957,12 +9957,13 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
     return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, computed);
 }
 
-/* Named residual. Not covered: only Location's member getters (search, hash, href) ask this seam, so a candidate of
-   `window.name`, `document.referrer` or a message's data never finds a snapshot before its source's first read and
-   re-runs the document from the baseline. Next diff builds: the same yield-and-ask stage in the window.name getter,
-   the referrer getter and the message event's data getter, each passing its declared source. Absence shows as:
-   `cutRefused: "no-cut"` on a parked search whose root is one of those sources while `_sourceCuts.taken` is
-   non-zero on the same document. */
+/* Asked by Location's search, hash and href getters, Window's name getter and Document's referrer getter.
+   Named residual. Not covered: a message's data (`message.data:<id>`), minted at the dispatch of a record a peer
+   routed here, in a document a peer references, where source_cut_ask takes no cut because routed records are
+   not attached to a held member. Next diff builds: a held member a peer's routed records reach, so a referenced
+   document can be cut and the dispatch can ask this seam before its mint. Absence shows as: `cutRefused:
+   "no-cut"` on a parked search rooted in a message's data while `_sourceCuts.taken` is non-zero on the same
+   document. */
 int concolic_source_cut_due(const char *const *srcs, int n)
 {
     DCHECK(g_source_overlay != SOURCE_OVERLAY_UNDECLARED,

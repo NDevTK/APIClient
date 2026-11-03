@@ -67,6 +67,10 @@
 enum { DM_MEMBERS(DM_ENUM_ONE) DM_N };
 static const char *const DM_NAME[] = { DM_MEMBERS(DM_NAME_ONE) };
 
+/* §3.1.4's referrer as the attacker source it is, and its display shape. */
+#define DM_REFERRER_SRC   "document.referrer"
+#define DM_REFERRER_SHAPE "{" DM_REFERRER_SRC "}"
+
 /* §3.1.1 declares `cookie` READ-WRITE and the other three READ-ONLY, which is what decides whether an assignment
    is the setter's algorithm or a TypeError in strict mode. Stated once, beside the names. */
 static int g_id_cookie_set = -1;
@@ -165,8 +169,7 @@ static JSValue js_doc_metadata(JSContext *ctx, JSValueConst this_val, int magic)
        and the value is still the SOURCE, because the referrer is attacker-influenced (the attacker links to the
        page from a document they control) and a branch on it must fork. Its delivery is declared in _init. */
     case DM_REFERRER:
-        return concolic_source_wrap(ctx, "{document.referrer}", "document.referrer",
-                                    JS_NewStringLen(ctx, "", 0));
+        return concolic_source_wrap(ctx, DM_REFERRER_SHAPE, DM_REFERRER_SRC, JS_NewStringLen(ctx, "", 0));
     /* §3.1.4's cookie GETTER, in the standard's own order: cookie-averse first, then the opaque-origin throw,
        then "the cookie-string for the document's URL for a 'non-HTTP' API".
        THE SOURCE IS MINTED PER READ, never once at the install — see the file header — and the AGENT-WIDE store
@@ -217,6 +220,40 @@ static JSValue js_doc_metadata(JSContext *ctx, JSValueConst this_val, int magic)
         return JS_NewString(ctx, document_readiness_of(lxb_dom_interface_node(dom)));
     }
 }
+
+/* The members' getter steps as one step machine, magic the member index. Its one stage rests before `referrer`,
+   which reads the attacker source: the solver may ask for a snapshot standing before the read
+   (concolic_source_cut_due), which the read waits for by yielding and asking again. Every other member reads at
+   once. */
+#define DM_GET_STAGES(X) \
+    X(DM_GET_READ, "HTML §3.1.4 Resource metadata management: the attribute's getter steps")
+enum { IDL_STEP_STAGE_BASE(DM_GET_STAGES) DM_GET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DM_GET_STEPS[] = { DM_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* No state: the stage is the whole position, and the member is the magic. */
+typedef struct { uint8_t unused; } DmGetState;
+
+static void dm_get_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int dm_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    static const char *const SRCS[] = { DM_REFERRER_SRC };
+    int magic = idl_step_magic(hdr);
+
+    (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == DM_GET_READ, "a Document metadata getter resumed into a stage §3.1.4 does not have");
+    if (!dm_receiver(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+    if (magic == DM_REFERRER && concolic_source_cut_due(SRCS, 1)) return JS_STEP_YIELD;
+    *presult = js_doc_metadata(ctx, hdr->this_val, magic);
+    return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+}
+
+static const IdlStepDecl DM_GET_DECL = { dm_get_step, sizeof(DmGetState), dm_get_visit, NULL,
+                                         "HTML §3.1.4 Document metadata attribute getters", DM_GET_STEPS };
+/* Declared with g_id_cookie_set and given back with it, so they are valid exactly while it is. */
+static int g_id_dm_get[DM_N];
 
 /* §3.1.4's cookie SETTER. `attribute USVString cookie`, so the value is a real string by the time this runs —
    the declaration converted it, and a page's `toString` ran as a rest point of the conversion rather than
@@ -273,10 +310,11 @@ void document_metadata_init(JSContext *ctx)
        such a cookie as present (an assumption). */
     concolic_declare_source_precondition(DM_COMPONENT, "document.cookie", SRC_PRE_APPLICATION_STATE);
     concolic_source_precondition_absent(DM_COMPONENT, "document.cookie");
-    concolic_declare_source(DM_COMPONENT, "document.referrer", " \"#<>?^`{}|", 0, SRC_DELIVER_REFERRING_ADDRESS);
+    concolic_declare_source(DM_COMPONENT, DM_REFERRER_SRC, " \"#<>?^`{}|", 0, SRC_DELIVER_REFERRING_ADDRESS);
     /* §3.1.1's `attribute USVString cookie` — the only read-write member here, and its type is what performs
        §3.2.12's scalar value conversion before the body ever sees the string. */
     g_id_cookie_set = idl_setter_id(ctx, IDL_USVSTRING, false, js_doc_set_cookie, 0);
+    for (int i = 0; i < DM_N; i++) g_id_dm_get[i] = idl_getter_id_step(ctx, &DM_GET_DECL, i);
 }
 
 void document_metadata_install(JSContext *ctx, JSValueConst proto)
@@ -286,8 +324,7 @@ void document_metadata_install(JSContext *ctx, JSValueConst proto)
     DCHECK(g_id_cookie_set >= 0, "Document's metadata members were installed before they were declared — the "
                                  "declarations are the AGENT's and the installs are the REALM's");
     for (i = 0; i < DM_N; i++)
-        idl_install_accessor(ctx, proto, DM_NAME[i], js_doc_metadata, i,
-                             i == DM_COOKIE ? g_id_cookie_set : -1);
+        idl_install_accessor_step(ctx, proto, DM_NAME[i], g_id_dm_get[i], i == DM_COOKIE ? g_id_cookie_set : -1);
 }
 
 /* RELEASED BY ITS DECLARER — §3.1.4's four members are declared from document_init, so document_agent_free
@@ -310,5 +347,6 @@ void document_metadata_free(void)
 {
     DCHECK(g_id_cookie_set >= 0, "§3.1.4's members were released in an agent that never declared them");
     g_id_cookie_set = -1;
+    for (int i = 0; i < DM_N; i++) g_id_dm_get[i] = -1;
     concolic_undeclare_sources(DM_COMPONENT);
 }

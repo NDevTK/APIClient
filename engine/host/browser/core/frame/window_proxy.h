@@ -831,12 +831,19 @@ bool window_proxy_same_origin_with_top(JSContext *ctx);
    BORROWED. */
 const char *window_proxy_name(JSValueConst proxy);
 
+/* §7.2.2.1's name as the attacker source it is where nobody stated it, and its display shape. */
+#define WINDOW_NAME_SRC   "window.name"
+#define WINDOW_NAME_SHAPE "{" WINDOW_NAME_SRC "}"
+
 /* §7.2.2.1's `name`, READ AND WRITTEN THROUGH THE ONE PLACE IT LIVES. A Window and its WindowProxy are two
    spellings of one navigable, so `window.name` inside a document and `w.name` from its opener are one attribute
    of one record — window.c answers the global's accessor from here rather than from a second source. The value
    is CONCRETE where the navigable's name was stated (§7.4 states it) and CONCOLIC where it was not, which is
    the navigable the instance started in. */
 JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy);
+/* Whether window_proxy_name_value would answer the attacker source WINDOW_NAME_SRC rather than a stated name, so
+   a reading machine can rest before the read (concolic_source_cut_due). Reads the fields the value is read from. */
+bool window_proxy_name_is_source(JSContext *ctx, JSValueConst proxy);
 /* The navigable's name becomes unknown again, as one a cross-origin opener set: what a fresh open of this
    page gives the new document, since §7.2.2.1's open names the new navigable after the opener's target. */
 void window_proxy_name_forget(JSContext *ctx, JSValueConst proxy);

@@ -486,20 +486,39 @@ static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueC
     return r < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
-/* §7.2.2.1's `name` — THE NAVIGABLE'S, which is the same attribute `w.name` reads through the WindowProxy and is
-   answered from the same record. It was a second source here: a source-only concolic with no example, so
-   `open(url, "chan42")` gave "chan42" to the opener and an example-free unknown to the popup's own script,
-   which is the popup unable to learn the name it was created with. HTML §7.2.2.1 says "return this's
-   navigable's target name"; window_proxy_name_value is where that is computed, including whether it is known
-   at all. */
-static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+/* §7.2.2.1's `name` getter steps, "return this's navigable's target name": the navigable's, the same attribute
+   `w.name` reads through the WindowProxy, answered from the one record (window_proxy_name_value), which also
+   decides whether the name is known. A step machine whose one stage rests before a read of an unknown name, the
+   attacker source, so the solver may take a snapshot standing before it (concolic_source_cut_due); the read
+   waits by yielding and asking again. */
+#define WIN_NAME_GET_STAGES(X) \
+    X(WIN_NAME_GET_READ, "HTML §7.2.2.1 Opening and closing windows: the name getter steps")
+enum { IDL_STEP_STAGE_BASE(WIN_NAME_GET_STAGES) WIN_NAME_GET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const WIN_NAME_GET_STEPS[] = { WIN_NAME_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)magic;
-    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
-    return window_proxy_name_value(ctx, nav);
+/* No state: the stage is the whole position. */
+typedef struct { uint8_t unused; } WinNameGetState;
+
+static void win_name_get_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int win_name_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    static const char *const SRCS[] = { WINDOW_NAME_SRC };
+    JSValueConst nav;
+
+    (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == WIN_NAME_GET_READ, "the name getter resumed into a stage §7.2.2.1 does not have");
+    nav = window_proxy_this_navigable(ctx, hdr->this_val);
+    if (JS_IsUninitialized(nav)) return JS_STEP_ABRUPT;   /* §3.7.6's TypeError, already thrown */
+    if (window_proxy_name_is_source(ctx, nav) && concolic_source_cut_due(SRCS, 1)) return JS_STEP_YIELD;
+    *presult = window_proxy_name_value(ctx, nav);
+    return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
 }
+
+static const IdlStepDecl WIN_NAME_GET_DECL = { win_name_get_step, sizeof(WinNameGetState), win_name_get_visit,
+                                               NULL, "HTML §7.2.2.1 the Window name getter", WIN_NAME_GET_STEPS };
 
 /* §7.2.2.1's `name` is SETTABLE, and it was not — the accessor had no setter at all, so `window.name = "x"` was a
    silent no-op and a page that names itself to be reached by `open(url, "x")` could not. It renames the
@@ -650,7 +669,7 @@ static JSValue js_win_set_status(JSContext *ctx, JSValueConst this_val, JSValueC
  * find_own_property found nothing), so a global variable read pays for this only when it was going to fail
  * anyway — and the index test is the engine's own, not a re-parse of the atom's text. */
 static JSClassID g_window_class;
-/* THE RUNTIME THE TWO CLASSES AND THE FIVE POOL ENTRIES BELOW WERE DECLARED IN. It is what makes "this
+/* THE RUNTIME THE TWO CLASSES AND THE POOL ENTRIES BELOW WERE DECLARED IN. It is what makes "this
    component is declared" a fact separate from any one of the values it declares — see window_is. */
 static JSRuntime *g_window_rt;
 
@@ -1290,6 +1309,7 @@ static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ont
 static int g_id_close = -1, g_id_stop = -1;   /* declared once per agent — see window_init */
 static int g_id_opener_set = -1;   /* §7.2.2.4's `opener` setter, declared with them for the same reason */
 static int g_id_name_set = -1;     /* §7.2.2.1's `name` setter — its DOMString conversion is the page's code */
+static int g_id_name_get = -1;     /* §7.2.2.1's `name` getter — it rests before reading an unknown name */
 static int g_id_status_set = -1;   /* §7.2.2.5's `status` setter — likewise */
 
 void window_init(JSContext *ctx)
@@ -1315,6 +1335,7 @@ void window_init(JSContext *ctx)
     g_status_slot = realm_value_declare(ctx, "HTML §7.2.2.5 the Window's status");
     g_id_opener_set = idl_setter_id(ctx, IDL_ANY, false, js_win_set_opener, 0);
     g_id_name_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_name, 0);
+    g_id_name_get = idl_getter_id_step(ctx, &WIN_NAME_GET_DECL, 0);
     g_id_status_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_status, 0);
     {
         static const IdlArgType NAMED_ARGS[4] = { IDL_ANY, IDL_ANY, IDL_ANY, IDL_ANY };
@@ -1361,6 +1382,8 @@ void window_init(JSContext *ctx)
                    "HTML §7.2.2.4 Accessing related windows' `opener` setter declaration");
     agent_state_id("window", &g_id_name_set,
                    "HTML §7.2.2.1 Opening and closing windows' `name` setter declaration");
+    agent_state_id("window", &g_id_name_get,
+                   "HTML §7.2.2.1 Opening and closing windows' `name` getter declaration");
     agent_state_id("window", &g_id_named_step,
                    "HTML §7.2.2.3 Named access on the Window object's step over regions of unknown markup");
     agent_state_id("window", &g_id_named_domain_step,
@@ -1559,7 +1582,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *origin)
        written down here — a stated title is a claim the next run can falsify. */
     agent_cluster_install(ctx, g);
 
-    idl_install_accessor(ctx, g, "name", js_win_get_name, 0, g_id_name_set);
+    idl_install_accessor_step(ctx, g, "name", g_id_name_get, g_id_name_set);
     /* HTML §7.2.2 The Window object: its IDL block ends `Window includes GlobalEventHandlers; Window
        includes WindowEventHandlers;`, so `window.onload`, `onerror`, `onmessage` and the rest are THIS
        interface's members and belong to this install — the same reason DOM §2.7 Interface EventTarget's
@@ -1583,7 +1606,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *origin)
  * §7.2.6.5's NavigationHistoryEntry and the cross-agent seam, while wpt_runner.c ran it a whole teardown later,
  * after solver_agent_free and after document_free. Reverse declaration order decides it now and no author has
  * to agree with any other. Nothing here ever needed a JSContext: what this gives back is two class ids, a
- * realm-value slot id and five pool entries, every one of which is a registration in the RUNTIME. */
+ * realm-value slot id and its pool entries, every one of which is a registration in the RUNTIME. */
 void window_free(JSRuntime *rt)
 {
     /* NOT a null check. This runs from a release column that runs only where platform_agent_init ran, and this
@@ -1594,7 +1617,7 @@ void window_free(JSRuntime *rt)
            "never brought up");
     DCHECK(g_window_rt == rt,
            "§7.2.2's Window was released against a RUNTIME other than the one it was declared in — its two "
-           "classes, its realm-value slot and its five pool entries are registrations in that runtime, and "
+           "classes, its realm-value slot and its pool entries are registrations in that runtime, and "
            "zeroing them against another leaves every one of them standing in the runtime that issued them");
     g_window_class = 0;
     g_window_props_class = 0;
@@ -1603,15 +1626,15 @@ void window_free(JSRuntime *rt)
        asserts it is back at -1, which is the half that makes a forgotten reset crash rather than hand a second
        agent a slot in a runtime that no longer exists. */
     g_status_slot = JS_INVALID_CLASS_ID;
-    /* AND THE FIVE POOL ENTRIES, which this release kept — the same slots window_proxy_free was keeping one file
+    /* AND THE POOL ENTRIES, which this release kept — the same slots window_proxy_free was keeping one file
        over, and the same consequence: a declaration is a registration in a runtime, so a carried index names an
        entry in a pool the next agent has not built, read by the first window_install that agent runs. Their
        pre-init value is -1 and not 0, because entry 0 is a real member (see the declarations above). */
-    g_id_opener_set = g_id_name_set = g_id_status_set = g_id_named_step = g_id_named_domain_step = -1;
+    g_id_opener_set = g_id_name_set = g_id_name_get = g_id_status_set = g_id_named_step = g_id_named_domain_step = -1;
     concolic_undeclare_sources("window");   /* the named-access rows the composer's claim declared */
     concolic_set_markup_composer(NULL, NULL);
     g_id_close = g_id_stop = -1;
-    /* AND §8.1.4.6's MACHINE, for the reason the five pool entries above are given back and the one
+    /* AND §8.1.4.6's MACHINE, for the reason the pool entries above are given back and the one
        core/events/report_exception.c states at its own flow definition: JS_RegisterStepDef hands out an index
        into the runtime's own tail, so an id kept across a teardown names a table the next agent has not built
        — and window_init's own DCHECK is what turns a forgotten reset into a crash rather than into a realm

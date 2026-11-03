@@ -1748,21 +1748,29 @@ const char *window_proxy_name(JSValueConst proxy)
    uncertainty the program does not have. The navigable nobody here created is the one whose name a cross-origin
    opener may have set, and that read is concolic, carrying the spec's "" as its example, so it forks control
    flow without losing the value. */
+bool window_proxy_name_is_source(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+
+    DCHECK(p != NULL, "whether the name is unknown was asked of something that is not a WindowProxy");
+    /* HTML §7.2.2 "The Window object": "If this's navigable is null, then return the empty string.", the predicate
+       `closed` reads, so a frame removed from the tree answers "" as it answers `closed`; a closing top-level
+       traversable still has its navigable and keeps its name. */
+    return !window_proxy_browsing_context_null(ctx, proxy) && !p->name_known;
+}
+
 JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
 
     DCHECK(p != NULL, "the name of something that is not a WindowProxy was read");
-    /* HTML §7.2.2 "The Window object": "If this's navigable is null, then return the empty string.", the predicate
-       `closed` reads, so a frame removed from the tree answers "" on the next line as it answers `closed`; a
-       closing top-level traversable still has its navigable and keeps its name. */
-    if (window_proxy_browsing_context_null(ctx, proxy)) return JS_NewStringLen(ctx, "", 0);
-    if (p->name_known)
-        return JS_IsUndefined(p->name_val) ? JS_NewString(ctx, p->name ? p->name : "") : JS_DupValue(ctx, p->name_val);
     /* The world's: §7.2.2.1's name is written by whoever navigated this navigable, which is another document and
-       often an attacker's, and nothing in this document's served bytes states it. */
-    return concolic_new(ctx, "{window.name}", "window.name", CONCOLIC_WHOSE_WORLD,
-                        JS_NewStringLen(ctx, "", 0));
+       often an attacker's, and nothing in this document's served bytes states it. It is minted through the one
+       source seam, which records the read on the flow's history. */
+    if (window_proxy_name_is_source(ctx, proxy))
+        return concolic_source_wrap(ctx, WINDOW_NAME_SHAPE, WINDOW_NAME_SRC, JS_NewStringLen(ctx, "", 0));
+    if (window_proxy_browsing_context_null(ctx, proxy)) return JS_NewStringLen(ctx, "", 0);
+    return JS_IsUndefined(p->name_val) ? JS_NewString(ctx, p->name ? p->name : "") : JS_DupValue(ctx, p->name_val);
 }
 
 /* §7.2.2.1's `name` setter, the one place it is written. It renames the browsing context, so `frameW.name = "B"`
@@ -3914,7 +3922,7 @@ void window_proxy_init(JSContext *ctx)
     agent_state_ptr(WP_COMPONENT, &g_live_navs, "every live WindowProxy of this agent, scanned on its per-flow doc");
     /* §7.2.2.1's name is an attacker source where it is minted unknown (window_proxy_name_value): another
        document names this navigable and then navigates it here. */
-    concolic_declare_source(WP_COMPONENT, "window.name", "", 0, SRC_DELIVER_NAVIGABLE_NAME);
+    concolic_declare_source(WP_COMPONENT, WINDOW_NAME_SRC, "", 0, SRC_DELIVER_NAVIGABLE_NAME);
     realm_declare_intrinsic(window_proxy_install_proto);
 }
 
