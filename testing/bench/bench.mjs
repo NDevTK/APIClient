@@ -389,9 +389,15 @@ function table(dir) {
       lines.push([page, rs.length, Object.entries(ended).map(([k, v]) => `${k}:${v}`).join(','),
                   ...METRICS.map((m) => fmt(spread(rs.map((g) => g[m])))),
                   fmt(spread(p.runs.map((r) => r.wireMisses)))].join('\t'));
-      for (const m of METRICS) for (const g of rs) agg[m].push(g[m] / (g.stepWork / 1e6));
+      /* A reading taken at zero work (a page that drained before its first slice) states no rate. */
+      for (const m of METRICS) for (const g of rs) {
+        if (g.stepWork === 0) continue;
+        const x = g[m] / (g.stepWork / 1e6);
+        need(Number.isFinite(x), `${page}'s ${m} per M stepWork is ${x}`);
+        agg[m].push(x);
+      }
     }
-    lines.push(`per M stepWork, over every (page, run) reading at this budget: ` +
+    lines.push(`per M stepWork, over every (page, run) reading at this budget taken past zero work: ` +
                METRICS.map((m) => `${SHORT[m]} ${fmt(spread(agg[m].map((x) => +x.toFixed(3))))}`).join('  '));
   }
   lines.push('', '## the last sample of each run, whatever ended it (not a budget reading)',
