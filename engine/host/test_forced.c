@@ -1398,6 +1398,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/textencunk.h"
 #include "fixture/cssdsetprop.h"
 #include "fixture/sheetrest.h"
+#include "fixture/wnameunk.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2053,6 +2054,7 @@ TF_DOCS[] = {
     { "textencunk", HTML_TEXTENCUNK },
     { "cssdsetprop", HTML_CSSDSETPROP },
     { "sheetrest", HTML_SHEETREST },
+    { "wnameunk", HTML_WNAMEUNK },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19315,6 +19317,23 @@ TF_UNIT void probes_sheetrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `wnameunk` document (fixture/wnameunk.h): window.name set to an example-free unknown reads
+   back as that unknown. */
+TF_UNIT void probes_wnameunk(const char *js, Probe *tab, int *n) {
+    const char *wn_why = NULL; int wn_tt = 1;
+    fold_row(&wn_tt, &wn_why, param_value_is(js, "/api/wnunk", "w", "wnDAY") ||
+                              param_value_is(js, "/api/wnunk", "w", "wnOTHER"),
+             "NOT REACHED: no /api/wnunk record, so the name setter over an example-free unknown did not return");
+    fold_row(&wn_tt, &wn_why, param_value_is(js, "/api/wnunk", "w", "wnDAY") &&
+                              param_value_is(js, "/api/wnunk", "w", "wnOTHER"),
+             "only one arm of the gate over the name's third part ran, so window.name did not read back as the "
+             "unknown the setter was handed");
+    const Probe rows[] = {
+        { "wname-unknown-no-example", wn_tt, "/api/wnunk", SESS_EXPLORE, wn_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25304,6 +25323,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_textencunk(js, probes, &np);
     probes_cssdsetprop(js, probes, &np);
     probes_sheetrest(js, probes, &np);
+    probes_wnameunk(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
