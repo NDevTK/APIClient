@@ -1374,6 +1374,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cutshed.h"
 #include "fixture/cutname.h"
 #include "fixture/cutref.h"
+#include "fixture/cutpeer.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
 #include "fixture/cwmix.h"
@@ -2038,6 +2039,7 @@ TF_DOCS[] = {
     { "cutshed", HTML_CUTSHED, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "cutname", HTML_CUTNAME },
     { "cutref", HTML_CUTREF },
+    { "cutpeer", HTML_CUTPEER },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
     { "cwmix", HTML_CWMIX },
@@ -18772,13 +18774,15 @@ TF_UNIT void probes_cutshed(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
-/* The rows of the `cutname` and `cutref` documents (fixture/cutname.h, fixture/cutref.h): each markup search over
-   its one attacker source fires after the document's long setup, from a snapshot taken before that source's
-   first read. Each document reads one source, so its cut census is that source's. */
+/* The rows of the `cutname`, `cutref` and `cutpeer` documents (fixture/cutname.h, fixture/cutref.h,
+   fixture/cutpeer.h): each markup search over its one attacker source fires after the document's long setup,
+   from a snapshot taken before that source's first read. Each document reads one source, so its cut census is
+   that source's; cutpeer's document is one a peer references. */
 TF_UNIT void probes_cutsource(const char *js, Probe *tab, int *n) {
     static const struct { const char *src, *fired, *cut, *fired_anchor, *cut_anchor; } ROW[] = {
         { "window.name", "cn-fired", "cn-from-cut", "'cnOut'", "cnAcc" },
         { "document.referrer", "cr-fired", "cr-from-cut", "'crOut'", "crAcc" },
+        { LOCATION_HASH_SRC, "cp-fired", "cp-from-cut", "'cpOut'", "cpAcc" },
     };
     for (size_t i = 0; i < COUNTOF(ROW); i++) {
         char hs[1024] = "";
