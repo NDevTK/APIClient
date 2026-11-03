@@ -17811,10 +17811,13 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
 }
 
 /* The rows of the `xwinfwd` document (fixture/xwinfwd.h): an attacker's message to A, forwarded by A to its
-   same-origin frame B, reaches B's markup; the PoC states the chain back to the attacker's delivery to A. */
+   same-origin frame B, reaches B's markup; the PoC states the chain back to the attacker's delivery to A. Only B
+   writes markup, so any innerHTML record is B's write; its source is whatever identity the forwarded value
+   kept. */
 TF_UNIT void probes_xwinfwd(const char *js, Probe *tab, int *n) {
     char src[1024] = "";
-    int has = s_rooted_source(js, "innerHTML", "xwFwd", src, sizeof src);
+    static const char *const needles[] = { "\"handler\":\"xwARecv\"", "\"originOwned\":\"attacker-site\"" };
+    int has = s_rooted_source(js, "innerHTML", "message.data", src, sizeof src);
     const char *xr_why = NULL, *xa_why = NULL, *xb_why = NULL, *xk_why = NULL, *xp_why = NULL;
     int xr_tt = 1, xa_tt = 1, xb_tt = 1, xk_tt = 1, xp_tt = 1;
     fold_row(&xr_tt, &xr_why, !!strstr(js, "\"https://x.test/api/xw-b-ready\""),
@@ -17826,15 +17829,11 @@ TF_UNIT void probes_xwinfwd(const char *js, Probe *tab, int *n) {
              "NOT REACHED: there is no /api/xw-b-recv record, so A's forwarded message never reached xwBRecv "
              "past its origin check");
     fold_row(&xk_tt, &xk_why, has,
-             "NOT REACHED: no innerHTML @S record's source names `xwFwd`, so B's write of the forwarded data was "
-             "never searched");
-    fold_row(&xp_tt, &xp_why, has && s_stage(js, "innerHTML", src) == S_FIRED,
-             "B's write of the forwarded data fired no PoC");
-    fold_row(&xp_tt, &xp_why, has && s_field(js, "innerHTML", src, "\"handler\":\"xwARecv\""),
-             "B's PoC does not name the attacker's message to A (xwARecv), so it states no chain back to an "
-             "attacker source");
-    fold_row(&xp_tt, &xp_why, has && s_field(js, "innerHTML", src, "\"originOwned\":\"attacker-site\""),
-             "B's PoC does not state a message sent from an origin the attacker owns");
+             "NOT REACHED: no innerHTML @S record's source is rooted in message data, so B's write of the "
+             "forwarded data was never searched");
+    fold_row(&xp_tt, &xp_why, s_fired_stating(js, "innerHTML", needles, 2, NULL, NULL),
+             "no fired innerHTML PoC names the attacker's message to A (xwARecv) from an origin the attacker "
+             "owns, so B's write states no chain back to an attacker source");
     const Probe rows[] = {
         { "xw-frame-ran", xr_tt, "xwARecv", SESS_EXPLORE, xr_why },
         { "xw-a-recv", xa_tt, "xwARecv", SESS_EXPLORE, xa_why },
