@@ -588,13 +588,13 @@ bool flex_intrinsic_max_content_main_block_size_ask(lxb_dom_element_t *el, CssPx
         lxb_dom_node_t *node = box_tree_child_node(c);
         lxb_dom_element_t *it;
 
-        if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        /* css-flexbox-1 §4 "Flex Items": "Each in-flow child of a flex container becomes a flex item", over the
+           classification §9.9.1's own walk steps — so a `display: none` child (css-display-3 §2.5: it generates
+           no boxes) and §4.1's absolutely-positioned one are no item and have no height to ask. A replaced
+           item's size is CSS 2.1 §10.6.2's (intrinsic_block_size.c), which asks no walk. */
+        if (flex_item_child_kind(el, node) != FLEX_ITEM_CHILD_ELEMENT) continue;
         it = lxb_dom_interface_element(node);
-        /* css-flexbox-1 §4.1 "Absolutely-Positioned Flex Children": such a child is no item. A replaced item's
-           size is CSS 2.1 §10.6.2's (intrinsic_block_size.c), which asks no walk. */
-        if (css_computed_keyword_is(it, "position", CSS_KEYWORD_ABSOLUTE) ||
-            css_computed_keyword_is(it, "position", CSS_KEYWORD_FIXED) || replaced_element_of(it).replaced)
-            continue;
+        if (replaced_element_of(it).replaced) continue;
         if (!block_flow_auto_height_ask(it, &h)) return false;
     }
     *out = flex_intrinsic_max_content_main_block_size(el);
