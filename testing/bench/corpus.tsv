@@ -18,3 +18,9 @@ telegram	https://web.telegram.org/k/	apps.tsv: Vite SPA, logged-out shell of a m
 mdn	https://developer.mozilla.org/en-US/docs/Web/JavaScript	apps.tsv: webpack app with same-origin JSON
 astexplorer	https://astexplorer.net/	apps.tsv: webpack SPA with many parser chunks
 control-razor	http://127.0.0.1:8931/#needle	control: testing/bench/razor/ (python3 -m http.server 8931 there while recording); each rung assembles its address at run time
+openlibrary	https://openlibrary.org/	apps.tsv: passes 1-4, same-origin /search.json answers JSON anonymously while /account/loans.json is gated
+replit	https://replit.com/	apps.tsv: Next.js app, 104 classic <script src>; tests 1-2 not assessed
+codesandbox	https://codesandbox.io/	apps.tsv: Next.js app router; tests 1-2 not assessed
+vscodedev	https://vscode.dev/	apps.tsv: hand-rolled loader in a 342KiB document; tests 1-2 not assessed
+slack	https://app.slack.com/	apps.tsv: custom rollup from a.slack-edge.com; tests 1-2 not assessed
+figma	https://www.figma.com/	apps.tsv: Next.js app router behind Netlify; tests 1-2 not assessed
