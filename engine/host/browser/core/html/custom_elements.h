@@ -122,10 +122,6 @@ int custom_elements_queue_arm(const CustomElementQueue *q);
 
 void custom_elements_queue_init(CustomElementQueue *q);
 void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVisit *v);
-/* The half of this record's teardown that is NOT a reference — the error-reporting-mode flag the drain may be
-   holding on the global. A step machine whose `visit` names this queue discharges its references through that
-   one declaration and calls THIS; see report_exception_work_unlock for why the split exists. */
-void custom_elements_queue_unlock(JSContext *ctx, CustomElementQueue *q);
 
 /* §4.13.6 step 1: `q` becomes the CURRENT element queue, for as long as the calling member's own steps run.
    There is no stack array — see custom_elements.c: a declared member's steps run inside one C activation of

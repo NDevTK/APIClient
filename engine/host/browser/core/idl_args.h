@@ -1140,11 +1140,6 @@ typedef struct {
     /* The buffer across a fork: the deep fork byte-copies the driving state and re-takes only what a `visit`
        names, so an unvisited buffer would be one allocation two flows walk and free. */
     void  (*visit)(JSContext *ctx, void **buf, JSStepVisit *v);
-    /* Gives back what the buffer holds that is not a reference, for a walk abandoned mid-request (HTML
-       §8.1.4.6 "Runtime script errors" step 6.1's error reporting mode, which would otherwise stay set on the
-       global). `release` runs on the normal 0 edge, this on the abandoned one, called beside
-       custom_elements_queue_unlock. It frees no reference; `visit` covers those. */
-    void  (*unlock)(JSContext *ctx, void *buf);
 } IdlTreeSteps;
 void idl_set_tree_steps(const IdlTreeSteps *ops);
 

@@ -188,10 +188,9 @@ static void worker_report_visit(JSContext *ctx, void *stp, JSStepVisit *v)
 
 static JSValue worker_report_fini(JSContext *ctx, void *stp, bool take_result)
 {
-    WorkerReportTask *s = stp;
-
+    (void)ctx;
+    (void)stp;
     (void)take_result;
-    if (s->started) report_exception_work_unlock(ctx, &s->rep);   /* step 6.1's flag; the visit holds the rest */
     return JS_UNDEFINED;
 }
 

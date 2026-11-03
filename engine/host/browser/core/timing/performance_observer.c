@@ -405,12 +405,9 @@ static void js_po_notify_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 static JSValue js_po_notify_fini(JSContext *ctx, void *st, bool take_result)
 {
-    PoNotifyTask *s = st;
-
+    (void)ctx;
+    (void)st;
     (void)take_result;
-    /* HTML §8.1.4.6 step 5's FLAG, if a report was abandoned holding it. Not a reference, so no declaration
-       names it and the visit above is what releases the record's references. */
-    report_exception_work_unlock(ctx, &s->rep);
     return JS_UNDEFINED;
 }
 

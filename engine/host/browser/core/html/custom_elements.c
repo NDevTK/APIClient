@@ -1379,14 +1379,6 @@ int custom_elements_upgrade_run(JSContext *ctx, CeUpgrade *u, JSValueConst el, J
     return 0;
 }
 
-/* THE DRAIN'S OWN TEARDOWN, which is the reporting flag it may be holding on the global. An upgrade in flight
-   owes nothing here: its operands are named by custom_elements_upgrade_visit, and what its step 10 entered is
-   the torn-down flow's own world (custom_elements_active_ctor_enter). */
-void custom_elements_queue_unlock(JSContext *ctx, CustomElementQueue *q)
-{
-    q->reporting = 0;
-    report_exception_work_unlock(ctx, &q->rep);
-}
 
 /* §4.13.6 "invoke custom element reactions in an element queue", one reaction per entry.
    THE POP HAPPENS FIRST AND IT IS OBSERVABLE: step 3 removes the queue from the stack BEFORE step 4 invokes it,
@@ -1619,12 +1611,9 @@ static void js_ce_backup_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 static JSValue js_ce_backup_fini(JSContext *ctx, void *st, bool take_result)
 {
-    JSCeBackup *s = st;
+    (void)ctx;
+    (void)st;
     (void)take_result;
-    /* THE LOCK ONLY. The queue's reactions are references js_ce_backup_visit names and the teardown discharges
-       that list; what no declaration can carry is §8.1.4.6 step 5's error-reporting flag, which a backup queue
-       abandoned mid-drain would otherwise leave raised on the global forever. */
-    custom_elements_queue_unlock(ctx, &s->q);
     return JS_UNDEFINED;
 }
 
@@ -2965,6 +2954,9 @@ typedef struct {
        the same string only for an autonomous element — telling them apart is the whole of §3.2.3 step 7. */
     JSValue  local;
     uint32_t flags;     /* step 15's three booleans, as CE_DEF_* bit positions */
+    /* Whether steps 8-9 raised this registry's `element definition is running` and step 14 has not yet lowered
+       it. The machine's own byte: the registry's flag is a property of whichever world is switched in. */
+    uint8_t  running;
 } CeDefineState;
 
 static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -2980,16 +2972,15 @@ static void ce_define_visit(JSContext *ctx, void *st, JSStepVisit *v)
 }
 
 /* §4.13.4 step 14's "then, regardless of whether the above steps threw an exception or not: set this's element
-   definition is running to false". The teardown IS that "regardless": it runs on the throw path and on the
-   completion path, and on nothing in between, which is what a park in the middle of step 14.5 requires.
-   IT IS THE WHOLE OF THIS HOOK, and it is also why the hook runs BEFORE the declaration is discharged: the flag
-   lives on `s->registry`, so lowering it READS a value this state owns. Reading one here is correct; freeing
-   one is not — every value below the flag is named by ce_define_visit, which is the one list. */
-static void ce_define_release(JSContext *ctx, void *st)
+   definition is running to false", on the live path of the world that raised it: at the end of step 14, and on
+   an abrupt exit after steps 8-9. A flow torn down while parked inside step 14 takes the flag with its world. */
+static void ce_define_lower(JSContext *ctx, CeDefineState *s)
 {
-    CeDefineState *s = st;
-    if (JS_IsObject(s->registry) && ce_reg_flag(ctx, s->registry, g_atom_defining))
-        ce_reg_set_flag(ctx, s->registry, g_atom_defining, false);
+    DCHECK(s->running && ce_reg_flag(ctx, s->registry, g_atom_defining),
+           "§4.13.4 step 14 lowered `element definition is running` for a define that did not raise it, or in a "
+           "world where it is not raised");
+    ce_reg_set_flag(ctx, s->registry, g_atom_defining, false);
+    s->running = 0;
 }
 
 /* §4.13.4'S TWO `sequence<DOMString>` CONVERSIONS AS ONE WALK — step 14.5.2's observedAttributes and step
@@ -3181,9 +3172,7 @@ static int ce_define_checks(JSContext *ctx, JSValueConst registry, int argc, JSV
     JS_FreeValue(ctx, ext);
     /* STEPS 8-9: "element definition is running". It exists because everything after it READS THE PAGE'S
        OBJECT — a static `observedAttributes` getter that calls `define` again would otherwise run this whole
-       algorithm re-entrantly and commit two definitions for one name. The flag is cleared by
-       ce_define_release, which is this machine's teardown and therefore runs on BOTH exits, which is exactly
-       what step 14's "regardless of whether the above steps threw an exception or not" asks for. */
+       algorithm re-entrantly and commit two definitions for one name. Step 14's lowering is ce_define_lower. */
     if (ce_reg_flag(ctx, registry, g_atom_defining)) {
         JS_ThrowDOMException(ctx, "NotSupportedError",
                              "customElements.define was re-entered while this registry was already defining");
@@ -3262,8 +3251,8 @@ static JSValue ce_define_commit(JSContext *ctx, JSValueConst registry, JSValueCo
     return JS_UNDEFINED;
 }
 
-static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+static int js_ce_define_steps(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     CeDefineState *s = st;
     int r;
@@ -3272,9 +3261,10 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* EVERY owned field before the first thing that can throw: the failure path tears this state down
-           through ce_define_release, which frees exactly what the state holds and nothing else. */
+           through ce_define_visit, which names exactly what the state holds and nothing else. */
         s->proto = s->raw = s->registry = s->local = JS_UNDEFINED;
         s->flags = 0;
+        s->running = 0;
         s->callbacks = JS_NewArray(ctx);
         s->names = JS_NewArray(ctx);
         s->features = JS_NewArray(ctx);
@@ -3288,6 +3278,7 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
         if (!ce_registry_this(ctx, hdr->this_val)) return -1;
         s->registry = JS_DupValue(ctx, hdr->this_val);
         if (ce_define_checks(ctx, s->registry, argc, argv, &s->local) < 0) return -1;
+        s->running = 1;                                /* steps 8-9 raised it */
         hdr->stage = CE_PROTOTYPE;
     }
     if (hdr->stage == CE_PROTOTYPE) {
@@ -3428,13 +3419,26 @@ static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
     }
     DCHECK(hdr->stage == CE_COMMIT, "customElements.define resumed into a stage §4.13.4 does not have");
     JS_FreeValue(ctx, cb_result);
+    ce_define_lower(ctx, s);                           /* step 14's last line, before step 15 */
     *presult = ce_define_commit(ctx, s->registry, argv, s->names, s->proto, s->callbacks, s->local, s->flags);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
 }
 
+/* The machine, with step 14's lowering on its abrupt exit: every `return -1` after steps 8-9 is a throw out of
+   step 14's catching list. */
+static int js_ce_define(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    CeDefineState *s = st;
+    int r = js_ce_define_steps(ctx, hdr, st, argc, argv, cb_result, presult, out_cb, out_argc);
+
+    if (r < 0 && s->running) ce_define_lower(ctx, s);
+    return r;
+}
+
 static const IdlStepDecl CE_DEFINE_STEP = {
-    js_ce_define, sizeof(CeDefineState), ce_define_visit, ce_define_release,
+    js_ce_define, sizeof(CeDefineState), ce_define_visit, NULL,
     "HTML §4.13.4 CustomElementRegistry.define", CE_DEFINE_STEPS
 };
 

@@ -262,13 +262,9 @@ static void js_mo_notify_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 static JSValue js_mo_notify_fini(JSContext *ctx, void *st, bool take_result)
 {
-    JSMoNotify *s = st;
-
+    (void)ctx;
+    (void)st;
     (void)take_result;
-    /* §8.1.4.6 step 5's FLAG, if a report was abandoned holding it. It is not a reference, so no declaration
-       names it and the discharge cannot give it back; the record's REFERENCES are named by js_mo_notify_visit
-       and released through it, which is why this is the unlock and not the whole release. */
-    report_exception_work_unlock(ctx, &s->rep);
     return JS_UNDEFINED;
 }
 

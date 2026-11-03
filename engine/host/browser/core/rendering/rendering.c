@@ -352,12 +352,9 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 static JSValue js_update_rendering_fini(JSContext *ctx, void *st, bool take_result)
 {
-    JSUpdateRendering *s = st;
-
+    (void)ctx;
+    (void)st;
     (void)take_result;
-    /* §8.1.4.6 step 5's FLAG, if an animation-frame callback's report was abandoned holding it. Not a
-       reference, so no declaration names it; the record's references are js_update_rendering_visit's. */
-    report_exception_work_unlock(ctx, &s->rep);
     return JS_UNDEFINED;
 }
 

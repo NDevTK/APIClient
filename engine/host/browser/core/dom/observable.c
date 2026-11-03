@@ -345,9 +345,7 @@ static JSValue js_obs_fini(JSContext *ctx, void *st, bool take_result)
     JSValue r = take_result ? s->result : JS_UNDEFINED;
 
     if (take_result) s->result = JS_UNDEFINED;
-    /* §8.1.4.6 step 5's FLAG — the one part of the report record that is not a reference, so no declaration
-       names it and leaving it set would put this global in error reporting mode forever. */
-    report_exception_work_unlock(ctx, &s->rw);
+    (void)ctx;
     return r;
 }
 

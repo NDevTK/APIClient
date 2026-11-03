@@ -2923,11 +2923,11 @@ static void element_tree_steps_free(JSContext *ctx, void *vb)
     TreeStepBuf *b = vb;
 
     if (!b) return;
-    /* §4.12.1.1's execution state, and this is its `release` half — the §8.1.4.6 flag, which no declaration can
-       carry. Its REFERENCES are the visit's, and there are none left to discharge here: this entry point is
-       reached only when the walk finished (the drain's 0 edge), and a finished walk has closed every bracket it
-       opened. That is asserted rather than assumed, because the alternative failure is silent: a value alive
-       here is one nothing frees, since the visit-driven discharge runs only for a walk that was ABANDONED. */
+    /* §4.12.1.1's execution state. Its REFERENCES are the visit's, and there are none left to discharge here:
+       this entry point is reached only when the walk finished (the drain's 0 edge), and a finished walk has
+       closed every bracket it opened. That is asserted rather than assumed, because the alternative failure is
+       silent: a value alive here is one nothing frees, since the visit-driven discharge runs only for a walk
+       that was ABANDONED. */
     DCHECK(!html_script_exec_owed(&b->exec),
            "§4.2.3's tree-steps walk finished with §4.12.1.1's \"execute the script element\" still owed — the "
            "walk ends only when every staticNodeList entry's steps are over, so an outstanding nested program "
@@ -2976,20 +2976,9 @@ static void element_tree_steps_visit(JSContext *ctx, void **slot, JSStepVisit *v
     v->array(ctx, slot, sizeof *b + sizeof *b->e * (size_t)b->n, 1, 1, tree_steps_block_elem);
 }
 
-/* THE ABANDONED WALK'S OTHER HALF — §8.1.4.6 step 6.1's error-reporting-mode flag, given back. See
-   IdlTreeSteps::unlock: the driver's discharge covers every REFERENCE this buffer owns and cannot cover a flag,
-   and `element_tree_steps_free` above runs only on the walk's normal 0 edge. */
-static void element_tree_steps_unlock(JSContext *ctx, void *vb)
-{
-    TreeStepBuf *b = vb;
-
-    if (!b) return;
-    html_script_exec_release(ctx, &b->exec);
-}
-
 static const IdlTreeSteps ELEMENT_TREE_STEPS = {
     element_tree_steps_take, element_tree_steps_take_more, element_tree_steps_step, element_tree_steps_step_open,
-    element_tree_steps_free, element_tree_steps_recorded, element_tree_steps_visit, element_tree_steps_unlock
+    element_tree_steps_free, element_tree_steps_recorded, element_tree_steps_visit
 };
 
 /* §4.9 `[SameObject] readonly attribute NamedNodeMap attributes`. [SameObject] is an identity the IDL states,

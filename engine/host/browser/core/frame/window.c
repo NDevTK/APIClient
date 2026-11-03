@@ -172,10 +172,9 @@ static void js_win_report_error_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 static JSValue js_win_report_error_fini(JSContext *ctx, void *st, bool take_result)
 {
+    (void)ctx;
+    (void)st;
     (void)take_result;
-    /* §8.1.4.6 step 6.1's FLAG, if the report was abandoned holding it. Not a reference, so no declaration
-       names it and the visit above is what releases the record's references. */
-    report_exception_work_unlock(ctx, &((JSWinReportError *)st)->rep);
     /* §8.2's IDL is `undefined reportError(any e)` and §8.1.4.6's one step returns nothing, so the method has
        no completion value: a report that fired listeners and one that skipped step 6 entirely because the
        global was already in error reporting mode must be indistinguishable to the page. */

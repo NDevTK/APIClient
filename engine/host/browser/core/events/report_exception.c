@@ -79,7 +79,9 @@ static const char *const RX_STEPS[] = { RX_STAGES(JS_STEP_STAGE_LABEL) NULL };
 /* §8.1.4.6 step 6's IN ERROR REPORTING MODE, which is a flag on the GLOBAL and not on this component: a report
    whose own `error` listener throws must not report that throw recursively, and "recursively" is per global.
    It hangs off the global under a private Symbol, which is also what makes it per-flow for free — a flag set by
-   one forked arm is a property write the COW delta captures.
+   one forked arm is a property write the COW delta captures. Step 6.3 is its one give-back: event_target_fire_run
+   ends step 6.2 with 0 or parks, never abruptly, and a flow freed while parked inside it takes the flag with its
+   own world, so no teardown writes it.
    THE INITIALISER IS EXPLICIT because core/agent_state.h's SLOT_VALUE pre-init is `JS_IsUndefined`, and a bare
    static JSValue is all-zero bytes rather than JS_UNDEFINED — the declared kind and the static's actual
    pre-init state would then disagree on a component that had been declared and never released. */
@@ -222,7 +224,6 @@ void report_exception_work_start(ReportExceptionWork *w)
 {
     w->stage = RX_EXTRACT;
     w->info = JS_UNDEFINED;
-    w->reporting = 0;
     w->phase = 0;
     w->ev = JS_UNDEFINED;
     w->cb[0] = w->cb[1] = w->cb[2] = w->cb[3] = JS_UNDEFINED;
@@ -237,41 +238,11 @@ void report_exception_work_visit(JSContext *ctx, ReportExceptionWork *w, JSStepV
         v->val(ctx, &w->cb[i]);
 }
 
-void report_exception_work_unlock(JSContext *ctx, ReportExceptionWork *w)
-{
-    /* THE FLAG IS A LOCK, SO ITS OWNER HAS TO RELEASE IT ON EVERY EXIT. A report that is ABANDONED — the flow
-       it belongs to is dropped, or the dispatch machine holding it is torn down while the `error` event is
-       still in flight — would otherwise leave the global in error reporting mode forever, and step 6 then
-       silently skips EVERY later report on that global. That is invisible: the first exception is reported and
-       every one after it is swallowed, which reads exactly like "reporting does not work sometimes".
-       IT IS ITS OWN FUNCTION because it is the only part of this record's teardown a `visit` cannot express: a
-       global flag is not a reference, so no declaration names it. Everything else here IS named by the visit
-       above, and a teardown that restated it would be the second list.
-       IT ASKS ABOUT THE LOCK, NOT ABOUT THE STAGE, and the stages it would have been asking about are now
-       declared: `if (w->stage != 0)` reads RX_MODE — the stage that has finished the extract and has NOT yet
-       taken the mode — as a record that owes the flag back, and would clear a mode some other report is holding.
-       That is what a negation over the stages always is: a claim about every stage that is not the first, made
-       before those stages exist. The lock is not a step of the algorithm, it is a thing the algorithm HOLDS. */
-    DCHECK(w->stage < RX_STAGE_COUNT,
-           RX_ALGORITHM " abandoned a report at a cursor its stage declaration does not name — a record torn "
-           "down at a stage nobody declares is one whose step 6.1 lock nobody can say was taken");
-    if (w->reporting) {
-        JSValue g = JS_GetGlobalObject(ctx);
-        reporting_mode(ctx, g, /*set*/ 1, false);
-        JS_FreeValue(ctx, g);
-        w->reporting = 0;
-    }
-    /* A TEARDOWN IS NOT A TRANSITION, which is why this is an assignment and not a STEP_GOTO: the record is
-       abandoned wherever it stood, so its fire request's cursor is legitimately mid-flight and the assert
-       STEP_GOTO makes — that no sub-sequence is left in flight across a stage move — is about a machine that
-       CONTINUES. What this restores is the start state, so a record reached again is asked from its first step
-       rather than resumed into a dispatch nobody is holding. */
-    w->stage = 0;
-}
 
 void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w)
 {
-    report_exception_work_unlock(ctx, w);
+    DCHECK(w->stage < RX_STAGE_COUNT,
+           RX_ALGORITHM " released a report at a cursor its stage declaration does not name");
     report_exception_work_visit(ctx, w, JS_StepFreeVisitor());
 }
 
@@ -504,7 +475,6 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
     if (reporting_mode(ctx, global, /*set*/ 0, false))
         goto not_handled;
     reporting_mode(ctx, global, /*set*/ 1, true);   /* step 6.1 */
-    w->reporting = 1;                               /* and this record now owes it back — see the unlock */
     /* AND IT RETURNS RATHER THAN RUNNING ON. The fire is the next stage; a body that sets its stage and falls
        into the next arm has crossed a boundary the driver never saw, so the label would claim a rest point the
        engine cannot park at. JS_STEP_YIELD is what asks: the scheduler parks this report if a sibling flow
@@ -520,7 +490,6 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
     if (r)
         return r;
     reporting_mode(ctx, global, /*set*/ 1, false);      /* step 6.3 */
-    w->reporting = 0;                                   /* given back at the step that gives it back */
 not_handled:
     /* STEP 7's notHandled is `not_canceled`: a listener that called `preventDefault()` cancelled the event, and
        that is how a page says it handled the error, so nothing below runs for it.
@@ -590,10 +559,8 @@ static void js_report_flow_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 static JSValue js_report_flow_fini(JSContext *ctx, void *st, bool take_result)
 {
+    (void)st;
     (void)take_result;
-    /* §8.1.4.6 step 6.1's FLAG, if the report was abandoned holding it. Not a reference, so no declaration
-       names it and the visit above is what releases the record's references. */
-    report_exception_work_unlock(ctx, &((JSReportFlow *)st)->rep);
     /* §8.1.4.4 step 8.3.3 returns evaluationStatus, and nothing in this engine reads it: the flow's completion
        value is not the page's (a <script> has none) and the scheduler discards it. */
     return JS_UNDEFINED;

@@ -184,8 +184,7 @@ void html_script_immediate_free(ScriptImmediate *imm);
  * program's frame is live, and its own element is in the slot, while the nested one runs.
  *
  * THE STATE IS THE DRIVING MACHINE'S, exactly as focus.h's `phase`/`cb` and abort.h's work record are: the
- * machine declares it in its own `visit` so a fork copies it, and calls the release below for the half no
- * declaration can carry (§8.1.4.6 step 6.1's error-reporting-mode flag). */
+ * machine declares it in its own `visit` so a fork copies it and its teardown discharges it. */
 #define SCRIPT_EXEC_CB_SLOTS (2 + 0)   /* step_call_run's [this, program] — a program takes no arguments */
 
 typedef struct {
@@ -216,8 +215,7 @@ bool html_script_exec_owed(const ScriptExec *x);
 void html_script_exec_begin(ScriptExec *x, ScriptImmediate *imm);
 /* The ONE list of what this state owns, forwarded from the driving machine's own `visit`. */
 void html_script_exec_visit(JSContext *ctx, ScriptExec *x, JSStepVisit *v);
-/* The half the list cannot carry: §8.1.4.6 step 6.1's flag, given back if the run was abandoned holding it.
-   Frees nothing the visit names — see quickjs-step.h on why that split is folded to a number and checked. */
+/* The finished run's close: asserts it holds no source text. Frees nothing; its references are the visit's. */
 void html_script_exec_release(JSContext *ctx, ScriptExec *x);
 /* THE ALGORITHM, DRIVEN. `ctx` is `el`'s node document's realm — §4.12.1.1 step 32's settings object, step 34's
    base URL and the global the program closes over, and never whichever realm performed the mutation.

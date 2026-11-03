@@ -1011,17 +1011,6 @@ static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
     custom_elements_upgrade_visit(ctx, &s->up, v);
 }
 
-/* What this algorithm took from outside itself and owes back on every exit: §8.1.4.6 step 5's error-reporting flag
-   on the global. Values are named by doc_create_el_visit, the one list teardown discharges. The active custom
-   element constructor map entry is not owed here: the restore runs on the live path (dce_restore), and a flow
-   discarded while parked on the constructor is freed while not switched in, so the entry goes with its world. */
-static void doc_create_el_release(JSContext *ctx, void *st)
-{
-    DocCreateElState *s = st;
-
-    report_exception_work_unlock(ctx, &s->rw);
-}
-
 /* DOM §4.9 create an element, the restore after the catching list: "If previousRegistry is null, then remove the
    surrounding agent's active custom element constructor map[C]. Otherwise, set … map[C] to previousRegistry" —
    which the map's stack form does by dropping the entry this creation pushed. Run on every live exit after the
@@ -1046,7 +1035,7 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
         /* Every owned field before the first thing that can throw: the failure path tears the state down through
-           doc_create_el_release, which frees exactly what the state holds. */
+           doc_create_el_visit, which names exactly what the state holds. */
         s->cb[0] = s->def = s->el = s->local = s->result = s->exc = s->ctor = JS_UNDEFINED;
         s->entered = 0;
         report_exception_work_start(&s->rw);
@@ -1294,7 +1283,7 @@ report:
 }
 
 static const IdlStepDecl DOC_CREATE_EL_STEP = {
-    js_doc_create_element_step, sizeof(DocCreateElState), doc_create_el_visit, doc_create_el_release,
+    js_doc_create_element_step, sizeof(DocCreateElState), doc_create_el_visit, NULL,
     "DOM §4.5 Document.createElement, over §4.9 create an element", DCE_STEPS,
     /* DOM §4.9 step 5.1.4 is "run these steps while catching any exceptions", so the construct's abrupt completion
        is this algorithm's value: it reports it and answers with a failed HTMLUnknownElement. */

@@ -22,13 +22,6 @@ typedef struct {
        flight`, a private numbering that says nothing about the algorithm and that a cross-session resume can
        only guess at. */
     uint8_t stage;
-    /* STEP 6.1'S FLAG IS HELD, NOT INFERRED FROM THE STAGE. The unlock below read `stage != 0` for "this record
-       set the global's error reporting mode and owes it back", which is the negation this engine has now been
-       bitten by twice: it is a claim about EVERY stage that is not the first, so it is wrong for every stage
-       added after it — and the extract stage §8.1.4.6 has since gained is exactly such a stage, one at which
-       this record has NOT taken the mode. The lock is not a step of the algorithm, it is a thing the algorithm
-       is HOLDING, so it is its own field and the unlock asks about it directly. */
-    uint8_t reporting;
     uint8_t phase;     /* event_target_fire_run's own */
     /* errorInfo handed in rather than extracted — §8.1.4.6 step 5's omitError arm, as data: an ErrorEvent of this
        realm whose `error` is null, or JS_UNDEFINED for a report that extracts it from its exception (owned). */
@@ -124,12 +117,10 @@ void report_exception_work_start(ReportExceptionWork *w);
    `error` is null, and is taken; report_exception_run is then handed JS_UNDEFINED as the exception. */
 void report_exception_work_start_error_info(ReportExceptionWork *w, JSValue info);
 void report_exception_work_visit(JSContext *ctx, ReportExceptionWork *w, JSStepVisit *v);
-/* STEP 6.1'S FLAG, GIVEN BACK — the half of this record's teardown that is NOT a reference and therefore not
-   something the visit above can carry. A step machine whose own `visit` names this record discharges the
-   references through that declaration (the driver's teardown discharges it) and calls THIS for the flag; calling the whole
-   release from such a machine would be the second list its declaration exists to be. */
-void report_exception_work_unlock(JSContext *ctx, ReportExceptionWork *w);
-/* Both halves, for a caller that holds this record OUTSIDE a step machine's declaration. */
+/* The record's references, for a caller that holds it OUTSIDE a step machine's declaration; a machine that
+   names it in its own `visit` has the driver discharge them. Step 6.1's flag owes no teardown: step 6.3 gives
+   it back on the one live exit of step 6.2, and a flow torn down while parked inside step 6.2 takes the flag
+   with its own world. */
 void report_exception_work_release(JSContext *ctx, ReportExceptionWork *w);
 /* `exception` is BORROWED — the caller took it off the context with JS_GetException and owns it. */
 int  report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst exception, JSValue in,

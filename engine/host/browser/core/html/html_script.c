@@ -1222,10 +1222,7 @@ void html_script_exec_visit(JSContext *ctx, ScriptExec *x, JSStepVisit *v)
 
 void html_script_exec_release(JSContext *ctx, ScriptExec *x)
 {
-    /* §8.1.4.6 step 6.1's ERROR REPORTING MODE, given back — a FLAG and not a reference, which is exactly what
-       a `release` may touch and what no declaration can carry. Left set it would put the global in error
-       reporting mode for the rest of the session and silently swallow every later report. */
-    report_exception_work_unlock(ctx, &x->rx);
+    (void)ctx;
     DCHECK(x->text == NULL,
            "a §4.12.1.1 step 36 state was released still holding its source text — see the visit");
 }

@@ -6547,19 +6547,6 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
 #endif
     }
 
-    /* §8.1.4.6 step 5's FLAG, if this member's reaction drain was abandoned holding it. Not a reference, so no
-       declaration names it and the discharge the driver runs after this cannot give it back; leaving it set
-       would put the global in error reporting mode forever and silently swallow every later report. */
-    custom_elements_queue_unlock(ctx, &s->ce);
-    /* …AND THE SAME FLAG, IF THE §4.2.3 WALK WAS ABANDONED HOLDING IT. The walk parks on the page's code at
-       insert step 12 (HTML §4.12.1.1 "Processing model" step 36's nested program, and the report its throw
-       owes), so it is the second algorithm on this state that can be dropped mid-report. The buffer's own
-       `release` runs on the walk's normal 0 edge and cannot answer for this one. */
-    if (s->tree) {
-        DCHECK(g_tree != NULL, "an IDL member holds a tree-steps buffer with no DOM layer registered");
-        g_tree->unlock(ctx, s->tree);
-    }
-
     /* AND THE ONE LIST IS DISCHARGED BY THE DRIVER, after this returns — tramp_step_state_free_1 reads
        js_idl_args_visit exactly as it reads every other machine's, so this function neither restates it nor
        calls it. It covers the whole state: the converted argument vector, every declared conversion frame, the

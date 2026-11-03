@@ -3438,10 +3438,6 @@ static JSValue js_dispatch_fini(JSContext *ctx, void *st, bool take_result)
        releases it after this returns, and a free here would be the second list this engine forbids. */
     if (JS_IsObject(s->click_el))
         click_in_progress_set(ctx, s->click_el, false);
-    /* §8.1.4.6 step 5's FLAG, if the dispatch was abandoned inside a report. It is not a reference, so no
-       declaration names it; the report record's references ARE named by js_dispatch_visit, which is why this
-       is the unlock and not the whole release. */
-    report_exception_work_unlock(ctx, &s->rep);
     return r;
 }
 
