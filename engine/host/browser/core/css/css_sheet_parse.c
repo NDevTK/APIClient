@@ -63,6 +63,9 @@ CssSheetParse *css_sheet_parse_begin(lxb_css_stylesheet_t *sst, const char *text
 bool css_sheet_parse_ended(const CssSheetParse *run)
 {
     DCHECK(run != NULL, "a sheet parse was asked about with no run");
+    DCHECK(run->status != LXB_STATUS_SUSPENDED
+           || (lxb_css_parser_is_running(run->parser) && run->parser->rules > run->parser->rules_begin),
+           "a sheet parse answered suspended with its parser's rule stack empty, so its run had already ended");
     return run->status != LXB_STATUS_SUSPENDED;
 }
 

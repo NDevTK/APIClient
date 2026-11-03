@@ -1397,6 +1397,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxprobe.h"
 #include "fixture/textencunk.h"
 #include "fixture/cssdsetprop.h"
+#include "fixture/sheetrest.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2051,6 +2052,7 @@ TF_DOCS[] = {
     { "rxprobe", HTML_RXPROBE },
     { "textencunk", HTML_TEXTENCUNK },
     { "cssdsetprop", HTML_CSSDSETPROP },
+    { "sheetrest", HTML_SHEETREST },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19294,6 +19296,25 @@ TF_UNIT void probes_cssdsetprop(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `sheetrest` document (fixture/sheetrest.h): a sheet whose parse suspends inside its last
+   rule's declaration block answers the sheet an unsuspended parse does. */
+TF_UNIT void probes_sheetrest(const char *js, Probe *tab, int *n) {
+    const char *sr_why = NULL; int sr_tt = 1;
+    fold_row(&sr_tt, &sr_why, !!strstr(js, "\"/api/sheetrest\""),
+             "NOT REACHED: no /api/sheetrest record, so the document whose sheet parse suspends inside its last "
+             "rule's block did not run its script");
+    fold_row(&sr_tt, &sr_why, param_value_is(js, "/api/sheetrest", "n", "1") &&
+                              param_value_is(js, "/api/sheetrest", "d", "1001") &&
+                              param_value_is(js, "/api/sheetrest", "w", "7px") &&
+                              param_value_is(js, "/api/sheetrest", "c", "7px"),
+             "the sheet whose parse suspended inside its one rule's block does not read back as one rule of 1001 "
+             "declarations ending in width:7px, through CSSOM and the cascade");
+    const Probe rows[] = {
+        { "sheet-parse-rest-in-block", sr_tt, "/api/sheetrest", SESS_EXPLORE, sr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25274,6 +25295,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxprobe(js, probes, &np);
     probes_textencunk(js, probes, &np);
     probes_cssdsetprop(js, probes, &np);
+    probes_sheetrest(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
