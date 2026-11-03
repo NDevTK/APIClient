@@ -12130,7 +12130,9 @@ static long engine_shed_layout_jobs(uint64_t target) {
    With no yield to size it (the first batch, or one whose collection gave nothing back) it is twice the last. */
 static void engine_relocate_under_pressure(JSRuntime *rt) {
     uint64_t line, ref, fp, live;
-    long sold = 0, want;
+    /* `sold` counts members given back, a held snapshot shed or a sale; only the sales are `g_pressure_sold`, read
+       off the refusal edge's own sale counter. */
+    long sold = 0, want, sales_before = g_reclaim_sales;
     bool at_floor = false;
     JSGCCycleStats st;
 
@@ -12181,7 +12183,7 @@ static void engine_relocate_under_pressure(JSRuntime *rt) {
         if (!engine_reclaim_at_rest()) { at_floor = true; break; }
         sold++;
     }
-    g_pressure_sold += sold;
+    g_pressure_sold += g_reclaim_sales - sales_before;
     if (at_floor) {
         /* The frontier's floor closes the episode: nothing is left to sell. */
         g_pressure_target = UINT64_MAX;
