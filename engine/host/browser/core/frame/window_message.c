@@ -660,6 +660,11 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
            "would have to invent the one field a page's check is written against");
     target = win_proxy(ctx);
     DCHECK(!JS_IsUndefined(target), "a message was routed to an instance whose own WindowProxy does not exist");
+    /* The sender reached this document through a WindowProxy for it, so a peer references it, and source_cut_ask
+       takes no snapshot here: the data this delivery mints is never read behind a cut. */
+    DCHECK(engine_referenced(),
+           "a message was routed into a document no peer is recorded as referencing — the sender holds a "
+           "WindowProxy for it, and the flag is what keeps this document's timelines open for the peer's records");
 
     buf = JS_NewArrayBufferCopy(ctx, bytes, len);
     entry = JS_IsException(buf) ? buf : JS_NewArray(ctx);
