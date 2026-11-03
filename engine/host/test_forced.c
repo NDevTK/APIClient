@@ -1371,6 +1371,8 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/srcreach.h"
 #include "fixture/cutboot.h"
 #include "fixture/cutshed.h"
+#include "fixture/cutname.h"
+#include "fixture/cutref.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
 #include "fixture/cwmix.h"
@@ -2028,6 +2030,8 @@ TF_DOCS[] = {
     { "srcreachneg", HTML_SRCREACHNEG },
     { "cutboot", HTML_CUTBOOT },
     { "cutshed", HTML_CUTSHED, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "cutname", HTML_CUTNAME },
+    { "cutref", HTML_CUTREF },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
     { "cwmix", HTML_CWMIX },
@@ -18612,6 +18616,36 @@ TF_UNIT void probes_cutshed(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `cutname` and `cutref` documents (fixture/cutname.h, fixture/cutref.h): each markup search over
+   its one attacker source fires after the document's long setup, from a snapshot taken before that source's
+   first read. Each document reads one source, so its cut census is that source's. */
+TF_UNIT void probes_cutsource(const char *js, Probe *tab, int *n) {
+    static const struct { const char *src, *fired, *cut, *fired_anchor, *cut_anchor; } ROW[] = {
+        { "window.name", "cn-fired", "cn-from-cut", "'cnOut'", "cnAcc" },
+        { "document.referrer", "cr-fired", "cr-from-cut", "'crOut'", "crAcc" },
+    };
+    for (size_t i = 0; i < COUNTOF(ROW); i++) {
+        char hs[1024] = "";
+        int has = s_rooted_source(js, "innerHTML", ROW[i].src, hs, sizeof hs);
+        const char *fw_why = NULL, *ac_why = NULL;
+        int fw_tt = 1, ac_tt = 1;
+
+        fold_row(&fw_tt, &fw_why, has,
+                 "NOT REACHED: no innerHTML @S record carries a source rooted in this document's attacker source");
+        fold_row(&fw_tt, &fw_why, has && s_stage(js, "innerHTML", hs) == S_FIRED,
+                 "the innerHTML search over this document's attacker source did not fire a PoC");
+        fold_row(&ac_tt, &ac_why, sr_census(js, "taken") > 0,
+                 "NOT REACHED: no snapshot was taken before the first read of this document's attacker source");
+        fold_row(&ac_tt, &ac_why, sr_census(js, "armsSeeded") > 0,
+                 "no candidate was forked off a snapshot: every candidate re-ran the setup from the baseline");
+        const Probe rows[] = {
+            { ROW[i].fired, fw_tt, ROW[i].fired_anchor, SESS_EXPLORE, fw_why },
+            { ROW[i].cut, ac_tt, ROW[i].cut_anchor, SESS_EXPLORE, ac_why },
+        };
+        probes_append(tab, n, rows, (int)COUNTOF(rows));
+    }
+}
+
 /* The rows of the `clobber` document (fixture/clobber.h). */
 TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     char hs[1024] = "", us[1024] = "";
@@ -25318,6 +25352,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_srcreach(js, probes, &np);
     probes_cutboot(js, probes, &np);
     probes_cutshed(js, probes, &np);
+    probes_cutsource(js, probes, &np);
     probes_typedinput(js, probes, &np);
     probes_closerequest(js, probes, &np);
     probes_cwmix(js, probes, &np);
