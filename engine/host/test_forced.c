@@ -1484,6 +1484,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/msgimgload.h"
 #include "fixture/xwinfwd.h"
 #include "fixture/msgprefix.h"
+#include "fixture/prefixjoin.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2154,6 +2155,7 @@ TF_DOCS[] = {
     { "msgimgload", HTML_MSGIMGLOAD },
     { "xwinfwd", HTML_XWINFWD },
     { "msgprefix", HTML_MSGPREFIX },
+    { "prefixjoin", HTML_PREFIXJOIN },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -17865,6 +17867,49 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `prefixjoin` document (fixture/prefixjoin.h): each listener's kept prefix reaches markup joined
+   with a later message's member, and its PoC states both messages in order; pjFrag's also states the fragment the
+   joined value depends on. */
+TF_UNIT void probes_prefixjoin(const char *js, Probe *tab, int *n) {
+    static const char *const frag[] = { "\"handler\":\"pjFrag\"", "\"source\":\"location.hash\"" };
+    static const char *const two[] = { "\"handler\":\"pjTwo\"" };
+    char src[1024] = "";
+    int fhas = s_rooted_source(js, "innerHTML", ".fPre", src, sizeof src) ||
+               s_rooted_source(js, "innerHTML", ".fPost", src, sizeof src);
+    int thas = s_rooted_source(js, "innerHTML", ".tPre", src, sizeof src) ||
+               s_rooted_source(js, "innerHTML", ".tPost", src, sizeof src);
+    const char *fe_why = NULL, *fk_why = NULL, *fp_why = NULL, *te_why = NULL, *tk_why = NULL, *tp_why = NULL;
+    int fe_tt = 1, fk_tt = 1, fp_tt = 1, te_tt = 1, tk_tt = 1, tp_tt = 1;
+    fold_row(&fe_tt, &fe_why, !!strstr(js, "\"/api/pj-frag-emit\""),
+             "NOT REACHED: there is no /api/pj-frag-emit record, so no flow delivered an `fPost` message after its "
+             "own `fPre` message to pjFrag");
+    fold_row(&fk_tt, &fk_why, fhas,
+             "NOT REACHED: no innerHTML @S record's source names `fPre` or `fPost`, so pjFrag's joined write was "
+             "never searched");
+    fold_row(&fp_tt, &fp_why, s_fired_stating(js, "innerHTML", frag, 2, "\"fPre\"", "\"fPost\""),
+             "no fired innerHTML PoC states the message carrying `fPre` followed by the one carrying `fPost` to "
+             "pjFrag together with the fragment its joined value reads: a candidate whose other attacker source "
+             "stays unknown hands the sink a value it skips as not its injection");
+    fold_row(&te_tt, &te_why, !!strstr(js, "\"/api/pj-two-emit\""),
+             "NOT REACHED: there is no /api/pj-two-emit record, so no flow delivered a `tPost` message after its "
+             "own `tPre` message to pjTwo");
+    fold_row(&tk_tt, &tk_why, thas,
+             "NOT REACHED: no innerHTML @S record's source names `tPre` or `tPost`, so pjTwo's joined write was "
+             "never searched");
+    fold_row(&tp_tt, &tp_why, s_fired_stating(js, "innerHTML", two, 1, "\"tPre\"", "\"tPost\""),
+             "no fired innerHTML PoC states the message carrying `tPre` followed by the one carrying `tPost` to "
+             "pjTwo: a message pjOther turned away in the path's chain refused the template's composition");
+    const Probe rows[] = {
+        { "pj-frag-emit", fe_tt, "pjFrag", SESS_EXPLORE, fe_why },
+        { "pj-frag-sink", fk_tt, "pjFrag", SESS_EXPLORE, fk_why, .gate = "pj-frag-emit" },
+        { "pj-frag-poc", fp_tt, "pjFrag", SESS_EXPLORE, fp_why, .gate = "pj-frag-sink" },
+        { "pj-two-emit", te_tt, "pjFrag", SESS_EXPLORE, te_why },
+        { "pj-two-sink", tk_tt, "pjFrag", SESS_EXPLORE, tk_why, .gate = "pj-two-emit" },
+        { "pj-two-poc", tp_tt, "pjFrag", SESS_EXPLORE, tp_why, .gate = "pj-two-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `xwinfwd` document (fixture/xwinfwd.h): an attacker's message to A, forwarded by A to its
    same-origin frame B, reaches B's markup; the PoC states the chain back to the attacker's delivery to A. Only B
    writes markup, so any innerHTML record is B's write; its source is whatever identity the forwarded value
@@ -25537,6 +25582,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_msgimgload(js, probes, &np);
     probes_xwinfwd(js, probes, &np);
     probes_msgprefix(js, probes, &np);
+    probes_prefixjoin(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
