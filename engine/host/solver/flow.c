@@ -188,22 +188,19 @@ typedef struct FlowAcct {
      * (flow.h) are the census rows about it. */
     double base;
     double earned;
-    /* Whether `base` is a stored tag at all, which makes the coordinate a relation rather than a copy. Zero: the
-       account has never held the thread, `base` is not read, and the coordinate is the frontier's virtual time
-       (`g_vt`), re-read at every pick. One: dispatched at least once, and `base` is the tag frozen at the virtual
-       time it stood at, start-time fair queueing's F taken when the item is first served. The freeze is at
-       service, not creation: SFQ's `max(v(t), F_prev)` keeps an unserved member from falling behind because its
-       server takes the minimum tag, while this order takes the maximum and an emission raises the served account's
-       tag, so v(t) runs away from waiting members, and a coordinate stamped at creation would be passed by
-       whatever the incumbent earns afterwards (stranding, for instance, every @S candidate session). A fact about
-       the account, never a member: two arms forked at two instants must read it the same, so the arm joins the
-       family (flow_fork_inherit) and reads this bit through the same pointer. */
+    /* Whether the account has held the thread. While it has not, or while it is owed its first turn
+       (`first_turn`), `base` is not read and the coordinate is the frontier's virtual time (`g_vt`), re-read at
+       every pick: this order takes the maximum and an emission raises the served account's tag, so v(t) runs away
+       from waiting members, and a coordinate stamped at creation or at a first dispatch would be passed by
+       whatever the incumbent earns while the account waits (stranding every @S candidate whose turn a fork or a
+       park interrupted). A fact about the account, never a member: two arms forked at two instants must read it the
+       same, so the arm joins the family (flow_fork_inherit) and reads this bit through the same pointer. */
     unsigned char placed;
-    /* Whether `base` is the first turn this account is owed: set where flow_set_running freezes the clock into
-       `base`, cleared where the account has received one quantum of service, which zeroes `base`. Level 2's terms
-       are the account's emitted value, the fitness, the UCB bonus and the aging; the placement is none of them, so
-       it buys the turn that tries the account and no standing after it. A cold-tier restore writes a parked
-       coordinate and leaves this clear. */
+    /* Whether this account is owed the turn its placement bought: set at its first dispatch (flow_set_running),
+       cleared where it has received one quantum of service (flow_age_running). Level 2's terms are the account's
+       emitted value, the fitness, the UCB bonus and the aging; the placement is none of them, so it buys the turn
+       that tries the account and no standing after it. `base` is 0 throughout; a cold-tier restore writes a parked
+       coordinate into it and leaves this clear. */
     unsigned char first_turn;
     /* The work this family has ever received, in units of work: a lifetime counter, never forgiven, unlike
        `fam_work`. It decides when the first turn ends. */
@@ -718,15 +715,17 @@ static double flow_weight_observed(const Flow *f);
  * that answers only while `g_running` is set would place every newcomer differently depending on whether the host
  * was between two dispatches).
  *
- * It is the most any account has itself produced: the largest `earned` ledger, raised at one event, an emission by
- * the item in service. Between emissions it is constant, as SFQ says, so a newcomer's placement is a fact rather
- * than a race with its creation instant. It reads ledgers and not coordinates (`base + earned`): a coordinate
- * carries the clock its account was placed at, so a clock following coordinates hands each newcomer every earlier
- * newcomer's placement too, and placements compound into a lead no account produced, above an account that
- * produced more. A dispatch does not write it: moving the clock to the winner's own coordinate would lift every
- * unplaced account the pick compared it against to that coordinate, where a full optimism bonus puts them above
- * it, and the pick would un-choose its own winner (see flow_set_running). The clock follows what accounts produce,
- * never which member holds the thread.
+ * It is the most any account standing on its own ledger has produced: the largest `earned` of an account past its first
+ * turn, raised at two events, an emission by the item in service and the end of an account's first turn. An account
+ * still owed its first turn stands on the clock (acct_root_val), so its ledger is not a term of the clock: read twice
+ * it would lift the account by its own findings once more. Between those events it is constant, as SFQ says, so a
+ * newcomer's placement is a fact rather than a race with its creation instant. It reads ledgers and not coordinates
+ * (`base + earned`): a coordinate carries the clock its account was placed at, so a clock following coordinates hands
+ * each newcomer every earlier newcomer's placement too, and placements compound into a lead no account produced, above
+ * an account that produced more. A dispatch does not write it: moving the clock to the winner's own coordinate would
+ * lift every unplaced account the pick compared it against to that coordinate, where a full optimism bonus puts them
+ * above it, and the pick would un-choose its own winner (see flow_set_running). The clock follows what accounts
+ * produce, never which member holds the thread.
  *
  * Every write raises the frontier generation at the writer: the clock is a term of every unplaced account's
  * weight, and the preempt hook's rival cache is correct only if such a move arrives through the generation.
@@ -751,6 +750,9 @@ static double frontier_vt(void) {
 
 /* The one writer of it. `f` is the item whose tag the clock is now a reading of, the flow in service whose own tag
    an emission (or a restore) has just raised, already installed as `g_running`. */
+/* Whether an account stands on its own ledger: dispatched, and past the first turn its placement bought. */
+static int acct_on_ledger(const FlowAcct *fam) { return fam->placed && !fam->first_turn; }
+
 /* Does the clock still lead every account: the definition of `g_vt` asked as a question, for the assert in the
    writer below. Walked over the members, as the census counts families; a family reached twice answers the same
    value, so no marking is needed for a maximum. Mentioned only inside a DCHECK condition, so release neither calls
@@ -758,7 +760,7 @@ static double frontier_vt(void) {
 static int acct_vt_leads(void) {
     int i;
     for (i = 0; i < g_flows_n; i++)
-        if (g_flows[i]->family && g_flows[i]->family->earned > g_vt) return 0;
+        if (g_flows[i]->family && acct_on_ledger(g_flows[i]->family) && g_flows[i]->family->earned > g_vt) return 0;
     return 1;
 }
 
@@ -767,16 +769,16 @@ static void frontier_vt_serve(const Flow *f) {
     DCHECK(f != NULL && f->family != NULL,
            "the frontier's clock was asked to follow a flow that owns no account — a departed flow cannot be the "
            "item in service");
-    DCHECK(f->family->placed,
-           "the frontier's clock was asked to follow an account that still reads the clock — the dispatch must stamp "
-           "the account before installing the flow, as flow_set_running does");
+    DCHECK(acct_on_ledger(f->family),
+           "the frontier's clock was asked to follow an account that still reads the clock — an account stands on its "
+           "ledger only once its first turn is served (flow_age_running) or a park restored it");
     /* The account's own ledger, neither the queue weight (which carries the server's aging, so a newcomer would be
        charged for the leader's debt, and a member given nothing owes nothing) nor its coordinate (whose `base` is a
        placement, see the banner). */
     v = f->family->earned;
     /* And the maximum over accounts, taken incrementally: SFQ's `max(v(t), F)` computed here rather than at every
        arrival. `earned` is a ledger nothing decreases and an emission is its only writer, which calls this, so the
-       incremental maximum is exact; a placement and a cold-tier restore write `base` and leave it. */
+       incremental maximum is exact; a cold-tier restore writes `base` and leaves it. */
     if (v > g_vt) g_vt = v;
     /* The definition, asserted: `g_vt` is the largest ledger any account holds. It catches a second writer of
        `earned` that does not serve the clock. O(members) and dev-only, as flow_is_min_weight, and paid once per
@@ -799,20 +801,24 @@ static void frontier_vt_serve(const Flow *f) {
    once per family (acct_family_coord) and every member's weight reads the same bits. */
 static double acct_root_val(const FlowAcct *fam) {
     /* The order's reward is the sum of the two, spelled only here, so the split cannot leak into a caller that adds
-       one of them. `base` is where the account entered the order and `earned` what it has emitted since. While the
-       account has never been served the first is a relation: an unplaced account has emitted nothing (only the
-       flow holding the thread is credited, and holding it places the account), so its reward is the frontier's
-       virtual time re-read at every pick, SFQ's `max(v(t), F)` as a continuing relation; once served, its tag
-       freezes and it stands on its own ledger. The `+ earned` is written on both arms rather than factored out:
-       it is zero on the unplaced arm by construction (asserted), and factoring it would read as an arm that
-       discards a ledger rather than one where it is empty. */
+       one of them. Until the account's first turn is served the first is a relation, the frontier's virtual time
+       re-read at every pick, SFQ's `max(v(t), F)` as a continuing relation; from then on `base` is 0 (or a cold tier's
+       parked coordinate) and the account stands on its own ledger. The `+ earned` is written on both arms rather than
+       factored out: it is zero on the unplaced arm by construction (asserted), and factoring it would read as an arm
+       that discards a ledger rather than one where it is empty. */
     DCHECK(fam->up == NULL, "a reward was read off a fork-tree node that is not a family root — the reward is held "
                             "only on the root every member's `family` names");
     DCHECK(fam->placed || fam->earned == 0.0,
            "an account that has never held the thread was credited an emission — only the running flow is credited "
            "and a dispatch places its account, so a detector credited a flow not in service or an account was "
            "un-placed");
-    return (fam->placed ? fam->base : frontier_vt()) + fam->earned;
+    /* An account owed its first turn holds no stored tag: a tag frozen at its first dispatch would be passed by
+       every finding the frontier makes while the account waits out the rest of a turn a fork or a park
+       interrupted, and the turn it was placed for would never be served. */
+    DCHECK(!fam->first_turn || fam->base == 0.0,
+           "an account owed its first turn holds a stored coordinate — it reads the frontier's clock until one quantum "
+           "of service ends the turn, so a stamp here is a placement the clock can run away from");
+    return (acct_on_ledger(fam) ? fam->base : frontier_vt()) + fam->earned;
 }
 
 static double acct_family_val(const Flow *f) {
@@ -846,14 +852,14 @@ void flow_restore_reward(Flow *f, double val) {
        census's forgiveness identity; `base + earned` is unchanged. And it is a tag, placed by the statement that
        writes it: `base` is read only once the account is placed, so writing the parked number without placing it
        would rank the recipe at this session's clock.
-       Named residual. Not covered: a recipe parked before it was ever served comes back placed and should come back
-       reading: cold.c parks a never-served account as `%.17g` of flow_reward (this session's clock reading), and it
-       is restored here as a frozen tag, so it re-enters at a foreign clock rather than tracking the one it now
-       belongs to. Correct for a member coming back that has earned. Next diff builds: a park record carrying
-       `base`, `earned` and the placement bit apart (cold.c's format and writer), so a rebuild restores a served
-       account at its tag and a never-served one unplaced. Absence shows as: a resumed session reporting
-       `valUnplaced: 0` at its first census while rebuilt recipes stand, with `valMin` pinned at a coordinate no
-       member of this session was served at. */
+       Named residual. Not covered: a recipe parked before its first turn was served comes back placed and should come
+       back reading: cold.c parks such an account as `%.17g` of flow_reward (this session's clock reading), and it is
+       restored here as a frozen tag, so it re-enters at a foreign clock rather than tracking the one it now belongs to.
+       Correct for a member coming back that has earned. Next diff builds: a park record carrying `base`, `earned`, the
+       placement bit and the first-turn bit apart (cold.c's format and writer), so a rebuild restores a served account
+       at its tag and one still owed its turn reading the clock. Absence shows as: a resumed session reporting
+       `valUnplaced: 0` at its first census while rebuilt recipes stand, with `valMin` pinned at a coordinate no member
+       of this session was served at. */
     f->family->base   = val;
     f->family->placed = 1;
     /* The clock reads ledgers and this writes a coordinate, so the serve leaves the clock where it is; it is
@@ -1225,28 +1231,24 @@ static int g_plateau_open = 0;
 static long g_plateau_held_idle = 0;
 long flow_plateau_held_idle(void) { return g_plateau_held_idle; }
 
-/* A flow takes or releases the thread, and a dispatch is where an account's coordinate stops being a reading of
-   the frontier's clock and becomes a tag. The two statements are one operation and in this order, because between
-   them the clock would be defined by an account defined by the clock.
-   The stamp is value-preserving by construction, and asserted: an unplaced account's reward is frontier_vt(), so
-   freezing that reading into `base` cannot move the flow's coordinate by an ulp. The assert catches a stamp that
-   writes some other quantity (the flow's own weight, the incumbent's reward, a per-member sum), which would move a
-   member at the instant it is picked.
+/* A flow takes or releases the thread, and a dispatch is where an account's first turn begins. The account keeps
+   reading the frontier's clock until that turn's quantum of service is spent (flow_age_running), so the placement
+   is value-preserving by construction, and asserted. The two statements are one operation and in this order,
+   because between them the clock would be defined by an account defined by the clock.
    Releasing the thread leaves the clock where it is: v(t) holds between busy periods, so a newcomer created between
    two slices enters where the frontier last stood rather than at zero. */
 void  flow_set_running(Flow *f) {
     if (f && f->family && !f->family->placed) {
         double w = flow_queue_weight(f);
         DCHECK(f->family->earned == 0.0,
-               "an account is being placed with a ledger already on it — placement freezes the frontier's "
-               "clock into `base`, and a non-zero `earned` here means this account emitted before it ever held "
-               "the thread, so the reward it is about to be ranked on counts one finding twice");
-        f->family->base   = frontier_vt();
+               "an account is being placed with a ledger already on it — a non-zero `earned` here means this "
+               "account emitted before it ever held the thread, so the reward it is about to be ranked on counts "
+               "one finding twice");
         f->family->placed = 1;
         f->family->first_turn = 1;
         DCHECK(flow_queue_weight(f) == w,
-               "freezing the frontier's clock into an account's tag moved the flow's queue coordinate — an unplaced "
-               "account's reward is that clock, so the stamp must leave the weight the pick compared unchanged");
+               "placing an account moved the flow's queue coordinate — an unplaced account and one owed its first turn "
+               "both read the frontier's clock, so the placement must leave the weight the pick compared unchanged");
     }
     g_running = f;
     g_running_switches++;
@@ -1257,8 +1259,8 @@ void  flow_set_running(Flow *f) {
        and before engine.c records what the winner was ranked on. The argument for following the item in service
        is about findings, and the emission caller of frontier_vt_serve answers it. Because every writer of the
        clock raises the frontier generation, the pick and the preempt hook read one clock, and a rival cached at a
-       generation is one the pick was shown. Placement above is rank-neutral and raises nothing: freezing `base`
-       makes the account stand on the identical value, which the DCHECK asserts. */
+       generation is one the pick was shown. Placement above is rank-neutral and raises nothing: the account reads
+       the identical clock before and after, which the DCHECK asserts. */
 }
 Flow *flow_running(void) { return g_running; }
 
@@ -1338,7 +1340,8 @@ int flow_credit_emit(double v) {
        event, and it makes v(t) a continuing relation: without it every account never served would stand at the
        largest ledger as of its last pick, and be passed by the findings the producer makes during the slice it
        holds. */
-    frontier_vt_serve(g_running);
+    if (acct_on_ledger(g_running->family)) frontier_vt_serve(g_running);
+    else frontier_rank_changed();   /* the account reads the clock, so its ledger orders it and the clock stays */
     /* And this member's own ledger, which ranks nothing. The family total is what an account has emitted and is
        the order; this is what this flow emitted, which the census asks (a frontier retiring members while every
        one reads zero here is coasting on an ancestor's findings). Never copied, inherited or read by flow_weight. */
@@ -2061,9 +2064,11 @@ void flow_age_running(int64_t us) {
     /* The first turn ends at one quantum of the family's service, Level 1's unit of a pull: the placement
        is forgiven and the account stands on what it emitted. A rank change, so the order is told. */
     if (g_running->family->first_turn && g_running->family->served >= ENGINE_QUANTUM_WORK) {
-        g_running->family->base = 0.0;
+        DCHECK(g_running->family->base == 0.0, "an account ended its first turn holding a stored coordinate");
         g_running->family->first_turn = 0;
-        frontier_rank_changed();
+        /* It now stands on its ledger, which the clock's maximum reads from here on; the serve raises the rank
+           change the move from the clock to the ledger is. */
+        frontier_vt_serve(g_running);
     }
     /* And the same units on this flow's branch bucket: an observation, not a third charge, and nothing in
        flow_weight reads it. This is the one site that adds to either half above, so it is the one site where every
@@ -2885,16 +2890,16 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  * away from waiting members, and a coordinate stamped at creation is passed by what the incumbent earns afterwards.
  * Two newcomers created at two instants would then differ by something neither did.
  *
- * So the coordinate is read, not written, until the account is first served. An unplaced account's reward is
- * frontier_vt() (acct_family_val), re-read at every pick; the dispatch that first gives it the thread freezes that
- * reading into `base` (flow_set_running), and from then on it stands on its own tag plus its own ledger. That is
- * `max(v(t), F_prev)` evaluated continuously for a member with no F_prev, and it makes placement a fact about the
- * queue rather than a race with the newcomer's creation instant.
+ * So the coordinate is read, not written, until the account's first turn is served. Its reward is frontier_vt()
+ * (acct_family_val), re-read at every pick, until one quantum of service ends that turn (flow_age_running), and
+ * from then on it stands on its own ledger. That is `max(v(t), F_prev)` evaluated continuously for a member with no
+ * F_prev, and it makes placement a fact about the queue rather than a race with the newcomer's creation instant or
+ * with how soon a fork or a park interrupts its turn.
  *
- * It does not re-relate an account that has been served: such an account earns and ages on its own tag, so a
- * leader that keeps emitting leads and a served account that produces nothing can be passed. That is the bandit
- * ordering the scheduler asks for (accumulated emitted value, order only); whether a leader's advantage decays is
- * a different question. So `val_min` does not climb with `val_max`, and the alternatives are inadmissible:
+ * It does not re-relate an account whose first turn has been served: such an account earns and ages on its own tag, so
+ * a leader that keeps emitting leads and a served account that produces nothing can be passed. That is the bandit
+ * ordering the scheduler asks for (accumulated emitted value, order only); whether a leader's advantage decays is a
+ * different question. So `val_min` does not climb with `val_max`, and the alternatives are inadmissible:
  *   (a) re-relate until the account earns: an account that emitted once stands at its tag while one that never
  *       emitted stands at the clock, so a finding demotes its author by the whole reward spread, a promise
  *       outweighing a finding without bound, which flow_nonreward exists to prevent; and the never-earning account
