@@ -1403,6 +1403,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/wnameunk.h"
 #include "fixture/flexsvg.h"
 #include "fixture/ceupsale.h"
+#include "fixture/flexnone.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2063,6 +2064,7 @@ TF_DOCS[] = {
     { "wnameunk", HTML_WNAMEUNK },
     { "flexsvg", HTML_FLEXSVG },
     { "ceupsale", HTML_CEUPSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "flexnone", HTML_FLEXNONE },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19408,6 +19410,22 @@ TF_UNIT void probes_ceupsale(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexnone` document (fixture/flexnone.h): a `display: none` child of a `column` flex
+   container is no flex item, so its auto height does not ask for one. */
+TF_UNIT void probes_flexnone(const char *js, Probe *tab, int *n) {
+    const char *fn_why = NULL; int fn_tt = 1;
+    fold_row(&fn_tt, &fn_why, !!strstr(js, "\"/api/flexnone\""),
+             "NOT REACHED: no /api/flexnone record, so the document aborted before its fetch");
+    fold_row(&fn_tt, &fn_why, param_value_is(js, "/api/flexnone", "i", "10") &&
+                              param_value_is(js, "/api/flexnone", "o", "20"),
+             "css-flexbox-1 §9.9.1: a `column` container whose items are one 10px box and a `display: none` "
+             "child is not 10px tall, or its 5px-padded container is not 20px");
+    const Probe rows[] = {
+        { "flex-none-child", fn_tt, "/api/flexnone", SESS_EXPLORE, fn_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25401,6 +25419,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_wnameunk(js, probes, &np);
     probes_flexsvg(js, probes, &np);
     probes_ceupsale(js, probes, &np);
+    probes_flexnone(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
