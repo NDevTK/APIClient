@@ -1399,6 +1399,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cssdsetprop.h"
 #include "fixture/sheetrest.h"
 #include "fixture/wnameunk.h"
+#include "fixture/flexsvg.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2055,6 +2056,7 @@ TF_DOCS[] = {
     { "cssdsetprop", HTML_CSSDSETPROP },
     { "sheetrest", HTML_SHEETREST },
     { "wnameunk", HTML_WNAMEUNK },
+    { "flexsvg", HTML_FLEXSVG },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19334,6 +19336,26 @@ TF_UNIT void probes_wnameunk(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexsvg` document (fixture/flexsvg.h): a replaced flex item's intrinsic inline size
+   transfers its preferred height, so its container's lines are not their own input. */
+TF_UNIT void probes_flexsvg(const char *js, Probe *tab, int *n) {
+    const char *fs_why = NULL; int fs_tt = 1;
+    fold_row(&fs_tt, &fs_why, !!strstr(js, "\"/api/flexsvg\""),
+             "NOT REACHED: no /api/flexsvg record, so the document aborted before its fetch");
+    fold_row(&fs_tt, &fs_why, param_value_is(js, "/api/flexsvg", "b1", "32") &&
+                              param_value_is(js, "/api/flexsvg", "b2", "20") &&
+                              param_value_is(js, "/api/flexsvg", "in", "52"),
+             "css-sizing-4 §4.2: the `auto`-width column button is not its 24px-high svg's 20px, or the row item "
+             "holding it and a 32px button is not 52px wide");
+    fold_row(&fs_tt, &fs_why, param_value_is(js, "/api/flexsvg", "sw", "20") &&
+                              param_value_is(js, "/api/flexsvg", "sh", "24"),
+             "the svg in the `auto`-width column button is not laid out at its declared 20px by 24px");
+    const Probe rows[] = {
+        { "flex-svg-intrinsic-transfer", fs_tt, "/api/flexsvg", SESS_EXPLORE, fs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25324,6 +25346,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_cssdsetprop(js, probes, &np);
     probes_sheetrest(js, probes, &np);
     probes_wnameunk(js, probes, &np);
+    probes_flexsvg(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
