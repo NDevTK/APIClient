@@ -3787,11 +3787,13 @@ static int cobase_row(int row)
 
 int concolic_root_cobases(const char *root, const char *own, void (*cb)(void *ud, const char *src), void *ud)
 {
+    /* -1 where the search is delivered through a precondition row (concolic_declare_source_precondition), which
+       has no base an attacker source shares. */
     int own_base = row_base(root_declared_row(own)), found = 0;
     const char *p;
     size_t n;
 
-    DCHECK(root && own && own_base >= 0, "co-sources were asked of no root, or beside an own root no row declares");
+    DCHECK(root && own, "co-sources were asked of no root or beside no member");
     for (int i = 0; root_member(root, i, &p, &n); i++) {
         int base = row_base(src_row(p, n));
 
