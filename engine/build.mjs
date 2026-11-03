@@ -2010,21 +2010,20 @@ function wfqReading(out) {
           (svcUp > svcDown
             ? `the leader is holding the thread and being charged for it, and a gap behind it is closing`
             : `the front's own charge is not accumulating: the flow STANDING at the front is not the flow ` +
-              `being charged. Two things read that way and \`topSvcFam\` beside it separates them — a front ` +
-              `REFILLED by freshly-minted arms, or a leader whose silence an emission keeps forgiving — and ` +
-              `in neither does waiting close a gap behind it`);
+              `being charged — a front REFILLED by freshly-minted arms, or one that just emitted and restarted ` +
+              `its turns — and in neither does waiting close a gap behind it`);
       })();
   /* WHAT THE FRONT ITSELF IS DOING, which is the half `neverPickedGap` cannot supply and without which a
-     standing gap has two causes and one reading. See solver/flow.h: `topSvcFam` is the leading ACCOUNT's
-     silence and is what an emission resets, so it says whether that account's aging is being forgiven; `topSvc`
-     is the leader's OWN, and on a one-family frontier it is the only half that can move a gap at all. */
+     standing gap has two causes and one reading. See solver/flow.h: `topSvcFam` is all the work the leading
+     ACCOUNT has been given, its aging, which no emission resets; `topSvc` is the leader's OWN turn, and on a
+     one-family frontier it is the only half that can move a gap at all. */
   const leadAging = ((w.topSvc + w.topSvcFam) * AGE_QUANTUM);
   const leader =
-    `the front carries ${leadAging.toFixed(3)} points of aging (${w.topSvc} notches of its own silence, ` +
-    `${w.topSvcFam} of its family's), so the leading account ` +
+    `the front carries ${leadAging.toFixed(3)} points (${w.topSvc} notches of its own turn, ` +
+    `${w.topSvcFam} of its family's aging), so the leading account ` +
     (w.topSvcFam === 0
-      ? `emitted within the last quantum and its aging is being forgiven as fast as it is charged`
-      : `has been silent for ${w.topSvcFam} quanta`) +
+      ? `has received less than one quantum of service`
+      : `has received ${w.topSvcFam} quanta of service`) +
     (w.families === 1
       ? `; this frontier is ONE family, so that family charge lands on every member in the same instant and ` +
         `cancels out of every gap above — only the ${(w.topSvc * AGE_QUANTUM).toFixed(3)} points of the ` +
@@ -2130,20 +2129,19 @@ function wfqReading(out) {
          and a forgiveness count, and dropping the reading there would make it an observation computed on one
          arm and absent on the other: the pre-dispatch census is precisely where "the leading account has never
          emitted" is the whole of what there is to say.
-         AND THE EVENT THE FRONT'S TWO SILENCE NOTCHES ARE A READING BETWEEN, which is what turns "the leader's
-         aging is being reset" from an inference into a count. It is NOT a lifetime counter even though it only
+         AND THE EVENT THAT RESTARTS THE FRONT'S TURNS, as a count. It is NOT a lifetime counter even though it only
          climbs for one account: the count belongs to whichever account is at the FRONT, and that changes — so
          a FALL between two samples is a change of leader, which `valTop` falling beside it confirms, and this
          row is read per sample and never differenced on its own. The engine asserts the equivalence this arm
          splits on (flow_credit_emit raises the ledger and bumps the generation in one statement), so a
-         forgiveness count at zero IS a leading account that has never emitted, not a hole. */
+         count at zero IS a leading account that has never emitted, not a hole. */
       (w.topForgiven === 0
-         ? `. The leading account has never been forgiven its silence window, which is the same fact as its ` +
-           `ledger standing at ${w.valTop} — flow_credit_emit raises both in one statement — so its aging is ` +
-           `accumulating and has never been reset`
-         : `. The leading account's silence window has been forgiven ${w.topForgiven} time(s) for a ledger of ` +
+         ? `. The leading account has never emitted, which is the same fact as its ledger standing at ` +
+           `${w.valTop} — flow_credit_emit raises both in one statement`
+         : `. The leading account has emitted ${w.topForgiven} time(s) for a ledger of ` +
            `${w.valTop}, ${(w.valTop / w.topForgiven).toFixed(2)} point(s) per finding; an emission zeroes ` +
-           `both aging halves for EVERY arm of it at once, so read this against the ${w.picksMax} above — if ` +
+           `the turn of EVERY arm of it at once (its aging, the family's work, is never zeroed), so read this ` +
+           `against the ${w.picksMax} above — if ` +
            `the frontier is collapsing into tied visit tiers and flow_pick is sweeping one from its oldest ` +
            `member forward, that maximum tracks this count and ${w.picksMax > 0 ? (w.picksLive / w.picksMax).toFixed(2) : "the sweep depth"} ` +
            `is the mean depth between two emissions`);

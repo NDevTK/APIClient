@@ -8461,7 +8461,7 @@ static int64_t g_rival_fam_coord_notch = 0;
    value, and an assert over the accessor cannot be short a summand. It is one-sided by design: between two
    generations four stand still and the fifth only rises, so the computed weight is non-increasing (rounding to
    nearest is monotone in each operand of flow_order_key's sums); equality would fire on the one movement the
-   interval permits. It fires on what the five cannot see: a forgiveness of the family's silence with the generation
+   interval permits. It fires on what the five cannot see: a credit to the family's reward with the generation
    unchanged (flow_credit_emit is that writer and bumps today), a summand that moves up, or a notch that decreases.
    The direction is the precondition for any cached maximum, heap or index over flow_index_key. Written in every build, read only in dev (in release the condition is inside
    a `sizeof`).
@@ -8637,7 +8637,7 @@ static int preempt_hook(int kind) {
     DCHECKF(!g_rival || flow_weight(g_rival) <= g_rival_w,
             "the cached rival's weight rose while the frontier generation stood still (cached %.17g, current %.17g; "
             "family notch %lld -> %lld) — between generations a non-running member's weight may only "
-            "fall, so a forgiveness of its family's silence (flow_credit_emit) or another writer lost its rank-change "
+            "fall, so a credit to its family's reward (flow_credit_emit) or another writer lost its rank-change "
             "raise, or flow_order_key composes a term that moves without a write",
             g_rival_w, flow_weight(g_rival), (long long)g_rival_fam_coord_notch, (long long)flow_family_notch(g_rival));
     if (cur && g_rival && flow_weight(g_rival) > flow_weight(cur)) {   /* value yield */

@@ -205,8 +205,8 @@ typedef struct Flow {
        reader goes through flow.c's flow_own_silence and never reads it raw. Written only for the flow holding the
        thread; inherited at a fork. Reset at an emission credited to the account. */
     int64_t work;
-    /* Which silence window `work` is a reading of: this flow's copy of its account's `emit_gen`. An emission
-       forgives the whole family with one increment of `emit_gen` rather than a walk, because flow_weight is O(1)
+    /* Which window `work` is a reading of: this flow's copy of its account's `emit_gen`. An emission restarts every
+       member's turn with one increment of `emit_gen` rather than a walk, because flow_weight is O(1)
        and is evaluated inside DCHECK conditions. Inherited at a fork together with `work`; flow_fork_inherit's
        rank-neutrality equality fails if only one is copied. flow.c's flow_age_running normalises a stale value
        where the flow is charged. */
@@ -1107,7 +1107,7 @@ typedef struct {
        small N is a sweep in progress; a large N is an order whose within-family terms no longer separate
        anything, so `g_flows` position decides the pick. On a one-family frontier the reward and the family
        aging cancel, leaving the optimism bonus (the site's service, shared by every member standing there); the
-       turn then orders the tie (forgiven for the whole account at an emission). Read beside `jobs_framed`.
+       turn then orders the tie (restarted for the whole account at an emission). Read beside `jobs_framed`.
        A gauge, never differenced. flow_wfq_census asserts `never_picked_at_top <= never_picked`, and that it is
        non-zero exactly when `never_picked_gap` is 0.0. */
     long never_picked_at_top;
@@ -1334,26 +1334,23 @@ typedef struct {
        and reads which term holds the best candidate behind. `present` is 0 where no candidate stands. */
     FlowWeightOperands cand_top_ops, cand_ops;
 
-    /* The two halves of the leader's own silence, read off the member flow_best returned, in notches like
-       `svc_max`/`svc_fam_max` (multiply by FLOW_AGE_QUANTUM for points). A ledger is monotone, so a frozen
-       `val_top` and a slowly earning one look alike; the silence is not monotone (flow_credit_emit zeroes
-       `fam_work`), so these say whether the leader's aging is being forgiven.
-       Reported separately: on a one-family frontier `top_svc_fam` is a common offset that cancels from every
-       gap. `top_svc` is the leader's turn, no summand: a front holding the thread climbs in it, while a front
-       refilled by fresh arms keeps it low or sawtoothing. Bounded by the extrema above (the leader
-       is one of the members walked) and asserted. */
+    /* The leader's aging and turn, read off the member flow_best returned, in notches like `svc_max`/`svc_fam_max`
+       (multiply by FLOW_AGE_QUANTUM for points). `top_svc_fam` is all the work the leading account has been given, the
+       debit its ledger `val_top` is weighed against. Reported separately: on a one-family frontier `top_svc_fam` is a
+       common offset that cancels from every gap. `top_svc` is the leader's turn, no summand: a front holding the thread
+       climbs in it, while a front refilled by fresh arms keeps it low or sawtoothing. Bounded by the extrema above (the
+       leader is one of the members walked) and asserted. */
     int64_t top_svc;
     int64_t top_svc_fam;
     /* How many times the leading account's within-family order has been erased: its `emit_gen`, raised once per
-       credited finding by flow_credit_emit and by nothing else. `val_top` cannot stand in for it, because a
-       credit is any positive amount (the @S survival ratchet credits fractions).
-       An emission zeroes the family's silence and every arm's turn at once, leaving arms in one visit tier exactly
-       tied, so flow_pick returns the tied member with the lowest birth sequence and the tier is swept from its
-       oldest member, one member per quantum of turn; the next emission restarts the sweep. If that
-       holds, `picks_max` tracks this within a small factor and `picks_live / picks_max` is the mean sweep depth;
-       `val_top / top_forgiven` says whether the leader earns findings or ratchets fractions.
-       A per-account lifetime count whose series may fall at a leader change: both falling is a new leader,
-       this falling while `val_top` rises is a generation going backwards. Read per sample, never differenced. */
+       credited finding by flow_credit_emit and by nothing else. `val_top` cannot stand in for it, because a credit is
+       any positive amount (the @S survival ratchet credits fractions). An emission zeroes every arm's turn at once,
+       leaving arms in one visit tier exactly tied, so flow_pick returns the tied member with the lowest birth sequence
+       and the tier is swept from its oldest member, one member per quantum of turn; the next emission restarts the
+       sweep. If that holds, `picks_max` tracks this within a small factor and `picks_live / picks_max` is the mean
+       sweep depth; `val_top / top_forgiven` says whether the leader earns findings or ratchets fractions. A per-account
+       lifetime count whose series may fall at a leader change: both falling is a new leader, this falling while
+       `val_top` rises is a generation going backwards. Read per sample, never differenced. */
     int64_t top_forgiven;
     /* The most every term of the order except the reward can lift one member: flow.c's FLOW_NONREWARD_MAX, the
        bound flow_nonreward asserts, emitted because it folds two terms (the optimism ceiling, which the fitness
