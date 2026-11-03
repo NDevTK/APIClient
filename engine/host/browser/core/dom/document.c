@@ -984,13 +984,12 @@ typedef struct {
     JSValue exc;        /* step 5.1.4's caught exception (owned), held across the report's own park */
     /* Step 5.1.1's `C`, held because step 5.1.4 constructs it across a park, and a `define` inside the page's
        constructor may have replaced the definition's entry, while the class step 5.1.4 resumes into must be the one
-       step 5.1.1 named. Owned. The restore step 5.1.6 owes is the machine's and holds its own reference (see
-       idl_active_ctor_owed). */
+       step 5.1.1 named, and the key the restore after the catching list gives back. Owned. */
     JSValue ctor;
-    /* Whether steps 5.1.2-5.1.3 ran. The paired restore is the machine's (idl_active_ctor_owed); step 5.1.4 asserts
-       this before constructing, since an unentered map means HTML §3.2.3 "HTML element constructors" step 3 would
-       answer from the document's registry for a creation that may have named a scoped one. A flag, not
-       `JS_IsObject(s->ctor)`, because the two are different facts. */
+    /* Whether the map holds this creation's entry: set when it is entered and cleared when the restore after the
+       catching list runs. The construct asserts it, since an unentered map means HTML §3.2.3 "HTML element
+       constructors" step 3 would answer from the document's registry for a creation that may have named a scoped
+       one. A flag, not `JS_IsObject(s->ctor)`, because the two are different facts. */
     uint8_t entered;
     ReportExceptionWork rw;
     /* HTML §4.13.5's cursor, for DOM §4.9 step 4.3, the customized-built-in arm, which upgrades rather than
@@ -1013,24 +1012,26 @@ static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
 }
 
 /* What this algorithm took from outside itself and owes back on every exit: §8.1.4.6 step 5's error-reporting flag
-   on the global. Values are named by doc_create_el_visit, the one list teardown discharges. DOM §4.9 steps
-   5.1.5-5.1.6 also owe every exit (a flow discarded while parked on the constructor never resumes, and the
-   agent-wide map entry would answer every later `new C()` in the agent from this creation's registry), but removing
-   the entry drops a reference to `C`, which doc_create_el_visit names, and a `release` runs inside idl_args.c's
-   fingerprint bracket, which compares holder counts and cannot tell that give-back from a discharged declaration.
-   So the give-back is declared to the machine at the enter (idl_active_ctor_owed) and performed at its teardown,
-   below the bracket, beside §4.13.5's half. */
+   on the global. Values are named by doc_create_el_visit, the one list teardown discharges. The active custom
+   element constructor map entry is not owed here: the restore runs on the live path (dce_restore), and a flow
+   discarded while parked on the constructor is freed while not switched in, so the entry goes with its world. */
 static void doc_create_el_release(JSContext *ctx, void *st)
 {
     DocCreateElState *s = st;
 
     report_exception_work_unlock(ctx, &s->rw);
-    /* The same obligation for step 4.3's arm: HTML §4.13.5 step 10's regardless-list is owed by every exit from its
-       step 10, including a flow discarded while parked on the upgrade's Construct (the map entry from steps 8-9 is
-       agent-wide, and step 6's construction-stack entry is read by the next `super()`). A no-op when no upgrade is
-       in flight. It is placed here because §4.13.5 holds its own `C` on the cursor, not a declared value. Steps 4
-       and 5 are the two arms of one `if`, so only one of the two entries ever ran. */
-    custom_elements_upgrade_unlock(ctx, &s->up);
+}
+
+/* DOM §4.9 create an element, the restore after the catching list: "If previousRegistry is null, then remove the
+   surrounding agent's active custom element constructor map[C]. Otherwise, set … map[C] to previousRegistry" —
+   which the map's stack form does by dropping the entry this creation pushed. Run on every live exit after the
+   enter, in the world that entered. */
+static void dce_restore(JSContext *ctx, DocCreateElState *s)
+{
+    DCHECK(s->entered, "DOM §4.9's restore of the active custom element constructor map ran for a creation that "
+                       "did not set it, or ran twice");
+    custom_elements_active_ctor_leave(ctx, s->ctor);
+    s->entered = 0;
 }
 
 static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1168,10 +1169,6 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
            element its `super()` mints belongs to (without it a class defined in a scoped registry cannot find its
            own definition). */
         custom_elements_active_ctor_enter(ctx, s->ctor, registry);
-        /* The restore is owed to the machine, not written after the construct or in `release`: step 5.1.4 parks on
-           page code, so its three exits (checks done, report done, flow discarded) share only the machine's
-           teardown, and the give-back drops a reference to `C` (see doc_create_el_release). */
-        idl_active_ctor_owed(ctx, hdr, s->ctor);
         s->entered = 1;
         JS_FreeValue(ctx, registry);
         /* Step 5.1.4.8 compares what the constructor made against the name this operation was given, already
@@ -1251,7 +1248,7 @@ upgrade:
 
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        if (!local || !d) { if (local) JS_FreeCString(ctx, local); return -1; }
+        if (!local || !d) { if (local) JS_FreeCString(ctx, local); dce_restore(ctx, s); return -1; }
         r = custom_elements_created_check(ctx, s->result,
                                           lxb_dom_interface_document(d->dom), local, len);
         JS_FreeCString(ctx, local);
@@ -1262,6 +1259,7 @@ upgrade:
             STEP_GOTO(hdr->stage, DCE_REPORT, &s->phase, NULL);
             goto report;
         }
+        dce_restore(ctx, s);
         *presult = s->result;
         s->result = JS_UNDEFINED;
         return 0;
@@ -1291,6 +1289,7 @@ report:
         custom_elements_mark_failed(ctx, el);
         *presult = el;
     }
+    dce_restore(ctx, s);
     return 0;
 }
 

@@ -1117,21 +1117,6 @@ typedef struct {
        suspension would be seen by whatever flow ran next. */
     uint8_t   ce_threw;
     JSValue   ce_exc;
-    /* §4.13.4'S ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP ENTRY THIS INVOCATION ENTERED AND HAS NOT LEFT — the `C`
-       of DOM §4.9 create an element step 5.1.1, held so steps 5.1.5-5.1.6 can run at the one exit common to
-       every way out of step 5.1, INCLUDING a flow discarded while parked on the page's constructor. Owned;
-       JS_UNDEFINED when this invocation entered nothing, which is every member but that one.
-       IT IS THE MACHINE'S AND NOT THE MEMBER'S, and that is the whole point of the field rather than a
-       placement detail. The map is a MAP OF CONSTRUCTORS TO REGISTRIES, so giving an entry back DROPS A
-       REFERENCE to the constructor — and a member's `release` runs inside the fingerprint bracket below, whose
-       comparison is over the whole heap's count of every value the declaration names. A give-back that moves
-       any of those counts is indistinguishable there from a `release` that discharged the declaration itself,
-       so the bracket refuses it. The agent's OTHER bracket of this same pair was never in that position:
-       §4.13.5 "Upgrades" step 10's regardless-list is given back by custom_elements_queue_unlock, which runs
-       BELOW the bracket. This puts DOM §4.9's in the same place, so the agent's map has ONE give-back point
-       and a member's `release` is left holding only what its own contract names — a lexbor handle, a foreign
-       allocation, a flag to lower, none of which is a reference. */
-    JSValue   ace_ctor;
 } JSIdlArgsState;
 
 /* THE STATE BLOCK'S TAIL, WHOSE SIZE IS THE MEMBER'S AND NOT THIS MACHINE'S. Three things live after the fixed
@@ -3880,7 +3865,6 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->conv);
     v->val(ctx, &s->vstage);
     v->val(ctx, &s->ce_exc);
-    v->val(ctx, &s->ace_ctor);
     /* §3.2.17's WALK — its source, the dictionary it is building, the member in flight, the sequence cursor and
        EVERY declared frame, named in ONE place that both entries share. The frames are handed in rather than
        stored on the walk, so this is where the argument machine's tail layout meets it. */
@@ -4766,7 +4750,6 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         s->ce_after_body = 0;
         s->ce_threw = 0;
         s->ce_exc = JS_UNDEFINED;
-        s->ace_ctor = JS_UNDEFINED;
         s->hdr.stage = 1;
     }
 
@@ -6538,11 +6521,7 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
        free-WITHOUT-null does not, and reaches the discharge as the second free where the allocator answers —
        the same trade quickjs.c's fold has always taken for a declared `buf`.
        IT THEREFORE DOES NOT FORBID a `release` from moving reference counts elsewhere in the agent's object
-       graph. The active-ctor give-back is still paid below this bracket rather than in a `release`, and the
-       reason is now only the second one it always also had: it is one half of a PAIR whose other half
-       (custom_elements_queue_unlock, §4.13.5 "Upgrades" step 10's regardless-list) is paid there, and the two
-       must unwind in nesting order — a member's `release` runs before that unlock, so an upgrade reached from
-       inside this member's own Construct would leave the OUTER bracket first.
+       graph.
        AND IT NAMES THE MEMBER, because this is the ONE point every declared member's teardown converges on: an
        assert stamped with this line and a remedy phrased as "release only what the declaration does not name"
        is an instruction with no object, and finding which of the platform's members it meant is a search of
@@ -6579,27 +6558,6 @@ static JSValue idl_args_result(JSContext *ctx, void *st, bool take_result)
     if (s->tree) {
         DCHECK(g_tree != NULL, "an IDL member holds a tree-steps buffer with no DOM layer registered");
         g_tree->unlock(ctx, s->tree);
-    }
-    /* …AND DOM §4.9 create an element STEPS 5.1.5-5.1.6, if this invocation entered §4.13.4's active custom
-       element constructor map and step 5.1 did not get back out — which for a flow discarded while parked on
-       the page's constructor is every time, and which no resume ever comes back to run. It is BELOW the
-       fingerprint bracket and not inside the member's `release` because giving the entry back drops a
-       reference to `C`, and that bracket cannot tell that from a `release` discharging the declaration.
-       IT IS ALSO WHERE THE AGENT'S OTHER BRACKET OF THIS PAIR IS GIVEN BACK — custom_elements_queue_unlock
-       above runs §4.13.5 "Upgrades" step 10's regardless-list steps 1-2 — and the ORDER of the two is the
-       nesting: an upgrade reached from inside this member's own Construct entered LAST, so it leaves FIRST, and
-       the leave's own top-of-stack identity assert is what catches a pair that ran out of order.
-       The map is agent-wide, so an entry left on it answers every later `new C()` in the agent, in flows that
-       never named this registry — and nothing reports it, because the entry is a live value on a live object. */
-    /* THE QUESTION IS "IS THERE A CONSTRUCTOR HERE", NOT "IS THE SLOT UNDEFINED", because a step state arrives
-       ZEROED and a zeroed JSValue is a NUMBER rather than JS_UNDEFINED — so a machine torn down before its
-       stage 0 ever ran would answer "not undefined" and hand §4.13.4's leave an integer. Every key of that map
-       is a constructor, which its own enter asserts, so this is the same fact stated in the form the zeroed
-       state also answers correctly. */
-    if (JS_IsObject(s->ace_ctor)) {
-        custom_elements_active_ctor_leave(ctx, s->ace_ctor);
-        JS_FreeValue(ctx, s->ace_ctor);
-        s->ace_ctor = JS_UNDEFINED;
     }
 
     /* AND THE ONE LIST IS DISCHARGED BY THE DRIVER, after this returns — tramp_step_state_free_1 reads
@@ -7513,23 +7471,6 @@ int idl_step_magic(const JSStepHdr *hdr)
     return idl_member(hdr->arg)->magic;
 }
 
-void idl_active_ctor_owed(JSContext *ctx, JSStepHdr *hdr, JSValueConst ctor)
-{
-    /* The header is this state's FIRST field — the same identity every read of `hdr->arg` in this file already
-       relies on — so a body that holds its header holds its machine. */
-    JSIdlArgsState *s = (JSIdlArgsState *)hdr;
-
-    DCHECK(hdr->arg >= 0 && hdr->arg < g_n,
-           "a step body declared an active custom element constructor map entry with no pool entry behind it");
-    /* NOT `JS_IsUndefined` — see the teardown's own read for why a zeroed state cannot be asked that way. */
-    DCHECK(!JS_IsObject(s->ace_ctor),
-           "one IDL invocation entered §4.13.4's active custom element constructor map TWICE without leaving. "
-           "The pair nests one deep per invocation — DOM §4.9 create an element step 5.1's bracket is the only "
-           "one a declared member enters directly, and it brackets a single Construct — so a second entry means "
-           "the first is about to be given back for the wrong constructor, and HTML §3.2.3 \"HTML element "
-           "constructors\" step 3 would then answer some other algorithm's registry");
-    s->ace_ctor = JS_DupValue(ctx, ctor);
-}
 
 int idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSetter body, int magic)
 {

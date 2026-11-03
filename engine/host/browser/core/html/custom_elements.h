@@ -54,9 +54,9 @@ enum { CE_REACTION_CALLBACK = 0, CE_REACTION_UPGRADE = 1, CE_REACTION_MOVE_PAIR 
    to dequeue from; welding the cursor to the drain's record is what would have forced a second copy of
    §4.13.5 for the caller that has no drain, which is the dual-system rot this file's own architecture rules
    name. The cursor moved OUT of CustomElementQueue rather than being duplicated into DocCreateElState.
-   THE ELEMENT AND THE DEFINITION ARE HELD HERE and not re-read from the caller at each re-entry, because step
-   10's regardless-list is owed by a flow that is TORN DOWN mid-Construct and therefore never re-enters at
-   all: custom_elements_upgrade_unlock is that exit, and it can name only what this record itself holds. */
+   THE ELEMENT AND THE DEFINITION ARE HELD HERE and not re-read from the caller at each re-entry, so a resume
+   is checked against the upgrade it resumes. A flow torn down mid-Construct owes no regardless-list: it is
+   freed while not switched in, and what step 10 entered lives in its own world, which goes with it. */
 typedef struct {
     /* 0 exactly when no upgrade is in flight, which is what every caller's teardown reads to decide whether
        step 10's regardless-list is still owed. */
@@ -69,12 +69,6 @@ typedef struct {
 
 void custom_elements_upgrade_init(CeUpgrade *u);
 void custom_elements_upgrade_visit(JSContext *ctx, CeUpgrade *u, JSStepVisit *v);
-/* HTML §4.13.5 step 10's REGARDLESS-LIST, for the flow that never comes back to run it — "regardless of
-   whether the above steps threw an exception or not" is a claim about every exit from step 10, and a flow torn
-   down while parked on step 10.3's Construct is one of them. What step 10 took by then outlives the flow: the
-   active custom element constructor map entry steps 8-9 pushed, and step 6's construction stack entry. A
-   no-op when no upgrade is in flight, so every caller calls it unconditionally from its own release. */
-void custom_elements_upgrade_unlock(JSContext *ctx, CeUpgrade *u);
 /* HTML §4.13.5 "Upgrades", ONE STEP AT A TIME. `el` and `def` are the algorithm's two inputs and are ADOPTED
    at the first entry; a re-entry passes the same pair and is asserted against what was adopted, because a
    resume that names a different upgrade is the one way this cursor can be driven wrong.
@@ -233,21 +227,10 @@ bool custom_elements_element_has_is_value(JSContext *ctx, JSValueConst wrap);
    steps 5.1.2-5.1.3 and 5.1.5-5.1.6 — and `previousRegistry` is what makes them a pair rather than two writes.
    The leave takes `ctor` back so the assert it carries is an IDENTITY question: a pair that ran out of order
    would otherwise restore some other algorithm's previousRegistry with nothing to say so.
-   THE LEAVE OWES EVERY EXIT, TEARDOWN INCLUDED. "Regardless of whether the above steps threw" covers the flow
-   that is DISCARDED while parked on the page's constructor, which no resume ever comes back from. The map is
-   agent-wide, so an entry left on it answers every later `new C()` in the agent, in flows that never named
-   this registry — and nothing reports it, because the entry is a live value on a live object.
-   IT IS NOT AN IdlStepDecl `release`, AND THE REASON IS THAT AN ENTRY IS NOT A FLAG. That field's stated
-   purpose is what no declaration can name — a lexbor handle, a foreign allocation, a flag to lower — while this
-   map holds CONSTRUCTORS as keys, so the leave mutates the agent's own object graph and drops a reference to
-   `C`. A step machine that enters therefore declares the leave with core/idl_args.h's idl_active_ctor_owed, and
-   the machine performs it at its teardown, below idl_args.c's `release` bracket. §4.13.5 "Upgrades"' half is
-   given back the same way and at the same point, through custom_elements_queue_unlock, and THAT is what makes
-   the placement load-bearing rather than tidy: the two are a nested pair and must unwind in nesting order, and
-   a member's `release` runs before that unlock. (It is no longer the fingerprint that forces it. idl_args.c
-   once folded the heap's reference count of every declared value, which refused this give-back — `C` is a
-   declared value — and aborted every completed `document.createElement` of a defined name; that fold reads slot
-   IDENTITY now and would not object.) */
+   THE MAP IS PER WORLD. It is an array the agent builds before boot, so a flow's enter is a write to a
+   baseline object, captured in that flow's delta (solver/dom_cow.h's state isolation). Each leave therefore
+   runs on the live path of the algorithm that entered, in the world that entered: a flow discarded while
+   parked on the page's constructor is freed while not switched in, and its entry goes with its delta. */
 void custom_elements_active_ctor_enter(JSContext *ctx, JSValueConst ctor, JSValueConst registry);
 void custom_elements_active_ctor_leave(JSContext *ctx, JSValueConst ctor);
 /* DOM §4.9 steps 5.1.4.2-11: the checks the spec runs on what the page's constructor RETURNED, and the state

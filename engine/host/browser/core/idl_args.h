@@ -892,8 +892,7 @@ typedef struct {
        constructing-entry-list flag). It runs before the declaration is discharged, so it may read owned values.
        idl_args.c folds every declared slot's identity (tag, and payload where that is a pointer) on each side
        of the call and requires them equal: `release` may move reference counts elsewhere but must not free,
-       null, replace or hand over a declared slot. NULL when there is nothing of that kind. The active custom
-       element constructor map is given back by idl_active_ctor_owed instead, for its nesting order. */
+       null, replace or hand over a declared slot. NULL when there is nothing of that kind. */
     void      (*release)(JSContext *ctx, void *state);
     /* Which algorithm this member is and which step each stage rests at: the pool builds one JSTrampStepDef per
        member, prepends labels for its own two stages, and the driver's one check reads it. `steps` is indexed
@@ -1077,15 +1076,6 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
    shared step contract (innerHTML and outerHTML are one walk with two starting points). */
 int idl_step_magic(const JSStepHdr *hdr);
 
-/* Declare that this invocation entered the active custom element constructor map, so the machine gives the
- * entry back at its teardown. `ctor` is DOM §4.9 create an element step 5.1.1's `C`, borrowed; the machine
- * takes its own reference.
- *
- * Not done in the member's `release`: steps 5.1.5-5.1.6 must also run for a discarded flow parked in the
- * page's constructor, so only the teardown can run them, and they must unwind in nesting order with HTML
- * §4.13.5 "Upgrades" step 10's give-back (custom_elements_queue_unlock), which the teardown pays below
- * idl_args.c's `release` bracket. One per invocation, asserted. */
-void idl_active_ctor_owed(JSContext *ctx, JSStepHdr *hdr, JSValueConst ctor);
 
 /* Read a member of the dictionary the declaration built. An omitted `optional D options = {}` argument is not
    there at all, so a plain property get would be a get on `undefined`; here an absent dictionary has every

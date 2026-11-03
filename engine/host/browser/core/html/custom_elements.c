@@ -941,11 +941,11 @@ void custom_elements_active_ctor_leave(JSContext *ctx, JSValueConst ctor)
     uint32_t n = ce_array_len(ctx, g_active_ctor_map);
 
     (void)ctor;   /* the identity assert below is the only reader, and it is dev-only */
-    DCHECK(n > 0, "§4.13.4's active custom element constructor map was restored with nothing on it. Three "
-                  "algorithms bracket a Construct with this pair — HTML §4.13.5 \"Upgrades\" steps 8-9 and its "
-                  "step 10 regardless-list, that same upgrade's teardown while it is parked mid-construct, and "
-                  "DOM §4.9 \"Interface Element\" create an element steps 5.1.2-5.1.3 and 5.1.5-5.1.6 — so an "
-                  "empty stack means one of them left without entering");
+    DCHECK(n > 0, "§4.13.4's active custom element constructor map was restored with nothing on it. Two "
+                  "algorithms bracket a Construct with this pair, each on its own live path — HTML §4.13.5 "
+                  "\"Upgrades\" steps 8-9 and its step 10 regardless-list, and DOM §4.9 \"Interface Element\" "
+                  "create an element's set and restore around its Construct — so an empty map means a leave "
+                  "ran in a world that never entered");
 #if APICLIENT_DEV
     /* THE IDENTITY HALF, READ ONLY WHERE THERE IS AN ENTRY TO READ. It is a dev question and nothing else —
        the restore itself is one truncation — so the read that answers it is not performed in a release build,
@@ -1104,10 +1104,6 @@ void custom_elements_queue_visit(JSContext *ctx, CustomElementQueue *q, JSStepVi
     for (k = 0; k < 2 + CE_MAX_REACTION_ARGS; k++) v->val(ctx, &q->cb[k]);
 }
 
-/* custom_elements_queue_unlock is defined BELOW §4.13.5 rather than here beside the other three lifecycle
-   calls: what it owes at a teardown is that algorithm's step 10 regardless-list, so it is unreadable away
-   from the enter it undoes. */
-
 /* Which of §4.13.6 step 1.3.1's arms the drain last parked in — see custom_elements.h.
    THREE ARMS AND NOT FOUR, ALTHOUGH THERE ARE NOW FOUR REST POINTS. An arm names WHERE a park is, and a
    CE_REACTION_MOVE_PAIR reaction parks in exactly the place a CE_REACTION_CALLBACK one does: inside a
@@ -1192,8 +1188,8 @@ void custom_elements_upgrade_visit(JSContext *ctx, CeUpgrade *u, JSStepVisit *v)
     STEP_CB_FOREACH(u->cb, k) v->val(ctx, &u->cb[k]);
 }
 
-/* THE END OF ONE UPGRADE, ON EITHER OF ITS TWO COMPLETIONS. The inputs were adopted at the first entry
-   precisely so the teardown below can name them, so they are released exactly where the cursor goes idle —
+/* THE END OF ONE UPGRADE, ON EITHER OF ITS TWO COMPLETIONS. The inputs were adopted at the first entry, so
+   they are released exactly where the cursor goes idle —
    and the two facts are written together because a stage that said IDLE while the operands were still held
    is a record that reports no upgrade in flight and still owns its element. */
 static void ce_upgrade_done(JSContext *ctx, CeUpgrade *u)
@@ -1220,9 +1216,8 @@ int custom_elements_upgrade_run(JSContext *ctx, CeUpgrade *u, JSValueConst el, J
            (JS_VALUE_GET_PTR(u->el) == JS_VALUE_GET_PTR(el) &&
             JS_VALUE_GET_PTR(u->def) == JS_VALUE_GET_PTR(def)),
            "HTML §4.13.5 \"Upgrades\" was resumed with an element or a definition other than the pair it "
-           "adopted at its first entry — the operands are held on the cursor so that step 10's regardless-list "
-           "can be owed by a torn-down flow, and a resume that renames them is running one upgrade's second "
-           "half over another upgrade's element");
+           "adopted at its first entry — a resume that renames them is running one upgrade's second half over "
+           "another upgrade's element");
     if (u->stage == CE_UP_IDLE) {
         lxb_dom_attr_t *a;
 
@@ -1237,9 +1232,7 @@ int custom_elements_upgrade_run(JSContext *ctx, CeUpgrade *u, JSValueConst el, J
         }
         DCHECK(node && node->type == LXB_DOM_NODE_TYPE_ELEMENT,
                "an upgrade reaction was enqueued for something that is not an element");
-        /* THE INPUTS ARE ADOPTED HERE, past step 1's early return so a bail-out owns nothing. From this line
-           on the algorithm has taken step 6's construction stack entry and steps 8-9's map entry, which is
-           exactly the window in which a torn-down flow still owes step 10's regardless-list. */
+        /* THE INPUTS ARE ADOPTED HERE, past step 1's early return so a bail-out owns nothing. */
         u->el = JS_DupValue(ctx, el);
         u->def = JS_DupValue(ctx, def);
         JS_DefinePropertyValue(ctx, (JSValue)el, g_atom_def, JS_DupValue(ctx, def), CE_SLOT_FLAGS);  /* step 2 */
@@ -1276,7 +1269,7 @@ int custom_elements_upgrade_run(JSContext *ctx, CeUpgrade *u, JSValueConst el, J
            map takes THIS ELEMENT'S registry for the duration of the construct, because that is the only way
            §3.2.3 step 3 can find a definition that lives in a SCOPED registry. The enter is paired with the
            leave below, which runs whether or not the construction threw — step 10's regardless-list — and
-           with the one in custom_elements_queue_unlock for the drain that never gets back here at all. */
+           a flow torn down before it gets back here takes the entry with its own world. */
         {
             JSValue ctor = JS_GetProperty(ctx, def, g_atom_ctor);
             JSValue reg = ce_registry_of_node(ctx, el);
@@ -1386,49 +1379,13 @@ int custom_elements_upgrade_run(JSContext *ctx, CeUpgrade *u, JSValueConst el, J
     return 0;
 }
 
-/* §4.13.5 STEP 10'S REGARDLESS-LIST FOR THE UPGRADE THAT NEVER COMES BACK.
- * "Regardless of whether the above steps threw an exception or not" is a claim about EVERY exit from step 10,
- * and a flow torn down while parked on step 10.3's Construct is one of them — the resume that would have run
- * the list is exactly what teardown means. What step 10 took by then is agent-wide and outlives the flow: the
- * active custom element constructor map entry steps 8-9 pushed, whose survival makes HTML §3.2.3 "HTML element
- * constructors" step 3 answer THIS constructor out of THIS element's registry for every later `new C()` in the
- * agent; and step 6's construction stack entry, which §3.2.3 step 12 takes as "the last entry in definition's
- * construction stack" — so the next `super()` for that definition is handed an element belonging to a flow
- * that no longer exists, and §3.2.3 step 13's already-constructed-marker question is asked about it.
- * NEITHER IS VISIBLE TO ANY DETECTOR HERE — both are live values on live objects, so the leak walk has nothing
- * to say, and the wrong answer arrives later in another algorithm.
- * `u->stage` is zero exactly when no upgrade is in flight, which is what makes this decidable at a teardown;
- * the definition is the one the RUN ADOPTED and never the name's current entry, because a `define` running
- * inside the constructor this flow died in may have replaced that entry and the pair to unwind is the pair
- * step 10 pushed. That is also why it is held on the cursor: the drain could read it back off the reaction it
- * was holding, and DOM §4.9's create an element has no reaction to read anything off. */
-void custom_elements_upgrade_unlock(JSContext *ctx, CeUpgrade *u)
-{
-    if (u->stage == CE_UP_IDLE) return;
-    DCHECK(JS_IsObject(u->def),
-           "HTML §4.13.5 \"Upgrades\" was in flight at a teardown with no definition to name what step 10 "
-           "took — the definition is adopted at the first entry precisely so this exit can undo it");
-    {
-        JSValue ctor = JS_GetProperty(ctx, u->def, g_atom_ctor);
-        JSValue stack = JS_GetProperty(ctx, u->def, g_atom_stack);
-        uint32_t n = ce_array_len(ctx, stack);
-
-        custom_elements_active_ctor_leave(ctx, ctor);        /* regardless-list steps 1-2 */
-        DCHECK(n > 0, "HTML §4.13.5 step 10's regardless-list step 3 found an empty construction stack at a "
-                      "teardown — step 6 pushed onto it before the Construct this flow is parked on");
-        ce_array_set_len(ctx, stack, n - 1);                 /* regardless-list step 3 */
-        JS_FreeValue(ctx, stack);
-        JS_FreeValue(ctx, ctor);
-    }
-    ce_upgrade_done(ctx, u);
-}
-
-/* THE DRAIN'S OWN TEARDOWN, which is the reporting flag it may be holding on the global plus the upgrade's. */
+/* THE DRAIN'S OWN TEARDOWN, which is the reporting flag it may be holding on the global. An upgrade in flight
+   owes nothing here: its operands are named by custom_elements_upgrade_visit, and what its step 10 entered is
+   the torn-down flow's own world (custom_elements_active_ctor_enter). */
 void custom_elements_queue_unlock(JSContext *ctx, CustomElementQueue *q)
 {
     q->reporting = 0;
     report_exception_work_unlock(ctx, &q->rep);
-    custom_elements_upgrade_unlock(ctx, &q->up);
 }
 
 /* §4.13.6 "invoke custom element reactions in an element queue", one reaction per entry.
