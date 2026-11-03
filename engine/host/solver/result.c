@@ -1660,7 +1660,10 @@ char *result_cold_json(void) {
     METRIC_SET(paged_reqs, e.paged_reqs);
     METRIC_SET(paged_asks, e.paged_asks);
     METRIC_SET(paged_unarmed, e.paged_unarmed);
+    METRIC_SET(paged_over, e.paged_over);
     METRIC_SET(paged_floor, e.paged_floor);
+    METRIC_SET(paged_shed, e.paged_shed);
+    METRIC_SET(paged_sales, e.paged_sales);
     METRIC_SET(pressure_sold, e.pressure_sold);
     METRIC_SET(pressure_collects, e.pressure_collects);
     DCHECK(e.rest_compose_attempts >= e.rest_compositions,

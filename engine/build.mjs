@@ -522,8 +522,11 @@ function retiredReading(c) {
   coldPartition(c, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
   coldPartition(c, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
   /* AND THE PAGER'S OWN PARTITION, which is what makes the `sold` arm below a reading rather than a zero.
-     engine_reclaim_tail leaves by exactly three doors and each counts itself on the line it leaves by. */
-  coldPartition(c, "pagedAsks", ["pagedUnarmed", "pagedFloor", "sold"], "engine_frontier_census");
+     engine_reclaim_tail leaves by exactly five exits and each counts itself on the line it leaves by; a sale's
+     record may sell more flows for their bulk, so the sale exits and the funded flows sum to `sold`. */
+  coldPartition(c, "pagedAsks", ["pagedOver", "pagedUnarmed", "pagedFloor", "pagedShed", "pagedSales"],
+                "engine_frontier_census");
+  coldPartition(c, "sold", ["pagedSales", "parkFunded"], "engine_frontier_census");
   return `retired: ${c.finished} (${c.finishedFlows} exploration flow(s), ` +
          `${c.finishedCands} @S candidate MEMBER(s))` +
          (c.finished === 0
@@ -556,13 +559,19 @@ function retiredReading(c) {
                ? ` — the allocator never refused this instance anything, so the RAM floor was NOT met in this ` +
                  `run and the pager is unexercised rather than failing; the reclaim edge's write half ` +
                  `(engine_reclaim_tail, solver/reclaim.c) has had nothing to answer`
-               : ` — ${c.pagedUnarmed} declined outside the reclaim safepoint and ${c.pagedFloor} answered at ` +
-                 `the frontier's floor` +
+               : ` — ${c.pagedOver} past the instance's whole limit, ${c.pagedUnarmed} declined outside the ` +
+                 `reclaim safepoint, ${c.pagedShed} answered by shedding a held snapshot and ${c.pagedFloor} ` +
+                 `answered at the frontier's floor` +
+                 (c.pagedShed > 0
+                   ? `; a shed gives back a re-derivable snapshot and sells no member`
+                   : ``) +
                  (c.pagedFloor > 0
                    ? `; a floor answer is the pager holding nothing but the running flow, which is where ` +
                      `paging genuinely runs out`
-                   : `; not one refusal reached the frontier at all, so every one of them arrived where the ` +
-                     `safepoint is down — what is short here is ARMING and not members to sell`)));
+                   : c.pagedShed > 0 || c.pagedOver > 0
+                     ? ``
+                     : `; not one refusal reached the frontier at all, so every one of them arrived where the ` +
+                       `safepoint is down — what is short here is ARMING and not members to sell`)));
 }
 /* THE FORK TABLE'S LARGEST ROW, AND ONLY THE LARGEST. decide.c's own note says the table is a CASCADE — a
    chain of gates produces rows in a geometric series and the last site in program order is always the biggest

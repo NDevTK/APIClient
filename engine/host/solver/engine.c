@@ -1130,11 +1130,13 @@ static long g_flows_sold_flows, g_flows_sold_cands;
 /* Whether the refusal edge was asked, which `sold` cannot say: `sold: 0` reads the same for a run that never met
    the RAM floor, one whose refusal arrived outside the safepoint (the reclaim is armed only across the flow
    step, so elsewhere it is declined and the frontier never consulted), and one that met the floor holding only
-   the running flow (the pager's real end). Every engine_reclaim_tail call returns after exactly one of the two
-   refusals or a sale of exactly one flow, so `asks == unarmed + floor + sold`, asserted at
-   engine_frontier_census so an arm added later without a counter fires there. Instance totals like
+   the running flow (the pager's real end). Every engine_reclaim_tail call leaves by exactly one of five exits,
+   each counted on its own line: a request past the whole limit (`over`), the unarmed refusal, the floor, a held
+   snapshot shed (`shed`) and a sale (`sales`). So `asks == over + unarmed + floor + shed + sales`, asserted at
+   engine_frontier_census so an exit added later without a counter fires there; a sale's own record may sell more
+   flows for their bulk (engine_park_fund), so `sales + park_funded == sold`. Instance totals like
    `g_flows_sold`, never per session: the question is whether the edge has ever fired. */
-static long g_reclaim_asks, g_reclaim_unarmed, g_reclaim_floor;
+static long g_reclaim_asks, g_reclaim_over, g_reclaim_unarmed, g_reclaim_floor, g_reclaim_shed, g_reclaim_sales;
 /* RAM pressure's policy (engine.h's engine_set_ram_share): the share in permille, the limit it is a share of (0:
    none known, so pressure sells nothing), and the sales it made, a subset of `g_flows_sold`. */
 static unsigned g_ram_share = ENGINE_RAM_SHARE_DEFAULT;
@@ -11870,7 +11872,10 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     g_reclaim_asks++;
     /* Not the floor, answered negative (quickjs.h's JSMemoryReclaimFunc): a request past the instance's whole limit,
        which no sale could fund, and an ask between steps, whose caller sells at rest and composes again. */
-    if (g_ram_limit != 0 && (uint64_t)wanted > g_ram_limit) return -1;
+    if (g_ram_limit != 0 && (uint64_t)wanted > g_ram_limit) {
+        g_reclaim_over++;
+        return -1;
+    }
     if (!g_reclaim_allowed) {
         g_reclaim_unarmed++;
         /* Inside a step with the safepoint closed, no caller recovers: that refusal is the floor. */
@@ -11895,6 +11900,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
 
         if (s) {
             engine_shed_standby(g_sess_ctx, s);
+            g_reclaim_shed++;
             return 1;
         }
     }
@@ -11930,6 +11936,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        this flow held the last reference on. A tail flow's dying prefix cannot be a segment the running flow stands on
        (a shared segment has a second reference), so the release moves nothing in the live heap or document. */
     g_sale_open = 1;
+    g_reclaim_sales++;
     engine_sale_release(tail);
     engine_sale_write(tail);
     /* And the records of the flows this one's record sold for their bulk, each of which may sell more. */
@@ -12365,7 +12372,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "host that was shown the requests, so carry it rather than reset it");
     /* Not reset, because they are the instance's totals rather than a session's, and a rate that restarted would
        be a level again (see g_host_asked): g_host_asked/g_host_answered/g_host_answers_extra/g_host_answers_late/
-       g_host_answers_refused/g_host_terminated; g_reclaim_asks/g_reclaim_unarmed/g_reclaim_floor, which partition against g_flows_sold
+       g_host_answers_refused/g_host_terminated; g_reclaim_asks and its five exits, whose sale exit stands against g_flows_sold
        (carried by the assert above); g_prog_starts/g_prog_starts_cand/g_prog_starts_other, which partition
        against each other, and g_prog_queued_cand, the ask the candidate arm is read against; and the five
        g_net_prog_* counters, three of which stand in two relations asserted at engine_frontier_census and whose
@@ -13754,8 +13761,11 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->host_terminated    = g_host_terminated;
     out->paged_reqs         = g_paged_reqs;
     out->paged_asks         = g_reclaim_asks;
+    out->paged_over         = g_reclaim_over;
     out->paged_unarmed      = g_reclaim_unarmed;
     out->paged_floor        = g_reclaim_floor;
+    out->paged_shed         = g_reclaim_shed;
+    out->paged_sales        = g_reclaim_sales;
     out->pressure_sold      = g_pressure_sold;
     out->pressure_collects  = g_pressure_collects;
     out->park_funded        = g_park_funded;
@@ -13845,13 +13855,24 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "%ld at engine_queue_fetched_script) — a door queued a program through a second compile door",
             out->net_prog_fetch_queued, out->net_prog_xhr_queued, out->net_prog_queued);
     /* And the refusal edge's own partition, which makes a zero `sold` readable: every engine_reclaim_tail call
-       leaves by one of three doors (declined because the safepoint is unarmed, answered at the floor, a sale of one
-       flow), so the arms are the whole of the asks, and this catches a fourth door added without a counter. `asks`
-       alone separates "the allocator never refused" from "the pager was consulted and could do nothing". */
-    DCHECKF(out->paged_unarmed + out->paged_floor + out->sold == out->paged_asks,
-            "the census's reclaim rows do not partition the allocator's asks (%ld unarmed + %ld at the floor + %ld "
-            "sold against %ld) — engine_reclaim_tail has three exits that each count themselves",
-            out->paged_unarmed, out->paged_floor, out->sold, out->paged_asks);
+       leaves by one of five exits (a request past the whole limit, declined because the safepoint is unarmed,
+       answered at the floor, a held snapshot shed, a sale), so the arms are the whole of the asks, and this catches
+       a sixth exit added without a counter. `asks` alone separates "the allocator never refused" from "the pager
+       was consulted and could do nothing". A sale exit sells one flow and its record may sell more for their bulk,
+       and a shed at the edge is one of the sheds `cuts_shed` counts. */
+    DCHECKF(out->paged_over + out->paged_unarmed + out->paged_floor + out->paged_shed + out->paged_sales ==
+                out->paged_asks,
+            "the census's reclaim rows do not partition the allocator's asks (%ld past the limit + %ld unarmed + %ld "
+            "at the floor + %ld shed + %ld sales against %ld) — engine_reclaim_tail has five exits that each count "
+            "themselves", out->paged_over, out->paged_unarmed, out->paged_floor, out->paged_shed, out->paged_sales,
+            out->paged_asks);
+    DCHECKF(out->paged_sales + out->park_funded == out->sold,
+            "the census counts %ld sale exits and %ld flows sold to fund a record against %ld flows sold — "
+            "engine_sale_write runs once per sale exit and once per funded flow",
+            out->paged_sales, out->park_funded, out->sold);
+    DCHECKF(out->paged_shed <= out->cuts_shed,
+            "the census counts %ld snapshots shed at the refusal edge against %ld shed in all — the edge sheds "
+            "through engine_shed_standby, which counts every shed", out->paged_shed, out->cuts_shed);
     DCHECKF(out->pressure_sold <= out->sold,
             "RAM pressure counts %ld sales against %ld flows sold — every pressure sale is an engine_reclaim_tail "
             "sale, counted there first", out->pressure_sold, out->sold);

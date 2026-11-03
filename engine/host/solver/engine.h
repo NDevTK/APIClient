@@ -1256,10 +1256,14 @@ typedef struct {
     long host_terminated;    /* rendezvous ids withdrawn: Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
     /* Whether the allocator's refusal edge reached the pager at all, which a zero `sold` cannot say:
-       `paged_unarmed + paged_floor + sold == paged_asks`, asserted at engine_frontier_census. */
+       `paged_over + paged_unarmed + paged_floor + paged_shed + paged_sales == paged_asks` and
+       `paged_sales + park_funded == sold`, asserted at engine_frontier_census. */
     long paged_asks;         /* times the allocator's refusal edge reached this engine (engine_reclaim_tail) */
+    long paged_over;         /* …declined because the request exceeds the instance's whole limit */
     long paged_unarmed;      /* …declined because the reclaim safepoint was not armed (outside the flow step) */
     long paged_floor;        /* …answered at the frontier's floor: no member but the flow that is running */
+    long paged_shed;         /* …answered by shedding a held snapshot (solver/source_cut.h) */
+    long paged_sales;        /* …answered by a sale of the frontier's tail */
     /* Whether a reply ever became a program, per door. The `fetch()` reply (FLOW_PENDING_RESOLVE delivery) and
      * core/xhr/xml_http_request.c's `xhr_take_reply` both end in engine_queue_fetched_script, so without these
      * a network chunk is indistinguishable from the page's own bundle in `progStartsOther`. Each `…_asks` is
