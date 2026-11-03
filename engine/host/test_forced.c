@@ -1474,6 +1474,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/tworoot.h"
 #include "fixture/msgimgload.h"
 #include "fixture/xwinfwd.h"
+#include "fixture/msgprefix.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2134,6 +2135,7 @@ TF_DOCS[] = {
     { "tworoot", HTML_TWOROOT },
     { "msgimgload", HTML_MSGIMGLOAD },
     { "xwinfwd", HTML_XWINFWD },
+    { "msgprefix", HTML_MSGPREFIX },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -17743,6 +17745,35 @@ TF_UNIT void probes_tworoot(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `msgprefix` document (fixture/msgprefix.h): a first message's member kept in a binding reaches
+   markup joined with a later message's member, and the PoC states both messages in order. */
+TF_UNIT void probes_msgprefix(const char *js, Probe *tab, int *n) {
+    char src[1024] = "";
+    static const char *const needles[] = { "\"handler\":\"mpStage\"" };
+    int has = s_rooted_source(js, "innerHTML", ".mpPre", src, sizeof src) ||
+              s_rooted_source(js, "innerHTML", ".mpPost", src, sizeof src);
+    const char *px_why = NULL, *pe_why = NULL, *pk_why = NULL, *pp_why = NULL;
+    int px_tt = 1, pe_tt = 1, pk_tt = 1, pp_tt = 1;
+    fold_row(&px_tt, &px_why, !!strstr(js, "\"/api/mp-prefix\""),
+             "NOT REACHED: there is no /api/mp-prefix record, so no message whose data holds a String `mpPre` "
+             "reached mpStage");
+    fold_row(&pe_tt, &pe_why, !!strstr(js, "\"/api/mp-emit\""),
+             "NOT REACHED: there is no /api/mp-emit record, so no flow delivered an `mpPost` message after its own "
+             "`mpPre` message");
+    fold_row(&pk_tt, &pk_why, has,
+             "NOT REACHED: no innerHTML @S record's source names `mpPre` or `mpPost`, so the joined write was never "
+             "searched");
+    fold_row(&pp_tt, &pp_why, s_fired_stating(js, "innerHTML", needles, 1, "\"mpPre\"", "\"mpPost\""),
+             "no fired innerHTML PoC states the message carrying `mpPre` followed by the message carrying `mpPost`");
+    const Probe rows[] = {
+        { "mp-prefix", px_tt, "mpStage", SESS_EXPLORE, px_why },
+        { "mp-emit", pe_tt, "mpStage", SESS_EXPLORE, pe_why, .gate = "mp-prefix" },
+        { "mp-sink", pk_tt, "mpStage", SESS_EXPLORE, pk_why, .gate = "mp-emit" },
+        { "mp-poc", pp_tt, "mpStage", SESS_EXPLORE, pp_why, .gate = "mp-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `msgimgload` document (fixture/msgimgload.h): message data a listener kept reaches markup in
    the image's `load` handler, which the page's own load task runs. */
 TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
@@ -25277,6 +25308,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_tworoot(js, probes, &np);
     probes_msgimgload(js, probes, &np);
     probes_xwinfwd(js, probes, &np);
+    probes_msgprefix(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
