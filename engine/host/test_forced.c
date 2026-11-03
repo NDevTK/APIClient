@@ -17822,8 +17822,29 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
     static const char *const markup_img[5] = { "mi2-load-first", "mi2-load-own-task", "mi2-msg-first", "mi2-sink",
                                                "mi2-poc" };
 
+    static const char *const preview_img[5] = { "mi3-load-first", "mi3-load-own-task", "mi3-msg-first",
+                                                "mi3-sink", "mi3-poc" };
+    static const char *const pin[] = { "\"pinnedSources\":[{\"source\":\"{location.search}[preview]\","
+                                       "\"equals\":\"1\",\"delivery\":\"address\",\"deliveryPrefix\":\"?\","
+                                       "\"deliveryKey\":\"preview\"}]",
+                                       "\"handler\":\"miMessage\"" };
+
     msgimgload_rows(js, "/api/mi-load", "}.v", "miOnLoad", script_img, tab, n);
     msgimgload_rows(js, "/api/mi-load2", "}.w", "miMarkupLoad", markup_img, tab, n);
+    msgimgload_rows(js, "/api/mi-load3", "}.x", "miPreviewLoad", preview_img, tab, n);
+    const char *pa_why = NULL, *pp_why = NULL;
+    int pa_tt = 1, pp_tt = 1;
+    fold_row(&pa_tt, &pa_why, !!strstr(js, "\"/api/mi-preview\""),
+             "NOT REACHED: there is no /api/mi-preview record, so no flow took the arm where the query's `preview` "
+             "is '1' and the third Image was never created");
+    fold_row(&pp_tt, &pp_why, s_fired_stating(js, "innerHTML", pin, 2, NULL, NULL),
+             "no fired innerHTML PoC states `{location.search}[preview]` equal to '1' with its address delivery "
+             "beside the message to miMessage, so the third Image's sink states no route");
+    const Probe rows[] = {
+        { "mi3-preview-arm", pa_tt, "miMessage", SESS_EXPLORE, pa_why },
+        { "mi3-poc-pinned", pp_tt, "miMessage", SESS_EXPLORE, pp_why, .gate = "mi3-sink" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
 /* The rows of the `xwinfwd` document (fixture/xwinfwd.h): an attacker's message to A, forwarded by A to its
