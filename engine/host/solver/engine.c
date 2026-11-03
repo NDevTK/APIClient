@@ -2580,8 +2580,18 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
                   "live while a peer holds a WindowProxy for them");
     for (int i = 0; i < n; i++) {
         Flow *f = flow_at(i);
-        /* A held snapshot stands at an instant before this arrival; its arms are live members when they take one. */
-        if (flow_held(f)) continue;
+        /* A held snapshot stands at an instant before this arrival and never steps, so the record waits on its
+           queue for the arms forked off it later (engine_cut_arm forks the queue with the commitments), each of
+           which admits or refuses it at its own delivery step. Arms already forked are live and take it below.
+           Named residual. Not covered: an arm delivers such a record at its first task boundary, which may come
+           before the point the path it replays received it. Next diff builds: the frozen path records the cursor
+           at each delivery it made, and an arm withholds a record until its replay reaches that cursor. Absence
+           shows as: a cut arm's replay leaving its frozen path in a document that received a routed record
+           after the cut. */
+        if (flow_held(f)) {
+            flow_deliver_push(ctx, f, record, sender_origin);
+            continue;
+        }
         /* Appended, because two messages from one world are sequential: HTML §9.3.3 Posting messages ends the
            window post message steps by queueing a global task on the posted message task source, and §8.1.7.1
            Definitions gives a task a source to "group and serialize related tasks", so the page observes one
@@ -3509,8 +3519,14 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
            is not a refusal either (two forests, or a generation a park ended): uncertainty keeps the arm, so a
            wrong-agent addressee narrows nothing. */
         if (addressee != NULL && world_vec_relate_held(addressee, f->world) == WORLD_REL_CONTRADICT) continue;
-        /* A held snapshot never runs a program, so it answers nothing; its arms are live members when asked. */
-        if (flow_held(f)) continue;
+        /* A held snapshot never runs a program, so the question waits on its queue for the arms forked off it
+           later, each answering its own copy; arms already forked are live and take it below. Its shed spends the
+           token (engine_shed_standby), so a question no arm took still reaches its last holder's edge. */
+        if (flow_held(f)) {
+            g_perform_attached++;
+            perform_q_push(ctx, f, record, token);
+            continue;
+        }
         attached++;
         g_perform_attached++;
         /* Appended, because successive operations are sequential: the asking side parks on each in turn, and
@@ -11995,11 +12011,40 @@ Flow *engine_cut_arm(JSContext *ctx, Flow *standby, const void *path) {
    head start and drops nothing; it is the snapshot of a timeline that its parent continues, so its work items are
    copies of live ones. */
 static void engine_shed_standby(JSContext *ctx, Flow *s) {
+    int n;
+    char **tokens;
+
     DCHECK(s != flow_running() && s != g_reclaim_keep && flow_held(s) && flow_is_member(s),
            "a standby to shed is the running flow, the one being switched in, or not a held member");
+    for (int k = 0; k < s->dyn_n; k++)
+        DCHECK(s->dyn_token[k] == NULL,
+               "a standby holds a started operation's token — it was cut from a flow that owed no answer and never "
+               "runs a program, so a token can only be queued on it");
+    /* The questions queued on it for later arms: after the release this holder is gone, so each token takes the
+       last-holder edge every other holder takes when it lets the token go (perform_token_spent). */
+    n = flow_perform_pending(s);
+    tokens = n ? reclaim_calloc((size_t)n, sizeof *tokens) : NULL;
+    CHECK(n == 0 || tokens != NULL, "engine: OOM collecting a shed snapshot's queued questions");
+    for (int k = 0; k < n; k++) {
+        JSValue e = JS_GetPropertyUint32(ctx, s->perform_q, (uint32_t)k);
+        JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
+        const char *t = JS_ToCString(ctx, tv);
+
+        CHECK(t != NULL, "engine: OOM reading a shed snapshot's queued question");
+        tokens[k] = reclaim_strdup(t);
+        CHECK(tokens[k] != NULL, "engine: OOM keeping a shed snapshot's queued question");
+        JS_FreeCString(ctx, t);
+        JS_FreeValue(ctx, tv);
+        JS_FreeValue(ctx, e);
+    }
     flow_withdraw_async_sends(ctx, s);
     flow_release(ctx, s);
     g_cuts_shed++;
+    for (int k = 0; k < n; k++) {
+        perform_token_spent(ctx, tokens[k]);
+        free(tokens[k]);
+    }
+    free(tokens);
 }
 
 static void engine_shed_cuts(JSContext *ctx, int all) {

@@ -1,6 +1,5 @@
 /* Time-travel points before a source read (see source_cut.h). */
 #include "solver/source_cut.h"
-#include "solver/engine.h"    /* engine_referenced: a peer may route into this document */
 #include "solver/reclaim.h"
 #include "check.h"
 #include <stdlib.h>
@@ -84,13 +83,9 @@ int source_cut_ask(const char *const *srcs, int n) {
         g_census.unparked++;
         return 0;
     }
-    /* Named residual. Not covered: a document a peer references takes no cut, because a record or operation a
-       peer routes here after the snapshot reaches only the members live when it arrives (engine_route skips a
-       held member), so an arm forked off the standby later would never receive it. Next diff builds: what a peer
-       routes while a standby is held is kept with its cut and given to each arm forked off it. Absence shows as:
-       `_sourceCuts.taken` zero, and `cutRefused: "no-cut"` on every search, in a document a peer references that
-       reads a declared source. */
-    if (engine_referenced() || flow_deliver_pending(f) || flow_perform_pending(f) || flow_owes_answer(f)) return 0;
+    /* A document a peer references takes cuts too: what the peer routes while a standby is held waits on the
+       standby's queues for the arms forked off it (engine_route, engine_perform). */
+    if (flow_deliver_pending(f) || flow_perform_pending(f) || flow_owes_answer(f)) return 0;
     for (int i = 0; i < n; i++)
         if (!source_read_has(f, srcs[i]) && !source_cut_of(f, srcs[i]) && !strv_has(f->cut_due, f->cut_due_n, srcs[i]))
             strv_push(&f->cut_due, &f->cut_due_n, srcs[i]);
