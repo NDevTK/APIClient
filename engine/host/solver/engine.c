@@ -1005,6 +1005,12 @@ typedef struct RootScript {
     lxb_dom_element_t *el;
 } RootScript;
 static RootScript *g_root_scripts;
+/* The documents joined to this agent during the session (engine_join_document), each with the table its rows were
+   laid from and its arrival's marks, kept so every timeline minted from the baseline afterwards is seeded with them
+   too. Freed where the session ends, with the root's table. */
+typedef struct { uint32_t doc; EngineArrival arrival; RootScript *rows; int n; } JoinedSeed;
+static JoinedSeed *g_joins;
+static int g_joins_n;
 /* The name the next row of any flow's sequence takes is minted by solver/flow.c's g_work_seq: one counter per
    instance (sibling arms mint independently, and a register entry a fork shares must resolve to one row in
    every arm), starting at 1 so 0, the register field's default, names no row, and shared with a flow's queued
@@ -7741,6 +7747,16 @@ void engine_set_arrival(EngineArrival a) {
 /* Every fresh timeline of the root document comes through here (flow.c's flow_seed), so a document reached past
    a forced gate has every timeline marked before its seed parks a request — the boot flow, a cold-resumed one
    and an @S candidate alike. */
+static void seed_baseline_call(void *ud, JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv,
+                               bool is_task, JSTaskSource source, JSTaskHandle handle);
+
+/* A timeline minted from the baseline stands on the state the first timeline started from, so it owes what that
+   one was handed: the root's programs, the callbacks the baseline queued before any flow existed (adopted by the
+   first executing flow, js_adopt_baseline_calls), and every document joined to the agent since, in that order.
+   Named residual. Not covered: a timeline seeded before the first one executed (a cold-resumed flow rebuilt at
+   the session's start), which takes no baseline callback, since the adoption hands the originals to whichever
+   flow executes first. Next diff builds: the adoption made a host step taken at each from-baseline flow's first
+   switch-in. Absence shows as: a resumed session's timeline in which an initial-markup frame never loads. */
 static void engine_seed_root_flow(Flow *f) {
     DCHECK(g_sess_live, "a flow was seeded with the root document's programs outside a live session — the table "
                         "exists only while a session is open");
@@ -7750,6 +7766,11 @@ static void engine_seed_root_flow(Flow *f) {
             f->dyn_n);
     flow_take_peer_marks(f, arrival_marks(g_arrival));
     engine_seed_scripts(f, g_sess_doc, g_root_scripts, g_root_n);
+    JS_BaselineCallsEach(JS_GetRuntime(g_sess_ctx), seed_baseline_call, f);
+    for (int j = 0; j < g_joins_n; j++) {
+        flow_take_peer_marks(f, arrival_marks(g_joins[j].arrival));
+        engine_seed_scripts(f, g_joins[j].doc, g_joins[j].rows, g_joins[j].n);
+    }
 }
 
 /* Whether unstarted row `k` of `f`, still owed its bytes, was filed by a parser. HTML §4.12.1.1 files a
@@ -8766,6 +8787,20 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
         flow_job_push(ctx, f, fn, argc, argv, is_task, handle);
     }
     return 1;   /* host owns it */
+}
+
+/* One adopted baseline callback handed to the from-baseline timeline `ud` at its seed, as engine_enqueue_job would
+   take it: the same realm, arguments, queue and handle (a fork's arms hold one handle the same way). */
+static void seed_baseline_call(void *ud, JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv,
+                               bool is_task, JSTaskSource source, JSTaskHandle handle) {
+    Flow *f = ud;
+
+    DCHECK(f != NULL && f != flow_running(), "a baseline callback was handed to no flow, or to the running one");
+    DCHECK(handle != JS_TASK_HANDLE_NONE, "an adopted baseline callback carries the never-issued handle");
+    DCHECKF(!is_task || task_source_stated((TaskSource)source),
+            "an adopted baseline task states no task source (is_task=%d)", (int)is_task);
+    g_jobs_q++;
+    flow_job_push(ctx, f, fn, argc, argv, is_task, handle);
 }
 
 /* The third part of that ownership (installed as JS_SetJobRemoveHook): HTML §4.11.4 The dialog element's "Remove
@@ -11650,6 +11685,18 @@ static void engine_session_close(void) {
     }
     g_root_n = 0;
     g_root_n_held = g_root_n_awaited = g_root_n_refused = 0;   /* the arms go back with the total they partition */
+    for (int j = 0; j < g_joins_n; j++) {
+        for (int i = 0; i < g_joins[j].n; i++) {
+            free(g_joins[j].rows[i].url);
+            if (g_joins[j].rows[i].body) dyn_body_unref(g_joins[j].rows[i].body);
+        }
+        free(g_joins[j].rows);
+    }
+    free(g_joins);
+    g_joins = NULL;
+    g_joins_n = 0;
+    /* And the baseline's adopted callbacks, the seed's other record, while every realm they name is alive. */
+    JS_ReleaseBaselineCalls(JS_GetRuntime(g_sess_ctx));
     g_sess_live = 0;
 }
 
@@ -12431,13 +12478,12 @@ void engine_host_baseline(void) {
  * second root world in this instance's forest, where world_vec_relate reads two roots as the two arms of one
  * branch: a peer that took an answer from one timeline would refuse every post and answer from the other, and
  * neither timeline would ever hold both documents' writes.
- * Named residual. Not covered: two orders the agent's event loop allows. A flow's sequence has one cursor, so
- * these rows run after the flow's remaining rows of other documents, and a parser-blocking script of one
- * document holds another's; and a timeline minted from the baseline after this call (an @S candidate session,
- * witness_verify's run) is seeded with the root's rows only. Next diff builds: a cursor per document in the flow's
- * sequence, and the session's list of joins replayed onto every from-baseline timeline. Absence shows as: a
- * joined document's script running only once an earlier document's pending script has arrived, and a candidate
- * session in an agent holding a joined document never reaching a sink in that document's code. */
+ * A timeline minted from the baseline after this call (an @S candidate session, witness_verify's run) is seeded
+ * with this document's rows too, from the table kept in g_joins (engine_seed_root_flow).
+ * Named residual. Not covered: an order the agent's event loop allows. A flow's sequence has one cursor, so these
+ * rows run after the flow's remaining rows of other documents, and a parser-blocking script of one document holds
+ * another's. Next diff builds: a cursor per document in the flow's sequence. Absence shows as: a joined document's
+ * script running only once an earlier document's pending script has arrived. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
                           const ScriptType *types, const ScriptSchedule *sched, lxb_dom_element_t **els,
                           int n, EngineArrival arrival) {
@@ -12525,15 +12571,16 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
         engine_seed_scripts(f, doc, rows, rown);
         flow_clear_host_owed(f);
     }
-    /* The table is this call's, not the flows': engine_queue_into copies the address into each flow's own row and
-       takes a reference on the body, so both are given back here, each body surviving as long as some flow holds
-       the row that names it. The root document's table outlives its call because it seeds a flow every time one
-       is created; this one is laid onto the flows standing now. */
-    for (i = 0; i < rown; i++) {
-        free(rows[i].url);
-        if (rows[i].body) dyn_body_unref(rows[i].body);
+    /* The table outlives the call, as the root's does: it seeds every timeline minted from the baseline from now
+       on (engine_seed_root_flow). engine_queue_into copies each address and takes its own reference on each body,
+       so the session's end gives this copy back. */
+    {
+        JoinedSeed *grown = realloc(g_joins, (size_t)(g_joins_n + 1) * sizeof *grown);
+
+        CHECK(grown != NULL, "engine: OOM recording a joined document for the timelines minted after it");
+        g_joins = grown;
+        g_joins[g_joins_n++] = (JoinedSeed){ doc, arrival, rows, rown };
     }
-    free(rows);
 }
 
 void engine_set_referenced(int referenced) {

@@ -3779,6 +3779,15 @@ JS_EXTERN void JS_SetJobDropHook(JSJobDropHook h);
    can assert that a second call finds none. */
 JS_EXTERN int JS_DropJobsForContext(JSContext *ctx);
 
+/* The callbacks the baseline queued before any flow existed, once the first executing flow adopted them, each
+   handed to `visit` in arrival order with the fields the enqueue hook was given; answers how many. A host hands
+   copies to every later timeline minted from the baseline, which holds the same pre-boot state. The arguments
+   are borrowed. JS_ReleaseBaselineCalls gives the list back; it must run while every entry's realm is alive. */
+typedef void (*JSBaselineCallVisit)(void *ud, JSContext *ctx, JSJobFunc *job_func, int argc, JSValueConst *argv,
+                                    bool is_task, JSTaskSource source, JSTaskHandle handle);
+JS_EXTERN int JS_BaselineCallsEach(JSRuntime *rt, JSBaselineCallVisit visit, void *ud);
+JS_EXTERN void JS_ReleaseBaselineCalls(JSRuntime *rt);
+
 /* THE SAME OWNERSHIP SEAM, BY NAME INSTEAD OF BY REALM — the hook a host that TOOK a job answers when ONE job
    is to be taken back off its queue. It never fights JS_DropJobsForContext: that one removes by document and
    this one by identity, so a job the destroy already removed is simply not found here (and the reverse).

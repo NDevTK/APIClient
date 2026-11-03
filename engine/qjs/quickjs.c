@@ -643,6 +643,11 @@ struct JSRuntime {
        ownerlessness is a property of WHEN the user agent queued the callback and not of which queue it named —
        js_enqueue_platform_call carries the counterexample that made the task-only version wrong. */
     struct list_head baseline_call_list; /* list of JSJobEntry.link, both queues' entries in arrival order */
+    /* THE SAME ENTRIES ONCE ADOPTED, kept for every other timeline minted from the baseline: the first executing
+       flow took them, and a later from-baseline flow (an @S candidate) holds the same pre-boot state and so owes
+       the same work. Not a queue: nothing runs from here and no removal walks it. The host hands copies to each
+       such flow (JS_BaselineCallsEach) and releases the list when its session ends (JS_ReleaseBaselineCalls). */
+    struct list_head baseline_adopted_list;
     /* THE NEXT NAME TO ISSUE — see JSTaskHandle in quickjs.h. ONE counter for the whole runtime, so a handle is
        unique across both queues, the baseline list AND whatever the enqueue hook's owner is holding; that
        uniqueness is exactly what JS_RemoveQueuedTask asserts when it refuses to find one handle twice. */
@@ -3974,6 +3979,7 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     init_list_head(&rt->job_list);
     init_list_head(&rt->task_list);
     init_list_head(&rt->baseline_call_list);
+    init_list_head(&rt->baseline_adopted_list);
     init_list_head(&rt->parked_flows);
     init_list_head(&rt->finrec_pending);
 
@@ -4490,6 +4496,33 @@ static void js_adopt_baseline_calls(JSRuntime *rt)
         if (!taken)
             return;
         list_del(&e->link);
+        list_add_tail(&e->link, &rt->baseline_adopted_list);
+    }
+}
+
+int JS_BaselineCallsEach(JSRuntime *rt, JSBaselineCallVisit visit, void *ud)
+{
+    struct list_head *el;
+    int n = 0;
+
+    DCHECK(visit != NULL, "the adopted baseline calls were walked with nowhere to hand them");
+    list_for_each(el, &rt->baseline_adopted_list) {
+        JSJobEntry *e = list_entry(el, JSJobEntry, link);
+
+        visit(ud, e->ctx, e->job_func, e->argc, vc(e->argv), e->is_task, e->source, e->handle);
+        n++;
+    }
+    return n;
+}
+
+void JS_ReleaseBaselineCalls(JSRuntime *rt)
+{
+    struct list_head *el, *el1;
+
+    list_for_each_safe(el, el1, &rt->baseline_adopted_list) {
+        JSJobEntry *e = list_entry(el, JSJobEntry, link);
+
+        list_del(&e->link);
         js_job_entry_free(rt, e);
     }
 }
@@ -4911,6 +4944,9 @@ void JS_FreeRuntime(JSRuntime *rt)
         js_job_entry_free(rt, e);
     }
     init_list_head(&rt->baseline_call_list);
+    /* The adopted copies are a host's record, released at its session's end; a host that ran flows owning no
+       queues never adopted any. */
+    JS_ReleaseBaselineCalls(rt);
 
     /* A parked cleanup entry that never became a job still owns its callback, held value and context, so it is
        released here rather than reported as a leak by the walk below. */
