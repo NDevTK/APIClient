@@ -251,6 +251,25 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
         }
         if (want_s) JS_FreeCString(ctx, want_s);
         JS_FreeValue(ctx, want);
+        /* The stage rests before a routed delivery's data, an attacker source, is minted: the solver may ask for
+           a snapshot standing before that first read (concolic_source_cut_due), which the delivery waits for by
+           yielding and re-entering this stage, whose steps above read and allocate nothing that outlives them. */
+        {
+            JSValue dsrc = JS_GetPropertyUint32(ctx, entry, PQ_DATA_SRC);
+            int due = 0;
+
+            DCHECK(JS_IsNull(dsrc) || JS_IsString(dsrc),
+                   "a queued window message carries a data-source slot that is neither a source name nor null");
+            if (JS_IsString(dsrc)) {
+                const char *name = JS_ToCString(ctx, dsrc);
+
+                CHECK(name != NULL, "window message: OOM reading a delivery's data-source name");
+                due = concolic_source_cut_due(&name, 1);
+                JS_FreeCString(ctx, name);
+            }
+            JS_FreeValue(ctx, dsrc);
+            if (due) return JS_STEP_YIELD;
+        }
 
         /* §9.3.3 step 8: THE DESERIALIZE AND THE EVENT BELONG TO THE TARGET'S REALM. The standard says "in
            targetWindow's relevant realm" for both, and it is not pedantry here: the deserialized objects and
@@ -660,11 +679,6 @@ void window_message_deliver_remote(JSContext *ctx, const char *record, const cha
            "would have to invent the one field a page's check is written against");
     target = win_proxy(ctx);
     DCHECK(!JS_IsUndefined(target), "a message was routed to an instance whose own WindowProxy does not exist");
-    /* The sender reached this document through a WindowProxy for it, so a peer references it, and source_cut_ask
-       takes no snapshot here: the data this delivery mints is never read behind a cut. */
-    DCHECK(engine_referenced(),
-           "a message was routed into a document no peer is recorded as referencing — the sender holds a "
-           "WindowProxy for it, and the flag is what keeps this document's timelines open for the peer's records");
 
     buf = JS_NewArrayBufferCopy(ctx, bytes, len);
     entry = JS_IsException(buf) ? buf : JS_NewArray(ctx);
