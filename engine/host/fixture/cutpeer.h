@@ -1,6 +1,7 @@
 /* THE LONG-BOOT REFERENCED DOCUMENT: cutboot's setup and fragment sink in a document that embeds a cross-site
-   frame. The frame is markup, so the parse creates it before anything forks, and its peer holds a WindowProxy for
-   this document (its `parent`, HTML §7.3.1.3), which makes this document one a peer references for the whole run.
+   frame. The frame is markup, so the parse creates its child navigable (HTML §7.3.1.3 Child navigables) before
+   anything forks, and the peer hosting it holds a WindowProxy for this document, its parent, which makes this
+   document one a peer references for the whole run.
    A candidate of the fragment can still start at a snapshot taken before its first read: what a peer routes
    while the snapshot is held waits on it for the arms forked off it.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
