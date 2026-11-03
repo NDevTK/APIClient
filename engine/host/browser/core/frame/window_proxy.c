@@ -1787,14 +1787,25 @@ JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueCons
     /* §7.2.2: "If this's navigable is null, then return." */
     if (window_proxy_browsing_context_null(ctx, proxy)) return JS_UNDEFINED;
     /* A concolic name is kept whole (`name_val`), and named access compares the bytes of its example, which is
-       what concrete execution of this flow wrote. */
+       what concrete execution of this flow wrote. An unknown with no example (a capture of an attacker source's
+       forced match arm) states no bytes, so the navigable has no target name named access can find.
+       Named residual. Not covered: the world in which an example-free name equals a name a lookup asks for.
+       Next diff: the rules for choosing a navigable fork their name comparison over an unknown name. Absence
+       shows as: `window.open(u, t)` after a write of an example-free name to `t` never reaching the navigable
+       it named. */
     if (concolic_is(v)) {
         JSValue ex = concolic_example_string(ctx, v);
 
-        DCHECK(JS_IsString(ex),
-               "a navigable was renamed to an unknown whose example has no string form — §7.2.2.1's setter takes "
-               "a DOMString, so the value reaching here was converted; build the conversion over the example "
-               "where the IDL argument is taken");
+        DCHECK(JS_IsString(ex) || !concolic_example_present(v),
+               "a navigable was renamed to an unknown whose example is an Object or a Symbol — §7.2.2.1's setter "
+               "takes a DOMString, whose ToString would have converted or refused that example where the IDL "
+               "argument is taken");
+        if (!JS_IsString(ex)) {
+            wp_set(ctx, p, &p->name_val, JS_DupValue(ctx, v));
+            p->name = NULL;
+            p->name_known = 1;
+            return JS_UNDEFINED;
+        }
         n = JS_ToCString(ctx, ex);
         JS_FreeValue(ctx, ex);
         if (!n) return JS_EXCEPTION;
