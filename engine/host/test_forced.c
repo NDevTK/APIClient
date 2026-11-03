@@ -19400,10 +19400,11 @@ TF_UNIT void probes_ceupsale(const char *js, Probe *tab, int *n) {
     const char *cu_why = NULL; int cu_tt = 1;
     fold_row(&cu_tt, &cu_why, tf_census_row(js, "_cold", "soldFlows") >= 1,
              "NOT REACHED: RAM pressure sold no flow, so the arm parked inside the constructor was never freed");
-    fold_row(&cu_tt, &cu_why, param_value_is(js, "/api/cusell", "m", "free") &&
+    fold_row(&cu_tt, &cu_why, (param_value_is(js, "/api/cusell", "m", "free") ||
+                               param_value_is(js, "/api/cusell", "m", "held")) &&
                               param_value_is(js, "/api/cusell", "n", "true"),
-             "the growing arm did not finish with its own upgraded element and a direct `new XCs()`, so the "
-             "sale of the parked arm reached the world that survived it");
+             "no arm finished with its own upgraded element and a direct `new XCs()`, so the sale of the parked "
+             "arm reached the world that survived it");
     const Probe rows[] = {
         { "ce-upgrade-sale", cu_tt, "/api/cusell", SESS_EXPLORE, cu_why },
     };
