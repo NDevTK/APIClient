@@ -259,20 +259,11 @@ CssPx used_value_default_replaced_size(bool vertical);
 /* CSS 2.1 §10.3.2 "Inline, replaced elements"' five arms, as a content-box width in CSS pixels, over the
    natural dimensions `rep` states. `rep` is the caller's own `replaced_element_of` answer because HTML
    §15.4.2's classification changes under the running flow as a reply lands, so two reads in one algorithm
-   could disagree. The precondition, `width` behaving as `auto`, is each caller's: §10.3's dispatch reads the
-   computed value, and css-sizing-3 §5.1 "Intrinsic Sizes" holds it by definition ("the size it would have if
-   it was a float given an auto preferred size in that axis (and no minimum or maximum size in that axis)"),
-   so asserting it would abort on `<img width="18">`. The opposite axis is not removed, so `height` is still
-   read (§5.1's Note: "size constraints in the opposite dimension will transfer through").
-   `uv_replaced_size`'s box-type refusals are not part of this: an intrinsic size is §5.1's hypothetical float,
-   which CSS 2.1 §10.3.6 "Floating, replaced elements" answers "as for inline replaced elements". Nor is §3.3's
-   `box-sizing` conversion, which belongs to whichever box the caller reports. */
-/* Named residual. Not covered: arm 2 reads the opposite axis through `used_value_px`, which routes a replaced
-   element into `uv_replaced_size` and its refusals, so a replaced flex or grid item or table box with a
-   non-`auto` `height` and a natural aspect ratio aborts there. Next: nothing here; that refusal is correct
-   (css-flexbox-1 §9.2 "Line Length Determination" makes a declared size the flex base size) and is retired by
-   the flex layout it names. How its absence would show: an intrinsic-size request aborts naming css-flexbox-1
-   §9.2 from inside a css-sizing-3 §5.1 walk. */
+   could disagree. The precondition, `width` behaving as `auto`, is each caller's (§10.3's dispatch reads the
+   computed value), so asserting it here would abort on `<img width="18">`. The ratio arm reads the box's USED
+   height, so it is a used-value answer: css-sizing-3 §5.1's hypothetical float is
+   core/layout/intrinsic_size.c's, over its preferred height. §3.3's `box-sizing` conversion belongs to
+   whichever box the caller reports. */
 CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedElement *rep);
 
 /* CSS 2.1 §10.6.2's used `height` of the replaced element `el` with a computed `height` of `auto`, as a

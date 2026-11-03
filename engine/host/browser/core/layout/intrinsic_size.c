@@ -1076,14 +1076,45 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
 /* css-sizing-3 §5.1 "Intrinsic Sizes" for a replaced box. Which rule applies depends on natural dimensions: "a
    block-level or inline-level replaced element whose height or width behaves as auto is effectively defined to
    use its max-content size (CSS2§10.3.2)", while "the intrinsic sizes of replaced elements without natural
-   sizes are defined below". So a box with a natural size takes CSS 2.2 §10.3.2 "Inline, replaced elements",
-   via core/layout/used_value.h's `used_value_replaced_auto_width_px` (the same arms the used value runs; that
-   header's CSS 2.1 §10.3.2 has the same number and title in both corpora), and one without takes §5.1's arms.
+   sizes are defined below". So a box with a natural size takes CSS 2.2 §10.3.2 "Inline, replaced elements"
+   over the float's own preferred height (`is_replaced_float_width`), and one without takes §5.1's arms.
    Both sizes are one number: §5.1 varies only the containing block "in that axis", and no arm of §10.3.2 reads
-   the containing block's inline size (four arms are a natural dimension or constant; the fifth multiplies the
-   used height by the ratio). The box type is not asked: §5.1 sizes it "if it was a float", and CSS 2.2 §10.3.6
+   the containing block's inline size (its arms are a natural dimension, a constant, or a height through the
+   ratio). The box type is not asked: §5.1 sizes it "if it was a float", and CSS 2.2 §10.3.6
    "Floating, replaced elements" says "the used value of 'width' is determined as for inline replaced
    elements". */
+/* The inline size of §5.1's hypothetical float for a replaced box with a natural width or height. Its `height`
+   is the float's preferred height, never the box's used height where it stands: a flex item's used height is
+   its container's lines, which may be laying out the very container this size is asked for.
+   css-sizing-4 §4.2 "Effects of Preferred Aspect Ratio on Automatic Sizes": "the resolved preferred size in the
+   ratio-determining axis (before applying min/max) gets transferred thru the ratio", and §4.4 "Min/Max Size
+   Transfers" transfers that axis's definite minimum and then maximum, the minimum winning, as
+   core/layout/used_value.c's transferred size suggestion does. A height that is not a <length> behaves as
+   `auto`, which leaves CSS 2.2 §10.3.2's arms over the natural sizes; under both `auto`, §10.6.2's first arm
+   makes the used height the natural height.
+   Named residual. Not covered: a percentage `height` against a containing block whose height is definite, which
+   resolves rather than behaving as `auto`. Next diff: resolve it against a definite containing block height
+   asked without the box's own formatting context. Absence shows as: a replaced box with a ratio and a
+   percentage height in a fixed-height parent contributing its natural width instead of the transferred one. */
+static CssPx is_replaced_float_width(lxb_dom_element_t *el, const ReplacedElement *rep)
+{
+    CssPx h, v;
+
+    DCHECK(rep->has_width || rep->has_height,
+           "css-sizing-3 §5.1's float width was asked for a replaced box with neither natural size; §5.1's own "
+           "arms answer that one before this is reached");
+    if (rep->has_ratio && intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_VERTICAL, "height", CSS_KEYWORD_AUTO, &h)) {
+        if (intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_VERTICAL, "max-height", CSS_KEYWORD_NONE, &v))
+            h = css_px_min(h, v);
+        if (intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_VERTICAL, "min-height", CSS_KEYWORD_AUTO, &v))
+            h = css_px_max(h, v);
+        return css_px_scale(h, rep->ratio);
+    }
+    if (rep->has_width) return rep->width;
+    if (rep->has_ratio) return css_px_scale(rep->height, rep->ratio);
+    return used_value_default_replaced_size(false);
+}
+
 static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
     IntrinsicInlineSizes out;
@@ -1150,7 +1181,7 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
         if (!intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_HORIZONTAL, "min-width", CSS_KEYWORD_AUTO, &size))
             size = used_value_default_replaced_size(false);
     } else {
-        size = used_value_replaced_auto_width_px(el, rep);
+        size = is_replaced_float_width(el, rep);
     }
     DCHECK(size.px >= 0.0,
            "css-sizing-3 §5.1's intrinsic inline size of a REPLACED box came out negative. Every arm that "
