@@ -94055,6 +94055,9 @@ static JSValue js_math_clz32(JSContext *ctx, JSValueConst this_val, int argc, JS
 static JSValue js_string_fromCharCode(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_string_fromCodePoint(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 static JSValue js_Date_UTC(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+/* The algorithm both Date.UTC's definition and its body's derivation over an unknown name. */
+#define JS_DATE_UTC_ALGORITHM \
+    "21.4.3.4 Date.UTC ( year [ , month [ , day [ , hour [ , minute [ , second [ , millisecond ] ] ] ] ] ] )"
 static int js_dv_get_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc);
 static JSValue js_dv_get_fini(JSContext *ctx, void *st, bool take_result);
 static void js_dv_get_visit(JSContext *ctx, void *st, JSStepVisit *v);
@@ -95604,7 +95607,7 @@ static const JSTrampStepDef js_math_imul_def = PRIMARGS_DEF(PRIMARGS(0x3, HINT_N
 static const JSTrampStepDef js_math_clz32_def = PRIMARGS_DEF(PRIMARGS(0x1, HINT_NUMBER, 1), generic, js_math_clz32, 0, "21.3.2.11 Math.clz32 ( x )");
 static const JSTrampStepDef js_str_fromCharCode_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 1), generic, js_string_fromCharCode, 0, "22.1.2.1 String.fromCharCode ( ...codeUnits )");
 static const JSTrampStepDef js_str_fromCodePoint_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 1), generic, js_string_fromCodePoint, 0, "22.1.2.2 String.fromCodePoint ( ...codePoints )");
-static const JSTrampStepDef js_date_UTC_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 7), generic, js_Date_UTC, 0, "21.4.3.4 Date.UTC ( year [ , month [ , date [ , hours [ , minutes [ , seconds [ , ms ] ] ] ] ] ] )");
+static const JSTrampStepDef js_date_UTC_def = PRIMARGS_DEF(PRIMARGS_ALL | PRIMARGS(0, HINT_NUMBER, 7), generic, js_Date_UTC, 0, JS_DATE_UTC_ALGORITHM);
 /* new Function(a, b, body) / the generator and async variants. The receiver slot is new_target on a constructor
    step, which is what step 29's GetPrototypeFromConstructor reads. */
 static const char *const js_dynfunc_steps[];
@@ -106896,7 +106899,8 @@ static double js_math_round(double a)
     return u.d;
 }
 
-/* §21.3.2.11 Math.clz32 ( x ), §21.3.2.19 Math.hypot ( ...args ) and §21.3.2.20 Math.imul ( x, y ) RUN OVER
+/* §21.3.2.11 Math.clz32 ( x ), §21.3.2.19 Math.hypot ( ...args ), §21.3.2.20 Math.imul ( x, y ) and §21.4.3.4
+   Date.UTC — the coerce-then-compute GENERIC bodies whose steps are ToNumber over their arguments — RUN OVER
    THE OPERANDS' OWN EXAMPLES. §21.3.2.25 Math.max ( ...args ) / §21.3.2.26 Math.min ( ...args ) already answer
    this way one function down, and theirs is NOT this builder only because it is the `generic_magic` twin and
    carries a magic this family has none of.
@@ -106909,7 +106913,7 @@ static double js_math_round(double a)
    `Math.imul(x)` is argc 1 and still reads argv[1]. An example vector sized argc would be read off its end.
    AN ARGUMENT WITH NO EXAMPLE MAKES THE WHOLE RESULT EXAMPLELESS rather than letting a picked number decide a
    later `if` — a value known only to satisfy a gate is INVENTED, which is the one thing @H may never emit. */
-static JSValue js_math_generic_example(JSContext *ctx, JSCFunction *body, JSValueConst this_val,
+static JSValue js_primargs_body_example(JSContext *ctx, JSCFunction *body, JSValueConst this_val,
                                        int argc, int nread, JSValueConst *argv)
 {
     int n = argc > nread ? argc : nread;
@@ -106949,7 +106953,7 @@ done:
    step 1 and step 2 name x and y and no step reads a third argument.
    Returns JS_UNINITIALIZED when no argument the steps coerce is unknown, which is the caller's signal that its
    ordinary body is the right answer. */
-static JSValue js_math_generic_unknown(JSContext *ctx, JSCFunction *body, const char *op,
+static JSValue js_primargs_body_unknown(JSContext *ctx, JSCFunction *body, const char *op,
                                        JSValueConst this_val, int argc, int nread, JSValueConst *argv)
 {
     int i, coerced = argc < nread ? argc : nread;
@@ -106959,7 +106963,7 @@ static JSValue js_math_generic_unknown(JSContext *ctx, JSCFunction *body, const 
         if (!js_value_is_concolic(argv[i]))
             continue;
         c = js_concolic_derive(ctx, argv[i], op,
-                               js_math_generic_example(ctx, body, this_val, argc, nread, argv));
+                               js_primargs_body_example(ctx, body, this_val, argc, nread, argv));
         DCHECK(!JS_IsUninitialized(c),
                "the concolic derivation declined an operand this function had already recognised as unknown "
                "external input — the value semantics were installed without the builtin-derivation hook");
@@ -106985,7 +106989,7 @@ static JSValue js_math_hypot(JSContext *ctx, JSValueConst this_val,
        ONE unknown argument makes the WHOLE result unknown. A known +∞𝔽 would settle the result on its own, so
        answering unknown there is broader than the algorithm strictly needs; it costs a FORK the search would
        otherwise not take, which is the direction to err in, and never a value the page did not compute. */
-    c = js_math_generic_unknown(ctx, js_math_hypot, "Math.hypot", this_val, argc, argc, argv);
+    c = js_primargs_body_unknown(ctx, js_math_hypot, "Math.hypot", this_val, argc, argc, argv);
     if (!JS_IsUninitialized(c))
         return c;
 
@@ -107033,7 +107037,7 @@ static JSValue js_math_imul(JSContext *ctx, JSValueConst this_val,
        EXACTLY TWO ARGUMENTS ARE COERCED, which is why the scan is bounded rather than over argc: no step reads
        a third, so `Math.imul(1, 2, {unknown})` is 2 and answering unknown there would be a value the page does
        not compute. */
-    u = js_math_generic_unknown(ctx, js_math_imul, "Math.imul", this_val, argc, 2, argv);
+    u = js_primargs_body_unknown(ctx, js_math_imul, "Math.imul", this_val, argc, 2, argv);
     if (!JS_IsUninitialized(u))
         return u;
 
@@ -107058,7 +107062,7 @@ static JSValue js_math_clz32(JSContext *ctx, JSValueConst this_val,
        IDENTITY, so the declaration hands one straight through uncoerced.
        ONE argument is coerced and no step reads a second, so the scan is bounded at one: the count of leading
        zero bits of a value nobody has is unknown, and nothing else about the call can make it known. */
-    u = js_math_generic_unknown(ctx, js_math_clz32, "Math.clz32", this_val, argc, 1, argv);
+    u = js_primargs_body_unknown(ctx, js_math_clz32, "Math.clz32", this_val, argc, 1, argv);
     if (!JS_IsUninitialized(u))
         return u;
 
@@ -123283,6 +123287,14 @@ static JSValue js_Date_UTC(JSContext *ctx, JSValueConst this_val,
     double fields[] = { 0, 0, 1, 0, 0, 0, 0 };
     int i, n;
     double a;
+    JSValue u;
+
+    /* Steps 1-7 are ToNumber over each present argument, which the coerce-then-compute declaration leaves to
+       this body, and its ToPrimitive hands an unknown through uncoerced. An unknown present argument makes the
+       time value unknown, derived with the time value the examples compute as its example. */
+    u = js_primargs_body_unknown(ctx, js_Date_UTC, JS_DATE_UTC_ALGORITHM, this_val, argc, 7, argv);
+    if (!JS_IsUninitialized(u))
+        return u;
 
     n = argc;
     if (n == 0)
