@@ -207,18 +207,25 @@ static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const c
 
     if (el == NULL) return false;
     len = css_computed_length(el, name);
+    /* css-sizing-3 §3.2's intrinsic keywords (core/layout/intrinsic_size.h): in the inline axis the keyword's
+       size, `fit-content` clamping against the item's share of `inner_main`; a block size's keyword "is
+       equivalent to its automatic size", so states no size here.
+       Named residual. Not covered: a `column` item's `min-height`/`max-height` keyword as a limit, which is the
+       automatic block size rather than no limit. Next diff: the item's automatic block size as that limit.
+       Absence shows as a `column` flex item with `max-height: min-content` flexing past its content height. */
+    if (len.kind == CSS_LENGTH_KEYWORD && intrinsic_size_keyword(len.keyword)) {
+        if (vertical) return false;
+        *out = intrinsic_keyword_inline_px(el, len.keyword,
+                                           css_px_max(css_px_sub(css_px_sub(inner_main,
+                                                                            fl_main_border_padding(el, false)),
+                                                                 fl_main_margins(el, false)), css_px(0.0)));
+        return true;
+    }
     if (len.kind == CSS_LENGTH_KEYWORD) {
         DCHECKF(len.keyword == initial,
-                "%s: `%s` computed to the keyword `%s` rather than to its initial value `%s`. "
-                "css-sizing-3 §3.2 \"Sizing Values: the <length-percentage [0,∞]>, auto | none, stretch, "
-                "min-content, max-content, and fit-content values\" adds keywords this engine records no "
-                "computed-value "
-                "rule for, and css-flexbox-1 §7.2.3 \"The flex-basis property\" gains every one of them by "
-                "reference — \"The flex-basis property hereby also gains these new keywords, as its values are "
-                "defined by reference to <'width'>\". BUILD "
-                "css-sizing-3 §3.2's keyword arm where a `width` of the same "
-                "shape is answered (core/layout/intrinsic_size.c and core/layout/used_value.c both refuse the "
-                "identical keyword on the identical grammar) and this routes through it unchanged",
+                "%s: `%s` computed to the keyword `%s` rather than to its initial value `%s`. Of css-sizing-3 "
+                "§3.2's level-3 keywords, which css-flexbox-1 §7.2.3 \"The flex-basis property\" gains by "
+                "reference, the intrinsic ones are answered above and `stretch` (§4.2) is not built",
                 box_subject(el, nbuf, sizeof nbuf), name, css_keyword_name(len.keyword), css_keyword_name(initial));
         return false;
     }

@@ -913,10 +913,34 @@ CssPx intrinsic_outer_block_contribution(lxb_dom_element_t *el, CssPx inner)
      - a percentage, cyclic in an intrinsic pass. §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"
        treats a cyclic preferred or max size "as that property's initial value", and resolves a min size's
        "against zero"; both mean no size to apply here, though `min-width`'s is a number (zero).
-   §3.2's level-3 keywords have no computed-value rule here, so any other keyword is asserted away (as in
+   §3.2's intrinsic keywords are answered as intrinsic_size.h states; `stretch` is asserted away (as in
    core/layout/used_value.c). Exported for css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions",
    whose item percentages are cyclic against the container's main size too; the composition is not shared
    (§5.2 replaces the measurement, §9.9.3 takes the larger). */
+bool intrinsic_size_keyword(CssKeyword k)
+{
+    return k == CSS_KEYWORD_MIN_CONTENT || k == CSS_KEYWORD_MAX_CONTENT || k == CSS_KEYWORD_FIT_CONTENT;
+}
+
+IntrinsicInlineSizes intrinsic_keyword_inline_sizes(lxb_dom_element_t *el, CssKeyword k)
+{
+    IntrinsicInlineSizes in = intrinsic_inline_sizes(el), out = in;
+
+    DCHECKF(intrinsic_size_keyword(k), "`%s` is not one of css-sizing-3 §3.2's intrinsic size keywords",
+            css_keyword_name(k));
+    if (k == CSS_KEYWORD_MIN_CONTENT) out.max_content = in.min_content;
+    if (k == CSS_KEYWORD_MAX_CONTENT) out.min_content = in.max_content;
+    return out;
+}
+
+CssPx intrinsic_keyword_inline_px(lxb_dom_element_t *el, CssKeyword k, CssPx available)
+{
+    IntrinsicInlineSizes in = intrinsic_keyword_inline_sizes(el, k);
+
+    /* For `min-content` and `max-content` the two halves are equal, so the clamp is the identity. */
+    return css_px_min(css_px_max(in.min_content, available), in.max_content);
+}
+
 bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, const char *name,
                                  CssKeyword initial, CssPx *out)
 {
@@ -924,14 +948,19 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, con
     CssPx declared, surround;
     bool border_box;
 
+    if (len.kind == CSS_LENGTH_KEYWORD && intrinsic_size_keyword(len.keyword)) {
+        if (axis == INTRINSIC_AXIS_VERTICAL || len.keyword == CSS_KEYWORD_FIT_CONTENT) return false;
+        *out = len.keyword == CSS_KEYWORD_MIN_CONTENT ? intrinsic_inline_sizes(ch).min_content
+                                                     : intrinsic_inline_sizes(ch).max_content;
+        return true;
+    }
     if (len.kind == CSS_LENGTH_KEYWORD) {
         DCHECKF(len.keyword == initial,
                 "`%s` computed to the keyword `%s` rather than to its initial value `%s`. CSS 2.1 §10.2 "
                 "\"Content width: the 'width' property\" and §10.4 \"Minimum and maximum widths: 'min-width' "
-                "and 'max-width'\" admit no other keyword, and css-sizing-3 §3.2's level-3 additions are ones "
-                "this engine records no computed-value rule for — core/layout/used_value.c asserts the same "
-                "thing about the same grammar. So this is a value the cascade produced and no section of it "
-                "defines",
+                "and 'max-width'\" admit no other keyword; of css-sizing-3 §3.2's level-3 additions the three "
+                "intrinsic keywords are answered above and `stretch` (§4.2 \"Stretch-fit Sizing: filling the "
+                "containing block\") is not built",
                 name, css_keyword_name(len.keyword), css_keyword_name(initial));
         return false;
     }
@@ -970,24 +999,40 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, con
    max-width: 100px` gives 300px. §10.4's second pass re-solves an `auto` margin, already zero under §2.2
    ("auto margins are treated as zero"), so a clamp is equivalent here; core/layout/used_value.c runs the real
    pass. */
-static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured)
+/* One of `ch`'s inline sizing properties as the pair §5.2 applies under each constraint: a length is one number
+   under both, and an intrinsic keyword is its pair over `measured`, which is `ch`'s own §5.1 pair. */
+static bool is_declared_pair(lxb_dom_element_t *ch, const char *name, CssKeyword initial,
+                             IntrinsicInlineSizes measured, IntrinsicInlineSizes *out)
 {
-    IntrinsicInlineSizes out = measured;
+    CssLength len = css_computed_length(ch, name);
     CssPx v;
 
-    if (intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "width", CSS_KEYWORD_AUTO, &v)) {
-        out.min_content = v;
-        out.max_content = v;
+    if (len.kind == CSS_LENGTH_KEYWORD && intrinsic_size_keyword(len.keyword)) {
+        *out = measured;
+        if (len.keyword == CSS_KEYWORD_MIN_CONTENT) out->max_content = measured.min_content;
+        if (len.keyword == CSS_KEYWORD_MAX_CONTENT) out->min_content = measured.max_content;
+        return true;
     }
-    if (intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "max-width", CSS_KEYWORD_NONE, &v)) {
-        out.min_content = css_px_min(out.min_content, v);
-        out.max_content = css_px_min(out.max_content, v);
+    if (!intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, name, initial, &v)) return false;
+    out->min_content = out->max_content = v;
+    return true;
+}
+
+static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured)
+{
+    IntrinsicInlineSizes out = measured, d;
+
+    if (is_declared_pair(ch, "width", CSS_KEYWORD_AUTO, measured, &d)) out = d;
+    if (is_declared_pair(ch, "max-width", CSS_KEYWORD_NONE, measured, &d)) {
+        out.min_content = css_px_min(out.min_content, d.min_content);
+        out.max_content = css_px_min(out.max_content, d.max_content);
     }
     /* §3.2's `auto` minimum is a used 0, and §5.2.1 resolves a cyclic min size against zero, so the floor runs
        on both arms. It is on the content box, before a possibly negative margin is added by the caller. */
-    if (!intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "min-width", CSS_KEYWORD_AUTO, &v)) v = css_px(0.0);
-    out.min_content = css_px_max(out.min_content, v);
-    out.max_content = css_px_max(out.max_content, v);
+    if (!is_declared_pair(ch, "min-width", CSS_KEYWORD_AUTO, measured, &d))
+        d.min_content = d.max_content = css_px(0.0);
+    out.min_content = css_px_max(out.min_content, d.min_content);
+    out.max_content = css_px_max(out.max_content, d.max_content);
     return out;
 }
 

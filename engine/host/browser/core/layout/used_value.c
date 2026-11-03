@@ -289,6 +289,12 @@ static bool uv_len_is_auto(CssLength len)
     return css_length_is_keyword(len, CSS_KEYWORD_AUTO);
 }
 
+/* css-sizing-3 §3.2's `min-content`, `max-content` or `fit-content` (core/layout/intrinsic_size.h). */
+static bool uv_len_is_intrinsic_keyword(CssLength len)
+{
+    return len.kind == CSS_LENGTH_KEYWORD && intrinsic_size_keyword(len.keyword);
+}
+
 /* A LENGTH THAT IS A `CssPx` — CSS 2.1 §10.4's "using the computed value of 'max-width' as the computed value
    for 'width'", which is a substitution into the very parameter §10.3's rules are run with. It is the ONE
    place a used value re-enters the pipeline as a computed one, and it carries the `CssPx` whole rather than
@@ -1672,9 +1678,12 @@ bool used_value_width_is_definite(lxb_dom_element_t *el)
     case CSS_LENGTH_KEYWORD:
         break;
     }
+    /* css-sizing-3 §3.2's intrinsic keywords size the box to its content, which is the shrink-to-fit answer
+       below: not definite. */
+    if (uv_len_is_intrinsic_keyword(w)) return false;
     DCHECKF(w.kind == CSS_LENGTH_KEYWORD && w.keyword == CSS_KEYWORD_AUTO,
-            "%s: definiteness was asked of a width whose computed keyword is not `auto`; css-sizing-3 §3.2's "
-            "keyword widths are refused where the width is used", box_subject(el, nbuf, sizeof nbuf));
+            "%s: definiteness was asked of a width whose computed keyword is not `auto` or an intrinsic keyword; "
+            "css-sizing-3 §3.2's `stretch` is refused where the width is used", box_subject(el, nbuf, sizeof nbuf));
     switch (kind) {
     case UV_BOX_BLOCK_FLOW:
         /* CSS 2.1 §10.3.3's stretch-fit width: definite over a definite containing block. */
@@ -2017,6 +2026,8 @@ bool used_value_width_ask(lxb_dom_element_t *el)
     /* A replaced element is sized by its natural dimensions (`uv_replaced_size`). */
     if (replaced_element_of(el).replaced) return true;
     width = css_computed_length(el, "width");
+    /* css-sizing-3 §3.2's intrinsic keywords read the box's own §5.1 pair (uv_preferred_len). */
+    if (uv_len_is_intrinsic_keyword(width) && !intrinsic_inline_sizes_ask(el)) return false;
     switch (uv_box_kind(el)) {
     case UV_BOX_FLOAT:
     case UV_BOX_INLINE_BLOCK:
@@ -2058,9 +2069,10 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
     DCHECK(el != NULL, "the behaves-as-auto question was asked with no element");
     h = css_computed_length(el, "height");
     if (h.kind == CSS_LENGTH_KEYWORD) {
-        if (!uv_len_is_auto(h))
-            DFAILF("a `height` computed to css-sizing-3 §3.2's `%s`, a level-3 keyword whose behaves-as-auto "
-                   "answer (§3.2.1) this engine has not built; BUILD it with that keyword's block-size arm",
+        /* css-sizing-3 §3.2: an intrinsic keyword's block size "is equivalent to its automatic size". */
+        if (!uv_len_is_auto(h) && !uv_len_is_intrinsic_keyword(h))
+            DFAILF("a `height` computed to css-sizing-3 §3.2's `%s`, whose behaves-as-auto answer (§3.2.1) this "
+                   "engine has not built; BUILD it with §4.2's stretch-fit block size",
                    css_keyword_name(h.keyword));
         return true;
     }
@@ -2248,6 +2260,7 @@ typedef struct {
 static bool uv_flex_item_cross_axis(lxb_dom_element_t *el, UvBox box, bool vertical);
 
 static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_max, CssPx *out);
+static CssPx uv_stretch_fit_content_width(lxb_dom_element_t *el, UvBox box);
 
 /* css-grid-1 §6.6 "Automatic Minimum Size of Grid Items" for `el` on one axis, in the terms of a `min-width`
    or `min-height` value. Every item spans one track, so §6.6's flexible-track condition holds, and a
@@ -2452,28 +2465,19 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
        §3.3's `box-sizing` conversion is applied to both for the reason every other arm applies it: each of the
        three is a CONTENT size and the used value css-sizing-3 §3.3 exposes is the border box's. */
     case CSS_KEYWORD_MIN_CONTENT:
-    case CSS_KEYWORD_MAX_CONTENT: {
-        CssPx px;
+    case CSS_KEYWORD_MAX_CONTENT:
+    case CSS_KEYWORD_FIT_CONTENT: {
+        CssPx px = vertical ? block_flow_auto_height(el)
+                            : intrinsic_keyword_inline_px(el, len.keyword, uv_stretch_fit_content_width(el, box));
 
-        if (vertical) {
-            px = block_flow_auto_height(el);
-        } else {
-            IntrinsicInlineSizes in = intrinsic_inline_sizes(el);
-
-            px = len.keyword == CSS_KEYWORD_MIN_CONTENT ? in.min_content : in.max_content;
-        }
         *out = uv_is_border_box(el) ? css_px_add(px, uv_surround_total(uv_surround(el, vertical))) : px;
         return true;
     }
     case CSS_KEYWORD_STRETCH:
-    case CSS_KEYWORD_FIT_CONTENT:
-        DFAILF("a `min-`/`max-` size is css-sizing-3 §3.2's `%s`. `stretch` \"applies stretch-fit sizing, "
-               "attempting to match the size of the box’s margin box to the size of its containing block\" "
-               "(§4.2 \"Stretch-fit Sizing: filling the containing block\"), and `fit-content` is "
-               "\"min(max-content, max(min-content, stretch))\". The two intrinsic sizes are built "
-               "(core/layout/intrinsic_size.h); BUILD §4.2's stretch-fit size, and `fit-content` is then the "
-               "clamp `uv_shrink_to_fit_width` already computes with it as the available space",
-               css_keyword_name(len.keyword));
+        DFAIL("a `min-`/`max-` size is css-sizing-3 §3.2's `stretch`, which \"applies stretch-fit sizing, "
+              "attempting to match the size of the box’s margin box to the size of its containing block\" "
+              "(§4.2 \"Stretch-fit Sizing: filling the containing block\"). BUILD it over "
+              "uv_stretch_fit_content_width");
         return false;
     default:
         DFAILF("a `min-`/`max-` size computed to keyword %u, outside css-sizing-3 §3.1.2's and §3.1.3's sets",
@@ -4670,9 +4674,54 @@ done:
     return r;
 }
 
+/* One horizontal edge of `el` for its stretch-fit width: an `auto` one is zero (css-sizing-3 §4.2 "Stretch-fit
+   Sizing: filling the containing block": "treat auto margins as zero"), a percentage resolves against the
+   containing block's width. */
+static CssPx uv_stretch_edge(lxb_dom_element_t *el, const char *name, CssPx cb_width)
+{
+    CssLength l = css_computed_length(el, name);
+
+    if (uv_len_is_auto(l)) return css_px(0.0);
+    if (l.kind == CSS_LENGTH_ABSOLUTE) return l.px;
+    return css_length_resolve_pct(l, cb_width);
+}
+
+/* css-sizing-3 §4.2's stretch-fit inline size of `el` as a content width: the containing block's width less
+   its margins, borders and padding (and, for an absolutely positioned box, its two horizontal insets),
+   floored at zero. */
+static CssPx uv_stretch_fit_content_width(lxb_dom_element_t *el, UvBox box)
+{
+    CssPx cbw = used_value_containing_block_width(el);
+    CssPx a = css_px_sub(cbw, uv_surround_total(uv_surround(el, false)));
+
+    a = css_px_sub(css_px_sub(a, uv_stretch_edge(el, "margin-left", cbw)), uv_stretch_edge(el, "margin-right", cbw));
+    if (box == UV_BOX_ABS)
+        a = css_px_sub(css_px_sub(a, uv_stretch_edge(el, "left", cbw)), uv_stretch_edge(el, "right", cbw));
+    return css_px_max(a, css_px(0.0));
+}
+
+/* The preferred size a pass runs with. css-sizing-3 §3.2's intrinsic keywords become the length they size the
+   box to: in the inline axis the keyword's size over the box's §5.1 pair and its stretch-fit width
+   (core/layout/intrinsic_size.h), in the box-sizing box §3.3 measures; for a block size "this is equivalent to
+   its automatic size", so `auto`. */
+static CssLength uv_preferred_len(lxb_dom_element_t *el, UvBox box, bool vertical)
+{
+    CssLength len = css_computed_length(el, vertical ? "height" : "width");
+    CssPx w;
+
+    if (!uv_len_is_intrinsic_keyword(len)) return len;
+    if (vertical) {
+        len.keyword = CSS_KEYWORD_AUTO;
+        return len;
+    }
+    w = intrinsic_keyword_inline_px(el, len.keyword, uv_stretch_fit_content_width(el, box));
+    if (uv_is_border_box(el)) w = css_px_add(w, uv_surround_total(uv_surround(el, false)));
+    return uv_len_px(w);
+}
+
 static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
 {
-    return uv_sized_as(el, box, vertical, css_computed_length(el, vertical ? "height" : "width"));
+    return uv_sized_as(el, box, vertical, uv_preferred_len(el, box, vertical));
 }
 
 CssPx used_value_content_width_as_px(lxb_dom_element_t *el, CssLength width)

@@ -77,6 +77,20 @@ typedef struct {
    nothing: every box type this walk cannot size crashes naming its section. */
 IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el);
 
+/* css-sizing-3 §3.2 "Sizing Values: the <length-percentage>, auto | none, stretch, min-content, max-content, and
+   fit-content values"' three intrinsic keywords. In the INLINE axis each is a size of `el`'s own §5.1 pair:
+   `min-content` and `max-content` its min-content and max-content size, and `fit-content` "min(max-content,
+   max(min-content, stretch))". For a BLOCK size each "is equivalent to its automatic size", so the block axis
+   reads them as `auto`. */
+bool intrinsic_size_keyword(CssKeyword k);
+/* Keyword `k`'s inline size of `el` under §2.3's two intrinsic size constraints, as content-box widths: the
+   pair a §5.2 contribution takes (`fit-content` is the min-content size under a min-content constraint and the
+   max-content size under a max-content one). */
+IntrinsicInlineSizes intrinsic_keyword_inline_sizes(lxb_dom_element_t *el, CssKeyword k);
+/* Keyword `k`'s inline size of `el` as a used content-box width, `available` being the stretch-fit content width
+   `fit-content` clamps (css-sizing-3 §4.2 "Stretch-fit Sizing: filling the containing block"). */
+CssPx intrinsic_keyword_inline_px(lxb_dom_element_t *el, CssKeyword k, CssPx available);
+
 /* One of `el`'s three sizing properties on `axis`, as a content-box extent in CSS pixels for an intrinsic
    pass: true when it states a size to apply, false when it states none. `name` is `width`, `min-width` or
    `max-width` (or the `height` triple vertically) and `initial` its initial value (`auto`, `auto`, `none`), the
@@ -88,7 +102,10 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el);
    False is a real answer: §3.2's initial keywords state no size, and §5.2.1 "Intrinsic Contributions of
    Percentage-Sized Boxes" drops a cyclic percentage (always cyclic in an intrinsic pass). §3.2's used 0 for
    `min-width: auto` is the caller's, since css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items" overrides
-   it for flex items. §3.3's conversion is applied here over the intrinsic surround. */
+   it for flex items. §3.3's conversion is applied here over the intrinsic surround. An intrinsic keyword states
+   a size only where it is one number independent of the available space: `min-content` and `max-content` in the
+   inline axis. `fit-content` there depends on the constraint, which is why §5.2's composition reads
+   intrinsic_keyword_inline_sizes instead; in the block axis all three are `auto`. */
 bool intrinsic_declared_sizing_px(lxb_dom_element_t *el, IntrinsicAxis axis, const char *name,
                                  CssKeyword initial, CssPx *out);
 

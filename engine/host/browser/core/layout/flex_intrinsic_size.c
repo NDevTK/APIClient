@@ -252,18 +252,16 @@ static CssPx fis_flex_base_size(lxb_dom_element_t *item, bool vertical, FisMainS
            as in core/layout/flex_line.c. */
         if (intrinsic_declared_sizing_px(item, prop.axis, prop.size, CSS_KEYWORD_AUTO, &v)) return v;
         return measured.max_content;
-    case CSS_KEYWORD_STRETCH:
     case CSS_KEYWORD_MIN_CONTENT:
     case CSS_KEYWORD_MAX_CONTENT:
     case CSS_KEYWORD_FIT_CONTENT:
-        DFAILF("`flex-basis` computed to the keyword `%s`. css-flexbox-1 §7.2.3 \"The flex-basis property\" gives "
-               "it `content | <'width'>`, and css-sizing-3 §3.2 \"Sizing Values: the <length-percentage>, auto | "
-               "none, stretch, min-content, max-content, and fit-content values\" adds the rest by reference — "
-               "\"The flex-basis property hereby also gains these new keywords, as its values are defined by "
-               "reference to <'width'>\". BUILD §3.2's keyword arm where a `width` of the same shape is answered "
-               "(core/layout/intrinsic_size.c refuses the identical keyword on the identical grammar) and this "
-               "routes through it unchanged",
-               css_keyword_name(basis.keyword));
+        /* css-sizing-3 §3.2's intrinsic keywords, gained by reference (css-flexbox-1 §7.2.3): one number where
+           the keyword states one, else the content size as for `content` (core/layout/intrinsic_size.h). */
+        if (intrinsic_declared_sizing_px(item, prop.axis, "flex-basis", CSS_KEYWORD_AUTO, &v)) return v;
+        return measured.max_content;
+    case CSS_KEYWORD_STRETCH:
+        DFAIL("`flex-basis` computed to css-sizing-3 §3.2's `stretch`, gained by reference (css-flexbox-1 §7.2.3 "
+              "\"The flex-basis property\"); BUILD §4.2 \"Stretch-fit Sizing: filling the containing block\"");
         return measured.max_content;
     default:
         DFAILF("`flex-basis` computed to keyword %u, outside css-flexbox-1 §7.2.3's set", (unsigned)basis.keyword);
