@@ -2402,8 +2402,10 @@ static int assume_set_within(const EpAssumeSet *a, const EpAssumeSet *b) {
     return i == a->n;
 }
 
-/* The origin `url` requests from, against this realm's document (Fetch §4.1 Main fetch's same-origin test is over
-   the request's current URL and its origin, the document's): the bytes the run determined it from are a concrete
+/* The origin `url` requests from, against the request's origin (Fetch §4.1 Main fetch's same-origin test is over
+   the request's current URL and its origin, the client's: HTML §8.1.3.2 Environment settings objects' origin,
+   which for a document is the document's and for a worker its global's, both this agent's one origin,
+   origin_agent): the bytes the run determined it from are a concrete
    address's own, or for a concolic one the page bytes ahead of its first hole where they decide the host
    (url_prefix_decides_host), else its example (address_origin_determined's two arms). An opaque origin is same
    origin with nothing.
@@ -2412,18 +2414,17 @@ static int assume_set_within(const EpAssumeSet *a, const EpAssumeSet *b) {
    core/url/registrable_domain.h. Absence shows as: an app's own API subdomain sorting with third parties. */
 static int address_destination(JSContext *ctx, JSValueConst url) {
     char *disp = url_display(ctx, url);
-    const char *b = document_base_url(ctx), *d = document_url(ctx);
-    UrlRecord base, docu, target;
+    const char *b = document_base_url(ctx);
+    UrlRecord base, target;
     char *ex = NULL;
     const char *bytes = disp;
     size_t n;
     int dest = EPDST_UNKNOWN, ok;
 
     CHECK(disp, "endpoint: OOM reading an address's page bytes");
-    url_record_init(&base); url_record_init(&docu); url_record_init(&target);
+    url_record_init(&base); url_record_init(&target);
     CHECKF(b && url_parse(&base, b, strlen(b), NULL),
-           "endpoint: the document base URL `%s` does not parse — HTML §2.4.1 makes it a URL record", b ? b : "");
-    CHECKF(d && url_parse(&docu, d, strlen(d), NULL), "endpoint: the document URL `%s` does not parse", d ? d : "");
+           "endpoint: the API base URL `%s` does not parse — HTML §2.4.1 makes it a URL record", b ? b : "");
     n = strlen(disp);
     if (concolic_is(url)) {
         unsigned char *hole = concolic_shape_hole_mask(url);
@@ -2446,13 +2447,9 @@ static int address_destination(JSContext *ctx, JSValueConst url) {
         free(hole);
     }
     ok = bytes && url_parse(&target, bytes, n, &base);
-    if (ok) {
-        char *to = origin_serialize_of_url(&target), *dos = origin_serialize_of_url(&docu);
-        CHECK(to && dos, "endpoint: OOM serializing an origin");
-        dest = strcmp(to, "null") && !strcmp(to, dos) ? EPDST_SAME_ORIGIN : EPDST_CROSS_ORIGIN;
-        free(to); free(dos);
-    }
-    url_record_free(&target); url_record_free(&docu); url_record_free(&base);
+    if (ok)
+        dest = origin_same_as_url(origin_agent(), &target) ? EPDST_SAME_ORIGIN : EPDST_CROSS_ORIGIN;
+    url_record_free(&target); url_record_free(&base);
     free(ex);
     free(disp);
     return dest;
