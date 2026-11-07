@@ -137,6 +137,33 @@ function withinTime(pages, key, out) {
   return { c: wsum === 0 ? null : +(csum / wsum).toFixed(3), yielding };
 }
 
+/* A group's yield rate against the rest's inside time: every page's picks cut into the same five equal-work strata as
+   withinTime, and the Mantel-Haenszel rate ratio over the strata where both sides ran,
+   sum(y1 * w0 / W) / sum(y0 * w1 / W), which a stratum where one side ran little cannot dominate; 1 says the group
+   yields per unit of work as the rest of its time does. The strata it rests on and both sides' work and yield are
+   stated beside it. */
+function groupWithinTime(pages, inGroup, out) {
+  const o = { strata: 0, work1: 0, work0: 0, y1: 0, y0: 0, num: 0, den: 0 };
+  for (const rows of pages.values()) {
+    const xs = [...rows].sort((a, b) => a.v.at - b.v.at);
+    const W = xs.reduce((n, r) => n + r.work, 0);
+    for (let s = 0, i = 0, acc = 0; s < 5 && i < xs.length; s++) {
+      let w1 = 0, w0 = 0, y1 = 0, y0 = 0;
+      while (i < xs.length && (acc < ((s + 1) * W) / 5 || s === 4)) {
+        const r = xs[i];
+        if (inGroup(r)) { w1 += r.work; y1 += r.y[out]; } else { w0 += r.work; y0 += r.y[out]; }
+        acc += r.work; i++;
+      }
+      if (w1 === 0 || w0 === 0) continue;
+      o.strata++; o.work1 += w1; o.work0 += w0; o.y1 += y1; o.y0 += y0;
+      o.num += (y1 * w0) / (w1 + w0); o.den += (y0 * w1) / (w1 + w0);
+    }
+  }
+  const perM = (y, w) => (w === 0 ? '—' : (y / (w / 1e6)).toFixed(3));
+  return [o.strata, o.work1, +o.y1.toFixed(2), perM(o.y1, o.work1), o.work0, +o.y0.toFixed(2), perM(o.y0, o.work0),
+          o.den === 0 ? '—' : (o.num / o.den).toFixed(3)];
+}
+
 const fmtC = (r) => (r.c === null ? '—' : (r.c >= 0 ? '+' : '') + r.c.toFixed(3));
 
 /* Rows grouped into at most five bins of `key`: one per distinct value when there are few, else quintiles of the
@@ -262,6 +289,15 @@ function main() {
       return [rs.length, w, per('paid'), per('value'), per('newSites')];
     };
     out.push([name, ...side(true), ...side(false)].join('\t'));
+  }
+  for (const outc of OUTCOMES) {
+    out.push('', `## groups inside time, ${outc}: the group's rate against the rest's, Mantel-Haenszel over five ` +
+             'equal-work strata per page (only strata where both sides ran; 1 = no difference)',
+             ['group', 'strata', 'work1', `${outc}1`, '/M1', 'work0', `${outc}0`, '/M0', 'rateRatioMH'].join('\t'));
+    for (const [name, bit] of CLS) out.push([`cls:${name}`, ...groupWithinTime(pages, (r) => (r.cls & bit) !== 0, outc)].join('\t'));
+    out.push(['cls:forced|drive|candidate', ...groupWithinTime(pages, (r) => (r.cls & 35) !== 0, outc)].join('\t'));
+    for (const k of [0, 1, 2]) out.push([`priced=${k}`, ...groupWithinTime(pages, (r) => r.v.priced === k, outc)].join('\t'));
+    out.push(['priced>=3', ...groupWithinTime(pages, (r) => r.v.priced >= 3, outc)].join('\t'));
   }
   const want = o.bins ? o.bins.split(',') : ['at', 'x', 'served', 'famNotch', 'turn', 'priced'];
   for (const name of want) {
