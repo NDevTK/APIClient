@@ -1482,6 +1482,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/linkrest.h"
 #include "fixture/linknest.h"
 #include "fixture/collattr.h"
+#include "fixture/collenum.h"
 #include "fixture/collrest.h"
 #include "fixture/wnameunk.h"
 #include "fixture/flexsvg.h"
@@ -2179,6 +2180,10 @@ TF_DOCS[] = {
     { "linkrest", HTML_LINKREST },
     { "linknest", HTML_LINKNEST },
     { "collattr", HTML_COLLATTR },
+    { "collforin", HTML_COLLFORIN },
+    { "collkeys", HTML_COLLKEYS },
+    { "collhasown", HTML_COLLHASOWN },
+    { "collexpando", HTML_COLLEXPANDO },
     { "collrest", HTML_COLLREST },
     { "wnameunk", HTML_WNAMEUNK },
     { "flexsvg", HTML_FLEXSVG },
@@ -20577,6 +20582,30 @@ TF_UNIT void probes_linknest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the four collenum documents (fixture/collenum.h): the internal methods of a live collection that a
+   builtin reaches answer the collection's indices and its expandos. */
+TF_UNIT void probes_collenum(const char *js, Probe *tab, int *n) {
+    const char *fi_why = NULL, *ky_why = NULL, *ho_why = NULL, *ex_why = NULL;
+    int fi_tt = 1, ky_tt = 1, ho_tt = 1, ex_tt = 1;
+    fold_row(&fi_tt, &fi_why, param_value_is(js, "/api/collforin", "k", "0-1-2"),
+             "a for-in over a three-element `children` did not list the indices 0, 1 and 2");
+    fold_row(&ky_tt, &ky_why, param_value_is(js, "/api/collkeys", "k", "0-1-2") &&
+                              param_value_is(js, "/api/collkeys", "n", "0-1-2"),
+             "Object.keys and Object.getOwnPropertyNames of a three-element `children` did not answer 0, 1, 2");
+    fold_row(&ho_tt, &ho_why, param_value_is(js, "/api/collhasown", "h", "10"),
+             "hasOwnProperty over a fresh three-element collection did not answer true for 1 and false for 5");
+    fold_row(&ex_tt, &ex_why, param_value_is(js, "/api/collexpando", "e", "5") &&
+                              param_value_is(js, "/api/collexpando", "l", "3"),
+             "an expando written on an HTMLCollection did not read back, or its length moved");
+    const Probe rows[] = {
+        { "collection-for-in", fi_tt, "/api/collforin", SESS_EXPLORE, fi_why },
+        { "collection-own-keys", ky_tt, "/api/collkeys", SESS_EXPLORE, ky_why },
+        { "collection-has-own", ho_tt, "/api/collhasown", SESS_EXPLORE, ho_why },
+        { "collection-expando-set", ex_tt, "/api/collexpando", SESS_EXPLORE, ex_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `collattr` document (fixture/collattr.h): live collections filtered by an attribute answer the
    tree after a write to that attribute. */
 TF_UNIT void probes_collattr(const char *js, Probe *tab, int *n) {
@@ -27156,6 +27185,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_linkrest(js, probes, &np);
     probes_linknest(js, probes, &np);
     probes_collattr(js, probes, &np);
+    probes_collenum(js, probes, &np);
     probes_collrest(js, probes, &np);
     probes_wnameunk(js, probes, &np);
     probes_flexsvg(js, probes, &np);
