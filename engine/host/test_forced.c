@@ -1455,6 +1455,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rangetext.h"
 #include "fixture/willchange.h"
 #include "fixture/csstextderived.h"
+#include "fixture/translatepct.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2133,6 +2134,7 @@ TF_DOCS[] = {
     { "rangetext", HTML_RANGETEXT },
     { "willchange", HTML_WILLCHANGE },
     { "csstextderived", HTML_CSSTEXTDERIVED },
+    { "translatepct", HTML_TRANSLATEPCT },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -20154,6 +20156,27 @@ TF_UNIT void probes_csstextderived(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `translatepct` document (fixture/translatepct.h): css-transforms-1 §7's percentage
+   translations against §5's reference box. */
+TF_UNIT void probes_translatepct(const char *js, Probe *tab, int *n) {
+    const char *tp_why = NULL; int tp_tt = 1;
+    fold_row(&tp_tt, &tp_why, !!strstr(js, "\"/api/translatepct\""),
+             "NOT REACHED: no /api/translatepct record, so the document aborted before its fetch");
+    fold_row(&tp_tt, &tp_why, param_value_is(js, "/api/translatepct", "cx", "80") &&
+                              param_value_is(js, "/api/translatepct", "cy", "90"),
+             "css-transforms-1 §7: `translate(-50%, -50%)` on a 40x20 box at (100, 100) does not start at (80, 90)");
+    fold_row(&tp_tt, &tp_why, param_value_is(js, "/api/translatepct", "b", "15") &&
+                              param_value_is(js, "/api/translatepct", "k", "10"),
+             "css-transforms-1 §5: `translateX(25%)` is not a quarter of the border box (15px), or of the content "
+             "box (10px) under `transform-box: content-box`");
+    fold_row(&tp_tt, &tp_why, param_value_is(js, "/api/translatepct", "pc", "320"),
+             "css-transforms-1 §2: an ancestor's `translateY(50%)` of its 40px height does not carry its child 20px");
+    const Probe rows[] = {
+        { "translate-percentage", tp_tt, "/api/translatepct", SESS_EXPLORE, tp_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -26171,6 +26194,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rangetext(js, probes, &np);
     probes_willchange(js, probes, &np);
     probes_csstextderived(js, probes, &np);
+    probes_translatepct(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
