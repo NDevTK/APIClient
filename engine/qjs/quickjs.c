@@ -95742,7 +95742,7 @@ static const JSTrampStepDef js_str_charAt_def     = { sizeof(JSStrRecv), js_str_
 static const JSTrampStepDef js_str_charCodeAt_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_CHARCODEAT, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.3 String.prototype.charCodeAt",
                                                     .steps = js_str_charCodeAt_steps };
-static const JSTrampStepDef js_str_slice_def      = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SLICE, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
+static const JSTrampStepDef js_str_slice_def      = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SLICE, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING, .string_slice = 1,
                                                     .algorithm = "22.1.3.22 String.prototype.slice",
                                                     .steps = js_str_slice_steps };
 static const JSTrampStepDef js_str_substr_def     = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_SUBSTR, .visit = js_str_recv_visit, .result_types = JS_LANG_TYPE_STRING,
@@ -98905,9 +98905,8 @@ static void js_concolic_call_unit_map(JSContext *ctx, JSConcolicCall *s)
    builtin-protocol RegExp: seeds §22.2.7.2 RegExpBuiltinExec's matcher, from index 0 where §22.2.6.11 seeks the
    first match, over every String the receiver's domain admits (string_domain). 1 where the match is seeded, 0
    where the call or the receiver states nothing it can run over, -1 on an allocation refused.
-   Named residual. Not covered: a String searchValue (§22.1.3.19 step 5's StringIndexOf). Next diff builds: its
-   positions asked over the same domain. How its absence shows: an address a page normalises with a String
-   searchValue reads as holding no unit the page wrote. */
+   A String searchValue is answered at once (js_concolic_call_string_search). */
+static int js_concolic_call_string_search(JSContext *ctx, JSConcolicCall *s);
 static int js_concolic_call_prefix_begin(JSContext *ctx, JSConcolicCall *s)
 {
     JSObject *fp = JS_VALUE_GET_OBJ(s->cb[1]);
@@ -98924,6 +98923,8 @@ static int js_concolic_call_prefix_begin(JSContext *ctx, JSConcolicCall *s)
         s->hdr.argc < 1 || !g_concolic.is(s->hdr.this_val))
         return 0;
     pat = s->hdr.argv[0];
+    if (JS_IsString(pat))
+        return js_concolic_call_string_search(ctx, s);
     if (g_concolic.is(pat) || !js_concolic_call_regexp_builtin(ctx, pat))
         return 0;
     if (!g_concolic.string_domain(ctx, s->hdr.this_val, &s->pm_str, ascii, &wide))
@@ -98948,6 +98949,53 @@ static int js_concolic_call_prefix_begin(JSContext *ctx, JSConcolicCall *s)
     DCHECK(r == 0, "lre_exec_begin_prefix answered a value its contract does not name");
     s->pm_matching = 1;
     return 1;
+}
+
+/* §22.1.3.19 step 5 and §22.1.3.20 step 9's StringIndexOf ( string, searchValue, 0 ) over every String the
+   receiver's domain admits: the first position whose units are the search value's in some world. An attempt
+   inside the known units fails where one of them differs, matches in every world where all lie inside, and may
+   match where the rest are each a unit of the tail set; an attempt at or past their end may match where every
+   unit of the search value is one. With none, every world returns the receiver; else the result keeps the
+   receiver's units before the first such position. The search's work is bounded by the examples' run of the
+   same search over a subject that begins with these units. Answers 0: nothing is left to seed. */
+static int js_concolic_call_string_search(JSContext *ctx, JSConcolicCall *s)
+{
+    JSString *lit = JS_VALUE_GET_STRING(s->hdr.argv[0]), *p;
+    JSValue pre = JS_UNDEFINED;
+    uint64_t ascii[2];
+    int wide = 0, m = (int)lit->len, plen, i, j, any = 1;
+    uint32_t k;
+
+    if (m == 0 || !g_concolic.string_domain(ctx, s->hdr.this_val, &pre, ascii, &wide))
+        return 0;
+    p = JS_VALUE_GET_STRING(pre);
+    plen = (int)p->len;
+    for (j = 0; j < m && any; j++) {
+        uint32_t u = string_get(lit, j);
+
+        any = u < 0x80 ? (int)(ascii[u >> 6] >> (u & 63) & 1) : wide;
+    }
+    k = (uint32_t)plen;
+    for (i = 0; i < plen; i++) {
+        int ok = 1;
+
+        for (j = 0; j < m && ok; j++) {
+            uint32_t u = string_get(lit, j);
+
+            if (i + j < plen) ok = string_get(p, i + j) == u;
+            else ok = u < 0x80 ? (int)(ascii[u >> 6] >> (u & 63) & 1) : wide;
+        }
+        if (ok) { k = (uint32_t)i; break; }
+    }
+    JS_FreeValue(ctx, pre);
+    if (i == plen && !any) {
+        JS_FreeValue(ctx, s->result);
+        s->result = js_dup(s->hdr.this_val);
+    } else if (k > 0) {
+        s->result = g_concolic.string_keep_prefix(ctx, s->result, s->hdr.this_val, k);
+        if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return -1; }
+    }
+    return 0;
 }
 
 /* One slice of the seeded matcher. Where no admitted String matches, every world's replace returns its
@@ -99213,6 +99261,18 @@ int JS_FunctionSearchResult(JSValueConst f)
         (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
         return JS_SEARCH_RESULT_NONE;
     return tramp_step_def_of(f)->search_result;
+}
+
+bool JS_FunctionIsStringSlice(JSValueConst f)
+{
+    JSObject *fp;
+
+    if (JS_VALUE_GET_TAG(f) != JS_TAG_OBJECT) return false;
+    fp = JS_VALUE_GET_OBJ(f);
+    if (fp->class_id != JS_CLASS_C_FUNCTION ||
+        (fp->u.cfunc.cproto != JS_CFUNC_step && fp->u.cfunc.cproto != JS_CFUNC_step_ctor))
+        return false;
+    return tramp_step_def_of(f)->string_slice != 0;
 }
 
 bool JS_FunctionIsStringSplit(JSValueConst f)

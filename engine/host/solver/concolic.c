@@ -1979,8 +1979,9 @@ static unsigned root_whose_or_unstated(unsigned m)
 
 /* ---- the affine facet (ConcolicAffine) ---------------------------------------------------------------------- */
 
-/* A term is at most 2^32 in magnitude: every term is minted from a Web IDL `long` (2^31) less an integer the
-   mint asserts is within 2^31. A form whose bound exceeds 2^53 leaves the integers a double holds exactly. */
+/* A term is at most 2^32 in magnitude: it is minted from a Web IDL `long` (2^31) less an integer the mint asserts
+   is within 2^31, or it is a String's length (below 2^30). A form whose bound exceeds 2^53 leaves the integers a
+   double holds exactly. */
 #define AFF_TERM_MAX  4294967296.0
 #define AFF_EXACT_MAX 9007199254740992.0
 
@@ -2093,6 +2094,52 @@ static void aff_attach(JSValueConst v, ConcolicAffine *a)
     if (!c) { aff_free(a); return; }
     DCHECK(c->aff == NULL, "an affine form was attached twice to one value — the facet is written at the mint");
     c->aff = a;
+}
+
+/* The affine term naming the length of the String `s`: §6.1.4's count of its code units, one integer per value,
+   so it is keyed by the value's identity. A length is below 2^30 here (JS_STRING_LEN_MAX), inside AFF_TERM_MAX.
+   NULL where `s` has no identity. Owned. */
+static char *string_length_term(JSValueConst s)
+{
+    const char *f[1];
+
+    f[0] = concolic_ident_c(s);
+    return f[0] ? concolic_ident_compose("String length", f, 1) : NULL;
+}
+
+/* The form `1·length(s)` for the length read `r` of the unknown String `s`, attached to `r`. */
+static void string_length_attach(JSValueConst r, JSValueConst s)
+{
+    char *term = string_length_term(s);
+    ConcolicAffine *af;
+
+    if (!term) return;
+    af = reclaim_calloc(1, sizeof *af);
+    CHECK(af, "concolic: OOM recording a String length's affine form");
+    af->n = 1;
+    af->term = reclaim_malloc(sizeof *af->term);
+    af->k = reclaim_malloc(sizeof *af->k);
+    CHECK(af->term && af->k, "concolic: OOM recording a String length's affine term");
+    af->term[0] = term;
+    af->k[0] = 1.0;
+    af->c = 0.0;
+    aff_attach(r, af);
+}
+
+/* Whether `start` is, in every world, at least the length of the unknown String `s`: its form is `1·length(s) +
+   c` with `c >= 0`. */
+static int string_length_reached(JSContext *ctx, JSValueConst start, JSValueConst s)
+{
+    AffOperand o;
+    char *term;
+    int r;
+
+    if (!aff_operand(ctx, start, &o) || !o.form || o.form->n != 1 || o.form->k[0] != 1.0 || o.form->c < 0.0)
+        return 0;
+    term = string_length_term(s);
+    r = term && !strcmp(term, o.form->term[0]);
+    free(term);
+    return r;
 }
 
 /* The concrete Number a cancelled form stands for. `example`, when the operands carried one, is the real
@@ -4711,6 +4758,14 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
             JS_FreeCString(ctx, name);
         }
     }
+    /* §10.4.3.4 step 8's own `length` of an unknown String is one integer of that String in every world: the
+       affine facet names it, so a value computed from it can be compared with the String's own length. */
+    if (c->ty == CTY_STRING && concolic_is(r) && !aff_of(r)) {
+        const char *name = JS_AtomToCString(ctx, atom);
+
+        if (name && !strcmp(name, "length")) string_length_attach(r, obj);
+        if (name) JS_FreeCString(ctx, name);
+    }
     free(shape);
     return r;
 }
@@ -6125,6 +6180,21 @@ static JSValue concolic_call_hook(JSContext *ctx, JSValueConst func_obj, JSValue
         if (!(concolic_types(c->facet_src) & callable)) {
             JS_FreeValue(ctx, example);
             return JS_ThrowTypeError(ctx, "%s is not a function", c->member);
+        }
+    }
+    /* §22.1.3.22 String.prototype.slice over an unknown String with no `end`: where ToClampedIndex(start, length)
+       reaches the String's own length in every world, from ≥ to and the result is the empty String. */
+    if (concolic_is(this_val) && cty_of_operand(this_val) == CTY_STRING && argc >= 1 &&
+        (argc < 2 || JS_IsUndefined(argv[1])) && string_length_reached(ctx, argv[0], this_val)) {
+        JSValue fex = concolic_example(ctx, func_obj);
+        int is_slice = JS_FunctionIsStringSlice(fex);
+
+        JS_FreeValue(ctx, fex);
+        if (is_slice) {
+            DCHECK(JS_IsUndefined(example) || (JS_IsString(example) && example_units(ctx, example) == 0),
+                   "a slice from the receiver's own length had a non-empty example");
+            JS_FreeValue(ctx, example);
+            return JS_NewStringLen(ctx, "", 0);
         }
     }
     /* A slice or substring of a string an unknown was concatenated into, over a range inside one piece, is that
