@@ -1592,6 +1592,8 @@ static bool ev_client_rects_ask(const EvTarget *t)
     CssPx w, h;
 
     if (!t->has_box || ev_has_svg_layout_box(t->node)) return true;
+    /* Step 3's first constraint maps every rectangle through the transforms that apply (ev_client_rect_px). */
+    if (!css_transform_matrix_current_ask(el)) return false;
     kind = element_view_fragment_kind(el);
     if (kind == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
         FlowRect *frags = NULL;
@@ -1684,7 +1686,8 @@ bool element_view_text_rects_ask(const lxb_dom_node_t *text, uint32_t start, uin
     while (block_flow_drive_deferred(d)) {
         FlowRect *r = NULL;
         size_t n = 0;
-        bool done = flow_text_fragment_rects_ask(text, start, end, &r, &n);
+        bool done = flow_text_fragment_rects_ask(text, start, end, &r, &n) &&
+                    css_transform_matrix_current_ask(lxb_dom_interface_element(p));
 
         free(r);
         if (done) return true;

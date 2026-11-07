@@ -105,4 +105,9 @@ CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el);
    "the transforms that apply to the element and its ancestors" names. */
 CssTransformMatrix css_transform_matrix_current(lxb_dom_element_t *el);
 
+/* The layout the matrix above reads, asked under a resting drive (core/layout/layout_job.h): the reference box
+   of each element on the chain whose transform holds a percentage translation. False ("not yet") with the
+   question suspended for the caller's drive. */
+bool css_transform_matrix_current_ask(lxb_dom_element_t *el);
+
 #endif

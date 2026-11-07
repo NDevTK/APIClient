@@ -134,6 +134,10 @@ unsigned css_computed_contain(lxb_dom_element_t *el);
    that "the author expects to animate or change the property with the given name on the element". */
 bool css_computed_will_change_names(lxb_dom_element_t *el, const char *property);
 
+/* Whether the used css-transforms-1 §5 `transform-box` of `el`, an element with a CSS layout box, is its content
+   box (`content-box` or `fill-box`) rather than its border box (`border-box`, `stroke-box` or `view-box`). */
+bool css_computed_transform_box_is_content(lxb_dom_element_t *el);
+
 /* css-transforms-1 §3 "The transform Property"'s COMPUTED VALUE AS THE PARSED LIST — the THIRD shape this
    component answers, and it is an entry for the same reason `css_computed_line_height` and
    `css_computed_border_spacing` are: text cannot carry it. §3's `Computed value:` line is "as specified, but

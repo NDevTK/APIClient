@@ -2643,6 +2643,19 @@ static char *computed_contain(char *spec)
     return css_contain_serialize(ok ? bits : 0);
 }
 
+bool css_computed_transform_box_is_content(lxb_dom_element_t *el)
+{
+    char *v = css_computed_value(el, "transform-box");
+    bool content;
+
+    DCHECK(v != NULL, "css-transforms-1 §5's computed `transform-box` came back as no value; its row derives one");
+    /* "For elements with associated CSS layout box, the used value for fill-box is content-box and for
+       stroke-box and view-box is border-box." */
+    content = strcmp(v, "content-box") == 0 || strcmp(v, "fill-box") == 0;
+    free(v);
+    return content;
+}
+
 bool css_computed_will_change_names(lxb_dom_element_t *el, const char *property)
 {
     char *v = css_computed_value(el, "will-change");
@@ -2769,6 +2782,21 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
        value`. */
     case CSS_PROPERTY_WILL_CHANGE:
         return spec;
+    /* css-transforms-1 §5 "Transform reference box: the transform-box property": `Computed value: specified
+       keyword`, over `content-box | border-box | fill-box | stroke-box | view-box`, folded to lowercase. A value
+       outside the grammar is the invalid declaration CSS Syntax drops, which leaves the initial `view-box`. */
+    case CSS_PROPERTY_TRANSFORM_BOX: {
+        static const char *const KW[] = { "content-box", "border-box", "fill-box", "stroke-box", "view-box" };
+        size_t k;
+
+        for (k = 0; k < COUNTOF(KW); k++)
+            if (strcasecmp(spec, KW[k]) == 0) {
+                free(spec);
+                return css_cv_strdup(KW[k]);
+            }
+        free(spec);
+        return css_cv_strdup("view-box");
+    }
     case CSS_PROPERTY_FONT_FAMILY:
         return computed_font_family(el, spec);
     /* `float` (CSS2 §9.5.1) states "Computed value: as specified", and a keyword has no absolutization to do —

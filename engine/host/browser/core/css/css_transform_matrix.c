@@ -2,15 +2,13 @@
    numbers these are, for why §3.2's two-step product is NOT this algorithm, and for why the linear part of the
    matrix is a `double` while its translation is a `CssPx`.
 
-   WHAT THE THREE RELEASE ARMS OF THIS ONE ALGORITHM LEAVE BEHIND, STATED TOGETHER BECAUSE NO GATE HERE CAN
-   REACH THEM. Two crashes below and one assert are dev-only, so a release build takes all three arms at once
-   and they must compose rather than merely each be defensible: `css_tm_of_function`'s `default:` returns the
-   IDENTITY for a rotation, a scale, a skew or a `matrix()`; `css_tm_translation_px` returns a percentage
-   translation's `px`, which core/css/css_length.c initialises to ZERO with an empty environment set and
-   DCHECKs it holds there, so it is a defined number and not an uninitialised read; and
-   `css_transform_matrix_current`'s linear-part assert is compiled out. THE THREE AGREE, and that is the point:
-   the first arm makes every matrix a translation, so the third arm's invariant still HOLDS in release rather
-   than merely going unchecked, and the composition in the initial containing block's space stays exact. What
+   WHAT THE TWO RELEASE ARMS OF THIS ONE ALGORITHM LEAVE BEHIND, STATED TOGETHER BECAUSE NO GATE HERE CAN
+   REACH THEM. A crash below and an assert are dev-only, so a release build takes both arms at once and they
+   must compose rather than merely each be defensible: `css_tm_of_function`'s `default:` returns the IDENTITY
+   for a rotation, a scale, a skew or a `matrix()`, and `css_transform_matrix_current`'s linear-part assert is
+   compiled out. THE TWO AGREE, and that is the point: the first arm makes every matrix a translation, so the
+   second arm's invariant still HOLDS in release rather than merely going unchecked, and the composition in
+   the initial containing block's space stays exact. What
    a release build reports for a rotated box is the UNTRANSFORMED border area — which is the answer this engine
    gave before it read `transform` at all, is what a user agent with no transform support reports, and is a
    rectangle rather than a state a consumer has no step for. NOTHING HERE RETURNS A PARTIALLY-MAPPED
@@ -27,6 +25,7 @@
 #include "core/css/css_transform.h"
 #include "core/css/css_transform_function.h"
 #include "core/css/css_transform_matrix.h"
+#include "core/layout/used_value.h"
 
 CssTransformMatrix css_transform_matrix_identity(void)
 {
@@ -66,30 +65,35 @@ void css_transform_matrix_map(CssTransformMatrix m, CssPx x, CssPx y, CssPx *out
     *out_y = css_px_add(css_px_add(css_px_scale(x, m.b), css_px_scale(y, m.d)), m.f);
 }
 
-static CssPx css_tm_translation_px(const CssLength *len)
+/* css-transforms-1 §5 "Transform reference box: the transform-box property"'s reference box of `el` on one axis,
+   its width or (`vertical`) its height: "For elements with associated CSS layout box, the used value for
+   fill-box is content-box and for stroke-box and view-box is border-box". */
+static CssPx css_tm_reference_size(lxb_dom_element_t *el, bool vertical)
+{
+    return css_computed_transform_box_is_content(el) ? used_value_content_px(el, vertical)
+                                                     : used_value_border_edge_px(el, vertical);
+}
+
+static bool css_tm_reference_size_ask(lxb_dom_element_t *el, bool vertical)
+{
+    CssPx unused;
+
+    return css_computed_transform_box_is_content(el) ? used_value_content_ask(el, vertical, &unused)
+                                                     : used_value_border_edge_ask(el, vertical, &unused);
+}
+
+/* One translation argument of `el`'s transform on one axis: css-transforms-1 §7 "The Transform Functions": "A
+   percentage for horizontal translations is relative to the width of the reference box. A percentage for
+   vertical translations is relative to the height of the reference box." The percentage is a used value, since
+   css-values-4 §10.11 "Computed Value" leaves it unresolved at computed-value time. */
+static CssPx css_tm_translation_px(lxb_dom_element_t *el, const CssLength *len, bool vertical)
 {
     DCHECK(len->kind != CSS_LENGTH_KEYWORD,
            "css-transforms-1 §7.1 \"2D Transform Functions\" gives every translation function a "
            "`<length-percentage>` argument, which admits no keyword at all — so a keyword here is a value "
            "core/css/css_transform_function.c's grammar accepted and its own `Value:` line does not");
-    if (len->kind != CSS_LENGTH_ABSOLUTE)
-        DFAIL("css-transforms-1 §7 \"The Transform Functions\" states that \"A percentage for horizontal "
-              "translations is relative to the width of the reference box\", and §5 \"Transform reference box: "
-              "the transform-box property\" is what names that box — its `Initial:` line is `view-box` and its "
-              "own resolution for this engine's elements is \"For elements with associated CSS layout box, the "
-              "used value for fill-box is content-box and for stroke-box and view-box is border-box\". THE "
-              "PERCENTAGE IS NOT RESOLVED AT COMPUTED-VALUE TIME AND THAT IS CORRECT — css-values-4 §10.11 "
-              "\"Computed Value\" leaves an unresolved percentage as specified and §3 \"The transform "
-              "Property\"'s line moves LENGTHS — so this is a USED value and the box is its operand. BUILD §5's "
-              "`transform-box` as a computed value (lexbor's registry carries no entry for it and "
-              "core/css/css_style_declaration.c carries no initial-value row, so the cascade answers nothing "
-              "for every element today), then resolve the percentage against "
-              "core/layout/used_value.h's `used_value_border_edge_px` on this element's own axis. THE "
-              "CANCELLATION THIS COMPONENT RESTS ON IS UNTOUCHED BY THAT: a percentage translation is still a "
-              "TRANSLATION, so §2's transform-origin bracket still cancels and the origin is still not part of "
-              "the answer — what is missing is only the number. `translate(-50%, -50%)` is the centring idiom "
-              "this refuses and is the reason to build it first");
-    return len->px;
+    if (len->kind == CSS_LENGTH_ABSOLUTE) return len->px;
+    return css_length_resolve_pct(*len, css_tm_reference_size(el, vertical));
 }
 
 /* §12 "Mathematical Description of Transform Functions"' MATRIX FOR ONE `<transform-function>`.
@@ -108,13 +112,9 @@ static CssPx css_tm_translation_px(const CssLength *len)
  * ABSENT FROM THE ANSWER because the algorithm removes it.
  * FOR EVERY OTHER FUNCTION THE BRACKET SURVIVES and the origin is the first thing that would have to exist, so
  * that is what the crash names rather than §12's remaining rows, which are the easy half.
- *
- * A PERCENTAGE TRANSLATION IS IN THE SECOND POPULATION AND NOT THE FIRST, which is one step past where a
- * reader would draw the line: it commutes like any other translation, and §7's own sentence is that "A
- * percentage for horizontal translations is relative to the width of the reference box" — so resolving it
- * needs §5's reference box, which needs the computed `transform-box` this engine also does not derive. The
- * cancellation is untouched; what is missing is the number. */
-static CssTransformMatrix css_tm_of_function(const CssTransformFunction *fn)
+ * A percentage translation is in the first population: it commutes like any other translation, and only its
+ * number reads §5's reference box (`css_tm_translation_px`). */
+static CssTransformMatrix css_tm_of_function(lxb_dom_element_t *el, const CssTransformFunction *fn)
 {
     CssTransformMatrix out = css_transform_matrix_identity();
 
@@ -125,16 +125,16 @@ static CssTransformMatrix css_tm_of_function(const CssTransformFunction *fn)
     /* "A 2D translation with the parameters tx and ty is equivalent to a 3D translation where tz has zero as a
        value" — §12's own row, and its `tz` is the third dimension this engine's 3x2 does not carry. */
     case CSS_TF_TRANSLATE:
-        out.e = css_tm_translation_px(&fn->length[0]);
+        out.e = css_tm_translation_px(el, &fn->length[0], false);
         /* §7.1's own default, applied HERE because core/css/css_transform_function.h records what the author
            WROTE: "If <ty> is not provided, ty has zero as a value". */
-        if (fn->argc > 1) out.f = css_tm_translation_px(&fn->length[1]);
+        if (fn->argc > 1) out.f = css_tm_translation_px(el, &fn->length[1], true);
         break;
     case CSS_TF_TRANSLATE_X:
-        out.e = css_tm_translation_px(&fn->length[0]);
+        out.e = css_tm_translation_px(el, &fn->length[0], false);
         break;
     case CSS_TF_TRANSLATE_Y:
-        out.f = css_tm_translation_px(&fn->length[0]);
+        out.f = css_tm_translation_px(el, &fn->length[0], true);
         break;
     case CSS_TF_MATRIX3D:
     case CSS_TF_TRANSLATE3D:
@@ -211,9 +211,46 @@ CssTransformMatrix css_transform_matrix_of_element(lxb_dom_element_t *el)
        of transform functions applied from the coordinate system of the ancestor to the local coordinate system
        of a given element". */
     for (i = 0; i < list.n; i++)
-        out = css_transform_matrix_multiply(out, css_tm_of_function(&list.fn[i]));
+        out = css_transform_matrix_multiply(out, css_tm_of_function(el, &list.fn[i]));
     css_transform_list_free(&list);
     return out;
+}
+
+/* The reference box sizes `el`'s own percentage translations read, asked: false ("not yet") when one was
+   deferred. A function other than a translation reads none here, and crashes in `css_tm_of_function`. */
+static bool css_tm_element_ask(lxb_dom_element_t *el)
+{
+    CssTransformList list;
+    bool done = true;
+    size_t i;
+
+    if (!css_transform_is_transformable(el) || !css_computed_transform_list(el, &list)) return true;
+    for (i = 0; done && i < list.n; i++) {
+        const CssTransformFunction *fn = &list.fn[i];
+        bool x = false, y = false;
+
+        if (fn->kind == CSS_TF_TRANSLATE) {
+            x = fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
+            y = fn->argc > 1 && fn->length[1].kind != CSS_LENGTH_ABSOLUTE;
+        } else if (fn->kind == CSS_TF_TRANSLATE_X) {
+            x = fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
+        } else if (fn->kind == CSS_TF_TRANSLATE_Y) {
+            y = fn->length[0].kind != CSS_LENGTH_ABSOLUTE;
+        }
+        done = (!x || css_tm_reference_size_ask(el, false)) && (!y || css_tm_reference_size_ask(el, true));
+    }
+    css_transform_list_free(&list);
+    return done;
+}
+
+bool css_transform_matrix_current_ask(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *on;
+
+    DCHECK(el != NULL, "css-transforms-1 §2's current transformation matrix was asked of no element");
+    for (on = el; on != NULL; on = css_parent_element(on))
+        if (!css_tm_element_ask(on)) return false;
+    return true;
 }
 
 CssTransformMatrix css_transform_matrix_current(lxb_dom_element_t *el)
