@@ -1871,20 +1871,33 @@ int flow_path_victim_act(const Flow *f) {
     return 0;
 }
 
+int flow_path_person_act(const Flow *f) {
+    int called;
+
+    DCHECK(f != NULL, "a flow was asked whether a person's act stands on its path, of no flow");
+    if (victim_acts(f) > 0) return 1;
+    if (!f->orphan) return 0;
+    called = f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n;
+    for (int k = 0; k < called; k++)
+        if (f->orphan_acts[k] && !strstr(f->orphan_acts[k], "\"kind\":\"message\"")) return 1;
+    return 0;
+}
+
 FlowPathMarks flow_path_marks(const Flow *f) {
-    FlowPathMarks m = { flow_path_forced(f), f->path_pinned, f->path_peer_driven, f->path_peer_pinned, -1, -1 };
+    FlowPathMarks m = { flow_path_forced(f), f->path_pinned, f->path_peer_driven, f->path_peer_pinned, -1, -1, NULL };
     return m;
 }
 
 int flow_assumed(const Flow *f) {
-    DCHECK(f->assumed_reads >= 0 && f->assumed_slots_n >= 0 && (f->assumed_slots_n == 0) == !f->assumed_slots,
-           "a flow's assumption count is negative, or its slot list and its length disagree");
+    DCHECK(f->assumed_reads >= 0 && f->assumed_slots_n >= 0 && (f->assumed_slots_n == 0) == !f->assumed_slots &&
+           (f->assumed_slots_n == 0) == !f->assumed_slot_names && (f->assumed_reads == 0) == !f->assumed_read_names,
+           "a flow's assumption count is negative, or a slot or name list and its length disagree");
     return f->assumed_reads + f->assumed_slots_n;
 }
 
 int flow_against_env(const Flow *f) {
-    DCHECK(f->env_slots_n >= 0 && (f->env_slots_n == 0) == !f->env_slots,
-           "a flow's env slot list and its length disagree");
+    DCHECK(f->env_slots_n >= 0 && (f->env_slots_n == 0) == !f->env_slots && (f->env_slots_n == 0) == !f->env_slot_names,
+           "a flow's env slot or name list and its length disagree");
     return f->env_slots_n;
 }
 
@@ -1892,20 +1905,73 @@ int flow_against_env(const Flow *f) {
    environment unknown's example. */
 static int flow_priced(const Flow *f) { return flow_assumed(f) + flow_against_env(f); }
 
-/* Appends `slot` to one of a flow's priced slot lists (`*v`, `*n`), which stay ascending because a flow's
-   decisions are consumed in cursor order and a fork's sibling arm is the slot past every one its parent holds. */
-static void flow_slot_push(int **v, int *n, int slot) {
+/* The interned names of priced decisions (flow_priced_name), owned here and released by flow_registry_free. */
+static char **g_priced_names;
+static int g_priced_names_n, g_priced_names_cap;
+
+const char *flow_priced_name(const char *name) {
+    char *c;
+    DCHECK(name != NULL && *name, "a priced decision was named by nothing — a read names its source and a slot its "
+                                  "subject's root, and both are non-empty");
+    for (int i = 0; i < g_priced_names_n; i++) if (!strcmp(g_priced_names[i], name)) return g_priced_names[i];
+    if (g_priced_names_n == g_priced_names_cap) {
+        int nc = g_priced_names_cap ? g_priced_names_cap * 2 : 16;
+        char **g = realloc(g_priced_names, (size_t)nc * sizeof *g);
+        CHECK(g, "flow: OOM interning a priced decision's name");
+        g_priced_names = g; g_priced_names_cap = nc;
+    }
+    c = strdup(name);
+    CHECK(c, "flow: OOM interning a priced decision's name");
+    g_priced_names[g_priced_names_n++] = c;
+    return c;
+}
+
+/* Appends `name` to a name array of length `n` (`*names`), whose count field the caller moves. */
+static void flow_name_push(const char ***names, int n, const char *name) {
+    const char **g;
+    DCHECK(name != NULL, "a priced decision arrived with no name — every producer states its subject");
+    g = realloc(*names, (size_t)(n + 1) * sizeof *g);
+    CHECK(g, "flow: OOM recording a priced decision's name");
+    *names = g;
+    (*names)[n] = name;
+}
+
+/* Appends `slot` and its interned `name` to one of a flow's priced slot lists (`*v`, `*names`, `*n`), which stay
+   ascending because a flow's decisions are consumed in cursor order and a fork's sibling arm is the slot past
+   every one its parent holds. */
+static void flow_slot_push(int **v, const char ***names, int *n, int slot, const char *name) {
     int *g;
     DCHECK(slot >= 0 && (*n == 0 || (*v)[*n - 1] < slot),
            "a priced decision slot arrived below one the flow already holds — slots are taken in cursor order");
     g = realloc(*v, (size_t)(*n + 1) * sizeof *g);
     CHECK(g, "flow: OOM recording a priced decision slot");
     *v = g;
+    flow_name_push(names, *n, name);
     (*v)[(*n)++] = slot;
 }
 
-static void flow_assumed_slot_push(Flow *f, int slot) { flow_slot_push(&f->assumed_slots, &f->assumed_slots_n, slot); }
-static void flow_env_slot_push(Flow *f, int slot) { flow_slot_push(&f->env_slots, &f->env_slots_n, slot); }
+static void flow_assumed_slot_push(Flow *f, int slot, const char *name) {
+    flow_slot_push(&f->assumed_slots, &f->assumed_slot_names, &f->assumed_slots_n, slot, name);
+}
+static void flow_env_slot_push(Flow *f, int slot, const char *name) {
+    flow_slot_push(&f->env_slots, &f->env_slot_names, &f->env_slots_n, slot, name);
+}
+
+/* Copies `src`'s priced reads into `sib`, which holds none: a fork and an arrival on a snapshot inherit them. */
+static void flow_reads_inherit(Flow *sib, const Flow *src) {
+    DCHECK(sib->assumed_reads == 0 && !sib->assumed_read_names, "a flow inherited priced reads twice");
+    for (int i = 0; i < src->assumed_reads; i++) flow_name_push(&sib->assumed_read_names, i, src->assumed_read_names[i]);
+    sib->assumed_reads = src->assumed_reads;
+}
+
+int flow_priced_each(const Flow *f, void (*visit)(FlowPricedKind kind, const char *name, void *ud), void *ud) {
+    int i;
+    DCHECK(f != NULL && visit != NULL, "a flow's priced decisions were enumerated of no flow or with no visitor");
+    for (i = 0; i < f->assumed_reads; i++) visit(FLOW_PRICED_READ, f->assumed_read_names[i], ud);
+    for (i = 0; i < f->assumed_slots_n; i++) visit(FLOW_PRICED_ASSUMED_ARM, f->assumed_slot_names[i], ud);
+    for (i = 0; i < f->env_slots_n; i++) visit(FLOW_PRICED_ENV_ARM, f->env_slot_names[i], ud);
+    return flow_priced(f);
+}
 
 /* A priced count moved: the member stands in the class of its new count at the same code site, which moves no
    service, since the service is the code site's. */
@@ -1914,52 +1980,60 @@ static void flow_priced_moved(Flow *f) {
 }
 
 /* Records `slot` in the running flow's list `*v`/`*n` unless it holds it: a sibling's own fork slot is recorded at
-   the fork and met again at its replay, the only slot that can be. Answers whether the list grew. */
-static int flow_slot_note(int **v, int *n, int slot) {
+   the fork and met again at its replay, the only slot that can be, and it names what its fork named. Answers
+   whether the list grew. */
+static int flow_slot_note(int **v, const char ***names, int *n, int slot, const char *name) {
+    const char *in = flow_priced_name(name);
     if (*n && (*v)[*n - 1] >= slot) {
         DCHECK((*v)[*n - 1] == slot,
                "a replayed slot below the flow's last priced slot was not among them — slots are replayed in "
                "cursor order, so only the sibling's own fork slot can be met again");
+        DCHECKF((*names)[*n - 1] == in,
+                "the sibling's own fork slot was named `%s` at the fork and `%s` at its replay — both read the root "
+                "of the one subject the slot decides", (*names)[*n - 1], in);
         return 0;
     }
-    flow_slot_push(v, n, slot);
+    flow_slot_push(v, names, n, slot, in);
     return 1;
 }
 
-/* Drops the slots at or above `c` from `*v`/`*n`; answers whether any went. */
-static int flow_slot_truncate(int **v, int *n, int c) {
+/* Drops the slots at or above `c` from `*v`/`*names`/`*n`; answers whether any went. */
+static int flow_slot_truncate(int **v, const char ***names, int *n, int c) {
     int k;
     for (k = *n; k > 0 && (*v)[k - 1] >= c; k--) {}
     if (k == *n) return 0;
     *n = k;
-    if (!k) { free(*v); *v = NULL; }
+    if (!k) { free(*v); *v = NULL; free(*names); *names = NULL; }
     return 1;
 }
 
-void flow_note_assumed_read(void) {
-    DCHECK(g_running != NULL, "an assumed read was recorded with no flow running");
-    g_running->assumed_reads++;
-    flow_priced_moved(g_running);
+void flow_note_assumed_read(const char *name) {
+    Flow *f = g_running;
+    DCHECK(f != NULL, "an assumed read was recorded with no flow running");
+    flow_name_push(&f->assumed_read_names, f->assumed_reads, flow_priced_name(name));
+    f->assumed_reads++;
+    flow_priced_moved(f);
 }
 
-void flow_note_assumed_slot(int slot) {
+void flow_note_assumed_slot(int slot, const char *name) {
     Flow *f = g_running;
     DCHECK(f != NULL, "an assumed decision slot was recorded with no flow running");
-    if (flow_slot_note(&f->assumed_slots, &f->assumed_slots_n, slot)) flow_priced_moved(f);
+    if (flow_slot_note(&f->assumed_slots, &f->assumed_slot_names, &f->assumed_slots_n, slot, name))
+        flow_priced_moved(f);
 }
 
-void flow_note_env_slot(int slot) {
+void flow_note_env_slot(int slot, const char *name) {
     Flow *f = g_running;
     DCHECK(f != NULL, "an env decision slot was recorded with no flow running");
-    if (flow_slot_note(&f->env_slots, &f->env_slots_n, slot)) flow_priced_moved(f);
+    if (flow_slot_note(&f->env_slots, &f->env_slot_names, &f->env_slots_n, slot, name)) flow_priced_moved(f);
 }
 
 void flow_priced_truncate(int c) {
     Flow *f = g_running;
     int a, e;
     DCHECK(f != NULL && c >= 0, "a priced-slot truncation was asked with no flow running or below slot 0");
-    a = flow_slot_truncate(&f->assumed_slots, &f->assumed_slots_n, c);
-    e = flow_slot_truncate(&f->env_slots, &f->env_slots_n, c);
+    a = flow_slot_truncate(&f->assumed_slots, &f->assumed_slot_names, &f->assumed_slots_n, c);
+    e = flow_slot_truncate(&f->env_slots, &f->env_slot_names, &f->env_slots_n, c);
     if (a || e) flow_priced_moved(f);
 }
 
@@ -2371,11 +2445,16 @@ void flow_fork_inherit(Flow *sib, const Flow *parent, FlowPathMarks at_branch) {
     DCHECK(at_branch.assumed_slot < 0 || at_branch.env_slot < 0,
            "a fork priced its sibling's one arm twice, as an assumption and as an arm against an environment "
            "unknown — decide.c classifies a subject by its root's declared kind, which is one or the other");
-    sib->assumed_reads = parent->assumed_reads;
-    for (int i = 0; i < parent->assumed_slots_n; i++) flow_assumed_slot_push(sib, parent->assumed_slots[i]);
-    if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot);
-    for (int i = 0; i < parent->env_slots_n; i++) flow_env_slot_push(sib, parent->env_slots[i]);
-    if (at_branch.env_slot >= 0) flow_env_slot_push(sib, at_branch.env_slot);
+    DCHECK((at_branch.assumed_slot >= 0 || at_branch.env_slot >= 0) == (at_branch.priced_name != NULL),
+           "a fork's priced arm and its name disagree — engine_prepare_fork interns the name exactly when decide.c "
+           "prices the sibling's arm");
+    flow_reads_inherit(sib, parent);
+    for (int i = 0; i < parent->assumed_slots_n; i++)
+        flow_assumed_slot_push(sib, parent->assumed_slots[i], parent->assumed_slot_names[i]);
+    if (at_branch.assumed_slot >= 0) flow_assumed_slot_push(sib, at_branch.assumed_slot, at_branch.priced_name);
+    for (int i = 0; i < parent->env_slots_n; i++)
+        flow_env_slot_push(sib, parent->env_slots[i], parent->env_slot_names[i]);
+    if (at_branch.env_slot >= 0) flow_env_slot_push(sib, at_branch.env_slot, at_branch.priced_name);
     /* And the site, the optimism term's operand: the arm stands at its parent's code site, in the family it just
        joined, so both read one service count and the fork moves nothing; in its parent's class unless its own arm
        is priced. The arm's keyless class in the root flow_new minted is freed as the arm leaves it. */
@@ -2654,6 +2733,8 @@ void flow_registry_free(JSContext *ctx) {
 #endif
     }
     free(g_flows); g_flows = NULL; g_flows_cap = 0;
+    for (int i = 0; i < g_priced_names_n; i++) free(g_priced_names[i]);
+    free(g_priced_names); g_priced_names = NULL; g_priced_names_n = g_priced_names_cap = 0;
     /* And the world namespace goes down after the flows: releasing a flow announces the death of its world, and the
        registry is what names that world. Any segment this instance still holds for a peer's world is a foreign
        flow's malloc'd state that nothing else frees and the GC walk never names. */
@@ -2954,9 +3035,10 @@ void flow_arrive_on_snapshot(Flow *sib, const Flow *snap, FlowPathMarks at_cut) 
        the units completed, the path's marks, and the priced decisions, under which it stands at the snapshot's
        code site in its own ledger. */
     sib->visits = snap->visits;
-    sib->assumed_reads = snap->assumed_reads;
-    for (int i = 0; i < snap->assumed_slots_n; i++) flow_assumed_slot_push(sib, snap->assumed_slots[i]);
-    for (int i = 0; i < snap->env_slots_n; i++) flow_env_slot_push(sib, snap->env_slots[i]);
+    flow_reads_inherit(sib, snap);
+    for (int i = 0; i < snap->assumed_slots_n; i++)
+        flow_assumed_slot_push(sib, snap->assumed_slots[i], snap->assumed_slot_names[i]);
+    for (int i = 0; i < snap->env_slots_n; i++) flow_env_slot_push(sib, snap->env_slots[i], snap->env_slot_names[i]);
     flow_site_move(sib, flow_site_for(sib, snap->at->code->kind, snap->at->code->key));
     sib->path_forced = at_cut.forced;
     sib->path_pinned = at_cut.pinned;
@@ -6621,8 +6703,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
         /* The candidate it was verifying: the strings and the target's key are this flow's copies, freed nowhere
            else for a removed flow (the teardown walks the flows still there). */
         free(f->cand_src); free(f->cand_payload); fire_target_clear(&f->fire);
-        free(f->assumed_slots);
-        free(f->env_slots);
+        free(f->assumed_slots); free(f->assumed_slot_names); free(f->assumed_read_names);
+        free(f->env_slots); free(f->env_slot_names);
         for (int k = 0; k < f->cand_dn; k++) { free(f->cand_dsrc[k]); free(f->cand_dval[k]); }
         free(f->cand_dsrc); free(f->cand_dval);
         for (int k = 0; k < f->orphan_chain_n; k++) free(f->orphan_acts[k]);

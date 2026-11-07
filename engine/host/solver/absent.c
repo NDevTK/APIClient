@@ -1591,7 +1591,7 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcol
         break;
     case JS_CONCOLIC_ABSENT_ANSWERS_THROW:
         flow_mark_forced_arm();
-        flow_note_assumed_read();   /* reading past the throw takes the absent name as present */
+        flow_note_assumed_read(src);   /* reading past the throw takes the absent name as present */
         break;
     }
 done:

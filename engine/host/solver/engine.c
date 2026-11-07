@@ -5093,9 +5093,14 @@ int engine_session_forks(void) { return g_sess_forking; }
    and overwriting would leak a decision blob and pin blob nothing names, keeping the frozen decision prefix under
    them alive. A backstop: the two ways to reach it without a consumer crash where they are born. */
 int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable,
-                        const char *site, int assumed_slot, int env_slot) {
+                        const char *site, int assumed_slot, int env_slot, const char *priced_name) {
     Flow *f = flow_running();
     FlowPathMarks marks;
+    const char *pname;
+
+    DCHECK((assumed_slot >= 0 || env_slot >= 0) == (priced_name != NULL),
+           "a fork's priced arm was prepared with no name, or a name with no priced arm");
+    pname = priced_name ? flow_priced_name(priced_name) : NULL;
 
     DCHECK(f != NULL, "a sibling was prepared with no flow running — the blobs would describe no timeline");
     DCHECK(g_sess_forking,
@@ -5118,6 +5123,7 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
             marks = flow_path_marks(f);
             marks.assumed_slot = assumed_slot;
             marks.env_slot = env_slot;
+            marks.priced_name = pname;
             engine_sibling_assemble(ctx, f, NULL, dec_blob, pin_blob, marks);
             return 0;
         }
@@ -5159,6 +5165,7 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
     g_fork_dec = dec_blob; g_fork_pins = pin_blob; g_fork_marks = flow_path_marks(f);
     g_fork_marks.assumed_slot = assumed_slot;
     g_fork_marks.env_slot = env_slot;
+    g_fork_marks.priced_name = pname;
     return 1;
 }
 

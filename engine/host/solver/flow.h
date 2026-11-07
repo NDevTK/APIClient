@@ -548,14 +548,20 @@ typedef struct Flow {
        global or member the session throws at and this flow read past (`assumed_reads`), and the decision slots
        whose arm took such a value as present against its example (`assumed_slots`, ascending slot indices,
        malloc'd and owned). Their sum is flow_assumed, a weight term. Fork-carried; not cold-tier state, since a
-       resumed flow's replay re-reaches each read and slot. */
+       resumed flow's replay re-reaches each read and slot. Each `*_names` array is its count's names, index for
+       index: the source a read took as present, the root a slot's subject names (flow_priced_name interns
+       both, so the arrays are owned and the strings are not). They are what a record states (flow_priced_each)
+       and no weight reads them. */
     int   assumed_reads;
+    const char **assumed_read_names;
     int  *assumed_slots;
+    const char **assumed_slot_names;
     int   assumed_slots_n;
     /* The decision slots whose arm went against the example of an environment unknown (decide.c's
        dec_subject_environment), in `assumed_slots`' form; their count is flow_against_env, priced as an
        assumption is. Fork-carried, not cold-tier state, for the same reason. */
     int  *env_slots;
+    const char **env_slot_names;
     int   env_slots_n;
     /* The document's load stage is not here: a flow reaches several Documents in its agent cluster and each has
        its own readiness, so it lives on each Document (document.c's readiness slot), isolated per flow by the
@@ -1840,7 +1846,7 @@ void  flow_retire_fitness(Flow *f);
 /* A flow's path marks, read at one instant. `assumed_slot` is the decision slot of a fork's sibling arm when that
    arm takes absent application state as present, `env_slot` when it goes against an environment unknown's example
    (decide.c's dec_fork_here), and -1 otherwise; at most one is a slot. */
-typedef struct { int forced, pinned, peer_driven, peer_pinned, assumed_slot, env_slot; } FlowPathMarks;
+typedef struct { int forced, pinned, peer_driven, peer_pinned, assumed_slot, env_slot; const char *priced_name; } FlowPathMarks;
 /* The running flow just took an arm its concrete example contradicts: `path_forced`'s one writer. Idempotent and
    monotone. Not a credit or a charge: a fork is rank-neutral, so it does not bump the frontier generation. */
 void  flow_mark_forced_arm(void);
@@ -1857,16 +1863,27 @@ int   flow_path_forced(const Flow *f);
 FlowPathMarks flow_path_marks(const Flow *f);
 /* How many assumptions `f`'s path rests on: its assumed reads plus its assumed slots. */
 int   flow_assumed(const Flow *f);
-/* The running flow read past an absent global or member the session throws at (absent.c). */
-void  flow_note_assumed_read(void);
+/* The running flow read past an absent global or member the session throws at (absent.c); `name` is the
+   member's source, borrowed. */
+void  flow_note_assumed_read(const char *name);
 /* The running flow's decision slot `slot` took absent application state as present against its example
-   (decide.c, at a replay). Idempotent per slot, since a fork's sibling holds its own arm's slot from the fork. */
-void  flow_note_assumed_slot(int slot);
+   (decide.c, at a replay). Idempotent per slot, since a fork's sibling holds its own arm's slot from the fork.
+   `name` is the subject's root (concolic_root_c), borrowed; a slot met again names what its fork named. */
+void  flow_note_assumed_slot(int slot, const char *name);
+/* The agent's one copy of a priced decision's name, which a flow's name arrays point at: interned so a fork
+   copies pointers, and kept until flow_registry_free. `name` is borrowed and non-NULL. */
+const char *flow_priced_name(const char *name);
+/* What a priced decision of `f`'s path took: an absent name read past its throw, an arm taking absent state as
+   present, or an arm against an environment unknown's example. */
+typedef enum { FLOW_PRICED_READ = 0, FLOW_PRICED_ASSUMED_ARM, FLOW_PRICED_ENV_ARM } FlowPricedKind;
+/* Visits each of `f`'s priced decisions, reads first and then each slot list in slot order, with its kind and
+   name (borrowed, agent-lifetime); answers how many, which equals flow_assumed(f) + flow_against_env(f). */
+int   flow_priced_each(const Flow *f, void (*visit)(FlowPricedKind kind, const char *name, void *ud), void *ud);
 /* How many decisions `f`'s path took against an environment unknown's example: its env slots. */
 int   flow_against_env(const Flow *f);
 /* The running flow's decision slot `slot` went against an environment unknown's example (decide.c, at a replay),
-   idempotent per slot as flow_note_assumed_slot is. */
-void  flow_note_env_slot(int slot);
+   idempotent per slot as flow_note_assumed_slot is, with its name in the same form. */
+void  flow_note_env_slot(int slot, const char *name);
 /* The running flow's decision vector now ends at slot `c` (decide.c's dec_leave_path): its assumed and env slots
    at or above go. */
 void  flow_priced_truncate(int c);
@@ -1896,6 +1913,9 @@ int   flow_attacker_acts_only(const Flow *f);
    body runs as the listener of an act (a click, typing, a drop)? A subset of flow_path_driven; a timeline that
    took a delivery from a driven peer reads 0, since the peer's acts are held in its own instance. */
 int   flow_path_victim_act(const Flow *f);
+/* Does an act a person performs stand on this flow's path: a modelled user act, or a drive member whose act is not
+   a message (a message act is posted by the attacker's page, HTML §9.3.3)? */
+int   flow_path_person_act(const Flow *f);
 /* Charge the running flow for the work a step just burned, in units of work (the reward's currency), after
    the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `work`). A
    flow that leaves the frontier also hands what it burned to the flow that forked it, which prices a fork

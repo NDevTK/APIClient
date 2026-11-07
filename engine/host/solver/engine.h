@@ -231,10 +231,11 @@ void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx));
  * A C body that is neither has no resume point, and this DFAILs naming `site`; the fix is to declare it with
  * JS_CFUNC_STEP_DEF, never to ask less. It does not stash unconditionally, because an unconsumed stash would
  * abort the next fork far from its cause. `asked` is the constraint key, or NULL. `assumed_slot` and `env_slot`
- * are the sibling's priced arm (solver/flow.h's FlowPathMarks). Requires a running flow in a forking session
+ * are the sibling's priced arm (solver/flow.h's FlowPathMarks) and `priced_name` its subject's root, non-NULL
+ * exactly when one of them is a slot. Requires a running flow in a forking session
  * (asserted). */
 int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable,
-                        const char *site, int assumed_slot, int env_slot);
+                        const char *site, int assumed_slot, int env_slot, const char *priced_name);
 
 /* Whether this session forks at all (explore vs verify). The interpreter and step driver read the policy
  * through the flow-control hook table, whose absent `branch`/`outcome` already mean the ordinary arm (-1, or

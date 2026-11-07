@@ -1365,8 +1365,8 @@ static int dec_subject_environment(JSValueConst v) {
    prices it: the sibling replaying its own fork slot, or a resumed flow replaying its path. */
 static void dec_note_priced(JSValueConst subject, int forced_arm, int slot) {
     if (!forced_arm || g_c <= slot) return;
-    if (dec_subject_assumed(subject)) flow_note_assumed_slot(slot);
-    else if (dec_subject_environment(subject)) flow_note_env_slot(slot);
+    if (dec_subject_assumed(subject)) flow_note_assumed_slot(slot, concolic_root_c(subject));
+    else if (dec_subject_environment(subject)) flow_note_env_slot(slot, concolic_root_c(subject));
 }
 
 /* Is an arm over `v` a decision about an input another party sets: does a member of its root declare a
@@ -1409,7 +1409,8 @@ static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, 
     if (key) fork_key_count(key, FORK_ROW_PREDICATE);
     else     fork_key_count(fork_site_name(subject), FORK_ROW_SITE);
     pblob = concolic_pins_suspend();
-    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable, site, assumed_slot, env_slot);
+    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable, site, assumed_slot, env_slot,
+                                  assumed_slot >= 0 || env_slot >= 0 ? concolic_root_c(subject) : NULL);
     /* This flow's own arm, onto the head the freeze emptied, under the question both arms answer, so the sibling
        and every later replay of this path check the slot against what they ask and diverge on a mismatch.
        Named residual. Not covered: one code site with the same subject shape met in swapped order across
