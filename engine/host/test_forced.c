@@ -517,15 +517,16 @@ static int  fixture_cold_moment_met(void);
 static int  fixture_op_asked(void);
 static void fixture_ask_remote_op(JSContext *ctx);
 static void fixture_route_peer_post(JSContext *ctx);
-/* The cross-origin peer posts of the messaging and two-message documents: fixture_provide raises a latch when
-   the page asks `/api/xdready` or `/api/xdmready`, after its handlers are listening, and the exploring
-   session's hook routes each document's posts once. */
-static int  g_xd_ready, g_xd_routed, g_xdm_ready, g_xdm_routed;
+/* The cross-origin peer posts of the messaging, two-message and held-delivery documents: fixture_provide raises a
+   latch when the page asks `/api/xdready`, `/api/xdmready` or `/api/chready`, after its handlers are listening,
+   and the exploring session's hook routes each document's posts once. */
+static int  g_xd_ready, g_xd_routed, g_xdm_ready, g_xdm_routed, g_ch_ready, g_ch_routed;
 /* The sources each routed post mints, written when it is routed and read by the rows; empty before. */
 #define TF_DELIVERY_SRC_CAP 64
 static char g_xd_dsrc[TF_DELIVERY_SRC_CAP], g_xd_osrc[TF_DELIVERY_SRC_CAP];
 static char g_xdm1_dsrc[TF_DELIVERY_SRC_CAP], g_xdm1_osrc[TF_DELIVERY_SRC_CAP];
 static char g_xdm2_dsrc[TF_DELIVERY_SRC_CAP], g_xdm2_osrc[TF_DELIVERY_SRC_CAP];
+static char g_ch_dsrc[TF_DELIVERY_SRC_CAP], g_ch_osrc[TF_DELIVERY_SRC_CAP];
 static void fixture_route_gadget_post(JSContext *ctx);
 
 /* ─── THE ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON: A PAIR, AND A THIRD AT ANOTHER DOOR ───
@@ -1094,6 +1095,7 @@ static int fixture_provide(JSContext *ctx) {
            to that question and free to disagree with it. */
         if (!strcmp(abs, "https://x.test/api/xdready")) g_xd_ready = 1;
         if (!strcmp(abs, "https://x.test/api/xdmready")) g_xdm_ready = 1;
+        if (!strcmp(abs, "https://x.test/api/chready")) g_ch_ready = 1;
         if (tf_replytwice_hold(abs, (const char *const[5]){ method, mode, referrer_policy, referrer, url })) {
             /* Owed, and written by tf_replytwice_pay below once its lag has passed. */
         } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
@@ -1409,6 +1411,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/cutname.h"
 #include "fixture/cutref.h"
 #include "fixture/cutpeer.h"
+#include "fixture/cuthold.h"
 #include "fixture/typedinput.h"
 #include "fixture/closerequest.h"
 #include "fixture/cwmix.h"
@@ -2084,6 +2087,7 @@ TF_DOCS[] = {
     { "cutname", HTML_CUTNAME },
     { "cutref", HTML_CUTREF },
     { "cutpeer", HTML_CUTPEER },
+    { "cuthold", HTML_CUTHOLD },
     { "typedinput", HTML_TYPEDINPUT },
     { "closerequest", HTML_CLOSEREQUEST },
     { "cwmix", HTML_CWMIX },
@@ -19072,6 +19076,33 @@ TF_UNIT void probes_cutsource(const char *js, Probe *tab, int *n) {
     }
 }
 
+/* The rows of the `cuthold` document (fixture/cuthold.h): the markup search over the fragment fires from an arm
+   of the fragment's snapshot, which can only happen if the arm held the peer's post until its replay passed the
+   timer that opens the listener; and an arm delivered a held record where its frozen path did. */
+TF_UNIT void probes_cuthold(const char *js, Probe *tab, int *n) {
+    char hs[1024] = "";
+    int has = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, hs, sizeof hs);
+    const char *fw_why = NULL, *hd_why = NULL;
+    int fw_tt = 1, hd_tt = 1;
+
+    fold_row(&fw_tt, &fw_why, !!strstr(js, "\"/api/ch-recv\""),
+             "NOT REACHED: there is no /api/ch-recv record, so the listener never ran after the timer marked its step");
+    fold_row(&fw_tt, &fw_why, has,
+             "NOT REACHED: no innerHTML @S record carries a source rooted in location.hash");
+    fold_row(&fw_tt, &fw_why, has && s_stage(js, "innerHTML", hs) == S_FIRED,
+             "the innerHTML <- location.hash search behind the peer's post did not fire a PoC");
+    fold_row(&hd_tt, &hd_why, sr_census(js, "armsSeeded") > 0,
+             "NOT REACHED: no candidate was forked off the fragment's snapshot");
+    fold_row(&hd_tt, &hd_why, sr_census(js, "holdsMet") > 0,
+             "no arm delivered a held record where its frozen path did: the peer's post reached the listener at "
+             "the arm's first task boundary, before the timer its path ran first");
+    const Probe rows[] = {
+        { "ch-fired", fw_tt, "'chOut'", SESS_EXPLORE, fw_why },
+        { "ch-held", hd_tt, "chStep", SESS_EXPLORE, hd_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `clobber` document (fixture/clobber.h). */
 TF_UNIT void probes_clobber(const char *js, Probe *tab, int *n) {
     char hs[1024] = "", us[1024] = "";
@@ -26033,6 +26064,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_cutboot(js, probes, &np);
     probes_cutshed(js, probes, &np);
     probes_cutsource(js, probes, &np);
+    probes_cuthold(js, probes, &np);
     probes_typedinput(js, probes, &np);
     probes_closerequest(js, probes, &np);
     probes_cwmix(js, probes, &np);
@@ -27136,6 +27168,10 @@ static void fixture_route_gadget_post(JSContext *ctx) {
         g_xdm_routed = 1;
         fixture_post_from_peer(ctx, "xmpeer", "xdmone", "https://peer.example", g_xdm1_dsrc, g_xdm1_osrc);
         fixture_post_from_peer(ctx, "xmpeer", "<b>xdmtwo</b>", "https://peer.example", g_xdm2_dsrc, g_xdm2_osrc);
+    }
+    if (g_ch_ready && !g_ch_routed) {
+        g_ch_routed = 1;
+        fixture_post_from_peer(ctx, "chpeer", "chgo", "https://peer.example", g_ch_dsrc, g_ch_osrc);
     }
 }
 
