@@ -55,6 +55,31 @@ typedef struct {
     size_t fields, n_fields;
 } WasmSubType;
 
+/* §5.3.9's limits: the address type (i64 when `addr64`), the minimum and an optional maximum. */
+typedef struct {
+    bool addr64;
+    bool has_max;
+    uint64_t min, max;
+} WasmLimits;
+
+typedef enum {
+    WASM_EXTERN_FUNC = 0x00, WASM_EXTERN_TABLE = 0x01, WASM_EXTERN_MEMORY = 0x02, WASM_EXTERN_GLOBAL = 0x03,
+    WASM_EXTERN_TAG = 0x04
+} WasmExternKind;
+
+/* §5.5.5's import: two names, as offsets into the decoded bytes (which a compiled module keeps), and a §5.3.14
+   external type. `index` is a func's or a tag's type index; `type` is a table's element type or a global's value
+   type; `limits` a table's or a memory's; `mutable_` a global's. */
+typedef struct {
+    size_t module_offset, module_size;
+    size_t name_offset, name_size;
+    WasmExternKind kind;
+    uint32_t index;
+    WasmValType type;
+    WasmLimits limits;
+    bool mutable_;
+} WasmImport;
+
 typedef struct {
     WasmSubType *types;
     size_t n_types, cap_types;
@@ -64,6 +89,8 @@ typedef struct {
     size_t n_fields, cap_fields;
     uint32_t *type_indices;
     size_t n_type_indices, cap_type_indices;
+    WasmImport *imports;
+    size_t n_imports, cap_imports;
 } WasmModule;
 
 /* Release every pool. Idempotent. */

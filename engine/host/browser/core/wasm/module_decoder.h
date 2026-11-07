@@ -2,16 +2,17 @@
  * sections, decoded as a step machine over a complete byte sequence.
  *
  * One step reads one production instance: the §5.5.17 preamble, one §5.5.2 section header (with a custom
- * section's name length or a list's count), one code point of a §5.5.3 custom name, or one item of §5.5.4's
- * type section (a §5.3.8 rectype or subtype head, a supertype index, a §5.3.7 composite head, a value type or
- * a field). The caller owns how many steps a rest covers; the whole state is the WasmModuleDecoder.
+ * section's name length or a list's count), one code point of a §5.2.4 name, one item of §5.5.4's type section
+ * (a §5.3.8 rectype or subtype head, a supertype index, a §5.3.7 composite head, a value type or a field), or
+ * one §5.5.5 import's name length or external type. The caller owns how many steps a rest covers; the whole
+ * state is the WasmModuleDecoder.
  * The bytes are input: every malformed encoding is a WasmDecodeStatus refusal, never an assert. A refusal names
  * the production that failed with the reference interpreter's message, which the spec testsuite matches.
  *
- * Named residual. Not covered: the contents of the sections after the type section (§5.5.5-§5.5.16) and
+ * Named residual. Not covered: the contents of the sections after the import section (§5.5.6-§5.5.16) and
  * §5.5.17's function/code and data count agreements; such a section is delimited and not decoded. Next diff
- * builds: §5.5.5's import section, then one section per diff. Absence shows as: a module whose type section and
- * framing are well formed but whose later contents are malformed is answered WASM_DECODE_DONE. */
+ * builds: §5.5.6's function section, then one section per diff. Absence shows as: a module whose type and import
+ * sections and framing are well formed but whose later contents are malformed is answered WASM_DECODE_DONE. */
 #ifndef ENGINE_HOST_BROWSER_CORE_WASM_MODULE_DECODER_H
 #define ENGINE_HOST_BROWSER_CORE_WASM_MODULE_DECODER_H
 
@@ -38,6 +39,9 @@ typedef enum {
     WASM_DECODE_STORAGE_TYPE,         /* §5.3.7: a byte that begins no storage type */
     WASM_DECODE_COMP_TYPE,            /* §5.3.7: a byte that begins no composite type */
     WASM_DECODE_MUTABILITY,           /* §5.3.7: a mut byte other than 0x00 and 0x01 */
+    WASM_DECODE_IMPORT_KIND,          /* §5.3.14: an external type's byte other than 0x00 to 0x04 */
+    WASM_DECODE_LIMITS_FLAGS,         /* §5.3.9: a limits flag byte other than 0x00, 0x01, 0x04 and 0x05 */
+    WASM_DECODE_ZERO_BYTE,            /* §5.3.10: a tag type's first byte is not 0x00 */
     WASM_DECODE_NO_ROOM               /* a list could not be allocated; its size is the input's */
 } WasmDecodeStatus;
 
@@ -66,7 +70,8 @@ typedef struct {
     size_t pos;
     int phase;
     int last_rank;          /* §5.5.17's place of the last non-custom section, 0 before the first */
-    size_t name_end;        /* while a custom name is read: the byte after it */
+    size_t name_end;        /* while a name is read: the byte after it */
+    int name_next;          /* the phase that follows the name */
     size_t section_end;     /* while a section's contents are read: the byte after its len */
     uint32_t items_left;    /* the section's list: items not yet read */
     uint32_t group_left;    /* §5.3.8's current rec group: subtypes not yet read */

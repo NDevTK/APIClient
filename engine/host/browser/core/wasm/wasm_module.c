@@ -13,5 +13,6 @@ void wasm_module_free(WasmModule *m)
     free(m->val_types);
     free(m->fields);
     free(m->type_indices);
+    free(m->imports);
     memset(m, 0, sizeof *m);
 }
