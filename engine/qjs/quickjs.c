@@ -14534,6 +14534,33 @@ JSValue JS_GetPrototypeSlot(JSContext *ctx, JSValueConst obj)
     return proto ? js_dup(JS_MKPTR(JS_TAG_OBJECT, proto)) : JS_NULL;
 }
 
+/* Web IDL §3.9.7 named property visibility algorithm step 4's walk: whether an object of `obj`'s prototype chain,
+   which is not `obj`, has an own property `atom`. 1 or 0 when every link answers [[GetOwnProperty]] and
+   [[GetPrototypeOf]] from its own slots, so asking before step 1 is unobservable; -1 at the first link that does
+   not (a Proxy, a class with its own [[GetOwnProperty]], a computed prototype a walk may not take). Runs no page
+   code. */
+int JS_PrototypeChainHasOwnProperty(JSContext *ctx, JSValueConst obj, JSAtom atom)
+{
+    JSObject *p;
+
+    DCHECK(JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT,
+           "a named property's visibility was asked of a value that is not an object");
+    for (p = JS_VALUE_GET_OBJ(obj);;) {
+        const JSClassExoticMethods *gp = js_exotic_getproto(ctx->rt, p);
+
+        if (gp && !gp->get_prototype_walkable) return -1;
+        p = js_walk_proto(ctx, p);
+        if (!p) return 0;
+        if (p->class_id == JS_CLASS_PROXY) return -1;   /* before is_exotic: a proxy IS exotic */
+        if (p->is_exotic) {
+            const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
+
+            if (em && (em->get_own_property || em->get_own_property_step)) return -1;
+        }
+        if (find_own_property1(p, atom)) return 1;
+    }
+}
+
 JSValue JS_GetPrototype(JSContext *ctx, JSValueConst obj)
 {
     JSValue val;

@@ -40,6 +40,7 @@
 #include "quickjs-step.h"
 #include <stdio.h>
 #include "core/idl_indexed.h"
+#include "core/idl_named.h"   /* Web IDL §3.9.7 named property visibility algorithm steps 4-5 */
 #include "idl_indexed_getters.h"   /* GENERATED — Web IDL §3.7.9 Iterable declarations step 1 */
 
 static JSClassID g_class;
@@ -175,12 +176,15 @@ int idl_indexed_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
         /* §3.9.7's LegacyPlatformObjectGetOwnProperty step 1.2: a SUPPORTED property index, or nothing —
            JS_UNDEFINED past the end is "not a supported property index" and falls through to `return 0`. */
         v = (i < d->length(ctx, obj)) ? d->item(ctx, obj, i) : JS_UNDEFINED;
-    } else if (d->named && atom_is_string(ctx, prop)) {
+    } else if (d->named && atom_is_string(ctx, prop) && !idl_named_hidden_by_prototype(ctx, obj, prop)) {
         /* Step 2. THE STRING TEST IS THE SPEC'S OWN CONDITION, quoted from §3.9.3 [[DefineOwnProperty]] step 2
            where it is written out ("If O supports named properties, O does not implement an interface with the
            [Global] extended attribute, P is a String, and P is not an unforgeable property name of O, then:"):
            a Symbol is never a supported property NAME, and without the test the atom's own DESCRIPTION was
-           what the named getter was handed. */
+           what the named getter was handed.
+           §3.9.7's visibility steps 4-5 are asked before step 1's lookup: no decl's interface has
+           [LegacyOverrideBuiltIns] (DOM's HTMLCollection and NamedNodeMap carry none), and the walk answers
+           from slots alone, so the order is unobservable and a member's own name costs no lookup. */
         const char *s = JS_AtomToCString(ctx, prop);
         if (!s) return -1;
         v = d->named(ctx, obj, s);
@@ -206,10 +210,11 @@ int idl_indexed_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
    PROPERTY INDICES "in ascending numerical order". That is what Object.keys, spread and for-in see, and the
    ascending order is what makes `Object.keys(list)` read like an array's; quickjs merges these with the
    object's ordinary keys, which is steps 4 and 5.
-   STEP 3, THE SUPPORTED PROPERTY NAMES, IS NOT APPENDED, and it is the same missing piece the delete below
-   names: step 3 takes only the names VISIBLE under §3.9.7's named property visibility algorithm, which this
-   file does not have. So `Object.getOwnPropertyNames(el.children)` omits a named property a browser lists,
-   for the two decls that carry a named getter and for no other. */
+   STEP 3, THE SUPPORTED PROPERTY NAMES, IS NOT APPENDED: it lists each supported name §3.9.7's visibility
+   algorithm shows, and for a live collection enumerating them is a walk that rests. The next diff appends them
+   after the indices on the keyed entry's GP_OWNKEYS, filtered by idl_named_hidden_by_prototype. Until then
+   `Object.getOwnPropertyNames(el.children)` omits a named property a browser lists, for the two decls that
+   carry a named getter and for no other. */
 int idl_indexed_own_property_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj,
                                    const IdlIndexedDecl *d)
 {
@@ -303,14 +308,12 @@ int idl_indexed_define_own_property(JSContext *ctx, JSValueConst obj, JSAtom pro
  * the fall-through: it is the same question asked of the same `length`, and a second route to it is what
  * §3.9.1 and §3.9.3 would then be one edit away from disagreeing with.
  *
- * STEP 2, THE NAMED-PROPERTY ARM, IS NOT HERE, and it is the one thing this pair does not answer. It needs
- * §3.9.7's named property visibility algorithm — including the prototype walk that makes `delete coll.item`
- * (the method is on the prototype, so the named property is invisible) a different question from
- * `delete coll.someElementId`. This engine already has that algorithm, written for Storage in
- * core/storage/storage.c, and the diff that answers step 2 is the one that lifts it out to be shared rather
- * than a third copy — the same algorithm §3.9.1's step 2 above is missing, which is why the two are one piece
- * of work and not two. Until then a named property on the two decls that have one (an HTMLCollection's and a
- * NamedNodeMap's) answers `delete` with `true` where a browser answers `false`. */
+ * STEP 2, THE NAMED-PROPERTY ARM, IS NOT HERE. Its prototype walk is core/idl_named.c's, which makes
+ * `delete coll.item` (the method is on the prototype, so the named property is invisible) a different question
+ * from `delete coll.someElementId`; what it lacks is step 1's supported-name lookup, which for a live collection
+ * is a walk that rests. The next diff routes [[Delete]] of a String key through the keyed entry as a step. Until
+ * then a visible named property on the two decls that have one (an HTMLCollection's and a NamedNodeMap's)
+ * answers `delete` with `true` where a browser answers `false`. */
 int idl_indexed_delete_property(JSContext *ctx, JSValueConst obj, JSAtom prop, const IdlIndexedDecl *d)
 {
     uint32_t i;
@@ -417,9 +420,13 @@ static int idl_indexed_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 static JSValue idl_indexed_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
     const IdlIndexedDecl *d = decl_of(obj);
+    uint32_t i;
 
     DCHECK(d != NULL, "an object of the indexed-property class has no decl at a keyed read");
     if (!d->own_step) return JS_UNDEFINED;
+    if (d->named && !JS_AtomIsIndex(ctx, &i, prop) && atom_is_string(ctx, prop) &&
+        idl_named_hidden_by_prototype(ctx, obj, prop))
+        return JS_UNDEFINED;   /* the prototype answers: no walk for a member's own name */
     DCHECK(!has_indexed_setter(d),
            "an indexed interface with a step [[GetOwnProperty]] has an indexed property setter, whose descriptor "
            "is writable where the class's get_own_property_step_flags state it is not");

@@ -1637,6 +1637,9 @@ JS_EXTERN JSValue JS_GetPrototype(JSContext *ctx, JSValueConst val);
 /* The object's own stored prototype link (a new reference, or JS_NULL), never a class's computed answer: what a
    get_prototype hook of a prototype_slot_settable class reads to learn what the page set. */
 JS_EXTERN JSValue JS_GetPrototypeSlot(JSContext *ctx, JSValueConst obj);
+/* Web IDL §3.9.7 named property visibility algorithm step 4: 1 when a prototype of `obj` has an own property
+   `atom`, 0 when none does, -1 when a link answers by its own internal methods and must be asked in spec order. */
+JS_EXTERN int JS_PrototypeChainHasOwnProperty(JSContext *ctx, JSValueConst obj, JSAtom atom);
 JS_EXTERN int JS_GetLength(JSContext *ctx, JSValueConst obj, int64_t *pres);
 JS_EXTERN int JS_SetLength(JSContext *ctx, JSValueConst obj, int64_t len);
 

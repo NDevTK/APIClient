@@ -9,10 +9,10 @@
  * with each other while agreeing with nothing the map holds. That is worse than absence, because it looks
  * like it works.
  *
- * §3.9.7's NAMED PROPERTY VISIBILITY ALGORITHM IS WRITTEN OUT HERE, and it has to be. quickjs consults a
- * class's exotic get_own_property only after the ordinary own-property scan on THIS object misses, which is
- * the algorithm's step 2 — but its steps 4-5 walk the PROTOTYPE CHAIN and refuse a name any prototype has an
- * own property for, and no engine hook does that for us. Storage carries no [LegacyOverrideBuiltIns], so
+ * §3.9.7's NAMED PROPERTY VISIBILITY ALGORITHM IS ASKED HERE (st_named_visible). quickjs consults a class's
+ * exotic get_own_property only after the ordinary own-property scan on THIS object misses, which is the
+ * algorithm's step 2; its steps 4-5 walk the PROTOTYPE CHAIN and refuse a name any prototype has an own
+ * property for, which is core/idl_named.c's walk. Storage carries no [LegacyOverrideBuiltIns], so
  * `length`, `key`, `getItem`, `setItem`, `removeItem`, `clear`, `constructor`, @@toStringTag and everything on
  * Object.prototype are INVISIBLE as named properties: `localStorage.setItem('length','5')` stores the entry
  * and `localStorage.length` still answers the count. Skipping the walk would make it answer "5".
@@ -49,6 +49,7 @@
 #include "core/events/event_target.h"
 #include "core/events/storage_event.h"
 #include "core/idl_args.h"
+#include "core/idl_named.h"   /* Web IDL §3.9.7 named property visibility algorithm steps 4-5 */
 #include "core/idl_slots.h"
 #include "core/realm.h"
 #include "core/storage/storage.h"
@@ -667,11 +668,12 @@ static bool st_atom_is_string(JSContext *ctx, JSAtom a)
  * [LegacyOverrideBuiltIns], so step 3 never fires and the prototype walk of steps 4-5 decides.
  *
  * Step 2 ("if O has an own property named P, then return false") is the engine's: quickjs reaches an exotic
- * get_own_property only after the ordinary own-property scan on this object has missed. Everything else is
- * here. `*pvalue`, when non-NULL and the answer is true, receives the map's value, OWNED. */
+ * get_own_property only after the ordinary own-property scan on this object has missed. Step 1 is here and
+ * steps 4-5 are core/idl_named.c's. `*pvalue`, when non-NULL and the answer is true, receives the map's value,
+ * OWNED. */
 static bool st_named_visible(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValue *pvalue)
 {
-    JSValue slots, map, v = JS_UNDEFINED, proto;
+    JSValue slots, map, v = JS_UNDEFINED;
     bool found;
 
     if (!st_atom_is_string(ctx, prop)) return false;
@@ -682,26 +684,10 @@ static bool st_named_visible(JSContext *ctx, JSValueConst obj, JSAtom prop, JSVa
     JS_FreeValue(ctx, map);
     if (!found) return false;
 
-    /* Steps 4-5: "Let prototype be O.[[GetPrototypeOf]](). While prototype is not null: if prototype is not a
-       named properties object, and prototype has an own property named P, then return false." Storage.prototype
-       is not a named properties object and neither is Object.prototype, so every level counts. The query runs
-       NO page code — an interface prototype's members are data properties and accessors this engine installed
-       — which is what lets it happen inside an exotic hook with no flow base under it. */
-    proto = JS_GetPrototype(ctx, obj);
-    while (JS_IsObject(proto)) {
-        JSValue next;
-        int has = JS_GetOwnPropertyNoUserCode(ctx, NULL, proto, prop);
-
-        if (has != 0) {
-            JS_FreeValue(ctx, proto);
-            JS_FreeValue(ctx, v);
-            return false;
-        }
-        next = JS_GetPrototype(ctx, proto);
-        JS_FreeValue(ctx, proto);
-        proto = next;
+    if (idl_named_hidden_by_prototype(ctx, obj, prop)) {   /* steps 4-5 */
+        JS_FreeValue(ctx, v);
+        return false;
     }
-    JS_FreeValue(ctx, proto);
     if (pvalue) *pvalue = v;
     else JS_FreeValue(ctx, v);
     return true;                                                          /* step 6 */
