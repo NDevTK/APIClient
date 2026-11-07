@@ -1430,6 +1430,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/vrel.h"
 #include "fixture/flexanonbase.h"
 #include "fixture/flexratio.h"
+#include "fixture/rangetext.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2103,6 +2104,7 @@ TF_DOCS[] = {
     { "vrel", HTML_VREL },
     { "flexanonbase", HTML_FLEXANONBASE },
     { "flexratio", HTML_FLEXRATIO },
+    { "rangetext", HTML_RANGETEXT },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19944,6 +19946,36 @@ TF_UNIT void probes_flexratio(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rangetext` document (fixture/rangetext.h): CSSOM View §9's Range text rectangles. */
+TF_UNIT void probes_rangetext(const char *js, Probe *tab, int *n) {
+    const char *rt_why = NULL; int rt_tt = 1;
+    fold_row(&rt_tt, &rt_why, !!strstr(js, "\"/api/rangetext\""),
+             "NOT REACHED: no /api/rangetext record, so the document aborted before its fetch");
+    fold_row(&rt_tt, &rt_why, param_value_is(js, "/api/rangetext", "n", "1") &&
+                              param_value_is(js, "/api/rangetext", "x", "0") &&
+                              param_value_is(js, "/api/rangetext", "y", "0") &&
+                              param_value_is(js, "/api/rangetext", "w", "0") &&
+                              param_value_is(js, "/api/rangetext", "h", "0"),
+             "CSSOM View §9: a range over a whole Text node does not answer one rectangle equal to the content "
+             "area of a span around the same characters");
+    fold_row(&rt_tt, &rt_why, param_value_is(js, "/api/rangetext", "mn", "1") &&
+                              param_value_is(js, "/api/rangetext", "ml", "0") &&
+                              param_value_is(js, "/api/rangetext", "mr", "0") &&
+                              param_value_is(js, "/api/rangetext", "bw", "0"),
+             "CSSOM View §9: a range over code units [1, 3) is not one rectangle from where [0, 1) ends to where "
+             "[2, 3) ends, or its bounding box is not that rectangle");
+    fold_row(&rt_tt, &rt_why, param_value_is(js, "/api/rangetext", "cn", "1") &&
+                              param_value_is(js, "/api/rangetext", "cw", "0") &&
+                              param_value_is(js, "/api/rangetext", "cx", "0") &&
+                              param_value_is(js, "/api/rangetext", "wn", "2"),
+             "CSSOM View §9: a collapsed range is not one zero-width rectangle where the next character starts, "
+             "or a range over text on two lines does not answer two rectangles");
+    const Probe rows[] = {
+        { "range-text-rects", rt_tt, "/api/rangetext", SESS_EXPLORE, rt_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25947,6 +25979,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_vrel(js, probes, &np);
     probes_flexanonbase(js, probes, &np);
     probes_flexratio(js, probes, &np);
+    probes_rangetext(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
