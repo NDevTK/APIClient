@@ -11959,7 +11959,7 @@ char *engine_sale_census_json(void) {
         "\"coro\":%.0f,\"maps\":%.0f,\"hostBytes\":%.0f,\"privObjs\":%.0f,\"privBytes\":%.0f,\"privStrBytes\":%.0f,"
         "\"sharedBorn\":%.0f,\"baseline\":%.0f,\"bytecode\":%.0f,\"coroSlots\":%.0f,\"tramp\":%.0f,\"parks\":%.0f,"
         "\"domHead\":%.0f,\"domChain\":%.0f,\"domSegs\":%.0f,\"domStr\":%.0f,\"domNodes\":%.0f,\"domText\":%.0f,"
-        "\"liveGen0Objs\":%ld,\"liveGen0Bytes\":%ld,\"liveBornObjs\":%ld,\"liveBornBytes\":%ld,\"states\":[",
+        "\"liveGen0Objs\":%ld,\"liveGen0Bytes\":%ld,\"liveBornObjs\":%ld,\"liveBornBytes\":%ld,\"states\":{",
         g_sale_census.n, g_sale_census.framed, g_sale_census.work, g_sale_census.full, g_sale_census.own,
         g_sale_census.work_max, g_sale_census.full_max, g_sale_census.own_max, g_sale_census.heap_head,
         g_sale_census.heap_chain, g_sale_census.heap_segs, g_sale_census.slots, g_sale_census.cells,
@@ -11969,9 +11969,9 @@ char *engine_sale_census_json(void) {
         g_sale_census.dom_head, g_sale_census.dom_chain, g_sale_census.dom_segs, g_sale_census.dom_str,
         g_sale_census.dom_nodes, g_sale_census.dom_text, g0o, g0b, bo, bb);
     for (int k = 0; k < cow_state_kind_count(); k++)
-        n += snprintf(b + n, cap - (size_t)n, "%s{\"%s\":%.0f}", k ? "," : "", cow_state_kind_name(k),
+        n += snprintf(b + n, cap - (size_t)n, "%s\"%s\":%.0f", k ? "," : "", cow_state_kind_name(k),
                       g_sale_census.states[k]);
-    n += snprintf(b + n, cap - (size_t)n, "],\"domKinds\":[");
+    n += snprintf(b + n, cap - (size_t)n, "},\"domKinds\":[");
     for (int k = 0; k < 9; k++) n += snprintf(b + n, cap - (size_t)n, "%s%.0f", k ? "," : "", g_sale_census.dom_kinds[k]);
     n += snprintf(b + n, cap - (size_t)n, "],");
     n += sale_hist_json(b + n, cap - (size_t)n, "hWork", g_sale_census.h_work);
