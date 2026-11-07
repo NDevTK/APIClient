@@ -2734,15 +2734,18 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     int reached = gf && !off_park ? act_list_drivable(gf) && !gf->path_peer_driven : !driven;
     int victim_act = gf && !off_park ? flow_path_victim_act(gf) : 0;
     /* The same rule over each piece the request carries: the address, each header and the body.
-       Named residual. Not covered: a body's byte spans, whose capture keeps a shape and no root, and an
-       XMLHttpRequest's author headers and body, which that component stores as strings. Next diff builds: a root
-       on core/fetch/body.h's BodySpan and on the XHR author header list. Absence shows as: a record whose body
-       span or XHR header spells a declared attacker source and whose `attackerRooted` is false. */
+       An XMLHttpRequest body's byte spans are that component's own residual at its record site (its body slot
+       holds a String, so no span reaches here). */
     DCHECK(!body || !body->root || body->kind == EPB_SHAPE, "a body's root was stated for bytes that are not an "
                                                             "unknown's display shape");
     unsigned char *hdr_atk = reclaim_calloc((size_t)(nhdrs > 0 ? nhdrs : 1), 1);
     int atk_addr = aroot != NULL && reached && concolic_root_delivered_any(aroot);
-    int atk_body = body && body->root && reached && concolic_root_delivered_any(body->root);
+    /* A body's piece is its unknown (a shape body) or, for bytes, the first span an attacker source roots. */
+    const char *body_root = body && body->root && concolic_root_delivered_any(body->root) ? body->root : NULL;
+
+    for (int k = 0; body && !body_root && k < body->nspan; k++)
+        if (body->span[k].root && concolic_root_delivered_any(body->span[k].root)) body_root = body->span[k].root;
+    int atk_body = reached && body_root != NULL;
     int atk = atk_addr || atk_body;
 
     CHECK(hdr_atk != NULL, "endpoint: OOM recording which headers an attacker source roots");
@@ -2757,7 +2760,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 
     for (int i = 0; !vroot && i < nhdrs; i++)
         if (hdr_atk[i]) { vroot = hdrs[i].root; vheader = hdrs[i].name; vpiece = WIT_VPIECE_HEADER; }
-    if (!vroot && atk_body) { vroot = body->root; vpiece = WIT_VPIECE_BODY; }
+    if (!vroot && atk_body) { vroot = body_root; vpiece = WIT_VPIECE_BODY; }
     DCHECK(!atk_addr || acls != EPA_CONCRETE,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
@@ -2795,7 +2798,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         CHECK(mroots, "endpoint: OOM collecting a sighting's marking roots");
         if (atk_addr) mroots[nm++] = aroot;
         for (int i = 0; i < nhdrs; i++) if (hdr_atk[i]) mroots[nm++] = hdrs[i].root;
-        if (atk_body) mroots[nm++] = body->root;
+        if (atk_body) mroots[nm++] = body_root;
         DCHECK((nm > 0) == !!atk, "a sighting's marking pieces and its mark disagree");
         endpoint_sight_now(ctx, &sight, url, mroots, nm, creds, gf && !off_park);
         free(mroots);
@@ -2855,7 +2858,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                here may disagree about the class. The delivery root moves with the class on this line and nowhere
                else, so the two are always one sighting's. */
             if (atk) endpoint_mark_attacker_rooted(&g_eps[i], atk_addr ? aroot : NULL, hdrs, nhdrs, hdr_atk,
-                                                   atk_body ? body->root : NULL, victim_act);
+                                                   atk_body ? body_root : NULL, victim_act);
             endpoint_sight_merge(&g_eps[i], &sight);
             if (acls > g_eps[i].addr_class) {
                 g_eps[i].addr_class = acls;
@@ -2904,7 +2907,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        sighting's fact (see the struct); the `done:` arm frees this local only where no record took it. NULL is the
        value's own answer, never a declined allocation (the CHECK at the read). */
     if (atk) endpoint_mark_attacker_rooted(e, atk_addr ? aroot : NULL, hdrs, nhdrs, hdr_atk,
-                                           atk_body ? body->root : NULL, victim_act);
+                                           atk_body ? body_root : NULL, victim_act);
     endpoint_sight_merge(e, &sight);
     e->addr_root = aroot; aroot = NULL;
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because

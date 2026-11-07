@@ -74,7 +74,8 @@ typedef enum {
    unknown had none, which states that nobody knows those bytes and is never a hole for a default. Spans are
    sorted and disjoint (asserted), and each becomes a body param named `body[off:end]`. Borrowed for the
    call. */
-typedef struct { size_t off, len; const char *shape, *example; } EndpointBodySpan;
+/* `root` is the span's unknown's delivery root, NULL for none. */
+typedef struct { size_t off, len; const char *shape, *example, *root; } EndpointBodySpan;
 
 /* `root` is the delivery root of an EPB_SHAPE body's unknown, NULL for every other kind. */
 typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;

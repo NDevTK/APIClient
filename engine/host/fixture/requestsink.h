@@ -4,7 +4,8 @@
    fetch whose path a query value extends, a POST whose header and body query values supply, an uncredentialed
    GET to another origin, an uncredentialed GET whose origin the page pins, and a DELETE the page sends only
    from its own button's click listener carry the security-relevant mark, the last stating that a victim act
-   stands on its path. Two stay plain API records: a fetch in a function the page never calls (reached only by
+   stands on its path. So do an XMLHttpRequest whose header and body a query value supplies, and a POST whose
+   body bytes the page writes from a query value's character code. Two stay plain API records: a fetch in a function the page never calls (reached only by
    a drive), and a credentialed fetch rooted in stored state.
    Exploring documents of test_forced.c (its TF_DOCS table); each ends with TF_CANVAS_INK. */
 #ifndef ENGINE_HOST_FIXTURE_REQUESTSINK_H
@@ -30,6 +31,19 @@ static const char HTML_REQUESTSINK[] =
     "var rqP = rqQ.get('p');"
     "if (rqP !== null) fetch(location.origin + '/api/rq-pinned?x=' + encodeURIComponent(rqP), { credentials: 'omit' });"
     "function rqNeverCalled() { var o = rqQ.get('o'); if (o !== null) fetch('/api/rq-orphan/' + o); }"
+    "var rqX = rqQ.get('x');"
+    "if (rqX !== null) {"
+    "  var rqXhr = new XMLHttpRequest();"
+    "  rqXhr.open('POST', '/api/rq-xhr');"
+    "  rqXhr.setRequestHeader('X-Rq', rqX);"
+    "  rqXhr.send(rqX);"
+    "}"
+    "var rqY = rqQ.get('y');"
+    "if (rqY !== null) {"
+    "  var rqBytes = new Uint8Array(1);"
+    "  rqBytes[0] = rqY.charCodeAt(0);"
+    "  fetch('/api/rq-bytes', { method: 'POST', body: rqBytes });"
+    "}"
     "var rqStored = localStorage.getItem('rqk');"
     "if (rqStored !== null) fetch('/api/rq-store?k=' + encodeURIComponent(rqStored));"
     "document.getElementById('rqGoBtn').addEventListener('click', function () {"

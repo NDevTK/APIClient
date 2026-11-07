@@ -75,7 +75,7 @@ static int g_body_iface_n;
 
 /* …AND WHAT ONE SPAN OWNS, for the same reason: the element visit and the finalizer's loop walk this one list.
    Both are `char *` and neither carries a length, which is why the visit reads one off the string. */
-#define BODY_SPAN_OWNED(STR) STR(shape) STR(example)
+#define BODY_SPAN_OWNED(STR) STR(shape) STR(example) STR(root)
 
 /* ONE SPAN'S OWN TWO STRINGS, declared to whichever consumer `v->array` is driving.
    THE LENGTH IS READ OFF THE STRING ITSELF, because `v->buf` copies a block of a STATED size and a span's
@@ -252,6 +252,12 @@ static void body_spans_capture(JSContext *ctx, BodyState *b, JSValueConst src)
             s->shape = js_strdup(ctx, shape);
             CHECK(s->shape != NULL, "body: OOM copying the provenance of an unknown byte of a request body");
             s->example = len == 1 ? body_span_example_text(ctx, el) : NULL;
+            {
+                const char *root = concolic_root_c(el);
+
+                s->root = root ? js_strdup(ctx, root) : NULL;
+                CHECK(!root || s->root, "body: OOM copying the root of an unknown byte of a request body");
+            }
         }
         JS_FreeValue(ctx, el);
     }
@@ -427,6 +433,8 @@ int body_state_copy(JSContext *ctx, BodyState *dst, const BodyState *src)
             s->example = src->span[i].example ? reclaim_strdup(src->span[i].example) : NULL;
             CHECK(!src->span[i].example || s->example != NULL,
                   "body: OOM copying the example of an unknown byte of a body");
+            s->root = src->span[i].root ? reclaim_strdup(src->span[i].root) : NULL;
+            CHECK(!src->span[i].root || s->root != NULL, "body: OOM copying the root of an unknown byte of a body");
         }
         return 0;
     }

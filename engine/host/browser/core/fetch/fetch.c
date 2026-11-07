@@ -2620,6 +2620,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                     espan[k].len = bs[k].len;
                     espan[k].shape = bs[k].shape;
                     espan[k].example = bs[k].example;
+                    espan[k].root = bs[k].root;
                 }
             }
             eb.span = espan;

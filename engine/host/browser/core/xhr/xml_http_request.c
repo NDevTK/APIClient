@@ -117,8 +117,12 @@ typedef struct {
        input must reach that surface the same way or the endpoint is a hole with no value in it. JS_NULL where
        open() was handed a plain string — a POSITIVE statement (this address is exactly what `url` says). */
     JSValue url_src;
-    JSValue author_headers;    /* author request headers — an Array of [name, value] */
+    /* author request headers — an Array of [name, value] or [name, value, root], `root` the delivery root of the
+       unknown whose shape `value` is (solver/concolic.h's concolic_root_c), the first one a combine kept */
+    JSValue author_headers;
     JSValue request_body;      /* request body — a JS string, or JS_NULL */
+    /* the delivery root of the unknown a shape body (`request_body_is_shape`) spells, a JS string, else JS_NULL */
+    JSValue request_body_root;
     /* …AND WHETHER THOSE CHARACTERS ARE THE BODY OR A SPELLING OF ONE. The slot above is declared a JS string
        because §3.5.6 step 4's extraction is resolved to bytes here, and for a body built out of unknown
        external input there are no bytes: what lands in it is core/fetch/body.h's DISPLAY SHAPE. The two are
@@ -213,7 +217,8 @@ static int g_run_stepid = -1;      /* the fetch/response lifecycle machine, mint
    the same list the finalizer frees and the gc_mark walks. */
 #define XO(f) (uint16_t)offsetof(XhrData, f)
 static const uint16_t XHR_VALS[] = {
-    XO(upload), XO(method), XO(url), XO(url_src), XO(author_headers), XO(request_body), XO(override_mime),
+    XO(upload), XO(method), XO(url), XO(url_src), XO(author_headers), XO(request_body), XO(request_body_root),
+    XO(override_mime),
     XO(response_headers), XO(status_text), XO(response_url), XO(received), XO(response_object),
 };
 static const CowRecord XHR_REC = { sizeof(XhrData), XHR_VALS, (int)(sizeof(XHR_VALS) / sizeof(XHR_VALS[0])) };
@@ -455,13 +460,14 @@ static int hl_find(JSContext *ctx, JSValueConst arr, const char *name)
     return -1;
 }
 
-static void hl_push(JSContext *ctx, JSValueConst arr, const char *name, const char *value)
+static void hl_push(JSContext *ctx, JSValueConst arr, const char *name, const char *value, const char *root)
 {
     JSValue pair = JS_NewArray(ctx);
 
     if (JS_IsException(pair)) return;
     JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, name));
     JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, value));
+    if (root) JS_SetPropertyUint32(ctx, pair, 2, JS_NewString(ctx, root));
     JS_SetPropertyUint32(ctx, (JSValue)arr, hl_len(ctx, arr), pair);
 }
 
@@ -497,15 +503,18 @@ static char *hl_get(JSContext *ctx, JSValueConst arr, const char *name)
 /* §5.1 "combine (name, value)": if the list already contains an entry with this name, append `, value` to the
    FIRST one; otherwise append the pair. §3.5.2's example — X-Test: one then two arriving as `one, two` — is
    this operation and nothing else. */
-static void hl_combine(JSContext *ctx, JSValueConst arr, const char *name, const char *value)
+static void hl_combine(JSContext *ctx, JSValueConst arr, const char *name, const char *value, const char *root)
 {
     int at = hl_find(ctx, arr, name);
-    JSValue pair, vv;
+    JSValue pair, vv, rv;
     const char *old;
     char *joined;
 
-    if (at < 0) { hl_push(ctx, arr, name, value); return; }
+    if (at < 0) { hl_push(ctx, arr, name, value, root); return; }
     pair = JS_GetPropertyUint32(ctx, arr, (uint32_t)at);
+    rv = JS_GetPropertyUint32(ctx, pair, 2);
+    if (root && JS_IsUndefined(rv)) JS_SetPropertyUint32(ctx, pair, 2, JS_NewString(ctx, root));
+    JS_FreeValue(ctx, rv);
     vv = JS_GetPropertyUint32(ctx, pair, 1);
     old = JS_ToCString(ctx, vv);
     if (old) {
@@ -526,9 +535,10 @@ static void hl_set(JSContext *ctx, JSValueConst arr, const char *name, const cha
     int at = hl_find(ctx, arr, name);
     JSValue pair;
 
-    if (at < 0) { hl_push(ctx, arr, name, value); return; }
+    if (at < 0) { hl_push(ctx, arr, name, value, NULL); return; }
     pair = JS_GetPropertyUint32(ctx, arr, (uint32_t)at);
     JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, value));
+    JS_SetPropertyUint32(ctx, pair, 2, JS_UNDEFINED);   /* the value set is bytes this engine wrote: no root */
     JS_FreeValue(ctx, pair);
 }
 
@@ -735,6 +745,7 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     d->send_invoked = 0;
     xhr_set(ctx, d, &d->author_headers, JS_NewArray(ctx));
     xhr_set(ctx, d, &d->request_body, JS_NULL);
+    xhr_set(ctx, d, &d->request_body_root, JS_NULL);
     d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
     d->request_prov = -1;           /* …and the grade goes with the request it is about */
     d->request_pinned = -1;         /* …as does the witness mark composed beside it */
@@ -1190,7 +1201,8 @@ static JSValue js_xhr_set_request_header(JSContext *ctx, JSValueConst this_val, 
         lower[i] = (name[i] >= 'A' && name[i] <= 'Z') ? (char)(name[i] - 'A' + 'a') : name[i];
     lower[name_len] = 0;
     if (!header_forbidden_request(lower, norm))
-        hl_combine(ctx, d->author_headers, name, norm);   /* step 6 */
+        hl_combine(ctx, d->author_headers, name, norm,
+                   concolic_is(argv[1]) ? concolic_root_c(argv[1]) : NULL);   /* step 6 */
     free(lower);
     free(norm);
     JS_FreeCString(ctx, name);
@@ -2449,7 +2461,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
 {
     uint32_t n = hl_len(ctx, d->author_headers), i;
     EndpointHeader *eh = NULL;
-    const char **owned = NULL;   /* the 2n cstrings borrowed for the call, freed together after it */
+    const char **owned = NULL;   /* the 3n cstrings (name, value, root) borrowed for the call, freed after it */
     EndpointBody eb;
     const EndpointBody *ebp = NULL;
     const char *method;
@@ -2476,18 +2488,20 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
                           "endpoint is a hole in the frontier");
     if (n) {
         eh = js_malloc(ctx, sizeof(*eh) * (size_t)n);
-        owned = js_malloc(ctx, sizeof(*owned) * (size_t)n * 2);
+        owned = js_malloc(ctx, sizeof(*owned) * (size_t)n * 3);
         CHECK(eh != NULL && owned != NULL, "XMLHttpRequest: OOM projecting the author headers onto the @H "
                                            "surface — a dropped endpoint is a hole in the frontier");
         for (i = 0; i < n; i++) {
             JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);
             JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
-            owned[i * 2] = JS_ToCString(ctx, nv);
-            owned[i * 2 + 1] = JS_ToCString(ctx, vv);
-            eh[i].name = owned[i * 2] ? owned[i * 2] : "";
-            eh[i].value = owned[i * 2 + 1] ? owned[i * 2 + 1] : "";
-            eh[i].root = NULL;   /* the author header list holds strings (solver/endpoint.c's residual) */
-            JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
+            JSValue rv = JS_GetPropertyUint32(ctx, pair, 2);
+            owned[i * 3] = JS_ToCString(ctx, nv);
+            owned[i * 3 + 1] = JS_ToCString(ctx, vv);
+            owned[i * 3 + 2] = JS_IsUndefined(rv) ? NULL : JS_ToCString(ctx, rv);
+            eh[i].name = owned[i * 3] ? owned[i * 3] : "";
+            eh[i].value = owned[i * 3 + 1] ? owned[i * 3 + 1] : "";
+            eh[i].root = owned[i * 3 + 2];
+            JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, rv); JS_FreeValue(ctx, pair);
         }
     }
     if (!JS_IsNull(d->request_body)) {
@@ -2511,7 +2525,9 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
             /* §3.5.6 step 4's arm, carried from the extraction rather than re-derived from the characters —
                which cannot be done, since a display shape and a body that spells one are the same bytes. */
             eb.kind = d->request_body_is_shape ? EPB_SHAPE : EPB_SENT;
-            eb.root = NULL;   /* the body slot holds a string (solver/endpoint.c's residual) */
+            /* The unknown's root the store site carried beside the arm, borrowed for the call. */
+            eb.root = d->request_body_is_shape && JS_IsString(d->request_body_root)
+                    ? JS_ToCString(ctx, d->request_body_root) : NULL;
             /* AND NO SPAN RECORD, STATED RATHER THAN LEFT UNWRITTEN — `eb` is declared field by field, so a
                member nobody assigns is read out of whatever the stack held, and a count with no array is the
                half-record solver/endpoint.c's own assert refuses. This is a POSITIVE statement and not a
@@ -2556,9 +2572,10 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
     endpoint_record(ctx, method, xhr_request_address(d), eh, (int)n, ebp,
                     xhr_request_prov(d), xhr_request_driven(d), EPD_XHR, xhr_credentials_mode(d));
     if (body) JS_FreeCString(ctx, body);
+    if (ebp && ebp->root) JS_FreeCString(ctx, ebp->root);
     free(body_ct);
     if (owned) {
-        for (i = 0; i < n * 2; i++) if (owned[i]) JS_FreeCString(ctx, owned[i]);
+        for (i = 0; i < n * 3; i++) if (owned[i]) JS_FreeCString(ctx, owned[i]);
         js_free(ctx, owned);
     }
     js_free(ctx, eh);
@@ -3496,6 +3513,7 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
         xhr_set(ctx, d, &d->request_body, JS_NULL);
+        xhr_set(ctx, d, &d->request_body_root, JS_NULL);
         d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
         s->body_len = 0;
         if (!JS_IsNull(s->body) && !JS_IsUndefined(s->body)) {
@@ -3528,6 +3546,11 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
                whether these characters are the body or a spelling of it, and this is where that is known. */
             d->request_body_is_shape = (body_state_content(&b, &bbytes, &blen) == BODY_SHAPE);
             xhr_set(ctx, d, &d->request_body, JS_NewStringLen(ctx, bbytes ? bbytes : "", blen));
+            {
+                const char *root = d->request_body_is_shape ? concolic_root_c(b.unknown) : NULL;
+
+                xhr_set(ctx, d, &d->request_body_root, root ? JS_NewString(ctx, root) : JS_NULL);
+            }
             s->body_len = (double)blen;
             body_state_free(JS_GetRuntime(ctx), &b);
             /* Step 4's Content-Type: the author's own wins, and only an absent one takes the extracted type. */
@@ -3799,7 +3822,8 @@ static int js_xhr_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        value to release and no collector can walk one; xhr_set here would free whatever calloc's zeroes decode
        to. Every assignment AFTER this function is a write and goes through xhr_set. */
     d->upload = upload;
-    d->method = d->url = d->url_src = d->request_body = d->override_mime = d->response_object = JS_NULL;
+    d->method = d->url = d->url_src = d->request_body = d->request_body_root = d->override_mime =
+        d->response_object = JS_NULL;
     d->author_headers = JS_NewArray(ctx);
     d->response_headers = JS_NewArray(ctx);
     d->status_text = JS_NewString(ctx, "");

@@ -74,6 +74,7 @@ typedef struct {
     size_t len;        /* bytes covered — the element's width */
     char  *shape;      /* the unknown's display shape; never NULL */
     char  *example;    /* the unknown's own example as text, or NULL where it has none */
+    char  *root;       /* the unknown's delivery root (solver/concolic.h's concolic_root_c), or NULL for none */
 } BodySpan;
 
 /* `spancap` IS THE SPAN ARRAY'S STORAGE, BESIDE THE `nspan` THAT IS ITS CONTENT, and the pair exists because
