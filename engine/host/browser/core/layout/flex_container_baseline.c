@@ -18,16 +18,34 @@
 #include "core/layout/layout_job.h"
 #include "core/layout/used_value.h"
 
-/* The element of member `m`, which gives the container its baseline; §4's anonymous item is refused by name. */
-static lxb_dom_element_t *fcb_element(lxb_dom_element_t *container, const FlexLineMember *m)
+/* The element of element member `m`. */
+static lxb_dom_element_t *fcb_element(const FlexLineMember *m)
 {
-    char buf[160];
-
-    if (m->anonymous)
-        DFAILF("%s: css-flexbox-1 §8.5 takes the container's baseline from §4's anonymous item around its text, "
-               "whose position core/layout/flex_position.h does not answer. BUILD that item's placement",
-               box_subject(container, buf, sizeof buf));
+    DCHECK(!m->anonymous, "css-flexbox-1 §8.5 read an element off §4's anonymous item, which has none");
     return lxb_dom_interface_element(m->first);
+}
+
+/* css-flexbox-1 §8.5's baseline set from member `m`, as its distance from `container`'s content-box top: an
+   element item's first baseline, synthesized from its border box where it has none (css-align-3 §9.1), or §4's
+   anonymous item's first line box's, which it always holds (flex_cross_size.h). Its operands are asked here. */
+static bool fcb_member_baseline_ask(lxb_dom_element_t *container, const FlexLineMember *m, CssPx *out)
+{
+    lxb_dom_element_t *item;
+    bool item_has = false;
+    CssPx b = css_px(0.0), x, y, w, h, last;
+
+    if (m->anonymous) {
+        if (!flex_position_operands_ask(container)) return false;
+        flex_position_anonymous_box(container, m->first, &x, &y, &w, &h);
+        (void)flex_cross_size_anonymous_lines(container, m, &b, &last);
+        *out = css_px_add(y, b);
+        return true;
+    }
+    item = fcb_element(m);
+    if (!box_first_baseline_ask(item, &item_has, &b) || !flex_position_operands_ask(container)) return false;
+    flex_position_item_offset(container, item, &x, &y);
+    *out = css_px_add(y, item_has ? b : used_value_border_edge_px(item, true));
+    return true;
 }
 
 /* The startmost item of a single-line `column` container: the first in order-modified document order, which
@@ -52,9 +70,9 @@ static lxb_dom_element_t *fcb_column_startmost(lxb_dom_element_t *container)
         }
         if (best != NULL && order >= best_order) continue;
         if (kind == FLEX_ITEM_CHILD_TEXT)
-            DFAILF("%s: css-flexbox-1 §8.5 takes the container's baseline from §4's anonymous item around its "
-                   "text, whose position core/layout/flex_position.h does not answer. BUILD that item's placement",
-                   box_subject(container, buf, sizeof buf));
+            DFAILF("%s: css-flexbox-1 §8.5 takes a `column` container's baseline from §4's anonymous item around "
+                   "its text, which core/layout/flex_position.h places only in a `row` container. BUILD its column "
+                   "placement", box_subject(container, buf, sizeof buf));
         best = lxb_dom_interface_element(node);
         best_order = order;
     }
@@ -81,11 +99,9 @@ static bool fcb_cross_axis_ask(lxb_dom_element_t *container, bool *has, CssPx *o
 
 bool flex_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, CssPx *out)
 {
-    FlexLineMember *m = NULL;
+    FlexLineMember *m = NULL, chosen;
     size_t n, i, pick = SIZE_MAX;
     lxb_dom_element_t *item = NULL;
-    bool item_has = false;
-    CssPx b = css_px(0.0), x, y;
     char buf[160];
 
     DCHECK(container != NULL && has != NULL && out != NULL,
@@ -107,7 +123,10 @@ bool flex_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
        group shares one baseline, so its first member's position and baseline give it. */
     for (i = 0; i < n && m[i].line == 0; i++) {
         if (!flex_baseline_participates(container, &m[i])) continue;
-        item = fcb_element(container, &m[i]);
+        if (m[i].anonymous)
+            DFAILF("%s: §4's anonymous item is in baseline alignment, whose placement core/layout/flex_position.h "
+                   "refuses. BUILD its baseline-aligned placement", box_subject(container, buf, sizeof buf));
+        item = fcb_element(&m[i]);
         if (flex_cross_size_resolved_align(container, item).baseline == CSS_KEYWORD_LAST)
             DFAILF("%s is in last-baseline alignment, whose shared baseline css-flexbox-1 §8.5's second step "
                    "takes. BUILD the last baseline set", box_subject(item, buf, sizeof buf));
@@ -121,12 +140,9 @@ bool flex_container_first_baseline_ask(lxb_dom_element_t *container, bool *has, 
        container's baseline at the empty item's border-box bottom in that browser. A flex item synthesizes from
        its border edges (css-align-3 §9.1), the alphabetic baseline from the line-under edge. */
     if (pick == SIZE_MAX) pick = 0;
-    item = fcb_element(container, &m[pick]);
+    chosen = m[pick];
     free(m);
-    if (!box_first_baseline_ask(item, &item_has, &b) || !flex_position_operands_ask(container)) return false;
-    flex_position_item_offset(container, item, &x, &y);
-    *out = css_px_add(y, item_has ? b : used_value_border_edge_px(item, true));
-    return true;
+    return fcb_member_baseline_ask(container, &chosen, out);
 }
 
 bool flex_container_first_baseline(lxb_dom_element_t *container, CssPx *out)
