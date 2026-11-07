@@ -1579,6 +1579,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxprefix.h"
 #include "fixture/rxtest.h"
 #include "fixture/uriclass.h"
+#include "fixture/slicelen.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2283,6 +2284,7 @@ TF_DOCS[] = {
     { "rxprefix", HTML_RXPREFIX },
     { "rxtest", HTML_RXTEST },
     { "uriclass", HTML_URICLASS },
+    { "slicelen", HTML_SLICELEN },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -18135,6 +18137,31 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `slicelen` document (fixture/slicelen.h): a slice from a String's own length is empty in every
+   world, and one from short of it is not decided. */
+TF_UNIT void probes_slicelen(const char *js, Probe *tab, int *n) {
+    const char *o_why = NULL, *h_why = NULL, *l_why = NULL;
+    int o_tt = 1, h_tt = 1, l_tt = 1;
+
+    fold_row(&o_tt, &o_why, !!strstr(js, "\"/api/sl-own-empty\""),
+             "there is no /api/sl-own-empty record: a slice from the String's own length was not empty");
+    fold_row(&o_tt, &o_why, !strstr(js, "/api/sl-own-nonempty"),
+             "/api/sl-own-nonempty is in the document: `s.slice(s.length)` was answered as possibly non-empty");
+    fold_row(&h_tt, &h_why, !!strstr(js, "\"/api/sl-head-empty\""),
+             "there is no /api/sl-head-empty record: a slice from the unchanged replace's length was not empty");
+    fold_row(&h_tt, &h_why, !strstr(js, "/api/sl-head-nonempty"),
+             "/api/sl-head-nonempty is in the document: a slice from the length of the replace that returned "
+             "its receiver was answered as possibly non-empty");
+    fold_row(&l_tt, &l_why, !!strstr(js, "\"/api/sl-less-empty\"") && !!strstr(js, "\"/api/sl-less-nonempty\""),
+             "a slice from one less than a possibly empty String's length did not run both arms");
+    const Probe rows[] = {
+        { "sl-own-one-arm", o_tt, "/api/sl-own-empty", SESS_EXPLORE, o_why },
+        { "sl-head-one-arm", h_tt, "/api/sl-head-empty", SESS_EXPLORE, h_why },
+        { "sl-less-both-arms", l_tt, "/api/sl-less-empty", SESS_EXPLORE, l_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `uriclass` document (fixture/uriclass.h): an encoded unknown holds only the units Encode
    produces, so a RegExp over a unit outside them is decided, and one over a unit inside them forks. */
 TF_UNIT void probes_uriclass(const char *js, Probe *tab, int *n) {
@@ -26790,6 +26817,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxprefix(js, probes, &np);
     probes_rxtest(js, probes, &np);
     probes_uriclass(js, probes, &np);
+    probes_slicelen(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
