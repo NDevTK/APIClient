@@ -1977,13 +1977,14 @@ static int park_doc_spelling_current(const char *recipes)
     return *q == ';' || *q == '\0';
 }
 
-int cold_resume(JSContext *ctx, const char *recipes)
+/* The records of one park document after its generation record, rebuilt as flows appended to the frontier and
+   counted into `c`; answers how many it landed. The namespace they resume into is already installed: cold_resume
+   installs a session's from the document's first record before it hands the rest over. */
+static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
 {
     void **seg = NULL;
     long seg_n = 0, seg_cap = 0, flows = 0, k;
-    const char *p = recipes;
     const int before = flow_count();
-    int gen_seen = 0;
     /* HOW MANY RECORDS THIS PASS CONSUMED — the read side's half of park_doc_agrees, counted at the loop head
        so it cannot disagree with the records the way a per-arm sum can. It is the merge's own total exactly as
        `flows` is, and it is what the identity at the bottom is asserted against. */
@@ -1995,18 +1996,6 @@ int cold_resume(JSContext *ctx, const char *recipes)
     /* The flows the 'o' records made drives of: each chain counts once, however many members it has. */
     long drives = 0;
 
-    DCHECK(recipes != NULL && *recipes != '\0',
-           "the cold tier was asked to resume an empty park document — a document with no residue DELETES its "
-           "cold entry, so a caller reaching here has confused 'fully explored' with 'paged out'");
-    memset(&g_resumed, 0, sizeof g_resumed);
-    /* A residue an older build wrote names bodies and sites by another fold; it is refused whole, as an old
-       novelty spelling is, and the session starts from its boot flow. Stored state from the past is input. */
-    if (!park_doc_spelling_current(recipes)) {
-        g_resumed.refused = 1;
-        printf("@RESUMED 0\n");
-        fflush(stdout);
-        return 0;
-    }
     /* THIS IS AN APPEND, NOT A SEED, and the two used to be one act. It asserted the frontier was EMPTY and
        assigned its park-local ordinals into it as though the document were the whole of what exists — which is
        true of the session-start rebuild and false by construction of the thing this tier is for: a PARTIAL
@@ -2033,48 +2022,9 @@ int cold_resume(JSContext *ctx, const char *recipes)
         q = p + 1;
         recs++;
         if (kind == 'g') {
-            /* THE NAMESPACE THIS RESIDUE RESUMES INTO, INSTALLED BEFORE ANYTHING IS NAMED UNDER IT. The record
-               carries the WRITER's generation and world_session_resume mints one above it — the successor is
-               computed here rather than written out there, so a document cannot state a namespace that is not
-               strictly beyond the one its own flows ran in. */
-            uint32_t gen;
-            long spell;
-
-            DCHECK(p == recipes,
-                   "a park document's generation record is not its first — every flow read before it would be "
-                   "rebuilt in the ENDED session's namespace, and a peer that never left memory already holds "
-                   "a segment for each of those names (solver/world.h)");
-            DCHECK(!gen_seen,
-                   "a park document names TWO generations — one document is one session's residue, however "
-                   "many partial parks appended to it, so a second is two sessions' flows merged into one");
-            gen_seen = 1;
-            /* THE ADVANCE IS CHECKED BESIDE THE VALUE, AND `ep == end` IS NOT THAT CHECK — the two coincide on
-               the one input that matters, which is why the field had no reader-side statement at all. A bare
-               'g' record puts `q` AT `end`, so `strtoul` converts nothing, leaves `ep` where it started, and
-               `ep == end` is satisfied by the very position that says it read nothing; the generation then
-               installs as 0 and world_session_resume mints 1 — the namespace the FIRST resumed session of this
-               document minted in, which is precisely the collision this record exists to prevent, and it
-               arrives wearing the record's own success. It is park_reward's and park_ordinal's hole in the one
-               field that names the WHOLE document's namespace rather than one flow's path: an unreadable
-               generation and a real `g0` are the same number, and `g0` is what every FIRST park of a document
-               legitimately writes (solver/world.c: a document reaching world_registry_init for the first time
-               is generation 0), so nothing downstream can tell them apart either.
-               TWO ASSERTS AND NOT ONE, because they refuse different things — a field that was not read, and a
-               record whose name spelling is not this build's — and a single condition over both would report
-               whichever fired under the message written for the other. */
-            gen = (uint32_t)strtoul(q, &ep, 10);
-            DCHECK(ep != q,
-                   "a park document's generation record carries no number — `strtoul` converts nothing and "
-                   "answers 0, which is the generation a document's FIRST session legitimately parks under, so "
-                   "an unreadable record and a real `g0` are one value. The resumed session would mint in "
-                   "generation 1 — the namespace the first resumed session of this document already used — and "
-                   "a peer that never left memory keys its segments on exactly those names");
-            spell = (ep < end && *ep == ',') ? strtol(ep + 1, &ep, 10) : -1;
-            DCHECK(spell == JS_ORPHAN_LOCATOR_SPELLING && ep < end && *ep == ',',
-                   "a generation record carries no name spelling and session start after its number — "
-                   "park_doc_spelling_current admitted this document, so the two readers of one record disagree");
-            world_session_resume(gen);
-            hr_time_session_start_adopt(strtod(ep + 1, NULL));
+            DFAIL("a park document names a second generation record, or the records an in-session rebuild reads "
+                  "carry one — cold_resume installs a session's namespace from its document's first record before it "
+                  "hands the rest over, so another would rebuild flows into a namespace no live peer agrees on");
         } else if (kind == 'w') {
             /* A PEER'S TIMELINE, RE-MATERIALIZED FROM THE ONE THING ABOUT IT THAT HAS AN IDENTITY OUTSIDE THE
                SESSION THAT HELD IT. The vector is handed straight back to world_segment, which is the same
@@ -2093,7 +2043,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
             n_anc = world_parse(vec, &w, &anc);
             world_segment(ctx, w, anc, n_anc);
             free(vec);
-            g_resumed.worlds++;
+            c->worlds++;
         } else if (kind == 's') {
             long id, bid;
             signed char *arms;
@@ -2204,7 +2154,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
             flow_seed(fl);
-            flows++; g_resumed.flows++;
+            flows++; c->flows++;
             last_flow = fl;
         } else if (kind == 'r') {
             /* WHICH SENDING TIMELINE THE FLOW WRITTEN BEFORE THIS ONE IS IN — put back before any of its
@@ -2258,7 +2208,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
                uses and matters for one reason: the push owns the vocabulary check, so a record naming a
                FlowCommitArm that does not exist aborts there — and a census raised first would have already
                claimed a commitment this rebuild never installed. */
-            g_resumed.commits++;
+            c->commits++;
         } else if (kind == 'm') {
             /* A MESSAGE A PEER SENT AND THIS DOCUMENT HAD NOT YET RECEIVED, put back on the queue of the flow
                it belonged to, in the order it was written — which is the order the page must observe (HTML
@@ -2290,7 +2240,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
             engine_routed_rebuilt(ctx, last_flow, record, origin);
             free(record);
             free(origin);
-            g_resumed.delivers++;
+            c->delivers++;
         } else if (kind == 'o') {
             /* THE FUNCTION A DRIVEN ORPHAN WAS DRIVING, put back on the flow it belonged to — which is the flow
                written immediately before it, the same binding an unmade delivery uses and for the same reason.
@@ -2345,7 +2295,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
             last_flow->orphan_claim_at = 0;
             /* The act is read when the member's call is built; a repeated body is a listener driven again. */
             flow_orphan_chain_push(last_flow, hash, NULL, (int)doc, 1);
-            g_resumed.orphans++;
+            c->orphans++;
         } else if (kind == 'v') {
             /* A WITNESS VERIFICATION COMES BACK AS ITS SUBSTITUTION, ITS KEY AND ITS PATH — park_rec_vfy's
                fields, rebuilt as a 'c' record's flow is. It needs no re-binding: it is no search's, and its key
@@ -2378,7 +2328,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
             q = park_comma(q);
             fl->cand_payload = park_unhex(q, end);
             witness_verify_resumed(fire_target_key(&fl->fire));
-            g_resumed.cands++;
+            c->cands++;
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
@@ -2523,7 +2473,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
                    it would tell solve.c's arrival check to read a substitution that no longer exists. */
                 free(fl->cand_src);     fl->cand_src = NULL;
                 free(fl->cand_payload); fl->cand_payload = NULL;
-                g_resumed.cands_withdrawn++;
+                c->cands_withdrawn++;
             } else {
                 /* AND THE PAYLOAD'S PROVENANCE IS STATED, because this is the only site that knows it. These
                    bytes came out of the record above, so this session's search list has no row for them unless
@@ -2534,7 +2484,7 @@ int cold_resume(JSContext *ctx, const char *recipes)
                    nothing on the flow to re-derive it FROM: a resumed candidate and a seeded one are
                    byte-for-byte the same assembly apart from where the payload was read. */
                 fl->cand_resumed = 1;
-                g_resumed.cands++;
+                c->cands++;
             }
             /* AND IT IS REBUILT EXACTLY AS AN 'f' IS, including a `-` segment. The temptation here is to say
                that `-` means "never scheduled" and leave such a candidate un-started, the way
@@ -2581,15 +2531,6 @@ int cold_resume(JSContext *ctx, const char *recipes)
     DCHECK(flows > 0,
            "a parked frontier rebuilt no flows at all — the document held segments with nobody standing on "
            "them, so the whole residue it was written to save is unreachable");
-    /* AND IT SAID WHICH NAMESPACE IT CAME FROM. A residue written by a session that had no generation to state
-       is one whose names collide with this one's by construction — the same failure the 'd' arm refuses, from
-       the other direction: a reader that filled the gap with 0 would hand every peer that never left memory
-       the exact names it already holds segments for. */
-    DCHECK(gen_seen,
-           "a park document names no world-name GENERATION — a WorldId is (document, generation, serial) and "
-           "the document name is stable across a park by requirement, so a residue that cannot say which "
-           "session wrote it resumes into names a surviving peer already keys its segments on, and answers "
-           "every rebuilt flow inside the timeline of a flow that no longer exists");
     /* THE OTHER SIDE OF THE MERGE, AND IT IS THE RAZOR ITSELF: "a resume that drops, starves, skips, reorders
        or forgets ANY flow is a CAP". Every record that named a flow produced one, and every member that was
        already here is still here — one equality says both, because the registry only ever appends and the
@@ -2598,16 +2539,6 @@ int cold_resume(JSContext *ctx, const char *recipes)
            "the frontier did not grow by exactly the flows this document rebuilt — a parked flow was dropped on "
            "the way in, or a live one left while the residue was landing, and either way the union of every "
            "flow from every session is no longer what the frontier holds");
-    /* THE ONE OBSERVABLE THAT THE RESUME RAN, and it had a READER and no WRITER. `extension/bridge.js` parses
-       `@RESUMED <n>` and reports it in the per-run engine log beside the park count, so that "the full
-       park->persist->rehydrate->resume SEQUENCE across all engines is observable" — its words. Nothing has
-       ever printed it, so that field was a zero for every session there has ever been, and a rehydration that
-       silently rebuilt nothing would have looked exactly like one that rebuilt four thousand flows. It is the
-       same defect the file's own comment records one field over (`_orphans`, `_work`, `_parked`: "which
-       nothing on the engine side has ever written, so the whole diagnostic reported three zeroes forever").
-       Printed here rather than counted into the result document because the result is built when the session
-       ENDS and this is a fact about how it BEGAN — a session that goes on to crash still has to have said that
-       it resumed, or the residue looks like it was never read back. */
     /* …AND THE SAME FACT DECOMPOSED, for a host that can ask rather than read. The sum is asserted against the
        count the merge itself kept, so an arm added to the grammar without a counter is caught here instead of
        silently reporting a kind that ran as one that did not.
@@ -2617,15 +2548,15 @@ int cold_resume(JSContext *ctx, const char *recipes)
        candidate. Both produced a member, so both are in the sum — folding the withdrawals into `cands` would
        report candidates that never registered, and folding them into `flows` would hide that the residue
        carried @S records at all, which is the one thing this census exists to make visible. */
-    g_resumed.segs = seg_n;
-    DCHECK(g_resumed.flows + g_resumed.cands + g_resumed.cands_withdrawn == flows,
+    c->segs = seg_n;
+    DCHECK(c->flows + c->cands + c->cands_withdrawn == flows,
            "the rebuild's per-kind census does not add up to the flows it landed — a record kind produced a "
            "flow without counting itself, so a host asking which arms of the grammar ran is told one did not");
     /* THE ORPHAN LOCATORS ARE DELIBERATELY OUTSIDE THAT SUM, because an 'o' record does not produce a flow —
        it is a FIELD of the flow written before it, so it can only ever be a subset of them. Stated rather than
        folded in: a reader who saw the two counters side by side and added all three would be asserting that a
        document with a drive in it rebuilt one flow too many. */
-    DCHECK(drives <= flows && drives <= g_resumed.orphans,
+    DCHECK(drives <= flows && drives <= c->orphans,
            "the rebuild made more drives than it rebuilt flows, or than it read locators — an 'o' record names "
            "the flow before it and every drive has at least one");
     /* AND THE TOTAL AND ITS PARTS ARE ONE NUMBER READ TWO WAYS, WHICH IS park_doc_agrees ASKED AT THE OTHER
@@ -2637,10 +2568,8 @@ int cold_resume(JSContext *ctx, const char *recipes)
        nowhere, and it is the whole reason a census of a rebuild could be STATED rather than read.
        NINE SUMMANDS HERE AGAINST THE WRITER'S EIGHT, and the extra one is `cands_withdrawn` — not a ninth
        record kind but the second OUTCOME of the 'c' arm, which exists only on this side because only this
-       side can refuse a payload. One 'g', and it is a CONSTANT here rather than a counter because the two
-       asserts above have already made it one — `gen_seen` is refused twice over, once for a second record and
-       once for none at all — and cold.h keeps the generation out of both censuses for exactly that reason.
-       Both of those asserts and this one are dev-only, so the constant cannot outlive what establishes it.
+       side can refuse a payload. The generation record is not read here (cold_resume reads it), and cold.h
+       keeps it out of both censuses.
        IT IS THE ARMED HALF OF THE TWO COUNTERS ADDED BESIDE IT. A residue carrying no 'r' and no 'm' cannot
        exercise their increments, so on such a document this identity is what stands between a 0 that is an
        absent RECORD and a 0 that is an absent COUNTER — and it is not vacuous there, because the other seven
@@ -2650,34 +2579,74 @@ int cold_resume(JSContext *ctx, const char *recipes)
        the rebuild and does not corrupt it — and aborting a resume over a reporting discrepancy would lose a
        whole suspended frontier to it. FORMATTED, because the nine numbers are what localize it: the kind
        whose counter is short is the one whose row does not account for the gap. */
-    DCHECKF(recs == 1 + g_resumed.segs + g_resumed.flows + g_resumed.cands + g_resumed.cands_withdrawn +
-                    g_resumed.worlds + g_resumed.orphans + g_resumed.commits + g_resumed.delivers,
-            "the rebuild read %ld record(s) and its census accounts for %ld — g 1, s %ld, f %ld, c %ld "
+    DCHECKF(recs == c->segs + c->flows + c->cands + c->cands_withdrawn +
+                    c->worlds + c->orphans + c->commits + c->delivers,
+            "the rebuild read %ld record(s) and its census accounts for %ld — s %ld, f %ld, c %ld "
             "(+%ld withdrawn), w %ld, o %ld, r %ld, m %ld. A record kind was parsed without counting itself, "
             "so every host asking which arms of this grammar ran is told a kind that ran did not, and a "
             "census nobody can check is a census anybody can state",
             recs,
-            1 + g_resumed.segs + g_resumed.flows + g_resumed.cands + g_resumed.cands_withdrawn +
-                g_resumed.worlds + g_resumed.orphans + g_resumed.commits + g_resumed.delivers,
-            g_resumed.segs, g_resumed.flows, g_resumed.cands, g_resumed.cands_withdrawn,
-            g_resumed.worlds, g_resumed.orphans, g_resumed.commits, g_resumed.delivers);
-    /* RESIDUAL: THE TOTAL SURVIVES AN ABORT AND THE DECOMPOSITION DOES NOT, WHICH INVERTS WHICH OF THE TWO
-       THE PARAGRAPH ABOVE IS AN ARGUMENT FOR. That paragraph's reason for printing here rather than into the
-       result document is exactly right - "a session that goes on to crash still has to have said that it
-       resumed" - and the six numbers this merge has just established are published on TWO DIFFERENT
-       SCHEDULES: `flows` on the line below, at this instant, and segs/cands/cands_withdrawn/worlds/orphans
-       only through result.c's @COLD census, which is composed at the first scheduler sample. A session that
-       aborts BETWEEN the merge and that sample therefore publishes exactly the one number cold.h says cannot
-       do the job - "a single total cannot distinguish a residue of nothing but plain flows from one that
-       also carried an @S candidate" - and it is the @S arm that the surviving number is least able to name.
-       NOT COVERED: the five per-kind numbers, on any run that does not reach a census sample.
-       THE NEXT DIFF emits them at THIS moment through a channel that already has a reader - @COLD's
-       `resumed*` rows, which result.c composes - and NOT as a fresh marker beside the line below, which
-       would be a write with no reader, and NOT by widening that line, which extension/bridge.js parses as a
-       bare decimal tail and raises on.
-       ITS ABSENCE SHOWS as a run whose emitted marker set holds @RESUMED and no @COLD: the residue's
-       composition is then unrecoverable from the stream, and a round-trip reader reports that nothing said
-       what was rebuilt while this function held the answer. */
+            c->segs + c->flows + c->cands + c->cands_withdrawn +
+                c->worlds + c->orphans + c->commits + c->delivers,
+            c->segs, c->flows, c->cands, c->cands_withdrawn,
+            c->worlds, c->orphans, c->commits, c->delivers);
+    return flows;
+}
+
+int cold_resume(JSContext *ctx, const char *recipes)
+{
+    const char *end, *q;
+    char *ep;
+    uint32_t gen;
+    long spell, flows;
+
+    DCHECK(recipes != NULL && *recipes != '\0',
+           "the cold tier was asked to resume an empty park document — a document with no residue DELETES its "
+           "cold entry, so a caller reaching here has confused 'fully explored' with 'paged out'");
+    memset(&g_resumed, 0, sizeof g_resumed);
+    /* A residue an older build wrote names bodies and sites by another fold; it is refused whole, as an old
+       novelty spelling is, and the session starts from its boot flow. Stored state from the past is input. */
+    if (!park_doc_spelling_current(recipes)) {
+        g_resumed.refused = 1;
+        printf("@RESUMED 0\n");
+        fflush(stdout);
+        return 0;
+    }
+    /* The namespace the residue resumes into, installed before anything is named under it: the document's first
+       record carries the writer's generation (park_doc_spelling_current admitted its shape), and
+       world_session_resume mints one strictly above it, so a document cannot state a namespace below the one its
+       flows ran in. A bare number that converts nothing reads as `g0`, which every first park legitimately
+       writes, so the conversion is asserted apart from the spelling. */
+    end = strchr(recipes, ';');
+    if (!end) end = recipes + strlen(recipes);
+    q = recipes + 1;
+    gen = (uint32_t)strtoul(q, &ep, 10);
+    DCHECK(ep != q,
+           "a park document's generation record carries no number — it would install as 0, the generation a "
+           "document's first session parks under, so the resumed session would mint in names the first resumed "
+           "session of this document already used, which a peer that never left memory keys its segments on");
+    spell = (ep < end && *ep == ',') ? strtol(ep + 1, &ep, 10) : -1;
+    DCHECK(spell == JS_ORPHAN_LOCATOR_SPELLING && ep < end && *ep == ',',
+           "a generation record carries no name spelling and session start after its number — "
+           "park_doc_spelling_current admitted this document, so the two readers of one record disagree");
+    world_session_resume(gen);
+    hr_time_session_start_adopt(strtod(ep + 1, NULL));
+    flows = park_rebuild(ctx, (*end == ';') ? end + 1 : end, &g_resumed);
+    /* THE ONE OBSERVABLE THAT THE RESUME RAN, and it had a READER and no WRITER. `extension/bridge.js` parses
+       `@RESUMED <n>` and reports it in the per-run engine log beside the park count, so that "the full
+       park->persist->rehydrate->resume SEQUENCE across all engines is observable" — its words. Nothing has
+       ever printed it, so that field was a zero for every session there has ever been, and a rehydration that
+       silently rebuilt nothing would have looked exactly like one that rebuilt four thousand flows. It is the
+       same defect the file's own comment records one field over (`_orphans`, `_work`, `_parked`: "which
+       nothing on the engine side has ever written, so the whole diagnostic reported three zeroes forever").
+       Printed here rather than counted into the result document because the result is built when the session
+       ENDS and this is a fact about how it BEGAN — a session that goes on to crash still has to have said that
+       it resumed, or the residue looks like it was never read back. */
+    /* Named residual. Not covered: the per-kind rebuild counts on a run that aborts before its first census
+       sample, since they reach the stream only through @COLD's `resumed*` rows. Next diff builds: those counts
+       emitted at this instant through @COLD's existing reader, never as a new marker or a wider line below,
+       which extension/bridge.js parses as a bare decimal tail. Absence shows as: a run whose marker set holds
+       @RESUMED and no @COLD. */
     printf("@RESUMED %ld\n", flows);
     fflush(stdout);
     return 1;
