@@ -413,8 +413,26 @@ static int idl_indexed_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
    classList` and `'getNamedItem' in el.attributes` were false the same way. testharness's assert_array_equals
    opens with `"length" in actual`, so every collection assertion in the corpus failed its precondition and
    reported the collection as "not an array" — a hundred subtests whose real message was that `in` was wrong. */
+/* JSClassExoticMethods.get_own_property_step: the decl's own step for `prop`, or JS_UNDEFINED. Owned. */
+static JSValue idl_indexed_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    const IdlIndexedDecl *d = decl_of(obj);
+
+    DCHECK(d != NULL, "an object of the indexed-property class has no decl at a keyed read");
+    if (!d->own_step) return JS_UNDEFINED;
+    DCHECK(!has_indexed_setter(d),
+           "an indexed interface with a step [[GetOwnProperty]] has an indexed property setter, whose descriptor "
+           "is writable where the class's get_own_property_step_flags state it is not");
+    return d->own_step(ctx, obj, prop);
+}
+
 static JSClassExoticMethods g_exotic = {
     .get_own_property = idl_indexed_get_own,
+    .get_own_property_step = idl_indexed_get_own_step,
+    /* Web IDL §3.9.7 Abstract operations, LegacyPlatformObjectGetOwnProperty steps 1.2.7-8, for a decl with no
+       indexed property setter: not writable, enumerable, configurable. A named property's descriptor differs,
+       so a step answers op 2 for an index only. */
+    .get_own_property_step_flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE,
     .get_own_property_names = idl_indexed_own_names,
     .define_own_property = idl_indexed_define_own,
     .delete_property = idl_indexed_delete,

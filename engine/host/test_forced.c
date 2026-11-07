@@ -6553,6 +6553,49 @@ TF_UNIT void named_walk_on_selftest(JSContext *ctx, lxb_html_document_t *dom)
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
+/* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
+   schedule declining every offer and one taking every offer, and the walks are charged the same nodes under both,
+   so a resume continues a parked walk rather than re-running it. `k3` is a `<b>`, so namedItem over the `<i>`
+   collection misses it: step 2 takes the first element in the collection. The elements come from one innerHTML
+   write, because each `document.createElement` read walks the Document's named properties over the fixture's
+   whole document first. */
+static const char *TF_COLL_WALK_SRC =
+    "(function(){ var d = document.createElement('div'), i, ok = 1, h = '';"
+    " for (i = 0; i < 300; i++) h += i % 3 ? '<i id=k' + i + '></i>' : '<b id=k' + i + '></b>';"
+    " d.innerHTML = h;"
+    " var t = d.getElementsByTagName('i'), c = d.children;"
+    " if (t.length !== 200 || c.length !== 300 || d.childNodes.length !== 300) ok = 0;"
+    " if (t[150].id !== 'k226' || t.item(149).id !== 'k224' || t.item(200) !== null) ok = 0;"
+    " if (t.namedItem('k299') !== c[299] || t.k299 !== c[299] || t.namedItem('k3') !== null) ok = 0;"
+    " if (!(150 in t) || (200 in t) || c[300] !== undefined) ok = 0;"
+    " return ok ? t.length + c.length : -1; })()";
+
+TF_UNIT void collection_walk_selftest(JSContext *ctx)
+{
+    static const JSFlowControlHooks *const SCHED[2] = { &TF_DIFF_DECLINE, &TF_DIFF_FORCE };
+    uint64_t charged[2];
+    int susp[2], mach[2];
+
+    for (int k = 0; k < 2; k++) {
+        ThreadWorkCensus before, now;
+        int32_t got;
+
+        thread_work_census(&before);
+        got = tf_step_diff_run(ctx, TF_COLL_WALK_SRC, "collection-walk", SCHED[k], &susp[k], &mach[k]);
+        thread_work_census(&now);
+        charged[k] = now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK];
+        CHECKF(got == 500, "the live collections over 300 detached elements answered %d (schedule %s), not 500",
+               (int)got, k ? "forced" : "declined");
+    }
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    CHECK(susp[0] == 0, "the collection fixture parked with the policy declining every offer");
+    CHECKF(charged[0] >= 300 && charged[1] == charged[0],
+           "the collection walks were charged %llu nodes declined and %llu forced: a walk charged nothing, or a "
+           "resume re-ran a parked walk instead of continuing it",
+           (unsigned long long)charged[0], (unsigned long long)charged[1]);
+    CHECK(mach[1] > 0, "the collection fixture never suspended inside a step machine under the forcing schedule");
+}
+
 /* Native only: the witness's answer is an abort read from a forked child, and the vehicle has no process to
    fork. The DCHECK it arms is the same source in both builds. */
 #if APICLIENT_DEV && !defined(__EMSCRIPTEN__)
@@ -41339,6 +41382,8 @@ int main(int argc, char **argv) {
     union_arm_selftest(ctx);
     /* A Document named-property miss walks on to the prototype once under both schedules; needs the document. */
     named_walk_on_selftest(ctx, dom);
+    /* DOM §4.2.10's live collections rest per node and resume where they parked; needs the document. */
+    collection_walk_selftest(ctx);
     /* HTML §4.12.5.1.16's ROUND TRIP, immediately after the union arms and for the same two reasons: it needs
        a REALM and the DOCUMENT, which the block above establishes, and it must stand BEFORE the time-travel
        hooks below so its canvas and its bitmap belong to the pre-boot baseline rather than to whichever flow

@@ -68,8 +68,9 @@
    of its other work, with every site's sheets within a stated factor of the fit. */
 #define THREAD_WORK_UNITS_PER_KIB_CSSOM 361
 #define THREAD_WORK_CSSOM_BYTES_PER_RULE 48
-/* A named-property lookup's walk rests at every element and is charged one element per rest, so the per-call
-   floor above (rounded up) prices an element at one unit whatever the rate; the rate states that floor. */
+/* A resting tree walk (a named-property lookup, a live collection) rests at every node and is charged one node per
+   rest, so the per-call floor above (rounded up) prices a node at one unit whatever the rate; the rate states that
+   floor. */
 #define THREAD_WORK_UNITS_PER_KI_DOM_ELEMENTS 1024
 
 #include <stddef.h>
@@ -87,7 +88,7 @@ typedef enum {
     THREAD_WORK_LAYOUT_BOX,     /* a §9.4.1 question body run, charged per question answered (layout_job.c) */
     THREAD_WORK_LAYOUT_LINE,    /* a line box fill or intrinsic run's items taken (layout_job.c's spends) */
     THREAD_WORK_SELECTOR_MATCH, /* style rules tested by one element's author match (css_style_declaration.c) */
-    THREAD_WORK_DOM_WALK,       /* elements a named-property lookup visited (core/dom/document_named.c) */
+    THREAD_WORK_DOM_WALK,       /* nodes a resting tree walk visited (core/dom/named_walk.c, collections.c) */
     THREAD_WORK_CSSOM_BUILD,    /* rule text a style sheet's CSSOM build made objects of (core/css/css_rule.c) */
     THREAD_WORK_N
 } ThreadWorkKind;

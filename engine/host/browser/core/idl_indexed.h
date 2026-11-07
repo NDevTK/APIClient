@@ -6,8 +6,9 @@
 
 /* What an interface with an indexed property getter must answer: how many supported indices it has, and what
    is at one. `named` is the NAMED property getter beside it (HTMLCollection has one, a token list does not) —
-   NULL when the IDL declares none. Both are pure reads of the component's own state, so they are ordinary C:
-   a page cannot put code on the path an index lookup takes. */
+   NULL when the IDL declares none. They are pure reads of the component's own state, so they are ordinary C:
+   a page cannot put code on the path an index lookup takes. An interface whose answer is a walk of the page's
+   size declares `own_step` too, and its C functions then answer only what needs no walk. */
 typedef struct {
     const char *interface_name;                                  /* for the assertions, and only for them */
     uint32_t (*length)(JSContext *ctx, JSValueConst self);
@@ -22,6 +23,11 @@ typedef struct {
        needs to own a reference is asking for the wrong mechanism. 0 = no cache, which is right for a static
        list whose item() is already an array read. */
     size_t   cache_size;
+    /* The keyed read of `prop` as a step machine, for an interface whose answer is a walk charged as work: the
+       function JSClassExoticMethods.get_own_property_step hands the keyed entry, f(obj, key, receiver, op), or
+       JS_UNDEFINED where `length`, `item` and `named` answer `prop` in place. Owned. NULL when every answer is
+       in place. Its descriptor is Web IDL §3.9.7's indexed one with no indexed property setter. */
+    JSValue (*own_step)(JSContext *ctx, JSValueConst self, JSAtom prop);
 } IdlIndexedDecl;
 
 /* This object's cache scratch, or NULL when the interface declared none. Zeroed at construction, so an

@@ -45,6 +45,7 @@
 #include "core/dom/document_named.h"   /* §3.1.7's named element, the document-named kind's filter */
 #include "core/dom/attr_list.h"   /* dom_attr_generation, which an attribute-filtered cache keys on */
 #include "core/dom/element.h"   /* element_id_bytes — DOM §4.9's ID, which both named lookups below are over */
+#include "core/timing/thread_work.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 
@@ -342,16 +343,13 @@ static lxb_dom_node_t *coll_adv(int kind, lxb_dom_node_t *root, lxb_dom_node_t *
     return forward ? n->next : n->prev;
 }
 
-/* THE INDEX CACHE — Blink's CollectionIndexCache, and the reason it has to exist here too.
-   A live collection has nothing to cache the tree IN, so counting it is a walk and reaching index `i` is a walk
-   of `i`. That makes the loop every page writes — `for (i = 0; i < el.children.length; i++) el.children[i]` —
-   quadratic in the page's own markup, and it runs inside an exotic [[GetOwnProperty]], which is a synchronous C
-   contract with nowhere to suspend. Being O(1) is what makes a body safe to leave un-parkable, so this is what
-   makes the indexed getter safe: not a way to yield out of the walk, but no walk to yield out of.
-   The cache is a MEMO, valid exactly while what it read is unchanged: the tree version, which the swap
-   advances, so a cache another flow filled is already invalid by the time this one runs, and for a kind whose
-   filter reads attributes the attribute generation too, because an attribute write moves no tree version.
-   Nothing here is per-flow state; a miss costs the walk that used to happen every time. */
+/* THE INDEX CACHE, Blink's CollectionIndexCache. A live collection has nothing to cache the tree in, so counting it
+   is a walk and reaching index `i` is a walk of `i`; the cache makes the loop every page writes
+   (`for (i = 0; i < el.children.length; i++) el.children[i]`) linear rather than quadratic in its markup. Each walk
+   rests per node (CollWalk). The cache is a memo, valid exactly while what it read is unchanged: the tree version,
+   which the swap advances, so a cache another flow filled is already invalid by the time this one runs, and for a
+   kind whose filter reads attributes the attribute generation too, because an attribute write moves no tree
+   version. Nothing here is per-flow state; a miss costs the walk. */
 typedef struct {
     uint64_t        version;      /* the tree this describes; never 0, because the version starts at 1 */
     uint64_t        attr_gen;     /* the attributes it read (dom_attr_generation), or 0 for a kind reading none */
@@ -370,7 +368,6 @@ static bool coll_in_subtree(const lxb_dom_node_t *n, const lxb_dom_node_t *root)
     return false;
 }
 
-/* The cache for this collection, already checked against the tree it describes. NULL means walk from scratch. */
 /* The name a by-name collection was built with. Read once per call rather than per node — the walk is the
    node-shaped part, and a CString per node would make the constant bigger than the algorithm. */
 static void coll_query(JSContext *ctx, JSValueConst self, int kind, CollQuery *q)
@@ -411,6 +408,7 @@ static bool coll_filters_attributes(int kind)
            kind == COLL_DOC_NAMED;
 }
 
+/* The cache for this collection, already checked against what it describes. NULL means walk from scratch. */
 static CollCache *coll_cache(JSValueConst self, lxb_dom_node_t *owner, int kind)
 {
     CollCache *c = idl_indexed_cache(self);
@@ -426,188 +424,416 @@ static CollCache *coll_cache(JSValueConst self, lxb_dom_node_t *owner, int kind)
     return c;
 }
 
-static uint32_t coll_length(JSContext *ctx, JSValueConst self)
-{
-    JSValue owner;
-    int kind = coll_kind(ctx, self, &owner);
-    lxb_dom_node_t *n, *c;
-    uint32_t count = 0;
-    CollCache *cc;
+/* ---- the walks, one node per entry ---------------------------------------------------------------------- */
 
-    if (kind == COLL_STATIC) {
-        JSValue lv = JS_GetPropertyStr(ctx, owner, "length");
-        JS_ToUint32(ctx, &count, lv);
-        JS_FreeValue(ctx, lv);
-        JS_FreeValue(ctx, owner);
-        return count;
-    }
-    n = node_of(owner);
-    JS_FreeValue(ctx, owner);
-    if (!n) return 0;
-    cc = coll_cache(self, n, kind);
-    if (cc && cc->has_length) return cc->length;
-    /* THE TREE AS IT IS NOW. That walk is the liveness — there is nothing here to invalidate or refresh,
-       because the version says when what was counted stopped describing the tree. */
-    {
-        CollQuery q;
-        coll_query(ctx, self, kind, &q);
-        for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1))
-            if (coll_takes(kind, &q, c)) count++;
-        coll_query_free(ctx, &q);
-    }
-    if (cc) { cc->length = count; cc->has_length = 1; }
-    return count;
+/* A collection walk's resume point, kept in a step machine's state: the collection's kind and root, the node last
+   visited (NULL before the first), and the members passed. Nodes only, so a state holding one needs no visit;
+   zeroed means not begun. A walk keeps the kind and root it began with. */
+typedef struct {
+    lxb_dom_node_t *root, *cursor;
+    uint64_t        passed, want;   /* members visited; for an index, how many reach it */
+    int             kind;
+    uint8_t         begun, forward;
+} CollWalk;
+
+static void coll_walk_begin(CollWalk *w, int kind, lxb_dom_node_t *root, lxb_dom_node_t *from, int forward,
+                            uint64_t want)
+{
+    DCHECK(!w->begun && root != NULL && (from != NULL || forward),
+           "a collection walk began twice, over no root, or backwards from before its first node");
+    w->root = root;
+    w->cursor = from;
+    w->kind = kind;
+    w->forward = (uint8_t)forward;
+    w->want = want;
+    w->passed = 0;
+    w->begun = 1;
 }
 
-/* Step `from` by `delta` members of the collection, in `dir`. The members are the children `coll_takes` accepts,
-   so a NodeList steps one child at a time and an HTMLCollection skips the text between elements. */
-static lxb_dom_node_t *coll_step(int kind, const CollQuery *q, lxb_dom_node_t *root,
-                                 lxb_dom_node_t *from, uint32_t delta, int forward)
+/* The node after the cursor in the walk's direction, charged one node visited; NULL past the last. */
+static lxb_dom_node_t *coll_walk_next(CollWalk *w)
 {
-    lxb_dom_node_t *c = from;
-    while (delta) {
-        c = coll_adv(kind, root, c, forward);
-        if (!c) return NULL;
-        if (coll_takes(kind, q, c)) delta--;
-    }
+    lxb_dom_node_t *c;
+
+    DCHECK(w->begun, "a collection walk was stepped before it began");
+    c = w->cursor ? coll_adv(w->kind, w->root, w->cursor, w->forward) : coll_first_node(w->kind, w->root);
+    if (!c) return NULL;
+    thread_work_charge(THREAD_WORK_DOM_WALK, 1);
+    w->cursor = c;
     return c;
 }
 
-static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
+/* Whether `c` is a member of `self`. The query is read from the slots at each node, because its bytes are the
+   slot string's and do not outlive the entry. */
+static bool coll_walk_takes(JSContext *ctx, JSValueConst self, const CollWalk *w, const lxb_dom_node_t *c)
+{
+    CollQuery q;
+    bool takes;
+
+    coll_query(ctx, self, w->kind, &q);
+    takes = coll_takes(w->kind, &q, c);
+    coll_query_free(ctx, &q);
+    return takes;
+}
+
+/* A static list's length: its array's, which the engine built and no page reaches. */
+static uint32_t coll_static_length(JSContext *ctx, JSValueConst arr)
+{
+    JSValue lv = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t count = 0;
+
+    JS_ToUint32(ctx, &count, lv);
+    JS_FreeValue(ctx, lv);
+    return count;
+}
+
+/* DOM §4.2.10.1's and §4.2.10.2's `length`, "the number of nodes represented by the collection", one node per
+   call: true while the walk has more to visit, so the caller rests; false with `*plen` set. */
+static bool coll_length_rest(JSContext *ctx, JSValueConst self, CollWalk *w, uint32_t *plen)
+{
+    lxb_dom_node_t *c;
+    CollCache *cc;
+
+    if (!w->begun) {
+        JSValue owner;
+        int kind = coll_kind(ctx, self, &owner);
+        lxb_dom_node_t *n;
+
+        if (kind == COLL_STATIC) {
+            *plen = coll_static_length(ctx, owner);
+            JS_FreeValue(ctx, owner);
+            return false;
+        }
+        n = node_of(owner);
+        JS_FreeValue(ctx, owner);
+        *plen = 0;
+        if (!n) return false;
+        cc = coll_cache(self, n, kind);
+        if (cc && cc->has_length) { *plen = cc->length; return false; }
+        /* THE TREE AS IT IS NOW. That walk is the liveness — there is nothing here to invalidate or refresh,
+           because the version says when what was counted stopped describing the tree. */
+        coll_walk_begin(w, kind, n, NULL, 1, 0);
+    }
+    c = coll_walk_next(w);
+    if (c) {
+        if (coll_walk_takes(ctx, self, w, c)) w->passed++;
+        return true;
+    }
+    DCHECK(w->passed <= UINT32_MAX, "a collection counted more members than a tree can hold");
+    cc = coll_cache(self, w->root, w->kind);
+    if (cc) { cc->length = (uint32_t)w->passed; cc->has_length = 1; }
+    *plen = (uint32_t)w->passed;
+    return false;
+}
+
+/* DOM §4.2.10's item and indexed getter, the indexth node in the collection, one node per call: true while the
+   walk has more to visit; false with `*pres` the node (owned), or JS_UNDEFINED past the end. A loop that reads 0,
+   1, 2… moves one member per call from the cached one rather than i of them, and a read that goes backwards walks
+   through `prev`. */
+static bool coll_item_rest(JSContext *ctx, JSValueConst self, uint32_t i, CollWalk *w, JSValue *pres)
+{
+    lxb_dom_node_t *c;
+    CollCache *cc;
+
+    *pres = JS_UNDEFINED;
+    if (!w->begun) {
+        JSValue owner;
+        int kind = coll_kind(ctx, self, &owner);
+        lxb_dom_node_t *n;
+
+        if (kind == COLL_STATIC) {
+            *pres = JS_GetPropertyUint32(ctx, owner, i);
+            JS_FreeValue(ctx, owner);
+            return false;
+        }
+        n = node_of(owner);
+        JS_FreeValue(ctx, owner);
+        if (!n) return false;
+        cc = coll_cache(self, n, kind);
+        if (cc && cc->has_length && i >= cc->length) return false;
+        if (cc && cc->node) {
+            /* THE CACHED MEMBER IS STILL IN THE COLLECTION'S SUBTREE. For the child kinds that is one pointer; for
+               a descendant kind it is a walk up to the owner, which is O(depth) and dev-only. Writing it as
+               `parent == n` was right for the two kinds that existed and silently wrong for the two that did not —
+               a descendant is not a child, and the assert fired on the first by-name collection built. */
+            DCHECK(coll_in_subtree(cc->node, n),
+                   "a cached collection member has left the collection's owner — a tree mutation did not advance "
+                   "dom_cow_version, so the cache is describing a tree that is gone");
+            if (i == cc->index) { *pres = node_wrap(ctx, cc->node); return false; }
+            coll_walk_begin(w, kind, n, cc->node, i > cc->index, i > cc->index ? i - cc->index : cc->index - i);
+        } else {
+            coll_walk_begin(w, kind, n, NULL, 1, (uint64_t)i + 1);
+        }
+    }
+    c = coll_walk_next(w);
+    if (!c) return false;
+    if (!coll_walk_takes(ctx, self, w, c) || ++w->passed < w->want) return true;
+    cc = coll_cache(self, w->root, w->kind);
+    if (cc) { cc->index = i; cc->node = c; }
+    *pres = node_wrap(ctx, c);
+    return false;
+}
+
+/* §4.2.10.2 Interface HTMLCollection's named getter and namedItem(key): the first element in the collection whose
+   ID is `name`, or which is in the HTML namespace with a `name` attribute that is. Only HTMLCollection has one; a
+   NodeList's IDL declares none, so `nodes.foo` is honestly undefined. One node per call: true while the walk has
+   more to visit; false with `*pres` the element (owned) or JS_UNDEFINED. */
+static bool coll_named_rest(JSContext *ctx, JSValueConst self, const char *name, size_t nlen, CollWalk *w,
+                            JSValue *pres)
+{
+    lxb_dom_node_t *c;
+    const lxb_char_t *v;
+    size_t vlen = 0;
+
+    *pres = JS_UNDEFINED;
+    if (!w->begun) {
+        JSValue owner;
+        int kind = coll_kind(ctx, self, &owner);
+        lxb_dom_node_t *n = node_of(owner);
+
+        JS_FreeValue(ctx, owner);
+        /* §4.2.10.2's named getter belongs to HTMLCollection AND TO NO OTHER KIND, which is why the test names
+           those kinds rather than excluding the NodeLists: `kind != COLL_CHILDREN && !coll_is_descendant(kind)`
+           said the same thing only while every descendant walk was an HTMLCollection, and getElementsByName is a
+           descendant walk that is not one. A foreign receiver reaches here with kind -1 and is excluded by the
+           same line — which is why this is a refusal and not a DCHECK: `this` is page-supplied, and
+           HTMLCollection.prototype.namedItem.call({}, "x") is a page's input rather than a broken invariant.
+           NAMED RESIDUAL — a NodeList reaching this member answers `null` where Web IDL §3.7.7 Operations
+           requires a TypeError for a receiver that does not implement HTMLCollection. WHAT THE NEXT DIFF BUILDS:
+           an `idl_this_iface` declaration on `namedItem` naming a `collections_is_htmlcollection` predicate this
+           component would export, which is the same shape core/dom/document.c already declares for its own
+           members. HOW ITS ABSENCE WOULD SHOW: calling that member with any receiver the corpus can reach — a
+           NodeList, a plain object, a DOMTokenList — and observing a value where a browser throws. */
+        if (!n || !coll_is_htmlcollection(kind)) return false;
+        /* §4.2.10.2 STEP 1, which had no spelling here at all: "The namedItem(key) method steps are: If key is
+           the empty string, return null." IT IS NOT REDUNDANT WITH §4.9'S UNSET STEP, which is the reading that
+           would leave it out — no element's ID is the empty string, so the ID clause below could never answer an
+           empty key, and the `name` clause can: lexbor hands back a `name=""` attribute as non-NULL data of length
+           0, so `vlen == nlen` held at zero and `hc.namedItem("")` ANSWERED THAT ELEMENT. One step, two clauses,
+           and only one of them was already covered.
+           JS_UNDEFINED IS §4.2.10.2'S `null` HERE AND ALSO THE RIGHT ANSWER AT THE OTHER DOOR, which is why this
+           is one test and not two: js_coll_named_item maps JS_UNDEFINED to JS_NULL for the METHOD, and the named
+           getter needs the empty string NOT to be a supported property name — which is the same sentence's own
+           supported-property-names algorithm, whose `name` clause appends a value "neither the empty string nor
+           is in result". */
+        if (nlen == 0) return false;
+        coll_walk_begin(w, kind, n, NULL, 1, 0);
+    }
+    c = coll_walk_next(w);
+    if (!c) return false;
+    /* Step 2's "the first element in the collection": a member, not any element of the walk's subtree. */
+    if (c->type != LXB_DOM_NODE_TYPE_ELEMENT || !coll_walk_takes(ctx, self, w, c)) return true;
+    /* §4.2.10.2 step 2's FIRST clause, "it has an ID which is key" — DOM §4.9's ID and not the `id`
+       attribute, which is why this is element_id_bytes. A qualified-name read stood here and matched an
+       `id` in a non-null namespace, so `hc.namedItem(k)` and `hc[k]` answered an element whose ID §4.9's
+       change steps never set. The unset half rides along: no element's ID is the empty string. */
+    v = element_id_bytes(lxb_dom_interface_element(c), &vlen);
+    if (v && vlen == nlen && memcmp(v, name, nlen) == 0) { *pres = node_wrap(ctx, c); return false; }
+    /* §4.2.10.2 step 2's SECOND clause, whose namespace half was missing: "it is in the HTML namespace and
+       has a name attribute whose value is key". The ELEMENT's namespace, not the attribute's — so an
+       `<svg>` child with `name="x"` is not a match however its attribute reads, and `hc.x` answered it.
+       It is the same term HTML §2.1.3 "XML compatibility" defines for getElementsByName one arm up in
+       coll_takes, which is why that walk already tests `c->ns != LXB_NS_HTML` and this one did not.
+       NAMED RESIDUAL — THE ATTRIBUTE'S OWN NAMESPACE IS STILL UNTESTED. WHAT IS NOT COVERED: "a name
+       attribute" is §4.9's three-part definition (local name `name`, namespace null, namespace prefix
+       null), and this is a QUALIFIED-NAME read, so an HTML element carrying
+       `setAttributeNS(ns, "name", key)` matches where a browser does not — the same defect §4.9's ID half
+       above was just routed out of, one attribute over. WHAT THE NEXT DIFF BUILDS: this read at
+       `dom_attr_get_ns(el, NULL, "name")`, which is the population every `"name", 4` reader in this
+       component shares and is therefore its own subproblem rather than a line here. HOW ITS ABSENCE WOULD
+       SHOW, as an observation: `hc.namedItem(k)` or `hc[k]` answering an HTML element whose only
+       `name`-named attribute is namespaced. */
+    if (c->ns != LXB_NS_HTML) return true;
+    v = lxb_dom_element_get_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"name", 4, &vlen);
+    if (v && vlen == nlen && memcmp(v, name, nlen) == 0) { *pres = node_wrap(ctx, c); return false; }
+    return true;
+}
+
+/* ---- the C entries --------------------------------------------------------------------------------------
+   Web IDL §3.9's internal methods asked from C (own keys, [[Delete]], a C [[GetOwnProperty]] or [[Set]]): a
+   static list and a valid cache answer in place. A walk rests per node on the keyed entry and the members, so a
+   C caller that needs one is a caller to route there. */
+#define COLL_C_ROUTE "route this caller's read through the keyed entry (get_own_property_step), never a C walk"
+
+static uint32_t coll_length_c(JSContext *ctx, JSValueConst self)
 {
     JSValue owner;
     int kind = coll_kind(ctx, self, &owner);
-    lxb_dom_node_t *n, *c;
-    uint32_t k = 0;
-    JSValue r = JS_UNDEFINED;
+    lxb_dom_node_t *n;
+    uint32_t count = 0;
     CollCache *cc;
 
-    if (kind == COLL_STATIC) {
-        r = JS_GetPropertyUint32(ctx, owner, i);
-        JS_FreeValue(ctx, owner);
-        return r;
-    }
-    n = node_of(owner);
+    if (kind == COLL_STATIC) count = coll_static_length(ctx, owner);
+    n = kind == COLL_STATIC ? NULL : node_of(owner);
     JS_FreeValue(ctx, owner);
-    if (!n) return JS_UNDEFINED;
+    if (!n) return count;
     cc = coll_cache(self, n, kind);
-    {
-    CollQuery q;
-    coll_query(ctx, self, kind, &q);
-    if (cc && cc->node) {
-        /* THE WHOLE POINT: a loop that reads 0, 1, 2… moves one member per call rather than i of them. A read
-           that goes BACKWARDS is the same walk through `prev`, because a child list is doubly linked and a page
-           iterating in reverse deserves the same answer as one iterating forwards. */
-        /* THE CACHED MEMBER IS STILL IN THE COLLECTION'S SUBTREE. For the child kinds that is one pointer; for
-           a descendant kind it is a walk up to the owner, which is O(depth) and dev-only. Writing it as
-           `parent == n` was right for the two kinds that existed and silently wrong for the two that did not —
-           a descendant is not a child, and the assert fired on the first by-name collection built. */
-        DCHECK(coll_in_subtree(cc->node, n),
-               "a cached collection member has left the collection's owner — a tree mutation did not advance "
-               "dom_cow_version, so the cache is describing a tree that is gone");
-        c = i >= cc->index ? coll_step(kind, &q, n, cc->node, i - cc->index, 1)
-                           : coll_step(kind, &q, n, cc->node, cc->index - i, 0);
-        coll_query_free(ctx, &q);
-        if (!c) return JS_UNDEFINED;
-        cc->index = i;
-        cc->node = c;
-        return node_wrap(ctx, c);
-    }
-    for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
-        if (!coll_takes(kind, &q, c)) continue;
-        if (k == i) {
-            if (cc) { cc->index = i; cc->node = c; }
-            coll_query_free(ctx, &q);
-            return node_wrap(ctx, c);
-        }
-        k++;
-    }
-    coll_query_free(ctx, &q);
-    }
+    if (cc && cc->has_length) return cc->length;
+    DFAIL("a C activation asked a live collection's length with no count cached: the count rests per node as "
+          "coll_length_rest, so " COLL_C_ROUTE);
+    return 0;
+}
+
+static JSValue coll_item_c(JSContext *ctx, JSValueConst self, uint32_t i)
+{
+    JSValue owner, r = JS_UNDEFINED;
+    int kind = coll_kind(ctx, self, &owner);
+    lxb_dom_node_t *n;
+    CollCache *cc;
+
+    if (kind == COLL_STATIC) r = JS_GetPropertyUint32(ctx, owner, i);
+    n = kind == COLL_STATIC ? NULL : node_of(owner);
+    JS_FreeValue(ctx, owner);
+    if (!n) return r;
+    cc = coll_cache(self, n, kind);
+    if (cc && cc->has_length && i >= cc->length) return JS_UNDEFINED;
+    if (cc && cc->node && cc->index == i) return node_wrap(ctx, cc->node);
+    DFAIL("a C activation asked a live collection's index with no member cached there: the walk rests per node "
+          "as coll_item_rest, so " COLL_C_ROUTE);
     return JS_UNDEFINED;
 }
 
-/* §4.2.10.2 Interface HTMLCollection's NAMED getter: the first element whose `id` is `name`, or — for the
-   elements whose content attribute the spec lists — whose `name` is. Only HTMLCollection has one; a NodeList's
-   IDL declares none, so `nodes.foo` is honestly undefined rather than a search that finds nothing. */
-static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
+static JSValue coll_named_c(JSContext *ctx, JSValueConst self, const char *name)
 {
-    JSValue owner;
-    int kind = coll_kind(ctx, self, &owner);
-    lxb_dom_node_t *n, *c;
-    size_t nlen = strlen(name), vlen = 0;
-
-    n = node_of(owner);
-    JS_FreeValue(ctx, owner);
-    /* §4.2.10.2's named getter belongs to HTMLCollection AND TO NO OTHER KIND, which is why the test names
-       those kinds rather than excluding the NodeLists: `kind != COLL_CHILDREN && !coll_is_descendant(kind)`
-       said the same thing only while every descendant walk was an HTMLCollection, and getElementsByName is a
-       descendant walk that is not one. A foreign receiver reaches here with kind -1 and is excluded by the
-       same line — which is why this is a refusal and not a DCHECK: `this` is page-supplied, and
-       HTMLCollection.prototype.namedItem.call({}, "x") is a page's input rather than a broken invariant.
-       NAMED RESIDUAL — a NodeList reaching this member answers `null` where Web IDL §3.7.7 Operations
-       requires a TypeError for a receiver that does not implement HTMLCollection. WHAT THE NEXT DIFF BUILDS:
-       an `idl_this_iface` declaration on `namedItem` naming a `collections_is_htmlcollection` predicate this
-       component would export, which is the same shape core/dom/document.c already declares for its own
-       members. HOW ITS ABSENCE WOULD SHOW: calling that member with any receiver the corpus can reach — a
-       NodeList, a plain object, a DOMTokenList — and observing a value where a browser throws. */
-    if (!n || !coll_is_htmlcollection(kind)) return JS_UNDEFINED;
-    /* §4.2.10.2 STEP 1, which had no spelling here at all: "The namedItem(key) method steps are: If key is
-       the empty string, return null." IT IS NOT REDUNDANT WITH §4.9'S UNSET STEP, which is the reading that
-       would leave it out — no element's ID is the empty string, so the ID clause below could never answer an
-       empty key, and the `name` clause can: lexbor hands back a `name=""` attribute as non-NULL data of length
-       0, so `vlen == nlen` held at zero and `hc.namedItem("")` ANSWERED THAT ELEMENT. One step, two clauses,
-       and only one of them was already covered.
-       JS_UNDEFINED IS §4.2.10.2'S `null` HERE AND ALSO THE RIGHT ANSWER AT THE OTHER DOOR, which is why this
-       is one test and not two: js_coll_named_item maps JS_UNDEFINED to JS_NULL for the METHOD, and the named
-       getter needs the empty string NOT to be a supported property name — which is the same sentence's own
-       supported-property-names algorithm, whose `name` clause appends a value "neither the empty string nor
-       is in result". */
-    if (nlen == 0) return JS_UNDEFINED;
-    for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
-        const lxb_char_t *v;
-        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        /* §4.2.10.2 step 2's FIRST clause, "it has an ID which is key" — DOM §4.9's ID and not the `id`
-           attribute, which is why this is element_id_bytes. A qualified-name read stood here and matched an
-           `id` in a non-null namespace, so `hc.namedItem(k)` and `hc[k]` answered an element whose ID §4.9's
-           change steps never set. The unset half rides along: no element's ID is the empty string. */
-        v = element_id_bytes(lxb_dom_interface_element(c), &vlen);
-        if (v && vlen == nlen && memcmp(v, name, nlen) == 0) return node_wrap(ctx, c);
-        /* §4.2.10.2 step 2's SECOND clause, whose namespace half was missing: "it is in the HTML namespace and
-           has a name attribute whose value is key". The ELEMENT's namespace, not the attribute's — so an
-           `<svg>` child with `name="x"` is not a match however its attribute reads, and `hc.x` answered it.
-           It is the same term HTML §2.1.3 "XML compatibility" defines for getElementsByName one arm up in
-           coll_takes, which is why that walk already tests `c->ns != LXB_NS_HTML` and this one did not.
-           NAMED RESIDUAL — THE ATTRIBUTE'S OWN NAMESPACE IS STILL UNTESTED. WHAT IS NOT COVERED: "a name
-           attribute" is §4.9's three-part definition (local name `name`, namespace null, namespace prefix
-           null), and this is a QUALIFIED-NAME read, so an HTML element carrying
-           `setAttributeNS(ns, "name", key)` matches where a browser does not — the same defect §4.9's ID half
-           above was just routed out of, one attribute over. WHAT THE NEXT DIFF BUILDS: this read at
-           `dom_attr_get_ns(el, NULL, "name")`, which is the population every `"name", 4` reader in this
-           component shares and is therefore its own subproblem rather than a line here. HOW ITS ABSENCE WOULD
-           SHOW, as an observation: `hc.namedItem(k)` or `hc[k]` answering an HTML element whose only
-           `name`-named attribute is namespaced. */
-        if (c->ns != LXB_NS_HTML) continue;
-        v = lxb_dom_element_get_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"name", 4, &vlen);
-        if (v && vlen == nlen && memcmp(v, name, nlen) == 0) return node_wrap(ctx, c);
-    }
+    (void)ctx; (void)self;
+    if (!name[0]) return JS_UNDEFINED;   /* §4.2.10.2 step 1: the empty string is no supported property name */
+    DFAIL("a C activation asked an HTMLCollection's named [[GetOwnProperty]]: the lookup rests per node as "
+          "coll_named_rest, so " COLL_C_ROUTE " (a [[Set]] reaching here asks what Web IDL §3.9.2 [[Set]] "
+          "step 2's LegacyPlatformObjectGetOwnProperty(O, P, true) ignores)");
     return JS_UNDEFINED;
+}
+
+/* ---- the keyed read as a step machine ------------------------------------------------------------------- */
+
+#define COLL_KEYED_ALGORITHM "Web IDL §3.9.7 Abstract operations: LegacyPlatformObjectGetOwnProperty of a collection"
+#define COLL_KEYED_STAGES(X) X(COLL_KEYED_WALK, COLL_KEYED_ALGORITHM)
+enum { IDL_STEP_STAGE_BASE(COLL_KEYED_STAGES) COLL_KEYED_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const COLL_KEYED_STEPS[] = { COLL_KEYED_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static int g_keyed_id = -1;
+
+static void coll_walk_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;
+}
+
+/* f(obj, key, receiver, op), op 0 for [[Get]], 1 for [[HasProperty]] and 2 for [[GetOwnProperty]]: one node per
+   entry, then the indexed or named property's value (true for op 1), or undefined (false) for a miss, which
+   quickjs walks on to the prototype. */
+static int coll_keyed_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    CollWalk *w = st;
+    JSAtom key;
+    uint32_t i;
+    bool more, index;
+    JSValue v;
+    int op;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == COLL_KEYED_WALK && argc == 4 && JS_IsString(argv[1]) &&
+               JS_VALUE_GET_TAG(argv[3]) == JS_TAG_INT,
+           "a collection's keyed read was called with a shape the keyed entry does not issue");
+    op = JS_VALUE_GET_INT(argv[3]);
+    DCHECK(op == 0 || op == 1 || op == 2,
+           "a collection's keyed read was asked neither [[Get]], [[HasProperty]] nor [[GetOwnProperty]]");
+    key = JS_ValueToAtom(ctx, argv[1]);
+    if (key == JS_ATOM_NULL) return JS_STEP_ABRUPT;
+    index = JS_AtomIsIndex(ctx, &i, key);
+    JS_FreeAtom(ctx, key);
+    if (index) {
+        more = coll_item_rest(ctx, argv[0], i, w, &v);
+    } else {
+        size_t n;
+        const char *name = JS_ToCStringLen(ctx, &n, argv[1]);
+
+        if (!name) return JS_STEP_ABRUPT;
+        more = coll_named_rest(ctx, argv[0], name, n, w, &v);
+        JS_FreeCString(ctx, name);
+    }
+    if (more) return JS_STEP_YIELD;
+    if (op == 1) {
+        *presult = JS_NewBool(ctx, !JS_IsUndefined(v));
+        JS_FreeValue(ctx, v);
+        return JS_STEP_DONE;
+    }
+    if (op == 2 && !index && !JS_IsUndefined(v))
+        DFAIL("an HTMLCollection's named [[GetOwnProperty]] hit answers the indexed descriptor the class's "
+              "get_own_property_step_flags state, where [LegacyUnenumerableNamedProperties] makes a named one "
+              "not enumerable: build a per-answer descriptor on the step's op 2");
+    *presult = v;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl COLL_KEYED_DECL = {
+    coll_keyed_step, sizeof(CollWalk), coll_walk_visit, NULL, COLL_KEYED_ALGORITHM, COLL_KEYED_STEPS
+};
+
+/* IdlIndexedDecl.own_step for NodeList: the walk for a live list's index; JS_UNDEFINED for a static list or any
+   other key, which the C entries answer. Owned. */
+static JSValue nodelist_own_step(JSContext *ctx, JSValueConst self, JSAtom prop)
+{
+    uint32_t i;
+
+    if (!JS_AtomIsIndex(ctx, &i, prop) || coll_kind(ctx, self, NULL) == COLL_STATIC) return JS_UNDEFINED;
+    DCHECK(g_keyed_id >= 0, "a collection's keyed read asked for its step before collections_init declared it");
+    return idl_step_function(ctx, "NodeList keyed read", g_keyed_id);
+}
+
+/* IdlIndexedDecl.own_step for HTMLCollection, which is always live: the walk for an index or a String key;
+   JS_UNDEFINED for a Symbol, which names no property of either kind. Owned. */
+static JSValue htmlcoll_own_step(JSContext *ctx, JSValueConst self, JSAtom prop)
+{
+    uint32_t i;
+
+    (void)self;
+    if (!JS_AtomIsIndex(ctx, &i, prop)) {
+        JSValue pv = JS_AtomToValue(ctx, prop);
+        bool str = JS_IsString(pv);
+
+        JS_FreeValue(ctx, pv);
+        if (!str) return JS_UNDEFINED;
+    }
+    DCHECK(g_keyed_id >= 0, "a collection's keyed read asked for its step before collections_init declared it");
+    return idl_step_function(ctx, "HTMLCollection keyed read", g_keyed_id);
 }
 
 /* A LIVE collection carries the index cache; the STATIC one does not, because its item() is already an array
    read and a cache would be a second copy of the answer to keep in step. Both kinds share one decl per
    interface, so the live decl's cache_size is what a static NodeList allocates too — a few bytes it never
    reads, against a second decl that differs in one field. */
-static const IdlIndexedDecl NODELIST_INDEXED = { "NodeList", coll_length, coll_item, NULL, sizeof(CollCache) };
-static const IdlIndexedDecl HTMLCOLL_INDEXED = { "HTMLCollection", coll_length, coll_item, coll_named,
-                                                 sizeof(CollCache) };
+static const IdlIndexedDecl NODELIST_INDEXED = { "NodeList", coll_length_c, coll_item_c, NULL, sizeof(CollCache),
+                                                 nodelist_own_step };
+static const IdlIndexedDecl HTMLCOLL_INDEXED = { "HTMLCollection", coll_length_c, coll_item_c, coll_named_c,
+                                                 sizeof(CollCache), htmlcoll_own_step };
 
 /* ---- the members ------------------------------------------------------------------------------------------ */
-static JSValue js_coll_length(JSContext *ctx, JSValueConst this_val, int magic)
+
+#define COLL_LENGTH_ALGORITHM "DOM §4.2.10 Old-style collections: NodeList and HTMLCollection length"
+#define COLL_LENGTH_STAGES(X) \
+    X(COLL_LENGTH_COUNT, COLL_LENGTH_ALGORITHM " (return the number of nodes represented by the collection)")
+enum { IDL_STEP_STAGE_BASE(COLL_LENGTH_STAGES) COLL_LENGTH_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const COLL_LENGTH_STEPS[] = { COLL_LENGTH_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static int g_length_id = -1;
+
+static int js_coll_length(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    (void)magic;
-    return JS_NewUint32(ctx, coll_length(ctx, this_val));
+    uint32_t len;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == COLL_LENGTH_COUNT, "a collection's length resumed into a stage it does not have");
+    if (coll_length_rest(ctx, hdr->this_val, st, &len)) return JS_STEP_YIELD;
+    *presult = JS_NewUint32(ctx, len);
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl COLL_LENGTH_DECL = {
+    js_coll_length, sizeof(CollWalk), coll_walk_visit, NULL, COLL_LENGTH_ALGORITHM, COLL_LENGTH_STEPS
+};
 
 /* §4.2.10.1 Interface NodeList's item(index) — "The item(index) method must return the indexth node in the
    collection. If there is no indexth node in the collection, then the method must return null." That null past
@@ -638,62 +864,102 @@ static JSValue js_coll_length(JSContext *ctx, JSValueConst this_val, int magic)
  * a fact about the value and not about that collection's contents. */
 #define COLL_ITEM_ALGORITHM "DOM §4.2.10 Old-style collections: NodeList and HTMLCollection item(index)"
 #define COLL_ITEM_STAGES(X)                                                                                   \
+    X(COLL_ITEM_COUNT, COLL_ITEM_ALGORITHM " (the number of nodes represented by the collection)")            \
     X(COLL_ITEM_READ, COLL_ITEM_ALGORITHM " (return the indexth node or element in the collection, or null)")
 enum { IDL_STEP_STAGE_BASE(COLL_ITEM_STAGES) COLL_ITEM_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const COLL_ITEM_STEPS[] = { COLL_ITEM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* item()'s state: the unknown index's chain, its count of positions, the index once known, and the walk. */
+typedef struct {
+    IdlIndexChain chain;
+    CollWalk      walk;
+    uint32_t      length, index;
+    uint8_t       known;
+} CollItemState;
+
+static void coll_item_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    idl_index_chain_visit(ctx, &((CollItemState *)st)->chain, v);
+}
+
 static int js_coll_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    IdlIndexChain *s = state;
-    uint32_t i = 0;
+    CollItemState *s = state;
     bool past_end = false;
     JSValue r;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);   /* this machine makes no request that delivers a value */
     *presult = JS_UNDEFINED;
-    DCHECK(hdr->stage == COLL_ITEM_READ,
-           "§4.2.10's `item` resumed into a stage the algorithm does not have — it is ONE sentence, and the "
-           "chain of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
     DCHECK(argc == 1,
            "§4.2.10's `item` reached its body with an argument count its declaration does not produce — its "
            "one `unsigned long index` is required, so Web IDL §3.6's argument-count check refuses a shorter call");
-    if (concolic_is(argv[0])) {
-        int rc = idl_index_chain_run(ctx, hdr, s, argv[0], coll_length(ctx, hdr->this_val),
-                                     COLL_ITEM_ALGORITHM, &i, &past_end);
+    if (hdr->stage == COLL_ITEM_COUNT) {
+        /* Only an unknown index asks the count: the chain's positions are the collection's indices. */
+        if (concolic_is(argv[0]) && coll_length_rest(ctx, hdr->this_val, &s->walk, &s->length))
+            return JS_STEP_YIELD;
+        memset(&s->walk, 0, sizeof s->walk);
+        hdr->stage = COLL_ITEM_READ;
+    }
+    DCHECK(hdr->stage == COLL_ITEM_READ, "§4.2.10's `item` resumed into a stage the algorithm does not have");
+    if (!s->known && concolic_is(argv[0])) {
+        int rc = idl_index_chain_run(ctx, hdr, &s->chain, argv[0], s->length, COLL_ITEM_ALGORITHM, &s->index,
+                                     &past_end);
         if (rc)
             return rc;   /* parked at the fork */
         if (past_end) {
             *presult = JS_NULL;   /* §4.2.10.1's and §4.2.10.2's own past-the-end answer */
             return JS_STEP_DONE;
         }
-    } else {
-        i = idl_index_arg_known(ctx, argv[0], COLL_ITEM_ALGORITHM);
+        s->known = 1;
+    } else if (!s->known) {
+        s->index = idl_index_arg_known(ctx, argv[0], COLL_ITEM_ALGORITHM);
+        s->known = 1;
     }
-    r = coll_item(ctx, hdr->this_val, i);
+    if (coll_item_rest(ctx, hdr->this_val, s->index, &s->walk, &r)) return JS_STEP_YIELD;
     *presult = JS_IsUndefined(r) ? JS_NULL : r;
     return JS_STEP_DONE;
 }
 
 static const IdlStepDecl COLL_ITEM_DECL = {
-    js_coll_item, sizeof(IdlIndexChain), idl_index_chain_visit, NULL,
+    js_coll_item, sizeof(CollItemState), coll_item_visit, NULL,
     COLL_ITEM_ALGORITHM, COLL_ITEM_STEPS, 0, NULL
 };
 
-static JSValue js_coll_named_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+#define COLL_NAMED_ALGORITHM "DOM §4.2.10.2 Interface HTMLCollection: namedItem(key)"
+#define COLL_NAMED_STAGES(X) X(COLL_NAMED_WALK, COLL_NAMED_ALGORITHM " step 2 (the first element in the collection)")
+enum { IDL_STEP_STAGE_BASE(COLL_NAMED_STAGES) COLL_NAMED_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const COLL_NAMED_STEPS[] = { COLL_NAMED_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_coll_named_item(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     const char *name;
+    size_t n;
+    bool more;
     JSValue r;
 
-    (void)magic;
-    if (argc < 1) return JS_NULL;
-    name = JS_ToCString(ctx, argv[0]);   /* a real string by now */
-    if (!name) return JS_EXCEPTION;
-    r = coll_named(ctx, this_val, name);
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == COLL_NAMED_WALK && argc == 1,
+           "§4.2.10.2's `namedItem` reached its body in a stage or with an argument count it does not have");
+    if (concolic_is(argv[0]))
+        DFAIL("§4.2.10.2's namedItem was handed an unknown key: build the walk's fork over the key's domain, the "
+              "question the keyed entry's GP_KEYDOMAIN asks of key_domain_step");
+    name = JS_ToCStringLen(ctx, &n, argv[0]);   /* a real string by now */
+    if (!name) return JS_STEP_ABRUPT;
+    more = coll_named_rest(ctx, hdr->this_val, name, n, st, &r);
     JS_FreeCString(ctx, name);
-    return JS_IsUndefined(r) ? JS_NULL : r;
+    if (more) return JS_STEP_YIELD;
+    *presult = JS_IsUndefined(r) ? JS_NULL : r;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl COLL_NAMED_DECL = {
+    js_coll_named_item, sizeof(CollWalk), coll_walk_visit, NULL, COLL_NAMED_ALGORITHM, COLL_NAMED_STEPS
+};
 
 /* ---- construction ------------------------------------------------------------------------------------------ */
 static JSValue coll_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl *decl, int kind,
@@ -854,6 +1120,7 @@ void collections_init(JSContext *ctx)
        is nothing here to throw. The type states the SIGN, which is the whole of what it decides. */
     static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
+    static const IdlArgType KEYED_ARGS[4] = { IDL_ANY, IDL_ANY, IDL_ANY, IDL_ANY };
     JSClassDef nl = { "NodeList" }, hc = { "HTMLCollection" };
 
     DCHECK(!g_ready, "collections_init ran twice — the interfaces are declared once per AGENT");
@@ -870,7 +1137,9 @@ void collections_init(JSContext *ctx)
     /* ONE declaration for `item`, installed on BOTH prototypes — it is the same operation with the same
        conversion in both IDLs, and two pool entries would be two copies of one fact. */
     g_item_id = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &COLL_ITEM_DECL, 0);
-    g_named_item_id = idl_method_id(ctx, ONE_STR, 1, js_coll_named_item, 0);
+    g_named_item_id = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &COLL_NAMED_DECL, 0);
+    g_length_id = idl_getter_id_step(ctx, &COLL_LENGTH_DECL, 0);
+    g_keyed_id = idl_method_id_step(ctx, KEYED_ARGS, 4, NULL, 0, &COLL_KEYED_DECL, 0);
     g_ready = 1;
     realm_declare_intrinsic(collections_install_protos);
 }
@@ -889,8 +1158,8 @@ void collections_install_protos(JSContext *ctx)
     CHECK(!JS_IsException(nlp) && !JS_IsException(hcp), "a collection prototype could not be allocated");
     idl_interface_tag(ctx, nlp, "NodeList");
     idl_interface_tag(ctx, hcp, "HTMLCollection");
-    idl_install_accessor_no_user_code(ctx, nlp, "length", js_coll_length, 0, -1);
-    idl_install_accessor_no_user_code(ctx, hcp, "length", js_coll_length, 0, -1);
+    idl_install_accessor_step(ctx, nlp, "length", g_length_id, -1);
+    idl_install_accessor_step(ctx, hcp, "length", g_length_id, -1);
     idl_install_method(ctx, nlp, "item", g_item_id);
     idl_install_method(ctx, hcp, "item", g_item_id);
     idl_install_method(ctx, hcp, "namedItem", g_named_item_id);
