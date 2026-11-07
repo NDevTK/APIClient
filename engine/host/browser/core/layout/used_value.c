@@ -2518,77 +2518,115 @@ static UvLimits uv_limits(lxb_dom_element_t *el, UvBox box, bool vertical)
     return lim;
 }
 
-/* §10.4's SECOND ALGORITHM — the CONSTRAINT-VIOLATION TABLE — whose ANTECEDENT is tested here and is FALSE in
- * this build, so what stands here is the crash that names it rather than eleven rows nothing can exercise.
- *
- * §10.4's own words: "However, for replaced elements with an INTRINSIC RATIO and BOTH 'width' AND 'height'
- * SPECIFIED AS 'auto', the algorithm is as follows: select from the table the resolved height and width values
- * for the appropriate constraint violation. Take the max-width and max-height as max(min, max) so that
- * min <= max holds true." §10.7 does not restate it — "for replaced elements with both 'width' and 'height'
- * computed as 'auto', use the algorithm under Minimum and maximum widths above to find the used width and
- * height" — so the two axes are ONE joint solve and the per-axis clamp below is not merely a different order
- * of the same arithmetic, it is a different answer: the table PRESERVES THE RATIO, which two independent
- * clamps cannot.
- *
- * IT IS REACHED BY A `canvas`, AND THE SENTENCE THAT STOOD HERE SAID IT COULD NOT BE. That sentence was an
- * argument about THIS TREE and not about the spec — "core/layout/replaced_element.c mints `has_ratio` in
- * exactly one place, `rep_sized(0.0, 0.0)`, whose degenerate ratio css-images-3 §4.1 denies" — and it stopped
- * being true the moment that component derived HTML §4.12.5 "The canvas element"'s bitmap: a `<canvas>` has a
- * natural width of 300 and a natural height of 150 from its own content attributes, so it has a natural ratio
- * of 2, which is the first non-degenerate one this engine has ever produced. THE TRIGGER IS ORDINARY
- * RESPONSIVE CSS — `canvas { max-width: 100% }` with neither `width` nor `height` declared — so this abort is
- * a work queue rather than an edge case, and the per-axis clamp it stands in front of is the WRONG answer for
- * exactly the element that now reaches it.
- *
- * THE SENTENCE HERE SAID HTML §15.4.3 "Attributes for embedded content and images" WOULD MOVE IT OUT OF
- * REACH AGAIN, AND IT WAS SPEC-WRONG ABOUT ITS OWN SUBJECT. It read: §15.4.3 maps the `width`/`height`
- * CONTENT attributes to presentational hints on the `width`/`height` PROPERTIES, which makes the antecedent's
- * "both specified as 'auto'" FALSE for every `<canvas width=… height=…>`, so only a bare `<canvas>` under a
- * `max-width` still reaches this. THE MECHANISM IS EXACTLY RIGHT AND `canvas` IS NOT IN IT. §15.4.3 has two
- * paragraphs that map those attributes to the DIMENSION PROPERTIES and `canvas` is in neither: the first is
- * "The width and height attributes on an img element's dimension attribute source map to the dimension
- * properties 'width' and 'height' on the img element respectively", and the second is the same sentence for
- * "embed, iframe, object, and video elements, and input elements with a type attribute in the Image Button
- * state". `canvas` gets ONE sentence in that section and it is a different property — "The width and height
- * attributes map to the aspect-ratio property on canvas elements" — which leaves `width` and `height`
- * computing to `auto` whatever the attributes say. So a SIZED `<canvas width=300 height=150>` reaches this
- * abort exactly as a bare one does, its 300x150 being HTML §4.12.5 "The canvas element"'s BITMAP and
- * therefore a NATURAL dimension rather than a hint, and the eleven rows are owed for the whole population
- * rather than for a corner of it.
- * WHAT THE RETIRED SENTENCE IS RIGHT ABOUT IS `<img>`, which IS in the first paragraph — so a presentational
- * hint really does falsify the antecedent there, and what still reaches this is an `<img>` with no dimension
- * attributes the day a DECODER gives §15.4.2 "Images"' first rule real natural dimensions. That is the case
- * that matters most, because it is what makes a narrow viewport scale a photograph's height instead of
- * leaving it at its natural one. BUILD the eleven rows. */
-/* `len` is the size the pass ran with on its own axis (`vertical`); the other axis is read as computed. */
-static void uv_require_no_ratio_table(lxb_dom_element_t *el, const UvLimits *lim, bool vertical, CssLength len)
+/* CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'"'s second algorithm: "for replaced
+   elements with an intrinsic ratio and both width and height specified as auto", the limits of both axes
+   resolve together through its table, which preserves the ratio where two per-axis clamps would not; §10.7
+   delegates both axes' limits to it. True with `*rep` for that element under a limit on either axis, the only
+   case in which the table and the per-axis steps can disagree. A flex or grid item's tentative sizes are its
+   container's algorithm's, which the table's `w` and `h` are not, so it is refused. */
+static bool uv_ratio_table_applies(lxb_dom_element_t *el, UvBox box, bool vertical, CssLength len,
+                                   const UvLimits *lim, ReplacedElement *rep)
 {
-    ReplacedElement rep;
+    UvLimits other;
 
-    /* The cheap conjuncts first, and the classification last — `replaced_element_of` reads an image request's
-       state, and the table's subject is a shape that answers no to one of these two tests long before that. */
-    if (!lim->has_max && !(lim->has_min && lim->min.px > 0.0)) return;
     if (!uv_len_is_auto(len) || !css_computed_length_is(el, vertical ? "width" : "height", CSS_KEYWORD_AUTO))
-        return;
-    rep = replaced_element_of(el);
-    if (!rep.replaced || !rep.has_ratio) return;
-    DFAIL("CSS 2.1 §10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\" has a SECOND algorithm "
-          "for exactly this element — a REPLACED element with an INTRINSIC RATIO and both `width` and `height` "
-          "specified as `auto`, under a declared limit — and the per-axis clamp is the WRONG one for it: two "
-          "independent clamps distort the ratio, and the table is what preserves it. §10.7 delegates to the "
-          "same table (\"for replaced elements with both 'width' and 'height' computed as 'auto', use the "
-          "algorithm under Minimum and maximum widths above\"), so it resolves BOTH axes in one step. Its "
-          "eleven rows are over `w` and `h`, \"the results of the width and height computations IGNORING the "
-          "'min-width', 'min-height', 'max-width' and 'max-height' properties\" — which is the tentative pass "
-          "this component already runs on each axis — after \"take the max-width and max-height as "
-          "max(min, max) so that min <= max holds true\". WHAT REACHED THIS IS AN INTRINSIC RATIO, AND THE "
-          "ELEMENT THAT HAS ONE IS A `canvas`: core/layout/replaced_element.c derives HTML §4.12.5 \"The "
-          "canvas element\"'s bitmap from the element's own `width` and `height` content attributes, whose "
-          "§4.12.5 defaults are 300 and 150, so its ratio is 2 — the first non-degenerate one in this build. "
-          "`canvas { max-width: 100% }` with neither size declared is the whole trigger. BUILD the eleven "
-          "rows over the two tentative values, and note that the row conditions are a DISJOINT partition — the "
-          "four single-violation rows must be tested AFTER the six double-violation ones or a box violating "
-          "both takes the wrong one");
+        return false;
+    *rep = replaced_element_of(el);
+    if (!rep->replaced || !rep->has_ratio) return false;
+    other = uv_limits(el, box, !vertical);
+    if (!lim->has_max && lim->min.px <= 0.0 && !other.has_max && other.min.px <= 0.0) return false;
+    if (box == UV_BOX_ITEM)
+        DFAIL("CSS 2.1 §10.4's constraint-violation table over a flex or grid item: its `w` and `h` are \"the "
+              "results of the width and height computations ignoring\" the limits, which for an item are its "
+              "container's algorithm's. BUILD the table over those tentative sizes");
+    return true;
+}
+
+/* One limit pair in the content box, which the table's ratio is over (css-sizing-3 §2 "Terminology": a
+   preferred aspect ratio "is applied to its content box"); the limits are in css-sizing-3 §3.3's box. */
+static void uv_limits_to_content(lxb_dom_element_t *el, UvLimits *lim, bool vertical)
+{
+    CssPx sur;
+
+    if (!uv_is_border_box(el)) return;
+    sur = uv_surround_total(uv_surround(el, vertical));
+    lim->min = css_px_max(css_px_sub(lim->min, sur), css_px(0.0));
+    if (lim->has_max) lim->max = css_px_max(css_px_sub(lim->max, sur), css_px(0.0));
+}
+
+static CssPx uv_min_of_max(CssPx v, const UvLimits *lim)
+{
+    return lim->has_max ? css_px_min(v, lim->max) : v;
+}
+
+/* The table's resolved size on `vertical`'s axis, as a computed value in css-sizing-3 §3.3's box: "then apply
+   the rules under 'Calculating widths and margins' above, as if width were computed as this value". `w` and
+   `h` are §10.3.2's and §10.6.2's arms with both sizes `auto`, taken here rather than through used_value_px,
+   whose other axis would ask this table back. Every `h/w` and `w/h` is the ratio: each tentative pair is a
+   natural pair or one natural size and the ratio. The two-violation rows are tested first, so the eleven rows
+   partition; their `max-width/w ≤ max-height/h` is compared cross-multiplied, which a zero `w` cannot divide. */
+static CssPx uv_ratio_table(lxb_dom_element_t *el, const ReplacedElement *rep, UvBox box, bool vertical)
+{
+    UvLimits lw = uv_limits(el, box, false), lh = uv_limits(el, box, true);
+    double r = rep->ratio;
+    CssPx w, h, rw, rh, out;
+    bool w_over, w_under, h_over, h_under;
+
+    DCHECK(rep->has_ratio && r > 0.0, "CSS 2.1 §10.4's table was asked of a replaced element without a ratio");
+    if (rep->has_width) w = rep->width;
+    else if (rep->has_height) w = css_px_scale(rep->height, r);
+    else w = used_value_replaced_auto_width_px(el, rep);
+    h = rep->has_height ? rep->height : css_px_scale(w, 1.0 / r);
+    uv_limits_to_content(el, &lw, false);
+    uv_limits_to_content(el, &lh, true);
+    /* "Take the max-width and max-height as max(min, max) so that min ≤ max holds true." */
+    if (lw.has_max) lw.max = css_px_max(lw.min, lw.max);
+    if (lh.has_max) lh.max = css_px_max(lh.min, lh.max);
+    w_over = lw.has_max && w.px > lw.max.px;
+    w_under = w.px < lw.min.px;
+    h_over = lh.has_max && h.px > lh.max.px;
+    h_under = h.px < lh.min.px;
+    rw = w;
+    rh = h;
+    if (w_over && h_over) {
+        if (lw.max.px * h.px <= lh.max.px * w.px) {
+            rw = lw.max;
+            rh = css_px_max(lh.min, css_px_scale(lw.max, 1.0 / r));
+        } else {
+            rw = css_px_max(lw.min, css_px_scale(lh.max, r));
+            rh = lh.max;
+        }
+    } else if (w_under && h_under) {
+        if (lw.min.px * h.px <= lh.min.px * w.px) {
+            rw = uv_min_of_max(css_px_scale(lh.min, r), &lw);
+            rh = lh.min;
+        } else {
+            rw = lw.min;
+            rh = uv_min_of_max(css_px_scale(lw.min, 1.0 / r), &lh);
+        }
+    } else if (w_under && h_over) {
+        rw = lw.min;
+        rh = lh.max;
+    } else if (w_over && h_under) {
+        rw = lw.max;
+        rh = lh.min;
+    } else if (w_over) {
+        rw = lw.max;
+        rh = css_px_max(css_px_scale(lw.max, 1.0 / r), lh.min);
+    } else if (w_under) {
+        rw = lw.min;
+        rh = uv_min_of_max(css_px_scale(lw.min, 1.0 / r), &lh);
+    } else if (h_over) {
+        rw = css_px_max(css_px_scale(lh.max, r), lw.min);
+        rh = lh.max;
+    } else if (h_under) {
+        rw = uv_min_of_max(css_px_scale(lh.min, r), &lw);
+        rh = lh.min;
+    }
+    out = vertical ? rh : rw;
+    DCHECK(out.px >= 0.0, "CSS 2.1 §10.4's table resolved a negative size from non-negative operands");
+    if (!uv_is_border_box(el)) return out;
+    return css_px_add(out, uv_surround_total(uv_surround(el, vertical)));
 }
 
 /* ---- CSS 2.1 §10.3.2's LAST ARM AND §10.6.2's, WHICH ARE ONE RECTANGLE STATED TWICE ------------------------
@@ -3397,9 +3435,8 @@ CssPx used_value_replaced_content_based_minimum(lxb_dom_element_t *el, const Rep
    §10.4/§10.7's CLAMP IS `uv_sized`'s AND NOT THIS FUNCTION'S, and this is one of the two arms where that
    split has a consequence rather than being tidiness: §10.4's SECOND algorithm — the constraint-violation
    table, "for replaced elements with an INTRINSIC RATIO and both 'width' and 'height' specified as 'auto'" —
-   replaces the ordinary three steps for exactly the subject this function computes. Its antecedent is tested
-   in `uv_require_no_ratio_table`, one level up, because it is a fact about BOTH axes at once and this function
-   sees one; a `canvas` under a declared limit satisfies it and aborts there, for the reason stated there. */
+   replaces the ordinary three steps for exactly the subject this function computes. It is `uv_ratio_table`,
+   one level up, because it is a fact about both axes at once and this function sees one. */
 static CssPx uv_grid_item_auto_height(lxb_dom_element_t *el);
 static CssPx uv_grid_item_auto_width(lxb_dom_element_t *el, UvBox box);
 
@@ -4655,7 +4692,15 @@ static UvSized uv_sized_as(lxb_dom_element_t *el, UvBox box, bool vertical, CssL
        that assert; §17.5.2 now ANSWERS for a table's width, so the return is what keeps it out. */
     if (box == UV_BOX_TABLE) goto done;
     lim = uv_limits(el, box, vertical);
-    uv_require_no_ratio_table(el, &lim, vertical, r.len);
+    {
+        ReplacedElement rep;
+
+        if (uv_ratio_table_applies(el, box, vertical, r.len, &lim, &rep)) {
+            r.len = uv_len_px(uv_ratio_table(el, &rep, box, vertical));
+            r.used = uv_pass_size(el, r.len, box, vertical);
+            goto done;
+        }
+    }
     /* STEP 2 — "if the tentative used width is greater than 'max-width' … using the computed value of
        'max-width' as the computed value for 'width'". */
     if (lim.has_max && r.used.px > lim.max.px) {
