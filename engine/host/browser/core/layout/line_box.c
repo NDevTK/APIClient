@@ -96,10 +96,10 @@ static void lb_require_horizontal_tb(lxb_dom_element_t *el)
    nobody chose. It is read as its three longhands (css-inline-3 §4.2 "Transverse Box Alignment: the
    vertical-align property": `[ first | last ] || <'alignment-baseline'> || <'baseline-shift'>`). This
    implements §4.2.2's initial `baseline` ("use the dominant baseline choice of the parent") with §4.2.1's
-   initial `auto` source and §4.2.3's initial `0` shift, and `middle` for an atomic inline-level or replaced box
-   (`lb_atomic_extent`), each placing the box against the parent's baseline, which every box above it shares.
-   Under them §10.8.1's `A'` and `D'` are measured from one line, so step 3's maxima compare like numbers; any
-   other value crashes. */
+   initial `auto` source, and `middle` for an atomic inline-level or replaced box (`lb_atomic_extent`), each
+   placing the box against the parent's baseline, then §4.2.3's baseline-relative shifts (`lb_own_baseline_shift`)
+   raising it off that position. Under them §10.8.1's `A'` and `D'` are measured from one line, so step 3's
+   maxima compare like numbers; any other value crashes. */
 static void lb_require_baseline_alignment(lxb_dom_element_t *el, bool atomic)
 {
     CssLength shift;
@@ -152,17 +152,11 @@ static void lb_require_baseline_alignment(lxb_dom_element_t *el, bool atomic)
               "still has ONE source and is not a set this longhand indexes into. DECIDE which of the four is "
               "here, before reading a source that may select nothing");
     shift = css_computed_length(el, "baseline-shift");
-    if (shift.kind != CSS_LENGTH_ABSOLUTE || shift.px.px != 0.0)
-        DFAIL("css-inline-3 §4.2.3 \"Post-Alignment Shift: the baseline-shift longhand\" shifts this "
-              "inline-level box off the position §10.8's step 2 aligned it to — `sub`, `super`, a "
-              "`<length-percentage>` (whose percentage \"refer[s] to the used value of line-height\", which "
-              "core/css/css_computed_value.h's `css_used_line_height_px` answers), or one of the "
-              "LINE-RELATIVE values `top`, `center` and `bottom`. The first three are an offset added to this "
-              "box's `A'` and subtracted from its `D'` before step 3's maxima, which is arithmetic this file "
-              "already has the operands for; the last three are §10.8's own undefined-baseline case and are "
-              "not an offset at all. BUILD the baseline-relative arm here — the shift resolved against the "
-              "used `line-height` — and take the line-relative arm out through §10.8's step 2 with the top/"
-              "bottom boxes it belongs with, so the two are never averaged into one number");
+    if (shift.kind == CSS_LENGTH_KEYWORD && shift.keyword != CSS_KEYWORD_SUB && shift.keyword != CSS_KEYWORD_SUPER)
+        DFAIL("css-inline-3 §4.2.3 \"Post-Alignment Shift: the baseline-shift longhand\"'s line-relative "
+              "`top`, `center` or `bottom` \"shift the inline box and its contents relative to the bounds of its "
+              "line box\", which is CSS 2.2 §10.8's undefined-baseline case rather than an offset. BUILD them in "
+              "§10.8's step 2 with the line box's top and bottom, after the baseline-aligned boxes");
 }
 
 /* ---- §10.8's step 1 and §10.8.1's half-leading, for one inline box --------------------------------------- */
@@ -198,6 +192,41 @@ static bool lb_close(double a, double b)
     return diff <= 1e-9 * (1.0 + scale);
 }
 
+/* css-inline-3 §4.2.3 "Post-Alignment Shift: the baseline-shift longhand"'s baseline-relative shift of `el`'s own
+   box, positive upward: a <length>, a <percentage> "of the line-height" (its "Percentages: refer to the used
+   value of line-height", `el`'s own), `sub` "dropping by one fifth of the parent's used font-size" and
+   `super` "raising by one third of the parent's used font-size", the defaults where no font metric is
+   consulted. The line-relative keywords are refused by `lb_require_baseline_alignment` first. */
+static CssPx lb_own_baseline_shift(lxb_dom_element_t *el)
+{
+    CssLength shift = css_computed_length(el, "baseline-shift");
+    lxb_dom_element_t *parent;
+
+    if (shift.kind == CSS_LENGTH_ABSOLUTE) return shift.px;
+    if (shift.kind != CSS_LENGTH_KEYWORD) return css_length_resolve_pct(shift, css_used_line_height_px(el));
+    DCHECKF(shift.keyword == CSS_KEYWORD_SUB || shift.keyword == CSS_KEYWORD_SUPER,
+            "`baseline-shift: %s` reached the baseline-relative shift; lb_require_baseline_alignment refuses "
+            "the line-relative keywords first", css_keyword_name(shift.keyword));
+    parent = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+    DCHECK(parent != NULL, "an inline-level box on a line has no box-tree parent to take `sub`/`super` from");
+    return css_px_scale(css_font_size_px(parent), shift.keyword == CSS_KEYWORD_SUB ? -1.0 / 5.0 : 1.0 / 3.0);
+}
+
+/* The shift of the baseline `el`'s contents align to, from the line's root baseline: the sum over `el` and its
+   enclosing boxes while each is a non-atomic inline box. CSS 2.2 §10.8.1 aligns "the baseline of the box with
+   the baseline of the parent box", so an inline box's shift carries everything inside it; the walk stops at
+   the box establishing the inline formatting context, whose own shift applies in its parent's. */
+static CssPx lb_inline_boxes_shift(lxb_dom_element_t *el)
+{
+    CssPx sum = css_px(0.0);
+
+    while (el != NULL && css_computed_display_is(el, CSS_KEYWORD_INLINE)) {
+        sum = css_px_add(sum, lb_own_baseline_shift(el));
+        el = box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)));
+    }
+    return sum;
+}
+
 /* §10.8.1 for an inline box containing no glyphs, the case the section states itself: "if the inline box
    contains no glyphs at all, it is considered to contain a strut (an invisible glyph of zero width) with the
    `A` and `D` of the element's first available font". The box is measured as a glyph would be: "still for
@@ -229,6 +258,18 @@ static LbExtent lb_strut_extent(lxb_dom_element_t *el)
            "section's own \"the height of the inline box … is thus exactly 'line-height'\" is an identity over "
            "`A + L/2` and `D + L/2` with `L = 'line-height' - AD`, so a disagreement here is one of the three "
            "operands having been read for a different element than the other two");
+    return out;
+}
+
+/* §10.8.1's `A'` and `D'` of inline box `el` on a line, raised by its shifted baseline (`lb_inline_boxes_shift`).
+   The line's own strut is `lb_strut_extent` of the container, which no shift moves. */
+static LbExtent lb_inline_box_extent(lxb_dom_element_t *el)
+{
+    LbExtent out = lb_strut_extent(el);
+    CssPx s = lb_inline_boxes_shift(el);
+
+    out.above = css_px_add(out.above, s);
+    out.below = css_px_sub(out.below, s);
     return out;
 }
 
@@ -282,7 +323,7 @@ static CssPx lb_content_top_from_margin_edge(lxb_dom_element_t *el)
    boxes puts its last baseline under its bottom margin edge, so `below` is negative). `lb_take` is a maximum
    against the line's strut, non-negative for a non-negative `line-height`, so neither can pull a line box
    below zero. */
-static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
+static LbExtent lb_atomic_aligned_extent(lxb_dom_element_t *el)
 {
     CssPx margin_box = used_value_margin_edge_px(el, true);
     bool inline_block = css_computed_display_is(el, CSS_KEYWORD_INLINE_BLOCK);
@@ -340,6 +381,19 @@ static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
     if (!block_flow_last_line_box_baseline(el, &inner_baseline)) return out;
     out.above = css_px_add(lb_content_top_from_margin_edge(el), inner_baseline);
     out.below = css_px_sub(margin_box, out.above);
+    return out;
+}
+
+/* §10.8's step 2 for an atomic inline: the aligned split, raised by css-inline-3 §4.2.3's shift of the box itself
+   and of the inline boxes around it, whose baseline it aligns to. */
+static LbExtent lb_atomic_extent(lxb_dom_element_t *el)
+{
+    LbExtent out = lb_atomic_aligned_extent(el);
+    CssPx s = css_px_add(lb_own_baseline_shift(el),
+                         lb_inline_boxes_shift(box_tree_parent(box_tree_child_of_node(lxb_dom_interface_node(el)))));
+
+    out.above = css_px_add(out.above, s);
+    out.below = css_px_sub(out.below, s);
     return out;
 }
 
@@ -740,7 +794,7 @@ static size_t lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
         lb_take(&w->out, lb_atomic_extent(box));
         derived++;
     } else if (w->strut_of != box) {
-        w->strut = lb_strut_extent(box);
+        w->strut = lb_inline_box_extent(box);
         w->strut_of = box;
         derived++;
         lb_take(&w->out, w->strut);
@@ -1852,7 +1906,7 @@ static bool lb_span_pull(LbFill *f)
             if (f->span_strut_of == text_run_measure_item_style(&f->m, j) && f->span_strut_line == i) continue;
             f->span_strut_of = text_run_measure_item_style(&f->m, j);
             f->span_strut_line = i;
-            f->span_strut = lb_strut_extent(f->span_strut_of);
+            f->span_strut = lb_inline_box_extent(f->span_strut_of);
             layout_job_line_metrics_spend(1);
             b = f->span_strut;
             f->span_lo = css_px_min(f->span_lo, css_px_sub(css_px_add(top, e.above), b.above));
@@ -2080,14 +2134,17 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
     const LbLineFacts *facts;
     LineBoxGlyph *v = NULL;
     size_t i, j, ng = 0, cap = 0;
+    lxb_dom_element_t *shift_of = NULL;   /* the box `shift` was derived for */
+    CssPx shift = css_px(0.0);
 
     DCHECK(style != NULL && out != NULL,
            "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 text was asked for with no element whose properties "
            "the establishing box has, or with nowhere to report the characters");
     /* §9.4.2's physical axes are asserted at this entry, not inside `lb_align_offset`, because both
        coordinates are physical and only `origin_x` goes through that helper; `baseline_y` comes from the
-       `top`/`e.above` stack with no alignment in it, and css-writing-modes-4 §3.2 "Block Flow Direction: the
-       writing-mode property" makes the block axis the one that moves. One call, not
+       `top`/`e.above` stack raised only by each box's shift (`lb_inline_boxes_shift`), and
+       css-writing-modes-4 §3.2 "Block Flow Direction: the writing-mode property" makes the block axis the one
+       that moves. One call, not
        `line_box_inline_fragments`' two: this entry is handed the establishing container itself, so
        css-writing-modes-4 §7.3 "Orthogonal Flows" has no second element to compare here. */
     lb_require_horizontal_tb(style);
@@ -2126,7 +2183,11 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
             /* The offset is `text_run_measure_line_offset` at this item, the walk `TextRunLine.size` is taken by,
                so a glyph's position and its line's width describe one text; no advance is accumulated here. */
             v[ng].origin_x = css_px_add(align, text_run_measure_line_offset(&f->m, f->lines[i], j));
-            v[ng].baseline_y = baseline;
+            if (v[ng].style != shift_of) {
+                shift_of = v[ng].style;
+                shift = lb_inline_boxes_shift(shift_of);
+            }
+            v[ng].baseline_y = css_px_sub(baseline, shift);
             ng++;
         }
     }
