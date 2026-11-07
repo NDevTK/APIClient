@@ -1536,6 +1536,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/xwinfwd.h"
 #include "fixture/msgprefix.h"
 #include "fixture/prefixjoin.h"
+#include "fixture/xdhost.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2227,6 +2228,7 @@ TF_DOCS[] = {
     { "xwinfwd", HTML_XWINFWD },
     { "msgprefix", HTML_MSGPREFIX },
     { "prefixjoin", HTML_PREFIXJOIN },
+    { "xdhost", HTML_XDHOST },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -17967,6 +17969,38 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `xdhost` document (fixture/xdhost.h): a host the page's own bytes decide is concrete, so a
+   comparison of two such hosts runs one arm, while a host the fragment picks still runs both. */
+TF_UNIT void probes_xdhost(const char *js, Probe *tab, int *n) {
+    const char *a_why = NULL, *b_why = NULL, *c_why = NULL, *o_why = NULL;
+    int a_tt = 1, b_tt = 1, c_tt = 1, o_tt = 1;
+
+    fold_row(&a_tt, &a_why, !!strstr(js, "\"/api/xd-same-a\""),
+             "there is no /api/xd-same-a record: the comparison of two hosts the page wrote did not run its arm");
+    fold_row(&a_tt, &a_why, !strstr(js, "/api/xd-cross-a"),
+             "/api/xd-cross-a is in the document: an anchor's host over `location.href` or over the constant "
+             "`/api/xd-path` was answered as unknown, although the page's bytes reach past the authority in both");
+    fold_row(&b_tt, &b_why, !!strstr(js, "\"/api/xd-same-b\""),
+             "there is no /api/xd-same-b record: the comparison over a path built from the query did not run");
+    fold_row(&b_tt, &b_why, !strstr(js, "/api/xd-cross-b"),
+             "/api/xd-cross-b is in the document: the host of `/api/xd-item/` plus the query, written back through "
+             "`a.href`, was answered as unknown, although the path the page wrote decides it");
+    fold_row(&c_tt, &c_why, !!strstr(js, "\"/api/xd-same-c\""),
+             "there is no /api/xd-same-c record: `new URL(path, location.href).host` did not reach its comparison");
+    fold_row(&c_tt, &c_why, !strstr(js, "/api/xd-cross-c"),
+             "/api/xd-cross-c is in the document: the URL interface answered the host of a path the page wrote "
+             "against `location.href` as unknown");
+    fold_row(&o_tt, &o_why, !!strstr(js, "\"/api/xd-open-same\"") && !!strstr(js, "\"/api/xd-open-cross\""),
+             "the fragment's own href did not run both arms: a host the attacker picks was answered as concrete");
+    const Probe rows[] = {
+        { "xd-path-one-arm", a_tt, "/api/xd-same-a", SESS_EXPLORE, a_why },
+        { "xd-item-one-arm", b_tt, "/api/xd-same-b", SESS_EXPLORE, b_why },
+        { "xd-url-one-arm", c_tt, "/api/xd-same-c", SESS_EXPLORE, c_why },
+        { "xd-open-both-arms", o_tt, "/api/xd-open-same", SESS_EXPLORE, o_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `prefixjoin` document (fixture/prefixjoin.h): each listener's kept prefix reaches markup joined
    with a later message's member, and its PoC states both messages in order; pjFrag's also states the fragment the
    joined value depends on. */
@@ -26288,6 +26322,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_xwinfwd(js, probes, &np);
     probes_msgprefix(js, probes, &np);
     probes_prefixjoin(js, probes, &np);
+    probes_xdhost(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);

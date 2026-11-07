@@ -53,8 +53,8 @@
    Returns false when there is no href or it does not parse — the url is then null, which every member has an
    answer for.
    `raw_href` receives the attribute's VALUE (owned; JS_NULL when absent), which is a CONCOLIC when a flow
-   stashed an attacker string there — the parse then runs on its concrete EXAMPLE and js_link_get DERIVES the
-   member from it, keeping the provenance. Reading it as BYTES here is what dropped the triple. */
+   stashed an attacker string there — the parse then runs on its concrete EXAMPLE, and js_link_get answers the
+   members from the unknown record instead (hyperlink_member_unknown) unless that example does not parse. */
 static bool hyperlink_url(JSContext *ctx, JSValueConst el, UrlRecord *out, JSValue *raw_href)
 {
     JSValue href = element_attr_get_value(ctx, el, "href");
@@ -74,9 +74,7 @@ static bool hyperlink_url(JSContext *ctx, JSValueConst el, UrlRecord *out, JSVal
     base_url = document_base_url_of(node->owner_document);
     if (JS_IsNull(href) || JS_IsException(href)) goto done;
 
-    /* A concolic with no example yet has no bytes to parse, and §4.6.3 has no step that invents them: the url
-       is null, so the href getter's step 4 answers with the attribute value itself — still carrying its
-       provenance, which is the whole point of not stringifying it. */
+    /* A concolic with no example yet has no bytes to parse here; js_link_get answers it as an unknown url. */
     concrete = concolic_is(href) ? concolic_example(ctx, href) : JS_DupValue(ctx, href);
     if (!JS_IsString(concrete)) { JS_FreeValue(ctx, concrete); goto done; }
     s = JS_ToCStringLen(ctx, &len, concrete);
@@ -115,16 +113,51 @@ static const struct { const char *name; int member; bool readonly; } HL_M[] = {
 };
 #define HL_N ((int)(sizeof HL_M / sizeof HL_M[0]))
 
+/* §4.6.3's url over an href attribute holding unknown input `href` (borrowed): the unknown URL record that its
+   encoding-parse relative to the node document's base URL is (url_construct_unknown, as `new URL(href, base)`
+   composes it), and member `magic` is that record's (url_member_unknown). A member the page's own bytes decide
+   is then concrete, and the rest derive from one record, so `a.href = a.href` keeps it. Owned. */
+static JSValue hyperlink_member_unknown(JSContext *ctx, JSValueConst el, JSValueConst href, int magic)
+{
+    const char *base_url = document_base_url_of(node_of(el)->owner_document);
+    JSValueConst argv[2];
+    JSValue base = JS_UNDEFINED, rec, r;
+
+    DCHECK(concolic_is(href), "a hyperlink's unknown url was asked of an href the page determined");
+    argv[0] = href;
+    if (base_url && *base_url) {
+        base = JS_NewString(ctx, base_url);
+        CHECK(!JS_IsException(base), "hyperlink: OOM spelling the document base URL");
+        argv[1] = base;
+    }
+    rec = url_construct_unknown(ctx, JS_IsUndefined(base) ? 1 : 2, argv);
+    JS_FreeValue(ctx, base);
+    CHECK(!JS_IsException(rec), "hyperlink: OOM composing an unknown href's URL record");
+    r = url_member_unknown(ctx, rec, HL_M[magic].member);
+    JS_FreeValue(ctx, rec);
+    return r;
+}
+
 static JSValue js_link_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     UrlRecord u;
     JSValue raw = JS_NULL, r;
+    bool ok;
 
     DCHECK(magic >= 0 && magic < HL_N && HL_M[magic].member == magic,
            "§4.6.3's member table is not indexed by the member id it names — the getter reads the member's "
            "name out of it to compose a derived value's identity, and a shifted row gives two members one");
 
-    if (!hyperlink_url(ctx, this_val, &u, &raw)) {
+    ok = hyperlink_url(ctx, this_val, &u, &raw);
+    /* Unknown input in the href is an unknown url unless its example is bytes that do not parse, which the
+       null-url answers below take. */
+    if (concolic_is(raw) && (ok || !concolic_example_present(raw))) {
+        if (ok) url_record_free(&u);
+        r = hyperlink_member_unknown(ctx, this_val, raw, magic);
+        JS_FreeValue(ctx, raw);
+        return r;
+    }
+    if (!ok) {
         /* §4.6.3's href getter steps 3 and 4: with a null url, `href` is the ATTRIBUTE's own value — a page
            that wrote something unparseable reads back what it wrote, and an attacker string reads back STILL
            TAINTED — and every other member is the empty string. */
@@ -138,21 +171,6 @@ static JSValue js_link_get(JSContext *ctx, JSValueConst this_val, int magic)
         free(s);
     }
     url_record_free(&u);
-    /* A MEMBER OF A TAINTED URL IS TAINTED. The href attribute held unknown external input, so everything
-       computed off it is attacker-controlled: `a.href = location.hash.slice(1)` then `a.search` is the
-       fragment's own bytes, and answering with a bare string is how the sink downstream reads as clean. The
-       REAL parse already ran on the concrete example above — the way `+` really concatenates — so what is
-       needed here is a DERIVATION carrying it, which is §Solver-half's triple kept whole across the DOM round
-       trip.
-       IT IS THE DERIVATION SEAM AND NOT concolic_source_wrap, for two reasons that are the same reason.
-       source_wrap MINTS AT A SOURCE: it asserts that a declared source's shape is its provenance in braces, and
-       provenance is INHERITED through a derivation — so `location.hash.slice(1)` arrives carrying the declared
-       source `location.hash` with a derived shape, and wrapping it would abort on that assert. And it would
-       give every member of one href the SAME identity, so a flow that branched on `a.search` would have
-       DECIDED `a.pathname`, pruning arms nothing contradicts — the defect concolic.h names for the ordering
-       hook. Deriving per member keeps the eleven apart, which is what a constraint key has to do. */
-    if (concolic_is(raw))
-        r = concolic_builtin_hook(ctx, raw, HL_M[magic].name, r);   /* consumes `r` as the example */
     JS_FreeValue(ctx, raw);
     return r;
 }

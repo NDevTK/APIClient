@@ -1361,13 +1361,12 @@ bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *b
     return url_parse_into(out, input, len, base, -1, NULL);
 }
 
-UrlPrefixState url_prefix_state(const char *prefix, size_t len, const UrlRecord *base)
+/* url_prefix_state, with the record the prefix's bytes build left in `out` (initialised here; the caller frees). */
+static UrlPrefixState url_prefix_parse(const char *prefix, size_t len, const UrlRecord *base, UrlRecord *out)
 {
-    UrlRecord u;
     int st = -1;
 
-    (void)url_parse_into(&u, prefix, len, base, -1, &st);
-    url_record_free(&u);
+    (void)url_parse_into(out, prefix, len, base, -1, &st);
     switch (st) {
     case -1:                                  return URL_PREFIX_FAILED;
     case ST_SCHEME_START:                     return URL_PREFIX_SCHEME_START;
@@ -1394,6 +1393,15 @@ UrlPrefixState url_prefix_state(const char *prefix, size_t len, const UrlRecord 
     DFAIL("§4.4's basic URL parser reached the end of a prefix in a state this file does not name — the "
           "hostname override is entered only through url_parse_override, never by a fresh parse");
     return URL_PREFIX_FAILED;
+}
+
+UrlPrefixState url_prefix_state(const char *prefix, size_t len, const UrlRecord *base)
+{
+    UrlRecord u;
+    UrlPrefixState s = url_prefix_parse(prefix, len, base, &u);
+
+    url_record_free(&u);
+    return s;
 }
 
 bool url_prefix_decides_host(UrlPrefixState s)
@@ -1862,19 +1870,138 @@ static JSValue url_origin_over_base_origin(JSContext *ctx, JSValueConst unknown)
     return o;
 }
 
+/* The bytes the page itself wrote at the start of URL input `v`, owned, with their count in `*n`: all of a known
+   String, and of an unknown the shape's bytes ahead of its first hole (concolic_shape_hole_mask). */
+static char *url_page_prefix(JSContext *ctx, JSValueConst v, size_t *n)
+{
+    char *disp;
+
+    *n = 0;
+    if (concolic_is(v)) {
+        unsigned char *hole = concolic_shape_hole_mask(v);
+
+        disp = reclaim_strdup(concolic_shape_c(v));
+        CHECK(disp && hole, "url: OOM reading an address's page bytes");
+        while (disp[*n] && !hole[*n]) (*n)++;
+        free(hole);
+        return disp;
+    }
+    {
+        const char *c = JS_ToCString(ctx, v);
+
+        CHECK(c != NULL, "url: OOM reading a known URL input");
+        disp = reclaim_strdup(c);
+        JS_FreeCString(ctx, c);
+        CHECK(disp, "url: OOM reading a known URL input");
+        *n = strlen(disp);
+        return disp;
+    }
+}
+
+/* The URL_* members, as bits, that a §4.4 parse whose page bytes end in state `s` (building `page`) has decided
+   whatever bytes follow. Past the authority (path start, path, opaque path, query, fragment) no later byte
+   returns the machine to the scheme, userinfo, host or port states or fails the parse, so those members are the
+   page bytes', and so is the origin except a blob URL's, which §4.7 Origin reads off its path. The query state
+   has also ended the path, and the fragment state the query; `href` and `hash` are never decided. */
+static unsigned url_prefix_decided(UrlPrefixState s, const UrlRecord *page)
+{
+    unsigned m = 0;
+
+    if (s == URL_PREFIX_PATH_START || s == URL_PREFIX_PATH || s == URL_PREFIX_OPAQUE_PATH ||
+        s == URL_PREFIX_QUERY || s == URL_PREFIX_FRAGMENT) {
+        DCHECK(page->scheme && *page->scheme, "a prefix past the authority built a record with no scheme");
+        m |= 1u << URL_PROTOCOL | 1u << URL_USERNAME | 1u << URL_PASSWORD | 1u << URL_HOST | 1u << URL_HOSTNAME |
+             1u << URL_PORT;
+        if (strcmp(page->scheme, "blob")) m |= 1u << URL_ORIGIN;
+    }
+    if (s == URL_PREFIX_QUERY || s == URL_PREFIX_FRAGMENT) m |= 1u << URL_PATHNAME;
+    if (s == URL_PREFIX_FRAGMENT) m |= 1u << URL_SEARCH;
+    return m;
+}
+
+/* The members of the unknown URL record `rec` its page bytes decide (url_prefix_decided), with `page`
+   (initialised here; the caller frees) the record those bytes build: the input's page bytes parsed against its
+   base, where an unknown base's own page bytes stand for it and decide only what they decide of the base.
+   Named residual. Not covered: a record a setter derived (url_set_unknown), whose members this answers as
+   undecided. Next diff builds: each setter's own carry of the members it keeps, as url_record_host_open walks
+   them. How its absence shows: a member of `u` after `u.search = x` forks where `new URL(...)` of the same bytes
+   does not. */
+static unsigned url_record_page_decided(JSContext *ctx, JSValueConst rec, UrlRecord *page)
+{
+    const JSValue *ops;
+    int n = concolic_kept_operands(rec, "URL", &ops);
+    unsigned base_mask = ~0u;
+    UrlRecord b;
+    bool have_base = false;
+    char *in;
+    size_t len;
+    UrlPrefixState st;
+
+    url_record_init(page);
+    if (!n || !(concolic_is(ops[0]) || JS_IsString(ops[0]))) return 0;
+    url_record_init(&b);
+    if (n > 1 && concolic_is(ops[1])) {
+        char *bd = url_page_prefix(ctx, ops[1], &len);
+
+        base_mask = url_prefix_decided(url_prefix_parse(bd, len, NULL, &b), &b);
+        free(bd);
+        have_base = base_mask != 0;
+    } else if (n > 1 && JS_IsString(ops[1])) {
+        const char *bs = JS_ToCString(ctx, ops[1]);
+
+        CHECK(bs != NULL, "url: OOM reading a URL base");
+        have_base = url_parse(&b, bs, strlen(bs), NULL);
+        JS_FreeCString(ctx, bs);
+    }
+    /* A base the call has and this engine cannot read, or that does not parse, decides nothing here. */
+    if (n > 1 && !JS_IsUndefined(ops[1]) && !have_base) {
+        url_record_free(&b);
+        return 0;
+    }
+    in = url_page_prefix(ctx, ops[0], &len);
+    st = url_prefix_parse(in, len, have_base ? &b : NULL, page);
+    free(in);
+    url_record_free(&b);
+    return url_prefix_decided(st, page) & base_mask;
+}
+
 JSValue url_member_unknown(JSContext *ctx, JSValueConst unknown, int member)
 {
     JSValue hold, ex = JS_UNDEFINED;
     const UrlRecord *er;
+    UrlRecord page;
 
+    DCHECK(member >= URL_HREF && member <= URL_HASH, "an unknown URL record's member was asked by no URL_* index");
+    /* A member the page's own bytes decide is the same in every world, so it is that string and no unknown. */
+    if (url_record_page_decided(ctx, unknown, &page) & 1u << member) {
+        char *m = url_member_get(&page, member);
+        JSValue v;
+
+        url_record_free(&page);
+#if APICLIENT_DEV
+        er = url_unknown_example(ctx, unknown, &hold);
+        if (er) {
+            char *em = url_member_get(er, member);
+
+            DCHECKF(!strcmp(m, em), "the page bytes of an unknown URL decide its %s as `%s`, and its example's is "
+                    "`%s` — the example is not a parse of bytes that begin with the page's", URL_MEMBER_NAMES[member],
+                    m, em);
+            free(em);
+        }
+        JS_FreeValue(ctx, hold);
+#endif
+        v = JS_NewString(ctx, m);
+        free(m);
+        CHECK(!JS_IsException(v), "url: OOM spelling a decided member of an unknown URL");
+        return v;
+    }
+    url_record_free(&page);
     if (member == URL_ORIGIN) {
         JSValue o = url_origin_over_base_origin(ctx, unknown);
 
         if (!JS_IsUninitialized(o)) return o;
     }
     er = url_unknown_example(ctx, unknown, &hold);
-
-    DCHECK(member >= URL_HREF && member <= URL_HASH, "an unknown URL record's member was asked by no URL_* index");
     if (er) {
         char *m = url_member_get(er, member);
 
@@ -2331,16 +2458,13 @@ JSValue url_construct_unknown(JSContext *ctx, int argc, JSValueConst *argv)
    path, query or fragment and no later byte returns §4.4's machine to the host states. 0 where they do not. */
 static int url_base_page_record(JSContext *ctx, JSValueConst base, UrlRecord *b)
 {
-    char *disp = reclaim_strdup(concolic_shape_c(base));
-    unsigned char *hole = concolic_shape_hole_mask(base);
-    size_t n = 0;
+    size_t n;
+    char *disp;
     int ok;
 
-    (void)ctx;
-    CHECK(disp && hole, "url: OOM reading a base's page bytes");
-    while (disp[n] && !hole[n]) n++;
+    DCHECK(concolic_is(base), "a base's page record was asked of a known base, which is parsed whole");
+    disp = url_page_prefix(ctx, base, &n);
     ok = url_prefix_decides_host(url_prefix_state(disp, n, NULL)) && url_parse(b, disp, n, NULL);
-    free(hole);
     free(disp);
     return ok;
 }
@@ -2355,25 +2479,11 @@ static int url_input_host_open(JSContext *ctx, JSValueConst input, JSValueConst 
     UrlRecord b;
     UrlPrefixState st;
     char *disp;
-    unsigned char *hole = NULL;
     const char *bs;
-    size_t n = 0;
+    size_t n;
     int have_base = 0;
 
-    if (concolic_is(input)) {
-        disp = reclaim_strdup(concolic_shape_c(input));
-        hole = concolic_shape_hole_mask(input);
-        CHECK(disp && hole, "url: OOM reading an address's page bytes");
-        while (disp[n] && !hole[n]) n++;
-    } else {
-        const char *c = JS_ToCString(ctx, input);
-
-        CHECK(c != NULL, "url: OOM reading a known URL input");
-        disp = reclaim_strdup(c);
-        JS_FreeCString(ctx, c);
-        CHECK(disp, "url: OOM reading a known URL input");
-        n = strlen(disp);
-    }
+    disp = url_page_prefix(ctx, input, &n);
     url_record_init(&b);
     if (JS_IsString(base)) {
         bs = JS_ToCString(ctx, base);
@@ -2385,7 +2495,6 @@ static int url_input_host_open(JSContext *ctx, JSValueConst input, JSValueConst 
     }
     st = url_prefix_state(disp, n, have_base ? &b : NULL);
     url_record_free(&b);
-    free(hole);
     free(disp);
     if (concolic_is(base) && !have_base) return st == URL_PREFIX_FAILED || !url_prefix_decides_host(st);
     return !url_prefix_decides_host(st);
