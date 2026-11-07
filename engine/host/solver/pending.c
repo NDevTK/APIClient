@@ -35,12 +35,18 @@ static JSAtom g_rv_owed_atom[PEND_RV_CLASSES];
 static int    g_atoms_ready;
 
 /* The registers owed at least one rendezvous of either class, so the host's join visits those and no other flow.
-   A register's `rvAt` slot is its index here, -1 when it is owed none; the entries are borrowed, since a register
-   leaves only through pending_free, which takes it out first. Kept by pend_rv_owed_set, the one writer of the
-   counts membership is a predicate over. */
-static JSAtom   g_rv_at_atom;
+   The entries are borrowed, since a register leaves only through pending_free, which takes it out first. Kept by
+   pend_rv_owed_set, the one writer of the counts membership is a predicate over.
+   A member's position is kept in C, in `g_rv_ix` (register object -> index into `g_rv_regs`), and not on the
+   register: the set spans every flow's registers, so it is engine bookkeeping across flows rather than data a
+   flow queued, and a removal moves another flow's member. On the register, that move was a write into the JS
+   heap from a parked flow's teardown (pending_free under cow_release_scope_begin), which the delta refuses. An
+   open-addressed table with linear probing and backward-shift deletion, so a removal leaves no tombstone. */
 static JSValue *g_rv_regs;
 static int      g_rv_n, g_rv_cap;
+typedef struct { const void *reg; int at; } PendRvSlot;
+static PendRvSlot *g_rv_ix;
+static int         g_rv_ix_cap, g_rv_ix_n;
 
 /* WHAT THE FORK DOES WITH EACH FIELD, from the one list in pending.h. */
 static const int PEND_COPY_MODE[PEND_FIELD_COUNT] = {
@@ -70,7 +76,6 @@ static void pend_atoms(void)
     g_len_atom = JS_NewAtom(pend_ctx(), "length");
     g_rv_owed_atom[PEND_RV_SYNC] = JS_NewAtom(pend_ctx(), "syncOwed");
     g_rv_owed_atom[PEND_RV_ASYNC] = JS_NewAtom(pend_ctx(), "asyncOwed");
-    g_rv_at_atom = JS_NewAtom(pend_ctx(), "rvAt");
     g_atoms_ready = 1;
 }
 
@@ -90,15 +95,18 @@ void pending_free_ctx(JSContext *ctx)
     pending_index_reset(ctx);
     DCHECK(g_rv_n == 0, "registers owed a rendezvous outlived the session's context — every register leaves the "
                         "owed set at pending_free, so one was dropped without it");
+    DCHECKF(g_rv_ix_n == 0, "the owed set's index still holds %d registers with the set empty", g_rv_ix_n);
     free(g_rv_regs);
     g_rv_regs = NULL;
     g_rv_n = g_rv_cap = 0;
+    free(g_rv_ix);
+    g_rv_ix = NULL;
+    g_rv_ix_cap = g_rv_ix_n = 0;
     if (g_atoms_ready) {
         for (i = 0; i < PEND_FIELD_COUNT; i++) JS_FreeAtom(ctx, g_field[i]);
         JS_FreeAtom(ctx, g_len_atom);
         JS_FreeAtom(ctx, g_rv_owed_atom[PEND_RV_SYNC]);
         JS_FreeAtom(ctx, g_rv_owed_atom[PEND_RV_ASYNC]);
-        JS_FreeAtom(ctx, g_rv_at_atom);
         g_atoms_ready = 0;
     }
     g_ctx = NULL;
@@ -187,44 +195,109 @@ static int pend_rv_owed(JSValueConst reg, int cls)
     return n;
 }
 
-/* A register's index in the owed set, -1 when it is not a member; present from the register's first instant
-   (pend_register_new), so its absence is a register built outside this file. */
+static size_t pend_rv_ix_home(const void *reg)
+{
+    uint64_t h = (uint64_t)(uintptr_t)reg * 0x9E3779B97F4A7C15ull;
+    return (size_t)(h >> 17) & (size_t)(g_rv_ix_cap - 1);
+}
+
+/* The slot holding `reg`, or the empty slot where it would go. */
+static size_t pend_rv_ix_find(const void *reg)
+{
+    size_t m = (size_t)g_rv_ix_cap - 1, h = pend_rv_ix_home(reg);
+
+    while (g_rv_ix[h].reg && g_rv_ix[h].reg != reg) h = (h + 1) & m;
+    return h;
+}
+
+/* A register's index in the owed set, -1 when it is not a member. */
 static int pend_rv_at(JSValueConst reg)
 {
-    JSValue v;
+    size_t h;
     int at;
 
-    CHECK(JS_GetOwnSlot(pend_ctx(), &v, reg, g_rv_at_atom) > 0 && JS_VALUE_GET_TAG(v) == JS_TAG_INT,
-          "engine: a pending register carries no integer index into the owed set — every register is built in "
-          "solver/pending.c with that slot present, and the host's join would never be shown its rendezvous");
-    at = JS_VALUE_GET_INT(v);
+    if (g_rv_ix_cap == 0) return -1;
+    h = pend_rv_ix_find(JS_VALUE_GET_PTR(reg));
+    if (!g_rv_ix[h].reg) return -1;
+    at = g_rv_ix[h].at;
+    DCHECKF(at >= 0 && at < g_rv_n && JS_VALUE_GET_PTR(g_rv_regs[at]) == JS_VALUE_GET_PTR(reg),
+            "the owed set's index places a register at %d of %d members, and the member there is another "
+            "register — the index and the set are written together in pend_rv_join and pend_rv_leave only",
+            at, g_rv_n);
     return at;
 }
 
-static void pend_rv_at_set(JSValueConst reg, int at)
+/* Records that `reg` stands at `at`, adding it to the index or moving it within it. */
+static void pend_rv_ix_put(const void *reg, int at)
 {
-    int r;
+    size_t h;
 
-    cow_engine_write_begin();
-    r = JS_DefinePropertyValue(pend_ctx(), reg, g_rv_at_atom, JS_NewInt32(pend_ctx(), at), JS_PROP_C_W_E);
-    cow_engine_write_end();
-    DCHECK(r >= 0, "a pending register's index into the owed set could not be defined");
-    (void)r;
+    if ((g_rv_ix_n + 1) * 2 > g_rv_ix_cap) {
+        PendRvSlot *old = g_rv_ix;
+        int ocap = g_rv_ix_cap, i;
+
+        g_rv_ix_cap = ocap ? ocap * 2 : 128;
+        g_rv_ix = calloc((size_t)g_rv_ix_cap, sizeof *g_rv_ix);
+        CHECK(g_rv_ix, "engine: OOM growing the index of the set of registers owed a rendezvous");
+        for (i = 0; i < ocap; i++)
+            if (old[i].reg) g_rv_ix[pend_rv_ix_find(old[i].reg)] = old[i];
+        free(old);
+    }
+    h = pend_rv_ix_find(reg);
+    if (!g_rv_ix[h].reg) { g_rv_ix[h].reg = reg; g_rv_ix_n++; }
+    g_rv_ix[h].at = at;
+}
+
+/* Removes `reg` from the index, shifting back every later member of its probe run so no lookup stops early. */
+static void pend_rv_ix_del(const void *reg)
+{
+    size_t m = (size_t)g_rv_ix_cap - 1, hole = pend_rv_ix_find(reg), j;
+
+    DCHECK(g_rv_ix[hole].reg == reg, "a register left the owed set's index without being in it");
+    g_rv_ix[hole].reg = NULL;
+    g_rv_ix_n--;
+    for (j = (hole + 1) & m; g_rv_ix[j].reg; j = (j + 1) & m) {
+        size_t home = pend_rv_ix_home(g_rv_ix[j].reg);
+        /* The entry at j may fill the hole when its home is not cyclically within (hole, j]. */
+        if (((j - home) & m) >= ((j - hole) & m)) {
+            g_rv_ix[hole] = g_rv_ix[j];
+            g_rv_ix[j].reg = NULL;
+            hole = j;
+        }
+    }
+}
+
+/* Puts `reg` at the end of the owed set. */
+static void pend_rv_join(JSValueConst reg)
+{
+    if (g_rv_n == g_rv_cap) {
+        JSValue *g = realloc(g_rv_regs, (size_t)(g_rv_cap = g_rv_cap ? g_rv_cap * 2 : 64) * sizeof *g);
+        CHECK(g, "engine: OOM growing the set of registers owed a rendezvous");
+        g_rv_regs = g;
+    }
+    g_rv_regs[g_rv_n] = (JSValue)reg;
+    pend_rv_ix_put(JS_VALUE_GET_PTR(reg), g_rv_n++);
+    DCHECKF(g_rv_ix_n == g_rv_n && pend_rv_at(reg) == g_rv_n - 1,
+            "a register joined the owed set and the index disagrees: %d indexed against %d members, the "
+            "newcomer at %d", g_rv_ix_n, g_rv_n, pend_rv_at(reg));
 }
 
 /* Takes `reg` out of the owed set, moving the last member into its place. */
 static void pend_rv_leave(JSValueConst reg, int at)
 {
     DCHECK(at >= 0 && at < g_rv_n && JS_VALUE_GET_PTR(g_rv_regs[at]) == JS_VALUE_GET_PTR(reg),
-           "a register's index into the owed set names another member — the slot and the set are written "
-           "together here and nowhere else");
+           "a register's index into the owed set names another member — the index and the set are written "
+           "together here and in pend_rv_join only");
+    pend_rv_ix_del(JS_VALUE_GET_PTR(reg));
     g_rv_regs[at] = g_rv_regs[--g_rv_n];
-    if (at < g_rv_n) pend_rv_at_set(g_rv_regs[at], at);
-    pend_rv_at_set(reg, -1);
+    if (at < g_rv_n) pend_rv_ix_put(JS_VALUE_GET_PTR(g_rv_regs[at]), at);
+    DCHECKF(g_rv_ix_n == g_rv_n && pend_rv_at(reg) == -1 && (at == g_rv_n || pend_rv_at(g_rv_regs[at]) == at),
+            "a register left the owed set and the index disagrees: %d indexed against %d members, the leaver "
+            "at %d, the member moved into %d at %d", g_rv_ix_n, g_rv_n, pend_rv_at(reg), at,
+            at < g_rv_n ? pend_rv_at(g_rv_regs[at]) : -2);
 }
 
-/* A new register, its two counts zero and its owed-set index -1 from its first instant, so no reader meets a
-   missing slot. */
+/* A new register, its two counts zero from its first instant, so no reader meets a missing slot. */
 static JSValue pend_register_new(void)
 {
     JSValue reg;
@@ -238,7 +311,6 @@ static JSValue pend_register_new(void)
                                 JS_PROP_C_W_E) < 0;
     r |= JS_DefinePropertyValue(pend_ctx(), reg, g_rv_owed_atom[PEND_RV_ASYNC], JS_NewInt32(pend_ctx(), 0),
                                 JS_PROP_C_W_E) < 0;
-    r |= JS_DefinePropertyValue(pend_ctx(), reg, g_rv_at_atom, JS_NewInt32(pend_ctx(), -1), JS_PROP_C_W_E) < 0;
     cow_engine_write_end();
     CHECK(!r, "engine: OOM defining a new pending register's counts");
     return reg;
@@ -267,13 +339,7 @@ static void pend_rv_owed_set(JSValueConst reg, int cls, int n)
     at = pend_rv_at(reg);
     owed = pend_rv_owed(reg, PEND_RV_SYNC) + pend_rv_owed(reg, PEND_RV_ASYNC) > 0;
     if (owed && at < 0) {
-        if (g_rv_n == g_rv_cap) {
-            JSValue *g = realloc(g_rv_regs, (size_t)(g_rv_cap = g_rv_cap ? g_rv_cap * 2 : 64) * sizeof *g);
-            CHECK(g, "engine: OOM growing the set of registers owed a rendezvous");
-            g_rv_regs = g;
-        }
-        g_rv_regs[g_rv_n] = (JSValue)reg;
-        pend_rv_at_set(reg, g_rv_n++);
+        pend_rv_join(reg);
     } else if (!owed && at >= 0) {
         pend_rv_leave(reg, at);
     }
