@@ -3,18 +3,14 @@
    fragment is parsed IN — a `<tr>` is dropped anywhere but inside a table, and that is the tree builder's
    rule, not something a caller chooses. The parsed nodes are handed to the placement, which inserts each
    through the per-flow chokepoints.
-   LEXBOR MUST NOT RUN PAGE CODE. That is what lets a parser — a state machine with a great deal of internal
-   position — live inside an engine whose flows suspend and resume at any depth: the parse holds no continuation
-   across anything the page can preempt, so it never has to be suspended and never has to be part of a snapshot.
-   It completes inside one opcode over bytes, and the tree builder never runs a `<script>` it parses: what
-   §13.2.4.5's scripting mode decides is what the FRAG_FEED boundary STAMPS on the ones it produced. Under
+   LEXBOR MUST NOT RUN PAGE CODE. That is what lets the parse rest at every byte (the machine below) with no
+   continuation of the page's under it: the parser and its position are a function of the markup alone, so a
+   fork sheds them and parses again rather than copying them. The tree builder never runs a `<script>` it parses:
+   what §13.2.4.5's scripting mode decides is what the FRAG_FEED boundary STAMPS on the ones it produced. Under
    INERT — the default, and what four of the six members take — that stamp is `already started`, which
    HTML §4.12.1.1 step 1 reads when the placement's insertion steps prepare the element, so the script is dead. Under
    FRAGMENT the stamp is not applied and the script runs when the fragment reaches a document, which is the
    whole of what §13.2.4.5 means by "executed as soon as they are inserted".
-   Re-entry is what a violation would look like: page code running mid-parse and reaching one of these again.
-   Asserted rather than assumed, because the day it stops holding is the day a half-built tree ends up inside
-   another flow's delta.
 
    WHERE THIS FILE CAME FROM AND WHY: see core/html/fragment_parser.h. */
 #include <stdlib.h>
