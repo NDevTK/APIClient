@@ -1456,6 +1456,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/willchange.h"
 #include "fixture/csstextderived.h"
 #include "fixture/translatepct.h"
+#include "fixture/fillwidth.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2135,6 +2136,7 @@ TF_DOCS[] = {
     { "willchange", HTML_WILLCHANGE },
     { "csstextderived", HTML_CSSTEXTDERIVED },
     { "translatepct", HTML_TRANSLATEPCT },
+    { "fillwidth", HTML_FILLWIDTH },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -20177,6 +20179,20 @@ TF_UNIT void probes_translatepct(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fillwidth` document (fixture/fillwidth.h): CSS 2.2 §9.4.2's line box width for a run that
+   breaks, resolved over §10.1's containing block chain through a flex item's used main size. */
+TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
+    const char *fw_why = NULL; int fw_tt = 1;
+    fold_row(&fw_tt, &fw_why, !!strstr(js, "\"/api/fillwidth\""),
+             "NOT REACHED: no /api/fillwidth record, so the document aborted before its fetch");
+    fold_row(&fw_tt, &fw_why, param_value_is(js, "/api/fillwidth", "d", "30"),
+             "CSS 2.2 §9.4.2: two words in a 200px line box are not two lines one 30px pitch apart");
+    const Probe rows[] = {
+        { "fill-width", fw_tt, "/api/fillwidth", SESS_EXPLORE, fw_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -26195,6 +26211,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_willchange(js, probes, &np);
     probes_csstextderived(js, probes, &np);
     probes_translatepct(js, probes, &np);
+    probes_fillwidth(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
