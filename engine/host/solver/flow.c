@@ -5737,6 +5737,16 @@ static int site_code_cmp(const void *a, const void *b) {
     if (x->code->kind != y->code->kind) return x->code->kind < y->code->kind ? -1 : 1;
     return x->code->key < y->code->key ? -1 : x->code->key > y->code->key;
 }
+/* The order of the census's top never-dispatched sites: more members first, then the row's own printed fields, so
+   the rows do not depend on where the allocator placed the sites (site_ptr_cmp's walk order). */
+static int never_top_above(const __typeof__(((WfqCensus *)0)->never_top[0]) *a,
+                           const __typeof__(((WfqCensus *)0)->never_top[0]) *b) {
+    if (a->members != b->members) return a->members > b->members;
+    if (a->kind != b->kind) return a->kind < b->kind;
+    if (a->key != b->key) return a->key < b->key;
+    if (a->seen != b->seen) return a->seen < b->seen;
+    return a->served < b->served;
+}
 static void site_runs(const FlowSite **v, long n, long *sites, long *codes, long *unserved, WfqCensus *top) {
     long i, run;
 
@@ -5748,12 +5758,12 @@ static void site_runs(const FlowSite **v, long n, long *sites, long *codes, long
         (*sites)++;
         if (unserved && v[i]->code->served == 0) (*unserved)++;
         if (top) {
+            __typeof__(top->never_top[0]) row = { .kind = v[i]->code->kind, .key = v[i]->code->key,
+                                                  .seen = v[i]->seen, .served = v[i]->code->served, .members = run };
             int full = top->never_top_n == 5, k = full ? 4 : top->never_top_n++;
-            if (full && top->never_top[4].members >= run) continue;
-            top->never_top[k].kind = v[i]->code->kind; top->never_top[k].key = v[i]->code->key;
-            top->never_top[k].seen = v[i]->seen; top->never_top[k].served = v[i]->code->served;
-            top->never_top[k].members = run;
-            for (; k > 0 && top->never_top[k].members > top->never_top[k - 1].members; k--) {
+            if (full && !never_top_above(&row, &top->never_top[4])) continue;
+            top->never_top[k] = row;
+            for (; k > 0 && never_top_above(&top->never_top[k], &top->never_top[k - 1]); k--) {
                 __typeof__(top->never_top[0]) t = top->never_top[k];
                 top->never_top[k] = top->never_top[k - 1]; top->never_top[k - 1] = t;
             }
