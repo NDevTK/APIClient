@@ -18788,8 +18788,8 @@ TF_UNIT void probes_storedreq(const char *js, Probe *tab, int *n) {
 /* The rows of the `requestpieces` document (fixture/requestpieces.h): each request's mark names the query value
    its piece carries as that piece's root. */
 TF_UNIT void probes_requestpieces(const char *js, Probe *tab, int *n) {
-    const char *xh_why = NULL, *by_why = NULL;
-    int xh_tt = 1, by_tt = 1, seen, marked, plain;
+    const char *xh_why = NULL, *by_why = NULL, *bv_why = NULL;
+    int xh_tt = 1, by_tt = 1, bv_tt = 1, seen, marked, plain;
 
     rq_marks(js, "https://x.test/api/rp-xhr", &seen, &marked, &plain);
     fold_row(&xh_tt, &xh_why, seen > 0, "NOT REACHED: there is no https://x.test/api/rp-xhr record");
@@ -18802,9 +18802,13 @@ TF_UNIT void probes_requestpieces(const char *js, Probe *tab, int *n) {
     fold_row(&by_tt, &by_why, seen > 0, "NOT REACHED: there is no /api/rp-bytes record");
     fold_row(&by_tt, &by_why, rq_mark_has(js, "/api/rp-bytes", "\"body\":\"{" LOCATION_SEARCH_SRC "}[y]\""),
              "the POST's mark does not name the query value whose character code its body byte is");
+    fold_row(&bv_tt, &bv_why, sq_witness_has(js, "/api/rp-bytes", "{\"verification\":\"verified\"", NULL),
+             "no witness of the byte-body POST is verified, so the run delivering the query value did not send a "
+             "body byte rooted in it: a piece carrying a transform of the value is not observed");
     const Probe rows[] = {
         { "rp-xhr-marked", xh_tt, "rp-xhr", SESS_EXPLORE, xh_why },
         { "rp-bytes-marked", by_tt, "rp-bytes", SESS_EXPLORE, by_why },
+        { "rp-bytes-verified", bv_tt, "rp-bytes", SESS_EXPLORE, bv_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
