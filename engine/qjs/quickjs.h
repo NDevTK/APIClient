@@ -1762,7 +1762,7 @@ JS_EXTERN void *JS_GetOpaque2(JSContext *ctx, JSValueConst obj, JSClassID class_
 JS_EXTERN void *JS_GetAnyOpaque(JSValueConst obj, JSClassID *class_id);
 
 /* 'buf' must be zero terminated i.e. buf[buf_len] = '\0'. The parse runs to its end inside the call, so it is
-   for the host's time between two scheduler steps; called while a flow runs it DFAILs. A platform parse of
+   for the host's time between two scheduler steps; called from inside an activation it DFAILs. A platform parse of
    the page's input calls %JSON.parse% as a request from its step machine instead. */
 JS_EXTERN JSValue JS_ParseJSON(JSContext *ctx, const char *buf, size_t buf_len,
                                const char *filename);

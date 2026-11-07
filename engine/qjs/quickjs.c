@@ -111599,13 +111599,15 @@ static JSValue JS_ParseJSON_internal(JSContext *ctx, const char *buf, size_t buf
     return JS_EXCEPTION;
 }
 
-/* 'buf' must be zero terminated i.e. buf[buf_len] = '\0'. */
+/* 'buf' must be zero terminated i.e. buf[buf_len] = '\0'. A flow runs exactly while an activation is on the
+   runtime's stack: the base JS_FlowResume installs stays installed on the host's time between steps, when the
+   trusted zone's entries parse their records. */
 JSValue JS_ParseJSON(JSContext *ctx, const char *buf, size_t buf_len, const char *filename)
 {
-    if (g_flow_base_gen != NULL)
-        DFAIL("JS_ParseJSON was called while a flow runs — it takes every offer back, so the parse cannot rest; "
-              "a platform parse of the page's input is Infra §6's call of %JSON.parse% made as a request "
-              "(core/infra_json.h), and the engine's own record is JS_ParseJSONRecord");
+    if (ctx->rt->current_stack_frame != NULL)
+        DFAIL("JS_ParseJSON was called from inside an activation, so the parse cannot rest; a platform parse of "
+              "the page's input is Infra §6's call of %JSON.parse% made as a request (core/infra_json.h), and "
+              "the engine's own record is JS_ParseJSONRecord");
     return JS_ParseJSON_internal(ctx, buf, buf_len, filename, NULL);
 }
 
