@@ -502,6 +502,13 @@ bool block_flow_is_floated(lxb_dom_element_t *el);
 /* Whether float `f` sits in one of §9.2.1.1's runs that generates line boxes, where core/layout/line_box.c's fill
    places it at the line it falls on; otherwise it starts where §9.4.1's stack stands (`block_flow_float_top_ask`). */
 bool block_flow_float_on_line(lxb_dom_element_t *f);
+/* Whether `el`'s CSS 2.1 §10.3.7 hypothetical box is block-level: §10.3.7's Note ("this hypothetical
+   calculation might require also assuming a different computed value for `display`") over §9.2.1's level. */
+bool block_flow_hypothetical_is_block_level(lxb_dom_element_t *el);
+/* Whether absolutely positioned `el`'s CSS 2.1 §10.3.7 hypothetical box is inline-level and sits in one of
+   §9.2.1.1's runs that generates line boxes, where core/layout/line_box.c's fill holds its placeholder and
+   states its static position (`line_box_static_position_ask`). */
+bool block_flow_static_box_on_line(lxb_dom_element_t *el);
 /* Whether floated `f` floats to the right: §9.5.1's `Value:` line is `left | right | none`. */
 bool block_flow_float_is_right(lxb_dom_element_t *f);
 /* CSS 2.2 §9.5.2's sides `el`'s computed `clear` clears, physical: whether it clears any. */
@@ -617,9 +624,9 @@ lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t
    top margin would have escaped through its container's top edge.
    `el` IS THE OUT-OF-FLOW ELEMENT ITSELF and this entry does not ask whether it is out of flow, because the
    answer is the same for a box that is in flow: it is where §9.4.1's stack reaches that content position.
-   Every case the walk cannot state crashes naming it — a hypothetical box §9.7 leaves INLINE-LEVEL (§9.4.2's
-   line, core/layout/line_box.h), an element §9.2.1.1's content order does not reach, and a run with
-   box-generating inline content in front of the element, whose anonymous box §9.2.1.1 splits in two. */
+   An inline-level hypothetical box on a line is not asked here (`block_flow_static_box_on_line`). The walk
+   crashes naming each case it cannot state: an element §9.2.1.1's content order does not reach, and a run
+   with box-generating inline content before the element, whose anonymous box §9.2.1.1 splits in two. */
 CssPx block_flow_static_child_top(lxb_dom_element_t *el);
 
 /* The same distance asked without a drive of its own: false ("not yet") when the walk deferred a question,

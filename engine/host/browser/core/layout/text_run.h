@@ -96,9 +96,12 @@ typedef enum {
                                  point — CSS 2.2 §8.1 "Box dimensions"' margin box, put on the line by CSS 2.2
                                  §9.4.2 "Inline formatting contexts", and the U+FFFC whose [UAX14] class CB
                                  puts an opportunity on each side of it */
-    TEXT_RUN_ITEM_FLOAT       /* CSS 2.2 §9.5's float at its place in the content: out of flow, so no size and
+    TEXT_RUN_ITEM_FLOAT,      /* CSS 2.2 §9.5's float at its place in the content: out of flow, so no size and
                                  no code point (css-text-3 §5.5: "out-of-flow boxes ... do not introduce a
                                  forced line break or soft wrap opportunity in the flow") */
+    TEXT_RUN_ITEM_PLACEHOLDER /* an absolutely positioned box whose CSS 2.1 §10.3.7 hypothetical box is
+                                 inline-level, at its place in the content: out of flow as a float is, and
+                                 kept so the fill can state css-position-3 §3.5.3's static position */
 } TextRunItemKind;
 
 /* Which of css-sizing-3 §2.1 "Auto Box Sizes"' two constraints a per-line sum is taken under. Only an atomic
@@ -295,6 +298,11 @@ void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, Cs
    segment, having no break opportunity around it. */
 void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style, CssPx max_content);
 
+/* Add the placeholder of `style`, an absolutely positioned element whose hypothetical box is inline-level, at the
+   current position: no size, no break, nothing on a min-content or max-content segment, and it closes no
+   collapsible white-space run, as a float does not. */
+void text_run_measure_add_placeholder(TextRunMeasure *m, lxb_dom_element_t *style);
+
 /* Close the collection; nothing may be added afterwards. Each `step` then takes one item or position: the code
    points copied out, [UAX14]'s pass, §5.5's tailoring, and css-sizing-3 §2.1's walk; it answers how many items
    it took, and `done` says the two answers are readable. The pass is kept for the fill; each caller owes
@@ -386,6 +394,7 @@ bool text_run_measure_item_is_forced_break(const TextRunMeasure *m, size_t i);
    'line-height'." */
 bool text_run_measure_item_is_atomic(const TextRunMeasure *m, size_t i);
 bool text_run_measure_item_is_float(const TextRunMeasure *m, size_t i);
+bool text_run_measure_item_is_placeholder(const TextRunMeasure *m, size_t i);
 
 /* Item `i`'s code point, for the character kind only: what css-values-4 §6.1.1 "Font-relative Lengths…"
    measured an advance for, for a painter (CSS 2.1 §E.2 "Painting order"'s step 7.2.1, "the text", at

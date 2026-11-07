@@ -592,8 +592,13 @@ static LbChildNext lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, BoxTre
     /* §9.4.2's line box holds in-flow inline-level boxes; an absolutely positioned box is out of flow and
        introduces no break (css-text-3 §5.5: "out-of-flow boxes and inline box boundaries do not introduce a
        forced line break or soft wrap opportunity in the flow"). Its position is §9.3.2's over a static
-       position. */
-    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) || css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) return LB_CHILD_PLACED;
+       position, which for an inline-level hypothetical box is a position on this line (css-position-3 §3.5.3),
+       so that one leaves a placeholder. */
+    if (css_computed_keyword_is(el, "position", CSS_KEYWORD_ABSOLUTE) ||
+        css_computed_keyword_is(el, "position", CSS_KEYWORD_FIXED)) {
+        if (!block_flow_hypothetical_is_block_level(el)) text_run_measure_add_placeholder(m, el);
+        return LB_CHILD_PLACED;
+    }
     d = css_computed_display(el);
     if (css_display_spells(d, CSS_KEYWORD_NONE)) { return LB_CHILD_PLACED; }
     /* CSS 2.2 §9.5 takes a float out of the line and puts it beside the line boxes. Its place in the content
@@ -816,8 +821,9 @@ static size_t lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
     bool atom = text_run_measure_item_is_atomic(m, i);
 
     DCHECK(i < w->line.to, "CSS 2.2 §10.8's walk over one line box took an item past the line's end");
-    /* A float is beside the line box, not on it: no extent, and it does not make the line exist. */
-    if (text_run_measure_item_is_float(m, i)) return 0;
+    /* A float is beside the line box, not on it, and a placeholder is out of flow: no extent, and neither makes
+       the line exist. */
+    if (text_run_measure_item_is_float(m, i) || text_run_measure_item_is_placeholder(m, i)) return 0;
     /* §10.8's step 1 has a semicolon: "for replaced elements, inline-block elements, and inline-table
        elements, this is the height of their margin box; for inline boxes, this is their 'line-height'." An
        atomic item's box is on the first side, every other item's on the second. */
@@ -2651,7 +2657,8 @@ static bool lb_box_items(const TextRunMeasure *m, lxb_dom_element_t *el, size_t 
            to `el` here (it is a non-replaced inline box and the walk does not descend into atomics); the test
            makes that a statement, so no such kind delimits a fragment. */
         if (text_run_measure_item_is_text(m, i) || text_run_measure_item_is_forced_break(m, i) ||
-            text_run_measure_item_is_atomic(m, i) || text_run_measure_item_is_float(m, i))
+            text_run_measure_item_is_atomic(m, i) || text_run_measure_item_is_float(m, i) ||
+            text_run_measure_item_is_placeholder(m, i))
             continue;
         if (found == 0) first = i;
         last = i;
@@ -3023,6 +3030,59 @@ static bool lb_item_of_text(const TextRunMeasure *m, size_t j, const lxb_dom_nod
    cluster), which CSSOM View §9 also rounds a partial coverage out to. Next diff: grapheme cluster boundaries
    in core/layout/text_run.c's collection, as a per-item cluster start. Absence shows as a range over part of a
    combining sequence answering a rectangle narrower than the cluster it cuts. */
+bool line_box_static_position_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing, CssPx *x, CssPx *y)
+{
+    LbContext ctx;
+    lxb_dom_element_t *style;
+    size_t b, i, k, found = 0;
+    char ebuf[64];
+
+    DCHECK(el != NULL && establishing != NULL && x != NULL && y != NULL,
+           "css-position-3 §3.5.3's static position was asked with no element or nowhere to report it");
+    DCHECKF(block_flow_static_box_on_line(el),
+            "<%s> (display `%s`): a static position on a line was asked of a box whose hypothetical box is "
+            "block-level or in a run with no line box, which CSS 2 §9.4.1's stack answers",
+            lb_el_name(el, ebuf, sizeof ebuf), lb_el_display(el));
+    lb_require_horizontal_tb(el);
+    if (!lb_establishing_context(lxb_dom_interface_node(el), &ctx)) return false;
+    style = ctx.style;
+    lb_require_horizontal_tb(style);
+    *establishing = style;
+    for (b = 0; b < ctx.n; b++) {
+        if (!line_box_atomics_ask(style, ctx.box[b].run, line_box_available_width_derived()) ||
+            !line_box_extents_ask(style, ctx.box[b].run, line_box_available_width_derived())) {
+            free(ctx.box);
+            return false;
+        }
+    }
+    for (b = 0; b < ctx.n; b++) {
+        LbFill *f = lb_layout(style, ctx.box[b].run, line_box_available_width_derived());
+        const LbLineFacts *facts = lb_fill_facts(f, style);
+        size_t count = f->n > 0 ? f->lines[f->n - 1].to : 0;
+
+        for (k = 0; k < count; k++)
+            if (text_run_measure_item_is_placeholder(&f->m, k) && text_run_measure_item_style(&f->m, k) == el) break;
+        if (k == count) continue;
+        /* The line holding the placeholder, whose line-over side and the inline position it reached there are
+           §3.5.3's rectangle: "spanning between the line-over/line-under sides of the line box that would have
+           contained its 'hypothetical box' … and positioned at its inline-start static position". */
+        for (i = 0; i < f->n && !(f->lines[i].from <= k && k < f->lines[i].to); i++)
+            ;
+        DCHECK(i < f->n, "a placeholder item lies on none of the fill's lines, which partition every item");
+        *y = css_px_add(ctx.box[b].origin_y, facts[i].top);
+        *x = css_px_add(ctx.box[b].origin_x, css_px_add(lb_fill_align(f, style, i),
+                                                        text_run_measure_line_offset(&f->m, f->lines[i], k)));
+        found++;
+    }
+    free(ctx.box);
+    DCHECKF(found == 1,
+            "<%s> (display `%s`): an absolutely positioned box with an inline-level hypothetical box left %zu "
+            "placeholders in the runs of its formatting context; `lb_child` collects exactly one where its "
+            "content order reaches it",
+            lb_el_name(el, ebuf, sizeof ebuf), lb_el_display(el), found);
+    return true;
+}
+
 bool line_box_text_fragments_ask(const lxb_dom_node_t *text, uint32_t start, uint32_t end,
                                  lxb_dom_element_t **establishing, LineBoxFragment **out, size_t *count)
 {

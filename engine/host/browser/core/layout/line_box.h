@@ -305,6 +305,12 @@ bool line_box_extents_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
 bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                    LineBoxFragment **out, size_t *count);
 
+/* css-position-3 §3.5.3's static position of absolutely positioned `el` whose hypothetical box is inline-level and
+   on a line (`block_flow_static_box_on_line`): `*y` the line-over side of the line box holding its placeholder
+   and `*x` the inline position the line reached there, in `LineBoxFragment`'s frame (offsets from
+   `*establishing`'s content box origin). False ("not yet") as `line_box_inline_fragments_ask`. */
+bool line_box_static_position_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing, CssPx *x, CssPx *y);
+
 /* CSSOM View §9 "Extensions to the Range Interface"'s rectangles for Text node `text` over its code units
    `[start, end)`, in `LineBoxFragment`'s frame, one per line box the selected characters are on: "the vertical
    dimension of each box is determined by the font ascent and descent, and the horizontal dimension by the text

@@ -747,7 +747,27 @@ bool flow_static_position_ask(lxb_dom_element_t *el, bool vertical, bool trailin
     spcb = block_flow_static_position_containing_block(el);
     if (!flow_border_box_origin_ask(spcb, &o)) return false;
     if (!fp_abs_cb_leading_ask(el, vertical, true, &cb_edge)) return false;
-    if (vertical) {
+    if (block_flow_static_box_on_line(el)) {
+        /* css-position-3 §3.5.3's Inline Layout: an inline-level hypothetical box's static-position rectangle
+           spans the line-over and line-under sides of its line box "and [is] positioned at its inline-start
+           static position", both measured from the block container's content box, so its §8.1 leading border
+           and padding are added as below. */
+        lxb_dom_element_t *establishing;
+        CssPx lx, ly;
+        char nbuf[160];
+
+        DCHECKF(!trailing,
+                "%s: CSS 2.1 §10.3.7's `rtl` static position was asked of a hypothetical box on a line. BUILD "
+                "the inline-start position of a right-to-left line from the fill's placeholder",
+                box_subject(el, nbuf, sizeof nbuf));
+        if (!line_box_static_position_ask(el, &establishing, &lx, &ly)) return false;
+        DCHECKF(establishing == spcb,
+                "%s: the line holding its placeholder is in a different block container from CSS 2.1 §10.3.7's "
+                "static-position containing block; both are the nearest block container ancestor",
+                box_subject(el, nbuf, sizeof nbuf));
+        edge = vertical ? css_px_add(css_px_add(o.y, used_value_leading_edge_px(spcb, true)), ly)
+                        : css_px_add(css_px_add(o.x, used_value_leading_edge_px(spcb, false)), lx);
+    } else if (vertical) {
         if (!block_flow_static_child_top_ask(el, &top)) return false;
         /* §9.4.1's vertical rule from the walk that implements it, measured from the static-position containing
            block's top content edge, so its §8.1 leading border and padding are added here, as §10.1's second

@@ -243,7 +243,8 @@ static bool tr_kind_has_code_point(TextRunItemKind kind)
    stored. The two questions cross, so they are two functions. */
 static bool tr_kind_has_size(TextRunItemKind kind)
 {
-    return kind == TEXT_RUN_ITEM_EDGE || kind == TEXT_RUN_ITEM_ATOMIC || kind == TEXT_RUN_ITEM_FLOAT;
+    return kind == TEXT_RUN_ITEM_EDGE || kind == TEXT_RUN_ITEM_ATOMIC || kind == TEXT_RUN_ITEM_FLOAT ||
+           kind == TEXT_RUN_ITEM_PLACEHOLDER;
 }
 
 /* Whether this item is content that css-text-3 §4.1.2 "Phase II: Trimming and Positioning" stops at when it
@@ -354,6 +355,13 @@ void text_run_measure_add_float(TextRunMeasure *m, lxb_dom_element_t *style, Css
     it->size[TEXT_RUN_SIZE_MIN_CONTENT] = css_px(0.0);
     it->size[TEXT_RUN_SIZE_MAX_CONTENT] = max_content;
     if (max_content.px != 0.0) m->atomic_sizes_differ = true;
+}
+
+void text_run_measure_add_placeholder(TextRunMeasure *m, lxb_dom_element_t *style)
+{
+    DCHECK(m != NULL && style != NULL && !m->finished,
+           "a placeholder was added with no accumulator, no element, or to a measurement already closed");
+    (void)tr_append_item(m, TEXT_RUN_ITEM_PLACEHOLDER, style);
 }
 
 /* HTML §15.3.4's newline, as the one code point [UAX14] needs to decide it. css-text-3 §4 "White Space
@@ -1337,6 +1345,13 @@ bool text_run_measure_item_is_float(const TextRunMeasure *m, size_t i)
     tr_require_answers(m);
     DCHECK(i < m->count, "an item of a collected run was read past its end");
     return m->items[i].kind == TEXT_RUN_ITEM_FLOAT;
+}
+
+bool text_run_measure_item_is_placeholder(const TextRunMeasure *m, size_t i)
+{
+    tr_require_answers(m);
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    return m->items[i].kind == TEXT_RUN_ITEM_PLACEHOLDER;
 }
 
 uint32_t text_run_measure_item_cp(const TextRunMeasure *m, size_t i)

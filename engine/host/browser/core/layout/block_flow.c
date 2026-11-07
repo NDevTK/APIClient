@@ -3162,7 +3162,7 @@ bool block_flow_child_top_ask(lxb_dom_element_t *el, CssPx *out)
    same list `bf_element_child` classifies a real child with, because it is the same question about the same
    box list. A box that is not block-level is on §9.4.2's LINE and its static position is a position ALONG one,
    which is a different algorithm and not a narrower answer. */
-static bool bf_hypothetical_is_block_level(lxb_dom_element_t *el)
+bool block_flow_hypothetical_is_block_level(lxb_dom_element_t *el)
 {
     CssDisplay d = css_hypothetical_static_display(el);
     bool block = bf_display_is_block_level(d) ||
@@ -3275,21 +3275,12 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
     /* §10.3.7's Note first, because every other step below is written about a box on §9.4.1's stack and this
        is what decides whether the hypothetical box is one. A float has no hypothetical box: it sits where it is
        in its container's content. */
-    if (!flt && !bf_hypothetical_is_block_level(el))
-        DFAILF("%s: CSS 2.1 §10.3.7's hypothetical box — the element \"if its specified `position` value had "
-               "been `static` and its specified `float` had been `none`\" — is INLINE-LEVEL, so §9.4.2's line "
-               "boxes hold it and not §9.4.1's stack. Its static position is therefore a position ALONG a "
-               "line box, which is core/layout/line_box.h's fragment and not this walk's running offset: the "
-               "hypothetical box would sit at whatever inline position the line had reached, on whichever "
-               "line box §9.4.2's fill had got to. §10.3.7's own Note is what makes this case exist — \"note "
-               "that due to the rules in section 9.7, this hypothetical calculation might require also "
-               "assuming a different computed value for `display`\" — since §9.7 blockifies the REAL box's "
-               "`display` and the hypothetical one keeps the specified value "
-               "(core/css/css_computed_value.h's `css_hypothetical_static_display`). BUILD it as "
-               "core/layout/line_box.h's fill over a box list that CONTAINS this element, and report the "
-               "fragment's origin: the fill is the same one §9.4.2 already runs, and what it does not have is "
-               "a box for an element §9.3.1 took out of flow",
-               box_subject(el, nbuf, sizeof nbuf));
+    /* An inline-level hypothetical box in a run that generates line boxes is on a line, and its static position
+       is css-position-3 §3.5.3's position along that line (core/layout/line_box.h), never this stack's. In a
+       run that generates none, the line box it would open starts where the stack stands.
+       Named residual: that line's own alignment (css-text-4 §7.1 `text-align`) is not applied, which the next
+       diff builds from the fill over the hypothetical run; its absence shows as an absolutely positioned box
+       with `auto` insets, alone in a centered container's run, placed at the run's start edge. */
     after = bf_static_run_after(cb, n, &reached);
     if (!reached)
         DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1's CONTENT ORDER for that "
@@ -3302,6 +3293,10 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
                "the box list over the HYPOTHETICAL document that §10.3.7 describes, in which this element's "
                "`position` is `static` — the same enumeration, asked of a child list one member longer",
                box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
+    DCHECKF(flt || !block_flow_static_box_on_line(el),
+            "%s, in %s: CSS 2 §9.4.1's stack was asked the static top of a hypothetical box that is inline-level "
+            "and on a line, which is line_box_static_position_ask's to answer",
+            box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
     /* §9.2.1.1's SPLIT, WHICH THIS WALK CANNOT MEASURE AND WILL NOT GUESS AT. A hypothetical block-level box
        inside a run of inline content breaks that run into TWO anonymous block boxes and sits between them, so
        its position is the running position plus the height of the FIRST of them — a height this walk measures
@@ -3350,7 +3345,10 @@ static bool bf_static_top_ask(lxb_dom_element_t *el, bool flt, CssPx *out)
                box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
     run.pos = start.run_pos;
     run.neg = start.run_neg;
-    *out = bf_static_margin_edge(start.pos, run, flt ? css_px(0.0) : bf_hypothetical_margin_top(el, cb),
+    /* CSS 2.2 §8.3's vertical margins "will not have any effect on non-replaced inline elements". */
+    *out = bf_static_margin_edge(start.pos, run,
+                                 flt || !block_flow_hypothetical_is_block_level(el) ? css_px(0.0)
+                                                                            : bf_hypothetical_margin_top(el, cb),
                                  start.escaping);
     return true;
 }
@@ -3372,6 +3370,21 @@ bool block_flow_float_on_line(lxb_dom_element_t *f)
     run.after = bf_static_run_after(cb, lxb_dom_interface_node(f), &reached);
     DCHECKF(reached, "%s: its containing block's content order never reached this float",
             box_subject(f, fbuf, sizeof fbuf));
+    run.end = bf_next_block_box(cb, run.after, NULL);
+    return block_flow_run_generates_box(cb, run);
+}
+
+bool block_flow_static_box_on_line(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *cb;
+    BlockFlowRun run;
+    bool reached = false;
+
+    if (block_flow_hypothetical_is_block_level(el)) return false;
+    cb = block_flow_static_position_containing_block(el);
+    run.after = bf_static_run_after(cb, lxb_dom_interface_node(el), &reached);
+    /* An element the content order does not reach is on no run, which the stack's own crash names. */
+    if (!reached) return false;
     run.end = bf_next_block_box(cb, run.after, NULL);
     return block_flow_run_generates_box(cb, run);
 }
