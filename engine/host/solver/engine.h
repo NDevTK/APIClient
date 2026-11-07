@@ -366,6 +366,7 @@ int engine_frontier_settled(void);
 void engine_set_referenced(int referenced);
 /* The flag above, for the ABI's readers. It is the one copy. */
 int  engine_referenced(void);
+struct SourceCutLog;
 /* An arm forked off held snapshot `standby` (solver/source_cut.h), standing on frozen path `path` (borrowed;
    decide_blob_on_path) at the snapshot's cursor, assembled while the standby is switched in and returned with no
    flow switched in. `log` (borrowed, may be NULL) is the path's delivery log, which the arm's deliveries wait on
