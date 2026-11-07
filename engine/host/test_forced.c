@@ -601,7 +601,22 @@ typedef struct { const char *at; const char *type; const char *body; } TfServed;
                   RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256 RXM_A256
 #define RXM_A65536 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 \
                    RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096 RXM_A4096
+/* fixture/linkrest.h's style sheet: 10,000 rules `.lrNNNN{width:1px}` by macro repetition, then the one its
+   element matches. */
+#define LINKREST_R(p) ".lr" p "{width:1px}"
+#define LINKREST_10(p) LINKREST_R(p "0") LINKREST_R(p "1") LINKREST_R(p "2") LINKREST_R(p "3") LINKREST_R(p "4") \
+                       LINKREST_R(p "5") LINKREST_R(p "6") LINKREST_R(p "7") LINKREST_R(p "8") LINKREST_R(p "9")
+#define LINKREST_100(p) LINKREST_10(p "0") LINKREST_10(p "1") LINKREST_10(p "2") LINKREST_10(p "3")             \
+                        LINKREST_10(p "4") LINKREST_10(p "5") LINKREST_10(p "6") LINKREST_10(p "7")             \
+                        LINKREST_10(p "8") LINKREST_10(p "9")
+#define LINKREST_1000(p) LINKREST_100(p "0") LINKREST_100(p "1") LINKREST_100(p "2") LINKREST_100(p "3")        \
+                         LINKREST_100(p "4") LINKREST_100(p "5") LINKREST_100(p "6") LINKREST_100(p "7")        \
+                         LINKREST_100(p "8") LINKREST_100(p "9")
+#define LINKREST_SHEET LINKREST_1000("0") LINKREST_1000("1") LINKREST_1000("2") LINKREST_1000("3")              \
+                       LINKREST_1000("4") LINKREST_1000("5") LINKREST_1000("6") LINKREST_1000("7")              \
+                       LINKREST_1000("8") LINKREST_1000("9") "#lrEl{width:7px}"
 static const TfServed TF_SERVED[] = {
+    { "https://x.test/sheet/linkrest.css", "text/css", LINKREST_SHEET },
     { "https://x.test/chunk/rxmod.js", "text/javascript",
       "var rxmR = /" RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 "b/;"
       "export var m = rxmR.test('a'.repeat(327680) + 'b') && !rxmR.test('a'.repeat(327680))"
@@ -1402,6 +1417,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/textencunk.h"
 #include "fixture/cssdsetprop.h"
 #include "fixture/sheetrest.h"
+#include "fixture/linkrest.h"
 #include "fixture/wnameunk.h"
 #include "fixture/flexsvg.h"
 #include "fixture/ceupsale.h"
@@ -2067,6 +2083,7 @@ TF_DOCS[] = {
     { "textencunk", HTML_TEXTENCUNK },
     { "cssdsetprop", HTML_CSSDSETPROP },
     { "sheetrest", HTML_SHEETREST },
+    { "linkrest", HTML_LINKREST },
     { "wnameunk", HTML_WNAMEUNK },
     { "flexsvg", HTML_FLEXSVG },
     { "ceupsale", HTML_CEUPSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
@@ -19513,6 +19530,25 @@ TF_UNIT void probes_sheetrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `linkrest` document (fixture/linkrest.h): a linked style sheet more than a work quantum long
+   reads back whole through CSSOM and the cascade. */
+TF_UNIT void probes_linkrest(const char *js, Probe *tab, int *n) {
+    const char *lr_why = NULL; int lr_tt = 1;
+    fold_row(&lr_tt, &lr_why, !!strstr(js, "\"/api/linkrest\""),
+             "NOT REACHED: no /api/linkrest record, so the document whose linked sheet is longer than a work "
+             "quantum never read its sheet back");
+    fold_row(&lr_tt, &lr_why, param_value_is(js, "/api/linkrest", "n", "10001") &&
+                              param_value_is(js, "/api/linkrest", "f", ".lr0000") &&
+                              param_value_is(js, "/api/linkrest", "w", "7px") &&
+                              param_value_is(js, "/api/linkrest", "c", "7px"),
+             "the linked sheet does not read back as 10001 rules from .lr0000 to one of width:7px, through CSSOM "
+             "and the cascade");
+    const Probe rows[] = {
+        { "link-sheet-rest", lr_tt, "/api/linkrest", SESS_EXPLORE, lr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `wnameunk` document (fixture/wnameunk.h): window.name set to an example-free unknown reads
    back as that unknown. */
 TF_UNIT void probes_wnameunk(const char *js, Probe *tab, int *n) {
@@ -25613,6 +25649,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_textencunk(js, probes, &np);
     probes_cssdsetprop(js, probes, &np);
     probes_sheetrest(js, probes, &np);
+    probes_linkrest(js, probes, &np);
     probes_wnameunk(js, probes, &np);
     probes_flexsvg(js, probes, &np);
     probes_ceupsale(js, probes, &np);
