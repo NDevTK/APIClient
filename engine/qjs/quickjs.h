@@ -2994,6 +2994,9 @@ typedef struct JSConcolicHooks {
     /* `op` over the `n` operands (at least one unknown), carrying `example` (consumed): the value a builtin
        hands the page's code when that value is a piece of an unknown, such as a replacer's matched substring. */
     JSValue (*derived)(JSContext *ctx, const char *op, const JSValueConst *operands, int n, JSValue example);
+    /* The type set (JS_LANG_TYPE_* bits) the standard fixes for `v`, an unknown `derived` just answered: the
+       solver's type facet for it, so a later §6.1 type test over it is decided (`𝔽(countBytes)` is a Number). */
+    void (*type_fix)(JSContext *ctx, JSValueConst v, unsigned lang_types);
     /* WHETHER THAT ANSWER IS BYTES: 1 when the operand holds an example or a determined value, either of which may
        be `undefined`, 0 when it has none. `example` spends JS_UNDEFINED on both, so an operation over a value
        whose example is `undefined` — a member the served record holds as `undefined` — asks this first. */

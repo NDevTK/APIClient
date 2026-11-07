@@ -32995,7 +32995,7 @@ static int check_function(JSContext *ctx, JSValueConst obj);
 static void iter_helper_close_source_abrupt(JSContext *ctx, JSIteratorHelperData *it);
 static JSValue js_typed_array_constructor_obj(JSContext *ctx, JSValueConst new_target, JSValueConst obj, int classid);
 static bool ta_consume_ready(JSContext *ctx, JSValueConst *call_argv, int call_argc, JSValue *out_getiter);
-static bool ta_buffer_ctor_ready(JSValueConst *call_argv, int call_argc);
+static bool ta_buffer_ctor_ready(JSContext *ctx, JSValueConst *call_argv, int call_argc);
 static const JSTrampStepDef js_ta_ctor_defs[JS_TYPED_ARRAY_COUNT];
 
 /* A Promise combinator (all, allSettled, any, and the keyed allKeyed/allSettledKeyed, which differ only in
@@ -33601,6 +33601,8 @@ typedef struct JSTACtor {
     JSValue off_pred;    /* the step 2 or 3 test TAC_OFFSET_FORK holds across its fork (owned) */
     uint8_t off_fork;    /* which of those tests TAC_OFFSET_FORK asks next */
     uint8_t off_example; /* off_unknown's example is an aligned index, and `offset` holds it */
+    JSValue count_pred;  /* the ToIndex bound TAC_COUNT_FORK holds across its fork (owned) */
+    uint8_t count_fork;  /* which of ToIndex's two bounds TAC_COUNT_FORK asks next */
 } JSTACtor;
 
 typedef struct JSIterZip {
@@ -34980,12 +34982,18 @@ typedef struct JSTASlice {
     JSStepHdr hdr;          /* MUST be first: the generic step driver casts the state to JSStepHdr * */
     JSValue src;            /* the receiver (owned) */
     JSValue arr;            /* the created target (owned) */
-    JSValue cb_args[2];     /* [ctor, count] handed to the CONSTRUCT step */
-    int start, final, count;
+    JSValue cb_args[2];     /* [ctor, count] handed to the CONSTRUCT step (owned) */
+    JSValue prim[2];        /* `start` and `end` as primitives, `end` UNINITIALIZED where it is undefined (owned) */
+    JSValue start_v;        /* startIndex where it is unknown, else UNINITIALIZED (owned) */
+    JSValue pred;           /* the predicate TASLICE_RANGE or TASLICE_COPY holds across its fork (owned) */
+    int start, final, count;   /* the indices; where they are unknown, their examples (0 where none) */
     int len;                /* the receiver's length as read BEFORE the index coercions ran */
     uint8_t class_id;       /* the receiver's element type, read with len (the buffer may move afterwards) */
     uint8_t asked;          /* 1 = the CONSTRUCT has been requested; the next entry carries its result */
     uint8_t created;        /* 1 = `arr` exists; the next step does the copy */
+    uint8_t unknown;        /* TASLICE_RANGE derived the indices, so cb_args[1] may be an unknown countBytes */
+    uint8_t have;           /* …and their examples exist */
+    uint8_t copy_phase;     /* TASLICE_COPY's next test: the length floor, countBytes > 0, then the copy */
 } JSTASlice;
 
 /* ---- JSON.stringify: SerializeJSONProperty as an explicit-stack step machine ----
@@ -38494,7 +38502,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 if (cmach >= ITERCONS_TA_CTOR_BASE
                     && cmach < ITERCONS_TA_CTOR_BASE + JS_TYPED_ARRAY_COUNT
-                    && ta_buffer_ctor_ready(con_args, con_argc)) {
+                    && ta_buffer_ctor_ready(ctx, con_args, con_argc)) {
                     /* The SECOND entry under the same declaration: 23.2.5.1 step 6.b's view-over-a-buffer form,
                        whose byteOffset and length are ToIndex'd — the page's code. The walk above declined it, so
                        the branch test the spec already makes is what chose between them. */
@@ -91310,10 +91318,34 @@ static bool setmap_consume_ready(JSContext *ctx, JSValueConst *call_argv, int ca
    This named iter_consume_gen_backed as its gate; that predicate had already lost its last caller and is deleted.
    What decides is the side-effect-free iter_data_at_iterator probe below, and only as a HINT the acquire may
    reuse — every shape it cannot answer for is acquired on the tramp instead of refused. */
+/* Whether `v`, the %TypedArray% constructor's first argument, is an unknown whose type set the solver fixes to a
+   primitive: 23.2.5.1 step 7's "firstArg is an Object" is then false in every world, and step 9's ToIndex takes
+   it. An unknown whose set holds an Object and a primitive is not one.
+   Named residual. Not covered: that mixed set, which takes the iterable walk as an Object does. Next diff builds:
+   step 7's test as a two-completion ask over the unknown. Absence shows as: a typed array built from an unknown
+   number whose length reads as the walk's array-like length. */
+static bool js_ta_first_arg_count_unknown(JSContext *ctx, JSValueConst v)
+{
+    JSValue t;
+    const char *str;
+    bool r = false;
+
+    if (!js_value_is_concolic(v)) return false;
+    DCHECK(g_concolic.type_of != NULL, "an unknown reached the TypedArray constructor with no type_of hook");
+    t = g_concolic.type_of(ctx, v);
+    if (JS_IsString(t) && (str = JS_ToCString(ctx, t)) != NULL) {
+        r = strcmp(str, "object") && strcmp(str, "function");
+        JS_FreeCString(ctx, str);
+    }
+    JS_FreeValue(ctx, t);
+    return r;
+}
+
 static bool ta_consume_ready(JSContext *ctx, JSValueConst *call_argv, int call_argc, JSValue *out_getiter)
 {
     *out_getiter = JS_UNDEFINED;
     if (call_argc < 1) return false;
+    if (js_ta_first_arg_count_unknown(ctx, call_argv[0])) return false;   /* step 9's element count */
     /* 23.2.5.1 step 6.a: only an OBJECT first argument reaches the iterable/array-like branch — a number is a
        length and takes a different algorithm entirely, as do a TypedArray source (an element-wise copy that
        invokes nothing) and an ArrayBuffer (a view over existing bytes). The BUFFER case is the constructor's other
@@ -91339,10 +91371,11 @@ static bool ta_consume_ready(JSContext *ctx, JSValueConst *call_argv, int call_a
    test picks which entry runs. A declaration cannot say "only when the first argument is a buffer", which is why
    a step-ctor wrapped in FRONT of the whole constructor was the wrong shape — it intercepted the object arguments
    the consume walk owns. */
-static bool ta_buffer_ctor_ready(JSValueConst *call_argv, int call_argc)
+static bool ta_buffer_ctor_ready(JSContext *ctx, JSValueConst *call_argv, int call_argc)
 {
     JSObject *sp0;
-    if (call_argc < 1 || JS_VALUE_GET_TAG(call_argv[0]) != JS_TAG_OBJECT)
+    if (call_argc < 1 || JS_VALUE_GET_TAG(call_argv[0]) != JS_TAG_OBJECT ||
+        js_ta_first_arg_count_unknown(ctx, call_argv[0]))
         return true;   /* the ELEMENT-COUNT form (and `new Uint8Array()`): the body implements it itself */
     sp0 = JS_VALUE_GET_OBJ(call_argv[0]);
     /* WIDENED to the TYPED-ARRAY source (23.2.5.1 step 5, InitializeTypedArrayFromTypedArray) rather than given
@@ -92342,18 +92375,89 @@ static JSValue js_ab_slice_fini(JSContext *ctx, void *st, bool take_result)
 enum { TASUB_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_ta_subarray_steps[] = { TASUB_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* §23.2.3.30 steps 8-14 where sourceLength, a bound or sourceByteOffset is unknown. A known begin of at least 0
-   over an unknown sourceLength forks `begin <= sourceLength`, so startIndex is begin on that arm and sourceLength
-   on the other; every other unknown startIndex, and endIndex, beginByteOffset and newLength, is derived with the
-   real clamp over the examples as its example. The routed %TypedArray% constructor then builds the view over
-   them. 0, a request code, or -1. */
+/* The derivations js_ta_clamped_bounds mints, as one method's steps name them: 7.1.26 ToClampedIndex for its start
+   and for its end, and the fork a stated start asks over an unknown length. */
+typedef struct { const char *start, *end, *within; } JSTAClampSteps;
+
+/* 7.1.26 ToClampedIndex of a %TypedArray% method's `start` and `end` (JS_UNINITIALIZED where the page passed
+   undefined, which is the length itself) over `len`, the source's length: an unknown, or the stated `len_stated`.
+   A stated start of at least 0 over an unknown length forks `start <= len`, held at `*pred` across the fork, so
+   startIndex is the start on that arm and the length on the other; every other unknown index is derived with the
+   real clamp over the examples as its example, which `*have` says exist. The two indices are owned. 0, a request
+   code, or -1. */
+static int js_ta_clamped_bounds(JSContext *ctx, JSStepHdr *h, JSValueConst len, int64_t len_stated,
+                                JSValueConst start, JSValueConst end, JSValue *pred, const JSTAClampSteps *st,
+                                JSValue *start_v, JSValue *final_v, int64_t *start_ex, int64_t *final_ex,
+                                bool *have)
+{
+    JSValue ops[2], ex;
+    int64_t rel = 0, len_ex = 0;
+    int arm, r;
+
+    *start_v = *final_v = JS_UNDEFINED;
+    ex = js_value_is_concolic(len) ? js_concolic_operand(ctx, len) : js_dup(len);
+    *have = JS_IsNumber(ex) && JS_ToInt64Sat(ctx, &len_ex, ex) == 0;
+    JS_FreeValue(ctx, ex);
+    if (!js_value_is_concolic(start) && JS_ToInt64Sat(ctx, &rel, start))
+        return -1;
+    if (!js_value_is_concolic(start) && !js_value_is_concolic(len)) {
+        *start_ex = rel < 0 ? max_int64(len_stated + rel, 0) : min_int64(rel, len_stated);
+        *start_v = js_int64(*start_ex);
+    } else if (!js_value_is_concolic(start) && rel >= 0) {
+        if (JS_IsUninitialized(*pred)) {
+            JSValue sp[2];
+
+            sp[0] = JS_NewInt64(ctx, rel);
+            sp[1] = js_dup(len);
+            CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a view's unknown length");
+            *pred = sp[0];
+        }
+        r = step_tobool_run(ctx, h, *pred, st->within, &arm);
+        if (r) return r;
+        *start_ex = arm ? rel : len_ex;
+        *start_v = arm ? js_int64(rel) : js_dup(len);
+    } else {
+        ex = js_value_is_concolic(start) ? js_concolic_operand(ctx, start) : js_dup(start);
+        *have = *have && (!js_value_is_concolic(start) || JS_IsNumber(ex)) &&
+                JS_ToInt64Clamp(ctx, start_ex, ex, 0, len_ex, len_ex) == 0;
+        JS_FreeValue(ctx, ex);
+        ops[0] = start;
+        ops[1] = len;
+        *start_v = g_concolic.derived(ctx, st->start, ops, 2, *have ? js_int64(*start_ex) : JS_UNDEFINED);
+        DCHECK(!JS_IsUninitialized(*start_v), "an unknown start or length derived no unknown startIndex");
+    }
+    if (JS_IsUninitialized(end)) {
+        *final_v = js_dup(len);
+        *final_ex = len_ex;
+        return 0;
+    }
+    ex = js_value_is_concolic(end) ? js_concolic_operand(ctx, end) : js_dup(end);
+    *have = *have && (!js_value_is_concolic(end) || JS_IsNumber(ex)) &&
+            JS_ToInt64Clamp(ctx, final_ex, ex, 0, len_ex, len_ex) == 0;
+    JS_FreeValue(ctx, ex);
+    ops[0] = end;
+    ops[1] = len;
+    *final_v = g_concolic.derived(ctx, st->end, ops, 2, *have ? js_int64(*final_ex) : JS_UNDEFINED);
+    if (JS_IsUninitialized(*final_v))
+        *final_v = js_int64(*final_ex);
+    return 0;
+}
+
+/* §23.2.3.30 steps 8-14 where sourceLength, a bound or sourceByteOffset is unknown: the bounds are
+   js_ta_clamped_bounds', and newLength and beginByteOffset are derived from them with the real arithmetic over
+   the examples as their examples. The routed %TypedArray% constructor then builds the view over them. 0, a
+   request code, or -1. */
 static int js_ta_subarray_bounds_unknown(JSContext *ctx, JSTASubarray *s, JSValue cb_result)
 {
+    static const JSTAClampSteps steps = {
+        "23.2.3.30 step 8 (startIndex is ToClampedIndex(start, srcLength))",
+        "23.2.3.30 step 13 (endIndex is ToClampedIndex(end, srcLength))",
+        "23.2.3.30 step 8 begin within srcLength" };
     JSObject *p = get_typed_array(ctx, s->hdr.this_val);
     JSTypedArray *ta;
-    JSValue src_len, start_v, final_v, ops[3], ex;
-    int64_t rel = 0, len_ex = 0, start_ex = 0, final_ex = 0;
-    int shift, arm, r;
+    JSValue src_len, start_v, final_v, ops[3];
+    int64_t start_ex = 0, final_ex = 0;
+    int shift, r;
     bool have, off_have;
 
     JS_FreeValue(ctx, cb_result);
@@ -92361,55 +92465,10 @@ static int js_ta_subarray_bounds_unknown(JSContext *ctx, JSTASubarray *s, JSValu
     ta = p->u.typed_array;
     shift = typed_array_size_log2(p->class_id);
     src_len = JS_IsUninitialized(ta->length_unknown) ? js_int64(s->len) : js_dup(ta->length_unknown);
-    ex = js_value_is_concolic(src_len) ? js_concolic_operand(ctx, src_len) : js_dup(src_len);
-    have = JS_IsNumber(ex) && JS_ToInt64Sat(ctx, &len_ex, ex) == 0;
-    JS_FreeValue(ctx, ex);
-    if (!js_value_is_concolic(s->prim[0]) && JS_ToInt64Sat(ctx, &rel, s->prim[0])) {
-        JS_FreeValue(ctx, src_len);
-        return -1;
-    }
-    if (!js_value_is_concolic(s->prim[0]) && !js_value_is_concolic(src_len)) {
-        start_ex = rel < 0 ? max_int64(s->len + rel, 0) : min_int64(rel, s->len);
-        start_v = js_int64(start_ex);
-    } else if (!js_value_is_concolic(s->prim[0]) && rel >= 0) {
-        if (JS_IsUninitialized(s->pred)) {
-            JSValue sp[2];
-
-            sp[0] = JS_NewInt64(ctx, rel);
-            sp[1] = js_dup(src_len);
-            CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a view's unknown length");
-            s->pred = sp[0];
-        }
-        r = step_tobool_run(ctx, &s->hdr, s->pred, "23.2.3.30 step 8 begin within srcLength", &arm);
-        if (r) { JS_FreeValue(ctx, src_len); return r; }
-        start_ex = arm ? rel : len_ex;
-        start_v = arm ? js_int64(rel) : js_dup(src_len);
-    } else {
-        ex = js_value_is_concolic(s->prim[0]) ? js_concolic_operand(ctx, s->prim[0]) : js_dup(s->prim[0]);
-        have = have && (!js_value_is_concolic(s->prim[0]) || JS_IsNumber(ex)) &&
-               JS_ToInt64Clamp(ctx, &start_ex, ex, 0, len_ex, len_ex) == 0;
-        JS_FreeValue(ctx, ex);
-        ops[0] = s->prim[0];
-        ops[1] = src_len;
-        start_v = g_concolic.derived(ctx, "23.2.3.30 step 8 (startIndex is ToClampedIndex(start, srcLength))", ops,
-                                     2, have ? js_int64(start_ex) : JS_UNDEFINED);
-        DCHECK(!JS_IsUninitialized(start_v), "an unknown begin or srcLength derived no unknown startIndex");
-    }
-    if (JS_IsUndefined(step_arg(&s->hdr, 1))) {
-        final_v = js_dup(src_len);
-        final_ex = len_ex;
-    } else {
-        ex = js_value_is_concolic(s->prim[1]) ? js_concolic_operand(ctx, s->prim[1]) : js_dup(s->prim[1]);
-        have = have && (!js_value_is_concolic(s->prim[1]) || JS_IsNumber(ex)) &&
-               JS_ToInt64Clamp(ctx, &final_ex, ex, 0, len_ex, len_ex) == 0;
-        JS_FreeValue(ctx, ex);
-        ops[0] = s->prim[1];
-        ops[1] = src_len;
-        final_v = g_concolic.derived(ctx, "23.2.3.30 step 13 (endIndex is ToClampedIndex(end, srcLength))", ops, 2,
-                                     have ? js_int64(final_ex) : JS_UNDEFINED);
-        if (JS_IsUninitialized(final_v))
-            final_v = js_int64(final_ex);
-    }
+    r = js_ta_clamped_bounds(ctx, &s->hdr, src_len, s->len, s->prim[0],
+                             JS_IsUndefined(step_arg(&s->hdr, 1)) ? JS_UNINITIALIZED : s->prim[1], &s->pred,
+                             &steps, &start_v, &final_v, &start_ex, &final_ex, &have);
+    if (r) { JS_FreeValue(ctx, src_len); return r; }
     ops[0] = final_v;
     ops[1] = start_v;
     s->cargs[3] = g_concolic.derived(ctx, "23.2.3.30 step 14 (newLength is max(endIndex - startIndex, 0))", ops, 2,
@@ -128134,13 +128193,18 @@ static JSValue js_typed_array_toReversed(JSContext *ctx, JSValueConst this_val,
    tests do) had nowhere to suspend. As a step machine the create is a CONSTRUCT step; the copy that follows is
    pure C over two typed arrays and needs no further suspension. */
 
-/* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). cb_args[1] is the count, a number rather than a reference. */
+/* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). */
 static void js_ta_slice_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSTASlice *s = st;
     v->val(ctx, &s->arr);
     v->val(ctx, &s->src);
     v->val(ctx, &s->cb_args[0]);
+    v->val(ctx, &s->cb_args[1]);
+    v->val(ctx, &s->prim[0]);
+    v->val(ctx, &s->prim[1]);
+    v->val(ctx, &s->start_v);
+    v->val(ctx, &s->pred);
 }
 
 /* Request ToPrimitive on hdr.argv[i] when it is an object, so a user valueOf on `start` or `end` SUSPENDS.
@@ -128151,8 +128215,8 @@ static void js_ta_slice_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static bool ta_slice_toprim(JSTASlice *s, int i, JSValue **out_cb, int *out_argc)
 {
     JSValueConst v = step_arg(&s->hdr, i);
-    if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT)
-        return false;
+    if (!js_toprim_operand(v))
+        return false;                   /* a primitive, or an unknown, whose coercion is TASLICE_RANGE's */
     s->hdr.cb_coerce[0] = (JSValue)v;   /* borrowed: hdr.argv holds the reference */
     *out_cb = s->hdr.cb_coerce; *out_argc = HINT_NUMBER;
     return true;
@@ -128166,37 +128230,86 @@ static bool ta_slice_toprim(JSTASlice *s, int i, JSValue **out_cb, int *out_argc
     X(TASLICE_START,    "23.2.3.27 step 4 (startIndex is ToClampedIndex(start, srcArrayLength))") \
     X(TASLICE_END,      "23.2.3.27 steps 5-6 (an undefined end is srcArrayLength, else endIndex is " \
                         "ToClampedIndex(end, srcArrayLength); countBytes is max(endIndex - startIndex, 0))") \
+    X(TASLICE_RANGE,    "23.2.3.27 steps 4-6 over an unknown start, end or sourceArrayLength (a stated start forks)") \
     X(TASLICE_SPECIES,  "23.2.3.27 step 7 via 7.3.22 (C is Get(O, \"constructor\"), then S is Get(C, @@species))") \
-    X(TASLICE_CREATE,   "23.2.3.27 steps 7-8 (A is Construct(ctor, <<count>>); the elements are copied)")
+    X(TASLICE_CREATE,   "23.2.3.27 step 7 (resultArray is TypedArraySpeciesCreate(obj, << F(countBytes) >>))") \
+    X(TASLICE_COPY,     "23.2.3.27 step 8 (if countBytes > 0, the elements are copied)")
 enum { TASLICE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_ta_slice_steps[] = { TASLICE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+static int js_ta_store_element(JSContext *ctx, JSObject *p, int64_t k, JSValue v);
+
+/* 23.2.3.27 steps 8.7.3.1-2 over the target's example window where startIndex or a [[ByteOffset]] is unknown: each
+   of the `n` elements is TypedArrayGetElement of the source at startIndex + n, stored by TypedArraySetElement
+   (js_ta_store_element). An unknown startIndex makes each value an unknown derived from it and the element its
+   example index reads. 0 or -1. */
+static int js_ta_slice_copy_unknown(JSContext *ctx, JSTASlice *s, JSObject *p, JSObject *p1, int n)
+{
+    for (int k = 0; k < n; k++) {
+        uint32_t at = (uint32_t)s->start + (uint32_t)k;
+        JSValue v, ex, ops[3];
+
+        if (at < p->u.array.count) {
+            bool got = js_get_fast_array_element(ctx, p, at, &v);
+            DCHECK(got, "a source element below its stored count has no value");
+        } else {
+            v = js_ta_get_past_example(ctx, p, at);
+        }
+        if (!JS_IsUninitialized(s->start_v)) {
+            ex = js_value_is_concolic(v) ? (js_concolic_held(v) ? js_concolic_operand(ctx, v) : JS_UNDEFINED)
+                                         : js_dup(v);
+            ops[0] = s->start_v;
+            ops[1] = js_int32(k);
+            ops[2] = v;
+            {
+                JSValue d = g_concolic.derived(ctx, "23.2.3.27 step 8.7.3.1 (kValue is TypedArrayGetElement(obj, k))",
+                                               ops, 3, ex);
+                DCHECK(!JS_IsUninitialized(d), "an unknown startIndex derived no unknown element");
+                JS_FreeValue(ctx, v);
+                v = d;
+            }
+        }
+        if (js_ta_store_element(ctx, p1, k, v) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int js_ta_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
+    static const JSTAClampSteps steps = {
+        "23.2.3.27 step 4 (startIndex is ToClampedIndex(start, sourceArrayLength))",
+        "23.2.3.27 step 5 (endIndex is ToClampedIndex(end, sourceArrayLength))",
+        "23.2.3.27 step 4 start within sourceArrayLength" };
     JSTASlice *s = st;
     JSObject *p, *p1;
-    int n, shift, space, count;
+    int n, shift, space, count, r, arm;
     JSValue val;
 
     switch (s->hdr.stage) {
     case TASLICE_VALIDATE:   /* ValidateTypedArray + capture the pre-coercion length, then coerce `start` */
         JS_FreeValue(ctx, cb_result);
+        /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
+        s->src = s->arr = JS_UNDEFINED;
+        s->cb_args[0] = s->cb_args[1] = JS_UNDEFINED;
+        s->prim[0] = s->prim[1] = JS_UNDEFINED;
+        s->start_v = s->pred = JS_UNINITIALIZED;
+        s->unknown = s->have = s->copy_phase = 0;
         p = get_typed_array(ctx, s->hdr.this_val);
         if (!p) return -1;
         if (typed_array_is_oob(p)) { JS_ThrowTypeErrorArrayBufferOOB(ctx); return -1; }
         s->len = p->u.array.count;
         s->class_id = p->class_id;
         s->src = js_dup(s->hdr.this_val);
-        s->arr = JS_UNDEFINED;
-        s->cb_args[0] = JS_UNDEFINED;
         s->hdr.stage = TASLICE_START;
         if (ta_slice_toprim(s, 0, out_cb, out_argc)) return 5;
         cb_result = js_dup(step_arg(&s->hdr, 0));
         /* fall through */
-    case TASLICE_START:   /* cb_result is `start` as a primitive */
-        { int r = JS_ToInt32Clamp(ctx, &s->start, cb_result, 0, s->len, s->len);
-          JS_FreeValue(ctx, cb_result);
-          if (r) return -1; }
+    case TASLICE_START:   /* cb_result is `start` as a primitive, or an unknown */
+        s->prim[0] = cb_result;
+        /* a stated start's ToIntegerOrInfinity runs here, before `end` is coerced, as step 4 is before step 5 */
+        if (!js_value_is_concolic(s->prim[0]) && JS_ToInt32Clamp(ctx, &s->start, s->prim[0], 0, s->len, s->len))
+            return -1;
         s->final = s->len;
         s->hdr.stage = TASLICE_END;
         if (s->hdr.argc > 1 && !JS_IsUndefined(s->hdr.argv[1])) {
@@ -128206,16 +128319,61 @@ static int js_ta_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             cb_result = JS_UNINITIALIZED;   /* absent end: `final` stays at the length */
         }
         /* fall through */
-    case TASLICE_END:   /* cb_result is `end` as a primitive, or UNINITIALIZED when there was none */
-        if (JS_VALUE_GET_TAG(cb_result) != JS_TAG_UNINITIALIZED) {
-            int r = JS_ToInt32Clamp(ctx, &s->final, cb_result, 0, s->len, s->len);
-            JS_FreeValue(ctx, cb_result);
-            if (r) return -1;
-        }
-        s->hdr.stage = TASLICE_SPECIES;
-        s->count = max_int(s->final - s->start, 0);
-        s->cb_args[1] = js_int32(s->count);
+    case TASLICE_END:   /* cb_result is `end` as a primitive or an unknown, or UNINITIALIZED when there was none */
+        s->prim[1] = cb_result;
         cb_result = JS_UNDEFINED;
+        if (!JS_IsUninitialized(s->prim[1]) && !js_value_is_concolic(s->prim[1]) &&
+            JS_ToInt32Clamp(ctx, &s->final, s->prim[1], 0, s->len, s->len))
+            return -1;
+        p = get_typed_array(ctx, s->src);
+        if (p && (!JS_IsUninitialized(p->u.typed_array->length_unknown) || js_value_is_concolic(s->prim[0]) ||
+                  js_value_is_concolic(s->prim[1]))) {
+            s->hdr.stage = TASLICE_RANGE;
+        } else {
+            s->count = max_int(s->final - s->start, 0);
+            s->cb_args[1] = js_int32(s->count);
+            s->hdr.stage = TASLICE_SPECIES;
+        }
+        /* fall through */
+    case TASLICE_RANGE:
+        if (s->hdr.stage == TASLICE_RANGE) {
+            JSValue len, start_v, final_v, ops[2];
+            int64_t start_ex = 0, final_ex = 0;
+            bool have;
+
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            p = get_typed_array(ctx, s->src);
+            if (!p) return -1;
+            len = JS_IsUninitialized(p->u.typed_array->length_unknown) ? js_int64(s->len)
+                                                                        : js_dup(p->u.typed_array->length_unknown);
+            r = js_ta_clamped_bounds(ctx, &s->hdr, len, s->len, s->prim[0], s->prim[1], &s->pred, &steps,
+                                     &start_v, &final_v, &start_ex, &final_ex, &have);
+            if (r) { JS_FreeValue(ctx, len); return r < 0 ? -1 : r; }
+            JS_FreeValue(ctx, s->pred);
+            s->pred = JS_UNINITIALIZED;
+            ops[0] = final_v;
+            ops[1] = start_v;
+            s->cb_args[1] = g_concolic.derived(ctx, "23.2.3.27 step 6 (countBytes is max(endIndex - startIndex, 0))",
+                                               ops, 2, have ? js_int64(max_int64(final_ex - start_ex, 0))
+                                                            : JS_UNDEFINED);
+            if (JS_IsUninitialized(s->cb_args[1]))
+                s->cb_args[1] = js_int64(max_int64(final_ex - start_ex, 0));
+            else
+                g_concolic.type_fix(ctx, s->cb_args[1], JS_LANG_TYPE_NUMBER);   /* step 7's 𝔽(countBytes) */
+            DCHECK(start_ex >= 0 && start_ex <= INT32_MAX && final_ex >= 0 && final_ex <= INT32_MAX,
+                   "a clamped index's example is outside the typed array's index range");
+            s->start = (int)start_ex;
+            s->final = (int)final_ex;
+            s->count = have ? max_int(s->final - s->start, 0) : 0;
+            s->have = have;
+            s->unknown = 1;
+            if (js_value_is_concolic(start_v)) s->start_v = start_v;
+            else JS_FreeValue(ctx, start_v);
+            JS_FreeValue(ctx, final_v);
+            JS_FreeValue(ctx, len);
+            s->hdr.stage = TASLICE_SPECIES;
+        }
         /* fall through */
     case TASLICE_SPECIES:
         /* SpeciesConstructor reads .constructor and @@species IN THIS ORDER, after the indices and before the
@@ -128223,15 +128381,15 @@ static int js_ta_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            page's [[Get]]s, so they are requests: JS_SpeciesConstructor ran them from C, and a getter with a loop
            in it aborted at its back-edge with no flow base. */
         { JSValue ctor;
-          int r = step_speciesctor_run(ctx, &s->hdr, s->hdr.this_val, JS_UNDEFINED, cb_result, &ctor,
-                                       out_cb, out_argc);
+          r = step_speciesctor_run(ctx, &s->hdr, s->hdr.this_val, JS_UNDEFINED, cb_result, &ctor, out_cb, out_argc);
           if (r) return r < 0 ? -1 : r;
           s->hdr.stage = TASLICE_CREATE;
+          if (JS_IsUndefined(ctor) && js_value_is_concolic(s->cb_args[1]))
+              ctor = JS_GetClassCtor(ctx, s->class_id);   /* the default constructor, routed as a Construct */
           if (JS_IsUndefined(ctor)) {
               /* no species: the default constructor for this element type, which is C — nothing to suspend, so
                  it is created here and the machine goes straight to the copy. */
-              JSValue cnt = js_int32(s->count);
-              JSValue arr = js_typed_array_constructor(ctx, JS_UNDEFINED, 1, vc(&cnt), s->class_id);
+              JSValue arr = js_typed_array_constructor(ctx, JS_UNDEFINED, 1, vc(&s->cb_args[1]), s->class_id);
               if (JS_IsException(arr)) return -1;
               s->arr = arr; s->created = 1;
           } else {
@@ -128241,34 +128399,92 @@ static int js_ta_slice_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         break;
     }
 
-    DCHECK(s->hdr.stage == TASLICE_CREATE, "%TypedArray%.prototype.slice resumed in no stage");
-    if (!s->created) {
-        if (!s->asked) {
-            /* The FIRST entry carries JS_UNDEFINED, not UNINITIALIZED — do_step_tramp seeds the driver with
-               UNDEFINED — so "have I asked yet" is state, never a tag test. Reading it off the tag made the first
-               entry look like a settled construct, which validated JS_UNDEFINED as a typed array. */
-            s->asked = 1;
-            JS_FreeValue(ctx, cb_result);
-            *out_cb = s->cb_args; *out_argc = 1;   /* [ctor, count] */
-            return 4;
+    if (s->hdr.stage == TASLICE_CREATE) {
+        if (!s->created) {
+            if (!s->asked) {
+                /* The FIRST entry carries JS_UNDEFINED, not UNINITIALIZED — do_step_tramp seeds the driver with
+                   UNDEFINED — so "have I asked yet" is state, never a tag test. Reading it off the tag made the
+                   first entry look like a settled construct, which validated JS_UNDEFINED as a typed array. */
+                s->asked = 1;
+                JS_FreeValue(ctx, cb_result);
+                *out_cb = s->cb_args; *out_argc = 1;   /* [ctor, count] */
+                return 4;
+            }
+            /* the construct settled: TypedArrayCreateFromConstructor's validation, exactly as
+               js_typed_array_create performs it — ValidateTypedArray, then the immutable-buffer check; the length
+               floor is TASLICE_COPY's first test. */
+            s->arr = cb_result;
+            s->created = 1;
+            if (js_typed_array_get_length_unsafe(ctx, s->arr) < 0) return -1;
+            if (typed_array_is_immutable(JS_VALUE_GET_OBJ(s->arr))) {
+                JS_ThrowTypeErrorImmutableArrayBuffer(ctx);
+                return -1;
+            }
+        } else {
+            JS_FreeValue(ctx, cb_result);   /* the no-species path: nothing was requested, this is the seed */
         }
-        /* the construct settled: TypedArrayCreateFromConstructor's validation, exactly as js_typed_array_create
-           performs it — ValidateTypedArray, the immutable-buffer check, then the length floor. */
-        s->arr = cb_result;
-        s->created = 1;
-        { int new_len = js_typed_array_get_length_unsafe(ctx, s->arr);
-          if (new_len < 0) return -1;
-          if (typed_array_is_immutable(JS_VALUE_GET_OBJ(s->arr))) { JS_ThrowTypeErrorImmutableArrayBuffer(ctx); return -1; }
-          if (new_len < s->count) { JS_ThrowTypeError(ctx, "TypedArray length is too small"); return -1; } }
-    } else {
-        JS_FreeValue(ctx, cb_result);   /* the no-species path: nothing was requested, this is the seed */
+        cb_result = JS_UNDEFINED;
+        s->hdr.stage = TASLICE_COPY;
     }
+
+    DCHECK(s->hdr.stage == TASLICE_COPY, "%TypedArray%.prototype.slice resumed in no stage");
+    JS_FreeValue(ctx, cb_result);
+    p1 = JS_VALUE_GET_OBJ(s->arr);
+    while (s->copy_phase < 2 && s->unknown) {
+        /* 23.2.4.1 TypedArrayCreateFromConstructor step 4.3's length floor, then step 8's countBytes > 0:
+           predicates over the result's length and the unknown count, so both arms run */
+        if (JS_IsUninitialized(s->pred)) {
+            JSValue sp[2];
+
+            if (s->copy_phase == 0) {
+                sp[0] = JS_IsUninitialized(p1->u.typed_array->length_unknown) ? js_int32(p1->u.array.count)
+                                                                               : js_dup(p1->u.typed_array->length_unknown);
+                sp[1] = js_dup(s->cb_args[1]);
+            } else {
+                sp[0] = js_int32(0);
+                sp[1] = js_dup(s->cb_args[1]);
+            }
+            if (!js_value_is_concolic(sp[0]) && !js_value_is_concolic(sp[1])) {
+                double a = 0, b = 0;
+
+                JS_ToFloat64(ctx, &a, sp[0]);
+                JS_ToFloat64(ctx, &b, sp[1]);
+                s->pred = js_bool(a < b);
+            } else {
+                DCHECK(g_concolic.rel != NULL, "a slice's count is unknown with no JSConcolicHooks.rel installed");
+                CHECK(g_concolic.rel(ctx, sp + 2, OP_lt), "the relation hook declined a slice's count test");
+                s->pred = sp[0];
+            }
+        }
+        r = step_tobool_run(ctx, &s->hdr, s->pred, s->copy_phase == 0
+                            ? "23.2.4.1 TypedArrayCreateFromConstructor step 4.3 (length < argList[0])"
+                            : "23.2.3.27 step 8 (countBytes > 0)", &arm);
+        if (r) return r < 0 ? -1 : r;
+        JS_FreeValue(ctx, s->pred);
+        s->pred = JS_UNINITIALIZED;
+        if (s->copy_phase == 0 && arm) { JS_ThrowTypeError(ctx, "TypedArray length is too small"); return -1; }
+        if (s->copy_phase == 1 && !arm) return 0;
+        s->copy_phase++;
+    }
+    if (!s->unknown && js_typed_array_get_length_unsafe(ctx, s->arr) < s->count) {
+        JS_ThrowTypeError(ctx, "TypedArray length is too small");
+        return -1;
+    }
+    /* The copy fills the target's example window: `count` is countBytes, or its example where it is unknown.
+       Named residual. Not covered: the elements past that window where countBytes is unknown, which a read past
+       it answers from the target's own unknown length rather than from the source's bytes. Next diff builds: a
+       store past an unknown-length view's example window that 10.4.5.17's read past it answers. Absence shows
+       as: a sink fed from such a slice whose root names the bounds' sources but not the source buffer's own. */
     count = s->count;
     if (count > 0) {
         if (validate_typed_array(ctx, s->src) || validate_typed_array(ctx, s->arr))
             return -1;
         p = get_typed_array(ctx, s->src);
         p1 = get_typed_array(ctx, s->arr);
+        if (p && p1 && (!JS_IsUninitialized(s->start_v) || !JS_IsUninitialized(p->u.typed_array->offset_unknown) ||
+                        !JS_IsUninitialized(p1->u.typed_array->offset_unknown))) {
+            return js_ta_slice_copy_unknown(ctx, s, p, p1, min_int(count, (int)p1->u.array.count));
+        }
         /* s->len is the length read BEFORE start/end were coerced and before the species constructor ran. If the
            receiver's length has MOVED since (a valueOf or a ctor that resizes the backing buffer), `count` is
            stale and the block copy would read past the end — take the element-wise path, which re-reads the live
@@ -129306,6 +129522,7 @@ static JSValue js_ta_view_finish(JSContext *ctx, JSValue obj, JSTAViewPlan *pl);
     X(TAC_OFFSET,      "23.2.5.1.3 step 2 (offset is ToIndex(byteOffset))") \
     X(TAC_OFFSET_FORK, "23.2.5.1.3 steps 2-3 over an unknown offset (ToIndex's interval and the alignment fork)") \
     X(TAC_LENGTH,      "23.2.5.1.3 step 5.a (newLength is ToIndex(length))") \
+    X(TAC_COUNT_FORK,  "23.2.5.1 step 9 over an unknown firstArg (elementLength is ToIndex(firstArg): its interval)") \
     X(TAC_RANGE,       "23.2.5.1.3 steps 8-9 over an unknown buffer length or offset (the range test forks)") \
     X(TAC_PROTO,       "23.2.5.1 steps 5 and 6.c.iii via 23.2.5.1.1 (AllocateTypedArray, then the initialization)")
 enum { TACTOR_STAGES(JS_STEP_STAGE_ENUM) };
@@ -129380,6 +129597,18 @@ static JSValue js_ta_ctor_offset_test(JSContext *ctx, JSTACtor *s, int size_log2
     return sp[0];
 }
 
+/* 23.2.5.1 step 9's 7.1.24 ToIndex step 1 over an unknown firstArg: the integer, a Number, carrying `example`
+   (consumed). Owned. */
+static JSValue js_ta_ctor_count_int(JSContext *ctx, JSTACtor *s, JSValue example)
+{
+    JSValue r = g_concolic.derived(ctx, "7.1.24 ToIndex ( arg ) step 1 (int is ToIntegerOrInfinity(arg))",
+                                   (JSValueConst *)&s->argp[0], 1, example);
+
+    DCHECK(!JS_IsUninitialized(r), "an unknown element count derived no unknown integer");
+    g_concolic.type_fix(ctx, r, JS_LANG_TYPE_NUMBER);
+    return r;
+}
+
 static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSTACtor *s = st;
@@ -129405,17 +129634,20 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->off_pred = JS_UNINITIALIZED;
         s->off_fork = 0;
         s->off_example = 0;
+        s->count_pred = JS_UNINITIALIZED;
+        s->count_fork = 0;
         s->plan.in_range = false;
         s->plan.offset_unknown = false;
         s->plan.len_unknown = false;
         s->offset = 0;
         for (i = 0; i < 3; i++)
             s->argp[i] = js_dup(step_arg(&s->hdr, i));
-        DCHECK(ta_buffer_ctor_ready((JSValueConst *)s->argp, s->hdr.argc > 0 ? s->hdr.argc : 1),
+        DCHECK(ta_buffer_ctor_ready(ctx, (JSValueConst *)s->argp, s->hdr.argc > 0 ? s->hdr.argc : 1),
                "the TypedArray view entry was reached with a source the consume walk owns");
-        if (JS_VALUE_GET_TAG(s->argp[0]) != JS_TAG_OBJECT) {
+        if (JS_VALUE_GET_TAG(s->argp[0]) != JS_TAG_OBJECT || js_ta_first_arg_count_unknown(ctx, s->argp[0])) {
             /* step 6.c: ToIndex(firstArgument) THEN AllocateTypedArray. The argument is already primitive, so
-               that ToIndex invokes nothing and the plan in the tail performs it. */
+               that ToIndex invokes nothing and the plan in the tail performs it, or TAC_COUNT_FORK where it is an
+               unknown. */
             s->hdr.stage = TAC_OFFSET;
             goto have_length;
         }
@@ -129506,6 +129738,66 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->argp[2] = prim;
     }
  have_length:
+    s->hdr.stage = TAC_COUNT_FORK;
+    STEP_ARM(TAC_COUNT_FORK);
+    if (!s->is_copy && js_ta_first_arg_count_unknown(ctx, s->argp[0])) {
+        /* 23.2.5.1 step 9 over unknown input: 7.1.24 ToIndex's interval forks and its failing arm throws the
+           RangeError; the passing arm allocates at the integer's example (0 where it has none, or its example
+           leaves the interval), and the integer becomes [[ArrayLength]] (the tail, from len_unknown). */
+        static const char *const asks[2] = { "7.1.24 ToIndex step 2 (int is at least 0)",
+                                             "7.1.24 ToIndex step 2 (int is at most 2**53 - 1)" };
+        int arm;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        if (JS_IsUninitialized(s->len_unknown)) {
+            JSValue ex = js_concolic_held(s->argp[0]) ? js_concolic_operand(ctx, s->argp[0]) : JS_UNDEFINED;
+            double d = 0;
+            bool have = JS_IsNumber(ex) && JS_ToFloat64(ctx, &d, ex) == 0;
+
+            JS_FreeValue(ctx, ex);
+            d = isnan(d) ? 0 : trunc(d) + 0.0;
+            s->len_unknown = js_ta_ctor_count_int(ctx, s, have ? js_float64(d) : JS_UNDEFINED);
+        }
+        while (s->count_fork < 2) {
+            if (JS_IsUninitialized(s->count_pred)) {
+                JSValue sp[2];
+
+                sp[0] = s->count_fork == 0 ? js_int32(0) : js_dup(s->len_unknown);
+                sp[1] = s->count_fork == 0 ? js_dup(s->len_unknown) : js_float64(MAX_SAFE_INTEGER);
+                DCHECK(g_concolic.rel != NULL, "an element count is unknown with no JSConcolicHooks.rel installed");
+                CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined an unknown element count");
+                s->count_pred = sp[0];
+            }
+            r = step_tobool_run(ctx, &s->hdr, s->count_pred, asks[s->count_fork], &arm);
+            if (r) return r < 0 ? -1 : r;
+            JS_FreeValue(ctx, s->count_pred);
+            s->count_pred = JS_UNINITIALIZED;
+            if (!arm) {
+                JS_ThrowRangeError(ctx, "invalid array length");
+                return -1;
+            }
+            s->count_fork++;
+        }
+        {
+            JSValue ex = js_concolic_held(s->len_unknown) ? js_concolic_operand(ctx, s->len_unknown) : JS_UNDEFINED;
+            double d = -1;
+
+            if (!JS_IsNumber(ex) || JS_ToFloat64(ctx, &d, ex) || !(d >= 0 && d <= MAX_SAFE_INTEGER)) {
+                d = 0;
+                if (js_concolic_held(s->len_unknown)) {
+                    /* this arm contradicts the example: the integer has none here */
+                    JSValue none = js_ta_ctor_count_int(ctx, s, JS_UNDEFINED);
+
+                    JS_FreeValue(ctx, s->len_unknown);
+                    s->len_unknown = none;
+                }
+            }
+            JS_FreeValue(ctx, ex);
+            JS_FreeValue(ctx, s->argp[0]);
+            s->argp[0] = js_float64(d);
+        }
+    }
     /* 23.2.5.1.3 step 5.a ToIndex(length) over unknown input: the view is built at the length's example and the
        unknown becomes its [[ArrayLength]], so its elements stay the buffer's indexed bytes. The plan's range
        check runs on the example. */
@@ -129649,6 +129941,24 @@ static int js_ta_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
                           "the buffer's example bytes — build a view whose stated length holds and whose bytes "
                           "past the example derive as a read past an unknown length does");
             }
+            if (!JS_IsException(s->result) && !JS_IsUninitialized(s->len_unknown) &&
+                JS_VALUE_GET_TAG(s->argp[0]) != JS_TAG_OBJECT) {
+                /* 23.2.5.1.5 AllocateTypedArrayBuffer step 3: the new buffer's byteLength is elementSize ×
+                   length, an unknown wherever length is one */
+                JSTypedArray *nta = JS_VALUE_GET_OBJ(s->result)->u.typed_array;
+                JSArrayBuffer *nab = nta->buffer->u.array_buffer;
+                JSValue ops[2];
+
+                DCHECK(JS_IsUninitialized(nab->length_unknown), "a buffer the element-count form allocated already "
+                                                                "states an unknown length");
+                ops[0] = s->len_unknown;
+                ops[1] = js_int32(1 << typed_array_size_log2(s->hdr.arg));
+                nab->length_unknown = g_concolic.derived(ctx, "23.2.5.1.5 AllocateTypedArrayBuffer step 3 (byteLength "
+                                                         "is elementSize * length)", ops, 2,
+                                                         js_concolic_held(s->len_unknown)
+                                                         ? js_int64(nab->byte_length) : JS_UNDEFINED);
+                DCHECK(!JS_IsUninitialized(nab->length_unknown), "an unknown element count derived no byte length");
+            }
             if (!JS_IsException(s->result) && !JS_IsUninitialized(s->len_unknown)) {
                 JSTypedArray *nta = JS_VALUE_GET_OBJ(s->result)->u.typed_array;
 
@@ -129703,6 +130013,7 @@ static void js_ta_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->range_pred);
     v->val(ctx, &s->off_unknown);
     v->val(ctx, &s->off_pred);
+    v->val(ctx, &s->count_pred);
     if (s->planned) v->val(ctx, &s->plan.buffer);
 }
 

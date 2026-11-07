@@ -5085,6 +5085,14 @@ static void concolic_type_state_at(JSValueConst r, unsigned ty, const char *file
     c->ty = (uint8_t)ty;
 }
 
+/* JSConcolicHooks.type_fix: the set the standard fixes for a value the engine just derived. */
+static void concolic_type_fix_hook(JSContext *ctx, JSValueConst v, unsigned lang_types)
+{
+    (void)ctx;
+    DCHECK(concolic_is(v), "a type was fixed for a value that is not an unknown");
+    concolic_type_state(v, cty_of_tyf(lang_types));
+}
+
 /* The equality algorithms, spelled once: the identity's operator field. concolic_new_cmp composes the same
    field for a component whose IDL member is a comparison, and the two must agree exactly or a page writing
    the comparison the component declares would fork again over the same predicate. There is no inequality
@@ -10035,6 +10043,7 @@ static JSConcolicHooks g_hooks = {
     .example = concolic_example,
     .call = concolic_call_hook,
     .derived = concolic_new_derived,
+    .type_fix = concolic_type_fix_hook,
     .example_held = concolic_example_present,
     /* The ordinal half of a page-created value's name. With the member NULL the engine stamps 0,
        JS_CreationName answers absent for every value, and literal_ident's creation-name arm returns NULL: a host
