@@ -1383,6 +1383,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/requestsink.h"
 #include "fixture/storedreq.h"
 #include "fixture/recordrank.h"
+#include "fixture/requestpieces.h"
 #include "fixture/requestroute.h"
 #include "fixture/clobber.h"
 #include "fixture/srcreach.h"
@@ -2173,6 +2174,7 @@ TF_DOCS[] = {
     { "storedreq", HTML_STOREDREQ },
     { "recordrank", HTML_RECORDRANK },
     { "recordrankframe", HTML_RECORDRANKFRAME, OPENER_POLICY_SAME_ORIGIN, .xfo = "DENY" },
+    { "requestpieces", HTML_REQUESTPIECES },
     { "requestroute", HTML_REQUESTROUTE },
     { "requestredrive", HTML_REQUESTREDRIVE },
     { "recordless", HTML_RECORDLESS },
@@ -18477,8 +18479,6 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     int mk_tt[4] = { 1, 1, 1, 1 }, pr_tt[2] = { 1, 1 }, pl_tt[2] = { 1, 1 }, i, seen, marked, plain;
     const char *to_why = NULL, *tn_why = NULL, *tf_why = NULL, *go_why = NULL, *fg_why = NULL, *gs_why = NULL;
     int to_tt = 1, tn_tt = 1, tf_tt = 1, go_tt = 1, fg_tt = 1, gs_tt = 1;
-    const char *xh_why = NULL, *by_why = NULL;
-    int xh_tt = 1, by_tt = 1;
     char to_src[1024] = "", go_src[1024] = "";
     int has_go = s_rooted_source(js, "request", "[go]", go_src, sizeof go_src);
 
@@ -18519,17 +18519,6 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
              "the POST's mark does not name the query value its X-Tenant header carries");
     fold_row(&fg_tt, &fg_why, rq_mark_has(js, "/api/rq-forge", "\"body\":\"{" LOCATION_SEARCH_SRC "}[b]\""),
              "the POST's mark does not name the query value its body carries");
-    rq_marks(js, "/api/rq-xhr", &seen, &marked, &plain);
-    fold_row(&xh_tt, &xh_why, seen > 0, "NOT REACHED: there is no /api/rq-xhr record");
-    fold_row(&xh_tt, &xh_why,
-             rq_mark_has(js, "/api/rq-xhr", "\"headers\":{\"X-Rq\":\"{" LOCATION_SEARCH_SRC "}[x]\"}"),
-             "the XMLHttpRequest's mark does not name the query value its author header carries");
-    fold_row(&xh_tt, &xh_why, rq_mark_has(js, "/api/rq-xhr", "\"body\":\"{" LOCATION_SEARCH_SRC "}[x]\""),
-             "the XMLHttpRequest's mark does not name the query value its body carries");
-    rq_marks(js, "/api/rq-bytes", &seen, &marked, &plain);
-    fold_row(&by_tt, &by_why, seen > 0, "NOT REACHED: there is no /api/rq-bytes record");
-    fold_row(&by_tt, &by_why, rq_mark_has(js, "/api/rq-bytes", "\"body\":\"{" LOCATION_SEARCH_SRC "}[y]\""),
-             "the POST's mark does not name the query value whose character code its body byte is");
     for (i = 0; i < 2; i++) {
         rq_marks(js, plain_at[i], &seen, &marked, &plain);
         fold_row(&pr_tt[i], &pr_why[i], seen > 0, "NOT REACHED: there is no record of this address");
@@ -18550,8 +18539,6 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
         { "rq-pinned-marked", mk_tt[2], "rqP", SESS_EXPLORE, mk_why[2] },
         { "rq-click-marked", mk_tt[3], "rqDel", SESS_EXPLORE, mk_why[3] },
         { "rq-forge-marked", fg_tt, "rq-forge", SESS_EXPLORE, fg_why },
-        { "rq-xhr-marked", xh_tt, "rq-xhr", SESS_EXPLORE, xh_why },
-        { "rq-bytes-marked", by_tt, "rq-bytes", SESS_EXPLORE, by_why },
         { "rq-orphan-reached", pr_tt[0], "rqNeverCalled", SESS_EXPLORE, pr_why[0] },
         { "rq-orphan-plain", pl_tt[0], "rqNeverCalled", SESS_EXPLORE, pl_why[0], .reach = "rq-orphan-reached" },
         { "rq-storage-reached", pr_tt[1], "rqStored", SESS_EXPLORE, pr_why[1] },
@@ -18746,6 +18733,30 @@ TF_UNIT void probes_storedreq(const char *js, Probe *tab, int *n) {
         { "sq-note-verified", vf_tt[2], "srNoteAsk", SESS_EXPLORE, vf_why[2] },
         { "sq-never-reached", nr_tt, "srNever", SESS_EXPLORE, nr_why },
         { "sq-never-plain", np_tt, "srNever", SESS_EXPLORE, np_why, .reach = "sq-never-reached" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `requestpieces` document (fixture/requestpieces.h): each request's mark names the query value
+   its piece carries as that piece's root. */
+TF_UNIT void probes_requestpieces(const char *js, Probe *tab, int *n) {
+    const char *xh_why = NULL, *by_why = NULL;
+    int xh_tt = 1, by_tt = 1, seen, marked, plain;
+
+    rq_marks(js, "/api/rp-xhr", &seen, &marked, &plain);
+    fold_row(&xh_tt, &xh_why, seen > 0, "NOT REACHED: there is no /api/rp-xhr record");
+    fold_row(&xh_tt, &xh_why,
+             rq_mark_has(js, "/api/rp-xhr", "\"headers\":{\"X-Rp\":\"{" LOCATION_SEARCH_SRC "}[x]\"}"),
+             "the XMLHttpRequest's mark does not name the query value its author header carries");
+    fold_row(&xh_tt, &xh_why, rq_mark_has(js, "/api/rp-xhr", "\"body\":\"{" LOCATION_SEARCH_SRC "}[x]\""),
+             "the XMLHttpRequest's mark does not name the query value its body carries");
+    rq_marks(js, "/api/rp-bytes", &seen, &marked, &plain);
+    fold_row(&by_tt, &by_why, seen > 0, "NOT REACHED: there is no /api/rp-bytes record");
+    fold_row(&by_tt, &by_why, rq_mark_has(js, "/api/rp-bytes", "\"body\":\"{" LOCATION_SEARCH_SRC "}[y]\""),
+             "the POST's mark does not name the query value whose character code its body byte is");
+    const Probe rows[] = {
+        { "rp-xhr-marked", xh_tt, "rp-xhr", SESS_EXPLORE, xh_why },
+        { "rp-bytes-marked", by_tt, "rp-bytes", SESS_EXPLORE, by_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -26068,6 +26079,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_storedreq(js, probes, &np);
     probes_recordrank(js, probes, &np);
     probes_recordrankframe(js, probes, &np);
+    probes_requestpieces(js, probes, &np);
     probes_requestroute(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
