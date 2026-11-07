@@ -3495,8 +3495,11 @@ static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
     if (hdr->stage == SEND_BODY_STR) {
         /* The union's USVString arm: a value that is not one of the interface arms is ToString'd, and that is
            the page's code. body_extract takes the string arm as an ALREADY-CONVERTED string, which is what
-           this stage produces. */
-        if (!JS_IsNull(s->body) && !JS_IsUndefined(s->body) && !xhr_body_is_interface_arm(s->body)) {
+           this stage produces. An unknown crosses as itself, as fetch's body does: §7.1.1 over it is the
+           identity, and body_extract's string arm holds the unknown (core/fetch/body.h's `unknown`), where a
+           ToString here would park the coercion and end the send with no request. */
+        if (!JS_IsNull(s->body) && !JS_IsUndefined(s->body) && !concolic_is(s->body) &&
+            !xhr_body_is_interface_arm(s->body)) {
             JSValue str;
             r = step_tostring_run(ctx, hdr, s->body, in, &str, out_cb, out_argc);
             if (r > 0) return r;
