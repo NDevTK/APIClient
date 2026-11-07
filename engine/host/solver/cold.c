@@ -2010,9 +2010,8 @@ int cold_resume(JSContext *ctx, const char *recipes)
     /* THIS IS AN APPEND, NOT A SEED, and the two used to be one act. It asserted the frontier was EMPTY and
        assigned its park-local ordinals into it as though the document were the whole of what exists — which is
        true of the session-start rebuild and false by construction of the thing this tier is for: a PARTIAL
-       self-park writes the lowest-value TAIL, which belongs back beside every flow that was NOT paged out.
-       Its one caller today is engine_sched_begin, so the tail returns only at the next session (engine.c's
-       engine_sale_write states that residual).
+       self-park writes the lowest-value TAIL, which belongs beside every flow NOT paged out; its one caller is
+       engine_sched_begin, so the tail returns at the next session (engine_sale_write states that residual).
        THE SEEDING CLAIM DID NOT DISAPPEAR, IT MOVED TO THE PLACE THAT MAKES IT. "The boot flow and the residue
        are alternatives" is a statement about STARTING a session, so engine_sched_begin asserts the frontier is
        empty and then chooses one of the two; a rebuild has no business asserting anything about flows it did
