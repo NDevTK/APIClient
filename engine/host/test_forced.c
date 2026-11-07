@@ -20802,7 +20802,7 @@ TF_UNIT void probes_fileparse_taslice(const char *js, Probe *tab, int *n) {
         { "fpy-parsed", sp_tt, "/api/fpy-parsed", SESS_EXPLORE, sp_why },
         { "fpy-hash3", sh_tt, "/api/fpy-hash3", SESS_EXPLORE, sh_why },
         { "fpy-sink-file", sf_tt, "function fpyParse", SESS_EXPLORE, sf_why, .gate = "fpy-parsed" },
-        { "fpy-sink-query", sq_tt, ".slice(6, 6 + len)", SESS_EXPLORE, sq_why, .gate = "fpy-parsed" },
+        { "fpy-sink-query", sq_tt, "Uint8Array(buf).slice(6, 6 + len)", SESS_EXPLORE, sq_why, .gate = "fpy-parsed" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
