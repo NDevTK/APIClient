@@ -107,9 +107,14 @@ async function main() {
       if (how === "dnr") await setRule(rule(url), { "Origin": A, "Referer": A + "/page?x=secret",
                                                     "Cookie": "Bnone=1; Cnone=1; Bpart=1",
                                                     "Sec-Fetch-Site": "cross-site" });
-      // A function, not an expression: the offscreen document's CSP has no 'unsafe-eval'.
-      results[id] = await off.evaluate((u, i) => fetch(u, i).then((r) => ({ status: r.status }),
-                                                                 (e) => ({ error: String(e) })), url, init);
+      // A function, not an expression: the offscreen document's CSP has no 'unsafe-eval'. The offscreen realm's
+      // own fetch is sealed (lib/safe-fetch.js), so the row fetches from an about:blank child realm of it: the
+      // same extension initiator in no tab, with the child's documentId, which wire-events.js does not relay.
+      results[id] = await off.evaluate((u, i) => {
+        let f = document.getElementById("probe-realm");
+        if (!f) { f = document.createElement("iframe"); f.id = "probe-realm"; document.documentElement.appendChild(f); }
+        return f.contentWindow.fetch(u, i).then((r) => ({ status: r.status }), (e) => ({ error: String(e) }));
+      }, url, init);
       if (how === "dnr") await setRule(null, {});
     } else throw new Error("unknown path " + how);
   }
