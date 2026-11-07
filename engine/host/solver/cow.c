@@ -2425,6 +2425,46 @@ static void cow_entry_objects(const void *seg, const CowEntry *e, bool applied, 
         if (JS_IsObject(*vals[i])) visit(seg, *vals[i], arg);
 }
 
+static void cow_entry_serial(const CowEntry *e, void (*val)(JSValueConst v, void *arg), void *arg,
+                             CowSerialCensus *out) {
+    if (e->is_gendata) { out->coro++; return; }
+    if (e->is_map) {
+        out->maps++;
+        if (cow_map_live(e)) { val(cow_map_key(e), arg); val(cow_map_cur(e), arg); }
+        return;
+    }
+    _Static_assert(COW_STATE_KIND_N <= 16, "CowSerialCensus.states has a row per state kind");
+    if (e->is_state) {
+        out->states[e->state_kind]++;
+        if (e->state_kind == COW_STATE_HOST) out->host_bytes += (long)e->a_len;
+        if (e->state_kind == COW_STATE_HOST_REC) {
+            out->host_bytes += (long)e->rec->size;
+            if (e->a_cur)
+                for (int i = 0; i < e->rec->n_val; i++)
+                    val(*(const JSValue *)((const char *)e->a_cur + e->rec->val_off[i]), arg);
+        }
+        return;
+    }
+    if (e->vref) out->cells++; else out->slots++;
+    if (e->cur_state == COW_CUR_PRESENT) { val(e->cur.value, arg); val(e->cur.getter, arg); val(e->cur.setter, arg); }
+}
+
+uint32_t cow_delta_fork_gen(const CowDelta *d) { return d->fork_gen; }
+
+void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void *arg), void *arg,
+                             CowSerialCensus *out) {
+    DCHECK(d != NULL && !d->head_applied, "a serial census was asked of a delta whose head is on the heap — its "
+                                          "flow-side values are the live heap's, not the entries'");
+    memset(out, 0, sizeof *out);
+    out->head = d->n;
+    for (int i = 0; i < d->n; i++) cow_entry_serial(&d->e[i], val, arg, out);
+    for (const CowSeg *s = d->base; s != NULL; s = s->base) {
+        out->segs++;
+        out->chain += s->n;
+        for (int i = 0; i < s->n; i++) cow_entry_serial(&s->e[i], val, arg, out);
+    }
+}
+
 /* See cow.h. */
 void cow_delta_objects(const CowDelta *d, CowSegEnter enter, CowObjectVisit visit, void *arg) {
     DCHECK(d != NULL && enter != NULL && visit != NULL,

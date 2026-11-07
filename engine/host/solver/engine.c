@@ -11855,8 +11855,138 @@ static long g_sale_owed_n;
 static int g_sale_open;
 static long g_park_funded;   /* lifetime: flows sold for their bulk to fund another's record (engine_park_fund) */
 
+/* WHAT EACH SOLD MEMBER WOULD COST TO BRING BACK, BOTH WAYS — read at the sale, before anything is released. A
+   replay re-runs the member's lifetime work (the sum of its agents' charges, inherited at every fork); a
+   serialized delta writes what it changed: its heap entries (head and chain), the host records they saved, the
+   objects born on its own path since its last fork and reachable from its roots, its DOM entries and created
+   nodes, and its frames' live slots. `full` counts the chain the member stands on; `own` leaves the chain out,
+   because a frozen segment is shared by siblings and is written once. Bytes are this census's estimate: an
+   entry is a name and a value (SALE_ENTRY_BYTES), a created node SALE_NODE_BYTES. Log2 buckets. */
+enum { SALE_HIST = 48, SALE_ENTRY_BYTES = 24, SALE_NODE_BYTES = 64 };
+static struct {
+    long n, framed;
+    double work, full, own;
+    long work_max, full_max, own_max;
+    double heap_head, heap_chain, heap_segs, slots, cells, coro, maps, states[16], host_bytes;
+    double priv_objs, priv_bytes, priv_str_bytes, shared_born, baseline, bytecode, coro_slots, tramp, parks;
+    double dom_head, dom_chain, dom_segs, dom_kinds[9], dom_str, dom_nodes, dom_text;
+    long h_work[SALE_HIST], h_full[SALE_HIST], h_own[SALE_HIST], h_ratio[SALE_HIST];
+} g_sale_census;
+
+static int sale_log2(double v) {
+    int b = 0;
+    while (v >= 2.0 && b < SALE_HIST - 1) { v /= 2.0; b++; }
+    return b;
+}
+static void sale_reach_val(JSValueConst v, void *arg) { (void)arg; JS_FlowReachValue(v); }
+
+static void engine_sale_census_take(const Flow *f) {
+    CowSerialCensus hc;
+    DomSerialCensus dc;
+    JSFlowReach r;
+    int64_t work = 0;
+    long full, own, framed = 0;
+
+    for (int i = 0; i < f->n_agents; i++) work += (int64_t)f->agents[i].work;
+    JS_FlowReachBegin(g_sess_ctx, f->delta ? cow_delta_fork_gen(f->delta) : 0);
+    JS_FlowReachValue(f->fn);
+    JS_FlowReachValue(f->pending);
+    JS_FlowReachValue(f->deliver_q);
+    JS_FlowReachValue(f->deliver_world_q);
+    JS_FlowReachValue(f->perform_q);
+    JS_FlowReachValue(f->orphan_claim_fn);
+    JS_FlowReachParked(f->parked);
+    for (int i = 0; i < f->n_agents; i++) {
+        JS_FlowReachValue(f->agents[i].jobs);
+        JS_FlowReachValue(f->agents[i].program);
+        if (f->agents[i].frame) { framed = 1; JS_FlowReachFrame(f->agents[i].frame); }
+        JS_FlowReachParked(f->agents[i].parked);
+    }
+    memset(&hc, 0, sizeof hc);
+    if (f->delta) cow_delta_serial_census(f->delta, sale_reach_val, NULL, &hc);
+    JS_FlowReachEnd(&r);
+    dom_cow_serial_census(f->dom, f->dom_n, f->dom_base, &dc);
+
+    own = (hc.head + f->dom_n) * SALE_ENTRY_BYTES + r.priv_bytes + r.priv_string_bytes + dc.created_nodes * SALE_NODE_BYTES
+          + dc.created_text_bytes + dc.str_bytes + r.coro_slots * (long)sizeof(JSValue) + hc.host_bytes;
+    full = own + (hc.chain + dc.chain) * SALE_ENTRY_BYTES;
+    g_sale_census.n++;
+    g_sale_census.framed += framed;
+    g_sale_census.work += (double)work; g_sale_census.full += full; g_sale_census.own += own;
+    if (work > g_sale_census.work_max) g_sale_census.work_max = (long)work;
+    if (full > g_sale_census.full_max) g_sale_census.full_max = full;
+    if (own > g_sale_census.own_max) g_sale_census.own_max = own;
+    g_sale_census.heap_head += hc.head; g_sale_census.heap_chain += hc.chain; g_sale_census.heap_segs += hc.segs;
+    g_sale_census.slots += hc.slots; g_sale_census.cells += hc.cells; g_sale_census.coro += hc.coro;
+    g_sale_census.maps += hc.maps; g_sale_census.host_bytes += hc.host_bytes;
+    for (int k = 0; k < 16; k++) g_sale_census.states[k] += hc.states[k];
+    g_sale_census.priv_objs += r.priv_objs; g_sale_census.priv_bytes += r.priv_bytes;
+    g_sale_census.priv_str_bytes += r.priv_string_bytes; g_sale_census.shared_born += r.shared_born;
+    g_sale_census.baseline += r.baseline; g_sale_census.bytecode += r.bytecode;
+    g_sale_census.coro_slots += r.coro_slots; g_sale_census.tramp += r.tramp_frames; g_sale_census.parks += r.parks;
+    g_sale_census.dom_head += dc.head; g_sale_census.dom_chain += dc.chain; g_sale_census.dom_segs += dc.segs;
+    for (int k = 0; k < 9; k++) g_sale_census.dom_kinds[k] += dc.kinds[k];
+    g_sale_census.dom_str += dc.str_bytes; g_sale_census.dom_nodes += dc.created_nodes;
+    g_sale_census.dom_text += dc.created_text_bytes;
+    g_sale_census.h_work[sale_log2((double)work)]++;
+    g_sale_census.h_full[sale_log2((double)full)]++;
+    g_sale_census.h_own[sale_log2((double)own)]++;
+    g_sale_census.h_ratio[sale_log2((double)work / (double)(full > 0 ? full : 1))]++;
+}
+
+static int sale_hist_json(char *b, size_t cap, const char *name, const long *h) {
+    int top = 0, n;
+    for (int i = 0; i < SALE_HIST; i++) if (h[i]) top = i + 1;
+    n = snprintf(b, cap, "\"%s\":[", name);
+    for (int i = 0; i < top && (size_t)n < cap; i++) n += snprintf(b + n, cap - (size_t)n, "%s%ld", i ? "," : "", h[i]);
+    if ((size_t)n < cap) n += snprintf(b + n, cap - (size_t)n, "]");
+    return n;
+}
+
+char *engine_sale_census_json(void) {
+    size_t cap = 8192;
+    char *b = malloc(cap);
+    int n;
+    long g0o, g0b, bo, bb;
+
+    CHECK(b != NULL, "engine: OOM composing the sale census");
+    JS_FlowGenCensus(JS_GetRuntime(g_sess_ctx), &g0o, &g0b, &bo, &bb);
+    n = snprintf(b, cap,
+        "{\"n\":%ld,\"framed\":%ld,\"work\":%.0f,\"full\":%.0f,\"own\":%.0f,\"workMax\":%ld,\"fullMax\":%ld,"
+        "\"ownMax\":%ld,\"heapHead\":%.0f,\"heapChain\":%.0f,\"heapSegs\":%.0f,\"slots\":%.0f,\"cells\":%.0f,"
+        "\"coro\":%.0f,\"maps\":%.0f,\"hostBytes\":%.0f,\"privObjs\":%.0f,\"privBytes\":%.0f,\"privStrBytes\":%.0f,"
+        "\"sharedBorn\":%.0f,\"baseline\":%.0f,\"bytecode\":%.0f,\"coroSlots\":%.0f,\"tramp\":%.0f,\"parks\":%.0f,"
+        "\"domHead\":%.0f,\"domChain\":%.0f,\"domSegs\":%.0f,\"domStr\":%.0f,\"domNodes\":%.0f,\"domText\":%.0f,"
+        "\"liveGen0Objs\":%ld,\"liveGen0Bytes\":%ld,\"liveBornObjs\":%ld,\"liveBornBytes\":%ld,\"states\":[",
+        g_sale_census.n, g_sale_census.framed, g_sale_census.work, g_sale_census.full, g_sale_census.own,
+        g_sale_census.work_max, g_sale_census.full_max, g_sale_census.own_max, g_sale_census.heap_head,
+        g_sale_census.heap_chain, g_sale_census.heap_segs, g_sale_census.slots, g_sale_census.cells,
+        g_sale_census.coro, g_sale_census.maps, g_sale_census.host_bytes, g_sale_census.priv_objs,
+        g_sale_census.priv_bytes, g_sale_census.priv_str_bytes, g_sale_census.shared_born, g_sale_census.baseline,
+        g_sale_census.bytecode, g_sale_census.coro_slots, g_sale_census.tramp, g_sale_census.parks,
+        g_sale_census.dom_head, g_sale_census.dom_chain, g_sale_census.dom_segs, g_sale_census.dom_str,
+        g_sale_census.dom_nodes, g_sale_census.dom_text, g0o, g0b, bo, bb);
+    for (int k = 0; k < cow_state_kind_count(); k++)
+        n += snprintf(b + n, cap - (size_t)n, "%s{\"%s\":%.0f}", k ? "," : "", cow_state_kind_name(k),
+                      g_sale_census.states[k]);
+    n += snprintf(b + n, cap - (size_t)n, "],\"domKinds\":[");
+    for (int k = 0; k < 9; k++) n += snprintf(b + n, cap - (size_t)n, "%s%.0f", k ? "," : "", g_sale_census.dom_kinds[k]);
+    n += snprintf(b + n, cap - (size_t)n, "],");
+    n += sale_hist_json(b + n, cap - (size_t)n, "hWork", g_sale_census.h_work);
+    n += snprintf(b + n, cap - (size_t)n, ",");
+    n += sale_hist_json(b + n, cap - (size_t)n, "hFull", g_sale_census.h_full);
+    n += snprintf(b + n, cap - (size_t)n, ",");
+    n += sale_hist_json(b + n, cap - (size_t)n, "hOwn", g_sale_census.h_own);
+    n += snprintf(b + n, cap - (size_t)n, ",");
+    n += sale_hist_json(b + n, cap - (size_t)n, "hRatio", g_sale_census.h_ratio);
+    n += snprintf(b + n, cap - (size_t)n, "}");
+    CHECK((size_t)n < cap, "engine: the sale census outgrew its buffer");
+    return b;
+}
+
 /* The first half of a sale: the flow leaves every query and gives back what its record does not read. */
 static void engine_sale_release(Flow *tail) {
+    engine_sale_census_take(tail);
     /* The synchronous requests leave with the flow, counted (see g_paged_reqs); an answered HOSTREQ entry still
        awaits answers from other peer timelines and stays counted. Its fetch parks go back with the register at
        flow_release_bulk, and the drop of a pair's last park withdraws the request (engine_pending_withdrawn). */

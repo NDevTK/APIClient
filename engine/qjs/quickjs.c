@@ -56054,6 +56054,204 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
     return (JSValue *)c;
 }
 
+/* JS_FlowReach* — see quickjs.h. The visited set and the work stack are host malloc, not the runtime's, because
+   the walk runs inside a RAM-pressure sale and a runtime allocation there would ask for a second sale. */
+static struct {
+    JSRuntime *rt;
+    uint32_t floor;
+    const void **set; size_t set_cap, set_n;
+    JSGCObjectHeader **stk; size_t stk_cap, stk_n;
+    JSFlowReach r;
+} g_reach;
+
+static bool reach_seen(const void *p)
+{
+    size_t m, h;
+
+    if (g_reach.set_n * 2 >= g_reach.set_cap) {
+        size_t ncap = g_reach.set_cap ? g_reach.set_cap * 2 : 4096, i;
+        const void **ns = calloc(ncap, sizeof *ns);
+
+        CHECK(ns != NULL, "flow reach census: OOM growing the visited set");
+        for (i = 0; i < g_reach.set_cap; i++) {
+            const void *q = g_reach.set[i];
+            if (!q) continue;
+            h = ((uintptr_t)q * 0x9E3779B97F4A7C15ull >> 17) & (ncap - 1);
+            while (ns[h]) h = (h + 1) & (ncap - 1);
+            ns[h] = q;
+        }
+        free(g_reach.set);
+        g_reach.set = ns; g_reach.set_cap = ncap;
+    }
+    m = g_reach.set_cap - 1;
+    h = ((uintptr_t)p * 0x9E3779B97F4A7C15ull >> 17) & m;
+    while (g_reach.set[h]) {
+        if (g_reach.set[h] == p) return true;
+        h = (h + 1) & m;
+    }
+    g_reach.set[h] = p;
+    g_reach.set_n++;
+    return false;
+}
+
+static void reach_string(JSValueConst v)
+{
+    int tag = JS_VALUE_GET_TAG(v);
+
+    if (tag == JS_TAG_STRING) {
+        JSString *p = JS_VALUE_GET_STRING(v);
+        if (reach_seen(p)) return;
+        g_reach.r.priv_strings++;
+        g_reach.r.priv_string_bytes += (long)sizeof(JSString) + ((long)p->len << p->is_wide_char);
+    } else if (tag == JS_TAG_STRING_ROPE) {
+        JSStringRope *r = JS_VALUE_GET_PTR(v);
+        if (reach_seen(r)) return;
+        reach_string(r->left);
+        reach_string(r->right);
+    }
+}
+
+static void reach_mark(JSRuntime *rt, JSGCObjectHeader *gp)
+{
+    (void)rt;
+    if (reach_seen(gp)) return;
+    switch (JS_GC_TYPE(gp)) {
+    case JS_GC_OBJ_TYPE_JS_OBJECT: {
+        JSObject *p = (JSObject *)gp;
+        if (p->flow_gen == 0) { g_reach.r.baseline++; return; }
+        if (p->flow_gen <= g_reach.floor) { g_reach.r.shared_born++; return; }
+        break;
+    }
+    case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE: g_reach.r.bytecode++; return;
+    case JS_GC_OBJ_TYPE_JS_CONTEXT: return;
+    case JS_GC_OBJ_TYPE_VAR_REF: g_reach.r.cells++; break;
+    case JS_GC_OBJ_TYPE_ASYNC_FUNCTION: g_reach.r.coros++; break;
+    default: break;
+    }
+    if (g_reach.stk_n == g_reach.stk_cap) {
+        size_t ncap = g_reach.stk_cap ? g_reach.stk_cap * 2 : 1024;
+        JSGCObjectHeader **ns = realloc(g_reach.stk, ncap * sizeof *ns);
+        CHECK(ns != NULL, "flow reach census: OOM growing the work stack");
+        g_reach.stk = ns; g_reach.stk_cap = ncap;
+    }
+    g_reach.stk[g_reach.stk_n++] = gp;
+}
+
+static void reach_frame_slots(JSAsyncFunctionState *s)
+{
+    JSStackFrame *sf = &s->frame;
+    TrampFrame *t;
+
+    if (sf->cur_sp) {
+        JSValue *sp;
+        g_reach.r.coro_slots += (long)(sf->cur_sp - sf->arg_buf);
+        for (sp = sf->arg_buf; sp < sf->cur_sp; sp++) reach_string(*sp);
+    }
+    for (t = s->tramp_top; t; t = t->up) g_reach.r.tramp_frames++;
+}
+
+static void reach_drain(void)
+{
+    while (g_reach.stk_n) {
+        JSGCObjectHeader *gp = g_reach.stk[--g_reach.stk_n];
+
+        if (JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_JS_OBJECT) {
+            JSObject *p = (JSObject *)gp;
+            JSShapeProperty *prs = get_shape_prop(p->shape);
+            int i;
+
+            g_reach.r.priv_objs++;
+            g_reach.r.priv_bytes += (long)sizeof(JSObject) + (long)p->shape->prop_size * (long)sizeof(JSProperty);
+            for (i = 0; i < p->shape->prop_count; i++, prs++)
+                if (prs->atom != JS_ATOM_NULL && !(prs->flags & JS_PROP_TMASK)) reach_string(p->prop[i].u.value);
+            if (p->fast_array && (p->class_id == JS_CLASS_ARRAY || p->class_id == JS_CLASS_ARGUMENTS)) {
+                g_reach.r.priv_bytes += (long)p->u.array.count * (long)sizeof(JSValue);
+                for (uint32_t k = 0; k < p->u.array.count; k++) reach_string(p->u.array.u.values[k]);
+            } else if (p->class_id == JS_CLASS_ARRAY_BUFFER || p->class_id == JS_CLASS_SHARED_ARRAY_BUFFER) {
+                if (p->u.array_buffer) g_reach.r.priv_bytes += p->u.array_buffer->byte_length;
+            }
+        } else if (JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_VAR_REF) {
+            JSVarRef *vr = (JSVarRef *)gp;
+            if (vr->is_detached) reach_string(*vr->pvalue);
+        } else if (JS_GC_TYPE(gp) == JS_GC_OBJ_TYPE_ASYNC_FUNCTION) {
+            JSAsyncFunctionData *s = (JSAsyncFunctionData *)gp;
+            if (s->is_active) reach_frame_slots(&s->func_state);
+        }
+        mark_children(g_reach.rt, gp, reach_mark);
+    }
+}
+
+void JS_FlowReachBegin(JSContext *ctx, uint32_t floor)
+{
+    DCHECK(g_reach.rt == NULL, "a flow reach census was begun inside another — the walk state is one static");
+    g_reach.rt = ctx->rt;
+    g_reach.floor = floor;
+    memset(&g_reach.r, 0, sizeof g_reach.r);
+}
+
+void JS_FlowReachValue(JSValueConst v)
+{
+    DCHECK(g_reach.rt != NULL, "a flow reach root was fed outside a census");
+    reach_string(v);
+    JS_MarkValue(g_reach.rt, v, reach_mark);
+    reach_drain();
+}
+
+void JS_FlowReachFrame(JSValue *frame)
+{
+    JSAsyncFunctionState *s = (JSAsyncFunctionState *)frame;
+
+    DCHECK(g_reach.rt != NULL, "a flow reach frame was fed outside a census");
+    if (!s) return;
+    g_reach.r.coros++;
+    reach_frame_slots(s);
+    async_func_mark(g_reach.rt, s, reach_mark);
+    reach_drain();
+}
+
+void JS_FlowReachParked(void *parked)
+{
+    struct list_head *el, *first = parked;
+
+    if (!first) return;
+    el = first;
+    do {
+        JSAsyncFunctionState *b = list_entry(el, JSAsyncFunctionState, park_link);
+        g_reach.r.parks++;
+        JS_FlowReachFrame((JSValue *)b);
+        el = el->next;
+    } while (el != first);
+}
+
+void JS_FlowGenCensus(JSRuntime *rt, long *gen0_objs, long *gen0_bytes, long *born_objs, long *born_bytes)
+{
+    struct list_head *el;
+
+    *gen0_objs = *gen0_bytes = *born_objs = *born_bytes = 0;
+    list_for_each(el, &rt->gc_obj_list) {
+        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
+        JSObject *p;
+        long b;
+
+        if (JS_GC_TYPE(gp) != JS_GC_OBJ_TYPE_JS_OBJECT) continue;
+        p = (JSObject *)gp;
+        b = (long)sizeof(JSObject) + (long)p->shape->prop_size * (long)sizeof(JSProperty);
+        if (p->fast_array && (p->class_id == JS_CLASS_ARRAY || p->class_id == JS_CLASS_ARGUMENTS))
+            b += (long)p->u.array.count * (long)sizeof(JSValue);
+        if (p->flow_gen == 0) { (*gen0_objs)++; *gen0_bytes += b; }
+        else { (*born_objs)++; *born_bytes += b; }
+    }
+}
+
+void JS_FlowReachEnd(JSFlowReach *out)
+{
+    DCHECK(g_reach.rt != NULL && g_reach.stk_n == 0, "a flow reach census was ended that was not begun, or "
+                                                      "with roots still on its work stack");
+    *out = g_reach.r;
+    free(g_reach.set); g_reach.set = NULL; g_reach.set_cap = g_reach.set_n = 0;
+    g_reach.rt = NULL;
+}
+
 JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow) {
     JSAsyncFunctionState *s = (JSAsyncFunctionState *)flow;
     JSStackFrame *sf = &s->frame;

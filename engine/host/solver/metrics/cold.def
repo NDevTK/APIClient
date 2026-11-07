@@ -490,6 +490,10 @@ METRIC(program_cursors, "programCursors", GAUGE, "member", AGENT, "solver/cold.c
 /* …and how far each standing member is from having nothing left to run (solver/cold.h;
    `outOfPrograms` is its bucket 0). The cursor histogram is a position, this a distance. */
 METRIC(programs_ahead, "programsAhead", GAUGE, "member", AGENT, "solver/cold.c", OBJECT)
+/* What each RAM-pressure-sold member would cost to bring back by replay (its lifetime work) and by a serialized
+   delta (the bytes it changed); solver/engine.c's sale census states the estimate. Lifetime sums and log2
+   histograms over the sold set; the live-heap birth split is a gauge read at the sample. */
+METRIC(sale_census, "saleCensus", LIFETIME, "member", AGENT, "solver/engine.c", OBJECT)
 /* The @H surface's own denominator — endpoint.h states why its length is three states: small
    `epEmitted` with large `epAssets` learned little because the addresses were files.
    `epAssets` counts the flag `endpoint_mark_asset` set, an outcome over a classifier with a

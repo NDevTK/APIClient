@@ -2770,6 +2770,37 @@ long dom_cow_chain_bytes(void) {
     return g_dom_seg_live * (long)sizeof(DomSeg) + g_dom_seg_entries_live * (long)sizeof(DomUndo);
 }
 long dom_cow_head_bytes(int cap) { return (long)cap * (long)sizeof(DomUndo); }
+
+static void dom_entry_serial(const DomUndo *u, DomSerialCensus *out) {
+    DCHECK(u->kind >= 0 && u->kind < 9, "a DOM undo entry's kind is outside the census's rows");
+    out->kinds[u->kind]++;
+    if (u->name) out->str_bytes += (long)strlen(u->name);
+    if (u->ns) out->str_bytes += (long)strlen(u->ns);
+    if (u->prefix) out->str_bytes += (long)strlen(u->prefix);
+    if (u->kind == 0 || u->kind == 3) out->str_bytes += (long)u->old_len + (long)u->cur_len;
+    if (u->kind == 4 && u->node) {
+        const lxb_dom_node_t *root = u->node, *n = root;
+        while (n) {
+            out->created_nodes++;
+            if (n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT)
+                out->created_text_bytes += (long)lxb_dom_interface_character_data(n)->data.length;
+            if (n->first_child) { n = n->first_child; continue; }
+            while (n != root && !n->next) n = n->parent;
+            n = n == root ? NULL : n->next;
+        }
+    }
+}
+
+void dom_cow_serial_census(const void *head, int n, const void *base, DomSerialCensus *out) {
+    memset(out, 0, sizeof *out);
+    out->head = n;
+    for (int i = 0; i < n; i++) dom_entry_serial(&((const DomUndo *)head)[i], out);
+    for (const DomSeg *s = base; s != NULL; s = s->base) {
+        out->segs++;
+        out->chain += s->n;
+        for (int i = 0; i < s->n; i++) dom_entry_serial(&s->e[i], out);
+    }
+}
 /* THE DOM CALL-SITE CENSUS — see dom_site_note for what each number is, which arm of the push raises it, and
    the two identities that hold between them. All four are LIFETIME COUNTS over this session. */
 void dom_cow_site_stats(long *writes, long *sited, long *unsited, long *sites) {

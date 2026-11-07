@@ -1433,4 +1433,7 @@ void solver_agent_free(JSContext *ctx);
  * this sets; core/platform.c asks the runtime's step-machine census), so collapsing them aborts. */
 void solver_frontier_free(JSContext *ctx);
 
+/* The sold members' cost both ways, as a JSON object the caller frees (engine.c's sale census). */
+char *engine_sale_census_json(void);
+
 #endif

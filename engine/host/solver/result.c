@@ -1248,6 +1248,7 @@ char *result_cold_json(void) {
     /* The two frontier-extent histograms live on the heap, since there is no list width to derive; see
        cursor_hist_json, which takes each one's name for its asserts. */
     char *cursors;
+    char *sale = NULL;
     char *ahead;
     char *out;
     ColdResumed resumed;
@@ -1802,6 +1803,8 @@ char *result_cold_json(void) {
     METRIC_SET_OBJECT(step_units, hist);
     METRIC_SET_OBJECT(program_cursors, cursors);
     METRIC_SET_OBJECT(programs_ahead, ahead);
+    sale = engine_sale_census_json();
+    METRIC_SET_OBJECT(sale_census, sale);
     METRIC_SET(ep_minted, ep_minted);
     METRIC_SET(ep_assets, ep_assets);
     METRIC_SET(ep_emitted, ep_emitted);
@@ -1826,6 +1829,7 @@ char *result_cold_json(void) {
     json_buf_raw(&b, rungs);
     json_buf_raw(&b, "}");
     out = json_buf_take(&b);
+    free(sale);
     free(cursors);
     free(ahead);
     free(edge);

@@ -549,4 +549,14 @@ void cow_delta_objects(const CowDelta *d, CowSegEnter enter, CowObjectVisit visi
    delta's whole host allocation (the struct, its entry array at capacity, and its hash index). */
 void cow_delta_head_stats(const CowDelta *d, long *entries, long *bytes);
 
+/* WHAT A SERIALIZED COPY OF ONE PARKED DELTA WOULD HOLD — head and whole chain, entry by kind, the bytes of the
+   host records it saved, and each value its flow-side half holds handed to `val` (a parked head, so `cur`). The
+   unit is entries, not the host struct, because a serialized entry is a name and a value, not a CowEntry. */
+typedef struct {
+    long head, chain, segs, slots, cells, coro, maps, states[16], host_bytes;
+} CowSerialCensus;
+uint32_t cow_delta_fork_gen(const CowDelta *d);   /* the generation its last fork stamped (0: never forked) */
+void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void *arg), void *arg,
+                             CowSerialCensus *out);
+
 #endif

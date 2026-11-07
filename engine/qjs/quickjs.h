@@ -3628,6 +3628,24 @@ JS_EXTERN void    *JS_CloneParkedFlowsOf(JSContext *ctx, void *parked);
 /* Frame-snapshot fork: deep-copy a SUSPENDED flow into an INDEPENDENT clone that resumes from the same point.
    No fallback — an un-built frame shape (deep tramp chain / live closures) crashes loud. */
 JS_EXTERN JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow);
+/* What a parked flow's own heap is: the objects reachable from its roots that were born after `floor` (its fork
+   generation), which no sibling shares and which a serialized delta would have to write. The walk stops at an
+   object born at or before `floor` (shared with a sibling, or gen-0 baseline) and at function bytecode (code,
+   named by its script), counting each distinct stop. A stashed heap-frame chain (tramp_top) is counted, not
+   walked, as the collector's own mark does not walk it. Begin, feed roots, End; not reentrant. */
+typedef struct {
+    long priv_objs, priv_bytes, priv_strings, priv_string_bytes;
+    long shared_born, baseline, bytecode;
+    long cells, coros, coro_slots, tramp_frames, parks;
+} JSFlowReach;
+JS_EXTERN void JS_FlowReachBegin(JSContext *ctx, uint32_t floor);
+JS_EXTERN void JS_FlowReachValue(JSValueConst v);
+JS_EXTERN void JS_FlowReachFrame(JSValue *frame);
+JS_EXTERN void JS_FlowReachParked(void *parked);
+JS_EXTERN void JS_FlowReachEnd(JSFlowReach *out);
+/* The live JS objects by birth: gen 0 (baseline, named across a session boundary by what made it) and born
+   since (a serialized frontier writes each once), with the census's own byte estimate. A walk of the GC list. */
+JS_EXTERN void JS_FlowGenCensus(JSRuntime *rt, long *gen0_objs, long *gen0_bytes, long *born_objs, long *born_bytes);
 /* Why a SUSPENDED flow (or the runtime's parked set) cannot be forked at this instant, or NULL: the first step
    machine on its chain whose JSTrampStepDef.unforkable answers. A fork that may wait asks this before cloning
    and waits for the operation to end; a clone of a flow that answers non-NULL aborts. */

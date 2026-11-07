@@ -499,6 +499,10 @@ void dom_cow_rendering_stats(long *asks, long *grants, long *sited, long *digest
    report a number that drifts the next time an entry kind is added. */
 long dom_cow_chain_bytes(void);
 long dom_cow_head_bytes(int cap);
+/* WHAT A SERIALIZED COPY OF ONE PARKED FLOW'S DOM DELTA WOULD HOLD — its head buffer (dom_buf_take) and base chain
+   (dom_base_take): entries by kind, the string bytes they carry, and the nodes under the subtrees it created. */
+typedef struct { long head, chain, segs, kinds[9], str_bytes, created_nodes, created_text_bytes; } DomSerialCensus;
+void dom_cow_serial_census(const void *head, int n, const void *base, DomSerialCensus *out);
 
 /* THIS FLOW CREATED THIS NODE. Called from every place a node is made, so the delta owns it and destroys it
    when the delta is discarded. Inert while capture is off — a boot-time creation is baseline and outlives
