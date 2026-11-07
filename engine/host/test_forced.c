@@ -1475,6 +1475,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/ceupsale.h"
 #include "fixture/flexnone.h"
 #include "fixture/errsale.h"
+#include "fixture/chainsale.h"
 #include "fixture/sizekw.h"
 #include "fixture/svgratio.h"
 #include "fixture/vshift.h"
@@ -2163,6 +2164,7 @@ TF_DOCS[] = {
     { "flexnone", HTML_FLEXNONE },
     { "errsale", HTML_ERRSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "owedsale", HTML_OWEDSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "chainsale", HTML_CHAINSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "sizekw", HTML_SIZEKW },
     { "svgratio", HTML_SVGRATIO },
     { "vshift", HTML_VSHIFT },
@@ -20101,6 +20103,32 @@ TF_UNIT void probes_errsale(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `chainsale` document (fixture/chainsale.h): a flow sold while parked under an async body and a
+   generator body that stand mid-call on its stashed chain has the objects those two frames hold counted by the
+   sale census, which walks the sold member's heap with the collector's mark. The census sums over every sale and
+   counts a private birth or, past a later fork, a shared-born stop; the two frames hold 100. */
+TF_UNIT void probes_chainsale(const char *js, Probe *tab, int *n) {
+    const char *ch_why = NULL; int ch_tt = 1;
+    fold_row(&ch_tt, &ch_why, tf_census_row(js, "_cold", "soldFlows") >= 1,
+             "NOT REACHED: RAM pressure sold no flow, so no arm parked under the two coroutine bodies was walked");
+    fold_row(&ch_tt, &ch_why, tf_census_row(js, "saleCensus", "tramp") >= 3,
+             "NOT REACHED: the flows RAM pressure sold held fewer heap frames than chRun, chGen and chGrow, so none "
+             "was parked inside chGrow() under the two bodies");
+    fold_row(&ch_tt, &ch_why, tf_census_row(js, "saleCensus", "privObjs") +
+                              tf_census_row(js, "saleCensus", "sharedBorn") >= 100,
+             "a sold arm parked inside chGrow() was walked and the census found fewer than the 100 objects the "
+             "async body and the generator body hold: a coroutine frame mid-call on a stashed chain is not marked "
+             "by the record that owns it");
+    fold_row(&ch_tt, &ch_why, (param_value_is(js, "/api/chsell", "m", "free") ||
+                               param_value_is(js, "/api/chsell", "m", "held")) &&
+                              param_value_is(js, "/api/chsell", "n", "200"),
+             "no arm finished both bodies after the sale, so the sale reached the world that survived it");
+    const Probe rows[] = {
+        { "chain-sale-mark", ch_tt, "/api/chsell", SESS_EXPLORE, ch_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `sizekw` document (fixture/sizekw.h): css-sizing-3 §3.2's intrinsic size keywords as a
    `width`, in a contribution and as a used width. */
 TF_UNIT void probes_sizekw(const char *js, Probe *tab, int *n) {
@@ -26427,6 +26455,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_ceupsale(js, probes, &np);
     probes_flexnone(js, probes, &np);
     probes_errsale(js, probes, &np);
+    probes_chainsale(js, probes, &np);
     probes_sizekw(js, probes, &np);
     probes_svgratio(js, probes, &np);
     probes_vshift(js, probes, &np);
