@@ -447,6 +447,12 @@ Residuals, each a difference from the document's own request:
   from a document whose host is this extension's id would satisfy the initiator condition; it cannot carry a
   live token, and the worker's header CHECK covers it.
 - The header names a rule adds arrive lower-case and after the browser's own headers.
+- Every send, its preflight included, carries `Pragma: no-cache` and `Cache-Control: no-cache` unless its own
+  header list holds the field, because the wire's cache mode is "no-store" (Fetch §4.6 "HTTP-network-or-cache
+  fetch" step 8.18; `lib/wire.js` says why it is that mode). The document's own request carries them only under
+  its own "no-store" or "reload" mode. Chrome appends them beneath webRequest, so neither a rule nor the
+  DevTools Protocol's `Fetch.continueRequest` sees or removes them, and the Protocol's
+  `Network.setCacheDisabled` appends them too (measured in Chrome 155, `testing/nostore_fields_probe.cjs`).
 - The order between unpartitioned and partitioned cookies of equal path length is not the browser's.
   `chrome.cookies` states no creation time.
 - The storage access status is assumed `active`.

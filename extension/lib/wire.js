@@ -52,7 +52,12 @@ function _wireBodyUntil(body, done) {
    (lib/speak-as.js's speakAsAcquire), held until the send settles.
    Cache mode "no-store" (Fetch §2.2.5 "Requests": "Fetch behaves as if there is no HTTP cache at all"): the
    extension's one cache is keyed by the URL without its fragment, so it would answer one document's send with
-   another's reply, and a stale-while-revalidate revalidation is a request of its own after the send ended. */
+   another's reply, and a stale-while-revalidate revalidation is a request of its own after the send ended.
+   Named residual. Not covered: that mode appends `Pragma: no-cache` and `Cache-Control: no-cache` (Fetch §4.6
+   "HTTP-network-or-cache fetch" step 8.18) where the list holds neither, beneath webRequest, where no speak-as
+   rule reaches (testing/nostore_fields_probe.cjs). Next diff: a transport that skips the extension's cache
+   without appending them, such as a native host's own HTTP client. Its absence shows as a server seeing both
+   fields on a send whose document's own request carries neither. */
 async function wireSend(platformFetch, href, init) {
   CHECK(typeof platformFetch === "function" && typeof init.method === "string" && init.credentials === "omit" &&
         init.redirect === "manual" && (init.headers === undefined || Array.isArray(init.headers)) &&

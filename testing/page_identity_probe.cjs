@@ -192,7 +192,8 @@ async function main() {
 
 /* The zone send: the wire (lib/safe-fetch.js's _wire) speaking as an identity, through lib/request-identity.js
    and lib/speak-as.js. `spec` names the identity (a frame by documentId, or an engine origin and URL), the
-   request, and the identity's document referrer policy. The page sets `Referrer-Policy: unsafe-url`. */
+   request, and the identity's document referrer policy. The page sets `Referrer-Policy: unsafe-url`. A
+   `cacheMode` appends the fields Fetch §4.6 appends for it, as safeFetch does (lib/http-cache.js). */
 function zoneSend(off, spec) {
   return off.evaluate(async (s) => {
     const id = s.engine ? await engineIdentity(s.engine.origin, s.engine.docUrl, "probe:" + s.engine.docUrl)
@@ -207,8 +208,13 @@ function zoneSend(off, spec) {
     if (s.preflightUnsafe)
       await _wire(s.url, { method: "OPTIONS", credentials: "omit", redirect: "manual", headers: [],
                            speakAs: speak(speakAsPreflightHeaders(facts, s.method, "", [s.url], s.preflightUnsafe)) });
+    let list = Object.entries(s.headers || {});
+    if (s.cacheMode) {
+      const fields = httpCacheRequestFields(list, {});
+      list = list.concat(httpCacheModeHeaders(httpCacheMode(s.cacheMode, fields), fields));
+    }
     const r = await _wire(s.url, { method: s.method, credentials: "omit", redirect: "manual",
-                                   headers: Object.entries(s.headers || {}), body: s.body, speakAs: speak(own) });
+                                   headers: list, body: s.body, speakAs: speak(own) });
     return { status: r.status };
   }, spec).catch((e) => ({ error: String(e) }));
 }
@@ -234,6 +240,16 @@ async function zoneRows({ browser, page, sw, off, extId, route, results }) {
     headers: { "Content-Type": "application/json" }, preflightUnsafe: ["content-type"] }));
   results["page.put.B"] = await page.evaluate((u) => fetch(u, { method: "PUT", credentials: "include", body: "{}",
     headers: { "Content-Type": "application/json" } }).then((r) => r.status), echo("B", "page.put.B"));
+  // The cache-mode fields of Fetch §4.6 step 8.18: a page-set Cache-Control is kept, a "no-store" page request
+  // carries both, and a conditional header turns "default" into "no-store". Same-origin, so no preflight.
+  const cacheRows = [["ccset", { headers: { "Cache-Control": "max-age=5" } }, { headers: { "Cache-Control": "max-age=5" }, cacheMode: "default" }],
+                     ["nostore", { cache: "no-store" }, { cacheMode: "no-store" }],
+                     ["inm", { headers: { "If-None-Match": "\"v1\"" } }, { headers: { "If-None-Match": "\"v1\"" }, cacheMode: "default" }]];
+  for (const [name, pageInit, zoneSpec] of cacheRows) {
+    results["page." + name + ".A"] = await page.evaluate((u, i) => fetch(u, Object.assign({ credentials: "include" }, i))
+      .then((r) => r.status, (e) => String(e)), echo("A", "page." + name + ".A"), pageInit);
+    results["zone." + name + ".A"] = await zoneSend(off, asTop("A", "zone." + name + ".A", zoneSpec));
+  }
   // An engine send whose stated referrer is another origin's URL arrives with the document's URL.
   results["zone.engine.crossref.B"] = await zoneSend(off, { engine: { origin: A, docUrl: A + "/page?x=secret" },
     url: echo("B", "zone.engine.crossref.B"), method: "GET",
@@ -268,7 +284,7 @@ async function zoneRows({ browser, page, sw, off, extId, route, results }) {
 }
 
 const SHOWN = ["origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-storage-access",
-               "cookie"];
+               "cookie", "pragma", "cache-control"];
 function printTable(results, log) {
   const sw = new Set(log.filter((r) => r.kind === "swlog").map((r) => r.q.id));
   for (const id of Object.keys(results)) {

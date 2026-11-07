@@ -197,9 +197,11 @@ function _wireSendKey(href, init, facts) {
    once per world that makes it. */
 async function _wireSend(href, init, facts) {
   var speak = init.speakAs === undefined ? null : init.speakAs;
-  CHECK((speak === null) === (facts === null),
+  CHECK((speak === null) === (facts === null) &&
+        (facts === null || (!!facts && typeof facts.credentials === "string" && "partition" in facts)),
         "a send speaks as " + (speak === null ? "no document" : speak.docKey) + " and states " +
-        (facts === null ? "no" : "its") + " identity's credentials mode and partition — the two are one identity");
+        (facts === null ? "no" : facts === undefined ? "an absent" : "its") + " identity's credentials mode and " +
+        "partition — the two are one identity");
   if (speak === null) {
     var requestTime = Date.now();
     var bare = await _wire(href, init);
@@ -1612,17 +1614,19 @@ function _extractTokenList(headers, name) {
    the name of the step that failed, which is a network error. The preflight is uncredentialed and does not
    follow a redirect: a 3xx is not an ok status. This zone provides no CORS-preflight cache, so the step "If
    the user agent does not provide for a cache, then return response" ends it and `Access-Control-Max-Age` is
-   not read. `speak` is the OPTIONS request's speak-as (`_speakAs`) and `facts` its identity's (`_wireSend`). */
+   not read. `speak` is the OPTIONS request's speak-as (`_speakAs`), and `send(init)` answers the Response of
+   the wire the request's own send uses: safeFetch's coalesced `_wireSend`, or the operator tier's `_wire`. */
 async function _corsPreflight(href, method, headerList, credentialsMode, usePreflightFlag, origin, signal, speak,
-                              facts) {
+                              send) {
   var unsafe = _corsUnsafeRequestHeaderNames(headerList);
   /* `Access-Control-Request-Method` and `-Headers` are forbidden request-headers (§2.2.2), which a script's
      fetch cannot set; the OPTIONS headers speakAsPreflightHeaders composes (lib/speak-as.js) supply both. */
   CHECK(!!speak, "a CORS preflight was sent speaking as no document — Fetch §4.8's preflight carries the " +
         "request's origin, and safeFetch preflights only a request with an identity");
+  DCHECK(typeof send === "function", "a CORS preflight was handed no wire — its caller states the one its request uses");
   var init = { method: "OPTIONS", headers: [["Accept", "*/*"]], credentials: "omit", redirect: "manual", speakAs: speak };
   if (signal) init.signal = signal;
-  var resp = (await _wireSend(href, init, facts)).resp;
+  var resp = await send(init);
   /* A 3xx is not an ok status and is not followed. */
   var headers = {}, status = resp.status;
   resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; });
@@ -2274,7 +2278,9 @@ async function safeFetch(url, opts) {
         if (_preflight) {
           var _pf = await _corsPreflight(_current.href, _method, _headerList || [], opts.credentials,
                                          opts.useCorsPreflight, _serializedOrigin, opts.signal, speak.preflight,
-                                         _sendFacts);
+                                         function (i) {
+            return _wireSend(_current.href, i, _sendFacts).then(function (w) { return w.resp; });
+          });
           if (_pf) return { refusal: _refused("network", "blocked-cors-preflight:" + _pf + ":" + _current.origin,
                                               [parsed.href], {}) };
         }
@@ -2632,8 +2638,11 @@ async function safeFetchOperator(url, opts) {
          error. Anything else is not the wire's answer and travels on. */
       try {
         if (preflight) {
+          /* The person's act is sent, never answered from an earlier send's record, so its preflight takes the
+             wire its request takes. */
           var pf = await _corsPreflight(current.href, method, headerList, identity.credentials, false,
-                                        checkedOrigin, undefined, speak.preflight);
+                                        checkedOrigin, undefined, speak.preflight,
+                                        function (i) { return _wire(current.href, i); });
           if (pf) return { refusal: _refused("network", "blocked-cors-preflight:" + pf + ":" + current.origin,
                                              [parsed.href], {}) };
         }
