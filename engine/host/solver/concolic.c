@@ -2512,6 +2512,16 @@ static int cand_verifying(void) {
     return f && f->fire.kind == FIRE_REQUEST;
 }
 
+/* Is the value being minted the source `src`'s own read, whose shape is the source in braces? A derivation
+   inherits `src` from an operand (a concatenation, concolic_add_hook) and spells a longer shape. Under a
+   verification the delivered read is an unknown, so its derivations reach the mint with the source's `src`, and
+   only the read itself is the delivery. */
+static int mint_is_source_read(const char *shape, const char *src) {
+    size_t n = strlen(src);
+
+    return shape && shape[0] == '{' && !strncmp(shape + 1, src, n) && shape[n + 1] == '}' && !shape[n + 2];
+}
+
 /* Whether the mint will answer a plain value for a source (concolic.h says why it is this disjunction). Both
    arms are this file's: the pin is `concolic_new`'s early return and the substitution is `concolic_derived`'s,
    so a consumer composing the pair would copy a rule it cannot see change. */
@@ -8746,7 +8756,7 @@ static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const 
         free(ident);
         return gate_read(ctx, gbase_find(src));
     }
-    if (cand_matches(src)) {
+    if (cand_matches(src) && (!cand_verifying() || mint_is_source_read(shape, src))) {
         /* `example` is owned by this call whichever value comes back, and the payload replaces it: a source
            under substitution reads the attacker's bytes, not what the address held. A verification's read is
            the source itself with those bytes as its example (cand_verifying). */
