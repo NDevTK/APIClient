@@ -61,9 +61,11 @@
 #define THREAD_WORK_LINE_ITEMS_PER_METRIC 100
 /* A CSSOM build, per KiB of the serialized rule text its rule objects are made from (core/css/css_rule.c's
    build_top: a rule's selector or prelude and its block, serialized by the parse and built into an object),
-   a rule itself counting as THREAD_WORK_CSSOM_BYTES_PER_RULE bytes. A two-term fit of the kind's span CPU
-   over its rules and bytes on the `linkrest` and `sheetrest` fixture documents, over the CPU a unit of the
-   same census's other work took. */
+   a rule itself counting as THREAD_WORK_CSSOM_BYTES_PER_RULE bytes. Both numbers are placeholders, not
+   values: a two-term fit over two fixture documents (`linkrest`, `sheetrest`), whose sheets are uniform rules
+   no real site writes. What sets them is the same fit over real sites' stylesheets: the census's
+   twCssomBuildSpans/Input/Us rows read from runs on several JS-heavy app pages, against each run's CPU per unit
+   of its other work, with every site's sheets within a stated factor of the fit. */
 #define THREAD_WORK_UNITS_PER_KIB_CSSOM 361
 #define THREAD_WORK_CSSOM_BYTES_PER_RULE 48
 /* A named-property lookup's walk rests at every element and is charged one element per rest, so the per-call
