@@ -66,7 +66,8 @@ The offscreen router (`chrome.runtime.onMessage` listener in `offscreen-brain.js
 | Check | What it decides |
 |-------|-----------------|
 | `sender.id !== chrome.runtime.id` → drop | rejects other extensions only; every content script of ours carries our id, so it is not a trust signal |
-| `fromExtUrl` (`sender.url` starts with `chrome-extension://<id>/`) | authenticates the service worker's `__evt` hop, because a worker has no frame and Chrome leaves its `sender.origin` undefined |
+| `senderIsServiceWorker` (`sender.url` equals the manifest's worker script URL, and no `tab`, `frameId`, `documentId` or `origin`) | authenticates the service worker's `__evt` hop (`TAB_REMOVED`, `WEB_REQUEST`, `WIRE`), because a worker has no frame and Chrome stamps its message with `id` and `url` alone, while an extension tab's carries `origin`, `tab`, `frameId`, `documentId` and `documentLifecycle` (measured in Chrome 155); any other sender's `__evt` is refused, so no extension page can state a send's 3xx, `Set-Cookie` or error reason |
+| `fromExtUrl` (`sender.url` starts with `chrome-extension://<id>/`) | used only to drop, below |
 | `CONTENT_TYPES` and not `fromExtUrl` → `handleContentMessage` | the untrusted arm: `CONTENT_SEED`, `CONTENT_FORM_SUBMIT`, `RESPONSE_BODY`, `PROBE_HIT`, `POC_RAN`; dropped on the broader URL predicate, since dropping more can only refuse |
 | `fromExtDocument` (`sender.origin === EXTENSION_ORIGIN`) → `handlePopupMessage` | the document→document rule; a sandboxed extension page has the extension URL prefix and the opaque origin `"null"`, so it gets none of the command surface |
 
@@ -140,10 +141,16 @@ Which extension context can open a connection at all is enforced by CSP in all b
   hold no network constructor in code, which is a reading of their source, not an enforcement. The platform
   `fetch` it took is the zone's one network: it hands it to `wireSend` (`lib/wire.js`) for each send it
   decided, and no other script of the document holds it.
-- The service worker (the manifest's `connect-src 'self' https: http: data:`) can reach any http(s) host and
-  loads no seal. It sends nothing, which is code discipline: `background.js`, `speak-as-rule.js` and
-  `wire-events.js` call no `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`, and
-  `wire-events.js` CHECKs that no request initiated by the extension in no tab lacks a document.
+- The service worker's CSP (the manifest's `connect-src 'self' https: http: data:`) would let it reach any
+  http(s) host, and it holds no network: `worker-seal.js`, imported right after `check.js` and before every
+  other script of the worker, replaces `fetch`, `WebSocket`, `EventSource` and `WebTransport` (the network
+  constructors a Chrome 155 service worker has; it has no `XMLHttpRequest` or `navigator.sendBeacon`) with
+  non-writable, non-configurable functions that `CHECK`-fail. The `chrome.*` calls the worker makes use none of
+  them (measured: declarativeNetRequest, cookies, tabs, scripting, webNavigation, offscreen and
+  `runtime.getContexts` work under the seal). The seal names constructors, and a request no sealed name makes
+  still leaves (measured: CacheStorage's `add` sent one from a sealed worker), so `wire-events.js` also `CHECK`s
+  that no request initiated by the extension in no tab lacks a document; that residual is stated in
+  `worker-seal.js`. The offscreen document's seal names the same list, so it would have the same residual (inferred, not measured there).
 - The wire leaves from the offscreen document because that is where the zone decides, holds and reads each send,
   so a send's body streams to its reader as it arrives and no message boundary or worker lifetime sits under
   it. The offscreen document has no `chrome.webRequest` (it holds `chrome.runtime` alone), so the worker

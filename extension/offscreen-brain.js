@@ -2693,6 +2693,17 @@ const EXTENSION_ORIGIN = `chrome-extension://${chrome.runtime.id}`;
 function senderIsExtensionDocument(sender) {
   return !!sender && sender.origin === EXTENSION_ORIGIN;
 }
+/* This extension's service worker, by the frameless hop's browser-set fields: its script's URL, which the
+   manifest names, and no tab, frame, document or origin. Chrome 155 stamps a worker's message with `id` and `url`
+   alone, and an extension tab's with `origin`, `tab`, `frameId`, `documentId` and `documentLifecycle` beside
+   them (measured), so a page of this extension at any URL is not the worker. The script is manifest.json's
+   `background.service_worker`; this document's chrome.runtime has no getManifest (measured), so it is named. */
+const SERVICE_WORKER_HREF = chrome.runtime.getURL("background.js");
+function senderIsServiceWorker(sender) {
+  return !!sender && sender.id === chrome.runtime.id && sender.url === SERVICE_WORKER_HREF &&
+         sender.tab === undefined && sender.frameId === undefined && sender.documentId === undefined &&
+         sender.origin === undefined;
+}
 /* NO `CONTENT_PING`. The type was admitted here and handled above by appending {at, pageUrl} to a per-document
    array that NOTHING has ever read — and no content script has ever sent one, so it was a liveness channel
    with neither end. A document's liveness is answered by webNavigation.getAllFrames (GET_FRAMES), which is the
@@ -2712,38 +2723,38 @@ const CONTENT_TYPES = new Set([
 // The brain runs in the OFFSCREEN document and receives messages DIRECTLY: content scripts and the popup
 // reach it by broadcast, and the SW forwards only browser events no document message carries (navigation is
 // not one: a document's CONTENT_SEED drives its priority).
-//   • __evt TAB_REMOVED (from the SW, extension origin) → _onTabRemoved
-//   • __evt WEB_REQUEST (from the SW, extension origin) → webRequestEvent (lib/web-request.js)
-//   • __evt WIRE (from the SW, extension origin) → wireEvent (lib/wire.js), this document's own sends
+//   • __evt TAB_REMOVED (the SW's frameless hop) → _onTabRemoved
+//   • __evt WEB_REQUEST (the SW's frameless hop) → webRequestEvent (lib/web-request.js)
+//   • __evt WIRE (the SW's frameless hop) → wireEvent (lib/wire.js), this document's own sends
 //   • CONTENT_TYPES from a web-page origin   → handleContentMessage (UNTRUSTED;
 //                    real browser-verified sender = tab/frame/url)
 //   • extension-page origin (popup)          → handlePopupMessage
 //   • a "document-lifetime" port (onConnect, below) → webRequestDocumentPort (lib/web-request.js)
 // sender.id is NOT a trust signal (every onMessage sender carries our id). The boundary is the sender's
-// browser-set url or origin, and __evt is honored ONLY from the extension origin, so a compromised renderer
-// can't forge a browser event (a TAB_REMOVED, a webRequest record) by broadcasting one to this document.
+// browser-set url or origin, and __evt is honored ONLY from the service worker's frameless hop, so neither a
+// compromised renderer nor an extension page can forge a browser event (a TAB_REMOVED, a webRequest record, a
+// send's 3xx or Set-Cookie) by broadcasting one to this document.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return;
   if (!msg) return;
-  // TWO PREDICATES, BECAUSE SECURITY.md STATES TWO RULES AND THEY ARE NOT THE SAME CHECK:
-  // "SW→offscreen (`__evt`) is authenticated by `sender.url`: a service worker has no frame, so Chrome
-  //  leaves its `MessageSender.origin` undefined (a browser quirk) and only `sender.url` carries the
-  //  extension origin. Document→document hops (offscreen→SW in background.js, offscreen→popup) use
-  //  `sender.origin === chrome-extension://<id>` (browser-set, and `"null"` for a sandboxed extension
-  //  page → rejected)."
-  // ONE url-prefix predicate answered BOTH questions here, which is the document→document rule DELETED:
-  // a sandboxed extension page's sender.url is still `chrome-extension://<id>/…` while its ORIGIN is the
-  // opaque `"null"`, so a url prefix hands an opaque-origin document the trusted popup command surface
-  // (GET_STATE, SEND_REQUEST, CLEAR_TAB) — the exact impersonation SECURITY.md's attack table says is
-  // mitigated. The popup itself already gates the reverse direction on sender.origin (popup.js); a
-  // boundary checked on one side only is not a boundary.
+  // Three predicates over browser-set fields, one per rule SECURITY.md states: the worker's frameless hop
+  // (`senderIsServiceWorker`), a real extension document by its origin (`senderIsExtensionDocument`; a sandboxed
+  // extension page's origin is `"null"`), and the broader URL prefix, used only to drop, where dropping more can
+  // only refuse.
   const fromExtUrl = !!(sender.url && sender.url.startsWith(EXTENSION_ORIGIN + "/"));   // SW OR extension document
   const fromExtDocument = senderIsExtensionDocument(sender);
 
   if (msg.__evt) {
-    // The SW's own hop: it has no frame, so sender.origin is undefined and sender.url is the only
-    // browser-set carrier of the extension origin.
-    if (!fromExtUrl) return;
+    // A browser event is the worker's alone: an extension page that sends one would be stating a tab's close, a
+    // document's request or a send's 3xx, Set-Cookie and error reason, none of which it observed.
+    if (!senderIsServiceWorker(sender)) {
+      console.warn("[brain] refused the event `" + String(msg.__evt) + "` from " + JSON.stringify(sender.url) +
+                   " — only the service worker's frameless hop states a browser event");
+      return;
+    }
+    DCHECK(msg.__evt === "TAB_REMOVED" ? Number.isInteger(msg.tabId)
+                                       : !!msg.ev && typeof msg.ev === "object" && typeof msg.ev.ev === "string",
+           "the service worker sent the event " + JSON.stringify(msg) + " without its tab id or webRequest record");
     if (msg.__evt === "TAB_REMOVED") _onTabRemoved(msg.tabId);
     else if (msg.__evt === "WEB_REQUEST") webRequestEvent(msg.ev);
     else if (msg.__evt === "WIRE") wireEvent(msg.ev);

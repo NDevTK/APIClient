@@ -13,7 +13,7 @@
 // The popup talks to the brain directly over chrome.runtime.sendMessage (a
 // broadcast reaches the offscreen); the SW stays out of those messages.
 
-importScripts("check.js", "speak-as-rule.js", "wire-events.js");
+importScripts("check.js", "worker-seal.js", "speak-as-rule.js", "wire-events.js");
 
 const EXT_ORIGIN = "chrome-extension://" + chrome.runtime.id;
 const OFFSCREEN_URL = "ast-worker.html";
@@ -26,6 +26,11 @@ const OFFSCREEN_URL = "ast-worker.html";
    would inherit the most privileged surface this extension has (chrome.tabs.*, chrome.scripting in the MAIN
    world of any tab), and nothing about adding such a file would say so. */
 const OFFSCREEN_HREF = chrome.runtime.getURL(OFFSCREEN_URL);
+/* The offscreen document admits a browser event only from this script's URL (offscreen-brain.js's
+   SERVICE_WORKER_HREF), which it cannot read off the manifest itself. */
+DCHECK(self.location.href === chrome.runtime.getURL("background.js"),
+       "the service worker runs as " + self.location.href + ", and offscreen-brain.js's SERVICE_WORKER_HREF " +
+       "names background.js, so every __evt this worker sends would be refused");
 
 // ─── Offscreen lifecycle ──────────────────────────────────────────────────────
 /* The offscreen document is the zone's brain, and it exists whenever this worker runs: the worker creates it

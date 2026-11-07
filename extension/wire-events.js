@@ -1,22 +1,25 @@
 // wire-events.js — the service worker's half of the zone's wire. The offscreen document sends every request
 // (lib/wire.js) and has no chrome.webRequest, so this worker observes its requests and relays each event to it
-// as `__evt WIRE`, one at a time in the browser's order. This worker sends nothing itself. webRequest reports the
-// offscreen document's requests here, in no tab and with its documentId (measured in Chrome 155). Beside the
-// relay it checks the one fact only it can: what declarativeNetRequest did to each request's headers.
+// as `__evt WIRE`, one at a time in the browser's order. This worker holds no network (worker-seal.js).
+// webRequest reports the offscreen document's requests here, in no tab and with its documentId (measured in
+// Chrome 155). Beside the relay it checks the one fact only it can: what declarativeNetRequest did to each
+// request's headers.
 
 const _WIRE_ORIGIN = new URL(chrome.runtime.getURL("")).origin;
 speakAsInstalledReady();
 
-/* Which context. Every other extension context is sealed or has `connect-src 'none'`, and this worker sends
-   nothing, so a request initiated by this extension in no tab is the offscreen document's; a page's service
+/* Which context. Every other extension context is sealed or has `connect-src 'none'`, so a request initiated by
+   this extension in no tab is the offscreen document's; a page's service
    worker is also in no tab, and its initiator is the page's origin. A filter's `tabId` of TAB_ID_NONE matches
    every tab's requests too (measured in Chrome 155: a tab's fetch reached such a listener), so each listener
    reads `tabId` itself. The types are every type a speak-as rule's condition names. */
 const _WIRE_FILTER = { urls: ["http://*/*", "https://*/*"], types: ["xmlhttprequest", "other"] };
 function _wireOwn(d) {
   if (d.tabId !== chrome.tabs.TAB_ID_NONE || d.initiator !== _WIRE_ORIGIN) return false;
+  /* The seal names network constructors, and a request no sealed name makes (worker-seal.js's residual) would
+     arrive here from this worker, with no document. */
   CHECK(typeof d.documentId === "string", "this extension sent " + d.url + " in no tab and no document — only " +
-        "the offscreen document sends (lib/wire.js), and this worker sends nothing");
+        "the offscreen document sends (lib/wire.js), and this worker is sealed (worker-seal.js)");
   return true;
 }
 
