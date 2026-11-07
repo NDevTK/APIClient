@@ -1563,6 +1563,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/msgprefix.h"
 #include "fixture/prefixjoin.h"
 #include "fixture/xdhost.h"
+#include "fixture/rxprefix.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2256,6 +2257,7 @@ TF_DOCS[] = {
     { "msgprefix", HTML_MSGPREFIX },
     { "prefixjoin", HTML_PREFIXJOIN },
     { "xdhost", HTML_XDHOST },
+    { "rxprefix", HTML_RXPREFIX },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -17996,6 +17998,35 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxprefix` document (fixture/rxprefix.h): a replace keeps the receiver's units that no match
+   can reach, so the host of each page-written path stays the document's and its comparison runs one arm. */
+TF_UNIT void probes_rxprefix(const char *js, Probe *tab, int *n) {
+    static const char *const one[][3] = {
+        { "rp-anchored-one-arm", "\"/api/rp-same-a\"", "/api/rp-cross-a" },
+        { "rp-later-one-arm", "\"/api/rp-same-b\"", "/api/rp-cross-b" },
+        { "rp-inside-one-arm", "\"/api/rp-same-c\"", "/api/rp-cross-c" },
+    };
+    const char *why[3] = { NULL, NULL, NULL }, *o_why = NULL;
+    int tt[3] = { 1, 1, 1 }, o_tt = 1, i;
+
+    for (i = 0; i < 3; i++) {
+        fold_row(&tt[i], &why[i], !!strstr(js, one[i][1]),
+                 "the same-host arm of a replaced page-written path did not run: its record is absent");
+        fold_row(&tt[i], &why[i], !strstr(js, one[i][2]),
+                 "the cross-host arm of a replaced page-written path ran: the replace's result lost the page's "
+                 "units no match can reach, so the host of a path-absolute address was answered as unknown");
+    }
+    fold_row(&o_tt, &o_why, !!strstr(js, "\"/api/rp-open-same\"") && !!strstr(js, "\"/api/rp-open-cross\""),
+             "the replaced fragment did not run both arms: a host the attacker picks was answered as concrete");
+    const Probe rows[] = {
+        { one[0][0], tt[0], "/api/rp-same-a", SESS_EXPLORE, why[0] },
+        { one[1][0], tt[1], "/api/rp-same-b", SESS_EXPLORE, why[1] },
+        { one[2][0], tt[2], "/api/rp-same-c", SESS_EXPLORE, why[2] },
+        { "rp-open-both-arms", o_tt, "/api/rp-open-same", SESS_EXPLORE, o_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `xdhost` document (fixture/xdhost.h): a host the page's own bytes decide is concrete, so a
    comparison of two such hosts runs one arm, while a host the fragment picks still runs both. */
 TF_UNIT void probes_xdhost(const char *js, Probe *tab, int *n) {
@@ -26375,6 +26406,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_msgprefix(js, probes, &np);
     probes_prefixjoin(js, probes, &np);
     probes_xdhost(js, probes, &np);
+    probes_rxprefix(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
