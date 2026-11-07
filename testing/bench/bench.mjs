@@ -2,17 +2,18 @@
  * at fixed work budgets over several runs, so two engines are compared on one input with the spread beside it.
  *   record --store <dir> --snap <snapshot> [--pages a,b] [--work <units>]
  *   run --store <dir> --snap <snapshot> --out <dir> [--runs 3] [--budgets 10.8e6,27e6,54e6] [--pages a,b]
- *       [--jobs 1] [--backstop <s>] [--mem-cap <MiB>] [--bin <binary>]
+ *       [--jobs 1] [--backstop <s>] [--mem-cap <MiB>] [--bin <binary>] [--ledger on|off]
  *   table <out-dir> | ab <out-A> <out-B> | manifest --store <dir>
  * `--snap` is a frozen snapshot (engine/frozen_snapshot.sh) holding engine/trusted.mjs and a built
  * engine/host/out/qjs-native-none; its zone drives its binary over a page with the wire answered by wire.mjs.
  * A run is cut at the first census sample whose summed @COLD `stepWork` passes the largest budget; each budget is
  * read at the first sample past it, as the union of every instance's latest @RESULT, and a run that ends first has
  * no reading there, never a zero. Kept per run in logs/: <page>.<run>.<budget|final>.results.json, and every @COLD
- * and @WFQ line verbatim in <page>.<run>.census.tsv.gz. Each run is held to `--mem-cap` by a memory cgroup the
- * engine reads its RAM limit from (runMemcg). Replies are recorded, since live input would be a second moving
- * subject in an A/B: a recording is what the page's own sends received at a stated instant, keyed by URL; the
- * bytes stay outside the repository, and manifest.json names them. */
+ * and @WFQ line verbatim in <page>.<run>.census.tsv.gz, and the pick ledger (solver/pick_ledger.h, armed unless
+ * `--ledger off`; testing/bench/ledger.mjs reads it) in <page>.<run>.picks.tsv.gz. Each run is held to
+ * `--mem-cap` by a memory cgroup the engine reads its RAM limit from (runMemcg). Replies are recorded, since live
+ * input would be a second moving subject in an A/B: a recording is what the page's own sends received at a stated
+ * instant, keyed by URL; the bytes stay outside the repository, and manifest.json names them. */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -221,9 +222,10 @@ function runMemcg(tag, capMiB) {
 }
 
 const LINE = /^\[trusted\] \[([^\]]+)\] (@COLD|@WFQ|@RESULT)#(\d+) \2 (.*)$/;
+const PICK = /^\[trusted\] \[([^\]]+)\] (@PICKCOLS|@PICK) (.*)$/;
 const ABORT = /^@(?:WHY|E) (?:\{"phase":"assert"|.*\([^()]*:\d+\)$)/;
 
-function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runIx, wire = 'replay' }) {
+function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runIx, wire = 'replay', ledger = true }) {
   return new Promise((resolveRun) => {
     const tag = `${page.id}.${runIx}`;
     const wireLog = join(logDir, `${tag}.wire.jsonl`);
@@ -237,7 +239,8 @@ function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runI
                                     process.execPath, '--import', WIRE, snap.zone, page.url, snap.bin], {
       cwd: dirname(dirname(snap.zone)), detached: true, stdio: ['ignore', 'ignore', 'pipe'],
       env: { ...process.env, ...(wire === 'record' ? { NODE_USE_ENV_PROXY: '1' } : {}), BENCH_WIRE: wire,
-             BENCH_STORE: store, BENCH_PAGE: page.id, BENCH_WIRE_LOG: wireLog },
+             BENCH_STORE: store, BENCH_PAGE: page.id, BENCH_WIRE_LOG: wireLog,
+             APICLIENT_PICK_LEDGER: ledger ? '1' : '0' },
     });
     const inst = new Map();                 /* tag -> {work, result text} */
     const readings = [];
@@ -254,6 +257,9 @@ function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runI
     const census = createGzip();
     const censusDone = new Promise((ok, fail) =>
       census.pipe(createWriteStream(join(logDir, `${tag}.census.tsv.gz`))).on('finish', ok).on('error', fail));
+    const picks = createGzip();
+    const picksDone = new Promise((ok, fail) =>
+      picks.pipe(createWriteStream(join(logDir, `${tag}.picks.tsv.gz`))).on('finish', ok).on('error', fail));
     const sample = () => {
       let work = 0;
       for (const i of inst.values()) work += i.work;
@@ -274,6 +280,8 @@ function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runI
     rl.on('line', (line) => {
       if (abort === null && ABORT.test(line)) abort = line.slice(0, 400);
       tail.push(line.slice(0, 400)); if (tail.length > 40) tail.shift();
+      const p = PICK.exec(line);
+      if (p !== null) { picks.write(`${p[1]}\t${p[2]}\t${p[3]}\n`); return; }
       const m = LINE.exec(line);
       if (m === null) return;
       const [, itag, marker, , payload] = m;
@@ -291,7 +299,9 @@ function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runI
       clearTimeout(backstop);
       rl.close();
       census.end();
+      picks.end();
       await censusDone;
+      await picksDone;
       const memPeakMiB = memcg.peakMiB(), oomKills = memcg.oomKills();
       memcg.release();
       const endedBy = cut ? cut : oomKills > 0 ? 'memcg-oom'
@@ -482,7 +492,8 @@ async function record(o) {
   mkdirSync(logDir, { recursive: true });
   for (const page of pagesOf(o)) {
     const runIx = 'rec' + new Date().toISOString().replace(/[:.]/g, '');
-    const r = await runOne({ page, store, snap, budgets: [work], backstopS, memCapMiB, logDir, runIx, wire: 'record' });
+    const r = await runOne({ page, store, snap, budgets: [work], backstopS, memCapMiB, logDir, runIx, wire: 'record',
+                            ledger: false });
     appendFileSync(join(logDir, 'record.jsonl'), JSON.stringify({ ...r, readings: undefined }) + '\n');
     console.log(`${page.id} ${r.endedBy} work=${r.stepWorkReached} sends=${r.wireSends} new=${r.wireMisses} ` +
                 `mem=${r.memPeakMiB}MiB wall=${r.wallS.toFixed(0)}s${r.abort ? ' ABORT ' + r.abort.slice(0, 200) : ''}`);
@@ -494,11 +505,13 @@ async function run(o) {
   const budgets = (o.budgets || '10.8e6,54e6,216e6').split(',').map(Number).sort((a, b) => a - b);
   const runs = Number(o.runs || 3), jobs = Number(o.jobs || 1), backstopS = Number(o.backstop || 3600);
   const memCapMiB = Number(o['mem-cap'] || 4096);
+  if (o.ledger !== undefined && o.ledger !== 'on' && o.ledger !== 'off') throw new Error('--ledger takes on or off');
+  const ledger = o.ledger !== 'off';
   const pages = pagesOf(o);
   const rows = manifest(store).filter((r) => pages.some((p) => p.id === r.id));
   for (const r of rows) if (!r.recorded) throw new Error(`${r.id} has no recording in ${store}`);
   mkdirSync(join(out, 'logs'), { recursive: true });
-  const meta = { revision: snap.revision, binSha256: snap.binSha256, snap: resolve(o.snap), bin: snap.bin, budgets, runs, memCapMiB,
+  const meta = { revision: snap.revision, binSha256: snap.binSha256, snap: resolve(o.snap), bin: snap.bin, budgets, runs, memCapMiB, ledger,
                  store, storeDigest: storeDigest(manifest(store)), pages: pages.map((p) => p.id),
                  pageDigests: Object.fromEntries(rows.map((r) => [r.id, r.sha256])),
                  cores: (await import('node:os')).cpus().length, started: new Date().toISOString() };
@@ -510,7 +523,7 @@ async function run(o) {
   const worker = async () => {
     while (queue.length) {
       const { page, runIx } = queue.shift();
-      const r = await runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir: join(out, 'logs'), runIx });
+      const r = await runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir: join(out, 'logs'), runIx, ledger });
       appendFileSync(join(out, 'runs.jsonl'), JSON.stringify(r) + '\n');
       const last = r.readings[r.readings.length - 1];
       console.log(`${page.id}.${runIx} ${r.endedBy} work=${r.stepWorkReached} readings=${r.readings.length} ` +

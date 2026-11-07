@@ -1038,6 +1038,30 @@ int flow_owes_answer(const Flow *f);
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);
 
+/* One member's ranking terms as flow_order_cmp_level and flow_weight read them, for the pick ledger
+   (solver/pick_ledger.h). The order is `w = coord + x`, ties broken by `x`, then `ikey`, then the lesser `turn`, then
+   the lesser `seq`; `coord` is `reward - fam_notch * FLOW_AGE_QUANTUM` and `x` the site optimism over `served`,
+   `seen` and `assumed + against_env` weighted by `ikey` (the @S fitness, from `replay`, `surv` and `rung`). The other
+   fields are observations no term reads: `on_ledger` (the account stands at its own reward rather than the
+   frontier's virtual time), `indexed` (the member is in the pick's index), the code site, the family's founding
+   birth sequence, the member's own silence, visits and dispatches so far, and `cls`, FLOW_PICK_CLS_* bits. */
+#define FLOW_PICK_CLS_CANDIDATE 1u     /* an @S candidate or witness re-run (`cand_payload`) */
+#define FLOW_PICK_CLS_DRIVE     2u     /* a drive of uncalled code (`orphan`) */
+#define FLOW_PICK_CLS_POST      4u     /* a drive whose chain posts an attacker message to a listener */
+#define FLOW_PICK_CLS_VICTIM    8u     /* a victim act this tool performed stands on the path */
+#define FLOW_PICK_CLS_ATTACKER  16u    /* an attacker act stands on the path (flow_attacker_act_push) */
+#define FLOW_PICK_CLS_FORCED    32u    /* flow_path_forced */
+#define FLOW_PICK_CLS_OBSERVED  64u    /* the census's observed world: none of the above and nothing assumed */
+typedef struct {
+    double w, coord, reward, x, ikey, replay, surv;
+    int64_t fam_notch, served, seen, turn, own_silence, visits, picks;
+    int assumed, against_env, rung, on_ledger, indexed, site_kind;
+    uint64_t site_key, seq, family;
+    unsigned cls;
+} FlowPickTerms;
+/* Fills `t` from `f`, a frontier member with a family and a site. A read: it asserts that no rank moved. */
+void flow_pick_terms(const Flow *f, FlowPickTerms *t);
+
 /* The reward term as the order reads it: this flow's fork family's accumulated emitted value, not the member's
  * own `val`. Exported because the family node is private to flow.c and two consumers must name the quantity
  * flow_weight depends on: the scheduler's ranked-state cache, which asserts that the value yield fires only
@@ -1621,6 +1645,10 @@ int64_t flow_ix_asks(void);
  * the cache's hit rate. Counted at the raise rather than read from flow_frontier_gen, because
  * flow_registry_init resets the generation and none of the scan counters. Decides nothing. */
 long flow_rank_changes(void);
+/* Every dispatch this instance has made (flow_credit_pick), the lifetime counter @WFQ publishes as `picksLifetime`. */
+int64_t flow_picks_lifetime(void);
+/* Whether `f` stands in the order's index, the population a pick chooses from (host-owed members are out of it). */
+int flow_in_index(const Flow *f);
 /* Lifetime arrival and departure counts for this instance; see the census rows for the reading and identity. */
 int64_t flow_arrivals(void);
 int64_t flow_departures(void);

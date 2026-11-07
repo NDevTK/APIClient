@@ -73,6 +73,7 @@
 #include "solver/metrics.h"     /* the agent's metrics block, released with the agent */
 #include "solver/source_cut.h"  /* the snapshots a first read of an attacker source leaves */
 #include "check.h"
+#include "solver/pick_ledger.h"   /* the observer of every dispatch and its tenure */
 #include <math.h>
 #include <time.h>
 #include <stdlib.h>
@@ -11710,6 +11711,7 @@ static int64_t engine_now_ms(void) { return engine_now_us() / 1000; }
    paged out) and both must leave the runtime in the same state; a second copy of this list would leave a fork hook
    installed over a runtime whose flows are gone. */
 static void engine_session_close(void) {
+    pick_ledger_close(g_step_work, g_flows_sold);
     /* The frontier a closed session leaves is a set of snapshots: every flow's decision state in its own blob, its
        COW delta unapplied and its DOM head detached. That holds for every member but the one the scheduler is
        holding, whose state is live in decide.c's globals and applied to the heap and document, so the last act of
@@ -13085,6 +13087,9 @@ static int engine_sched_slice(int resume) {
            by asking each member rather than by counting unproductive picks. */
         if (!best) break;
         if (best != cur) {                  /* context switch: swap COW delta + decision + pins */
+            /* The ledger's row for this dispatch, read before the switch moves anything, so its terms are the ones
+               the pick compared. */
+            if (pick_ledger_armed()) pick_ledger_pick(best, cur != NULL, g_step_work, g_flows_sold);
             if (cur) flow_switch_out(ctx, cur);
             /* The switch-in allocates as it applies `best`'s delta (a slot a sibling deleted is re-created, a DOM
                node re-attached), and it holds no position in the frontier, only `best`: so the refusal edge is

@@ -36,6 +36,10 @@ static long g_refused_texts;
 static char *g_scope;
 /* The credit census, per kind: an ask is one novelty_credit call, which is paid or known-unpaid. */
 static long g_paid[NOVELTY_KIND_N], g_unpaid[NOVELTY_KIND_N];
+/* The same paid credits for the instance's life, and the subset that landed on the flow holding the thread: what
+   the pick ledger differences across a member's tenure (novelty.h's NoveltyCreditLife). Never reset, so a
+   difference never spans a session's reset. */
+static NoveltyCreditLife g_life[NOVELTY_KIND_N];
 /* Every drive this instance filed, with the product's count it read and its completed units at the seed. */
 typedef struct { NoveltyId id; unsigned seen; int64_t visits; } NoveltyDrive;
 static NoveltyDrive *g_drives;
@@ -129,6 +133,7 @@ void novelty_credit(NoveltyKind kind, int novel) {
            "a credit was asked for a kind novelty.h does not list as a credit kind — a counted kind is read, not paid");
     if (!novel) { g_unpaid[kind]++; return; }
     g_paid[kind]++;
+    g_life[kind].paid++;
     {
         /* One credit event seen from both ledgers: the flow ledger's paid value moves by exactly what this site
            counts as landed. */
@@ -139,7 +144,24 @@ void novelty_credit(NoveltyKind kind, int novel) {
                 "Level-1 value and the ledger it is read beside counted one event two ways",
                 flow_credit_paid_value() - before, landed);
         if (landed) g_landed += 1.0;
+        if (landed) g_life[kind].landed++;
     }
+}
+
+NoveltyCreditLife novelty_credit_life(NoveltyKind kind) {
+    DCHECK(kind >= 0 && kind < NOVELTY_KIND_N && !novelty_kind_counted[kind],
+           "a credit count was asked for a kind novelty.h does not list as a credit kind");
+    return g_life[kind];
+}
+
+const char *novelty_kind_name(NoveltyKind kind) {
+    DCHECK(kind >= 0 && kind < NOVELTY_KIND_N, "a novelty kind's token was asked for a kind novelty.h does not list");
+    return novelty_kind_token[kind];
+}
+
+int novelty_kind_is_counted(NoveltyKind kind) {
+    DCHECK(kind >= 0 && kind < NOVELTY_KIND_N, "a novelty kind was asked about that novelty.h does not list");
+    return novelty_kind_counted[kind];
 }
 
 unsigned novelty_drive_note(NoveltyId id, int64_t visits) {

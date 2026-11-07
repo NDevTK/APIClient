@@ -60,6 +60,14 @@ int  novelty_note_at(NoveltyKind kind, NoveltyId id, const char *file, int line)
    ask as paid or known-unpaid under `kind` either way. Every novel identity is worth the same: the kinds are
    what an identity is, never a weight on it. */
 void novelty_credit(NoveltyKind kind, int novel);
+/* Lifetime counts of the paid credits of credit kind `kind`: `paid` every novel ask, `landed` those credited to the
+   flow holding the thread (flow_credit_emit). Never reset (novelty_free leaves them), so a difference across an
+   interval of one instance is that interval's. Read by the pick ledger only; nothing ranks by them. */
+typedef struct { long paid, landed; } NoveltyCreditLife;
+NoveltyCreditLife novelty_credit_life(NoveltyKind kind);
+/* The wire token of `kind` ("endpoint", …) and whether it is a counted kind rather than a credit kind. */
+const char *novelty_kind_name(NoveltyKind kind);
+int novelty_kind_is_counted(NoveltyKind kind);
 /* The novel value that reached an account: 1.0 per novelty_credit paid ask whose flow_credit_emit paid a flow,
    which is the document's novel value as Level 1 ranks it. A novel emission on host time (no flow holds the
    thread) is counted paid in the census and is not in this sum. */

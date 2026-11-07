@@ -12,6 +12,7 @@
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "solver/world.h"    /* …and whether two sending timelines it committed to can both be true */
 #include "solver/source_cut.h" /* …and the time-travel points its history holds */
+#include "solver/pick_ledger.h" /* the observer told when a code site is first served */
 #include "check.h"
 #include <stdlib.h>
 #include <math.h>      /* INFINITY: the `nmax` of a treap subtree holding no never-dispatched member */
@@ -291,6 +292,9 @@ typedef struct FlowAcct {
     struct FlowAcct *ix_fprev, *ix_fnext;
     unsigned char ix_listed;
     Flow *away_head;
+    /* The birth sequence of the flow this node was minted for: on a root, the family's name in the pick ledger
+       (flow_pick_terms). Written once at flow_new; nothing ranks by it. */
+    uint64_t founder;
 } FlowAcct;
 
 /* One code site in one family's ledger: the service the family has given members dispatched from there. Level 2's
@@ -1136,6 +1140,8 @@ uint64_t flow_running_switches(void) { return g_running_switches; }
 /* How many times the order changed, for the life of this instance: the denominator the preempt hook's rescan
    count has and `scanNextRuns` is not. See solver/flow.h. */
 long flow_rank_changes(void) { return g_rank_changes; }
+int64_t flow_picks_lifetime(void) { return g_picks_total; }
+int flow_in_index(const Flow *f) { return f->ix_in; }
 
 /* How many members this instance has admitted and how many it has let go: whether the frontier is drained at all,
    the precondition for the order deciding anything. `arrivals / picksLifetime` is members minted per dispatch; see
@@ -1648,6 +1654,7 @@ static void flow_site_move(Flow *f, FlowSite *to) {
 
 /* `us` more service at code site `c`: every class standing there reads it, so each is re-filed. */
 static void flow_code_charge(FlowCodeSite *c, int64_t us) {
+    if (c->served == 0 && us > 0) pick_ledger_site_served(c->kind, c->key);
     c->served += us;
     for (FlowSite *st = c->classes; st; st = st->cnext) flow_ix_site_sync(st);
     frontier_rank_changed();
@@ -2938,6 +2945,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     f->reg_i = g_flows_n;
     g_flows[g_flows_n++] = f;
     f->ix_t.seq = ++g_ix_seq;   /* the treap's search tie-break, unique for the instance's life */
+    f->acct->founder = f->ix_t.seq;
     /* And it stands at its family's keyless site: it has decided nothing yet. */
     flow_site_join(f, flow_site_of(f->family, 0, 0, 0, 0));
     /* And into the order's index under the root and site minted above: a newcomer is runnable (calloc leaves no
@@ -4352,6 +4360,50 @@ double flow_weight(const Flow *f) {
            "a term of the WFQ's order other than the reward exceeds FLOW_NONREWARD_MAX — every non-reward term must "
            "span at most a finding; bound the term in site_optimism, or state its range in FLOW_NONREWARD_MAX");
     return flow_order_key(f).w;
+}
+
+void flow_pick_terms(const Flow *f, FlowPickTerms *t) {
+    const long rank_changes = g_rank_changes;
+    FlowOrderKey k;
+
+    DCHECK(f != NULL && f->reg_i >= 0 && f->reg_i < g_flows_n && g_flows[f->reg_i] == f && f->family != NULL &&
+               f->at != NULL,
+           "the pick ledger asked for the terms of a flow that is not a member standing at a site in a family");
+    k = flow_order_key(f);
+    t->w = k.w; t->x = k.x; t->ikey = k.ikey; t->turn = k.turn; t->seq = k.seq;
+    t->coord = flow_family_coord(f);
+    t->reward = acct_family_val(f);
+    t->fam_notch = flow_family_notch(f);
+    t->served = f->at->code->served;
+    t->seen = f->at->seen;
+    t->assumed = flow_assumed(f);
+    t->against_env = flow_against_env(f);
+    t->replay = f->cand_replay; t->surv = f->cand_surv; t->rung = f->cand_rung;
+    t->own_silence = flow_own_silence(f);
+    t->visits = f->visits;
+    t->picks = f->picks;
+    t->on_ledger = acct_on_ledger(f->family);
+    t->indexed = f->ix_in;
+    t->site_kind = f->at->code->kind;
+    t->site_key = f->at->code->key;
+    t->family = f->family->founder;
+    t->cls = 0;
+    if (f->cand_payload != NULL) t->cls |= FLOW_PICK_CLS_CANDIDATE;
+    if (f->orphan) t->cls |= FLOW_PICK_CLS_DRIVE;
+    for (int i = 0; f->orphan && f->orphan_acts && i < f->orphan_chain_n; i++)
+        if (f->orphan_acts[i] && strstr(f->orphan_acts[i], "\"kind\":\"message\"") != NULL)
+            t->cls |= FLOW_PICK_CLS_POST;
+    if (victim_acts(f) > 0) t->cls |= FLOW_PICK_CLS_VICTIM;
+    if (f->user_acts_n > victim_acts(f)) t->cls |= FLOW_PICK_CLS_ATTACKER;
+    if (flow_path_forced(f)) t->cls |= FLOW_PICK_CLS_FORCED;
+    if (!flow_path_forced(f) && flow_assumed(f) == 0 && !f->orphan && f->cand_payload == NULL)
+        t->cls |= FLOW_PICK_CLS_OBSERVED;
+    /* The order's own composition, so a term added to flow_order_key and not read here fires. */
+    DCHECKF(t->coord + t->x == t->w && t->w == flow_weight(f),
+            "a member's pick-ledger terms do not recompose its weight (coord %.17g + x %.17g, weight %.17g) — "
+            "flow_order_key gained or reordered a term flow_pick_terms does not read", t->coord, t->x, flow_weight(f));
+    DCHECK(g_rank_changes == rank_changes,
+           "reading a member's ranking terms for the pick ledger moved a rank — the ledger must only observe");
 }
 
 /* The order's index: the runnable maximum asked without weighing the frontier. The members standing at one site

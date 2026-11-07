@@ -2366,6 +2366,19 @@ async function main() {
       console.error(`[trusted] [${e.tag}] ${line}`);
       return;
     }
+    /* The pick ledger (solver/pick_ledger.h), written only when the host arms it: `@PICKCOLS` names the columns
+       once, then one `@PICK` row per dispatch. Echoed verbatim and read by nothing here; a row whose field count
+       is not the named one is the two grammars having parted. */
+    if (line.startsWith('@PICKCOLS ') || line.startsWith('@PICK ')) {
+      const cols = line.slice(line.indexOf(' ') + 1).split('\t').length;
+      if (line.startsWith('@PICKCOLS ')) e.pickCols = cols;
+      else if (e.pickCols !== cols)
+        throw new Error(`instance [${e.tag}] wrote a \`@PICK\` row of ${cols} field(s) under ` +
+                        `${e.pickCols === undefined ? 'no @PICKCOLS line' : `@PICKCOLS naming ${e.pickCols}`}: ` +
+                        line.slice(0, 200));
+      console.error(`[trusted] [${e.tag}] ${line}`);
+      return;
+    }
     for (const marker of CENSUS_MARKERS) {
       if (!line.startsWith(marker + ' ')) continue;
       const payload = line.slice(marker.length + 1);
