@@ -2938,6 +2938,8 @@ bool css_shorthand_complete_for(const char *longhand)
         "direction", "writing-mode", "transform", "visibility",
         /* `contain` — css-contain-2 §2 declares it standalone and no shorthand sets it. */
         "contain",
+        /* `will-change` — css-will-change-1 §2 declares it standalone and no shorthand sets it. */
+        "will-change",
         /* `pointer-events` — NO shorthand in CSS sets it. css-ui-4 §6.2 "Exclusion from Hit-testing: the
            pointer-events property" declares it as a standalone property with its own `Value:` line
            (`auto | none`) and its own `Computed value:` line, and the module states no shorthand over it:

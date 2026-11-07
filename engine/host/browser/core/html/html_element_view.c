@@ -242,13 +242,7 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
                        "different-effective-zoom bullet can fire. BUILD this property's `Computed value:` line "
                        "in css_computed_value.c and record its shorthands in css_shorthand.c",
                        HEV_UNREADABLE_ALWAYS[i]);
-        {
-            size_t np;
-            const char *const *props = used_value_positioning_cb_properties(&np);
-
-            for (i = 0; positioning == NULL && i < np; i++)
-                if (hev_declares(el, props[i])) positioning = props[i];
-        }
+        if (positioning == NULL) positioning = used_value_positioning_cb_unreadable(el);
         root = a;
     }
     if (root->parent != NULL && shadow_root_is(root->parent))
@@ -263,49 +257,28 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
        scope question is asked once, and only where a declaration was found — so an ordinary page whose
        ancestors carry no such declaration never pays for the second walk. */
     if (positioning != NULL && (q == HEV_CHAIN_POSITIONING || hev_chain_reads_positioning_cb(n)))
-        DFAILF("an element on this CSSOM VIEW §7 chain DECLARES `%s`, whose computed value "
-               "core/css/css_computed_value.h does not derive, and this member READS css-position-3 §2.1 "
-               "\"Containing Blocks of Positioned Boxes\"' positioning containing block — either because it is "
-               "`offsetParent` or one of the two defined against it, or because a box on this chain is "
-               "`absolute` or `fixed` and §2.1 therefore decides a used value the answer is built out of. §2.1's "
-               "Note is the list: \"Properties that can cause a box to establish an absolute positioning "
-               "containing block include position, transform, will-change, contain …\", and the same for a FIXED "
-               "positioning containing block minus `position` — so with one of them declared, `offsetParent`'s "
-               "two containing-block bullets and its `position: fixed` step 1 are decided by a value that was "
-               "never derived. BUILD this property's `Computed value:` line in css_computed_value.c and record "
-               "its shorthands in css_shorthand.c; §2.1's list ends in an ellipsis, so record the COMPLETE set "
-               "of properties that establish either containing block while you are there rather than the three "
-               "it names",
+        DFAILF("an element on this CSSOM VIEW §7 chain declares `%s`, which css-position-3 §2.1 \"Containing "
+               "Blocks of Positioned Boxes\" counts among the properties that establish a positioning containing "
+               "block, and core/css/css_computed_value.h derives no computed value for it, while this member reads "
+               "that containing block (it is `offsetParent` or defined against it, or a box on this chain is "
+               "`absolute` or `fixed`). BUILD its `Computed value:` line and its `does` test in "
+               "core/layout/used_value.c's `UV_CB_PROPERTIES`",
                positioning);
 }
 
 /* ---- §7's `offsetParent` --------------------------------------------------------------------------------- */
 
 /* CSSOM VIEW §7's "ancestor is a containing block of absolutely-positioned descendants (regardless of whether
-   there are any absolutely-positioned descendants)". css-position-3 §2.1 "Containing Blocks of Positioned
-   Boxes"' own Note lists what can establish one — "Properties that can cause a box to establish an absolute
-   positioning containing block include position, transform, will-change, contain …" — and the chain check above
-   has already crashed if `transform` or `will-change` is declared, so what is left is `position` and
-   css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment", each of whose boxes "establishes an
-   absolute positioning containing block and a fixed positioning containing block" (core/layout/containment.h).
-   WHICH OF ITS VALUES IS STATED BY css-position-3 §2 "Choosing A Positioning Scheme: position property", ONE
-   SENTENCE AND NOT A DERIVATION OVER THREE NAMES: "Values other than static make the box a positioned box, and
-   cause it to establish an absolute positioning containing block for its descendants". So this is written as
-   the complement of `static`, which is what the sentence says, and `sticky` needs no separate arm. A PARAPHRASE
-   IN QUOTATION MARKS STOOD HERE and cited §2.1 for it — "a box that establishes an ABSOLUTE POSITIONING
-   CONTAINING BLOCK" occurs in no section of that standard, and the words that DO settle this are one section
-   over, which is why the citation moved with them rather than only the marks coming off. */
+   there are any absolutely-positioned descendants)" and "a containing block for fixed-positioned descendants":
+   css-position-3 §2.1's establishment, the one predicate §10.1's walk asks (core/layout/used_value.h). */
 static bool hev_establishes_abspos_containing_block(lxb_dom_element_t *el)
 {
-    return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC) || containment_layout(el) ||
-           containment_paint(el);
+    return used_value_establishes_positioning_cb(el, false);
 }
 
-/* §7's "a containing block for fixed-positioned descendants": §2.1's FIXED list has no `position`, so of what
-   this engine reads only containment establishes one. */
 static bool hev_establishes_fixedpos_containing_block(lxb_dom_element_t *el)
 {
-    return containment_layout(el) || containment_paint(el);
+    return used_value_establishes_positioning_cb(el, true);
 }
 
 /* The nearest flat-tree ancestor of `n` that establishes a fixed positioning containing block, or NULL. A

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -2642,6 +2643,30 @@ static char *computed_contain(char *spec)
     return css_contain_serialize(ok ? bits : 0);
 }
 
+bool css_computed_will_change_names(lxb_dom_element_t *el, const char *property)
+{
+    char *v = css_computed_value(el, "will-change");
+    const char *p;
+    size_t n = strlen(property);
+    bool found = false;
+
+    DCHECK(v != NULL, "css-will-change-1 §2's computed `will-change` came back as no value; its row derives one");
+    /* `auto | <animateable-feature>#`: comma-separated, each feature one identifier, compared "ASCII
+       case-insensitive" as §2's <custom-ident> arm states. */
+    for (p = v; *p != '\0' && !found;) {
+        const char *s, *e;
+
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == ',') p++;
+        s = p;
+        while (*p != '\0' && *p != ',') p++;
+        e = p;
+        while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n')) e--;
+        found = (size_t)(e - s) == n && strncasecmp(s, property, n) == 0;
+    }
+    free(v);
+    return found;
+}
+
 unsigned css_computed_contain(lxb_dom_element_t *el)
 {
     char *v = css_computed_value(el, "contain");
@@ -2740,6 +2765,10 @@ static char *css_cv_computed(lxb_dom_element_t *el, CssPropertyId id)
         return computed_list_style_image(spec);
     case CSS_PROPERTY_CONTAIN:
         return computed_contain(spec);
+    /* css-will-change-1 §2 "Hinting at Future Behavior: the will-change property": `Computed value: specified
+       value`. */
+    case CSS_PROPERTY_WILL_CHANGE:
+        return spec;
     case CSS_PROPERTY_FONT_FAMILY:
         return computed_font_family(el, spec);
     /* `float` (CSS2 §9.5.1) states "Computed value: as specified", and a keyword has no absolutization to do —

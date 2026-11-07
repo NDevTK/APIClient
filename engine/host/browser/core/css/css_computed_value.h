@@ -130,6 +130,10 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name);
    and `content` are their expansions and `none` is the empty set. */
 unsigned css_computed_contain(lxb_dom_element_t *el);
 
+/* Whether `el`'s computed css-will-change-1 §2 `will-change` names `property` (a lowercase property name), so
+   that "the author expects to animate or change the property with the given name on the element". */
+bool css_computed_will_change_names(lxb_dom_element_t *el, const char *property);
+
 /* css-transforms-1 §3 "The transform Property"'s COMPUTED VALUE AS THE PARSED LIST — the THIRD shape this
    component answers, and it is an entry for the same reason `css_computed_line_height` and
    `css_computed_border_spacing` are: text cannot carry it. §3's `Computed value:` line is "as specified, but

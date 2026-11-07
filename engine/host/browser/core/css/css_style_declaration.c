@@ -3135,6 +3135,9 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     /* css-contain-2 §2 "Strong Containment: the contain property", whose `Initial:` line is `none`; lexbor's
        registry carries no `contain` entry, so this row is its §7.1 initial value. */
     { "contain", "none" },
+    /* css-will-change-1 §2 "Hinting at Future Behavior: the will-change property", `Initial: auto`; lexbor's
+       registry carries no `will-change` entry. */
+    { "will-change", "auto" },
     /* CSS 2.1 §17 Tables' four, each straight off its own `Initial:` line: §17.4.1 Caption position and
        alignment gives `caption-side` `top`, §17.5.2 Table width algorithms: the 'table-layout' property gives
        `table-layout` `auto`, §17.6 Borders gives `border-collapse` `separate`, and §17.6.1 The separated

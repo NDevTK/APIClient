@@ -29,6 +29,9 @@ bool containment_layout(lxb_dom_element_t *el);
    clip edge, and it establishes an independent formatting context and both positioning containing blocks and
    creates a stacking context. */
 bool containment_paint(lxb_dom_element_t *el);
+/* Whether §3.3's and §3.5's containment would take effect on `el` were it declared: neither "has an effect"
+   on the boxes those sections exclude. */
+bool containment_layout_paint_applies(lxb_dom_element_t *el);
 
 /* §2 "Strong Containment: the contain property": "when any containments are active on either the HTML html or
    body elements, propagation of properties from the body element to the initial containing block, the

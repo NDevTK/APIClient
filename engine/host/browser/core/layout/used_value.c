@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -18,6 +19,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/box_tree.h"
 #include "core/layout/containment.h"
+#include "core/css/css_transform.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
@@ -1157,82 +1159,141 @@ typedef struct {
 } UvCb;
 
 /* ---- css-position-3 §2.1 "Containing Blocks of Positioned Boxes": what establishes §10.1's third and fourth
-   rectangles, and the operands of that question this engine cannot read ---------------------------------
-   §2.1's Note lists them and ends in an ellipsis: "Properties that can cause a box to establish an absolute
-   positioning containing block include position, transform, will-change, contain…". `position` and `contain`
-   have computed values and `uv_establishes_abspos_cb` reads both. The rest are this list, read from the
-   CASCADED value as a detector whose only outcome is a crash: skipping such an ancestor would answer the next
-   one up, a real rectangle of the wrong box. `transform` is common in real bundles, so derive a page's rate
-   (`grep -c 'transform:'` against `grep -c 'position: *absolute'`) rather than assuming it is rare.
-   core/html/html_element_view.c asks the same list over a whole CSSOM VIEW §7 chain, so it is spelled once,
-   here, and exported. */
-static const char *const UV_POSITIONING_CB_PROPERTIES[] = { "transform", "will-change" };
+   rectangles. §2.1's Notes list the properties and end in an ellipsis: "Properties that can cause a box to
+   establish an absolute positioning containing block include position, transform, will-change, contain…", and
+   the same without `position` for a fixed positioning containing block. Each row is one such property and the
+   module that says so; `does` is NULL for one whose computed value is not derived, which is refused where it is
+   declared, since skipping the ancestor would answer the next one up, a real rectangle of the wrong box. ------ */
+typedef struct {
+    const char *name;
+    bool fixed;                            /* it establishes a fixed positioning containing block as well */
+    bool (*could)(lxb_dom_element_t *el); /* some non-initial value would, on this element */
+    bool (*does)(lxb_dom_element_t *el);  /* its computed value does; NULL where none is derived */
+    const char *initial;                   /* its `Initial:` value, which establishes nothing */
+} UvCbProperty;
 
-const char *const *used_value_positioning_cb_properties(size_t *n)
+static bool uv_cb_any(lxb_dom_element_t *el)
 {
-    DCHECK(n != NULL, "css-position-3 §2.1's property list was asked for with nowhere to put its length");
-    /* `COUNTOF` and not the naked `sizeof`/`sizeof` idiom, which check.h refuses a POINTER at
-       compile time for: this table is `const char *const []`, whose element is exactly as wide as an
-       address, so the bare form answers 1 on a pointer and turns a length into a silent truncation to one
-       entry — which here would be `transform` alone and would pass every ancestor declaring the other two. */
-    *n = COUNTOF(UV_POSITIONING_CB_PROPERTIES);
-    return UV_POSITIONING_CB_PROPERTIES;
+    (void)el;
+    return true;
 }
 
-/* THE DETECTOR, ASKED OF ONE ANCESTOR. `subject` is named in the crash beside the ancestor because the claim
-   a reader has to check spans both: it is the ancestor that carries the unreadable declaration and the
-   subject whose rectangle is decided by it. */
-static void uv_require_readable_positioning(lxb_dom_element_t *subject, lxb_dom_element_t *anc)
+/* css-position-3 §2: a box whose `position` is not `static` establishes an absolute positioning containing
+   block. */
+static bool uv_cb_positioned(lxb_dom_element_t *el)
 {
-    size_t i, np;
-    const char *const *props = used_value_positioning_cb_properties(&np);
+    return !css_computed_keyword_is(el, "position", CSS_KEYWORD_STATIC);
+}
+
+/* css-transforms-1 §2 "The Transform Rendering Model": "For elements whose layout is governed by the CSS box model,
+   any value other than none for the transform property also causes the element to establish a containing
+   block for all descendants", the transformable element of its §2 "Terminology". */
+static bool uv_cb_transformed(lxb_dom_element_t *el)
+{
+    return css_transform_is_transformable(el) && css_transform_is_transformed(el);
+}
+
+/* css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment": each box "establishes an absolute
+   positioning containing block and a fixed positioning containing block". */
+static bool uv_cb_contained(lxb_dom_element_t *el)
+{
+    return containment_layout(el) || containment_paint(el);
+}
+
+/* filter-effects-1 §5 "Graphic filters: the filter property": "A value other than none for the filter property
+   results in the creation of a containing block for absolute and fixed positioned descendants unless the element
+   it applies to is document root element in the current browsing context". */
+static bool uv_cb_not_root(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
+    return !(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT);
+}
+
+/* css-transforms-2's three individual transforms (§5 "Individual Transform Properties: the translate, scale,
+   and rotate properties": every value but `none` creates "a stacking context and containing block for all
+   descendants"), §7 "The transform-style Property" (`preserve-3d` "on a transformable element") and §8 "The
+   perspective Property" ("just like the transform property does"). */
+static const UvCbProperty UV_CB_PROPERTIES[] = {
+    { "position",        false, uv_cb_any,                         uv_cb_positioned,  "static" },
+    { "transform",       true,  css_transform_is_transformable,    uv_cb_transformed, "none" },
+    { "contain",         true,  containment_layout_paint_applies,  uv_cb_contained,   "none" },
+    { "translate",       true,  css_transform_is_transformable,    NULL,              "none" },
+    { "rotate",          true,  css_transform_is_transformable,    NULL,              "none" },
+    { "scale",           true,  css_transform_is_transformable,    NULL,              "none" },
+    { "transform-style", true,  css_transform_is_transformable,    NULL,              "flat" },
+    { "perspective",     true,  css_transform_is_transformable,    NULL,              "none" },
+    { "filter",          true,  uv_cb_not_root,                    NULL,              "none" },
+};
+
+/* Whether `el` declares row `p` with a value other than its initial one, spelled or through `initial` or
+   `unset` (none of these properties is inherited). */
+static bool uv_cb_declared(lxb_dom_element_t *el, const UvCbProperty *p)
+{
+    char *decl = cssom_cascaded_value(el, p->name);
+    bool declared = decl != NULL && strcasecmp(decl, p->initial) != 0 && strcasecmp(decl, "initial") != 0 &&
+                    strcasecmp(decl, "unset") != 0;
+
+    free(decl);
+    return declared;
+}
+
+const char *used_value_positioning_cb_unreadable(lxb_dom_element_t *el)
+{
+    size_t i;
+
+    for (i = 0; i < COUNTOF(UV_CB_PROPERTIES); i++)
+        if (UV_CB_PROPERTIES[i].does == NULL && uv_cb_declared(el, &UV_CB_PROPERTIES[i]))
+            return UV_CB_PROPERTIES[i].name;
+    return NULL;
+}
+
+/* Whether `anc` establishes css-position-3 §2.1's absolute (`fixed` false) or fixed positioning containing
+   block. css-will-change-1 §2 "Hinting at Future Behavior: the will-change property" makes a named property
+   count as set: "If any non-initial value of a property would cause the element to generate a containing block
+   for absolutely positioned elements, specifying that property in will-change must cause the element to
+   generate a containing block for absolutely positioned elements", and the same for fixed ones. `subject` is
+   named in the refusal beside the ancestor whose declaration it reads. */
+static bool uv_establishes_positioning_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc, bool fixed)
+{
+    size_t i;
     char nbuf[160], abuf[160];
 
-    for (i = 0; i < np; i++) {
-        char *decl = cssom_cascaded_value(anc, props[i]);
-        bool declared = decl != NULL;
+    for (i = 0; i < COUNTOF(UV_CB_PROPERTIES); i++) {
+        const UvCbProperty *p = &UV_CB_PROPERTIES[i];
 
-        free(decl);
-        if (declared)
-            DFAILF("%s, whose ancestor %s DECLARES `%s`: "
-                  "css-position-3 §2.1 \"Containing Blocks of Positioned Boxes\"' two Notes put that property "
-                  "in the set that decides this walk — \"Properties that can cause a box to establish an "
-                  "absolute positioning containing block include position, transform, will-change, contain…\" "
-                  "and the same list minus `position` for a FIXED positioning containing block — and "
-                  "core/css/css_computed_value.h derives no computed value for it. SKIPPING THIS ANCESTOR "
-                  "WOULD NOT BE A NARROWER ANSWER, IT WOULD BE A DIFFERENT BOX: an `absolute` subject's walk "
-                  "would stop at the next positioned ancestor above, whose PADDING EDGE is a real rectangle, "
-                  "and a `fixed` subject would be given the viewport when §2.1 puts it inside this ancestor "
-                  "— so every percentage and every solved offset would be measured from the wrong rectangle "
-                  "with nothing to say so. BUILD this property's `Computed value:` line in "
-                  "css_computed_value.c and record its shorthands in css_shorthand.c. §2.1's lists END IN AN "
-                  "ELLIPSIS, so record the COMPLETE set of properties that establish an absolute or a fixed "
-                  "positioning containing block into `used_value_positioning_cb_properties` while you are "
-                  "there rather than the three the Notes happen to name — that entry is the one place either "
-                  "question is asked from, so a property added to it reaches this walk and "
-                  "core/html/html_element_view.c's chain check together",
-                  box_subject(subject, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf), props[i]);
+        if (fixed && !p->fixed) continue;
+        if (css_computed_will_change_names(anc, p->name) && p->could(anc)) return true;
+        if (p->does != NULL) {
+            if (p->does(anc)) return true;
+            continue;
+        }
+        {
+            if (uv_cb_declared(anc, p))
+                DFAILF("%s, whose ancestor %s declares `%s`, which css-position-3 §2.1 \"Containing Blocks of "
+                       "Positioned Boxes\" counts among the properties that establish a positioning containing "
+                       "block, and core/css/css_computed_value.h derives no computed value for it. BUILD its "
+                       "`Computed value:` line and give its row in `UV_CB_PROPERTIES` a `does` test",
+                       box_subject(subject, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf), p->name);
+        }
     }
+    return false;
 }
 
-/* DOES THIS ANCESTOR ESTABLISH AN ABSOLUTE POSITIONING CONTAINING BLOCK? css-position-3 §2's own sentence is
-   the whole rule for `position` and it is written as the complement of `static` rather than as a disjunction
-   over three names, which is what makes `sticky` need no arm of its own — CSS 2.1 §10.1 predates that value and
-   lists the three it had. css-contain-2 §3.3 "Layout Containment" and §3.5 "Paint Containment" each add "The
-   ... containment box establishes an absolute positioning containing block and a fixed positioning containing
-   block" (core/layout/containment.h). */
+bool used_value_establishes_positioning_cb(lxb_dom_element_t *el, bool fixed)
+{
+    DCHECK(el != NULL, "css-position-3 §2.1's establishment question was asked of no element");
+    return uv_establishes_positioning_cb(el, el, fixed);
+}
+
 static bool uv_establishes_abspos_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc)
 {
-    uv_require_readable_positioning(subject, anc);
-    return !css_computed_keyword_is(anc, "position", CSS_KEYWORD_STATIC) || containment_layout(anc) ||
-           containment_paint(anc);
+    return uv_establishes_positioning_cb(subject, anc, false);
 }
 
-/* The FIXED list: §2.1's Note names "transform, will-change, contain…" and not `position`. */
 static bool uv_establishes_fixedpos_cb(lxb_dom_element_t *subject, lxb_dom_element_t *anc)
 {
-    uv_require_readable_positioning(subject, anc);
-    return containment_layout(anc) || containment_paint(anc);
+    return uv_establishes_positioning_cb(subject, anc, true);
 }
 
 /* §10.1's four cases, in the spec's own order, answering the BOX whose CONTENT EDGE is the rectangle. Each

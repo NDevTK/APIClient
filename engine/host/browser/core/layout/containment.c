@@ -40,7 +40,7 @@ static bool ct_size_applies(lxb_dom_element_t *el)
 
 /* §3.3's and §3.5's list, which is one list: the shared clauses and "its principal box is an internal table
    box other than table-cell". */
-static bool ct_layout_paint_applies(lxb_dom_element_t *el)
+bool containment_layout_paint_applies(lxb_dom_element_t *el)
 {
     CssDisplay d = css_computed_display(el);
     TableBoxKind kind = table_box_kind(d);
@@ -64,13 +64,13 @@ bool containment_inline_size(lxb_dom_element_t *el)
 bool containment_layout(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "css-contain-2 §3.3's layout containment was asked of no element");
-    return (css_computed_contain(el) & CSS_CONTAIN_LAYOUT) && ct_layout_paint_applies(el);
+    return (css_computed_contain(el) & CSS_CONTAIN_LAYOUT) && containment_layout_paint_applies(el);
 }
 
 bool containment_paint(lxb_dom_element_t *el)
 {
     DCHECK(el != NULL, "css-contain-2 §3.5's paint containment was asked of no element");
-    return (css_computed_contain(el) & CSS_CONTAIN_PAINT) && ct_layout_paint_applies(el);
+    return (css_computed_contain(el) & CSS_CONTAIN_PAINT) && containment_layout_paint_applies(el);
 }
 
 /* Whether any containment type is in effect on `el`. Style containment (§3.4) has no effect only where "the
