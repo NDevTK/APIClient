@@ -8,12 +8,11 @@
  * engine/host/out/qjs-native-none; its zone drives its binary over a page with the wire answered by wire.mjs.
  * A run is cut at the first census sample whose summed @COLD `stepWork` passes the largest budget; each budget is
  * read at the first sample past it, as the union of every instance's latest @RESULT, and a run that ends first has
- * no reading there, never a zero. Kept per run in logs/: <page>.<run>.<budget|final>.results.json, and every @COLD
- * and @WFQ line verbatim in <page>.<run>.census.tsv.gz, and the pick ledger (solver/pick_ledger.h, armed unless
- * `--ledger off`; testing/bench/ledger.mjs reads it) in <page>.<run>.picks.tsv.gz. Each run is held to
- * `--mem-cap` by a memory cgroup the engine reads its RAM limit from (runMemcg). Replies are recorded, since live
- * input would be a second moving subject in an A/B: a recording is what the page's own sends received at a stated
- * instant, keyed by URL; the bytes stay outside the repository, and manifest.json names them. */
+ * no reading there, never a zero. Kept per run in logs/: <page>.<run>.<budget|final>.results.json, every @COLD
+ * and @WFQ line in <page>.<run>.census.tsv.gz, and the pick ledger (solver/pick_ledger.h, unless `--ledger off`)
+ * in <page>.<run>.picks.tsv.gz. Each run is held to `--mem-cap` by a memory cgroup the engine reads its RAM limit
+ * from (runMemcg). Replies are recorded, since live input would be a second moving subject in an A/B: what the
+ * page's own sends received at a stated instant, keyed by URL, kept outside the repository, named by manifest.json. */
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
