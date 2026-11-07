@@ -138,6 +138,50 @@ function docAttackerRooted(m) {
   return !("headers" in m) || (docIsRecord(m.headers) && Object.keys(m.headers).length > 0 &&
                                Object.values(m.headers).every(docIsName));
 }
+/* solver/endpoint.h's record facts: `credentials` the modes stated (null for a sighting that stated none),
+   `destinations`, `attackerNeeds` false or {common, deliveries}, and `assumes` null or a list of {kind, name}
+   lists. A set is stated in its vocabulary's order with no repeat. */
+const ENDPOINT_CREDENTIALS = Object.freeze([null, "omit", "same-origin", "include"]);
+const ENDPOINT_DESTINATIONS = Object.freeze(["same-origin", "cross-origin", "unknown"]);
+const ENDPOINT_ASSUME_KINDS = Object.freeze(["absent-read", "absent-arm", "environment-arm"]);
+function docOrderedSet(v, vocab) {
+  return Array.isArray(v) && v.length > 0 && v.every((x, i) => vocab.indexOf(x) >= 0 &&
+                                                           (i === 0 || vocab.indexOf(v[i - 1]) < vocab.indexOf(x)));
+}
+function docDeliverySource(x) {
+  if (!docIsRecord(x) || !docIsName(x.source) || !docIsName(x.delivery) ||
+      !(x.deliveryPrefix === null || docIsName(x.deliveryPrefix))) return false;
+  const keys = Object.keys(x).join(",");
+  if (x.delivery !== "cross-document-message") return keys === "source,delivery,deliveryPrefix";
+  return keys === "source,delivery,deliveryPrefix,messageRoutes" && Array.isArray(x.messageRoutes) &&
+         (x.messageRoutes.length === 0 || docOrderedSet(x.messageRoutes, ["frame", "opener"]));
+}
+function docRecordFacts(row, f) {
+  if ("credentials" in row && !docOrderedSet(row.credentials, ENDPOINT_CREDENTIALS))
+    return f + ".credentials is not an ordered set of " + JSON.stringify(ENDPOINT_CREDENTIALS);
+  if ("destinations" in row && !docOrderedSet(row.destinations, ENDPOINT_DESTINATIONS))
+    return f + ".destinations is not an ordered set of " + ENDPOINT_DESTINATIONS.join("/");
+  if ("attackerNeeds" in row && row.attackerNeeds !== false) {
+    const n = row.attackerNeeds;
+    if (!docIsRecord(n) || Object.keys(n).join(",") !== "common,deliveries" || typeof n.common !== "boolean" ||
+        !Array.isArray(n.deliveries) || n.deliveries.length === 0 ||
+        !n.deliveries.every((d) => docIsRecord(d) && Object.keys(d).join(",") === "victimAct,sources" &&
+                                   typeof d.victimAct === "boolean" && Array.isArray(d.sources) &&
+                                   d.sources.length > 0 && d.sources.every(docDeliverySource)))
+      return f + ".attackerNeeds is neither false nor {common, deliveries: [{victimAct, sources: [{source, " +
+             "delivery, deliveryPrefix, messageRoutes?}]}]}";
+    if (("attackerRooted" in row) && row.attackerRooted === false)
+      return f + " states what an attacker needs for a record no sighting marked";
+  } else if ("attackerNeeds" in row && row.attackerRooted !== false) {
+    return f + " is marked and states nothing an attacker needs";
+  }
+  if ("assumes" in row && row.assumes !== null &&
+      !(Array.isArray(row.assumes) && row.assumes.length > 0 &&
+        row.assumes.every((a) => Array.isArray(a) && a.every((x) => docIsRecord(x) &&
+          Object.keys(x).join(",") === "kind,name" && ENDPOINT_ASSUME_KINDS.indexOf(x.kind) >= 0 && docIsName(x.name)))))
+    return f + ".assumes is neither null nor a non-empty list of [{kind, name}] sets";
+  return null;
+}
 function docEndpointRow(row, f) {
   if (!docIsRecord(row)) return f + " is not an object";
   for (const k of ENDPOINT_FACT_KEYS)
@@ -146,12 +190,15 @@ function docEndpointRow(row, f) {
     return f + ".addressRoot is none of null, false or a non-empty string";
   if ("attackerRooted" in row && row.attackerRooted !== false && !docAttackerRooted(row.attackerRooted))
     return f + ".attackerRooted is neither false nor {address?, headers?, body?, victimAct} with a piece named";
+  const whyFacts = docRecordFacts(row, f);
+  if (whyFacts !== null) return whyFacts;
   return "witness" in row ? docWitness(row, f) : null;
 }
 function docEndpoints(rows) {
   const why = docArray(rows, "fetchCallSites") || docEach(rows, "fetchCallSites", docEndpointRow);
   if (why !== null) return why;
-  for (const k of [...ENDPOINT_FACT_KEYS, "addressRoot", "attackerRooted", "witness"]) {
+  for (const k of [...ENDPOINT_FACT_KEYS, "addressRoot", "attackerRooted", "witness", "credentials", "destinations",
+                   "attackerNeeds", "assumes"]) {
     const stated = rows.filter((r) => k in r).length;
     if (stated !== 0 && stated !== rows.length)
       return "fetchCallSites states `" + k + "` on " + stated + " of " + rows.length + " rows";

@@ -1,11 +1,18 @@
 /* lib/popup-endpoints.js — the Endpoints panel: one row per method the forced execution learned (a method
    record with `_astInferred`, lib/learn.js), stating its verb, its address, the razor class its sightings
    stated, the address's provenance, what each sighting's flow assumed, each parameter with the example values
-   the run computed, and the request body the run observed; a row's Send button opens the method in the Send panel. Every cell is a
+   the run computed, and the request body the run observed; a row's Send button opens the method in the Send panel.
+   Rows stand in the spec's classes, a table of security-relevant records and one of plain records, each in its
+   order, and the reader may keep only the rows stating one value of one fact and list them by one fact
+   (lib/endpoint-record.js's recordClasses); each row states the facts beside its mark and the application state its paths assumed. Every
+   cell is a
    producer field read as itself; a fact no hop carries reads "unknown". Built only through
    lib/dom-builder.js. */
 
 const ENDPOINT_UNKNOWN = "unknown";
+// The reader's choices over RECORD_FIELDS: the [fact, value] rows are kept by, and the fact they are listed by.
+let endpointFilter = null;
+let endpointSortBy = null;
 
 // The panel. Reads `tabData` (GET_STATE, lib/serialize.js's serializeTabData) and nothing else.
 function renderEndpointsPanel() {
@@ -18,24 +25,64 @@ function renderEndpointsPanel() {
   DCHECK(tabData.discoveryDocs && typeof tabData.discoveryDocs === "object" &&
          tabData.endpoints && typeof tabData.endpoints === "object",
          "GET_STATE carried no discoveryDocs/endpoints map — serializeTabData writes both on every reply");
-  const rows = [];
+  const items = [];
   for (const svcName of Object.keys(tabData.discoveryDocs).sort()) {
     const svc = tabData.discoveryDocs[svcName];
     if (!svc.doc) continue;   // an outcome-only record: the published fetch's status, no method surface
     for (const m of getDocMethods(svc.doc)) {
       if (methodProvenance(m, "lib/popup-endpoints.js row") === null) continue;   // no bundle sighting
-      rows.push(endpointRow(svcName, svc.doc, m));
+      items.push({ svcName, doc: svc.doc, m });
     }
   }
-  if (rows.length === 0) {
+  const classes = recordClasses(items, (it) => it.m._astFacts, endpointFilter, endpointSortBy);
+  const table = (title, list) => domElement("table", { class: "ep-table" }, [
+    domElement("caption", {}, [title + " (" + list.length + ")"]),
+    domElement("thead", {}, [domElement("tr", {}, ["Method", "Address", "Razor", "Provenance", "Assumed", "Facts",
+      "Parameters", ""].map((h) => domElement("th", { scope: "col" }, [h])))]),
+    domElement("tbody", {}, list.map((it) => endpointRow(it.svcName, it.doc, it.m)))]);
+  if (items.length === 0) {
     domReplaceChildren(body, [domElement("div", { class: "empty" }, [
       "No endpoint has been learned by forced execution in this view yet — not a verdict that the bundle " +
       "calls none."])]);
     return;
   }
-  const head = domElement("thead", {}, [domElement("tr", {}, ["Method", "Address", "Razor", "Provenance",
-    "Assumed", "Parameters", ""].map((h) => domElement("th", { scope: "col" }, [h])))]);
-  domReplaceChildren(body, [domElement("table", { class: "ep-table" }, [head, domElement("tbody", {}, rows)])]);
+  domReplaceChildren(body, [endpointFilterControl(items), " ", endpointSortControl(),
+                            table("Security-relevant API records", classes.marked),
+                            table("Plain API records", classes.plain)]);
+}
+
+// The reader's filter: one option per (fact, value) some row states, and one that keeps every row.
+function endpointFilterControl(items) {
+  const pairs = [];
+  for (const it of items) {
+    const f = it.m._astFacts;
+    if (f === undefined) continue;
+    for (const field of Object.keys(RECORD_FIELDS))
+      for (const v of RECORD_FIELDS[field].of(f))
+        if (!pairs.some((p) => p[0] === field && p[1] === v)) pairs.push([field, v]);
+  }
+  const opts = [domElement("option", { value: "" }, ["every record"])].concat(
+    pairs.map((p) => domElement("option", { value: JSON.stringify(p) }, [p[0] + ": " + p[1]])));
+  const select = domElement("select", { title: "keep only the records stating one value of one fact" }, opts);
+  select.value = endpointFilter === null ? "" : JSON.stringify(endpointFilter);
+  select.addEventListener("change", () => {
+    endpointFilter = select.value === "" ? null : JSON.parse(select.value);
+    renderEndpointsPanel();
+  });
+  return domElement("label", { class: "ep-filter" }, ["Show ", select]);
+}
+
+// The reader's sort: one option per fact, and one that keeps each class in its order.
+function endpointSortControl() {
+  const opts = [domElement("option", { value: "" }, ["as learned"])].concat(
+    Object.keys(RECORD_FIELDS).map((k) => domElement("option", { value: k }, [k])));
+  const select = domElement("select", { title: "list each class by one fact" }, opts);
+  select.value = endpointSortBy === null ? "" : endpointSortBy;
+  select.addEventListener("change", () => {
+    endpointSortBy = select.value === "" ? null : select.value;
+    renderEndpointsPanel();
+  });
+  return domElement("label", { class: "ep-sort" }, ["List by ", select]);
 }
 
 function endpointRow(svcName, doc, m) {
@@ -50,6 +97,7 @@ function endpointRow(svcName, doc, m) {
                           ...(methodDriven(m, where) ? [" ", domElement("span", { class: "ep-grade ep-driven" },
                                                                         ["driven"])] : [])]),
     domElement("td", {}, [endpointWitnessCell(m, where)]),
+    domElement("td", {}, [endpointFactsCell(m)]),
     domElement("td", {}, [endpointParamsCell(doc, m, ep, where)]),
     domElement("td", {}, [endpointSendButton(svcName, m)]),
   ]);
@@ -153,6 +201,21 @@ function endpointWitnessCell(m, where) {
   }
   if (items.length === 0) return domElement("span", { class: "ep-none" }, ["nothing assumed"]);
   return domElement("ul", { class: "ep-witness" }, items);
+}
+
+/* The facts a row states beside its mark (lib/endpoint-record.js's recordFactsText) and the assumption sets its
+   paths rested on. A method from an engine build that stated no facts reads unknown. */
+function endpointFactsCell(m) {
+  const f = m._astFacts;
+  if (f === undefined) {
+    return domElement("span", { class: "ep-unknown",
+      title: "the engine build that reported this method's sightings stated no record facts" }, [ENDPOINT_UNKNOWN]);
+  }
+  const lines = [domElement("li", { class: f.rooted !== null ? "ep-facts-marked" : "ep-none" },
+                            [(f.rooted !== null ? "" : "plain API record; ") +
+                             recordFactsText(f, m.httpMethod).join("; ")]),
+                 domElement("li", { class: "ep-assumes" }, [recordAssumesText(f)])];
+  return domElement("ul", { class: "ep-facts" }, lines);
 }
 
 /* One entry, in the three shapes extension/bridge.js asserts at the seam. A pin's String value is quoted so it

@@ -752,7 +752,7 @@ function _mergeMethodInto(em, nm) {
          "lib/learn.js files every request under its document and derives the sum, so this sum was written elsewhere");
   for (const k in nm) {
     if (k === "parameters" || k === "_stats" || k === "_statsByDoc" || k === "_astInferred" ||
-        k === "_astRazorClasses" || k === "_astWitnesses") continue;
+        k === "_astRazorClasses" || k === "_astWitnesses" || k === "_astFacts") continue;
     if (em[k] === undefined || em[k] === null) em[k] = nm[k];
   }
   if (nm._astInferred) em._astInferred = true;
@@ -770,6 +770,8 @@ function _mergeMethodInto(em, nm) {
       em._astWitnesses = witnessPoolWith(em._astWitnesses, p.provenance, p.acts, p.assumed, p.verification, where);
     }
   }
+  // …and the record facts fold across documents by the rule they fold by across rows.
+  if (nm._astFacts !== undefined) em._astFacts = recordFactsJoin(em._astFacts, nm._astFacts);
   if (nm.parameters) {
     if (!em.parameters) em.parameters = {};
     for (const pn in nm.parameters) {

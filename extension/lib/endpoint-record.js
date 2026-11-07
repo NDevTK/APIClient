@@ -1058,3 +1058,130 @@ function endpointRecordMissingNames(ep, where) {
 function endpointRecordRecipe(ep) {
   return (typeof ep.pageUrl === "string" && ep.pageUrl !== "") ? ep.pageUrl : null;
 }
+
+/* THE FACTS A RECORD STATES BESIDE ITS MARK (engine/host/solver/endpoint.h's `attackerRooted`, `credentials`,
+   `destinations`, `attackerNeeds` and `assumes`), folded onto a method by the engine's own rules across
+   sightings: each set is the union of what the rows stated, `common` holds where some row's does, and the
+   assumption sets keep the minimal ones. Nothing here orders records. */
+const RECORD_CREDENTIALS = Object.freeze([null, "omit", "same-origin", "include"]);
+const RECORD_DESTINATIONS = Object.freeze(["same-origin", "cross-origin", "unknown"]);
+
+function _assumeSetKey(set) { return set.map((x) => x.kind + "\u001f" + x.name).sort(); }
+function _assumeSetWithin(a, b) {
+  const kb = _assumeSetKey(b);
+  return _assumeSetKey(a).every((k) => kb.indexOf(k) >= 0);
+}
+// The union of two ordered sets over `vocab`, in its order.
+function _setUnion(a, b, vocab) { return vocab.filter((v) => a.indexOf(v) >= 0 || b.indexOf(v) >= 0); }
+
+/* One @H row's facts, in the shape a method folds; the row's shape is extension/bridge.js's docRecordFacts. */
+function recordFacts(row, where) {
+  DCHECK(!!row && "attackerNeeds" in row && "credentials" in row && "destinations" in row && "assumes" in row &&
+         "attackerRooted" in row,
+         "an @H row reached the record-fact fold without its facts (" + where + ") — bridge.js admits a row " +
+         "only with every one of them or none");
+  return { rooted: row.attackerRooted === false ? null
+             : Object.keys(row.attackerRooted).filter((k) => k !== "victimAct"),
+           credentials: row.credentials, destinations: row.destinations,
+           needs: row.attackerNeeds === false ? null : row.attackerNeeds, assumes: row.assumes };
+}
+
+/* `prior` (a method's `_astFacts`, or undefined) with the folded facts `f` joined in; returns rather than
+   mutates. Used per row (lib/learn.js) and per method across documents (lib/merge.js). */
+function recordFactsJoin(prior, f) {
+  if (prior === undefined) return f;
+  const out = {};
+  out.rooted = prior.rooted === null ? f.rooted : f.rooted === null ? prior.rooted
+    : prior.rooted.concat(f.rooted.filter((k) => prior.rooted.indexOf(k) < 0));
+  out.credentials = _setUnion(prior.credentials, f.credentials, RECORD_CREDENTIALS);
+  out.destinations = _setUnion(prior.destinations, f.destinations, RECORD_DESTINATIONS);
+  if (prior.needs === null || f.needs === null) out.needs = prior.needs === null ? f.needs : prior.needs;
+  else {
+    const seen = prior.needs.deliveries.map((d) => JSON.stringify(d));
+    out.needs = { common: prior.needs.common || f.needs.common,
+                  deliveries: prior.needs.deliveries.concat(
+                    f.needs.deliveries.filter((d) => seen.indexOf(JSON.stringify(d)) < 0)) };
+  }
+  if (prior.assumes === null || f.assumes === null) out.assumes = prior.assumes === null ? f.assumes : prior.assumes;
+  else {
+    let sets = prior.assumes.slice();
+    for (const s of f.assumes) {
+      if (sets.some((t) => _assumeSetWithin(t, s))) continue;
+      sets = sets.filter((t) => !_assumeSetWithin(s, t)).concat([s]);
+    }
+    out.assumes = sets;
+  }
+  return out;
+}
+
+/* Each fact a reader may filter or sort by: the values a method's folded facts state for it, and the field's
+   vocabulary, in the order its producer declares it (solver/endpoint.c's enums, concolic.h's SourceDeliverKind),
+   which a sort lists values in. */
+const RECORD_FIELDS = Object.freeze({
+  credentials: { vocab: ["not stated", "omit", "same-origin", "include"],
+                 of: (f) => f.credentials.map((c) => c === null ? "not stated" : c) },
+  destination: { vocab: RECORD_DESTINATIONS, of: (f) => f.destinations },
+  delivery: { vocab: ["address", "referring-address", "user-file", "cross-document-message", "user-input",
+                      "navigable-name"],
+              of: (f) => f.needs === null ? []
+                : f.needs.deliveries.flatMap((d) => d.sources.map((x) => x.delivery)) },
+  "victim act": { vocab: ["none", "needed"],
+                  of: (f) => f.needs === null ? [] : f.needs.deliveries.map((d) => d.victimAct ? "needed" : "none") },
+  "only via": { vocab: ["an address component", "another source"],
+                of: (f) => f.needs === null ? [] : [f.needs.common ? "an address component" : "another source"] },
+  assumes: { vocab: ["nothing", "state", "not asked"],
+             of: (f) => f.assumes === null ? ["not asked"] : f.assumes.some((x) => x.length === 0) ? ["nothing"]
+               : ["state"] },
+});
+
+/* `items` in the spec's classes, security-relevant records (a marked fold) then plain ones, each in its given
+   order. The reader's own choices, each optional: `filter` [field, value] keeps only the items whose facts state
+   that value; `sortBy` a field lists each class stably by the first of an item's values in that field's
+   vocabulary, items stating none after. `factsOf(item)` answers the item's folded facts or undefined (an engine
+   build that stated none). Returns {marked, plain}. */
+function recordClasses(items, factsOf, filter, sortBy) {
+  const known = (k) => k === null || Object.prototype.hasOwnProperty.call(RECORD_FIELDS, k);
+  DCHECK(known(filter === null ? null : filter[0]) && known(sortBy),
+         "the Endpoints panel filtered or sorted by a field outside RECORD_FIELDS: " + JSON.stringify([filter, sortBy]));
+  const out = { marked: [], plain: [] };
+  items.forEach((it, i) => {
+    const f = factsOf(it);
+    if (filter !== null && (f === undefined || RECORD_FIELDS[filter[0]].of(f).indexOf(filter[1]) < 0)) return;
+    let k = 0;
+    if (sortBy !== null) {
+      const vocab = RECORD_FIELDS[sortBy].vocab, vs = f === undefined ? [] : RECORD_FIELDS[sortBy].of(f);
+      k = vs.length ? Math.min(...vs.map((v) => vocab.indexOf(v))) : vocab.length;
+    }
+    (f !== undefined && f.rooted !== null ? out.marked : out.plain).push({ it, i, k });
+  });
+  const ordered = (list) => list.sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.it);
+  return { marked: ordered(out.marked), plain: ordered(out.plain) };
+}
+
+/* What a record states, as the reader reads it. */
+function recordFactsText(f, method) {
+  const out = [];
+  if (f.rooted !== null) {
+    out.push("attacker roots " + f.rooted.join(" and "));
+    for (const d of f.needs.deliveries) {
+      out.push("reached through " + d.sources.map((s) => s.delivery + (s.deliveryPrefix === null ? "" : " " +
+        s.deliveryPrefix) + (s.messageRoutes === undefined ? "" : " (routes: " +
+        (s.messageRoutes.length ? s.messageRoutes.join(", ") : "none") + ")")).join(" and ") +
+        (d.victimAct ? " with a victim act" : ""));
+    }
+    if (!f.needs.common) out.push("only via a source other than the address");
+  }
+  out.push(method);
+  out.push("credentials " + f.credentials.map((c) => c === null ? "not stated" : c).join(", "));
+  out.push(f.destinations.join(", "));
+  return out;
+}
+
+/* The assumption sets as the reader reads them. */
+function recordAssumesText(f) {
+  if (f.assumes === null) return "not asked: no flow composed a sighting";
+  if (f.assumes.some((s) => s.length === 0)) return "reached assuming nothing";
+  const word = { "absent-read": " present (read past its throw)", "absent-arm": " present",
+                 "environment-arm": " against its example" };
+  return "reached assuming " + f.assumes.map((s) => s.map((x) => x.name + word[x.kind]).join(", ")).join("; or ");
+}

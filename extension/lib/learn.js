@@ -585,6 +585,12 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
                                         where);
     }
   }
+  /* …and the facts it states beside its mark, folded field by field (lib/endpoint-record.js's recordFactsJoin).
+     A row from an engine build that predates them states nothing. */
+  if ("attackerNeeds" in callSite) {
+    m._astFacts = recordFactsJoin(m._astFacts, recordFacts(callSite, "lib/learn.js registering method " +
+                                                                    JSON.stringify(methodName)));
+  }
 
   /* `_astCallSites` IS GONE, AND SO IS THE SOURCE LOCATION IT WAS MADE OF. It recorded one entry per call
      site as {script, line, column, enclosingFunction}, keyed and deduped on `line:column`, and its comment
