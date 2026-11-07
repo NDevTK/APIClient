@@ -56687,6 +56687,8 @@ static void tramp_cont_mark(JSContext *ctx, void *st, uint8_t kind)
 {
     ContLink next = { st, kind };
 
+    DCHECK(g_tramp_mark_func != NULL, "a continuation chain was marked outside the collector's chain walk — "
+                                      "tramp_chain_mark sets the mark callback for the length of its walk");
     while (next.kind != CONT_NONE && next.st != NULL)
         tramp_cont_mark_one(ctx, next.st, next.kind, &next);
 }
