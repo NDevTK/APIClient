@@ -574,11 +574,18 @@ int         concolic_path_gates(const char *root,
    where app state holds a value. */
 const char *concolic_path_precondition(void);
 /* The running flow's gates: further deliveries of the attacker sources its search's path pinned (`srcs` and the
-   Strings `vals` they were pinned to, concolic_path_gates), installed after its candidate and its deliveries at
-   every switch-in. Each is composed onto its row's base: a keyed row's tuple joins the base's other tuples
-   (the payload's own, where they share a base), and every read of a gated base answers the composed bytes
-   through the base's real transform. */
-void        concolic_set_gates(char *const *srcs, char *const *vals, int n);
+   Strings `vals` they were pinned to, concolic_path_gates), or a witness verification's further sources
+   (concolic_gate_beside), installed after its candidate and its deliveries at every switch-in. Each is composed
+   onto its row's base: a keyed row's tuple joins the base's other tuples (the payload's own, where they share a
+   base), a base no earlier gate placed begins with `heads[i]` (concolic_url_head of that base, or NULL; `heads`
+   may be NULL), and every read of a gated base answers the composed bytes through the base's real transform. */
+void        concolic_set_gates(char *const *srcs, char *const *vals, char *const *heads, int n);
+/* The value concolic_set_gates takes for a gate on the declared source `src` beside a delivery at the declared
+   member `own`, when the attacker writes `payload` there: the tuple's value for a keyed row, the component with
+   its prefix for a whole one; owned. NULL where no gate composes there: a mechanism other than the address and
+   the navigable's name, a named-access or JSON row, or a row on `own`'s base other than a tuple beside `own`'s
+   own tuple. */
+char       *concolic_gate_beside(const char *own, const char *src, const char *payload);
 /* The installed gates as given, each handed to `cb` in installation order; answers how many. */
 int         concolic_gates_each(void (*cb)(void *ud, const char *src, const char *equals), void *ud);
 /* The base rows of `root`'s declared members other than `own`'s base whose whole value a gate can carry (an

@@ -2558,9 +2558,10 @@ static int co_find(const char *src) {
 }
 
 /* Whether a source read answers a delivered value rather than an unknown: the search's own bytes, a further
-   delivery or a gate. */
+   delivery or a gate. A verification's candidate and gates are read as unknowns with the delivered bytes as their
+   examples (cand_verifying). */
 static int src_delivered(const char *src) {
-    return (cand_matches(src) && !cand_verifying()) || deliv_find(src) >= 0 || gbase_find(src) >= 0;
+    return ((cand_matches(src) || gbase_find(src) >= 0) && !cand_verifying()) || deliv_find(src) >= 0;
 }
 
 int concolic_src_delivering(const char *src) {
@@ -3685,11 +3686,18 @@ static int gate_composable(int row, const Cons *c)
            (g_srcs[row].deliver == SRC_DELIVER_ADDRESS || g_srcs[row].deliver == SRC_DELIVER_NAVIGABLE_NAME);
 }
 
+/* Whether a gate at `row` composes beside a payload at `own_row`: on the payload's own base only a tuple beside
+   the payload's own tuple does, since a whole component the payload rides, or one it is a tuple of, is the
+   payload's bytes and never a second value. */
+static int gate_beside(int row, int own_row)
+{
+    return row_base(row) != row_base(own_row) || (g_srcs[row].key && own_row >= 0 && g_srcs[own_row].key);
+}
+
 int concolic_path_gates(const char *root,
                         void (*cb)(void *ud, const char *src, const char *equals, int composable), void *ud)
 {
-    int own_row = root ? root_declared_row(root) : -1, own_base = row_base(own_row), found = 0;
-    int own_keyed = own_row >= 0 && g_srcs[own_row].key;
+    int own_row = root ? root_declared_row(root) : -1, found = 0;
 
     for (int i = 0; i < g_srcs_n; i++) {
         const Cons *c;
@@ -3705,12 +3713,28 @@ int concolic_path_gates(const char *root,
         /* URL §5.1's parse yields no tuple for a name the list does not carry, which `get` answers null. */
         if (g_srcs[i].key && c->valkind == (signed char)CONCOLIC_LIT_NULL) continue;
         found++;
-        /* On the payload's own base only a tuple beside the payload's own tuple composes: a whole component
-           the payload rides, or one it is a tuple of, is the payload's bytes and never a second value. */
-        if (cb) cb(ud, g_srcs[i].src, c->val,
-                   gate_composable(i, c) && (row_base(i) != own_base || (g_srcs[i].key && own_keyed)));
+        if (cb) cb(ud, g_srcs[i].src, c->val, gate_composable(i, c) && gate_beside(i, own_row));
     }
     return found;
+}
+
+char *concolic_gate_beside(const char *own, const char *src, const char *payload)
+{
+    int own_row = root_declared_row(own), row = src_row(src, strlen(src));
+    char *val;
+
+    DCHECK(own_row >= 0 && row >= 0 && row != own_row && payload && *payload,
+           "a gate beside a delivery was asked for a member that is no declared row, for the delivery's own "
+           "member, or with no payload");
+    if (row < 0 || g_srcs[row].principal || g_srcs[row].path || g_srcs[row].json ||
+        (g_srcs[row].deliver != SRC_DELIVER_ADDRESS && g_srcs[row].deliver != SRC_DELIVER_NAVIGABLE_NAME) ||
+        !gate_beside(row, own_row))
+        return NULL;
+    /* A keyed row's read is its tuple's value; a whole component's is the component, prefix included, which
+       concolic_set_gates takes off again. */
+    val = g_srcs[row].key || !g_srcs[row].prefix ? reclaim_strdup(payload) : shapef("%c%s", g_srcs[row].prefix, payload);
+    CHECK(val != NULL, "concolic: OOM composing a gate's value");
+    return val;
 }
 
 const char *concolic_path_precondition(void)
@@ -3748,7 +3772,7 @@ static void tuple_join(char **list, char *tuple)
     *list = out;
 }
 
-void concolic_set_gates(char *const *srcs, char *const *vals, int n)
+void concolic_set_gates(char *const *srcs, char *const *vals, char *const *heads, int n)
 {
     gates_clear();
     DCHECK(n == 0 || g_cand_src, "gates were installed for a flow carrying no candidate");
@@ -3799,7 +3823,9 @@ void concolic_set_gates(char *const *srcs, char *const *vals, int n)
             } else {
                 g_gbase_src[g_gbase_n] = reclaim_strdup(g_srcs[base].src);
                 CHECK(g_gbase_src[g_gbase_n] != NULL, "concolic: OOM installing a gate's base");
-                g_gbase_bytes[g_gbase_n++] = bytes;
+                /* The base's head goes first, as the candidate's does (concolic_set_candidate); a gate joining
+                   a base already placed shares that base's head. */
+                g_gbase_bytes[g_gbase_n++] = head_join(heads ? heads[i] : NULL, base, bytes);
             }
         }
 }
@@ -8755,8 +8781,13 @@ static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const 
         free(ident);
         return deliver_structured(ctx, deliv_find(src));
     }
-    if (gbase_find(src) >= 0) {   /* a base the path's gates compose onto, which the payload does not ride */
+    if (gbase_find(src) >= 0 && (!cand_verifying() || mint_is_source_read(shape, src))) {
+        /* A base the path's gates compose onto, which the payload does not ride; under a verification the
+           read is the source with those bytes as its example, as the candidate's is. */
         JS_FreeValue(ctx, example);
+        if (cand_verifying())
+            return concolic_alloc_shaped(ctx, shape, src, root, root_whose, ident, gate_read(ctx, gbase_find(src)),
+                                         whole);
         free(ident);
         return gate_read(ctx, gbase_find(src));
     }

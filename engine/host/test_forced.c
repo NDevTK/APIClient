@@ -18826,8 +18826,8 @@ TF_UNIT void probes_storedreq(const char *js, Probe *tab, int *n) {
 /* The rows of the `requestpieces` document (fixture/requestpieces.h): each request's mark names the query value
    its piece carries as that piece's root. */
 TF_UNIT void probes_requestpieces(const char *js, Probe *tab, int *n) {
-    const char *xh_why = NULL, *by_why = NULL, *bv_why = NULL, *tw_why = NULL;
-    int xh_tt = 1, by_tt = 1, bv_tt = 1, tw_tt = 1, seen, marked, plain;
+    const char *xh_why = NULL, *by_why = NULL, *bv_why = NULL, *tw_why = NULL, *tv_why = NULL;
+    int xh_tt = 1, by_tt = 1, bv_tt = 1, tw_tt = 1, tv_tt = 1, seen, marked, plain;
 
     rq_marks(js, "https://x.test/api/rp-xhr", &seen, &marked, &plain);
     fold_row(&xh_tt, &xh_why, seen > 0, "NOT REACHED: there is no https://x.test/api/rp-xhr record");
@@ -18852,8 +18852,12 @@ TF_UNIT void probes_requestpieces(const char *js, Probe *tab, int *n) {
              emitted_record_has(js, "/api/rp-two", "\"source\":\"{" LOCATION_SEARCH_SRC "}[z]\"") &&
              emitted_record_has(js, "/api/rp-two", "\"source\":\"" LOCATION_HASH_SRC "\""),
              "the two-span body's attackerNeeds does not list both sources a delivery must set");
+    fold_row(&tv_tt, &tv_why, sq_witness_has(js, "/api/rp-two", "{\"verification\":\"verified\"", NULL),
+             "no witness of the two-span POST is verified, so no run delivered both the query value and the "
+             "fragment its gate and its bytes need");
     const Probe rows[] = {
         { "rp-two-sources", tw_tt, "rp-two", SESS_EXPLORE, tw_why },
+        { "rp-two-verified", tv_tt, "rp-two", SESS_EXPLORE, tv_why },
         { "rp-xhr-marked", xh_tt, "rp-xhr", SESS_EXPLORE, xh_why },
         { "rp-bytes-marked", by_tt, "rp-bytes", SESS_EXPLORE, by_why },
         { "rp-bytes-verified", bv_tt, "rp-bytes", SESS_EXPLORE, bv_why },

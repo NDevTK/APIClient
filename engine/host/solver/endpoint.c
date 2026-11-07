@@ -450,70 +450,121 @@ static char *witness_payload(const Witness *w, const char **src) {
    `candidate` on a page whose gate over the root is not a substring test. */
 #define WIT_VERIFY_MARKER "apiclientverify"
 
-/* Can firing check a marked sighting's witness through `root`, the root of the piece an attacker source marked:
-   one declared source delivered through the victim's own address. Other mechanisms are witness_payload's
-   residual.
-   Named residual. Not covered: a sighting whose path also needs a second attacker source set (a body whose
-   spans carry two sources, a gate on another component), since a run delivers one root. Next diff builds: one
-   run delivering every source of the sighting's `attackerNeeds` delivery, each through its own transform.
-   Absence shows as: a record whose attackerNeeds delivery lists two sources and whose witnesses stay
-   `candidate`. */
-static int witness_marked_deliverable(const char *root) {
-    const char *kind;
-    char prefix = 0;
+/* What a marking sighting hands its witness's verification, all borrowed for the call: the marked piece the run
+   observes (`vpiece`, `vheader` naming a header) through `vroot`, its root, and the roots of every piece that
+   marks the sighting (`roots`, `nroots` of them), whose declared sources are its `attackerNeeds` delivery.
+   `vroot` is NULL for a sighting no attacker source marked. */
+typedef struct { const char *vroot; WitPiece vpiece; const char *vheader; const char *const *roots; int nroots; }
+    WitMarked;
 
-    return root && concolic_root_declared_sources(root) == 1 && concolic_source_delivery(root, &kind, &prefix) &&
-           !strcmp(kind, "address");
+/* A marked sighting's delivery as one verification sets it: `own`, the declared member of the observed piece's
+   root the value is substituted at, and `g`, the delivery's every other source as a gate beside it, each value
+   and head owned. `ok` falls to 0 at a source firing cannot set beside the others. */
+typedef struct { char *own; WitnessVerifyGate *g; int n; int ok; } MarkedDelivery;
+
+static void marked_delivery_visit(void *ud, const char *p, size_t n) {
+    MarkedDelivery *d = ud;
+    const char *kind;
+    char prefix = 0, *m = malloc(n + 1), *val;
+
+    CHECK(m, "endpoint: OOM reading a verification's source");
+    memcpy(m, p, n); m[n] = 0;
+    /* A precondition or principal member is no source the delivery sets (sight_source_visit's rule). */
+    if (!d->ok || !concolic_source_delivery(m, &kind, &prefix)) { free(m); return; }
+    if (d->own && !strcmp(d->own, m)) { free(m); return; }
+    for (int i = 0; i < d->n; i++)
+        if (!strcmp(d->g[i].src, m)) { free(m); return; }
+    if (strcmp(kind, "address")) { d->ok = 0; free(m); return; }
+    if (!d->own) { d->own = m; return; }
+    if (!(val = concolic_gate_beside(d->own, m, WIT_VERIFY_MARKER))) { d->ok = 0; free(m); return; }
+    d->g = realloc(d->g, (size_t)(d->n + 1) * sizeof *d->g);
+    CHECK(d->g, "endpoint: OOM collecting a verification's sources");
+    d->g[d->n].src = m;
+    d->g[d->n].val = val;
+    d->g[d->n].head = concolic_url_head(m);
+    d->n++;
 }
 
-/* Queue `w`'s verification, a pin witness's (witness_payload) or else, where `vroot` is the root of the piece
-   `vpiece` (`vheader` naming a header) an attacker source marked on this sighting, a delivery of the value
-   there behind the head this flow's facets compose; leaves `w` unqueued when firing can check neither. Runs in
-   the sighting's flow, whose facets the head is read from. */
-static void witness_queue(const Endpoint *e, Witness *w, const char *vroot, WitPiece vpiece, const char *vheader) {
+static void marked_delivery_free(MarkedDelivery *d) {
+    for (int i = 0; i < d->n; i++) {
+        free((char *)d->g[i].src); free((char *)d->g[i].val); free((char *)d->g[i].head);
+    }
+    free(d->g);
+    free(d->own);
+}
+
+/* Can firing check a marked sighting's witness, and with which delivery: every declared source of the
+   sighting's marking roots delivered through the victim's own address, the observed piece's own member first,
+   each other composable beside it as a gate (concolic_gate_beside). Other mechanisms are witness_payload's
+   residual. Fills `d` either way; the caller frees it.
+   Named residual. Not covered: a delivery holding a whole address component and a tuple of it, which no gate
+   composes beside the other. Next diff builds: the tuple composed into the whole component's delivered value.
+   Absence shows as: a record whose attackerNeeds delivery lists a component and a tuple of it and whose
+   witnesses stay `candidate`. */
+static int witness_marked_delivery(const WitMarked *m, MarkedDelivery *d) {
+    memset(d, 0, sizeof *d);
+    d->ok = 1;
+    concolic_root_declared_each(m->vroot, marked_delivery_visit, d);
+    for (int r = 0; d->ok && r < m->nroots; r++) concolic_root_declared_each(m->roots[r], marked_delivery_visit, d);
+    return d->ok && d->own != NULL;
+}
+
+/* Queue `w`'s verification, a pin witness's (witness_payload) or else, where `m` names the piece an attacker
+   source marked on this sighting, a delivery of the value at every source the sighting's delivery sets, each
+   behind the head this flow's facets compose for its base; leaves `w` unqueued when firing can check neither.
+   Runs in the sighting's flow, whose facets the heads are read from. */
+static void witness_queue(const Endpoint *e, Witness *w, const WitMarked *m) {
     static const char *const piece_tag[] = { "path", "address", "header", "body" };
     const char *src = NULL;
     char *payload = witness_payload(w, &src), *key, *head = NULL;
+    MarkedDelivery d = { 0 };
 
     DCHECK(w->asked && w->canon != NULL && w->vcanon == NULL,
            "a witness was queued for verification before it was spelled, or twice");
     if (payload) {
         w->vcanon = reclaim_strdup(w->canon);
-    } else if (witness_marked_deliverable(vroot)) {
-        const char *f[4];
+    } else if (m->vroot && witness_marked_delivery(m, &d)) {
+        const char **f = reclaim_calloc((size_t)(4 + 3 * d.n), sizeof *f);
 
-        DCHECK(vpiece != WIT_VPIECE_PATH && (vpiece == WIT_VPIECE_HEADER) == (vheader != NULL),
+        CHECK(f, "endpoint: OOM spelling a verification's key");
+        DCHECK(m->vpiece != WIT_VPIECE_PATH && (m->vpiece == WIT_VPIECE_HEADER) == (m->vheader != NULL),
                "a marked piece was queued without saying which piece the run must observe rooted");
-        src = vroot;
+        src = d.own;
         payload = reclaim_strdup(WIT_VERIFY_MARKER);
         CHECK(payload, "endpoint: OOM spelling a verification value");
-        w->vpiece = vpiece;
-        w->vheader = vheader ? reclaim_strdup(vheader) : NULL;
-        w->vroot = reclaim_strdup(vroot);
-        CHECK((!vheader || w->vheader) && w->vroot, "endpoint: OOM naming a verification's piece");
-        head = concolic_url_head(vroot);
-        f[0] = piece_tag[vpiece]; f[1] = vheader ? vheader : ""; f[2] = vroot; f[3] = head ? head : "";
-        w->vcanon = concolic_ident_compose("marked", f, 4);
+        w->vpiece = m->vpiece;
+        w->vheader = m->vheader ? reclaim_strdup(m->vheader) : NULL;
+        w->vroot = reclaim_strdup(d.own);
+        CHECK((!m->vheader || w->vheader) && w->vroot, "endpoint: OOM naming a verification's piece");
+        head = concolic_url_head(d.own);
+        f[0] = piece_tag[m->vpiece]; f[1] = m->vheader ? m->vheader : ""; f[2] = d.own; f[3] = head ? head : "";
+        for (int i = 0; i < d.n; i++) {
+            f[4 + 3 * i] = d.g[i].src; f[5 + 3 * i] = d.g[i].val; f[6 + 3 * i] = d.g[i].head ? d.g[i].head : "";
+        }
+        w->vcanon = concolic_ident_compose("marked", f, 4 + 3 * d.n);
+        free(f);
     }
-    if (!payload) return;
-    CHECK(w->vcanon, "endpoint: OOM spelling a verification's key");
-    key = witness_verify_key(e->method, e->path, w->vcanon);
-    witness_verify_queue(key, src, payload, head);
-    w->verify = verified_key(key) ? WIT_VERIFY_VERIFIED : WIT_VERIFY_CANDIDATE;
-    free(key);
-    free(payload);
-    free(head);
+    if (payload) {
+        CHECK(w->vcanon, "endpoint: OOM spelling a verification's key");
+        key = witness_verify_key(e->method, e->path, w->vcanon);
+        witness_verify_queue(key, src, payload, head, d.g, d.n);
+        w->verify = verified_key(key) ? WIT_VERIFY_VERIFIED : WIT_VERIFY_CANDIDATE;
+        free(key);
+        free(payload);
+        free(head);
+    }
+    marked_delivery_free(&d);
 }
 
 /* Files a sighting's witness on its record, taking ownership: a witness the record already holds is the same
    statement and is freed, anything else is one more, and is queued for verification when firing can check it
-   (witness_queue; `vroot` NULL for a sighting no attacker source marked). A held witness no run could check is
-   queued by a later sighting that marks. `*w` is empty afterwards either way. */
-static void endpoint_witness_add(Endpoint *e, Witness *w, const char *vroot, WitPiece vpiece, const char *vheader) {
+   (witness_queue). A held witness no run could check is queued by a later sighting that marks. `*w` is empty
+   afterwards either way. */
+static void endpoint_witness_add(Endpoint *e, Witness *w, const WitMarked *m) {
     for (int i = 0; i < e->nwit; i++)
         if (witness_same(&e->wit[i], w)) {
-            if (e->wit[i].asked && e->wit[i].verify == WIT_VERIFY_NO_CANDIDATE && vroot)
-                witness_queue(e, &e->wit[i], vroot, vpiece, vheader);
+            if (e->wit[i].asked && e->wit[i].verify == WIT_VERIFY_NO_CANDIDATE && m->vroot)
+                witness_queue(e, &e->wit[i], m);
             witness_free(w);
             w->asked = 0;
             return;
@@ -522,7 +573,7 @@ static void endpoint_witness_add(Endpoint *e, Witness *w, const char *vroot, Wit
            "a sighting witness reached its record already spelled or verified — both are written here");
     if (w->asked) {
         w->canon = witness_canon(w);
-        witness_queue(e, w, vroot, vpiece, vheader);
+        witness_queue(e, w, m);
     }
     if (e->nwit >= e->witcap) {
         int nc = e->witcap ? e->witcap * 2 : 2;
@@ -2709,6 +2760,17 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     for (int i = 0; !vroot && i < nhdrs; i++)
         if (hdr_atk[i]) { vroot = hdrs[i].root; vheader = hdrs[i].name; vpiece = WIT_VPIECE_HEADER; }
     if (!vroot && atk_body) { vroot = body_roots[0]; vpiece = WIT_VPIECE_BODY; }
+    /* The roots of every piece that marks the sighting: its delivery (endpoint_sight_now) and what a verification
+       sets (witness_queue). */
+    const char **mroots = reclaim_calloc((size_t)nhdrs + (size_t)nbody + 1, sizeof *mroots);
+    int nm = 0;
+
+    CHECK(mroots, "endpoint: OOM collecting a sighting's marking roots");
+    if (atk_addr) mroots[nm++] = aroot;
+    for (int i = 0; i < nhdrs; i++) if (hdr_atk[i]) mroots[nm++] = hdrs[i].root;
+    for (int k = 0; atk_body && k < nbody; k++) mroots[nm++] = body_roots[k];
+    DCHECK((nm > 0) == !!atk, "a sighting's marking pieces and its mark disagree");
+    const WitMarked marked = { vroot, vpiece, vheader, mroots, nm };
     DCHECK(!atk_addr || acls != EPA_CONCRETE,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
@@ -2733,22 +2795,13 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         free(aroot);
         free(hdr_atk);
         free(body_roots);
+        free(mroots);
         witness_free(&wit);
         return;
     }
     /* And what the sighting states beside the mark, read here, past the arm that records no API record. */
     EpSight sight;
-    {
-        const char **mroots = reclaim_calloc((size_t)nhdrs + (size_t)nbody + 1, sizeof *mroots);
-        int nm = 0;
-        CHECK(mroots, "endpoint: OOM collecting a sighting's marking roots");
-        if (atk_addr) mroots[nm++] = aroot;
-        for (int i = 0; i < nhdrs; i++) if (hdr_atk[i]) mroots[nm++] = hdrs[i].root;
-        for (int k = 0; atk_body && k < nbody; k++) mroots[nm++] = body_roots[k];
-        DCHECK((nm > 0) == !!atk, "a sighting's marking pieces and its mark disagree");
-        endpoint_sight_now(ctx, &sight, url, mroots, nm, creds, gf && !off_park);
-        free(mroots);
-    }
+    endpoint_sight_now(ctx, &sight, url, mroots, nm, creds, gf && !off_park);
     /* Path, then query, then body: the order a request is written in and the identity compares in. The path is
        re-spelled by the scan (see path_scan), and the re-spelled one becomes the endpoint's `url`, because the
        params are named in its grammar. The example is aligned against both halves of the address, so a hole in a
@@ -2817,7 +2870,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                `if (wcls == EPW_MAY_REST_ON)` would leave an `unasked` record `unasked` for ever once a later
                sighting read `no-witness`. */
             if (wcls > g_eps[i].witness_class) g_eps[i].witness_class = wcls;
-            endpoint_witness_add(&g_eps[i], &wit, vroot, vpiece, vheader);
+            endpoint_witness_add(&g_eps[i], &wit, &marked);
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
                 novelty_credit(NOVELTY_HEADER, endpoint_note_headers(&g_eps[i], had_headers));
             /* The arm the surface has no row for: a merge teaches the record structure and moves no census figure
@@ -2858,7 +2911,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because
        `EPW_UNASKED` happens to be zero, and the list's order is a later diff's to change. */
     e->witness_class = wcls;
-    endpoint_witness_add(e, &wit, vroot, vpiece, vheader);
+    endpoint_witness_add(e, &wit, &marked);
     /* And the ask and the mint are one instant. The bit is monotone and raised `++`-only at engine.c's single
        program-start line, so the two differ only if something on the path above (a display spelling, a path scan,
        a JSON body parse) runs page code. None does; the assert keeps a later diff from splitting the ask census's
@@ -2899,6 +2952,7 @@ done:
     free(aroot);
     free(hdr_atk);
     free(body_roots);
+    free(mroots);
     witness_free(&wit);   /* empty: endpoint_witness_add took or freed it on every arm that reaches here */
     DCHECK(!sight.delivery && !sight.as.e, "a sighting's facts reached the end of its act unmerged");
     kv_free(&kvb);

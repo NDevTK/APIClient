@@ -2638,23 +2638,30 @@ static void observe_runway(Cand *e, const Flow *f) {
 void solve_flow_begin(Flow *f) {
     const char *root = NULL, *head = NULL;
     const Cand *rc = NULL;
+    char *const *gsrc = NULL, *const *gval = NULL, *const *ghead = NULL;
+    int ngate = 0;
 
-    /* A sink candidate is delivered through its search's root; a witness verification is no search's, and its
-       identity is a declared delivery root (endpoint.c's witness_payload, witness_marked_deliverable), delivered
-       through that root's transforms as a candidate is. */
+    /* A sink candidate is delivered through its search's root, its search's gates beside it; a witness
+       verification is no search's, and its identity is a declared delivery root (endpoint.c's witness_payload,
+       witness_marked_delivery), delivered through that root's transforms as a candidate is, with every further
+       source its delivery sets as a gate. */
     if (f && f->cand_src && f->fire.kind == FIRE_SINK) {
         rc = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
 
         DCHECK(rc != NULL && rc->root != NULL, "a candidate flow was switched in whose search holds no root");
         root = rc ? rc->root : NULL;
         head = rc ? rc->url_head : NULL;
+        gsrc = rc ? rc->gate_src : NULL;
+        gval = rc ? rc->gate_val : NULL;
+        ngate = rc ? rc->ngate : 0;
     } else if (f && f->cand_src && f->fire.kind == FIRE_REQUEST) {
         root = f->cand_src;
         head = witness_verify_head(fire_target_key(&f->fire));
+        ngate = witness_verify_gates(fire_target_key(&f->fire), &gsrc, &gval, &ghead);
     }
     concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL, head);
     concolic_set_deliveries(f ? f->cand_dsrc : NULL, f ? f->cand_dval : NULL, f ? f->cand_dn : 0);
-    concolic_set_gates(rc ? rc->gate_src : NULL, rc ? rc->gate_val : NULL, rc ? rc->ngate : 0);
+    concolic_set_gates(gsrc, gval, ghead, ngate);
     concolic_set_cosources(rc ? rc->co_src : NULL, rc ? rc->nco : 0);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
     /* A witness verification substitutes and suppresses like a sink candidate and is no search's: its sinks
