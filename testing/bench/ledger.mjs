@@ -117,6 +117,26 @@ function concentration(rows, key, out) {
   return { n: xs.length, yielding, c: +(2 * area - 1).toFixed(3) };
 }
 
+/* The same index read inside time: each page's picks cut into five strata of equal work by their work coordinate,
+   the index taken in each, and the strata's indices averaged weighted by their yield. Most terms move with the run's
+   age, and early picks yield most, so the pooled index partly says when a pick happened; this one does not. */
+function withinTime(pages, key, out) {
+  let wsum = 0, csum = 0, yielding = 0;
+  for (const rows of pages.values()) {
+    const xs = [...rows].sort((a, b) => a.v.at - b.v.at);
+    const W = xs.reduce((n, r) => n + r.work, 0);
+    for (let s = 0, i = 0, acc = 0; s < 5 && i < xs.length; s++) {
+      const part = [];
+      while (i < xs.length && (acc < ((s + 1) * W) / 5 || s === 4)) { part.push(xs[i]); acc += xs[i].work; i++; }
+      const c = concentration(part, key, out);
+      if (c.c === null) continue;
+      const y = part.reduce((n, r) => n + r.y[out], 0);
+      wsum += y; csum += y * c.c; yielding += c.yielding;
+    }
+  }
+  return { c: wsum === 0 ? null : +(csum / wsum).toFixed(3), yielding };
+}
+
 const fmtC = (r) => (r.c === null ? '—' : (r.c >= 0 ? '+' : '') + r.c.toFixed(3));
 
 /* Rows grouped into at most five bins of `key`: one per distinct value when there are few, else quintiles of the
@@ -213,21 +233,22 @@ function main() {
       out.push('', `## concentration of ${outc} per unit of work, picks ordered by the term's ${how === 'value' ?
         'value' : 'rank among the sampled frontier at the pick'} (highest first); n = picks with a reading, ` +
         `yielding = those whose tenure produced any`);
-      out.push(['term', ...pageNames, 'pooled', 'n', 'yielding'].join('\t'));
+      out.push(['term', ...pageNames, 'pooled', 'n', 'yielding', 'withinTime', 'wtYielding'].join('\t'));
       for (const t of TERMS) {
         if (how === 'rank' && !t.rank) continue;
         const key = how === 'value' ? (r) => r.v[t.name] : (r) => r.rank[t.name];
         const pooledC = concentration(pooled, key, outc);
+        const wt = withinTime(pages, key, outc);
         out.push([t.name, ...pageNames.map((p) => fmtC(concentration(pages.get(p), key, outc))), fmtC(pooledC),
-                  pooledC.n, pooledC.yielding].join('\t'));
+                  pooledC.n, pooledC.yielding, fmtC(wt), wt.yielding].join('\t'));
       }
       if (how === 'value')
         for (const [name, bit] of CLS) {
           const key = (r) => ((r.cls & bit) ? 1 : 0);
-          const pooledC = concentration(pooled, key, outc);
+          const pooledC = concentration(pooled, key, outc), wt = withinTime(pages, key, outc);
           out.push([`cls:${name}`, ...pageNames.map((p) => fmtC(concentration(pages.get(p), key, outc))),
                     fmtC(pooledC), pooled.filter((r) => r.cls & bit).length,
-                    pooled.filter((r) => (r.cls & bit) && r.y[outc] > 0).length].join('\t'));
+                    pooled.filter((r) => (r.cls & bit) && r.y[outc] > 0).length, fmtC(wt), wt.yielding].join('\t'));
         }
     }
   }
