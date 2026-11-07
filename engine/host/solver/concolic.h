@@ -1257,6 +1257,9 @@ int         concolic_pin_store(const char *src, const char *root, ConcolicLit ki
    two its subject is. Answers concolic_pin_store's 1 where a value was written, 0 otherwise. Only this and the
    store's own selftests call concolic_pin_store, because only they know `src` names the compared value. */
 int         concolic_pin(JSValueConst cmp);
+/* The pin concolic_pin just wrote off `cmp` stands on an arm no example of this run confirmed (decide.c), so it is
+   an assumption: concolic_pins_each hands it over with `assumed` set. */
+void        concolic_pin_note_assumed(JSValueConst cmp);
 /* What a holding test over a value's §7.1.19 ToString ( arg ) determines, where the test is the engine's rather
    than the page's: an attribute holds the ToString of the value written into it (DOM §4.9 through Web IDL
    §3.2.10 DOMString's "Let x be ? ToString(V)"), and Selectors 4 §6.1's `[att=val]` holding says that ToString
@@ -1344,9 +1347,10 @@ int         concolic_member_of_root(const char *src, const char *root);
 int         concolic_value_truth(const char *ident);
 /* One pin of the running flow, as concolic_pins_each hands it over: `src` is the source path the pin is keyed
    under (what a later read concretizes through), `val` the §7.1.19 ToString ( argument ) spelling of the
-   operand the page's equality wrote, and `kind` what that spelling denotes. All three are borrowed from the
-   constraint chain for the length of the visit. */
-typedef void (*ConcolicPinVisit)(const char *src, ConcolicLit kind, const char *val, void *ud);
+   operand the page's equality wrote, and `kind` what that spelling denotes, all three borrowed from the
+   constraint chain for the length of the visit; `assumed` is whether the pin's arm is one no example of this run
+   confirmed (concolic_pin_note_assumed). */
+typedef void (*ConcolicPinVisit)(const char *src, ConcolicLit kind, const char *val, int assumed, void *ud);
 /* Visits every pin the running flow's constraint holds, once per source: the head and every frozen segment
    under it, where an entry a nearer copy of its key shadows is visited only as that copy. The order is the
    chain's and is not a fact about the page, so a consumer comparing two enumerations orders them itself.

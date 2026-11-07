@@ -37342,8 +37342,9 @@ TF_UNIT void pin_kind_selftest(JSContext *ctx)
  * concolic_pins_each walks the head and every frozen segment. A pin re-taken after a freeze is copied up into
  * the head, so the segment's older entry for the same source is shadowed and must not be visited. */
 typedef struct { int n; int a_seen; int b_seen; int c_seen; const char *a_val; } PinsEachTally;
-static void pins_each_count(const char *src, ConcolicLit kind, const char *val, void *ud)
+static void pins_each_count(const char *src, ConcolicLit kind, const char *val, int assumed, void *ud)
 {
+    (void)assumed;   /* the store's own selftest writes no assumed pin */
     PinsEachTally *t = ud;
 
     CHECK(kind == CONCOLIC_LIT_STRING, "the pin enumeration handed back a kind no pin in this fixture holds");

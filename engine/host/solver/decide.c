@@ -1667,7 +1667,10 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
            recorded at the choice because the composed URL is a bare string by then (`pin_mint` answers with a
            primitive and `concolic_add_hook` derives nothing from two); solver/flow.h's field has the full
            reading. Gated on `pinned`: a loose equality or a derived subject determined no value. */
-        if (pinned && (forced_arm || real == REAL_ARM_UNOBSERVED)) flow_mark_pinned_value();
+        if (pinned && (forced_arm || real == REAL_ARM_UNOBSERVED)) {
+            flow_mark_pinned_value();
+            concolic_pin_note_assumed(cond);
+        }
     }
     /* The other arm, which is an observation, not an absence: forced execution runs both arms of every
        `x === "admin"`, and the sibling has proved the value is not the token. Without this it would emit its

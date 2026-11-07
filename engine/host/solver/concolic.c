@@ -869,6 +869,8 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
    contradicted. It prunes only a branch on the same predicate the flow already fixed.
    ex_contra: this flow took an arm the value's own example says a real session does not take
    (concolic_contradict_example).
+   val_assumed: the arm that wrote `val` is one no example of this run confirmed (concolic_pin_note_assumed), so
+   the pin is an assumption rather than an observation; written and copied with `val`.
    tostr: the §7.1.19 ToString ( arg ) of the value at this identity, determined by an engine test over that
    ToString which held (concolic_pin_tostring). It is not `val`: it states the String the value converts to,
    which an Object or a derivation can produce without being that String. */
@@ -912,7 +914,8 @@ typedef struct { BoundSide lo, hi; } Bound;
    [lo, hi], or does not occur (holds 0). */
 typedef struct { double lo, hi; double *ex; int nex; } SearchRange;
 typedef struct { char *tok; signed char holds, last; double lo, hi; } SubFacet;
-typedef struct { char *key; char *val; signed char valkind; char **excl; int nexcl; Bound *bnd;
+typedef struct { char *key; char *val; signed char valkind; signed char val_assumed; char **excl; int nexcl;
+                 Bound *bnd;
                  ConcolicPred *pred; int npred; ConcolicLooseEq *leq; int nleq;
                  ConcolicPrincipalPin *ppin; int nppin; char **ptok; int nptok;
                  signed char truth; signed char ex_contra;
@@ -1099,6 +1102,7 @@ static Cons *cons_entry(const char *key) {
     /* The kind with the bytes, under the same condition: a copy-up without it would hand the sibling a spelling
        pin_mint reads back as CONCOLIC_LIT_NONE, which it refuses. */
     g_pins[g_pins_n].valkind = (below && below->val) ? below->valkind : (signed char)CONCOLIC_LIT_NONE;
+    g_pins[g_pins_n].val_assumed = (below && below->val) ? below->val_assumed : 0;
     /* The exclusions, the facts below, and every later field copy up for the reason stated above. */
     g_pins[g_pins_n].excl = NULL;
     g_pins[g_pins_n].nexcl = 0;
@@ -1312,6 +1316,7 @@ int concolic_pin_store(const char *src, const char *root, ConcolicLit kind, cons
         c = cons_entry(src);
         free(c->val); c->val = reclaim_strdup(val); CHECK(c->val, "concolic: OOM pin value");
         c->valkind = (signed char)kind;
+        c->val_assumed = 0;   /* concolic_pin_note_assumed raises it for an arm no example confirmed */
         g_pin_any = 1;   /* the one write of a pin value, so the one place the latch can be raised */
         wrote = 1;
         /* `c` is dead from here: cons_entry may grow the head by realloc, so nothing below reaches through it. */
@@ -2167,6 +2172,18 @@ void concolic_entail(JSValueConst eq)
     (void)pinned;
 }
 
+void concolic_pin_note_assumed(JSValueConst cmp) {
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(cmp, g_concolic_class) : NULL;
+    Cons *e;
+
+    DCHECK(c != NULL && c->src != NULL && c->cmp_src_own == 1,
+           "an assumed pin was noted off a comparison that pinned no source of its own — decide.c notes one only "
+           "where concolic_pin wrote a value");
+    e = cons_entry(c->src);
+    DCHECK(e->val != NULL, "an assumed pin was noted under a source that holds no pin value");
+    e->val_assumed = 1;
+}
+
 int concolic_pin(JSValueConst cmp) {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(cmp, g_concolic_class) : NULL;
 
@@ -2341,7 +2358,7 @@ static void cons_each(ConsVisit visit, void *ud) {
 typedef struct { ConcolicPinVisit visit; void *ud; } PinsEach;
 static void pins_each_one(const Cons *e, void *ud) {
     const PinsEach *p = ud;
-    if (e->val) p->visit(e->key, (ConcolicLit)e->valkind, e->val, p->ud);
+    if (e->val) p->visit(e->key, (ConcolicLit)e->valkind, e->val, e->val_assumed, p->ud);
 }
 
 void concolic_pins_each(ConcolicPinVisit visit, void *ud) {

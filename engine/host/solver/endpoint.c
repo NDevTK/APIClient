@@ -72,7 +72,9 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
 typedef enum { WIT_PIN = 0, WIT_BRANCH, WIT_OUTCOME } WitWhat;
 typedef enum { WIT_VERIFY_NO_CANDIDATE = 0, WIT_VERIFY_CANDIDATE, WIT_VERIFY_VERIFIED } WitVerify;
 typedef enum { WIT_VPIECE_PATH = 0, WIT_VPIECE_ADDRESS, WIT_VPIECE_HEADER, WIT_VPIECE_BODY } WitPiece;
-typedef struct { WitWhat what; char *subject; char *value; ConcolicLit kind; int taken; } WitEntry;
+/* `assumed` is a pin's concolic_pins_each fact (its arm no example confirmed); not part of the identity, since the
+   report states every pin whether or not an observation agreed. */
+typedef struct { WitWhat what; char *subject; char *value; ConcolicLit kind; int taken; int assumed; } WitEntry;
 typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *canon; char *acts;
                  WitPiece vpiece; char *vheader; char *vcanon; } Witness;
 /* `is_asset` is what the resource at this address turned out to be, written after the record exists. Whether a
@@ -281,12 +283,16 @@ static void wit_add(Witness *w, WitWhat what, const char *subject, const char *v
     CHECK(x->subject && (!value || x->value), "endpoint: OOM recording a sighting's witness");
     x->kind = kind;
     x->taken = taken;
+    x->assumed = 0;
 }
 
-static void wit_pin_visit(const char *src, ConcolicLit kind, const char *val, void *ud) {
+static void wit_pin_visit(const char *src, ConcolicLit kind, const char *val, int assumed, void *ud) {
+    Witness *w = ud;
+
     DCHECK(src != NULL && val != NULL && kind != CONCOLIC_LIT_NONE,
            "the pin store handed a witness a pin with no source, value or kind");
-    wit_add(ud, WIT_PIN, src, val, kind, 0);
+    wit_add(w, WIT_PIN, src, val, kind, 0);
+    w->e[w->n - 1].assumed = assumed;
 }
 
 static void wit_decision_visit(ConcolicDecision what, const char *spelling, int taken, void *ud) {
@@ -2187,8 +2193,9 @@ static int verify_piece_carries(JSContext *ctx, const Witness *w, JSValueConst u
 }
 
 /* A witness verification's own observation, made at its request (endpoint_record's suppressed arm). The run
-   assumed nothing of its own: no assumed decision, and no pin on an arm its example contradicts (an arm the
-   observed state holds is no assumption). A witness it then reaches is raised to verified: a pin witness's
+   assumed nothing of its own: no assumed decision, and no pin on an arm no example confirmed (an arm the
+   observed state holds is no assumption; the delivery itself marks the path pinned, so the path bit is not the
+   question). A witness it then reaches is raised to verified: a pin witness's
    when the run reached its method and path, a marked piece's when the request carries the delivered marker
    there. The key is kept for one filed later. */
 static void endpoint_verify_observe(JSContext *ctx, const char *key, const char *method, JSValueConst url,
@@ -2204,8 +2211,8 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
     kv_free(&kvb);
     own = witness_now();
     DCHECK(own.asked, "a witness verification observed a request with no flow standing");
-    clean = !engine_pinned_of_running_path();
-    for (int i = 0; i < own.n; i++) clean &= own.e[i].what == WIT_PIN;
+    clean = 1;
+    for (int i = 0; i < own.n; i++) clean &= own.e[i].what == WIT_PIN && !own.e[i].assumed;
     for (int i = 0; clean && i < g_eps_n; i++) {
         if (strcmp(g_eps[i].method, vm) || strcmp(g_eps[i].path, vp)) continue;
         for (int j = 0; j < g_eps[i].nwit; j++) {
