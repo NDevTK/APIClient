@@ -553,7 +553,7 @@ void cow_delta_head_stats(const CowDelta *d, long *entries, long *bytes);
    host records it saved, and each value its flow-side half holds handed to `val` (a parked head, so `cur`). The
    unit is entries, not the host struct, because a serialized entry is a name and a value, not a CowEntry. */
 typedef struct {
-    long head, chain, segs, slots, cells, coro, maps, states[16], host_bytes;
+    long head, chain, segs, slots, cells, coro, maps, states[16], host_bytes, host_bytes_head;
 } CowSerialCensus;
 uint32_t cow_delta_fork_gen(const CowDelta *d);   /* the generation its last fork stamped (0: never forked) */
 void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void *arg), void *arg,

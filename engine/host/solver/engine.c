@@ -11907,9 +11907,11 @@ static void engine_sale_census_take(const Flow *f) {
     JS_FlowReachEnd(&r);
     dom_cow_serial_census(f->dom, f->dom_n, f->dom_base, &dc);
 
-    own = (hc.head + f->dom_n) * SALE_ENTRY_BYTES + r.priv_bytes + r.priv_string_bytes + dc.created_nodes * SALE_NODE_BYTES
-          + dc.created_text_bytes + dc.str_bytes + r.coro_slots * (long)sizeof(JSValue) + hc.host_bytes;
-    full = own + (hc.chain + dc.chain) * SALE_ENTRY_BYTES;
+    own = (hc.head + f->dom_n) * SALE_ENTRY_BYTES + r.priv_bytes + r.priv_string_bytes + dc.head_bytes
+          + r.coro_slots * (long)sizeof(JSValue) + hc.host_bytes_head;
+    full = r.priv_bytes + r.priv_string_bytes + r.coro_slots * (long)sizeof(JSValue) + hc.host_bytes
+           + (hc.head + hc.chain + f->dom_n + dc.chain) * SALE_ENTRY_BYTES + dc.str_bytes + dc.created_nodes * SALE_NODE_BYTES
+           + dc.created_text_bytes;
     g_sale_census.n++;
     g_sale_census.framed += framed;
     g_sale_census.work += (double)work; g_sale_census.full += full; g_sale_census.own += own;

@@ -2458,6 +2458,7 @@ void cow_delta_serial_census(const CowDelta *d, void (*val)(JSValueConst v, void
     memset(out, 0, sizeof *out);
     out->head = d->n;
     for (int i = 0; i < d->n; i++) cow_entry_serial(&d->e[i], val, arg, out);
+    out->host_bytes_head = out->host_bytes;
     for (const CowSeg *s = d->base; s != NULL; s = s->base) {
         out->segs++;
         out->chain += s->n;

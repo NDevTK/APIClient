@@ -2795,6 +2795,7 @@ void dom_cow_serial_census(const void *head, int n, const void *base, DomSerialC
     memset(out, 0, sizeof *out);
     out->head = n;
     for (int i = 0; i < n; i++) dom_entry_serial(&((const DomUndo *)head)[i], out);
+    out->head_bytes = out->str_bytes + out->created_nodes * 64 + out->created_text_bytes;
     for (const DomSeg *s = base; s != NULL; s = s->base) {
         out->segs++;
         out->chain += s->n;
