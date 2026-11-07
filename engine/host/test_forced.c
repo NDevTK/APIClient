@@ -1427,6 +1427,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/svgratio.h"
 #include "fixture/vshift.h"
 #include "fixture/vrel.h"
+#include "fixture/flexanonbase.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2096,6 +2097,7 @@ TF_DOCS[] = {
     { "svgratio", HTML_SVGRATIO },
     { "vshift", HTML_VSHIFT },
     { "vrel", HTML_VREL },
+    { "flexanonbase", HTML_FLEXANONBASE },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19734,6 +19736,22 @@ TF_UNIT void probes_vrel(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexanonbase` document (fixture/flexanonbase.h): css-flexbox-1 §8.5's baseline from §4's
+   anonymous item. */
+TF_UNIT void probes_flexanonbase(const char *js, Probe *tab, int *n) {
+    const char *fa_why = NULL; int fa_tt = 1;
+    fold_row(&fa_tt, &fa_why, !!strstr(js, "\"/api/flexanonbase\""),
+             "NOT REACHED: no /api/flexanonbase record, so the document aborted before its fetch");
+    fold_row(&fa_tt, &fa_why, param_value_is(js, "/api/flexanonbase", "d1", "0") &&
+                              param_value_is(js, "/api/flexanonbase", "d2", "0"),
+             "css-flexbox-1 §8.5: an inline-flex container whose only item is anonymous text does not stand at "
+             "the height of the same container with the text in an element item");
+    const Probe rows[] = {
+        { "flex-anonymous-baseline", fa_tt, "/api/flexanonbase", SESS_EXPLORE, fa_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25735,6 +25753,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_svgratio(js, probes, &np);
     probes_vshift(js, probes, &np);
     probes_vrel(js, probes, &np);
+    probes_flexanonbase(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
