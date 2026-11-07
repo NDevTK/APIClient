@@ -1501,6 +1501,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparsefetch.h"
 #include "fixture/fileparseslice.h"
 #include "fixture/fileparsesub.h"
+#include "fixture/fileparsetaslice.h"
 #include "fixture/spaniso.h"
 #include "fixture/fileparseset.h"
 #include "fixture/mrkeys.h"
@@ -2187,6 +2188,7 @@ TF_DOCS[] = {
     { "fileparse-fetch", HTML_FILEPARSE_FETCH },
     { "fileparse-slice", HTML_FILEPARSE_SLICE },
     { "fileparse-sub", HTML_FILEPARSE_SUB },
+    { "fileparse-taslice", HTML_FILEPARSE_TASLICE },
     { "spaniso", HTML_SPANISO },
     { "fileparse-set", HTML_FILEPARSE_SET },
     { "mrkeys", HTML_MRKEYS },
@@ -20774,6 +20776,37 @@ TF_UNIT void probes_fileparse_sub(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `fileparse-taslice` document (fixture/fileparsetaslice.h): the decoded typed-array slice reaches
+   new Function rooted in the seed's reply and, on the query's arm, in location.search, and the fragment's start
+   index reaches the arm whose copy is three elements long. */
+TF_UNIT void probes_fileparse_taslice(const char *js, Probe *tab, int *n) {
+    char seed[1024] = "", query[1024] = "";
+    int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
+    int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
+    const char *sp_why = NULL; int sp_tt = 1;
+    fold_row(&sp_tt, &sp_why, !!strstr(js, "\"/api/fpt-parsed\""),
+             "NOT REACHED: there is no /api/fpt-parsed record, so no arm decoded the typed-array slice");
+    const char *sf_why = NULL; int sf_tt = 1;
+    fold_row(&sf_tt, &sf_why, has_seed,
+             "no eval @S record carries a source rooted in the seed file's reply, so the typed-array slice copied "
+             "the bytes without their provenance");
+    const char *sq_why = NULL; int sq_tt = 1;
+    fold_row(&sq_tt, &sq_why, has_query,
+             "no eval @S record carries a source rooted in location.search, so the typed-array slice of the reply "
+             "to the address the attacker names stopped at that reply's example extent");
+    const char *sh_why = NULL; int sh_tt = 1;
+    fold_row(&sh_tt, &sh_why, !!strstr(js, "\"/api/fpt-hash3\""),
+             "NOT REACHED: there is no /api/fpt-hash3 record, so no arm sliced the page's array from the "
+             "fragment's index to a three-element copy");
+    const Probe rows[] = {
+        { "fpt-parsed", sp_tt, "/api/fpt-parsed", SESS_EXPLORE, sp_why },
+        { "fpt-hash3", sh_tt, "/api/fpt-hash3", SESS_EXPLORE, sh_why },
+        { "fpt-sink-file", sf_tt, "function fptParse", SESS_EXPLORE, sf_why, .gate = "fpt-parsed" },
+        { "fpt-sink-query", sq_tt, ".slice(6, 6 + len)", SESS_EXPLORE, sq_why, .gate = "fpt-parsed" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fileparse-set` document (fixture/fileparseset.h): the copy set from the reply reaches new
    Function rooted in the seed's reply and in location.search, its byte past the seed's length is unknown, and a
    4-byte target fits on the arm where the reply is that short. */
@@ -26420,6 +26453,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_fetch(js, probes, &np);
     probes_fileparse_slice(js, probes, &np);
     probes_fileparse_sub(js, probes, &np);
+    probes_fileparse_taslice(js, probes, &np);
     probes_spaniso(js, probes, &np);
     probes_fileparse_set(js, probes, &np);
     probes_mathrandom(js, probes, &np);
