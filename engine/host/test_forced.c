@@ -1382,6 +1382,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/twinread.h"
 #include "fixture/requestsink.h"
 #include "fixture/storedreq.h"
+#include "fixture/recordrank.h"
 #include "fixture/requestroute.h"
 #include "fixture/clobber.h"
 #include "fixture/srcreach.h"
@@ -1911,8 +1912,10 @@ static const char *HTML_POPOVER =
    pressure share the document's instance is configured with (solver/engine.h's engine_set_ram_share, permille),
    as a host configures an instance; a row that omits it leaves the engine's default. */
 /* `frame`, when set, roots the document as a cross-origin child: its navigable's parent is a peer's (TF_FRAME_PARENT)
-   and `frame` is HTML §15.3.2's container frame element margins that peer's container stated. */
-static const struct { const char *name; const char *src; OpenerPolicyValue coop; unsigned share; const char *frame; }
+   and `frame` is HTML §15.3.2's container frame element margins that peer's container stated. `xfo`, when set, is
+   the `X-Frame-Options` value the document's response carries (HTML §7.7). */
+static const struct { const char *name; const char *src; OpenerPolicyValue coop; unsigned share; const char *frame;
+                      const char *xfo; }
 TF_DOCS[] = {
     { "css", HTML_CSS },
     { "timers", HTML_TIMERS },
@@ -2164,6 +2167,8 @@ TF_DOCS[] = {
     { "onceread", HTML_ONCEREAD },
     { "requestsink", HTML_REQUESTSINK },
     { "storedreq", HTML_STOREDREQ },
+    { "recordrank", HTML_RECORDRANK },
+    { "recordrankframe", HTML_RECORDRANKFRAME, OPENER_POLICY_SAME_ORIGIN, .xfo = "DENY" },
     { "requestroute", HTML_REQUESTROUTE },
     { "requestredrive", HTML_REQUESTREDRIVE },
     { "recordless", HTML_RECORDLESS },
@@ -2207,6 +2212,15 @@ static OpenerPolicyValue tf_doc_coop(const char *name) {
     for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
         if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].coop;
     return OPENER_POLICY_UNSAFE_NONE;
+}
+
+/* The `X-Frame-Options` value the member named `name` is served with, or NULL for none. */
+static const char *tf_doc_xfo(const char *name) {
+    size_t i;
+
+    for (i = 0; name && i < COUNTOF(TF_DOCS); i++)
+        if (!strcmp(TF_DOCS[i].name, name)) return TF_DOCS[i].xfo;
+    return NULL;
 }
 
 /* The container frame element margins the member named `name` is rooted under as a cross-origin child, or NULL
@@ -18546,6 +18560,113 @@ static int sq_witness_has(const char *js, const char *prefix, const char *with, 
     return 0;
 }
 
+/* Whether some record of the address beginning `prefix` holds every one of `needles` (NULL-terminated), a needle
+   written `!x` holding where `x` is absent from that record. */
+static int rr_has(const char *js, const char *prefix, const char *const *needles) {
+    EmittedRec r[EMITTED_REC_MAX];
+    int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX), i, k;
+
+    for (i = 0; i < n; i++) {
+        for (k = 0; needles[k]; k++) {
+            int neg = needles[k][0] == '!';
+            const char *x = needles[k] + neg;
+            if ((memmem(r[i].b, r[i].n, x, strlen(x)) == NULL) != neg) break;
+        }
+        if (!needles[k]) return 1;
+    }
+    return 0;
+}
+
+/* `why` followed by what the first record of `prefix` states from its mark through its assumptions, into `buf`, so
+   a red row says what the record does say. */
+static const char *rr_why(const char *js, const char *prefix, const char *why, char *buf, size_t cap) {
+    EmittedRec r[EMITTED_REC_MAX];
+    int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX);
+    const char *a = n ? memmem(r[0].b, r[0].n, "\"attackerRooted\"", 16) : NULL;
+    const char *z = a ? memmem(a, (size_t)(r[0].b + r[0].n - a), "\"params\"", 8) : NULL;
+
+    snprintf(buf, cap, "%s; the record states %.*s", why, a && z ? (int)(z - a) : 9, a && z ? a : "no record");
+    return buf;
+}
+
+/* The rows of the `recordrank` document (fixture/recordrank.h): the facts each record states beside its mark. */
+TF_UNIT void probes_recordrank(const char *js, Probe *tab, int *n) {
+    static const char *const post[] = { "\"credentials\":[\"include\"]", "\"destinations\":[\"same-origin\"]",
+                                        "\"attackerNeeds\":{\"common\":true,\"deliveries\":[{\"victimAct\":false,"
+                                        "\"sources\":[{\"source\":\"{location.search}[q]\",\"delivery\":\"address\"",
+                                        NULL };
+    static const char *const third[] = { "\"credentials\":[\"omit\"]", "\"destinations\":[\"cross-origin\"]",
+                                         "\"attackerNeeds\":{\"common\":true", NULL };
+    static const char *const me[] = { "\"kind\":\"absent-arm\",\"name\":\"", "__rrUser", NULL };
+    static const char *const me_none[] = { "\"assumes\":[[]", NULL };
+    static const char *const acct[] = { "\"kind\":\"absent-read\",\"name\":\"", "__rrAcct", NULL };
+    static const char *const plain[] = { "\"assumes\":[[]]", "\"attackerNeeds\":false", NULL };
+    static const char *const name[] = { "\"common\":false", "\"delivery\":\"navigable-name\"",
+                                        "!\"delivery\":\"address\"", NULL };
+    static const char *const ref[] = { "\"common\":false", "\"delivery\":\"referring-address\"",
+                                       "!\"delivery\":\"address\"", NULL };
+    static const char *const msg[] = { "\"common\":false", "\"victimAct\":false",
+                                       "\"delivery\":\"cross-document-message\"",
+                                       "\"messageRoutes\":[\"frame\",\"opener\"]", NULL };
+    static const char *const both_addr[] = { "\"driven\":false", "\"common\":true", "\"delivery\":\"address\"",
+                                             NULL };
+    static const char *const both_msg[] = { "\"driven\":true", "\"common\":false",
+                                            "\"delivery\":\"cross-document-message\"", NULL };
+    static const struct { const char *row, *at, *const *want, *why; int absent; } t[] = {
+        { "rr-post-facts", "/api/rr-post", post, "the credentialed POST to the page's own origin whose address `?q=` "
+          "roots does not state include, same-origin and its delivery through the address" },
+        { "rr-third-facts", "https://rr-third.test/c", third, "the uncredentialed GET to another origin carrying the "
+          "document's address does not state omit and cross-origin" },
+        { "rr-me-assumes", "/api/rr-me", me, "the request behind `window.__rrUser` does not state the arm that took "
+          "the absent global as present" },
+        { "rr-me-not-free", "/api/rr-me", me_none, "the request behind `window.__rrUser` states a path that "
+          "assumed nothing, though every path to it takes the absent global as present", 1 },
+        { "rr-acct-assumes", "/api/rr-acct", acct, "the request composed from `__rrAcct` does not state the read "
+          "past its throw" },
+        { "rr-plain-free", "/api/rr-plain", plain, "the request every path sends does not state a path that "
+          "assumed nothing, or is marked" },
+        { "rr-name-only", "/api/rr-name", name, "the request rooted only in window.name does not state window.name "
+          "as its only delivery" },
+        { "rr-ref-only", "/api/rr-ref", ref, "the request rooted only in the referrer does not state the referrer "
+          "as its only delivery" },
+        { "rr-msg-opener", "/api/rr-msg", msg, "the request rooted only in a message's data, on a page served "
+          "with no opener policy and no framing refusal, does not state the frame and opener routes" },
+        { "rr-both-address", "/api/rr-both", both_addr, "the page's own record of the request sent from `?q=` and "
+          "from a message's data does not read common with the address delivery" },
+        { "rr-both-message", "/api/rr-both", both_msg, "the message drive's record of the request sent from `?q=` and "
+          "from a message's data does not state the message delivery; lib/learn.js folds the two into one method" },
+    };
+    Probe rows[COUNTOF(t)];
+    static char whys[COUNTOF(t)][1024];
+    size_t i;
+
+    for (i = 0; i < COUNTOF(t); i++) {
+        int ok = rr_has(js, t[i].at, t[i].want);
+        rows[i] = (Probe){ t[i].row, t[i].absent ? !ok : ok, t[i].at, SESS_EXPLORE,
+                           (t[i].absent ? !ok : ok) ? NULL : rr_why(js, t[i].at, t[i].why, whys[i], sizeof whys[i]),
+                           .reach = t[i].absent ? "rr-me-assumes" : NULL };
+    }
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
+/* The rows of the `recordrankframe` document: no route reaches its message listener, so no record of the request
+   that listener sends states a message route. Its own plain request is the reach control. */
+TF_UNIT void probes_recordrankframe(const char *js, Probe *tab, int *n) {
+    static const char *const routes[] = { "\"messageRoutes\":[\"", NULL };
+    static const char *const plain[] = { "\"attackerNeeds\":false", NULL };
+    int reached = rr_has(js, "/api/rrf-plain", plain);
+    int routed = rr_has(js, "/api/rrf-msg", routes);
+    const Probe rows[] = {
+        { "rrf-plain-reached", reached, "/api/rrf-plain", SESS_EXPLORE,
+          reached ? NULL : "NOT REACHED: there is no plain record of /api/rrf-plain" },
+        { "rrf-msg-no-route", !routed, "/api/rrf-msg", SESS_EXPLORE,
+          !routed ? NULL : "a record of the request a message listener sends states a message route, on a page whose "
+                           "opener policy severs an opener and whose X-Frame-Options refuses framing",
+          .reach = "rrf-plain-reached" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `storedreq` document (fixture/storedreq.h). Each request sending a value the page stored from
    an attacker source carries the security-relevant mark, and a witness of its record states the chain: the
    attacker's open of the address where a later load reads the value, and a verification by re-running to the
@@ -25866,6 +25987,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_twinread(js, probes, &np);
     probes_requestsink(js, probes, &np);
     probes_storedreq(js, probes, &np);
+    probes_recordrank(js, probes, &np);
+    probes_recordrankframe(js, probes, &np);
     probes_requestroute(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
@@ -39968,8 +40091,11 @@ int main(int argc, char **argv) {
                             stated outright rather than left to a default, for the same reason the row above
                             it is. */
                          /*is_iframe_srcdoc*/ false);
-        /* HTML §7.7's input: no response, so no `X-Frame-Options`. */
-        document_state_x_frame_options(ctx, NULL, 0);
+        /* HTML §7.7's input: the member's stated `X-Frame-Options`, else none, since no response carried one. */
+        {
+            char *xfo = (char *)tf_doc_xfo(doc_name);
+            document_state_x_frame_options(ctx, xfo ? &xfo : NULL, xfo ? 1 : 0);
+        }
         JS_FreeValue(ctx, root_proxy);
     }
 
