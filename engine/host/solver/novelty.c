@@ -124,7 +124,7 @@ int novelty_note_at(NoveltyKind kind, NoveltyId id, const char *file, int line) 
     return !(s->flags & SLOT_KNOWN);
 }
 
-void novelty_credit(NoveltyKind kind, int novel, int razor) {
+void novelty_credit(NoveltyKind kind, int novel) {
     DCHECK(kind >= 0 && kind < NOVELTY_KIND_N && !novelty_kind_counted[kind],
            "a credit was asked for a kind novelty.h does not list as a credit kind — a counted kind is read, not paid");
     if (!novel) { g_unpaid[kind]++; return; }
@@ -138,7 +138,7 @@ void novelty_credit(NoveltyKind kind, int novel, int razor) {
                 "a novel credit moved the flow ledger's paid value by %g while flow_credit_emit answered %d — the "
                 "Level-1 value and the ledger it is read beside counted one event two ways",
                 flow_credit_paid_value() - before, landed);
-        if (landed) g_landed += razor ? 1.0 : NOVELTY_STATABLE_WEIGHT;
+        if (landed) g_landed += 1.0;
     }
 }
 

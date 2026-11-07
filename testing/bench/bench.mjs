@@ -74,14 +74,16 @@ const key = (r) => `${r.method} ${r.url}`;
    asserts the same document, so a miss is a reader no longer paired with its producer. */
 function need(ok, what) { if (!ok) throw new Error(`a result document breaks its contract: ${what}`); }
 
-/* The population a reading counts, from result documents `docs` (one per instance). An address is runtime-only
-   when any row of it states that razor class (endpoint.c's `razorClass`, per address); its keys and values are
-   the distinct (location, name) and (location, name, example) of those rows' params. A finding is a
-   securitySinks entry carrying a `poc` (fire-verified); a sink search is any entry, by (sink, source).
-   `noveltyPaid` sums `_novelty.kinds[].paid` (asks the product had not seen) and `landedValue` sums
-   `_novelty.landed` (the paid value Level 1 ranks: 1.0 a razor identity, 0.25 a statable one). */
+/* The population a reading counts, from result documents `docs` (one per instance), each identity counted once
+   in their union, so a repeat sighting in a second instance or a second row adds nothing: an address is
+   (method, url); a key is (address, location, name); a value is (key, example); a header is (address, name),
+   case-folded; a finding is a securitySinks entry carrying a `poc` (fire-verified), by (sink, source), and a sink
+   search is any entry. `noveltyPaid` sums `_novelty.kinds[].paid` (asks the product had not seen) and
+   `landedValue` sums `_novelty.landed` (the value Level 1 ranks, one point per novel identity); both are per
+   instance, so they are diagnostics beside the union rather than the headline. */
 export function readingOf(docs) {
   const endpoints = new Map();
+  const keys = new Set(), values = new Set(), headers = new Set();
   const sinks = new Set(), findings = new Set();
   const drives = new Set();
   const paidByKind = {};
@@ -96,24 +98,27 @@ export function readingOf(docs) {
     need(Array.isArray(d.fetchCallSites) && Array.isArray(d.securitySinks) && Array.isArray(d.pageErrors),
          'fetchCallSites, securitySinks and pageErrors are arrays');
     for (const r of d.fetchCallSites) {
-      need(typeof r.method === 'string' && typeof r.url === 'string' && typeof r.razorClass === 'string' &&
+      need(typeof r.method === 'string' && typeof r.url === 'string' &&
            typeof r.provenance === 'string' && Array.isArray(r.params),
-           `a fetchCallSites row has method, url, razorClass, provenance and params: ${JSON.stringify(r).slice(0, 200)}`);
+           `a fetchCallSites row has method, url, provenance and params: ${JSON.stringify(r).slice(0, 200)}`);
+      /* endpoint.c writes `headers` only when a header was seen, as an object of name to value. */
+      need(!('headers' in r) || (typeof r.headers === 'object' && r.headers !== null && !Array.isArray(r.headers)),
+           `a fetchCallSites row's headers is an object when present: ${String(JSON.stringify(r.headers)).slice(0, 200)}`);
       const k = `${r.method} ${r.url}`;
-      const row = endpoints.get(k) || { razor: new Set(), provenance: new Set(), params: new Set(), values: new Set(),
-                                        attackerRooted: false };
+      const row = endpoints.get(k) || { provenance: new Set(), attackerRooted: false };
       /* `false`, or the record of the attacker source rooting the address (endpoint.c's `attackerRooted`). */
       need(r.attackerRooted === false || (typeof r.attackerRooted === 'object' && r.attackerRooted !== null),
            `a fetchCallSites row's attackerRooted is false or a record: ${JSON.stringify(r.attackerRooted)}`);
       row.attackerRooted ||= r.attackerRooted !== false;
-      row.razor.add(r.razorClass);
       row.provenance.add(r.provenance);
       for (const p of r.params) {
         need(typeof p.name === 'string' && typeof p.location === 'string' && Array.isArray(p.validValues),
              `a param has name, location and validValues: ${JSON.stringify(p).slice(0, 200)}`);
-        row.params.add(`${p.location}:${p.name}`);
-        for (const v of p.validValues) row.values.add(`${p.location}:${p.name}=${JSON.stringify(v)}`);
+        const pk = JSON.stringify([k, p.location, p.name]);
+        keys.add(pk);
+        for (const v of p.validValues) values.add(JSON.stringify([pk, v]));
       }
+      if ('headers' in r) for (const h of Object.keys(r.headers)) headers.add(JSON.stringify([k, h.toLowerCase()]));
       endpoints.set(k, row);
     }
     for (const s of d.securitySinks) {
@@ -136,21 +141,17 @@ export function readingOf(docs) {
       if (m !== null) drives.add(m[1]);
     }
   }
-  const rt = [...endpoints.entries()].filter(([, r]) => r.razor.has('runtime-only'));
-  const provenance = {}, razor = {};
+  const provenance = {};
   for (const [, r] of endpoints) {
     if (r.attackerRooted) attackerRooted++;
     for (const p of r.provenance) provenance[p] = (provenance[p] || 0) + 1;
-    for (const c of r.razor) razor[c] = (razor[c] || 0) + 1;
   }
   return {
     addresses: endpoints.size,
-    runtimeOnlyAddresses: rt.length,
-    runtimeOnlyKeys: rt.reduce((n, [, r]) => n + r.params.size, 0),
-    runtimeOnlyValues: rt.reduce((n, [, r]) => n + r.values.size, 0),
-    runtimeOnly: rt.map(([k]) => k).sort(),
+    keys: keys.size,
+    values: values.size,
+    headers: headers.size,
     addressesByProvenance: provenance,
-    addressesByRazor: razor,
     sinkSearches: sinks.size,
     findingsFired: findings.size,
     attackerRootedAddresses: attackerRooted,
@@ -325,11 +326,12 @@ function runOne({ page, store, snap, budgets, backstopS, memCapMiB, logDir, runI
 
 /* ── Statistics ───────────────────────────────────────────────────────────────────────────────────────────── */
 
-const METRICS = ['runtimeOnlyAddresses', 'runtimeOnlyKeys', 'runtimeOnlyValues', 'findingsFired', 'landedValue',
-                 'noveltyPaid', 'addresses', 'attackerRootedAddresses', 'sinkSearches', 'sinkTainted', 'candidates',
+/* The headline leads: the union's identities and the fire-verified findings. The rest are diagnostics. */
+const METRICS = ['addresses', 'keys', 'values', 'headers', 'findingsFired', 'landedValue', 'noveltyPaid',
+                 'attackerRootedAddresses', 'sinkSearches', 'sinkTainted', 'candidates',
                  'drivesUncalled', 'observedMembers', 'assumedMembers', 'members'];
-const SHORT = { runtimeOnlyAddresses: 'rtAddr', runtimeOnlyKeys: 'rtKeys', runtimeOnlyValues: 'rtVals',
-                findingsFired: 'fired', landedValue: 'landed', noveltyPaid: 'paid', addresses: 'addr', attackerRootedAddresses: 'atkAddr',
+const SHORT = { addresses: 'addr', keys: 'keys', values: 'vals', headers: 'hdrs',
+                findingsFired: 'fired', landedValue: 'landed', noveltyPaid: 'paid', attackerRootedAddresses: 'atkAddr',
                 sinkSearches: 'sinks', sinkTainted: 'tainted', candidates: 'cands', drivesUncalled: 'drives',
                 observedMembers: 'obsMem', assumedMembers: 'asmMem', members: 'mem' };
 
@@ -512,7 +514,8 @@ async function run(o) {
       appendFileSync(join(out, 'runs.jsonl'), JSON.stringify(r) + '\n');
       const last = r.readings[r.readings.length - 1];
       console.log(`${page.id}.${runIx} ${r.endedBy} work=${r.stepWorkReached} readings=${r.readings.length} ` +
-                  (last ? `rtAddr=${last.runtimeOnlyAddresses} addr=${last.addresses} fired=${last.findingsFired} ` +
+                  (last ? `addr=${last.addresses} keys=${last.keys} vals=${last.values} hdrs=${last.headers} ` +
+                          `fired=${last.findingsFired} ` +
                           `landed=${last.landedValue} paid=${last.noveltyPaid} ` : '') +
                   `miss=${r.wireMisses}/${r.wireSends} load=${r.load1.map((x) => x.toFixed(2)).join('->')} ` +
                   `wall=${r.wallS.toFixed(0)}s${r.abort ? ' ABORT ' + r.abort.slice(0, 160) : ''}`);

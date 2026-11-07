@@ -5,7 +5,7 @@
 # and observations are stated there. The replies each page's run fetched are recorded once by `bench.mjs
 # record` into a store outside the repository; manifest.json names each page's recording by date and digest.
 # control-libs is the instrument control: this repository's own document (testing/corpus/control/serve.mjs,
-# served on its 8913 port while recording), whose runtime-only addresses are known to be reachable natively.
+# served on its 8913 port while recording), whose addresses are known to be reachable natively.
 control-libs	http://127.0.0.1:8913/?item=42&view=compact	control: real libraries' requests (serve.mjs's control-libs)
 regex101	https://regex101.com/	apps.tsv: same-origin JSON backend, /api/user* routes shipped and gated
 gitlab	https://gitlab.com/explore	apps.tsv: logged-out document ships admin-console chunks
@@ -17,7 +17,6 @@ tldraw	https://www.tldraw.com/	apps.tsv: Vite SPA
 telegram	https://web.telegram.org/k/	apps.tsv: Vite SPA, logged-out shell of a messaging app
 mdn	https://developer.mozilla.org/en-US/docs/Web/JavaScript	apps.tsv: webpack app with same-origin JSON
 astexplorer	https://astexplorer.net/	apps.tsv: webpack SPA with many parser chunks
-control-razor	http://127.0.0.1:8931/#needle	control: testing/bench/razor/ (python3 -m http.server 8931 there while recording); each rung assembles its address at run time
 openlibrary	https://openlibrary.org/	apps.tsv: passes 1-4, same-origin /search.json answers JSON anonymously while /account/loans.json is gated
 replit	https://replit.com/	apps.tsv: Next.js app, 104 classic <script src>; tests 1-2 not assessed
 codesandbox	https://codesandbox.io/	apps.tsv: Next.js app router; tests 1-2 not assessed

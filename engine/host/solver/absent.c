@@ -1460,12 +1460,12 @@ JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JS
     /* SERVED: this is the PRESENT arm, so the member is one a published record REALLY HOLDS and `value` is
        the bytes themselves. An inline script in the document this engine was served wrote them, so a parse
        of those bytes states this value — and it is minted unknown anyway, deliberately, so that a gate over
-       it FORKS rather than being decided for the whole run from what a logged-out visitor was sent. That is
-       exactly the member §What-the-tool-produces' bar must not count, and it is the one fact that separates
-       this arm from the MISS arm one hook down.
+       it FORKS rather than being decided for the whole run from what a logged-out visitor was sent. An
+       address composed from it reads `unknown-unproven`, and that is the one fact that separates this arm
+       from the MISS arm one hook down.
        NAMED RESIDUAL — THE ARM IS WIDER THAN THE POPULATION THAT WORD IS EXACT FOR. WHAT IS NOT COVERED: a
        record published by a script the run FETCHED rather than by the served document writes its members
-       here too, and whether a parse of a fetched body counts as "the served bytes" is the bar's own question
+       here too, and whether a fetched body counts as "the served bytes" is the address class's own question
        rather than this mint's — so such a member is called SERVED on the strength of a document this file
        never read. WHAT THE NEXT DIFF BUILDS: the published-namespace registry recording WHICH script wrote
        the record, which `ns_path_of` already looks a row up by, so the word is read off the row instead of
@@ -1574,8 +1574,8 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name, JSConcol
     ns_member_spell(base, name, s, &shape, &src);
     /* THE WORLD'S, AND THE CONTRAST WITH THE PRESENT ARM IS THE WHOLE OF WHY THIS IS STATED PER ARM: this is
        the MISS arm, so the member is ABSENT — the document this engine was served states nothing about it,
-       and what WOULD stand there is whatever a server injects for a visitor with state. No parse of any byte
-       this run received can state it, which is the population the bar exists for. */
+       and what WOULD stand there is whatever a server injects for a visitor with state, which no byte this
+       run received holds. An address composed from it reads `unknown`. */
     absent_declare_precondition(src);
     r = concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, JS_UNDEFINED);
     /* The example is the absence, so an arm against it takes the member as present (decide.c's assumption). */

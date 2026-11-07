@@ -1683,7 +1683,7 @@ async function cmdNetDiff(args) {
       /* THE KEY IS THE RECORD'S OWN ADDRESS, AND THREE SUBSTITUTES USED TO STAND IN IT. This diagnostic's
          whole subject is whether an address the solver learned matches one the page issued, so a field a
          consumer answers for is a field that decides an endpoint's IDENTITY — the concealment defect landing
-         on the one number CLAUDE.md names (`netdiff --unused`). `e.method || "GET"` filed a verb-less record
+         on this diagnostic's own number (`netdiff --unused`). `e.method || "GET"` filed a verb-less record
          under GET, where it could match a live GET and be counted as covered. `e.path || e.url` was worse
          than a default: `path` is legitimately "" for a shape-origin address with no literal remainder
          (lib/callsite-url.js), and that file states the invariant this line is built on — "`host + path`
@@ -1740,7 +1740,7 @@ async function cmdNetDiff(args) {
              that now holds rather than deleted.
              MEASURED, on a live supabase run at artifact 7a7cd512: 33 `http` records and 7 `postmessage`
              records on one log, and `r.callStack.split` threw on the first postmessage — so
-             `netdiff --unused`, the diagnostic CLAUDE.md names as the moat's headline, returned the single
+             `netdiff --unused` returned the single
              string "Cannot read properties of undefined (reading 'split')" and no census whatever. The kind
              is asked FIRST, and a spelling outside the four crashes here rather than being diffed as a round
              trip nobody made. */

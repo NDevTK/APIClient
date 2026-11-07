@@ -752,18 +752,12 @@ function _mergeMethodInto(em, nm) {
          "lib/learn.js files every request under its document and derives the sum, so this sum was written elsewhere");
   for (const k in nm) {
     if (k === "parameters" || k === "_stats" || k === "_statsByDoc" || k === "_astInferred" ||
-        k === "_astRazorClasses" || k === "_astWitnesses" || k === "_astFacts") continue;
+        k === "_astWitnesses" || k === "_astFacts") continue;
     if (em[k] === undefined || em[k] === null) em[k] = nm[k];
   }
   if (nm._astInferred) em._astInferred = true;
-  // The razor-class set is a union across documents, for the reason it is a set within one.
-  if (nm._astRazorClasses !== undefined) {
-    const where = "lib/merge.js moat-merging a method's razor classes";
-    for (const c of checkRazorClassSet(nm._astRazorClasses, where)) {
-      em._astRazorClasses = razorClassSetWith(em._astRazorClasses, c, where);
-    }
-  }
-  // …and so is the witness pool: each member is one sighting's statement and none is joined to another.
+  // The witness pool is a union across documents: each member is one sighting's statement and none is joined
+  // to another.
   if (nm._astWitnesses !== undefined) {
     const where = "lib/merge.js moat-merging a method's witnesses";
     for (const p of checkWitnessPool(nm._astWitnesses, where)) {

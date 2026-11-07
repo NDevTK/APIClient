@@ -5033,20 +5033,12 @@ function identityOfBinding(t, off, scan, s) {
 /* ---- the ORIGIN of a value: the same specifier, followed further than one callback parameter --------------- */
 
 /* A PARAMETER OF A CORPUS-DECLARED FUNCTION IS A ROUTE THIS WALK DOES NOT HAVE AND `ifaceOfExpr` DOES, AND
- * THE ASYMMETRY IS REAL — measured, `scan.localParamSlot` and `scan.callArgsOf` resolve here exactly as they
- * do there. What is recorded is that building the mirror arm would NOT have moved the row it was proposed
- * for, so a reader is not sent to spend a diff finding that out: at `fold`'s own `switch (node.type)` in
- * testing/static_surface.mjs (:221 today, :190 when this was written — the file has since grown a
- * blind-spot band above it, which is why this reference now carries the CONSTRUCT and not only the line)
- * the receiver is `fold`'s first parameter, `callArgsOf` finds NINE call sites, and `originOfExpr` answers
- * null for all nine — eight because a self-recursive walker passes paths rooted at its own parameter, which
- * this walk's cycle guard declines by construction, and the ninth (`a`, the door's URL argument at
- * `const r = a ? fold(a, binds, 0)`, :424 today and :390 then) because it is a computed index
- * over a binding written from another corpus callback's parameter, which no arm here reads either. Under
- * `agreeOrigin` one null is the whole answer. A widening would therefore need BOTH the parameter arm and a
- * rule that an argument rooted at the parameter under question contributes the answer being computed — which
- * is §MAP_PATH's argument one construct over — and neither is landed here. RETIREMENT: this record goes when
- * a parameter arm exists on this walk, because the question is then answered by code rather than by a note. */
+ * THE ASYMMETRY IS REAL — `scan.localParamSlot` and `scan.callArgsOf` resolve here exactly as they do there.
+ * A self-recursive walker passes paths rooted at its own parameter, which this walk's cycle guard declines by
+ * construction, so a widening would need BOTH the parameter arm and a rule that an argument rooted at the
+ * parameter under question contributes the answer being computed — which is §MAP_PATH's argument one
+ * construct over — and neither is landed here. RETIREMENT: this record goes when a parameter arm exists on
+ * this walk, because the question is then answered by code rather than by a note. */
 
 /* THE FOREIGN ARM ABOVE ANSWERS FOR ONE CONSTRUCT AND THE QUESTION IS BIGGER THAN THAT CONSTRUCT. Its sentence
  * is right — "the specifier says where the producer is" — and the shape it reads it off is a callback PARAMETER,
@@ -6620,7 +6612,7 @@ if (platformDecided.length) {
          of nineteen names, three at four of four. A tree walk and `fn(rec.part)` are one construct.
    AND THE WEAKEST ROW OF THIS BAND WAS A FOREIGN AST NODE, WHICH IS RECORDED HERE BECAUSE THE FINDING TRAVELLED
    AS AN ACCUSATION AND IS NOT ONE. Measured at 3a819306, first row of this band and therefore the weakest by its
-   own sort: `testing/static_surface.mjs` `n` read 24 names and this comparison explained FOUR of them by a
+   own sort: a deleted static scanner's parameter `n` read 24 names and this comparison explained FOUR of them by a
    popup record and TWO by an engine emission, so the corpus-local candidate won 4-2 and the receiver was
    DECIDED — and by content it is the parameter of `walk(ast, (n) => …)` over a `@babel/parser` AST, a node
    nothing in this corpus constructs, whose `type`, `kind`, `declarations`, `id`, `local` and `left` are

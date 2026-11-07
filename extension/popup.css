@@ -2067,17 +2067,12 @@ details summary:hover {
   color: #8b949e;
   font-style: italic;
 }
-.ep-razor,
 .ep-grade {
   display: inline-block;
   margin: 0 4px 2px 0;
   padding: 0 4px;
   border-radius: 3px;
   border: 1px solid #30363d;
-}
-.ep-razor-runtime-only {
-  color: #3fb950;
-  border-color: #3fb950;
 }
 .ep-grade-forced,
 .ep-value-forced {

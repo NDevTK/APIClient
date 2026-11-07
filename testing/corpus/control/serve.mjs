@@ -177,7 +177,8 @@ const DOCS = [
      then executes and puts rows on the emitted surface. nav-decline.html cannot ask it: both of its rungs
      are `derived`, so at the table as it now stands both of them fire and the decline it is named for is no
      longer what it measures (its own head records that). This row holds the three questions that one cannot
-     — does the child's document RUN, does it clear the product's hard bar, and does the FORCED bound hold.
+     — does the child's document RUN, does an address it composes from a reply field read `unknown`, and
+     does the FORCED bound hold.
      ITS REGRESSION MODE IS A SILENT ZERO AND NOT AN ABORT, which is why it is its own origin: a child
      navigable that stops loading, or a forced one that starts, moves THIS origin's own log rather than
      another channel's published baseline.

@@ -587,9 +587,9 @@
         reply: [
           { name: "account", type: "string",
             why: "`{\"runnable\":0|1,\"paid\":…,\"pulls\":…}` as qjs_level1_account composes it: " +
-                 "whether a member can take the thread now, the razor-weighted novel value this instance has " +
-                 "landed, and the quanta of work it was served. The trusted zone ranks documents by a bound on " +
-                 "value per pull over these, " +
+                 "whether a member can take the thread now, the novel value this instance has landed (one " +
+                 "point per novel identity), and the quanta of work it was served. The trusted zone ranks " +
+                 "documents by a bound on value per pull over these, " +
                  "and ranks a non-runnable instance last" },
           WORKING_SET] },
 

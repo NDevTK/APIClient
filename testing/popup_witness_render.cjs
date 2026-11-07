@@ -19,7 +19,7 @@ const path = require("path");
 const { launchChrome } = require("./harness.js");
 
 const EXT = path.resolve(process.argv[2] || path.join(__dirname, "..", "extension"));
-const ASSUMED_CELL = 4;   // Method, Address, Razor, Provenance, Assumed, Facts, Parameters, Send
+const ASSUMED_CELL = 3;   // Method, Address, Provenance, Assumed, Facts, Parameters, Send
 
 const MARKUP = "<img src=x onerror=alert(1)>";
 const CASES = [

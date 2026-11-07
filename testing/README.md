@@ -54,7 +54,7 @@ node testing/harness.js <command> [args…]
 | `capture <out.js>` | Save the page's served HTML. |
 | `diag [secs] [reload]` | List CDP targets, then tee every extension console for N seconds. |
 | `multitab <url…>` | Open each url in its own tab and poll learned endpoints per host — the concurrent-scheduler measurement. |
-| `netdiff [--all] [--assets] [--unused]` | The moat's headline diagnostic. See below. |
+| `netdiff [--all] [--assets] [--unused]` | Live traffic against what forced execution learned, a diagnostic. See below. |
 
 ## `netdiff`
 
@@ -63,9 +63,8 @@ the brain's own state.
 
 * default — LIVE-NOT-LEARNED: requests that fired and were not learned. A coverage gap.
 * `--unused` — LEARNED-NOT-LIVE: the API surface forced execution found and the page never
-  fired, with the parameter keys and example values it recovered. **This is the value**;
-  CLAUDE.md names it a diagnostic that the solver dominates the live page, never the thing to
-  optimize.
+  fired, with the parameter keys and example values it recovered. A diagnostic, never the thing
+  to optimize: learning is measured by novel identities and verified records.
 
 Every run prints a `runs` census first — how many documents ended `complete`, `crashed`,
 `nothing-to-run`, or have **not returned**. Read it before the counts under it: a missing
@@ -164,8 +163,8 @@ forbids — so its wait loop could never match and every fixture burned its full
 `RE-MEASURED 2026-06-14 at submodule HEAD 3ec3b92`, against an `engine/qjs` that is no longer a submodule.
 
 WHAT THEY MEASURED IS MEASURED TODAY BY THINGS THAT RUN. `moat_survey.sh` was a per-document `netdiff`
-regression check against a committed baseline table; `netdiff` is above, is hand-driven, and CLAUDE.md names
-`--unused` a DIAGNOSTIC and never the thing to optimize — so a pass/fail gate keyed on it, carrying stored
+regression check against a committed baseline table; `netdiff` is above, is hand-driven, and
+`--unused` is a DIAGNOSTIC and never the thing to optimize — so a pass/fail gate keyed on it, carrying stored
 per-document expected counts, is a banned shape independently of the missing corpus, being both a change
 detector and a second hand-kept copy of what the engine emits. `scale_survey.sh` asked whether a late
 document is STARVED behind an accumulating backlog; `multitab` is that measurement at the document grain,

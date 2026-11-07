@@ -122,10 +122,8 @@ void  rung_entry_compile_global_named(const char *name, int typeof_only);
    OF EXECUTION AND IS NO STRONGER THAN A PARSE'S. `base` is tested against the names a realm binds to its own
    global; `api.fetch`, a bundler's `(0,o.requestIdleCallback)` re-export shim and a wrapper's own member are
    refused by that test, and a channel without it would not refine the rows above — it would be a different and
-   far louder one. HOW MUCH louder is a property of real bundles rather than of this engine, so it is a command
-   and never a number here: `node testing/static_surface.mjs` prints, per declared entry name, the property reads
-   that ARE on the global against those that are not, and that figure moves with which bundles were mirrored on
-   the day it was taken. The IDENTITY test a
+   far louder one. HOW MUCH louder is a property of real bundles rather than of this engine, so it is never a
+   number here. The IDENTITY test a
    parse cannot make (is this receiver object the realm's global) needs an OBJECT, so it lives downstream of
    reach, which is the one place a row whose whole purpose is to be upstream of reach may not put its question.
    IT RECORDS AND DECIDES NOTHING, like its sibling. */

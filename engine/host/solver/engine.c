@@ -238,28 +238,18 @@ static void script_csp_meta_free(JSContext *ctx, ScriptCspMeta *h)
    predicate's true arm, and the caller has refused everything else, so the fallthrough is a guard over an
    enumeration this codebase owns: what reaches it is a program kind added to the predicate and not here.
 
-   Three tokens, because they are evidence of different things: a document's own external script is markup;
-   an injected script and a dynamic `import()` are code this engine ran, and a lazy chunk reached through the
-   third is what the runtime-only razor is most about.
+   Three tokens, because they are three mechanisms: a parser-inserted external script, a script-created one,
+   and a dynamic `import()`. A `<script src>` written by `document.write` is parser-inserted (its `parser
+   document` is non-null: core/html/html_script.c prepares it at the tokenizer's `</script>`), so it takes
+   `document-script`, which is what that door states.
 
    The first two are separated by the parser-inserted mark, not the kind. A kind is a queue position and a
-   door is about origin (solver/pending.h's `PROV_OBSERVED`). HTML §4.12.1.1 tests "el has an async attribute
-   or el's force async is true" before "el is not parser inserted" (core/loader/document_scripts.c's
-   `script_block_schedule` keeps that order), so a parser-inserted `<script async src>` takes
-   FLOW_PENDING_SCRIPT, and a script-created element whose `async` setter cleared force async takes
-   FLOW_PENDING_DOCSCRIPT. Keyed on the kind, the first would over-credit the razor and the second would claim
-   a markup scan reaches an address only page code composed. The module arm reads no mark because
-   `pending_prov_compose` refuses a parser-inserted park of any other kind (§4.12.1.1 gives `parser document`
-   to `script` elements only).
-
-   Named residual. Not covered: a `<script src>` written by `document.write`. Its `parser document` is non-null
-   (core/html/html_script.c prepares it at the tokenizer's `</script>`; core/html/document_open.c), so it takes
-   `document-script`, classed `markup` by endpoint.h, although running code produced the bytes; the razor's
-   floor falls. Next diff builds: producers stating whether the element's bytes are the response's, carried
-   beside `parser_inserted` on the park. It may not be inferred from which producer parked, because
-   core/loader/xml_document.c records that a load's own scripts return at §4.12.1.1 step 18 today and that
-   order is due to change. Absence shows as: a document whose only external script was written by
-   `document.write` reports a nonzero `epReach.markup`. */
+   door is the mechanism. HTML §4.12.1.1 tests "el has an async attribute or el's force async is true" before
+   "el is not parser inserted" (core/loader/document_scripts.c's `script_block_schedule` keeps that order), so
+   a parser-inserted `<script async src>` takes FLOW_PENDING_SCRIPT, and a script-created element whose `async`
+   setter cleared force async takes FLOW_PENDING_DOCSCRIPT; keyed on the kind, each would be filed under the
+   other's door. The module arm reads no mark because `pending_prov_compose` refuses a parser-inserted park of
+   any other kind (§4.12.1.1 gives `parser document` to `script` elements only). */
 static int program_load_door(int kind, int parser_inserted)
 {
     switch (kind) {
@@ -6742,8 +6732,8 @@ static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, ui
     for (; k < argc; k++) {
         if (pos > 0) snprintf(id, sizeof id, "{orphan%016llx#%d.arg%d}", (unsigned long long)hash, pos, k);
         else snprintf(id, sizeof id, "{orphan%016llx.arg%d}", (unsigned long long)hash, k);
-        /* This engine's own instrument: the argument stood in no byte anywhere, so an address composed from it is
-           runtime-only but nothing was learned from it; the provenance says so, as the assert says it of the
+        /* This engine's own instrument: the argument stood in no byte anywhere, so nothing is learned about whose
+           value an address composed from it rests on; the provenance says so, as the assert says it of the
            example. */
         args[k] = concolic_new(ctx, id, id, CONCOLIC_WHOSE_INSTRUMENT, JS_UNDEFINED);
         ORPHAN_BINDS_OPEN(args[k], id);

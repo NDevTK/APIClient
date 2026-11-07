@@ -259,25 +259,11 @@ const passes = files.map((f) => {
            absentNames: measured.length === 0 ? 'nothing-measured'
              : measured.some((r) => 'absentFatal' in r) ? 'fatal'
              : measured.some((r) => 'absentOwedNames' in r) ? 'carried' : 'predates' ,
-           /* AND A SIXTH, FOR THE COLUMN THIS PRODUCT IS ACTUALLY JUDGED BY, asked separately for the
-              reason the five above are and with one more: CLAUDE.md §What-the-tool-produces' HARD BAR is
-              "an address, a key or a value that NO PARSE of the served bytes can state, because it exists
-              only at run time", solver/endpoint.c composes it PER ROW as `razorClass`, and until site.mjs
-              began carrying it the bar was scored one DOCUMENT at a time and over no corpus at all.
-              IT IS A QUESTION ABOUT THE INSTRUMENT AND NOT ABOUT THE ARTIFACT, which is why there are TWO
-              channels and not one. This state answers whether the site.mjs that wrote the pass carried the
-              FIELD -- a missing key. Whether the WASM that answered stated the fact is a DIFFERENT fact,
-              carried per row as the string `(field-absent)` inside a key that is present, and it is read
-              per site below. Folding the two would report a census taken against an old artifact as one
-              taken by an old instrument, and those prescribe opposite work: rebuild and reinstall, against
-              wait for a newer pass. */
-           razor: measured.length === 0 ? 'nothing-measured'
-             : measured.some((r) => 'endpointRazorClass' in r) ? 'carried' : 'predates',
-           /* AND THE SAME TWO-CHANNEL SPLIT FOR THE DATA DOORS' ASK LADDER, for the reason stated one clause
-              up and not restated: whether the site.mjs that wrote the pass carried the FIELD is a question
-              about the INSTRUMENT, and whether the wasm that answered DECLARED the edge is a different fact
-              carried per row and read per site below. They prescribe opposite work — wait for a newer pass,
-              against a host that installs no such machine — so they are two channels here too. */
+           /* AND A TWO-CHANNEL SPLIT FOR THE DATA DOORS' ASK LADDER: whether the site.mjs that wrote the
+              pass carried the FIELD is a question about the INSTRUMENT, and whether the wasm that answered
+              DECLARED the edge is a different fact carried per row and read per site below. They prescribe
+              opposite work — wait for a newer pass, against a host that installs no such machine — so they
+              are two channels. */
            netAsk: measured.length === 0 ? 'nothing-measured'
              : measured.some((r) => 'netDoorAsk' in r) ? 'carried' : 'predates' };
 });
@@ -889,38 +875,9 @@ for (const p of passes) for (const r of p.rows) {
        another — a `|| []` here would turn all three into the clean bill, which is the one this file most
        exists not to publish. */
     anames: r.absentOwedNames,
-    /* THE HARD BAR PER ADDRESS, AND THE OPERAND IT IS COMPOSED OUT OF, which is the one column in this file
-       that can tell a run that learned a GATED API SURFACE from one that counted a `<head>` back.
-       §What-the-tool-produces' bar is "an address, a key or a value that NO PARSE of the served bytes can
-       state, because it exists only at run time"; solver/endpoint.c composes `razorClass` per row out of
-       `endpoint_razor_class_of`, extension/bridge.js relays it onto every engine-run record, and
-       engine/build.mjs, extension/popup.js and testing/live-run.js all read it. This file was the consumer
-       that never asked -- so the bar was scored per DOCUMENT and over no CORPUS, which is the write-with-no-
-       reader half of the contract on the column the product is measured by.
-       THE UNION IS NEVER ASSEMBLED HERE. A consumer unioning `doors` with `addressClass` by hand builds the
-       figure CLAUDE.md DEMOTED, because `EPR_BEYOND` is what a MARKUP parse cannot reach and `fetch`, `xhr`
-       and `module-import` are all in it. `epRazor` arrives already composed; `epAddr` is carried BESIDE it
-       as the operand that cannot state the bar alone, never as an input to a sum made here.
-       THEY ARE TWO FIELDS AND ONE OBSERVATION MORE THAN `epAddr` ALONE (CLAUDE.md §EVIDENCE-INFLATION):
-       `epRazor` is DERIVED from `epAddr` and from the door's own bytes column, so a reader counting them as
-       two independent signals is counting one and a half.
-       LEFT AS WHATEVER site.mjs WROTE, which is three facts and no default: an OBJECT is a stated
-       partition (`{}` being the partition of an EMPTY surface, a finding about the page), the string
-       `(field-absent)` is an ARTIFACT older than the field, `null` is a pass whose runs carried no counters
-       at all, and ABSENT is a pass predating the field entirely. A `|| {}` here would turn all four into
-       the one this file most exists not to publish -- an engine that answered and proved nothing. */
-    epRazor: r.endpointRazorClass, epAddr: r.endpointAddressClass,
-    /* AND THE BOUND ON THE ONE POPULATION THE BAR CANNOT SIZE, LEFT AS WHATEVER site.mjs WROTE for `epRazor`'s
-       reason exactly. It is NEVER summed with the bar: `may-rest-on` is a MAY — a pin is a fact about the PATH
-       that composed the address and says nothing about whether this address read that source — so adding it to
-       `runtime-only` composes an over-claim out of a floor. It is read AT THE SAME PASS as the bar below, not
-       at its own best, because the pair is one observation of one run. */
-    epWitness: r.endpointWitnessClass,
-    /* AND THE TWO DATA DOORS' ASK LADDER, LEFT AS WHATEVER site.mjs WROTE for `epRazor`'s reason exactly —
-       an OBJECT is a stated ladder, `null` is a pass whose runs carried no counters, and ABSENT is a pass
-       predating the field. A `|| {}` would turn all three into the one state this file most exists not to
-       publish. It is NOT an input to the hard bar and is never summed with it: the bar is about WHAT AN
-       ADDRESS WAS, and this is about whether a door's machine was REACHED AT ALL. */
+    /* THE TWO DATA DOORS' ASK LADDER, LEFT AS WHATEVER site.mjs WROTE — an OBJECT is a stated ladder, `null`
+       is a pass whose runs carried no counters, and ABSENT is a pass predating the field. A `|| {}` would turn
+       all three into the one state this file most exists not to publish. */
     epNetAsk: r.netDoorAsk,
     /* AND THE DOOR × WITNESS JOIN WITH ITS OWN THREE DENOMINATORS, which is what makes this file its first
        reader. site.mjs composed the join and NOTHING ANYWHERE READ IT — a write with no reader on the one
@@ -928,17 +885,17 @@ for (const p of passes) for (const r of p.rows) {
        shape CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS names and the ninth time this corpus reader has been the
        consumer that never asked.
        WHAT IS READ IS THE PAIRING AND NOT THE MAGNITUDE. The join's counts are a union over every document at
-       the origin and every analysis each held, so they are a DIFFERENT UNIT from `epRazor`'s — those are one
-       engine run — and site.mjs's own banner says differencing them is a category error. A PAIRING is
+       the origin and every analysis each held, so they are a DIFFERENT UNIT from a per-run histogram's — those
+       are one engine run — and site.mjs's own banner says differencing them is a category error. A PAIRING is
        scope-invariant where a count is not: which door goes with which witness class holds in the union exactly
        where it holds per document, so the KEY SET is the finding and `doorWitnessRows` is what the counts are
        checkable against.
-       LEFT AS WHATEVER site.mjs WROTE, for `epRazor`'s reason: ABSENT is a pass predating the field, and an
+       LEFT AS WHATEVER site.mjs WROTE: ABSENT is a pass predating the field, and an
        object is a stated join whose `{}` is an empty surface. */
     epJoin: r.doorWitness, epJoinRows: r.doorWitnessRows,
     epJoinSnaps: r.doorWitnessSnaps, epJoinDocs: r.doorWitnessDocs,
     /* AND THE THREE ROWS THAT SAY WHETHER THE ENGINE RAN AT ALL AND WHETHER IT COULD TAKE A DELIVERY, left as
-       whatever site.mjs wrote for `epRazor`'s reason. All three were write-with-no-reader in THIS file — the
+       whatever site.mjs wrote. All three were write-with-no-reader in THIS file — the
        tenth, eleventh and twelfth time this corpus reader has been the consumer that never asked — and they
        are the three the endpoint columns above cannot be read without: a surface of 98 addresses and one of 190
        are the same engine on the same bytes, and what separates them is how much of the instance's span its own
@@ -1715,252 +1672,14 @@ if (loads.length) console.log(`load average across rows: min ${Math.min(...loads
    CAN learn from the page; the spread column beside it is what says how reliably. */
 const measurable = table.filter((t) => t.outcome !== 'NET/FIXTURE');
 const withEp = table.filter((t) => t.epAnswered > 0);
-/* WHERE THE LEARNED ADDRESSES CAME FROM IS ASKED BY `reach.mjs`, NOT HERE, AND THE COLUMN THAT USED TO STAND
-   AT THIS POINT IS DELETED RATHER THAN LEFT BESIDE IT. It compared a learned address STRIPPED TO ITS PATHNAME
-   against markup attribute values taken RAW, read only `src`/`href`/`img src` case-sensitively, and resolved
-   nothing — so an absolutely-specified resource could never match, a `srcSet` list was invisible, a
-   document-relative `./chunk.js` never matched, and a percent-encoded learned spelling never met its raw
-   attribute. Every one of those misses INFLATES the complement, which was the column a reader was told to
-   trust: it published 122 addresses as named-nowhere-in-markup where the sound answer over the same rows and
-   the same mirror is 0. A second, correct implementation standing next to it would be the dual-system rot —
-   and the broken one is the one already in everybody's fingers, so it goes.
-   THE CENSUS TABLE'S CONTRACT IS THE RUN OUTCOME AND THE ABORT QUEUE; provenance is a different axis over
-   different inputs (the TRACKED mirror rather than these untracked rows) and it lives in its own file:
-       node reach.mjs <the same census files> */
-/* CLAUDE.md §What-the-tool-produces' HARD BAR, OVER THE CORPUS, WHICH NOTHING HAS EVER SCORED. That bar is
-   "an address, a key or a value that NO PARSE of the served bytes can state, because it exists only at run
-   time". solver/endpoint.c composes it PER ROW, extension/bridge.js relays the partition onto every
-   engine-run record, and three consumers read it -- all of them at the grain of ONE DOCUMENT. The retirement
-   condition CLAUDE.md states for that record names exactly the construction missing: a corpus row saying,
-   with its RUN COUNT and its SPREAD, how many of a drive's addresses cleared the bar. This is that row.
-   IT IS A FLOOR, A DIAGNOSTIC, AND NEVER A TARGET, which is the first thing a reader of it must hold.
-   `runtime-only: 0` against a nonzero emitted surface is this engine's REFUSAL TO CLAIM the bar on that
-   document -- solver/endpoint.h enumerates the three populations `concrete` hides, of which a source a flow
-   PINNED AND RE-READ really is past every parse and cannot be said so by any field -- so a low number is an
-   under-claim published as a floor and not a weak capability. Optimising toward this column is optimising
-   toward a measurement, which §netdiff already refuses by name for `--unused`.
-   THE UNION IS NOT COMPOSED HERE AND MAY NOT BE. The engine composes it at the one line where both operands
-   are in hand; a consumer assembling one out of `doors` and `addressClass` builds the figure CLAUDE.md
-   DEMOTED, since `EPR_BEYOND` is what a MARKUP parse cannot reach and `fetch`, `xhr` and `module-import` are
-   all in it. The `unproven` margin beside the `runtime-only` one is the SAME partition's other bucket and is
-   not a second observation of anything (CLAUDE.md §EVIDENCE-INFLATION): `razorClass` is DERIVED from
-   `addressClass` and the door's own bytes column, so these two numbers are one fact about a surface read two
-   ways round, and a reader counting them as corroborating signals is counting one.
-   FOUR STATES AND NONE FOLDED, because a zero on this column has four readings that take different work and
-   three of them are not about the page at all. `no-field` is a pass written by a site.mjs predating the
-   field; `artifact-predates` is a run record that carried counters and not this key, which is a fact about
-   the BUILD and prescribes a rebuild rather than a wait; `no-counters` is a pass whose runs carried none at
-   all, which bridge.js writes deliberately for a crashed run "because seven zeroes read as a run that
-   explored nothing"; and `{}` is a stated partition of an EMPTY SURFACE, which is the only one of the four
-   that is a finding about the page. A `|| {}` anywhere above would publish all four as the last.
-   THE PER-SITE SEQUENCE IS PRINTED AND NOT ONLY A TOTAL, which is `cold`'s rule in testing/live-run.js and
-   holds for its reason: a RANGE over bucket names is not a quantity, and one run of a live site is not a
-   measurement -- so the passes are listed in order, the spread of the cleared count is stated beside them,
-   and the run count is the denominator of both. A site answering once cannot then be read as one answering
-   the same way twice.
-   THE PAIR IS TAKEN FROM ONE PASS PER SITE AND THE TOTALS SAY SO. `endpointsTotalBestPass` beside it already
-   sums a per-site BEST, and the question a headline answers is what the tool CAN prove about the page -- so
-   the site's pass with the most `runtime-only` rows is chosen and BOTH buckets are read off THAT pass. Taking
-   each margin from whichever pass maximised it would be two margins of two different observations summed into
-   one line, which is the two-moments defect this file has already had to publish two indices to refuse.
-   IT IS A SECTION AND NOT A COLUMN, for the owed-globals queue's reason: `pad` TRUNCATES, and a truncated
-   histogram is a number whose denominator the reader cannot see. */
-const RAZOR_RUNTIME = 'runtime-only', RAZOR_UNPROVEN = 'unproven';
-const rzPredates = passes.filter((p) => p.razor === 'predates').map((p) => p.label);
-const rzCarried = passes.filter((p) => p.razor === 'carried').map((p) => p.label);
-if (rzPredates.length)
-  console.log('\n*** THE HARD-BAR SECTION BELOW IS OVER ' + rzCarried.length + ' OF ' + passes.length +
-    ' PASS(ES) — ' + rzPredates.join(', ') + ' predate(s) the razor field entirely (their rows carry no ' +
-    '`endpointRazorClass`), so a site reading `no-field` over those passes is this instrument being unable ' +
-    'to ask. It is NOT a page whose every address a parse of the served bytes could have stated, and it is ' +
-    'NOT an artifact too old to say — that one is `artifact-predates` and prescribes a rebuild. ***');
-/* WHAT ONE PASS SAID ABOUT THE BAR, AS A TOKEN OR AS THE PARTITION, with the four states above kept apart at
-   the point the string is composed rather than by a reader holding the convention in their head. */
-const rzOne = (m) => {
-  if (!('epRazor' in m) || m.epRazor === undefined) return { tok: 'no-field' };
-  if (m.epRazor === null) return { tok: 'no-counters' };
-  if (typeof m.epRazor === 'string') return { tok: 'artifact-predates' };
-  const h = m.epRazor;
-  let tot = 0;
-  for (const k of Object.keys(h)) tot += h[k];
-  return { ro: h[RAZOR_RUNTIME] || 0, un: h[RAZOR_UNPROVEN] || 0, tot, h };
-};
-/* …AND THE SAME FOUR STATES OVER THE WITNESS PARTITION, which is a SEPARATE reader rather than a field of
-   `rzOne` because the two partitions can arrive independently: a pass written by a site.mjs that carries the
-   razor field and predates this one leaves `epWitness` missing while `epRazor` is an object, and folding them
-   would report the pair as unaskable when half of it is there. */
-const wzOne = (m) => {
-  if (!('epWitness' in m) || m.epWitness === undefined) return { tok: 'no-field' };
-  if (m.epWitness === null) return { tok: 'no-counters' };
-  if (typeof m.epWitness === 'string') return { tok: 'artifact-predates' };
-  const h = m.epWitness;
-  let tot = 0;
-  for (const k of Object.keys(h)) tot += h[k];
-  return { may: h['may-rest-on'] || 0, none: h['no-witness'] || 0, un: h['unasked'] || 0, tot, h };
-};
-/* THE DECLARED CLASS SET OF THE ARTIFACT A MEASUREMENT RAN ON, and the THREE absences kept apart rather than
-   folded, for the reason site.mjs gives at the field: `null` is no @COLD census on that record at all,
-   `(field-absent)` is a cold census from a build older than the field, and an OBJECT is the real answer. A
-   reader that treated the first two as "declares nothing" would report a build with no `unknown` arm where
-   the truth is that nobody asked — which is the accusing direction, and it is the one this pair exists to
-   refuse. `bar` is whether the key the hard bar keys on is PRESENT, at any value including zero: presence is
-   the declaration and the count is a different fact this row does not read. */
-const declOne = (m) => {
-  const d = m ? m.epAddressClassDeclared : undefined;
-  if (!d || typeof d !== 'object' || Array.isArray(d)) return { h: false, bar: false, n: 0 };
-  return { h: true, bar: ('unknown' in d), n: Object.keys(d).length };
-};
-const rzRows = table.map((t) => {
-  const per = t.measurements.map(rzOne);
-  const stated = per.filter((x) => x.h);
-  /* THE PASS WHOSE PARTITION PROVED THE MOST, AND BOTH BUCKETS READ OFF IT. Ties keep the FIRST, so the
-     choice is the earliest pass that reached the maximum rather than whichever the sort happened to leave. */
-  let best = null, bestAt = -1;
-  for (let i = 0; i < per.length; i++)
-    if (per[i].h && (!best || per[i].ro > best.ro)) { best = per[i]; bestAt = i; }
-  /* THE WITNESS READ AT THE BAR'S OWN PASS AND NEVER AT ITS OWN BEST — CLAUDE.md
-     §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE. The bound and the bar are a PAIR and the sentence a
-     reader composes from them ("part of this run's `unproven` is a population the bar could not look at") is
-     about ONE run; taking each from the pass that maximises it would be two runs' margins read as one
-     document, which is the defect this file's own data-door section records having committed once. */
-  const wAtBest = bestAt >= 0 ? wzOne(t.measurements[bestAt]) : null;
-  /* …AND WHETHER THE ARTIFACT THAT RAN EVEN HAS THE CLASS THE BAR KEYS ON, READ AT THAT SAME PASS. This is
-     the one question a `cleared: 0` could not be read against: a build whose enum has no `unknown` arm
-     CANNOT clear the bar, and from bridge.js's own partition that is byte-identical to a build that has it
-     and reached no such address — because that partition counts OBSERVED values, so an unreached class has
-     no key. It had to be answered by `git show <head>:engine/host/solver/endpoint.h | grep -c
-     EPA_SOURCE_DETERMINED` over fifteen artifact heads, which is an archaeology standing in for a field.
-     THE MEMBER SET AND NEVER THE COUNTS, and at the BAR'S OWN PASS for §A-CONSERVATION-IDENTITY's reason
-     exactly as `wAtBest` is: site.mjs relays this from solver/metrics' GAUGE row, which is the
-     partition at ONE CENSUS INSTANT while the bar is over the whole emitted array, so the two are two
-     moments and nothing here differences them. What a gauge at any instant still proves is which keys the
-     build DECLARES, and that is all this reads. */
-  const declAtBest = bestAt >= 0 ? declOne(t.measurements[bestAt]) : null;
-  /* AND THE SPREAD OF THE BOUND OVER EVERY PASS THAT STATED IT, WHICH IS NOT DECORATION BESIDE THE
-     AT-BEST VALUE — IT IS WHAT MAKES THAT VALUE READABLE AT ALL. The at-best pass is chosen by MAX
-     `runtime-only` with ties keeping the first, and on a document where the bar reads 0 on every pass EVERY
-     PASS TIES, so the choice is whichever ran first and the bound printed beside it is one sample of a
-     quantity that moves.
-     MEASURED, AND IT IS THE FLATTERING DIRECTION, WHICH IS WHY THIS IS A REPAIR AND NOT A REFINEMENT: two
-     gitpod passes off ONE artifact, one site, one dwell, no abort in either, both partitions summing to their
-     own 190 — `{unasked:1, no-witness:189}` and `{unasked:1, no-witness:97, may-rest-on:92}`. The first says
-     the bar's zero is the engine having genuinely proved nothing and sends the next diff to the SOLVER; the
-     second says 92 of 190 addresses are a population the bar could not look at and sends it to the PIN. Those
-     are opposite diffs, the bar ties at 0 across both, and the at-best rule prints the FIRST.
-     THE REASON THE BOUND MOVES AND THE BAR DOES NOT IS THAT IT IS A FACT ABOUT THE PATH. `may-rest-on` says
-     the path that composed the address had pinned a source's value; the same address composed on two
-     interleavings genuinely has two answers, and the record merges MAX over sightings — so a spread here is
-     the field working rather than noise, and a single pass of it is not a measurement. */
-  const wStated = per.map((x, i) => (x.h ? wzOne(t.measurements[i]) : null)).filter((w) => w && w.h);
-  const wMays = wStated.map((w) => w.may);
-  const wMax = wMays.length ? Math.max(...wMays) : 0;
-  const wSpread = wMays.length
-    ? (() => { const lo = Math.min(...wMays);
-               return lo === wMax ? String(lo) : lo + '-' + wMax; })()
-    : '-';
-  return { id: t.id, n: t.measurements.length, per, stated: stated.length, best, wAtBest,
-           wSpread, wMax, wStatedN: wStated.length,
-           /* A SPREAD OVER THE PASSES THAT STATED A PARTITION, never over the ones that could not be asked --
-              `-` where none did, which is absent and is not a zero. */
-           spread: stated.length ? (() => {
-             const v = stated.map((x) => x.ro), lo = Math.min(...v), hi = Math.max(...v);
-             return lo === hi ? String(lo) : lo + '-' + hi;
-           })() : '-' };
-});
-const rzStated = rzRows.filter((r) => r.stated > 0);
-const rzCleared = rzStated.filter((r) => r.best.ro > 0);
-console.log('\nTHE HARD BAR (CLAUDE.md §What-the-tool-produces) OVER ' + rzCarried.length + '/' + passes.length +
-  ' PASS(ES) — an address, key or value NO PARSE of the served bytes can state. A FLOOR AND A DIAGNOSTIC:\n' +
-  '  `runtime-only: 0` beside a nonzero surface is this engine REFUSING TO CLAIM the bar on that document,\n' +
-  '  never a smaller capability, and `unproven` is the SAME partition\'s other bucket rather than a second fact.');
-/* EVERY COLUMN SIZES ITSELF TO ITS WIDEST VALUE, for `termW`'s reason one table up: `pad` TRUNCATES, and a
-   clipped `artifact-predates` is not a narrow value but a wrong one -- `0-4` clipped to `0` is the difference
-   between a site that cleared the bar in one pass and one that never did.
-   AND THE STACK IS NOT A COLUMN HERE, WHICH IS WHY THE RULE ABOVE IS NOT ENOUGH ON ITS OWN. A width derived
-   from the rows is only an improvement over a fixed one where the field is a VALUE; `list.byId`'s third
-   column in `apps.tsv` is a PARAGRAPH -- a site's whole evidence note, hundreds of characters with its own
-   prose and citations -- so deriving a width from it printed a 1200-column line and a fixed width would have
-   clipped it into a sentence that stops mid-claim. The main table above prints no stack for exactly that
-   reason and this section does the same; a reader wanting it reads the list. MEASURED on this corpus's own
-   `apps.tsv` while building this section, which is the one artifact that could have shown it. */
-const rzShown = rzRows.filter((r) => r.n > 0);
-const rzCell = (x) => x.h ? (x.ro + '+' + x.un + '=' + x.tot) : x.tok;
-const rzClear = (r) => r.spread + ' of ' + r.stated + '/' + r.n + ' pass(es)';
-const rzIdW = Math.max('site'.length, ...rzShown.map((r) => r.id.length)) + 2;
-const rzClW = Math.max('cleared'.length, ...rzShown.map((r) => rzClear(r).length)) + 2;
-/* THE BOUND'S OWN CELL, SIZED LIKE EVERY OTHER COLUMN HERE AND FOR ITS REASON. It reads `-` only where no
-   pass stated a bar partition at all, so there was no pass to read it AT; a pass that stated the bar and not
-   the bound prints its own token, which is the instrument or the artifact and never a zero. */
-const wzCell = (r) => r.wAtBest === null ? '-'
-  : !r.wAtBest.h ? r.wAtBest.tok
-  /* THE SPREAD FIRST AND THE AT-BEST VALUE SECOND, because the spread is the claim and the at-best value is
-     one sample of it. They are printed TOGETHER and never one without the other: where they differ, the
-     at-best pass was chosen by a tie and the spread is what a reader may act on. */
-  : r.wSpread + ' may (' + r.wAtBest.may + ' at best) / ' + r.wAtBest.un + ' unasked of ' + r.wAtBest.tot
-    + ' over ' + r.wStatedN + '/' + r.n;
-const rzWW = Math.max('may-rest-on, spread'.length, ...rzShown.map((r) => wzCell(r).length)) + 2;
-if (rzShown.length) {
-  console.log('  ' + pad('site', rzIdW) + pad('cleared', rzClW) + pad('may-rest-on, spread', rzWW) +
-    'runtime-only+unproven=emitted, PER PASS IN ORDER');
-  for (const r of rzShown)
-    console.log('  ' + pad(r.id, rzIdW) + pad(rzClear(r), rzClW) + pad(wzCell(r), rzWW) +
-      r.per.map(rzCell).join(' | '));
-  console.log('  `may` BOUNDS the part of `unproven` the bar could not look at and is NEVER added to');
-  console.log('  `runtime-only`: a pin is a fact about the PATH that composed the address. The SPREAD is the');
-  console.log('  claim and the `at best` figure is one sample of it — where they differ, the at-best pass was');
-  console.log('  chosen by a TIE, because that rule maximises `runtime-only` and every pass ties at 0 on a');
-  console.log('  document the bar refuses. MEASURED: two gitpod passes off one artifact read 0 and 92 of 190,');
-  console.log('  which are opposite next diffs (the SOLVER against the PIN), so one pass of this is no answer.');
-}
-/* AND THE CORPUS FIGURE, WITH ITS RUN COUNT AND THE DENOMINATOR OF EVERY SHARE IN IT ON THE SAME LINE. A
-   count over a corpus that does not state how many passes it is over, and over how many sites could be asked
-   at all, is a figure belonging to a population a reader cannot name. */
-console.log('hard bar totals: ' + JSON.stringify({
-  passes: passes.length, passesCarryingTheField: rzCarried.length,
-  sitesStatingAPartition: rzStated.length,
-  sitesClearingTheBar: rzCleared.length,
-  /* BOTH BUCKETS OFF ONE PASS PER SITE -- the site's best by `runtime-only` -- so the pair is one observation
-     and their sum is that pass's own emitted surface rather than two passes' margins added together. */
-  runtimeOnlyBestPass: rzStated.reduce((n, r) => n + r.best.ro, 0),
-  unprovenAtThatSamePass: rzStated.reduce((n, r) => n + r.best.un, 0),
-  emittedAtThatSamePass: rzStated.reduce((n, r) => n + r.best.tot, 0),
-  /* THE BOUND AT THAT SAME PASS, AND THE COUNT OF SITES IT COULD BE ASKED OF — two figures and not one,
-     because a corpus total over the bound alone cannot say whether a 0 is every site answering 0 or most
-     sites not carrying the field. Never added to `runtimeOnlyBestPass`. */
-  sitesStatingTheBound: rzStated.filter((r) => r.wAtBest && r.wAtBest.h).length,
-  mayRestOnAtThatSamePass: rzStated.reduce((n, r) => n + ((r.wAtBest && r.wAtBest.h) ? r.wAtBest.may : 0), 0),
-  unaskedAtThatSamePass: rzStated.reduce((n, r) => n + ((r.wAtBest && r.wAtBest.h) ? r.wAtBest.un : 0), 0),
-  /* AND THE OTHER END OF THE SPREAD, LABELLED AS A DIFFERENT PASS AND NEVER SUMMED WITH THE FOUR FIGURES
-     ABOVE. The row above is the bound at the BAR'S pass, which on a document the bar refuses is whichever pass
-     ran first — so a corpus total of it is a sum of arbitrary samples. This is the bound at ITS OWN maximum,
-     per site, and the pair brackets what the bar could not look at. They are two passes of one document by
-     construction and are therefore NOT an identity with anything here: adding either to
-     `runtimeOnlyBestPass` composes an over-claim out of a floor, and adding them to each other counts one
-     surface twice. Read the two as a RANGE, which is the only thing a moving quantity supports. */
-  mayRestOnAtItsOwnBestPass: rzStated.reduce((n, r) => n + r.wMax, 0),
-  /* AND THE TWO FIGURES THAT SAY WHETHER A `sitesClearingTheBar` OF ZERO IS EVEN A STATEMENT ABOUT THE
-     ENGINE. `sitesStatingTheDeclaredSet` is the count that could be ASKED — a census written before the
-     field, or by a build whose cold census carried none, answers neither and is counted in neither, which is
-     the absence of a question and not a zero. `sitesWhoseBuildDeclaresTheBarClass` is how many of THOSE ran
-     an artifact whose enum has the arm the bar keys on, read off the macro rather than typed: slice
-     `#define ENDPOINT_ADDRESS_CLASSES(X)` in solver/endpoint.h to its first line not ending in a backslash
-     and read the `X(` names off it. THE ARMS ARE NOT ENUMERATED HERE AND THAT IS THE POINT -- this sentence
-     listed them once, the list has since grown an arm, and the enumeration was then a count competing with
-     the command printed beside it (CLAUDE.md §a-count-is-the-one-derived-coordinate). What this figure
-     reads is the arm `declOne` names and nothing else, so a widening below the bar's own class leaves it
-     unchanged. Never summed with anything above. */
-  sitesStatingTheDeclaredSet: rzStated.filter((r) => r.declAtBest && r.declAtBest.h).length,
-  sitesWhoseBuildDeclaresTheBarClass:
-    rzStated.filter((r) => r.declAtBest && r.declAtBest.h && r.declAtBest.bar).length,
-}));
-/* WHICH DOOR PAIRS WITH WHICH WITNESS CLASS, OVER THE CORPUS — the one statement the two margins above
+/* WHICH DOOR PAIRS WITH WHICH WITNESS CLASS, OVER THE CORPUS — the one statement the door and witness margins
    structurally cannot make, and the column that had no reader anywhere until this block. A reader holding
    `doors {document-script:1, link-element:97, module-import:92}` beside `witness {unasked:1, no-witness:97,
    may-rest-on:92}` can see the three numbers AGREE and cannot see that they agree ROW BY ROW: two partitions
    of one population whose buckets happen to be the same sizes are consistent with every pairing there is.
    THE KEY SET IS THE FINDING AND THE COUNTS ARE NOT, which is why this prints pairings and not magnitudes.
    site.mjs's join unions every document at the origin and every analysis each held, so its counts are a
-   DIFFERENT UNIT from `epRazor`'s — one engine run at `countersFrom` — and differencing the two is
+   DIFFERENT UNIT from a per-run histogram's — one engine run at `countersFrom` — and differencing the two is
    CLAUDE.md §AND-TWO-INSTRUMENTS-CAN-DISAGREE's category error. A PAIRING survives that where a count does
    not: which door goes with which class holds in the union exactly where it holds per document.
    SO THE ARITHMETIC CHECKED HERE IS THE JOIN'S OWN. `epJoinRows` counts those same arrays by LENGTH while the
@@ -2024,7 +1743,8 @@ if (jnShown.length) {
                                                 : r.docs + ' doc(s) ' + r.snaps + ' analys(es)', 24) +
       (r.keys.length ? r.keys.join(' ') : '(empty surface)') +
       (r.stray.length ? '   ARTIFACT-OLDER-THAN-A-KEY: ' + r.stray.join(' ') : ''));
-  console.log('  the PAIRINGS are the finding; the counts are a union over documents and are NOT `epRazor`\'s');
+  console.log('  the PAIRINGS are the finding; the counts are a union over documents and are NOT a per-run ' +
+              'histogram\'s');
   console.log('  unit, so they are checked against `epJoinRows` on the same row and never against `emitted`');
 }
 /* HOW MUCH OF THE INSTANCE'S SPAN THE ENGINE'S OWN LOOP GOT, AND HOW MANY FLOWS COULD TAKE A DELIVERY — the

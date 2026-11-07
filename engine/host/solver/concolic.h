@@ -30,9 +30,9 @@ void concolic_bound_selftest(void);
 /* WHOSE UNKNOWN A ROOT IS — the fourth fact a provenance holds, and a different question from all three
  * above it. `concolic_src_c` names WHERE A CANDIDATE IS INJECTED, `concolic_root_c` names WHICH COMPONENT
  * CARRIED THE BYTES IN, `concolic_ident_c` names WHICH VALUE THIS IS. None of them answers whether anything
- * outside this engine supplied the unknown at all, and that is the question §What-the-tool-produces' hard bar
- * turns on: an address, key or value "no parse of the served bytes can state, because it exists only at run
- * time". Two populations satisfy that sentence literally and fail the claim it is making.
+ * outside this engine supplied the unknown at all, and that is the question solver/endpoint.h's address class
+ * turns on (`unknown` against `unknown-unproven`). Two populations are undetermined and supplied by nobody
+ * outside: bytes the served document holds, and holes this engine minted.
  *
  * IT IS A FACT ABOUT THE ROOT AND NEVER ABOUT THE COMPOSITION, which is the axis to get right because the
  * composition is the one the emitted rows invite and it is wrong in BOTH directions: `fetch(cfg.url)` emits a
@@ -60,18 +60,17 @@ void concolic_bound_selftest(void);
 #define CONCOLIC_ROOT_WHOSE(X) \
     /* No mint on this value's provenance stated whose unknown it is. */ \
     X(CONCOLIC_WHOSE_UNSTATED,   "unstated") \
-    /* A document, a server, an attacker or the ENVIRONMENT supplied it, and no parse of the bytes this \
-       engine was served states it: an injected global the document did NOT spell, a reply field, a \
-       declared attacker source, a viewport or a clock. This is the population the bar exists for. */ \
+    /* A document, a server, an attacker or the ENVIRONMENT supplied it, from outside the bytes this \
+       engine was served: an injected global the document did NOT spell, a reply field, a declared \
+       attacker source, a viewport or a clock. An undetermined address rooted here reads `unknown`. */ \
     X(CONCOLIC_WHOSE_WORLD,      "world") \
     /* The bytes STAND IN THE DOCUMENT this engine was served, and the value is minted unknown anyway, \
        deliberately and correctly, so that a gate over it FORKS rather than being decided for the whole \
-       run. A parse of the served bytes states such a value, so "it exists only at run time" is false of \
-       an address composed from one. */ \
+       run. An address composed from one reads `unknown-unproven`. */ \
     X(CONCOLIC_WHOSE_SERVED,     "served") \
     /* THIS ENGINE minted the hole so that a drive could happen at all — a driven orphan's argument or \
-       receiver, which stood in no byte anywhere because it was never in any byte. The bar is true of such \
-       an address and the product's claim is false of it: nothing was LEARNED, because the hole is ours. */ \
+       receiver, which stood in no byte anywhere because it was never in any byte. Nothing is LEARNED \
+       about an address composed from it, because the hole is ours. */ \
     X(CONCOLIC_WHOSE_INSTRUMENT, "instrument")
 
 #define CONCOLIC_WHOSE_ARM(id, word) id,
@@ -83,9 +82,9 @@ typedef enum { CONCOLIC_ROOT_WHOSE(CONCOLIC_WHOSE_ARM) CONCOLIC_WHOSE_COUNT } Co
  * both static to solver/concolic.c. No sound form of the question is spellable from outside this file: a
  * consumer recovering the members by parsing the joined string is the matching §RUN-DON'T-MATCH forbids.
  *
- * TWO AND NOT ONE, because the bar and its negation are not each other's complement over a SET. `_any` is the
- * DISJUNCTION — one world root is enough to clear the bar however many instrument roots stand beside it, since
- * the address genuinely rests on something a parse cannot state. `_all` is the UNIVERSAL, which is what a
+ * TWO AND NOT ONE, because a claim and its negation are not each other's complement over a SET. `_any` is the
+ * DISJUNCTION — one world root is enough to class an address `unknown` however many instrument roots stand
+ * beside it, since the address rests on something supplied from outside. `_all` is the UNIVERSAL, which is what a
  * consumer refusing a claim needs: an address EVERY one of whose roots this engine minted rests on nothing
  * anybody supplied. A value whose roots are mixed answers 1 to `_any` and 0 to `_all` for the same `whose`,
  * and that is a third state rather than a tie to break here — the consumer decides, because what to do about

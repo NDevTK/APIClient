@@ -1087,8 +1087,7 @@ static void add_pending(const char *src, const char *root, int sink) {
        event), is paid nothing (solver/novelty.h). */
     novelty_credit(NOVELTY_SINK,
                    !identity_held_elsewhere(0, sink, src, e) &&
-                       novelty_note(NOVELTY_SINK, sink_identity(NOVELTY_SINK, sink, src)),
-                   0);
+                       novelty_note(NOVELTY_SINK, sink_identity(NOVELTY_SINK, sink, src)));
     cand_learn_path(e);
     sc = sink_class(sink);
     /* A single-context class's written-down vectors are attacks: the seeder may withdraw a contradicted one, and
@@ -1251,8 +1250,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
        finding the product already holds is paid nothing (solver/novelty.h). */
     novelty_credit(NOVELTY_FINDING,
                    !identity_held_elsewhere(1, cls, f->source, f) &&
-                       novelty_note(NOVELTY_FINDING, sink_identity(NOVELTY_FINDING, cls, f->source)),
-                   1);
+                       novelty_note(NOVELTY_FINDING, sink_identity(NOVELTY_FINDING, cls, f->source)));
     /* Give back the re-injection point: the blob pins the frozen segment and every segment below it, and a
        solved search seeds nothing further. Clearing it is what closes the search, since search_seeds reads this
        NULL; the probe's other arms keep arriving after a fire and would otherwise be seeded again. */
@@ -1287,7 +1285,7 @@ static void park_on_sender(const char *src, const char *root, int sink) {
     had = e->snd.n;
     if (sender_pins_learn(&e->snd)) {
         for (int i = had; i < e->snd.n; i++) novel |= novelty_note(NOVELTY_SENDER, sender_identity(e, i));
-        novelty_credit(NOVELTY_SENDER, novel, 0);
+        novelty_credit(NOVELTY_SENDER, novel);
     }
     DCHECK(e->snd.n > 0, "a detection behind a pinned principal recorded no sender for its search");
 }

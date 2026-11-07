@@ -101,7 +101,7 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     not merge into the page's own record. */
                  int driven;
                  /* `addr_class` is whether the run had determined the address when it recorded it (endpoint.h's
-                    ENDPOINT_ADDRESS_CLASSES has each word's claim and why it is a floor under the hard bar). No
+                    ENDPOINT_ADDRESS_CLASSES has each word's claim). No
                     producer states it: it is read off the `url` value's own concolic provenance at the door.
                     Merged by a max over the list's order, unlike `door` and `pre_program`, which are properties of
                     the mint: that some observed path composed the address from a value it had not determined
@@ -109,14 +109,14 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     is not taken back by a later sighting that proved less. */
                  int addr_class;
                  /* `witness_class` is whether this address may rest on a witness this engine chose (endpoint.h's
-                    ENDPOINT_WITNESS_CLASSES: the necessary condition under the razor). Merged like `addr_class`,
+                    ENDPOINT_WITNESS_CLASSES). Merged like `addr_class`,
                     by a max over its list's order: a sighting that could ask outranks one that could not, and a
                     path that had chosen a witness is not taken back by a later one that had not. The two fields
                     differ in what each order means, not in the shape of the merge. */
                  int witness_class;
                  /* Which sources the address value's bytes entered through, as concolic.h's `concolic_root_c`
-                    spells them: the delivery provenance of the address. A diagnostic, never an operand of the hard
-                    bar: `address_class_of` asks concolic.h's `concolic_root_whose_any` of the value, a fact the
+                    spells them: the delivery provenance of the address. A diagnostic, never an operand of the
+                    class: `address_class_of` asks concolic.h's `concolic_root_whose_any` of the value, a fact the
                     mint stated and every derivation carried, and a classification keyed on this string's spelling
                     would be a match rather than a run. It is the root of the sighting whose class the record
                     carries, written at the mint and replaced on the line that raises the class, so class and root
@@ -167,7 +167,7 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
    on an @H record is worse than a crash. */
 const char *endpoint_door_token(int door) {
     switch (door) {
-#define ENDPOINT_DOOR_ARM(id, token, reach, bytes) case id: return token;
+#define ENDPOINT_DOOR_ARM(id, token) case id: return token;
     ENDPOINT_DOORS(ENDPOINT_DOOR_ARM)
 #undef ENDPOINT_DOOR_ARM
     }
@@ -177,39 +177,10 @@ const char *endpoint_door_token(int door) {
                 door);
 }
 
-/* See endpoint.h. Generated from the same list as `endpoint_door_token`, so a door added without a reach does not
-   compile and the reach is stated in one place, a column rather than a table beside the enum. The fallthrough is a
-   CHECK for `endpoint_door_token`'s reason: this runs once per emitted @H record in the reach census in every
-   build, and a release build would classify a record under whatever the register held. */
-int endpoint_door_reach(int door) {
-    switch (door) {
-#define ENDPOINT_DOOR_REACH_ARM(id, token, reach, bytes) case id: return reach;
-    ENDPOINT_DOORS(ENDPOINT_DOOR_REACH_ARM)
-#undef ENDPOINT_DOOR_REACH_ARM
-    }
-    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the reach "
-                "census can only classify a door the list names, so the class it would raise is outside the "
-                "partition",
-                door);
-}
-
-/* See endpoint.h. `endpoint_door_token`'s construct and its severity, one list over. */
-const char *endpoint_reach_token(int reach) {
-    switch (reach) {
-#define ENDPOINT_REACH_ARM(id, token) case id: return token;
-    ENDPOINT_REACHES(ENDPOINT_REACH_ARM)
-#undef ENDPOINT_REACH_ARM
-    }
-    CHECK_FAILF("endpoint: the @H reach census states the class %d, which is none of endpoint.h's ENDPOINT_REACHES — "
-                "every class comes off `endpoint_door_reach`, generated from the door list's third column, so no "
-                "list produced this value",
-                reach);
-}
-
-/* See endpoint.h. `endpoint_reach_token`'s construct and severity, with a sharper reason: this runs once per
-   emitted row too, so a release fallthrough would write whatever the register held into the key that states the
-   product's own hard bar. There is no `EPA_UNSTATED` arm, because no producer can forget: the class is derived at
-   the door from the address value (`address_class_of`). */
+/* See endpoint.h. `endpoint_door_token`'s construct and severity, one list over: this runs once per emitted row
+   too, so a release fallthrough would write whatever the register held into a published key. There is no
+   `EPA_UNSTATED` arm, because no producer can forget: the class is derived at the door from the address value
+   (`address_class_of`). */
 const char *endpoint_address_class_token(int cls) {
     switch (cls) {
 #define ENDPOINT_ADDRESS_CLASS_ARM(id, token) case id: return token;
@@ -222,40 +193,8 @@ const char *endpoint_address_class_token(int cls) {
                 cls);
 }
 
-/* See endpoint.h. Generated from the same list as `endpoint_door_reach`, one column over, so a door added without
-   stating whose bytes it hands this surface does not compile; a forgotten door would err in the safe direction
-   (`EPB_DOCUMENT` proves nothing), the under-claim nobody discovers. The fallthrough is a CHECK for
-   `endpoint_door_reach`'s reason: once per emitted @H record in every build, it would otherwise hand the razor
-   composer a plausible answer. */
-int endpoint_door_bytes(int door) {
-    switch (door) {
-#define ENDPOINT_DOOR_BYTES_ARM(id, token, reach, bytes) case id: return bytes;
-    ENDPOINT_DOORS(ENDPOINT_DOOR_BYTES_ARM)
-#undef ENDPOINT_DOOR_BYTES_ARM
-    }
-    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the razor "
-                "composer asks whether a door's bytes were in the served document, and it cannot ask that of a door "
-                "the list does not name",
-                door);
-}
-
-/* See endpoint.h. `endpoint_reach_token`'s construct and severity, with `endpoint_address_class_token`'s sharper
-   reason: it runs once per emitted row in every build, on the key that states the product's hard bar. */
-const char *endpoint_razor_class_token(int cls) {
-    switch (cls) {
-#define ENDPOINT_RAZOR_CLASS_ARM(id, token) case id: return token;
-    ENDPOINT_RAZOR_CLASSES(ENDPOINT_RAZOR_CLASS_ARM)
-#undef ENDPOINT_RAZOR_CLASS_ARM
-    }
-    CHECK_FAILF("endpoint: an @H record states the razor class %d, which is none of endpoint.h's "
-                "ENDPOINT_RAZOR_CLASSES — `endpoint_razor_class_of` returns one of exactly two members, so nothing "
-                "in this file composed this value",
-                cls);
-}
-
 /* See endpoint.h. `endpoint_address_class_token`'s construct and severity, with that list's banner's extra reason:
-   this word is the only published bound on the part of the razor's `unproven` whose bytes this engine chose (a
-   pin's bytes are a literal the page's own predicate spelled, so what it bounds is reproducibility), and a release
+   this word is the only published bound on how much of the surface rests on bytes this engine chose, and a release
    build publishing a word nothing decided would put a measurement under a figure nobody took. */
 const char *endpoint_witness_class_token(int cls) {
     switch (cls) {
@@ -589,26 +528,6 @@ static void endpoint_witness_add(Endpoint *e, Witness *w, const char *vroot, Wit
     w->acts = NULL; w->vpiece = WIT_VPIECE_PATH; w->vheader = NULL; w->vcanon = NULL;
 }
 
-/* See endpoint.h. A union rather than an intersection, for the address class's own merge's reason: each operand is
-   a positive statement that the address exists only at run time, so an intersection would answer `unproven` for a
-   row one of them proved and make the floor read lower than the run established. No assert on either operand:
-   both arrive through generated switches whose fallthrough is a CHECK in every build, so an assert here could not
-   fail. The two `if`s are not a precedence: both return the same member. */
-int endpoint_razor_class_of(int door, int addr_class) {
-    /* `== EPA_UNKNOWN`, not `!= EPA_CONCRETE`: every member added to `ENDPOINT_ADDRESS_CLASSES` goes below the one
-       this bar reads, carving a population out of the claim without a character changing here, which is why that
-       list is where a narrowing of the bar goes. `EPA_SOURCE_DETERMINED` is an address this flow determined out of
-       a source, whose pin's bytes are a literal the page's own text spells, so it does not exist only at run time.
-       `EPA_UNKNOWN_UNPROVEN` is one the run did not determine and whose every root this engine minted, or the
-       served document spells, or no mint could speak for, so the bar is false of it or unproven about it.
-       `!= EPA_CONCRETE` would claim both, the over-claim endpoint.h's banner measures; it reads as the natural
-       complement because both members sit on the concolic side of `url_display`'s branch. Each is its own census
-       row, so the population that left this class is countable. */
-    if (addr_class == EPA_UNKNOWN) return EPZ_RUNTIME_ONLY;
-    if (endpoint_door_bytes(door) == EPB_OFF_DOCUMENT) return EPZ_RUNTIME_ONLY;
-    return EPZ_UNPROVEN;
-}
-
 /* A value carrying a `{hole}` is a shape, an unknown the code did not compute, and a hole-free one is the real
    thing; a concrete value supersedes a shape for the same header, as a param's example values do. */
 static int header_is_shape(const char *v) { return strchr(v, '{') != NULL; }
@@ -671,8 +590,8 @@ static long g_ask_suppressed;   /* declined AT the gate: a candidate/verify re-f
 static long g_ask_origin_finding, g_ask_origin_driven;
 static long g_ask_merged;       /* reached a record this surface already held — the invisible arm */
 static long g_ask_minted;       /* created a record — the arm, and the only one, that moves `epMinted` */
-/* The cut of the merged arm that answers the razor's own sentence, which `asks - preProgram` bounds from above and
- * never states: the ask was made with a program running and the record it reached was minted before any program
+/* The cut of the merged arm that `asks - preProgram` bounds from above and never states: the ask was made with a
+ * program running and the record it reached was minted before any program
  * had run, running code composing an address the markup had already named. Nothing else in either census can be
  * that, since a merge moves no surface figure. A cut, not a fourth arm: it selects inside `merged` on a fact
  * about the record, so it is contained in `merged` and in `asks - preProgram`, both asserted in
@@ -731,9 +650,9 @@ typedef struct {
      * the only recording point.
      *
      * With `named` beside it, `called == 0` separates "the program names no such call" from "a flow never reached
-     * one it makes" (`named > 0 && called == 0`, the state the runtime-only razor is about, since every address
-     * behind such a site is one a parse of the bytes recovers and this engine did not) and "the hook is not
-     * wired". A floor over one spelling, with no containment against `called` in either direction: `called >
+     * one it makes" (`named > 0 && called == 0`: an address behind such a site is one this engine did not learn)
+     * and "the hook is not wired". A floor over one spelling, with no containment against `called` in either
+     * direction: `called >
      * named` is ordinary (`window.fetch(u)` is a property read, `(function (fetch) {…})(self.fetch)` a local
      * slot), and so is `named > called`, also because every flow that replays a program recompiles it, so this
      * counts compiler resolutions, never source sites: a bit, not a magnitude, named `Named` rather than `Sites`.
@@ -863,9 +782,8 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
     return r;
 }
 
-/* Whether the run had determined this address: the product's hard bar, read off the test `url_display` makes. A
- * concolic `url` is an address some segment of which entered the program at a source and which therefore stands in
- * no served byte. No parser, no table of statable shapes, and nothing about the address's text is consulted.
+/* Whether the run had determined this address, read off the test `url_display` makes. A concolic `url` is an
+ * address some segment of which entered the program at a source. Nothing about the address's text is consulted.
  * Both concolic members are url_display's concolic branch, so `cls != EPA_CONCRETE` is exactly `concolic_is(url)`
  * and exactly "this row printed a shape"; the refinement answers a different question (did this flow determine
  * the symbolic value it holds, and whose unknown does it rest on) and changes no branch of url_display.
@@ -881,7 +799,7 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
  * before its own strict gate and passed bare, endpoint.h's worked example.
  *
  * Whose unknown it is (concolic.h's `concolic_root_whose_any`, a disjunction over the root set the mint states and
- * `derived_root_whose` unions at every join) separates three populations from the bar with one predicate: a hole
+ * `derived_root_whose` unions at every join) separates three populations from `EPA_UNKNOWN` with one predicate: a hole
  * `engine_orphan_call` minted so a drive could happen at all (`{orphan<hex>.argN}`, an unknown nobody supplied);
  * a value whose bytes stand in the served document and is minted unknown so a gate over it forks (HTML §4.12.1's
  * data block, an injected global an inline script wrote: CONCOLIC_WHOSE_SERVED, stated by core/loader/data_block.c
@@ -899,11 +817,11 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
  * shape, root or class would hand any document an abort switch, and whether a page re-reads a source is the
  * page's choice. Provenance threading is asserted at `concolic_alloc`.
  *
- * The bar is as good as what the mints stated, and one path loses the statement: a value somebody outside this
+ * The class is as good as what the mints stated, and one path loses the statement: a value somebody outside this
  * engine supplied whose whose-mask was lost reads `EPA_UNKNOWN_UNPROVEN`, an under-claim. The real path is §2.7.8
  * StructuredDeserialize's rebuild, which has the shape and source but mints CONCOLIC_WHOSE_UNSTATED; the gap is
  * owned by core/structured_clone.c's named residual at that mint, and this line reads the fix for free. Guessing
- * WORLD here instead would put a rebuilt orphan argument back on the bar.
+ * WORLD here instead would class a rebuilt orphan argument `unknown`.
  * Named residual. Not covered: the census publishes the address class and the witness class as two histograms, so
  * how many concolic rows were `unasked` is an inequality between marginals; the per-endpoint row carries both
  * adjacently, but no census joins them. Next diff builds: one keyed census row joining the two, as
@@ -961,8 +879,7 @@ static int address_class_of(JSContext *ctx, JSValueConst url) {
        enough however many engine-minted holes stand beside it, and `_all` would refuse a mixed set the run did
        prove, an invisible under-claim. One read separates all three non-WORLD populations, so a second read beside
        it would be two answers to one question. Nothing is asserted about the answer: the pair
-       `!!root == !!root_whose` is asserted at `concolic_alloc`, and this answer's mapping is asserted at the one
-       call site, where a door is in hand. */
+       `!!root == !!root_whose` is asserted at `concolic_alloc`. */
     if (!concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)) return EPA_UNKNOWN_UNPROVEN;
     if (!address_origin_determined(ctx, url)) return EPA_UNKNOWN_ORIGIN_OPEN;
     return EPA_UNKNOWN;
@@ -2676,22 +2593,6 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        spelling is taken from: the merge arm and the mint both need it, the value is borrowed for this call, and
        nothing below holds the JSValue. */
     int acls = address_class_of(ctx, url);
-    /* The bar's claiming member maps to `runtime-only` for every door: it is `endpoint_razor_class_of`'s first
-       line. Asserted here because the mapping takes a door and only a caller holds one; a door arm put in front of
-       that line fires this. */
-    DCHECK(endpoint_razor_class_of(door, EPA_UNKNOWN) == EPZ_RUNTIME_ONLY,
-           "`address_class_of`'s flow-less member does not map to `runtime-only` under `endpoint_razor_class_of` — "
-           "the gate that stops a stale pin chain from claiming a determination rests on that mapping");
-    /* And the member that does not claim: `address_class_of` narrows the bar by returning `EPA_UNKNOWN_UNPROVEN`,
-       and that narrowing is real only while this mapping leaves such a row `unproven`; a door arm, or a member
-       reordered above `EPA_UNKNOWN`, would hand the bar back every instrument hole with every census still summing.
-       The `EPB_OFF_DOCUMENT` arm is excluded, not exempted: that operand is the bar's other positive statement
-       (`reply-chunk` hands this surface bytes in no served document), so a row clearing through the door is the
-       union working. */
-    DCHECK(endpoint_door_bytes(door) == EPB_OFF_DOCUMENT ||
-           endpoint_razor_class_of(door, EPA_UNKNOWN_UNPROVEN) == EPZ_UNPROVEN,
-           "`address_class_of`'s whose-narrowed member clears the product's bar through a door whose bytes were in "
-           "the served document — that member exists so the bar refuses an address the run did not determine");
     /* And what the path that composed it had chosen, read on the same line and for the same reason: a fact about
        the running flow, which nothing below may re-ask. */
     int wcls = witness_class_now();
@@ -2877,8 +2778,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             if (wcls > g_eps[i].witness_class) g_eps[i].witness_class = wcls;
             endpoint_witness_add(&g_eps[i], &wit, vroot, vpiece, vheader);
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
-                novelty_credit(NOVELTY_HEADER, endpoint_note_headers(&g_eps[i], had_headers),
-                               endpoint_razor_class_of(g_eps[i].door, g_eps[i].addr_class) == EPZ_RUNTIME_ONLY);
+                novelty_credit(NOVELTY_HEADER, endpoint_note_headers(&g_eps[i], had_headers));
             /* The arm the surface has no row for: a merge teaches the record structure and moves no census figure
                (not `minted`, not `emitted`, not `preProgram`, whose flag belongs to the mint), so running code
                composing every address the markup had named would be byte-identical on all four rows to running
@@ -2947,9 +2847,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     {
         int novel = novelty_note(NOVELTY_ENDPOINT, nid);
         int hnovel = endpoint_note_headers(e, 0);
-        int razor = endpoint_razor_class_of(e->door, e->addr_class) == EPZ_RUNTIME_ONLY;
-        novelty_credit(NOVELTY_ENDPOINT, novel, razor);
-        if (!novel && e->nh) novelty_credit(NOVELTY_HEADER, hnovel, razor);
+        novelty_credit(NOVELTY_ENDPOINT, novel);
+        if (!novel && e->nh) novelty_credit(NOVELTY_HEADER, hnovel);
     }
 done:
     free(path);
@@ -3063,7 +2962,8 @@ void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *
             "(%ld) — the cut is raised only inside the merge arm, so a larger cut is a raise outside "
             "it", g_ask_merged_pre_program, g_ask_merged);
     /* And the second is against the other fact the cut selects on: every member was asked with a program running,
-       so it is contained in `asks - preProgram`, endpoint.h's separation between the two readings of a zero razor.
+       so it is contained in `asks - preProgram`, endpoint.h's separation between the two readings of a zero
+       `emitted - preProgram`.
        The sides are raised at different events (the door's entry, the merge), so they part exactly when the door's
        program bit and the record's stop meaning one instant, the state the mint's DCHECK guards from the other
        side. */
@@ -3306,64 +3206,18 @@ char *endpoint_door_hist_json(void) {
     return json_buf_take(&b);
 }
 
-/* The same surface partitioned by what a parse of the document would have reached (endpoint.h has the three
-   classes, why three, and why the map is a column of the door list): `beyond` is the addresses a markup parse does
-   not reach, `either` the population no door can decide, and `markup` the `<head>` counted back. It is a markup
-   diagnostic, not the product's bar, which `endpoint_razor_class_of` composes from `addressClass` and the door
-   list's fourth column (`endpoint_razor_hist_json` below); this row is keyed on the third column, and a literal
-   chunk URL delivered through `module-import` is `beyond` here and scores zero on the bar. It is a coarsening of
-   the door row, not a second observation: every count is the sum of its class's door counts, so two zeroes here
-   are one zero, and what it adds is the map as data. A separate walk rather than a sum of the door table, so one
-   walk drifting is a loud identity failure (the walks share the `is_asset` skip). No range assert on the
-   subscript: `endpoint_door_reach` is generated and its fallthrough is a CHECK in every build, so an assert could
-   not fail; `endpoint_door_hist_json` asserts because its subscript is the raw `door` field. */
-char *endpoint_reach_hist_json(void) {
-    JsonBuf b = { 0 };
-    long n[EPR_COUNT];
-    long minted, assets, emitted, pre_program, sum = 0;
-    int r, i;
-
-    memset(n, 0, sizeof n);
-    for (i = 0; i < g_eps_n; i++) {
-        if (g_eps[i].is_asset) continue;
-        n[endpoint_door_reach(g_eps[i].door)]++;
-    }
-    endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
-
-    /* Every class is emitted including zeroes, for the door census's reason and a sharper one: an absent `beyond`
-       and a `beyond` of 0 are what this row keeps apart. The zero is this markup diagnostic declining to claim
-       reach (never the product's bar, which no count of doors reaches); the absence is an instrument that
-       stopped. */
-    json_buf_raw(&b, "{");
-    for (r = 0; r < EPR_COUNT; r++) {
-        if (r) json_buf_raw(&b, ",");
-        json_buf_str(&b, endpoint_reach_token(r));
-        json_buf_raw(&b, ":");
-        edge_num(&b, n[r]);
-        sum += n[r];
-    }
-    json_buf_raw(&b, "}");
-    DCHECKF(sum == emitted,
-            "the @H surface's per-reach counts sum to %ld against the %ld rows it emits — the three classes "
-            "partition the emitted surface over the same `is_asset` skip, so the two walks are counting different "
-            "populations", sum, emitted);
-    return json_buf_take(&b);
-}
-
 /* The same surface partitioned by whether the run had determined the address and whose unknown it rests on
-   (endpoint.h has each class's claim, why there is no unstated member, and why the field is a floor under the
-   hard bar). `unknown` is the addresses reached holding a value the run had not determined and resting on an
-   unknown supplied outside this engine, the one figure the bar is scored off; `unknown-unproven` is undetermined
-   and refused by the bar; `concrete` and `source-determined` are the rest and claim nothing about a parse. A second
-   observation, not a coarsening: it is keyed on a property of the address value no door implies either way
-   (`link-element` is reached by determined and tainted addresses alike, `reply-chunk` is `beyond` with a
-   determined address every time), so the three histograms hold two observations. A third walk, for the reach
-   row's reason. The subscript is re-asserted, though the token speller is a CHECK, because this line indexes the
-   array before any speller runs; both sides are this codebase's own. Three facts about the list's order are
-   asserted, since the record's merge is a max over it and a later diff can break the order without going out of
-   range: `EPA_CONCRETE` is the low end (the identity element the `memset` leaves); `EPA_UNKNOWN` the high end (the
-   bar keys on it, so a member above it would let a max carry a record out of the class the bar reads); and the
-   determined members are a prefix (below). */
+   (endpoint.h has each class's claim and why there is no unstated member). `unknown` is the addresses reached
+   holding a value the run had not determined and resting on an unknown supplied outside this engine;
+   `unknown-unproven` and `origin-undetermined` are undetermined otherwise; `concrete` and `source-determined` are
+   the determined rest. A second observation, not a coarsening of the door row: it is keyed on a property of the
+   address value no door implies either way (`link-element` is reached by determined and tainted addresses alike).
+   A separate walk, so one walk drifting is a loud identity failure. The subscript is re-asserted, though the token
+   speller is a CHECK, because this line indexes the array before any speller runs; both sides are this codebase's
+   own. Three facts about the list's order are asserted, since the record's merge is a max over it and a later diff
+   can break the order without going out of range: `EPA_CONCRETE` is the low end (the identity element the `memset`
+   leaves); `EPA_UNKNOWN` the high end (a member above it would let a max carry a record out of the class Q2
+   reads); and the determined members are a prefix (below). */
 char *endpoint_address_hist_json(void) {
     JsonBuf b = { 0 };
     long n[EPA_COUNT];
@@ -3374,9 +3228,9 @@ char *endpoint_address_hist_json(void) {
            "endpoint.h's ENDPOINT_ADDRESS_CLASSES does not begin with the member that proves nothing — the record's "
            "merge is a maximum over this order and `memset` leaves a fresh record at 0, so 0 must make no claim");
     DCHECK(EPA_UNKNOWN == EPA_COUNT - 1,
-           "endpoint.h's ENDPOINT_ADDRESS_CLASSES does not end with EPA_UNKNOWN — `endpoint_razor_class_of` keys the "
-           "product's bar on it and the merge is a maximum over this order, so a member above it would let a later "
-           "sighting carry a record out of the class that clears the bar");
+           "endpoint.h's ENDPOINT_ADDRESS_CLASSES does not end with EPA_UNKNOWN — Q2 is `cls == EPA_UNKNOWN` and "
+           "the merge is a maximum over this order, so a member above it would let a later sighting carry a record "
+           "out of the class Q2 reads");
     /* The third fact, which the two ends cannot see: the list's two predicates are asked of one stored member, and
        with more than one undetermined member Q1 is spelled as a threshold (`cls <= EPA_SOURCE_DETERMINED`), which
        is correct only while the determined members are a prefix. A determined member added above an undetermined
@@ -3396,9 +3250,8 @@ char *endpoint_address_hist_json(void) {
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
 
-    /* Every class is emitted including zeroes, for the reach census's reason: an absent `unknown` is an instrument
-       that stopped writing the class, while an `unknown` of 0 is the hard bar answering, a refusal to claim the
-       capability on this document. */
+    /* Every class is emitted including zeroes: an absent `unknown` is an instrument that stopped writing the class,
+       while an `unknown` of 0 is the run answering. */
     json_buf_raw(&b, "{");
     for (c = 0; c < EPA_COUNT; c++) {
         if (c) json_buf_raw(&b, ",");
@@ -3412,62 +3265,12 @@ char *endpoint_address_hist_json(void) {
             "the @H surface's per-address-class counts sum to %ld against the %ld rows it emits — the classes "
             "partition the emitted surface over the same `is_asset` skip, so the two walks are counting different "
             "populations", sum, emitted);
-    /* The bar is not the sum of this table and the reach table: the two overlap (an undetermined `reply-chunk` row
-       is counted by both), so their sum exceeds the surface; a union is per-row membership, which
-       `endpoint_razor_hist_json` composes. */
     return json_buf_take(&b);
 }
 
-/* The same surface partitioned by the bar itself (endpoint.h has each class's claim and why the field is a floor):
-   `endpoint_razor_class_of` is the whole keying, `runtime-only` where the run had not determined the address and
-   its unknown was supplied outside this engine, or where the door's bytes are not the served document's, and
-   `unproven` otherwise. A fourth walk, not a sum of the two tables: the operands overlap (a row that is `unknown`
-   and `EPB_OFF_DOCUMENT` is in each marginal and is one row here), so a sum would be arithmetically wrong. The
-   `addr_class` range is re-asserted because a corrupt value would fall through `endpoint_razor_class_of`'s first
-   arm into `unproven`, an under-claim published as a floor; `door` is not, because `endpoint_door_bytes` CHECKs it
-   in every build and nothing here indexes by it. This is a cross-check against the per-row `razorClass` column,
-   never a sum with it: both come off one predicate, read at two instants over a gauge (`epEmitted` falls when an
-   asset verdict lands between a census and the emission), so a difference names which records each document
-   described. */
-char *endpoint_razor_hist_json(void) {
-    JsonBuf b = { 0 };
-    long n[EPZ_COUNT];
-    long minted, assets, emitted, pre_program, sum = 0;
-    int c, i;
-
-    memset(n, 0, sizeof n);
-    for (i = 0; i < g_eps_n; i++) {
-        if (g_eps[i].is_asset) continue;
-        DCHECKF(g_eps[i].addr_class >= 0 && g_eps[i].addr_class < EPA_COUNT,
-                "an @H record reached the razor census carrying the address class %d, which is none of endpoint.h's "
-                "ENDPOINT_ADDRESS_CLASSES — `endpoint_razor_class_of` would read it as `unproven` and under-claim "
-                "the published floor", g_eps[i].addr_class);
-        n[endpoint_razor_class_of(g_eps[i].door, g_eps[i].addr_class)]++;
-    }
-    endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
-
-    /* Every class is emitted including zeroes, for the walks above's reason: an absent `runtime-only` is an
-       instrument that stopped, and a `runtime-only` of 0 is the product's bar answering, a refusal to claim the
-       capability on this document. */
-    json_buf_raw(&b, "{");
-    for (c = 0; c < EPZ_COUNT; c++) {
-        if (c) json_buf_raw(&b, ",");
-        json_buf_str(&b, endpoint_razor_class_token(c));
-        json_buf_raw(&b, ":");
-        edge_num(&b, n[c]);
-        sum += n[c];
-    }
-    json_buf_raw(&b, "}");
-    DCHECKF(sum == emitted,
-            "the @H surface's per-razor-class counts sum to %ld against the %ld rows it emits — the two classes "
-            "partition the emitted surface over the same `is_asset` skip, so the walks are counting different "
-            "populations", sum, emitted);
-    return json_buf_take(&b);
-}
-
-/* The fifth walk, over the one fact the bar's `unproven` does not carry (endpoint.h has each member's claim and why
-   it is the necessary condition under the bar rather than part of it), separate for `endpoint_reach_hist_json`'s
-   reason. This list is ordered and the record's merge is a max over it, so a later diff can break the order
+/* The same surface partitioned by witness class (endpoint.h has each member's claim), a separate walk for
+   `endpoint_address_hist_json`'s reason. This list is ordered and the record's merge is a max over it, so a later
+   diff can break the order
    without going out of range; `EPW_UNASKED` is the identity element the `memset` leaves, so it must be the lowest
    member or a merge could lower a record that had already read something. */
 char *endpoint_witness_hist_json(void) {
@@ -3490,10 +3293,9 @@ char *endpoint_witness_hist_json(void) {
     }
     endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
 
-    /* Every class is emitted including zeroes, for the four walks' reason, and here the two states take opposite
-       work: an absent `may-rest-on` is an instrument that stopped writing the field, while a zero is a run on which
-       no address was composed by a path that had pinned anything, which makes the bar's `unproven` beside it the
-       run having proved nothing and sends the next diff to the solver rather than to the pin. */
+    /* Every class is emitted including zeroes, and here the two states take opposite work: an absent `may-rest-on`
+       is an instrument that stopped writing the field, while a zero is a run on which no address was composed by a
+       path that had pinned anything, which sends the next diff to the solver rather than to the pin. */
     json_buf_raw(&b, "{");
     for (c = 0; c < EPW_COUNT; c++) {
         if (c) json_buf_raw(&b, ",");
@@ -3745,33 +3547,19 @@ char *endpoint_json_array(void) {
         json_buf_raw(&b, ","); json_buf_key(&b, "mintedAt");
         json_buf_str(&b, e->pre_program ? "pre-program" : "post-program");
         /* And the third fact about the sighting, which neither of those implies: whether the run had determined the
-           address and whose unknown it rests on, the hard bar at its own grain, which no count of doors reaches (a
-           literal chunk URL through `module-import` and `/api/{location.hash}` through `fetch` are both `beyond` a
-           markup parse, and only the second clears the bar). The whose fact is in this one word rather than a
-           column of its own, so a consumer reading `unknown-unproven` beside `unproven` can check the razor's
-           answer against what the wire carries (`endpoint_razor_class_of`'s contract). Written on every row in
-           every build, so a consumer's `(unstated)` bucket stays a fact about the build (endpoint.h). */
+           address and whose unknown it rests on (a literal chunk URL through `module-import` and
+           `/api/{location.hash}` through `fetch` share no class). The whose fact is in this one word rather than a
+           column of its own. Written on every row in every build, so a consumer's `(unstated)` bucket stays a fact
+           about the build (endpoint.h). */
         json_buf_raw(&b, ","); json_buf_key(&b, "addressClass");
         json_buf_str(&b, endpoint_address_class_token(e->addr_class));
-        /* And the hard bar as one word, the union of two of the three, so the emitter that states a razor figure
-           composes the union itself and a door count cannot be assembled into one. (`endpoint_door_reach(door) ==
-           EPR_BEYOND` would be the demoted figure: `fetch`, `xhr`, `beacon` and `module-import` are all `beyond` a
-           markup parse, and a JS AST parse reads them off the text without running anything.) Derived, not stored,
-           which keeps it honest under its operands' two merge rules (`addr_class` by a max, `door` the first
-           sighting's), leaves no third merge rule to get wrong, and lets a consumer check this word against the two
-           beside it. Written on every row in every build. */
-        json_buf_raw(&b, ","); json_buf_key(&b, "razorClass");
-        json_buf_str(&b, endpoint_razor_class_token(endpoint_razor_class_of(e->door, e->addr_class)));
-        /* And the one fact the bar does not carry, beside it rather than inside it (endpoint.h's
-           ENDPOINT_WITNESS_CLASSES): `razorClass` is a floor and this a may, adjacent so the pair is legible per
-           row: `unproven` beside `may-rest-on` is the population the razor's zero does not account for, and
-           `unproven` beside `no-witness` the run having proved nothing about this address. Written on every row in
-           every build. */
+        /* And whether the address may rest on bytes this engine chose (endpoint.h's ENDPOINT_WITNESS_CLASSES), a
+           may beside the class, adjacent so the pair is legible per row. Written on every row in every build. */
         json_buf_raw(&b, ","); json_buf_key(&b, "witnessClass");
         json_buf_str(&b, endpoint_witness_class_token(e->witness_class));
         json_buf_raw(&b, ","); json_buf_key(&b, "witness");
         witness_json(&b, e);
-        /* And the operand the address class was derived from, which none of the four columns above publishes:
+        /* And the operand the address class was derived from, which none of the columns above publishes:
          * `addressClass` says the run held an unknown somebody outside this engine supplied, and only this says
          * which component carried the bytes in, so it is the per-row observation a reader checks the whose
          * narrowing against; an `unknown-unproven` row whose root names a component carrying a document's or a
@@ -3786,7 +3574,7 @@ char *endpoint_json_array(void) {
          * fill"); a string naming the sources, possibly a set. The types discriminate, not a token: a root may be
          * composed from a name the page chose (solver/absent.c mints an injected global's source from the property
          * read), so any reserved in-band word could be spelled by a document. It composes no verdict here or in any
-         * consumer: the bar reads whose through `concolic_root_whose_any`, never this string's spelling. Written on
+         * consumer: the class reads whose through `concolic_root_whose_any`, never this string's spelling. Written on
          * every row in every build.
          * Named residual. Not covered: the root is that of the sighting whose class the record carries, so where
          * two sightings of one address held the same class and different roots, the second root is recorded

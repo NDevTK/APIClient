@@ -1384,19 +1384,15 @@ const SPECS = [
      that component's to make. This is it, and it is an INDEX rather than a foreign row for the reason the
      `file system` and `sri` rows already argue: a foreign row STOPS a wrong answer and only an index ANSWERS,
      and there is a citation here to answer.
-     THE POPULATION IS ONE SITE AND IT IS THE STRONGEST FORM A CITATION TAKES — `testing/static_surface.mjs`
-     writes this standard's name, a levelled number and a QUOTED title, and the title is the heading verbatim.
-     That site's own comment records that it cited a NON-EXISTENT section of HTML for one commit, written from
-     memory, and was repaired by a fetch; with this row the repair is CONFIRMED by the tool on every run
-     instead of resting on that one reading.
+     No site in the audited tree writes this standard's name before a number today; the row stands so the
+     component above can cite it, and a citation written against it is checked from its first run.
      THE ANCHOR IS THE TWO-WORD PLURAL NAME AND NOTHING SHORTER, which is the `mathml`/`database`/`core` hazard
      both lists already record from the other end. `serviceworker` as one word is written constantly here — an
      IDL interface name, a Fetch destination string, an exposure-set flag, a CSP directive key — so a one-word
      anchor would be consulted at sites discussing none of this and is the coincidence generator `keepTerm`
      refuses for terms. The SINGULAR is left off too: this tree writes it as ordinary prose about a kind of
      worker rather than as a document's name, and the two sites where it stands nearest a number are both
-     naming HTML. Derived rather than eyeballed over the audited tree: the only place a spelling of this
-     standard is the token immediately before a number is the one site above.
+     naming HTML.
      AND `test_forced.c`'S PARENTHESISED GLOBAL-NAME LIST IS WHY THE SHORTER ANCHOR WOULD HAVE COST SOMETHING
      RATHER THAN MERELY BOUGHT NOTHING. It writes a worker realm's global names as a tuple and then a number of
      the XMLHttpRequest Standard immediately after the closing bracket, so the token nearest that number is an

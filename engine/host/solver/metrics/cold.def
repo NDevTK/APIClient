@@ -519,45 +519,20 @@ METRIC(ep_pre_program, "epPreProgram", GAUGE, "address", AGENT, "solver/endpoint
    `<link>` and a markup one share a door, and a `<link>` after a `<script src>` is minted
    post-program). Each emitted row carries both. */
 METRIC(ep_doors, "epDoors", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
-/* …and which of those mechanisms a markup parse of the served document would have reached, keyed
-   on the door list's third column: `markup`, `either` (a parser-inserted or script-created
-   `link-element`, `image-element` or `form-submit`, which the door does not distinguish) and
-   `beyond`, a floor under the markup question. This is a diagnostic, not the razor: a literal
-   chunk URL through `module-import` is `beyond` yet scores zero at the bar, which is
-   `epRazorClass` below (composed by `endpoint_razor_class_of`); build.mjs renders this as the
-   markup diagnostic and `endpointRazorClassReading` as the bar.
-   Entailed by the door row (each class sums its doors), so the two are one observation; what
-   this adds is the map. Never a target: `beyond` 0 against nonzero `epEmitted` is a refusal to
-   claim, and the row is an identity within one run, not comparable across wall-denominated
-   runs. Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum and
-   build.mjs re-checks it against the emitted document. */
-METRIC(ep_reach, "epReach", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
 /* …and the address's own class, read off the address value's concolic provenance at endpoint.c's
-   door: the bar is a property of the address, not the mechanism (`/api/{location.hash}` through
-   `fetch` clears it; a literal chunk URL through `module-import` does not). A second
-   observation beside `epDoors`/`epReach`, which are one.
-   A floor, not a verdict: `unknown` is a positive statement that the address rested on an
-   unknown supplied from outside the engine (one resting on a hole the engine minted for its own
-   drive is refused), so it clears the bar. `concrete` claims nothing about a parse; what it
-   hides is listed at solver/endpoint.h (a literal, the document's own address, or a pinned
-   source re-read). Never a target. Its denominator `epEmitted` travels on this line;
-   endpoint.c asserts the sum. */
+   door: a property of the address, not the mechanism (`/api/{location.hash}` through `fetch` is
+   `unknown`; a literal chunk URL through `module-import` is `concrete`). A second observation
+   beside `epDoors`. `unknown` is a positive statement that the address rested on an unknown
+   supplied from outside the engine (one resting on a hole the engine minted for its own drive is
+   `unknown-unproven`); what `concrete` hides is listed at solver/endpoint.h (a literal, the
+   document's own address, or a pinned source re-read). Never a target. Its denominator
+   `epEmitted` travels on this line; endpoint.c asserts the sum. */
 METRIC(ep_address_class, "epAddressClass", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
-/* …and the bar itself, which no reader can compose from its operands: a union is a statement
-   about per-row membership, and the marginals above carry no overlap. A cross-check against the
-   emitted array's `razorClass`, never a sum with it: both come off `endpoint_razor_class_of`,
-   taken at two instants over a gauge (`epEmitted` falls when an asset verdict lands between
-   them), so a disagreement names which records each document described. `runtime-only` 0
-   against nonzero `epEmitted` is a refusal to claim; `unproven` claims nothing about a parse.
-   Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum. */
-METRIC(ep_razor_class, "epRazorClass", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)
-/* …and the necessary condition under that bar, beside it and never inside it: the bar is a floor
-   of positive statements, and this is a "may" (solver/endpoint.h). `may-rest-on` bounds the
-   addresses composed by a path that had pinned a source, which `addressClass` calls
-   `concrete` because the pin arm re-reads a bare primitive: 0 means no chosen-bytes population
-   under this surface, nonzero means addresses that may not reproduce for a real session and
-   the next diff is the pin. It is not a bound on the bar's slack — a pin's bytes are a literal
-   the page's own text spells (solver/concolic.c), so `unproven` holds them correctly.
+/* …and whether each address may rest on bytes this engine chose, a "may" beside the class and
+   never inside it (solver/endpoint.h). `may-rest-on` bounds the addresses composed by a path that
+   had pinned a source, which `addressClass` calls `concrete` because the pin arm re-reads a bare
+   primitive: 0 means no chosen-bytes population under this surface, nonzero means addresses that
+   may not reproduce for a real session and the next diff is the pin.
    `unasked` is no flow standing when the record was minted: a door composing a request outside
    the scheduler. Its denominator `epEmitted` travels on this line; endpoint.c asserts the sum. */
 METRIC(ep_witness_class, "epWitnessClass", GAUGE, "address", AGENT, "solver/endpoint.c", OBJECT)

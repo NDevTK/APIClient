@@ -86,52 +86,50 @@ typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
    of) nor `mintedAt` (when): a `<link>` below a `<head>` script is minted post-program and is still markup.
    It is the first sighting's mechanism and is never re-armed, and it is not part of `same_identity`: two
    mechanisms reaching one address are one endpoint, and splitting it would scatter one request's params.
-   Columns: id, wire token, what a markup parse reaches through the door (ENDPOINT_REACHES), and whose bytes
-   the door hands this surface (ENDPOINT_DOOR_BYTES). One list keeps the enum, the token table and every
-   census in step; a door missing a column does not compile. The three program doors share one call site,
+   Columns: id and wire token. One list keeps the enum, the token table and the door census in step. The
+   three program doors share one call site,
    solver/engine.c's park consumer, whose `program_load_door` reads the park kind for `module-import` and the
    parser-inserted mark for the two element doors, because a kind is a queue position and not an origin. */
 #define ENDPOINT_DOORS(X)                                                                                    \
     /* HTML §4.12.1.1 "Processing model": a program load whose `<script src>` a parser inserted, read off   \
-       the park's `parser document` mark and never off the queue its reply is delivered at. Narrower than   \
-       `markup` by one population, a named residual at `program_load_door`: a `<script src>` a             \
-       `document.write` put in the tree is parser-inserted and is not in the served bytes. */               \
-    X(EPD_DOCUMENT_SCRIPT, "document-script", EPR_MARKUP, EPB_DOCUMENT)                             \
+       the park's `parser document` mark and never off the queue its reply is delivered at; a `<script src>` \
+       a `document.write` put in the tree is parser-inserted too. */                                         \
+    X(EPD_DOCUMENT_SCRIPT, "document-script")                                                                \
     /* a `<script src>` no parser inserted: running code put the element in the tree */                     \
-    X(EPD_INJECTED_SCRIPT, "injected-script", EPR_BEYOND, EPB_DOCUMENT)                             \
-    /* a dynamic `import()`: no element, so no parse of the document can find it */                          \
-    X(EPD_MODULE_IMPORT,   "module-import", EPR_BEYOND, EPB_DOCUMENT)                               \
+    X(EPD_INJECTED_SCRIPT, "injected-script")                                                                \
+    /* a dynamic `import()`: a program load with no element */                                               \
+    X(EPD_MODULE_IMPORT,   "module-import")                                                                  \
     /* a `<script src>` whose address running code assigned as an unknown this engine cannot fetch. The     \
        taint shadow map holds an entry only where a script wrote the attribute, so this door is never       \
        parser-inserted (asserted in core/html/html_script.c). */                                             \
-    X(EPD_SCRIPT_ELEMENT,  "script-element", EPR_BEYOND, EPB_DOCUMENT)                              \
+    X(EPD_SCRIPT_ELEMENT,  "script-element")                                                                 \
     /* HTML §4.2.4.3 "Fetching and processing a resource from a link element", preloads included. A `<link>` \
        the markup declared and one a script created reach it alike, and the door cannot say which. */       \
-    X(EPD_LINK_ELEMENT,    "link-element", EPR_EITHER, EPB_DOCUMENT)                                \
+    X(EPD_LINK_ELEMENT,    "link-element")                                                                   \
     /* HTML §4.8.4.3.5 "Updating the image data", its source set and its undecided arm. An `<img>` the      \
        parser built and one `new Image()` composed are one door. */                                          \
-    X(EPD_IMAGE_ELEMENT,   "image-element", EPR_EITHER, EPB_DOCUMENT)                               \
+    X(EPD_IMAGE_ELEMENT,   "image-element")                                                                  \
     /* HTML §4.10.5.1.19 "Image Button state (type=image)": an `<input type=image>`'s own image fetch, a   \
        different algorithm from an `img`'s over the same destination. Markup and script reach it alike. */  \
-    X(EPD_IMAGE_INPUT,     "image-input", EPR_EITHER, EPB_DOCUMENT)                                 \
+    X(EPD_IMAGE_INPUT,     "image-input")                                                                    \
     /* a `<form action>` from the markup and one whose action a script wrote reach core/html/html_form.c's  \
        one recording pair alike */                                                                           \
-    X(EPD_FORM_SUBMIT,     "form-submit", EPR_EITHER, EPB_DOCUMENT)                                 \
+    X(EPD_FORM_SUBMIT,     "form-submit")                                                                    \
     /* HTML §7.4.2.2 "Beginning navigation"'s destination, and §7.4's create when it folds one in: a page   \
        address, recorded where core/frame/navigable.c resolves it and before any policy decides whether it  \
        loads. A markup `<iframe src>` and a script's `open()` or `location` write reach it alike. */         \
-    X(EPD_NAVIGATION,      "navigation", EPR_EITHER, EPB_DOCUMENT)                                  \
-    X(EPD_FETCH,          "fetch", EPR_BEYOND, EPB_DOCUMENT)                                       \
-    X(EPD_XHR,             "xhr", EPR_BEYOND, EPB_DOCUMENT)                                         \
-    X(EPD_BEACON,          "beacon", EPR_BEYOND, EPB_DOCUMENT)                                      \
+    X(EPD_NAVIGATION,      "navigation")                                                                     \
+    X(EPD_FETCH,           "fetch")                                                                          \
+    X(EPD_XHR,             "xhr")                                                                            \
+    X(EPD_BEACON,          "beacon")                                                                         \
     /* a sub-request written inside a multipart batch body the page composed */                              \
-    X(EPD_BATCH_PART,      "batch-part", EPR_BEYOND, EPB_DOCUMENT)                                  \
+    X(EPD_BATCH_PART,      "batch-part")                                                                     \
     /* an address a reply named (solver/reply_decode.c) and no line of the page composed */                  \
-    X(EPD_REPLY_CHUNK,     "reply-chunk", EPR_BEYOND, EPB_OFF_DOCUMENT)
+    X(EPD_REPLY_CHUNK,     "reply-chunk")
 
 typedef enum {
     EPD_UNSTATED = 0,   /* nobody said; endpoint_record refuses it */
-#define ENDPOINT_DOOR_MEMBER(id, token, reach, bytes) id,
+#define ENDPOINT_DOOR_MEMBER(id, token) id,
     ENDPOINT_DOORS(ENDPOINT_DOOR_MEMBER)
 #undef ENDPOINT_DOOR_MEMBER
     EPD_COUNT           /* list end; the members take no explicit values, so the enum is dense and the mint's
@@ -142,102 +140,50 @@ typedef enum {
    row in every build, and a release fallthrough would publish a plausible mechanism name nothing ran. */
 const char *endpoint_door_token(int door);
 
-/* What a markup parse of the served document reaches through a door: the door list's third column. Three
-   words, not two: `link-element`, `image-element`, `form-submit` and `navigation` are reached by
-   parser-inserted and script-created elements alike and the door does not record which, so a two-way split would have to guess,
-   and either guess mis-credits one population. `beyond` is named for what a markup parse reaches and never
-   for who ran, which is why `reply-chunk` is in it. This is a diagnostic, not the product's bar:
-   `endpoint_razor_class_of` composes the bar and does not read the reach. */
-#define ENDPOINT_REACHES(X)                                                                                  \
-    /* a parse of the served bytes reaches every address through this door */                                \
-    X(EPR_MARKUP, "markup")                                                                                  \
-    /* the door is reached by a parser-inserted element and by a script-created one alike, and it does not    \
-       record which — so neither claim may be made about a row that came through it */                        \
-    X(EPR_EITHER, "either")                                                                                  \
-    /* no parse of the served document reaches any address through this door */                              \
-    X(EPR_BEYOND, "beyond")
-
-typedef enum {
-#define ENDPOINT_REACH_MEMBER(id, token) id,
-    ENDPOINT_REACHES(ENDPOINT_REACH_MEMBER)
-#undef ENDPOINT_REACH_MEMBER
-    EPR_COUNT           /* list end, dense. No unstated member: a reach is stated in the door list, so no
-                           producer can forget one, and a door without it does not compile. */
-} EndpointReach;
-
-/* The one wire token of a reach; a CHECK on a value outside the list, for endpoint_door_token's reason. */
-const char *endpoint_reach_token(int reach);
-
-/* The reach of `door`, read off the door list's third column; a CHECK on a door outside the list. */
-int         endpoint_door_reach(int door);
-
-/* Whether the bytes a door hands this surface were in the document this engine was served at all: the door
-   list's fourth column and the door-side operand of the product's bar (an address, key or value no parse of
-   the served bytes can state because it exists only at run time). It differs from ENDPOINT_REACHES, which
-   asks what a markup parse reaches: `module-import` is `beyond`, yet its literal chunk URL stands in the
-   served scripts. The member that proves nothing is first and zero, and a door added without this column does
-   not compile. */
-#define ENDPOINT_DOOR_BYTES(X)                                                                      \
-    /* the address was composed out of the served document, its markup or its own scripts. It      \
-       claims nothing about whether a parse of those bytes states the address; that depends on the  \
-       value, which is ENDPOINT_ADDRESS_CLASSES' question. */                                       \
-    X(EPB_DOCUMENT,     "document")                                                                 \
-    /* the bytes reached this engine at run time from outside that document — today a reply         \
-       payload, such as the Flight client reference chunk list solver/reply_decode.c reads. No      \
-       parse of the served document holds them, so such a row clears the bar whatever its address  \
-       class says. */                                                                               \
-    X(EPB_OFF_DOCUMENT, "off-document")
-
-typedef enum {
-#define ENDPOINT_DOOR_BYTES_MEMBER(id, token) id,
-    ENDPOINT_DOOR_BYTES(ENDPOINT_DOOR_BYTES_MEMBER)
-#undef ENDPOINT_DOOR_BYTES_MEMBER
-    EPB_COUNT           /* list end, dense; no unstated member, for EPR_COUNT's reason */
-} EndpointDoorBytes;
-
-/* Whose bytes `door` hands this surface, read off the door list's fourth column; a CHECK on a door outside the
-   list, since a release fallthrough would answer the product's bar for a mechanism nothing named. */
-int         endpoint_door_bytes(int door);
-
 /* What the address value's own concolic provenance proves about it, derived by `address_class_of` from
    endpoint_record's `url` alone; no producer states it, so there is no unstated member. It answers two
    questions from one stored member, so they cannot disagree about a row:
-     Q1, did the run determine this address:   `cls <= EPA_SOURCE_DETERMINED`;
-     Q2, does the address side clear the bar:  `cls == EPA_UNKNOWN` (read by `endpoint_razor_class_of`).
+     Q1, did the run determine this address:                          `cls <= EPA_SOURCE_DETERMINED`;
+     Q2, does the undetermined address rest on a world-supplied unknown: `cls == EPA_UNKNOWN`.
    The order is load-bearing and asserted at `endpoint_address_hist_json`: `EPA_CONCRETE` is zero (the
    memset's identity and the class that proves nothing), the determined members are a prefix (Q1 is a
    threshold), and `EPA_UNKNOWN` is the top. A record's merge is a MAX over the order, because what one
-   sighting proved about the address is not taken back by a later sighting that proved less. No member says
-   whether a parse could state the address; what a static reader reaches is a moving frontier. `concrete`
-   also covers an address composed of literals and the document's own address; a reply-carried address is
-   concrete too, and the door's bytes column catches it. */
+   sighting proved about the address is not taken back by a later sighting that proved less. `concrete`
+   also covers an address composed of literals, the document's own address, and an address a reply carried.
+   Named residual. Not covered: a `<form action>` composed from an unknown records `concrete`.
+   core/html/html_form.c reads the action's taint at HTML §4.10.22.3 "Form submission algorithm" step 12 and
+   spends it on the @S sink alone, then `form_record_request` records the `url_serialize`d bytes, while the
+   link and image doors record the taint itself. Recording the bare taint would drop the entries the
+   submission writes into the action's query, and unioning `valueClass` into the address would over-claim,
+   because `concolic_hole_key` is a bare brace test. Next diff: the recorded address composed as a concolic
+   from the action's taint and the entries, which needs `url_parse`/`url_serialize` to carry concolics.
+   Absence shows as: `form-submit` rows reading `concrete` beside their own `valueClass` `unknown` while the
+   same document's `link-element` rows read `unknown`. */
 #define ENDPOINT_ADDRESS_CLASSES(X)                                                                          \
     /* the run determined this address and holds no evidence that any segment of it entered the program at   \
-       a source (`concolic_is` is false). It claims nothing about a parse. */                                \
+       a source (`concolic_is` is false). */                                                                 \
     X(EPA_CONCRETE, "concrete")                                                                              \
     /* the address is this engine's own concolic and this flow's equality pinned it: concolic.h's           \
        CONCOLIC_EX_DETERMINED, as in `var u = cfg.url; if (u === '/api/v2/items') fetch(u);`. Q1 answers   \
        determined and Q2 no: a pin's bytes are the equality's other operand, which solver/concolic.c spells \
-       only where that operand is not concolic, so they are bytes the page's own text holds (usually a      \
-       literal in the bundle). The run proved which world it explored, not that the bytes are absent from  \
-       the served document. */                                                                               \
+       only where that operand is not concolic. */                                                           \
     X(EPA_SOURCE_DETERMINED, "source-determined")                                                            \
     /* the run did not determine it, and no root of the value is one anybody outside this engine supplied   \
        (`concolic_root_whose_any(url, CONCOLIC_WHOSE_WORLD)` answers no). It holds a hole this engine minted \
        to drive code (a driven orphan's own argument), a value whose bytes stand in the served document but  \
        is minted unknown so a gate over it forks (a data block, a global an inline script wrote), and a      \
-       value no mint could attribute (concolic.h's `UNSTATED`, or no root at all). None clears the bar. */   \
+       value no mint could attribute (concolic.h's `UNSTATED`, or no root at all). */                        \
     X(EPA_UNKNOWN_UNPROVEN, "unknown-unproven")                                                              \
     /* the run did not determine it, some root is the world's, and its origin is undetermined: no page byte \
        ahead of the first hole decides the scheme and host against the document base (URL §4.4 "URL         \
        parsing"), and the address holds no example to parse (concolic.h's NONE or CONTRADICTED), as in a    \
        host read out of an absent cookie. A request whose origin no run determined names no endpoint of the  \
-       app, so it does not clear the bar. A host from a reply field the run holds an example of is `unknown`. */ \
+       app. A host from a reply field the run holds an example of is `unknown`. */                           \
     X(EPA_UNKNOWN_ORIGIN_OPEN, "origin-undetermined")                                                        \
     /* the run did not determine it, and some root is one a document, a server, an attacker or the            \
        environment supplied (concolic.h's `WORLD`: the location fragment, an absent server-injected global,  \
-       a reply field, a device reading). One such root suffices (`_any`, not `_all`). This row clears the    \
-       bar; it is the top member, so a reordering is what could lower a record out of it. */               \
+       a reply field, a device reading). One such root suffices (`_any`, not `_all`). It is the top member, \
+       so a reordering is what could lower a record out of it. */                                           \
     X(EPA_UNKNOWN,  "unknown")
 
 typedef enum {
@@ -251,45 +197,9 @@ typedef enum {
    outside the list, for endpoint_door_token's reason. */
 const char *endpoint_address_class_token(int cls);
 
-/* The product's bar per row: whether this run proved the address exists only at run time. It is the union of
-   two positive statements, each sound alone, so it is a floor: the address side is `EPA_UNKNOWN`
-   (undetermined, resting on an unknown supplied from outside this engine) and the door side is
-   `EPB_OFF_DOCUMENT` (bytes never in the served document). `reply-chunk` is `concrete` and clears it;
-   `/api/{location.hash}` through `fetch` is `EPB_DOCUMENT` and clears it. It is computed at the emitter from
-   `door` and `addr_class` and never stored; it is sound under both fields' merges (`addr_class` is a MAX over
-   sightings and `door` is the first sighting's) because no later sighting retracts either statement.
-   `unproven` is not the claim that a parse could state the address, and `EPW_MAY_REST_ON` is never unioned
-   in: it is a may, and folding it would turn the floor into an over-claim.
-   Named residual. Not covered: an address determined by a pin whose other operand was a non-concolic value
-   taken from off-document bytes exists only at run time but reads `unproven`, because a non-concolic operand
-   carries no provenance. Next diff: the pin records whose bytes its other operand came from, beside the bytes
-   it already copies, and `address_class_of` reads that. Absence shows as: a `source-determined`, `unproven`
-   row whose pinning literal stands in no served byte. */
-#define ENDPOINT_RAZOR_CLASSES(X)                                                                   \
-    /* this run proved nothing about whether a parse of the served bytes could state the address:  \
-       every `concrete`, `source-determined` or `unknown-unproven` row through a door whose bytes  \
-       were in the served document. It is not the complement of the member below over parses. */   \
-    X(EPZ_UNPROVEN,     "unproven")                                                                 \
-    /* this run proved the address exists only at run time: it reached it holding an undetermined  \
-       value resting on an unknown supplied from outside this engine, or the door handed it bytes  \
-       that were never in the served document. */                                                  \
-    X(EPZ_RUNTIME_ONLY, "runtime-only")
-
-typedef enum {
-#define ENDPOINT_RAZOR_CLASS_MEMBER(id, token) id,
-    ENDPOINT_RAZOR_CLASSES(ENDPOINT_RAZOR_CLASS_MEMBER)
-#undef ENDPOINT_RAZOR_CLASS_MEMBER
-    EPZ_COUNT           /* list end, dense; derived from two fields written unconditionally, so there is no
-                           producer and no unstated member */
-} EndpointRazorClass;
-
-/* The one wire token of a razor class; a CHECK on a value outside the list, for endpoint_door_token's
-   reason. */
-const char *endpoint_razor_class_token(int cls);
-
 /* Whether the address may rest on a witness this engine chose (bytes the engine picked rather than a server
-   sent), published per row as `witnessClass`. It bounds reproducibility, not the bar: a row resting on chosen
-   bytes is one a real session may never see, and it is never unioned into the razor. It separates two
+   sent), published per row as `witnessClass`. It bounds reproducibility: a row resting on chosen bytes is one
+   a real session may never see. It separates two
    opposite remedies for a surface of `concrete` rows: the solver keeps too few values unknown, or a pin
    erased a taint (concolic.c's `pin_mint` hands a pinned re-read back as a bare primitive). The order encodes
    how much is claimed and the record's merge is a MAX: a sighting that asked outranks one that could not, and
@@ -301,7 +211,7 @@ const char *endpoint_razor_class_token(int cls);
        the ordinary case), so the question was not asked. It proves nothing either way. */          \
     X(EPW_UNASKED,     "unasked")                                                                   \
     /* a flow stood and its path had chosen no witness: nothing this run pinned can be under this    \
-       address, so `unproven` here really is the run having proved nothing. */                       \
+       address. */                                                                                   \
     X(EPW_NO_WITNESS,  "no-witness")                                                                \
     /* a flow stood whose path had determined a source's value on an arm no example confirmed       \
        (solver/flow.h's `path_pinned`). The address may rest on bytes this engine                    \
@@ -324,47 +234,15 @@ const char *endpoint_witness_class_token(int cls);
    member, zeroes included, summing to endpoint_surface_census's `emitted` (asserted). */
 char *endpoint_witness_hist_json(void);
 
-/* The bar for one row: `EPZ_RUNTIME_ONLY` when `addr_class` is `EPA_UNKNOWN` or `door`'s bytes are
-   `EPB_OFF_DOCUMENT`, else `EPZ_UNPROVEN`. It takes the two wire fields rather than a record, so a consumer
-   can check a row's `razorClass` against that row's own `door` and `addressClass`. */
-int         endpoint_razor_class_of(int door, int addr_class);
-
 /* The emitted surface partitioned by address class, as a malloc'd JSON object (caller frees): one row per
    member of ENDPOINT_ADDRESS_CLASSES, zeroes included, summing to endpoint_surface_census's `emitted`
    (asserted here, with the class order). It is keyed on the address value, an observation independent of the
-   door histograms. A diagnostic, read within one run against `epEmitted` on the same census line: `unknown`
-   at 0 is a refusal to claim the bar on this document, not a smaller version of it. */
+   door histograms. A diagnostic, read within one run against `epEmitted` on the same census line. */
 char   *endpoint_address_hist_json(void);
 
 /* The emitted surface partitioned by door, as a malloc'd JSON object (caller frees): one row per member of
    ENDPOINT_DOORS, zeroes included, summing to endpoint_surface_census's `emitted` (asserted). */
 char   *endpoint_door_hist_json(void);
-
-/* The emitted surface partitioned by ENDPOINT_REACHES, as a malloc'd JSON object (caller frees), one row per
-   member, summing to `emitted` (asserted). Each count is the door histogram's counts summed over that reach's
-   doors, so the two are one observation at two grains; what this adds is the door-to-reach map, which only
-   the door list states. It is a diagnostic and not the bar: `beyond` holds a literal chunk URL through
-   `module-import`, and a share read off it is over `epEmitted`. `either` is a decision rather than a gap: the
-   standard sets a parser-inserted mark only on scripts and on form-associated controls, so no flag exists that
-   could split the link and image doors, and the bar does not read the reach. */
-/* Named residual, on the axis the bar reads. Not covered: a `<form action>` composed from an unknown reaches
-   the bar as `concrete`. core/html/html_form.c reads the action's taint at HTML §4.10.22.3 "Form submission
-   algorithm" step 12 and spends it on the @S sink alone, then `form_record_request` records the
-   `url_serialize`d bytes, while the link and image doors record the taint itself. Recording the bare taint
-   would drop the entries the submission writes into the action's query, and unioning `valueClass` into the
-   address would over-claim, because `concolic_hole_key` is a bare brace test. Next diff: the recorded address
-   composed as a concolic from the action's taint and the entries, which needs `url_parse`/`url_serialize` to
-   carry concolics. Absence shows as: `form-submit` rows reading `unproven` beside their own `valueClass`
-   `unknown` while the same document's `link-element` rows read `runtime-only`. */
-char   *endpoint_reach_hist_json(void);
-
-/* The emitted surface partitioned by ENDPOINT_RAZOR_CLASSES, as a malloc'd JSON object (caller frees), summing
-   to `emitted` (asserted): the one census row that states the bar. It is its own walk with the emit's asset
-   skip, never a sum of other rows: those are marginals, and the bar's two operands can both hold for one row.
-   It restates the per-row `razorClass` at the population grain; the two can be read at different instants,
-   and `epEmitted` falls when an asset verdict lands between them. It is a floor and a diagnostic:
-   `runtime-only` at 0 is a refusal to claim, and its denominator is `epEmitted` on the same census line. */
-char   *endpoint_razor_hist_json(void);
 
 /* Records one learned endpoint, or merges it into the record of the same identity: method, path shape,
    `prov`, and the ordered names and locations of its params. `url` may be concolic (its shape is recorded) or
@@ -398,7 +276,7 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
      `method`; `url` (the path shape); `bodyMime` with one of `bodyBase64`, `bodyShape` or
        `bodyExampleBase64` (see EndpointBodyKind); `provenance` (`observed`|`derived`|`forced`); `driven`
        (a boolean: the sighting was minted inside a drive of a function the page never called); `door`;
-       `mintedAt` (`pre-program`|`post-program`); `addressClass`; `razorClass`; `witnessClass`; `witness`
+       `mintedAt` (`pre-program`|`post-program`); `addressClass`; `witnessClass`; `witness`
        (below); `addressRoot` (null for a `concrete` address, false when the value has no root, else the
        root's name); `attackerRooted` (below); `params`; `headers` (an object, only when a header was seen).
    Every class key is always present, since its words are exhaustive. `provenance` is the record's, its grade
@@ -406,8 +284,8 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    sent), `observed` a real load of the document, and `forced` an address that exists only because a gate was
    forced, never to be reported as either other word. `addressClass` cannot be re-derived from braces in
    `url`: extension/lib/learn.js mints `{path_*}` holes from live traffic into addresses it reads `concrete`
-   for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, which `razorClass` already
-   composes, so a consumer reading the bar as `!= "concrete"` over-claims. */
+   for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, so a consumer reading Q2 as
+   `!= "concrete"` over-claims. */
 /* `attackerRooted`: false, or `{address?, headers?, body?, victimAct}`, which marks the record
    security-relevant: each piece an attacker source rooted on a path an attacker reaches (every act on it one the
    attacker performs or a victim performs on the page) names its first such sighting's root (`headers` as an

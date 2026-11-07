@@ -119,16 +119,5 @@
   "errors": 0,
   "bodyBytes": 1512234,
   "sha256": "b56de303eedd8d4a521437f322d310dd77469f73dbc3652271d9e4ebf3f0dcd3"
- },
- {
-  "id": "control-razor",
-  "url": "http://127.0.0.1:8931/#needle",
-  "recorded": true,
-  "from": "2026-11-01T15:48:06.702Z",
-  "to": "2026-11-01T15:48:07.039Z",
-  "replies": 5,
-  "errors": 1,
-  "bodyBytes": 1727,
-  "sha256": "de657866d7e8725693948ad19a6ce61fb233977557640a594948d42ff9882b69"
  }
 ]

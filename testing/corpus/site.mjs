@@ -97,9 +97,6 @@ const PROBE = `(() => ({
     run: d._astRun === undefined ? null : d._astRun,
     astError: d._astError ? String(d._astError).slice(0,300) : null,
     sites: (d._astResults || []).flatMap(a => (a.fetchCallSites || []).map(x => (x.method||'?') + ' ' + (x.url||''))),
-    /* The addresses of the same walk whose row states \`razorClass: runtime-only\`, the product's bar. */
-    runtimeOnly: (d._astResults || []).flatMap(a => (a.fetchCallSites || [])
-      .filter(x => x.razorClass === 'runtime-only').map(x => (x.method||'?') + ' ' + (x.url||''))),
     /* THE DOOR AND THE WITNESS CLASS JOINED PER ROW, WHICH IS THE ONE STATEMENT NO MARGINAL CARRIES. The
        census publishes four histograms over this same array and CLAUDE.md's own rule for them is that "a union
        is a statement about per-row MEMBERSHIP and two marginals carry no overlap between them" — so a reader
@@ -922,8 +919,8 @@ const frontierPrograms = (() => {
      `deliver-one-reply` 904 against 909 and `link-connected-time` 97 against 97 and
      `evaluate-a-module-program` 4 against 4, so the SAME document was loaded and the SAME replies were
      delivered — while `fire-due-timer` reads 0 against 14154, `run-a-task` 406 against 14634, `unitsDone` 513
-     against 30179, `orphanScripts` 1 against 48, and the product's own razor (`endpointRazorClass`'
-     `runtime-only`) 0 against 5. The low run's clock never advanced and nothing downstream of a timer ran.
+     against 30179, and `orphanScripts` 1 against 48. The low run's clock never advanced and nothing
+     downstream of a timer ran.
      WHICH OF THE TWO STATES THAT IS HAS NOW BEEN MEASURED AND IT IS NEITHER — THE CLOCK IS DOWNSTREAM, AND
      THIS PARAGRAPH'S OWN FRAMING IS THE THING THE ROWS IT ADDED REFUTED. It is kept in its own words because
      a reader who re-derives it from `fire-due-timer: 0` will reach it again. Two drives of the same document
@@ -939,10 +936,6 @@ const frontierPrograms = (() => {
      mid-program barely reaches it, and `unitsDone` reads 1502 against 10961. That is solver/flow.c's
      THROUGHPUT state, which that file says NO WEIGHT CHANGE REACHES — the clock fires nothing because the
      chain is not reached, and the chain is not reached because units are not finishing.
-     AND `fire-due-timer: 0` DOES NOT IMPLY A ZERO RAZOR, which this paragraph's table invites: the low drive
-     above read `runtime-only 4` with its timer count at zero. The product's razor reproduces at 4-6 across
-     six release drives of this document and read 0 on one of seven, so the razor's own variance is a separate
-     question from the clock's and the two must not be read as one column.
      RETIREMENT: this record goes when the licence the clock asks for is counted at its own REFUSAL — the
      `!event_loop_may_advance()` arms in core/timing/timer.c and core/rendering/rendering.c — because the
      remaining two states behind an ask with no fire are then one row apart. MEASURED ABSENT with the command:
@@ -1029,17 +1022,15 @@ const frontierPrograms = (() => {
    them, with no indication that anything else happened.
    `of` AND `skipped` WERE NOT ENOUGH AND THAT WAS MY OWN HALF-MEASURE. They say a run was DROPPED; they do
    not say WHAT IT HELD, and the difference decides whether a zero on this row is a fact about the engine or
-   an artifact of which entry the reader landed on. MEASURED on the drive that scored the §5.6 routing: two
-   passes published `endpointRazorClass {unproven: 98}` and `epFetchAskCalledLife 0` while their own run 0
-   held `{unproven: 194, runtime-only: 6}` and `epFetchAskCalledLife 25` — the pass that cleared the product's
-   hard bar reported a clean zero for it, twice.
+   an artifact of which entry the reader landed on: a pass whose run 0 called `fetch()` 25 times can publish
+   a later run's `epFetchAskCalledLife 0`.
    IT ALSO PUTS A QUESTION MARK OVER A STANDING SENTENCE ELSEWHERE IN THIS TREE, which is why this is a row
    rather than a note: solver/endpoint.h records `epFetchAskCalledLife` as 0 "on every attributed real-page
    row that produced a census", and that may be a property of THIS READER rather than of the engine. The row
    below is what lets the next reader tell those apart instead of inheriting the sentence.
    DELIBERATELY NARROW. This is not a second copy of the census per run — it is the smallest set that answers
    `did this run do anything`: the frontier it stood at, the two ask rungs that say whether the fetch machine
-   was entered and reached its offer, and the hard bar itself. Everything else stays single-valued at
+   was entered and reached its offer, and the address classes. Everything else stays single-valued at
    `countersFrom`, because a row that carried every column per run would be the duplication testing/
    census_rows.js argues against at its own banner, where the CURATION is this driver's and only the KIND is
    the producer's.
@@ -1054,7 +1045,7 @@ const perRun = (() => {
       for (const k of ['live', 'epFetchAskCalledLife', 'epFetchAskOfferedLife'])
         if (typeof c[k] === 'number') o[k] = c[k];
     }
-    if ('endpointRazorClass' in e) o.endpointRazorClass = e.endpointRazorClass;
+    if ('endpointAddressClass' in e) o.endpointAddressClass = e.endpointAddressClass;
     return o;
   });
   /* ONE KEY BESIDE THE INDEX IS NOTHING TO REPORT — a row of bare `at`s carries no fact and would be a column
@@ -1068,71 +1059,19 @@ const perRun = (() => {
    RETIREMENT: it goes when the three rows are one field, which is a rename and waits for a pass that can
    re-derive every archived comparison rather than being smuggled in beside a fix. */
 const learnedAddrs = [...new Set(mine.flatMap(d => d.sites))];
-/* THE FOUR ENDPOINT FACT PARTITIONS THE SHIPPED PATH ALREADY WRITES, OF WHICH ONE IS CLAUDE.md
-   §What-the-tool-produces' HARD BAR AND THE OTHER THREE ARE WHAT IT IS COMPOSED OUT OF. The owner's
-   statement of that bar is "an address, a key or a value that NO PARSE of the served bytes can state,
-   because it exists only at run time", and solver/endpoint.c composes it PER ROW as `razorClass` out of
-   `endpoint_razor_class_of(door, addr_class)` -- `runtime-only` where the run reached the address holding a
-   value it had not determined AND RESTING ON AN UNKNOWN SOMEBODY OUTSIDE THE ENGINE SUPPLIED, OR where the
-   door handed it bytes that were never in the served document, `unproven` otherwise. (The address-side
-   conjunct is new and the operand without it is kept because it is what a reader re-derives from the word
-   `unknown`: an undetermined address standing on a hole the engine minted for its own drive is a DIFFERENT
-   address class the engine refuses, so `not determined` alone was never this bar's operand.) extension/bridge.js relays all four onto every engine-run record and asserts each
-   one SUMS to `endpoints`; engine/build.mjs, extension/popup.js and testing/live-run.js read them. THIS
-   FILE -- the one that ranks the CORPUS -- was the consumer that never asked, so the bar this product is
-   judged by was scored one DOCUMENT at a time and over no corpus at all. That is the write-with-no-reader
-   half of the contract on the column this project is measured by, and the EIGHTH time this row has been the
-   consumer missing a field written to answer its own ambiguity, after `orphansAsked`, `unitsDone`, the @S
-   arrival census, the WFQ split, the arrivals/departures pair, the step histogram and the out-of-programs
-   partition.
-   THE UNION IS NOT COMPOSED HERE AND MAY NOT BE, which is not tidiness. extension/bridge.js argues it at
-   its own emit: a classification that grows in the ENGINE and is duplicated in a consumer drifts the day a
-   door is added, and the operand a consumer assembles by hand out of `endpointDoors` and
-   `endpointAddressClass` is the figure CLAUDE.md DEMOTED -- `EPR_BEYOND` is what a MARKUP parse cannot
-   reach and `fetch`, `xhr` and `module-import` are all in it, so a union built that way answers the weaker
-   question while wearing the stronger one's name. `endpointRazorClass` arrives ALREADY COMPOSED, at the one
-   line in the engine where both operands are in hand, and this row relays it whole.
-   THREE HISTOGRAMS ARE TWO OBSERVATIONS AND FOUR FIELDS ARE STILL TWO, said here because here is where the
-   numbers are (CLAUDE.md §EVIDENCE-INFLATION). `endpointDoors` and `endpointMintedAt` are one fact about an
-   address at two grains; `endpointAddressClass` is the second; `endpointRazorClass` is DERIVED from the
-   second and from the door's own bytes column and adds no observation to either. A reader counting four
-   agreeing rows as four signals is counting two.
-   IT IS A FLOOR AND A DIAGNOSTIC AND NEVER A TARGET. `runtime-only: 0` beside a nonzero `endpoints` is this
-   engine's REFUSAL TO CLAIM the bar on that document and not a smaller version of the capability:
-   solver/endpoint.h enumerates what `concrete` hides -- a literal, the document's own address, and a source
-   a flow PINNED AND RE-READ, which really is past every parse and which no field on the record can say.
-   Optimising toward this column is optimising toward a measurement.
-   THREE ABSENCES, THREE TOKENS, AND NONE FOLDED INTO ANOTHER -- which is the whole reason this is a helper
-   and not four `counted[last].X` reads. `null` is NO RUN CARRIED COUNTERS: bridge.js writes none on a
-   crashed run, deliberately, "because seven zeroes read as a run that explored nothing", so this agrees with
-   `endpoints: null` one line up and `runOutcomesMine` says which outcome it was. `(field-absent)` is a run
-   record that carried counters and NOT this key -- an ARTIFACT older than the field, which is a fact about
-   the BUILD and never about an address, and it is a STRING rather than a dropped key precisely so a reader
-   can tell it from a census written by a site.mjs that predates the field at all (that one leaves the key
-   missing, which is the channel report.mjs's per-pass arrival test reads). `{}` is a run that stated the
-   partition of an EMPTY SURFACE, which is a finding about the page. And `(unstated)` INSIDE a histogram is
-   bridge.js's own bucket for a wasm older than the key, which that zone asserts is all-or-nothing.
-   THE DENOMINATOR IS `endpoints` AT `countersFrom`, WHICH IS THE SAME ENTRY THESE ARE READ OFF. Each
-   partition sums to it by the producer's own assertion, so the pair is ONE moment and a share of it is a
-   share of a population that ran -- and `endpointFactsDisagree` below is that containment asked HERE, where
-   the DCHECK that asks it in the offscreen is compiled out: this driver measures whatever artifact is
-   installed, release included, so this is the only reader of that identity in a release census rather than a
-   second copy of a live check.
-   THE FIELD NAMES ARE ONE LIST, so the row's keys and the check below cannot disagree about which fields
-   they are about, and each is the SHIPPED spelling -- a query written against extension/bridge.js's own name
-   answers at both grains. */
+/* The endpoint fact partitions the shipped path writes (extension/bridge.js relays each onto every engine-run
+   record and asserts it sums to `endpoints`): which door, when, the address class and the witness class.
+   `endpointDoors` and `endpointMintedAt` are one fact at two grains; the address class is a second; the
+   witness class is a may beside it (`may-rest-on`: composed by a path that had pinned a source on an arm its
+   own example contradicted). Diagnostics, never targets.
+   Three absences, three tokens: `null` is no run carried counters (bridge.js writes none on a crashed run);
+   `(field-absent)` is a run record with counters and not this key, an artifact older than the field; `{}` is
+   a run that stated the partition of an empty surface. `(unstated)` inside a histogram is bridge.js's bucket
+   for a wasm older than the key. The denominator is `endpoints` at `countersFrom`, the same entry these are
+   read off, and `endpointFactsDisagree` below asks that containment here, where the offscreen's DCHECK is
+   compiled out in release. The field names are one list, so the row's keys and the check cannot disagree. */
 const EP_FACT_ABSENT = '(field-absent)';
-/* …AND THE BOUND ON THE ONE POPULATION `endpointRazorClass` CANNOT SIZE, which is a FIFTH member of this one
-   list rather than a field of its own for the reason the banner above gives: the row's keys and the
-   containment check below are driven from here, so a partition added in one place and not the other is a
-   column nothing checks. `may-rest-on` is the count of emitted addresses composed by a path that had pinned a
-   source's value on an arm its own example contradicted -- a MAY and NEVER summed with the bar, because a pin
-   is a fact about the PATH and says nothing about whether this address read that source. Its whole use is a
-   fork: `unproven` beside `may-rest-on` 0 is the bar having genuinely proved nothing on this document, and
-   beside a nonzero one it is a population the bar could not look at, because `pin_mint` hands a pinned read
-   back as a BARE primitive and the address then grades `concrete`. Those take opposite diffs. */
-const EP_FACT_FIELDS = ['endpointDoors', 'endpointMintedAt', 'endpointAddressClass', 'endpointRazorClass',
-                        'endpointWitnessClass'];
+const EP_FACT_FIELDS = ['endpointDoors', 'endpointMintedAt', 'endpointAddressClass', 'endpointWitnessClass'];
 const epFact = (k) => !counted.length ? null
   : (k in counted[counted.length - 1]) ? counted[counted.length - 1][k] : EP_FACT_ABSENT;
 /* …AND WHETHER THE TWO DATA DOORS' MACHINES WERE EVER REACHED AT ALL, WHICH `endpointDoors` STRUCTURALLY
@@ -1149,7 +1088,7 @@ const epFact = (k) => !counted.length ? null
    something the producer deliberately does not, and the whole measurement would be destroyed by the check
    meant to guard it. `endpointFactsDisagree` below is a CONTAINMENT this engine does assert and whose dev
    `DCHECK` release compiles out; this is a MEASUREMENT with no identity behind it. Publish both and let the
-   reader subtract — which is also why no verdict is composed here, exactly as the razor's union is not.
+   reader subtract — which is also why no verdict is composed here.
    ELEVEN ROWS ARE ONE LADDER WITH PARTIAL ENTAILMENT AND NOT ELEVEN SIGNALS (CLAUDE.md §EVIDENCE-INFLATION).
    The producer asserts `…AskOfferedLife <= epAsks`, asserts NO relation between xhr's PLACED and OFFERED (a
    placed send whose task never runs offers nothing), and asserts NO containment between NAMED and CALLED in
@@ -1362,12 +1301,9 @@ const row = {
      is still the right thing to watch a live run advance by. */
   endpoints: counted.length ? counted[counted.length - 1].endpoints : null,
   endpointSnapshots: counted.length,
-  /* …AND WHAT EACH OF THOSE ADDRESSES WAS, OF WHICH `endpointRazorClass` IS THE HARD BAR AND THE OTHER
-     THREE ARE ITS OPERANDS AND ITS GRAINS -- see the helper above for why the union is not composed here,
-     why four fields are two observations, why a zero is a REFUSAL TO CLAIM rather than a small capability,
-     and what each of the three absence tokens means. Read WITH `endpoints` and `countersFrom`: all four are
-     taken off the SAME counted entry, so each sums to that number by the producer's own assertion and the
-     set is one moment rather than four. The keys are bridge.js's own spellings, derived from ONE list. */
+  /* …and what each of those addresses was (see the helper above for the absence tokens). Read with
+     `endpoints` and `countersFrom`: all are taken off the same counted entry, so each sums to that number by
+     the producer's own assertion. The keys are bridge.js's own spellings, derived from one list. */
   ...Object.fromEntries(EP_FACT_FIELDS.map((k) => [k, epFact(k)])),
   /* …AND THE ENGINE'S OWN CLASS PARTITION BESIDE THEM, WHICH IS A DIFFERENT INSTRUMENT AND NOT A DENSER
      COPY OF `endpointAddressClass`. The four rows above are bridge.js's, composed from the EMITTED ROWS by
@@ -1381,7 +1317,7 @@ const row = {
      report.mjs, `epAddressClass` occurred in 0, `endpointAddressClass` in 125, and an invented key in 0.
      WHAT IT IS FOR, AND IT IS EXACTLY ONE THING: THE DECLARED MEMBER SET OF THE ARTIFACT THAT RAN. A key
      present reading 0 proves that build's enum HAS that class; a key absent proves it does not. That is the
-     question a corpus-wide razor reading could not ask from a row at all -- it had to be answered by
+     question a corpus-wide reading could not ask from a row at all -- it had to be answered by
      `git show <artifact head>:engine/host/solver/endpoint.h | grep -c EPA_SOURCE_DETERMINED`, which is an
      ARCHAEOLOGY over fifteen heads standing in for a field.
      THE TWO MAY NOT BE DIFFERENCED, WHICH IS WHY NO VERDICT IS COMPOSED HERE AND WHY THIS IS A SECOND ROW
@@ -1966,8 +1902,6 @@ const row = {
      then stated by the row rather than by this paragraph. */
   siteEndpoints: learnedAddrs,
   distinctEndpoints: learnedAddrs.length,
-  /* The distinct `runtime-only` addresses over the same documents, beside the histogram's count of rows. */
-  runtimeOnlyEndpoints: [...new Set(mine.flatMap(d => d.runtimeOnly))],
   /* WHAT `siteEndpoints` AND `distinctEndpoints` ARE A COUNT OF, STATED BY THE ROW RATHER THAN BY THE
      PARAGRAPH ABOVE THEM. They are the addresses that SURVIVED the engine's asset skip, and the population
      they were drawn FROM is in no field of this document. solver/endpoint.c's `endpoint_json_array` drops

@@ -125,7 +125,7 @@ function docWitness(row, f) {
 /* The per-row facts solver/endpoint.c writes as tokens; `addressRoot`, whose domain is null, false or a
    non-empty string; and `attackerRooted`, false or `{address?, headers?, body?, victimAct}`. A key is stated on
    every row or on none, since one instance emits one document shape. */
-const ENDPOINT_FACT_KEYS = Object.freeze(["door", "mintedAt", "addressClass", "razorClass", "witnessClass"]);
+const ENDPOINT_FACT_KEYS = Object.freeze(["door", "mintedAt", "addressClass", "witnessClass"]);
 /* solver/endpoint.c's mark: the rooted pieces in this order, each a root's name (`headers` an object of header name
    to root), at least one of them, then `victimAct`. */
 function docAttackerRooted(m) {
@@ -606,7 +606,7 @@ function endpointFactHistogram(rows, key) {
    And the string is page-influenced (solver/absent.c mints source names from page property names), so it may
    not be a histogram key: `Object.assign({}, h)` copies with [[Set]] and a `__proto__` key would set a
    prototype. The names stay on the row; this counts the four-way state under fixed parenthesised keys.
-   It is a diagnostic, not an operand of the bar: whose unknown a root names is not decidable from the string. */
+   It is a diagnostic: whose unknown a root names is not decidable from the string. */
 const ENDPOINT_ROOT_NAMED = "(named)";
 const ENDPOINT_ROOT_UNATTRIBUTED = "(unattributed)";
 const ENDPOINT_ROOT_NO_CONCOLIC = "(no-concolic)";
@@ -865,26 +865,12 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            states they are two facts, and a reader reads the margins. Each sums to `endpoints`. */
         endpointDoors: endpointFactHistogram(result.fetchCallSites, "door"),
         endpointMintedAt: endpointFactHistogram(result.fetchCallSites, "mintedAt"),
-        /* The address class, the one of these that answers the product's bar (an address no parse of the served
-           bytes can state). Doors cannot be coarsened into it: a literal chunk URL via `module-import` is beyond a
-           markup parse yet clears nothing, while `/api/{location.hash}` via `fetch` clears it.
-           It is a floor, not a verdict: `unknown` means the run reached the address holding a value it had not
-           determined and resting on an unknown supplied from outside the engine, so those rows clear the bar;
-           `concrete` claims nothing about a parse (solver/endpoint.h enumerates what it hides). This zone holds
-           no copy of that classification, so a class added to `ENDPOINT_ADDRESS_CLASSES` reaches it unedited, and
-           a row from an older wasm lands in `(unstated)`. */
+        /* The address class: whether the run determined each address and whose unknown it rests on
+           (solver/endpoint.h's ENDPOINT_ADDRESS_CLASSES). This zone holds no copy of that classification, so a
+           class added to the list reaches it unedited, and a row from an older wasm lands in `(unstated)`. */
         endpointAddressClass: endpointFactHistogram(result.fetchCallSites, "addressClass"),
-        /* The razor class, the figure a person may read as the bar: solver/endpoint.c unions the address
-           class's `unknown` rows with the rows whose door handed it bytes never in the served document, per row,
-           where both facts are in hand. The union is composed there, not here, so this zone holds no door map
-           that would abort it when the engine adds a door (and `EPR_BEYOND`, the markup-parse class, is not the
-           operand). It derives from `door` and `addressClass` and adds no observation: `unproven` is not a claim
-           that a parse could state the address. Rendered and asserted generically, like the rows above. */
-        endpointRazorClass: endpointFactHistogram(result.fetchCallSites, "razorClass"),
-        /* The witness class, sizing the population `unproven` hides (a source a flow pinned and re-read). It is
-           never unioned into the bar: `may-rest-on` is a fact about the path, not this address's bytes, so
-           folding it in would turn a floor into an over-claim. The columns are read side by side. Rendered
-           and asserted generically. */
+        /* The witness class: how many addresses may rest on bytes a flow pinned (`may-rest-on` is a fact about
+           the path, not this address's bytes). Rendered and asserted generically. */
         endpointWitnessClass: endpointFactHistogram(result.fetchCallSites, "witnessClass"),
         /* The delivery-root state the address class derives from, sizing the population whose `unknown` is a
            hole `engine_orphan_call` minted for its own drive (solver/endpoint.c's `address_class_of` residual).
@@ -924,7 +910,6 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        only statement of which partitions are checked, so a histogram added above needs a line here. */
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
                       ["endpointAddressClass", m.endpointAddressClass],
-                      ["endpointRazorClass", m.endpointRazorClass],
                       ["endpointWitnessClass", m.endpointWitnessClass],
                       ["endpointAddressRoot", m.endpointAddressRoot]]) {
       let _n = 0;
@@ -1962,8 +1947,8 @@ async function frontierAll() {
   } catch (e) { RETHROW_FATAL(e); frontierFail("scan", e); return []; }
 }
 /* Level 1: one order over documents, hot, parked and waiting alike, over a two-level tree, site then document
-   (level1Tree, level1Key). A pull is one quantum of work, so an account is counts: `value`, the razor-weighted
-   novel value its instances' flows landed (main.c's qjs_level1_account, solver/novelty.h's weights), and `pulls`,
+   (level1Tree, level1Key). A pull is one quantum of work, so an account is counts: `value`, the novel identities
+   its instances' flows landed (main.c's qjs_level1_account, one point each per solver/novelty.h), and `pulls`,
    the quanta it was served. A node's index is the Poisson KL upper confidence bound on its value per pull
    (Garivier and Cappé, "The KL-UCB Algorithm for Bounded Stochastic Bandits and Beyond", 2011, with the Poisson
    divergence d(p, q) = q − p + p ln(p / q)) over its pulls P against its parent's N:

@@ -568,13 +568,6 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
        pooled by provenance alone, and each offered value carries its own drive mark (`_astDrivenValues`). */
     m._astDriven = m._astDriven === undefined ? callSite.driven : drivenJoin(m._astDriven, callSite.driven);
   }
-  /* …and what this sighting proved about the address against the product's bar, collected as a set
-     (lib/endpoint-record.js states why it is not folded). A row from an engine build that predates the key
-     states nothing, so it adds nothing. */
-  if ("razorClass" in callSite) {
-    m._astRazorClasses = razorClassSetWith(m._astRazorClasses, callSite.razorClass,
-                                           "lib/learn.js registering method " + JSON.stringify(methodName));
-  }
   /* …and what each sighting's flow assumed, as its own pool beside the values (lib/endpoint-record.js's
      `witnessPoolWith`). A row from an engine build that predates the key states nothing. */
   if ("witness" in callSite) {

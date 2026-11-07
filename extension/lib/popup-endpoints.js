@@ -1,6 +1,6 @@
 /* lib/popup-endpoints.js — the Endpoints panel: one row per method the forced execution learned (a method
-   record with `_astInferred`, lib/learn.js), stating its verb, its address, the razor class its sightings
-   stated, the address's provenance, what each sighting's flow assumed, each parameter with the example values
+   record with `_astInferred`, lib/learn.js), stating its verb, its address, the address's provenance,
+   what each sighting's flow assumed, each parameter with the example values
    the run computed, and the request body the run observed; a row's Send button opens the method in the Send panel.
    Rows stand in the spec's classes, a table of security-relevant records and one of plain records, each in its
    order, and the reader may keep only the rows stating one value of one fact and list them by one fact
@@ -37,7 +37,7 @@ function renderEndpointsPanel() {
   const classes = recordClasses(items, (it) => it.m._astFacts, endpointFilter, endpointSortBy);
   const table = (title, list) => domElement("table", { class: "ep-table" }, [
     domElement("caption", {}, [title + " (" + list.length + ")"]),
-    domElement("thead", {}, [domElement("tr", {}, ["Method", "Address", "Razor", "Provenance", "Assumed", "Facts",
+    domElement("thead", {}, [domElement("tr", {}, ["Method", "Address", "Provenance", "Assumed", "Facts",
       "Parameters", ""].map((h) => domElement("th", { scope: "col" }, [h])))]),
     domElement("tbody", {}, list.map((it) => endpointRow(it.svcName, it.doc, it.m)))]);
   if (items.length === 0) {
@@ -92,7 +92,6 @@ function endpointRow(svcName, doc, m) {
   return domElement("tr", {}, [
     domElement("td", { class: "ep-method" }, [m.httpMethod]),
     domElement("td", { class: "ep-address" }, [endpointAddressCell(m, ep)]),
-    domElement("td", {}, [endpointRazorCell(m, where)]),
     domElement("td", {}, [domElement("span", { class: "ep-grade ep-grade-" + prov }, [prov]),
                           ...(methodDriven(m, where) ? [" ", domElement("span", { class: "ep-grade ep-driven" },
                                                                         ["driven"])] : [])]),
@@ -149,15 +148,6 @@ function endpointAddressCell(m, ep) {
              JSON.stringify(m.path) }, [ENDPOINT_UNKNOWN]);
   }
   return domElement("code", {}, [ep.url]);
-}
-
-function endpointRazorCell(m, where) {
-  const set = methodRazorClasses(m, where);
-  if (set === undefined) {
-    return domElement("span", { class: "ep-unknown",
-      title: "the engine build that reported this method's sightings stated no razor class" }, [ENDPOINT_UNKNOWN]);
-  }
-  return domElement("span", {}, set.map((c) => domElement("span", { class: "ep-razor ep-razor-" + c }, [c])));
 }
 
 /* What each sighting's flow assumed (lib/endpoint-record.js's `methodWitnesses`), one line per sighting and

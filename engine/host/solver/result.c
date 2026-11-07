@@ -1283,20 +1283,12 @@ char *result_cold_json(void) {
     char *rungs;
     /* …the same surface partitioned by the mechanism that composed each address (solver/endpoint.h). */
     char *doors;
-    /* …by what a markup parse would have reached through each mechanism: the row above coarsened by a map, one
-       fact at two grains (solver/endpoint.h states the map and its three classes). */
-    char *reach;
-    /* …by whether the run had determined each address at all: a second observation, not a third grain, since
-       no door implies it (solver/endpoint.h states each class and why the field is a floor). */
+    /* …by whether the run had determined each address at all: a second observation, since no door implies it
+       (solver/endpoint.h states each class). */
     char *acls;
-    /* …and the bar itself: the per-row union of that row with the door's bytes column, which no marginal
-       carries. A fourth walk, and a cross-check against the emitted array's `razorClass`, never a sum with it
-       (solver/endpoint.h). */
-    char *razor;
-    /* …and the one fact that bar does not carry: how many addresses rest on a path that had pinned a source
-       (`path_pinned`, set in flow.c and stamped onto requests at engine.c's pending_push sites). It bounds
-       reproducibility — bytes this engine chose rather than a server sent — and is never unioned into the bar,
-       since a pin's bytes are a literal the page's own predicate spelled (solver/endpoint.h). */
+    /* …and how many addresses rest on a path that had pinned a source (`path_pinned`, set in flow.c and stamped
+       onto requests at engine.c's pending_push sites). It bounds reproducibility: bytes this engine chose rather
+       than a server sent (solver/endpoint.h). */
     char *witness;
 
     cold_census(&c);
@@ -1575,20 +1567,16 @@ char *result_cold_json(void) {
     xedge = endpoint_xhr_edge_rows();
     rungs = rung_entry_rows();
     doors = endpoint_door_hist_json();
-    reach = endpoint_reach_hist_json();
     acls  = endpoint_address_hist_json();
-    razor = endpoint_razor_hist_json();
     witness = endpoint_witness_hist_json();
-    if (!cursors || !ahead || !edge || !xedge || !rungs || !doors || !reach || !acls || !razor || !witness) {
+    if (!cursors || !ahead || !edge || !xedge || !rungs || !doors || !acls || !witness) {
         free(cursors);
         free(ahead);
         free(edge);
         free(xedge);
         free(rungs);
         free(doors);
-        free(reach);
         free(acls);
-        free(razor);
         free(witness);
         cold_census_release(&c);
         return NULL;
@@ -1819,9 +1807,7 @@ char *result_cold_json(void) {
     METRIC_SET(ep_emitted, ep_emitted);
     METRIC_SET(ep_pre_program, ep_pre_program);
     METRIC_SET_OBJECT(ep_doors, doors);
-    METRIC_SET_OBJECT(ep_reach, reach);
     METRIC_SET_OBJECT(ep_address_class, acls);
-    METRIC_SET_OBJECT(ep_razor_class, razor);
     METRIC_SET_OBJECT(ep_witness_class, witness);
     METRIC_SET(ep_asks, ep_asks);
     METRIC_SET(ep_ask_pre_program, ep_ask_pre);
@@ -1846,9 +1832,7 @@ char *result_cold_json(void) {
     free(xedge);
     free(rungs);
     free(doors);
-    free(reach);
     free(acls);
-    free(razor);
     free(witness);
     cold_census_release(&c);
     return out;

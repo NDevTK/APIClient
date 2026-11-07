@@ -76,7 +76,7 @@ typedef struct {
     char *root;         /* delivery provenance: where the bytes entered. A derivation unions its operands'
                            (one member = unchanged); a set, walked by root_member. NULL exactly when `src` is */
     /* Whose unknown each member of `root` is: a mask over ConcolicRootWhose, because `root` is a set and one
-       world root is enough to clear the product's bar however many instrument roots stand beside it. The mask
+       world root is enough to class an address `unknown` however many instrument roots stand beside it. The mask
        answers both quantifiers from one fact: `concolic_root_whose_any` tests a bit, `_all` tests that the mask
        is exactly that bit. Maintained only where the root is joined (derived_root_whose, beside
        derived_root_join). Zero exactly when `root` is NULL, which concolic_alloc asserts.
@@ -8660,7 +8660,7 @@ static JSValue concolic_alloc_shaped(JSContext *ctx, const char *shape, const ch
            "two are one fact about where the bytes came from and every derivation inherits the second while "
            "some of them re-mint the first, so a mismatch is a derivation that forgot to thread it");
     /* …and the mask with the root, for the same reason: a root with an empty mask would make
-       `concolic_root_whose_any` answer no for every member, and the product's bar could not tell a hole this
+       `concolic_root_whose_any` answer no for every member, and the address class could not tell a hole this
        engine minted from one a server supplied. The mask goes wherever the root goes, and a derivation that
        forgets crashes here. CONCOLIC_WHOSE_UNSTATED is a bit, so "no mint could say" passes and only "nobody
        threaded anything" fails. */
@@ -9837,8 +9837,7 @@ JSValue concolic_string_concat(JSContext *ctx, JSValue a, JSValue b)
    `setTimeout`, `requestIdleCallback`) composes no address. So it is not `a || b`: OR-ing would prefer every
    body that touches a timer, most of a real bundle, and the order would be the heap order again. */
 /* Which names denote this realm's own global object: the one statement of it on the consumer side of
-   `.global_member_named`, held here because this file owns the table and both consumers are reached through it
-   (testing/static_surface.mjs's `GLOBAL_OBJECTS` is a separate set over a corpus, per rung_entry.c's residual).
+   `.global_member_named`, held here because this file owns the table and both consumers are reached through it.
    A source-text test by necessity: quickjs.h's hook takes no `JSContext`, because what is reported is a fact
    about source, so the realm cannot be asked; the residual's next diff has the installers lend the set
    (browser/core/frame/window.c binds three of these, the interpreter's intrinsics the fourth). `parent` and `top`
@@ -9921,8 +9920,7 @@ static JSConcolicHooks g_hooks = {
     .global_named = compile_global_named_dispatch,
     /* …and the property spelling of the same fact, through the dispatch above, which applies the global-
        receiver test. Whether a bundle spells a door's entry name only as a property is a property of real
-       bundles, measured over a mirrored corpus by `node testing/static_surface.mjs` (its PROP-ONLY column),
-       not argued here. It decides nothing, like its sibling. */
+       bundles, not argued here. It decides nothing, like its sibling. */
     .global_member_named = compile_global_member_dispatch,
     .lead = concolic_lead_hook };
 
@@ -10060,7 +10058,7 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
        (solver/source_cut.h): a snapshot taken after it serves no candidate of this source. */
     if (src && src_row(src, strlen(src)) >= 0) source_read_note(src);
     /* A declared attacker source is the world's: its component models a channel a person or a server drives,
-       which no parse of the served bytes states. This seam is that population's one door. */
+       from outside the bytes this engine was served. This seam is that population's one door. */
     return concolic_new(ctx, shape, src, CONCOLIC_WHOSE_WORLD, computed);
 }
 

@@ -105,10 +105,7 @@ void rung_entry_declare(StepUnit u, const char *const *names) {
    this one. A page may reassign `self`, `frames` and `globalThis` — all three are writable — so this test
    presumes the standard bindings; a bundle that rebinds one raises a row by one on a name it does not name,
    which is the only direction in which this table can be wrong and is the reason the set is the narrow one.
-   AND IT IS A SECOND STATEMENT OF ONE SET, WHICH IS RECORDED RATHER THAN HIDDEN: testing/static_surface.mjs
-   holds `GLOBAL_OBJECTS` for the same purpose over a mirrored corpus, and the two differ today — it carries
-   `global` and not `frames`, which is correct for a pass that must refuse to guess and wrong for an engine
-   that knows what it installed. The residual at the foot of this file names what removes the copy. */
+   The residual at the foot of this file names what makes it the installer's own declaration. */
 /* THE RECEIVER TEST IS NO LONGER HERE AND THE `base` NO LONGER ARRIVES, which is a deletion and not a loss. A
    wrapper's own member, a bundler's `(0,o.requestIdleCallback)` re-export shim and an `api.fetch` each read a
    property of a receiver that is NOT the global, and every one of them would raise a denominator this document
@@ -117,7 +114,7 @@ void rung_entry_declare(StepUnit u, const char *const *names) {
    realm binds to its own global, and the residual below records that it was already the second of three; a
    property channel for solver/endpoint.c's doors would have made it four, so the set moved to the one place both
    consumers pass through instead. Their SHARE of the property reads of these names is a fact about real bundles
-   and is measured by `node testing/static_surface.mjs`, never asserted anywhere. */
+   and is never asserted anywhere. */
 void rung_entry_compile_global_member(const char *member) {
     if (!member) return;
     /* …and then exactly the walk its sibling performs, over the SAME tables, for the same reason: every
@@ -237,23 +234,15 @@ char *rung_entry_rows(void) {
    RETIREMENT: this residual goes when a row on this census states how many reads of a global self-name took a
    COMPUTED key, because the floor is then a number a reader can weigh rather than a sentence they must believe.
 
-   AND A SECOND ONE, ABOUT THE RECEIVER TEST RATHER THAN THE MEMBER — AND ITS FIRST CLAUSE IS NOW ABOUT ANOTHER
-   FILE, which is why it is rewritten here rather than deleted: the hazard is unchanged and only its address
-   moved. WHAT IS NOT COVERED: the receiver set is still a SECOND STATEMENT of which names a realm binds to its
-   own global — testing/static_surface.mjs states the same set as `GLOBAL_OBJECTS` for the same purpose, and the
-   two already differ, so it is a copy and not merely a risk of one. What changed is that this file no longer
-   holds one: `GLOBAL_SELF_NAMES` lives at solver/concolic.c's dispatch, which both consumers of
-   `.global_member_named` are reached through, so a door channel added for solver/endpoint.c did not make it a
-   third. The names are installed in browser/core/frame/window.c — which binds `window`, `self` and `frames` to
-   the global BY VALUE — and `globalThis` by the interpreter's own intrinsics, which is where the fact is, and
-   neither of those tells either remaining copy anything.
+   AND A SECOND ONE, ABOUT THE RECEIVER TEST RATHER THAN THE MEMBER. WHAT IS NOT COVERED: the receiver set,
+   `GLOBAL_SELF_NAMES` at solver/concolic.c's dispatch (which both consumers of `.global_member_named` are
+   reached through), is a statement of which names a realm binds to its own global made apart from where they
+   are bound: browser/core/frame/window.c binds `window`, `self` and `frames` to the global BY VALUE, and the
+   interpreter's own intrinsics bind `globalThis`, and neither tells the set anything.
    WHAT THE NEXT DIFF BUILDS: the set declared where it is installed, borrowed and never copied, exactly as a
    rung's entry table is — a realm's global installer lending its own table at its per-realm install, so a realm
-   that binds a fourth self-reference gains the receiver test for it with no edit here and the mirrored-corpus
-   pass derives the set from that declaration the way it already derives the rung tables from theirs.
-   HOW ITS ABSENCE WOULD SHOW: a reader compares this channel's rows against a mirrored-corpus count of
-   property-spelled sites and finds this one lower by exactly the sites whose receiver is spelled with a name one
-   copy holds and the other does not — a disagreement whose size is a property of two lists rather than of any
-   program, and which neither output attributes to the lists.
+   that binds a fourth self-reference gains the receiver test for it with no edit here.
+   HOW ITS ABSENCE WOULD SHOW: a property read off a realm-bound self-reference outside the set raises no row on
+   this channel while the bare spelling of the same name does.
    RETIREMENT: this record goes when the receiver set reaching this file is borrowed from the component that
    installs it, so no list here can be the one that drops a name. */

@@ -7,7 +7,7 @@ In one sentence: **a browser with a BFS time-travel solver.** The browser half (
 - compute the **logged-in API surface while logged out**, because a single-page app ships the same bundle to every visitor;
 - construct **XSS proofs of concept that are proven by firing**, from code that never ran.
 
-What the tool adds on a given page is measurable: the addresses a run emitted that no parse of the served bytes can state, because they exist only at run time. A total is not that number — most of a total is the markup counted back.
+What the tool adds on a given page is measurable: the novel identities a run learned — addresses, parameter keys, values, headers — each counted once against everything already learned, and its fire-verified findings. A count that grows with repeats is not that number.
 
 ## How it works
 

@@ -1236,16 +1236,16 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      reader. */
   "epMinted", "epAssets", "epEmitted", "epPreProgram",
   "epAsks", "epAskPreProgram", "epAskSuppressed", "epAskMerged", "epAskMinted",
-  /* AND THE CUT INSIDE THE MERGED ARM, WHICH IS THE RAZOR'S SECOND READING STATED RATHER THAN BOUNDED. The
+  /* AND THE CUT INSIDE THE MERGED ARM, STATED RATHER THAN BOUNDED. The
      five rows above make `asks - preProgram` readable and that subtraction is a CEILING on "running code
      reached a network call site and every address it built was already known" — it is nonzero for a
      post-program MINT and for a merge into a post-program record too. This row is that population and only
-     it. A NONZERO here beside `epBeyondMarkup: 0` is the whole finding in two numbers: the page's own code
+     it. A NONZERO here beside `epPostProgram: 0` is the whole finding in two numbers: the page's own code
      ran, composed addresses, and composed the `<head>`'s. It is a LIFETIME count like its neighbours and it
      is CONTAINED in `epAskMerged`, so it is never added to the three arms beside it. */
   "epAskMergedPreProgram",
   /* AND THE HOST EDGE'S OWN ENTRY, WHICH EVERY ROW ABOVE STRUCTURALLY CANNOT SEE AND WHICH THIS DRIVER — THE
-     ONE THAT READS THE RAZOR — WAS THE CONSUMER THAT NEVER ASKED. The eleven `ep*` rows above are counted at
+     ONE THAT READS THE SURFACE — WAS THE CONSUMER THAT NEVER ASKED. The eleven `ep*` rows above are counted at
      endpoint_record's door, so a `fetch()` the page CALLED and the engine threw out of, or parked inside and
      never resumed, is a network call site REACHED and is in none of them. solver/endpoint.h states what these
      five separate and it is the product's own question: `epFetchAskBeganLife == 0` beside a nonzero `epAsks`
@@ -1276,7 +1276,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      whose slack is the constructions still parked on their replies and on a page mid-run is most of them; and
      `epFetchAskOfferedLife <= epAsks` three rows up, whose slack is every OTHER door into the surface — which
      is what makes the fetch edge's SHARE of the ask population readable and is the only relation that ties
-     this census to the razor it was built to explain.
+     this census to the surface it was built to explain.
      AN ARTIFACT OLDER THAN THESE ROWS PRINTS `-` FOR ALL FIVE, which is this driver's absent-versus-zero rule
      and is the honest answer: the run did not state them. The engine's absent form is the rows being ABSENT
      from `_cold` rather than five zeroes — a host that installs no fetch runs no fetch machine and has no
@@ -1385,91 +1385,11 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
   "epXhrAskCalledLife",
   "epXhrAskBeganLife", "epXhrAskPlacedLife", "epXhrAskOfferedLife",
   "epXhrOutFreedLife", "epXhrOutFreedPlacedLife", "epXhrOutDiedAtLife",
-  /* AND CLAUDE.md §What-the-tool-produces' RAZOR, WHICH IS THE ONE ROW ON THIS WHOLE LIST THAT ANSWERS WHAT
-     THE RUN LEARNED RATHER THAN HOW FAR IT GOT. Every `ep*` row above is a TOTAL over the learned surface or
-     over the gate in front of it; this partitions that surface by WHAT A PARSE OF THE SERVED DOCUMENT WOULD
-     HAVE REACHED — `beyond` the addresses a `<script src>` scan does not already state, `markup` the `<head>`
-     counted back, `either` the doors that are reached by a parser-inserted element and a script-created one
-     alike and do not record which. solver/endpoint.h holds the map and states why there are three classes and
-     not two; the count is a FLOOR (`beyond`) with its undecidable population beside it rather than a single
-     number that would have to guess.
-     IT IS THE ONE OBJECT ON THIS LIST AND ITS KIND IS THE PRODUCER'S LIKE EVERY OTHER MEMBER'S. `census()`
-     copies it whole and the per-run line carries it as JSON; nothing here spreads it, because a range over
-     bucket names is not a quantity — which is `endpointDoors`' rule one array over.
-     A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: `beyond` 0 against a nonzero `epEmitted` is a
-     REFUSAL TO CLAIM the capability on this document, not a smaller version of it, and it is an IDENTITY read
-     WITHIN one run rather than a total to compare across two. An artifact older than the row prints `null`,
-     which is this driver's absent-versus-zero rule and is a different fact from a surface with nothing
-     beyond the markup — the first is the run not stating it, the second is the razor answering. */
-  "epReach",
-  /* …AND THE SAME RAZOR READ AGAINST THE OWNER'S HARD BAR RATHER THAN AGAINST A MARKUP PARSE, WHICH IS THE
-     ROW THAT MAKES THAT BAR SCORABLE OVER A CORPUS AT ALL. The bar is "an address, a key or a value that NO
-     PARSE of the served bytes can state, because it exists only at run time", and `epReach` cannot be
-     coarsened into it in either direction: a literal chunk URL delivered through `module-import` is `beyond`
-     a markup parse and clears NOTHING at this bar, while `/api/{location.hash}` through `fetch` clears it
-     outright. Two addresses through ONE door differ on exactly this — which is why a 19-site census of this
-     driver could close with a full `epDoors` table, `epReach` in hand, and no way to say whether any of its
-     119 code-door addresses cleared the bar.
-     IT IS A SECOND OBSERVATION AND NOT A THIRD GRAIN, which is where it differs from the row above it.
-     `epReach` is `epDoors` summed by a map and says so; this is keyed on a property of the ADDRESS VALUE —
-     whether the run had DETERMINED it — which solver/endpoint.c reads off that value's own concolic
-     provenance at the recording door. No door implies it either way, so a reader holding all three of these
-     rows holds TWO observations (CLAUDE.md §EVIDENCE-INFLATION).
-     IT IS A FLOOR AND THE TWO FLOORS OVERLAP AND MAY NOT BE SUMMED. `unknown` rows DEFINITELY clear the bar;
-     `concrete` claims nothing whatever about a parse, because whether a static reader could have stated an
-     address is not decidable by anybody — a bundler's chunk manifest needs a scope pass to resolve. And an
-     address a REPLY named is `concrete` here and past every parse of the document at once, so the bar's floor
-     over a surface is the UNION of this row's `unknown` and `epReach`'s `beyond`; a union is not a sum,
-     because a row can be in both, and nothing in this driver composes one.
-     ITS KIND AND ITS ABSENCE FOLLOW `epReach`'s EXACTLY: an object copied whole and never spread, and an
-     artifact older than the row prints `null`, which is a different fact from a surface every address of
-     which the run had determined — the first is the run not stating the bar, the second is the bar answering
-     and refusing to claim it. */
+  /* The emitted surface partitioned by whether the run determined each address and whose unknown it rests
+     on (solver/endpoint.h's ENDPOINT_ADDRESS_CLASSES), and by whether each address may rest on bytes a flow
+     pinned (`may-rest-on`; `unasked` is no flow standing at the mint, a finding about the door). Objects
+     copied whole and never spread; an artifact older than a row prints `null`, the run not stating it. */
   "epAddressClass",
-  /* …AND THE UNION OF THOSE TWO, COMPOSED BY THE PRODUCER, WHICH IS THE ONE ROW ON THIS LIST A PERSON MAY
-     READ AS THE HARD BAR ITSELF. The row above ends "the bar's floor over a surface is the UNION of this
-     row's `unknown` and `epReach`'s `beyond`; a union is not a sum, because a row can be in both, and
-     NOTHING IN THIS DRIVER COMPOSES ONE" — and that last clause was a statement about THIS FILE which is
-     why it is kept there: a reader holding the two marginals re-derives the union-is-not-a-sum argument and
-     then has to assemble the union by hand, which is the one assembly CLAUDE.md
-     §What-the-tool-produces names as the defect. solver/endpoint.c's `endpoint_razor_class_of` composes it
-     PER ROW at the emitter, out of the address class and the door list's FOURTH column — whether the door
-     handed this surface bytes that were in the served document at all — and `endpoint_razor_hist_json`
-     partitions the emitted surface by it, so the composed class is a @COLD row and no consumer assembles
-     anything.
-     IT IS A THIRD GRAIN OF TWO OBSERVATIONS AND NOT A THIRD OBSERVATION. It is DERIVED from `epReach`'s
-     operand and `epAddressClass`, so a reader holding all three of these rows still holds TWO facts
-     (CLAUDE.md §EVIDENCE-INFLATION) — and the derivation is named here rather than left to be noticed,
-     which is that record's own prescribed cure.
-     IT IS A FLOOR AND NEVER A TARGET, in `epReach`'s words: `runtime-only` 0 against a nonzero `epEmitted`
-     is this document REFUSING TO CLAIM the bar and not a smaller version of it, and `unproven` is not the
-     claim that a parse COULD have stated the address — solver/endpoint.h enumerates the three populations
-     it holds, one of which (a source this flow PINNED and re-read) really is past every parse.
-     ITS KIND AND ITS ABSENCE FOLLOW THE TWO ROWS ABOVE IT EXACTLY: an object copied whole and never spread,
-     and an artifact older than the row prints `null`, which is the run not stating the bar and is a
-     different fact from the bar answering and refusing to claim it. */
-  "epRazorClass",
-  /* …AND THE BOUND ON THE ONE POPULATION THAT ROW'S OWN BANNER NAMES AND COULD NOT SIZE. It says
-     "solver/endpoint.h enumerates the three populations it holds, one of which (a source this flow PINNED and
-     re-read) really is past every parse" — a sentence that was true, was load-bearing, and pointed at a
-     quantity NO census published: `path_pinned` is written at five request sites and read by one accessor,
-     and no row anywhere carried it, so a reader meeting `runtime-only: 0` could not tell a run that genuinely
-     determined every address from one whose pin erased a taint the bar should have seen.
-     IT IS NOT A THIRD OPERAND OF THE BAR AND MUST NEVER BE READ AS ONE. The bar is a FLOOR made of two
-     POSITIVE statements and this is a MAY — the pin is a fact about the PATH, and this row does not say the
-     address read that source at all — so unioning it in would turn a floor into an OVER-claim, which is the
-     defect solver/endpoint.h states at the list itself and the reason it is a separate word.
-     WHAT THE PAIR SAYS, AND IT IS A DECISION BETWEEN TWO OPPOSITE DIFFS rather than a column: `unproven`
-     beside `may-rest-on` 0 is a run on which no address was composed by a path that had pinned anything, so
-     the bar's zero is the run having genuinely proved nothing and the next diff belongs to the SOLVER keeping
-     more values unknown; a nonzero `may-rest-on` is the population the bar's zero does not account for, and
-     the next diff belongs to the PIN carrying a provenance through a determined read.
-     `unasked` IS NOT A SMALL `no-witness`, which is the one misreading this row most invites: it is the
-     question not having been asked, because no flow stood when the record was minted, and a nonzero row there
-     is a door composing a request outside the scheduler — a finding about that door and not about an address.
-     ITS KIND AND ITS ABSENCE FOLLOW THE THREE ROWS ABOVE IT EXACTLY: an object copied whole and never spread,
-     and an artifact older than the row prints `null`, which is a different fact from a surface no address of
-     which rested on a pin. */
   "epWitnessClass"];
 
 const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS, COLD_FORK_PINNED,
@@ -1686,44 +1606,13 @@ function census(r) {
           "this record and no reading composed from either is about the run that happened";
     }
   }
-  /* AND THE SUBTRACTION IS COMPUTED HERE RATHER THAN LEFT TO THE READER, BECAUSE ONE A READER MUST PERFORM IS
-     ONE NOBODY PERFORMS. Both halves are already rows above; this is the difference §What-the-tool-produces
-     names as the form the razor USED to take — the addresses this run emitted MINUS the ones minted before it
-     started a program, which is a PROXY for the markup door counted back. The sentence that stood here said a
-     parser reaches the second set and only execution reaches the first, and that is the over-credit the
-     paragraph below this one is about: it is true of the DOOR and only approximately true of the TIMING.
-     IT IS ENTAILED BY THE TWO ROWS IT SITS BESIDE AND THEREFORE CARRIES ITS DERIVATION, which is the cure
-     §EVIDENCE-INFLATION prescribes for a derived row: three rows here are TWO facts, and a reader counting
-     zeroes must be able to see that from the output rather than by reading this file. The `Of` field is the
-     derivation, spelled, so a row quoted out of this document into a brief carries what it is made of — which
-     is the one copy a relay preserves.
-     AND IT IS null RATHER THAN 0 WHEN EITHER HALF IS ABSENT. A build with no such counter emits nothing for
-     it, and `0 - 0` would render a run that could not be asked identically to a run that was asked and
-     contributed nothing — the absent-versus-zero pair landing on the one column the product is judged by.
-     A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: optimising toward a subtraction optimises the
-     instrument. A zero here is a REFUSAL TO CLAIM the capability on this document, not a smaller version of
-     it, and it is not comparable across two runs — it is an identity read WITHIN one. */
-  /* AND IT IS NO LONGER THE RAZOR, WHICH IS THE FIRST THING A READER OF THIS NUMBER SHOULD BE TOLD AND WHICH
-     THIS PARAGRAPH USED TO GET HALF RIGHT. It said the subtraction was no longer the ONLY statement available
-     and named `endpointDoors`/`endpointMintedAt` as the rows beside it; that is true and it is weaker than
-     what holds now. `epReach` on THIS census is CLAUDE.md §What-the-tool-produces' razor computed by the
-     producer from a map no consumer can re-derive — which door a parse of the served bytes reaches — so the
-     razor is a ROW and this line is a TIMING statement that was standing in for one.
-     THE TWO ARE NOT TWO ANSWERS TO ONE QUESTION AND THE DIFFERENCE IS THE READING. `epEmitted - epPreProgram`
-     counts rows minted AFTER the first program started, and solver/endpoint.h states why that is a proxy for
-     the markup door and not the door: a `<head>` whose first `<script src>` runs before the parser reaches
-     the `<link>` below it mints that link POST-program, so the subtraction credits a pure markup subresource
-     to forced execution — in the flattering direction, on the commonest document shape there is. `epReach`
-     asks WHICH DOOR and cannot make that mistake. So a nonzero `epBeyondMarkup` beside `epReach.beyond: 0` is
-     that over-credit VISIBLE, on one line, from ONE document at ONE instant, which is what makes the pair
-     worth carrying rather than one of them worth deleting.
-     `endpointDoors`/`endpointMintedAt` ON THE SPREAD LINE ARE STILL A DIFFERENT DOCUMENT — the @H array
-     bridge.js holds at composition, against this from the engine's `_cold` census — so no identity between
-     THOSE and this is asserted anywhere and none may be read. `epReach` is the one that shares a document
-     with the subtraction beside it. */
-  o.epBeyondMarkup = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
+  /* The addresses minted after the first program started, computed here because a derivation a reader must
+     perform is one nobody performs, with its derivation spelled in the `Of` field. It is timing, not
+     mechanism: a `<link>` below a `<head>` script is minted post-program (solver/endpoint.h). null, not 0,
+     when either half is absent. A diagnostic, read within one run. */
+  o.epPostProgram = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
     ? o.epEmitted - o.epPreProgram : null;
-  o.epBeyondMarkupOf = (o.epBeyondMarkup === null) ? null : "epEmitted - epPreProgram";
+  o.epPostProgramOf = (o.epPostProgram === null) ? null : "epEmitted - epPreProgram";
   /* THE ORDER'S OWN CENSUS, AND `members: 0` IS NOT A READING. extension/bridge.js states the contract it
      asserts: no `wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER carrying NO term rows at
      all, and a full object is a READING. A finalize document is composed after the frontier drained or parked,
@@ -1760,7 +1649,7 @@ function census(r) {
        "null because that instant is not the run, and the LIFETIME counts are the run's own totals)");
   for (const k of WFQ_ROWS)
     if (k !== "members") o[k] = w && (live || WFQ_LIFETIME.has(k)) && typeof w[k] === "number" ? w[k] : null;
-  /* THE THREE SHARES OF THE INSTANCE'S SPAN, COMPUTED HERE FOR `epBeyondMarkup`'s REASON — a derivation a
+  /* THE THREE SHARES OF THE INSTANCE'S SPAN, COMPUTED HERE FOR `epPostProgram`'s REASON — a derivation a
      reader must perform is one nobody performs, and these are the three a reader of the four time rows above
      will otherwise do by hand against the WRONG denominator. Each carries its derivation in an `…Of` field so
      a figure quoted out of this document into a brief carries what it is made of, which is the one copy a
@@ -1829,7 +1718,7 @@ function census(r) {
         "difference is a slice whose span was never charged, a second writer of one accumulator, or a clock " +
         "that is no longer monotone";
   }
-  /* THE FOUR READINGS THE SCAN ROWS EXIST FOR, COMPUTED HERE FOR `epBeyondMarkup`'s REASON and each carrying
+  /* THE FOUR READINGS THE SCAN ROWS EXIST FOR, COMPUTED HERE FOR `epPostProgram`'s REASON and each carrying
      its derivation, because a reader holding ten bare counts composes none of them:
        `scanPerStep`     = scanNextWeights / steps — the frontier the DISPATCH loop actually walked per step.
                            Read against `wfqMembers`: near it is an O(members) walk at every ask, and far below
@@ -1968,7 +1857,7 @@ function census(r) {
     /* AND THE PER-ARM RATE, WHICH IS THE READING THE BANNER SIXTY LINES UP ASKS FOR BY NAME ("read that
        against `stepUnitRuns` arm by arm") AND WHICH NOBODY HAD TAKEN — because it is a derivation over two
        HISTOGRAMS and this driver only ever composed derivations over numbers. It is here rather than in prose
-       for `epBeyondMarkup`'s reason: a derivation a reader must perform is one nobody performs.
+       for `epPostProgram`'s reason: a derivation a reader must perform is one nobody performs.
        THE COUNT AND THE RATE DISAGREE, AND THE COUNT IS THE ONE THAT MISLEADS — which is §decide.h's
        arrivals warning arriving in this histogram. MEASURED over seven real-site runs of two documents when
        this landed (and the figures are an era's reading, where the DERIVATION is the artifact):
@@ -2303,13 +2192,13 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
        other field below is then a per-row array with nothing anywhere naming the row's subject, so a run's
        output is UNATTRIBUTABLE FROM ITSELF: two documents' door histograms sit side by side and read as two
        samples of one site.
-       IT IS THE READ-WITH-NO-WRITER DEFECT INVERTED, on the axis that decides what a razor figure is about.
+       IT IS THE READ-WITH-NO-WRITER DEFECT INVERTED, on the axis that decides what a surface figure is about.
        `url` is on the engine row already -- a crash row prints it -- so this was a written field with no
        reader, and CLAUDE.md's rule about that pair is exact: a name READ somewhere and WRITTEN nowhere is a
        broken contract, and so is its mirror. The cost was measured rather than imagined: a per-site pass
        whose profile was reused reported a door histogram containing `document-script:1` for a document that
-       ships ZERO `<script src>` elements, and a `beyond` of 3 for a site that on an isolated browser CRASHES
-       -- a crashed run's razor is UNSCORED, not small, and the reused profile hid that behind a plausible
+       ships ZERO `<script src>` elements for a site that on an isolated browser CRASHES
+       -- a crashed run's surface is UNSCORED, not small, and the reused profile hid that behind a plausible
        number. Nothing in the emitted run could have said so.
        null RATHER THAN A GUESS where the row does not carry one, per this file's absent-versus-zero rule: a
        row from an artifact that predates the field is a row this driver cannot attribute, which is a
@@ -2347,9 +2236,9 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
        reader compares WITHIN a kind and never across, and one object holding both invites exactly the
        comparison neither supports — the same reason bridge.js keeps the four censuses as four objects. */
     /* WHICH MECHANISM COMPOSED EACH ADDRESS THE RUN EMITTED, AND WHETHER THE PAGE'S CODE HAD RUN WHEN IT
-       DID — the pair that makes `endpoints` in COUNTERS readable and the pair `epBeyondMarkup` below is a
+       DID — the pair that makes `endpoints` in COUNTERS readable and the pair `epPostProgram` below is a
        SUBTRACTION over. That subtraction says how many addresses forced execution CAN HAVE contributed and
-       names none of them, so a run reading `epBeyondMarkup: 0` and one reading 30 are two numbers with no row
+       names none of them, so a run reading `epPostProgram: 0` and one reading 30 are two numbers with no row
        under either; these two are the rows. CLAUDE.md §What-the-tool-produces asks for exactly this as that
        record's retirement, extension/bridge.js composes both off the ONE `fetchCallSites` array the
        `endpoints` figure is the length of, and each is asserted there to SUM to it.
@@ -2360,126 +2249,26 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
        so the formatter below spells them `-` and `{}` and never folds either into the other. */
     doors: mine.map((r) => ({ doors: ("endpointDoors" in r) ? r.endpointDoors : undefined,
                               mintedAt: ("endpointMintedAt" in r) ? r.endpointMintedAt : undefined,
-                              /* …AND THE THIRD: whether the run had DETERMINED each address, per address,
-                                 off the emitted array. The two beside it are WHICH MECHANISM and WHEN, and
-                                 neither reaches the bar — a literal chunk URL through `module-import` and
-                                 one built out of the fragment come through the same door as each other.
-                                 THIS CLAUSE USED TO CALL IT "THE ONLY ONE OF THE THREE THAT ANSWERS THE
-                                 OWNER'S HARD BAR" AND IS REWRITTEN RATHER THAN DELETED, because a reader
-                                 who re-derives it from the two rows above will write it again: it is an
-                                 OPERAND of that bar and not the bar. It cannot see a row whose address was
-                                 an ordinary determined string by the time it arrived AND whose bytes were
-                                 never in the served document at all — a chunk list a reply carried — which
-                                 clears the bar outright and lands in `concrete` here. `undefined` is a relay
-                                 predating the field and is a different fact from a surface whose every
-                                 address the run had determined, for the two rows above's reason. */
+                              /* …and the third: whether the run determined each address and whose unknown
+                                 it rests on, off the emitted array. `undefined` is a relay predating the
+                                 field, a different fact from a surface the run determined. */
                               addressClass: ("endpointAddressClass" in r)
                                 ? r.endpointAddressClass : undefined,
-                              /* …AND THE BAR ITSELF, COMPOSED BY THE PRODUCER OUT OF THAT OPERAND AND THE
-                                 DOOR'S OWN BYTES COLUMN. extension/bridge.js writes it on every engine-run
-                                 record from solver/endpoint.c's per-row `razorClass`, and it is read here
-                                 because a field the shipped path writes and the one instrument that
-                                 measures a REAL SITE does not read is a producer with no reader on exactly
-                                 the column this product is judged by.
-                                 IT IS NOT UNIONED WITH ANYTHING HERE AND MAY NOT BE. The zone that relays
-                                 it holds no door map, by its own argument, and neither does this file: a
-                                 union assembled by a consumer out of `doors` and `addressClass` is the
-                                 figure CLAUDE.md §What-the-tool-produces DEMOTED, because `beyond` is what
-                                 a MARKUP parse cannot reach and `fetch`, `xhr` and `module-import` are all
-                                 in it. `undefined` is a relay predating the field, for the rows above's
-                                 reason. */
-                              razorClass: ("endpointRazorClass" in r)
-                                ? r.endpointRazorClass : undefined,
-                              /* …AND WHOSE HOLE EACH NON-DETERMINED ADDRESS CARRIED, which is the one axis
-                                 none of the three above can express and the one the bar's own open question
-                                 is about. The rows beside it say WHICH DOOR, WHEN, and WHETHER THE RUN HAD
-                                 DETERMINED the address; not one of them says, of an address the run did NOT
-                                 determine, WHERE THE UNKNOWN CAME FROM. IT IS NOT THE WHOSE AXIS AND THE
-                                 CLAUSE THAT STOOD HERE SAID IT WAS, FALSELY, AT THIS COMMIT'S OWN PARENT —
-                                 it read "a hole this engine minted for its own orphan drive clears the hard
-                                 bar in exactly the same bucket as one a page's own `location.hash` put
-                                 there, which are opposite findings about the product", and the retired
-                                 wording is kept because a reader who re-derives it from "an unknown is an
-                                 unknown" will write it again. solver/engine.c mints a driven orphan's
-                                 argument AND its receiver `CONCOLIC_WHOSE_INSTRUMENT`, saying at the site
-                                 that the bar's own claim "is false of it: nothing was LEARNED, because the
-                                 hole is ours"; `address_class_of` asks `concolic_root_whose_any(url,
-                                 CONCOLIC_WHOSE_WORLD)` — the ONE live call to that predicate in
-                                 solver/endpoint.c, five matched as a CONSTRUCT against ten matches of the
-                                 bare name, the other four being prose — so an INSTRUMENT-only mask answers
-                                 NO, the class is `unknown-unproven`, and `endpoint_razor_class_of` clears
-                                 only on `EPA_UNKNOWN`. THE BAR ALREADY REFUSES THE ENGINE'S OWN HOLES, and
-                                 the clause describing the world before it did was published in the series
-                                 that ended it — which is the cost clause written out of what its author
-                                 FOUND rather than what they LEFT.
-                                 WHAT THE ROW ADDS IS THE NAMES, AND THAT IS WHAT MAKES THAT REFUSAL
-                                 FALSIFIABLE RATHER THAN MERELY ASSERTED: a `runtime-only` row whose root is
-                                 WHOLLY `{orphan<hex>…}` is that refusal regressed, which is the observation
-                                 solver/endpoint.c's own HOW-ITS-ABSENCE-WOULD-SHOW clause names this
-                                 emitted row for.
-                                 THE NAMES MAY NOT BE PARSED FOR WHOSE — extension/bridge.js says so at this
-                                 very histogram and solver/endpoint.c says why, the root being a SET whose
-                                 walk is static to solver/concolic.c — so `(named)` holds THREE states and
-                                 not one: a real source root; a JOINED set mixing a page source with an
-                                 engine hole, which is the one case that DOES clear the bar and the one case
-                                 this row cannot resolve; and a derivation that became its OWN root, whose
-                                 mask is `UNSTATED` (solver/concolic.c's `root ? root : shape` at four code
-                                 sites, each with `root_whose_or_unstated` beside it).
-                                 `(unattributed)` IS A TRIPWIRE AND NOT HALF OF A SPLIT. It needs a concolic
-                                 carrying a `src` and no `root`, which `concolic_alloc`'s own pair asserts
-                                 forbid in dev (`!!src == !!root` and `!!root == !!root_whose`), so a nonzero
-                                 bucket here is a release-build mask drop or a mint that has parted from
-                                 those asserts — worth a column, and not an observation about the page.
-                                 IT IS NOT A FOURTH OPERAND OF THE BAR AND MAY NOT BE UNIONED INTO IT.
-                                 solver/endpoint.h states that case at `ENDPOINT_WITNESS_CLASSES` and it
-                                 holds here for the same reason: `endpoint_razor_class_of` takes TWO ints,
-                                 the address class and the door's bytes column, so the bar cannot ask a
-                                 property of a VALUE at all, and a consumer that folded this in would turn a
-                                 floor into a claim about provenance the producer never composed.
-                                 THREE OF ITS FOUR BUCKETS ARE NOT THREE FACTS. solver/endpoint.c writes
-                                 `null` on EXACTLY the rows whose `addr_class` is `EPA_CONCRETE` — read at
-                                 the emitter, not inferred — so `(no-concolic)` is ENTAILED by this line's
-                                 `addressClass: concrete` and corroborates nothing (CLAUDE.md
-                                 §EVIDENCE-INFLATION); `(unstated)` is a relay predating the field. The
-                                 observation is the `(named)`-against-`(unattributed)` split WITHIN the rows
-                                 that carried an unknown, and nothing else on this line can make it.
-                                 `undefined` IS A RELAY PREDATING THE FIELD, for the three rows above's
-                                 reason exactly, and extension/bridge.js records that NO ARCHIVED ROW
-                                 carried this key at all — so the first drive that reads it is the first
-                                 reading of this axis on a real site rather than a re-reading of one. */
+                              /* …and the delivery-root state of each address (extension/bridge.js's
+                                 histogram): `(no-concolic)` is entailed by `addressClass: concrete`, so the
+                                 observation is `(named)` against `(unattributed)` within the rows that
+                                 carried an unknown. `(unattributed)` is a tripwire: `concolic_alloc`'s pair
+                                 asserts forbid it in dev. The names may not be parsed for whose. */
                               addressRoot: ("endpointAddressRoot" in r)
                                 ? r.endpointAddressRoot : undefined })),
-                              /* NAMED RESIDUAL — THE ROOT NAMES REACH NO READER, AND A READER FOR THEM
-                                 MAY NOT GO HERE. A reader was landed here and is WITHDRAWN rather than
-                                 kept, because it was a READ WITH NO WRITER: it took `r.fetchCallSites`
-                                 off the engine-log row, and extension/bridge.js composes the four
-                                 histograms into THAT record while attaching `fetchCallSites` to the
-                                 ANALYSIS, 278 lines apart — two objects. Measured by driving it: the row
-                                 printed `-` on both completed runs while `endpointAddressClass` beside it
-                                 printed `concrete:198`, so the document was there and the field was on
-                                 something else, and the `-` token asserted "a relay with no engine
-                                 document", which was false.
-                                 WHAT IS NOT COVERED: solver/endpoint.c emits each row's `addressRoot`
-                                 STRING and no consumer anywhere reads it. The histogram above buckets
-                                 every non-empty one to `(named)`, so `{orphan<hex>.argN}` — a spelling
-                                 solver/engine.c alone produces and no document can write — and an
-                                 injected member a page's own inline script wrote are indistinguishable in
-                                 every artifact a reader has.
-                                 WHAT THE NEXT DIFF BUILDS: a reader on the surface that HOLDS the rows,
-                                 which is `globalStore.endpoints` as lib/endpoint-record.js shapes it, not
-                                 a new field on the log record — extension/bridge.js states at the
-                                 histogram that the names are DELIBERATELY not there and gives its reason,
-                                 so adding them would silence a decision rather than fill a gap. What that
-                                 diff owes first is whether `addressRoot` survives lib/merge.js into the
-                                 record at all; it is read off `result.fetchCallSites` by a DCHECK in
-                                 bridge.js before the merge, and whether it is carried past it is not
-                                 established here.
-                                 HOW ITS ABSENCE WOULD SHOW: a run whose razor reads `runtime-only` and
-                                 whose roots a reader cannot attribute — the engine's own instrument hole
-                                 and a page source printing one identical bucket, so the one observation
-                                 solver/endpoint.c's own HOW-ITS-ABSENCE-WOULD-SHOW clause names this
-                                 emitted row for cannot be made from any artifact. Observed wherever that
-                                 bucket is read; not keyed to whichever row currently exhibits it. */
+                              /* Named residual. Not covered: solver/endpoint.c emits each row's
+                                 `addressRoot` string and no consumer reads it; the histogram buckets every
+                                 non-empty one to `(named)`, so an engine-minted `{orphan<hex>.argN}` and an
+                                 injected member a page's inline script wrote are indistinguishable. Next diff
+                                 builds: a reader on the surface that holds the rows (`globalStore.endpoints`
+                                 as lib/endpoint-record.js shapes it), not a new field on the log record,
+                                 after establishing whether `addressRoot` survives lib/merge.js. How its
+                                 absence would show: `unknown` rows whose roots no artifact attributes. */
     frontier: mine.map(census),
     storeEndpointsDelta: (last.endpoints === null || before.endpoints === null)
       ? null : last.endpoints - before.endpoints,
@@ -2665,38 +2454,19 @@ async function main() {
         /* AND WHAT THOSE ENDPOINTS WERE, WHICH IS THE ONE COLUMN ON THIS LINE THAT CAN TELL A RUN THAT
            LEARNED A GATED API SURFACE FROM ONE THAT COUNTED A `<head>` BACK. It is NOT a spread, for `cold`'s
            reason one field up: the sequence is the answer, and a range over bucket names is not a quantity.
-           READ WITH `epBeyondMarkup` IN `frontier` AND NOT INSTEAD OF IT. That subtraction is composed from
+           READ WITH `epPostProgram` IN `frontier` AND NOT INSTEAD OF IT. That subtraction is composed from
            the ENGINE's own census and this from the emitted array, so they are two documents at two instants
            and this driver asserts no identity between them — they are a CROSS-CHECK, and a door partition
-           that is all markup beside a nonzero `epBeyondMarkup` is a disagreement worth opening, not a sum
+           that is all markup beside a nonzero `epPostProgram` is a disagreement worth opening, not a sum
            to reconcile. */
         endpointDoors: rs.map((r) => r.doors.map((d) => hist(d.doors)).join("|") || "no-row"),
         endpointMintedAt: rs.map((r) => r.doors.map((d) => hist(d.mintedAt)).join("|") || "no-row"),
-        /* AND THE HARD BAR PER ADDRESS, BESIDE THE TWO ROWS THAT CANNOT STATE IT. Read WITH `epAddressClass`
-           in `frontier` and not instead of it: that row is composed from the ENGINE's own census and this
-           from the emitted array, so they are two documents at two instants and this driver asserts no
-           identity between them — they are a CROSS-CHECK, and an `unknown: 0` here beside a nonzero one
-           there is a disagreement worth opening rather than a pair to reconcile. It is the same relationship
-           `endpointDoors` has with `epReach` one row up. */
+        /* The address class per run, off the emitted array; a cross-check against `frontier`'s engine-side
+           `epAddressClass`, two documents at two instants with no identity asserted between them. */
         endpointAddressClass: rs.map((r) => r.doors.map((d) => hist(d.addressClass)).join("|") || "no-row"),
-        /* …AND THE BAR, PER RUN, BESIDE THE OPERAND THAT CANNOT STATE IT. Read WITH `epRazorClass` in
-           `frontier` and not instead of it, for `endpointAddressClass`'s reason exactly: that row is
-           composed from the ENGINE's own census and this from the emitted array, so they are two documents
-           at two instants and this driver asserts no identity between them — a `runtime-only: 0` here
-           beside a nonzero one there is a disagreement worth opening rather than a pair to reconcile.
-           IT IS THE COLUMN THIS PRODUCT IS JUDGED BY AND IT IS STILL A DIAGNOSTIC: a run whose whole
-           surface reads `unproven` has REFUSED TO CLAIM the bar on that document, which is a finding about
-           the run and never a target to optimise toward. */
-        endpointRazorClass: rs.map((r) => r.doors.map((d) => hist(d.razorClass)).join("|") || "no-row"),
-        /* …AND WHOSE HOLE PAID FOR IT, which is the column that separates this product working from this
-           product measuring itself. A surface whose razor reads `runtime-only` on rows whose root names
-           `{orphan<hex>.argN}` is the ENGINE'S OWN MINT clearing the engine's own bar; the same figure on
-           rows naming a declared attacker source is the thing the tool exists to find. Both print an
-           identical `endpointRazorClass`, so this is the only row on this line that can tell them apart.
-           READ WITH `endpointAddressClass` ONE ROW UP AND NEVER AS A FOURTH SIGNAL: `(no-concolic)` is that
-           row's `concrete` restated, by the emitter's own `addr_class == EPA_CONCRETE` arm, so the two rows
-           carry THREE facts between them and not five. It composes no union and asserts no identity against
-           `frontier`'s engine-side census, for `endpointAddressClass`'s reason exactly. */
+        /* …and whose hole each unknown address carried: rows rooted in an engine-minted `{orphan<hex>.argN}`
+           and rows rooted in a declared attacker source print one identical `endpointAddressClass`. Read with
+           that row: `(no-concolic)` restates its `concrete`. */
         endpointAddressRoot: rs.map((r) => r.doors.map((d) => hist(d.addressRoot)).join("|") || "no-row"),
         sinks: spread(rs, first("sinks")),
         candidates: spread(rs, first("candidates")),

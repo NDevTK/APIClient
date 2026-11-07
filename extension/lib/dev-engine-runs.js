@@ -216,8 +216,6 @@ function devEngineRunsSection(runs) {
            !Array.isArray(m.endpointMintedAt) &&
            m.endpointAddressClass && typeof m.endpointAddressClass === "object" &&
            !Array.isArray(m.endpointAddressClass) &&
-           m.endpointRazorClass && typeof m.endpointRazorClass === "object" &&
-           !Array.isArray(m.endpointRazorClass) &&
            m.endpointWitnessClass && typeof m.endpointWitnessClass === "object" &&
            !Array.isArray(m.endpointWitnessClass),
            "an engine run record reached the diagnostics page without its endpoint partitions — bridge.js " +
@@ -226,7 +224,6 @@ function devEngineRunsSection(runs) {
            "relay broken");
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
                       ["endpointAddressClass", m.endpointAddressClass],
-                      ["endpointRazorClass", m.endpointRazorClass],
                       ["endpointWitnessClass", m.endpointWitnessClass]]) {
       let _n = 0;
       for (const k of Object.keys(_p[1])) _n += _p[1][k];
@@ -249,129 +246,13 @@ function devEngineRunsSection(runs) {
         + `the parser reaches the link below it mints that link post-program, and a literal chunk URL and one `
         + `built out of the fragment arrive through the same door as each other. "unknown" is the engine `
         + `stating it had NOT determined that address AND that its unknown is one somebody OUTSIDE the `
-        + `engine supplied, which is the only one of these buckets that is a FLOOR under the hard bar below; `
-        + `"unknown-unproven" is an address the run did not determine whose unknown the engine minted for its `
-        + `own drive, or the served document itself spells, or no mint could speak for — undetermined and `
-        + `REFUSED by that bar; "concrete" claims nothing at all about what a parse could reach. `
+        + `engine supplied; "unknown-unproven" is an address the run did not determine whose unknown the `
+        + `engine minted for its own drive, or the served document itself spells, or no mint could speak `
+        + `for; "concrete" is an address the run determined. `
         + `A bucket named "(unstated)" is a row from an engine older than that key and is a fact about the `
         + `build, not about the page.`;
-    /* The razor, read off the engine's own census `epReach` against `epEmitted` (a gauge taken at an instant,
-       which is why its denominator is named and is not the array length above). solver/endpoint.c applies the
-       door-to-reach map; this file holds no copy of it. `beyond` 0 is a refusal to claim, not a small number,
-       and `either` is the undecidable population, so the floor and its bound are both rendered. No assert
-       stands on these engine keys: an installed wasm older than a key is the ordinary case for a zone
-       deployed on write, and its absence is stated (in two causes: no row, or class names this reader does
-       not know) and never defaulted to a zero. */
-    const _reach = m.cold.epReach;
-    const _emitted = m.cold.epEmitted;
-    const _reachStated = _reach !== null && typeof _reach === "object" && !Array.isArray(_reach)
-                       && typeof _emitted === "number";
-    const _beyond = _reachStated ? _reach.beyond : undefined;
-    const _either = _reachStated ? _reach.either : undefined;
-    const _razorStated = typeof _beyond === "number" && typeof _either === "number";
-    const _bound = !_razorStated || _either === 0
-      ? ``
-      : ` A FLOOR, not a total: ${_either} further address(es) came through a mechanism that is `
-        + `reached by a parser-inserted element and by a script-created one alike and does not record which, `
-        + `and the producer declines to guess rather than under-credit one or over-credit the other — so the `
-        + `true figure lies between the two and neither half is quotable alone.`;
-    const razor = !_reachStated
-      ? `razor — what this engine reached that a markup parse could not: NOT STATED BY THIS BUILD. The `
-        + `installed engine composes no such census row, so nothing here has claimed or refused anything. `
-        + `That is a fact about the BUILD and never about this page, and it is NOT a zero.`
-      : !_razorStated
-        ? `razor — what this engine reached that a markup parse could not: NOT READABLE FROM THIS BUILD. The `
-          + `census carries the partition under class names this reader does not know, so no floor can be `
-          + `read off it — again a fact about the BUILD, and again NOT a zero.`
-        : _emitted === 0
-          ? `razor — what this engine reached that a markup parse could not: this run emitted no address at `
-            + `all, so there is no surface to partition and the razor has no population here. A statement `
-            + `about this RUN, read WITH the surface row above and not against it.`
-          : _beyond === 0
-            ? `razor — what this engine reached that a markup parse could not: NONE of `
-              + `${_emitted} emitted address(es). That is this run's REFUSAL TO CLAIM the `
-              + `capability on this document and NOT a small number — every address on the surface above is `
-              + `one a parse of the served bytes hands a reader for free.${_bound} A DIAGNOSTIC AND NEVER A `
-              + `TARGET: an identity read WITHIN this run, not against another run's.`
-            : `razor — what this engine reached that a markup parse could not: `
-              + `${_beyond} of ${_emitted} emitted address(es) came through a `
-              + `mechanism NO parse of the served document reaches.${_bound} A DIAGNOSTIC AND NEVER A `
-              + `TARGET: an identity read WITHIN this run, not against another run's. The denominator is the `
-              + `engine's own census taken at that instant, and is not the array length in the row above.`;
-    /* The hard bar from the census's address classes: `unknown` rows (undetermined, resting on an unknown
-       somebody outside the engine supplied) definitely clear it; `concrete` claims nothing about a parse. It
-       is a floor that overlaps the razor and is never added to it. Same stated-absence rules and denominator
-       as the razor, read off the same `_emitted` local so both sentences share one instant. */
-    const _acls = m.cold.epAddressClass;
-    const _aclsStated = _acls !== null && typeof _acls === "object" && !Array.isArray(_acls)
-                      && typeof _emitted === "number";
-    const _undet = _aclsStated ? _acls.unknown : undefined;
-    const _barStated = typeof _undet === "number";
-    const hardBar = !_aclsStated
-      ? `hard bar — addresses NO parse of the served bytes can state: NOT STATED BY THIS BUILD. The installed `
-        + `engine composes no such census row, so nothing here has claimed or refused anything. That is a `
-        + `fact about the BUILD and never about this page, and it is NOT a zero.`
-      : !_barStated
-        ? `hard bar — addresses NO parse of the served bytes can state: NOT READABLE FROM THIS BUILD. The `
-          + `census carries the partition under class names this reader does not know, so no floor can be `
-          + `read off it — again a fact about the BUILD, and again NOT a zero.`
-        : _emitted === 0
-          ? `hard bar — addresses NO parse of the served bytes can state: this run emitted no address at all, `
-            + `so there is no surface to partition and the bar has no population here. A statement about this `
-            + `RUN, read WITH the surface row above and not against it.`
-          : _undet === 0
-            ? `hard bar — addresses NO parse of the served bytes can state: NONE of `
-              + `${_emitted} emitted address(es) was one this run had not determined AND whose `
-              + `unknown somebody outside the engine supplied. That is a `
-              + `REFUSAL TO CLAIM the bar on this document and NOT a small number. It is a FLOOR and not a `
-              + `verdict: a determined address may still be past every parse — one a flow PINNED and re-read, `
-              + `or one a REPLY named — and this engine cannot say which, so the floor here and the razor `
-              + `above OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`
-            : `hard bar — addresses NO parse of the served bytes can state: at least `
-              + `${_undet} of ${_emitted} emitted address(es) — the run reached `
-              + `each of those holding a value it had NOT determined, resting on an unknown a document, a `
-              + `server, an attacker or the environment supplied, so it stands in no served byte. (An `
-              + `undetermined address whose unknown the ENGINE minted for its own drive is counted by none of `
-              + `this: it is the engine's own "unknown-unproven" and the bar refuses it.) A FLOOR and not a `
-              + `verdict: some of the remaining `
-              + `${_emitted - _undet} may be past a parse too (a pinned source re-read, an `
-              + `address a reply named) and nothing here guesses which, so this floor and the razor above `
-              + `OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`;
-    /* The same bar composed per row by solver/endpoint.c (`razorClass`: the `unknown` rows together with the
-       rows whose door handed it bytes never in the served document) and partitioned by bridge.js, so it is one
-       floor and not two halves. Its denominator is `endpoints`, the array length, not the census gauge, so it
-       cross-checks the row above rather than adding to it. Readability asks whether a class name this reader
-       knows appears, which covers both an engine older than the key and a class list that moved, without
-       naming bridge.js's `(unstated)` constant from another realm. */
-    const _razorCls = m.endpointRazorClass;
-    const _only = _razorCls["runtime-only"] === undefined ? 0 : _razorCls["runtime-only"];
-    const _razorReadable = _razorCls["runtime-only"] !== undefined || _razorCls["unproven"] !== undefined;
-    const composedBar = m.endpoints === 0
-      ? `hard bar, composed — this run emitted no address at all, so there is no surface to partition and the `
-        + `bar has no population here. A statement about this RUN.`
-      : !_razorReadable
-        ? `hard bar, composed — NOT READABLE FROM THIS BUILD. No emitted address carries a razor class this `
-          + `reader knows, which is either an installed engine older than the key or one whose class list `
-          + `moved under this zone — a fact about the BUILD in both cases, and NOT a zero. The two `
-          + `bracketing rows above are what this build can say.`
-        : _only === 0
-          ? `hard bar, composed — NONE of ${m.endpoints} emitted address(es) is one this run `
-            + `PROVED exists only at run time. That is a REFUSAL TO CLAIM the bar on this document and NOT a `
-            + `small number. Still a FLOOR: "unproven" claims nothing about what a parse could reach, and a `
-            + `source this flow pinned and re-read really is past every parse — the row below is how large `
-            + `that population can be.`
-          : `hard bar, composed — ${_only} of ${m.endpoints} emitted address(es) `
-            + `is one this run PROVED exists only at run time: it reached the address holding a value it had `
-            + `not determined AND resting on an unknown a document, a server, an attacker or the environment `
-            + `supplied, or it read the address out of bytes that were never in the served document. This `
-            + `is the UNION of those two, composed per address by the engine, so it is ONE floor and not two `
-            + `to bracket. Still a FLOOR: "unproven" claims nothing about what a parse could reach. A `
-            + `DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run; its denominator is the emitted array's `
-            + `own length above and not the engine's census figure.`;
-    /* The bound on the population that bar cannot size: `may-rest-on` rows were composed by a path that pinned
-       a source's value on an arm its own example contradicted. A may, never added to the bar. Zero says the
-       bar's `unproven` is the engine having proved nothing; nonzero says part of it is a population the bar
-       cannot look at. */
+    /* How many addresses may rest on bytes this engine chose: `may-rest-on` rows were composed by a path that
+       pinned a source's value on an arm its own example contradicted. A may, read beside the address class. */
     const _wCls = m.endpointWitnessClass;
     const _mayRest = _wCls["may-rest-on"] === undefined ? 0 : _wCls["may-rest-on"];
     const _unasked = _wCls["unasked"] === undefined ? 0 : _wCls["unasked"];
@@ -385,14 +266,11 @@ function devEngineRunsSection(runs) {
           + `under this zone. A fact about the BUILD and NOT a zero.`
         : (_mayRest === 0
             ? `may rest on a witness — NONE of ${m.endpoints} emitted address(es) was composed `
-              + `by a path that had pinned a source's value on an arm its own example contradicted. So this `
-              + `run's "unproven" above is the bar having genuinely proved nothing, rather than a population `
-              + `the bar could not look at.`
+              + `by a path that had pinned a source's value on an arm its own example contradicted.`
             : `may rest on a witness — ${_mayRest} of ${m.endpoints} emitted `
               + `address(es) was composed by a path that HAD pinned a source's value on an arm its own `
-              + `example contradicted. That is a MAY and never a bar: it does not say the address read that `
-              + `source. It is the bound on the one population "unproven" above cannot look at, because `
-              + `a pinned read comes back as a bare value and the address then grades "concrete".`)
+              + `example contradicted. That is a MAY: it does not say the address read that source. A pinned `
+              + `read comes back as a bare value and the address then grades "concrete".`)
           + (_unasked === 0 ? ``
              : ` ${_unasked} address(es) could not be asked at all — no flow stood when the `
                + `record was minted, which is a door composing a request outside the scheduler and is a `
@@ -472,15 +350,12 @@ function devEngineRunsSection(runs) {
       ? [domElement("strong", {}, ["still running"]), ` — snapshot, not a total; ${resumedTxt}; ${coldTxt} · so far: `]
       : `run complete · ${resumedTxt}; ${coldTxt} · `;
     /* Row order is load-bearing: sentences point at their neighbours by position ("the endpoints learned
-       above", "the surface above", "this run's `unproven` above"), so the orphan sentence follows the cost
-       row, the razor and bar rows follow the surface row, and the witness row follows the composed bar. */
+       above", "the surface above"), so the orphan sentence follows the cost row and the witness row follows
+       the surface row. */
     return domElement("div", { class: "deep-row" }, [
       label([`${where} — `, head, parts.join(" · ")]),
       label([orphan]),
       label([surface]),
-      label([razor]),
-      label([hardBar]),
-      label([composedBar]),
       label([witnessRow]),
       label([egress]),
       label([order]), denom, censusRows,
