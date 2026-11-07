@@ -11859,7 +11859,10 @@ static void engine_sale_release(Flow *tail) {
    live operands, and rebuilt from its record when the pick reaches it by a replay that reaches the member's own
    work coordinate at the sale uncharged and re-sends nothing, since flow_age_running charges replayed work like any
    other. Absence shows as: two runs of one artifact over one input whose picks agree until the first RAM-pressure
-   sale and differ after it. */
+   sale and differ after it.
+   Named residual. Not covered: a flow captured as a snapshot; the cold tier stores a recipe and re-executes it.
+   Next diff builds: a serialized COW delta and frame chain that a resume restores without re-execution. Absence
+   shows as: a resumed member's first quantum spent re-running work its path had already done. */
 static void engine_sale_write(Flow *tail) {
     /* Which population is leaving, read before flow_release frees the label: `cand_src` is the whole question
        (solver/engine.h). Per member, as at the retirement arm (engine.h). */
