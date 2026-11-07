@@ -19076,9 +19076,9 @@ TF_UNIT void probes_cutsource(const char *js, Probe *tab, int *n) {
     }
 }
 
-/* The rows of the `cuthold` document (fixture/cuthold.h): the markup search over the fragment fires from an arm
-   of the fragment's snapshot, which can only happen if the arm held the peer's post until its replay passed the
-   timer that opens the listener; and an arm delivered a held record where its frozen path did. */
+/* The rows of the `cuthold` document (fixture/cuthold.h): the markup search over the fragment fires, which from an
+   arm of the fragment's snapshot needs the peer's post held until the replay passed the timer's branch that marks
+   the step; and an arm delivered a held record where its frozen path did. */
 TF_UNIT void probes_cuthold(const char *js, Probe *tab, int *n) {
     char hs[1024] = "";
     int has = s_rooted_source(js, "innerHTML", LOCATION_HASH_SRC, hs, sizeof hs);
@@ -19086,7 +19086,7 @@ TF_UNIT void probes_cuthold(const char *js, Probe *tab, int *n) {
     int fw_tt = 1, hd_tt = 1;
 
     fold_row(&fw_tt, &fw_why, !!strstr(js, "\"/api/ch-recv\""),
-             "NOT REACHED: there is no /api/ch-recv record, so the listener never ran after the timer marked its step");
+             "NOT REACHED: there is no /api/ch-recv record, so no poll saw the post arrive after the step was marked");
     fold_row(&fw_tt, &fw_why, has,
              "NOT REACHED: no innerHTML @S record carries a source rooted in location.hash");
     fold_row(&fw_tt, &fw_why, has && s_stage(js, "innerHTML", hs) == S_FIRED,
@@ -19095,7 +19095,7 @@ TF_UNIT void probes_cuthold(const char *js, Probe *tab, int *n) {
              "NOT REACHED: no candidate was forked off the fragment's snapshot");
     fold_row(&hd_tt, &hd_why, sr_census(js, "holdsMet") > 0,
              "no arm delivered a held record where its frozen path did: the peer's post reached the listener at "
-             "the arm's first task boundary, before the timer its path ran first");
+             "the arm's first task boundary, before the timer's branch its path took first");
     const Probe rows[] = {
         { "ch-fired", fw_tt, "'chOut'", SESS_EXPLORE, fw_why },
         { "ch-held", hd_tt, "chStep", SESS_EXPLORE, hd_why },
