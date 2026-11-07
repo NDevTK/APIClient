@@ -6556,13 +6556,13 @@ TF_UNIT void named_walk_on_selftest(JSContext *ctx, lxb_html_document_t *dom)
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
    schedule declining every offer and one taking every offer, and the walks are charged the same nodes under both,
    so a resume continues a parked walk rather than re-running it. `k3` is a `<b>`, so namedItem over the `<i>`
-   collection misses it: step 2 takes the first element in the collection. The elements come from one innerHTML
-   write, because each `document.createElement` read walks the Document's named properties over the fixture's
-   whole document first. */
+   collection misses it: step 2 takes the first element in the collection. The elements belong to an inert
+   document of the program's own (DOM §4.5.1 Interface DOMImplementation, createHTMLDocument()), built through
+   no sink: the analysed document's policy (Trusted Types refuses a string to innerHTML) and its census (a sink
+   reach) are the page's, and each `createElement` read walks only that small document's named properties. */
 static const char *TF_COLL_WALK_SRC =
-    "(function(){ var d = document.createElement('div'), i, ok = 1, h = '';"
-    " for (i = 0; i < 300; i++) h += i % 3 ? '<i id=k' + i + '></i>' : '<b id=k' + i + '></b>';"
-    " d.innerHTML = h;"
+    "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div'), e, i, ok = 1;"
+    " for (i = 0; i < 300; i++) { e = x.createElement(i % 3 ? 'i' : 'b'); e.id = 'k' + i; d.appendChild(e); }"
     " var t = d.getElementsByTagName('i'), c = d.children;"
     " if (t.length !== 200 || c.length !== 300 || d.childNodes.length !== 300) ok = 0;"
     " if (t[150].id !== 'k226' || t.item(149).id !== 'k224' || t.item(200) !== null) ok = 0;"
