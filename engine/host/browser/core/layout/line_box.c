@@ -849,9 +849,9 @@ static size_t lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
 
 /* §10.8's step 2 for the line-relative boxes, after the baseline-aligned ones fixed `w->out`: each grows the line
    only where its subtree is taller, at the edge §4.2.3 leaves free, which is §10.8's "minimize the line box
-   height". `top` boxes extend the line under, `bottom` boxes over and `center` boxes both by half; the order
-   is CSS 2.2's open choice ("there are multiple solutions and CSS 2 does not define the position of the line
-   box's baseline"), and any order yields the same height, the tallest of the four. */
+   height". `top` boxes extend the line under, `bottom` boxes over and `center` boxes both by half. The order is
+   open, CSS 2.2 §10.8 saying that "there are multiple solutions and CSS 2.2 does not define the position of the
+   line box's baseline", and any order yields the same height, the tallest of the four. */
 static LbExtent lb_line_relative_extent(const LbLineWalk *w)
 {
     LbExtent out = w->out;
