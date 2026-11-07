@@ -1491,6 +1491,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
 #include "fixture/startin.h"
+#include "fixture/staticinline.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2183,6 +2184,7 @@ TF_DOCS[] = {
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
+    { "staticinline", HTML_STATICINLINE },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -20490,6 +20492,26 @@ TF_UNIT void probes_startin(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `staticinline` document (fixture/staticinline.h): css-position-3 §3.5.3's static-position
+   rectangle for an absolutely positioned box whose hypothetical box is inline-level. */
+TF_UNIT void probes_staticinline(const char *js, Probe *tab, int *n) {
+    const char *si_why = NULL; int si_tt = 1;
+    fold_row(&si_tt, &si_why, !!strstr(js, "\"/api/staticinline\""),
+             "NOT REACHED: no /api/staticinline record, so the document aborted before its fetch");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/staticinline", "x1", "0") &&
+                              param_value_is(js, "/api/staticinline", "y1", "0"),
+             "css-position-3 §3.5.3: an inline-level hypothetical box on a first line is not at the inline "
+             "position the line reached (x1 0) and that line's top (y1 0)");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/staticinline", "x2", "0") &&
+                              param_value_is(js, "/api/staticinline", "y2", "120"),
+             "css-position-3 §3.5.3: an inline-level hypothetical box on a second line is not after the box "
+             "before it (x2 0) on that line's top (y2 120)");
+    const Probe rows[] = {
+        { "static-inline", si_tt, "/api/staticinline", SESS_EXPLORE, si_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -26589,6 +26611,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
     probes_startin(js, probes, &np);
+    probes_staticinline(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
