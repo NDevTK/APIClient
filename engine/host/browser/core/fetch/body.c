@@ -24,6 +24,7 @@
 #include "core/encoding/text_stream.h"
 #include "core/fetch/body.h"
 #include "core/idl_args.h"
+#include "core/infra_json.h"       /* json()'s parse JSON bytes to a JavaScript value */
 #include "core/realm.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
@@ -972,35 +973,12 @@ static JSValue body_read_blob_unknown(JSContext *ctx, JSValueConst recv, JSValue
     return r;
 }
 
-/* %JSON.parse%, captured per realm before its scripts run: json()'s parse JSON from bytes is Infra §6's call of
-   the original function, which a page replacing `JSON.parse` does not change. */
-static JSClassID g_json_parse_slot = JS_INVALID_CLASS_ID;
-
-/* OWNED: the caller frees. */
-static JSValue body_json_parse(JSContext *ctx)
-{
-    DCHECK(g_json_parse_slot != JS_INVALID_CLASS_ID,
-           "json() asked for %JSON.parse% before body_declare declared its slot");
-    return realm_value_get(ctx, g_json_parse_slot);
-}
-
-static void body_install_realm(JSContext *ctx)
-{
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue json = JS_GetPropertyStr(ctx, global, "JSON");
-    JSValue parse = JS_GetPropertyStr(ctx, json, "parse");
-
-    CHECK(JS_IsFunction(ctx, parse), "%JSON.parse% is not a function — json() has no parser to run");
-    realm_value_set(ctx, g_json_parse_slot, parse);
-    JS_FreeValue(ctx, json);
-    JS_FreeValue(ctx, global);
-}
-
-/* Over an unknown body (core/byte_reader.h): text() resolves with the unknown, json() parses it, and the three
-   containers hold its byte sequence. formData() has no answer for one yet. */
+/* Over an unknown body (core/byte_reader.h): text() resolves with the unknown, json() parses it as it parses
+   bytes, by a call of %JSON.parse%, and the three containers hold its byte sequence. formData() has no answer
+   for one yet. */
 static const ByteReader BODY_READERS[] = {
     { "text",        byte_reader_text,         BYTE_READER_UNKNOWN_SELF, NULL },
-    { "json",        byte_reader_json,         BYTE_READER_UNKNOWN_CALL, body_json_parse },
+    { "json",        byte_reader_json_string,  BYTE_READER_UNKNOWN_CALL, infra_json_parse_fn },
     { "arrayBuffer", byte_reader_array_buffer, BYTE_READER_UNKNOWN_IMAGE, NULL, byte_reader_array_buffer_unknown },
     { "bytes",       byte_reader_bytes,        BYTE_READER_UNKNOWN_IMAGE, NULL, byte_reader_bytes_unknown },
     { "blob",        body_read_blob,           BYTE_READER_UNKNOWN_IMAGE, NULL, body_read_blob_unknown },
@@ -1261,11 +1239,6 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
         /* §5.3's `textStream()` is declared on the same include and for the same reason: one algorithm, whose
            receiver decides which interface it is running for. */
         g_body_text_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_body_text_decl, 0);
-        g_json_parse_slot = realm_value_declare(ctx, "%JSON.parse% (Body json())");
-        realm_declare_intrinsic(body_install_realm);
-        agent_state_realm_slot("request", &g_json_parse_slot,
-                               "Fetch §5.3 Body mixin's per-realm %JSON.parse%, the parser json() runs over an "
-                               "unknown body");
         /* THE MIXIN'S OWN AGENT STATE, DECLARED ON THE FIRST INCLUDE — core/agent_state.h. The ROW IS
            `request` AND NOT THIS FILE'S NAME, because a row is a DECLARE and a RELEASE core/platform.c
            itself calls and this file is on neither column: it is reached only through the two interfaces

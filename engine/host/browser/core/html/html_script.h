@@ -185,7 +185,8 @@ void html_script_immediate_free(ScriptImmediate *imm);
  *
  * THE STATE IS THE DRIVING MACHINE'S, exactly as focus.h's `phase`/`cb` and abort.h's work record are: the
  * machine declares it in its own `visit` so a fork copies it and its teardown discharges it. */
-#define SCRIPT_EXEC_CB_SLOTS (2 + 0)   /* step_call_run's [this, program] — a program takes no arguments */
+#define SCRIPT_EXEC_CB_SLOTS (2 + 1)   /* step_call_run's [this, callee, argument]: an import map's parse takes
+                                          its text, and a program takes no arguments */
 
 typedef struct {
     /* The report, ADOPTED. `text` is consumed by the compile in the FIRST leg and is NULL at every rest point

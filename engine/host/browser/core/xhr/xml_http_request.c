@@ -72,6 +72,7 @@
 #include "core/fetch/request.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
+#include "core/infra_json.h"   /* §3.6.9 step 7's parse JSON from bytes */
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/mime/mime_type.h"
 #include "core/url/url.h"
@@ -1667,31 +1668,48 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
     free(content_type);
 }
 
-/* §3.6.9 the response getter — a STEP GETTER because the "document" arm PARSES, which is work of the page's
-   size and must be able to yield. */
+/* §3.6.9 the response getter — a STEP GETTER because the "document" and "json" arms PARSE, which is work of
+   the page's size and must be able to yield. */
 #define RESPONSE_STAGES(X) \
     X(RESPONSE_BUILD, "XHR §3.6.9 the response getter steps 1-6 (the text arm, or building the response " \
-                      "object for arraybuffer/blob/document/json)")
+                      "object for arraybuffer/blob/document)") \
+    X(RESPONSE_JSON,  "XHR §3.6.9 the response getter step 7 (parse JSON from bytes on this's received bytes, " \
+                      "Infra §6's call of %JSON.parse%)")
 enum { IDL_STEP_STAGE_BASE(RESPONSE_STAGES) RESPONSE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const RESPONSE_STEPS[] = { RESPONSE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-typedef struct { int unused; } JSXhrResponseState;
+typedef struct {
+    uint8_t started;
+    uint8_t phase;     /* the %JSON.parse% call's own cursor */
+    JSValue text;      /* step 7's decoded bytes, the call's argument (owned) */
+    JSValue cb[3];     /* the call request buffer: [this, %JSON.parse%, text] */
+} JSXhrResponseState;
+
 static void js_xhr_response_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     JSXhrResponseState *s = st;
-    (void)ctx; (void)s; (void)v;
+    int k;
+
+    /* The block is zeroed, and a zeroed JSValue is not JS_UNDEFINED: nothing is owned before step 7 starts. */
+    if (!s->started) return;
+    v->val(ctx, &s->text);
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
 }
 
 static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
+    JSXhrResponseState *s = st;
     XhrData *d;
 
-    (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
-    JS_FreeValue(ctx, cb_result);
-    DCHECK(hdr->stage == RESPONSE_BUILD, "the response getter resumed at a stage §3.6.9 does not have");
+    (void)argc; (void)argv;
+    DCHECK(hdr->stage == RESPONSE_BUILD || hdr->stage == RESPONSE_JSON,
+           "the response getter resumed at a stage §3.6.9 does not have");
     d = xhr_receiver(ctx, hdr->this_val);
-    if (!d) return JS_STEP_ABRUPT;
+    if (!d) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
+    if (hdr->stage == RESPONSE_JSON) goto json;
+    JS_FreeValue(ctx, cb_result);
+    cb_result = JS_UNDEFINED;
     /* Step 1: the text arms answer while LOADING as well as when done, which is the whole reason a page can
        stream a text response. */
     if (d->response_type == RT_EMPTY || d->response_type == RT_TEXT) {
@@ -1737,22 +1755,37 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     } else if (d->response_type == RT_DOCUMENT) {
         xhr_set_document_response(ctx, d);
     } else {
-        size_t len = 0, text_n = 0;
+        size_t len = 0;
         const uint8_t *bytes;
-        char *text;
-        JSValue parsed;
+
         DCHECK(d->response_type == RT_JSON, "the response getter reached an arm §3.6.9 does not have");
         if (d->network_error) { *presult = JS_NULL; return 0; }
         bytes = fetch_body_bytes(ctx, d->received, &len);
-        /* Step 7's "parse JSON from bytes", which is TWO steps and not one: Infra's algorithm is "let string be
-           the result of running UTF-8 decode on bytes", THEN `JSON.parse` on that string. The decode is what
-           turns a malformed sequence into a U+FFFD the parser can see — handing the raw bytes to JS_ParseJSON
-           instead runs quickjs's own lenient decoder, which accepts UTF-8-encoded surrogates JSON's grammar
-           does not produce. A throw is answered with null and the object stays unset. */
-        text = encoding_utf8_decode((const char *)bytes, len, &text_n);
-        CHECK(text != NULL, "XMLHttpRequest: OOM decoding a JSON response's bytes");
-        parsed = JS_ParseJSON(ctx, text, text_n, "<xhr response>");
-        free(text);
+        /* Step 7's "parse JSON from bytes", which is Infra §6's TWO steps: the UTF-8 decode, which turns a
+           malformed sequence into the U+FFFD the parser sees, then %JSON.parse% over that string, called as a
+           request so the parse rests at the quantum. */
+        s->started = 1;
+        s->phase = 0;
+        for (int k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
+        s->text = infra_json_bytes_string(ctx, bytes, len);
+        if (JS_IsException(s->text)) { s->text = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        hdr->stage = RESPONSE_JSON;
+        goto json;
+    }
+    *presult = JS_DupValue(ctx, d->response_object);
+    return 0;
+
+json:
+    {
+        JSValue fn = infra_json_parse_fn(ctx), parsed;
+        int r = step_call_run(ctx, &s->phase, s->cb, 3, fn, JS_UNDEFINED, 1, (JSValueConst *)&s->text,
+                              cb_result, &parsed, out_cb, out_argc);
+
+        JS_FreeValue(ctx, fn);
+        if (r > 0) return r;
+        JS_FreeValue(ctx, s->text);
+        s->text = JS_UNDEFINED;
+        /* "If that threw an exception, then return null", with the response object left unset. */
         if (JS_IsException(parsed)) {
             JS_FreeValue(ctx, JS_GetException(ctx));
             *presult = JS_NULL;
@@ -1763,14 +1796,15 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
            records where the spec gives it one, and only the first read's would be the one a later gate is
            deciding about. */
         xhr_set(ctx, d, &d->response_object, xhr_reply_content(ctx, d, parsed));
+        *presult = JS_DupValue(ctx, d->response_object);
+        return 0;
     }
-    *presult = JS_DupValue(ctx, d->response_object);
-    return 0;
 }
 
 static const IdlStepDecl XHR_RESPONSE_DECL = {
     js_xhr_response_step, sizeof(JSXhrResponseState), js_xhr_response_visit, NULL,
-    "XHR §3.6.9 the response getter", RESPONSE_STEPS
+    "XHR §3.6.9 the response getter", RESPONSE_STEPS,
+    .catches_abrupt = 1   /* step 7's "If that threw an exception, then return null" */
 };
 
 /* §3.6.10 responseText. */
@@ -1795,6 +1829,12 @@ static JSValue js_xhr_get_response_text(JSContext *ctx, JSValueConst this_val, i
 enum { IDL_STEP_STAGE_BASE(RESPONSE_XML_STAGES) RESPONSE_XML_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const RESPONSE_XML_STEPS[] = { RESPONSE_XML_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+typedef struct { int unused; } JSXhrResponseXmlState;
+static void js_xhr_response_xml_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    (void)ctx; (void)st; (void)v;
+}
+
 static int js_xhr_response_xml_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                     JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -1818,7 +1858,7 @@ static int js_xhr_response_xml_step(JSContext *ctx, JSStepHdr *hdr, void *st, in
 }
 
 static const IdlStepDecl XHR_RESPONSE_XML_DECL = {
-    js_xhr_response_xml_step, sizeof(JSXhrResponseState), js_xhr_response_visit, NULL,
+    js_xhr_response_xml_step, sizeof(JSXhrResponseXmlState), js_xhr_response_xml_visit, NULL,
     "XHR §3.6.11 the responseXML getter", RESPONSE_XML_STEPS
 };
 

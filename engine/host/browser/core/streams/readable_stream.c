@@ -4168,9 +4168,10 @@ static const IdlStepDecl js_from_call_decl = {
  * and a caller reaching this is already a machine); this owns the buffer and the reactions.
  *
  * WHAT `make` IS. The value the page finally gets — a string, a parsed JSON, an ArrayBuffer, a Blob — is the
- * CALLING spec's, not this one's, and it is one C function over the finished bytes. Carrying it here is what
- * lets a drain answer `response.json()`'s promise directly rather than answering bytes that something else
- * then has to react to a second time. */
+ * CALLING spec's, not this one's, and it is one C function over the finished bytes, then, for a reader that
+ * names one, a call of `callee` over what `make` built, made as a request (DS_CONVERT) and handed to `finish`.
+ * Carrying them here is what lets a drain answer `response.json()`'s promise directly rather than answering
+ * bytes that something else then has to react to a second time. */
 enum { DRAIN_OK = 0, DRAIN_ERR, DRAIN_N };
 
 typedef struct {
@@ -4181,6 +4182,8 @@ typedef struct {
        still arriving keeps its own bytes in its own delta (a C buffer here would be shared by both arms). */
     JSValue parts;
     JSValue (*make)(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
+    JSValue (*callee)(JSContext *ctx);                              /* NULL: `make`'s value is the answer */
+    JSValue (*finish)(JSContext *ctx, JSValueConst recv, JSValue value);   /* the call's value, CONSUMED */
 } DrainData;
 
 static JSClassID g_drain_class;
@@ -4314,6 +4317,8 @@ static uint8_t *drain_bytes(JSContext *ctx, DrainData *dr, size_t *plen)
                 "answered: another chunk, the close, or an error)") \
     X(DS_READ, "Fetch §2.2.4 fully read a body step 5 (the next read through the reader)") \
     X(DS_RELEASE, "Fetch §2.2.4 fully read a body step 5 (releasing the reader once the body is whole)") \
+    X(DS_CONVERT, "Fetch §5.3 \"Body mixin\" consume body step 4 (successSteps: convertBytesToJSValue as the " \
+                  "reader's own call over the collected bytes; a throw is step 4's errorSteps)") \
     X(DS_SETTLE, "Fetch §5.3 \"Body mixin\" consume body step 4 (successSteps: convertBytesToJSValue over the collected " \
                  "bytes, then resolve the promise)")
 enum { DS_STAGES(JS_STEP_STAGE_ENUM) };
@@ -4426,11 +4431,32 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             s->value = dr->make(ctx, dr->recv, (const char *)bytes, blen);
             lexbor_free(bytes);
             if (JS_IsException(s->value)) {
-                /* §2.2.4: an abrupt completion INSIDE the read is what the promise rejects with — which is how
-                   `json()`'s SyntaxError reaches the page's `.catch` rather than the call site. */
+                /* §2.2.4: an abrupt completion INSIDE the read is what the promise rejects with. */
                 s->value = JS_GetException(ctx);
                 s->reject = 1;
+            } else if (dr->callee != NULL) {
+                STEP_GOTO(s->hdr.stage, DS_CONVERT, &s->phase, NULL);
             }
+        }
+        if (s->hdr.stage == DS_RELEASE) STEP_GOTO(s->hdr.stage, DS_SETTLE, &s->phase, NULL);
+    }
+
+    if (s->hdr.stage == DS_CONVERT) {
+        /* The reader's call, over what `make` built: `json()`'s %JSON.parse%, whose SyntaxError reaches the
+           page's `.catch` because this machine catches it. */
+        JSValue fn = dr->callee(ctx);
+
+        r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), fn, JS_UNDEFINED, 1, (JSValueConst *)&s->value,
+                          cb_result, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+        if (r > 0) return r;
+        cb_result = JS_UNDEFINED;
+        JS_FreeValue(ctx, s->value);
+        if (JS_IsException(out)) {
+            s->value = JS_GetException(ctx);
+            s->reject = 1;
+        } else {
+            s->value = dr->finish(ctx, dr->recv, out);
         }
         STEP_GOTO(s->hdr.stage, DS_SETTLE, &s->phase, NULL);
     }
@@ -4457,12 +4483,15 @@ static const JSTrampStepDef js_drain_defs[DRAIN_N] = { DRAIN_DEF(DRAIN_OK), DRAI
 JSValue readable_stream_drain(JSContext *ctx, JSValueConst reader, JSValueConst read_promise,
                               JSValueConst recv,
                               JSValue (*make)(JSContext *ctx, JSValueConst recv, const char *bytes,
-                                              size_t len))
+                                              size_t len),
+                              JSValue (*callee)(JSContext *ctx),
+                              JSValue (*finish)(JSContext *ctx, JSValueConst recv, JSValue value))
 {
     DrainData *dr;
     JSValue obj, promise;
 
     DCHECK(make != NULL, "a drain was started with nothing to build from the bytes");
+    DCHECK(callee == NULL || finish != NULL, "a drain was given a call over its bytes and nothing to take its value");
     obj = JS_NewObjectClass(ctx, g_drain_class);
     if (JS_IsException(obj)) return obj;
     dr = js_mallocz(ctx, sizeof *dr);
@@ -4474,6 +4503,8 @@ JSValue readable_stream_drain(JSContext *ctx, JSValueConst reader, JSValueConst 
     dr->reader = JS_DupValue(ctx, reader);
     dr->recv = JS_DupValue(ctx, recv);
     dr->make = make;
+    dr->callee = callee;
+    dr->finish = finish;
     promise = JS_NewPromiseCapability(ctx, dr->funcs);
     if (JS_IsException(promise)) { JS_FreeValue(ctx, obj); return promise; }
     if (drain_react(ctx, read_promise, obj) < 0) {

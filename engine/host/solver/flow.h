@@ -485,6 +485,8 @@ typedef struct Flow {
      * "Processing model" restores `document.currentScript` after the report (an `error` listener reads the
      * throwing element), and a report frame that throws is an engine defect (§8.1.4.6 step 6's
      * error-reporting-mode flag). JS_FlowIsCall cannot answer it, since a driven orphan also holds a call root.
+     * An inline `importmap` row's registration frame (core/loader/import_map.h's import_map_register_flow) is
+     * the row's remaining work in the same way, and reports its own error to rethrow.
      * Carried by a fork; not cold-tier state (a replay throws and owes the report again). */
     int   reporting;
     /* Is this flow's live frame a modelled close request's task (HTML §6.10.1 "Close requests")? Asked for

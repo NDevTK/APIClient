@@ -17,7 +17,9 @@ typedef JSValue (*ByteReaderMake)(JSContext *ctx, JSValueConst recv, const char 
    because its bytes cannot be spelled. SELF resolves with a String: the unknown itself where it is a String in
    every world, since text()'s UTF-8 decode undoes §5.2's UTF-8 encode of a scalar value string, and otherwise a
    String derived from it, the decode of the encoding of its ToString. CALL resolves with what `callee` (this realm's function,
-   owned) returns over it, and rejects with its throw: json()'s parse JSON from bytes is %JSON.parse%. IMAGE
+   owned) returns over it, and rejects with its throw: json()'s parse JSON from bytes is %JSON.parse%. A reader
+   with a `callee` calls it over what `make` built from bytes too, as a request from the reader's machine, and
+   that value carries the bytes' provenance; so json()'s `make` is only Infra §6's UTF-8 decode. IMAGE
    resolves with what `image` builds over it and the receiver: a container whose bytes are the unknown's byte
    sequence, holding no example bytes (the receiver is what states the container's other members, such as
    blob()'s MIME type). NONE, the zero, is a reader with no answer, and the machine crashes naming it. */
@@ -86,7 +88,7 @@ void byte_reader_install(JSContext *ctx, JSValueConst proto, int handle);
    its own — Fetch's `formData()`, whose parser is chosen by the Content-Type — supplies its own `make` and
    points its table at that. */
 JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
-JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
+JSValue byte_reader_json_string(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
 JSValue byte_reader_array_buffer(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len);
 /* The same two containers over a body that is unknown input with no bytes: the image of `unknown`, the body
    text() answers, with no example bytes, so its length and every byte are unknowns. They state nothing but the

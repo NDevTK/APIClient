@@ -120,6 +120,7 @@
 #include "core/streams/transform_stream.h"
 #include "core/streams/writable_stream.h"
 #include "core/structured_clone.h"
+#include "core/infra_json.h"
 #include "core/timing/event_loop.h"
 #include "core/timing/hr_time.h"
 #include "core/timing/performance.h"
@@ -182,6 +183,7 @@ typedef struct {
 
 static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
 static void d_system_time_zone(JSContext *c, const PlatformAgent *a) { (void)a; system_time_zone_init(c); }
+static void d_infra_json(JSContext *c, const PlatformAgent *a) { (void)a; infra_json_init(c); }
 static void d_intl(JSContext *c, const PlatformAgent *a) { (void)a; intl_init(c); }
 static void d_css_namespace(JSContext *c, const PlatformAgent *a) { (void)a; css_namespace_init(c); }
 static void d_css_numeric_value(JSContext *c, const PlatformAgent *a) { (void)a; css_numeric_value_init(c); }
@@ -320,6 +322,7 @@ static void r_css_keyword_value(JSRuntime *rt) { (void)rt; css_keyword_value_fre
 static void r_css_math_value(JSRuntime *rt) { css_math_value_free(rt); }
 static void r_css_unit_value(JSRuntime *rt) { (void)rt; css_unit_value_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
+static void r_infra_json(JSRuntime *rt) { (void)rt; infra_json_free(); }
 static void r_performance(JSRuntime *rt) { (void)rt; performance_free(); }
 static void r_performance_entry(JSRuntime *rt) { (void)rt; performance_entry_free(); }
 static void r_performance_observer(JSRuntime *rt) { performance_observer_free(rt); }
@@ -653,6 +656,9 @@ static const PlatformComponent PLATFORM[] = {
     /* ECMAScript §21.4.1.24 SystemTimeZoneIdentifier ( ): Date's local time is the pinned zone, answered by the
        Intl host, before any realm runs script. It holds no agent state, so it releases nothing. */
     { "system_time_zone",    d_system_time_zone,    NULL,        NULL },
+    /* Infra §6 "JSON"'s %JSON.parse%, captured by a realm intrinsic before any later row's install or any
+       script could replace it; Fetch §5.3's json(), XHR §3.6.9's JSON response and HTML's import maps call it. */
+    { "infra_json",          d_infra_json,          NULL,        r_infra_json },
     /* Console §1. §1.4's timer table reads HR-TIME §4's current high resolution time, so it follows `hr_time`;
        no other row touches the console namespace, and every later row may call it. The namespace goes on the
        global through a realm intrinsic, so a child navigable gets its own count map, group stack and timer table. */

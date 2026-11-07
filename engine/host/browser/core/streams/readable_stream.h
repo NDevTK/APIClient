@@ -137,7 +137,9 @@ JSValue readable_stream_stored_error(JSContext *ctx, JSValueConst v);
 JSValue readable_reader_closed(JSContext *ctx, JSValueConst reader);
 
 /* FULLY READ a stream the caller has already acquired a reader on and issued the FIRST read against, and
-   answer a promise for what `make` builds from the whole byte sequence.
+   answer a promise for what `make` builds from the whole byte sequence — or, with a `callee`, for what
+   `finish` makes of that function's value over it, the call made as a request so it rests and can throw a
+   rejection.
  *
  * WHY THE CALLER STARTS IT. Acquiring the reader and issuing a read are CALLS of code that can suspend, and a
  * host component reaching this is already a machine, so it makes those two calls itself; what it cannot do is
@@ -147,6 +149,8 @@ JSValue readable_reader_closed(JSContext *ctx, JSValueConst reader);
 JSValue readable_stream_drain(JSContext *ctx, JSValueConst reader, JSValueConst read_promise,
                               JSValueConst recv,
                               JSValue (*make)(JSContext *ctx, JSValueConst recv, const char *bytes,
-                                              size_t len));
+                                              size_t len),
+                              JSValue (*callee)(JSContext *ctx),
+                              JSValue (*finish)(JSContext *ctx, JSValueConst recv, JSValue value));
 
 #endif

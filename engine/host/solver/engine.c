@@ -10415,16 +10415,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
             if (stype == SCRIPT_TYPE_IMPORTMAP) {
                 DCHECK(flow_dyn_url(f) == NULL,
                        "an import map row carries an address — only an inline `importmap` script is a row");
-                if (import_map_create_and_register(prog_ctx, body, body_n, prog_name) < 0) {
-                    JSValue exc = JS_GetException(prog_ctx);
-                    flow_install_base(f, prog_ctx, report_exception_flow(prog_ctx, exc));
-                    JS_FreeValue(prog_ctx, exc);
-                    f->reporting = 1;
-                    g_step_unit = STEP_UNIT_REGISTER_IMPORT_MAP;
-                    return 0;
-                }
+                /* The parse calls %JSON.parse% and so rests; the frame reports its own error to rethrow and
+                   completes normally, and it is the row's remaining work, so the row is left at its end. */
+                flow_install_base(f, prog_ctx, import_map_register_flow(prog_ctx, body, body_n, prog_name));
+                f->reporting = 1;
                 g_step_unit = STEP_UNIT_REGISTER_IMPORT_MAP;
-                ENGINE_LEAVE_ROW(f);
                 return 0;
             }
             /* A module is a different algorithm, not a flag: §8.1.4.4 has two entries and they part here. A classic

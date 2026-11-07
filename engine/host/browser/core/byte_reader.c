@@ -36,6 +36,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/byte_reader.h"
+#include "core/infra_json.h"   /* json()'s Infra §6 decode */
 #include "core/encoding/encoding.h"   /* Encoding §6 "Hooks for standards"'s UTF-8 decode — both readers run it */
 #include "core/streams/readable_stream.h"
 #include "solver/concolic.h"          /* the triple a byte sequence somebody else filled arrives as */
@@ -51,6 +52,8 @@
    macro-generated def and a runtime-assembled one identically, where reading the source covered neither. */
 #define BYTE_READER_MAX 8
 #define BYTE_READER_IFACE_MAX 4
+
+static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue value);
 
 static const ByteReaderIface *g_iface[BYTE_READER_IFACE_MAX];
 static int g_iface_stepid[BYTE_READER_IFACE_MAX][BYTE_READER_MAX];
@@ -80,8 +83,8 @@ static const ByteReaderIface *iface_of(JSValueConst v)
     X(BR_FIRST_READ, \
       "Fetch §5.3 Body mixin's consume body step 6 → fully read a body step 5 (read all bytes from the reader)") \
     X(BR_CONVERT, \
-      "Fetch §5.3 Body mixin's consume body step 4 (successSteps: convertBytesToJSValue over a body of unknown " \
-      "external input, the reader's own call; a throw is step 4's errorSteps)") \
+      "Fetch §5.3 Body mixin's consume body step 4 (successSteps: convertBytesToJSValue as the reader's own " \
+      "call, over its decoded bytes or a body of unknown external input; a throw is step 4's errorSteps)") \
     X(BR_SETTLE, \
       "Fetch §5.3 Body mixin's consume body steps 3-4 (resolve promise with the converted value, or reject " \
       "error) — 27.5.1.3 step 2.f's `then` read reaches the page's own prototype chain")
@@ -91,6 +94,7 @@ static const char *const js_byte_reader_steps[] = { BYTE_READER_STAGES(JS_STEP_S
 typedef struct JSByteReaderState {
     JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
     uint8_t   cphase;   /* the settle call's own phase, so the stage can hold it across a suspension */
+    uint8_t   content;  /* the conversion's value is the content of bytes this reader read (byte_reader_content) */
     JSValue   promise;  /* the capability's promise — this machine's result (owned) */
     JSValue   func;     /* its resolve or its reject, whichever this read settles with (owned) */
     JSValue   value;    /* what it settles WITH: the text, the parsed body, or the error (owned) */
@@ -226,8 +230,16 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
                 reject = 1;
             }
         } else {
-            s->value = f->readers[s->hdr.arg].make(ctx, s->hdr.this_val, bytes ? bytes : "", bytes ? len : 0);
-            if (JS_IsException(s->value)) { s->value = JS_GetException(ctx); reject = 1; }
+            const ByteReader *rd = &f->readers[s->hdr.arg];
+
+            s->value = rd->make(ctx, s->hdr.this_val, bytes ? bytes : "", bytes ? len : 0);
+            if (JS_IsException(s->value)) {
+                s->value = JS_GetException(ctx);
+                reject = 1;
+            } else if (rd->callee != NULL) {
+                s->content = 1;
+                STEP_GOTO(s->hdr.stage, BR_CONVERT, &s->cphase, NULL);
+            }
         }
         if (s->hdr.stage == BR_TAKE) {
             if (byte_reader_capability(ctx, s, reject) < 0) return JS_STEP_ABRUPT;
@@ -236,8 +248,9 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
     }
 
     if (s->hdr.stage == BR_CONVERT) {
-        /* The reader's own call over the unknown, which is the page's code only in that it can fork: JSON.parse
-           over unknown text asks its two completions through the branch seam. */
+        /* The reader's own call, over what `make` built from the bytes or over the unknown: the page's code only
+           in that it rests and can fork, since JSON.parse over unknown text asks its two completions through the
+           branch seam. A throw is consume body's errorSteps, so this machine catches it (catches_abrupt). */
         const ByteReaderIface *f = iface_of(s->hdr.this_val);
         JSValue fn, out;
 
@@ -253,7 +266,7 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             s->value = JS_GetException(ctx);
             reject = 1;
         } else {
-            s->value = out;
+            s->value = s->content ? byte_reader_content(ctx, s->hdr.this_val, out) : out;
         }
         if (byte_reader_capability(ctx, s, reject) < 0) return JS_STEP_ABRUPT;
         STEP_GOTO(s->hdr.stage, BR_SETTLE, &s->cphase, NULL);
@@ -282,7 +295,8 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         /* The DRAIN owns the settle from here: it holds the accumulating bytes, it reacts to each read, and it
            resolves with what this reader's `make` builds. So this machine's result IS its promise. */
         s->promise = readable_stream_drain(ctx, s->reader, read_promise, s->hdr.this_val,
-                                           f->readers[s->hdr.arg].make);
+                                           f->readers[s->hdr.arg].make, f->readers[s->hdr.arg].callee,
+                                           byte_reader_content);
         JS_FreeValue(ctx, read_promise);
         return JS_IsException(s->promise) ? JS_STEP_ABRUPT : JS_STEP_DONE;
     }
@@ -308,8 +322,8 @@ static int js_byte_reader_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
                               "Parameters)"
 #define BYTE_READER_ROWS(F) F(0) F(1) F(2) F(3) F(4) F(5) F(6) F(7)
 #define BYTE_READER_ROW(i) \
-    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, (i), .visit = js_byte_reader_visit, \
-      .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
+    { sizeof(JSByteReaderState), js_byte_reader_step, js_byte_reader_fini, (i), .catches_abrupt = 1, \
+      .visit = js_byte_reader_visit, .algorithm = BYTE_READER_ALGORITHM, .steps = js_byte_reader_steps },
 static const JSTrampStepDef js_byte_reader_defs[BYTE_READER_MAX] = {
     BYTE_READER_ROWS(BYTE_READER_ROW)
 };
@@ -468,31 +482,17 @@ JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, s
     return byte_reader_content(ctx, recv, out);
 }
 
-JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
+JSValue byte_reader_json_string(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
     /* Fetch §5.3 "Body mixin"'s `json()` is "the result of running consume body with this and parse JSON
        from bytes", and the name Fetch links there is Infra §6 "JSON"'s parse JSON bytes to a JavaScript
        value, whose TWO steps are Infra's "Let string be the result of running UTF-8 decode on bytes" and
-       then parse a JSON string to a JavaScript value given string. Infra §6 numbers each of its algorithm
-       lists from 1, so the list is named and never a bare step number; and Infra has no committed corpus
-       here, so its name in front of the number is what keeps this quotation from being judged as Fetch's
-       or as Encoding's — both of which also number a §6. Handing the bytes straight to the parser ran
-       quickjs's lenient decoder instead, so a body whose bytes are not well-formed UTF-8 parsed as
-       something Encoding's decoder would have replaced.
-       The REAL parser runs on the decoded string, so a malformed body rejects with the SyntaxError the page
-       would actually catch rather than a placeholder this engine invented. */
-    char *text;
-    size_t n = 0;
-    JSValue out;
-
-    text = encoding_utf8_decode(bytes, len, &n);
-    CHECK(text != NULL, "byte reader: OOM running Encoding §6's UTF-8 decode over a body before parsing it");
-    out = JS_ParseJSON(ctx, text, n, "<body>");
-    free(text);
-    /* THE PARSE ARM ONLY. A body that is not a JSON text left a SyntaxError standing and `out` is the
-       exception, which byte_reader_content hands straight back so §5.3 rejects with the throw the page
-       catches — a record this reader never built has no provenance to carry. */
-    return byte_reader_content(ctx, recv, out);
+       then parse a JSON string to a JavaScript value given string. This is the first; the second is the
+       reader's `callee` (%JSON.parse%), which the machine calls over this String as a request, so the parse
+       rests at the quantum like the page's own JSON.parse. Infra §6 numbers each of its algorithm lists from
+       1, so the list is named and never a bare step number. */
+    (void)recv;
+    return infra_json_bytes_string(ctx, (const uint8_t *)bytes, len);
 }
 
 /* A COPY, for both of these, because what the page gets is ITS OWN to detach, transfer or write through —

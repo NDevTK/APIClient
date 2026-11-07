@@ -23,6 +23,7 @@
 #include "core/events/event.h"           /* §4.12.1.1's error arm dispatches an Event, so it MINTS one */
 #include "core/events/event_target.h"    /* …through DOM §2.9's one dispatch, which runs the PAGE's listeners */
 #include "core/idl_args.h"       /* the `async` attribute's setter, declared like every other IDL member's */
+#include "core/infra_json.h"   /* an import map's parse is Infra §6's call of %JSON.parse% */
 #include "core/loader/import_map.h"   /* HTML §8.1.5.3, "execute the script element"'s `importmap` arm */
 #include "core/url/url.h"        /* HTML §4.12.1.1's "encoding-parsing a URL given src, relative to el's node document" */
 #include "core/loader/document_scripts.h"   /* HTML §4.12.1.1's type-string steps, asked ONCE for both halves */
@@ -1159,6 +1160,7 @@ void html_script_immediate_free(ScriptImmediate *imm)
 enum {
     SX_IDLE = 0,   /* nothing owed — the state a driving machine's buffer is built in and returns to */
     SX_RUN,        /* step 6's classic arm: the program is compiled, the bracket is open, the run is in flight */
+    SX_IMPORTMAP,  /* step 6's importmap arm: the map's text is being parsed by a call of %JSON.parse% */
     SX_REPORT      /* §8.1.4.4 "Calling scripts" step 8's third bullet, INSIDE the bracket step 4 will close */
 };
 
@@ -1170,8 +1172,7 @@ void html_script_exec_init(ScriptExec *x)
     x->type = SCRIPT_TYPE_NONE;
     x->stage = SX_IDLE;
     x->phase = 0;
-    x->cb[0] = JS_UNDEFINED;
-    x->cb[1] = JS_UNDEFINED;
+    for (int k = 0; k < SCRIPT_EXEC_CB_SLOTS; k++) x->cb[k] = JS_UNDEFINED;
     script_compile_init(&x->sc);
     x->old = JS_UNDEFINED;
     x->exc = JS_UNDEFINED;
@@ -1212,8 +1213,7 @@ void html_script_exec_visit(JSContext *ctx, ScriptExec *x, JSStepVisit *v)
            "a §4.12.1.1 step 36 state was visited still holding its source text — the compile releases it in "
            "the same leg it reads it, so a buffer alive here has crossed a rest point that would hand one "
            "allocation to two forked arms");
-    v->val(ctx, &x->cb[0]);
-    v->val(ctx, &x->cb[1]);
+    for (int k = 0; k < SCRIPT_EXEC_CB_SLOTS; k++) v->val(ctx, &x->cb[k]);
     script_compile_visit(ctx, &x->sc, v);
     v->val(ctx, &x->old);
     v->val(ctx, &x->exc);
@@ -1270,16 +1270,23 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
                result", the result created over the source text and step 34's base URL. An error to rethrow is
                reported by the stage below, which runs no bracket for this arm. */
             if (x->type == SCRIPT_TYPE_IMPORTMAP) {
-                int rr = import_map_create_and_register(ctx, x->text, x->text_n, document_base_url(ctx));
+                /* The parse is HTML §8.1.4.8's "parse a JSON string to an Infra value", Infra §6's call of
+                   %JSON.parse%, made as a request so a long map rests; SX_IMPORTMAP takes its answer. */
+                JSValue input = JS_NewStringLen(ctx, x->text, x->text_n), fn = infra_json_parse_fn(ctx);
 
                 free(x->text);
                 x->text = NULL;
                 x->text_n = 0;
-                if (rr == 0) { script_exec_finish(ctx, x); return 0; }
-                x->exc = JS_GetException(ctx);
-                x->stage = SX_REPORT;
-                in = JS_UNDEFINED;
-                goto report;
+                CHECK(!JS_IsException(input), "HTML §8.1.4.8: OOM holding an import map's text");
+                x->stage = SX_IMPORTMAP;
+                r = step_call_run(ctx, &x->phase, x->cb, SCRIPT_EXEC_CB_SLOTS, fn, JS_UNDEFINED, 1,
+                                  (JSValueConst *)&input, JS_UNDEFINED, &out, out_cb, out_argc);
+                JS_FreeValue(ctx, input);
+                JS_FreeValue(ctx, fn);
+                DCHECK(r == JS_STEP_CALL,
+                       "an import map's parse answered without parking — it is a call request of %JSON.parse%, "
+                       "which has no arm that completes in place");
+                return r;
             }
             /* §4.12.1.1 STEP 34's CLASSIC ARM — "let script be the result of creating a classic script using
                source text, settings object, base URL, and options" — performed HERE rather than where the step
@@ -1364,6 +1371,26 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
             x->exc = JS_GetException(ctx);
             x->stage = SX_REPORT;
         }
+    }
+
+    /* Step 6's `importmap` arm, once its parse answered: "Register an import map given el's relevant global
+       object and el's result", where a parse that threw is the result's error to rethrow, reported below. */
+    if (x->stage == SX_IMPORTMAP) {
+        JSValue out = JS_UNDEFINED;
+
+        r = step_call_run(ctx, &x->phase, x->cb, SCRIPT_EXEC_CB_SLOTS, JS_UNDEFINED, JS_UNDEFINED, 0, NULL,
+                          in, &out, out_cb, out_argc);
+        DCHECK(r == 0, "an import map's parse re-parked on the same request — a call request has two legs and "
+                       "the second one collects");
+        in = JS_UNDEFINED;   /* step_call_run moved it into `out` */
+        if (!JS_IsException(out)) {
+            int rr = import_map_register_parsed(ctx, out, document_base_url(ctx));
+
+            JS_FreeValue(ctx, out);
+            if (rr == 0) { script_exec_finish(ctx, x); return 0; }
+        }
+        x->exc = JS_GetException(ctx);
+        x->stage = SX_REPORT;
     }
 
     /* HTML §8.1.4.4 "Calling scripts" STEP 8's THIRD BULLET — "otherwise, rethrow errors is false. Perform the

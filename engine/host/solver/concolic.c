@@ -3637,7 +3637,7 @@ static JSValue deliver_structured(JSContext *ctx, int i) {
         flow_mark_forced_arm();
         flow_mark_pinned_value();
     }
-    v = JS_ParseJSON(ctx, g_dl_val[i], strlen(g_dl_val[i]), "<delivery>");
+    v = JS_ParseJSONRecord(ctx, g_dl_val[i], strlen(g_dl_val[i]), "<delivery>");
     CHECK(!JS_IsException(v), "concolic: a delivery's composed JSON did not parse — message_compose writes it");
     return v;
 }

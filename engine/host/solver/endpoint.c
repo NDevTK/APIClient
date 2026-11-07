@@ -1785,7 +1785,11 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
        nothing branches on a pattern in the bytes; the real codec runs. A type the page did declare is still the
        only thing consulted for it. */
     if (mime_type_is_json(&mt) || (mt.type && mt.subtype && !strcmp(mt.type, "text") && !strcmp(mt.subtype, "plain"))) {
-        JSValue v = JS_ParseJSON(ctx, text, body->len, "<@H request body>");
+        /* Named residual. Not covered: the page's request body is parsed to its end inside this call, which
+           runs while the sending flow runs. Next diff: the @H body read as a resting stage of the request's
+           record. Its absence shows as a step overrunning the slice at a request whose JSON body is more than a
+           quantum long. */
+        JSValue v = JS_ParseJSONRecord(ctx, text, body->len, "<@H request body>");
         /* A page may send bytes that are not the JSON its header claims: the page's fact, not this engine's
            invariant, so the exception is discharged here, and no field is recorded, the true statement about a
            body whose fields could not be read. */

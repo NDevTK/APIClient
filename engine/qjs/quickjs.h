@@ -1761,9 +1761,16 @@ JS_EXTERN void *JS_GetOpaque(JSValueConst obj, JSClassID class_id);
 JS_EXTERN void *JS_GetOpaque2(JSContext *ctx, JSValueConst obj, JSClassID class_id);
 JS_EXTERN void *JS_GetAnyOpaque(JSValueConst obj, JSClassID *class_id);
 
-/* 'buf' must be zero terminated i.e. buf[buf_len] = '\0'. */
+/* 'buf' must be zero terminated i.e. buf[buf_len] = '\0'. The parse runs to its end inside the call, so it is
+   for the host's time between two scheduler steps; called while a flow runs it DFAILs. A platform parse of
+   the page's input calls %JSON.parse% as a request from its step machine instead. */
 JS_EXTERN JSValue JS_ParseJSON(JSContext *ctx, const char *buf, size_t buf_len,
                                const char *filename);
+/* The same parse, at any time, for text the engine or its host composed and reads back as a record of its own
+   (a delivery the solver composed, an Intl host answer) or that the solver reads to describe a request or a
+   reply, never for a value the page receives. */
+JS_EXTERN JSValue JS_ParseJSONRecord(JSContext *ctx, const char *buf, size_t buf_len,
+                                     const char *filename);
 /* JS_JSONStringify is DELETED. Serialization runs the page's code — toJSON, the replacer, every element and
    member read, and a Proxy's ownKeys/getOwnPropertyDescriptor traps — so it is a step machine reached through
    the flow machinery, and a C entry beside it would be a second implementation of the same algorithm. */

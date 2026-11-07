@@ -16,12 +16,15 @@
 void import_map_init(JSContext *ctx);
 void import_map_free(JSRuntime *rt);
 
-/* HTML §8.1.4.8 "Import map parse results"' create an import map parse result given `input` and `base_url`,
-   then register an import map given this realm's global — the two steps an inline `importmap` script takes
-   from "prepare the script element" to "execute the script element". The global is a Window (only a Document
-   has `script` elements). Returns 0, or -1 with the parse result's error to rethrow pending on `ctx`, which
-   the caller reports (HTML §8.1.4.6) because reporting fires `error` and runs the page's code. */
-int import_map_create_and_register(JSContext *ctx, const char *input, size_t input_len, const char *base_url);
+/* HTML §8.1.4.8 "Import map parse results"' create an import map parse result from `parsed`, the value parse a
+   JSON string to an Infra value gave its input (the caller's own call of %JSON.parse%, made as a request so it
+   rests), then register an import map given this realm's global. The global is a Window (only a Document has
+   `script` elements). Returns 0, or -1 with the parse result's error to rethrow pending on `ctx`, which the
+   caller reports (HTML §8.1.4.6) because reporting fires `error` and runs the page's code. */
+int import_map_register_parsed(JSContext *ctx, JSValueConst parsed, const char *base_url);
+/* The same two steps over `input`, parse included, and the report of an error to rethrow, as a frame for the
+   scheduler to install (a JS_FlowNewCall base); the frame completes normally. */
+JSValue *import_map_register_flow(JSContext *ctx, const char *input, size_t input_len, const char *base_url);
 
 /* HTML §8.1.5.1 "The resolution algorithm" steps 4-5 and 9-11: the import map (this realm's global's when the
    global is a Window, otherwise an empty one) matched for `normalized_specifier` from `serialized_base_url`.

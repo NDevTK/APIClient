@@ -110944,6 +110944,15 @@ static JSValue JS_ParseJSON_internal(JSContext *ctx, const char *buf, size_t buf
 /* 'buf' must be zero terminated i.e. buf[buf_len] = '\0'. */
 JSValue JS_ParseJSON(JSContext *ctx, const char *buf, size_t buf_len, const char *filename)
 {
+    if (g_flow_base_gen != NULL)
+        DFAIL("JS_ParseJSON was called while a flow runs — it takes every offer back, so the parse cannot rest; "
+              "a platform parse of the page's input is Infra §6's call of %JSON.parse% made as a request "
+              "(core/infra_json.h), and the engine's own record is JS_ParseJSONRecord");
+    return JS_ParseJSON_internal(ctx, buf, buf_len, filename, NULL);
+}
+
+JSValue JS_ParseJSONRecord(JSContext *ctx, const char *buf, size_t buf_len, const char *filename)
+{
     return JS_ParseJSON_internal(ctx, buf, buf_len, filename, NULL);
 }
 
@@ -111960,7 +111969,11 @@ static int js_json_raw_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         !is_valid_raw_json_char(string_get(p, p->len - 1)))
         goto syntax_error;
     /* rawJSON only validates: no reviver, so this is the plain parse — JS_ParseJSON_internal is the one parser,
-       reached directly rather than through a builtin entry that no longer exists. */
+       reached directly rather than through a builtin entry that no longer exists.
+       Named residual. Not covered: the validation runs to its end inside this step, over the page's text (a
+       primitive, so one token, which a long string literal makes long). Next diff: the parse on this machine's
+       own JSONParse state, yielding as JP_PARSE does. Its absence shows as a step overrunning the slice at a
+       JSON.rawJSON of a string more than a quantum long. */
     {
         const char *cs; size_t cl;
         cs = JS_ToCStringLen(ctx, &cl, s->str);

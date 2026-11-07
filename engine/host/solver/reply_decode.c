@@ -262,7 +262,7 @@ static void walk_chunks(JSContext *ctx, const UrlRecord *base, FlightRows *rs, J
                     /* THE REFERENCED ROW'S PAYLOAD IS JSON, run through the REAL codec like every other value
                        here. A row whose payload is a tagged one (`I[`, `HL[`) is not JSON and parses to an
                        exception, which is an ordinary fact about a stream whose rows are not all values. */
-                    JSValue rv = JS_ParseJSON(ctx, r->payload, r->payload_n, "<flight>");
+                    JSValue rv = JS_ParseJSONRecord(ctx, r->payload, r->payload_n, "<flight>");
                     if (JS_IsException(rv)) JS_FreeValue(ctx, JS_GetException(ctx));
                     else { r->walking = 1; FLIGHT_PUSH(rv); }
                 }
@@ -298,7 +298,7 @@ static void learn_client_reference(JSContext *ctx, const UrlRecord *base, Flight
            "a Flight row was read as a client reference without carrying one — the caller tests the `I[` tag "
            "and this parses from the bracket, so a payload that does not start there is being parsed one byte "
            "off and would yield a JSON value belonging to no row");
-    arr = JS_ParseJSON(ctx, payload + 1, n - 1, "<flight>");
+    arr = JS_ParseJSONRecord(ctx, payload + 1, n - 1, "<flight>");
     if (JS_IsException(arr)) { JS_FreeValue(ctx, JS_GetException(ctx)); return; }
     if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return; }
 
@@ -341,6 +341,11 @@ static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body
 
 /* ── the entry ───────────────────────────────────────────────────────────────────────────────────────────── */
 
+/* Named residual. Not covered: a Flight body's rows are parsed to their end inside this call, which runs on the
+   host's time for a reply the host delivered (engine_provide, reply_body_append) and inside the sending flow
+   for an XMLHttpRequest reply (xml_http_request.c's xhr_take_reply). Next diff: the learning as a resting
+   machine the XHR send machine runs as a request. Its absence shows as an XHR send step overrunning the slice
+   on a reply whose Flight rows are more than a quantum long. */
 void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply, int prov,
                         int driven)
 {

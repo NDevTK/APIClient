@@ -5,7 +5,10 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/agent_state.h"
+#include "core/events/report_exception.h"   /* §8.1.4.6, for a parse result's error to rethrow */
+#include "core/infra_json.h"   /* the parse is Infra §6's call of %JSON.parse% */
 #include "core/realm.h"
 #include "core/url/url.h"
 #include "core/loader/import_map.h"
@@ -610,19 +613,17 @@ static JSValue im_member(JSContext *ctx, JSValueConst parsed, const char *key, b
     return v;
 }
 
-/* Parse an import map string. Returns 0 with `out` filled, or -1 with the exception thrown. */
-static int im_parse(JSContext *ctx, const char *input, size_t len, const UrlRecord *base, ImportMap *out)
+/* An import map from the value parsing its text produced. Returns 0 with `out` filled, or -1 with the exception
+   thrown. `parsed` is borrowed. */
+static int im_parse(JSContext *ctx, JSValueConst parsed, const UrlRecord *base, ImportMap *out)
 {
     static const char *const names[] = { "imports", "scopes", "integrity" };
-    JSValue parsed, v;
+    JSValue v;
     bool exists;
     int rc = 0;
 
     memset(out, 0, sizeof *out);
-    parsed = JS_ParseJSON(ctx, input, len, "<import map>");
-    if (JS_IsException(parsed)) return -1;
     if (!im_is_ordered_map(ctx, parsed)) {
-        JS_FreeValue(ctx, parsed);
         JS_ThrowTypeError(ctx, "the top-level value of an import map needs to be a JSON object");
         return -1;
     }
@@ -642,7 +643,6 @@ static int im_parse(JSContext *ctx, const char *input, size_t len, const UrlReco
         }
         JS_FreeValue(ctx, v);
     }
-    JS_FreeValue(ctx, parsed);
     if (rc) im_free(out);
     return rc;
 }
@@ -718,13 +718,13 @@ static void im_merge_into_global(JSContext *ctx, ImportMap *nm)
     im_free(nm);
 }
 
-int import_map_create_and_register(JSContext *ctx, const char *input, size_t input_len, const char *base_url)
+int import_map_register_parsed(JSContext *ctx, JSValueConst parsed, const char *base_url)
 {
     UrlRecord base;
     ImportMap nm;
     int rc;
 
-    DCHECK(input != NULL && base_url != NULL, "an import map was registered with no text or no base URL");
+    DCHECK(base_url != NULL, "an import map was registered with no base URL");
     DCHECK(im_global_is_window(ctx),
            "an import map was registered on a global that is not a Window — only a Document has `script` "
            "elements, and register an import map is given a Window global");
@@ -732,11 +732,117 @@ int import_map_create_and_register(JSContext *ctx, const char *input, size_t inp
     CHECK(url_parse(&base, base_url, strlen(base_url), NULL),
           "an import map's base URL does not parse — it is the element's node document's document base URL, a "
           "serialized URL this engine computed");
-    rc = im_parse(ctx, input, input_len, &base, &nm);
+    rc = im_parse(ctx, parsed, &base, &nm);
     url_record_free(&base);
     if (rc) return -1;
     im_merge_into_global(ctx, &nm);
     return 0;
+}
+
+/* The two steps as a frame, for an inline `importmap` row the scheduler runs: the parse is %JSON.parse%
+   called as a request, so it rests, and a parse result whose error to rethrow is set is reported (HTML
+   §8.1.4.6) by this machine, which therefore completes normally. */
+#define IMR_STAGES(X) \
+    X(IMR_PARSE,  "HTML §8.1.4.8 \"Import map parse results\"' create an import map parse result (parse a " \
+                  "JSON string to an Infra value given input) and register an import map") \
+    X(IMR_REPORT, "HTML §8.1.4.6 report an exception given the parse result's error to rethrow")
+enum { IMR_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const IMR_STEPS[] = { IMR_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr           hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t             started;
+    uint8_t             phase;    /* the %JSON.parse% call's own cursor */
+    JSValue             cb[3];    /* the call request buffer: [this, %JSON.parse%, input] */
+    JSValue             exc;      /* the error to rethrow, held across its report (owned) */
+    ReportExceptionWork rep;
+} ImportMapRegister;
+
+static void imr_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    ImportMapRegister *s = st;
+    int k;
+
+    if (!s->started) return;   /* the block is zeroed, and a zeroed JSValue is not JS_UNDEFINED */
+    for (k = 0; k < 3; k++) v->val(ctx, &s->cb[k]);
+    v->val(ctx, &s->exc);
+    report_exception_work_visit(ctx, &s->rep, v);
+}
+
+static int imr_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    ImportMapRegister *s = st;
+    int r;
+
+    if (s->hdr.stage == IMR_PARSE) {
+        JSValue fn, parsed;
+        const char *base;
+
+        if (!s->started) {
+            int k;
+
+            s->started = 1;
+            s->phase = 0;
+            for (k = 0; k < 3; k++) s->cb[k] = JS_UNDEFINED;
+            s->exc = JS_UNDEFINED;
+            report_exception_work_start(&s->rep);
+        }
+        fn = infra_json_parse_fn(ctx);
+        r = step_call_run(ctx, &s->phase, s->cb, 3, fn, JS_UNDEFINED, 1, &s->hdr.argv[0], cb_result, &parsed,
+                          out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+        if (r > 0) return r;
+        cb_result = JS_UNDEFINED;
+        if (!JS_IsException(parsed)) {
+            base = JS_ToCString(ctx, s->hdr.argv[1]);
+            CHECK(base != NULL, "HTML §8.1.4.8: OOM reading an import map's base URL");
+            r = import_map_register_parsed(ctx, parsed, base);
+            JS_FreeCString(ctx, base);
+            JS_FreeValue(ctx, parsed);
+            if (r == 0) return JS_STEP_DONE;
+        }
+        s->exc = JS_GetException(ctx);
+        s->hdr.stage = IMR_REPORT;
+    }
+    DCHECK(s->hdr.stage == IMR_REPORT, "an import map's registration resumed at a stage it does not have");
+    r = report_exception_run(ctx, &s->rep, s->exc, cb_result, out_cb, out_argc);
+    if (r) return r;
+    JS_FreeValue(ctx, s->exc);
+    s->exc = JS_UNDEFINED;
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef imr_def = {
+    sizeof(ImportMapRegister), imr_step, NULL, 0, .catches_abrupt = 1, .visit = imr_visit,
+    .algorithm = "HTML §4.12.1.1 execute the script element's importmap arm (create an import map parse result, "
+                 "then register an import map)",
+    .steps = IMR_STEPS
+};
+
+/* Registered on first use, as core/events/report_exception.c's frame is; the definition outlives the runtime. */
+static int g_imr_stepid = -1;
+
+JSValue *import_map_register_flow(JSContext *ctx, const char *input, size_t input_len, const char *base_url)
+{
+    JSValue fn, args[2];
+    JSValue *base;
+
+    DCHECK(input != NULL && base_url != NULL, "an import map was registered with no text or no base URL");
+    if (g_imr_stepid < 0) {
+        g_imr_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &imr_def);
+        CHECK(g_imr_stepid >= 0, "an import map's registration machine could not be registered with this runtime");
+    }
+    fn = JS_NewCFunction2(ctx, NULL, "registerAnImportMap", 2, JS_CFUNC_step, g_imr_stepid);
+    CHECK(!JS_IsException(fn), "an import map's registration callee could not be allocated");
+    args[0] = JS_NewStringLen(ctx, input, input_len);
+    args[1] = JS_NewString(ctx, base_url);
+    CHECK(!JS_IsException(args[0]) && !JS_IsException(args[1]), "HTML §8.1.4.8: OOM holding an import map's text");
+    base = JS_FlowNewCall(ctx, fn, JS_UNDEFINED, 2, (JSValueConst *)args, false);
+    JS_FreeValue(ctx, args[0]);
+    JS_FreeValue(ctx, args[1]);
+    JS_FreeValue(ctx, fn);
+    CHECK(base != NULL, "an import map's registration frame could not be allocated");
+    return base;
 }
 
 /* ---- resolution ------------------------------------------------------------------------------------------ */

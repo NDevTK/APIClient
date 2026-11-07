@@ -795,7 +795,7 @@ JSValue intl_ask(JSContext *ctx, IntlHostOp op, JSValueConst locales, const char
     free(owned);
     free(tags);
     free(fields);
-    parsed = JS_ParseJSON(ctx, answer, strlen(answer), "<intl host>");
+    parsed = JS_ParseJSONRecord(ctx, answer, strlen(answer), "<intl host>");
     CHECKF(JS_IsObject(parsed), "the Intl host's answer to %s is not a JSON object: %s", intl_host_op_name(op),
            answer);
     free(answer);
