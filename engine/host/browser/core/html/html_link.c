@@ -1085,7 +1085,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
             if (!cand) continue;    /* HTML §2.4.2's failure: an address that is not one names no endpoint */
             uv = JS_NewString(ctx, cand);
             CHECK(!JS_IsException(uv), "§4.6.8.20: OOM naming an image candidate for the endpoint surface");
-            endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT);
+            endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT, FETCH_CREDENTIALS_UNPLACED);
             JS_FreeValue(ctx, uv);
             free(cand);
         }
@@ -1101,7 +1101,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
            marked obtained. */
         if (ss.undecided) {
             if (!JS_IsUndefined(ss.undecided_url))
-                endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT);
+                endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT, FETCH_CREDENTIALS_UNPLACED);
             image_source_set_release(ctx, &ss);
             return;
         }
@@ -1138,7 +1138,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
             /* BORROWED, never freed — solver/dom_cow.h states the contract at the declaration and
                core/html/html_script.c reads it the same way at the same kind of site. */
             JSValueConst t = dom_cow_attr_taint(el, "href");
-            if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT); return; }
+            if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT, FETCH_CREDENTIALS_UNPLACED); return; }
         }
 
         /* §4.2.4.3's create a link request opens "Assert: options's href is not the empty string" — an assert
@@ -1178,7 +1178,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
         CHECK(!JS_IsException(uv), "§4.6.8.20: OOM naming a preload for the endpoint surface");
         /* §4.2.4.3's create-a-link-request sets no method, so it is Fetch §2.2.5 "Requests"' `GET`. STATED,
            because the reply seam is keyed on the (method, url) pair. */
-        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT);
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT, FETCH_CREDENTIALS_UNPLACED);
         JS_FreeValue(ctx, uv);
     }
 
@@ -1388,7 +1388,7 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
     {
         /* BORROWED, never freed — solver/dom_cow.h states the contract at the declaration. */
         JSValueConst t = dom_cow_attr_taint(el, "href");
-        if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT); return; }
+        if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT, FETCH_CREDENTIALS_UNPLACED); return; }
     }
 
     /* STEPS 4-5: "Let url be the result of encoding-parsing a URL given el's href attribute's value, relative
@@ -1425,7 +1425,7 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
         CHECK(!JS_IsException(uv), "§4.6.8.12: OOM naming a modulepreload for the endpoint surface");
         /* §8.1.4.2's "fetch a single module script" creates its request with no method, so it is Fetch
            §2.2.5 "Requests"' `GET`. STATED, because the reply seam is keyed on the (method, url) pair. */
-        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT);
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT, FETCH_CREDENTIALS_UNPLACED);
         JS_FreeValue(ctx, uv);
     }
 
@@ -1986,7 +1986,7 @@ static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el, bool by_parse
     {
         /* BORROWED, never freed — solver/dom_cow.h states the contract at the declaration. */
         JSValueConst t = dom_cow_attr_taint(el, "href");
-        if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT); return; }
+        if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT, FETCH_CREDENTIALS_UNPLACED); return; }
     }
 
     /* §4.2.4.3's create a link request steps 2-3: "Let url be the result of encoding-parsing a URL given
@@ -2005,7 +2005,7 @@ static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el, bool by_parse
     {
         JSValue uv = JS_NewString(ctx, abs);
         CHECK(!JS_IsException(uv), "§4.6.8.23: OOM naming a stylesheet for the endpoint surface");
-        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT);
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_LINK_ELEMENT, FETCH_CREDENTIALS_UNPLACED);
         JS_FreeValue(ctx, uv);
     }
 

@@ -2554,7 +2554,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
        the sighting, the trusted zone's record and the reply's learning three independent answers to one
        question about one exchange. See the `request_prov` field. */
     endpoint_record(ctx, method, xhr_request_address(d), eh, (int)n, ebp,
-                    xhr_request_prov(d), xhr_request_driven(d), EPD_XHR);
+                    xhr_request_prov(d), xhr_request_driven(d), EPD_XHR, xhr_credentials_mode(d));
     if (body) JS_FreeCString(ctx, body);
     free(body_ct);
     if (owned) {

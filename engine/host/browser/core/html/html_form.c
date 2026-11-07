@@ -1256,9 +1256,9 @@ static void form_record_request(JSContext *ctx, UrlRecord *action, int method, i
         ct.name = "Content-Type";
         ct.value = form_enctype_mime(enctype);
         ct.root = NULL;   /* the form's enctype, bytes this engine wrote */
-        endpoint_record(ctx, "POST", url, &ct, 1, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_FORM_SUBMIT);
+        endpoint_record(ctx, "POST", url, &ct, 1, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_FORM_SUBMIT, FETCH_CREDENTIALS_UNPLACED);
     } else {
-        endpoint_record(ctx, "GET", url, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_FORM_SUBMIT);
+        endpoint_record(ctx, "GET", url, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_FORM_SUBMIT, FETCH_CREDENTIALS_UNPLACED);
     }
     JS_FreeValue(ctx, url);
     free(serialized);

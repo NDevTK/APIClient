@@ -2662,8 +2662,15 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
            pointers across `fetch_owe`. */
         {
             const char *em = JS_ToCString(ctx, s->rec.method);
+            const char *ec;
             CHECK(em != NULL, "OOM borrowing §2.2.5's method for the @H surface's endpoint identity");
-            endpoint_record(rctx, em, s->url, eh, s->hdrs->n, ebp, prov, driven, EPD_FETCH);
+            DCHECK(JS_IsString(s->rec.credentials), "a fetch reached §5.6 step 12 with no credentials mode on its "
+                                                    "request record — §5.4 sets one on every Request");
+            ec = JS_ToCString(ctx, s->rec.credentials);
+            CHECK(ec != NULL, "OOM borrowing §2.2.5's credentials mode for the @H surface");
+            endpoint_record(rctx, em, s->url, eh, s->hdrs->n, ebp, prov, driven, EPD_FETCH,
+                            fetch_credentials_of_token(ec));
+            JS_FreeCString(ctx, ec);
             JS_FreeCString(ctx, em);
         }
         if (ext_mime) JS_FreeCString(ctx, ext_mime);

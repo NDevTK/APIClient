@@ -180,7 +180,7 @@ static void learn_request_message(JSContext *ctx, const char *p, const char *end
     uv = JS_NewString(ctx, target);
     /* AT THE OUTER REQUEST'S GRADE, handed down from the `fetch()` that composed this body — a sub-request
        written inside a body is evidence of exactly what the request carrying it is evidence of. */
-    endpoint_record(ctx, method, uv, hb.n ? hb.e : NULL, hb.n, NULL, prov, driven, EPD_BATCH_PART);
+    endpoint_record(ctx, method, uv, hb.n ? hb.e : NULL, hb.n, NULL, prov, driven, EPD_BATCH_PART, FETCH_CREDENTIALS_UNPLACED);
     JS_FreeValue(ctx, uv);
 
     free(method);

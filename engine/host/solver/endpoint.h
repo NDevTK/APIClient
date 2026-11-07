@@ -25,6 +25,7 @@
 #define ENGINE_HOST_SOLVER_ENDPOINT_H
 
 #include "quickjs.h"
+#include "core/fetch/fetch.h"   /* FetchCredentialsMode, the `creds` a producer states */
 
 void    endpoint_init(void);
 void    endpoint_free(void);
@@ -381,9 +382,15 @@ char   *endpoint_razor_hist_json(void);
    `prov` and independent of it: running code states `engine_driven_of_running_path()` (asserted against the
    running flow), and a reply-learned or park address states the request's. */
 /* `door` is which mechanism composed the address, stated by the producer; see ENDPOINT_DOORS. */
+/* `creds` is the request's Fetch §2.2.5 "Requests" credentials mode (core/fetch/fetch.h's FetchCredentialsMode),
+   stated by the producer that created the request: fetch, XHR and a program park.
+   Named residual. Not covered: every other door passes FETCH_CREDENTIALS_UNPLACED, so its record states no
+   credentials mode. Next diff builds: each element door's mode from its CORS settings attribute
+   (core/html/cors_settings_attribute.h) and each navigation's and beacon's from its request. Absence shows as:
+   `credentials: null` on a link, image, form, navigation or beacon record. */
 void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                         const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int driven,
-                        int door);
+                        int door, int creds);
 
 /* The @H surface as a malloc'd JSON array (caller frees), one object per record not marked an asset; it is an
    array and not a document because result.h composes the document. Record keys:
@@ -405,6 +412,22 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    attacker performs or a victim performs on the page) names its first such sighting's root (`headers` as an
    object of header name to root), and `victimAct` is whether every marking sighting's path needed a victim act.
    At least one piece is present. */
+/* `credentials`: each Fetch §2.2.5 credentials mode a sighting's producer stated, in that enum's order, with null
+   for a sighting whose producer stated none (the `creds` residual above). Whether cookies are sent is derived
+   where the principal is (solver/pending.h's `credentials` field states why the engine sends three words). */
+/* `destinations`: each of `same-origin`, `cross-origin` (the address's origin against its document's, from the
+   bytes the run determined it from) and `unknown` (it determined none) some sighting read. */
+/* `attackerNeeds`: false for an unmarked record, else `{common, deliveries}`. `deliveries` holds each distinct
+   marking sighting's `{victimAct, sources}`: `victimAct` whether an act a person performs stands on its path
+   (flow_path_person_act, which counts no message act, unlike `attackerRooted.victimAct`), and `sources` its
+   declared sources as `{source, delivery, deliveryPrefix}`, a message's with the `messageRoutes`
+   document_message_routes leaves the attacker page (empty where COOP and framing refuse both). `common` is
+   whether some marking sighting was rooted in address components alone. */
+/* `assumes`: null where no flow composed a sighting, else the minimal sets of priced decisions its sightings'
+   paths rested on (solver/flow.h's flow_priced_each), none a subset of another: `[[]]` is a record some path
+   reached assuming nothing. An entry is `{kind, name}`: `absent-read` an absent global or member read past its
+   throw, `absent-arm` an arm taking absent application state (a global, a member, a stored key, a cookie) as
+   present, `environment-arm` an arm against an environment unknown's example; `name` the source or root. */
 /* `witness`: one element per distinct sighting witness, never a union of two (it would state a combination no
    flow assumed), never empty. An element is `null` where no flow stood (`witnessClass` `unasked`), else
    `{assumed, verification}`, `assumed` being the minting flow's assumptions at the act, sorted by kind then

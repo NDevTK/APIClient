@@ -868,7 +868,7 @@ static void img_update_rest_selected(JSContext *ctx, JSValueConst elv, int32_t s
         if (!cand) continue;   /* HTML §2.4.2's failure: an address that is not one names no endpoint */
         uv = JS_NewString(ctx, cand);
         CHECK(!JS_IsException(uv), "§4.8.4.3.7: OOM naming an image candidate for the endpoint surface");
-        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_IMAGE_ELEMENT);
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_IMAGE_ELEMENT, FETCH_CREDENTIALS_UNPLACED);
         JS_FreeValue(ctx, uv);
         free(cand);
     }
@@ -880,7 +880,7 @@ static void img_update_rest_selected(JSContext *ctx, JSValueConst elv, int32_t s
        nothing may claim to have been, and no event is fired for a decision that was never taken. */
     if (ss.undecided) {
         if (!JS_IsUndefined(ss.undecided_url))
-            endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_IMAGE_ELEMENT);
+            endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_IMAGE_ELEMENT, FETCH_CREDENTIALS_UNPLACED);
         image_source_set_release(ctx, &ss);
         JS_FreeValue(ctx, st);
         return;
@@ -979,7 +979,7 @@ static void img_update_rest_selected(JSContext *ctx, JSValueConst elv, int32_t s
     {
         JSValue uv = JS_NewString(ctx, abs);
         CHECK(!JS_IsException(uv), "§4.8.4.3.5: OOM naming an image request for the endpoint surface");
-        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_IMAGE_ELEMENT);
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path(), engine_driven_of_running_path(), EPD_IMAGE_ELEMENT, FETCH_CREDENTIALS_UNPLACED);
         JS_FreeValue(ctx, uv);
     }
 

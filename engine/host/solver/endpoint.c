@@ -14,6 +14,7 @@
 #include "solver/solve.h"            /* the request class an attacker-chosen host is handed to */
 #include "core/dom/document.h"       /* the base an address prefix is parsed against */
 #include "core/url/url.h"
+#include "core/url/origin.h"          /* the origin a destination is compared by */
 #include "core/fetch/fetch.h"         /* Fetch's same-origin test over an unknown address */
 #include "check.h"
 #include <stdlib.h>
@@ -133,6 +134,17 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                  char *atk_addr_root, *atk_body_root;
                  struct { char *name, *root; } *atk_hdrs; int natk_hdrs;
                  int atk_victim_act;
+                 /* What the record's sightings state beside the mark (endpoint.h's `credentials`, `destinations`,
+                    `attackerNeeds` and `assumes`), each the set its sightings stated, merged by
+                    endpoint_sight_merge: `creds_seen` a bit per FetchCredentialsMode a sighting's producer stated
+                    (FETCH_CREDENTIALS_UNPLACED's bit where one stated none); `dest_seen` a bit per EpDest; the
+                    distinct marking sightings' deliveries (owned JSON), with `atk_common` whether some one's sources
+                    are all address components; `asets` the minimal assumption sets, an antichain under inclusion,
+                    of the sightings a flow stood at (`asm_asked`). */
+                 unsigned creds_seen, dest_seen;
+                 int atk_common, asm_asked;
+                 char **atk_deliveries; int natk_deliveries;
+                 struct EpAssumeSet *asets; int nasm;
                  /* The body this engine had no field reader for (endpoint.h): set only where `body_params` named
                     nothing, so never a second spelling of `params`' fields, and never overwritten, since a request
                     body is one example. Exactly one of two fields is set: `body_b64` is bytes the request sends, a
@@ -2331,9 +2343,227 @@ static void endpoint_mark_attacker_rooted(Endpoint *e, const char *addr, const E
     e->atk_victim_act = was ? (e->atk_victim_act & victim_act) : victim_act;
 }
 
+/* A sighting's facts beside the mark (see the struct). */
+typedef enum { EPDST_NONE = 0, EPDST_SAME_ORIGIN, EPDST_CROSS_ORIGIN, EPDST_UNKNOWN } EpDest;
+static const char *const ep_dest_token[] = { NULL, "same-origin", "cross-origin", "unknown" };
+/* One sighting's assumption set: entries `kind \x1f name`, sorted and distinct. */
+typedef struct EpAssumeSet { char **e; int n; } EpAssumeSet;
+/* `delivery` is a marking sighting's `{victimAct, sources}` as owned JSON, NULL for one that marks nothing. */
+typedef struct { int creds, dest, common, asked; char *delivery; EpAssumeSet as; } EpSight;
+
+static const char *const ep_priced_token[] = { "absent-read", "absent-arm", "environment-arm" };
+
+static void sight_assume_visit(FlowPricedKind kind, const char *name, void *ud) {
+    EpAssumeSet *a = ud;
+    char **g = realloc(a->e, (size_t)(a->n + 1) * sizeof *g);
+    size_t kl, nl;
+    CHECK(g, "endpoint: OOM recording a sighting's assumptions");
+    a->e = g;
+    CHECK(kind >= FLOW_PRICED_READ && kind <= FLOW_PRICED_ENV_ARM, "endpoint: a priced decision of no kind");
+    kl = strlen(ep_priced_token[kind]); nl = strlen(name);
+    a->e[a->n] = malloc(kl + 1 + nl + 1);
+    CHECK(a->e[a->n], "endpoint: OOM recording a sighting's assumptions");
+    memcpy(a->e[a->n], ep_priced_token[kind], kl);
+    a->e[a->n][kl] = '\x1f';
+    memcpy(a->e[a->n] + kl + 1, name, nl + 1);
+    a->n++;
+}
+
+static int sight_str_cmp(const void *x, const void *y) { return strcmp(*(char *const *)x, *(char *const *)y); }
+
+static void assume_set_free(EpAssumeSet *a) {
+    for (int i = 0; i < a->n; i++) free(a->e[i]);
+    free(a->e);
+    a->e = NULL; a->n = 0;
+}
+
+/* Is sorted `a` a subset of sorted `b`? */
+static int assume_set_within(const EpAssumeSet *a, const EpAssumeSet *b) {
+    int i = 0, j = 0;
+    while (i < a->n && j < b->n) {
+        int c = strcmp(a->e[i], b->e[j]);
+        if (c == 0) { i++; j++; }
+        else if (c > 0) j++;
+        else return 0;
+    }
+    return i == a->n;
+}
+
+/* The origin `url` requests from, against this realm's document (Fetch §4.1 Main fetch's same-origin test is over
+   the request's current URL and its origin, the document's): the bytes the run determined it from are a concrete
+   address's own, or for a concolic one the page bytes ahead of its first hole where they decide the host
+   (url_prefix_decides_host), else its example (address_origin_determined's two arms). An opaque origin is same
+   origin with nothing.
+   Named residual. Not covered: same site, which needs the registrable domain of both hosts, so a sibling
+   subdomain of the app reads `cross-origin`. Next diff builds: a `same-site` member read through
+   core/url/registrable_domain.h. Absence shows as: an app's own API subdomain sorting with third parties. */
+static int address_destination(JSContext *ctx, JSValueConst url) {
+    char *disp = url_display(ctx, url);
+    const char *b = document_base_url(ctx), *d = document_url(ctx);
+    UrlRecord base, docu, target;
+    char *ex = NULL;
+    const char *bytes = disp;
+    size_t n;
+    int dest = EPDST_UNKNOWN, ok;
+
+    CHECK(disp, "endpoint: OOM reading an address's page bytes");
+    url_record_init(&base); url_record_init(&docu); url_record_init(&target);
+    CHECKF(b && url_parse(&base, b, strlen(b), NULL),
+           "endpoint: the document base URL `%s` does not parse — HTML §2.4.1 makes it a URL record", b ? b : "");
+    CHECKF(d && url_parse(&docu, d, strlen(d), NULL), "endpoint: the document URL `%s` does not parse", d ? d : "");
+    n = strlen(disp);
+    if (concolic_is(url)) {
+        unsigned char *hole = concolic_shape_hole_mask(url);
+        CHECK(hole, "endpoint: OOM reading an address's page bytes");
+        for (n = 0; disp[n] && !hole[n]; n++) {}
+        if (!url_prefix_decides_host(url_prefix_state(disp, n, &base))) {
+            JSValue exv = concolic_example_string(ctx, url);
+            bytes = NULL;
+            if (JS_IsString(exv)) {
+                const char *s = JS_ToCStringLen(ctx, &n, exv);
+                CHECK(s != NULL, "endpoint: OOM reading an address's example");
+                ex = malloc(n + 1);
+                CHECK(ex, "endpoint: OOM reading an address's example");
+                memcpy(ex, s, n); ex[n] = 0;
+                JS_FreeCString(ctx, s);
+                bytes = ex;
+            }
+            JS_FreeValue(ctx, exv);
+        }
+        free(hole);
+    }
+    ok = bytes && url_parse(&target, bytes, n, &base);
+    if (ok) {
+        char *to = origin_serialize_of_url(&target), *dos = origin_serialize_of_url(&docu);
+        CHECK(to && dos, "endpoint: OOM serializing an origin");
+        dest = strcmp(to, "null") && !strcmp(to, dos) ? EPDST_SAME_ORIGIN : EPDST_CROSS_ORIGIN;
+        free(to); free(dos);
+    }
+    url_record_free(&target); url_record_free(&docu); url_record_free(&base);
+    free(ex);
+    free(disp);
+    return dest;
+}
+
+/* One declared source of a marking sighting: its delivery as concolic_source_delivery declares it (the engine's
+   own source vocabulary) and, for a message, the routes this document's policies leave the attacker page
+   (document_message_routes, the answer solve.c's `messageRoutes` states). */
+typedef struct { JSContext *ctx; int all_address; JsonBuf out; int nout; char **seen; int nseen; } SightSources;
+static void sight_source_visit(void *ud, const char *p, size_t n) {
+    SightSources *st = ud;
+    char *m = malloc(n + 1);
+    const char *kind = NULL;
+    char prefix = 0;
+
+    CHECK(m, "endpoint: OOM reading a sighting's source");
+    memcpy(m, p, n); m[n] = 0;
+    if (!concolic_source_delivery(m, &kind, &prefix)) { free(m); return; }   /* a precondition or principal */
+    for (int i = 0; i < st->nseen; i++)   /* one source rooting two pieces is one source */
+        if (!strcmp(st->seen[i], m)) { free(m); return; }
+    {
+        char **g = realloc(st->seen, (size_t)(st->nseen + 1) * sizeof *g);
+        CHECK(g, "endpoint: OOM reading a sighting's source");
+        st->seen = g;
+        st->seen[st->nseen] = reclaim_strdup(m);
+        CHECK(st->seen[st->nseen], "endpoint: OOM reading a sighting's source");
+        st->nseen++;
+    }
+    DCHECK(kind != NULL, "a declared delivery answered no mechanism token");
+    if (strcmp(kind, "address")) st->all_address = 0;
+    if (st->nout++) json_buf_raw(&st->out, ",");
+    json_buf_raw(&st->out, "{"); json_buf_key(&st->out, "source"); json_buf_str(&st->out, m);
+    json_buf_raw(&st->out, ","); json_buf_key(&st->out, "delivery"); json_buf_str(&st->out, kind);
+    json_buf_raw(&st->out, ","); json_buf_key(&st->out, "deliveryPrefix");
+    if (prefix) { char pfx[2] = { prefix, 0 }; json_buf_str(&st->out, pfx); }
+    else json_buf_raw(&st->out, "null");
+    if (!strcmp(kind, "cross-document-message")) {
+        bool frame, opener;
+        document_message_routes(st->ctx, &frame, &opener);
+        json_buf_raw(&st->out, ","); json_buf_key(&st->out, "messageRoutes"); json_buf_raw(&st->out, "[");
+        if (frame) json_buf_str(&st->out, "frame");
+        if (opener) { if (frame) json_buf_raw(&st->out, ","); json_buf_str(&st->out, "opener"); }
+        json_buf_raw(&st->out, "]");
+    }
+    json_buf_raw(&st->out, "}");
+    free(m);
+}
+
+/* Reads one sighting's facts at the act: the producer's credentials mode, the destination, where the sighting
+   marks the record (the `n` roots `roots` of the pieces that mark it) its delivery (their declared sources and
+   whether a person's act stands on its path, flow_path_person_act), and the priced decisions of the flow that
+   composed it where one did (`asked`: a flow stands and the door is not off a park, the mark's own condition). */
+static void endpoint_sight_now(JSContext *ctx, EpSight *sg, JSValueConst url, const char *const *roots, int n,
+                               int creds, int asked) {
+    memset(sg, 0, sizeof *sg);
+    sg->creds = creds;
+    sg->dest = address_destination(ctx, url);
+    if (n > 0) {
+        SightSources st = { ctx, 1, { 0 }, 0, NULL, 0 };
+        json_buf_raw(&st.out, "{"); json_buf_key(&st.out, "victimAct");
+        json_buf_raw(&st.out, asked && flow_path_person_act(flow_running()) ? "true" : "false");
+        json_buf_raw(&st.out, ","); json_buf_key(&st.out, "sources"); json_buf_raw(&st.out, "[");
+        for (int r = 0; r < n; r++) concolic_root_declared_each(roots[r], sight_source_visit, &st);
+        json_buf_raw(&st.out, "]}");
+        DCHECK(st.nout > 0, "a marking sighting's roots have no declared delivery — the mark asks "
+                            "concolic_root_delivered_any of each piece's root");
+        for (int i = 0; i < st.nseen; i++) free(st.seen[i]);
+        free(st.seen);
+        sg->common = st.all_address;
+        sg->delivery = json_buf_take(&st.out);
+        CHECK(sg->delivery, "endpoint: OOM spelling a marking sighting's delivery");
+    }
+    sg->asked = asked;
+    if (asked) {
+        const Flow *f = flow_running();
+        int n = flow_priced_each(f, sight_assume_visit, &sg->as), u, i;
+        DCHECK(n == sg->as.n, "a flow's priced decisions and the names they were visited with disagree in number");
+        if (sg->as.n > 1) qsort(sg->as.e, (size_t)sg->as.n, sizeof *sg->as.e, sight_str_cmp);
+        for (i = 1, u = sg->as.n ? 1 : 0; i < sg->as.n; i++) {
+            if (!strcmp(sg->as.e[u - 1], sg->as.e[i])) { free(sg->as.e[i]); continue; }
+            sg->as.e[u++] = sg->as.e[i];
+        }
+        sg->as.n = u;
+    }
+}
+
+/* Merges a sighting into its record (see the struct for each rule); takes the sighting's owned fields. */
+static void endpoint_sight_merge(Endpoint *e, EpSight *sg) {
+    int k, w;
+    DCHECK(sg->dest > EPDST_NONE && sg->dest <= EPDST_UNKNOWN, "a sighting determined no destination word");
+    DCHECK(sg->creds >= 0 && sg->creds < 8 * (int)sizeof e->creds_seen, "a credentials mode outside the set's bits");
+    e->creds_seen |= 1u << sg->creds;
+    e->dest_seen |= 1u << sg->dest;
+    if (sg->delivery) {
+        e->atk_common |= sg->common;
+        for (k = 0; k < e->natk_deliveries && strcmp(e->atk_deliveries[k], sg->delivery); k++) {}
+        if (k == e->natk_deliveries) {
+            char **g = realloc(e->atk_deliveries, (size_t)(k + 1) * sizeof *g);
+            CHECK(g, "endpoint: OOM merging a sighting's delivery");
+            e->atk_deliveries = g;
+            e->atk_deliveries[e->natk_deliveries++] = sg->delivery;
+        } else {
+            free(sg->delivery);
+        }
+        sg->delivery = NULL;
+    }
+    if (!sg->asked) return;
+    e->asm_asked = 1;
+    for (k = 0; k < e->nasm; k++)
+        if (assume_set_within(&e->asets[k], &sg->as)) { assume_set_free(&sg->as); return; }
+    for (k = 0, w = 0; k < e->nasm; k++) {
+        if (assume_set_within(&sg->as, &e->asets[k])) { assume_set_free(&e->asets[k]); continue; }
+        e->asets[w++] = e->asets[k];
+    }
+    e->asets = realloc(e->asets, (size_t)(w + 1) * sizeof *e->asets);
+    CHECK(e->asets, "endpoint: OOM merging a sighting's assumptions");
+    e->asets[w] = sg->as;
+    e->nasm = w + 1;
+    sg->as.e = NULL; sg->as.n = 0;
+}
+
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                      const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int driven,
-                     int door) {
+                     int door, int creds) {
     /* What this sighting is evidence of, asserted at the mint for `kv_add`'s reason: every site that records an
        endpoint passes through here. A value outside the vocabulary is the dangerous one: `0` is `observed`, so an
        uninitialised grade reads as the strongest claim this surface makes. */
@@ -2368,6 +2598,9 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        `EPD_UNSTATED` to `EPD_COUNT`. `EPD_UNSTATED` is 0 so that a producer that forgets is refused here rather than
        read as whichever mechanism the numbering put first; endpoint_door_token's CHECK catches the same record in
        release. */
+    DCHECKF(creds >= FETCH_CREDENTIALS_UNPLACED && creds <= FETCH_CREDENTIALS_INCLUDE,
+            "an endpoint was recorded with the credentials mode %d, none of core/fetch/fetch.h's. method=%s",
+            creds, method);
     DCHECKF(door > EPD_UNSTATED && door < EPD_COUNT,
             "an endpoint was recorded with the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the door is "
             "the one fact about a sighting no consumer can re-derive; state the door of the mechanism this call site "
@@ -2548,6 +2781,19 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         witness_free(&wit);
         return;
     }
+    /* And what the sighting states beside the mark, read here, past the arm that records no API record. */
+    EpSight sight;
+    {
+        const char **mroots = reclaim_calloc((size_t)nhdrs + 2, sizeof *mroots);
+        int nm = 0;
+        CHECK(mroots, "endpoint: OOM collecting a sighting's marking roots");
+        if (atk_addr) mroots[nm++] = aroot;
+        for (int i = 0; i < nhdrs; i++) if (hdr_atk[i]) mroots[nm++] = hdrs[i].root;
+        if (atk_body) mroots[nm++] = body->root;
+        DCHECK((nm > 0) == !!atk, "a sighting's marking pieces and its mark disagree");
+        endpoint_sight_now(ctx, &sight, url, mroots, nm, creds, gf && !off_park);
+        free(mroots);
+    }
     /* Path, then query, then body: the order a request is written in and the identity compares in. The path is
        re-spelled by the scan (see path_scan), and the re-spelled one becomes the endpoint's `url`, because the
        params are named in its grammar. The example is aligned against both halves of the address, so a hole in a
@@ -2604,6 +2850,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                else, so the two are always one sighting's. */
             if (atk) endpoint_mark_attacker_rooted(&g_eps[i], atk_addr ? aroot : NULL, hdrs, nhdrs, hdr_atk,
                                                    atk_body ? body->root : NULL, victim_act);
+            endpoint_sight_merge(&g_eps[i], &sight);
             if (acls > g_eps[i].addr_class) {
                 g_eps[i].addr_class = acls;
                 free(g_eps[i].addr_root);
@@ -2652,6 +2899,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        value's own answer, never a declined allocation (the CHECK at the read). */
     if (atk) endpoint_mark_attacker_rooted(e, atk_addr ? aroot : NULL, hdrs, nhdrs, hdr_atk,
                                            atk_body ? body->root : NULL, victim_act);
+    endpoint_sight_merge(e, &sight);
     e->addr_root = aroot; aroot = NULL;
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because
        `EPW_UNASKED` happens to be zero, and the list's order is a later diff's to change. */
@@ -2698,6 +2946,7 @@ done:
     free(aroot);
     free(hdr_atk);
     witness_free(&wit);   /* empty: endpoint_witness_add took or freed it on every arm that reaches here */
+    DCHECK(!sight.delivery && !sight.as.e, "a sighting's facts reached the end of its act unmerged");
     kv_free(&kvb);
 }
 
@@ -3560,6 +3809,58 @@ char *endpoint_json_array(void) {
             json_buf_key(&b, "victimAct"); json_buf_raw(&b, e->atk_victim_act ? "true" : "false");
             json_buf_raw(&b, "}");
         }
+        DCHECK(endpoint_marked(e) == (e->natk_deliveries > 0),
+               "a record's mark and its deliveries disagree about whether a sighting marked it");
+        DCHECK(e->creds_seen && e->dest_seen, "a record states no sighting's credentials mode or destination");
+        json_buf_raw(&b, ","); json_buf_key(&b, "credentials"); json_buf_raw(&b, "[");
+        for (int c = FETCH_CREDENTIALS_UNPLACED, first = 1; c <= FETCH_CREDENTIALS_INCLUDE; c++) {
+            if (!(e->creds_seen & (1u << c))) continue;
+            if (!first) json_buf_raw(&b, ",");
+            first = 0;
+            if (c == FETCH_CREDENTIALS_UNPLACED) json_buf_raw(&b, "null");
+            else json_buf_str(&b, fetch_credentials_token((FetchCredentialsMode)c));
+        }
+        json_buf_raw(&b, "]");
+        json_buf_raw(&b, ","); json_buf_key(&b, "destinations"); json_buf_raw(&b, "[");
+        for (int d = EPDST_SAME_ORIGIN, first = 1; d <= EPDST_UNKNOWN; d++) {
+            if (!(e->dest_seen & (1u << d))) continue;
+            if (!first) json_buf_raw(&b, ",");
+            first = 0;
+            json_buf_str(&b, ep_dest_token[d]);
+        }
+        json_buf_raw(&b, "]");
+        json_buf_raw(&b, ","); json_buf_key(&b, "attackerNeeds");
+        if (!e->natk_deliveries) json_buf_raw(&b, "false");
+        else {
+            json_buf_raw(&b, "{"); json_buf_key(&b, "common"); json_buf_raw(&b, e->atk_common ? "true" : "false");
+            json_buf_raw(&b, ","); json_buf_key(&b, "deliveries"); json_buf_raw(&b, "[");
+            for (int k = 0; k < e->natk_deliveries; k++) {
+                if (k) json_buf_raw(&b, ",");
+                json_buf_raw(&b, e->atk_deliveries[k]);
+            }
+            json_buf_raw(&b, "]}");
+        }
+        json_buf_raw(&b, ","); json_buf_key(&b, "assumes");
+        if (!e->asm_asked) json_buf_raw(&b, "null");
+        else {
+            json_buf_raw(&b, "[");
+            for (int k = 0; k < e->nasm; k++) {
+                if (k) json_buf_raw(&b, ",");
+                json_buf_raw(&b, "[");
+                for (int j = 0; j < e->asets[k].n; j++) {
+                    const char *x = e->asets[k].e[j], *sep = strchr(x, '\x1f');
+                    char kind[24];
+                    CHECK(sep && (size_t)(sep - x) < sizeof kind, "endpoint: an assumption entry has no kind");
+                    memcpy(kind, x, (size_t)(sep - x)); kind[sep - x] = 0;
+                    if (j) json_buf_raw(&b, ",");
+                    json_buf_raw(&b, "{"); json_buf_key(&b, "kind"); json_buf_str(&b, kind);
+                    json_buf_raw(&b, ","); json_buf_key(&b, "name"); json_buf_str(&b, sep + 1);
+                    json_buf_raw(&b, "}");
+                }
+                json_buf_raw(&b, "]");
+            }
+            json_buf_raw(&b, "]");
+        }
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");
@@ -3721,6 +4022,10 @@ void endpoint_free(void) {
             free(g_eps[i].atk_hdrs[j].root);
         }
         free(g_eps[i].atk_hdrs);
+        for (int k = 0; k < g_eps[i].natk_deliveries; k++) free(g_eps[i].atk_deliveries[k]);
+        free(g_eps[i].atk_deliveries);
+        for (int k = 0; k < g_eps[i].nasm; k++) assume_set_free(&g_eps[i].asets[k]);
+        free(g_eps[i].asets);
         for (int j = 0; j < g_eps[i].np; j++) {
             free(g_eps[i].params[j].name);
             for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]);

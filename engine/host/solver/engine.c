@@ -410,7 +410,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
                 "parse cannot reach an address its own element carries", door, pkind);
         /* HTML §8.1.4.2 sets no method, so it is Fetch §2.2.5's `GET`; `req->method` is what the producer
            stated, already asserted present at this function's entry. */
-        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, prov, driven, door);
+        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, prov, driven, door, req->credentials);
         JS_FreeValue(ctx, uv);
     }
     /* Fetch §4.1 Main fetch step 6, run before the key is composed. The reply seam is keyed on (method, mode,

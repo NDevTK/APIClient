@@ -455,7 +455,7 @@ static void navigable_record_destination(JSContext *ctx, const char *addr, int p
     if (strncmp(addr, "about:", 6) == 0) return;
     v = JS_NewString(ctx, addr);
     CHECK(!JS_IsException(v), "navigable: OOM recording a navigation's destination on the @H surface");
-    endpoint_record(ctx, "GET", v, NULL, 0, NULL, prov, driven, EPD_NAVIGATION);
+    endpoint_record(ctx, "GET", v, NULL, 0, NULL, prov, driven, EPD_NAVIGATION, FETCH_CREDENTIALS_UNPLACED);
     JS_FreeValue(ctx, v);
 }
 

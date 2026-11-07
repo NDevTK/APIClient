@@ -196,7 +196,7 @@ static JSValue ii_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     (void)this_val; (void)argc; (void)argv; (void)magic;
     /* Recorded before the policy checks: a request a policy refuses is still one the page makes. */
     endpoint_record(ctx, "GET", func_data[1], NULL, 0, NULL, engine_prov_of_running_path(),
-                    engine_driven_of_running_path(), EPD_IMAGE_INPUT);
+                    engine_driven_of_running_path(), EPD_IMAGE_INPUT, FETCH_CREDENTIALS_UNPLACED);
     u = JS_ToCString(ctx, func_data[1]);
     CHECK(u != NULL, "§4.10.5.1.19: OOM reading an Image Button's request URL");
     abs = strdup(u);
@@ -261,7 +261,7 @@ static void ii_run(JSContext *ctx, JSValueConst wrap, lxb_dom_element_t *el, con
     taint = dom_cow_attr_taint(el, "src");
     if (!JS_IsUndefined(taint)) {
         endpoint_record(ctx, "GET", taint, NULL, 0, NULL, engine_prov_of_running_path(),
-                        engine_driven_of_running_path(), EPD_IMAGE_INPUT);
+                        engine_driven_of_running_path(), EPD_IMAGE_INPUT, FETCH_CREDENTIALS_UNPLACED);
         return;
     }
     v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &n);
