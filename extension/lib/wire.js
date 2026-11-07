@@ -103,7 +103,11 @@ async function wireSend(platformFetch, href, init) {
              setCookie: setCookie3xx };
   }
   var setCookie = data ? [] : await rec.setCookie;
-  return { response: new Response(_wireBodyUntil(resp.body, release),
+  /* A null body status (Fetch §2.2.3 "Statuses", lib/safe-fetch.js's _NULL_BODY_STATUSES) takes a null body:
+     §5.5 "Response class" throws a TypeError for any other, and the platform's Response to a 304 carries an
+     empty stream. */
+  var body = _NULL_BODY_STATUSES.indexOf(resp.status) >= 0 ? null : resp.body;
+  return { response: new Response(_wireBodyUntil(body, release),
                                   { status: resp.status, statusText: resp.statusText, headers: resp.headers }),
            setCookie: setCookie };
 }
