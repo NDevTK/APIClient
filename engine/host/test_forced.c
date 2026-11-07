@@ -1483,6 +1483,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/linknest.h"
 #include "fixture/collattr.h"
 #include "fixture/collenum.h"
+#include "fixture/collvisible.h"
 #include "fixture/collrest.h"
 #include "fixture/wnameunk.h"
 #include "fixture/flexsvg.h"
@@ -2184,6 +2185,7 @@ TF_DOCS[] = {
     { "collkeys", HTML_COLLKEYS },
     { "collhasown", HTML_COLLHASOWN },
     { "collexpando", HTML_COLLEXPANDO },
+    { "collvisible", HTML_COLLVISIBLE },
     { "collrest", HTML_COLLREST },
     { "wnameunk", HTML_WNAMEUNK },
     { "flexsvg", HTML_FLEXSVG },
@@ -20582,6 +20584,23 @@ TF_UNIT void probes_linknest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `collvisible` document (fixture/collvisible.h): an HTMLCollection's named property is invisible
+   under a prototype member of the same name. */
+TF_UNIT void probes_collvisible(const char *js, Probe *tab, int *n) {
+    const char *vs_why = NULL; int vs_tt = 1;
+    fold_row(&vs_tt, &vs_why, param_value_is(js, "/api/collvisible", "l", "number") &&
+                              param_value_is(js, "/api/collvisible", "i", "function") &&
+                              param_value_is(js, "/api/collvisible", "z", "1") &&
+                              param_value_is(js, "/api/collvisible", "n", "1") &&
+                              param_value_is(js, "/api/collvisible", "o", "1"),
+             "an HTMLCollection holding elements with ids `length` and `item` answered an element for a prototype "
+             "member's name, or lost the named property `vsZ` or namedItem('item')");
+    const Probe rows[] = {
+        { "collection-named-visibility", vs_tt, "/api/collvisible", SESS_EXPLORE, vs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the four collenum documents (fixture/collenum.h): the internal methods of a live collection that a
    builtin reaches answer the collection's indices and its expandos. */
 TF_UNIT void probes_collenum(const char *js, Probe *tab, int *n) {
@@ -27186,6 +27205,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_linknest(js, probes, &np);
     probes_collattr(js, probes, &np);
     probes_collenum(js, probes, &np);
+    probes_collvisible(js, probes, &np);
     probes_collrest(js, probes, &np);
     probes_wnameunk(js, probes, &np);
     probes_flexsvg(js, probes, &np);
