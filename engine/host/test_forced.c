@@ -5354,6 +5354,90 @@ static void wasm_binary_check(const char *src, const char *expect, WasmDecodeSta
            src, got, expect);
 }
 
+/* fixture/wasm_binary.h's rendering of a decoded type section: per type `<rec start>+<rec size> final|open
+   <supers> <composite>`, joined by "; ". It reads every field of WasmSubType, WasmValType and WasmFieldType, so
+   a decode that drops or misplaces one renders differently. Asked only of a decode that answered DONE. */
+static void wasm_text_put(char *buf, size_t cap, size_t *at, const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+
+    va_start(ap, fmt);
+    n = vsnprintf(buf + *at, cap - *at, fmt, ap);
+    va_end(ap);
+    CHECK(n >= 0 && (size_t)n < cap - *at, "a WebAssembly type rendering outgrew the fixture's buffer");
+    *at += (size_t)n;
+}
+
+static void wasm_val_text(char *buf, size_t cap, size_t *at, const WasmValType *t)
+{
+    static const char *const HEAP[] = { "exn", "array", "struct", "i31", "eq", "any", "extern", "func", "none",
+                                        "noextern", "nofunc", "noexn" };
+
+    switch (t->code) {
+    case WASM_TYPE_I32: wasm_text_put(buf, cap, at, "i32"); return;
+    case WASM_TYPE_I64: wasm_text_put(buf, cap, at, "i64"); return;
+    case WASM_TYPE_F32: wasm_text_put(buf, cap, at, "f32"); return;
+    case WASM_TYPE_F64: wasm_text_put(buf, cap, at, "f64"); return;
+    case WASM_TYPE_V128: wasm_text_put(buf, cap, at, "v128"); return;
+    case WASM_TYPE_I8: wasm_text_put(buf, cap, at, "i8"); return;
+    case WASM_TYPE_I16: wasm_text_put(buf, cap, at, "i16"); return;
+    case WASM_TYPE_REF:
+        wasm_text_put(buf, cap, at, t->nullable ? "ref null " : "ref ");
+        if (t->heap == 0) wasm_text_put(buf, cap, at, "$%u", (unsigned)t->heap_index);
+        else {
+            CHECK(t->heap >= WASM_HEAP_EXN && t->heap <= WASM_HEAP_NOEXN, "a decoded heap type has no name");
+            wasm_text_put(buf, cap, at, "%s", HEAP[t->heap - WASM_HEAP_EXN]);
+        }
+        return;
+    }
+    CHECK_FAIL("a decoded WebAssembly value type has a code module_decoder.h does not produce");
+}
+
+static void wasm_field_text(char *buf, size_t cap, size_t *at, const WasmFieldType *f)
+{
+    if (f->mutable_) wasm_text_put(buf, cap, at, "mut ");
+    wasm_val_text(buf, cap, at, &f->storage);
+}
+
+static void wasm_type_text(const WasmModule *m, char *buf, size_t cap)
+{
+    size_t at = 0, i, k;
+
+    buf[0] = '\0';
+    for (i = 0; i < m->n_types; i++) {
+        const WasmSubType *t = &m->types[i];
+
+        wasm_text_put(buf, cap, &at, "%s%zu+%u %s<", i ? "; " : "", t->rec_start, (unsigned)t->rec_size,
+                      t->final ? "final" : "open");
+        for (k = 0; k < t->n_supers; k++)
+            wasm_text_put(buf, cap, &at, "%s%u", k ? "," : "", (unsigned)m->type_indices[t->supers + k]);
+        wasm_text_put(buf, cap, &at, "> ");
+        if (t->kind == WASM_COMP_FUNC) {
+            wasm_text_put(buf, cap, &at, "func[");
+            for (k = 0; k < t->n_params; k++) {
+                if (k) wasm_text_put(buf, cap, &at, ",");
+                wasm_val_text(buf, cap, &at, &m->val_types[t->params + k]);
+            }
+            wasm_text_put(buf, cap, &at, "]->[");
+            for (k = 0; k < t->n_results; k++) {
+                if (k) wasm_text_put(buf, cap, &at, ",");
+                wasm_val_text(buf, cap, &at, &m->val_types[t->results + k]);
+            }
+            wasm_text_put(buf, cap, &at, "]");
+            continue;
+        }
+        CHECK(t->kind == WASM_COMP_STRUCT || (t->kind == WASM_COMP_ARRAY && t->n_fields == 1),
+              "a decoded WebAssembly type is neither a function, a struct, nor an array of one field");
+        wasm_text_put(buf, cap, &at, t->kind == WASM_COMP_STRUCT ? "struct[" : "array[");
+        for (k = 0; k < t->n_fields; k++) {
+            if (k) wasm_text_put(buf, cap, &at, ",");
+            wasm_field_text(buf, cap, &at, &m->fields[t->fields + k]);
+        }
+        wasm_text_put(buf, cap, &at, "]");
+    }
+}
+
 TF_UNIT void wasm_module_decoder_selftest(void)
 {
     enum { NR = sizeof WASM_BINARY_ROWS / sizeof WASM_BINARY_ROWS[0],
@@ -5379,6 +5463,26 @@ TF_UNIT void wasm_module_decoder_selftest(void)
                           wasm_module_decoder_run(&d));
         wasm_module_decoder_free(&d);
     }
+    for (i = 0; i < COUNTOF(WASM_TYPE_MALFORMED_ROWS); i++) {
+        const WasmBinaryRow *row = &WASM_TYPE_MALFORMED_ROWS[i];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, row->expect, wasm_module_decoder_run(&d));
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_TYPE_ROWS); i++) {
+        const WasmTypeRow *row = &WASM_TYPE_ROWS[i];
+        static char text[4096];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
+        wasm_type_text(wasm_module_decoder_module(&d), text, sizeof text);
+        CHECKF(strcmp(text, row->types) == 0, "the WebAssembly module %s decoded its types as \"%s\"; they are "
+                                               "\"%s\"", row->src, text, row->types);
+        wasm_module_decoder_free(&d);
+    }
     do {
         live = 0;
         for (i = 0; i < NR; i++) {
@@ -5388,9 +5492,18 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         }
     } while (live > 0);
     for (i = 0; i < NR; i++) {
+        static char text_alone[4096], text_together[4096];
+
         CHECKF(st_together[i] == st_alone[i] && together[i].n_sections == alone[i].n_sections,
                "the WebAssembly binary %s decoded differently stepped among the others than alone",
                WASM_BINARY_ROWS[i].src);
+        if (st_alone[i] == WASM_DECODE_DONE) {
+            wasm_type_text(wasm_module_decoder_module(&alone[i]), text_alone, sizeof text_alone);
+            wasm_type_text(wasm_module_decoder_module(&together[i]), text_together, sizeof text_together);
+            CHECKF(strcmp(text_alone, text_together) == 0,
+                   "the WebAssembly binary %s decoded different types stepped among the others than alone",
+                   WASM_BINARY_ROWS[i].src);
+        }
         for (k = 0; k < alone[i].n_sections; k++) {
             const WasmSection *t = wasm_module_decoder_section(&together[i], k);
             const WasmSection *a = wasm_module_decoder_section(&alone[i], k);
