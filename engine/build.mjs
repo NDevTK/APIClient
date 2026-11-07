@@ -370,7 +370,7 @@ const coldFields = sourceFact(() => censusDefRowSet(["cold"],
    "stepUnitOverrunAskArms", "stepUnitOverrunGapArms",
    "outOfProgramsAtTheLadderUnits", "programCursors",
    "programsAhead", "epDoors", "epAddressClass", "epWitnessClass",
-   "ramLimitSource"],
+   "ramLimitSource", "saleCensus"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer's declaration rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
