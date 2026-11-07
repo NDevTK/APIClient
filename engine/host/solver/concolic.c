@@ -3270,18 +3270,20 @@ static CarrierKind root_carrier(const char *root)
 static int carrier_shared_byte(unsigned char b) { return b < 0x20 || b > 0x7E; }
 
 /* JSConcolicHooks.lead: the domain fact the delivery declaration holds, for a builtin deciding whether one of
-   its completions is feasible. The prefix is what the component says its value carries (`#` for a fragment,
-   `?` for a query), the same declaration the candidate delivery is built from. A derived value
-   (`location.hash.slice(1)`) has its own source identity and no declaration, so it answers 0: slicing is what
-   removes the prefix. */
+   its completions is feasible. The prefix is what the component says its own value carries (`#` for a
+   fragment, `?` for a query), the same declaration the candidate delivery is built from, so it is the lead of
+   the source read alone (`src_self`): a derivation inherits its first unknown operand's `src` and begins
+   wherever its own bytes do (`'{"u":"' + location.href`), and a derived row's value (a tuple's, a member's)
+   is a part of its parent component without the prefix. Either answers 0, which bounds nothing. */
 static int concolic_lead_hook(JSValueConst v)
 {
-    const char *src = concolic_src_c(v);
-    int i;
-    if (!src) return 0;
-    for (i = 0; i < g_srcs_n; i++)
-        if (!strcmp(g_srcs[i].src, src)) return (unsigned char)g_srcs[i].prefix;
-    return 0;
+    const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    int row;
+
+    if (!c || !c->src_self || !c->src) return 0;
+    row = src_row(c->src, strlen(c->src));
+    if (row < 0 || g_srcs[row].parent) return 0;
+    return (unsigned char)g_srcs[row].prefix;
 }
 
 /* The candidate as the page reads it. The solver's payload is what the attacker puts in the URL; this is what
