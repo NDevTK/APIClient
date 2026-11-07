@@ -74,6 +74,7 @@ static void eh_add(EhBuf *b, const char *name, size_t nn, const char *val, size_
     memcpy(v2, val, vn); v2[vn] = 0;
     b->e[b->n].name = n2;
     b->e[b->n].value = v2;
+    b->e[b->n].root = NULL;   /* bytes of the batch body the page composed */
     b->n++;
 }
 

@@ -2486,6 +2486,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
             owned[i * 2 + 1] = JS_ToCString(ctx, vv);
             eh[i].name = owned[i * 2] ? owned[i * 2] : "";
             eh[i].value = owned[i * 2 + 1] ? owned[i * 2 + 1] : "";
+            eh[i].root = NULL;   /* the author header list holds strings (solver/endpoint.c's residual) */
             JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
         }
     }
@@ -2510,6 +2511,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
             /* §3.5.6 step 4's arm, carried from the extraction rather than re-derived from the characters —
                which cannot be done, since a display shape and a body that spells one are the same bytes. */
             eb.kind = d->request_body_is_shape ? EPB_SHAPE : EPB_SENT;
+            eb.root = NULL;   /* the body slot holds a string (solver/endpoint.c's residual) */
             /* AND NO SPAN RECORD, STATED RATHER THAN LEFT UNWRITTEN — `eb` is declared field by field, so a
                member nobody assigns is read out of whatever the stack held, and a count with no array is the
                half-record solver/endpoint.c's own assert refuses. This is a POSITIVE statement and not a

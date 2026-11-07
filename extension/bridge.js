@@ -123,19 +123,29 @@ function docWitness(row, f) {
   return null;
 }
 /* The per-row facts solver/endpoint.c writes as tokens; `addressRoot`, whose domain is null, false or a
-   non-empty string; and `attackerRooted`, false or `{address, victimAct}`. A key is stated on every row or on none, since
-   one instance emits one document shape. */
+   non-empty string; and `attackerRooted`, false or `{address?, headers?, body?, victimAct}`. A key is stated on
+   every row or on none, since one instance emits one document shape. */
 const ENDPOINT_FACT_KEYS = Object.freeze(["door", "mintedAt", "addressClass", "razorClass", "witnessClass"]);
+/* solver/endpoint.c's mark: the rooted pieces in this order, each a root's name (`headers` an object of header name
+   to root), at least one of them, then `victimAct`. */
+function docAttackerRooted(m) {
+  if (!docIsRecord(m) || typeof m.victimAct !== "boolean") return false;
+  const keys = Object.keys(m), pieces = keys.slice(0, -1);
+  if (keys[keys.length - 1] !== "victimAct" || !pieces.length) return false;
+  if (pieces.join(",") !== ["address", "headers", "body"].filter((k) => k in m).join(",")) return false;
+  if ("address" in m && !docIsName(m.address)) return false;
+  if ("body" in m && !docIsName(m.body)) return false;
+  return !("headers" in m) || (docIsRecord(m.headers) && Object.keys(m.headers).length > 0 &&
+                               Object.values(m.headers).every(docIsName));
+}
 function docEndpointRow(row, f) {
   if (!docIsRecord(row)) return f + " is not an object";
   for (const k of ENDPOINT_FACT_KEYS)
     if (k in row && !docIsName(row[k])) return f + "." + k + " is not a non-empty string";
   if ("addressRoot" in row && row.addressRoot !== null && row.addressRoot !== false && !docIsName(row.addressRoot))
     return f + ".addressRoot is none of null, false or a non-empty string";
-  if ("attackerRooted" in row && row.attackerRooted !== false &&
-      !(docIsRecord(row.attackerRooted) && Object.keys(row.attackerRooted).join(",") === "address,victimAct" &&
-        docIsName(row.attackerRooted.address) && typeof row.attackerRooted.victimAct === "boolean"))
-    return f + ".attackerRooted is neither false nor {address: a non-empty string, victimAct: a boolean}";
+  if ("attackerRooted" in row && row.attackerRooted !== false && !docAttackerRooted(row.attackerRooted))
+    return f + ".attackerRooted is neither false nor {address?, headers?, body?, victimAct} with a piece named";
   return "witness" in row ? docWitness(row, f) : null;
 }
 function docEndpoints(rows) {

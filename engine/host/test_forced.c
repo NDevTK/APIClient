@@ -18391,7 +18391,7 @@ static int fcs_has(const char *js, const char *needle);
    `*marked` how many carry the mark, `*plain` how many state `false`. */
 static void rq_marks(const char *js, const char *prefix, int *seen, int *marked, int *plain) {
     EmittedRec r[EMITTED_REC_MAX];
-    static const char mk[] = "\"attackerRooted\":{\"address\":", pl[] = "\"attackerRooted\":false";
+    static const char mk[] = "\"attackerRooted\":{", pl[] = "\"attackerRooted\":false";
     int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX), i;
 
     *seen = n; *marked = 0; *plain = 0;
@@ -18399,6 +18399,22 @@ static void rq_marks(const char *js, const char *prefix, int *seen, int *marked,
         *marked += memmem(r[i].b, r[i].n, mk, sizeof mk - 1) != NULL;
         *plain += memmem(r[i].b, r[i].n, pl, sizeof pl - 1) != NULL;
     }
+}
+
+/* Whether some record of the address beginning `prefix` carries `piece` inside its mark. */
+static int rq_mark_has(const char *js, const char *prefix, const char *piece) {
+    static const char mk[] = "\"attackerRooted\":{";
+    EmittedRec r[EMITTED_REC_MAX];
+    int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX), i;
+
+    for (i = 0; i < n; i++) {
+        const char *m = memmem(r[i].b, r[i].n, mk, sizeof mk - 1), *end;
+
+        if (!m) continue;
+        end = memmem(m, (size_t)(r[i].b + r[i].n - m), "\"victimAct\":", 12);
+        if (end && memmem(m, (size_t)(end - m), piece, strlen(piece))) return 1;
+    }
+    return 0;
 }
 
 /* Whether some record of the address beginning `prefix` is marked with `victimAct` as `want` states it. */
@@ -18424,8 +18440,8 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     static const char *const plain_at[2] = { "/api/rq-orphan/", "/api/rq-store" };
     const char *mk_why[4] = { NULL, NULL, NULL, NULL }, *pr_why[2] = { NULL, NULL }, *pl_why[2] = { NULL, NULL };
     int mk_tt[4] = { 1, 1, 1, 1 }, pr_tt[2] = { 1, 1 }, pl_tt[2] = { 1, 1 }, i, seen, marked, plain;
-    const char *to_why = NULL, *tn_why = NULL, *tf_why = NULL, *go_why = NULL;
-    int to_tt = 1, tn_tt = 1, tf_tt = 1, go_tt = 1;
+    const char *to_why = NULL, *tn_why = NULL, *tf_why = NULL, *go_why = NULL, *fg_why = NULL;
+    int to_tt = 1, tn_tt = 1, tf_tt = 1, go_tt = 1, fg_tt = 1;
     char to_src[1024] = "", go_src[1024] = "";
     int has_go = s_rooted_source(js, "request", "[go]", go_src, sizeof go_src);
 
@@ -18451,6 +18467,13 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
                  i == 3 ? "the click-sent request's mark does not state that a victim act stands on its path"
                         : "the mark of a request the page sends unprompted states that it needs a victim act");
     }
+    rq_marks(js, "/api/rq-forge", &seen, &marked, &plain);
+    fold_row(&fg_tt, &fg_why, seen > 0, "NOT REACHED: there is no /api/rq-forge record");
+    fold_row(&fg_tt, &fg_why,
+             rq_mark_has(js, "/api/rq-forge", "\"headers\":{\"x-tenant\":\"{" LOCATION_SEARCH_SRC "}[t]\"}"),
+             "the POST's mark does not name the query value its X-Tenant header carries");
+    fold_row(&fg_tt, &fg_why, rq_mark_has(js, "/api/rq-forge", "\"body\":\"{" LOCATION_SEARCH_SRC "}[b]\""),
+             "the POST's mark does not name the query value its body carries");
     for (i = 0; i < 2; i++) {
         rq_marks(js, plain_at[i], &seen, &marked, &plain);
         fold_row(&pr_tt[i], &pr_why[i], seen > 0, "NOT REACHED: there is no record of this address");
@@ -18469,6 +18492,7 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
         { "rq-other-marked", mk_tt[1], "rqH", SESS_EXPLORE, mk_why[1] },
         { "rq-pinned-marked", mk_tt[2], "rqP", SESS_EXPLORE, mk_why[2] },
         { "rq-click-marked", mk_tt[3], "rqDel", SESS_EXPLORE, mk_why[3] },
+        { "rq-forge-marked", fg_tt, "rq-forge", SESS_EXPLORE, fg_why },
         { "rq-orphan-reached", pr_tt[0], "rqNeverCalled", SESS_EXPLORE, pr_why[0] },
         { "rq-orphan-plain", pl_tt[0], "rqNeverCalled", SESS_EXPLORE, pl_why[0], .reach = "rq-orphan-reached" },
         { "rq-storage-reached", pr_tt[1], "rqStored", SESS_EXPLORE, pr_why[1] },

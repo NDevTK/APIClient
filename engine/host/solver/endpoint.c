@@ -116,12 +116,14 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     `addr_class == EPA_CONCRETE` and the second is not, so the class on the same row tells them
                     apart, which is why the emit spells NULL in two JSON types. */
                  char *addr_root;
-                 /* The delivery root of the first sighting whose address an attacker source roots on a path an
-                    attacker reaches, which makes the record security-relevant; NULL while there is none. Raised
-                    once and never cleared, the max-merge `addr_class` takes. `atk_victim_act` is whether every
-                    such sighting's path needed a victim act: a min-merge, since one sighting that needed none
-                    shows the request is sent without one. */
-                 char *atk_addr_root;
+                 /* What makes the record security-relevant, per piece: the delivery root of the first sighting
+                    whose address, a header (by name) or body an attacker source roots on a path an attacker
+                    reaches; NULL, or no entry, while there is none. Each is raised once and never cleared, the
+                    max-merge `addr_class` takes. `atk_victim_act` is whether every marking sighting's path
+                    needed a victim act: a min-merge, since one sighting that needed none shows the request is
+                    sent without one. */
+                 char *atk_addr_root, *atk_body_root;
+                 struct { char *name, *root; } *atk_hdrs; int natk_hdrs;
                  int atk_victim_act;
                  /* The body this engine had no field reader for (endpoint.h): set only where `body_params` named
                     nothing, so never a second spelling of `params`' fields, and never overwritten, since a request
@@ -2181,19 +2183,43 @@ static int address_host_open(JSContext *ctx, JSValueConst url) {
     return r;
 }
 
-/* Mark `e` security-relevant with a marking sighting's root and whether its path needed a victim act (see the
-   struct). The first sighting's root is kept; every one lowers `atk_victim_act`. The root is copied: the
-   caller's copy may move to `addr_root` on the same call. */
-static void endpoint_mark_attacker_rooted(Endpoint *e, const char *root, int victim_act) {
-    DCHECK(root != NULL, "a record was marked attacker-rooted with no root");
+static int endpoint_marked(const Endpoint *e) {
+    return e->atk_addr_root != NULL || e->atk_body_root != NULL || e->natk_hdrs > 0;
+}
+
+/* A marking piece's root, copied, unless the record already holds one for it. */
+static void endpoint_mark_piece(char **slot, const char *root) {
+    if (!root || *slot) return;
+    *slot = reclaim_strdup(root);
+    CHECK(*slot, "endpoint: OOM copying the root that marks a record security-relevant");
+}
+
+/* Mark `e` security-relevant with a marking sighting's roots, each NULL for a piece no attacker source roots, and
+   whether its path needed a victim act (see the struct). Each piece keeps its first sighting's root; every
+   sighting lowers `atk_victim_act`. Roots are copied: the caller's address root may move to `addr_root` on the
+   same call. */
+static void endpoint_mark_attacker_rooted(Endpoint *e, const char *addr, const EndpointHeader *hdrs, int nhdrs,
+                                          const unsigned char *hdr_atk, const char *body, int victim_act) {
+    int was = endpoint_marked(e), i, j;
+
     DCHECK(victim_act == 0 || victim_act == 1, "a marking sighting's victim-act fact is not a bit");
-    if (e->atk_addr_root) {
-        e->atk_victim_act &= victim_act;
-        return;
+    endpoint_mark_piece(&e->atk_addr_root, addr);
+    endpoint_mark_piece(&e->atk_body_root, body);
+    for (i = 0; i < nhdrs; i++) {
+        if (!hdr_atk[i]) continue;
+        DCHECK(hdrs[i].root != NULL, "a header was marked attacker-rooted with no root");
+        for (j = 0; j < e->natk_hdrs && strcmp(e->atk_hdrs[j].name, hdrs[i].name); j++) {}
+        if (j < e->natk_hdrs) continue;
+        e->atk_hdrs = realloc(e->atk_hdrs, (size_t)(e->natk_hdrs + 1) * sizeof *e->atk_hdrs);
+        CHECK(e->atk_hdrs, "endpoint: OOM growing a record's attacker-rooted headers");
+        e->atk_hdrs[e->natk_hdrs].name = reclaim_strdup(hdrs[i].name);
+        e->atk_hdrs[e->natk_hdrs].root = reclaim_strdup(hdrs[i].root);
+        CHECK(e->atk_hdrs[e->natk_hdrs].name && e->atk_hdrs[e->natk_hdrs].root,
+              "endpoint: OOM copying an attacker-rooted header");
+        e->natk_hdrs++;
     }
-    e->atk_addr_root = reclaim_strdup(root);
-    CHECK(e->atk_addr_root, "endpoint: OOM copying the root that marks a record security-relevant");
-    e->atk_victim_act = victim_act;
+    DCHECK(endpoint_marked(e), "a sighting marked a record and no piece of it carried a root");
+    e->atk_victim_act = was ? (e->atk_victim_act & victim_act) : victim_act;
 }
 
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
@@ -2358,13 +2384,24 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        as: an attacker-rooted script address read plain whose park's witness lists only drivable acts. */
     int reached = gf && !off_park ? act_list_drivable(gf) && !gf->path_peer_driven : !driven;
     int victim_act = gf && !off_park ? flow_path_victim_act(gf) : 0;
-    /* Named residual. Not covered: a header or body an attacker source roots, whose roots the header list and
-       the body state drop when they take bytes, so only the address can mark a record. Next diff builds: a root
-       carried per header entry and body span from Headers' append and body extraction to this call. Absence
-       shows as: a record whose header or body shape spells a declared attacker source and whose
-       `attackerRooted` is false. */
-    int atk = aroot != NULL && reached && concolic_root_delivered_any(aroot);
-    DCHECK(!atk || acls != EPA_CONCRETE,
+    /* The same rule over each piece the request carries: the address, each header and the body.
+       Named residual. Not covered: a body's byte spans, whose capture keeps a shape and no root, and an
+       XMLHttpRequest's author headers and body, which that component stores as strings. Next diff builds: a root
+       on core/fetch/body.h's BodySpan and on the XHR author header list. Absence shows as: a record whose body
+       span or XHR header spells a declared attacker source and whose `attackerRooted` is false. */
+    DCHECK(!body || !body->root || body->kind == EPB_SHAPE, "a body's root was stated for bytes that are not an "
+                                                            "unknown's display shape");
+    unsigned char *hdr_atk = reclaim_calloc((size_t)(nhdrs > 0 ? nhdrs : 1), 1);
+    int atk_addr = aroot != NULL && reached && concolic_root_delivered_any(aroot);
+    int atk_body = body && body->root && reached && concolic_root_delivered_any(body->root);
+    int atk = atk_addr || atk_body;
+
+    CHECK(hdr_atk != NULL, "endpoint: OOM recording which headers an attacker source roots");
+    for (int i = 0; i < nhdrs; i++) {
+        hdr_atk[i] = hdrs[i].root && reached && concolic_root_delivered_any(hdrs[i].root);
+        atk |= hdr_atk[i];
+    }
+    DCHECK(!atk_addr || acls != EPA_CONCRETE,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
     /* A request whose scheme and host an attacker source decides names no endpoint of the app: whatever it
@@ -2389,6 +2426,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             g_ask_origin_driven++;
         }
         free(aroot);
+        free(hdr_atk);
         witness_free(&wit);
         return;
     }
@@ -2446,7 +2484,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                spelling, which for a concolic address is its shape and for a determined one its bytes, so sightings
                here may disagree about the class. The delivery root moves with the class on this line and nowhere
                else, so the two are always one sighting's. */
-            if (atk) endpoint_mark_attacker_rooted(&g_eps[i], aroot, victim_act);
+            if (atk) endpoint_mark_attacker_rooted(&g_eps[i], atk_addr ? aroot : NULL, hdrs, nhdrs, hdr_atk,
+                                                   atk_body ? body->root : NULL, victim_act);
             if (acls > g_eps[i].addr_class) {
                 g_eps[i].addr_class = acls;
                 free(g_eps[i].addr_root);
@@ -2493,7 +2532,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* And the provenance that class was derived from, transferred rather than copied, since class and root are one
        sighting's fact (see the struct); the `done:` arm frees this local only where no record took it. NULL is the
        value's own answer, never a declined allocation (the CHECK at the read). */
-    if (atk) endpoint_mark_attacker_rooted(e, aroot, victim_act);
+    if (atk) endpoint_mark_attacker_rooted(e, atk_addr ? aroot : NULL, hdrs, nhdrs, hdr_atk,
+                                           atk_body ? body->root : NULL, victim_act);
     e->addr_root = aroot; aroot = NULL;
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because
        `EPW_UNASKED` happens to be zero, and the list's order is a later diff's to change. */
@@ -2538,6 +2578,7 @@ done:
     /* The root this call copied and no record took: a merge that did not raise the class. Both arms that keep it
        NULL the local on the same line. */
     free(aroot);
+    free(hdr_atk);
     witness_free(&wit);   /* empty: endpoint_witness_add took or freed it on every arm that reaches here */
     kv_free(&kvb);
 }
@@ -3379,11 +3420,26 @@ char *endpoint_json_array(void) {
         else if (!e->addr_root)              json_buf_raw(&b, "false");
         else                                 json_buf_str(&b, e->addr_root);
         json_buf_raw(&b, ","); json_buf_key(&b, "attackerRooted");
-        if (!e->atk_addr_root) json_buf_raw(&b, "false");
-        else { json_buf_raw(&b, "{"); json_buf_key(&b, "address"); json_buf_str(&b, e->atk_addr_root);
-               json_buf_raw(&b, ","); json_buf_key(&b, "victimAct");
-               json_buf_raw(&b, e->atk_victim_act ? "true" : "false");
-               json_buf_raw(&b, "}"); }
+        if (!endpoint_marked(e)) json_buf_raw(&b, "false");
+        else {
+            json_buf_raw(&b, "{");
+            if (e->atk_addr_root) {
+                json_buf_key(&b, "address"); json_buf_str(&b, e->atk_addr_root); json_buf_raw(&b, ",");
+            }
+            if (e->natk_hdrs) {
+                json_buf_key(&b, "headers"); json_buf_raw(&b, "{");
+                for (int j = 0; j < e->natk_hdrs; j++) {
+                    if (j) json_buf_raw(&b, ",");
+                    json_buf_key(&b, e->atk_hdrs[j].name); json_buf_str(&b, e->atk_hdrs[j].root);
+                }
+                json_buf_raw(&b, "},");
+            }
+            if (e->atk_body_root) {
+                json_buf_key(&b, "body"); json_buf_str(&b, e->atk_body_root); json_buf_raw(&b, ",");
+            }
+            json_buf_key(&b, "victimAct"); json_buf_raw(&b, e->atk_victim_act ? "true" : "false");
+            json_buf_raw(&b, "}");
+        }
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");
@@ -3539,6 +3595,12 @@ void endpoint_free(void) {
         free(g_eps[i].body_example_b64);
         free(g_eps[i].addr_root);
         free(g_eps[i].atk_addr_root);
+        free(g_eps[i].atk_body_root);
+        for (int j = 0; j < g_eps[i].natk_hdrs; j++) {
+            free(g_eps[i].atk_hdrs[j].name);
+            free(g_eps[i].atk_hdrs[j].root);
+        }
+        free(g_eps[i].atk_hdrs);
         for (int j = 0; j < g_eps[i].np; j++) {
             free(g_eps[i].params[j].name);
             for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]);

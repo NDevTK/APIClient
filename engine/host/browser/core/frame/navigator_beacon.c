@@ -316,10 +316,12 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
            `params` already names). BODY_SHAPE still wins the test: a shape body has no data block for a span
            to name an offset into, so the two are disjoint and solver/endpoint.c asserts the pairing. */
         eb.kind = bkind == BODY_SHAPE ? EPB_SHAPE : (nespan > 0 ? EPB_EXAMPLE : EPB_SENT);
+        eb.root = bkind == BODY_SHAPE ? concolic_root_c(b.unknown) : NULL;
         ebp = &eb;
         if (mime) {                        /* step 6.3.3, run only "if contentType is not null" */
             hdrs[nhdrs].name = "Content-Type";
             hdrs[nhdrs].value = mime;
+            hdrs[nhdrs].root = NULL;   /* §5.2's extracted type, bytes this engine wrote */
             nhdrs++;
         }
     }

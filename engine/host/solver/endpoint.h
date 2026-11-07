@@ -33,8 +33,9 @@ void    endpoint_suppress(int on);   /* 1 during a candidate/verify re-run: its 
 /* A header the request carries; an endpoint reachable only with, say, `Authorization` is not reproducible
    without it. `value` is the literal the code computed, or the unknown's shape (`{state}.token`), which marks
    a runtime value the reviewer supplies. Borrowed for the call; the surface copies what it keeps, and on a
-   merge a concrete value supersedes a shape for the same header. */
-typedef struct { const char *name, *value; } EndpointHeader;
+   merge a concrete value supersedes a shape for the same header. `root` is the delivery root of the unknown
+   whose shape `value` is (solver/concolic.h's concolic_root_c), NULL where the value is bytes. */
+typedef struct { const char *name, *value, *root; } EndpointHeader;
 
 /* The request body the page composed. `mime` is the content type the request sends (the header list's, else
    the one Fetch §5.4 "Request class" step 37.4 extracts) and decides how the bytes are read: a JSON MIME type
@@ -74,8 +75,9 @@ typedef enum {
    call. */
 typedef struct { size_t off, len; const char *shape, *example; } EndpointBodySpan;
 
+/* `root` is the delivery root of an EPB_SHAPE body's unknown, NULL for every other kind. */
 typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
-                 const EndpointBodySpan *span; int nspan; } EndpointBody;
+                 const EndpointBodySpan *span; int nspan; const char *root; } EndpointBody;
 
 /* Which mechanism composed an address, stated by every producer because no consumer can re-derive it. Its
    zero is EPD_UNSTATED and endpoint_record refuses it. It is neither `prov` (what the sighting is evidence
@@ -398,10 +400,11 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    `url`: extension/lib/learn.js mints `{path_*}` holes from live traffic into addresses it reads `concrete`
    for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, which `razorClass` already
    composes, so a consumer reading the bar as `!= "concrete"` over-claims. */
-/* `attackerRooted`: false, or `{address, victimAct}`, which marks the record security-relevant: `address` names
-   the root of the first sighting whose address an attacker source rooted on a path an attacker reaches (every
-   act on it one the attacker performs or a victim performs on the page), and `victimAct` is whether every such
-   sighting's path needed a victim act. */
+/* `attackerRooted`: false, or `{address?, headers?, body?, victimAct}`, which marks the record
+   security-relevant: each piece an attacker source rooted on a path an attacker reaches (every act on it one the
+   attacker performs or a victim performs on the page) names its first such sighting's root (`headers` as an
+   object of header name to root), and `victimAct` is whether every marking sighting's path needed a victim act.
+   At least one piece is present. */
 /* `witness`: one element per distinct sighting witness, never a union of two (it would state a combination no
    flow assumed), never empty. An element is `null` where no flow stood (`witnessClass` `unasked`), else
    `{assumed, verification}`, `assumed` being the minting flow's assumptions at the act, sorted by kind then

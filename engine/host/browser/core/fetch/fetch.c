@@ -2575,6 +2575,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             for (i = 0; i < s->hdrs->n; i++) {
                 eh[i].name = s->hdrs->e[i].name;
                 eh[i].value = s->hdrs->e[i].value;
+                eh[i].root = s->hdrs->e[i].root;
             }
         }
         /* BOTH ARMS THAT HAVE SOMETHING TO SAY. A BODY_SHAPE contributes its display form, which is what a
@@ -2639,6 +2640,8 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                spans only on the BufferSource arm), so the two are disjoint and the surface's mint DCHECKs the
                pairing — a shape arriving with spans fires there instead of quietly becoming an example. */
             eb.kind = body_kind == BODY_SHAPE ? EPB_SHAPE : (nespan > 0 ? EPB_EXAMPLE : EPB_SENT);
+            /* The unknown a shape body spells, whose root the surface marks the request by (body.h's `unknown`). */
+            eb.root = body_kind == BODY_SHAPE ? concolic_root_c(s->body.unknown) : NULL;
             ebp = &eb;
         }
         /* AND THE SECOND HALF OF THE ASK, ON THE LINE BEFORE THE DOOR. It counts OFFERS and never records —

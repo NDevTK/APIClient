@@ -12,7 +12,10 @@
    `Set-Cookie` is the reason the spec keeps them separate, and `getSetCookie` is the member that reads them
    back. It is public because two things need to build one without a JS object in sight: the Headers interface
    itself, and `fetch`'s conversion of an `init.headers` bag into the set an endpoint requires. */
-typedef struct { char *name; char *value; } HeaderEntry;
+/* `root` is the delivery root (solver/concolic.h's concolic_root_c) of the unknown whose display shape `value`
+   is, owned, or NULL where the value is bytes: the provenance the @H surface marks a request by, carried
+   because a projected shape is bytes and cannot be asked for it. */
+typedef struct { char *name; char *value; char *root; } HeaderEntry;
 typedef struct { HeaderEntry *e; int n, cap; } HeaderList;
 
 /* §5.1: "A Headers object also has an associated guard" — WHICH of the page's writes the object refuses, and how.
@@ -45,6 +48,8 @@ bool  header_forbidden_request(const char *lower_name, const char *value);
 void  header_list_free(HeaderList *l);
 /* §5.1 append: lowercase the name, keep the pair. Both strings are COPIED. */
 void  header_list_append(HeaderList *l, const char *name, const char *value);
+/* …the same for a value that is an unknown's display shape, with that unknown's root (copied; NULL for bytes). */
+void  header_list_append_rooted(HeaderList *l, const char *name, const char *value, const char *root);
 /* A HEADER LIST A STEP MACHINE OWNS, AND THE PAIR THAT COPIES AND DESTROYS IT — quickjs-step.h's `tree`
    operation, which delegates BOTH halves of a deep fork's copy to the host and is therefore the one visit
    operation this list can be declared through. Every operation that copies for itself (`v->buf`, `v->array`,
@@ -68,7 +73,7 @@ extern const JSStepTreeOps header_list_step_ops;
    written OR silently refused — two outcomes the spec does not let a caller distinguish — and -1 with a
    TypeError live, which only the "immutable" guard produces. */
 int   header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard,
-                                 const char *name, const char *value);
+                                 const char *name, const char *value, const char *root);
 /* §5.1 set: replace every entry with this name by one. */
 void  header_list_set(HeaderList *l, const char *name, const char *value);
 void  header_list_delete(HeaderList *l, const char *name);
