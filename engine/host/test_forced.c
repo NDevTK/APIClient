@@ -1426,6 +1426,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/sizekw.h"
 #include "fixture/svgratio.h"
 #include "fixture/vshift.h"
+#include "fixture/vrel.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2094,6 +2095,7 @@ TF_DOCS[] = {
     { "sizekw", HTML_SIZEKW },
     { "svgratio", HTML_SVGRATIO },
     { "vshift", HTML_VSHIFT },
+    { "vrel", HTML_VREL },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19708,6 +19710,30 @@ TF_UNIT void probes_vshift(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `vrel` document (fixture/vrel.h): css-inline-3 §4.2.3's line-relative alignment. */
+TF_UNIT void probes_vrel(const char *js, Probe *tab, int *n) {
+    const char *vr_why = NULL; int vr_tt = 1;
+    fold_row(&vr_tt, &vr_why, !!strstr(js, "\"/api/vrel\""),
+             "NOT REACHED: no /api/vrel record, so the document aborted before its fetch");
+    fold_row(&vr_tt, &vr_why, param_value_is(js, "/api/vrel", "t", "0") &&
+                              param_value_is(js, "/api/vrel", "b", "0") &&
+                              param_value_is(js, "/api/vrel", "c", "15") &&
+                              param_value_is(js, "/api/vrel", "h1", "50"),
+             "css-inline-3 §4.2.3: a 50px `top` and a 50px `bottom` box do not both stand at the top of one 50px "
+             "line, or a 20px `center` box is not 15px down it");
+    fold_row(&vr_tt, &vr_why, param_value_is(js, "/api/vrel", "h2", "60") &&
+                              param_value_is(js, "/api/vrel", "b2", "0") &&
+                              param_value_is(js, "/api/vrel", "h3", "60") &&
+                              param_value_is(js, "/api/vrel", "t3", "0") &&
+                              param_value_is(js, "/api/vrel", "dr", "30"),
+             "CSS 2.2 §10.8: a 60px `bottom` or `top` box does not make a 60px line at its top edge, or the "
+             "`bottom` box does not move the baseline 30px further down than the `top` one");
+    const Probe rows[] = {
+        { "line-relative-alignment", vr_tt, "/api/vrel", SESS_EXPLORE, vr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25708,6 +25734,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_sizekw(js, probes, &np);
     probes_svgratio(js, probes, &np);
     probes_vshift(js, probes, &np);
+    probes_vrel(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
