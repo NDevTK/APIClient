@@ -1699,13 +1699,10 @@ static const IdlStepDecl RANGE_CONTEXTUAL_FRAGMENT = {
  * selected is already inside its parent's border area, so including it again would double-count it. "Selected
  * by the range" is DOM §5.5's CONTAINED IN, which `range_contains` above already decides.
  *
- * THE TEXT RULE IS THE ONE THIS ENGINE CANNOT RUN, and CSSOM View §9 says exactly why in its own words: the
- * bounds "are computed using FONT METRICS; thus, for horizontal writing, the vertical dimension of each box is
- * determined by the font ascent and descent, and the horizontal dimension by the text advance width", over
- * whole TYPOGRAPHIC CHARACTER UNITS. That is the same capability CSS 2.1 §9.4.2 "Inline formatting contexts"'s
- * line boxes need, so it is named as one thing in both places rather than as two gaps.
- *
- * THE COORDINATE SPACE IS THE ELEMENT MEMBER'S, because the rectangles ARE the element member's. */
+ * The text rule's bounds "are computed using font metrics; thus, for horizontal writing, the vertical dimension
+ * of each box is determined by the font ascent and descent, and the horizontal dimension by the text advance
+ * width", which are CSS 2.2 §9.4.2's line boxes' own measurements, so core/dom/element_view.h answers them from
+ * core/layout/line_box.h as it answers an element's. */
 
 /* CSSOM View §9 "Extensions to the Range Interface"'s "the range is not in the document" — DOM §5.5 makes a
    live range's root "the root of its start node", so a range whose nodes hang off a DocumentFragment or a
@@ -1732,73 +1729,76 @@ static bool range_selects_text(const RangeBounds *b, lxb_dom_node_t *n)
     return n == sn || n == en || range_contains(b, n) || bp_partially_contains(sn, en, n);
 }
 
-/* The elements CSSOM View §9 "Extensions to the Range Interface"'s getClientRects() includes the rectangles of:
-   every element the range contains whose parent it does not contain. ONE tree walk in CONTENT ORDER, which is
-   what the standard asks the merged list to be in ("a list of DOMRect objects IN CONTENT ORDER that matches the
-   following constraints"), so a selected Text node's rectangles belong between the elements' and two passes
-   would concatenate the constraints' lists instead. Stores a newly allocated array at `*out`, which the caller
-   frees, and answers its count. It reads no layout. */
-static size_t range_rect_elements(const RangeBounds *b, lxb_dom_element_t ***out)
+/* One member of CSSOM View §9 "Extensions to the Range Interface"'s getClientRects() list: a selected element
+   whose parent is not selected (`el`), or a Text node selected or partially selected (`text`) with the code
+   units `[start, end)` of it the range covers. */
+typedef struct {
+    lxb_dom_element_t *el;
+    const lxb_dom_node_t *text;
+    uint32_t start, end;
+} RangeMember;
+
+/* §9's members in CONTENT ORDER, one tree walk, which is what the standard asks the merged list to be in ("a
+   list of DOMRect objects in content order that matches the following constraints"), so a selected Text node's
+   rectangles fall between the elements'. Stores a newly allocated array at `*out`, which the caller frees, and
+   answers its count. It reads no layout. */
+static size_t range_rect_members(const RangeBounds *b, RangeMember **out)
 {
-    lxb_dom_node_t *root, *n;
-    lxb_dom_element_t **els = NULL;
+    lxb_dom_node_t *root, *n, *sn = bounds_start(b), *en = bounds_end(b);
+    RangeMember *ms = NULL;
     size_t m = 0, cap = 0;
 
     *out = NULL;
     if (!range_in_document(b)) return 0;
-    /* THE WALK IS OVER THE COMMON ANCESTOR AND NOT THE DOCUMENT, and that is a statement about the range and
-       not a saving: DOM §5.5's "contained in" places both of a contained node's boundary points inside the
-       range, so no node outside `commonAncestorContainer` can be contained or partially contained. */
-    root = common_ancestor(bounds_start(b), bounds_end(b));
+    /* The walk is over the common ancestor and not the document: DOM §5.5's "contained in" places both of a
+       contained node's boundary points inside the range, so no node outside `commonAncestorContainer` can be
+       contained or partially contained. */
+    root = common_ancestor(sn, en);
     for (n = root; n != NULL; n = node_next_in(n, root)) {
-        if (range_selects_text(b, n))
-            DFAIL("CSSOM VIEW §9's getClientRects() includes a rectangle for every TEXT NODE the range selects "
-                  "or partially selects, and states what computes it: 'the bounds of these DOMRect objects are "
-                  "computed using FONT METRICS; thus, for horizontal writing, the vertical dimension of each "
-                  "box is determined by the font ascent and descent, and the horizontal dimension by the text "
-                  "advance width', with a partially covered TYPOGRAPHIC CHARACTER UNIT (half a surrogate pair, "
-                  "part of a grapheme cluster) rounded out to the whole unit. THE VERTICAL DIMENSION IS NO "
-                  "LONGER THE GAP: the ascent and descent this rule names are CSS 2.1 §10.8.1 'Leading and "
-                  "half-leading''s `A` and `D`, and core/css/font_metrics.h holds both for the first available "
-                  "font. WHAT IS ABSENT IS THE ADVANCE WIDTH — font_metrics.h measures exactly two glyphs "
-                  "(css-values-4 §6.1.1's assumed '0' for `ch` and '水' for `ic`) and no run of text — which "
-                  "is the SAME missing capability CSS 2.1 §9.4.2 'Inline formatting contexts''s line boxes "
-                  "need for an inline box's fragments and CSS 2.1 §10.6.3's line-box arm needs for a "
-                  "content-based height. BUILD the per-glyph advance "
-                  "beside `A` and `D`, and css-text-3's typographic character unit segmentation; this rule and "
-                  "those two are then one component's three consumers");
-        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || !range_contains(b, n) ||
-            (n->parent != NULL && range_contains(b, n->parent)))
+        bool text = range_selects_text(b, n);
+
+        if (!text && (n->type != LXB_DOM_NODE_TYPE_ELEMENT || !range_contains(b, n) ||
+                      (n->parent != NULL && range_contains(b, n->parent))))
             continue;
         if (m == cap) {
             cap = cap ? cap * 2 : 8;
-            els = lexbor_realloc(els, cap * sizeof *els);
-            CHECK(els != NULL, "CSSOM View §9's selected-element list could not be grown");
+            ms = lexbor_realloc(ms, cap * sizeof *ms);
+            CHECK(ms != NULL, "CSSOM View §9's selected-member list could not be grown");
         }
-        els[m++] = lxb_dom_interface_element(n);
+        ms[m].el = text ? NULL : lxb_dom_interface_element(n);
+        ms[m].text = text ? n : NULL;
+        /* A boundary point inside the node bounds its part; a node the range runs through is whole. */
+        ms[m].start = text && n == sn ? b->start_off : 0;
+        ms[m].end = text && n == en ? b->end_off : (text ? node_length(n) : 0);
+        DCHECK(ms[m].start <= ms[m].end, "a selected Text node's covered code units run backwards");
+        m++;
     }
-    *out = els;
+    *out = ms;
     return m;
 }
 
-/* One selected element's client rectangles, derived inside the job and minted after it. */
+/* One member's client rectangles, derived inside the job and minted after it. */
 typedef struct {
-    lxb_dom_element_t *el;
+    RangeMember        mem;
     CssPx            (*r)[4];   /* owned */
     size_t             n;
 } RangeElementRects;
 
 /* Inside the entered job: asks every selected element's rectangles under `d` and, once all are answered, derives
    them over the answered memo into `rects` (one per element of `els`). False when the activation must rest. */
-static bool range_rects_measure(lxb_dom_element_t **els, size_t m, LayoutJobDrive *d, RangeElementRects *rects)
+static bool range_rects_measure(const RangeMember *els, size_t m, LayoutJobDrive *d, RangeElementRects *rects)
 {
     size_t i;
 
     for (i = 0; i < m; i++)
-        if (!element_view_client_rects_ask(els[i], d)) return false;
+        if (els[i].el != NULL ? !element_view_client_rects_ask(els[i].el, d)
+                              : !element_view_text_rects_ask(els[i].text, els[i].start, els[i].end, d))
+            return false;
     for (i = 0; i < m; i++) {
-        rects[i].el = els[i];
-        rects[i].n = element_view_client_rects_px(els[i], &rects[i].r);
+        rects[i].mem = els[i];
+        rects[i].n = els[i].el != NULL
+                         ? element_view_client_rects_px(els[i].el, &rects[i].r)
+                         : element_view_text_rects_px(els[i].text, els[i].start, els[i].end, &rects[i].r);
     }
     return true;
 }
@@ -1812,7 +1812,8 @@ static JSValue range_client_rects_mint(JSContext *ctx, const RangeElementRects *
 
     CHECK(!JS_IsException(out), "the range client-rect list could not be allocated");
     for (i = 0; i < m; i++) {
-        JSContext *rctx = document_realm_of(lxb_dom_interface_node(rects[i].el));
+        JSContext *rctx = document_realm_of(rects[i].mem.el != NULL ? lxb_dom_interface_node(rects[i].mem.el)
+                                                                    : (lxb_dom_node_t *)rects[i].mem.text);
 
         DCHECK(rctx != NULL || rects[i].n == 0,
                "a selected element answered client rectangles while its node document has no realm; an element "
@@ -1878,7 +1879,7 @@ static int js_range_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
                                JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     RangeRectsState *s = st;
-    lxb_dom_element_t **els = NULL;
+    RangeMember *els = NULL;
     RangeElementRects *rects;
     LayoutJobDrive d;
     size_t m;
@@ -1896,7 +1897,7 @@ static int js_range_rects_step(JSContext *ctx, JSStepHdr *hdr, void *st, int arg
     /* An entry the job's fork delivers to: its arm is recorded before the drive runs again. */
     rc = layout_job_fork(ctx, hdr, s->job);
     if (rc) return rc;
-    m = range_rect_elements(range_receiver(hdr->this_val), &els);
+    m = range_rect_members(range_receiver(hdr->this_val), &els);
     rects = lexbor_calloc(m ? m : 1, sizeof *rects);
     CHECK(rects != NULL, "CSSOM View §9's per-element rectangle list could not be allocated");
     rest_unit_begin(REST_UNIT_LAYOUT_DESCENDANTS);

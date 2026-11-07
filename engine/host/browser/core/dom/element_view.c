@@ -1659,6 +1659,75 @@ bool element_view_client_rects_ask(lxb_dom_element_t *el, LayoutJobDrive *d)
     return false;
 }
 
+/* CSSOM View §9's text rule asks the Text node's own rectangles, so the boxes it reads are its parent's subtree's:
+   a `display: contents` parent generates none itself and still lays out its text. */
+static lxb_dom_node_t *ev_text_parent(const lxb_dom_node_t *text)
+{
+    DCHECK(text != NULL && text->type == LXB_DOM_NODE_TYPE_TEXT && text->parent != NULL &&
+               text->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "CSSOM View §9's text rectangles were asked of a node that is not a Text node with an element parent; "
+           "a Range in a document selects only those (its caller asks `range_in_document` first)");
+    return text->parent;
+}
+
+bool element_view_text_rects_ask(const lxb_dom_node_t *text, uint32_t start, uint32_t end, LayoutJobDrive *d)
+{
+    lxb_dom_node_t *p = ev_text_parent(text);
+
+    if (!element_view_box_tests_ask(p)) {
+        DCHECK(layout_job_drive_spent(d),
+               "CSSOM VIEW §9's text rectangles' box tests parked an author match with the drive's allowance "
+               "unspent, so the next activation would ask the same thing over the same state for ever");
+        return false;
+    }
+    if (!element_view_subtree_has_boxes(p)) return true;
+    while (block_flow_drive_deferred(d)) {
+        FlowRect *r = NULL;
+        size_t n = 0;
+        bool done = flow_text_fragment_rects_ask(text, start, end, &r, &n);
+
+        free(r);
+        if (done) return true;
+        DCHECK(layout_job_drive_spent(d) || layout_job_drive_pending(d),
+               "CSSOM VIEW §9's text rectangles answered \"not yet\" with no question suspended and no allowance "
+               "spent, so the next activation would ask the same thing over the same state for ever");
+    }
+    return false;
+}
+
+size_t element_view_text_rects_px(const lxb_dom_node_t *text, uint32_t start, uint32_t end, CssPx (**out)[4])
+{
+    lxb_dom_node_t *p = ev_text_parent(text);
+    FlowRect *frags = NULL;
+    CssPx (*r)[4] = NULL;
+    CssPx b[4];
+    EvTarget t;
+    size_t n = 0, i;
+    bool served;
+
+    *out = NULL;
+    if (!element_view_subtree_has_boxes(p)) return 0;
+    ev_target_of_element(lxb_dom_interface_element(p), &t);
+    served = flow_text_fragment_rects_ask(text, start, end, &frags, &n);
+    DCHECK(served, "CSSOM View §9's text rectangles were read before element_view_text_rects_ask answered them");
+    (void)served;
+    if (n > 0) {
+        r = lexbor_malloc(n * sizeof *r);
+        CHECK(r != NULL, "CSSOM View §9's text rectangle list could not be allocated");
+    }
+    for (i = 0; i < n; i++) {
+        b[0] = frags[i].x;
+        b[1] = frags[i].y;
+        b[2] = frags[i].width;
+        b[3] = frags[i].height;
+        /* "The transforms that apply to the ancestors are applied": the parent's, which the text is inside. */
+        ev_client_rect_px(&t, lxb_dom_interface_element(p), b, r[i]);
+    }
+    free(frags);
+    *out = r;
+    return n;
+}
+
 size_t element_view_client_rects_px(lxb_dom_element_t *el, CssPx (**out)[4])
 {
     EvTarget t;

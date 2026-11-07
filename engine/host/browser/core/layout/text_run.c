@@ -190,11 +190,17 @@ static TextRunItem *tr_append_item(TextRunMeasure *m, TextRunItemKind kind, lxb_
     it->collapsible_space = false;
     it->size[TEXT_RUN_SIZE_MIN_CONTENT] = css_px(0.0);
     it->size[TEXT_RUN_SIZE_MAX_CONTENT] = css_px(0.0);
+    it->src = NULL;
+    it->src_off = 0;
+    it->src_len = 0;
     return it;
 }
 
-static void tr_append(TextRunMeasure *m, uint32_t cp, lxb_dom_element_t *style, bool wraps, bool space)
+static void tr_append(TextRunMeasure *m, uint32_t cp, const TextRunText *t, uint32_t off, uint32_t len,
+                      bool space)
 {
+    lxb_dom_element_t *style = t->style;
+    bool wraps = t->wraps;
     TextRunItem *c = tr_append_item(m, TEXT_RUN_ITEM_CHAR, style);
 
     if (m->faces_of != style) {
@@ -216,6 +222,9 @@ static void tr_append(TextRunMeasure *m, uint32_t cp, lxb_dom_element_t *style, 
     }
     c->wraps = wraps;
     c->collapsible_space = space;
+    c->src = t->src;
+    c->src_off = off;
+    c->src_len = (uint8_t)len;
 }
 
 /* Whether this kind contributes a code point to [UAX14]: the partition `finish` sizes its arrays by, fills them
@@ -475,6 +484,8 @@ static void tr_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb
        state as it was, so a collapsible run split across it collapses as one run. */
     t->p = data;
     t->end = data == NULL ? NULL : data + len;
+    t->src = NULL;
+    t->units = 0;
 }
 
 void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text,
@@ -495,6 +506,7 @@ void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, co
            "measured against another element's `font-size` and `white-space` is one document's text under "
            "another one's typography");
     tr_text_begin(m, style, cd->data.data, cd->data.data == NULL ? 0 : cd->data.length, t);
+    t->src = text;
 }
 
 void text_run_measure_chars_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_char_t *data,
@@ -514,11 +526,14 @@ bool text_run_measure_text_done(const TextRunText *t)
 
 void text_run_measure_text_step(TextRunMeasure *m, TextRunText *t)
 {
-    uint32_t cp;
+    uint32_t cp, off = t->units, len;
 
     DCHECK(!m->finished && !text_run_measure_text_done(t),
            "a text node was stepped past its last character or into a closed measurement");
     cp = (uint32_t)lxb_encoding_decode_valid_utf_8_single(&t->p, t->end);
+    /* DOM §4.10's offsets count UTF-16 code units, and a code point above U+FFFF is a surrogate pair. */
+    len = cp > 0xFFFF ? 2 : 1;
+    t->units += len;
     /* Lexbor's decoder, rather than another hand-rolled UTF-8 walk. It requires well-formed bytes, which a DOM
        string has: lexbor's parser replaces malformed input and quickjs's encoder emits the three-byte form even
        for an unpaired surrogate, which decodes to that code point and is stopped by the advance measure's own
@@ -540,7 +555,7 @@ void text_run_measure_text_step(TextRunMeasure *m, TextRunText *t)
        to spaces (U+0020) in all respects" (§4). None is collapsible, so §4.1.2 trims none. */
     if (!t->collapse && tr_is_collapsible_white_space(cp)) {
         m->in_white_space_run = false;
-        tr_append(m, cp == 0x0009 ? 0x0009 : 0x0020, t->style, t->wraps, false);
+        tr_append(m, cp == 0x0009 ? 0x0009 : 0x0020, t, off, len, false);
         return;
     }
     if (tr_is_collapsible_white_space(cp)) {
@@ -550,13 +565,13 @@ void text_run_measure_text_step(TextRunMeasure *m, TextRunText *t)
            leaves (step 3's tab, §4.1.3's segment break, §4's CR), and carries the inline of the first
            white-space character, the box css-text-3 §5.5 says controls the break it creates. */
         if (!m->in_white_space_run) {
-            tr_append(m, 0x0020, t->style, t->wraps, true);
+            tr_append(m, 0x0020, t, off, len, true);
             m->in_white_space_run = true;
         }
         return;
     }
     m->in_white_space_run = false;
-    tr_append(m, cp, t->style, t->wraps, false);
+    tr_append(m, cp, t, off, len, false);
 }
 
 /* ---- the measurement ---------------------------------------------------------------------------------------- */
@@ -1338,6 +1353,21 @@ uint32_t text_run_measure_item_cp(const TextRunMeasure *m, size_t i)
            "author wrote — ask `text_run_measure_item_is_text` first, which is what every walk over a line's "
            "items already asks for CSS 2.2 §9.4.2's zero-height rule");
     return m->items[i].cp;
+}
+
+bool text_run_measure_item_source(const TextRunMeasure *m, size_t i, const lxb_dom_node_t **node, uint32_t *off,
+                                  uint32_t *len)
+{
+    const TextRunItem *it;
+
+    tr_require_answers(m);
+    it = tr_char_at(m, i);
+    if (it->src == NULL) return false;
+    DCHECK(it->src_len == 1 || it->src_len == 2, "a character's source spans neither one nor two code units");
+    *node = it->src;
+    *off = it->src_off;
+    *len = it->src_len;
+    return true;
 }
 
 InstalledFont text_run_measure_item_face(const TextRunMeasure *m, size_t i)

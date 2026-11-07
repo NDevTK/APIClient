@@ -196,6 +196,7 @@
 #define ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_VIEW_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 #include "core/css/css_length.h"
@@ -264,6 +265,13 @@ struct LayoutJobDrive;
 bool element_view_client_rects_ask(lxb_dom_element_t *el, struct LayoutJobDrive *d);
 size_t element_view_client_rects_px(lxb_dom_element_t *el, CssPx (**out)[4]);
 JSValue element_view_rect_mint(JSContext *rctx, const CssPx r[4]);
+
+/* CSSOM View §9 "Extensions to the Range Interface"'s rectangles for Text node `text` over its code units
+   `[start, end)` (core/layout/line_box.h's `line_box_text_fragments_ask`), with `ask` and `px` used as the two
+   entries above are; the count may be zero. */
+bool element_view_text_rects_ask(const lxb_dom_node_t *text, uint32_t start, uint32_t end,
+                                 struct LayoutJobDrive *d);
+size_t element_view_text_rects_px(const lxb_dom_node_t *text, uint32_t start, uint32_t end, CssPx (**out)[4]);
 
 /* §6's get the bounding box, steps 3 and 4, over `n` > 0 client rectangles (each x, y, width, height), into
    `out` in the same order. §9's Range getBoundingClientRect() writes the same two steps out again over its own

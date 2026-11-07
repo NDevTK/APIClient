@@ -40,6 +40,7 @@
    other than `horizontal-tb` (css-writing-modes-4 §7.4's flow-relative restatement). */
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -132,5 +133,11 @@ size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out);
 /* The same rectangles without a drive of their own: false ("not yet") when the establishing context or its
    origin deferred a question, with nothing stored; true with the array at `*out` and its count at `*count`. */
 bool flow_inline_fragment_rects_ask(lxb_dom_element_t *el, FlowRect **out, size_t *count);
+
+/* CSSOM View §9's rectangles for Text node `text` over code units `[start, end)` (core/layout/line_box.h's
+   `line_box_text_fragments_ask`) in the same space. The count may be zero; the array is newly allocated and
+   the caller frees it. False ("not yet") with nothing stored. */
+bool flow_text_fragment_rects_ask(const lxb_dom_node_t *text, uint32_t start, uint32_t end, FlowRect **out,
+                                  size_t *count);
 
 #endif

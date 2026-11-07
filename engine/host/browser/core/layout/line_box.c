@@ -2,6 +2,7 @@
    establishes this formatting context, for the input a line box's height does not need, and for why §9.4.2's
    zero-height line box is a second answer. */
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2520,15 +2521,19 @@ static bool lb_anon_run(lxb_dom_element_t *container, lxb_dom_node_t *child, LbC
     return true;
 }
 
-/* The inline formatting context `el` is on: the nearest ancestor that generates a block container box,
-   reached by walking past the inline boxes between, then which of §9.4.2's two shapes holds this box. §9.4.2's
+/* The inline formatting context `subject` (a box on a line, or a Text node) is on: the nearest ancestor that
+   generates a block container box, reached by walking past the inline boxes between, then which of §9.4.2's
+   two shapes holds this box. §9.4.2's
    condition is asked over the container's whole child list, the one shape with an element to name it
    (core/layout/block_flow.h); a mixed container's runs are §9.2.1.1's anonymous block boxes, and the one
    holding this box supplies the run and origin `lb_anon_run` looks up. False ("not yet") when that lookup's
    §9.4.1 walk deferred a contribution; `*out` is then unwritten. */
-static bool lb_establishing_context(lxb_dom_element_t *el, LbContext *out)
+static bool lb_establishing_context(lxb_dom_node_t *subject, LbContext *out)
 {
-    lxb_dom_node_t *a, *child = lxb_dom_interface_node(el);
+    lxb_dom_node_t *a, *child = subject;
+    /* The element the messages name: the subject, or a Text subject's parent, whose properties it has. */
+    lxb_dom_element_t *el = lxb_dom_interface_element(subject->type == LXB_DOM_NODE_TYPE_ELEMENT ? subject
+                                                                                                : subject->parent);
     char ebuf[64], abuf[64];
     LbContext ctx;
 
@@ -2776,7 +2781,7 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
               "reach even that: `lb_phrasing_break` crashes for the soft wrap opportunity itself, one walk "
               "earlier, so it is that crash and not this one that gates it");
     lb_require_horizontal_tb(el);
-    if (!lb_establishing_context(el, &ctx)) return false;
+    if (!lb_establishing_context(lxb_dom_interface_node(el), &ctx)) return false;
     style = ctx.style;
     lb_require_horizontal_tb(style);
     *establishing = style;
@@ -2975,6 +2980,117 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
            "around an in-flow block-level box, and an atomic participates \"as a single opaque box\". So a "
            "second fragment is §9.4.2's fill having put one item on two lines, or this element having been "
            "collected into two of the container's anonymous block boxes");
+    *out = frags;
+    *count = nf;
+    return true;
+}
+
+/* One text fragment over items `[lo, hi)` of line `i` of box `b`, characters of one Text node whose box is
+   `box` (`lo == hi` for a caret): the inline extent is their advance along the line, and the block extent the
+   font's ascent and descent about the baseline their box's contents align to, as an inline box's content area
+   is measured. */
+static LineBoxFragment lb_text_fragment(LbFill *f, lxb_dom_element_t *style, const LbContext *ctx, size_t b,
+                                        const LbLineFacts *facts, size_t i, size_t lo, size_t hi,
+                                        lxb_dom_element_t *box)
+{
+    CssPx align = lb_fill_align(f, style, i);
+    CssPx baseline = css_px_sub(css_px_add(css_px_add(ctx->box[b].origin_y, facts[i].top), facts[i].e.above),
+                                lb_inline_boxes_shift(box));
+    LineBoxFragment out;
+
+    out.inline_start = css_px_add(ctx->box[b].origin_x,
+                                  css_px_add(align, text_run_measure_line_offset(&f->m, f->lines[i], lo)));
+    out.inline_end = css_px_add(ctx->box[b].origin_x,
+                                css_px_add(align, text_run_measure_line_offset(&f->m, f->lines[i], hi)));
+    out.block_start = css_px_sub(baseline, css_font_ascent_px(box));
+    out.block_end = css_px_add(baseline, css_font_descent_px(box));
+    return out;
+}
+
+/* Whether item `j` is a character of `text`, with its code unit range. */
+static bool lb_item_of_text(const TextRunMeasure *m, size_t j, const lxb_dom_node_t *text, uint32_t *off,
+                            uint32_t *len)
+{
+    const lxb_dom_node_t *src;
+
+    if (!text_run_measure_item_is_text(m, j)) return false;
+    return text_run_measure_item_source(m, j, &src, off, len) && src == text;
+}
+
+/* Named residual. Not covered: css-text-3's typographic character units beyond a surrogate pair (a grapheme
+   cluster), which CSSOM View §9 also rounds a partial coverage out to. Next diff: grapheme cluster boundaries
+   in core/layout/text_run.c's collection, as a per-item cluster start. Absence shows as a range over part of a
+   combining sequence answering a rectangle narrower than the cluster it cuts. */
+bool line_box_text_fragments_ask(const lxb_dom_node_t *text, uint32_t start, uint32_t end,
+                                 lxb_dom_element_t **establishing, LineBoxFragment **out, size_t *count)
+{
+    LbContext ctx;
+    lxb_dom_element_t *style;
+    LineBoxFragment *frags = NULL;
+    size_t nf = 0, b, i, j;
+    /* A collapsed range's caret: the first character of `text` at or after `start`, else the end of the last
+       one before it, by (box, line, item). */
+    bool has_caret = false, caret_after = false;
+    size_t cb = 0, cl = 0, ci = 0;
+
+    DCHECK(text != NULL && text->type == LXB_DOM_NODE_TYPE_TEXT && start <= end && establishing != NULL &&
+               out != NULL && count != NULL,
+           "CSSOM View §9's text rectangles were asked of no Text node, a reversed range, or nowhere to report");
+    if (!lb_establishing_context((lxb_dom_node_t *)text, &ctx)) return false;
+    style = ctx.style;
+    lb_require_horizontal_tb(style);
+    for (b = 0; b < ctx.n; b++) {
+        if (!line_box_atomics_ask(style, ctx.box[b].run, line_box_available_width_derived()) ||
+            !line_box_extents_ask(style, ctx.box[b].run, line_box_available_width_derived())) {
+            free(ctx.box);
+            return false;
+        }
+    }
+    for (b = 0; b < ctx.n; b++) {
+        LbFill *f = lb_layout(style, ctx.box[b].run, line_box_available_width_derived());
+        const LbLineFacts *facts = lb_fill_facts(f, style);
+
+        for (i = 0; i < f->n; i++) {
+            size_t lo = SIZE_MAX, hi = 0;
+            uint32_t off, len;
+
+            for (j = f->lines[i].from; j < f->lines[i].to; j++) {
+                if (!lb_item_of_text(&f->m, j, text, &off, &len)) continue;
+                if (start == end) {
+                    if (caret_after) continue;
+                    has_caret = true;
+                    cb = b;
+                    cl = i;
+                    ci = j;
+                    if (off + len > start) caret_after = true;
+                    else ci = j + 1;
+                    continue;
+                }
+                /* A partly covered code unit pair is covered whole: CSSOM View §9's "the full typographic
+                   character unit must be included". */
+                if (off >= end || off + len <= start) continue;
+                if (lo == SIZE_MAX) lo = j;
+                hi = j + 1;
+            }
+            if (lo == SIZE_MAX) continue;
+            frags = lexbor_realloc(frags, (nf + 1) * sizeof *frags);
+            CHECK(frags != NULL, "out of memory reporting CSSOM View §9's text rectangles");
+            frags[nf++] = lb_text_fragment(f, style, &ctx, b, facts, i, lo, hi,
+                                           text_run_measure_item_style(&f->m, lo));
+        }
+    }
+    if (has_caret) {
+        LbFill *f = lb_layout(style, ctx.box[cb].run, line_box_available_width_derived());
+        const LbLineFacts *facts = lb_fill_facts(f, style);
+
+        DCHECK(nf == 0, "a collapsed range's caret was placed beside a selection's rectangles");
+        frags = lexbor_malloc(sizeof *frags);
+        CHECK(frags != NULL, "out of memory reporting CSSOM View §9's caret rectangle");
+        frags[nf++] = lb_text_fragment(f, style, &ctx, cb, facts, cl, ci, ci,
+                                       lxb_dom_interface_element(text->parent));
+    }
+    free(ctx.box);
+    *establishing = style;
     *out = frags;
     *count = nf;
     return true;

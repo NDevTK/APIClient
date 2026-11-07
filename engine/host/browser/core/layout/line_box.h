@@ -305,6 +305,16 @@ bool line_box_extents_ask(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAva
 bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **establishing,
                                    LineBoxFragment **out, size_t *count);
 
+/* CSSOM View §9 "Extensions to the Range Interface"'s rectangles for Text node `text` over its code units
+   `[start, end)`, in `LineBoxFragment`'s frame, one per line box the selected characters are on: "the vertical
+   dimension of each box is determined by the font ascent and descent, and the horizontal dimension by the text
+   advance width", a partly covered surrogate pair taken whole. A collapsed range (`start == end`) answers one
+   zero-width caret before the first character at or after `start`, else after the last one before it. A
+   selection of only collapsed white space, or a node with no rendered character, answers none. The array is
+   newly allocated and the caller frees it. False ("not yet") as `line_box_inline_fragments_ask`. */
+bool line_box_text_fragments_ask(const lxb_dom_node_t *text, uint32_t start, uint32_t end,
+                                 lxb_dom_element_t **establishing, LineBoxFragment **out, size_t *count);
+
 /* Where a non-replaced inline box's own margin edges reach on one physical axis: `*lo` and `*hi` receive the
  * extreme over all of its fragments, in the frame `line_box_content_span_ask` and `LineBoxFragment` use (offsets
  * from `*establishing`'s content box origin), with `*establishing` receiving that block container.

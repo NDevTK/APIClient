@@ -145,6 +145,12 @@ typedef struct {
        `size[basis]` for every sized kind without an arm per kind; which members differ is recorded on the
        measurement (`atomic_sizes_differ`). */
     CssPx size[2];
+    /* A character's source: the Text node it was decoded from (NULL for supplied characters) and the DOM §4.10
+       code unit offset of its first code unit there, with its length in code units (2 for a code point a
+       surrogate pair spells). A collapsible space's run survives as its first character's. */
+    const lxb_dom_node_t *src;
+    uint32_t src_off;
+    uint8_t src_len;
 } TextRunItem;
 
 /* One reading of a line sum: the sized items and closed shaping runs, and the run still open. A shaping run is
@@ -238,6 +244,8 @@ typedef struct {
     lxb_dom_element_t *style;
     const lxb_char_t *p, *end;              /* the node's bytes still to decode */
     bool collapse, preserve_breaks, wraps;  /* css-text-3 §3's `white-space`, read once per node */
+    const lxb_dom_node_t *src;              /* the Text node, or NULL for supplied characters */
+    uint32_t units;                         /* DOM code units of `src` decoded before `p` */
 } TextRunText;
 
 void text_run_measure_text_begin(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text,
@@ -387,6 +395,11 @@ bool text_run_measure_item_is_float(const TextRunMeasure *m, size_t i);
    inline"): neither is a character the document contains, and drawing them would render .notdef for a `br`.
    A character the face lacks is still its code point; core/css/font_metrics.h answers .notdef for it. */
 uint32_t text_run_measure_item_cp(const TextRunMeasure *m, size_t i);
+
+/* Item `i`'s source, for the character kind only: false for supplied characters; true with the Text node and
+   the half-open code unit range `[*off, *off + *len)` it spells there (TextRunItem's `src`). */
+bool text_run_measure_item_source(const TextRunMeasure *m, size_t i, const lxb_dom_node_t **node, uint32_t *off,
+                                  uint32_t *len);
 
 /* Item `i`'s face, for the character kind only: the one its advance was measured in and its glyph is drawn
    from (core/fonts/font_matching.h). */

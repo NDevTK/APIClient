@@ -417,6 +417,40 @@ bool flow_inline_fragment_rects_ask(lxb_dom_element_t *el, FlowRect **out, size_
     return true;
 }
 
+bool flow_text_fragment_rects_ask(const lxb_dom_node_t *text, uint32_t start, uint32_t end, FlowRect **out,
+                                  size_t *count)
+{
+    lxb_dom_element_t *style = NULL;
+    LineBoxFragment *frags = NULL;
+    FlowRect *rects;
+    FlowPoint o;
+    CssPx left, top;
+    size_t n, i;
+
+    DCHECK(text != NULL && out != NULL && count != NULL,
+           "CSSOM View §9's text rectangles were asked for with no Text node or nowhere to report them");
+    if (!line_box_text_fragments_ask(text, start, end, &style, &frags, &n)) return false;
+    /* §10.1's second case over the establishing box, as `flow_inline_fragment_rects_ask` composes it. */
+    if (!flow_border_box_origin_ask(style, &o)) {
+        free(frags);
+        return false;
+    }
+    left = css_px_add(o.x, used_value_leading_edge_px(style, false));
+    top = css_px_add(o.y, used_value_leading_edge_px(style, true));
+    rects = lexbor_malloc((n ? n : 1) * sizeof *rects);
+    CHECK(rects != NULL, "out of memory placing CSSOM View §9's text rectangles");
+    for (i = 0; i < n; i++) {
+        rects[i].x = css_px_add(left, frags[i].inline_start);
+        rects[i].y = css_px_add(top, frags[i].block_start);
+        rects[i].width = css_px_sub(frags[i].inline_end, frags[i].inline_start);
+        rects[i].height = css_px_sub(frags[i].block_end, frags[i].block_start);
+    }
+    free(frags);
+    *out = rects;
+    *count = n;
+    return true;
+}
+
 size_t flow_inline_fragment_rects(lxb_dom_element_t *el, FlowRect **out)
 {
     LayoutJobDrive d;
