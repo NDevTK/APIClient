@@ -1366,6 +1366,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/windowname.h"
 #include "fixture/twinread.h"
 #include "fixture/requestsink.h"
+#include "fixture/storedreq.h"
 #include "fixture/requestroute.h"
 #include "fixture/clobber.h"
 #include "fixture/srcreach.h"
@@ -2135,6 +2136,7 @@ TF_DOCS[] = {
     { "twinread", HTML_TWINREAD },
     { "onceread", HTML_ONCEREAD },
     { "requestsink", HTML_REQUESTSINK },
+    { "storedreq", HTML_STOREDREQ },
     { "requestroute", HTML_REQUESTROUTE },
     { "requestredrive", HTML_REQUESTREDRIVE },
     { "recordless", HTML_RECORDLESS },
@@ -18430,6 +18432,86 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* Whether some record of the address beginning `prefix` holds a witness whose own object carries `with` and,
+   where `also` is not NULL, `also`: one sighting's statement, so two sightings' facts never combine. */
+static int sq_witness_has(const char *js, const char *prefix, const char *with, const char *also) {
+    static const char W[] = "{\"verification\":";
+    EmittedRec r[EMITTED_REC_MAX];
+    int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX), i;
+
+    for (i = 0; i < n; i++) {
+        const char *end = r[i].b + r[i].n, *w = memmem(r[i].b, r[i].n, W, sizeof W - 1);
+        while (w) {
+            const char *next = memmem(w + 1, (size_t)(end - w - 1), W, sizeof W - 1), *stop = next ? next : end;
+            size_t len = (size_t)(stop - w);
+            if (memmem(w, len, with, strlen(with)) && (!also || memmem(w, len, also, strlen(also)))) return 1;
+            w = next;
+        }
+    }
+    return 0;
+}
+
+/* The rows of the `storedreq` document (fixture/storedreq.h). Each request sending a value the page stored from
+   an attacker source carries the security-relevant mark, and a witness of its record states the chain: the
+   attacker's open of the address where a later load reads the value, and a verification by re-running to the
+   request. The key the page never writes stays a plain API record. */
+TF_UNIT void probes_storedreq(const char *js, Probe *tab, int *n) {
+    static const char open_act[] = "\"kind\":\"open\",\"target\":\"address\"";
+    static const char verified[] = "{\"verification\":\"verified\"";
+    static const char *const at[3] = { "/api/sr-track", "/api/sr-sync", "/api/sr-note" };
+    static const char any_mark[] = "\"attackerRooted\":{";
+    const char *rc_why[3] = { NULL, NULL, NULL }, *mk_why[3] = { NULL, NULL, NULL };
+    const char *op_why[3] = { NULL, NULL, NULL }, *vf_why[3] = { NULL, NULL, NULL };
+    int rc_tt[3] = { 1, 1, 1 }, mk_tt[3] = { 1, 1, 1 }, op_tt[3] = { 1, 1, 1 }, vf_tt[3] = { 1, 1, 1 };
+    const char *rs_why = NULL, *ts_why = NULL, *nr_why = NULL, *np_why = NULL;
+    int rs_tt = 1, ts_tt = 1, nr_tt = 1, np_tt = 1, i, seen, marked, plain;
+
+    fold_row(&rs_tt, &rs_why, !!strstr(js, "\"/api/sr-ref-saved\""),
+             "NOT REACHED: there is no /api/sr-ref-saved record, so the load that saves `?ref=` never ran");
+    fold_row(&ts_tt, &ts_why, !!strstr(js, "\"/api/sr-tok-saved\""),
+             "NOT REACHED: there is no /api/sr-tok-saved record, so the load that saves the fragment never ran");
+    for (i = 0; i < 3; i++) {
+        EmittedRec r[EMITTED_REC_MAX];
+        int k = emitted_records_prefixed(js, at[i], r, EMITTED_REC_MAX), j, any = 0;
+
+        for (j = 0; j < k; j++) any += memmem(r[j].b, r[j].n, any_mark, sizeof any_mark - 1) != NULL;
+        fold_row(&rc_tt[i], &rc_why[i], k > 0, "NOT REACHED: there is no record of this address");
+        fold_row(&mk_tt[i], &mk_why[i], any > 0,
+                 "no record of this request carries the security-relevant mark, though the value it sends is one "
+                 "the page stored from an attacker source");
+        fold_row(&vf_tt[i], &vf_why[i], sq_witness_has(js, at[i], verified, i < 2 ? open_act : NULL),
+                 "no witness of this request's record is verified by re-running to the request with the stored "
+                 "value's delivery, so the record does not state how an attacker reaches it");
+        if (i < 2)
+            fold_row(&op_tt[i], &op_why[i], sq_witness_has(js, at[i], open_act, NULL),
+                     "no witness of this request's record states the attacker opening the address again, the act "
+                     "by which a second load reads the value the first one stored");
+    }
+    rq_marks(js, "/api/sr-never", &seen, &marked, &plain);
+    fold_row(&nr_tt, &nr_why, seen > 0, "NOT REACHED: there is no /api/sr-never record");
+    fold_row(&np_tt, &np_why, marked == 0 && plain == seen,
+             "a record rooted only in a key the page never writes carries the mark, so a precondition was read as "
+             "an attacker source");
+    const Probe rows[] = {
+        { "sq-ref-saved", rs_tt, "srAsk", SESS_EXPLORE, rs_why },
+        { "sq-tok-saved", ts_tt, "srTok", SESS_EXPLORE, ts_why },
+        { "sq-track-reached", rc_tt[0], "srRef", SESS_EXPLORE, rc_why[0] },
+        { "sq-track-marked", mk_tt[0], "srRef", SESS_EXPLORE, mk_why[0] },
+        { "sq-track-open", op_tt[0], "srRef", SESS_EXPLORE, op_why[0] },
+        { "sq-track-verified", vf_tt[0], "srRef", SESS_EXPLORE, vf_why[0] },
+        { "sq-sync-reached", rc_tt[1], "X-Sr-Tok", SESS_EXPLORE, rc_why[1] },
+        { "sq-sync-marked", mk_tt[1], "X-Sr-Tok", SESS_EXPLORE, mk_why[1] },
+        { "sq-sync-open", op_tt[1], "X-Sr-Tok", SESS_EXPLORE, op_why[1] },
+        { "sq-sync-verified", vf_tt[1], "X-Sr-Tok", SESS_EXPLORE, vf_why[1] },
+        { "sq-note-reached", rc_tt[2], "srNoteAsk", SESS_EXPLORE, rc_why[2] },
+        { "sq-note-marked", mk_tt[2], "srNoteAsk", SESS_EXPLORE, mk_why[2] },
+        { "sq-note-verified", vf_tt[2], "srNoteAsk", SESS_EXPLORE, vf_why[2] },
+        { "sq-never-reached", nr_tt, "srNever", SESS_EXPLORE, nr_why },
+        { "sq-never-plain", np_tt, "srNever", SESS_EXPLORE, np_why, .reach = "sq-never-reached" },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `requestroute` and `requestredrive` documents (fixture/requestroute.h): each click-sent request
    whose host a query value decides fires with its clicks as its whole route; in `requestroute` a chain driving a
    function the page never calls reaches the sink in fewer drives. */
@@ -25572,6 +25654,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_joincompose(js, probes, &np);
     probes_twinread(js, probes, &np);
     probes_requestsink(js, probes, &np);
+    probes_storedreq(js, probes, &np);
     probes_requestroute(js, probes, &np);
     probes_recordless(js, probes, &np);
     probes_agenfork(js, probes, &np);
