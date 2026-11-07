@@ -170,6 +170,7 @@ A comment is read by every agent that opens the file, so its cost is paid on eve
 ## Time-travel resume
 
 - A parked flow resumes from its snapshot byte-identically at any depth, hot or cold, across sessions, by global value order. A resume re-derives example values from current sources.
+- Within one engine build a cold flow is its serialized COW delta, restored without re-execution; a recipe replay is only for a different build, which the build identity decides: its work up to the flow's recorded coordinate is uncharged, and its prefix's replies are answered from their records, never re-sent.
 - RAM pressure relocates the cold tail to IndexedDB, and a relocated flow re-enters this session's frontier when the value order reaches it: memory decides where a flow lives, never whether or when it runs. At disk, residency is the strict prefix of the value order within a configurable share; re-derivable entries may be shed; the only copy of unrecomputable work is never shed.
 
 ## @S — the PoC is constructed and proven by firing
