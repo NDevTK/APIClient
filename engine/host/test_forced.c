@@ -1506,6 +1506,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/owedsale.h"
 #include "fixture/startin.h"
 #include "fixture/staticinline.h"
+#include "fixture/getanims.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2208,6 +2209,7 @@ TF_DOCS[] = {
     { "jsonlead", HTML_JSONLEAD },
     { "startin", HTML_STARTIN },
     { "staticinline", HTML_STATICINLINE },
+    { "getanims", HTML_GETANIMS },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -21100,6 +21102,22 @@ TF_UNIT void probes_staticinline(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `getanims` document (fixture/getanims.h): Web Animations' `getAnimations({ subtree: true })`
+   over an animated `<svg>`, answering its CSS animations. */
+TF_UNIT void probes_getanims(const char *js, Probe *tab, int *n) {
+    const char *ga_why = NULL; int ga_tt = 1;
+    fold_row(&ga_tt, &ga_why, !!strstr(js, "\"/api/getanims\""),
+             "NOT REACHED: no /api/getanims record, so the document aborted before its fetch");
+    fold_row(&ga_tt, &ga_why, param_value_is(js, "/api/getanims", "n", "2") &&
+                              !param_value_is(js, "/api/getanims", "e", "TypeError"),
+             "Web Animations: `getAnimations({ subtree: true })` on an svg whose subtree runs two CSS animations did "
+             "not answer both of them");
+    const Probe rows[] = {
+        { "get-animations", ga_tt, "/api/getanims", SESS_EXPLORE, ga_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -27228,6 +27246,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_owedsale(js, probes, &np);
     probes_startin(js, probes, &np);
     probes_staticinline(js, probes, &np);
+    probes_getanims(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
