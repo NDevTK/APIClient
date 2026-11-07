@@ -41,7 +41,7 @@ const TERMS = [
 ];
 const CLS = [['candidate', 1], ['drive', 2], ['post', 4], ['victim', 8], ['attacker', 16], ['forced', 32],
              ['observed', 64]];
-const OUTCOMES = ['paid', 'value', 'newSites'];
+const OUTCOMES = ['paid', 'landed', 'newSites'];
 
 /* One run's stream: every instance's rows, as numeric columns. */
 function readRun(file) {
@@ -68,11 +68,11 @@ function readRun(file) {
 function rowOf(r, prevWork) {
   const num = (k) => { const v = Number(r[k]); need(r[k] !== undefined && Number.isFinite(v), `${k} is a number`); return v; };
   const kinds = Object.keys(r).filter((k) => k.startsWith('paid_')).map((k) => k.slice(5));
-  let paid = 0, landed = 0, razor = 0;
+  let paid = 0, landed = 0;
   const paidBy = {};
   for (const k of kinds) {
     paidBy[k] = num(`paid_${k}`);
-    paid += paidBy[k]; landed += num(`landed_${k}`); razor += num(`razor_${k}`);
+    paid += paidBy[k]; landed += num(`landed_${k}`);
   }
   const rank = {};
   const eligible = num('eligible');
@@ -94,8 +94,8 @@ function rowOf(r, prevWork) {
       prevTenureWork: prevWork.has(seq) ? prevWork.get(seq) : NaN, onLedger: num('onLedger'),
       displaced: num('displaced'), at: num('work'),
     },
-    y: { paid, value: razor + 0.25 * (landed - razor), newSites: num('newSites') },
-    paidBy, landed, razor,
+    y: { paid, landed, newSites: num('newSites') },
+    paidBy, landed,
   };
 }
 
@@ -240,8 +240,7 @@ function main() {
                   instances: inst.size, total, totalWork, rows: rows.length,
                   work: rows.reduce((n, r) => n + r.work, 0), firstSale,
                   paid: rows.reduce((n, r) => n + r.y.paid, 0), kinds,
-                  landed: rows.reduce((n, r) => n + r.landed, 0), razor: rows.reduce((n, r) => n + r.razor, 0),
-                  value: +rows.reduce((n, r) => n + r.y.value, 0).toFixed(2),
+                  landed: rows.reduce((n, r) => n + r.landed, 0),
                   newSites: rows.reduce((n, r) => n + r.y.newSites, 0),
                   paidPicks: rows.filter((r) => r.y.paid > 0).length });
   }
@@ -250,14 +249,14 @@ function main() {
   out.push(`# pick ledger over ${dir}: ${o['all-sales'] ? 'every tenure' : 'tenures closed before the instance\'s first sale'}`);
   out.push('', '## the population each reading rests on (counts; work in stepWork units)',
            ['page', 'ended', 'reached', 'inst', 'picks', 'work', 'readPicks', 'readWork', 'firstSaleAt', 'paidPicks', 'paid', 'landed',
-            'razor', 'value', 'newSites', 'paidByKind', 'abort'].join('\t'));
+            'newSites', 'paidByKind', 'abort'].join('\t'));
   for (const c of census)
     out.push([c.page, c.ended, c.reached, c.instances, c.total, c.totalWork, c.rows, c.work, c.firstSale ?? 'none', c.paidPicks, c.paid,
-              c.landed, c.razor, c.value, c.newSites,
+              c.landed, c.newSites,
               Object.entries(c.kinds).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(',') || '-', c.why].join('\t'));
   const sum = (k) => census.reduce((n, c) => n + c[k], 0);
   out.push(['pooled', '', '', '', sum('total'), sum('totalWork'), sum('rows'), sum('work'), '', sum('paidPicks'), sum('paid'),
-            sum('landed'), sum('razor'), +sum('value').toFixed(2), sum('newSites'), ''].join('\t'));
+            sum('landed'), sum('newSites'), ''].join('\t'));
 
   const pageNames = [...pages.keys()];
   for (const outc of OUTCOMES) {
@@ -285,13 +284,13 @@ function main() {
     }
   }
   out.push('', '## the classes, pooled: picks, work and yield per M work with the bit set and clear',
-           ['class', 'picks1', 'work1', 'paid/M1', 'value/M1', 'sites/M1', 'picks0', 'work0', 'paid/M0', 'value/M0',
+           ['class', 'picks1', 'work1', 'paid/M1', 'landed/M1', 'sites/M1', 'picks0', 'work0', 'paid/M0', 'landed/M0',
             'sites/M0'].join('\t'));
   for (const [name, bit] of CLS) {
     const side = (set) => {
       const rs = pooled.filter((r) => ((r.cls & bit) !== 0) === set), w = rs.reduce((n, r) => n + r.work, 0);
       const per = (k) => (w === 0 ? '—' : (rs.reduce((n, r) => n + r.y[k], 0) / (w / 1e6)).toFixed(3));
-      return [rs.length, w, per('paid'), per('value'), per('newSites')];
+      return [rs.length, w, per('paid'), per('landed'), per('newSites')];
     };
     out.push([name, ...side(true), ...side(false)].join('\t'));
   }
