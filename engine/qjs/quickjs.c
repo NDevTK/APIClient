@@ -33439,6 +33439,7 @@ typedef struct JSTACoerce {
     int idx[3];           /* their ToIntegerOrInfinity results, clamped against `len` */
     uint64_t fill_v64;    /* TAPRO_FILL only: argument 0 already converted to the element's representation */
     int len, i;
+    uint8_t unknown;      /* a fill or copyWithin argument is unknown: js_ta_fill_copy_unknown builds the write */
 } JSTACoerce;
 static int js_typed_array_fill_value(JSContext *ctx, JSObject *p, JSValueConst val, uint64_t *pv64);
 static JSValue js_typed_array_fill_build(JSContext *ctx, JSValueConst this_val, uint64_t v64, int k, int final);
@@ -92719,6 +92720,109 @@ static const char *const js_ta_includes_steps[] = {
         "23.2.3.16 step 5 (n is ToIntegerOrInfinity(fromIndex))")
     NULL };
 
+static int js_ta_store_element(JSContext *ctx, JSObject *p, int64_t k, JSValue v);
+
+/* `k` of `p` for k in [lo, hi), each set to `v` (borrowed) by 10.4.5.18 TypedArraySetElement (js_ta_store_element,
+   which keeps an unknown value's provenance). 0 or -1. */
+static int js_ta_store_run(JSContext *ctx, JSObject *p, int64_t lo, int64_t hi, JSValueConst v)
+{
+    hi = min_int64(hi, p->u.array.count);
+    for (int64_t k = lo; k < hi; k++)
+        if (js_ta_store_element(ctx, p, k, js_dup(v)) < 0) return -1;
+    return 0;
+}
+
+/* The value an unknown-index write over `p`'s own elements stores (copyWithin's moved elements): an unknown
+   derived from the index and from every unknown run the window holds, or JS_UNINITIALIZED where the window holds
+   none and the value is one of its concrete elements, which js_ab_span_get's read then derives from the index.
+   Owned. */
+static JSValue js_ta_moved_value(JSContext *ctx, JSObject *p, JSValueConst index)
+{
+    JSUnknownPiece *u = NULL;
+    int n = JS_BufferSourceUnknowns(ctx, JS_MKPTR(JS_TAG_OBJECT, p), &u);
+    JSValue *ops, r;
+
+    if (n == 0) { JS_FreeBufferUnknowns(ctx, u, n); return JS_UNINITIALIZED; }
+    ops = js_malloc(ctx, sizeof(*ops) * (size_t)(n + 1));
+    CHECK(ops != NULL, "OOM naming the elements an unknown-index copy moves");
+    ops[0] = (JSValue)index;
+    for (int i = 0; i < n; i++) ops[i + 1] = u[i].unknown;
+    r = g_concolic.derived(ctx, "23.2.3.6 step 8.14.2 (value is GetValueFromBuffer(buffer, fromByteIndex))",
+                           (JSValueConst *)ops, n + 1, JS_UNDEFINED);
+    DCHECK(!JS_IsUninitialized(r), "an unknown-index copy derived no unknown moved value");
+    js_free(ctx, ops);
+    JS_FreeBufferUnknowns(ctx, u, n);
+    return r;
+}
+
+/* 23.2.3.9 fill and 23.2.3.6 copyWithin where an argument is unknown. The indices are 7.1.26 ToClampedIndex over
+   the length read at step 3 (js_ta_clamped_bounds, so no fork: that length is stated), derived where unknown.
+   Stated indices store each element by TypedArraySetElement, so an unknown fill value keeps its provenance per
+   element. Where an index is unknown, the example world's write is performed at the indices' examples (where
+   they exist) and the elements the write may reach are an ANY span over the buffer (js_ab_span_set_any, whose
+   whole-buffer extent its own comment states), keyed by the unknown index. The receiver, or JS_EXCEPTION. */
+static JSValue js_ta_fill_copy_unknown(JSContext *ctx, JSTACoerce *s)
+{
+    static const JSTAClampSteps fill_steps = {
+        "23.2.3.9 step 6 (startIndex is ToClampedIndex(start, length))",
+        "23.2.3.9 step 7 (endIndex is ToClampedIndex(end, length))", NULL };
+    static const JSTAClampSteps target_steps = {
+        "23.2.3.6 step 4 (targetIndex is ToClampedIndex(target, length))", NULL, NULL };
+    static const JSTAClampSteps copy_steps = {
+        "23.2.3.6 step 5 (startIndex is ToClampedIndex(start, length))",
+        "23.2.3.6 step 6 (endIndex is ToClampedIndex(end, length))", NULL };
+    bool fill = TAPRO_MODE(s->hdr.arg) == TAPRO_FILL, have = false, have_t = true;
+    JSValue len = js_int64(s->len), pred = JS_UNINITIALIZED, to_v = JS_UNINITIALIZED, start_v, final_v, idx;
+    JSValueConst end = ta_coerce_wants(s, 2) ? s->prim[2] : JS_UNINITIALIZED;
+    int64_t to_ex = 0, start_ex = 0, final_ex = 0, dummy = 0;
+    JSObject *p = get_typed_array(ctx, s->hdr.this_val);
+    int r;
+
+    if (!p) return JS_EXCEPTION;
+    if (typed_array_is_oob(p)) return JS_ThrowTypeErrorArrayBufferOOB(ctx);   /* steps 8 and 8.3 */
+    if (!fill) {
+        r = js_ta_clamped_bounds(ctx, &s->hdr, len, s->len, s->prim[0], JS_UNINITIALIZED, &pred, &target_steps,
+                                 &to_v, &final_v, &to_ex, &dummy, &have_t);
+        DCHECK(r <= 0, "a clamp over a stated length asked for a fork");
+        if (r) return JS_EXCEPTION;
+        JS_FreeValue(ctx, final_v);
+    }
+    r = js_ta_clamped_bounds(ctx, &s->hdr, len, s->len, s->prim[1], end, &pred,
+                             fill ? &fill_steps : &copy_steps, &start_v, &final_v, &start_ex, &final_ex, &have);
+    DCHECK(r <= 0, "a clamp over a stated length asked for a fork");
+    if (r) { JS_FreeValue(ctx, to_v); return JS_EXCEPTION; }
+    have = have && have_t;
+    idx = !fill && js_value_is_concolic(to_v) ? to_v : js_value_is_concolic(start_v) ? start_v
+        : js_value_is_concolic(final_v) ? final_v : JS_UNINITIALIZED;
+    r = 0;
+    if (fill) {
+        /* step 12, at the stated indices or the examples */
+        if (JS_IsUninitialized(idx) || have)
+            r = js_ta_store_run(ctx, p, start_ex, final_ex, s->prim[0]);
+        if (r == 0 && !JS_IsUninitialized(idx))
+            js_ab_span_set_any(ctx, p->u.typed_array->buffer, idx,
+                               js_value_is_concolic(s->prim[0]) ? s->prim[0] : JS_UNINITIALIZED);
+    } else {
+        JSValue res = JS_UNDEFINED, moved;
+
+        /* step 8's copy at the examples, which is the whole copy where every index is stated */
+        if (have || JS_IsUninitialized(idx))
+            res = js_typed_array_copywithin_build(ctx, s->hdr.this_val, (int)to_ex, (int)start_ex, (int)final_ex,
+                                                  s->len);
+        if (JS_IsException(res)) r = -1;
+        JS_FreeValue(ctx, res);
+        if (r == 0 && !JS_IsUninitialized(idx)) {
+            moved = js_ta_moved_value(ctx, p, idx);
+            js_ab_span_set_any(ctx, p->u.typed_array->buffer, idx, moved);
+            JS_FreeValue(ctx, moved);
+        }
+    }
+    JS_FreeValue(ctx, to_v);
+    JS_FreeValue(ctx, start_v);
+    JS_FreeValue(ctx, final_v);
+    return r < 0 ? JS_EXCEPTION : js_dup(s->hdr.this_val);
+}
+
 static int js_ta_coerce_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSTACoerce *s = st;
@@ -92731,7 +92835,7 @@ static int js_ta_coerce_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         s->result = JS_UNDEFINED;
         s->prim[0] = JS_UNDEFINED; s->prim[1] = JS_UNDEFINED; s->prim[2] = JS_UNDEFINED;
         s->fill_v64 = 0;
-        s->len = 0; s->i = 0;
+        s->len = 0; s->i = 0; s->unknown = 0;
         /* steps 1-2 run before any coercion, and their throws precede them */
         p = get_typed_array(ctx, s->hdr.this_val);
         if (!p) return -1;
@@ -92757,7 +92861,10 @@ static int js_ta_coerce_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
            completes each argument's conversion before starting the next, so a Symbol in slot 0 must throw its
            TypeError before slot 1's valueOf ever runs. The operand is a primitive already — nothing below
            invokes user code, so this cannot suspend and needs no stage of its own. */
-        if (mode == TAPRO_FILL && s->i == 0) {
+        /* An unknown argument's conversion is js_ta_fill_copy_unknown's, which runs it with the others. */
+        if (js_value_is_concolic(s->prim[s->i]) && mode != TAPRO_SEARCH) {
+            s->unknown = 1;
+        } else if (mode == TAPRO_FILL && s->i == 0) {
             JSObject *p = get_typed_array(ctx, s->hdr.this_val);
             if (!p) return -1;
             if (js_typed_array_fill_value(ctx, p, s->prim[0], &s->fill_v64)) return -1;
@@ -92767,6 +92874,10 @@ static int js_ta_coerce_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         s->i++;
     }
     JS_FreeValue(ctx, cb_result);
+    if (s->unknown) {
+        s->result = js_ta_fill_copy_unknown(ctx, s);
+        return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
+    }
     switch (TAPRO_MODE(s->hdr.arg)) {
     case TAPRO_COPYWITHIN:
         s->result = js_typed_array_copywithin_build(ctx, s->hdr.this_val, s->idx[0], s->idx[1], s->idx[2],
