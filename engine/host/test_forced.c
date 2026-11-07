@@ -5438,6 +5438,46 @@ static void wasm_type_text(const WasmModule *m, char *buf, size_t cap)
     }
 }
 
+/* §5.5.5's imports as fixture/wasm_binary.h renders them: per import `"<module>" "<name>" <external type>`,
+   joined by "; ", with limits as `<address type>[<min>,<max or nothing>]`. `bytes` are the decoded module's. */
+static void wasm_limits_text(char *buf, size_t cap, size_t *at, const WasmLimits *l)
+{
+    wasm_text_put(buf, cap, at, "%s[%llu,", l->addr64 ? "i64" : "i32", (unsigned long long)l->min);
+    if (l->has_max) wasm_text_put(buf, cap, at, "%llu", (unsigned long long)l->max);
+    wasm_text_put(buf, cap, at, "]");
+}
+
+static void wasm_import_text(const WasmModule *m, const uint8_t *bytes, char *buf, size_t cap)
+{
+    size_t at = 0, i;
+
+    buf[0] = '\0';
+    for (i = 0; i < m->n_imports; i++) {
+        const WasmImport *im = &m->imports[i];
+
+        wasm_text_put(buf, cap, &at, "%s\"%.*s\" \"%.*s\" ", i ? "; " : "", (int)im->module_size,
+                      (const char *)bytes + im->module_offset, (int)im->name_size, (const char *)bytes + im->name_offset);
+        switch (im->kind) {
+        case WASM_EXTERN_FUNC: wasm_text_put(buf, cap, &at, "func $%u", (unsigned)im->index); break;
+        case WASM_EXTERN_TAG: wasm_text_put(buf, cap, &at, "tag $%u", (unsigned)im->index); break;
+        case WASM_EXTERN_MEMORY:
+            wasm_text_put(buf, cap, &at, "memory ");
+            wasm_limits_text(buf, cap, &at, &im->limits);
+            break;
+        case WASM_EXTERN_TABLE:
+            wasm_text_put(buf, cap, &at, "table ");
+            wasm_val_text(buf, cap, &at, &im->type);
+            wasm_text_put(buf, cap, &at, " ");
+            wasm_limits_text(buf, cap, &at, &im->limits);
+            break;
+        case WASM_EXTERN_GLOBAL:
+            wasm_text_put(buf, cap, &at, "global %s", im->mutable_ ? "mut " : "");
+            wasm_val_text(buf, cap, &at, &im->type);
+            break;
+        }
+    }
+}
+
 TF_UNIT void wasm_module_decoder_selftest(void)
 {
     enum { NR = sizeof WASM_BINARY_ROWS / sizeof WASM_BINARY_ROWS[0],
@@ -5472,15 +5512,35 @@ TF_UNIT void wasm_module_decoder_selftest(void)
         wasm_module_decoder_free(&d);
     }
     for (i = 0; i < COUNTOF(WASM_TYPE_ROWS); i++) {
-        const WasmTypeRow *row = &WASM_TYPE_ROWS[i];
+        const WasmTextRow *row = &WASM_TYPE_ROWS[i];
         static char text[4096];
         WasmModuleDecoder d;
 
         wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
         wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
         wasm_type_text(wasm_module_decoder_module(&d), text, sizeof text);
-        CHECKF(strcmp(text, row->types) == 0, "the WebAssembly module %s decoded its types as \"%s\"; they are "
-                                               "\"%s\"", row->src, text, row->types);
+        CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its types as \"%s\"; they are "
+                                              "\"%s\"", row->src, text, row->text);
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_IMPORT_MALFORMED_ROWS); i++) {
+        const WasmBinaryRow *row = &WASM_IMPORT_MALFORMED_ROWS[i];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, row->expect, wasm_module_decoder_run(&d));
+        wasm_module_decoder_free(&d);
+    }
+    for (i = 0; i < COUNTOF(WASM_IMPORT_ROWS); i++) {
+        const WasmTextRow *row = &WASM_IMPORT_ROWS[i];
+        static char text[4096];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
+        wasm_import_text(wasm_module_decoder_module(&d), (const uint8_t *)row->bytes, text, sizeof text);
+        CHECKF(strcmp(text, row->text) == 0, "the WebAssembly module %s decoded its imports as \"%s\"; they are "
+                                              "\"%s\"", row->src, text, row->text);
         wasm_module_decoder_free(&d);
     }
     do {
