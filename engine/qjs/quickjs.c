@@ -28524,6 +28524,14 @@ static void js_step_visit_free_machine(JSContext *ctx, void **slot) {
 }
 static const JSStepVisit js_step_visit_dup;
 static const JSStepVisit js_step_visit_free;
+static const JSStepVisit js_step_visit_mark;
+/* The collector's walk over a stashed heap-frame chain (tramp_chain_mark) reports through these, set for the
+   length of one walk: the record and step-machine declarations it reads take no mark callback. */
+static JSRuntime *g_tramp_mark_rt;
+static JS_MarkFunc *g_tramp_mark_func;
+static inline void tramp_mark_val(JSValueConst v) { JS_MarkValue(g_tramp_mark_rt, v, g_tramp_mark_func); }
+static void tramp_cont_mark(JSContext *ctx, void *st, uint8_t kind);
+static void tramp_step_state_mark(JSContext *ctx, void *st);
 /* The element visit for an array OF PLAIN VALUES — a machine's own gathered argument block. Shared, because
    more than one machine builds one and the element question has exactly one answer. */
 static void js_step_visit_value_elem(JSContext *ctx, void *elem, JSStepVisit *v) { v->val(ctx, (JSValue *)elem); }
@@ -28674,6 +28682,74 @@ static const JSStepVisit js_step_visit_free = { js_step_visit_free_val, js_step_
                                                 js_step_visit_free_array, js_step_visit_free_shared,
                                                 js_step_visit_free_maprec, js_step_visit_free_reexec,
                                                 js_step_visit_free_tree,  js_step_visit_free_cache };
+/* The collector's consumer of a declaration: it reports each counted reference to a GC object that the free
+   consumer above releases, and nothing else, since an edge the collector is told about must be backed by a
+   reference. Strings, atoms, buffers, map records, regexp contexts, shared and host structures and caches hold
+   no GC object edge, so those operations report nothing. */
+static void js_step_visit_mark_val(JSContext *ctx, JSValue *slot) { (void)ctx; tramp_mark_val(*slot); }
+static void js_step_visit_mark_strbuf(JSContext *ctx, StringBuffer *slot) { (void)ctx; (void)slot; }
+static void js_step_visit_mark_props(JSContext *ctx, JSPropertyEnum **slot, uint32_t n) {
+    (void)ctx; (void)slot; (void)n;
+}
+static void js_step_visit_mark_slots(JSContext *ctx, ValueSlot **slot, int64_t cap, int64_t from, int64_t to) {
+    (void)ctx; (void)cap;
+    if (*slot)
+        for (int64_t i = from; i < to; i++) tramp_mark_val((*slot)[i].val);
+}
+static void js_step_visit_mark_buf(JSContext *ctx, void **slot, size_t bytes) { (void)ctx; (void)slot; (void)bytes; }
+static void js_step_visit_mark_atom(JSContext *ctx, JSAtom *slot) { (void)ctx; (void)slot; }
+static void js_step_visit_mark_machine(JSContext *ctx, void **slot) { if (*slot) tramp_step_state_mark(ctx, *slot); }
+static void js_step_visit_mark_array(JSContext *ctx, void **slot, size_t size, int n, int cap,
+                                     void (*each)(JSContext *, void *, JSStepVisit *)) {
+    (void)cap;
+    if (*slot)
+        for (int i = 0; i < n; i++) each(ctx, (uint8_t *)*slot + size * (size_t)i, (JSStepVisit *)&js_step_visit_mark);
+}
+static void js_step_visit_mark_shared(JSContext *ctx, void **slot, int *refs, void (*destroy)(JSContext *, void *)) {
+    (void)ctx; (void)slot; (void)refs; (void)destroy;
+}
+static void js_step_visit_mark_maprec(JSContext *ctx, struct JSMapRecord **slot) { (void)ctx; (void)slot; }
+static void js_step_visit_mark_reexec(JSContext *ctx, REExecContext *ec, uint8_t **capture) {
+    (void)ctx; (void)ec; (void)capture;
+}
+static void js_step_visit_mark_tree(JSContext *ctx, void **root, void **cursors[], int ncursors,
+                                    const JSStepTreeOps *ops) {
+    (void)ctx; (void)root; (void)cursors; (void)ncursors; (void)ops;
+}
+static void js_step_visit_mark_cache(JSContext *ctx, void **slot, void (*destroy)(JSContext *, void *)) {
+    (void)ctx; (void)slot; (void)destroy;
+}
+static const JSStepVisit js_step_visit_mark = { js_step_visit_mark_val, js_step_visit_mark_strbuf, js_step_visit_mark_props,
+                                                js_step_visit_mark_slots, js_step_visit_mark_buf,
+                                                js_step_visit_mark_atom, js_step_visit_mark_machine,
+                                                js_step_visit_mark_array, js_step_visit_mark_shared,
+                                                js_step_visit_mark_maprec, js_step_visit_mark_reexec,
+                                                js_step_visit_mark_tree,  js_step_visit_mark_cache };
+
+/* A machine's counted references, for the collector: the header's owned values (the ones
+   tramp_step_state_free_1 releases), its captured arguments, and its declared state, for it and every
+   delegate it holds. What a machine's `fini` releases beyond its declaration is not reported. */
+static void tramp_step_state_mark(JSContext *ctx, void *st)
+{
+    for (JSStepHdr *h = st; h; h = h->delegate) {
+        DCHECK(h->def != NULL && h->def->visit != NULL,
+               "a parked step machine has no ownership declaration — js_step_def_check refuses such a "
+               "definition at registration, so this state was not built by the step driver");
+        tramp_mark_val(h->unknown_operand);
+        tramp_mark_val(h->this_val);
+        tramp_mark_val(h->func_obj);
+        tramp_mark_val(h->coerce);
+        tramp_mark_val(h->ctor_ntgt);
+        tramp_mark_val(h->cap_promise);
+        tramp_mark_val(h->cap_funcs[0]);
+        tramp_mark_val(h->cap_funcs[1]);
+        tramp_mark_val(h->park_in);
+        tramp_mark_val(h->park_exc);
+        tramp_mark_val(h->keys_pred);
+        for (int i = 0; i < h->argc; i++) tramp_mark_val(h->argv[i]);
+        h->def->visit(ctx, h, (JSStepVisit *)&js_step_visit_mark);
+    }
+}
 /* DELETED: tramp_step_visit_free, the per-machine call that discharged the declaration. Every one of the 137
    engine finis that called it — and the 46 host teardowns that spelled the same list out by hand — asked the
    ONE question "release what this state owns", at 183 places, one per machine. It is asked once now, in
@@ -29954,6 +30030,29 @@ static inline JSAtom cont_own_take_atom(JSAtom *s) { JSAtom a = *s; *s = JS_ATOM
 #define CONT_REC_AGREES_VISITED(t, n)
 #define CONT_REC_INIT_VISITED(t, n)
 #define CONT_REC_FREE_NEXT_VISITED(t, n)
+/* The collector's walk: each counted reference to a GC object that the role's FREE releases. An OWN_SUB's
+   requester chain is the sub-record's, which its release abandons, so it is walked from the sub-record. */
+#define CONT_REC_MARK_OWN_VAL(t, n) tramp_mark_val(r->n);
+#define CONT_REC_MARK_OWN_ATOM(t, n)
+#define CONT_REC_MARK_POD(t, n)
+#define CONT_REC_MARK_BORROW(t, n)
+#define CONT_REC_MARK_OUTER(t, n)
+#define CONT_REC_MARK_DESC_OUT(t, n)
+#define CONT_REC_MARK_FACTS(t, n) tramp_mark_val(r->n.value); tramp_mark_val(r->n.getter); tramp_mark_val(r->n.setter);
+#define CONT_REC_MARK_PROPS(t, n)
+#define CONT_REC_MARK_OWN_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) tramp_mark_val(r->n[i_]);
+#define CONT_REC_MARK_BORROW_ARRAY(t, n)
+#define CONT_REC_MARK_OWN_VEC(t, n) if (r->n) for (uint32_t k_ = 0; k_ < r->t; k_++) tramp_mark_val(r->n[k_]);
+#define CONT_REC_MARK_OWN_LIST(t, n) if (r->n) for (int k_ = 0; k_ < r->t; k_++) tramp_mark_val(r->n[k_]);
+#define CONT_REC_MARK_VIEW(t, n)
+#define CONT_REC_MARK_KIND_FLAG(t, n)
+#define CONT_REC_MARK_KIND_IMPLIES(t, n)
+#define CONT_REC_MARK_CLONE_HOOK(t, n)
+#define CONT_REC_MARK_OWN_SUB(t, n) if (r->n) t##_mark_sub(ctx, r->n);
+#define CONT_REC_MARK_FRESH(t, n) tramp_mark_val(r->n);
+#define CONT_REC_MARK_FRESH_ARRAY(t, n) for (int i_ = 0; i_ < (t); i_++) tramp_mark_val(r->n[i_]);
+#define CONT_REC_MARK_VISITED(t, n) CONT_REC_UNPAREN2_B t(ctx, &r->n, (JSStepVisit *)&js_step_visit_mark);
+#define CONT_REC_MARK(role, t, n)       CONT_REC_MARK_##role(t, n)
 #define CONT_REC_MEMBER(role, t, n)     CONT_REC_MEMBER_##role(t, n)
 #define CONT_REC_FREE(role, t, n)       CONT_REC_FREE_##role(t, n)
 #define CONT_REC_DUP(role, t, n)        CONT_REC_DUP_##role(t, n)
@@ -30026,6 +30125,18 @@ static inline JSAtom cont_own_take_atom(JSAtom *s) { JSAtom a = *s; *s = JS_ATOM
         FIELDS(CONT_REC_AGREES)                                                                                \
         (void)r; (void)kind;                                                                                   \
         return ok_;                                                                                            \
+    }                                                                                                          \
+    static void p##_mark_fields(JSContext *ctx, T *r)                                                         \
+    {                                                                                                          \
+        FIELDS(CONT_REC_MARK)                                                                                  \
+        (void)ctx; (void)r;                                                                                    \
+    }                                                                                                          \
+    static void p##_mark_sub(JSContext *ctx, T *r)                                                            \
+    {                                                                                                          \
+        uint8_t k_;                                                                                            \
+        void *o_ = p##_outer_get(r, &k_);                                                                      \
+        p##_mark_fields(ctx, r);                                                                               \
+        tramp_cont_mark(ctx, o_, k_);                                                                          \
     }
 
 /* A keyed property operation whose accessor or trap is running on the chain. `target` is the proxy's
@@ -30212,6 +30323,7 @@ static void js_arg_list_free(JSContext *ctx, JSArgList *al);
    from it), `phase` SMC_PROTO or SMC_ADDER. */
 struct JSIterConsume;
 static void js_iter_consume_end(JSContext *ctx, struct JSIterConsume *s);
+static void js_iter_consume_mark_sub(JSContext *ctx, struct JSIterConsume *r);
 static struct JSIterConsume *js_iter_consume_clone(JSContext *ctx, const struct JSIterConsume *r);
 static inline void *js_iter_consume_outer_get(struct JSIterConsume *r, uint8_t *out_kind);
 static inline void js_iter_consume_outer_set(struct JSIterConsume *r, void *outer, uint8_t outer_kind);
@@ -54035,6 +54147,7 @@ static void async_func_set_owner(JSRuntime *rt, JSAsyncFunctionState *s, JSGCObj
     }
 }
 
+static void tramp_chain_mark(JSRuntime *rt, JSAsyncFunctionState *s, JS_MarkFunc *mark_func);
 static void async_func_mark(JSRuntime *rt, JSAsyncFunctionState *s,
                             JS_MarkFunc *mark_func)
 {
@@ -54074,26 +54187,21 @@ static void async_func_mark(JSRuntime *rt, JSAsyncFunctionState *s,
         for(sp = sf->arg_buf; sp < sf->cur_sp; sp++)
             JS_MarkValue(rt, *sp, mark_func);
     }
-    /* RESIDUAL — s->tramp_top IS NOT WALKED HERE, WHICH IS A NARROWING AND NOT A DEFECT.
-       NOT COVERED: a DEEP-suspended flow stashes its heap call chain in s->tramp_top and this walk names only
-       the BASE frame, so every reference that chain holds is counted-and-unmarked. The set is not a list to
-       keep here — it is the one free_tramp_chain releases, and that walk is where to read it (per frame: the
-       live operands under that frame's own live end, async_promise, close_saved_exc, the callee
-       TRAMP_FRAME_RELEASE names, whatever tramp_cont_free gives back for its cont_state, and the requester a
-       generator frame abandons).
-       THERE IS NOTHING TO CRASH ON BECAUSE THE DIRECTION IS CONSERVATIVE: gc_decref_child's contract is that
-       every edge REPORTED is backed by a counted reference, never that every reference HELD is reported — so an
-       unreported edge leaves the child looking externally referenced and it SURVIVES. Over-reporting is the
-       failure that aborts; under-reporting is the failure that leaks, and this is the second.
-       WHAT THE NEXT DIFF BUILDS: a THIRD walk over the ownership lists the other two already share. A record
-       that can ride a parked chain is answerable by two of them today — free_tramp_chain releases one reference
-       and clone_deep_flow takes a second — and must afterwards be answerable by three: a chain walk here with
-       mark in place of free, and a tramp_cont_mark beside tramp_cont_free and tramp_cont_clone_one, so a field
-       added to a record's *_OWNED macro is marked as well as freed and duped.
-       HOW ITS ABSENCE WOULD SHOW: a coroutine parked inside a call, whose only remaining anchor is a cycle
-       through a value its chain holds, is never collected — JS_FreeRuntime's gc_obj_list walk reports leaked
-       objects and nothing names the cause. */
+    /* A deep-suspended base keeps no cur_sp of its own: its live end is the bottom frame's caller_sp, and its
+       chain's references are the chain's (tramp_chain_mark). */
+    if (s->tramp_top) {
+        TrampFrame *bt = (TrampFrame *)s->tramp_top;
+        while (bt->up) bt = bt->up;
+        DCHECK(sf->cur_sp == NULL || sf->cur_sp == bt->caller_sp,
+               "async_func_mark: the base frame's saved stack position disagrees with the bottom frame's record "
+               "of it — free_tramp_chain asserts the same agreement");
+        if (!sf->cur_sp)
+            for (sp = sf->arg_buf; sp < bt->caller_sp; sp++)
+                JS_MarkValue(rt, *sp, mark_func);
+        tramp_chain_mark(rt, s, mark_func);
+    }
 }
+
 
 static void async_func_free(JSRuntime *rt, JSAsyncFunctionState *s)
 {
@@ -56533,6 +56641,55 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
     if (held.v != held.inline_)
         js_free_rt(ctx->rt, held.v);
 }
+
+/* tramp_cont_free_one read for the collector: one link's counted references, and the next link out, which is
+   the one the release goes on to. A kind the release has no arm for has none here either, and both crash. */
+#define CONT_REC_CASE_MARK(k, T, p, role)                                                                      \
+    case k: {                                                                                                  \
+        T *r_ = st;                                                                                            \
+        CONT_REC_AGREES_AT(k, T, p, r_);                                                                       \
+        p##_mark_fields(ctx, r_);                                                                              \
+        next->st = p##_free_next(r_, &next->kind);                                                             \
+        return;                                                                                                \
+    }
+static void tramp_cont_mark_one(JSContext *ctx, void *st, uint8_t kind, ContLink *next)
+{
+    next->st = NULL;
+    next->kind = CONT_NONE;
+    switch ((enum ContKind)kind) {
+    case CONT_STEP: case CONT_STEP_YIELD: {
+        JSStepHdr *h = st;
+        tramp_step_state_mark(ctx, st);
+        next->st = h->outer; next->kind = h->outer_kind;
+        return;
+    }
+    CONT_RECORD_KINDS(CONT_REC_CASE_MARK)
+    case CONT_NONE:
+        break;
+    case CONT_IMPORT: case CONT_AGEN_CREATE: case CONT_SETTER: case CONT_ITER_HELPER: case CONT_ITER_FROM: case CONT_PROMISE_TRY:
+    case CONT_CONSUME_GETITER: case CONT_FOROF_NEXT: case CONT_INSTANCEOF:
+    case CONT_AGEN_DRIVE: case CONT_FROM_CTOR: case CONT_ITER_CLOSE: case CONT_ITER_CLOSE_CALL:
+    case CONT_ITER_NEXT_OP: case CONT_FOROF_ACQUIRE: case CONT_FOROF_GET:
+    case CONT_FORAWAIT_GET: case CONT_FORAWAIT_SYNC_GET: case CONT_FORAWAIT_WRAP: case CONT_PROMISE_CAP:
+    case CONT_PROMISE_TRY_SETTLE: case CONT_ITER_HELPER_GET:
+    case CONT_ITER_CALL_GET: case CONT_ITER_CALL_GET_NOARG:
+    case CONT_ITER_CALL: case CONT_FOROF_ENUMREC_GET: case CONT_FOROF_ENUMREC_WRAP:
+    case CONT_ITER_FROM_NEXT_GET: case CONT_FOR_IN_HAS:
+    case CONT_PROMISE_ALL_SETTLE: case CONT_AGEN_DEFER:
+        break;
+    }
+    DCHECKF(kind == CONT_NONE,
+            "tramp_cont_mark: a parked C-continuation of kind %d is on a chain the collector is walking, and "
+            "neither this walk nor tramp_cont_free knows what it owns — give the kind its arm in both", (int)kind);
+}
+/* The chain from `st` outward, for the collector. */
+static void tramp_cont_mark(JSContext *ctx, void *st, uint8_t kind)
+{
+    ContLink next = { st, kind };
+
+    while (next.kind != CONT_NONE && next.st != NULL)
+        tramp_cont_mark_one(ctx, next.st, next.kind, &next);
+}
 CONT_KIND_SWITCH_CHECKED_END
 
 /* TEAR DOWN A STASHED HEAP-FRAME CHAIN — the other half of the snapshot, and the operation JS_FlowFree used to
@@ -56713,6 +56870,84 @@ static void free_tramp_chain(JSContext *ctx, JSAsyncFunctionState *s)
            "that belongs to a chain this flow no longer has");
     s->tramp_top = NULL;
     s->frame.cur_sp = live_end;   /* the bottom frame's caller_sp: the base is now BASE-suspended */
+}
+
+static void js_async_generator_queue_mark(JSRuntime *rt, JSAsyncGeneratorData *s, JS_MarkFunc *mark_func);
+/* A coroutine record's own frame, for the collector, with `end` the live end the chain gives it: what
+   async_func_free releases. Used only where the chain owns the whole record (CONT_AGEN_CREATE). */
+static void tramp_coro_frame_mark(JSRuntime *rt, JSAsyncFunctionState *fs, JSValue *end, JS_MarkFunc *mark_func)
+{
+    JSStackFrame *sf = &fs->frame;
+
+    if (sf->eval_hold) { tramp_mark_val(sf->eval_hold->operand); tramp_mark_val(sf->eval_hold->text); }
+    if (sf->arg_buf) {
+        for (int i = 0; i < sf->var_ref_count; i++)
+            if (sf->var_refs[i] && var_ref_is_gc_object(sf->var_refs[i])) mark_func(rt, &sf->var_refs[i]->header);
+        for (JSValue *v = sf->arg_buf; v < end; v++) tramp_mark_val(*v);
+    }
+    tramp_mark_val(sf->cur_func);
+    tramp_mark_val(fs->this_val);
+}
+
+/* THE COLLECTOR'S WALK OVER A STASHED HEAP-FRAME CHAIN — free_tramp_chain read for marking: every counted
+   reference to a GC object that the teardown releases on the chain's own account, frame by frame, with each
+   frame's live end the next frame's caller_sp as the teardown has it. Reporting only those is what keeps an edge
+   backed by a reference: a value the chain borrows (a caller's registers, a receiver) or a frame inside a
+   coroutine record whose owner marks it is not reported here.
+   Named residual. Not covered: a coroutine body standing mid-call on a stashed chain (an async function, a
+   generator, a running async generator); its operand stack between arg_buf and the chain's live end is
+   released by the teardown but reported by nobody, because the record that owns the frame reads its NULL
+   cur_sp as running. Next diff builds: the parked live end recorded on the coroutine's frame where the chain
+   is stashed, read by async_func_mark. Absence shows as: an object held only by such a frame's operands, in a
+   cycle through the chain's owner, surviving every collection (the leak census at JS_FreeRuntime names it). */
+static void tramp_chain_mark(JSRuntime *rt, JSAsyncFunctionState *s, JS_MarkFunc *mark_func)
+{
+    JSRuntime *saved_rt = g_tramp_mark_rt;
+    JS_MarkFunc *saved_func = g_tramp_mark_func;
+    TrampFrame *t = (TrampFrame *)s->tramp_top;
+    JSValue *live_end;
+
+    g_tramp_mark_rt = rt;
+    g_tramp_mark_func = mark_func;
+    live_end = tramp_live_sf(t)->cur_sp;
+    while (t) {
+        TrampFrame *up = t->up;
+        JSStackFrame *lsf = tramp_live_sf(t);
+        JSAsyncGeneratorData *agd = tramp_agen_data(t);
+
+        if (lsf == &t->sf && t->sf.eval_hold) {
+            tramp_mark_val(t->sf.eval_hold->operand);
+            tramp_mark_val(t->sf.eval_hold->text);
+        }
+        if (agd && t->cont_kind == CONT_AGEN_CREATE) {
+            js_async_generator_queue_mark(rt, agd, mark_func);
+            if (js_async_generator_holds_frame(agd))
+                tramp_coro_frame_mark(rt, &agd->func_state, lsf->cur_sp ? lsf->cur_sp : live_end, mark_func);
+        } else if (agd) {
+            tramp_mark_val(t->agen_hold);
+            tramp_cont_mark(t->ctx, t->agen_cont, t->agen_ck);
+        } else {
+            tramp_cont_mark(t->ctx, t->cont_state, t->cont_kind);
+        }
+        if (t->async_data) {
+            mark_func(rt, &t->async_data->header);
+        } else if (t->gen_data) {
+            tramp_mark_val(t->close_saved_exc);
+        } else if (t->local_buf) {
+            for (int i = 0; i < lsf->var_ref_count; i++)
+                if (lsf->var_refs[i] && var_ref_is_gc_object(lsf->var_refs[i]))
+                    mark_func(rt, &lsf->var_refs[i]->header);
+            for (JSValue *v = t->local_buf; v < live_end; v++)
+                tramp_mark_val(*v);
+        }
+        tramp_mark_val(t->async_promise);
+        if (t->owns_func)
+            tramp_mark_val(t->sf.cur_func);
+        live_end = t->caller_sp;
+        t = up;
+    }
+    g_tramp_mark_rt = saved_rt;
+    g_tramp_mark_func = saved_func;
 }
 
 static void js_generator_finalizer(JSRuntime *rt, JSValueConst obj)
@@ -57839,20 +58074,26 @@ void JS_AsyncGenDataUnref(JSContext *ctx, void *ad) {
     if (--s->cow_ref == 0) js_async_generator_free(ctx->rt, s);
 }
 
+/* The requests an async generator's queue holds, each a result, a promise and its resolving pair. */
+static void js_async_generator_queue_mark(JSRuntime *rt, JSAsyncGeneratorData *s, JS_MarkFunc *mark_func)
+{
+    struct list_head *el;
+
+    list_for_each(el, &s->queue) {
+        JSAsyncGeneratorRequest *req = list_entry(el, JSAsyncGeneratorRequest, link);
+        JS_MarkValue(rt, req->result, mark_func);
+        JS_MarkValue(rt, req->promise, mark_func);
+        JS_MarkValue(rt, req->resolving_funcs[0], mark_func);
+        JS_MarkValue(rt, req->resolving_funcs[1], mark_func);
+    }
+}
+
 static void js_async_generator_mark(JSRuntime *rt, JSValueConst val,
                                     JS_MarkFunc *mark_func)
 {
     JSAsyncGeneratorData *s = JS_GetOpaque(val, JS_CLASS_ASYNC_GENERATOR);
-    struct list_head *el;
-    JSAsyncGeneratorRequest *req;
     if (s) {
-        list_for_each(el, &s->queue) {
-            req = list_entry(el, JSAsyncGeneratorRequest, link);
-            JS_MarkValue(rt, req->result, mark_func);
-            JS_MarkValue(rt, req->promise, mark_func);
-            JS_MarkValue(rt, req->resolving_funcs[0], mark_func);
-            JS_MarkValue(rt, req->resolving_funcs[1], mark_func);
-        }
+        js_async_generator_queue_mark(rt, s, mark_func);
         if (s->state != JS_ASYNC_GENERATOR_STATE_COMPLETED &&
             s->state != JS_ASYNC_GENERATOR_STATE_AWAITING_RETURN) {
             async_func_mark(rt, &s->func_state, mark_func);
