@@ -1488,6 +1488,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
 #include "fixture/owedsale.h"
+#include "fixture/startin.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2173,6 +2174,7 @@ TF_DOCS[] = {
     { "translatepct", HTML_TRANSLATEPCT },
     { "fillwidth", HTML_FILLWIDTH },
     { "jsonlead", HTML_JSONLEAD },
+    { "startin", HTML_STARTIN },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -20364,6 +20366,25 @@ TF_UNIT void probes_owedsale(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `startin` document (fixture/startin.h): Web IDL §3.2.25 over `(WellKnownDirectory or
+   FileSystemHandle)` with an unknown member value. */
+TF_UNIT void probes_startin(const char *js, Probe *tab, int *n) {
+    const char *si_why = NULL; int si_tt = 1;
+    fold_row(&si_tt, &si_why, !!strstr(js, "\"/api/startin\""),
+             "NOT REACHED: no /api/startin record, so the picker's options never completed their conversion");
+    fold_row(&si_tt, &si_why, param_value_is(js, "/api/startin", "r", "TypeError"),
+             "Web IDL §3.2.18: the world where `startIn` is no WellKnownDirectory value did not reject with a "
+             "TypeError");
+    fold_row(&si_tt, &si_why, param_value_count(js, "/api/startin", "r") >
+                              param_value_count_of(js, "/api/startin", "r", "TypeError"),
+             "Web IDL §3.2.18: no world where `startIn` is one of the six WellKnownDirectory values reached the "
+             "picker");
+    const Probe rows[] = {
+        { "start-in-union", si_tt, "/api/startin", SESS_EXPLORE, si_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -26386,6 +26407,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
     probes_owedsale(js, probes, &np);
+    probes_startin(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
