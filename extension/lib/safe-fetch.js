@@ -227,6 +227,12 @@ async function _wireSend(href, init, facts) {
    or this zone's minted "null:<uuid>" token, and is unique, so it is same-origin with nothing, not even
    another "null". Only a tuple origin contains "://", so this one test separates them. */
 function _isRealOrigin(o) { return typeof o === "string" && o.indexOf("://") > 0; }
+/* Whether `u` parses as a URL whose scheme is an HTTP(S) scheme (Fetch §2.1 "URL": "http" or "https"). */
+function _isHttpSchemeUrl(u) {
+  if (typeof u !== "string" || !URL.canParse(u)) return false;
+  var p = new URL(u).protocol;
+  return p === "http:" || p === "https:";
+}
 /* The empty byte sequence every refusal's body is, so a body is one type on every path; a caller telling "no
    bytes" from "bytes I cannot read" reads `ok` and `status`. */
 function _NO_BYTES() { return new Uint8Array(0); }

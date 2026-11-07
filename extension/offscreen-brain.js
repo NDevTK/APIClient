@@ -1542,6 +1542,18 @@ function handleContentMessage(msg, sender) {
                     "input; fail closed)");
       return;
     }
+    /* A seed is a document this zone loads through the network, so the browser's address for the document and
+       the suggested one are both HTTP(S)-scheme URLs. Every other document (about:blank, about:srcdoc, data:,
+       blob:) is made by its creator, from markup or script the creator's instance runs and materializes as a
+       child navigable, so there is nothing to load. Asked first, so the origins compared below are both tuple
+       origins: their serialization is HTML §7.1.1 "Origins"' same-origin test only then, since an opaque
+       origin is same origin only with itself and every one serializes as "null". */
+    if (!_isHttpSchemeUrl(_facts.url) || !_isHttpSchemeUrl(msg.seedUrl)) {
+      console.debug("[brain:content] CONTENT_SEED dropped — `%s` suggested for a document at `%s`: a seed is " +
+                    "an HTTP(S) document this zone loads, and any other is made by its creator's instance",
+                    msg.seedUrl, _facts.url);
+      return;
+    }
     var _seedOrigin = _originOfUrl(msg.seedUrl);
     var _docOrigin = _originOfUrl(_facts.url);
     if (_seedOrigin === "" || _seedOrigin !== _docOrigin) {

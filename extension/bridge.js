@@ -7732,6 +7732,9 @@ self.astDispatch = async function astDispatch(msg) {
            "an AST_ANALYZE for a live document carried no browser-stated address — it is the private-network " +
            "principal this navigation is classified against, and without it a suggested address would be " +
            "classified against itself");
+    DCHECK(_isHttpSchemeUrl(msg.sourceUrl) && _isHttpSchemeUrl(msg.seedUrl),
+           "an AST_ANALYZE seeds `" + msg.seedUrl + "` for a document at `" + msg.sourceUrl + "` — a seed's " +
+           "addresses are HTTP(S), and the CONTENT_SEED arm drops every other");
     DCHECK(msg.pageHtml === undefined && msg.responseHeaders === undefined,
            "an AST_ANALYZE for a live document arrived carrying a document body or a header list — a seed is " +
            "an address and never bytes, so a producer that ships either has rebuilt the second, unpoliced " +
