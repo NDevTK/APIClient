@@ -565,8 +565,9 @@ why: the `asker` of a request, the `creator` of a create, the `issuer` of a prov
 `navigable`'s current document, each `elsewhere` or `unprovisioned`; a create whose child name is not minted from
 its creator is `blocked-asker:child-not-minted`, and a navigation whose new name has no creator component is
 `blocked-asker:document-not-minted`. `<k>` names the history that created the document (solver/world.c), so every
-timeline replaying that history announces the same name and one instance serves them all; a create under a held
-name at another address is two documents claiming one name, `blocked-asker:child-readdressed`. A provisioning notice is judged the same way by the document that issued
+timeline replaying that history announces the same name and one instance serves them all; a create, swap or
+navigation under a held name at another address is two documents claiming one name,
+`blocked-asker:child-readdressed` or `blocked-asker:document-readdressed`. A provisioning notice is judged the same way by the document that issued
 it: a create by its creator, a `navigable.swap` or `navigable.navigate` by HTML §7.4.2.2's sourceDocument (whose record the
 new document's joins with that of the navigable's current document, the one its name is minted from), and a
 `document.seed` by the declaring document. An instance has no record of its own. A navigable's HTML §7.2.2.4

@@ -261,13 +261,14 @@ function docRecordOfAsker(name, lookup) {
    set) and a sentence naming the document. `role` says which document failed: the `asker` of a request, the
    `creator` of a create, the `issuer` of a provisioning notice, or the `navigable`'s current document that a
    navigation's new name is minted from. `reason` is docRecordOfAsker's, or `not-minted` for a `child` or
-   `document` name that is not minted from the document it must be, or `readdressed` for a `child` whose name is
-   already provisioned at another address. A name is shared by every timeline whose history created the
-   document, so a second create under it at another address is two documents claiming one identity. */
+   `document` name that is not minted from the document it must be, or `readdressed` for a `child` or `document`
+   whose name is already provisioned at another address. A name is shared by every timeline whose history
+   created the document, so a second create or navigation under it at another address is two documents claiming
+   one identity. */
 var _ASKER_REFUSALS = {
   "asker-elsewhere": 1, "asker-unprovisioned": 1, "creator-elsewhere": 1, "creator-unprovisioned": 1,
   "issuer-elsewhere": 1, "issuer-unprovisioned": 1, "navigable-elsewhere": 1, "navigable-unprovisioned": 1,
-  "child-not-minted": 1, "document-not-minted": 1, "child-readdressed": 1,
+  "child-not-minted": 1, "document-not-minted": 1, "child-readdressed": 1, "document-readdressed": 1,
   "opener-elsewhere": 1, "opener-unprovisioned": 1, "opener-foreign": 1, "child-sandboxed": 1
 };
 function docRecordAskerRefusal(role, reason, name) {

@@ -4794,9 +4794,23 @@ function owedList(method, s) {
    agent (main.c's `g_joined_ctx`/`g_joined_dom`) and the engine interns every document by name (`qjs_route`'s
    arrival assert is `world_doc_hosted(world_doc_intern(doc))`, solver/engine.c), so the two lists are one
    table on the other side of the boundary. */
-/* The address each provisioned child was created at, by name: the fact a later create under the same name is
-   checked against. */
+/* The address each provisioned document was created or navigated at, by name: the fact a later announcement
+   under the same name is checked against. */
 const _createdAddress = new Map();
+/* A create, swap or navigation announcing a name the pool already holds: solver/world.c's world_mint_doc
+   re-mints a creation's name in every timeline whose history made it, so the instance holding the document
+   serves them all, unless this announcement is at another address, which is two documents claiming one name.
+   Answers whether the notice is settled here. */
+function noticeNameHeld(eng, kind, role, name, address) {
+  if (!hostHolderOf(name)) return false;
+  if (_createdAddress.get(name) !== address) {
+    const readdressed = docRecordAskerRefusal(role, "readdressed", name);
+    console.warn("[bridge] " + kind + " " + name + " at " + address + " is refused: " + readdressed.text +
+                 " (" + _createdAddress.get(name) + ")");
+    engineCountRefusal(eng, readdressed.token);
+  }
+  return true;
+}
 /* A refusal this zone made of something an engine asked, counted on the instance's histogram beside the declined
    requests. The token is from a closed set (lib/document-record.js's `_ASKER_REFUSALS`). */
 function engineCountRefusal(eng, tok) {
@@ -5129,18 +5143,7 @@ async function hostNotice(eng, line) {
     return;
   }
   if (f[0] === "navigable.create") {
-    /* Already provisioned: every timeline whose history created the document announces it under one name
-       (solver/world.c's world_mint_doc), and the instance that holds it serves them all — unless this create is
-       at another address, which is two documents claiming one name. */
-    if (hostHolderOf(f[C.child])) {
-      if (_createdAddress.get(f[C.child]) !== f[C.address]) {
-        const _readdressed = docRecordAskerRefusal("child", "readdressed", f[C.child]);
-        console.warn("[bridge] navigable.create " + f[C.child] + " at " + f[C.address] + " is refused: " +
-                     _readdressed.text + " (" + _createdAddress.get(f[C.child]) + ")");
-        engineCountRefusal(eng, _readdressed.token);
-      }
-      return;
-    }
+    if (noticeNameHeld(eng, "navigable.create", "child", f[C.child], f[C.address])) return;
     /* The child's record, before anything is opened or loaded for it: the creating document's record
        (askerRecord) composed with the notice's words by HTML's own rules (lib/document-record.js), so a child
        of a document this tool opened is never graded as one the person navigated to and inherits every mark
@@ -5370,9 +5373,7 @@ async function hostNotice(eng, line) {
      the navigation's `document.fetch` (engineProvisionLoad): an untrusted engine that supplied bytes and a
      principal could name any origin's document into existence. */
   if (f[0] === "navigable.swap") {
-    /* The name is minted fresh for each swap (solver/world.h), so one this pool holds would provision one heap
-       for two Documents. */
-    if (hostHolderOf(f[P.document])) { engineRefuseNotice(eng, line, "names a document this pool already holds"); return; }
+    if (noticeNameHeld(eng, "navigable.swap", "document", f[P.document], f[P.address])) return;
     /* The re-fetch is made under the same decision as the navigation's own load, since the provenance on this
        record is the load job's (core/frame/browsing_context_group.c takes it from there); a swap cannot fetch
        an address this zone declined at `document.fetch`. */
@@ -5384,6 +5385,7 @@ async function hostNotice(eng, line) {
       return;
     }
     const _swapDoc = childDocRecord(_swapFrom.from, f[P.provenance], f[P.driven], f[P.pinned]);
+    _createdAddress.set(f[P.document], f[P.address]);
     const swapped = await engineProvisionLoad(eng, line, f, P, _swapDoc, _swapFrom.issuerDoc);
     if (swapped === null) return;
     /* A declined load provisions nothing, for the create arm's reason. */
@@ -5440,8 +5442,7 @@ async function hostNotice(eng, line) {
      holds from the navigation's `document.fetch`, or a load of a cross-origin request the engine never asked
      for (engineProvisionLoad). */
   if (f[0] === "navigable.navigate") {
-    /* The name is minted fresh by the navigating engine, as a swap's is. */
-    if (hostHolderOf(f[P.document])) { engineRefuseNotice(eng, line, "names a document this pool already holds"); return; }
+    if (noticeNameHeld(eng, "navigable.navigate", "document", f[P.document], f[P.address])) return;
     /* The records, as for a swap. */
     const _navFrom = issuedRecords(eng, f[P.issuer], f[P.document]);
     if (_navFrom.refusal) {
@@ -5468,6 +5469,7 @@ async function hostNotice(eng, line) {
       engineRefuseNotice(eng, line, "navigates to a peer at an address in its own agent cluster");
       return;
     }
+    _createdAddress.set(f[P.document], f[P.address]);
     const navd = await engineProvisionLoad(eng, line, f, P, _navDoc, _navFrom.issuerDoc);
     if (navd === null) return;
     /* A declined load provisions nothing, for the create arm's reason. */
