@@ -18564,7 +18564,7 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     fold_row(&fg_tt, &fg_why,
              rq_mark_has(js, "/api/rq-forge", "\"headers\":{\"x-tenant\":\"{" LOCATION_SEARCH_SRC "}[t]\"}"),
              "the POST's mark does not name the query value its X-Tenant header carries");
-    fold_row(&fg_tt, &fg_why, rq_mark_has(js, "/api/rq-forge", "\"body\":\"{" LOCATION_SEARCH_SRC "}[b]\""),
+    fold_row(&fg_tt, &fg_why, rq_mark_has(js, "/api/rq-forge", "\"body\":[\"{" LOCATION_SEARCH_SRC "}[b]\"]"),
              "the POST's mark does not name the query value its body carries");
     for (i = 0; i < 2; i++) {
         rq_marks(js, plain_at[i], &seen, &marked, &plain);
@@ -18788,24 +18788,34 @@ TF_UNIT void probes_storedreq(const char *js, Probe *tab, int *n) {
 /* The rows of the `requestpieces` document (fixture/requestpieces.h): each request's mark names the query value
    its piece carries as that piece's root. */
 TF_UNIT void probes_requestpieces(const char *js, Probe *tab, int *n) {
-    const char *xh_why = NULL, *by_why = NULL, *bv_why = NULL;
-    int xh_tt = 1, by_tt = 1, bv_tt = 1, seen, marked, plain;
+    const char *xh_why = NULL, *by_why = NULL, *bv_why = NULL, *tw_why = NULL;
+    int xh_tt = 1, by_tt = 1, bv_tt = 1, tw_tt = 1, seen, marked, plain;
 
     rq_marks(js, "https://x.test/api/rp-xhr", &seen, &marked, &plain);
     fold_row(&xh_tt, &xh_why, seen > 0, "NOT REACHED: there is no https://x.test/api/rp-xhr record");
     fold_row(&xh_tt, &xh_why,
              rq_mark_has(js, "https://x.test/api/rp-xhr", "\"headers\":{\"X-Rp\":\"{" LOCATION_SEARCH_SRC "}[x]\"}"),
              "the XMLHttpRequest's mark does not name the query value its author header carries");
-    fold_row(&xh_tt, &xh_why, rq_mark_has(js, "https://x.test/api/rp-xhr", "\"body\":\"{" LOCATION_SEARCH_SRC "}[x]\""),
+    fold_row(&xh_tt, &xh_why, rq_mark_has(js, "https://x.test/api/rp-xhr", "\"body\":[\"{" LOCATION_SEARCH_SRC "}[x]\"]"),
              "the XMLHttpRequest's mark does not name the query value its body carries");
     rq_marks(js, "/api/rp-bytes", &seen, &marked, &plain);
     fold_row(&by_tt, &by_why, seen > 0, "NOT REACHED: there is no /api/rp-bytes record");
-    fold_row(&by_tt, &by_why, rq_mark_has(js, "/api/rp-bytes", "\"body\":\"{" LOCATION_SEARCH_SRC "}[y]\""),
+    fold_row(&by_tt, &by_why, rq_mark_has(js, "/api/rp-bytes", "\"body\":[\"{" LOCATION_SEARCH_SRC "}[y]\"]"),
              "the POST's mark does not name the query value whose character code its body byte is");
     fold_row(&bv_tt, &bv_why, sq_witness_has(js, "/api/rp-bytes", "{\"verification\":\"verified\"", NULL),
              "no witness of the byte-body POST is verified, so the run delivering the query value did not send a "
              "body byte rooted in it: a piece carrying a transform of the value is not observed");
+    rq_marks(js, "/api/rp-two", &seen, &marked, &plain);
+    fold_row(&tw_tt, &tw_why, seen > 0, "NOT REACHED: there is no /api/rp-two record");
+    fold_row(&tw_tt, &tw_why, rq_mark_has(js, "/api/rp-two", "\"{" LOCATION_SEARCH_SRC "}[z]\"") &&
+                              rq_mark_has(js, "/api/rp-two", "\"" LOCATION_HASH_SRC "\""),
+             "the two-span body's mark does not name both sources its bytes carry");
+    fold_row(&tw_tt, &tw_why,
+             emitted_record_has(js, "/api/rp-two", "\"source\":\"{" LOCATION_SEARCH_SRC "}[z]\"") &&
+             emitted_record_has(js, "/api/rp-two", "\"source\":\"" LOCATION_HASH_SRC "\""),
+             "the two-span body's attackerNeeds does not list both sources a delivery must set");
     const Probe rows[] = {
+        { "rp-two-sources", tw_tt, "rp-two", SESS_EXPLORE, tw_why },
         { "rp-xhr-marked", xh_tt, "rp-xhr", SESS_EXPLORE, xh_why },
         { "rp-bytes-marked", by_tt, "rp-bytes", SESS_EXPLORE, by_why },
         { "rp-bytes-verified", bv_tt, "rp-bytes", SESS_EXPLORE, bv_why },

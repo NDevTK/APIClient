@@ -289,8 +289,8 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 /* `attackerRooted`: false, or `{address?, headers?, body?, victimAct}`, which marks the record
    security-relevant: each piece an attacker source rooted on a path an attacker reaches (every act on it one the
    attacker performs or a victim performs on the page) names its first such sighting's root (`headers` as an
-   object of header name to root), and `victimAct` is whether every marking sighting's path needed a victim act.
-   At least one piece is present. */
+   object of header name to root; `body` as an array of every distinct root its unknown and its spans carry),
+   and `victimAct` is whether every marking sighting's path needed a victim act. At least one piece is present. */
 /* `credentials`: each Fetch §2.2.5 credentials mode a sighting's producer stated, in that enum's order, with null
    for a sighting whose producer stated none (the `creds` residual above). Whether cookies are sent is derived
    where the principal is (solver/pending.h's `credentials` field states why the engine sends three words). */

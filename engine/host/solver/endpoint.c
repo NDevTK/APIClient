@@ -126,12 +126,13 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     apart, which is why the emit spells NULL in two JSON types. */
                  char *addr_root;
                  /* What makes the record security-relevant, per piece: the delivery root of the first sighting
-                    whose address, a header (by name) or body an attacker source roots on a path an attacker
-                    reaches; NULL, or no entry, while there is none. Each is raised once and never cleared, the
-                    max-merge `addr_class` takes. `atk_victim_act` is whether every marking sighting's path
-                    needed a victim act: a min-merge, since one sighting that needed none shows the request is
-                    sent without one. */
-                 char *atk_addr_root, *atk_body_root;
+                    whose address or a header (by name) an attacker source roots on a path an attacker reaches,
+                    and every distinct root the body's pieces (its shape unknown, its spans) carry; NULL, or no
+                    entry, while there is none. Each is raised and never cleared, the max-merge `addr_class`
+                    takes. `atk_victim_act` is whether every marking sighting's path needed a victim act: a
+                    min-merge, since one sighting that needed none shows the request is sent without one. */
+                 char *atk_addr_root;
+                 char **atk_body_roots; int natk_body;
                  struct { char *name, *root; } *atk_hdrs; int natk_hdrs;
                  int atk_victim_act;
                  /* What the record's sightings state beside the mark (endpoint.h's `credentials`, `destinations`,
@@ -2250,7 +2251,7 @@ static int address_host_open(JSContext *ctx, JSValueConst url) {
 }
 
 static int endpoint_marked(const Endpoint *e) {
-    return e->atk_addr_root != NULL || e->atk_body_root != NULL || e->natk_hdrs > 0;
+    return e->atk_addr_root != NULL || e->natk_body > 0 || e->natk_hdrs > 0;
 }
 
 /* A marking piece's root, copied, unless the record already holds one for it. */
@@ -2260,17 +2261,28 @@ static void endpoint_mark_piece(char **slot, const char *root) {
     CHECK(*slot, "endpoint: OOM copying the root that marks a record security-relevant");
 }
 
-/* Mark `e` security-relevant with a marking sighting's roots, each NULL for a piece no attacker source roots, and
-   whether its path needed a victim act (see the struct). Each piece keeps its first sighting's root; every
-   sighting lowers `atk_victim_act`. Roots are copied: the caller's address root may move to `addr_root` on the
-   same call. */
+/* Mark `e` security-relevant with a marking sighting's roots (`addr` NULL for an address no attacker source roots,
+   `body` its `nbody` distinct body roots), and whether its path needed a victim act (see the struct). The address
+   and each header keep their first sighting's root, the body gains every root it lacks, and every sighting
+   lowers `atk_victim_act`. Roots are copied: the caller's address root may move to `addr_root` on the same
+   call. */
 static void endpoint_mark_attacker_rooted(Endpoint *e, const char *addr, const EndpointHeader *hdrs, int nhdrs,
-                                          const unsigned char *hdr_atk, const char *body, int victim_act) {
+                                          const unsigned char *hdr_atk, const char *const *body, int nbody,
+                                          int victim_act) {
     int was = endpoint_marked(e), i, j;
 
     DCHECK(victim_act == 0 || victim_act == 1, "a marking sighting's victim-act fact is not a bit");
     endpoint_mark_piece(&e->atk_addr_root, addr);
-    endpoint_mark_piece(&e->atk_body_root, body);
+    for (i = 0; i < nbody; i++) {
+        DCHECK(body[i] != NULL, "a body piece was marked attacker-rooted with no root");
+        for (j = 0; j < e->natk_body && strcmp(e->atk_body_roots[j], body[i]); j++) {}
+        if (j < e->natk_body) continue;
+        e->atk_body_roots = realloc(e->atk_body_roots, (size_t)(e->natk_body + 1) * sizeof *e->atk_body_roots);
+        CHECK(e->atk_body_roots, "endpoint: OOM growing a record's attacker-rooted body pieces");
+        e->atk_body_roots[e->natk_body] = reclaim_strdup(body[i]);
+        CHECK(e->atk_body_roots[e->natk_body], "endpoint: OOM copying an attacker-rooted body piece");
+        e->natk_body++;
+    }
     for (i = 0; i < nhdrs; i++) {
         if (!hdr_atk[i]) continue;
         DCHECK(hdrs[i].root != NULL, "a header was marked attacker-rooted with no root");
@@ -2662,12 +2674,21 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                                                             "unknown's display shape");
     unsigned char *hdr_atk = reclaim_calloc((size_t)(nhdrs > 0 ? nhdrs : 1), 1);
     int atk_addr = aroot != NULL && reached && concolic_root_delivered_any(aroot);
-    /* A body's piece is its unknown (a shape body) or, for bytes, the first span an attacker source roots. */
-    const char *body_root = body && body->root && concolic_root_delivered_any(body->root) ? body->root : NULL;
+    /* A body's pieces are its unknown (a shape body) and its spans; each distinct root an attacker source roots
+       among them is one piece of the mark and one delivery the sighting needs. */
+    const char **body_roots = reclaim_calloc((size_t)(body ? body->nspan : 0) + 1, sizeof *body_roots);
+    int nbody = 0;
 
-    for (int k = 0; body && !body_root && k < body->nspan; k++)
-        if (body->span[k].root && concolic_root_delivered_any(body->span[k].root)) body_root = body->span[k].root;
-    int atk_body = reached && body_root != NULL;
+    CHECK(body_roots != NULL, "endpoint: OOM collecting a body's attacker-rooted pieces");
+    for (int k = -1; body && k < body->nspan; k++) {
+        const char *r = k < 0 ? body->root : body->span[k].root;
+        int seen = 0;
+
+        if (!r || !concolic_root_delivered_any(r)) continue;
+        for (int m = 0; m < nbody; m++) seen |= !strcmp(body_roots[m], r);
+        if (!seen) body_roots[nbody++] = r;
+    }
+    int atk_body = reached && nbody > 0;
     int atk = atk_addr || atk_body;
 
     CHECK(hdr_atk != NULL, "endpoint: OOM recording which headers an attacker source roots");
@@ -2682,7 +2703,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 
     for (int i = 0; !vroot && i < nhdrs; i++)
         if (hdr_atk[i]) { vroot = hdrs[i].root; vheader = hdrs[i].name; vpiece = WIT_VPIECE_HEADER; }
-    if (!vroot && atk_body) { vroot = body_root; vpiece = WIT_VPIECE_BODY; }
+    if (!vroot && atk_body) { vroot = body_roots[0]; vpiece = WIT_VPIECE_BODY; }
     DCHECK(!atk_addr || acls != EPA_CONCRETE,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
@@ -2706,18 +2727,19 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         }
         free(aroot);
         free(hdr_atk);
+        free(body_roots);
         witness_free(&wit);
         return;
     }
     /* And what the sighting states beside the mark, read here, past the arm that records no API record. */
     EpSight sight;
     {
-        const char **mroots = reclaim_calloc((size_t)nhdrs + 2, sizeof *mroots);
+        const char **mroots = reclaim_calloc((size_t)nhdrs + (size_t)nbody + 1, sizeof *mroots);
         int nm = 0;
         CHECK(mroots, "endpoint: OOM collecting a sighting's marking roots");
         if (atk_addr) mroots[nm++] = aroot;
         for (int i = 0; i < nhdrs; i++) if (hdr_atk[i]) mroots[nm++] = hdrs[i].root;
-        if (atk_body) mroots[nm++] = body_root;
+        for (int k = 0; atk_body && k < nbody; k++) mroots[nm++] = body_roots[k];
         DCHECK((nm > 0) == !!atk, "a sighting's marking pieces and its mark disagree");
         endpoint_sight_now(ctx, &sight, url, mroots, nm, creds, gf && !off_park);
         free(mroots);
@@ -2777,7 +2799,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                here may disagree about the class. The delivery root moves with the class on this line and nowhere
                else, so the two are always one sighting's. */
             if (atk) endpoint_mark_attacker_rooted(&g_eps[i], atk_addr ? aroot : NULL, hdrs, nhdrs, hdr_atk,
-                                                   atk_body ? body_root : NULL, victim_act);
+                                                   body_roots, atk_body ? nbody : 0, victim_act);
             endpoint_sight_merge(&g_eps[i], &sight);
             if (acls > g_eps[i].addr_class) {
                 g_eps[i].addr_class = acls;
@@ -2825,7 +2847,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        sighting's fact (see the struct); the `done:` arm frees this local only where no record took it. NULL is the
        value's own answer, never a declined allocation (the CHECK at the read). */
     if (atk) endpoint_mark_attacker_rooted(e, atk_addr ? aroot : NULL, hdrs, nhdrs, hdr_atk,
-                                           atk_body ? body_root : NULL, victim_act);
+                                           body_roots, atk_body ? nbody : 0, victim_act);
     endpoint_sight_merge(e, &sight);
     e->addr_root = aroot; aroot = NULL;
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because
@@ -2871,6 +2893,7 @@ done:
        NULL the local on the same line. */
     free(aroot);
     free(hdr_atk);
+    free(body_roots);
     witness_free(&wit);   /* empty: endpoint_witness_add took or freed it on every arm that reaches here */
     DCHECK(!sight.delivery && !sight.as.e, "a sighting's facts reached the end of its act unmerged");
     kv_free(&kvb);
@@ -3618,8 +3641,13 @@ char *endpoint_json_array(void) {
                 }
                 json_buf_raw(&b, "},");
             }
-            if (e->atk_body_root) {
-                json_buf_key(&b, "body"); json_buf_str(&b, e->atk_body_root); json_buf_raw(&b, ",");
+            if (e->natk_body) {
+                json_buf_key(&b, "body"); json_buf_raw(&b, "[");
+                for (int j = 0; j < e->natk_body; j++) {
+                    if (j) json_buf_raw(&b, ",");
+                    json_buf_str(&b, e->atk_body_roots[j]);
+                }
+                json_buf_raw(&b, "],");
             }
             json_buf_key(&b, "victimAct"); json_buf_raw(&b, e->atk_victim_act ? "true" : "false");
             json_buf_raw(&b, "}");
@@ -3831,7 +3859,8 @@ void endpoint_free(void) {
         free(g_eps[i].body_example_b64);
         free(g_eps[i].addr_root);
         free(g_eps[i].atk_addr_root);
-        free(g_eps[i].atk_body_root);
+        for (int j = 0; j < g_eps[i].natk_body; j++) free(g_eps[i].atk_body_roots[j]);
+        free(g_eps[i].atk_body_roots);
         for (int j = 0; j < g_eps[i].natk_hdrs; j++) {
             free(g_eps[i].atk_hdrs[j].name);
             free(g_eps[i].atk_hdrs[j].root);

@@ -134,7 +134,7 @@ function docAttackerRooted(m) {
   if (keys[keys.length - 1] !== "victimAct" || !pieces.length) return false;
   if (pieces.join(",") !== ["address", "headers", "body"].filter((k) => k in m).join(",")) return false;
   if ("address" in m && !docIsName(m.address)) return false;
-  if ("body" in m && !docIsName(m.body)) return false;
+  if ("body" in m && !(Array.isArray(m.body) && m.body.length > 0 && m.body.every(docIsName))) return false;
   return !("headers" in m) || (docIsRecord(m.headers) && Object.keys(m.headers).length > 0 &&
                                Object.values(m.headers).every(docIsName));
 }
