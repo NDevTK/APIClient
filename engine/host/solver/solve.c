@@ -267,6 +267,9 @@ typedef struct {
        a run that called these bodies in this order. Each candidate is seated on them (engine_orphan_wait_seat).
        Released with `reinject`; `chain_n` 0 for a detection outside any drive. */
     uint64_t *chain; int *chain_doc; int chain_n;
+    /* Whether the flow standing at this sink was a drive (Flow.orphan), taken with `reinject`: its path stands on
+       the drive, called or not yet calling another, whatever `chain_n` says. */
+    int route_on_drive;
     /* Whether that chain holds a member no act a page user performs calls (act_list_drivable), so every fire on
        it counts in `fired_no_act` and none is a PoC. Such a route is the one a later detection may supersede. */
     int route_no_act;
@@ -947,6 +950,7 @@ static void cand_route_release(Cand *e) {
     source_cut_log_free(e->deliv_log); e->deliv_log = NULL;
     free(e->chain); free(e->chain_doc);
     e->chain = NULL; e->chain_doc = NULL; e->chain_n = 0;
+    e->route_on_drive = 0;
     e->route_no_act = 0;
     e->pg_demand = PG_UNEXAMINED;
     sender_pins_free(&e->pp);
@@ -1018,6 +1022,8 @@ static void cand_learn_path(Cand *e) {
     }
     {
         int called = f && f->orphan ? (f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n) : 0;
+
+        e->route_on_drive = f && f->orphan;
 
         DCHECK(e->chain == NULL && e->chain_doc == NULL && e->chain_n == 0,
                "a search's chain of drives was frozen twice for one route — it is taken with the path capture "
@@ -1265,6 +1271,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
     source_cut_log_free(twin->deliv_log); twin->deliv_log = NULL;
     free(twin->chain); free(twin->chain_doc);
     twin->chain = NULL; twin->chain_doc = NULL; twin->chain_n = 0;
+    twin->route_on_drive = 0;
     /* And the search's live candidates lose their fitness now, since the finding they approach is held;
        solve_flow_begin retires any this walk cannot see (a member rebuilt from a park record later).
        Named residual. Not covered: a candidate of a search whose finding the product held before this session
@@ -2390,19 +2397,22 @@ static char *slot_place(const char *text, const char *payload)
 
 /* Why a candidate of `e` under deliveries `dl` cannot start at the search's cut, or NULL when it can. A cut serves
    a world whose every delivered source is first read after it: the payload's own base is by construction
-   (source_cut.h), and each gate's base must not have been read before the snapshot. */
+   (source_cut.h), and each gate's base must not have been read before the snapshot. The path's own shape is
+   asked first, because it refuses a cut whether or not one was taken: `no-cut` and `shed` name a missing
+   snapshot only for a path a snapshot could serve. */
 static const char *cut_refusal(const Cand *e, const char *dl) {
     const Flow *s;
 
-    if (!e->cut) return "no-cut";
-    s = source_cut_standby(e->cut);
-    if (!s) return "shed";
     /* Named residual. Not covered: a path through drives or message acts, whose candidate is seated on the chain
        of drives and posts the composed messages from the baseline (engine_orphan_wait_seat); next diff builds the
        seat of the drives called after the cut onto an arm; absence shows as `cutRefused` naming these on a search
        whose `runwayArms` is long. */
-    if (e->chain_n || s->orphan) return "drive-chain";
+    if (e->route_on_drive || e->chain_n) return "drive-chain";
     if (e->dl_tmpl || dl) return "message-deliveries";
+    if (!e->cut) return "no-cut";
+    s = source_cut_standby(e->cut);
+    if (!s) return "shed";
+    DCHECK(!s->orphan, "a snapshot stands on a drive — source_cut_ask answers a drive 0, so a drive takes none");
     for (int k = 0; k < e->ngate; k++) {
         const char *base = concolic_delivery_base(e->gate_src[k]);
 
