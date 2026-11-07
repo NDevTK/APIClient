@@ -1424,6 +1424,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/flexnone.h"
 #include "fixture/errsale.h"
 #include "fixture/sizekw.h"
+#include "fixture/svgratio.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2090,6 +2091,7 @@ TF_DOCS[] = {
     { "flexnone", HTML_FLEXNONE },
     { "errsale", HTML_ERRSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "sizekw", HTML_SIZEKW },
+    { "svgratio", HTML_SVGRATIO },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19658,6 +19660,31 @@ TF_UNIT void probes_sizekw(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `svgratio` document (fixture/svgratio.h): css-sizing-3 §5.1's first replaced arm, as a
+   block-level child's and an inline child's contribution and as a used width. */
+TF_UNIT void probes_svgratio(const char *js, Probe *tab, int *n) {
+    const char *sr_why = NULL; int sr_tt = 1;
+    fold_row(&sr_tt, &sr_why, !!strstr(js, "\"/api/svgratio\""),
+             "NOT REACHED: no /api/svgratio record, so the document aborted before its fetch");
+    fold_row(&sr_tt, &sr_why, param_value_is(js, "/api/svgratio", "b1", "40") &&
+                              param_value_is(js, "/api/svgratio", "b2", "60") &&
+                              param_value_is(js, "/api/svgratio", "b3", "60") &&
+                              param_value_is(js, "/api/svgratio", "b4", "40"),
+             "css-sizing-3 §5.1: an inline-block around a block-level 2:1 svg is not the svg's max-content size: "
+             "its <length> min-width (40px), its min-height through the ratio (60px), or the larger of the two "
+             "(60px and 40px)");
+    fold_row(&sr_tt, &sr_why, param_value_is(js, "/api/svgratio", "i", "60"),
+             "css-sizing-3 §5.1: an inline-block around an inline 2:1 svg is not the svg's 60px max-content size");
+    fold_row(&sr_tt, &sr_why, param_value_is(js, "/api/svgratio", "g", "0") &&
+                              param_value_is(js, "/api/svgratio", "z", "0"),
+             "css-sizing-3 §5.1: a float around a 2:1 svg with no min size is not the initial containing block's "
+             "width, or a min-content box around one is not its zero min-content size");
+    const Probe rows[] = {
+        { "replaced-ratio-only-size", sr_tt, "/api/svgratio", SESS_EXPLORE, sr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25656,6 +25683,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_flexnone(js, probes, &np);
     probes_errsale(js, probes, &np);
     probes_sizekw(js, probes, &np);
+    probes_svgratio(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
