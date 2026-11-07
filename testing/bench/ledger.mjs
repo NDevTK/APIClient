@@ -232,7 +232,12 @@ function main() {
     pages.set(page, rows);
     const kinds = {};
     for (const r of rows) for (const [k, v] of Object.entries(r.paidBy)) kinds[k] = (kinds[k] || 0) + v;
-    census.push({ page, ended: done.get(page).endedBy, instances: inst.size, total, totalWork, rows: rows.length,
+    const run = done.get(page);
+    need(typeof run.endedBy === 'string' && Number.isSafeInteger(run.stepWorkReached),
+         `runs.jsonl's ${page} states endedBy and stepWorkReached`);
+    census.push({ page, ended: run.endedBy, reached: run.stepWorkReached,
+                  why: run.abort === null ? '-' : run.abort.replace(/^@WHY /, '').slice(0, 90).replace(/\t/g, ' '),
+                  instances: inst.size, total, totalWork, rows: rows.length,
                   work: rows.reduce((n, r) => n + r.work, 0), firstSale,
                   paid: rows.reduce((n, r) => n + r.y.paid, 0), kinds,
                   landed: rows.reduce((n, r) => n + r.landed, 0), razor: rows.reduce((n, r) => n + r.razor, 0),
@@ -244,14 +249,14 @@ function main() {
   const out = [];
   out.push(`# pick ledger over ${dir}: ${o['all-sales'] ? 'every tenure' : 'tenures closed before the instance\'s first sale'}`);
   out.push('', '## the population each reading rests on (counts; work in stepWork units)',
-           ['page', 'ended', 'inst', 'picks', 'work', 'readPicks', 'readWork', 'firstSaleAt', 'paidPicks', 'paid', 'landed',
-            'razor', 'value', 'newSites', 'paidByKind'].join('\t'));
+           ['page', 'ended', 'reached', 'inst', 'picks', 'work', 'readPicks', 'readWork', 'firstSaleAt', 'paidPicks', 'paid', 'landed',
+            'razor', 'value', 'newSites', 'paidByKind', 'abort'].join('\t'));
   for (const c of census)
-    out.push([c.page, c.ended, c.instances, c.total, c.totalWork, c.rows, c.work, c.firstSale ?? 'none', c.paidPicks, c.paid,
+    out.push([c.page, c.ended, c.reached, c.instances, c.total, c.totalWork, c.rows, c.work, c.firstSale ?? 'none', c.paidPicks, c.paid,
               c.landed, c.razor, c.value, c.newSites,
-              Object.entries(c.kinds).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(',') || '-'].join('\t'));
+              Object.entries(c.kinds).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(',') || '-', c.why].join('\t'));
   const sum = (k) => census.reduce((n, c) => n + c[k], 0);
-  out.push(['pooled', '', '', sum('total'), sum('totalWork'), sum('rows'), sum('work'), '', sum('paidPicks'), sum('paid'),
+  out.push(['pooled', '', '', '', sum('total'), sum('totalWork'), sum('rows'), sum('work'), '', sum('paidPicks'), sum('paid'),
             sum('landed'), sum('razor'), +sum('value').toFixed(2), sum('newSites'), ''].join('\t'));
 
   const pageNames = [...pages.keys()];
