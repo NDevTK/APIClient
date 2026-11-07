@@ -3430,7 +3430,9 @@ char *endpoint_json_array(void) {
                 json_buf_key(&b, "headers"); json_buf_raw(&b, "{");
                 for (int j = 0; j < e->natk_hdrs; j++) {
                     if (j) json_buf_raw(&b, ",");
-                    json_buf_key(&b, e->atk_hdrs[j].name); json_buf_str(&b, e->atk_hdrs[j].root);
+                    json_buf_str(&b, e->atk_hdrs[j].name);   /* a header name is data, as in `headers` below */
+                    json_buf_raw(&b, ":");
+                    json_buf_str(&b, e->atk_hdrs[j].root);
                 }
                 json_buf_raw(&b, "},");
             }
