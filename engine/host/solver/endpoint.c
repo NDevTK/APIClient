@@ -499,12 +499,15 @@ static char *witness_payload(const Witness *w, const char **src) {
     return reclaim_strdup(w->e[0].value + 1);
 }
 
-/* The value a marked sighting's verification delivers at its attacker root: a String of the root's domain whose
-   bytes every address component's percent-encode set and the page's own URI codecs leave as they are, so the
-   request carries it verbatim in the rooted piece.
-   Named residual. Not covered: a gate over the root that this value does not pass (an equality, a prefix, a
-   length bound). Next diff builds: the value composed from the root's facets, as concolic_url_head composes a
-   URL head. Absence shows as: a marked record whose witness stays `candidate` on a page that gates the value. */
+/* The bytes a marked sighting's verification observes in the request: the payload delivered at its attacker root
+   behind the URL head the queuing flow's facets compose (concolic_url_head, an @S candidate's head), so the
+   delivered value is a member of the root's domain as far as its facets state it. Letters only, which every
+   address component's percent-encode set and the page's own URI codecs leave as they are, so the rooted piece
+   carries them verbatim.
+   Named residual. Not covered: an equality, a length bound or an exclusion over the root, which no head states
+   (concolic_url_head's own residual covers a facet on a derivation of the base). Next diff builds: those facets
+   composed into the delivery beside the substring ones. Absence shows as: a marked record whose witness stays
+   `candidate` on a page whose gate over the root is not a substring test. */
 #define WIT_VERIFY_MARKER "apiclientverify"
 
 /* Can firing check a marked sighting's witness through `root`, the root of the piece an attacker source marked:
@@ -520,18 +523,19 @@ static int witness_marked_deliverable(const char *root) {
 
 /* Queue `w`'s verification, a pin witness's (witness_payload) or else, where `vroot` is the root of the piece
    `vpiece` (`vheader` naming a header) an attacker source marked on this sighting, a delivery of the marker
-   there; leaves `w` unqueued when firing can check neither. */
+   there behind the head this flow's facets compose; leaves `w` unqueued when firing can check neither. Runs in
+   the sighting's flow, whose facets the head is read from. */
 static void witness_queue(const Endpoint *e, Witness *w, const char *vroot, WitPiece vpiece, const char *vheader) {
     static const char *const piece_tag[] = { "path", "address", "header", "body" };
     const char *src = NULL;
-    char *payload = witness_payload(w, &src), *key;
+    char *payload = witness_payload(w, &src), *key, *head = NULL;
 
     DCHECK(w->asked && w->canon != NULL && w->vcanon == NULL,
            "a witness was queued for verification before it was spelled, or twice");
     if (payload) {
         w->vcanon = reclaim_strdup(w->canon);
     } else if (witness_marked_deliverable(vroot)) {
-        const char *f[3];
+        const char *f[4];
 
         DCHECK(vpiece != WIT_VPIECE_PATH && (vpiece == WIT_VPIECE_HEADER) == (vheader != NULL),
                "a marked piece was queued without saying which piece the marker must be observed in");
@@ -541,16 +545,18 @@ static void witness_queue(const Endpoint *e, Witness *w, const char *vroot, WitP
         w->vpiece = vpiece;
         w->vheader = vheader ? reclaim_strdup(vheader) : NULL;
         CHECK(!vheader || w->vheader, "endpoint: OOM naming a verification's header");
-        f[0] = piece_tag[vpiece]; f[1] = vheader ? vheader : ""; f[2] = vroot;
-        w->vcanon = concolic_ident_compose("marked", f, 3);
+        head = concolic_url_head(vroot);
+        f[0] = piece_tag[vpiece]; f[1] = vheader ? vheader : ""; f[2] = vroot; f[3] = head ? head : "";
+        w->vcanon = concolic_ident_compose("marked", f, 4);
     }
     if (!payload) return;
     CHECK(w->vcanon, "endpoint: OOM spelling a verification's key");
     key = witness_verify_key(e->method, e->path, w->vcanon);
-    witness_verify_queue(key, src, payload);
+    witness_verify_queue(key, src, payload, head);
     w->verify = verified_key(key) ? WIT_VERIFY_VERIFIED : WIT_VERIFY_CANDIDATE;
     free(key);
     free(payload);
+    free(head);
 }
 
 /* Files a sighting's witness on its record, taking ownership: a witness the record already holds is the same

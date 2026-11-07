@@ -20,18 +20,21 @@ char *witness_verify_key(const char *method, const char *path, const char *witne
 /* …split back into its three fields, each owned by the caller. Asserts the key is one this file composed. */
 void  witness_verify_key_split(const char *key, char **method, char **path, char **witness_canon);
 
-/* Queues one verification for this session: substitute `payload` for the source `src` and watch for `key`'s
+/* Queues one verification for this session: substitute `payload` for the source `src`, behind `head` (the URL
+   component's head concolic_url_head composed from the queuing flow's facets, or NULL), and watch for `key`'s
    request. One per key per session: a key already queued, seeded or rebuilt from the cold tier is not queued
-   again. All three strings are copied. */
-void  witness_verify_queue(const char *key, const char *src, const char *payload);
+   again. Every string is copied. */
+void  witness_verify_queue(const char *key, const char *src, const char *payload, const char *head);
+/* The head `key`'s verification is delivered behind, or NULL for none; asserts the key is queued. Borrowed. */
+const char *witness_verify_head(const char *key);
 /* Mints a flow for every queued verification not yet seeded. Called at the pick beside solve_seed_candidates,
    so a verification is a member of the one frontier. Returns how many flows it added. */
 int   witness_verify_seed(JSContext *ctx);
 /* Whether witness_verify_seed would mint a flow. */
 int   witness_verify_seeds_owed(void);
-/* A verification flow rebuilt from the cold tier: records its key as seeded so this session does not mint a
-   second run for the same witness. */
-void  witness_verify_resumed(const char *key);
+/* A verification flow rebuilt from the cold tier, with the head its record carried (or NULL): records its key
+   as seeded so this session does not mint a second run for the same witness. */
+void  witness_verify_resumed(const char *key, const char *head);
 /* Per-session teardown of the queue. */
 void  witness_verify_free(void);
 

@@ -12,7 +12,7 @@
 
 /* One verification: the key it watches for and the substitution that tries it. `seeded` is set once a flow
    carries it, whether minted here or rebuilt from the cold tier, so a key is tried by one run per session. */
-typedef struct { char *key; char *src; char *payload; int seeded; } Verify;
+typedef struct { char *key; char *src; char *payload; char *head; int seeded; } Verify;
 static Verify *g_vfy;
 static int g_vfy_n, g_vfy_cap;
 
@@ -62,7 +62,7 @@ static Verify *find(const char *key) {
     return NULL;
 }
 
-static Verify *append(const char *key, const char *src, const char *payload) {
+static Verify *append(const char *key, const char *src, const char *payload, const char *head) {
     Verify *v;
 
     if (g_vfy_n >= g_vfy_cap) {
@@ -75,17 +75,26 @@ static Verify *append(const char *key, const char *src, const char *payload) {
     v->key = reclaim_strdup(key);
     v->src = src ? reclaim_strdup(src) : NULL;
     v->payload = payload ? reclaim_strdup(payload) : NULL;
+    v->head = head ? reclaim_strdup(head) : NULL;
     v->seeded = 0;
-    CHECK(v->key && (!src || v->src) && (!payload || v->payload), "witness_verify: OOM queueing a verification");
+    CHECK(v->key && (!src || v->src) && (!payload || v->payload) && (!head || v->head),
+          "witness_verify: OOM queueing a verification");
     return v;
 }
 
-void witness_verify_queue(const char *key, const char *src, const char *payload) {
+void witness_verify_queue(const char *key, const char *src, const char *payload, const char *head) {
     DCHECK(key && src && *src && payload && *payload,
            "a witness verification was queued without its key, source or payload — concolic_deliver refuses an "
            "empty payload, so the eligibility test must have declined it");
     if (find(key)) return;
-    append(key, src, payload);
+    append(key, src, payload, head);
+}
+
+const char *witness_verify_head(const char *key) {
+    const Verify *v = find(key);
+
+    DCHECK(v != NULL, "the head of a verification this session never queued or resumed was asked for");
+    return v ? v->head : NULL;
 }
 
 int witness_verify_seeds_owed(void) {
@@ -117,15 +126,17 @@ int witness_verify_seed(JSContext *ctx) {
     return added;
 }
 
-void witness_verify_resumed(const char *key) {
+void witness_verify_resumed(const char *key, const char *head) {
     Verify *v = find(key);
 
-    if (!v) v = append(key, NULL, NULL);
+    if (!v) v = append(key, NULL, NULL, head);
     v->seeded = 1;
 }
 
 void witness_verify_free(void) {
-    for (int i = 0; i < g_vfy_n; i++) { free(g_vfy[i].key); free(g_vfy[i].src); free(g_vfy[i].payload); }
+    for (int i = 0; i < g_vfy_n; i++) {
+        free(g_vfy[i].key); free(g_vfy[i].src); free(g_vfy[i].payload); free(g_vfy[i].head);
+    }
     free(g_vfy);
     g_vfy = NULL; g_vfy_n = g_vfy_cap = 0;
 }

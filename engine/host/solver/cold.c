@@ -633,10 +633,11 @@ static void park_rec_cand(const Flow *f, long id)
     park_hex(f->cand_payload);
 }
 
-/* A witness verification (solver/witness_verify.h): `v<seg>,<reward>,<hex src>,<hex key>,<hex payload>`. Its
-   substitution crosses as bytes for park_rec_cand's reason, its key as hex because it is length-prefixed text
-   holding a page's path, and the payload stays last for the same reason it does there. It carries no sink and
-   no root: it is no search's, and the delivery root is the source itself (endpoint.c's eligibility). */
+/* A witness verification (solver/witness_verify.h): `v<seg>,<reward>,<hex src>,<hex key>,<hex head>|-,<hex
+   payload>`. Its substitution crosses as bytes for park_rec_cand's reason, its key as hex because it is
+   length-prefixed text holding a page's path, its URL head (`-` for none) because the facets it was composed
+   from belong to the flow that queued it, and the payload stays last for the same reason it does there. It
+   carries no sink and no root: it is no search's, and the delivery root is the source itself. */
 static void park_rec_vfy(const Flow *f, long id)
 {
     char head[96];
@@ -650,6 +651,13 @@ static void park_rec_vfy(const Flow *f, long id)
     park_hex(f->cand_src);
     park_str(",");
     park_hex(fire_target_key(&f->fire));
+    park_str(",");
+    {
+        const char *vh = witness_verify_head(fire_target_key(&f->fire));
+
+        if (vh) park_hex(vh);
+        else park_str("-");
+    }
     park_str(",");
     park_hex(f->cand_payload);
 }
@@ -2326,8 +2334,20 @@ static long park_rebuild(JSContext *ctx, const char *p, ColdResumed *c)
                 free(key);
             }
             q = park_comma(q);
-            fl->cand_payload = park_unhex(q, end);
-            witness_verify_resumed(fire_target_key(&fl->fire));
+            {
+                const char *hb;
+                char *vh = NULL;
+
+                for (hb = q; q < end && *q != ','; q++)
+                    ;
+                DCHECK(q < end, "a parked witness verification has no payload after its head — a residue from a "
+                                "build whose 'v' record carried no head field; drop it and re-seed");
+                if (!(q - hb == 1 && *hb == '-')) vh = park_unhex(hb, q);
+                q = park_comma(q);
+                fl->cand_payload = park_unhex(q, end);
+                witness_verify_resumed(fire_target_key(&fl->fire), vh);
+                free(vh);
+            }
             c->cands++;
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);

@@ -21210,8 +21210,17 @@ TF_UNIT void probes_requestunk(const char *js, Probe *tab, int *n) {
              "a request @S record carries a source rooted in the query's `page=`, but the page sends that Request "
              "only after its own origin check pinned the URL record to this document's origin, so no attacker "
              "picks its host");
+    /* The same-origin-pinned request's record is marked by the query and verified through it: the delivery is
+       composed behind the head the page's own `indexOf('page=')` test states, so the slice reaches the request. */
+    const char *pv_why = NULL; int pv_tt = 1;
+    fold_row(&pv_tt, &pv_why,
+             sq_witness_has(js, "{URL(location.search.slice(location.search.indexOf(\\\"page=\\\")",
+                            "{\"verification\":\"verified\"", NULL),
+             "no witness of the record of the `page=` Request is verified, so a delivery at the query did not reach "
+             "the request carrying it: the value was not composed behind the head the page's slice tests for");
     const Probe rows[] = {
         { "rqu-built", bt_tt, "/api/rqu-built", SESS_EXPLORE, bt_why },
+        { "rqu-pinned-verified", pv_tt, "rquParam('page')", SESS_EXPLORE, pv_why },
         { "rqu-sink-query", sq_tt, "rquParam('src')", SESS_EXPLORE, sq_why, .gate = "rqu-built" },
         { "rqu-refused", rf_tt, "/api/rqu-refused", SESS_EXPLORE, rf_why },
         { "rqu-pinned-reached", pr_tt, "/api/rqu-pinned", SESS_EXPLORE, pr_why },

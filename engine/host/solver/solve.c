@@ -23,6 +23,7 @@
 #include "solver/compose.h"   /* a sender row's subject, spelled with its presence */
 #include "solver/act_list.h"   /* the acts a fire was verified under */
 #include "solver/source_cut.h" /* the snapshot a candidate forks from instead of the baseline */
+#include "solver/witness_verify.h"   /* the URL head a witness verification is delivered behind */
 
 /* Where a composed message's payload goes until a candidate takes it (Cand.dl_tmpl): a String the injection
    member's facets admit, alphanumeric so its JSON spelling is itself between quotes. */
@@ -2634,6 +2635,7 @@ void solve_flow_begin(Flow *f) {
         head = rc ? rc->url_head : NULL;
     } else if (f && f->cand_src && f->fire.kind == FIRE_REQUEST) {
         root = f->cand_src;
+        head = witness_verify_head(fire_target_key(&f->fire));
     }
     concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL, head);
     concolic_set_deliveries(f ? f->cand_dsrc : NULL, f ? f->cand_dval : NULL, f ? f->cand_dn : 0);
