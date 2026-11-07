@@ -18743,12 +18743,12 @@ TF_UNIT void probes_requestpieces(const char *js, Probe *tab, int *n) {
     const char *xh_why = NULL, *by_why = NULL;
     int xh_tt = 1, by_tt = 1, seen, marked, plain;
 
-    rq_marks(js, "/api/rp-xhr", &seen, &marked, &plain);
-    fold_row(&xh_tt, &xh_why, seen > 0, "NOT REACHED: there is no /api/rp-xhr record");
+    rq_marks(js, "https://x.test/api/rp-xhr", &seen, &marked, &plain);
+    fold_row(&xh_tt, &xh_why, seen > 0, "NOT REACHED: there is no https://x.test/api/rp-xhr record");
     fold_row(&xh_tt, &xh_why,
-             rq_mark_has(js, "/api/rp-xhr", "\"headers\":{\"X-Rp\":\"{" LOCATION_SEARCH_SRC "}[x]\"}"),
+             rq_mark_has(js, "https://x.test/api/rp-xhr", "\"headers\":{\"X-Rp\":\"{" LOCATION_SEARCH_SRC "}[x]\"}"),
              "the XMLHttpRequest's mark does not name the query value its author header carries");
-    fold_row(&xh_tt, &xh_why, rq_mark_has(js, "/api/rp-xhr", "\"body\":\"{" LOCATION_SEARCH_SRC "}[x]\""),
+    fold_row(&xh_tt, &xh_why, rq_mark_has(js, "https://x.test/api/rp-xhr", "\"body\":\"{" LOCATION_SEARCH_SRC "}[x]\""),
              "the XMLHttpRequest's mark does not name the query value its body carries");
     rq_marks(js, "/api/rp-bytes", &seen, &marked, &plain);
     fold_row(&by_tt, &by_why, seen > 0, "NOT REACHED: there is no /api/rp-bytes record");

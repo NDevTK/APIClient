@@ -2181,7 +2181,11 @@ static void endpoint_disp_add(Endpoint *e, const char *disp) {
 }
 
 /* Does the verification run's request carry the delivered marker in the piece `w` names (address, a header, the
-   body)? The address and a header value are read as the surface spells them, bytes or a shape around them. */
+   body)? The address and a header value are read as the surface spells them, bytes or a shape around them.
+   Named residual. Not covered: a piece carrying a transform of the value rather than its bytes (a body byte the
+   page writes from a character code). Next diff builds: the observation over the piece's bytes against the
+   delivered value run through the run's own transform. Absence shows as: a marked record whose body-span
+   witness stays `candidate`. */
 static int verify_piece_carries(JSContext *ctx, const Witness *w, JSValueConst url, const EndpointHeader *hdrs,
                                 int nhdrs, const EndpointBody *body) {
     static const char m[] = WIT_VERIFY_MARKER;
