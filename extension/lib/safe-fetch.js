@@ -11,8 +11,7 @@
      • CORB by the request's destination, for every code loader at once;
      • the per-origin egress policy (`_firingRefusal`), which decides whether an act may be spent at all.
    It runs in the offscreen document (`ast-worker.html`, after `check.js`, which defines the asserts) and
-   verbatim in `engine/trusted.mjs`'s vm realm. It fetches directly: COEP requires CORP only of no-cors
-   subresources, so only an over-restrictive `connect-src` could block this CORS fetch. */
+   verbatim in `engine/trusted.mjs`'s vm realm; each host's wire (`_wire`, below) is the only fetch it spends. */
 /* Returns a plain record, not a Response, so both hosts read one shape: { ok, status, statusText, headers
    (lowercased), body, urlList, computedType, refusal }.
    The body is bytes. A decode is a semantic the engine owns: HTML §8.1.4.2's "fetch a classic script" decodes

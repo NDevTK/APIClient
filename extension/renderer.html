@@ -10,23 +10,11 @@
      fixed set of host edges" becomes a fact the browser enforces instead of an import list somebody remembered
      not to write.
 
-     THIS PAGE LOADS NOTHING BY URL, AND THAT IS FORCED BY THE MANIFEST'S OWN COEP. `cross_origin_embedder_policy:
-     require-corp` is served on EVERY extension resource response (extensions/browser/extension_protocols.cc,
-     GetSecurityPolicyForURL — the value is read off the extension, not off the resource path), so this document
-     enforces require-corp on its own subresources. That same file emits `Access-Control-Allow-Origin: *` and
-     `Cross-Origin-Resource-Policy: cross-origin` ONLY when `send_cors_header` is set, and it is set only for a
-     resource `WebAccessibleResourcesInfo::IsResourceWebAccessible` accepts. Our resources are not web-accessible
-     and must not become so. So from THIS document's opaque origin:
-       • a classic `<script src="renderer.js">` is a no-cors CROSS-ORIGIN load of a response with no CORP header
-         -> under require-corp the policy defaults to `same-origin` -> BLOCKED;
-       • a module script (`<script type=module>` or `import()`) is fetched in CORS mode by HTML's "fetch a single
-         module script" -> `Origin: null` against a response with no ACAO -> BLOCKED;
-       • `fetch("lib/qjs/qjs.wasm")` is the same CORS load -> BLOCKED.
-     A `srcdoc` frame does not escape this: it is a local scheme, so it INHERITS the embedder's policy
-     container — COEP require-corp included — and it inherits the embedder's CSP, which has no 'unsafe-inline',
-     so it could not run this bootstrap either. Neither does dropping the manifest's COEP: the CORS half kills
-     modules and `fetch` regardless, and CLAUDE.md §scheduler costs require-corp as most of what a SharedArrayBuffer
-     transport already has paid for.
+     THIS PAGE LOADS NOTHING BY URL, BECAUSE ITS OWN POLICY REFUSES EVERY SUCH LOAD. The meta policy below is
+     `default-src 'none'` with a `script-src` naming no URL source, so a `<script src>`, an `import()` of a
+     package path and a `fetch` are all refused here; the untrusted side of this boundary is given no way to load
+     anything. The opaque origin is not what refuses them, nor any embedder policy: with a policy that names the
+     extension's scheme, this page loads its package's classic scripts, modules and fetches.
      THEREFORE the trusted zone HANDS this document everything it runs — check.js, the engine's JS glue and the
      wasm bytes arrive on the boot record — and this file's only job is to be a place inline script may run.
 
@@ -40,7 +28,7 @@
      page, which is this one.
 
      WHICH IS WHY IT IS IN `manifest.sandbox.pages`. That listing is what swaps the `extension_pages` policy
-     (`script-src 'self' 'wasm-unsafe-eval'` — a grant this document cannot use, see above) for the `sandbox`
+     (`script-src 'self' 'wasm-unsafe-eval'`, which runs no inline bootstrap) for the `sandbox`
      one, whose `'unsafe-inline'` is what lets a bootstrap exist with no URL to load it from, whose
      `'unsafe-eval'` is what compiles the wasm, and whose `blob:` is what lets `import()` reach the engine glue
      module built out of the Blob the offscreen delivered. The listing ALSO gives the document a CSP `sandbox`
@@ -373,81 +361,6 @@
     try { return await import(u); } finally { URL.revokeObjectURL(u); }
   }
 
-  /* THE SHARED-MEMORY ACT, PERFORMED ONCE AND RECORDED, SO THE ASSERT BELOW CAN STAND ON A RESULT RATHER THAN
-     ON A GETTER. A DCHECK condition must be side-effect-free (check.js's own law, and check.h's), so the
-     attempt cannot live inside one: it happens here, exactly once per boot, and what the assert reads is what
-     it wrote down.
-     THE ACT IS A STRUCTURED CLONE AND NEEDS NO SECOND AGENT, which is the correction to the instruction this
-     file used to carry ("postMessage a shared WebAssembly.Memory to a Worker"). HTML §2.7.3
-     "StructuredSerializeInternal ( value , forStorage [ , memory ] )" puts the gate on the SERIALIZING side —
-     "If IsSharedArrayBuffer(value) is true: If the current settings object's cross-origin isolated capability
-     is false, then throw a "DataCloneError" DOMException" — and carries its own note that the check "is only
-     needed when serializing (and not when deserializing)". §2.7.10 "Structured cloning API" makes
-     `structuredClone(value, options)` step 1 a `StructuredSerializeWithTransfer`, so it runs that same step. A
-     Worker would spawn an agent, need a blob: URL and be asynchronous; the clone is synchronous, allocates one
-     page, and exercises the identical gate.
-     THE OPERAND IS MINTED THROUGH `WebAssembly.Memory` AND NEVER THROUGH `new SharedArrayBuffer`, because in
-     the realm this file is about the constructor is not there to call — which is the whole reason the
-     constructor is a tripwire and not the capability.
-     THE CONTROL RUNS FIRST AND MUST SPEAK. A refusal means nothing from a serializer that refuses everything,
-     so an uncloneable value is offered first and ITS refusal is what arms the act; where it does not refuse,
-     the act is UNATTEMPTED and says so rather than reporting a refusal nobody can interpret. The operand is
-     armed the same way: a memory asked for shared that answers a plain buffer is not the value §2.7.3 gates.
-     `ungated` IS A POSITIVE STATEMENT AND NOT A PASS BY DEFAULT. §2.7.3 names "the current settings object's
-     cross-origin isolated capability" as the gate, and a realm that states no such capability has no gate for
-     the act to pass: its shared memory is unconditional, so a success there is a fact about that realm's KIND
-     and never about a grant this document was given. The classification reads whether the realm STATES the
-     capability and never its VALUE — the value is a tripwire, recorded and never asserted on. */
-  function sharedMemoryRecord(mod) {
-    function txt(e) { return String((e && e.name) || "Error") + ": " + String((e && e.message) || e); }
-    var r = {
-      coiStated: ("crossOriginIsolated" in self),
-      coi: self.crossOriginIsolated,
-      sabCtor: typeof SharedArrayBuffer,
-      /* THE ENGINE'S OWN LINEAR MEMORY, WHICH IS A TYPE AND NOT A CAPABILITY — there is no act to attempt,
-         since nothing at runtime can make a non-shared memory shared. It is recorded because a reader who
-         meets the assert below needs to know whether the shared-memory LINK is still owed on top of the
-         grant: a watchdog thread with no shared heap to store the yield request into is half a mechanism. */
-      engineHeap: Object.prototype.toString.call(mod.HEAPU8.buffer),
-      act: null,
-      why: null,
-    };
-    if (typeof structuredClone !== "function") {
-      r.act = "unattempted";
-      r.why = "this realm has no structuredClone, so the act has no spelling here";
-      return r;
-    }
-    var armed = false;
-    try { structuredClone(function () {}); } catch (e) { armed = true; }
-    if (!armed) {
-      r.act = "unattempted";
-      r.why = "the serializer did not refuse an uncloneable value, so a refusal of a shared buffer would say nothing";
-      return r;
-    }
-    var buf = null;
-    try { buf = new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true }).buffer; }
-    catch (e) {
-      r.act = "unattempted";
-      r.why = "no shared WebAssembly.Memory could be minted to try with — " + txt(e);
-      return r;
-    }
-    var kind = Object.prototype.toString.call(buf);
-    if (kind !== "[object SharedArrayBuffer]") {
-      r.act = "unattempted";
-      r.why = "a memory asked for shared answered " + kind + ", which is not the value §2.7.3 gates";
-      return r;
-    }
-    try {
-      structuredClone(buf);
-      r.act = r.coiStated ? "granted" : "ungated";
-      r.why = "the serializer let a SharedArrayBuffer through";
-    }
-    catch (e) { r.act = r.coiStated ? "refused" : "ungated"; r.why = txt(e); }
-    if (!r.coiStated)
-      r.why = "this realm states no cross-origin isolated capability, so it has no gate for the act to pass — " + r.why;
-    return r;
-  }
-
   /* THE PROGRAM THE INVITATION DELIVERED, RUN IN DEPENDENCY ORDER. Each step is what the next one needs, which
      is why this is a sequence and not a Promise.all: check.js installs the assertion mechanism every line below
      asserts with; mojo.js is the transport this frame's only channel is made of; mojom.js is VALIDATED as it is
@@ -469,6 +382,18 @@
            "a renderer began booting on a window record that is not an invitation — the embedder posts exactly " +
            "one, carrying this process's program and the primordial pipe, and anything else reaching here is a " +
            "frame instantiating whatever it was handed");
+    /* THIS REALM HOLDS NO CROSS-ORIGIN ISOLATED CAPABILITY, so the engine it runs on attacker bundles has no
+       SharedArrayBuffer and the browser's coarsened clock. HTML §7.2.2.6 "Script settings for Window objects"
+       makes the capability need the agent cluster's cross-origin-isolation mode to be "concrete" and the
+       document to be allowed the "cross-origin-isolated" feature; the manifest sends no opener or embedder
+       policy and renderer-host.js delegates no `allow`, so neither holds. Nothing needs shared memory: the slice
+       is engine work counted at dispatch (solver/engine.c's engine_quantum_spent), and a host call blocked on
+       `Atomics.wait` would be a flow that cannot yield. */
+    DCHECK(self.crossOriginIsolated !== true,
+           "the renderer's realm is cross-origin isolated, which hands the engine's attacker-controlled code " +
+           "SharedArrayBuffer and a fine clock that nothing here uses — read whether manifest.json gained " +
+           "`cross_origin_opener_policy`/`cross_origin_embedder_policy` or renderer-host.js an `allow` on this " +
+           "frame's element");
     /* AND THE TRANSPORT, BY THE SAME ROUTE AND FOR THE SAME REASON THE ENGINE TAKES IT. An interface exists
        only if BOTH ends agree on it, so both ends load ONE description: the offscreen loads these two files by
        <script src> off its own origin and this frame is handed the identical bytes, which is what makes a
@@ -501,256 +426,6 @@
       },
     });
     M.ccall("qjs_set_host_turn", null, ["number"], [HOST_TURN_MS]);
-    /* WHETHER THIS REALM CAN BE HANDED SHARED MEMORY, recorded by the act below (`sharedMemoryRecord`). The
-       cooperative slice needs none: it is engine work counted at dispatch (solver/engine.c's
-       engine_quantum_spent), which the page's code shape cannot evade, so no thread outside the instruction
-       stream is wanted for it.
-       WHAT BLOCKS THE TRANSPORT IS ONE THING AND IT IS NOT THE FLAG, which is the correction this line exists to carry —
-       quantum.h used to price the transport as `-pthread` plus cross-origin isolation ON THE OFFSCREEN
-       DOCUMENT, and the engine has not run there since every instance became a renderer. Measured here, on
-       real Chrome: this realm CAN construct a shared WebAssembly.Memory and CAN create a Worker, and the
-       Worker's `postMessage` of that memory throws `DataCloneError: SharedArrayBuffer transfer requires
-       self.crossOriginIsolated`.
-       AND THAT MESSAGE NAMES A SUFFICIENT GATE AS IF IT WERE THE NECESSARY ONE, WHICH IS THE HALF THIS
-       PARAGRAPH USED TO REPEAT. It said "the gate is the AGENT CLUSTER's cross-origin isolation", and the
-       SIBLING DOCUMENT refutes that at the value the manifest ships: in ast-worker.html
-       `self.crossOriginIsolated` is FALSE and the very same transfer SUCCEEDS. An ordinary http page in the
-       same browser, equally not isolated, is REFUSED with the same DataCloneError. Three documents, one
-       browser, one policy — so what the grant tracks is the EXTENSION ORIGIN and not the isolation, and
-       `crossOriginIsolated` is one of TWO routes to the transport rather than the gate on it.
-       WHY THIS REALM HAS NEITHER ROUTE, AND WHY NO POLICY VALUE BUYS ONE. Its origin is OPAQUE, so it is not
-       the extension origin and cannot inherit that grant; and — REFUTED, see below — "an opaque origin is
-       same-origin with nothing, so its agent cluster is never isolated either".
-       THAT SECOND CLAUSE IS FALSE AND IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS THE READING A READER
-       RE-DERIVES FROM THE FIRST. It conflates SAME-ORIGIN-NESS with ISOLATION MODE, and the two are set by
-       different algorithms. HTML §8.1.2.2 "Integration with the JavaScript agent cluster formalism"'s
-       "obtain a similar-origin window agent" mints a cluster and then "set agentCluster's cross-origin
-       isolation mode to group's cross-origin isolation mode" — a copy off the BROWSING CONTEXT GROUP, with no
-       origin test anywhere in it, and §7.3.2.3 "Groupings of browsing contexts" puts the mode on the group.
-       So an opaque-origin nested document inherits the mode of the group it is in, whatever its origin.
-       AND THE MEASUREMENT BELOW ESTABLISHED NOTHING ABOUT IT, WHICH IS THE METHOD ERROR AND NOT THE SENTENCE.
-       HTML §7.2.2.6 "Script settings for Window objects" makes the capability a CONJUNCTION — "return true if
-       both of the following hold and false otherwise: realm's agent cluster's cross-origin isolation mode is
-       "concrete", and window's associated document is allowed to use the cross-origin isolated feature" — and
-       the readings below vary COOP and the `sandbox` attribute, which are inputs to the FIRST conjunct only.
-       The second is a PERMISSIONS POLICY whose default allowlist is 'self' (HTML §2.2 "Policy-controlled
-       features"), so for this opaque-origin frame it is Disabled unless the embedder DELEGATES it with an
-       `allow` attribute — which nothing in this extension did, and which no value of COOP or `sandbox` can
-       substitute for. The `allow` axis was never varied, so every cell below has one conjunct unmet for a
-       reason the run could not see.
-       MEASURED WITH THAT AXIS VARIED, in real Chrome, 3 runs of 3 agreeing on every cell, each reading beside
-       an INVENTED sibling capability so a false is separable from a getter that is not there, and with THE ACT
-       (`sharedMemoryRecord`'s own shape) and not only the getter: for a child carrying BOTH this document's
-       sources of opacity — a `sandbox` attribute AND a CSP `sandbox` directive, which is exactly this frame —
-       under a top-level COOP `same-origin` + COEP `require-corp`,
-           no `allow`                         -> allowsFeature false, crossOriginIsolated false, act refused
-           `allow="cross-origin-isolated"`    -> allowsFeature TRUE,  crossOriginIsolated TRUE,  act GRANTED
-           `allow="cross-origin-isolated *"`  -> allowsFeature TRUE,  crossOriginIsolated TRUE,  act GRANTED
-           `allow="cross-origin-isolated 'self'"` -> allowsFeature false, crossOriginIsolated false, act refused
-       so this realm IS isolable and the edit that buys it removes no boundary: it is renderer-host.js's
-       `allow` delegation (landed, and measured on THIS frame: allowsFeature false -> TRUE with the act still
-       refused at the shipped COOP) plus a manifest COOP of `same-origin`, which HTML §7.1.3 "Cross-origin
-       opener policies" makes the only way to reach `same-origin-plus-COEP` and therefore a group mode at all.
-       BOTH ARE NOW SHIPPED AND THIS FRAME HOLDS THE CAPABILITY, MEASURED RATHER THAN PREDICTED — a controlled
-       pair over the manifest COOP string with everything else held, in real Chrome, one browser per case with
-       the IndexedDB cleared, the clone control shown ARMED on an uncloneable value in every cell and an
-       INVENTED sibling capability reading absent in every cell so a `false` is separable from a getter that is
-       not there. At `same-origin` (two browsers, identical): `self.origin === "null"` still, and
-       `crossOriginIsolated` TRUE, `document.featurePolicy.allowsFeature("cross-origin-isolated")` TRUE,
-       `typeof SharedArrayBuffer === "function"`, a shared `WebAssembly.Memory` minting `[object
-       SharedArrayBuffer]`, `structuredClone` of it LET THROUGH, and the clock's minimum nonzero
-       `performance.now()` delta at 5µs where the pre-delegation factorial read 100µs. At
-       `same-origin-allow-popups`, the SAME tree otherwise: the assert below FIRES, recording `act=refused`
-       with the browser's own `DataCloneError: SharedArrayBuffer transfer requires self.crossOriginIsolated`,
-       `self.crossOriginIsolated=false`, `typeof SharedArrayBuffer=undefined`, and this engine's linear memory
-       `[object ArrayBuffer]`. So the assert is armed by construction rather than by argument: the one string
-       that moved is the only thing between it firing and not, and the value it records at the old one is
-       exactly what the pre-flip factorial predicted.
-       AND `typeof SharedArrayBuffer === "undefined"` IN THAT REFUSING CELL IS WHY THE OPERAND IS MINTED THROUGH
-       `WebAssembly.Memory`: the record still obtained a real SharedArrayBuffer to try with in a realm whose
-       constructor is not there to call, so the act was ATTEMPTED and refused rather than unattempted.
-       WHAT THE FLIP COSTS IS MEASURED AND IS NOT THE OPENER. The clause below is right that a `same-origin`
-       opener severs `window.opener`, and nothing in extension/ reads it. What it misses is that
-       poc-sandbox.html classifies §LIVE-VERIFY's delivery by the IDENTITY of `window.open`'s RETURN VALUE, and
-       under a browsing-context-group switch that call answers null while the document loads and runs anyway —
-       measured 3 of 3 with the opened document's own request on a constant path as the witness: `delivered`
-       becomes `no-navigable` and the witness fires in both. So an outcome oracle that does not ride the
-       returned handle is owed BEFORE the flip, and that is a trusted-zone gap rather than an engine one.
-       THAT ORACLE IS BUILT AND THIS HALF OF THE COST IS PAID — the measurement above is kept in its own words
-       because it is what a reader re-derives from the handle, and because it was RIGHT. The delivery premise is
-       now latched in the trusted zone from a document ANNOUNCING ITSELF at the delivered address with the
-       browser's own origin and frame (offscreen-brain.js `_recordProbeDelivery`), and the handle is reported as
-       context that gates nothing. The standard predicts the measurement rather than merely permitting it:
-       HTML §7.2.2.1 "Opening and closing windows"' window open steps have FOUR `return null` arms over 19
-       steps — 1, 14, 17, 18 — with the navigate at step 15, and HTML §7.3.1.7 "Navigable target names"' rules
-       for choosing a navigable set step 17's `new with no opener` windowType whenever the opening document's
-       own opener policy is `same-origin` or `same-origin-plus-COEP` and its origin is not same origin with its
-       top-level origin. A `manifest.sandbox.pages` document has an OPAQUE origin, so that second conjunct holds
-       at EVERY COOP value and the flip arms the clause for every delivery rather than for some.
-       THE FLIP IS ORDERED AND LANDED, BY THE PROJECT OWNER, AND THE SENTENCE THAT STOOD HERE IS KEPT IN ITS
-       OWN WORDS BECAUSE A READER WHO RE-DERIVES IT FROM THE ASSERT BELOW WILL RE-ADD THE HOLD. It read: THE
-       FLIP IS STILL NOT ORDERED NEXT, AND THIS PARAGRAPH IS NOT A CLEARANCE FOR IT. What remains is this
-       document's own DCHECK below, the wasm link gaining `-pthread`/`-sSHARED_MEMORY`, and the watchdog thread
-       that the transport exists to carry — at `same-origin` a DEV build aborts here and a RELEASE build gains
-       the capability with nothing using it.
-       ITS THREE ITEMS ARE NOT ALIKE AND ONLY ONE OF THEM WAS A BLOCKER. The DCHECK below is this diff's, and it
-       is INVERTED rather than softened — the absence it guarded is one this extension has now deliberately
-       ended, so an assert that fires on the grant asserts against the design. The wasm link is a SEPARATE
-       landing that the grant is a PRECONDITION for rather than a companion to, and it is not silently deferred:
-       `engine/host/solver/quantum.c` #errors the day `__EMSCRIPTEN_SHARED_MEMORY__` is defined, so a link that
-       gains shared memory cannot compile until the thread that would use it exists.
-       AND THE WATCHDOG THREAD WAS ALREADY RETIRED AS A REASON BY THE RESIDUAL BELOW THIS FILE'S OWN ASSERT,
-       WHICH IS WHY NAMING IT AS `WHAT REMAINS` WAS THE STALEST PART OF THAT SENTENCE. `133f190` built the
-       dispatch-periodic raise, so population (a) — a stretch of bytecode that raises nothing — is closed with
-       no shared memory anywhere in it; and population (b), a C activation that performs no dispatch, answers no
-       poll however the request was raised, so the transport does not close it either. A reader who acted on the
-       retired sentence would have built a thread for a gap that is shut and a gap it cannot reach.
-       THE GRANT HAS NO CONSUMER, AND THE ONE THIS FILE NAMED IS FORBIDDEN BY THE SECTION IT CITED. The
-       sentence is kept in its own words because it is what a reader re-derives from `two instances` and
-       `one delta`. It read: CLAUDE.md §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER makes cross-WASM COW
-       synchronisation a REQUIRED mechanism — a flow whose world spans two instances has ONE delta that must
-       apply, unapply and park across both — and two renderer instances that can hold one shared linear memory
-       are the transport for it. The premise is exact and the transport is not: that same section says a
-       different-origin instance may be REMOTE (the native host provisions its peer as a CHILD PROCESS over
-       a pipe, which has no address space to share), that what crosses an instance boundary is a CLOSED
-       set of WindowProxy, Location and serialized messages, and that what crosses is TEXT carrying its
-       TYPE, because a live JSValue crosses neither a process, nor an instance, nor a session, nor a park.
-       SECURITY.md settles it from the other side, over a sandbox its own heading calls attacker-controlled:
-       one WASM instance per ORIGIN-KEYED AGENT CLUSTER, keyed on (browsing-context group, origin), with
-       ISOLATED MEMORY.
-       One address space across two instances is a page of one origin reading the whole heap of another
-       through the boundary this document's opaque origin exists to state, so it is not a narrower version of
-       the right answer — it is the boundary removed. Cross-WASM COW sync is required and its transport is the
-       serialized one the instance seam already carries.
-       SO NOTHING CONSUMES THE GRANT, AND THAT IS WHAT THIS FILE SAYS. It is not a gap: the two populations
-       below are closed and unreachable respectively, and the only other thing the grant was ever offered for
-       is the design struck above.
-       THE ORIGINAL READINGS ARE KEPT BELOW UNALTERED, because they are correct about the cells they cover and
-       are what a reader compares the widened factorial against.
-       MEASURED on real Chrome, one browser per case with the IndexedDB cleared, every reading taken beside an
-       INVENTED sibling so a false is separable from a getter that is not there, and an uncloneable value
-       posted first so the clone check is shown ARMED:
-           node testing/harness.js restart <port>
-           node testing/harness.js goto <any page>
-           node testing/harness.js offscreen `self.__r = await self.rendererLaunch(group + "\0" + origin)`
-         then, evaluated IN this frame: self.origin | self.crossOriginIsolated | typeof SharedArrayBuffer |
-           new Worker(blob).postMessage(new WebAssembly.Memory({initial:1,maximum:1,shared:true})) |
-           performance.now() sampled 30000 times, reading the MINIMUM NONZERO delta
-       At BOTH `same-origin-allow-popups` and `same-origin` this frame reads `self.origin === "null"`,
-       `crossOriginIsolated === false`, `typeof SharedArrayBuffer === "undefined"`, the shared-memory transfer
-       throwing, and a 100µs clock. THOSE FALSES ARE SCORED RATHER THAN A PAIR OF ZEROS BECAUSE THE FLIP IS NOT
-       INERT EVERYWHERE: at `same-origin` the OFFSCREEN's `crossOriginIsolated` goes TRUE and its clock sharpens
-       to 5µs, in the same browser and the same run. The flip moves that document and moves nothing here.
-       AND THE `sandbox` ATTRIBUTE IS NOT WHAT MAKES THIS ORIGIN OPAQUE, so widening or dropping it is not a
-       route either. The case measured is the attribute REMOVED ENTIRELY, which DOMINATES widening it with
-       `allow-same-origin` — the effective flags are the union of both restrictions, so an absent attribute
-       restricts strictly less than any value of one — and at `same-origin` such a frame still reads
-       `self.origin === "null"` and `crossOriginIsolated === false`. renderer.html is in
-       `manifest.sandbox.pages`, and that listing's CSP `sandbox` directive states the opaque origin on its own
-       — which is the boundary itself, so this sentence USED TO BE that the only edit which could buy this
-       realm the transport is the one removing the boundary, and it is REFUTED ABOVE.
-       The offscreen's own end-to-end watchdog is therefore
-       not a cheaper route but a DIFFERENT DOCUMENT: the transport is provisioned where the engine is not, at
-       both COOP values, and it is already provisioned there BEFORE any flip.
-       AND THE ATTRIBUTE CLAUSE IS RIGHT ABOUT OPACITY AND WRONG ABOUT WHAT FOLLOWS, WHICH THE SAME WIDENED
-       FACTORIAL SEPARATES: the `sandbox` attribute is indeed not what makes this origin opaque, and it IS what
-       makes the delegation land. Measured, opacity held constant by the CSP directive in every cell — with the
-       CSP directive as the ONLY source of opacity and NO `sandbox` attribute on the element, the identical
-       `allow` value delegates NOTHING (allowsFeature false, act refused), because Permissions Policy §9.3
-       "Parse policy directive" stores the element's DECLARED ORIGIN as the allowlist's `src`, which with no
-       attribute is the URL's origin (the extension's) and not this document's, and §4.7 "Allowlists" then
-       reaches its "if origin is an opaque origin, return false". With BOTH — which is this element — it
-       delegates. So "widening or dropping it is not a route either" is true of the ORIGIN and false of the
-       CAPABILITY, and dropping the attribute would now COST the delegation.
-       THE FAILURE IS GOOD NEWS AND THE MESSAGE SAYS SO — the shape of quantum.c's clock check. An absence
-       stated in prose is one nobody re-measures; asserted on the browser's OWN gate it ends by crashing, in
-       the realm that would host the thing that has become buildable.
-       IT USED TO ASSERT THE TWO ROUTES THEMSELVES — `self.crossOriginIsolated !== true && typeof
-       SharedArrayBuffer === "undefined"` — and that is REWRITTEN RATHER THAN DELETED, because the reasoning
-       that produced it is sound and a reader who re-derives it will write it again. Widening from the flag
-       alone to both routes was CORRECT and is not the defect: the measurement above is exactly a case of the
-       capability arriving WITHOUT the flag, and an assert watching one of two routes is silent on the one the
-       sibling document takes. What was wrong is that both routes are GETTERS, and the message standing over
-       them said so in its own words — `the constructor being present is a tripwire and not the capability`.
-       A getter that is not the capability is not a stricter test of it, it is a DIFFERENT test: this one fired
-       where the capability was absent, and would have stayed silent in a realm that held the capability with
-       neither getter set. THE FILE STATED THE RULE CORRECTLY IN THE SENTENCE ABOVE THE LINE THAT BROKE IT.
-       MEASURED, and it is why this is a defect rather than a preference: a Node worker realm defines
-       `SharedArrayBuffer` unconditionally, so `engine/renderer_host_gate.mjs` — which hosts this exact script
-       in one — aborted here on every archived run whose renderer.html carried the widened form (4 of 4) and on
-       none of the 7 carrying the older one, partitioned by the text at each revision rather than by ancestry.
-       WHAT STANDS INSTEAD IS THE ACT, performed once above and recorded, with the two getters kept as the
-       tripwires they are — read on every run, in the one direction §2.7.3 guarantees, and never the thing the
-       absence is asserted on.
-       RETIREMENT: this paragraph goes when renderer.html is no longer listed in `manifest.sandbox.pages`,
-       because the opaque origin is then not stated and the question it answers is a different question. */
-    var SHM = sharedMemoryRecord(M);
-    /* THE ASSERT IS THE OTHER WAY UP NOW, BECAUSE THE ABSENCE IT GUARDED IS ONE THIS EXTENSION DELIBERATELY
-       ENDED. Its condition was `SHM.act !== "granted"` and its message began: this renderer's realm GRANTED a
-       shared-memory serialization — the act ran, the platform's own gate saw it, and it was let through, so the
-       absence this file is built on is over. It went on to name the watchdog thread as what to build. It is
-       REWRITTEN RATHER THAN DELETED because its FORM was right and is what a reader re-derives: a capability
-       is confirmed by the ACT and a getter is a tripwire in front of it, which is why the act is still
-       performed once above and why this line still reads what it wrote down.
-       WHAT CHANGED IS WHICH STATE IS THE DESIGNED ONE. The manifest now ships COOP `same-origin` beside COEP
-       `require-corp`, and renderer-host.js delegates `allow="cross-origin-isolated"` to this frame, so
-       HTML §7.2.2.6 "Script settings for Window objects"' conjunction — "realm's agent cluster's
-       cross-origin isolation mode is "concrete", and window's associated document is allowed to use the
-       cross-origin isolated feature" — is met on BOTH halves for the first time. An assert that fires on the
-       grant would abort every dev renderer for arriving at the state the configuration was changed to reach,
-       which is asserting against the design rather than for it.
-       AND THE REMEDY THE OLD MESSAGE NAMED WAS ALREADY RETIRED BY THE RESIDUAL DIRECTLY BELOW THIS ASSERT,
-       which is the half worth keeping: `133f190` built the dispatch-periodic raise that closes population (a),
-       and population (b) — a C activation performing no dispatch — answers no poll however the request was
-       raised, so a watchdog thread closes neither. The crash was still sending its reader to build one.
-       WHAT IS ASSERTED INSTEAD IS THIS EXTENSION'S OWN CONFIGURATION, which is the only thing here a DCHECK
-       may stand on: the platform's answer is not ours, and whether we SHIPPED the two inputs that earn it is.
-       So a diff that reverts the manifest COOP, drops the `allow` delegation, or drops COEP aborts here naming
-       all three, in the realm that is the one able to see it.
-       THE REALM GUARD IS `coiStated` AND NOT `coi`, AND IT IS A PARTITION RATHER THAN A WEAKENING.
-       `sharedMemoryRecord` already classifies a realm that states NO cross-origin isolated capability as
-       `ungated`, because §2.7.3 names that capability as the gate and a realm without one has no gate for the
-       act to pass. `engine/renderer_host_gate.mjs` hosts this exact script in a NODE WORKER realm, and that
-       realm is measured — with the clone control armed on an uncloneable value and an invented sibling
-       capability reading absent — to report `"crossOriginIsolated" in self === false` while cloning a shared
-       `WebAssembly.Memory` buffer successfully. So it answers `ungated`, this assert is silent there by
-       construction, and it is live in the browser realm it is about. That is the same partition the record's
-       own classification is built on rather than a second copy of it. */
-    DCHECK(!(SHM.coiStated && SHM.act !== "granted"),
-           "this renderer's realm STATES a cross-origin isolated capability and its serializer REFUSED a " +
-           "shared WebAssembly.Memory anyway, so the two inputs this extension ships to earn the grant are " +
-           "not both reaching this frame. Recorded here: act=" + SHM.act + " (" + SHM.why +
-           "), self.crossOriginIsolated=" + String(SHM.coi) + ", typeof SharedArrayBuffer=" + SHM.sabCtor +
-           ", this engine's linear memory is " + SHM.engineHeap + ". The three things that earn it are " +
-           "manifest.json's `cross_origin_opener_policy` at `same-origin`, its " +
-           "`cross_origin_embedder_policy` at `require-corp`, and renderer-host.js's " +
-           "`allow=\"cross-origin-isolated\"` on this frame's element — HTML §7.1.3 \"Cross-origin opener " +
-           "policies\" makes the first two the only route to `same-origin-plus-COEP` and therefore to a group " +
-           "isolation mode at all, and Permissions Policy's default allowlist of 'self' makes the third " +
-           "the only route to the second conjunct for a frame whose origin is opaque. Read whichever of the " +
-           "three a diff removed; a `refused` here with all three present is this file's reading of " +
-           "HTML §2.7.3 \"StructuredSerializeInternal ( value , forStorage [ , memory ] )\" being wrong about " +
-           "this browser");
-    /* THE TRIPWIRES ARE READ ON EVERY RUN, IN THE ONE DIRECTION §2.7.3 GUARANTEES. A grant arriving while
-       `crossOriginIsolated` is FALSE is real and is the route ast-worker.html takes, so that disagreement is
-       RECORDED and never asserted — asserting it would abort on a shape the sibling document has. The other
-       direction cannot happen: with the capability TRUE, §2.7.3's SharedArrayBuffer branch has nothing left to
-       throw for once `forStorage` is false, and a `structuredClone` is never for storage. So a refusal there is
-       this file's reading of the standard disagreeing with the browser, which is a should-never-happen about
-       our OWN logic and is exactly what a DCHECK is for. */
-    DCHECK(!(SHM.coi === true && SHM.act === "refused"),
-           "this realm reports `self.crossOriginIsolated === true` and its serializer refused a " +
-           "SharedArrayBuffer anyway (" + SHM.why + ") — HTML §2.7.3 \"StructuredSerializeInternal " +
-           "( value , forStorage [ , memory ] )\" throws there only when that capability is false or " +
-           "when forStorage is " +
-           "true, and a structuredClone is neither, so this file's reading of the gate is wrong about this " +
-           "browser and every classification above it is drawn on the wrong map");
-    /* What this realm's isolation buys the scheduler is nothing: the slice is engine work counted at dispatch
-       (solver/engine.c's engine_quantum_spent), so no thread outside the instruction stream is wanted, and a C
-       activation that declares no step boundary dispatches nothing on either host until the step-machine
-       conversion reaches it. Shared memory plus `Atomics.wait` would make a host call synchronous, and a blocked
-       thread is a flow that cannot yield, so the one use this isolation would unlock is the one use it must
-       never be put to. */
   }
 
   /* THE WORKING SET, WHICH IS THIS FRAME'S TO STATE AND NOBODY ELSE'S. `HEAPU8.length` is the view over the

@@ -334,10 +334,8 @@ async function _swRpc(msg) {
     // accidentally still issues a storage.session.* RPC the unknown-api
     // throw below will surface it as a diagnostic — better than silently
     // doing nothing.
-    // NOTE: cross-origin fetch is NOT a SW RPC. External fetches go DIRECTLY from
-    // the offscreen document / its Worker through lib/safe-fetch.js (GET only,
-    // cookies omitted, http(s) only) — COEP does not block fetch, so the SW relay
-    // was pointless indirection and is gone.
+    // A network send is not an RPC arm: lib/safe-fetch.js decides it in the
+    // offscreen document and it rides its own `wire` port (wire.js).
     // Exploit-probe injection: run a named, predefined injector (above) in the
     // target tab's MAIN world. Returns the per-frame InjectionResult array (its
     // `.result` values are serializable) so the brain can merge them.

@@ -88,11 +88,9 @@
 
   var RENDERER_URL = "renderer.html";
 
-  /* THE RENDERER'S PROGRAM, READ ONCE BY THE ZONE THAT CAN READ IT. The frame cannot fetch these itself — the
-     manifest's `cross_origin_embedder_policy: require-corp` is served on every extension resource response and
-     Chromium emits `Cross-Origin-Resource-Policy`/`Access-Control-Allow-Origin` only for WEB-ACCESSIBLE
-     resources (extensions/browser/extension_protocols.cc), so from an opaque origin a classic subresource fails
-     the CORP check and a module or `fetch` fails CORS. Here the load is same-origin and passes both.
+  /* THE RENDERER'S PROGRAM, READ ONCE BY THE ZONE THAT CAN READ IT. The frame does not fetch these itself:
+     its own policy (`default-src 'none'`, and a `script-src` naming no URL source) refuses every load by URL,
+     so the untrusted side holds no way to load anything and is handed exactly this list.
      NOT `safeFetch`: that chokepoint exists for ANALYZER-driven requests to the web and rejects every scheme
      but http(s). This is the extension reading its own program off its own origin, which is not a request the
      analysis makes and not one a page can influence.
@@ -344,106 +342,6 @@
        This attribute is unchanged and is still what takes them away at the element, because the union rule means
        the narrower of the two decides and neither may rely on the other. */
     f.setAttribute("sandbox", "allow-scripts");
-    /* AND THE PERMISSIONS POLICY IS DELEGATED, BECAUSE THE CAPABILITY IS A CONJUNCTION AND THIS IS THE HALF
-       THIS ELEMENT OWNS. HTML §7.2.2.6 "Script settings for Window objects" defines the window's
-       cross-origin isolated capability as "true if both of the following hold and false otherwise: realm's
-       agent cluster's cross-origin isolation mode is "concrete", and window's associated document is allowed
-       to use the cross-origin isolated feature". HTML §2.2 "Policy-controlled features" gives that feature a
-       DEFAULT ALLOWLIST OF 'self', and this frame's origin is opaque, so Permissions Policy §9.7 "Define an
-       inherited policy for feature in container at origin" takes its final `otherwise return disabled` arm
-       for it unless a container policy names it — which is what this attribute is.
-       IT IS SET BEFORE THE ADDRESS AND BEFORE INSERTION for the same reason the `sandbox` attribute above is:
-       §9.4 "Process permissions policy attributes" reads the element's `allow` attribute when the container
-       policy is constructed, which is when the load begins.
-       MEASURED IN REAL CHROME RATHER THAN REASONED, one variable at a time, every reading taken beside an
-       INVENTED sibling capability (`crossOriginIsolatedZmqx`, absent in every cell) so a `false` is separable
-       from a getter that is not there, and with THE ACT and not only the getter — one `structuredClone` of a
-       shared `WebAssembly.Memory`'s buffer, armed first by an uncloneable value the serializer must refuse,
-       the shape renderer.html's own `sharedMemoryRecord` uses. On a served top-level page at COOP
-       `same-origin` + COEP `require-corp`, for a child whose origin is opaque, 3 runs of 3 agreeing on every
-       cell:
-         sandbox attribute, NO `allow`               -> allowsFeature false, crossOriginIsolated false, ACT refused
-         sandbox attribute, `allow` (bare, so 'src') -> allowsFeature TRUE,  crossOriginIsolated TRUE,  ACT GRANTED
-         sandbox attribute, `allow ... *`            -> allowsFeature TRUE,  crossOriginIsolated TRUE,  ACT GRANTED
-         sandbox attribute, `allow ... 'self'`       -> allowsFeature false, crossOriginIsolated false, ACT refused
-       The `'self'` row is what makes this a measurement of the ALLOWLIST rather than of the attribute's mere
-       presence: 'self' is the EMBEDDER's origin, which an opaque child is not, so §4.7 "Allowlists" finds no
-       match; the bare form stores the element's declared origin as `src` and that one does.
-       AND THE DECIDING INPUT IS THIS ATTRIBUTE AND NOT THE OPACITY, which the same measurement separates and
-       which matters because this document's opacity is stated TWICE — by the attribute above and by the CSP
-       `sandbox` directive `manifest.sandbox.pages` installs. With the CSP directive as the ONLY source of
-       opacity and no `sandbox` attribute on the element, the identical `allow` value delegates NOTHING
-       (allowsFeature false, ACT refused): the declared origin is then the URL's, which is the extension
-       origin, and §4.7's `if origin is an opaque origin, return false` is reached. Both together — which is
-       exactly this element — delegate. So the attribute above is load-bearing for THIS line and not only for
-       the boundary.
-       WHAT THIS BUYS IS THE SECOND CONJUNCT, AND THE FIRST ONE HAS NOW BEEN SHIPPED, SO THE SENTENCE THAT
-       STOOD HERE IS KEPT IN ITS OWN WORDS BECAUSE IT IS WHAT A READER RE-DERIVES FROM THIS LINE ALONE. It read:
-       WHAT THIS BUYS TODAY IS NOTHING AND THAT IS THE MEASURED STATE, because conjunct 1 is unmet: HTML §7.1.3
-       "Cross-origin opener policies" says the `same-origin-plus-COEP` value that sets a group's cross-origin
-       isolation mode "cannot be directly set via the Cross-Origin-Opener-Policy header but results from a
-       combination of setting both Cross-Origin-Opener-Policy: same-origin and a Cross-Origin-Embedder-Policy
-       header whose value is compatible with cross-origin isolation", and manifest.json ships
-       `same-origin-allow-popups`. Measured on THIS frame, in real Chrome, with the extension loaded off the
-       tree: before this line allowsFeature was FALSE and the act REFUSED; after it allowsFeature is TRUE and
-       the act is still REFUSED, with `crossOriginIsolated` false in both. HOW ITS ABSENCE WOULD SHOW: a
-       reader who flips the manifest COOP to `same-origin` expecting this frame to become isolated, and finds
-       it is not, because the half no COOP value can supply was never delegated.
-       EVERY CLAUSE OF THAT IS STILL TRUE OF THE §7.1.3 QUOTATION AND ITS LAST TWO SENTENCES ARE NOT TRUE OF THE
-       TREE: the manifest now ships `same-origin`, so conjunct 1 is met and this delegation is the reason
-       conjunct 2 is. Its `HOW ITS ABSENCE WOULD SHOW` clause is the one part that has become unfalsifiable
-       rather than false — a reader flipping the COOP and finding the frame not isolated is now the state this
-       line PREVENTS, so the observation it named would be this line having been removed.
-       THE TWO HALVES ARE ASSERTED WHERE THEY MEET RATHER THAN DESCRIBED HERE. renderer.html performs the
-       shared-memory act once and DCHECKs that a realm which STATES a cross-origin isolated capability was
-       granted it, naming all three inputs — this attribute, the manifest COOP and the manifest COEP — so a diff
-       that drops any one of them aborts in the realm that is the only one able to see it, instead of leaving a
-       paragraph here to go stale a second time.
-       AND THE FLIP WAS NOT THAT DIFF'S TO MAKE AND HAS SINCE BEEN MADE, BY THE PROJECT OWNER, WHICH LEAVES
-       THE COST RECORD BELOW AS THE REASON IT WAS SAFE RATHER THAN AS A REASON TO WAIT. It is an outward
-       behaviour change for every extension page and
-       it had a measured cost: poc-sandbox.html classifies §LIVE-VERIFY's delivery by the IDENTITY of
-       `window.open`'s return value, and at COOP `same-origin` a cross-origin auxiliary requires a browsing
-       context group switch (HTML §7.1.3.2 "Browsing context group switches due to opener policy" — "check if
-       popup COOP values require a browsing context group switch" returns FALSE for a
-       `same-origin-allow-popups` opener against an `unsafe-none` response and TRUE for a `same-origin` one),
-       so that call answers null while the document loads and runs anyway. Measured 3 of 3 with the opened
-       document's own request to a constant path as the witness: `delivered` becomes `no-navigable` and the
-       load witness fires in both. That is a delivery the card would report as never delivered, and the fix
-       that must precede the flip is an outcome oracle that does not ride the returned handle.
-       THAT ORACLE IS BUILT, AND THE SECTION CITED ABOVE IS NOT WHAT MAKES THE CALL ANSWER NULL. The
-       measurement is kept because it was right, and because a reader re-derives it from the handle.
-       §7.1.3.2 decides a group switch from the RESPONSE's opener policy, which arrives AFTER `window.open`
-       has returned — so it severs a handle already answered and cannot produce a synchronous null. The
-       synchronous null is HTML §7.2.2.1 "Opening and closing windows" step 17, "If windowType is `new with no
-       opener`, then return null": one of FOUR `return null` arms (1, 14, 17, 18) over 19 top-level steps whose
-       navigate is step 15, so steps 17 and 18 answer null for a document that HAS been navigated and only
-       step 14 means no navigable was created. HTML §7.3.1.7 "Navigable target names"' rules for choosing a
-       navigable set that windowType whenever the opening document's own opener policy is `same-origin` or
-       `same-origin-plus-COEP` and its origin is not same origin with its top-level origin — which every
-       `manifest.sandbox.pages` document satisfies on the second conjunct at any COOP value, and which asks
-       NOTHING about the target. So the flip arms it for EVERY delivery, not only for the targets §7.1.3.2
-       would have selected. The premise now comes from a document ANNOUNCING ITSELF at the delivered address
-       with the browser's own origin and frame (offscreen-brain.js `_recordProbeDelivery`), and the handle is
-       reported as context that gates nothing. This half of the flip's cost is paid, and the OTHER TWO items
-       that sentence used to list are not one outstanding thing but two unlike ones — kept here because the
-       list read as a single blocker and a reader will re-derive it that way. The wasm link's
-       `-pthread`/`-sSHARED_MEMORY` is a SEPARATE landing the grant is a precondition for, and it cannot be
-       silently deferred: `engine/host/solver/quantum.c` #errors the day `__EMSCRIPTEN_SHARED_MEMORY__` is
-       defined. The WATCHDOG THREAD is retired as a reason — renderer.html's own residual records that
-       `133f190`'s dispatch-periodic raise closed the population a watchdog would have closed, and that the
-       population still open is one no raise mechanism reaches — so the flip's benefit is not the quantum's and
-       is not claimed here. AND THE CONSUMER THIS SENTENCE NAMED IS STRUCK, kept in its own words because a
-       reader re-derives it from `two instances` and `one delta`. It read: what it makes buildable is CLAUDE.md
-       §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER's cross-WASM COW synchronisation, whose transport is one
-       shared linear memory between two instances. That section says a different-origin instance may be
-       REMOTE, and that what crosses an instance boundary is a CLOSED set of WindowProxy, Location and
-       serialized messages; SECURITY.md says one WASM instance per ORIGIN-KEYED AGENT CLUSTER, keyed on
-       (browsing-context group, origin), with ISOLATED MEMORY, over a sandbox it calls attacker-controlled. One
-       address space across two instances is a page of one origin reading another's whole heap through the
-       boundary THIS FILE mints the frame to state, so it is the boundary removed rather than a transport.
-       The flip's benefit is therefore not claimed here at all — renderer.html carries the full argument. */
-    f.setAttribute("allow", "cross-origin-isolated");
     /* THE ROUTING ID LEADS THE TITLE because the cluster key's own separator is a NUL, which every console and
        every element inspector renders as nothing at all — so a document holding several renderers showed a
        list of titles that ran two halves together and could not be told apart by eye. The id is the one name

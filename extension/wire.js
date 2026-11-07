@@ -1,10 +1,8 @@
 // wire.js — the trusted zone's one network: this service worker's fetch. lib/safe-fetch.js decides every
 // request in the offscreen document and hands this worker only the call that reaches the network, one port
 // per send ("wire"). The worker's fetch is the only platform fetch the extension spends on the network; the
-// offscreen document's is sealed (lib/safe-fetch.js), and webRequest reports none of that cross-origin
-// isolated document's requests to this worker, since Chromium's WebRequestEventRouter::ListenerMatchesRequest
-// drops an extension process's request for a listener in another process and isolation puts the extension's
-// pages in a process apart from this worker (measured in Chrome 148).
+// offscreen document's is sealed (lib/safe-fetch.js). webRequest reports this worker's own requests to it, and
+// the offscreen document's too, with the offscreen's documentId (measured in Chrome 155).
 // A send is asked for with redirect "manual", which never sends the hop and answers an opaque-redirect with no
 // headers; the 3xx itself is what webRequest reported here, and it is answered to the zone as the response, so
 // the zone follows each hop itself (Fetch §4.5 "HTTP-redirect fetch"). lib/web-request.js keeps documents'
@@ -64,8 +62,8 @@ chrome.webRequest.onBeforeSendHeaders.addListener((d) => {
     return;
   }
   CHECK(rec !== undefined && d.documentId === undefined,
-        "this extension sent " + d.url + " in no tab and no document, and it is not a live wire send — only " +
-        "this worker's fetch sends, and every send carries its own nonce");
+        "this extension sent " + d.url + " in no tab (document " + d.documentId + "), and it is not a live " +
+        "wire send — only this worker's fetch sends, and every send carries its own nonce");
   CHECK(rec.requestId === null, "the wire send of " + d.url + " went out twice — a \"manual\" redirect never " +
         "sends its hop, so a second request carrying the send's fragment is a hop the platform followed");
   DCHECK(rec.url === d.url, "webRequest reported the wire send of " + rec.url + " as " + d.url);

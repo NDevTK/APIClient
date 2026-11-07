@@ -41,10 +41,16 @@ comes from one mint, and the service worker re-checks the caller of its privileg
   service worker.
 - The frame has no network. The manifest's `sandbox` CSP grants `connect-src *`; the frame's own meta policy
   (`default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob:` in `renderer.html`) narrows it, and
-  policies combine so that every one must allow. The frame cannot load files by URL either (COEP
-  `require-corp` and its opaque origin refuse them), so `renderer-host.js` fetches a fixed list of five files
-  off the extension origin (`check.js`, `mojo.js`, `mojom.js`, `lib/qjs/qjs.mjs`, `lib/qjs/qjs.wasm`) and hands
-  the bytes over in the invitation.
+  policies combine so that every one must allow. The frame cannot load files by URL either: the same meta
+  policy names no URL source for scripts or connections, so `renderer-host.js` fetches a fixed list of five
+  files off the extension origin (`check.js`, `mojo.js`, `mojom.js`, `lib/qjs/qjs.mjs`, `lib/qjs/qjs.wasm`) and
+  hands the bytes over in the invitation. The policy is the whole refusal: with one that names the extension's
+  scheme, a sandboxed extension page loads its package's classic scripts, modules and fetches (measured in
+  Chrome 155, with and without COEP `require-corp`).
+- The frame is not cross-origin isolated (HTML §7.2.2.6 "Script settings for Window objects"), so the engine
+  has no `SharedArrayBuffer` and the coarsened clock: measured in Chrome 155, `typeof SharedArrayBuffer` is
+  `"undefined"`, a `structuredClone` of a shared `WebAssembly.Memory` throws `DataCloneError`, and the smallest
+  `performance.now()` step is 100 µs. `renderer.html` `DCHECK`s `self.crossOriginIsolated !== true`.
 - The transport is `content.mojom.Renderer` (`mojom.js`) over a `MessagePort`. `mojo.js` validates every
   incoming record with `CHECK` in dev and release (`Remote.prototype._onmessage`,
   `Receiver.prototype._onmessage`, `checkValues`, `requireWireAgreement`); a malformed record kills the
@@ -138,14 +144,15 @@ Which extension context can open a connection at all is enforced by CSP in all b
   one `wire` port per send, which it serves only to `ast-worker.html`. Beyond that fetch, that it sends
   nothing is code discipline: `background.js`, `speak-as-rule.js` and `wire.js` call no other `fetch`,
   `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`.
-- The wire leaves from the worker because webRequest observes it there. The extension's pages are cross-origin
-  isolated (COEP `require-corp` with COOP `same-origin`, for `SharedArrayBuffer`), and under that Chrome 148
-  reports none of the offscreen document's requests to webRequest, and it reports the worker's own
-  (measured). Chromium's `WebRequestEventRouter::ListenerMatchesRequest` drops a request from an extension
-  process for every listener in another renderer process, and isolation puts the extension's pages in a
-  process apart from its worker (measured: chrome://process-internals and the renderers'
-  `--renderer-client-id`; a listener in an isolated extension tab saw the offscreen document's fetches). The
-  offscreen document has no `chrome.webRequest` at all (it holds `chrome.runtime` alone).
+- The wire leaves from the worker, and webRequest observes it there: the worker's listeners see its own fetch,
+  in no tab and no document. The extension's pages are not cross-origin isolated (below, "Popup rendering and
+  extension CSP"), and then the worker's listeners also see the offscreen document's own requests, in no tab
+  and with the offscreen's `documentId` (measured in Chrome 155), so a request the sealed offscreen made would
+  reach the worker's CHECK. Under COEP `require-corp` with COOP `same-origin` they saw none of them (measured
+  in Chrome 148 and 155), because Chromium's `WebRequestEventRouter::ListenerMatchesRequest` drops a request
+  from an extension process for every listener in another renderer process and isolation puts the
+  extension's pages in a process apart from the worker. The offscreen document has no `chrome.webRequest` at
+  all (it holds `chrome.runtime` alone).
 - The zone follows every redirect itself (Fetch §4.5 "HTTP-redirect fetch"), so each hop is judged by every
   gate before it is sent and goes out as its own request, with its own nonce. The worker's fetch is asked for
   `redirect: "manual"`, which never sends the hop and answers an opaque-redirect without `Location`; the
@@ -751,9 +758,19 @@ payload's code ran in the delivered document, not that the sink produced the cal
 
 - Extension pages run under `default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self';
   style-src 'self'; img-src 'self'; connect-src 'self' https: http: data:; frame-src 'self';
-  frame-ancestors 'none'; form-action 'none'` (`manifest.json`), with COEP `require-corp` and COOP
-  `same-origin`. No resource is web-accessible, and `frame-ancestors 'none'` stops any page framing the popup or
-  the offscreen.
+  frame-ancestors 'none'; form-action 'none'` (`manifest.json`). No resource is web-accessible, and
+  `frame-ancestors 'none'` stops any page framing the popup or the offscreen. A web page's `window.open` of an
+  extension page runs nothing there (measured in Chrome 155).
+- The pages are not cross-origin isolated: `manifest.json` states no `cross_origin_embedder_policy` and no
+  `cross_origin_opener_policy`. Nothing uses what isolation grants (no `SharedArrayBuffer`, `Atomics` or shared
+  `WebAssembly.Memory`; the scheduler's slice is engine work counted at dispatch), and isolation would hand
+  the engine frame, once delegated `allow="cross-origin-isolated"`, a `SharedArrayBuffer` and a 5 µs clock
+  (measured in Chrome 155). COEP would refuse only cross-origin `no-cors` subresources without CORP, which
+  this policy already refuses. COOP `same-origin` would sever the opener of a window an extension page opens,
+  and none opens one with an opener: `domLink`'s links are `target=_blank` with no `opener` keyword, which
+  HTML §4.6.5 "Following hyperlinks"' get an element's noopener makes noopener, and the zone opens tabs with
+  `chrome.tabs.create`. Measured in Chrome 155 without COOP: such a link's page reads `window.opener` null,
+  while a `rel=opener` link's and a `window.open`'s read it non-null.
 - `popup.html` and `dev.html` require Trusted Types with no policy (`require-trusted-types-for 'script';
   trusted-types 'none'`), so every HTML sink throws when handed a string. Page-derived text reaches them only
   as text nodes and allowlisted attribute values built by `lib/dom-builder.js`, which parses no markup;
@@ -835,6 +852,6 @@ Each residual states what is not covered, what would close it, and how its absen
 | A compromised renderer reaches `chrome.tabs.*` or `chrome.scripting` through the service worker | mitigated: the service worker serves only the extension origin and pins `__rpc` to `OFFSCREEN_HREF` by equality |
 | A hole in that `__rpc` gate arms the live-verify injector in one of the person's tabs | mitigated: `scripting.exec` injects only into a tab `attackerPage.open` opened, or (`pocPerformActs`) into one document of a tab whose browser-stated opener is such a tab, a `CHECK` on the worker's record |
 | A sandboxed extension page impersonates a trusted extension document | mitigated: its origin is `"null"`, which fails every document→document check |
-| The bundle escapes the WASM sandbox into its host realm | out of model; the realm is `renderer.html` at a unique opaque origin with no `chrome.*`, no principal and no `connect-src`, reachable to the trusted zone only through validated `content.mojom.Renderer` records. See the residual on channels CSP does not govern |
+| The bundle escapes the WASM sandbox into its host realm | out of model; the realm is `renderer.html` at a unique opaque origin with no `chrome.*`, no principal, no `connect-src`, no `SharedArrayBuffer` and a 100 µs clock, reachable to the trusted zone only through validated `content.mojom.Renderer` records. See the residual on channels CSP does not govern |
 | A second instance is provisioned for an agent cluster that already has one | mitigated: `registerRenderer` refuses it with a `CHECK` in dev and release |
 | Injected markup in the popup runs script or exfiltrates | mitigated: the popup parses no page-derived markup (Trusted Types with no policy throws at every HTML sink), and its CSP refuses inline script and off-origin images, styles and forms; spoofed text or an http(s) link remains possible |
