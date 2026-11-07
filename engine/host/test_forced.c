@@ -1470,6 +1470,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/jsonrest.h"
 #include "fixture/linkrest.h"
 #include "fixture/linknest.h"
+#include "fixture/collattr.h"
 #include "fixture/wnameunk.h"
 #include "fixture/flexsvg.h"
 #include "fixture/ceupsale.h"
@@ -2158,6 +2159,7 @@ TF_DOCS[] = {
     { "jsonrest", HTML_JSONREST },
     { "linkrest", HTML_LINKREST },
     { "linknest", HTML_LINKNEST },
+    { "collattr", HTML_COLLATTR },
     { "wnameunk", HTML_WNAMEUNK },
     { "flexsvg", HTML_FLEXSVG },
     { "ceupsale", HTML_CEUPSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
@@ -19998,6 +20000,25 @@ TF_UNIT void probes_linknest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `collattr` document (fixture/collattr.h): live collections filtered by an attribute answer the
+   tree after a write to that attribute. */
+TF_UNIT void probes_collattr(const char *js, Probe *tab, int *n) {
+    const char *ca_why = NULL; int ca_tt = 1;
+    fold_row(&ca_tt, &ca_why, !!strstr(js, "\"/api/collattr\""),
+             "NOT REACHED: no /api/collattr record, so the reads of the attribute-filtered collections did not "
+             "return");
+    fold_row(&ca_tt, &ca_why, param_value_is(js, "/api/collattr", "c", "010") &&
+                              param_value_is(js, "/api/collattr", "n", "01") &&
+                              param_value_is(js, "/api/collattr", "l", "01") &&
+                              param_value_is(js, "/api/collattr", "k", "01"),
+             "a live collection filtered by class, name, href or id answered a length or a named key from before "
+             "a write to that attribute");
+    const Probe rows[] = {
+        { "collection-attribute-live", ca_tt, "/api/collattr", SESS_EXPLORE, ca_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `jsonrest` document (fixture/jsonrest.h): a JSON reply several quanta long reads back whole
    through json() over its bytes, the XHR json response, and json() over a streamed body. */
 TF_UNIT void probes_jsonrest(const char *js, Probe *tab, int *n) {
@@ -26450,6 +26471,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_jsonrest(js, probes, &np);
     probes_linkrest(js, probes, &np);
     probes_linknest(js, probes, &np);
+    probes_collattr(js, probes, &np);
     probes_wnameunk(js, probes, &np);
     probes_flexsvg(js, probes, &np);
     probes_ceupsale(js, probes, &np);
