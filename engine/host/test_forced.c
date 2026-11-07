@@ -1504,6 +1504,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/fileparseslice.h"
 #include "fixture/fileparsesub.h"
 #include "fixture/fileparsetaslice.h"
+#include "fixture/taindex.h"
 #include "fixture/spaniso.h"
 #include "fixture/fileparseset.h"
 #include "fixture/mrkeys.h"
@@ -2193,6 +2194,7 @@ TF_DOCS[] = {
     { "fileparse-slice", HTML_FILEPARSE_SLICE },
     { "fileparse-sub", HTML_FILEPARSE_SUB },
     { "fileparse-taslice", HTML_FILEPARSE_TASLICE },
+    { "taindex", HTML_TAINDEX },
     { "spaniso", HTML_SPANISO },
     { "fileparse-set", HTML_FILEPARSE_SET },
     { "mrkeys", HTML_MRKEYS },
@@ -20856,6 +20858,29 @@ TF_UNIT void probes_fileparse_taslice(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `taindex` document (fixture/taindex.h): fill and copyWithin over an index or a value the
+   fragment supplies reach the arm only that unknown can put there. */
+TF_UNIT void probes_taindex(const char *js, Probe *tab, int *n) {
+    const char *fi_why = NULL, *cp_why = NULL, *fv_why = NULL;
+    int fi_tt = 1, cp_tt = 1, fv_tt = 1;
+
+    fold_row(&fi_tt, &fi_why, !!strstr(js, "\"/api/tai-fill5\""),
+             "NOT REACHED: there is no /api/tai-fill5 record, so no arm of a fill from the fragment's start put the "
+             "value at element 5");
+    fold_row(&cp_tt, &cp_why, !!strstr(js, "\"/api/tai-copy4\""),
+             "NOT REACHED: there is no /api/tai-copy4 record, so no arm of a copyWithin from the fragment's start "
+             "moved element 3 to element 0");
+    fold_row(&fv_tt, &fv_why, !!strstr(js, "\"/api/tai-fillv9\""),
+             "NOT REACHED: there is no /api/tai-fillv9 record, so no arm of a fill with the fragment's value put 9 "
+             "at element 2");
+    const Probe rows[] = {
+        { "tai-fill5", fi_tt, "/api/tai-fill5", SESS_EXPLORE, fi_why },
+        { "tai-copy4", cp_tt, "/api/tai-copy4", SESS_EXPLORE, cp_why },
+        { "tai-fillv9", fv_tt, "/api/tai-fillv9", SESS_EXPLORE, fv_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `fileparse-set` document (fixture/fileparseset.h): the copy set from the reply reaches new
    Function rooted in the seed's reply and in location.search, its byte past the seed's length is unknown, and a
    4-byte target fits on the arm where the reply is that short. */
@@ -26504,6 +26529,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_fileparse_slice(js, probes, &np);
     probes_fileparse_sub(js, probes, &np);
     probes_fileparse_taslice(js, probes, &np);
+    probes_taindex(js, probes, &np);
     probes_spaniso(js, probes, &np);
     probes_fileparse_set(js, probes, &np);
     probes_mathrandom(js, probes, &np);
