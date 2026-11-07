@@ -8847,8 +8847,8 @@ static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const 
 
 /* A source read, the root of every identity. Its identity is its provenance, because nothing derived it. A
    source with no provenance has no identity either, which keeps both arms of every branch over it. */
-JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, ConcolicRootWhose whose,
-                     JSValue example) {
+static JSValue source_mint(JSContext *ctx, const char *shape, const char *src, const char *root,
+                          ConcolicRootWhose whose, JSValue example) {
     const char *f[1];
 
     /* A source's shape names a hole, in braces, asserted at the one mint every source goes through.
@@ -8934,7 +8934,7 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
     /* Whose unknown this is, stated after both arms that answer a non-concolic (the pin above, the candidate
        substitution in concolic_derived), since a mark before them would have no record. It rides the root,
        `src` itself here, so the mask is empty exactly when the root is NULL. */
-        JSValue r = concolic_derived(ctx, shape, src, src, src ? (1u << whose) : 0u,
+        JSValue r = concolic_derived(ctx, shape, src, root, src ? (1u << whose) : 0u,
                                      concolic_ident_compose("s", f, 1), example);
         /* …and its own identity, the precondition the pin arm above stands on, recorded as `src_self` so a seam
            that holds the value long after the mint (the CSS cascade, reading the DOM taint shadow) can ask. */
@@ -8964,6 +8964,17 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, Concoli
 #endif
         return r;
     }
+}
+
+JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, ConcolicRootWhose whose,
+                     JSValue example) {
+    return source_mint(ctx, shape, src, src, whose, example);
+}
+
+JSValue concolic_new_rooted(JSContext *ctx, const char *shape, const char *src, const char *root,
+                            ConcolicRootWhose whose, JSValue example) {
+    DCHECK(root != NULL && *root, "a rebuilt source was minted with no delivery root");
+    return source_mint(ctx, shape, src, root, whose, example);
 }
 
 int concolic_is(JSValueConst v) {

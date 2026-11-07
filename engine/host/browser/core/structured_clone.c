@@ -410,7 +410,10 @@ enum { TH_TYPE = 0, TH_DATA, TH_N };
    so a rebuild carrying the same `src` is correlated with every constraint the flow recorded. That is why the
    rebuild below is not the "SECOND symbol" the write hook's own banner refuses: the banner is about the
    SAME-TURN clone, where the live value is available and returning it is strictly better. */
-enum { SY_SHAPE = 0, SY_SRC, SY_EXAMPLE, SY_N };
+/* SY_ROOT is the value's delivery root, which a derived source's identity is not (`{location.search}.slice(…).0` is
+   rooted at `location.search`): rebuilt from its identity alone, the arriving value names no declared source and a
+   sink it reaches in the receiving realm opens no search. */
+enum { SY_SHAPE = 0, SY_SRC, SY_EXAMPLE, SY_ROOT, SY_N };
 
 /* THE JS-SPEC ARM, FIRST, because §2.7.7 asks it first: an [[ArrayBufferData]] slot decides the ArrayBuffer
    branch and everything else is "a platform object that is a transferable object". SharedArrayBuffer is a
@@ -772,7 +775,7 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
     for (i = 0; i < cn; i++) {
         JSValue cv = JS_GetPropertyUint32(ctx, concolics, i), rec;
         const char *shape = concolic_shape_c(cv);
-        const char *csrc = concolic_src_c(cv);
+        const char *csrc = concolic_src_c(cv), *croot = concolic_root_c(cv);
 
         /* THE SOURCE IDENTITY IS THE ONE FIELD THE REBUILD CANNOT DO WITHOUT, because it is what correlates
            the arriving value with every constraint this flow narrowed it under. A triple written without one
@@ -798,6 +801,9 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
         JS_SetPropertyUint32(ctx, rec, SY_SHAPE, JS_NewString(ctx, shape));
         JS_SetPropertyUint32(ctx, rec, SY_SRC, JS_NewString(ctx, csrc));
         JS_SetPropertyUint32(ctx, rec, SY_EXAMPLE, concolic_example(ctx, cv));
+        DCHECK(croot != NULL, "a value the write hook interned as concolic carries no delivery root — "
+                              "concolic_alloc asserts provenance and root together");
+        JS_SetPropertyUint32(ctx, rec, SY_ROOT, JS_NewString(ctx, croot));
         JS_FreeValue(ctx, cv);
         JS_SetPropertyUint32(ctx, out->symbols, i, rec);
     }
@@ -831,16 +837,20 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
        THE REBUILD IS WHERE THE SYMBOL RE-ENTERS THIS HEAP, and it is keyed on the source identity the record
        carries, which is what every constraint the sending flow narrowed is filed under. */
     for (i = 0; i < ns; i++) {
-        JSValue rec = JS_GetPropertyUint32(ctx, in->symbols, i), sh, sr, ex, nv;
-        const char *shape, *csrc;
+        JSValue rec = JS_GetPropertyUint32(ctx, in->symbols, i), sh, sr, ex, rt, nv;
+        const char *shape, *csrc, *croot;
 
         DCHECK(!JS_IsException(rec), "reading an engine-built symbol record threw");
         sh = JS_GetPropertyUint32(ctx, rec, SY_SHAPE);
         sr = JS_GetPropertyUint32(ctx, rec, SY_SRC);
         ex = JS_GetPropertyUint32(ctx, rec, SY_EXAMPLE);
+        rt = JS_GetPropertyUint32(ctx, rec, SY_ROOT);
         JS_FreeValue(ctx, rec);
         shape = JS_ToCString(ctx, sh);
         csrc = JS_ToCString(ctx, sr);
+        croot = JS_ToCString(ctx, rt);
+        DCHECK(croot != NULL, "a symbol record carried no delivery root — the writer DCHECKs that it has one, so "
+                              "the two halves of this record's format disagree");
         /* BOTH HALVES ARE REQUIRED AND NEITHER IS DEFAULTED: the writer asserts it wrote them, so an absence
            here is the two halves of this format disagreeing rather than a hole to fill. */
         DCHECK(shape != NULL, "a symbol record carried no display shape — the writer DCHECKs a braced one, "
@@ -864,7 +874,7 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
            because a reader alone would default and a writer alone would be a field nothing consumes. HOW ITS
            ABSENCE WOULD SHOW: a value posted through §2.7 and read back answering UNSTATED where the same
            value answered a member before it was serialized. */
-        nv = concolic_new(ctx, shape, csrc, CONCOLIC_WHOSE_UNSTATED, ex);
+        nv = concolic_new_rooted(ctx, shape, csrc, croot, CONCOLIC_WHOSE_UNSTATED, ex);
         /* RETIRED — THIS ASSERT WAS WRONG AND IT ABORTED EVERY DEV RUN THAT REBUILT A DETERMINED SOURCE.
            It read `DCHECK(concolic_is(nv), "a rebuilt triple is not concolic — the arriving value would
            stand for the example alone, so a branch on it would be DECIDED where the sender forked")`, and it
@@ -885,8 +895,10 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
                "forked and this flow has proved nothing that entitles it to answer one arm");
         JS_FreeCString(ctx, shape);
         JS_FreeCString(ctx, csrc);
+        JS_FreeCString(ctx, croot);
         JS_FreeValue(ctx, sh);
         JS_FreeValue(ctx, sr);
+        JS_FreeValue(ctx, rt);
         JS_SetPropertyUint32(ctx, values, n + i, nv);
     }
     /* THE SYMBOLS ARE REBUILT FIRST, at indices n + k, because a holder's receiving steps resolve its own

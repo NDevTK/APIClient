@@ -123,6 +123,11 @@ int         concolic_root_every(JSValueConst v, int (*member)(const char *p, siz
    returns, which is the same reason `src_self` is written by this mint and not by its callers. */
 JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, ConcolicRootWhose whose,
                      JSValue example);
+/* concolic_new for a value whose delivery root is not its own identity: a source value that crossed §2.7
+   StructuredSerialize as data and is rebuilt with the shape, identity and root it was written with, so the
+   receiving realm's sink names the source an attacker delivers at (the sender's), not the identity alone. */
+JSValue concolic_new_rooted(JSContext *ctx, const char *shape, const char *src, const char *root,
+                            ConcolicRootWhose whose, JSValue example);
 
 /* State that every reply could only make `v` a value ECMAScript §25.5.2.1 ParseJSON ( text ) produces: a
    String, Number, Boolean, null, or an object an Array or Object literal defines, whose own keys are Strings.
