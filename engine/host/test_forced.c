@@ -644,6 +644,15 @@ typedef struct { const char *at; const char *type; const char *body; } TfServed;
                        "#lnBig{" LINKNEST_D100("0") LINKNEST_D100("1") LINKNEST_D100("2") LINKNEST_D100("3")   \
                        LINKNEST_D100("4") LINKNEST_D100("5") LINKNEST_D100("6") LINKNEST_D100("7")             \
                        LINKNEST_D100("8") LINKNEST_D100("9") "height:3px}"
+/* fixture/collrest.h's elements: 50,000 empty `<i>` by macro repetition. */
+#define COLLREST_10 "<i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>"
+#define COLLREST_100 COLLREST_10 COLLREST_10 COLLREST_10 COLLREST_10 COLLREST_10 COLLREST_10 COLLREST_10     \
+                     COLLREST_10 COLLREST_10 COLLREST_10
+#define COLLREST_1000 COLLREST_100 COLLREST_100 COLLREST_100 COLLREST_100 COLLREST_100 COLLREST_100          \
+                      COLLREST_100 COLLREST_100 COLLREST_100 COLLREST_100
+#define COLLREST_10000 COLLREST_1000 COLLREST_1000 COLLREST_1000 COLLREST_1000 COLLREST_1000 COLLREST_1000    \
+                       COLLREST_1000 COLLREST_1000 COLLREST_1000 COLLREST_1000
+#define COLLREST_ITEMS COLLREST_10000 COLLREST_10000 COLLREST_10000 COLLREST_10000 COLLREST_10000
 /* fixture/jsonrest.h's reply: 10,000 records `{"i":NNNN,"v":"abcdefghijklmn"}` by macro repetition, then one
    whose `i` is -1. */
 #define JSONREST_R(p) "{\"i\":" p ",\"v\":\"abcdefghijklmn\"},"
@@ -1473,6 +1482,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/linkrest.h"
 #include "fixture/linknest.h"
 #include "fixture/collattr.h"
+#include "fixture/collrest.h"
 #include "fixture/wnameunk.h"
 #include "fixture/flexsvg.h"
 #include "fixture/ceupsale.h"
@@ -2169,6 +2179,7 @@ TF_DOCS[] = {
     { "linkrest", HTML_LINKREST },
     { "linknest", HTML_LINKNEST },
     { "collattr", HTML_COLLATTR },
+    { "collrest", HTML_COLLREST },
     { "wnameunk", HTML_WNAMEUNK },
     { "flexsvg", HTML_FLEXSVG },
     { "ceupsale", HTML_CEUPSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
@@ -20560,6 +20571,25 @@ TF_UNIT void probes_jsonrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `collrest` document (fixture/collrest.h): live collections over 50,001 elements answer their
+   length, an index, item(), namedItem() and a named key. */
+TF_UNIT void probes_collrest(const char *js, Probe *tab, int *n) {
+    const char *cr_why = NULL; int cr_tt = 1;
+    fold_row(&cr_tt, &cr_why, !!strstr(js, "\"/api/collrest\""),
+             "NOT REACHED: no /api/collrest record, so the reads of the long collections did not all return");
+    fold_row(&cr_tt, &cr_why, param_value_is(js, "/api/collrest", "n", "50001") &&
+                              param_value_is(js, "/api/collrest", "l", "crLast") &&
+                              param_value_is(js, "/api/collrest", "m", "1") &&
+                              param_value_is(js, "/api/collrest", "k", "11") &&
+                              param_value_is(js, "/api/collrest", "c", "50001"),
+             "the long collections do not read back as 50001 members whose last is crLast, through the index, "
+             "item(), namedItem(), the named key, children and childNodes");
+    const Probe rows[] = {
+        { "collection-walk-rest", cr_tt, "/api/collrest", SESS_EXPLORE, cr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `wnameunk` document (fixture/wnameunk.h): window.name set to an example-free unknown reads
    back as that unknown. */
 TF_UNIT void probes_wnameunk(const char *js, Probe *tab, int *n) {
@@ -27083,6 +27113,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_linkrest(js, probes, &np);
     probes_linknest(js, probes, &np);
     probes_collattr(js, probes, &np);
+    probes_collrest(js, probes, &np);
     probes_wnameunk(js, probes, &np);
     probes_flexsvg(js, probes, &np);
     probes_ceupsale(js, probes, &np);
