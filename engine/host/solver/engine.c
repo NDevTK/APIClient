@@ -11856,8 +11856,10 @@ static void engine_sale_release(Flow *tail) {
    Named residual. Not covered: the sold member's return within this session. Its record re-enters only at the
    next engine_sched_begin (cold_resume's one caller), so a sale removes its work from the session rather than
    only moving where it lives. Next diff builds: the sold member kept in the order at cold residency, ranked by its
-   live operands, and rebuilt from its record when the pick reaches it. Absence shows as: two runs of one artifact
-   over one input whose picks agree until the first RAM-pressure sale and differ after it. */
+   live operands, and rebuilt from its record when the pick reaches it by a replay that reaches the member's own
+   work coordinate at the sale uncharged and re-sends nothing, since flow_age_running charges replayed work like any
+   other. Absence shows as: two runs of one artifact over one input whose picks agree until the first RAM-pressure
+   sale and differ after it. */
 static void engine_sale_write(Flow *tail) {
     /* Which population is leaving, read before flow_release frees the label: `cand_src` is the whole question
        (solver/engine.h). Per member, as at the retirement arm (engine.h). */
