@@ -56055,7 +56055,8 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
 }
 
 /* JS_FlowReach* — see quickjs.h. The visited set and the work stack are host malloc, not the runtime's, because
-   the walk runs inside a RAM-pressure sale and a runtime allocation there would ask for a second sale. */
+   the walk runs inside a RAM-pressure sale and a runtime allocation there would ask for a second sale. The
+   release is spelled `(free)` because this file forbids the raw one for runtime memory, which this is not. */
 static struct {
     JSRuntime *rt;
     uint32_t floor;
@@ -56080,7 +56081,7 @@ static bool reach_seen(const void *p)
             while (ns[h]) h = (h + 1) & (ncap - 1);
             ns[h] = q;
         }
-        free(g_reach.set);
+        (free)(g_reach.set);
         g_reach.set = ns; g_reach.set_cap = ncap;
     }
     m = g_reach.set_cap - 1;
@@ -56130,7 +56131,7 @@ static void reach_mark(JSRuntime *rt, JSGCObjectHeader *gp)
     }
     if (g_reach.stk_n == g_reach.stk_cap) {
         size_t ncap = g_reach.stk_cap ? g_reach.stk_cap * 2 : 1024;
-        JSGCObjectHeader **ns = realloc(g_reach.stk, ncap * sizeof *ns);
+        JSGCObjectHeader **ns = (realloc)(g_reach.stk, ncap * sizeof *ns);
         CHECK(ns != NULL, "flow reach census: OOM growing the work stack");
         g_reach.stk = ns; g_reach.stk_cap = ncap;
     }
@@ -56248,7 +56249,7 @@ void JS_FlowReachEnd(JSFlowReach *out)
     DCHECK(g_reach.rt != NULL && g_reach.stk_n == 0, "a flow reach census was ended that was not begun, or "
                                                       "with roots still on its work stack");
     *out = g_reach.r;
-    free(g_reach.set); g_reach.set = NULL; g_reach.set_cap = g_reach.set_n = 0;
+    (free)(g_reach.set); g_reach.set = NULL; g_reach.set_cap = g_reach.set_n = 0;
     g_reach.rt = NULL;
 }
 
