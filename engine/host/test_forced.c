@@ -1425,6 +1425,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/errsale.h"
 #include "fixture/sizekw.h"
 #include "fixture/svgratio.h"
+#include "fixture/vshift.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2092,6 +2093,7 @@ TF_DOCS[] = {
     { "errsale", HTML_ERRSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "sizekw", HTML_SIZEKW },
     { "svgratio", HTML_SVGRATIO },
+    { "vshift", HTML_VSHIFT },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19685,6 +19687,27 @@ TF_UNIT void probes_svgratio(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `vshift` document (fixture/vshift.h): css-inline-3 §4.2.3's baseline-relative shifts. */
+TF_UNIT void probes_vshift(const char *js, Probe *tab, int *n) {
+    const char *vs_why = NULL; int vs_tt = 1;
+    fold_row(&vs_tt, &vs_why, !!strstr(js, "\"/api/vshift\""),
+             "NOT REACHED: no /api/vshift record, so the document aborted before its fetch");
+    fold_row(&vs_tt, &vs_why, param_value_is(js, "/api/vshift", "s", "10") &&
+                              param_value_is(js, "/api/vshift", "p", "-4"),
+             "css-inline-3 §4.2.3: `-50%` of a 20px line-height does not lower the box 10px, or `4px` does not "
+             "raise it 4px");
+    fold_row(&vs_tt, &vs_why, param_value_is(js, "/api/vshift", "b", "6") &&
+                              param_value_is(js, "/api/vshift", "u", "-10"),
+             "css-inline-3 §4.2.3: `sub` does not drop the box a fifth of its parent's 30px, or `super` does not "
+             "raise it a third");
+    fold_row(&vs_tt, &vs_why, param_value_is(js, "/api/vshift", "n", "-5"),
+             "css-inline-3 §4.2.3: an inline box's `5px` does not carry the atomic inline inside it");
+    const Probe rows[] = {
+        { "baseline-relative-shift", vs_tt, "/api/vshift", SESS_EXPLORE, vs_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25684,6 +25707,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_errsale(js, probes, &np);
     probes_sizekw(js, probes, &np);
     probes_svgratio(js, probes, &np);
+    probes_vshift(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
