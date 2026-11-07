@@ -4479,6 +4479,41 @@ typedef enum {
    (§6.6.1 step 5's parse, and step 8's component extraction for a shorthand) TOGETHER WITH the longhand it
    produced them for, and its EXAMPLE is exactly the bytes stored — which is the record's whole validation rule
    above, so it is asserted here rather than assumed. */
+/* The record for declaration `name` a write just stored as `stored`: none for a concrete `taint` (the entry is
+   cleared), else a derivation over the unknown `taint` named for `name`, so two declarations one value wrote
+   are two constraint keys. `unspellable` is a write that stored no bytes of the value's own. */
+static void cssd_taint_file(JSContext *ctx, JSValueConst block, const char *name, const char *stored,
+                            JSValueConst taint, bool unspellable)
+{
+    /* Measured and not capped: the operation name is half the derivation's identity, and a custom property's
+       name is whatever the page wrote. */
+    size_t n = sizeof CSSD_TAINT_OP - 1 + strlen(name) + 1;
+    char *op;
+    JSValue derived;
+
+    if (!concolic_is(taint)) {
+        cssd_taint_clear(ctx, block, name);
+        return;
+    }
+    op = lexbor_malloc(n);
+    CHECK(op != NULL, "cssom: OOM naming the derivation behind an unknown declaration value");
+    memcpy(op, CSSD_TAINT_OP, sizeof CSSD_TAINT_OP - 1);
+    memcpy(op + sizeof CSSD_TAINT_OP - 1, name, strlen(name) + 1);
+    /* The example is the bytes the write stored, and an unspellable write stored none of the value's own:
+       JS_UNDEFINED is solver/concolic.h's spelling of "no example", where the empty string the block holds
+       would state a concrete value no run computed. */
+    derived = concolic_builtin_hook(ctx, taint, op, unspellable ? JS_UNDEFINED : JS_NewString(ctx, stored));
+    free(op);
+    DCHECK(concolic_is(derived),
+           "a derivation over an unknown declaration value came back as something other than an unknown — "
+           "solver/concolic.h answers JS_UNINITIALIZED only for an operand that is not one, and this one was "
+           "tested directly above");
+    /* The stored bytes are the entry's own fact, which ties it to this declaration; the example answers per
+       flow and they do not. */
+    cssd_taint_set(ctx, block, name, derived, stored);
+    JS_FreeValue(ctx, derived);
+}
+
 static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const char *name, CssdWriteKind what,
                                    const char *value, bool important, JSValueConst taint)
 {
@@ -4506,39 +4541,7 @@ static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const cha
                "a write reported setting a declaration the list does not hold — the two are one step, and a "
                "name reported without a value is a report composed somewhere other than at the set");
         if (at < 0 || !d.v[at].value) continue;
-        if (!concolic_is(taint)) { cssd_taint_clear(ctx, block, set.name[i]); continue; }
-        {
-            /* MEASURED AND NOT CAPPED, because the operation name is HALF THE DERIVATION'S IDENTITY: a custom
-               property's name is whatever the page wrote, so a fixed buffer would truncate two long names to
-               one string and file two declarations under one constraint key. */
-            size_t n = sizeof CSSD_TAINT_OP - 1 + strlen(set.name[i]) + 1;
-            char *op = lexbor_malloc(n);
-            JSValue derived;
-
-            CHECK(op != NULL, "cssom: OOM naming the derivation behind an unknown declaration value");
-            memcpy(op, CSSD_TAINT_OP, sizeof CSSD_TAINT_OP - 1);
-            memcpy(op + sizeof CSSD_TAINT_OP - 1, set.name[i], strlen(set.name[i]) + 1);
-            /* THE EXAMPLE IS THE BYTES THE WRITE STORED, AND AN UNSPELLABLE WRITE STORED NONE. §@H never
-               invents, so the derivation over a value with no example must have none either — JS_UNDEFINED is
-               solver/concolic.h's own positive spelling of that ("JS_UNDEFINED where any operand has none"),
-               and handing it the empty string this arm put in the block would state a concrete value no run
-               computed. The bytes below are still the ENTRY's own fact and are a different question: they are
-               what ties the record to THIS declaration, which is why the record stores them and the unknown
-               does not. */
-            derived = concolic_builtin_hook(ctx, taint, op,
-                                            what == CSSD_WRITE_UNSPELLABLE ? JS_UNDEFINED
-                                                                           : JS_NewString(ctx, d.v[at].value));
-            free(op);
-            DCHECK(concolic_is(derived),
-                   "a derivation over an unknown declaration value came back as something other than an "
-                   "unknown — solver/concolic.h answers JS_UNINITIALIZED only for an operand that is not one, "
-                   "and this one was tested directly above");
-            /* THE BYTES THIS WRITE STORED, handed to the record as the entry's own fact. They are the same
-               string the derivation above was given as its example, and that is a COINCIDENCE OF THIS CALL
-               rather than the record's rule: the example answers per flow and these bytes do not. */
-            cssd_taint_set(ctx, block, set.name[i], derived, d.v[at].value);
-            JS_FreeValue(ctx, derived);
-        }
+        cssd_taint_file(ctx, block, set.name[i], d.v[at].value, taint, what == CSSD_WRITE_UNSPELLABLE);
     }
     /* §6.6.1's removeProperty steps 5 and 6 take the declaration away, so every record about it is about a
        declaration that is gone. The shorthand walk is the same one the removal made, asked of the same entry. */
@@ -5525,6 +5528,11 @@ static JSValue js_cssd_descriptor_set(JSContext *ctx, JSValueConst this_val, JSV
    to hand back the element's `style` attribute BYTES for both — which is a real string belonging to a different
    question: it is not a serialization (`style="color:red"` reads back as `color: red;` in a browser), and for a
    computed block it is the inline declarations of a block that has none. */
+/* Named residual. Not covered: a declaration the block's unknown record holds (cssd_taint_set) is serialized here
+   as its stored bytes, so cssText reads it back as a plain string. Next diff: compose the serialization with
+   concolic_string_concat, each recorded declaration's value as its unknown, through the shorthand absorption
+   `cssd_serialize_decls` performs. Absence shows as `el.style.cssText` after a write of a derived value taking
+   one arm of a comparison where `el.style.left` of the same declaration forks both. */
 static JSValue js_cssd_css_text(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue block = cssd_block(ctx, this_val), r;
@@ -5568,23 +5576,34 @@ static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
         JS_FreeValue(ctx, block);
         return cssd_readonly_throw(ctx);
     }
-    /* AN UNKNOWN cssText IS A WHOLE DECLARATION LIST AND NOT A VALUE, so it does not reach cssd_value: what
-       step 3 parses out of it is N declarations, and each of them would need its own derivation over this one
-       string, named for the declaration it produced. The three VALUE writes above already do exactly that per
-       longhand; what is missing here is the enumeration that turns one unknown into that per-declaration list. */
-    if (concolic_is(val))
-        DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's cssText setter was given UNKNOWN EXTERNAL "
-               "INPUT (`%s`), and its step 3 is \"Parse the given value and, if the return value is not the "
-               "empty list, insert the items in the list into the declarations, in specified order\" — a whole "
-               "DECLARATION LIST, so there is no one property for the block's unknown record to file it under. "
-               "WHAT THE NEXT DIFF BUILDS: serialize this value's own EXAMPLE the way the concrete arm below "
-               "does, enumerate the declarations it produced with cssd_decls_from_text, and record for each a "
-               "derivation over this string named for THAT declaration — the same composition "
-               "cssd_write_declaration makes per longhand, one level up, so `margin` and `color` set by one "
-               "cssText do not share a constraint key. ITS ABSENCE WOULD SHOW as this abort, and after it is "
-               "built, as `el.style.cssText = '--w:' + w + 'px'` leaving `getPropertyValue('--w')` a plain "
-               "string where the same write through setProperty leaves an unknown.",
-               concolic_shape_c(val) ? concolic_shape_c(val) : "{}");
+    /* An unknown cssText is a whole declaration list: step 3 parses its example, as every write parses a
+       value's (cssd_value), and each declaration it produced records its own derivation over this one string
+       through the one seam the value writes share (cssd_taint_file), named for that declaration. */
+    if (concolic_is(val)) {
+        CssdValue cv;
+        CssDecls d = { 0 };
+        unsigned i;
+
+        if (!cssd_value(ctx, val, "cssText setter", "cssText", &cv)) {
+            JS_FreeValue(ctx, block);
+            return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
+        }
+        if (cssd_value_unspellable(&cv)) {
+            cssd_value_unspellable_fail(ctx, val, "cssText setter", "cssText");
+            cssd_value_free(ctx, &cv);
+            JS_FreeValue(ctx, block);
+            return JS_UNDEFINED;
+        }
+        cssd_taint_empty(ctx, block);
+        cssd_decls_from_text(cv.bytes, strlen(cv.bytes), &d);
+        cssd_declarations_put(ctx, block, &d);
+        for (i = 0; i < d.n; i++)
+            if (d.v[i].value != NULL) cssd_taint_file(ctx, block, d.v[i].name, d.v[i].value, cv.taint, false);
+        cssd_decls_free(&d);
+        cssd_value_free(ctx, &cv);
+        JS_FreeValue(ctx, block);
+        return JS_UNDEFINED;
+    }
     v = JS_ToCString(ctx, val);
     if (!v) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
     /* §6.6.1's cssText setter step 2, "Empty the declarations" — every unknown the block recorded was about a
