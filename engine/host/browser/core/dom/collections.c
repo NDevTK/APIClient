@@ -43,6 +43,7 @@
 #include "core/dom/node.h"
 #include "core/dom/collections.h"
 #include "core/dom/document_named.h"   /* §3.1.7's named element, the document-named kind's filter */
+#include "core/dom/attr_list.h"   /* dom_attr_generation, which an attribute-filtered cache keys on */
 #include "core/dom/element.h"   /* element_id_bytes — DOM §4.9's ID, which both named lookups below are over */
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
@@ -347,11 +348,13 @@ static lxb_dom_node_t *coll_adv(int kind, lxb_dom_node_t *root, lxb_dom_node_t *
    quadratic in the page's own markup, and it runs inside an exotic [[GetOwnProperty]], which is a synchronous C
    contract with nowhere to suspend. Being O(1) is what makes a body safe to leave un-parkable, so this is what
    makes the indexed getter safe: not a way to yield out of the walk, but no walk to yield out of.
-   The cache is a MEMO, valid exactly while the tree version is unchanged — which the swap advances, so a cache
-   another flow filled is already invalid by the time this one runs. Nothing here is per-flow state; a miss
-   costs the walk that used to happen every time. */
+   The cache is a MEMO, valid exactly while what it read is unchanged: the tree version, which the swap
+   advances, so a cache another flow filled is already invalid by the time this one runs, and for a kind whose
+   filter reads attributes the attribute generation too, because an attribute write moves no tree version.
+   Nothing here is per-flow state; a miss costs the walk that used to happen every time. */
 typedef struct {
     uint64_t        version;      /* the tree this describes; never 0, because the version starts at 1 */
+    uint64_t        attr_gen;     /* the attributes it read (dom_attr_generation), or 0 for a kind reading none */
     lxb_dom_node_t *owner;        /* whose child list — the same object can be re-read from a different flow */
     lxb_dom_node_t *node;         /* the member at `index`, or NULL when only the length is known */
     uint32_t        index;
@@ -400,13 +403,24 @@ static void coll_query_free(JSContext *ctx, CollQuery *q)
     q->name = q->ns = NULL;
 }
 
-static CollCache *coll_cache(JSValueConst self, lxb_dom_node_t *owner)
+/* Whether `kind`'s filter reads an attribute (class, href, id or name), so its members change on an attribute
+   write; a child kind and a by-tag kind read node types and names, which no write changes. */
+static bool coll_filters_attributes(int kind)
+{
+    return kind == COLL_BY_CLASS || kind == COLL_LINKS || kind == COLL_NAMED || kind == COLL_BY_ELEM_NAME ||
+           kind == COLL_DOC_NAMED;
+}
+
+static CollCache *coll_cache(JSValueConst self, lxb_dom_node_t *owner, int kind)
 {
     CollCache *c = idl_indexed_cache(self);
+    uint64_t attr_gen = coll_filters_attributes(kind) ? dom_attr_generation() : 0;
+
     if (!c) return NULL;
-    if (c->version != dom_cow_version() || c->owner != owner) {
+    if (c->version != dom_cow_version() || c->owner != owner || c->attr_gen != attr_gen) {
         memset(c, 0, sizeof *c);
         c->version = dom_cow_version();
+        c->attr_gen = attr_gen;
         c->owner = owner;
     }
     return c;
@@ -430,7 +444,7 @@ static uint32_t coll_length(JSContext *ctx, JSValueConst self)
     n = node_of(owner);
     JS_FreeValue(ctx, owner);
     if (!n) return 0;
-    cc = coll_cache(self, n);
+    cc = coll_cache(self, n, kind);
     if (cc && cc->has_length) return cc->length;
     /* THE TREE AS IT IS NOW. That walk is the liveness — there is nothing here to invalidate or refresh,
        because the version says when what was counted stopped describing the tree. */
@@ -476,7 +490,7 @@ static JSValue coll_item(JSContext *ctx, JSValueConst self, uint32_t i)
     n = node_of(owner);
     JS_FreeValue(ctx, owner);
     if (!n) return JS_UNDEFINED;
-    cc = coll_cache(self, n);
+    cc = coll_cache(self, n, kind);
     {
     CollQuery q;
     coll_query(ctx, self, kind, &q);

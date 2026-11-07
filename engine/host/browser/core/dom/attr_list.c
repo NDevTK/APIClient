@@ -91,6 +91,13 @@ lxb_dom_attr_t *dom_attr_get_ns(lxb_dom_element_t *el, const char *ns, const cha
  * The destroy arm is gone rather than reproduced: the only caller is dom_attr_write, which appends only when
  * `dom_attr_get_ns` found no attribute with that identity, so a second (null, "id") is unreachable — and
  * (namespace, local name) is §4.9's UNIQUENESS key on the list, which is what makes that a DCHECK. */
+/* The attribute generation (attr_list.h). */
+static uint64_t g_attr_generation = 1;
+
+uint64_t dom_attr_generation(void) { return g_attr_generation; }
+
+void dom_attr_generation_advance(void) { g_attr_generation++; }
+
 void dom_attr_attach(lxb_dom_element_t *el, lxb_dom_attr_t *a, lxb_dom_attr_t *before)
 {
     lxb_dom_document_t *doc = lxb_dom_interface_node(el)->owner_document;
@@ -119,6 +126,7 @@ void dom_attr_attach(lxb_dom_element_t *el, lxb_dom_attr_t *a, lxb_dom_attr_t *b
     if (a->prev) a->prev->next = a; else el->first_attr = a;
     if (a->next) a->next->prev = a; else el->last_attr = a;
     a->owner = el;                                    /* step 2: the attribute's element */
+    dom_attr_generation_advance();
     /* §4.9 "HANDLE ATTRIBUTE CHANGES" FOR AN APPEND — the same edge `lxb_dom_element_attr_append` fires, fired
        here because this component IS that append for the paths lexbor's own entry cannot serve (an insert
        BEFORE a given attribute). The value is passed as the pair the callback is defined over rather than as
@@ -156,6 +164,7 @@ void dom_attr_detach(lxb_dom_attr_t *a)
     if (a->next) a->next->prev = a->prev; else el->last_attr = a->prev;
     a->prev = a->next = NULL;
     a->owner = NULL;                                  /* step 3 */
+    dom_attr_generation_advance();
     DCHECK(el->attr_id != a && el->attr_class != a,
            "an attribute was unlinked and the element's id/class cache still names it");
 }
@@ -191,6 +200,7 @@ void dom_attr_replace(lxb_dom_attr_t *old_a, lxb_dom_attr_t *new_a)
     new_a->owner = el;                                /* step 3 */
     old_a->prev = old_a->next = NULL;
     old_a->owner = NULL;                              /* step 5 */
+    dom_attr_generation_advance();
 }
 
 /* THE ONE PLACE AN Attr's STRUCT IS HANDED BACK, which is why both of an attribute's side-map entries go back
@@ -395,6 +405,7 @@ void dom_attr_set_value(lxb_dom_attr_t *a, const char *val, size_t val_len)
 #endif
     st = lxb_dom_attr_set_value(a, (const lxb_char_t *)val, val_len);
     CHECK(st == LXB_STATUS_OK, "dom-attr-oom: an attribute's value could not be stored");
+    dom_attr_generation_advance();
 #if APICLIENT_DEV
     DCHECK(doc->text->ref_count == want_text,
            "an attribute value write left the agent's TEXT arena holding a different number of live "

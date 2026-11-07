@@ -9,6 +9,7 @@
 #include <lexbor/html/attribute_steps.h>
 
 #include "check.h"
+#include "core/dom/attr_list.h"   /* the attribute generation an append advances */
 #include "core/dom/node_heap.h"
 #include "core/html/html_parse.h"
 /* HTML §13.2.6.4.8 'The "text" insertion mode' prepares the `script` element it just closed, and that is the
@@ -71,6 +72,7 @@ static lxb_status_t html_parse_attr_appended(lxb_dom_element_t *element,
     lxb_html_token_attr_t *ta;
 
     DCHECK(element != NULL, "the DOM reported an attribute append onto no element");
+    dom_attr_generation_advance();   /* an attribute arrived on an element (core/dom/attr_list.h) */
     DCHECK(old_value == NULL && old_len == 0,
            "an attribute APPEND reported a previous value — an append is §4.9's \"append an attribute\", which "
            "puts an attribute that was on no element onto one, so there is nothing it could replace; a "

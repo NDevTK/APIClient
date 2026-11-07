@@ -2,6 +2,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_ATTR_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_ATTR_LIST_H
 #include <stdbool.h>
+#include <stdint.h>
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 
@@ -46,6 +47,13 @@ lxb_dom_attr_t *dom_attr_create(lxb_dom_document_t *doc, const char *ns, const c
 lxb_dom_attr_t *dom_attr_clone(lxb_dom_document_t *doc, const lxb_dom_attr_t *src);
 /* §4.9 "change an attribute" step 2 — the VALUE, over an attribute that may or may not be on an element. */
 void dom_attr_set_value(lxb_dom_attr_t *a, const char *val, size_t val_len);
+/* A count of attribute writes, advanced by every attach, detach, replace and value write here (the per-flow
+   delta's restores included) and by lexbor's own append onto an element (core/html/html_parse.c's
+   attribute-append step), the two roads every attribute mutation of a tree takes. dom_cow_version does not
+   move for an attribute write, so a cache over what attributes decide (a live collection filtered by class,
+   name, href or id) keys on this beside it. */
+uint64_t dom_attr_generation(void);
+void dom_attr_generation_advance(void);
 /* §4.9 "append an attribute" steps 1 and 2, at a POSITION. `before` NULL appends at the end, which is what the
    algorithm itself always does — the position exists for the per-flow delta, whose job is to restore a list
    rather than to run an algorithm, and whose restore must put an attribute back at the index the page's
