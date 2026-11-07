@@ -2500,7 +2500,7 @@ static void sight_source_visit(void *ud, const char *p, size_t n) {
 
 /* Reads one sighting's facts at the act: the producer's credentials mode, the destination, where the sighting
    marks the record (the `n` roots `roots` of the pieces that mark it) its delivery (their declared sources and
-   whether a person's act stands on its path, flow_path_person_act), and the priced decisions of the flow that
+   whether a victim act stands on its path, flow_path_victim_act), and the priced decisions of the flow that
    composed it where one did (`asked`: a flow stands and the door is not off a park, the mark's own condition). */
 static void endpoint_sight_now(JSContext *ctx, EpSight *sg, JSValueConst url, const char *const *roots, int n,
                                int creds, int asked) {
@@ -2510,7 +2510,7 @@ static void endpoint_sight_now(JSContext *ctx, EpSight *sg, JSValueConst url, co
     if (n > 0) {
         SightSources st = { ctx, 1, { 0 }, 0, NULL, 0 };
         json_buf_raw(&st.out, "{"); json_buf_key(&st.out, "victimAct");
-        json_buf_raw(&st.out, asked && flow_path_person_act(flow_running()) ? "true" : "false");
+        json_buf_raw(&st.out, asked && flow_path_victim_act(flow_running()) ? "true" : "false");
         json_buf_raw(&st.out, ","); json_buf_key(&st.out, "sources"); json_buf_raw(&st.out, "[");
         for (int r = 0; r < n; r++) concolic_root_declared_each(roots[r], sight_source_visit, &st);
         json_buf_raw(&st.out, "]}");
@@ -2721,12 +2721,11 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        so this record could not state them. A value the page stored from an attacker source carries that
        source's root into the later read, so a later load's request is marked with the attacker's open in its
        acts. Path-wise is exact: forced execution also reaches a request that does not depend on an act on a
-       sibling path without it, where `victimAct` reads false. `gated` is the attacker-host rule's gate below. */
+       sibling path without it, where `victimAct` reads false. The attacker-host rule below reads `reached` too. */
     const Flow *gf = flow_running();
     int off_park = door == EPD_REPLY_CHUNK || door == EPD_DOCUMENT_SCRIPT || door == EPD_INJECTED_SCRIPT ||
                    door == EPD_MODULE_IMPORT;
-    int gated = gf && !off_park ? flow_path_victim_driven(gf) : driven;
-    DCHECK(!gf || off_park || !flow_attacker_acts_only(gf) || (!gated && driven),
+    DCHECK(!gf || off_park || !flow_attacker_acts_only(gf) || (!flow_path_victim_driven(gf) && driven),
            "a path whose only acts are the attacker's own reads as gated, or not as the tool's — the two halves of "
            "the drive fact have collapsed back into one");
     DCHECK(!gf || !gf->cand_src, "a candidate run's request reached the @H surface — endpoint_suppress is keyed "
@@ -2769,21 +2768,18 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
     /* A request whose scheme and host an attacker source decides names no endpoint of the app: whatever it
-       reaches is the attacker's pick. It is the request class's finding, a victim act on the path included,
-       since no control asks to send to the attacker's host: the act is listed in its proof as a PoC's acts are.
-       Under a drive with no victim act it is nothing at all. Every root member must be an attacker source.
+       reaches is the attacker's pick. It is the request class's finding where an attacker reaches its path
+       (`reached`, the mark's rule and fire_observed's), victim acts and messages on it included, since no
+       control asks to send to the attacker's host: the acts are listed in its proof as a PoC's are. Under a drive
+       of code the page never runs it is nothing at all. Every root member must be an attacker source.
        Named residual. Not covered: an address joining app state and an attacker source, whose roots are not
        held per hole. Next diff builds: the root of the hole the host's bytes come from. Absence shows as: a
        marked API record whose address begins with an app-state hole the attacker's bytes follow. */
     if (aroot && door_sends_request(door) && concolic_root_delivered_all(aroot) &&
         address_host_open(ctx, url)) {
-        const Flow *f = flow_running();
-
-        DCHECK(f != NULL, "a request whose host an attacker source decides was composed with no flow running — "
-                          "an attacker source is read inside a flow");
-        DCHECK(!flow_attacker_acts_only(f) || (!gated && driven),
-               "a path whose only acts are the attacker's own reads as gated at the attacker-host rule");
-        if (!gated || (f && flow_path_victim_act(f))) {
+        DCHECK(flow_running() != NULL, "a request whose host an attacker source decides was composed with no flow "
+                                       "running — an attacker source is read inside a flow");
+        if (reached) {
             g_ask_origin_finding++;
             solve_request_sink(ctx, url, document_base_url(ctx));
         } else {

@@ -1910,12 +1910,10 @@ int   flow_path_victim_driven(const Flow *f);
 /* Do the attacker's own acts stand on this path and nothing else that drives it? */
 int   flow_attacker_acts_only(const Flow *f);
 /* Does a victim act this tool performed stand on this flow's path: a modelled user act, or a drive member whose
-   body runs as the listener of an act (a click, typing, a drop)? A subset of flow_path_driven; a timeline that
-   took a delivery from a driven peer reads 0, since the peer's acts are held in its own instance. */
+   body runs as the listener of an act a person performs (a click, typing, a drop)? A message act is not one: the
+   attacker's page posts it (HTML §9.3.3 "Posting messages"). A subset of flow_path_driven; a timeline that took a
+   delivery from a driven peer reads 0, since the peer's acts are held in its own instance. */
 int   flow_path_victim_act(const Flow *f);
-/* Does an act a person performs stand on this flow's path: a modelled user act, or a drive member whose act is not
-   a message (a message act is posted by the attacker's page, HTML §9.3.3)? */
-int   flow_path_person_act(const Flow *f);
 /* Charge the running flow for the work a step just burned, in units of work (the reward's currency), after
    the step and by the scheduler alone, which holds both ends of the interval. Never a step count (see `work`). A
    flow that leaves the frontier also hands what it burned to the flow that forked it, which prices a fork

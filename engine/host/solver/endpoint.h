@@ -419,8 +419,8 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 /* `destinations`: each of `same-origin`, `cross-origin` (the address's origin against its document's, from the
    bytes the run determined it from) and `unknown` (it determined none) some sighting read. */
 /* `attackerNeeds`: false for an unmarked record, else `{common, deliveries}`. `deliveries` holds each distinct
-   marking sighting's `{victimAct, sources}`: `victimAct` whether an act a person performs stands on its path
-   (flow_path_person_act, which counts no message act, unlike `attackerRooted.victimAct`), and `sources` its
+   marking sighting's `{victimAct, sources}`: `victimAct` whether a victim act stands on its path
+   (flow_path_victim_act, which counts no message act), and `sources` its
    declared sources as `{source, delivery, deliveryPrefix}`, a message's with the `messageRoutes`
    document_message_routes leaves the attacker page (empty where COOP and framing refuse both). `common` is
    whether some marking sighting was rooted in address components alone. */

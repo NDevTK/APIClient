@@ -18611,8 +18611,8 @@ TF_UNIT void probes_recordrank(const char *js, Probe *tab, int *n) {
                                         "!\"delivery\":\"address\"", NULL };
     static const char *const ref[] = { "\"common\":false", "\"delivery\":\"referring-address\"",
                                        "!\"delivery\":\"address\"", NULL };
-    static const char *const msg[] = { "\"common\":false", "\"victimAct\":false",
-                                       "\"delivery\":\"cross-document-message\"",
+    static const char *const msg[] = { "\"common\":false", "\"victimAct\":false},\"credentials\"",
+                                       "\"victimAct\":false,\"sources\"", "\"delivery\":\"cross-document-message\"",
                                        "\"messageRoutes\":[\"frame\",\"opener\"]", NULL };
     static const char *const both_addr[] = { "\"driven\":false", "\"common\":true", "\"delivery\":\"address\"",
                                              NULL };
@@ -18636,7 +18636,8 @@ TF_UNIT void probes_recordrank(const char *js, Probe *tab, int *n) {
         { "rr-ref-only", "/api/rr-ref", ref, "the request rooted only in the referrer does not state the referrer "
           "as its only delivery" },
         { "rr-msg-opener", "/api/rr-msg", msg, "the request rooted only in a message's data, on a page served "
-          "with no opener policy and no framing refusal, does not state the frame and opener routes" },
+          "with no opener policy and no framing refusal, does not state the frame and opener routes, or states "
+          "the attacker's post as a victim act" },
         { "rr-both-address", "/api/rr-both", both_addr, "the page's own record of the request sent from `?q=` and "
           "from a message's data does not read common with the address delivery" },
         { "rr-both-message", "/api/rr-both", both_msg, "the message drive's record of the request sent from `?q=` and "

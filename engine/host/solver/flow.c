@@ -1867,18 +1867,6 @@ int flow_path_victim_act(const Flow *f) {
     DCHECK(called >= 0 && called <= f->orphan_chain_n,
            "a drive's built-call count lies outside its chain — the claim advances one member at a time");
     for (int k = 0; k < called; k++)
-        if (f->orphan_acts[k]) return 1;
-    return 0;
-}
-
-int flow_path_person_act(const Flow *f) {
-    int called;
-
-    DCHECK(f != NULL, "a flow was asked whether a person's act stands on its path, of no flow");
-    if (victim_acts(f) > 0) return 1;
-    if (!f->orphan) return 0;
-    called = f->orphan_want ? f->orphan_claim_at : f->orphan_chain_n;
-    for (int k = 0; k < called; k++)
         if (f->orphan_acts[k] && !strstr(f->orphan_acts[k], "\"kind\":\"message\"")) return 1;
     return 0;
 }
