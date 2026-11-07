@@ -2,8 +2,10 @@
    arguments the fragment supplies. A fill from a start the fragment chooses (6 where it chooses none) witnesses the
    arm where element 5 holds the filled value; a copyWithin from a start the fragment chooses (0 where it chooses
    none) witnesses the arm where element 0 holds element 3's value; a fill whose value the fragment chooses (0
-   where it chooses none) witnesses the arm where element 2 holds 9. No arm the fragment leaves at its default
-   reaches any of the three. Each witness fetch carries a constant.
+   where it chooses none) witnesses the arm where element 2 holds 9. Over `[5, 0, 5, 0]`, indexOf (§23.2.3.17),
+   lastIndexOf (§23.2.3.20) and includes (§23.2.3.16) from the fragment's fromIndex witness the arms answering 2,
+   0 and false. No arm the fragment leaves at its default reaches any of these. Each witness fetch carries a
+   constant.
    One of test_forced.c's exploring documents (its TF_DOCS table). It ends with TF_CANVAS_INK, which
    test_forced.c defines before including it. */
 #ifndef ENGINE_HOST_FIXTURE_TAINDEX_H
@@ -22,6 +24,10 @@ static const char HTML_TAINDEX[] =
     "if (taiB[0] === 4) fetch('/api/tai-copy4');"
     "var taiC = new Uint8Array(4); taiC.fill(taiN || 0);"
     "if (taiC[2] === 9) fetch('/api/tai-fillv9');"
+    "var taiD = new Uint8Array([5, 0, 5, 0]);"
+    "if (taiD.indexOf(5, taiN || 0) === 2) fetch('/api/tai-index2');"
+    "if (taiD.lastIndexOf(5, taiN || 3) === 0) fetch('/api/tai-last0');"
+    "if (!taiD.includes(5, taiN || 0)) fetch('/api/tai-incl-none');"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";

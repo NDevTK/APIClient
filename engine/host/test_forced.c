@@ -21188,8 +21188,8 @@ TF_UNIT void probes_fileparse_taslice(const char *js, Probe *tab, int *n) {
 /* The rows of the `taindex` document (fixture/taindex.h): fill and copyWithin over an index or a value the
    fragment supplies reach the arm only that unknown can put there. */
 TF_UNIT void probes_taindex(const char *js, Probe *tab, int *n) {
-    const char *fi_why = NULL, *cp_why = NULL, *fv_why = NULL;
-    int fi_tt = 1, cp_tt = 1, fv_tt = 1;
+    const char *fi_why = NULL, *cp_why = NULL, *fv_why = NULL, *ix_why = NULL, *lx_why = NULL, *in_why = NULL;
+    int fi_tt = 1, cp_tt = 1, fv_tt = 1, ix_tt = 1, lx_tt = 1, in_tt = 1;
 
     fold_row(&fi_tt, &fi_why, !!strstr(js, "\"/api/tai-fill5\""),
              "NOT REACHED: there is no /api/tai-fill5 record, so no arm of a fill from the fragment's start put the "
@@ -21200,10 +21200,22 @@ TF_UNIT void probes_taindex(const char *js, Probe *tab, int *n) {
     fold_row(&fv_tt, &fv_why, !!strstr(js, "\"/api/tai-fillv9\""),
              "NOT REACHED: there is no /api/tai-fillv9 record, so no arm of a fill with the fragment's value put 9 "
              "at element 2");
+    fold_row(&ix_tt, &ix_why, !!strstr(js, "\"/api/tai-index2\""),
+             "NOT REACHED: there is no /api/tai-index2 record, so no arm of indexOf from the fragment's fromIndex "
+             "answered the second occurrence");
+    fold_row(&lx_tt, &lx_why, !!strstr(js, "\"/api/tai-last0\""),
+             "NOT REACHED: there is no /api/tai-last0 record, so no arm of lastIndexOf from the fragment's "
+             "fromIndex answered the first occurrence");
+    fold_row(&in_tt, &in_why, !!strstr(js, "\"/api/tai-incl-none\""),
+             "NOT REACHED: there is no /api/tai-incl-none record, so no arm of includes from the fragment's "
+             "fromIndex started past the last occurrence");
     const Probe rows[] = {
         { "tai-fill5", fi_tt, "/api/tai-fill5", SESS_EXPLORE, fi_why },
         { "tai-copy4", cp_tt, "/api/tai-copy4", SESS_EXPLORE, cp_why },
         { "tai-fillv9", fv_tt, "/api/tai-fillv9", SESS_EXPLORE, fv_why },
+        { "tai-index2", ix_tt, "/api/tai-index2", SESS_EXPLORE, ix_why },
+        { "tai-last0", lx_tt, "/api/tai-last0", SESS_EXPLORE, lx_why },
+        { "tai-incl-none", in_tt, "/api/tai-incl-none", SESS_EXPLORE, in_why },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
