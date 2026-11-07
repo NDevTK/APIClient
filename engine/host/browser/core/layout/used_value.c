@@ -4425,16 +4425,6 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            "horizontal percentage always has §10.2's basis and resolved above, and css-sizing-3 §3.2's "
            "`min-content`/`max-content`/`fit-content()` are level-3 additions this engine records no "
            "computed-value rule for");
-    /* THE REPLACED QUESTION IS ASKED BEFORE THE BOX TYPE because §10.3 answers it before the box type too:
-       five of its ten sections delegate a replaced element's size to §10.3.2, and only the box types §10 does
-       not own at all (a table box, a flex or grid item) disagree. It is asked ONLY on this arm — a DECLARED
-       length is the used value for a replaced element and a non-replaced one alike, so a `<video
-       style="width:100px">` must not pay for a classification whose answer cannot change its size. */
-    {
-        ReplacedElement rep = replaced_element_of(el);
-
-        if (rep.replaced) return uv_replaced_size(el, &rep, box, vertical);
-    }
     /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11 — a ROUTE by §C-stack's test for its reason:
        delete `flex_cross_size_used_item_cross` and the question still has to be asked, because a flex item's
        cross size was never CSS 2.1 §10's to compute on either axis.
@@ -4447,8 +4437,8 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        makes the cross one, which is what that section states — one mapping, not two algorithms.
        NOTHING IT PASSES IS REACHED BEFORE IT. A flex item is never `UV_BOX_ABS` (css-position §2 takes an
        absolutely positioned box out of flow before `uv_box_kind` looks at its parent) and never
-       `UV_BOX_TABLE`, and a REPLACED one has already left through `uv_replaced_size` above, which refuses a
-       flex or grid item by name — so moving this ahead of those arms took no box away from them.
+       `UV_BOX_TABLE`. A REPLACED item is answered here too, before the replaced question below: step 11 owns its
+       cross size, and step 7 measures it through `used_value_block_level_content_px`.
        IT RETURNS A CONTENT EXTENT AND THE CONVERSION IS SPELLED HERE, exactly as it is for
        `block_flow_auto_height` below and for the same reason: §9.4's arithmetic is over content boxes and
        `used_value_px`'s contract is css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"'.
@@ -4469,6 +4459,17 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
 
         if (!uv_is_border_box(el)) return cross;
         return css_px_add(cross, uv_surround_total(uv_surround(el, vertical)));
+    }
+    /* THE REPLACED QUESTION IS ASKED BEFORE THE BOX TYPE because §10.3 answers it before the box type too:
+       five of its ten sections delegate a replaced element's size to §10.3.2, and only the box types §10 does
+       not own at all (a table box, a flex or grid item) disagree; a flex item's cross axis has left above. It
+       is asked ONLY on this arm — a DECLARED length is the used value for a replaced element and a
+       non-replaced one alike, so a `<video style="width:100px">` must not pay for a classification whose
+       answer cannot change its size. */
+    {
+        ReplacedElement rep = replaced_element_of(el);
+
+        if (rep.replaced) return uv_replaced_size(el, &rep, box, vertical);
     }
     if (vertical) {
         /* CSS 2.1 §10.6.3's CONTENT-BASED HEIGHT — "the distance from its top content edge to … the bottom
@@ -5273,6 +5274,30 @@ CssPx used_value_inset_resolved_px(lxb_dom_element_t *el, CssLength len, bool ve
 }
 
 
+/* css-flexbox-1 §9.4 "Cross Size Determination"' step 7 for a replaced `row` flex item whose height behaves as
+   `auto`: "performing layout as if it were an in-flow block-level box with the used main size", so its width is
+   the main size §9.7 fixed and not `auto`, and CSS 2.1 §10.6.2 "Inline replaced elements, block-level replaced
+   elements in normal flow, 'inline-block' replaced elements in normal flow and floating replaced elements"
+   takes its arms past the first: "if 'height' has a computed value of 'auto', and the element has an intrinsic
+   ratio then the used value of 'height' is: (used width) / (intrinsic ratio)", else the intrinsic height, else
+   the default. "Treating auto as fit-content" is that automatic size (css-sizing-3 §3.2: for a block size it
+   "is equivalent to its automatic size"). §10.7's limits then apply on their own axis; §10.4's table does not,
+   since the width is not `auto`. A content-box extent, as the entry answers. */
+static CssPx uv_flex_replaced_hypothetical_cross(lxb_dom_element_t *el, const ReplacedElement *rep)
+{
+    CssPx w = uv_content_size(el, false, uv_surround(el, false)), h;
+    UvLimits lim = uv_limits(el, UV_BOX_BLOCK_FLOW, true);
+
+    if (rep->has_ratio) h = css_px_scale(w, 1.0 / rep->ratio);
+    else if (rep->has_height) h = rep->height;
+    else h = used_value_default_replaced_size(true);
+    uv_limits_to_content(el, &lim, true);
+    if (lim.has_max) h = css_px_min(h, lim.max);
+    h = css_px_max(h, lim.min);
+    DCHECK(h.px >= 0.0, "css-flexbox-1 §9.4 step 7's replaced height came out negative from non-negative operands");
+    return h;
+}
+
 /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 7's "as if it were an in-flow block-level box". See
    used_value.h for why this is an entry rather than two lines at its caller and for what `min-height: auto`
    answers through it. */
@@ -5300,33 +5325,24 @@ CssPx used_value_block_level_content_px(lxb_dom_element_t *el, bool vertical)
        take the box away from, and they are refused rather than approximated for css-flexbox-1 §9.4's own
        reason: step 8 takes the LARGEST outer hypothetical cross size on the line, so one item measured by the
        wrong algorithm is the line's cross size and therefore the container's. */
-    /* A REPLACED ITEM IS REFUSED ON ONE AXIS-ARM AND ANSWERED ON THE OTHER, and the split is `uv_pass_size`'s
-       own: it asks the replaced question only on the `auto` arm, because "a DECLARED length is the used value
-       for a replaced element and a non-replaced one alike". So a replaced flex item with a declared cross size
-       takes the same arm every other box takes and this entry is simply right about it; what it cannot answer
-       is the arm where CSS 2.1 §10.6.2's natural dimensions and intrinsic ratio decide the number. */
+    /* A replaced item with a declared size on the asked axis takes the arm every other box takes, since "a
+       declared length is the used value for a replaced element and a non-replaced one alike". With that size
+       behaving as `auto`, a `row` flex item's height is §10.6.2 over its used main size
+       (`uv_flex_replaced_hypothetical_cross`). */
     if (replaced_element_of(el).replaced &&
         (vertical ? used_value_height_behaves_as_auto(el)
-                  : uv_len_is_auto(css_computed_length(el, "width"))))
-        DFAILF("%s: this FLEX ITEM is a REPLACED element with no declared size on the axis asked for, so "
-               "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 7's \"performing layout as if it were an "
-               "in-flow block-level box\" is CSS 2.1 §10.6.2 \"Inline replaced elements, block-level replaced "
-               "elements in normal flow, 'inline-block' replaced elements in normal flow and floating replaced "
-               "elements\"' natural dimensions and intrinsic ratio. THE CRASH IS NOT HERE BECAUSE §10.6.2 IS "
-               "UNBUILT AND THE ARM WOULD NOT MERELY FAIL — IT WOULD ANSWER: `uv_pass_size` routes a "
-               "replaced box to `uv_replaced_height` before it reads the box type, so the forced block-level "
-               "reading above reaches §10.6.2's arms and comes back with a number. IT IS THE WRONG NUMBER FOR "
-               "ONE REASON AND THAT REASON IS THE WHOLE OF THIS ARM: §10.6.2's ratio arm derives the height "
-               "from the box's USED WIDTH, and `uv_flex_item_main_size` — the route that makes that width "
-               "css-flexbox-1 §9.3 \"Main Size Determination\"'s flexed one — is gated on the box kind this "
-               "entry has just overridden, so the width divided by would be §10.3's and not the item's used "
-               "main size, which step 7 asks for in its own words. §9.2 \"Line Length Determination\"' step 3 "
-               "names the same operand for the MAIN axis (\"if the flex item has a preferred aspect ratio, a "
-               "used flex basis of content, and a definite cross size, then the flex base size is calculated "
-               "from its used cross size and the flex item's aspect ratio\") and `uv_replaced_size` refuses "
-               "that one by name. BUILD A §10.6.2 THAT TAKES THE USED MAIN SIZE AS AN ARGUMENT rather than "
-               "re-deriving it from the box, and this arm becomes a call",
+                  : uv_len_is_auto(css_computed_length(el, "width")))) {
+        lxb_dom_element_t *container = uv_flex_item_container(el, box);
+        ReplacedElement rep = replaced_element_of(el);
+
+        if (vertical && container != NULL && !flex_container_axis_is_vertical(container, FLEX_AXIS_MAIN))
+            return uv_flex_replaced_hypothetical_cross(el, &rep);
+        DFAILF("%s: a REPLACED grid item, or a `column` flex item, with no declared size on the axis asked for. "
+               "css-flexbox-1 §9.4 step 7 lays it out \"as if it were an in-flow block-level box with the used "
+               "main size\"; BUILD CSS 2.1 §10.6.2 or §10.3.2 over the size its container's algorithm fixes on "
+               "the other axis, as `uv_flex_replaced_hypothetical_cross` does for a `row` flex item",
                box_subject(el, nbuf, sizeof nbuf));
+    }
     {
         CssDisplay display = css_computed_display(el);
         bool table = uv_display_is_table(display);
