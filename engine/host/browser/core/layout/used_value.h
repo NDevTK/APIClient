@@ -412,6 +412,10 @@ const char *const *used_value_positioning_cb_properties(size_t *n);
    the first case has no box and the wrapper is a box the first entry cannot name. */
 CssPx used_value_containing_block_width(lxb_dom_element_t *el);
 
+/* CSS 2.1 §10.1's initial containing block of `el`'s document, its height when `vertical` and otherwise its
+   width: "for continuous media, it has the dimensions of the viewport". */
+CssPx used_value_initial_containing_block_px(lxb_dom_element_t *el, bool vertical);
+
 /* The same rectangle's height, a `bool` because §10.1's chain always has a width and often no height. CSS 2.1
    §10.5 "Content height: the 'height' property": "The percentage is calculated with respect to the height of
    the generated box's containing block. If the height of the containing block is not specified explicitly

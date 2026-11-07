@@ -220,6 +220,21 @@ static void is_require_acyclic(lxb_dom_element_t *el, const char *name)
            name);
 }
 
+/* css-sizing-3 §5.2's declared-size step, defined with §9.4.1's stack: §9.4.2's walk applies the same steps
+   to an atomic inline-level box, and one definition keeps them agreeing. */
+static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured);
+
+/* Whether `el` is css-sizing-3 §5.1's "undefined case of a replaced element whose height and width both behave
+   as auto" with a preferred aspect ratio and no natural size, which §5.1's first replaced arm sizes. */
+static bool is_replaced_ratio_only_auto(lxb_dom_element_t *el)
+{
+    ReplacedElement rep = replaced_element_of(el);
+
+    return rep.has_ratio && !rep.has_width && !rep.has_height &&
+           css_computed_length_is(el, "width", CSS_KEYWORD_AUTO) &&
+           css_computed_length_is(el, "height", CSS_KEYWORD_AUTO);
+}
+
 /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"' atomic inline-level box, as one item of this run:
    such boxes "participate in their inline formatting context as a single opaque box", with "a soft wrap
    opportunity before and after each replaced element or other atomic inline" (css-text-3 §5.5 "Line Breaking
@@ -255,6 +270,13 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
         at_zero.px = css_px_max(css_length_resolve_pct(width, css_px(0.0)), css_px(0.0));
         min = used_value_content_width_as_px(el, at_zero);
         max = used_value_content_width_as_px(el, as_auto);
+    } else if (is_replaced_ratio_only_auto(el)) {
+        /* css-sizing-3 §5.1's first replaced arm is the one whose two sizes differ, and §5.2's contribution of
+           a box with an `auto` preferred size is its pair under the box's own limits. */
+        IntrinsicInlineSizes in = is_declared_inline_sizes(el, intrinsic_inline_sizes(el));
+
+        min = in.min_content;
+        max = in.max_content;
     } else {
         /* One number as both of css-sizing-3 §2.1's contributions: §5.1 separates them only by a zero or
            infinite containing block in that axis, and no arm of CSS 2.2 §10.3.2 "Inline, replaced elements"
@@ -284,10 +306,6 @@ typedef struct {
     bool  left, right, below;
     CssPx row, rows, min;
 } IsFloats;
-
-/* css-sizing-3 §5.2's declared-size step, defined with §9.4.1's stack: §9.4.2's walk applies the same steps
-   to an atomic inline-level box, and one definition keeps them agreeing. */
-static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured);
 
 static IsChildNext is_child(TextRunMeasure *m, IsFloats *fl, lxb_dom_element_t *parent, BoxTreeChild c,
                             lxb_dom_node_t **node)
@@ -1123,9 +1141,9 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
    use its max-content size (CSS2§10.3.2)", while "the intrinsic sizes of replaced elements without natural
    sizes are defined below". So a box with a natural size takes CSS 2.2 §10.3.2 "Inline, replaced elements"
    over the float's own preferred height (`is_replaced_float_width`), and one without takes §5.1's arms.
-   Both sizes are one number: §5.1 varies only the containing block "in that axis", and no arm of §10.3.2 reads
-   the containing block's inline size (its arms are a natural dimension, a constant, or a height through the
-   ratio). The box type is not asked: §5.1 sizes it "if it was a float", and CSS 2.2 §10.3.6
+   Except under §5.1's first arm, both sizes are one number: §5.1 varies only the containing block "in that
+   axis", and no arm of §10.3.2 reads the containing block's inline size (its arms are a natural dimension, a
+   constant, or a height through the ratio). The box type is not asked: §5.1 sizes it "if it was a float", and CSS 2.2 §10.3.6
    "Floating, replaced elements" says "the used value of 'width' is determined as for inline replaced
    elements". */
 /* The inline size of §5.1's hypothetical float for a replaced box with a natural width or height. Its `height`
@@ -1160,6 +1178,57 @@ static CssPx is_replaced_float_width(lxb_dom_element_t *el, const ReplacedElemen
     return used_value_default_replaced_size(false);
 }
 
+/* §5.1's "if the box has a <length> as its computed value for min-width or min-height", as a content-box
+   extent on `axis` (css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"). The <length> test comes
+   first: `intrinsic_declared_sizing_px` also answers `min-content` and `max-content`, which are this box's own
+   intrinsic sizes and are not a <length>. */
+static bool is_replaced_min_length_px(lxb_dom_element_t *el, IntrinsicAxis axis, CssPx *out)
+{
+    const char *name = axis == INTRINSIC_AXIS_VERTICAL ? "min-height" : "min-width";
+    bool stated;
+
+    if (css_computed_length(el, name).kind != CSS_LENGTH_ABSOLUTE) return false;
+    stated = intrinsic_declared_sizing_px(el, axis, name, CSS_KEYWORD_AUTO, out);
+    DCHECKF(stated, "`%s` computed to a <length> and stated no size to an intrinsic pass", name);
+    (void)stated;
+    return true;
+}
+
+/* css-sizing-3 §5.1's first replaced arm, a replaced element without natural sizes that "has a non-degenerate
+   preferred aspect ratio": "for the min-content size, use zero", and the max-content size by its sub-arms.
+   The pair is the box's intrinsic sizes, whose available space is infinite (css-sizing-3 §2.1 "Auto Box
+   Sizes": the max-content size is the "size in a given axis when given infinite available space"), so the
+   first sub-arm, "if the available space is definite in the inline axis, use the stretch fit into that size",
+   is never this pair's: a used width over a definite containing block takes it, as
+   used_value_replaced_auto_width_px does through CSS 2.2 §10.3.2's suggested equation. The second takes a
+   <length> `min-width`, or a `min-height` "using the aspect ratio", and of both "the one that results in the
+   larger overall size"; the third "an inline size matching the corresponding dimension of the initial
+   containing block". The ratio is width over height of the content box (css-sizing-3 §2 "Terminology": a
+   preferred aspect ratio "is applied to its content box"). */
+static IntrinsicInlineSizes is_replaced_ratio_sizes(lxb_dom_element_t *el, const ReplacedElement *rep)
+{
+    IntrinsicInlineSizes out;
+    CssPx w, h;
+    bool has_w, has_h;
+
+    DCHECK(!rep->has_width && !rep->has_height && rep->has_ratio && rep->ratio > 0.0,
+           "css-sizing-3 §5.1's first replaced arm was asked of a box with a natural size or without a "
+           "non-degenerate ratio");
+    has_w = is_replaced_min_length_px(el, INTRINSIC_AXIS_HORIZONTAL, &w);
+    has_h = is_replaced_min_length_px(el, INTRINSIC_AXIS_VERTICAL, &h);
+    if (has_h) h = css_px_scale(h, rep->ratio);
+    out.min_content = css_px(0.0);
+    if (has_w && has_h) out.max_content = css_px_max(w, h);
+    else if (has_w) out.max_content = w;
+    else if (has_h) out.max_content = h;
+    else out.max_content = used_value_initial_containing_block_px(el, false);
+    DCHECK(out.max_content.px >= 0.0,
+           "css-sizing-3 §5.1's max-content size of a replaced box with only a ratio came out negative; each "
+           "arm is a min size floored at zero, a product with a positive ratio, or the initial containing "
+           "block's width");
+    return out;
+}
+
 static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
     IntrinsicInlineSizes out;
@@ -1180,40 +1249,7 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
            the committed corpus's (`engine/specindex/csssizing3.json`); the live draft now says
            "non-degenerate preferred aspect ratio", the same in substance because core/layout/replaced_element.c
            never sets `has_ratio` for a degenerate ratio (css-images-3 §4.1 "Object-Sizing Terminology"). */
-        if (rep->has_ratio)
-            DFAIL("css-sizing-3 §5.1 \"Intrinsic Sizes\"' FIRST replaced arm — a replaced element with a "
-                  "NON-DEGENERATE PREFERRED ASPECT RATIO and NEITHER natural size, which is the case CSS 2.2 "
-                  "§10.3.2 \"Inline, replaced elements\" declines to define ("
-                  "\"the used value of 'width' is undefined in CSS 2.2\") and css-sizing-3 fills in. "
-                  "WHAT IS NOT COVERED: the min-content size, which css-sizing-3 §5.1 states outright as "
-                  "\"for the min-content size, use zero\"; and the max-content size, whose three sub-arms are "
-                  "the stretch fit into a DEFINITE available inline size, else a <length> "
-                  "`min-width`/`min-height` with the other dimension from the ratio, else css-sizing-3 §5.1's "
-                  "\"use an inline size matching the corresponding dimension of the initial containing "
-                  "block\". "
-                  "WHAT THE NEXT DIFF BUILDS: an AVAILABLE SPACE parameter on this component, because "
-                  "`intrinsic_inline_sizes` takes an element and nothing else, so the first sub-arm's "
-                  "antecedent — css-sizing-3 §5.1's \"if the available space is definite in the inline axis\" "
-                  "— cannot even be ASKED from here and a walk that skipped to the second would answer a page "
-                  "wrongly rather than narrowly. The other two sub-arms need no new input: "
-                  "`intrinsic_declared_sizing_px` is already css-sizing-3 §5.1's `<length>` test (it answers "
-                  "false for the percentage css-sizing-3 §5.2.1 \"Intrinsic Contributions of Percentage-Sized "
-                  "Boxes\" substitutes away) and core/frame/viewport.h holds the initial containing block. "
-                  "HOW ITS ABSENCE WOULD SHOW: a replaced box whose only stated dimension is a ratio is laid "
-                  "out at CSS 2.2 §10.3.2's 300px default instead of at the ratio's own size, so a page that "
-                  "sizes such a box by its height gets a width that ignores the height. "
-                  "NOTHING IN THIS BUILD REACHES IT, AND THAT IS A FACT ABOUT ONE FILE RATHER THAN ABOUT THIS "
-                  "ONE: core/layout/replaced_element.c sets `has_ratio` in exactly one constructor, the one "
-                  "that also sets BOTH natural sizes, so a ratio without them cannot be constructed — the day "
-                  "an SVG image's `viewBox` is sized (core/layout/used_value.c refuses the SAME object from "
-                  "the used-value side and names the same subject), this arm is what that diff lands beside. "
-                  "ITS RELEASE ARM AND THE SIBLING'S COMPOSE, which is asked here rather than left to compose "
-                  "by luck: `DFAIL` is `((void)0)` at `-DAPICLIENT_DEV=0`, so this falls through to the "
-                  "no-ratio arm below and answers 300px, and core/layout/used_value.c's refusal of the same "
-                  "object falls through to the SAME 300px through CSS 2.2 §10.3.2's last arm. One defined "
-                  "wrong answer, identical on both sides of the seam, so a release build lays such a box out "
-                  "at the default replaced size rather than leaving the intrinsic pass and the used-value "
-                  "pass disagreeing about one element");
+        if (rep->has_ratio) return is_replaced_ratio_sizes(el, rep);
         /* §5.1's second arm, "if it has no preferred aspect ratio": "for both the min-content size and max-content
            size: if the box has a <length> as its computed minimum size (min-width/min-height) in that
            dimension, use that size … otherwise, use 300px for the width and/or 150px for the height as needed."
@@ -1223,7 +1259,7 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
            The fallback is `used_value_default_replaced_size`, not a literal 300: CSS 2.2 §10.3.2 qualifies it
            ("if 300px is too wide to fit the device, UAs should use the width of the largest rectangle that has
            a 2:1 ratio and fits the device instead"), so intrinsic and used widths agree. */
-        if (!intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_HORIZONTAL, "min-width", CSS_KEYWORD_AUTO, &size))
+        if (!is_replaced_min_length_px(el, INTRINSIC_AXIS_HORIZONTAL, &size))
             size = used_value_default_replaced_size(false);
     } else {
         size = is_replaced_float_width(el, rep);

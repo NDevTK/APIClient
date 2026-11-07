@@ -1106,6 +1106,11 @@ static CssPx uv_icb(lxb_dom_element_t *el, bool vertical)
     return vertical ? viewport_icb_height(dctx) : viewport_icb_width(dctx);
 }
 
+CssPx used_value_initial_containing_block_px(lxb_dom_element_t *el, bool vertical)
+{
+    return uv_icb(el, vertical);
+}
+
 /* ---- §10.1's ANSWER IS A BOX, AND A BOX IS NOT ALWAYS AN ELEMENT ------------------------------------------
    AN ELEMENT MAY GENERATE MORE THAN ONE BOX, so WHICH ELEMENT and WHICH OF THAT ELEMENT'S BOXES are two
    facts and a bare `lxb_dom_element_t *` states only the first. CSS 2.1 §17.4 Tables in the visual formatting
@@ -3282,13 +3287,13 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
         UvSurround s;
         UvBox box;
         CssPx w;
-        char nbuf[160];
 
-        if (cb != NULL && !used_value_width_is_definite(cb))
-            DFAILF("%s is a replaced element with an intrinsic ratio and no intrinsic size, both sizes `auto`, "
-                   "in a containing block whose width is content-based, where CSS 2.1 §10.3.2's suggestion "
-                   "does not apply. BUILD css-sizing-3 §5.1's intrinsic size for that object",
-                   box_subject(el, nbuf, sizeof nbuf));
+        /* Over a content-based containing block the available space is indefinite (css-sizing-3 §2
+           "Terminology"'s definite size is one "determined without performing layout"), so the
+           suggestion does not apply and css-sizing-3 §5.1 does: it "applies the rules above to the
+           undefined case of a replaced element whose height and width both behave as auto", whose
+           max-content size under an indefinite available space is core/layout/intrinsic_size.h's. */
+        if (cb != NULL && !used_value_width_is_definite(cb)) return intrinsic_inline_sizes(el).max_content;
         box = uv_box_kind(el);
         /* A block-level box takes the equation with §9.5's float avoidance; any other solves the same equation
            with its own section's margins, which an inline box's §10.3.2 states without a width. */
