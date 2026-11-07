@@ -20784,8 +20784,8 @@ TF_UNIT void probes_fileparse_taslice(const char *js, Probe *tab, int *n) {
     int has_seed = s_rooted_source(js, "eval", "fpseed", seed, sizeof seed);
     int has_query = s_rooted_source(js, "eval", LOCATION_SEARCH_SRC, query, sizeof query);
     const char *sp_why = NULL; int sp_tt = 1;
-    fold_row(&sp_tt, &sp_why, !!strstr(js, "\"/api/fpt-parsed\""),
-             "NOT REACHED: there is no /api/fpt-parsed record, so no arm decoded the typed-array slice");
+    fold_row(&sp_tt, &sp_why, !!strstr(js, "\"/api/fpy-parsed\""),
+             "NOT REACHED: there is no /api/fpy-parsed record, so no arm decoded the typed-array slice");
     const char *sf_why = NULL; int sf_tt = 1;
     fold_row(&sf_tt, &sf_why, has_seed,
              "no eval @S record carries a source rooted in the seed file's reply, so the typed-array slice copied "
@@ -20795,14 +20795,14 @@ TF_UNIT void probes_fileparse_taslice(const char *js, Probe *tab, int *n) {
              "no eval @S record carries a source rooted in location.search, so the typed-array slice of the reply "
              "to the address the attacker names stopped at that reply's example extent");
     const char *sh_why = NULL; int sh_tt = 1;
-    fold_row(&sh_tt, &sh_why, !!strstr(js, "\"/api/fpt-hash3\""),
-             "NOT REACHED: there is no /api/fpt-hash3 record, so no arm sliced the page's array from the "
+    fold_row(&sh_tt, &sh_why, !!strstr(js, "\"/api/fpy-hash3\""),
+             "NOT REACHED: there is no /api/fpy-hash3 record, so no arm sliced the page's array from the "
              "fragment's index to a three-element copy");
     const Probe rows[] = {
-        { "fpt-parsed", sp_tt, "/api/fpt-parsed", SESS_EXPLORE, sp_why },
-        { "fpt-hash3", sh_tt, "/api/fpt-hash3", SESS_EXPLORE, sh_why },
-        { "fpt-sink-file", sf_tt, "function fptParse", SESS_EXPLORE, sf_why, .gate = "fpt-parsed" },
-        { "fpt-sink-query", sq_tt, ".slice(6, 6 + len)", SESS_EXPLORE, sq_why, .gate = "fpt-parsed" },
+        { "fpy-parsed", sp_tt, "/api/fpy-parsed", SESS_EXPLORE, sp_why },
+        { "fpy-hash3", sh_tt, "/api/fpy-hash3", SESS_EXPLORE, sh_why },
+        { "fpy-sink-file", sf_tt, "function fpyParse", SESS_EXPLORE, sf_why, .gate = "fpy-parsed" },
+        { "fpy-sink-query", sq_tt, ".slice(6, 6 + len)", SESS_EXPLORE, sq_why, .gate = "fpy-parsed" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
