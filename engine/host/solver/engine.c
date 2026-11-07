@@ -14109,6 +14109,8 @@ void engine_set_provider(int (*provide)(JSContext *ctx), int (*holds)(const char
     g_provider = provide;
     g_provider_holds = holds;
 }
+static int (*g_provider_host_holds)(const char *record);
+void engine_set_provider_host_holds(int (*holds)(const char *record)) { g_provider_host_holds = holds; }
 
 /* Whether every line of the bill is one the provider says it owes and will write later. Inline because release
    type-checks a DCHECK's condition and calls nothing. */
@@ -14124,6 +14126,25 @@ static inline int provider_holds_bill(void) {
         CHECK(line != NULL, "engine: OOM reading the bill a provider was paid against");
         all = g_provider_holds != NULL && g_provider_holds(line);
         free(line);
+        b += len + (nl != NULL);
+    }
+    return all;
+}
+
+/* Whether every outstanding host request is one the provider says it owes and will answer later. Inline for
+   provider_holds_bill's reason. */
+static inline int provider_holds_host_requests(void) {
+    const char *b = engine_host_requests();
+    int all = 1;
+
+    while (*b && all) {
+        const char *nl = strchr(b, '\n');
+        size_t len = nl ? (size_t)(nl - b) : strlen(b);
+        char *record = strndup(b, len);
+
+        CHECK(record != NULL, "engine: OOM reading the host requests a provider was paid against");
+        all = g_provider_host_holds != NULL && g_provider_host_holds(record);
+        free(record);
         b += len + (nl != NULL);
     }
     return all;
@@ -14327,9 +14348,9 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                The two registers are named separately because they are two questions, and the check is
                unconditional, since both are empty on a slice with nothing outstanding too. */
             if (g_provider) {
-                DCHECK(*engine_host_requests() == '\0',
-                       "the smoke host paid and a synchronous request is still outstanding — this provider answers "
-                       "every record it is handed, so the blocked flow will never resume");
+                DCHECK(provider_holds_host_requests(),
+                       "the smoke host paid and a host request is still outstanding that it does not hold — this "
+                       "provider answers every other record it is handed, so the blocked flow will never resume");
                 DCHECK(provider_holds_bill(),
                        "the smoke host paid and a reply is still owed that it does not hold — the same silence one "
                        "register over: the flow that issued this fetch keeps its snapshot and its continuation and "

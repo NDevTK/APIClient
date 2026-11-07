@@ -521,6 +521,8 @@ static void fixture_route_peer_post(JSContext *ctx);
    latch when the page asks `/api/xdready`, `/api/xdmready` or `/api/chready`, after its handlers are listening,
    and the exploring session's hook routes each document's posts once. */
 static int  g_xd_ready, g_xd_routed, g_xdm_ready, g_xdm_routed, g_ch_ready, g_ch_routed;
+/* Whether `/api/osdue` was asked: until then hostreq_answer_all holds every `held.` host read (HTML_OWEDSALE). */
+static int  g_tf_held_due;
 /* The sources each routed post mints, written when it is routed and read by the rows; empty before. */
 #define TF_DELIVERY_SRC_CAP 64
 static char g_xd_dsrc[TF_DELIVERY_SRC_CAP], g_xd_osrc[TF_DELIVERY_SRC_CAP];
@@ -1121,6 +1123,7 @@ static int fixture_provide(JSContext *ctx) {
         if (!strcmp(abs, "https://x.test/api/xdready")) g_xd_ready = 1;
         if (!strcmp(abs, "https://x.test/api/xdmready")) g_xdm_ready = 1;
         if (!strcmp(abs, "https://x.test/api/chready")) g_ch_ready = 1;
+        if (!strncmp(abs, "https://x.test/api/osdue", strlen("https://x.test/api/osdue"))) g_tf_held_due = 1;
         if (tf_replytwice_hold(abs, (const char *const[5]){ method, mode, referrer_policy, referrer, url })) {
             /* Owed, and written by tf_replytwice_pay below once its lag has passed. */
         } else if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
@@ -1484,6 +1487,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/translatepct.h"
 #include "fixture/fillwidth.h"
 #include "fixture/jsonlead.h"
+#include "fixture/owedsale.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2156,6 +2160,7 @@ TF_DOCS[] = {
     { "ceupsale", HTML_CEUPSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "flexnone", HTML_FLEXNONE },
     { "errsale", HTML_ERRSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
+    { "owedsale", HTML_OWEDSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
     { "sizekw", HTML_SIZEKW },
     { "svgratio", HTML_SVGRATIO },
     { "vshift", HTML_VSHIFT },
@@ -6676,6 +6681,19 @@ static void tf_notices_drain(void)
     }
 }
 
+/* Whether a host request's operation is one this fixture holds (HTML_OWEDSALE's `held.` reads, until
+   `/api/osdue` was asked). */
+static int tf_host_holds_op(const char *op) { return !strncmp(op, "held.", 5) && !g_tf_held_due; }
+
+/* The provider's statement of which host requests it holds (engine_set_provider_host_holds), over one
+   `id<TAB>asker<TAB>op` record. */
+static int tf_host_holds(const char *record) {
+    const char *t1 = strchr(record, '\t'), *t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
+
+    DCHECK(t2 != NULL, "an outstanding host request did not arrive as `id<TAB>asker<TAB>op`");
+    return t2 != NULL && tf_host_holds_op(t2 + 1);
+}
+
 /* Child document ids this fixture has handed out. Starts above the fixture's own document (1). */
 static int hostreq_answer_all(JSContext *ctx)
 {
@@ -6705,6 +6723,11 @@ static int hostreq_answer_all(JSContext *ctx)
                "with nothing but a `blocked` count to say it is never coming back");
         if (!tab || !end) break;
         id = (uint32_t)strtoul(p, NULL, 10);
+        /* A held read stays owed, as a zone with latency leaves it, until its due request was asked. */
+        if (tf_host_holds_op(tab + 1)) {
+            p = end + 1;
+            continue;
+        }
         /* HTML_DECLINES's XMLHttpRequest refusal: a declined rendezvous gets no value, and flow_decline_fork
            builds its waiting and failure arms. */
         if (!strncmp(tab + 1, "xhr.send\t", 9) && tf_xhr_declined(tab + 1, (size_t)(end - (tab + 1)))) {
@@ -20327,6 +20350,20 @@ TF_UNIT void probes_jsonlead(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `owedsale` document (fixture/owedsale.h): a flow sold while the host owes it an answer
+   leaves the scheduler's owed set. */
+TF_UNIT void probes_owedsale(const char *js, Probe *tab, int *n) {
+    const char *os_why = NULL; int os_tt = 1;
+    fold_row(&os_tt, &os_why, tf_census_row(js, "_cold", "soldFlows") >= 1,
+             "NOT REACHED: RAM pressure sold no flow, so the arm blocked on the held host read was never freed");
+    fold_row(&os_tt, &os_why, param_value_is(js, "/api/osdone", "a", "free"),
+             "the growing arm did not finish after the blocked arm was sold");
+    const Probe rows[] = {
+        { "owed-sale", os_tt, "/api/osdone", SESS_EXPLORE, os_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -26348,6 +26385,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_translatepct(js, probes, &np);
     probes_fillwidth(js, probes, &np);
     probes_jsonlead(js, probes, &np);
+    probes_owedsale(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
@@ -40651,6 +40689,7 @@ int main(int argc, char **argv) {
 
     /* The trusted host's half: what it is owed, and how it pays. */
     engine_set_provider(fixture_provide, tf_replytwice_holds);
+    engine_set_provider_host_holds(tf_host_holds);
     /* The root document's own response's Set-Cookie, received at the baseline before any script runs, as
        main.c's qjs_receive_cookies hands an instance its root's fields after qjs_init. */
     {

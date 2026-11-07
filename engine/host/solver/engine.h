@@ -401,6 +401,9 @@ void engine_arrival_token(EngineArrival a, char *buf, size_t cap);
    writes an answer at its due point; `holds` takes one engine_pending_fetches line. A stall with `filled == 0`
    ends the run, since nothing this host holds will move it. */
 void engine_set_provider(int (*provide)(JSContext *ctx), int (*holds)(const char *line));
+/* What the provider owes of engine_host_requests and answers at a later payment, asked of one `id<TAB>asker<TAB>op`
+   record by the same completeness check (NULL: nothing), as `holds` is asked of the bill. */
+void engine_set_provider_host_holds(int (*holds)(const char *record));
 
 /* Begin a stepped session over `n` scripts. `forking` is the explore/verify policy engine_session_forks
    answers. `recipes` is the parked residue the host stored for this bundle (';'-joined records, solver/cold.h),
