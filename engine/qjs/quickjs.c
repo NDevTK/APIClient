@@ -56407,6 +56407,416 @@ void JS_FlowReachEnd(JSFlowReach *out)
     g_reach.rt = NULL;
 }
 
+/* JS_FlowGraph* — see quickjs.h. Host memory throughout, spelled `(free)`/`(realloc)` for the reason the reach
+   census gives: a write runs where a runtime allocation could ask for a sale. */
+enum { FG_PLAIN = 1, FG_ARRAY = 2 };
+/* A parked graph this writer cannot write whole would resume as a different heap, so the release build stops
+   too; the dev build's DCHECK above each use names what to build. */
+#define FG_NO_WRITER() CHECK_FAIL("flow graph: a parked graph holds a value or object no writer can write")
+typedef struct { const void *k; uint32_t v; } FGSlot;
+typedef struct { FGSlot *s; size_t cap, n; } FGMap;
+typedef struct { uint8_t *b; size_t len, cap; } FGBuf;
+struct JSFlowGraph {
+    FGBuf bytes;
+    JSValue *anchors;
+    uint32_t n_anchors, n_roots;
+};
+
+static void *fg_grow(void *p, size_t n)
+{
+    void *q = (realloc)(p, n);
+    CHECK(q != NULL, "flow graph: OOM growing a serialized graph's host storage");
+    return q;
+}
+static size_t fg_home(const void *k, size_t cap) { return (size_t)(((uintptr_t)k * 0x9E3779B97F4A7C15ull) >> 17) & (cap - 1); }
+static bool fg_map_get(const FGMap *m, const void *k, uint32_t *v)
+{
+    size_t h;
+    if (!m->cap) return false;
+    for (h = fg_home(k, m->cap); m->s[h].k; h = (h + 1) & (m->cap - 1))
+        if (m->s[h].k == k) { *v = m->s[h].v; return true; }
+    return false;
+}
+static void fg_map_put(FGMap *m, const void *k, uint32_t v)
+{
+    size_t h;
+    if ((m->n + 1) * 2 > m->cap) {
+        FGMap g = { NULL, m->cap ? m->cap * 2 : 256, 0 };
+        g.s = calloc(g.cap, sizeof *g.s);
+        CHECK(g.s != NULL, "flow graph: OOM growing an identity table");
+        for (size_t i = 0; i < m->cap; i++)
+            if (m->s[i].k) fg_map_put(&g, m->s[i].k, m->s[i].v);
+        (free)(m->s);
+        *m = g;
+    }
+    for (h = fg_home(k, m->cap); m->s[h].k; h = (h + 1) & (m->cap - 1)) ;
+    m->s[h].k = k; m->s[h].v = v; m->n++;
+}
+static void fg_put(FGBuf *b, const void *p, size_t n)
+{
+    if (b->len + n > b->cap) {
+        b->cap = (b->len + n) * 2 + 64;
+        b->b = fg_grow(b->b, b->cap);
+    }
+    memcpy(b->b + b->len, p, n);
+    b->len += n;
+}
+static void fg_u8(FGBuf *b, uint8_t v) { fg_put(b, &v, 1); }
+static void fg_u32(FGBuf *b, uint32_t v) { fg_put(b, &v, 4); }
+
+/* Strings are written by content: a string's identity is not observable, so two equal strings are one entry,
+   and a rebuilt graph writes the same bytes whichever JSString each value or key resolved to. */
+typedef struct { JSString *p; uint32_t h, v; } FGStr;
+typedef struct { FGStr *s; size_t cap, n; } FGStrMap;
+static bool fg_str_eq(JSString *a, JSString *b)
+{
+    return a->len == b->len && a->is_wide_char == b->is_wide_char &&
+           !memcmp(strv(a), strv(b), (size_t)a->len << a->is_wide_char);
+}
+static bool fg_str_get(const FGStrMap *m, JSString *p, uint32_t h, uint32_t *v)
+{
+    if (!m->cap) return false;
+    for (size_t i = h & (m->cap - 1); m->s[i].p; i = (i + 1) & (m->cap - 1))
+        if (m->s[i].h == h && fg_str_eq(m->s[i].p, p)) { *v = m->s[i].v; return true; }
+    return false;
+}
+static void fg_str_put(FGStrMap *m, JSString *p, uint32_t h, uint32_t v)
+{
+    size_t i;
+    if ((m->n + 1) * 2 > m->cap) {
+        FGStrMap g = { NULL, m->cap ? m->cap * 2 : 256, 0 };
+        g.s = calloc(g.cap, sizeof *g.s);
+        CHECK(g.s != NULL, "flow graph: OOM growing the string table");
+        for (size_t k = 0; k < m->cap; k++)
+            if (m->s[k].p) fg_str_put(&g, m->s[k].p, m->s[k].h, m->s[k].v);
+        (free)(m->s);
+        *m = g;
+    }
+    for (i = h & (m->cap - 1); m->s[i].p; i = (i + 1) & (m->cap - 1)) ;
+    m->s[i].p = p; m->s[i].h = h; m->s[i].v = v; m->n++;
+}
+
+typedef struct {
+    JSContext *ctx;
+    uint32_t floor;
+    JSFlowGraph *g;
+    FGMap objs, anch;
+    FGStrMap strs;
+    JSValue *held;      /* flattened ropes the string table names, released with the writer */
+    uint32_t n_held;
+    JSObject **order;
+    uint32_t n_order, cap_order;
+    uint32_t n_strs;
+    uint8_t *kinds;
+} FGWriter;
+
+/* A string by content, once per string: 'S' and its units the first time, 's' and its index after. */
+static void fg_string(FGWriter *w, FGBuf *out, JSString *p)
+{
+    uint32_t i, h = hash_string(p, (uint32_t)p->is_wide_char * 0x9E3779B9u + 1);
+    if (fg_str_get(&w->strs, p, h, &i)) { fg_u8(out, 's'); fg_u32(out, i); return; }
+    fg_str_put(&w->strs, p, h, w->n_strs++);
+    fg_u8(out, 'S');
+    fg_u32(out, p->len);
+    fg_u8(out, p->is_wide_char);
+    fg_put(out, strv(p), (size_t)p->len << p->is_wide_char);
+}
+
+static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
+{
+    switch (JS_VALUE_GET_TAG(v)) {
+    case JS_TAG_INT: fg_u8(out, 'I'); fg_u32(out, (uint32_t)JS_VALUE_GET_INT(v)); return;
+    case JS_TAG_BOOL: fg_u8(out, JS_VALUE_GET_BOOL(v) ? 'T' : 'F'); return;
+    case JS_TAG_NULL: fg_u8(out, 'N'); return;
+    case JS_TAG_UNDEFINED: fg_u8(out, 'U'); return;
+    case JS_TAG_FLOAT64: { double d = JS_VALUE_GET_FLOAT64(v); fg_u8(out, 'D'); fg_put(out, &d, 8); return; }
+    case JS_TAG_STRING: fg_string(w, out, JS_VALUE_GET_STRING(v)); return;
+    case JS_TAG_STRING_ROPE: {
+        JSValue flat = js_linearize_string_rope(w->ctx, v);
+        CHECK(!JS_IsException(flat), "flow graph: OOM flattening a rope a parked graph holds");
+        fg_string(w, out, JS_VALUE_GET_STRING(flat));
+        w->held = fg_grow(w->held, sizeof *w->held * (w->n_held + 1));
+        w->held[w->n_held++] = flat;   /* the string table names it until the write ends */
+        return;
+    }
+    case JS_TAG_OBJECT: {
+        JSObject *p = JS_VALUE_GET_OBJ(v);
+        uint32_t i;
+        if (p->flow_gen <= w->floor) {
+            if (!fg_map_get(&w->anch, p, &i)) {
+                JSFlowGraph *g = w->g;
+                i = g->n_anchors++;
+                g->anchors = fg_grow(g->anchors, sizeof *g->anchors * g->n_anchors);
+                g->anchors[i] = js_dup(v);
+                fg_map_put(&w->anch, p, i);
+            }
+            fg_u8(out, 'A'); fg_u32(out, i);
+            return;
+        }
+        if (!fg_map_get(&w->objs, p, &i)) {
+            uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY : 0;
+            if (kind == 0) {
+                DCHECKF(false, "flow graph: a private object of class %d is on a parked graph and has no writer — give "
+                       "its class a body here and in JS_FlowGraphRead", (int)p->class_id);
+                FG_NO_WRITER();
+            }
+            if (w->n_order == w->cap_order) {
+                w->cap_order = w->cap_order ? w->cap_order * 2 : 64;
+                w->order = fg_grow(w->order, sizeof *w->order * w->cap_order);
+                w->kinds = fg_grow(w->kinds, w->cap_order);
+            }
+            i = w->n_order++;
+            w->order[i] = p;
+            w->kinds[i] = kind;
+            fg_map_put(&w->objs, p, i);
+        }
+        fg_u8(out, 'O'); fg_u32(out, i);
+        return;
+    }
+    default:
+        DCHECKF(false, "flow graph: a value of tag %d is on a parked graph and has no writer", (int)JS_VALUE_GET_TAG(v));
+        FG_NO_WRITER();
+    }
+}
+
+/* A key: an integer index as 'k' and its number, a string atom as 'K' and its string. */
+static void fg_key(FGWriter *w, FGBuf *out, JSAtom atom)
+{
+    JSAtomStruct *a;
+    if (__JS_AtomIsTaggedInt(atom)) { fg_u8(out, 'k'); fg_u32(out, __JS_AtomToUInt32(atom)); return; }
+    a = w->ctx->rt->atom_array[atom];
+    if (a->atom_type != JS_ATOM_TYPE_STRING) {
+        DCHECKF(false, "flow graph: a private object on a parked graph is keyed by a symbol (atom type %d), and a "
+               "symbol has no writer — give it an identity here and in JS_FlowGraphRead", (int)a->atom_type);
+        FG_NO_WRITER();
+    }
+    fg_u8(out, 'K');
+    fg_string(w, out, a);
+}
+
+/* An object's body: its prototype, whether it is extensible, and its own data properties in shape order (an
+   array: its length and dense elements). A weak key or target, an accessor, a variable reference or a lazily
+   initialized property has no writer yet. */
+static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
+{
+    JSObject *p = w->order[id];
+    JSShape *sh = p->shape;
+    JSShapeProperty *prs = get_shape_prop(sh);
+
+    if (p->first_weak_ref) {
+
+        DCHECK(false, "flow graph: a private object on a parked graph is a weak key or a weak target, so a rebuilt object "
+
+               "would not be the one its collection or reference names — give weak identity a writer");
+
+        FG_NO_WRITER();
+
+    }
+    if (sh->proto) fg_value(w, out, JS_MKPTR(JS_TAG_OBJECT, sh->proto)); else fg_u8(out, 'N');
+    fg_u8(out, p->extensible);
+    if (w->kinds[id] == FG_ARRAY) {
+        if (!p->fast_array || sh->prop_count != 1) {
+            DCHECK(false, "flow graph: a private array on a parked graph is sparse or has own properties beside its "
+                   "length, which have no writer yet");
+            FG_NO_WRITER();
+        }
+        fg_value(w, out, p->prop[0].u.value);   /* length */
+        fg_u32(out, p->u.array.count);
+        for (uint32_t k = 0; k < p->u.array.count; k++) fg_value(w, out, p->u.array.u.values[k]);
+        return;
+    }
+    {
+        uint32_t live = 0;
+        for (int i = 0; i < sh->prop_count; i++) live += prs[i].atom != JS_ATOM_NULL;
+        fg_u32(out, live);   /* a deleted slot is not written: the rebuilt shape holds the live ones in order */
+    }
+    for (int i = 0; i < sh->prop_count; i++, prs++) {
+        if (prs->atom == JS_ATOM_NULL) continue;
+        if (prs->flags & JS_PROP_TMASK) {
+            DCHECKF(false, "flow graph: a private object on a parked graph holds a property of kind %d (an accessor, a "
+                   "variable reference or a lazy initializer), which has no writer yet", (int)(prs->flags & JS_PROP_TMASK));
+            FG_NO_WRITER();
+        }
+        fg_key(w, out, prs->atom);
+        fg_u8(out, (uint8_t)(prs->flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE | JS_PROP_ENUMERABLE)));
+        fg_value(w, out, p->prop[i].u.value);
+    }
+}
+
+JSFlowGraph *JS_FlowGraphWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor)
+{
+    FGWriter w = { 0 };
+    FGBuf rbuf = { 0 }, bbuf = { 0 };
+    JSFlowGraph *g = calloc(1, sizeof *g);
+
+    CHECK(g != NULL, "flow graph: OOM allocating a serialized graph");
+    w.ctx = ctx; w.floor = floor; w.g = g;
+    for (int i = 0; i < n; i++) fg_value(&w, &rbuf, roots[i]);
+    for (uint32_t i = 0; i < w.n_order; i++) fg_body(&w, &bbuf, i);
+    g->n_roots = (uint32_t)n;
+    fg_u32(&g->bytes, w.n_order);
+    if (w.n_order) fg_put(&g->bytes, w.kinds, w.n_order);
+    fg_u32(&g->bytes, (uint32_t)n);
+    if (rbuf.len) fg_put(&g->bytes, rbuf.b, rbuf.len);
+    if (bbuf.len) fg_put(&g->bytes, bbuf.b, bbuf.len);
+    (free)(rbuf.b); (free)(bbuf.b); (free)(w.order); (free)(w.kinds);
+    for (uint32_t i = 0; i < w.n_held; i++) JS_FreeValue(ctx, w.held[i]);
+    (free)(w.held); (free)(w.objs.s); (free)(w.strs.s); (free)(w.anch.s);
+    return g;
+}
+
+typedef struct {
+    JSContext *ctx;
+    const JSFlowGraph *g;
+    const uint8_t *p, *end;
+    JSValue *objs, *strs;
+    uint32_t n_objs, n_strs, cap_strs;
+} FGReader;
+
+static const uint8_t *fg_take(FGReader *r, size_t n)
+{
+    const uint8_t *q = r->p;
+    CHECK((size_t)(r->end - r->p) >= n, "flow graph: a serialized graph ends inside a record — its writer and "
+                                        "this reader disagree about its layout");
+    r->p += n;
+    return q;
+}
+static uint8_t fg_r8(FGReader *r) { return *fg_take(r, 1); }
+static uint32_t fg_r32(FGReader *r) { uint32_t v; memcpy(&v, fg_take(r, 4), 4); return v; }
+
+static JSValue fg_rstring(FGReader *r, uint8_t tag)
+{
+    uint32_t len, i;
+    uint8_t wide;
+    JSValue s;
+    if (tag == 's') {
+        i = fg_r32(r);
+        CHECK(i < r->n_strs, "flow graph: a string reference names no string written before it");
+        return js_dup(r->strs[i]);
+    }
+    len = fg_r32(r);
+    wide = fg_r8(r);
+    if (wide) {
+        uint16_t *u = js_malloc(r->ctx, (size_t)len * 2 + 2);
+        CHECK(u != NULL, "flow graph: OOM rebuilding a string");
+        memcpy(u, fg_take(r, (size_t)len * 2), (size_t)len * 2);
+        s = js_new_string16_len(r->ctx, u, (int)len);
+        js_free(r->ctx, u);
+    } else {
+        s = js_new_string8_len(r->ctx, (const char *)fg_take(r, len), (int)len);
+    }
+    CHECK(!JS_IsException(s), "flow graph: OOM rebuilding a string");
+    if (r->n_strs == r->cap_strs) {
+        r->cap_strs = r->cap_strs ? r->cap_strs * 2 : 64;
+        r->strs = fg_grow(r->strs, sizeof *r->strs * r->cap_strs);
+    }
+    r->strs[r->n_strs++] = js_dup(s);
+    return s;
+}
+
+static JSValue fg_rvalue(FGReader *r)
+{
+    uint8_t t = fg_r8(r);
+    uint32_t i;
+    double d;
+    switch (t) {
+    case 'I': return js_int32((int32_t)fg_r32(r));
+    case 'T': return JS_TRUE;
+    case 'F': return JS_FALSE;
+    case 'N': return JS_NULL;
+    case 'U': return JS_UNDEFINED;
+    case 'D': memcpy(&d, fg_take(r, 8), 8); return js_float64(d);
+    case 'S': case 's': return fg_rstring(r, t);
+    case 'A':
+        i = fg_r32(r);
+        CHECK(i < r->g->n_anchors, "flow graph: an anchor reference names no anchor the graph holds");
+        return js_dup(r->g->anchors[i]);
+    case 'O':
+        i = fg_r32(r);
+        CHECK(i < r->n_objs, "flow graph: an object reference names no object the graph holds");
+        return js_dup(r->objs[i]);
+    }
+    CHECK_FAIL("flow graph: a serialized value carries a tag this reader does not know");
+    return JS_UNDEFINED;
+}
+
+static JSAtom fg_rkey(FGReader *r)
+{
+    uint8_t t = fg_r8(r);
+    JSValue s;
+    JSAtom a;
+    if (t == 'k') return JS_NewAtomUInt32(r->ctx, fg_r32(r));
+    CHECK(t == 'K', "flow graph: a serialized key carries a tag this reader does not know");
+    t = fg_r8(r);
+    CHECK(t == 'S' || t == 's', "flow graph: a key's string carries a tag this reader does not know");
+    s = fg_rstring(r, t);
+    a = JS_ValueToAtom(r->ctx, s);
+    JS_FreeValue(r->ctx, s);
+    CHECK(a != JS_ATOM_NULL, "flow graph: OOM rebuilding a property key");
+    return a;
+}
+
+int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
+{
+    FGReader r = { 0 };
+    const uint8_t *kinds;
+    uint32_t n;
+
+    r.ctx = ctx; r.g = g;
+    r.p = g->bytes.b; r.end = g->bytes.b + g->bytes.len;
+    r.n_objs = fg_r32(&r);
+    kinds = fg_take(&r, r.n_objs);
+    r.objs = calloc(r.n_objs ? r.n_objs : 1, sizeof *r.objs);
+    CHECK(r.objs != NULL, "flow graph: OOM rebuilding a graph's object table");
+    for (uint32_t i = 0; i < r.n_objs; i++) {
+        r.objs[i] = kinds[i] == FG_ARRAY ? JS_NewArray(ctx) : JS_NewObjectProtoClass(ctx, JS_NULL, JS_CLASS_OBJECT);
+        CHECK(kinds[i] == FG_ARRAY || kinds[i] == FG_PLAIN, "flow graph: an object kind this reader does not know");
+        CHECK(!JS_IsException(r.objs[i]), "flow graph: OOM rebuilding an object");
+    }
+    n = fg_r32(&r);
+    CHECK(n == g->n_roots, "flow graph: the serialized root count disagrees with the graph's");
+    for (uint32_t i = 0; i < n; i++) roots[i] = fg_rvalue(&r);
+    for (uint32_t i = 0; i < r.n_objs; i++) {
+        JSValue o = r.objs[i], proto = fg_rvalue(&r);
+        uint8_t ext = fg_r8(&r);
+        CHECK(JS_SetPrototypeInternal(ctx, o, proto, false) >= 0, "flow graph: a rebuilt object refused its prototype");
+        JS_FreeValue(ctx, proto);
+        if (kinds[i] == FG_ARRAY) {
+            JSValue len = fg_rvalue(&r);
+            uint32_t count = fg_r32(&r);
+            for (uint32_t k = 0; k < count; k++)
+                CHECK(JS_DefinePropertyValueUint32(ctx, o, k, fg_rvalue(&r), JS_PROP_C_W_E) >= 0,
+                      "flow graph: a rebuilt array refused an element");
+            CHECK(JS_SetPropertyStr(ctx, o, "length", len) >= 0, "flow graph: a rebuilt array refused its length");
+        } else {
+            uint32_t np = fg_r32(&r);
+            for (uint32_t k = 0; k < np; k++) {
+                JSAtom key = fg_rkey(&r);
+                uint8_t fl;
+                fl = fg_r8(&r);
+                CHECK(JS_DefinePropertyValue(ctx, o, key, fg_rvalue(&r), fl) >= 0,
+                      "flow graph: a rebuilt object refused a property");
+                JS_FreeAtom(ctx, key);
+            }
+        }
+        if (!ext) CHECK(JS_PreventExtensions(ctx, o) >= 0, "flow graph: a rebuilt object refused to stop extending");
+    }
+    CHECK(r.p == r.end, "flow graph: a serialized graph has bytes past its last record");
+    for (uint32_t i = 0; i < r.n_objs; i++) JS_FreeValue(ctx, r.objs[i]);
+    for (uint32_t i = 0; i < r.n_strs; i++) JS_FreeValue(ctx, r.strs[i]);
+    (free)(r.objs); (free)(r.strs);
+    return 0;
+}
+
+size_t JS_FlowGraphBytes(const JSFlowGraph *g, const uint8_t **bytes) { *bytes = g->bytes.b; return g->bytes.len; }
+uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors) { *anchors = g->anchors; return g->n_anchors; }
+
+void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g)
+{
+    for (uint32_t i = 0; i < g->n_anchors; i++) JS_FreeValue(ctx, g->anchors[i]);
+    (free)(g->anchors); (free)(g->bytes.b); (free)(g);
+}
+
 JSValue *JS_FlowClone(JSContext *ctx, JSValue *flow) {
     JSAsyncFunctionState *s = (JSAsyncFunctionState *)flow;
     JSStackFrame *sf = &s->frame;

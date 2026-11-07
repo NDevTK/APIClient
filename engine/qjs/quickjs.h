@@ -3660,6 +3660,17 @@ JS_EXTERN void JS_FlowReachEnd(JSFlowReach *out);
 /* The live JS objects by birth: gen 0 (baseline, named across a session boundary by what made it) and born
    since (a serialized frontier writes each once), with the census's own byte estimate. A walk of the GC list. */
 JS_EXTERN void JS_FlowGenCensus(JSRuntime *rt, long *gen0_objs, long *gen0_bytes, long *born_objs, long *born_bytes);
+/* A PARKED FLOW'S PRIVATE GRAPH AS BYTES: the objects reachable from `roots` that were born after `floor`, written
+   by content, with every object born at or before it held as a counted anchor the graph keeps (in a session, the
+   live shared state is its own name). JS_FlowGraphRead rebuilds the roots into `roots` (n of them, as written)
+   over fresh objects that resolve each anchor to the object it names, so writing the rebuilt roots again gives
+   the same bytes and the same anchors. A class or value the writer has no body for is a DFAIL naming it. */
+typedef struct JSFlowGraph JSFlowGraph;
+JS_EXTERN JSFlowGraph *JS_FlowGraphWrite(JSContext *ctx, const JSValueConst *roots, int n, uint32_t floor);
+JS_EXTERN int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots);
+JS_EXTERN size_t JS_FlowGraphBytes(const JSFlowGraph *g, const uint8_t **bytes);
+JS_EXTERN uint32_t JS_FlowGraphAnchors(const JSFlowGraph *g, const JSValue **anchors);
+JS_EXTERN void JS_FlowGraphFree(JSContext *ctx, JSFlowGraph *g);
 /* Why a SUSPENDED flow (or the runtime's parked set) cannot be forked at this instant, or NULL: the first step
    machine on its chain whose JSTrampStepDef.unforkable answers. A fork that may wait asks this before cloning
    and waits for the operation to end; a clone of a flow that answers non-NULL aborts. */

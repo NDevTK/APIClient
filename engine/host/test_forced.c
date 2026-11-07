@@ -3389,6 +3389,100 @@ TF_UNIT void malloc_accounting_selftest(void)
  * IT IS THE CASE THAT TURNS AN ABORT INTO A WRONG ANSWER IF IT IS GOT WRONG. §6.7.3.2 alone answers "Blocked"
  * for every nonce-bearing policy, which is right for injected content and refuses a `<style nonce=…>` real
  * Chrome applies — so the whole cascade below it would then resolve from a document no browser has. */
+/* @GRAPHRT: a parked flow's private graph written and rebuilt (JS_FlowGraphWrite/Read), on a runtime of its own.
+   The graph is built through the C API at a generation above the floor, over one baseline object born at
+   generation 0: a root with every value kind the writer has a body for, a deleted slot, an integer key, a
+   non-writable property, two references to one non-extensible object, a self cycle, and an array naming both
+   the shared object and the baseline one. The rebuilt roots must be new objects that keep every identity
+   relation, resolve the baseline object to itself, and write the same bytes and anchors again. */
+TF_UNIT void flow_graph_selftest(void)
+{
+    JSRuntime *rt = JS_NewRuntime();
+    JSContext *ctx;
+    JSValue base, r, x, arr, roots[2], back[2], v, w;
+    JSFlowGraph *g1, *g2;
+    const uint8_t *b1, *b2;
+    const JSValue *a1, *a2;
+    size_t n1, n2;
+    uint32_t na1, na2;
+    int same;
+
+    CHECK(rt != NULL, "the flow graph's witness could not make a runtime");
+    JS_SetGCThreshold(rt, (size_t)-1);
+    ctx = JS_NewContext(rt);
+    CHECK(ctx != NULL, "the flow graph's witness could not make a context");
+    base = JS_NewObject(ctx);   /* generation 0: an anchor */
+    JS_SetFlowGen(5);
+    r = JS_NewObject(ctx);
+    x = JS_NewObject(ctx);
+    arr = JS_NewArray(ctx);
+    CHECK(JS_SetPropertyStr(ctx, x, "v", JS_NewInt32(ctx, 7)) >= 0 && JS_PreventExtensions(ctx, x) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "i", JS_NewInt32(ctx, 1)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "d", JS_NewFloat64(ctx, 3.5)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "gone", JS_NewInt32(ctx, 0)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "s", JS_NewString(ctx, "abc")) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "s2", JS_NewString(ctx, "abc")) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "w", JS_NewString(ctx, "\xc3\xa9\xe6\xbc\xa2")) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "t", JS_TRUE) >= 0 && JS_SetPropertyStr(ctx, r, "n", JS_NULL) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "u", JS_UNDEFINED) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "shared", JS_DupValue(ctx, x)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "again", JS_DupValue(ctx, x)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "self", JS_DupValue(ctx, r)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "base", JS_DupValue(ctx, base)) >= 0 &&
+          JS_DefinePropertyValueStr(ctx, r, "ro", JS_NewInt32(ctx, 9), JS_PROP_CONFIGURABLE) >= 0 &&
+          JS_SetPropertyUint32(ctx, r, 5, JS_NewString(ctx, "five")) >= 0 &&
+          JS_SetPropertyUint32(ctx, arr, 0, JS_NewInt32(ctx, 1)) >= 0 &&
+          JS_SetPropertyUint32(ctx, arr, 1, JS_NewString(ctx, "two")) >= 0 &&
+          JS_SetPropertyUint32(ctx, arr, 2, JS_DupValue(ctx, x)) >= 0 &&
+          JS_SetPropertyUint32(ctx, arr, 3, JS_DupValue(ctx, base)) >= 0 &&
+          JS_SetPropertyStr(ctx, r, "arr", arr) >= 0,
+          "the flow graph's witness could not build its graph");
+    {
+        JSAtom gone = JS_NewAtom(ctx, "gone");
+        CHECK(JS_DeleteProperty(ctx, r, gone, 0) > 0, "the flow graph's witness could not delete a property");
+        JS_FreeAtom(ctx, gone);
+    }
+    roots[0] = r; roots[1] = x;
+    g1 = JS_FlowGraphWrite(ctx, roots, 2, 2);
+    JS_SetFlowGen(9);   /* the rebuilt objects are born above the floor too, so the second write is of the same graph */
+    CHECK(JS_FlowGraphRead(ctx, g1, back) == 0, "the flow graph's witness could not rebuild its graph");
+    g2 = JS_FlowGraphWrite(ctx, back, 2, 2);
+    n1 = JS_FlowGraphBytes(g1, &b1); n2 = JS_FlowGraphBytes(g2, &b2);
+    na1 = JS_FlowGraphAnchors(g1, &a1); na2 = JS_FlowGraphAnchors(g2, &a2);
+    same = n1 == n2 && !memcmp(b1, b2, n1) && na1 == na2;
+    for (uint32_t i = 0; same && i < na1; i++) same = JS_VALUE_GET_PTR(a1[i]) == JS_VALUE_GET_PTR(a2[i]);
+    printf("@GRAPHRT {\"bytes\":%zu,\"anchors\":%u,\"identical\":%d}\n", n1, na1, same);
+    CHECK(same, "a rebuilt graph did not write the same bytes and anchors as the graph it was rebuilt from");
+    CHECK(JS_VALUE_GET_PTR(back[0]) != JS_VALUE_GET_PTR(r) && JS_VALUE_GET_PTR(back[1]) != JS_VALUE_GET_PTR(x),
+          "a rebuilt graph's roots are the original objects rather than new ones");
+#define TF_GRAPH_SAME(obj, key, want) \
+    (v = JS_GetPropertyStr(ctx, (obj), (key)), w = (v), JS_FreeValue(ctx, v), JS_VALUE_GET_PTR(w) == JS_VALUE_GET_PTR(want))
+    CHECK(TF_GRAPH_SAME(back[0], "shared", back[1]) && TF_GRAPH_SAME(back[0], "again", back[1]) &&
+          TF_GRAPH_SAME(back[0], "self", back[0]) && TF_GRAPH_SAME(back[0], "base", base),
+          "a rebuilt graph lost an identity: two references to one object, a self cycle, or a baseline anchor");
+#undef TF_GRAPH_SAME
+    v = JS_GetPropertyStr(ctx, back[0], "arr");
+    w = JS_GetPropertyUint32(ctx, v, 2);
+    CHECK(JS_VALUE_GET_PTR(w) == JS_VALUE_GET_PTR(back[1]), "a rebuilt array names a different object than its root");
+    JS_FreeValue(ctx, w);
+    w = JS_GetPropertyUint32(ctx, v, 3);
+    CHECK(JS_VALUE_GET_PTR(w) == JS_VALUE_GET_PTR(base), "a rebuilt array does not name the baseline anchor");
+    JS_FreeValue(ctx, w);
+    JS_FreeValue(ctx, v);
+    v = JS_GetPrototype(ctx, back[0]);
+    w = JS_GetPrototype(ctx, r);
+    CHECK(JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(w), "a rebuilt object's prototype is not the original's");
+    JS_FreeValue(ctx, v); JS_FreeValue(ctx, w);
+    CHECK(JS_IsExtensible(ctx, back[1]) == 0, "a rebuilt object that was not extensible became extensible");
+    JS_FlowGraphFree(ctx, g1);
+    JS_FlowGraphFree(ctx, g2);
+    JS_SetFlowGen(0);
+    JS_FreeValue(ctx, back[0]); JS_FreeValue(ctx, back[1]);
+    JS_FreeValue(ctx, r); JS_FreeValue(ctx, x); JS_FreeValue(ctx, base);
+    JS_FreeContext(ctx);
+    JS_FreeRuntime(rt);
+}
+
 /* @GCSTEP: the cycle collector as budgeted steps (JS_GCBegin/JS_GCStep), on a runtime of its own. The heap holds
    N garbage two-object cycles and one live cycle reachable only through the global `g`. Between the first and second
    steps a mutator moves the live cycle's only path from `g` to a new object's field, announcing nothing: the new
@@ -40673,6 +40767,7 @@ int main(int argc, char **argv) {
     secure_hash_selftest();
     hmac_selftest();
     gc_cycle_step_selftest();
+    flow_graph_selftest();
     malloc_accounting_selftest();
     concolic_bound_selftest();
     /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
