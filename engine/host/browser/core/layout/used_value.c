@@ -2559,8 +2559,9 @@ static CssPx uv_min_of_max(CssPx v, const UvLimits *lim)
     return lim->has_max ? css_px_min(v, lim->max) : v;
 }
 
-/* The table's resolved size on `vertical`'s axis, as a computed value in css-sizing-3 §3.3's box: "then apply
-   the rules under 'Calculating widths and margins' above, as if width were computed as this value". `w` and
+/* The table's resolved size on `vertical`'s axis, in css-sizing-3 §3.3's box, since CSS 2.1 §10.4 continues
+   "then apply the rules under 'Calculating widths and margins' above, as if width were computed as this
+   value". `w` and
    `h` are §10.3.2's and §10.6.2's arms with both sizes `auto`, taken here rather than through used_value_px,
    whose other axis would ask this table back. Every `h/w` and `w/h` is the ratio: each tentative pair is a
    natural pair or one natural size and the ratio. The two-violation rows are tested first, so the eleven rows
