@@ -1483,6 +1483,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/csstextderived.h"
 #include "fixture/translatepct.h"
 #include "fixture/fillwidth.h"
+#include "fixture/jsonlead.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2166,6 +2167,7 @@ TF_DOCS[] = {
     { "csstextderived", HTML_CSSTEXTDERIVED },
     { "translatepct", HTML_TRANSLATEPCT },
     { "fillwidth", HTML_FILLWIDTH },
+    { "jsonlead", HTML_JSONLEAD },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -20309,6 +20311,22 @@ TF_UNIT void probes_fillwidth(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `jsonlead` document (fixture/jsonlead.h): ECMAScript §25.5.2 JSON.parse over a JSON text
+   derived from an attacker source. */
+TF_UNIT void probes_jsonlead(const char *js, Probe *tab, int *n) {
+    const char *jl_why = NULL; int jl_tt = 1;
+    fold_row(&jl_tt, &jl_why, !!strstr(js, "\"/api/jsonlead\""),
+             "NOT REACHED: no /api/jsonlead record, so the parse of a text derived from `location.href` never "
+             "completed");
+    fold_row(&jl_tt, &jl_why, param_value_is(js, "/api/jsonlead", "k", "u"),
+             "ECMAScript §25.5.2: JSON.parse of JSON.stringify({ u: location.href }) did not give an object whose "
+             "one key is `u`");
+    const Probe rows[] = {
+        { "json-lead-derived", jl_tt, "/api/jsonlead", SESS_EXPLORE, jl_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -26329,6 +26347,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_csstextderived(js, probes, &np);
     probes_translatepct(js, probes, &np);
     probes_fillwidth(js, probes, &np);
+    probes_jsonlead(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
