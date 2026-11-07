@@ -152,11 +152,38 @@ static void lb_require_baseline_alignment(lxb_dom_element_t *el, bool atomic)
               "still has ONE source and is not a set this longhand indexes into. DECIDE which of the four is "
               "here, before reading a source that may select nothing");
     shift = css_computed_length(el, "baseline-shift");
-    if (shift.kind == CSS_LENGTH_KEYWORD && shift.keyword != CSS_KEYWORD_SUB && shift.keyword != CSS_KEYWORD_SUPER)
+    if (shift.kind == CSS_LENGTH_KEYWORD && shift.keyword != CSS_KEYWORD_SUB && shift.keyword != CSS_KEYWORD_SUPER &&
+        !atomic)
         DFAIL("css-inline-3 §4.2.3 \"Post-Alignment Shift: the baseline-shift longhand\"'s line-relative "
-              "`top`, `center` or `bottom` \"shift the inline box and its contents relative to the bounds of its "
-              "line box\", which is CSS 2.2 §10.8's undefined-baseline case rather than an offset. BUILD them in "
-              "§10.8's step 2 with the line box's top and bottom, after the baseline-aligned boxes");
+              "`top`, `center` or `bottom` on a non-atomic inline box, which aligns its aligned subtree: \"the "
+              "layout bounds of that box and the aligned subtrees of all child inline boxes whose computed "
+              "alignment-baseline value is not itself a line-relative shift value\". BUILD the subtree's bounds "
+              "over its descendants' extents, measured from the box's own baseline, beside the atomic arm "
+              "(`lb_line_relative`)");
+}
+
+/* css-inline-3 §4.2.3's line-relative shift values, which align a box's aligned subtree against its line box
+   rather than shift it off the baseline: `top` aligns "the line-over edge of the aligned subtree with the
+   line-over edge of the line box", `center` "the center of the aligned subtree with the center of the line box",
+   and `bottom` the line-under edges. CSS 2.2 §10.8 "Line height calculations: the 'line-height' and
+   'vertical-align' properties" adds that boxes aligned top or bottom "must be aligned so as to minimize the
+   line box height". An atomic inline's aligned subtree is its margin box. */
+typedef enum {
+    LB_REL_NONE = 0,
+    LB_REL_TOP,
+    LB_REL_CENTER,
+    LB_REL_BOTTOM
+} LbLineRelative;
+
+static LbLineRelative lb_line_relative(lxb_dom_element_t *el)
+{
+    CssLength shift = css_computed_length(el, "baseline-shift");
+
+    if (shift.kind != CSS_LENGTH_KEYWORD) return LB_REL_NONE;
+    if (shift.keyword == CSS_KEYWORD_TOP) return LB_REL_TOP;
+    if (shift.keyword == CSS_KEYWORD_CENTER) return LB_REL_CENTER;
+    if (shift.keyword == CSS_KEYWORD_BOTTOM) return LB_REL_BOTTOM;
+    return LB_REL_NONE;
 }
 
 /* ---- §10.8's step 1 and §10.8.1's half-leading, for one inline box --------------------------------------- */
@@ -753,6 +780,8 @@ typedef struct {
     bool        exists;
     lxb_dom_element_t *strut_of;   /* the element `strut` was derived for, or NULL */
     LbExtent    strut;
+    CssPx       rel[4];            /* per LbLineRelative, the tallest aligned subtree (index 0 unused) */
+    bool        has_rel[4];
 } LbLineWalk;
 
 static size_t lb_line_walk_begin(LbLineWalk *w, lxb_dom_element_t *style, TextRunLine line)
@@ -768,6 +797,7 @@ static size_t lb_line_walk_begin(LbLineWalk *w, lxb_dom_element_t *style, TextRu
     w->out = lb_strut_extent(style);
     w->exists = false;
     w->strut_of = NULL;
+    memset(w->has_rel, 0, sizeof w->has_rel);
     return 1;
 }
 
@@ -790,7 +820,14 @@ static size_t lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
     /* §10.8's step 1 has a semicolon: "for replaced elements, inline-block elements, and inline-table
        elements, this is the height of their margin box; for inline boxes, this is their 'line-height'." An
        atomic item's box is on the first side, every other item's on the second. */
-    if (atom) {
+    if (atom && lb_line_relative(box) != LB_REL_NONE) {
+        LbLineRelative rel = lb_line_relative(box);
+        CssPx h = used_value_margin_edge_px(box, true);
+
+        w->rel[rel] = w->has_rel[rel] ? css_px_max(w->rel[rel], h) : h;
+        w->has_rel[rel] = true;
+        derived++;
+    } else if (atom) {
         lb_take(&w->out, lb_atomic_extent(box));
         derived++;
     } else if (w->strut_of != box) {
@@ -810,6 +847,41 @@ static size_t lb_line_walk_item(LbLineWalk *w, const TextRunMeasure *m)
     return derived;
 }
 
+/* §10.8's step 2 for the line-relative boxes, after the baseline-aligned ones fixed `w->out`: each grows the line
+   only where its subtree is taller, at the edge §4.2.3 leaves free, which is §10.8's "minimize the line box
+   height". `top` boxes extend the line under, `bottom` boxes over and `center` boxes both by half; the order
+   is CSS 2.2's open choice ("there are multiple solutions and CSS 2 does not define the position of the line
+   box's baseline"), and any order yields the same height, the tallest of the four. */
+static LbExtent lb_line_relative_extent(const LbLineWalk *w)
+{
+    LbExtent out = w->out;
+
+    if (w->has_rel[LB_REL_TOP]) out.below = css_px_max(out.below, css_px_sub(w->rel[LB_REL_TOP], out.above));
+    if (w->has_rel[LB_REL_BOTTOM]) out.above = css_px_max(out.above, css_px_sub(w->rel[LB_REL_BOTTOM], out.below));
+    if (w->has_rel[LB_REL_CENTER]) {
+        CssPx extra = css_px_sub(w->rel[LB_REL_CENTER], css_px_add(out.above, out.below));
+
+        if (extra.px > 0.0) {
+            CssPx half = css_px_scale(extra, 0.5);
+
+            out.above = css_px_add(out.above, half);
+            out.below = css_px_add(out.below, css_px_sub(extra, half));
+        }
+    }
+    return out;
+}
+
+/* Where a line-relative atomic box's bottom margin edge sits below its line's baseline, the line being `e` and the
+   box's margin box `h` tall: `top` hangs it from the line's top edge, `bottom` stands it on the bottom edge, and
+   `center` centres it on the line's centre. */
+static CssPx lb_line_relative_below(LbLineRelative rel, CssPx h, LbExtent e)
+{
+    DCHECK(rel != LB_REL_NONE, "a baseline-aligned box was placed by the line-relative arm");
+    if (rel == LB_REL_TOP) return css_px_sub(h, e.above);
+    if (rel == LB_REL_BOTTOM) return e.below;
+    return css_px_add(css_px_scale(css_px_sub(e.below, e.above), 0.5), css_px_scale(h, 0.5));
+}
+
 static LbExtent lb_line_walk_end(const LbLineWalk *w, const TextRunMeasure *m, bool *exists)
 {
     size_t breaks = w->breaks, last_rendering = w->last_rendering;
@@ -826,7 +898,7 @@ static LbExtent lb_line_walk_end(const LbLineWalk *w, const TextRunMeasure *m, b
     /* §9.4.2's last conjunct. `last_rendering` is `line.to` exactly when the line holds nothing that renders,
        which is the empty-inline-box case the box-edges test above already answered. */
     if (last_rendering < line.to && text_run_measure_item_is_forced_break(m, last_rendering)) *exists = true;
-    return w->out;
+    return lb_line_relative_extent(w);
 }
 
 /* CSS 2.2 §9.4.2's "The width of a line box is determined by a containing block", stated or derived (see
@@ -2651,7 +2723,8 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
     CssPx before = css_px(0.0), after = css_px(0.0), drop = css_px(0.0), extent = css_px(0.0);
     /* §10.8.1's split of this box's margin box at its own baseline, zero for a box the section gives no
        baseline, so the atomic composition below is one arithmetic over both shapes. */
-    CssPx below = css_px(0.0);
+    CssPx below = css_px(0.0), rel_h = css_px(0.0);
+    LbLineRelative rel = LB_REL_NONE;
     size_t n, i, b, nf = 0;
     bool atomic;
 
@@ -2738,7 +2811,9 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
            elements in normal flow and floating replaced elements" for a replaced box, §10.6.6 "Complicated
            cases"' redirection to §10.6.7 for a non-replaced `inline-block`, through core/layout/used_value.h). */
         if (!lb_atomic_ask(el)) return false;
-        below = lb_atomic_extent(el).below;
+        rel = lb_line_relative(el);
+        if (rel == LB_REL_NONE) below = lb_atomic_extent(el).below;
+        else rel_h = used_value_margin_edge_px(el, true);
         drop = used_value_px(el, "margin-bottom");
         extent = used_value_border_edge_px(el, true);
     } else {
@@ -2838,7 +2913,8 @@ bool line_box_inline_fragments_ask(lxb_dom_element_t *el, lxb_dom_element_t **es
                        `below` beneath the line's baseline (zero for a box with no baseline), and CSS 2 §8.1 nests
                        the border area inside it, ending one `margin-bottom` above that edge and beginning one used
                        border-edge extent further up. */
-                    CssPx margin_bottom_edge = css_px_add(baseline, below);
+                    CssPx margin_bottom_edge =
+                        css_px_add(baseline, rel == LB_REL_NONE ? below : lb_line_relative_below(rel, rel_h, e));
 
                     frags[nf].block_end = css_px_sub(margin_bottom_edge, drop);
                     frags[nf].block_start = css_px_sub(frags[nf].block_end, extent);
