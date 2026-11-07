@@ -1,8 +1,8 @@
 /* What the pick ledger (engine/host/solver/pick_ledger.h) says about the Level 2 terms: for each term, alone and as
  * the picked member's rank among a sample of the frontier at the pick, how well it orders the picks by the novel
  * yield their tenures produced per unit of work. A reading, not a model: it decides nothing.
- *   node testing/bench/ledger.mjs <bench-out-dir> [--bins <term>[,<term>…]] [--all-sales]
- * It reads every logs/<page>.<run>.picks.tsv.gz the bench kept. A tenure is counted only when it closed before its
+ *   node testing/bench/ledger.mjs <bench-out-dir>… [--bins <term>[,<term>…]] [--all-sales]
+ * It reads the logs/<page>.<run>.picks.tsv.gz of every run runs.jsonl records as finished. A tenure is counted only when it closed before its
  * instance's first memory-pressure sale (`endSold` 0), because past a sale the picks depend on memory; `--all-sales`
  * counts every tenure.
  *
@@ -36,6 +36,8 @@ const TERMS = [
   { name: 'priced', rank: 'r_priced' }, { name: 'ikey', rank: 'r_ikey' }, { name: 'turn', rank: 'r_turn' },
   { name: 'ownSilence', rank: 'r_ownSilence' }, { name: 'seq', rank: 'r_seq' }, { name: 'visits' },
   { name: 'picks' }, { name: 'prevTenureWork' }, { name: 'onLedger' }, { name: 'displaced' },
+  /* Not a term: the pick's place in its instance's run, read beside the terms because most of them move with it. */
+  { name: 'at' },
 ];
 const CLS = [['candidate', 1], ['drive', 2], ['post', 4], ['victim', 8], ['attacker', 16], ['forced', 32],
              ['observed', 64]];
@@ -90,7 +92,7 @@ function rowOf(r, prevWork) {
       seen: num('seen'), priced: num('assumed') + num('againstEnv'), ikey: num('ikey'), turn: num('turn'),
       ownSilence: num('ownSilence'), seq, visits: num('visits'), picks: num('picks'),
       prevTenureWork: prevWork.has(seq) ? prevWork.get(seq) : NaN, onLedger: num('onLedger'),
-      displaced: num('displaced'),
+      displaced: num('displaced'), at: num('work'),
     },
     y: { paid, value: razor + 0.25 * (landed - razor), newSites: num('newSites') },
     paidBy, landed, razor,
@@ -102,7 +104,8 @@ function concentration(rows, key, out) {
   const xs = rows.filter((r) => Number.isFinite(key(r)));
   let W = 0, Y = 0;
   for (const r of xs) { W += r.work; Y += r.y[out]; }
-  if (xs.length === 0 || W === 0 || Y === 0) return { n: xs.length, c: null };
+  const yielding = xs.filter((r) => r.y[out] > 0).length;
+  if (xs.length === 0 || W === 0 || Y === 0) return { n: xs.length, yielding, c: null };
   xs.sort((a, b) => key(b) - key(a));
   let cw = 0, cy = 0, area = 0;
   for (let i = 0; i < xs.length;) {
@@ -111,7 +114,7 @@ function concentration(rows, key, out) {
     area += (gw / W) * (2 * cy + gy) / (2 * Y);   /* the trapezoid over this tie block */
     cw += gw; cy += gy; i = j;
   }
-  return { n: xs.length, c: +(2 * area - 1).toFixed(3) };
+  return { n: xs.length, yielding, c: +(2 * area - 1).toFixed(3) };
 }
 
 const fmtC = (r) => (r.c === null ? '—' : (r.c >= 0 ? '+' : '') + r.c.toFixed(3));
@@ -148,15 +151,25 @@ const num3 = (v) => (Math.abs(v) >= 1e4 || (v !== 0 && Math.abs(v) < 1e-3) ? v.t
 
 function main() {
   const o = args(process.argv.slice(2));
-  need(o._.length === 1, 'usage: node testing/bench/ledger.mjs <bench-out-dir> [--bins a,b] [--all-sales]');
-  const dir = o._[0];
-  const files = readdirSync(join(dir, 'logs')).filter((f) => f.endsWith('.picks.tsv.gz')).sort();
-  need(files.length > 0, `${dir}/logs holds no .picks.tsv.gz`);
+  need(o._.length >= 1, 'usage: node testing/bench/ledger.mjs <bench-out-dir>… [--bins a,b] [--all-sales]');
+  const dir = o._.join(' ');
+  /* Only the runs the bench has finished (runs.jsonl), since a running one's stream is still being written. A run
+     named in two directories is refused rather than read twice. */
+  const done = new Map(), files = [];
+  for (const d of o._) {
+    for (const r of readFileSync(join(d, 'runs.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) {
+      need(!done.has(`${r.page}.${r.run}`), `run ${r.page}.${r.run} is finished in two of the directories`);
+      done.set(`${r.page}.${r.run}`, r);
+      files.push(join(d, 'logs', `${r.page}.${r.run}.picks.tsv.gz`));
+    }
+  }
+  files.sort((a, b) => a.split('/').pop().localeCompare(b.split('/').pop()));
+  need(files.length > 0, `${dir} holds no finished run`);
   const pages = new Map();
   const census = [];
   for (const f of files) {
-    const page = f.replace(/\.picks\.tsv\.gz$/, '');
-    const { inst } = readRun(join(dir, 'logs', f));
+    const page = f.split('/').pop().replace(/\.picks\.tsv\.gz$/, '');
+    const { inst } = readRun(f);
     const rows = [];
     let total = 0, firstSale = null, totalWork = 0;
     for (const [, rs] of inst) {
@@ -172,7 +185,7 @@ function main() {
     pages.set(page, rows);
     const kinds = {};
     for (const r of rows) for (const [k, v] of Object.entries(r.paidBy)) kinds[k] = (kinds[k] || 0) + v;
-    census.push({ page, instances: inst.size, total, totalWork, rows: rows.length,
+    census.push({ page, ended: done.get(page).endedBy, instances: inst.size, total, totalWork, rows: rows.length,
                   work: rows.reduce((n, r) => n + r.work, 0), firstSale,
                   paid: rows.reduce((n, r) => n + r.y.paid, 0), kinds,
                   landed: rows.reduce((n, r) => n + r.landed, 0), razor: rows.reduce((n, r) => n + r.razor, 0),
@@ -184,35 +197,37 @@ function main() {
   const out = [];
   out.push(`# pick ledger over ${dir}: ${o['all-sales'] ? 'every tenure' : 'tenures closed before the instance\'s first sale'}`);
   out.push('', '## the population each reading rests on (counts; work in stepWork units)',
-           ['page', 'inst', 'picks', 'work', 'readPicks', 'readWork', 'firstSaleAt', 'paidPicks', 'paid', 'landed',
+           ['page', 'ended', 'inst', 'picks', 'work', 'readPicks', 'readWork', 'firstSaleAt', 'paidPicks', 'paid', 'landed',
             'razor', 'value', 'newSites', 'paidByKind'].join('\t'));
   for (const c of census)
-    out.push([c.page, c.instances, c.total, c.totalWork, c.rows, c.work, c.firstSale ?? 'none', c.paidPicks, c.paid,
+    out.push([c.page, c.ended, c.instances, c.total, c.totalWork, c.rows, c.work, c.firstSale ?? 'none', c.paidPicks, c.paid,
               c.landed, c.razor, c.value, c.newSites,
               Object.entries(c.kinds).filter(([, v]) => v > 0).map(([k, v]) => `${k}:${v}`).join(',') || '-'].join('\t'));
   const sum = (k) => census.reduce((n, c) => n + c[k], 0);
-  out.push(['pooled', '', sum('total'), sum('totalWork'), sum('rows'), sum('work'), '', sum('paidPicks'), sum('paid'),
+  out.push(['pooled', '', '', sum('total'), sum('totalWork'), sum('rows'), sum('work'), '', sum('paidPicks'), sum('paid'),
             sum('landed'), sum('razor'), +sum('value').toFixed(2), sum('newSites'), ''].join('\t'));
 
   const pageNames = [...pages.keys()];
   for (const outc of OUTCOMES) {
     for (const how of ['value', 'rank']) {
       out.push('', `## concentration of ${outc} per unit of work, picks ordered by the term's ${how === 'value' ?
-        'value' : 'rank among the sampled frontier at the pick'} (highest first); n = picks with a reading`);
-      out.push(['term', ...pageNames, 'pooled', 'n'].join('\t'));
+        'value' : 'rank among the sampled frontier at the pick'} (highest first); n = picks with a reading, ` +
+        `yielding = those whose tenure produced any`);
+      out.push(['term', ...pageNames, 'pooled', 'n', 'yielding'].join('\t'));
       for (const t of TERMS) {
         if (how === 'rank' && !t.rank) continue;
         const key = how === 'value' ? (r) => r.v[t.name] : (r) => r.rank[t.name];
         const pooledC = concentration(pooled, key, outc);
         out.push([t.name, ...pageNames.map((p) => fmtC(concentration(pages.get(p), key, outc))), fmtC(pooledC),
-                  pooledC.n].join('\t'));
+                  pooledC.n, pooledC.yielding].join('\t'));
       }
       if (how === 'value')
         for (const [name, bit] of CLS) {
           const key = (r) => ((r.cls & bit) ? 1 : 0);
           const pooledC = concentration(pooled, key, outc);
           out.push([`cls:${name}`, ...pageNames.map((p) => fmtC(concentration(pages.get(p), key, outc))),
-                    fmtC(pooledC), pooled.filter((r) => r.cls & bit).length].join('\t'));
+                    fmtC(pooledC), pooled.filter((r) => r.cls & bit).length,
+                    pooled.filter((r) => (r.cls & bit) && r.y[outc] > 0).length].join('\t'));
         }
     }
   }
@@ -227,7 +242,7 @@ function main() {
     };
     out.push([name, ...side(true), ...side(false)].join('\t'));
   }
-  const want = o.bins ? o.bins.split(',') : ['x', 'served', 'famNotch', 'turn', 'ikey', 'priced'];
+  const want = o.bins ? o.bins.split(',') : ['at', 'x', 'served', 'famNotch', 'turn', 'priced'];
   for (const name of want) {
     need(TERMS.some((t) => t.name === name), `--bins names no term ${name}`);
     for (const how of ['value', 'rank']) {
