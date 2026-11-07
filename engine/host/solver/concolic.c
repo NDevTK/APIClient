@@ -3558,8 +3558,8 @@ void concolic_set_candidate(const char *src, const char *root, const char *paylo
         /* One delivery per source per world: the payload enters at the root's declared base source read,
            through each derived row's transform on the way (a tuple, URL §5.2; markup for a named access), so
            every read of that source answers it and every derivation re-runs on it. A root no component
-           declares (a precondition, or a witness verification, which passes no root) substitutes at the
-           identity. A path the composer refuses delivers nothing, and the candidate cannot fire. */
+           declares (a precondition) substitutes at the identity. A path the composer refuses delivers nothing,
+           and the candidate cannot fire. */
         g_cand_bytes = reclaim_strdup(payload);
         CHECK(g_cand_bytes != NULL, "concolic: OOM installing an @S candidate's delivery");
         row = row_chain_walk(root, &g_cand_bytes, 0);

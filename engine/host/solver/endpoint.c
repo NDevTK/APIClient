@@ -64,11 +64,17 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    run reached its request assuming nothing of its own. `canon` is its identity as text, the verification key's
    third field; both are written when a record files it. `acts` is the act list the sighting's flow performed
    (solver/act_list.h): a JSON array, `[]` for none, or `null` where a called member has no act a person can
-   perform; owned, and part of the witness's identity. */
+   perform; owned, and part of the witness's identity. `vpiece` is what its verification run must observe: the
+   witnessed method and path (a pin's value reaching a gated request), or the delivered marker in the address,
+   the header `vheader` (owned) or the body (an attacker-rooted piece carrying it). `vcanon` (owned) is the
+   verification key's third field: `canon` for a pin's, and the piece and root for a marked piece's, so one run
+   checks every witness of the record that marks the piece through that root. Neither is part of the identity. */
 typedef enum { WIT_PIN = 0, WIT_BRANCH, WIT_OUTCOME } WitWhat;
 typedef enum { WIT_VERIFY_NO_CANDIDATE = 0, WIT_VERIFY_CANDIDATE, WIT_VERIFY_VERIFIED } WitVerify;
+typedef enum { WIT_VPIECE_PATH = 0, WIT_VPIECE_ADDRESS, WIT_VPIECE_HEADER, WIT_VPIECE_BODY } WitPiece;
 typedef struct { WitWhat what; char *subject; char *value; ConcolicLit kind; int taken; } WitEntry;
-typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *canon; char *acts; } Witness;
+typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *canon; char *acts;
+                 WitPiece vpiece; char *vheader; char *vcanon; } Witness;
 /* `is_asset` is what the resource at this address turned out to be, written after the record exists. Whether a
    static asset is an endpoint is decided by bytes (magic bytes and content type, not a URL suffix), which arrive on
    a reply, while a request is recorded before its policy check (a request a policy refuses is still one the bundle
@@ -312,7 +318,7 @@ static int wit_entry_cmp(const void *pa, const void *pb) {
 /* The running flow's witness, read at the act: its pin store and its assumed decisions. Two decision keys whose
    spellings and arms agree state one assumption, so a repeat is kept once. */
 static Witness witness_now(void) {
-    Witness w = { 0, NULL, 0, 0, WIT_VERIFY_NO_CANDIDATE, NULL, NULL };
+    Witness w = { 0, NULL, 0, 0, WIT_VERIFY_NO_CANDIDATE, NULL, NULL, WIT_VPIECE_PATH, NULL, NULL };
     int i, u;
 
     if (flow_running() == NULL) return w;
@@ -354,7 +360,9 @@ static void witness_free(Witness *w) {
     free(w->e);
     free(w->canon);
     free(w->acts);
-    w->e = NULL; w->n = w->cap = 0; w->canon = NULL; w->acts = NULL;
+    free(w->vheader);
+    free(w->vcanon);
+    w->e = NULL; w->n = w->cap = 0; w->canon = NULL; w->acts = NULL; w->vheader = NULL; w->vcanon = NULL;
 }
 
 static const char *const wit_verify_token[] = { "no-candidate", "candidate", "verified" };
@@ -451,7 +459,8 @@ static int verified_key(const char *key) {
    one value, the source a declared root delivered through the victim's own address, and the value one the
    address can carry (it begins with the component's prefix and holds something after it). The payload is the
    value past the prefix, which concolic_deliver puts back with the component's encoding.
-   Named residual. Not covered: a witness holding a decision, a pin on a derived value (the beta row's
+   Named residual. Not covered (beyond a marked sighting's, which witness_queue delivers at its root): a
+   witness holding a decision, a pin on a derived value (the beta row's
    `{location.hash}.slice(1)`), a non-String pin, more than one source, a source delivered by plant, referring
    address, user file or message, and a root no attacker delivers (a server reply field). Next diff: the @S
    solver composing a root value from the entries, and the delivery mechanisms beyond the address. How its
@@ -472,25 +481,78 @@ static char *witness_payload(const Witness *w, const char **src) {
     return reclaim_strdup(w->e[0].value + 1);
 }
 
+/* The value a marked sighting's verification delivers at its attacker root: a String of the root's domain whose
+   bytes every address component's percent-encode set and the page's own URI codecs leave as they are, so the
+   request carries it verbatim in the rooted piece.
+   Named residual. Not covered: a gate over the root that this value does not pass (an equality, a prefix, a
+   length bound). Next diff builds: the value composed from the root's facets, as concolic_url_head composes a
+   URL head. Absence shows as: a marked record whose witness stays `candidate` on a page that gates the value. */
+#define WIT_VERIFY_MARKER "apiclientverify"
+
+/* Can firing check a marked sighting's witness through `root`, the root of the piece an attacker source marked:
+   one declared source delivered through the victim's own address. Other mechanisms are witness_payload's
+   residual. */
+static int witness_marked_deliverable(const char *root) {
+    const char *kind;
+    char prefix = 0;
+
+    return root && concolic_root_declared_sources(root) == 1 && concolic_source_delivery(root, &kind, &prefix) &&
+           !strcmp(kind, "address");
+}
+
+/* Queue `w`'s verification, a pin witness's (witness_payload) or else, where `vroot` is the root of the piece
+   `vpiece` (`vheader` naming a header) an attacker source marked on this sighting, a delivery of the marker
+   there; leaves `w` unqueued when firing can check neither. */
+static void witness_queue(const Endpoint *e, Witness *w, const char *vroot, WitPiece vpiece, const char *vheader) {
+    static const char *const piece_tag[] = { "path", "address", "header", "body" };
+    const char *src = NULL;
+    char *payload = witness_payload(w, &src), *key;
+
+    DCHECK(w->asked && w->canon != NULL && w->vcanon == NULL,
+           "a witness was queued for verification before it was spelled, or twice");
+    if (payload) {
+        w->vcanon = reclaim_strdup(w->canon);
+    } else if (witness_marked_deliverable(vroot)) {
+        const char *f[3];
+
+        DCHECK(vpiece != WIT_VPIECE_PATH && (vpiece == WIT_VPIECE_HEADER) == (vheader != NULL),
+               "a marked piece was queued without saying which piece the marker must be observed in");
+        src = vroot;
+        payload = reclaim_strdup(WIT_VERIFY_MARKER);
+        CHECK(payload, "endpoint: OOM spelling a verification marker");
+        w->vpiece = vpiece;
+        w->vheader = vheader ? reclaim_strdup(vheader) : NULL;
+        CHECK(!vheader || w->vheader, "endpoint: OOM naming a verification's header");
+        f[0] = piece_tag[vpiece]; f[1] = vheader ? vheader : ""; f[2] = vroot;
+        w->vcanon = concolic_ident_compose("marked", f, 3);
+    }
+    if (!payload) return;
+    CHECK(w->vcanon, "endpoint: OOM spelling a verification's key");
+    key = witness_verify_key(e->method, e->path, w->vcanon);
+    witness_verify_queue(key, src, payload);
+    w->verify = verified_key(key) ? WIT_VERIFY_VERIFIED : WIT_VERIFY_CANDIDATE;
+    free(key);
+    free(payload);
+}
+
 /* Files a sighting's witness on its record, taking ownership: a witness the record already holds is the same
-   statement and is freed, anything else is one more, and is queued for verification when firing can check it.
-   `*w` is empty afterwards either way. */
-static void endpoint_witness_add(Endpoint *e, Witness *w) {
+   statement and is freed, anything else is one more, and is queued for verification when firing can check it
+   (witness_queue; `vroot` NULL for a sighting no attacker source marked). A held witness no run could check is
+   queued by a later sighting that marks. `*w` is empty afterwards either way. */
+static void endpoint_witness_add(Endpoint *e, Witness *w, const char *vroot, WitPiece vpiece, const char *vheader) {
     for (int i = 0; i < e->nwit; i++)
-        if (witness_same(&e->wit[i], w)) { witness_free(w); w->asked = 0; return; }
+        if (witness_same(&e->wit[i], w)) {
+            if (e->wit[i].asked && e->wit[i].verify == WIT_VERIFY_NO_CANDIDATE && vroot)
+                witness_queue(e, &e->wit[i], vroot, vpiece, vheader);
+            witness_free(w);
+            w->asked = 0;
+            return;
+        }
     DCHECK(w->canon == NULL && w->verify == WIT_VERIFY_NO_CANDIDATE,
            "a sighting witness reached its record already spelled or verified — both are written here");
     if (w->asked) {
-        const char *src = NULL;
-        char *payload = witness_payload(w, &src);
         w->canon = witness_canon(w);
-        if (payload) {
-            char *key = witness_verify_key(e->method, e->path, w->canon);
-            witness_verify_queue(key, src, payload);
-            w->verify = verified_key(key) ? WIT_VERIFY_VERIFIED : WIT_VERIFY_CANDIDATE;
-            free(key);
-            free(payload);
-        }
+        witness_queue(e, w, vroot, vpiece, vheader);
     }
     if (e->nwit >= e->witcap) {
         int nc = e->witcap ? e->witcap * 2 : 2;
@@ -500,7 +562,7 @@ static void endpoint_witness_add(Endpoint *e, Witness *w) {
     }
     e->wit[e->nwit++] = *w;
     w->e = NULL; w->n = w->cap = 0; w->asked = 0; w->canon = NULL; w->verify = WIT_VERIFY_NO_CANDIDATE;
-    w->acts = NULL;
+    w->acts = NULL; w->vpiece = WIT_VPIECE_PATH; w->vheader = NULL; w->vcanon = NULL;
 }
 
 /* See endpoint.h. A union rather than an intersection, for the address class's own merge's reason: each operand is
@@ -2094,13 +2156,47 @@ static void endpoint_disp_add(Endpoint *e, const char *disp) {
     e->ndisp++;
 }
 
-/* A witness verification's own observation, made at its request (endpoint_record's suppressed arm): the run
-   reached the witnessed method and path, and its own witness is empty, so the delivered value alone reached
-   it. Every filed witness with that key is raised to verified, and the key is kept for one filed later. */
-static void endpoint_verify_observe(JSContext *ctx, const char *key, const char *method, JSValueConst url) {
+/* Does the verification run's request carry the delivered marker in the piece `w` names (address, a header, the
+   body)? The address and a header value are read as the surface spells them, bytes or a shape around them. */
+static int verify_piece_carries(JSContext *ctx, const Witness *w, JSValueConst url, const EndpointHeader *hdrs,
+                                int nhdrs, const EndpointBody *body) {
+    static const char m[] = WIT_VERIFY_MARKER;
+
+    switch (w->vpiece) {
+    case WIT_VPIECE_ADDRESS: {
+        const char *u = concolic_name_cstr(ctx, url);
+        int r;
+
+        CHECK(u != NULL, "endpoint: OOM spelling a verification run's address");
+        r = strstr(u, m) != NULL;
+        JS_FreeCString(ctx, u);
+        return r;
+    }
+    case WIT_VPIECE_HEADER:
+        DCHECK(w->vheader != NULL, "a header verification names no header");
+        for (int i = 0; i < nhdrs; i++)
+            if (!strcmp(hdrs[i].name, w->vheader) && hdrs[i].value && strstr(hdrs[i].value, m)) return 1;
+        return 0;
+    case WIT_VPIECE_BODY:
+        return body && body->bytes && memmem(body->bytes, body->len, m, sizeof m - 1) != NULL;
+    case WIT_VPIECE_PATH:
+        break;
+    }
+    DFAIL("a marker verification was asked of a witness whose piece is the path, or of no piece");
+    return 0;
+}
+
+/* A witness verification's own observation, made at its request (endpoint_record's suppressed arm). The run
+   assumed nothing of its own: no assumed decision, and no pin on an arm its example contradicts (an arm the
+   observed state holds is no assumption). A witness it then reaches is raised to verified: a pin witness's
+   when the run reached its method and path, a marked piece's when the request carries the delivered marker
+   there. The key is kept for one filed later. */
+static void endpoint_verify_observe(JSContext *ctx, const char *key, const char *method, JSValueConst url,
+                                    const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body) {
     char *vm, *vp, *vc, *path;
     KvBuf kvb = { 0 };
     Witness own;
+    int clean, raised = 0;
 
     witness_verify_key_split(key, &vm, &vp, &vc);
     if (strcmp(vm, method)) { free(vm); free(vp); free(vc); return; }
@@ -2108,24 +2204,30 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
     kv_free(&kvb);
     own = witness_now();
     DCHECK(own.asked, "a witness verification observed a request with no flow standing");
-    if (!strcmp(path, vp) && own.n == 0) {
-        if (!verified_key(key)) {
-            if (g_verified_n >= g_verified_cap) {
-                int nc = g_verified_cap ? g_verified_cap * 2 : 8;
-                char **nv = realloc(g_verified, (size_t)nc * sizeof *nv);
-                CHECK(nv, "endpoint: OOM recording a verified witness");
-                g_verified = nv; g_verified_cap = nc;
-            }
-            g_verified[g_verified_n] = reclaim_strdup(key);
-            CHECK(g_verified[g_verified_n], "endpoint: OOM recording a verified witness");
-            g_verified_n++;
+    clean = !engine_pinned_of_running_path();
+    for (int i = 0; i < own.n; i++) clean &= own.e[i].what == WIT_PIN;
+    for (int i = 0; clean && i < g_eps_n; i++) {
+        if (strcmp(g_eps[i].method, vm) || strcmp(g_eps[i].path, vp)) continue;
+        for (int j = 0; j < g_eps[i].nwit; j++) {
+            Witness *w = &g_eps[i].wit[j];
+
+            if (!w->vcanon || strcmp(w->vcanon, vc)) continue;
+            if (w->vpiece == WIT_VPIECE_PATH ? strcmp(path, vp) != 0
+                                             : !verify_piece_carries(ctx, w, url, hdrs, nhdrs, body)) continue;
+            w->verify = WIT_VERIFY_VERIFIED;
+            raised = 1;
         }
-        for (int i = 0; i < g_eps_n; i++) {
-            if (strcmp(g_eps[i].method, vm) || strcmp(g_eps[i].path, vp)) continue;
-            for (int j = 0; j < g_eps[i].nwit; j++)
-                if (g_eps[i].wit[j].canon && !strcmp(g_eps[i].wit[j].canon, vc))
-                    g_eps[i].wit[j].verify = WIT_VERIFY_VERIFIED;
+    }
+    if (raised && !verified_key(key)) {
+        if (g_verified_n >= g_verified_cap) {
+            int nc = g_verified_cap ? g_verified_cap * 2 : 8;
+            char **nv = realloc(g_verified, (size_t)nc * sizeof *nv);
+            CHECK(nv, "endpoint: OOM recording a verified witness");
+            g_verified = nv; g_verified_cap = nc;
         }
+        g_verified[g_verified_n] = reclaim_strdup(key);
+        CHECK(g_verified[g_verified_n], "endpoint: OOM recording a verified witness");
+        g_verified_n++;
     }
     witness_free(&own);
     free(path); free(vm); free(vp); free(vc);
@@ -2310,7 +2412,8 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     if (g_suppress) {                       /* candidate/verify run: not a real @H endpoint */
         const Flow *f = flow_running();
         g_ask_suppressed++;
-        if (f && f->fire.kind == FIRE_REQUEST) endpoint_verify_observe(ctx, fire_target_key(&f->fire), method, url);
+        if (f && f->fire.kind == FIRE_REQUEST)
+            endpoint_verify_observe(ctx, fire_target_key(&f->fire), method, url, hdrs, nhdrs, body);
         /* A sink candidate's request is where the request class reads its context probe. */
         if (f && f->fire.kind == FIRE_SINK && door_sends_request(door)) solve_request_sink(ctx, url, document_base_url(ctx));
         return;
@@ -2401,6 +2504,14 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         hdr_atk[i] = hdrs[i].root && reached && concolic_root_delivered_any(hdrs[i].root);
         atk |= hdr_atk[i];
     }
+    /* The marked piece this sighting's witness is verified through, as a PoC is: the address, else the first
+       marked header, else the body. Borrowed for the call (`aroot` may move to the record, which outlives it). */
+    const char *vroot = atk_addr ? aroot : NULL, *vheader = NULL;
+    WitPiece vpiece = atk_addr ? WIT_VPIECE_ADDRESS : WIT_VPIECE_PATH;
+
+    for (int i = 0; !vroot && i < nhdrs; i++)
+        if (hdr_atk[i]) { vroot = hdrs[i].root; vheader = hdrs[i].name; vpiece = WIT_VPIECE_HEADER; }
+    if (!vroot && atk_body) { vroot = body->root; vpiece = WIT_VPIECE_BODY; }
     DCHECK(!atk_addr || acls != EPA_CONCRETE,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
@@ -2497,7 +2608,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                `if (wcls == EPW_MAY_REST_ON)` would leave an `unasked` record `unasked` for ever once a later
                sighting read `no-witness`. */
             if (wcls > g_eps[i].witness_class) g_eps[i].witness_class = wcls;
-            endpoint_witness_add(&g_eps[i], &wit);
+            endpoint_witness_add(&g_eps[i], &wit, vroot, vpiece, vheader);
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
                 novelty_credit(NOVELTY_HEADER, endpoint_note_headers(&g_eps[i], had_headers),
                                endpoint_razor_class_of(g_eps[i].door, g_eps[i].addr_class) == EPZ_RUNTIME_ONLY);
@@ -2538,7 +2649,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because
        `EPW_UNASKED` happens to be zero, and the list's order is a later diff's to change. */
     e->witness_class = wcls;
-    endpoint_witness_add(e, &wit);
+    endpoint_witness_add(e, &wit, vroot, vpiece, vheader);
     /* And the ask and the mint are one instant. The bit is monotone and raised `++`-only at engine.c's single
        program-start line, so the two differ only if something on the path above (a display spelling, a path scan,
        a JSON body parse) runs page code. None does; the assert keeps a later diff from splitting the ask census's

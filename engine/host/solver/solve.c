@@ -2623,14 +2623,17 @@ void solve_flow_begin(Flow *f) {
     const char *root = NULL, *head = NULL;
     const Cand *rc = NULL;
 
-    /* A sink candidate is delivered through its search's root; a witness verification pins a value at its
-       identity and is no search's. */
+    /* A sink candidate is delivered through its search's root; a witness verification is no search's, and its
+       identity is a declared delivery root (endpoint.c's witness_payload, witness_marked_deliverable), delivered
+       through that root's transforms as a candidate is. */
     if (f && f->cand_src && f->fire.kind == FIRE_SINK) {
         rc = search_of(f->cand_src, sink_class_of_name(fire_target_sink(&f->fire)));
 
         DCHECK(rc != NULL && rc->root != NULL, "a candidate flow was switched in whose search holds no root");
         root = rc ? rc->root : NULL;
         head = rc ? rc->url_head : NULL;
+    } else if (f && f->cand_src && f->fire.kind == FIRE_REQUEST) {
+        root = f->cand_src;
     }
     concolic_set_candidate(f ? f->cand_src : NULL, root, f ? f->cand_payload : NULL, head);
     concolic_set_deliveries(f ? f->cand_dsrc : NULL, f ? f->cand_dval : NULL, f ? f->cand_dn : 0);
