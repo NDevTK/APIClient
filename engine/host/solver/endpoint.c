@@ -116,10 +116,13 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     `addr_class == EPA_CONCRETE` and the second is not, so the class on the same row tells them
                     apart, which is why the emit spells NULL in two JSON types. */
                  char *addr_root;
-                 /* The delivery root of the first sighting whose address an attacker source roots on a path no
-                    act of this tool stands on, which makes the record security-relevant; NULL while there is none.
-                    Raised once and never cleared, the max-merge `addr_class` takes. */
+                 /* The delivery root of the first sighting whose address an attacker source roots on a path an
+                    attacker reaches, which makes the record security-relevant; NULL while there is none. Raised
+                    once and never cleared, the max-merge `addr_class` takes. `atk_victim_act` is whether every
+                    such sighting's path needed a victim act: a min-merge, since one sighting that needed none
+                    shows the request is sent without one. */
                  char *atk_addr_root;
+                 int atk_victim_act;
                  /* The body this engine had no field reader for (endpoint.h): set only where `body_params` named
                     nothing, so never a second spelling of `params`' fields, and never overwritten, since a request
                     body is one example. Exactly one of two fields is set: `body_b64` is bytes the request sends, a
@@ -2178,14 +2181,19 @@ static int address_host_open(JSContext *ctx, JSValueConst url) {
     return r;
 }
 
-/* Mark `e` security-relevant with the root of the sighting that made it so (see the struct). The root is copied:
-   the caller's copy may move to `addr_root` on the same call. */
-static void endpoint_mark_attacker_rooted(Endpoint *e, const char *root) {
-    DCHECK(e->atk_addr_root == NULL && root != NULL,
-           "a record was marked attacker-rooted twice, or with no root — the mark is raised once, by the first "
-           "sighting that carries one");
+/* Mark `e` security-relevant with a marking sighting's root and whether its path needed a victim act (see the
+   struct). The first sighting's root is kept; every one lowers `atk_victim_act`. The root is copied: the
+   caller's copy may move to `addr_root` on the same call. */
+static void endpoint_mark_attacker_rooted(Endpoint *e, const char *root, int victim_act) {
+    DCHECK(root != NULL, "a record was marked attacker-rooted with no root");
+    DCHECK(victim_act == 0 || victim_act == 1, "a marking sighting's victim-act fact is not a bit");
+    if (e->atk_addr_root) {
+        e->atk_victim_act &= victim_act;
+        return;
+    }
     e->atk_addr_root = reclaim_strdup(root);
     CHECK(e->atk_addr_root, "endpoint: OOM copying the root that marks a record security-relevant");
+    e->atk_victim_act = victim_act;
 }
 
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
@@ -2326,14 +2334,15 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                CHECK(aroot, "endpoint: OOM copying an address's delivery root — the record would carry a "
                             "class derived from a provenance it cannot name, and this surface's own reader "
                             "would report the address as one this engine attributed to nothing"); } }
-    /* Whether this sighting makes the record security-relevant: an attacker source roots its address and no
-       victim act or drive stands on its path (`gated`, flow_path_victim_driven: a drive of uncalled code, a
-       modelled victim act, a candidate run, or a delivery from one). A drive is API learning, and the page's own
-       control sending its request is the person's ask; the attacker's own act (loading the page again) is
-       neither, so it gates nothing here while `driven` still makes the request the tool's at egress. A door
-       recorded off a park has no running producer and states only `driven`. Path-wise is exact: forced
-       execution also reaches a request that does not depend on an act on a sibling path without it, where the
-       record is marked, so no act-causality tracker is needed. */
+    /* Whether this sighting makes the record security-relevant: an attacker source roots its address and an
+       attacker reaches its path, by the rule an @S fire is a PoC under (solve.c's fire_observed): every act on
+       it is one the attacker performs or a victim performs on the page (act_list_drivable). A drive of code the
+       page never runs is API learning; a victim act is listed in the witness's `acts` and stated as
+       `victimAct`. A delivery from a driven peer is excluded because its acts are held in the peer's instance,
+       so this record could not state them. A value the page stored from an attacker source carries that
+       source's root into the later read, so a later load's request is marked with the attacker's open in its
+       acts. Path-wise is exact: forced execution also reaches a request that does not depend on an act on a
+       sibling path without it, where `victimAct` reads false. `gated` is the attacker-host rule's gate below. */
     const Flow *gf = flow_running();
     int off_park = door == EPD_REPLY_CHUNK || door == EPD_DOCUMENT_SCRIPT || door == EPD_INJECTED_SCRIPT ||
                    door == EPD_MODULE_IMPORT;
@@ -2341,7 +2350,20 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     DCHECK(!gf || off_park || !flow_attacker_acts_only(gf) || (!gated && driven),
            "a path whose only acts are the attacker's own reads as gated, or not as the tool's — the two halves of "
            "the drive fact have collapsed back into one");
-    int atk = aroot != NULL && !gated && concolic_root_delivered_any(aroot);
+    DCHECK(!gf || !gf->cand_src, "a candidate run's request reached the @H surface — endpoint_suppress is keyed "
+                                 "on the same field and returns above");
+    /* Named residual. Not covered: a door recorded off a park, which has no running producer and states only
+       `driven`, so a program load an attacker reaches through a victim act or a reopened load is left plain.
+       Next diff builds: the producer's reachability carried on the park beside its drive mark. Absence shows
+       as: an attacker-rooted script address read plain whose park's witness lists only drivable acts. */
+    int reached = gf && !off_park ? act_list_drivable(gf) && !gf->path_peer_driven : !driven;
+    int victim_act = gf && !off_park ? flow_path_victim_act(gf) : 0;
+    /* Named residual. Not covered: a header or body an attacker source roots, whose roots the header list and
+       the body state drop when they take bytes, so only the address can mark a record. Next diff builds: a root
+       carried per header entry and body span from Headers' append and body extraction to this call. Absence
+       shows as: a record whose header or body shape spells a declared attacker source and whose
+       `attackerRooted` is false. */
+    int atk = aroot != NULL && reached && concolic_root_delivered_any(aroot);
     DCHECK(!atk || acls != EPA_CONCRETE,
            "an address whose root names a declared attacker source was classed concrete — the root is read off "
            "the same concolic value address_class_of classes, so one of the two misread it");
@@ -2424,7 +2446,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                spelling, which for a concolic address is its shape and for a determined one its bytes, so sightings
                here may disagree about the class. The delivery root moves with the class on this line and nowhere
                else, so the two are always one sighting's. */
-            if (atk && !g_eps[i].atk_addr_root) endpoint_mark_attacker_rooted(&g_eps[i], aroot);
+            if (atk) endpoint_mark_attacker_rooted(&g_eps[i], aroot, victim_act);
             if (acls > g_eps[i].addr_class) {
                 g_eps[i].addr_class = acls;
                 free(g_eps[i].addr_root);
@@ -2471,7 +2493,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* And the provenance that class was derived from, transferred rather than copied, since class and root are one
        sighting's fact (see the struct); the `done:` arm frees this local only where no record took it. NULL is the
        value's own answer, never a declined allocation (the CHECK at the read). */
-    if (atk) endpoint_mark_attacker_rooted(e, aroot);
+    if (atk) endpoint_mark_attacker_rooted(e, aroot, victim_act);
     e->addr_root = aroot; aroot = NULL;
     /* And what the composing path had chosen, written unconditionally: the max's identity element only because
        `EPW_UNASKED` happens to be zero, and the list's order is a later diff's to change. */
@@ -3359,6 +3381,8 @@ char *endpoint_json_array(void) {
         json_buf_raw(&b, ","); json_buf_key(&b, "attackerRooted");
         if (!e->atk_addr_root) json_buf_raw(&b, "false");
         else { json_buf_raw(&b, "{"); json_buf_key(&b, "address"); json_buf_str(&b, e->atk_addr_root);
+               json_buf_raw(&b, ","); json_buf_key(&b, "victimAct");
+               json_buf_raw(&b, e->atk_victim_act ? "true" : "false");
                json_buf_raw(&b, "}"); }
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {

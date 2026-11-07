@@ -123,7 +123,7 @@ function docWitness(row, f) {
   return null;
 }
 /* The per-row facts solver/endpoint.c writes as tokens; `addressRoot`, whose domain is null, false or a
-   non-empty string; and `attackerRooted`, false or `{address}`. A key is stated on every row or on none, since
+   non-empty string; and `attackerRooted`, false or `{address, victimAct}`. A key is stated on every row or on none, since
    one instance emits one document shape. */
 const ENDPOINT_FACT_KEYS = Object.freeze(["door", "mintedAt", "addressClass", "razorClass", "witnessClass"]);
 function docEndpointRow(row, f) {
@@ -133,9 +133,9 @@ function docEndpointRow(row, f) {
   if ("addressRoot" in row && row.addressRoot !== null && row.addressRoot !== false && !docIsName(row.addressRoot))
     return f + ".addressRoot is none of null, false or a non-empty string";
   if ("attackerRooted" in row && row.attackerRooted !== false &&
-      !(docIsRecord(row.attackerRooted) && Object.keys(row.attackerRooted).join(",") === "address" &&
-        docIsName(row.attackerRooted.address)))
-    return f + ".attackerRooted is neither false nor {address: a non-empty string}";
+      !(docIsRecord(row.attackerRooted) && Object.keys(row.attackerRooted).join(",") === "address,victimAct" &&
+        docIsName(row.attackerRooted.address) && typeof row.attackerRooted.victimAct === "boolean"))
+    return f + ".attackerRooted is neither false nor {address: a non-empty string, victimAct: a boolean}";
   return "witness" in row ? docWitness(row, f) : null;
 }
 function docEndpoints(rows) {

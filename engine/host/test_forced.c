@@ -18374,16 +18374,29 @@ static void rq_marks(const char *js, const char *prefix, int *seen, int *marked,
     }
 }
 
+/* Whether some record of the address beginning `prefix` is marked with `victimAct` as `want` states it. */
+static int rq_victim_act(const char *js, const char *prefix, int want) {
+    EmittedRec r[EMITTED_REC_MAX];
+    static const char yes[] = "\"victimAct\":true}", no[] = "\"victimAct\":false}";
+    int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX), i;
+
+    for (i = 0; i < n; i++)
+        if (memmem(r[i].b, r[i].n, want ? yes : no, want ? sizeof yes - 1 : sizeof no - 1)) return 1;
+    return 0;
+}
+
 /* The rows of the `requestsink` document (fixture/requestsink.h). A request whose host the fragment decides is a
    request-class record and no API record. The rest carry the engine's security-relevant mark where an attacker
-   source roots the address on a path no act of this tool stands on, and are plain where only a drive reaches
-   the request (a click listener, a never-called function) or only stored state roots it. The zone's
-   can-change-nothing predicate is not the engine's, so the uncredentialed rows carry the engine's mark here. */
+   source roots the address on a path an attacker reaches, stating whether a victim act stands on it (the click
+   listener's DELETE), and are plain where a drive of a never-called function reaches the request or only stored
+   state roots it. The zone's can-change-nothing predicate is not the engine's, so the uncredentialed rows carry
+   the engine's mark here. */
 TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
-    static const char *const marked_at[3] = { "/api/users/", "https://rq-other.test/q", "https://x.test/api/rq-pinned" };
-    static const char *const plain_at[3] = { "/api/drafts/", "/api/rq-orphan/", "/api/rq-store" };
-    const char *mk_why[3] = { NULL, NULL, NULL }, *pr_why[3] = { NULL, NULL, NULL }, *pl_why[3] = { NULL, NULL, NULL };
-    int mk_tt[3] = { 1, 1, 1 }, pr_tt[3] = { 1, 1, 1 }, pl_tt[3] = { 1, 1, 1 }, i, seen, marked, plain;
+    static const char *const marked_at[4] = { "/api/users/", "https://rq-other.test/q", "https://x.test/api/rq-pinned",
+                                              "/api/drafts/" };
+    static const char *const plain_at[2] = { "/api/rq-orphan/", "/api/rq-store" };
+    const char *mk_why[4] = { NULL, NULL, NULL, NULL }, *pr_why[2] = { NULL, NULL }, *pl_why[2] = { NULL, NULL };
+    int mk_tt[4] = { 1, 1, 1, 1 }, pr_tt[2] = { 1, 1 }, pl_tt[2] = { 1, 1 }, i, seen, marked, plain;
     const char *to_why = NULL, *tn_why = NULL, *tf_why = NULL, *go_why = NULL;
     int to_tt = 1, tn_tt = 1, tf_tt = 1, go_tt = 1;
     char to_src[1024] = "", go_src[1024] = "";
@@ -18401,18 +18414,24 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
              "the click-sent request whose host a query value decides did not fire");
     fold_row(&go_tt, &go_why, has_go && s_field(js, "request", go_src, "\"acts\":"),
              "the click-sent request's finding lists no act, so its proof omits the click it needs");
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < 4; i++) {
         rq_marks(js, marked_at[i], &seen, &marked, &plain);
         fold_row(&mk_tt[i], &mk_why[i], seen > 0, "NOT REACHED: there is no record of this address");
         fold_row(&mk_tt[i], &mk_why[i], marked > 0,
-                 "no record of this address carries the mark, though a query value roots it on the page's own path");
+                 "no record of this address carries the mark, though a query value roots it on a path an attacker "
+                 "reaches");
+        fold_row(&mk_tt[i], &mk_why[i], rq_victim_act(js, marked_at[i], i == 3),
+                 i == 3 ? "the click-sent request's mark does not state that a victim act stands on its path"
+                        : "the mark of a request the page sends unprompted states that it needs a victim act");
+    }
+    for (i = 0; i < 2; i++) {
         rq_marks(js, plain_at[i], &seen, &marked, &plain);
         fold_row(&pr_tt[i], &pr_why[i], seen > 0, "NOT REACHED: there is no record of this address");
         fold_row(&pl_tt[i], &pl_why[i], marked == 0 && plain == seen,
-                 i == 2 ? "a record rooted only in stored state carries the mark, so a precondition was read as an "
+                 i == 1 ? "a record rooted only in stored state carries the mark, so a precondition was read as an "
                           "attacker source"
-                        : "a record only a drive reaches carries the mark, so this tool's own act was read as the "
-                          "page's");
+                        : "a record only a drive of never-called code reaches carries the mark, so API learning was "
+                          "read as an attacker's reach");
     }
     const Probe rows[] = {
         { "rq-to-found", to_tt, "rqTo", SESS_EXPLORE, to_why },
@@ -18422,12 +18441,11 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
         { "rq-id-marked", mk_tt[0], "rqId", SESS_EXPLORE, mk_why[0] },
         { "rq-other-marked", mk_tt[1], "rqH", SESS_EXPLORE, mk_why[1] },
         { "rq-pinned-marked", mk_tt[2], "rqP", SESS_EXPLORE, mk_why[2] },
-        { "rq-click-reached", pr_tt[0], "rqDel", SESS_EXPLORE, pr_why[0] },
-        { "rq-click-plain", pl_tt[0], "rqDel", SESS_EXPLORE, pl_why[0], .reach = "rq-click-reached" },
-        { "rq-orphan-reached", pr_tt[1], "rqNeverCalled", SESS_EXPLORE, pr_why[1] },
-        { "rq-orphan-plain", pl_tt[1], "rqNeverCalled", SESS_EXPLORE, pl_why[1], .reach = "rq-orphan-reached" },
-        { "rq-storage-reached", pr_tt[2], "rqStored", SESS_EXPLORE, pr_why[2] },
-        { "rq-storage-plain", pl_tt[2], "rqStored", SESS_EXPLORE, pl_why[2], .reach = "rq-storage-reached" },
+        { "rq-click-marked", mk_tt[3], "rqDel", SESS_EXPLORE, mk_why[3] },
+        { "rq-orphan-reached", pr_tt[0], "rqNeverCalled", SESS_EXPLORE, pr_why[0] },
+        { "rq-orphan-plain", pl_tt[0], "rqNeverCalled", SESS_EXPLORE, pl_why[0], .reach = "rq-orphan-reached" },
+        { "rq-storage-reached", pr_tt[1], "rqStored", SESS_EXPLORE, pr_why[1] },
+        { "rq-storage-plain", pl_tt[1], "rqStored", SESS_EXPLORE, pl_why[1], .reach = "rq-storage-reached" },
     };
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
@@ -18479,6 +18497,9 @@ TF_UNIT void probes_storedreq(const char *js, Probe *tab, int *n) {
         fold_row(&mk_tt[i], &mk_why[i], any > 0,
                  "no record of this request carries the security-relevant mark, though the value it sends is one "
                  "the page stored from an attacker source");
+        if (i == 2)
+            fold_row(&mk_tt[i], &mk_why[i], rq_victim_act(js, at[i], 0),
+                     "no mark of the request a timer of the same load sends states that it needs no victim act");
         fold_row(&vf_tt[i], &vf_why[i], sq_witness_has(js, at[i], verified, i < 2 ? open_act : NULL),
                  "no witness of this request's record is verified by re-running to the request with the stored "
                  "value's delivery, so the record does not state how an attacker reaches it");
@@ -25071,7 +25092,8 @@ TF_UNIT void probes_decoder(const char *js, Probe *tab, int *n) {
     fold_row(&tdunk_tt, &tdunk_why,
              emitted_record_has(js, "/api/tdunknown",
                                 "\"addressRoot\":\"" LOCATION_HASH_SRC "\",\"attackerRooted\":{\"address\":\""
-                                LOCATION_HASH_SRC "\"},\"params\":[{\"name\":\"u\",\"location\":\"query\","
+                                LOCATION_HASH_SRC "\",\"victimAct\":false},\"params\":[{\"name\":\"u\","
+                                "\"location\":\"query\","
                                 "\"valueClass\":\"unknown\""),
              "the decode that completed a sequence held from unknown bytes was not derived from the fragment, so "
              "the held bytes' identity was lost between the two calls");

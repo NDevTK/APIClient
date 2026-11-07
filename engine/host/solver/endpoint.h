@@ -398,8 +398,10 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    `url`: extension/lib/learn.js mints `{path_*}` holes from live traffic into addresses it reads `concrete`
    for. Q1 (determined) is `concrete` or `source-determined`; Q2 is `unknown`, which `razorClass` already
    composes, so a consumer reading the bar as `!= "concrete"` over-claims. */
-/* `attackerRooted`: false, or `{address}` naming the root of the first sighting whose address an attacker
-   source rooted on a path no act of this tool stands on, which marks the record security-relevant. */
+/* `attackerRooted`: false, or `{address, victimAct}`, which marks the record security-relevant: `address` names
+   the root of the first sighting whose address an attacker source rooted on a path an attacker reaches (every
+   act on it one the attacker performs or a victim performs on the page), and `victimAct` is whether every such
+   sighting's path needed a victim act. */
 /* `witness`: one element per distinct sighting witness, never a union of two (it would state a combination no
    flow assumed), never empty. An element is `null` where no flow stood (`witnessClass` `unasked`), else
    `{assumed, verification}`, `assumed` being the minting flow's assumptions at the act, sorted by kind then
