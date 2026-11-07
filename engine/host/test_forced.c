@@ -1574,6 +1574,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/prefixjoin.h"
 #include "fixture/xdhost.h"
 #include "fixture/rxprefix.h"
+#include "fixture/rxtest.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2275,6 +2276,7 @@ TF_DOCS[] = {
     { "prefixjoin", HTML_PREFIXJOIN },
     { "xdhost", HTML_XDHOST },
     { "rxprefix", HTML_RXPREFIX },
+    { "rxtest", HTML_RXTEST },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -18033,6 +18035,31 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `rxtest` document (fixture/rxtest.h): `test` over an unknown subject is a predicate of the
+   match, decided where the page's units decide the match and forked where the subject's domain allows both. */
+TF_UNIT void probes_rxtest(const char *js, Probe *tab, int *n) {
+    const char *o_why = NULL, *a_why = NULL, *e_why = NULL;
+    int o_tt = 1, a_tt = 1, e_tt = 1;
+
+    fold_row(&o_tt, &o_why, !!strstr(js, "\"/api/rt-open-yes\"") && !!strstr(js, "\"/api/rt-open-no\""),
+             "`/\\?/.test` over the fragment did not run both arms: a match of unknown input was answered as a "
+             "concrete Boolean");
+    fold_row(&a_tt, &a_why, !!strstr(js, "\"/api/rt-anch-no\""),
+             "there is no /api/rt-anch-no record: `test` over a page path the pattern cannot match was not false");
+    fold_row(&a_tt, &a_why, !strstr(js, "/api/rt-anch-yes"),
+             "/api/rt-anch-yes is in the document: `test` over a subject beginning `/a` matched `/^\\/\\//`");
+    fold_row(&e_tt, &e_why, !!strstr(js, "\"/api/rt-exec-null\""),
+             "there is no /api/rt-exec-null record: `exec` over a page path the pattern cannot match was not null");
+    fold_row(&e_tt, &e_why, !strstr(js, "/api/rt-exec-match"),
+             "/api/rt-exec-match is in the document: `exec` over a subject beginning `/a` matched `/^\\/\\//`");
+    const Probe rows[] = {
+        { "rt-open-both-arms", o_tt, "/api/rt-open-yes", SESS_EXPLORE, o_why },
+        { "rt-test-one-arm", a_tt, "/api/rt-anch-no", SESS_EXPLORE, a_why },
+        { "rt-exec-one-arm", e_tt, "/api/rt-exec-null", SESS_EXPLORE, e_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `rxprefix` document (fixture/rxprefix.h): a replace keeps the receiver's units that no match
    can reach, so the host of each page-written path stays the document's and its comparison runs one arm. */
 TF_UNIT void probes_rxprefix(const char *js, Probe *tab, int *n) {
@@ -26617,6 +26644,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_prefixjoin(js, probes, &np);
     probes_xdhost(js, probes, &np);
     probes_rxprefix(js, probes, &np);
+    probes_rxtest(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
