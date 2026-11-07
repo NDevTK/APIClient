@@ -18401,6 +18401,23 @@ static void rq_marks(const char *js, const char *prefix, int *seen, int *marked,
     }
 }
 
+/* Whether every witness of every record of the address beginning `prefix` names `needle`: 1 for no record. */
+static int rq_every_witness_has(const char *js, const char *prefix, const char *needle) {
+    static const char W[] = "{\"verification\":";
+    EmittedRec r[EMITTED_REC_MAX];
+    int n = emitted_records_prefixed(js, prefix, r, EMITTED_REC_MAX), i;
+
+    for (i = 0; i < n; i++) {
+        const char *end = r[i].b + r[i].n, *w = memmem(r[i].b, r[i].n, W, sizeof W - 1);
+        while (w) {
+            const char *next = memmem(w + 1, (size_t)(end - w - 1), W, sizeof W - 1), *stop = next ? next : end;
+            if (!memmem(w, (size_t)(stop - w), needle, strlen(needle))) return 0;
+            w = next;
+        }
+    }
+    return 1;
+}
+
 /* Whether some record of the address beginning `prefix` carries `piece` inside its mark. */
 static int rq_mark_has(const char *js, const char *prefix, const char *piece) {
     static const char mk[] = "\"attackerRooted\":{";
@@ -18440,8 +18457,8 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
     static const char *const plain_at[2] = { "/api/rq-orphan/", "/api/rq-store" };
     const char *mk_why[4] = { NULL, NULL, NULL, NULL }, *pr_why[2] = { NULL, NULL }, *pl_why[2] = { NULL, NULL };
     int mk_tt[4] = { 1, 1, 1, 1 }, pr_tt[2] = { 1, 1 }, pl_tt[2] = { 1, 1 }, i, seen, marked, plain;
-    const char *to_why = NULL, *tn_why = NULL, *tf_why = NULL, *go_why = NULL, *fg_why = NULL;
-    int to_tt = 1, tn_tt = 1, tf_tt = 1, go_tt = 1, fg_tt = 1;
+    const char *to_why = NULL, *tn_why = NULL, *tf_why = NULL, *go_why = NULL, *fg_why = NULL, *gs_why = NULL;
+    int to_tt = 1, tn_tt = 1, tf_tt = 1, go_tt = 1, fg_tt = 1, gs_tt = 1;
     char to_src[1024] = "", go_src[1024] = "";
     int has_go = s_rooted_source(js, "request", "[go]", go_src, sizeof go_src);
 
@@ -18467,6 +18484,14 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
                  i == 3 ? "the click-sent request's mark does not state that a victim act stands on its path"
                         : "the mark of a request the page sends unprompted states that it needs a victim act");
     }
+    /* The click-sent fetch of a query-supplied address is an API record only on a path where Fetch's own
+       same-origin test over it holds, the world in which the attacker's value names this origin; on every other
+       path the attacker picks the host and it is the request class's finding. */
+    fold_row(&gs_tt, &gs_why,
+             rq_every_witness_has(js, "{location.search[go]}",
+                                  ".origin()===\\\"https://x.test\\\"\",\"taken\":true"),
+             "an API record of the address a query value supplies whole stands on a path where Fetch's same-origin "
+             "test over it does not hold, so a request whose host the attacker picks was filed as an endpoint");
     rq_marks(js, "/api/rq-forge", &seen, &marked, &plain);
     fold_row(&fg_tt, &fg_why, seen > 0, "NOT REACHED: there is no /api/rq-forge record");
     fold_row(&fg_tt, &fg_why,
@@ -18488,6 +18513,7 @@ TF_UNIT void probes_requestsink(const char *js, Probe *tab, int *n) {
         { "rq-to-no-record", tn_tt, "rqTo", SESS_EXPLORE, tn_why, .reach = "rq-to-found" },
         { "rq-to-fired", tf_tt, "rqTo", SESS_EXPLORE, tf_why },
         { "rq-go-fired-with-act", go_tt, "rqGoBtn", SESS_EXPLORE, go_why },
+        { "rq-go-record-same-origin", gs_tt, "rqGoBtn", SESS_EXPLORE, gs_why },
         { "rq-id-marked", mk_tt[0], "rqId", SESS_EXPLORE, mk_why[0] },
         { "rq-other-marked", mk_tt[1], "rqH", SESS_EXPLORE, mk_why[1] },
         { "rq-pinned-marked", mk_tt[2], "rqP", SESS_EXPLORE, mk_why[2] },
