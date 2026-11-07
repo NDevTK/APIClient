@@ -616,6 +616,30 @@ typedef struct { const char *at; const char *type; const char *body; } TfServed;
 #define LINKREST_SHEET LINKREST_1000("0") LINKREST_1000("1") LINKREST_1000("2") LINKREST_1000("3")              \
                        LINKREST_1000("4") LINKREST_1000("5") LINKREST_1000("6") LINKREST_1000("7")              \
                        LINKREST_1000("8") LINKREST_1000("9") "#lrEl{width:7px}"
+/* fixture/linknest.h's style sheet: `@layer ln{` holding `a:not(.lnA)`, 10,000 rules `.lnNNNN{width:1px}` by
+   macro repetition and the one its element matches, then `#lnBig` with 1,000 custom properties and a height. */
+#define LINKNEST_R(p) ".ln" p "{width:1px}"
+#define LINKNEST_10(p) LINKNEST_R(p "0") LINKNEST_R(p "1") LINKNEST_R(p "2") LINKNEST_R(p "3") LINKNEST_R(p "4") \
+                       LINKNEST_R(p "5") LINKNEST_R(p "6") LINKNEST_R(p "7") LINKNEST_R(p "8") LINKNEST_R(p "9")
+#define LINKNEST_100(p) LINKNEST_10(p "0") LINKNEST_10(p "1") LINKNEST_10(p "2") LINKNEST_10(p "3")             \
+                        LINKNEST_10(p "4") LINKNEST_10(p "5") LINKNEST_10(p "6") LINKNEST_10(p "7")             \
+                        LINKNEST_10(p "8") LINKNEST_10(p "9")
+#define LINKNEST_1000(p) LINKNEST_100(p "0") LINKNEST_100(p "1") LINKNEST_100(p "2") LINKNEST_100(p "3")        \
+                         LINKNEST_100(p "4") LINKNEST_100(p "5") LINKNEST_100(p "6") LINKNEST_100(p "7")        \
+                         LINKNEST_100(p "8") LINKNEST_100(p "9")
+#define LINKNEST_D(p) "--lnd" p ":hsl(46deg, 10%, 96%);"
+#define LINKNEST_D10(p) LINKNEST_D(p "0") LINKNEST_D(p "1") LINKNEST_D(p "2") LINKNEST_D(p "3") LINKNEST_D(p "4") \
+                        LINKNEST_D(p "5") LINKNEST_D(p "6") LINKNEST_D(p "7") LINKNEST_D(p "8") LINKNEST_D(p "9")
+#define LINKNEST_D100(p) LINKNEST_D10(p "0") LINKNEST_D10(p "1") LINKNEST_D10(p "2") LINKNEST_D10(p "3")      \
+                         LINKNEST_D10(p "4") LINKNEST_D10(p "5") LINKNEST_D10(p "6") LINKNEST_D10(p "7")      \
+                         LINKNEST_D10(p "8") LINKNEST_D10(p "9")
+#define LINKNEST_SHEET "@layer ln{a:not(.lnA){width:2px}"                                                   \
+                       LINKNEST_1000("0") LINKNEST_1000("1") LINKNEST_1000("2") LINKNEST_1000("3")              \
+                       LINKNEST_1000("4") LINKNEST_1000("5") LINKNEST_1000("6") LINKNEST_1000("7")              \
+                       LINKNEST_1000("8") LINKNEST_1000("9") "#lnEl{width:7px}}"                                \
+                       "#lnBig{" LINKNEST_D100("0") LINKNEST_D100("1") LINKNEST_D100("2") LINKNEST_D100("3")   \
+                       LINKNEST_D100("4") LINKNEST_D100("5") LINKNEST_D100("6") LINKNEST_D100("7")             \
+                       LINKNEST_D100("8") LINKNEST_D100("9") "height:3px}"
 /* fixture/jsonrest.h's reply: 10,000 records `{"i":NNNN,"v":"abcdefghijklmn"}` by macro repetition, then one
    whose `i` is -1. */
 #define JSONREST_R(p) "{\"i\":" p ",\"v\":\"abcdefghijklmn\"},"
@@ -635,6 +659,7 @@ static const TfServed TF_SERVED[] = {
     { "https://x.test/data/jsonrest-x.json", "application/json", JSONREST_BODY },
     { "https://x.test/data/jsonrest-s.json", "application/json", JSONREST_BODY },
     { "https://x.test/sheet/linkrest.css", "text/css", LINKREST_SHEET },
+    { "https://x.test/sheet/linknest.css", "text/css", LINKNEST_SHEET },
     { "https://x.test/chunk/rxmod.js", "text/javascript",
       "var rxmR = /" RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 "b/;"
       "export var m = rxmR.test('a'.repeat(327680) + 'b') && !rxmR.test('a'.repeat(327680))"
@@ -1441,6 +1466,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/sheetrest.h"
 #include "fixture/jsonrest.h"
 #include "fixture/linkrest.h"
+#include "fixture/linknest.h"
 #include "fixture/wnameunk.h"
 #include "fixture/flexsvg.h"
 #include "fixture/ceupsale.h"
@@ -2122,6 +2148,7 @@ TF_DOCS[] = {
     { "sheetrest", HTML_SHEETREST },
     { "jsonrest", HTML_JSONREST },
     { "linkrest", HTML_LINKREST },
+    { "linknest", HTML_LINKNEST },
     { "wnameunk", HTML_WNAMEUNK },
     { "flexsvg", HTML_FLEXSVG },
     { "ceupsale", HTML_CEUPSALE, OPENER_POLICY_UNSAFE_NONE, 1 },
@@ -19889,6 +19916,26 @@ TF_UNIT void probes_linkrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `linknest` document (fixture/linknest.h): a linked sheet whose one `@layer` block is more
+   than a work quantum to parse and to build reads back whole through CSSOM and the cascade. */
+TF_UNIT void probes_linknest(const char *js, Probe *tab, int *n) {
+    const char *ln_why = NULL; int ln_tt = 1;
+    fold_row(&ln_tt, &ln_why, !!strstr(js, "\"/api/linknest\""),
+             "NOT REACHED: no /api/linknest record, so the document whose linked sheet nests more than a work "
+             "quantum in one `@layer` never read its sheet back");
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/linknest", "n", "10002") &&
+                              param_value_is(js, "/api/linknest", "f", "a%3Anot(.lnA)") &&
+                              param_value_is(js, "/api/linknest", "w", "7px") &&
+                              param_value_is(js, "/api/linknest", "h", "3px") &&
+                              param_value_is(js, "/api/linknest", "d", "hsl(46deg, 10%, 96%)"),
+             "the linked sheet's `@layer` does not read back as 10002 rules from a:not(.lnA), with its last rule's "
+             "width:7px through the cascade, and its 1001-declaration rule's height and last custom property");
+    const Probe rows[] = {
+        { "link-sheet-nest", ln_tt, "/api/linknest", SESS_EXPLORE, ln_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `jsonrest` document (fixture/jsonrest.h): a JSON reply several quanta long reads back whole
    through json() over its bytes, the XHR json response, and json() over a streamed body. */
 TF_UNIT void probes_jsonrest(const char *js, Probe *tab, int *n) {
@@ -26234,6 +26281,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_sheetrest(js, probes, &np);
     probes_jsonrest(js, probes, &np);
     probes_linkrest(js, probes, &np);
+    probes_linknest(js, probes, &np);
     probes_wnameunk(js, probes, &np);
     probes_flexsvg(js, probes, &np);
     probes_ceupsale(js, probes, &np);
