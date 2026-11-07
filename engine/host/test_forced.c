@@ -1453,6 +1453,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/flexanonbase.h"
 #include "fixture/flexratio.h"
 #include "fixture/rangetext.h"
+#include "fixture/willchange.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2129,6 +2130,7 @@ TF_DOCS[] = {
     { "flexanonbase", HTML_FLEXANONBASE },
     { "flexratio", HTML_FLEXRATIO },
     { "rangetext", HTML_RANGETEXT },
+    { "willchange", HTML_WILLCHANGE },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -20091,6 +20093,29 @@ TF_UNIT void probes_rangetext(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `willchange` document (fixture/willchange.h): css-position-3 §2.1's positioning containing
+   blocks from `will-change` and `transform`. */
+TF_UNIT void probes_willchange(const char *js, Probe *tab, int *n) {
+    const char *wc_why = NULL; int wc_tt = 1;
+    fold_row(&wc_tt, &wc_why, !!strstr(js, "\"/api/willchange\""),
+             "NOT REACHED: no /api/willchange record, so the document aborted before its fetch");
+    fold_row(&wc_tt, &wc_why, param_value_is(js, "/api/willchange", "a1", "60") &&
+                              param_value_is(js, "/api/willchange", "a2", "10"),
+             "css-will-change-1 §2: `will-change: transform` does not make an absolute child's containing block, "
+             "or `will-change: opacity, scroll-position` does");
+    fold_row(&wc_tt, &wc_why, param_value_is(js, "/api/willchange", "f3", "60") &&
+                              param_value_is(js, "/api/willchange", "f4", "10") &&
+                              param_value_is(js, "/api/willchange", "f5", "60"),
+             "css-position-3 §2.1: `will-change: filter` or `transform: translateX(0px)` does not make a fixed "
+             "child's containing block, or `will-change: position` does");
+    fold_row(&wc_tt, &wc_why, param_value_is(js, "/api/willchange", "a6", "10"),
+             "css-position-3 §2.1: a declared `filter: none`, the initial value, made a containing block");
+    const Probe rows[] = {
+        { "positioning-cb-will-change", wc_tt, "/api/willchange", SESS_EXPLORE, wc_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -26106,6 +26131,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_flexanonbase(js, probes, &np);
     probes_flexratio(js, probes, &np);
     probes_rangetext(js, probes, &np);
+    probes_willchange(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
