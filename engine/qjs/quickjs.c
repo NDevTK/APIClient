@@ -1928,6 +1928,10 @@ typedef struct JSAsyncFunctionState {
     JSStackFrame frame;
     void *tramp_top;  /* APIClient forced-exec: the stashed heap-frame (TrampFrame) chain when this flow was
                          PREEMPTED mid-execution at depth; NULL when suspended at the base or not suspended. */
+    /* The live end of this coroutine's frame while it stands mid-call on a stashed chain (the callee frame's
+       caller_sp), NULL otherwise: written by tramp_chain_park_ends where a chain is stashed or cloned and
+       cleared where it resumes or is torn down, so the record that owns the frame marks its operands. */
+    JSValue *chain_sp;
     /* THE PARK — see flow_park. A parked continuation is a property of THE BASE IT SUSPENDS and of nothing
        else: it re-enters this activation, under this activation's heap, and no other base can be handed it.
        It used to be one struct on the JSRuntime, which is a CAPACITY where the design has none — the number
@@ -36350,6 +36354,7 @@ static void js_net_site_hit(JSRuntime *rt, JSFunctionBytecode *b, uint32_t pc)
 }
 
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
+static void tramp_chain_park_ends(struct TrampFrame *top, bool park);
 static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                JSValueConst this_obj, JSValueConst new_target,
                                int argc, JSValueConst *argv, int flags)
@@ -36754,6 +36759,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        exactly where the pair would stop agreeing. */
                     void *ystt = dtf->cont_state;
                     uint8_t ykind = dtf->cont_kind;
+                    tramp_chain_park_ends(dtf, false);
                     s->tramp_top = NULL;
                     tf_top = dtf->up;
                     sf = dtf->caller_sf; b = dtf->caller_b; ctx = dtf->caller_ctx;
@@ -36892,6 +36898,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        "a parked chain's frame resumed into a cur_func with no bytecode body — the same "
                        "question the base-body arm below asks, and the answer is read three levels deep here "
                        "before the first opcode dispatches");
+                tramp_chain_park_ends(dtf, false);
                 s->tramp_top = NULL;
                 tf_top = dtf;
                 rt->current_stack_frame = dsf;
@@ -48494,6 +48501,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    so stash its top into the generator base and unwind the C stack to the base's caller.
                    The chain (deepest -> ... -> bottom -> &gen_state->frame) stays linked for the rebuild. */
                 gen_state->tramp_top = tf_top;
+                tramp_chain_park_ends(tf_top, true);
                 rt->current_stack_frame = gen_state->frame.prev_frame;
                 return js_int32(FUNC_RET_PREEMPT);
             }
@@ -54194,7 +54202,14 @@ static void async_func_mark(JSRuntime *rt, JSAsyncFunctionState *s,
            cycle */
         for(sp = sf->arg_buf; sp < sf->cur_sp; sp++)
             JS_MarkValue(rt, *sp, mark_func);
+    } else if (s->chain_sp) {
+        /* mid-call on a stashed chain: the chain recorded where its live operands end */
+        for(sp = sf->arg_buf; sp < s->chain_sp; sp++)
+            JS_MarkValue(rt, *sp, mark_func);
     }
+    DCHECK(sf->cur_sp == NULL || s->chain_sp == NULL || sf->cur_sp == s->chain_sp,
+           "async_func_mark: a coroutine frame's saved stack position and the live end its stashed chain recorded "
+           "disagree — one of the two is stale, so its operands are bounded by a position it never had");
     /* A deep-suspended base keeps no cur_sp of its own: its live end is the bottom frame's caller_sp, and its
        chain's references are the chain's (tramp_chain_mark). */
     if (s->tramp_top) {
@@ -54971,6 +54986,7 @@ static JSGeneratorData *js_generator_data_clone(JSContext *ctx, JSGeneratorData 
     g1->func_state.argc = g0->func_state.argc;
     g1->func_state.throw_flag = g0->func_state.throw_flag;
     g1->func_state.tramp_top = NULL;
+    g1->func_state.chain_sp = NULL;   /* a clone stands on no chain until clone_deep_flow stamps it */
     return g1;
 }
 
@@ -54991,6 +55007,25 @@ static JSStackFrame *tramp_live_sf(TrampFrame *t) {
     if (t->gen_data)        return &t->gen_data->func_state.frame;
     if (tramp_agen_data(t)) return &tramp_agen_data(t)->func_state.frame;
     return &t->sf;
+}
+/* The coroutine record state whose frame is `t`'s live frame, or NULL for a plain frame. */
+static JSAsyncFunctionState *tramp_coro_state(TrampFrame *t) {
+    if (t->async_data)      return &t->async_data->func_state;
+    if (t->gen_data)        return &t->gen_data->func_state;
+    if (tramp_agen_data(t)) return &tramp_agen_data(t)->func_state;
+    return NULL;
+}
+/* Stamps (park) or clears each coroutine frame's chain_sp on the chain from `top`: a frame below the top stands
+   mid-call, and its live end is the caller_sp its callee recorded; the top frame is the live point, whose
+   cur_sp the preempt wrote. */
+static void tramp_chain_park_ends(TrampFrame *top, bool park) {
+    JSAsyncFunctionState *ts = tramp_coro_state(top);
+
+    if (ts) ts->chain_sp = NULL;
+    for (TrampFrame *t = top; t->up; t = t->up) {
+        JSAsyncFunctionState *cs = tramp_coro_state(t->up);
+        if (cs) cs->chain_sp = park ? t->caller_sp : NULL;
+    }
 }
 /* Whether a TrampFrame's buffer is its coroutine record's rather than its own local_buf. */
 static bool tramp_frame_is_coro(const TrampFrame *t) {
@@ -55838,6 +55873,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
             as2->func_state.argc = as->func_state.argc;
             as2->func_state.throw_flag = as->func_state.throw_flag;
             as2->func_state.tramp_top = NULL;
+            as2->func_state.chain_sp = NULL;   /* stamped with the clone's chain at its end */
             as2->func_state.frame.cur_sp = (i == 0) ? as2->func_state.frame.arg_buf + (osf->cur_sp - aof->arg_buf) : NULL;
             ct->async_data = as2;
             ct->async_promise = aprom2;        /* the fresh capability's promise (owned by this frame), or
@@ -56166,6 +56202,7 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
         }
     }
     c->tramp_top = ca[0];
+    tramp_chain_park_ends(ca[0], true);
     js_free(ctx, oa); js_free(ctx, ca);
     return (JSValue *)c;
 }
@@ -56782,6 +56819,7 @@ static void free_tramp_chain(JSContext *ctx, JSAsyncFunctionState *s)
        frame with no body at all — its sf is zeroed and this is NULL — and nothing below reads it, because a
        frame with nothing to unwind has no live region to bound. */
     live_end = tramp_live_sf(t)->cur_sp;
+    tramp_chain_park_ends(t, false);
 
     while (t) {
         TrampFrame *up = t->up;
@@ -56902,14 +56940,8 @@ static void tramp_coro_frame_mark(JSRuntime *rt, JSAsyncFunctionState *fs, JSVal
 /* THE COLLECTOR'S WALK OVER A STASHED HEAP-FRAME CHAIN — free_tramp_chain read for marking: every counted
    reference to a GC object that the teardown releases on the chain's own account, frame by frame, with each
    frame's live end the next frame's caller_sp as the teardown has it. Reporting only those is what keeps an edge
-   backed by a reference: a value the chain borrows (a caller's registers, a receiver) or a frame inside a
-   coroutine record whose owner marks it is not reported here.
-   Named residual. Not covered: a coroutine body standing mid-call on a stashed chain (an async function, a
-   generator, a running async generator); its operand stack between arg_buf and the chain's live end is
-   released by the teardown but reported by nobody, because the record that owns the frame reads its NULL
-   cur_sp as running. Next diff builds: the parked live end recorded on the coroutine's frame where the chain
-   is stashed, read by async_func_mark. Absence shows as: an object held only by such a frame's operands, in a
-   cycle through the chain's owner, surviving every collection (the leak census at JS_FreeRuntime names it). */
+   backed by a reference: a value the chain borrows (a caller's registers, a receiver) is not reported, and a
+   coroutine body's frame is reported by the record that owns it, through the chain_sp the stash recorded. */
 static void tramp_chain_mark(JSRuntime *rt, JSAsyncFunctionState *s, JS_MarkFunc *mark_func)
 {
     JSRuntime *saved_rt = g_tramp_mark_rt;
@@ -56924,7 +56956,12 @@ static void tramp_chain_mark(JSRuntime *rt, JSAsyncFunctionState *s, JS_MarkFunc
         TrampFrame *up = t->up;
         JSStackFrame *lsf = tramp_live_sf(t);
         JSAsyncGeneratorData *agd = tramp_agen_data(t);
+        JSAsyncFunctionState *cs = tramp_coro_state(t);
 
+        DCHECK(cs == NULL || cs->chain_sp == (t == s->tramp_top ? NULL : live_end),
+               "tramp_chain_mark: a coroutine frame on a stashed chain does not carry the live end its callee "
+               "recorded — the stash, the clone and the resume write chain_sp through tramp_chain_park_ends, so "
+               "a chain was stashed or resumed by a path that does not");
         if (lsf == &t->sf && t->sf.eval_hold) {
             tramp_mark_val(t->sf.eval_hold->operand);
             tramp_mark_val(t->sf.eval_hold->text);
@@ -58011,6 +58048,7 @@ static JSAsyncGeneratorData *js_async_generator_data_clone(JSContext *ctx, JSAsy
         c->func_state.argc = s->func_state.argc;
         c->func_state.throw_flag = s->func_state.throw_flag;
         c->func_state.tramp_top = NULL;
+        c->func_state.chain_sp = NULL;   /* a clone stands on no chain until clone_deep_flow stamps it */
         c->func_state.frame.cur_sp = c->func_state.frame.arg_buf + live;
     }
     c->state = s->state;
@@ -117766,6 +117804,7 @@ static int reaction_call_flow_init(JSContext *ctx, JSAsyncFunctionState *fs, JSV
     fs->throw_flag = false;
     fs->base_kind = FLOW_BASE_STEP_ROOT;
     fs->tramp_top = NULL;
+    fs->chain_sp = NULL;
     flow_park_init(fs);   /* a base is born unparked — see flow_park_init */
     sf->arg_buf = blk;
     sf->var_buf = blk;                                    /* 0 args, 0 vars: the stack starts at blk */
