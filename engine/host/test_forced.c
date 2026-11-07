@@ -1580,6 +1580,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/rxtest.h"
 #include "fixture/uriclass.h"
 #include "fixture/slicelen.h"
+#include "fixture/strsearch.h"
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
    loops and few branches so the full ASan smoke's ~3-4x fork-tree blowup is avoided. This is the per-change
@@ -2285,6 +2286,7 @@ TF_DOCS[] = {
     { "rxtest", HTML_RXTEST },
     { "uriclass", HTML_URICLASS },
     { "slicelen", HTML_SLICELEN },
+    { "strsearch", HTML_STRSEARCH },
 };
 
 /* The member named `name`. Refuses a name that is no member, since the run would answer for no document. */
@@ -18137,6 +18139,28 @@ TF_UNIT void probes_msgimgload(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `strsearch` document (fixture/strsearch.h): a replace with a String searchValue keeps the
+   receiver's units no occurrence can reach, so a page-written path's host stays the document's. */
+TF_UNIT void probes_strsearch(const char *js, Probe *tab, int *n) {
+    const char *a_why = NULL, *b_why = NULL, *o_why = NULL;
+    int a_tt = 1, b_tt = 1, o_tt = 1;
+
+    fold_row(&a_tt, &a_why, !!strstr(js, "\"/api/ss-none-same\"") && !strstr(js, "/api/ss-none-cross"),
+             "a replace of `#` over a page path and an encoded component did not keep the path's host: no "
+             "occurrence is possible, so every world returns the receiver");
+    fold_row(&b_tt, &b_why, !!strstr(js, "\"/api/ss-tail-same\"") && !strstr(js, "/api/ss-tail-cross"),
+             "a replace of `#` over a page path and the raw query did not keep the path's host: an occurrence "
+             "can only begin after the path");
+    fold_row(&o_tt, &o_why, !!strstr(js, "\"/api/ss-open-same\"") && !!strstr(js, "\"/api/ss-open-cross\""),
+             "the replaced fragment did not run both arms: a host the attacker picks was answered as concrete");
+    const Probe rows[] = {
+        { "ss-none-one-arm", a_tt, "/api/ss-none-same", SESS_EXPLORE, a_why },
+        { "ss-tail-one-arm", b_tt, "/api/ss-tail-same", SESS_EXPLORE, b_why },
+        { "ss-open-both-arms", o_tt, "/api/ss-open-same", SESS_EXPLORE, o_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `slicelen` document (fixture/slicelen.h): a slice from a String's own length is empty in every
    world, and one from short of it is not decided. */
 TF_UNIT void probes_slicelen(const char *js, Probe *tab, int *n) {
@@ -26818,6 +26842,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_rxtest(js, probes, &np);
     probes_uriclass(js, probes, &np);
     probes_slicelen(js, probes, &np);
+    probes_strsearch(js, probes, &np);
     probes_clientextent(js, probes, &np);
     probes_paintrest(js, probes, &np);
     probes_deepnest(js, probes, &np);
