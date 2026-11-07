@@ -363,6 +363,10 @@ int concolic_src_pinned(const char *src);
  * SIDE-EFFECT-FREE AND ALLOCATION-FREE, so it may stand in a DCHECK condition, and with the same bound as the
  * siblings: valid until this flow pins again, is reset, or is switched away from. */
 int concolic_src_determined(const char *src);
+/* Does the running flow answer a read of the source `src` with a delivery: an @S candidate's bytes, a witness
+   verification's unknown whose example is the delivered bytes, a further delivery or a gate? A read so answered
+   is not the observed address, whatever its example. Side-effect-free, with concolic_src_determined's bound. */
+int concolic_src_delivering(const char *src);
 
 /* INSTALL THE WHOLE HOOK SET. It exists because the set was written out as a struct literal at each entry —
    main.c and test_forced.c — and the two DRIFTED: the fixture harness installed three of the ten, so every

@@ -421,9 +421,11 @@ static JSValue loc_href(JSContext *ctx, UrlRecord *rec)
     rec->query = query;
     q = loc_source(ctx, rec, true);
     h = loc_source(ctx, rec, false);
-    /* A candidate run answers a mint with the delivered bytes, the attacker's address rather than this one, and
-       a world whose path the observed component contradicts holds no example of it. */
-    observed = concolic_is(q) && concolic_is(h) && concolic_example_present(q) && concolic_example_present(h);
+    /* A candidate run answers a mint with the delivered bytes, the attacker's address rather than this one (a
+       verification's unknown carries them as its example), and a world whose path the observed component
+       contradicts holds no example of it. */
+    observed = concolic_is(q) && concolic_is(h) && concolic_example_present(q) && concolic_example_present(h) &&
+               !concolic_src_delivering(LOCATION_SEARCH_SRC) && !concolic_src_delivering(LOCATION_HASH_SRC);
     v = concolic_string_concat(ctx, concolic_string_concat(ctx, loc_string(ctx, prefix), q), h);
 #if APICLIENT_DEV
     if (observed) {

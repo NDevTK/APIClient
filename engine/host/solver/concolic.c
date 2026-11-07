@@ -2563,6 +2563,10 @@ static int src_delivered(const char *src) {
     return (cand_matches(src) && !cand_verifying()) || deliv_find(src) >= 0 || gbase_find(src) >= 0;
 }
 
+int concolic_src_delivering(const char *src) {
+    return cand_matches(src) || deliv_find(src) >= 0 || gbase_find(src) >= 0;
+}
+
 int concolic_src_determined(const char *src) {
     return src_delivered(src) || concolic_src_pinned(src);
 }
