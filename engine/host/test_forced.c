@@ -1429,6 +1429,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/vshift.h"
 #include "fixture/vrel.h"
 #include "fixture/flexanonbase.h"
+#include "fixture/flexratio.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2101,6 +2102,7 @@ TF_DOCS[] = {
     { "vshift", HTML_VSHIFT },
     { "vrel", HTML_VREL },
     { "flexanonbase", HTML_FLEXANONBASE },
+    { "flexratio", HTML_FLEXRATIO },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -19923,6 +19925,25 @@ TF_UNIT void probes_flexanonbase(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `flexratio` document (fixture/flexratio.h): css-flexbox-1 §9.4 step 7 for a replaced item. */
+TF_UNIT void probes_flexratio(const char *js, Probe *tab, int *n) {
+    const char *fr_why = NULL; int fr_tt = 1;
+    fold_row(&fr_tt, &fr_why, !!strstr(js, "\"/api/flexratio\""),
+             "NOT REACHED: no /api/flexratio record, so the document aborted before its fetch");
+    fold_row(&fr_tt, &fr_why, param_value_is(js, "/api/flexratio", "f1", "50") &&
+                              param_value_is(js, "/api/flexratio", "f2", "30"),
+             "css-flexbox-1 §9.4 step 7: a 100px-wide 2:1 svg or a 60px-wide 2:1 canvas flex item is not half its "
+             "width tall");
+    fold_row(&fr_tt, &fr_why, param_value_is(js, "/api/flexratio", "f3", "60") &&
+                              param_value_is(js, "/api/flexratio", "f4", "100"),
+             "css-flexbox-1 §9.4 step 7: a 2:1 canvas flexed to 120px or a viewBox-only svg flexed to 200px is not "
+             "its used main size through the ratio tall");
+    const Probe rows[] = {
+        { "flex-replaced-cross-size", fr_tt, "/api/flexratio", SESS_EXPLORE, fr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -25925,6 +25946,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_vshift(js, probes, &np);
     probes_vrel(js, probes, &np);
     probes_flexanonbase(js, probes, &np);
+    probes_flexratio(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
