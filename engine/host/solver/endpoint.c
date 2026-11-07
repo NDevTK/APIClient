@@ -452,7 +452,12 @@ static char *witness_payload(const Witness *w, const char **src) {
 
 /* Can firing check a marked sighting's witness through `root`, the root of the piece an attacker source marked:
    one declared source delivered through the victim's own address. Other mechanisms are witness_payload's
-   residual. */
+   residual.
+   Named residual. Not covered: a sighting whose path also needs a second attacker source set (a body whose
+   spans carry two sources, a gate on another component), since a run delivers one root. Next diff builds: one
+   run delivering every source of the sighting's `attackerNeeds` delivery, each through its own transform.
+   Absence shows as: a record whose attackerNeeds delivery lists two sources and whose witnesses stay
+   `candidate`. */
 static int witness_marked_deliverable(const char *root) {
     const char *kind;
     char prefix = 0;
