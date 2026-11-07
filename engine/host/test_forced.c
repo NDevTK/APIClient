@@ -17,6 +17,8 @@
 #include "core/crypto/secure_hash.h"
 #include "core/image/inflate.h"  /* RFC 1951 DEFLATE and RFC 1950's zlib framing — @PNG */
 #include "core/image/png_decode.h" /* PNG §5.3's chunks through PNG §9.2's filters to RGBA — @PNGDEC */
+#include "core/wasm/module_decoder.h" /* WebAssembly Core §5.5's preamble and sections */
+#include "fixture/wasm_binary.h"    /* the spec testsuite's binary rows that decoder answers */
 #include "core/image/image_header.h" /* css-images-3 §4.1's natural dimensions — cross-checked by @PNGDEC */
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
@@ -5230,6 +5232,100 @@ TF_UNIT void png_decode_selftest(void)
               "would then release a buffer the caller owns");
         png_decode_free(&d);   /* must release nothing of the taken buffer */
         free(taken);
+    }
+}
+
+/* WebAssembly Core §5.5 "Modules"' framing (core/wasm/module_decoder.h) against the spec testsuite's rows and
+ * two real sites' modules (fixture/wasm_binary.h). Each row is decoded alone and then all of them at once, one
+ * step each in turn, so a decode that kept state outside its WasmModuleDecoder, or answered differently for
+ * where it rested, disagrees with itself. A refusal is held to the testsuite's message, so a decoder refusing
+ * for the wrong production fails as surely as one that accepts. */
+static void wasm_binary_check(const char *src, const char *expect, WasmDecodeStatus st)
+{
+    const char *got = wasm_decode_status_message(st);
+
+    CHECKF(st != WASM_DECODE_MORE, "the WebAssembly decode of %s returned MORE from wasm_module_decoder_run", src);
+    if (expect == NULL) {
+        CHECKF(st == WASM_DECODE_DONE, "the WebAssembly module %s was refused with \"%s\"", src, got);
+        return;
+    }
+    CHECKF(st != WASM_DECODE_DONE, "the malformed WebAssembly binary %s was decoded; the testsuite expects "
+                                   "\"%s\"", src, expect);
+    CHECKF(strncmp(got, expect, strlen(expect)) == 0,
+           "the malformed WebAssembly binary %s was refused with \"%s\"; the testsuite expects \"%s\"",
+           src, got, expect);
+}
+
+TF_UNIT void wasm_module_decoder_selftest(void)
+{
+    enum { NR = sizeof WASM_BINARY_ROWS / sizeof WASM_BINARY_ROWS[0],
+           NO = sizeof WASM_BINARY_ORDER_ROWS / sizeof WASM_BINARY_ORDER_ROWS[0] };
+    static WasmModuleDecoder alone[NR], together[NR];
+    WasmDecodeStatus st_alone[NR], st_together[NR];
+    size_t i, k, live;
+
+    for (i = 0; i < NR; i++) {
+        wasm_module_decoder_init(&alone[i], (const uint8_t *)WASM_BINARY_ROWS[i].bytes, WASM_BINARY_ROWS[i].len);
+        st_alone[i] = wasm_module_decoder_run(&alone[i]);
+        wasm_binary_check(WASM_BINARY_ROWS[i].src, WASM_BINARY_ROWS[i].expect, st_alone[i]);
+        wasm_module_decoder_init(&together[i], (const uint8_t *)WASM_BINARY_ROWS[i].bytes,
+                                 WASM_BINARY_ROWS[i].len);
+        st_together[i] = WASM_DECODE_MORE;
+    }
+    for (i = 0; i < NO; i++) {
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)WASM_BINARY_ORDER_ROWS[i].bytes,
+                                 WASM_BINARY_ORDER_ROWS[i].len);
+        wasm_binary_check(WASM_BINARY_ORDER_ROWS[i].src, WASM_BINARY_ORDER_ROWS[i].expect,
+                          wasm_module_decoder_run(&d));
+        wasm_module_decoder_free(&d);
+    }
+    do {
+        live = 0;
+        for (i = 0; i < NR; i++) {
+            if (st_together[i] != WASM_DECODE_MORE) continue;
+            st_together[i] = wasm_module_decoder_step(&together[i]);
+            live++;
+        }
+    } while (live > 0);
+    for (i = 0; i < NR; i++) {
+        CHECKF(st_together[i] == st_alone[i] && together[i].n_sections == alone[i].n_sections,
+               "the WebAssembly binary %s decoded differently stepped among the others than alone",
+               WASM_BINARY_ROWS[i].src);
+        for (k = 0; k < alone[i].n_sections; k++) {
+            const WasmSection *t = wasm_module_decoder_section(&together[i], k);
+            const WasmSection *a = wasm_module_decoder_section(&alone[i], k);
+
+            CHECKF(t->id == a->id && t->offset == a->offset && t->size == a->size
+                       && t->name_offset == a->name_offset && t->name_size == a->name_size,
+                   "section %zu of the WebAssembly binary %s differs between the two drives", k,
+                   WASM_BINARY_ROWS[i].src);
+        }
+        wasm_module_decoder_free(&alone[i]);
+        wasm_module_decoder_free(&together[i]);
+    }
+
+    for (i = 0; i < COUNTOF(WASM_BINARY_DETAIL); i++) {
+        const WasmBinaryDetail *row = &WASM_BINARY_DETAIL[i];
+        WasmModuleDecoder d;
+
+        wasm_module_decoder_init(&d, (const uint8_t *)row->bytes, row->len);
+        wasm_binary_check(row->src, NULL, wasm_module_decoder_run(&d));
+        CHECKF(wasm_module_decoder_section_count(&d) == row->n_sections,
+               "the WebAssembly module %s decoded to %zu sections; it has %zu", row->src,
+               wasm_module_decoder_section_count(&d), row->n_sections);
+        for (k = 0; k < row->n_sections; k++) {
+            const WasmSection *s = wasm_module_decoder_section(&d, k);
+            const WasmBinarySection *e = &row->sections[k];
+
+            CHECKF((unsigned)s->id == e->id && s->offset == e->offset && s->size == e->size
+                       && s->name_offset == e->name_offset && s->name_size == e->name_size,
+                   "section %zu of the WebAssembly module %s decoded as id %u at %zu+%zu (name %zu+%zu); it is "
+                   "id %u at %zu+%zu (name %zu+%zu)", k, row->src, (unsigned)s->id, s->offset, s->size,
+                   s->name_offset, s->name_size, e->id, e->offset, e->size, e->name_offset, e->name_size);
+        }
+        wasm_module_decoder_free(&d);
     }
 }
 
@@ -40540,6 +40636,7 @@ int main(int argc, char **argv) {
        above, so a failure here must be reported at this row rather than inside whatever first paints an
        image through it, and a decompressor that were broken would fail at its own row first. */
     png_decode_selftest();
+    wasm_module_decoder_selftest();   /* WebAssembly Core §5.5's framing, a primitive with no in-flow caller yet */
     /* @IMGMARK — the IMAGE mark that turns that decoder's output into ink, AFTER it and for the reason its
        own banner gives: this row's operand is png_decode's output. */
     display_image_mark_selftest();
