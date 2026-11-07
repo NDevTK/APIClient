@@ -937,11 +937,14 @@ LineBoxAvailableWidth line_box_available_width_stated(CssPx px)
 }
 
 /* The one read of that value, apart from the fill so the derived arm stays lazy (line_box.h: CSS 2.1 §10.3
-   is not run over `style` for a run with no break position in it). */
-static CssPx lb_available_width(lxb_dom_element_t *style, LineBoxAvailableWidth avail)
+   is not run over `style` for a run with no break position in it). A derived width is `style`'s used content
+   width, whose percentage or `auto` resolves up §10.1's containing block chain, so it is asked over that
+   chain: false ("not yet") leaves `*out` unwritten and the deferred question on the current job. */
+static bool lb_available_width_ask(lxb_dom_element_t *style, LineBoxAvailableWidth avail, CssPx *out)
 {
-    if (avail.stated) return avail.px;
-    return used_value_content_px(style, false);
+    if (!avail.stated) return used_value_content_ask(style, false, out);
+    *out = avail.px;
+    return true;
 }
 
 /* ---- §9.4.2's content, collected and distributed — the half every answer below shares ----------------------
@@ -1037,9 +1040,10 @@ static void lb_collect_end(LbCollect *k, lxb_dom_element_t *style, BlockFlowRun 
        inside the run is refused by `lb_child`. */
 }
 
-/* The distribution begun at §9.4.2's width, once css-sizing-3 §2.1's walk has answered whether the run splits. */
-static void lb_fill_distribute_begin(TextRunFill *d, const TextRunMeasure *m, lxb_dom_element_t *style,
-                                     LineBoxAvailableWidth avail)
+/* The distribution begun at §9.4.2's width, once css-sizing-3 §2.1's walk has answered whether the run splits.
+   False ("not yet") when that width was deferred, leaving `d` unbegun. */
+static bool lb_fill_distribute_begin_ask(TextRunFill *d, const TextRunMeasure *m, lxb_dom_element_t *style,
+                                         LineBoxAvailableWidth avail)
 {
     CssPx available = css_px(0.0);
 
@@ -1053,8 +1057,9 @@ static void lb_fill_distribute_begin(TextRunFill *d, const TextRunMeasure *m, lx
        It is derived only where it is an operand: §9.4.2's overflow sentence makes a run with no break position
        one line box at every width, and for many containers (`<div><span></span></div>`) the layout that
        derivation runs is one `used_value.c` may crash for. The fill asserts the theorem. */
-    if (text_run_measure_splits(m)) available = lb_available_width(style, avail);
+    if (text_run_measure_splits(m) && !lb_available_width_ask(style, avail, &available)) return false;
     text_run_fill_begin(d, m, available);
+    return true;
 }
 
 /* ---- one fill per layout job -------------------------------------------------------------------------------
@@ -1435,12 +1440,11 @@ static bool lb_fill_bands_ask(LbFill *f)
             return false;
         }
     free(v);
-    /* The content box's width the bands narrow: a shrink-to-fit container's reads its intrinsic sizes. */
-    if (!used_value_width_ask(f->style)) return false;
+    /* The content box's width the bands narrow, asked over §10.1's chain its percentage or `auto` reads. */
+    if (!used_value_content_ask(f->style, false, &f->content_w)) return false;
     f->bands_n = k;
     f->origin_top = top;
     f->origin_left = float_placement_content_left(f->style, block_flow_context_root(f->style));
-    f->content_w = used_value_content_px(f->style, false);
     f->line_left = lexbor_malloc((f->m.count + 1) * sizeof *f->line_left);
     f->line_w = lexbor_malloc((f->m.count + 1) * sizeof *f->line_w);
     f->partial = lexbor_malloc((f->m.count + 1) * sizeof *f->partial);
@@ -1615,10 +1619,8 @@ static bool lb_fill_lines_pull(LbFill *f)
             if (!lb_left()) return false;
             layout_job_line_items_spend(text_run_measure_finish_step(&f->m));
         }
-        /* A derived width is `style`'s own used width, which may shrink-to-fit over its intrinsic sizes. */
-        if (!f->avail.stated && text_run_measure_splits(&f->m) && !used_value_width_ask(f->style)) return false;
         if (!lb_fill_bands_ask(f)) return false;
-        lb_fill_distribute_begin(&f->dist, &f->m, f->style, f->avail);
+        if (!lb_fill_distribute_begin_ask(&f->dist, &f->m, f->style, f->avail)) return false;
         if (f->bands) {
             lb_fill_band(f, 0, css_px(0.0));
             f->banded = 1;
