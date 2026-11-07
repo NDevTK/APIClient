@@ -333,10 +333,12 @@ int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c,
    sheet creation runs. `parent_sheet` is the sheet every rule in it names. */
 void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet,
                           const char *text, size_t len);
-/* The same build a top-level rule at a time, over a run whose parse has ended (css_style_declaration.h's
-   CssomRulesRun): appends the objects for the next top-level rule and every rule nested in it, and answers
-   false when no top-level rule remained. */
-bool css_rule_build_sheet_step(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet, CssomRulesRun *run);
+/* The same build a rule at a time at any depth, over a run whose parse has ended (css_style_declaration.h's
+   CssomRulesRun): appends the object for the next rule in document order and answers false when no rule
+   remained. `chain` is a JS Array the caller owns for the whole build and keeps across rests: the enclosing
+   rules' objects, by depth. `*pinput` is the CSSOM build input the step charged (core/timing/thread_work.h). */
+bool css_rule_build_sheet_step(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet, JSValueConst chain,
+                               CssomRulesRun *run, size_t *pinput);
 
 /* THE AUTHOR CASCADE'S VIEW of a rule list: the STYLE rules that apply in `ctx`'s environment, flattened out of
  * the conditional group rules whose condition holds, each serialized as `selector{block}` for the SELECTOR

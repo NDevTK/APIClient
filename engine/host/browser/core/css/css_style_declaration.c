@@ -2005,47 +2005,39 @@ bool cssom_rules_run_parse_step(CssomRulesRun *run)
 
 bool cssom_rules_run_parsed(const CssomRulesRun *run) { return run->parsed; }
 
-bool cssom_rules_run_skip_top(CssomRulesRun *run)
-{
-    DCHECK(run->parsed && (run->v == NULL || run->n == 1),
-           "a top-level rule was passed over before the parse ended or inside another top-level rule's walk");
-    if (run->v == NULL || run->v[0].r == NULL) return false;
-    run->v[0].r = run->v[0].r->next;
-    return true;
-}
-
 /* The stylesheet's rules, walked in document order, each rule reported and then its own nested list walked
-   with the handle the callback just returned. The nesting is the stylesheet's own braces, which a page
-   chooses, so it is walked on a heap stack of lists and costs no C stack. One call walks one top-level rule
-   and everything nested in it, so no handle crosses two calls. */
-bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud)
+   with the handle the callback returned. The nesting is the stylesheet's own braces, which a page chooses, so
+   it is walked on a heap stack of lists and costs no C stack. One call reports one rule, so the stack and the
+   handles on it persist across calls. */
+bool cssom_rules_run_emit_next(CssomRulesRun *run, CssomRuleFn cb, void *ud)
 {
     const char *text = run->text;
     size_t len = run->len;
     CssdEmitFrame *f;
     lxb_css_rule_t *r;
 
-    DCHECK(cb != NULL, "a stylesheet's rules were reported to nowhere");
-    DCHECK(run->parsed && (run->v == NULL || run->n == 1),
-           "a top-level rule was reported before the parse ended or inside another top-level rule's walk");
-    if (run->v == NULL || run->v[0].r == NULL) return false;
-    do {
+    DCHECK(run->parsed, "a rule was reported before the parse ended");
+    if (run->v == NULL) return false;
+    for (;;) {
         CssomRule out = { NULL, "", false, NULL, false };
         const lxb_css_rule_list_t *kids = NULL;
         CssBuf sel = { 0 };
         char *block = NULL, *prelude = NULL, *at_name = NULL;
         void *handle, *parent;
+        size_t depth;
         bool top;
 
         f = &run->v[run->n - 1];
         r = f->r;
         if (r == NULL) {
+            if (run->n == 1) return false;
             run->n--;
             continue;
         }
         f->r = r->next;
         parent = f->parent;
         top = run->n == 1;
+        depth = run->n - 1;
         switch (r->type) {
         case LXB_CSS_RULE_STYLE: {
             lxb_css_rule_style_t *st = lxb_css_rule_style(r);
@@ -2055,8 +2047,10 @@ bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud)
                    "style question of a pseudo-element subject as its originating element's, which is the whole "
                    "answer only while engine/lexbor's pseudo-element state refuses every name; give the cascade "
                    "a pseudo-element subject before that state answers one");
-            lxb_css_selector_serialize_list_chain(st->selector, css_buf_cb, &sel);
-            block = cssd_serialize_block(st->declarations, text, len);
+            if (cb) {   /* a rule passed over is not serialized */
+                lxb_css_selector_serialize_list_chain(st->selector, css_buf_cb, &sel);
+                block = cssd_serialize_block(st->declarations, text, len);
+            }
             out.prelude = sel.s ? sel.s : "";
             out.prelude_is_selectors = true;
             out.block = block ? block : "";
@@ -2074,9 +2068,11 @@ bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud)
         case LXB_CSS_RULE_BAD_STYLE: {
             lxb_css_rule_bad_style_t *bad = lxb_css_rule_bad_style(r);
 
-            prelude = cssd_prelude_span(text, len, bad->prelude_begin, bad->prelude_end);
-            block = cssd_serialize_block(bad->declarations, text, len);
-            out.prelude = prelude;
+            if (cb) {
+                prelude = cssd_prelude_span(text, len, bad->prelude_begin, bad->prelude_end);
+                block = cssd_serialize_block(bad->declarations, text, len);
+            }
+            out.prelude = prelude ? prelude : "";
             out.block = block ? block : "";
             out.has_block = true;
             kids = bad->child;
@@ -2095,8 +2091,8 @@ bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud)
                    "lexbor reported an at-rule whose own name table has no entry for its type — the name is "
                    "the only thing that can say which CSSOM §6.4 interface the rule wants");
             if (!out.at_name) continue;
-            prelude = cssd_prelude_span(text, len, at->prelude_begin, at->prelude_end);
-            out.prelude = prelude;
+            if (cb) prelude = cssd_prelude_span(text, len, at->prelude_begin, at->prelude_end);
+            out.prelude = prelude ? prelude : "";
             /* Every at-rule lexbor knows keeps its block in the same place in the union, and a STATEMENT
                at-rule (`@import url(x);`) keeps a null one — which is the fact `has_block` reports. */
             kids = (at->type == LXB_CSS_AT_RULE_MEDIA) ? at->u.media->block
@@ -2112,7 +2108,7 @@ bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud)
                contains no declarations to report, so asking both questions of both is what makes the ANSWER
                the body's own rather than a table of at-rule names kept in the parser layer. The BUILDER
                decides which of the two a given at-rule is allowed to have; CSS Syntax drops the other. */
-            if (kids) {
+            if (kids && cb) {
                 /* WHICH BODY THIS IS, asked of the at-rule's own NAME — the one thing the token stream can
                    say. css-fonts-4 §6.9.1 "Basic syntax"'s seven `<font-feature-value-type>` at-rules hold
                    FEATURE VALUE DECLARATIONS and not properties, and the three property mechanisms that would
@@ -2144,7 +2140,7 @@ bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud)
             continue;
         }
         if (top) run->reported++;
-        handle = cb(ud, parent, &out);
+        handle = cb ? cb(ud, parent, &out) : (void *)(uintptr_t)(depth + 1);
         free(prelude);
         free(block);
         free(at_name);
@@ -2162,8 +2158,8 @@ bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud)
             run->v[run->n].parent = handle;
             run->n++;
         }
-    } while (run->n > 1);
-    return true;
+        return true;
+    }
 }
 
 unsigned cssom_rules_run_end(CssomRulesRun *run)
@@ -2189,7 +2185,7 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
     CssomRulesRun *run = cssom_rules_run_begin(text, len);
 
     while (cssom_rules_run_parse_step(run)) {}
-    while (cssom_rules_run_emit_top(run, cb, ud)) {}
+    while (cssom_rules_run_emit_next(run, cb, ud)) {}
     return cssom_rules_run_end(run);
 }
 

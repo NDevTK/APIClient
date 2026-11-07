@@ -173,6 +173,9 @@ struct lxb_css_parser {
     /* The yield hook and its context; NULL runs a parse to its end. */
     lxb_css_parser_yield_f              yield;
     void                                *yield_ctx;
+    /* Bytes tokenized by a lookahead whose tokens were dropped and the input re-read, which the tokenizer's
+       position no longer counts; the yield hook takes and zeroes it. */
+    size_t                              lookahead;
 };
 
 struct lxb_css_parser_state {

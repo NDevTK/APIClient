@@ -119,9 +119,11 @@ lxb_dom_document_t *css_style_sheet_node_document(JSValueConst sheet);
    script" — and a sheet whose rules were genuinely uninitialised would
    make `document.styleSheets[0].cssRules` empty for every page. So this is what the creator calls. */
 void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, const char *text, size_t len);
-/* The same rules a top-level rule at a time, over a run whose parse has ended (css_style_declaration.h's
-   CssomRulesRun), for a step machine that rests between them: false when no top-level rule remained. */
-bool css_style_sheet_build_rules_step(JSContext *ctx, JSValueConst sheet, CssomRulesRun *run);
+/* The same rules a rule at a time at any depth, over a run whose parse has ended (css_style_declaration.h's
+   CssomRulesRun), for a step machine that rests between them: false when no rule remained. `chain` and
+   `*pinput` are css_rule_build_sheet_step's. */
+bool css_style_sheet_build_rules_step(JSContext *ctx, JSValueConst sheet, JSValueConst chain, CssomRulesRun *run,
+                                      size_t *pinput);
 
 /* §6.1's TITLE, the CONCEPT — not §6.1.1's `title` attribute, which turns the empty string into null. §6.2's
    add-a-CSS-style-sheet steps branch on whether it is the empty string, which is why the concept is what is

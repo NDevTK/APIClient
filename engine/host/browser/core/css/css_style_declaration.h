@@ -290,16 +290,16 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
 /* The same parse and report, a rest unit at a time, for a step machine that rests between steps. `text` is
    BORROWED until cssom_rules_run_end. parse_step runs one CSS parse rest unit (solver/rest_unit.h's
    REST_UNIT_CSS_PARSE_BYTES) and answers true while the parse has more; `parsed` says it has answered false
-   and may not be stepped again. Once it has, emit_top
-   reports the next top-level rule and every rule nested in it through `cb`, and skip_top passes over it
-   unreported; both answer false when no top-level rule remains. A failed parse reports none. end frees the run
-   and answers how many top-level rules were reported. */
+   and may not be stepped again. Once it has, emit_next reports the next rule in document order, at any depth,
+   through `cb`, and answers false when no rule remains. With `cb` NULL it passes over the rule unreported and
+   hands its children the handle (void *)(depth + 1), depth 0 at the top, which is what css_rule.c's builder
+   returns, so a walk re-derived after a rest passes over what was built. A failed parse reports none. end
+   frees the run and answers how many top-level rules were reported. */
 typedef struct CssomRulesRun CssomRulesRun;
 CssomRulesRun *cssom_rules_run_begin(const char *text, size_t len);
 bool cssom_rules_run_parse_step(CssomRulesRun *run);
 bool cssom_rules_run_parsed(const CssomRulesRun *run);
-bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud);
-bool cssom_rules_run_skip_top(CssomRulesRun *run);
+bool cssom_rules_run_emit_next(CssomRulesRun *run, CssomRuleFn cb, void *ud);
 unsigned cssom_rules_run_end(CssomRulesRun *run);
 
 #endif

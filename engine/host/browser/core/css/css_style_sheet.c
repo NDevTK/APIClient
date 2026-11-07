@@ -579,12 +579,13 @@ void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, con
     css_rule_build_sheet(ctx, s->rules, sheet, text, len);
 }
 
-bool css_style_sheet_build_rules_step(JSContext *ctx, JSValueConst sheet, CssomRulesRun *run)
+bool css_style_sheet_build_rules_step(JSContext *ctx, JSValueConst sheet, JSValueConst chain, CssomRulesRun *run,
+                                      size_t *pinput)
 {
     CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "a sheet's CSS rules were built on something that is not a CSS style sheet");
-    return css_rule_build_sheet_step(ctx, s->rules, sheet, run);
+    return css_rule_build_sheet_step(ctx, s->rules, sheet, chain, run, pinput);
 }
 
 /* §6.1.2's `cssRules`. Its steps 1-2 are an origin-clean check and then "return a read-only, LIVE CSSRuleList

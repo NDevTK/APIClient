@@ -24,7 +24,8 @@ struct CssSheetParse {
 };
 
 /* The parser's yield hook: between two tokens, once a rest unit of bytes has been tokenized since the last
-   charge, they are charged and the run suspends. Charging only there keeps thread_work_charge's per-call
+   charge, they are charged and the run suspends. The bytes are the tokenizer's advance plus what a lookahead
+   tokenized and dropped (lxb_css_parser_t.lookahead). Charging only there keeps thread_work_charge's per-call
    rounding to one unit per step. */
 static bool css_sheet_parse_yield(lxb_css_parser_t *parser, void *ctx)
 {
@@ -33,10 +34,11 @@ static bool css_sheet_parse_yield(lxb_css_parser_t *parser, void *ctx)
 
     DCHECK(run->parser == parser, "a sheet parse's yield hook was reached by another run's parser");
     DCHECK(at >= run->charged && at <= run->len, "a sheet's tokenizer stands outside the bytes it was handed");
-    fresh = at - run->charged;
+    fresh = at - run->charged + parser->lookahead;
     if (fresh < rest_unit_items(REST_UNIT_CSS_PARSE_BYTES)) return false;
     thread_work_charge(THREAD_WORK_CSS_PARSE, fresh);
     run->charged = at;
+    parser->lookahead = 0;
     return true;
 }
 
@@ -80,7 +82,7 @@ bool css_sheet_parse_finish(CssSheetParse *run)
     bool ok;
 
     DCHECK(css_sheet_parse_ended(run), "a sheet parse was finished while its run was suspended");
-    thread_work_charge(THREAD_WORK_CSS_PARSE, run->len - run->charged);
+    thread_work_charge(THREAD_WORK_CSS_PARSE, run->len - run->charged + run->parser->lookahead);
     ok = run->status == LXB_STATUS_OK;
     lxb_css_parser_selectors_destroy(run->parser);
     lxb_css_parser_destroy(run->parser, true);

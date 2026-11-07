@@ -134,6 +134,7 @@ lxb_css_parser_clean(lxb_css_parser_t *parser)
     parser->status = LXB_STATUS_OK;
     parser->str.length = 0;
     parser->fake_null = false;
+    parser->lookahead = 0;
 }
 
 void

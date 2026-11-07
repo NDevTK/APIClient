@@ -1155,6 +1155,274 @@ lxb_css_syntax_parser_block_begin(lxb_css_parser_t *parser,
     return lxb_css_syntax_token_parser_do_phase_again(parser);
 }
 
+/* The token after `t` in the tokenizer's cache, tokenized ahead when `t` is the last one; NULL on failure. */
+static const lxb_css_syntax_token_t *
+lxb_css_syntax_parser_peek_next(lxb_css_parser_t *parser,
+                                const lxb_css_syntax_token_t *t)
+{
+    if (t->next == NULL && lxb_css_syntax_token_next(parser->tkz) == NULL) {
+        return NULL;
+    }
+
+    return t->next;
+}
+
+/* `t` or the first token after it that is neither whitespace nor a comment; NULL on failure. */
+static const lxb_css_syntax_token_t *
+lxb_css_syntax_parser_peek_wo_ws(lxb_css_parser_t *parser,
+                                 const lxb_css_syntax_token_t *t)
+{
+    while (t != NULL && (t->type == LXB_CSS_SYNTAX_TOKEN_WHITESPACE
+                         || t->type == LXB_CSS_SYNTAX_TOKEN_COMMENT))
+    {
+        t = lxb_css_syntax_parser_peek_next(parser, t);
+    }
+
+    return t;
+}
+
+/* The first non-whitespace token after the {}-block that closed at `t`, past a `!important`, which CSS Syntax 3
+   §5.5.6 Consume a declaration removes before its {}-block test; NULL on failure. */
+static const lxb_css_syntax_token_t *
+lxb_css_syntax_parser_block_after_value(lxb_css_parser_t *parser,
+                                        const lxb_css_syntax_token_t *t)
+{
+    static const char important[] = "important";
+    const lxb_css_syntax_token_t *imp;
+    const lxb_css_syntax_token_ident_t *id;
+    size_t i;
+
+    t = lxb_css_syntax_parser_peek_wo_ws(parser,
+                                         lxb_css_syntax_parser_peek_next(parser, t));
+    if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN_DELIM
+        || lxb_css_syntax_token_delim_char(t) != '!')
+    {
+        return t;
+    }
+
+    imp = lxb_css_syntax_parser_peek_wo_ws(parser,
+                                           lxb_css_syntax_parser_peek_next(parser, t));
+    if (imp == NULL) {
+        return NULL;
+    }
+
+    if (imp->type != LXB_CSS_SYNTAX_TOKEN_IDENT) {
+        return t;
+    }
+
+    id = lxb_css_syntax_token_ident(imp);
+    if (id->length != sizeof(important) - 1) {
+        return t;
+    }
+
+    for (i = 0; i < id->length; i++) {
+        lxb_char_t c = id->data[i];
+
+        if (c >= 'A' && c <= 'Z') {
+            c += 0x20;
+        }
+
+        if (c != (lxb_char_t) important[i]) {
+            return t;
+        }
+    }
+
+    return lxb_css_syntax_parser_peek_wo_ws(parser,
+                                    lxb_css_syntax_parser_peek_next(parser, imp));
+}
+
+/* The scan behind lxb_css_syntax_parser_block_is_declaration, over tokens it appends to the tokenizer's cache. */
+static bool
+lxb_css_syntax_parser_block_scan(lxb_css_parser_t *parser,
+                                 const lxb_css_syntax_token_t *ident,
+                                 bool *is_declaration)
+{
+    size_t base;
+    lxb_status_t status;
+    const lxb_css_syntax_token_t *t;
+
+    t = lxb_css_syntax_parser_peek_wo_ws(parser,
+                                    lxb_css_syntax_parser_peek_next(parser, ident));
+    if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN_COLON) {
+        goto failed;
+    }
+
+    t = lxb_css_syntax_parser_peek_wo_ws(parser,
+                                         lxb_css_syntax_parser_peek_next(parser, t));
+    if (t == NULL) {
+        goto failed;
+    }
+
+    base = parser->types_pos - parser->types_begin;
+
+    if (t->type == LXB_CSS_SYNTAX_TOKEN_LC_BRACKET) {
+        status = lxb_css_parser_types_push(parser, LXB_CSS_SYNTAX_TOKEN_RC_BRACKET);
+        if (status != LXB_STATUS_OK) {
+            parser->status = status;
+            return false;
+        }
+
+        t = lxb_css_syntax_parser_peek_next(parser, t);
+        if (t == NULL) {
+            parser->types_pos = parser->types_begin + base;
+            goto failed;
+        }
+    }
+
+    for (;;) {
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) {
+            *is_declaration = true;
+            break;
+        }
+
+        if ((size_t) (parser->types_pos - parser->types_begin) == base) {
+            if (t->type == LXB_CSS_SYNTAX_TOKEN_SEMICOLON
+                || t->type == LXB_CSS_SYNTAX_TOKEN_RC_BRACKET)
+            {
+                *is_declaration = true;
+                break;
+            }
+
+            if (t->type == LXB_CSS_SYNTAX_TOKEN_LC_BRACKET) {
+                *is_declaration = false;
+                break;
+            }
+        }
+
+        switch (t->type) {
+            case LXB_CSS_SYNTAX_TOKEN_FUNCTION:
+            case LXB_CSS_SYNTAX_TOKEN_L_PARENTHESIS:
+                status = lxb_css_parser_types_push(parser,
+                                                   LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS);
+                break;
+
+            case LXB_CSS_SYNTAX_TOKEN_LS_BRACKET:
+                status = lxb_css_parser_types_push(parser,
+                                                   LXB_CSS_SYNTAX_TOKEN_RS_BRACKET);
+                break;
+
+            case LXB_CSS_SYNTAX_TOKEN_LC_BRACKET:
+                status = lxb_css_parser_types_push(parser,
+                                                   LXB_CSS_SYNTAX_TOKEN_RC_BRACKET);
+                break;
+
+            case LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS:
+            case LXB_CSS_SYNTAX_TOKEN_RS_BRACKET:
+            case LXB_CSS_SYNTAX_TOKEN_RC_BRACKET:
+                status = LXB_STATUS_OK;
+
+                if ((size_t) (parser->types_pos - parser->types_begin) > base
+                    && parser->types_pos[-1] == t->type)
+                {
+                    parser->types_pos--;
+
+                    /* The {}-block that was the value's first token closed:
+                       the value is that block only if nothing else follows. */
+                    if ((size_t) (parser->types_pos - parser->types_begin) == base
+                        && t->type == LXB_CSS_SYNTAX_TOKEN_RC_BRACKET)
+                    {
+                        t = lxb_css_syntax_parser_block_after_value(parser, t);
+                        if (t == NULL) {
+                            parser->types_pos = parser->types_begin + base;
+                            goto failed;
+                        }
+
+                        *is_declaration = t->type == LXB_CSS_SYNTAX_TOKEN_SEMICOLON
+                                          || t->type == LXB_CSS_SYNTAX_TOKEN_RC_BRACKET
+                                          || t->type == LXB_CSS_SYNTAX_TOKEN__EOF;
+                        goto done;
+                    }
+                }
+                break;
+
+            default:
+                status = LXB_STATUS_OK;
+                break;
+        }
+
+        if (status != LXB_STATUS_OK) {
+            parser->types_pos = parser->types_begin + base;
+            parser->status = status;
+            return false;
+        }
+
+        t = lxb_css_syntax_parser_peek_next(parser, t);
+        if (t == NULL) {
+            parser->types_pos = parser->types_begin + base;
+            goto failed;
+        }
+    }
+
+done:
+
+    parser->types_pos = parser->types_begin + base;
+
+    return true;
+
+failed:
+
+    parser->status = parser->tkz->status;
+
+    return false;
+}
+
+/*
+ * CSS Syntax 3 §5.5.5 Consume a block's contents: an <ident-token> starts "Mark
+ * input. Consume a declaration … Otherwise, restore a mark from input, then
+ * consume a qualified rule". The choice is made before either is consumed, by
+ * the early exits the section's implementation note lists, which answer what
+ * the declaration attempt would. The first token is the ident and the next
+ * non-whitespace one a colon. A custom property name is a declaration.
+ * Otherwise §5.5.6 Consume a declaration returns nothing for a value holding a
+ * top-level {}-block beside any other non-whitespace value, so the value is
+ * scanned to its first top-level `;`, `}` or `{`: a `{` after another value is
+ * a rule, and a `{` first is a declaration only when the block is the whole
+ * value (`!important` aside). The scan tokenizes no further than the attempt
+ * would. False with parser->status set on failure.
+ */
+static bool
+lxb_css_syntax_parser_block_is_declaration(lxb_css_parser_t *parser,
+                                           const lxb_css_syntax_token_t *ident,
+                                           bool *is_declaration)
+{
+    bool ok;
+    size_t offset, errors;
+    const lxb_char_t *in_p;
+    lxb_css_syntax_token_t *t, *next;
+    lxb_css_syntax_tokenizer_t *tkz = parser->tkz;
+    const lxb_css_syntax_token_ident_t *name = lxb_css_syntax_token_ident(ident);
+
+    if (name->length >= 2 && name->data[0] == '-' && name->data[1] == '-') {
+        *is_declaration = true;
+        return true;
+    }
+
+    /* The tokenizer's own raw-input lookups (lookup_colon, lookup_important)
+       read from in_p and expect at most the cached tokens before it, so the
+       scan's tokens are dropped and the input re-read from where it stood. */
+    t = tkz->last;
+    in_p = tkz->in_p;
+    offset = tkz->offset;
+    errors = lexbor_array_obj_length(tkz->parse_errors);
+
+    ok = lxb_css_syntax_parser_block_scan(parser, ident, is_declaration);
+
+    parser->lookahead += (size_t) (tkz->in_p - in_p);
+
+    for (next = t->next; next != NULL; next = t->next) {
+        t->next = next->next;
+        lxb_css_syntax_token_string_free(tkz, next);
+        lexbor_dobject_free(tkz->tokens, next);
+    }
+
+    tkz->last = t;
+    tkz->in_p = in_p;
+    tkz->offset = offset;
+    tkz->parse_errors->length = errors;
+
+    return ok;
+}
+
 static const lxb_css_syntax_token_t *
 lxb_css_syntax_parser_block(lxb_css_parser_t *parser,
                             const lxb_css_syntax_token_t *token,
@@ -1204,8 +1472,18 @@ begin:
 
         case LXB_CSS_SYNTAX_TOKEN_IDENT:
             if (lxb_css_syntax_tokenizer_lookup_colon(parser->tkz)) {
-                rule->phase = lxb_css_syntax_parser_block_declarations;
-                break;
+                bool is_declaration;
+
+                if (!lxb_css_syntax_parser_block_is_declaration(parser, token,
+                                                                &is_declaration))
+                {
+                    return lxb_css_syntax_parser_failed(parser, parser->status);
+                }
+
+                if (is_declaration) {
+                    rule->phase = lxb_css_syntax_parser_block_declarations;
+                    break;
+                }
             }
 
             /* Fall Through. */

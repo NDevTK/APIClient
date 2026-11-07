@@ -1682,10 +1682,10 @@ static JSValue link_stylesheet_refused(JSContext *ctx, JSValueConst this_val, in
  * moment. */
 /* §4.6.8.23's process steps over a reply, as a machine, because step 4's sheet is the page's text: its parse
    and its rule objects are work of the reply's size, so the machine rests at every CSS parse rest unit and at
-   every REST_UNIT_CSSOM_RULES top-level rules. Between two rests the flow is parked with this machine on top
+   every REST_UNIT_CSSOM_INPUT bytes of rule build input. Between two rests the flow is parked with this machine on top
    of its chain, so no script of its world reads the partly built sheet.
-   The parse run is a cache over the text and the count of top-level rules built: a fork or a cold park sheds
-   it and the next step parses the text again and passes over the rules already built. */
+   The parse run is a cache over the text and the count of rules built: a fork or a cold park sheds it and the
+   next step parses the text again and passes over the rules already built. */
 #define LINK_SHEET_STAGES(X) \
     X(LSP_RESPONSE, "HTML §4.6.8.23 Link type \"stylesheet\"'s process the linked resource steps 1-4 (success, " \
                     "the styling test, the old sheet removed, the new one created and its text decoded)") \
@@ -1696,7 +1696,7 @@ static JSValue link_stylesheet_refused(JSContext *ctx, JSValueConst this_val, in
 enum { LINK_SHEET_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const link_sheet_steps[] = { LINK_SHEET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* The cache: a parse of the state's text, and how many of its top-level rules it has passed. */
+/* The cache: a parse of the state's text, and how many of its rules it has passed. */
 typedef struct {
     CssomRulesRun *run;
     uint32_t       at;
@@ -1708,7 +1708,8 @@ typedef struct {
     JSValue       sheet;    /* step 4's CSS style sheet (owned) */
     char         *text;     /* the decoded sheet text, js_malloc'd, `text_n + 1` bytes (owned) */
     size_t        text_n;
-    uint32_t      built;    /* top-level rules css_rule_build_sheet_step has built into the sheet */
+    uint32_t      built;    /* rules, at any depth, css_rule_build_sheet_step has built into the sheet */
+    JSValue       chain;    /* the build's enclosing-rule chain (css_rule.h), owned */
     LinkSheetRun *pc;       /* re-derivable from `text` and `built` */
 } LinkSheet;
 
@@ -1728,6 +1729,7 @@ static void link_sheet_visit(JSContext *ctx, void *stp, JSStepVisit *v)
        first step places the fields. */
     if (!s->started) return;
     v->val(ctx, &s->sheet);
+    v->val(ctx, &s->chain);
     v->buf(ctx, (void **)&s->text, s->text ? s->text_n + 1 : 0);
     v->cache(ctx, (void **)&s->pc, link_sheet_run_destroy);
 }
@@ -1756,6 +1758,7 @@ static int link_sheet_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
 
         s->started = 1;
         s->sheet = JS_UNDEFINED;
+        s->chain = JS_UNDEFINED;
         s->text = NULL;
         s->pc = NULL;
         DCHECK(s->hdr.argc >= 1, "a stylesheet reply was delivered with no response — the host calls this with "
@@ -1875,7 +1878,7 @@ static int link_sheet_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
 
     STEP_ARM(LSP_RULES);
     {
-        size_t k;
+        size_t k, input = 0;
         bool more = true;
 
         if (s->pc == NULL) {
@@ -1894,15 +1897,19 @@ static int link_sheet_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
         }
         /* A cache re-derived after a fork or a cold park passes over what this state already built. */
         while (s->pc->at < s->built) {
-            bool had = cssom_rules_run_skip_top(s->pc->run);
+            bool had = cssom_rules_run_emit_next(s->pc->run, NULL, NULL);
 
-            DCHECK(had, "a re-derived stylesheet parse holds fewer top-level rules than the build had already "
-                        "made from the same text — a parse is a function of its text, so the two cannot disagree");
+            DCHECK(had, "a re-derived stylesheet parse holds fewer rules than the build had already made from "
+                        "the same text — a parse is a function of its text, so the two cannot disagree");
             s->pc->at++;
         }
-        rest_unit_begin(REST_UNIT_CSSOM_RULES);
-        for (k = 0; more && k < rest_unit_items(REST_UNIT_CSSOM_RULES); k++) {
-            more = css_style_sheet_build_rules_step(realm, s->sheet, s->pc->run);
+        if (JS_IsUndefined(s->chain)) {
+            s->chain = JS_NewArray(ctx);
+            CHECK(!JS_IsException(s->chain), "§4.6.8.23: OOM holding a <link> element's rule build");
+        }
+        rest_unit_begin(REST_UNIT_CSSOM_INPUT);
+        for (k = 0; more && k < rest_unit_items(REST_UNIT_CSSOM_INPUT); k += input) {
+            more = css_style_sheet_build_rules_step(realm, s->sheet, s->chain, s->pc->run, &input);
             if (more) {
                 s->built++;
                 s->pc->at++;

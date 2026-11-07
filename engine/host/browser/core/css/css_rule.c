@@ -1566,45 +1566,21 @@ static void rule_orphan(JSContext *ctx, JSValueConst rule)
 
 /* ---- building the objects a PARSE produced ---------------------------------------------------------------- */
 
-/* One parse's rules, as the objects they become. The handles `cssom_parse_rules` hands back are INDICES into
-   `built` (offset by one, so NULL keeps meaning "top level"), which is why a realloc of that array is harmless
-   where a pointer into it would not be. A DROPPED rule pushes JS_UNDEFINED, so its own children are dropped
-   with it rather than being re-parented to the top of the sheet. */
+/* One parse's rules, as the objects they become. A rule at depth d (0 at the top) is handed back as the handle
+   d + 1, so NULL keeps meaning "top level", and its object is `chain[d]`: the walk is in document order, so
+   chain[0..d-1] are its enclosing rules when it is reported. A DROPPED rule stores JS_UNDEFINED, so its own
+   children are dropped with it rather than being re-parented to the top of the sheet. The chain is a JS Array,
+   so a build that rests between rules keeps it in its step state. */
 typedef struct {
     JSContext   *ctx;
     JSValueConst sheet;        /* CSSOM §6.4.2's parent CSS style sheet, which every rule in this parse names */
     JSValueConst top_parent;   /* the enclosing rule of the TOP-LEVEL rules — JS_NULL at a sheet's level */
     JSValueConst top_list;     /* where the top-level rules go */
-    JSValue     *built;
-    unsigned     n_built, cap_built;
+    JSValueConst chain;        /* the enclosing rules' objects, by depth (borrowed) */
     unsigned     n_top;        /* how many top-level rules became objects */
     size_t       input;        /* the CSSOM build input the parse handed this build (core/timing/thread_work.h) */
     char         unbuilt[64];  /* the FIRST at-rule name CSSOM §6.4 has no interface for, or "" */
 } RuleBuild;
-
-static void *build_push(RuleBuild *b, JSValue rule)   /* CONSUMES rule */
-{
-    if (b->n_built == b->cap_built) {
-        unsigned cap = b->cap_built ? b->cap_built * 2 : 8;
-        JSValue *grown = lexbor_realloc(b->built, (size_t)cap * sizeof(*grown));
-
-        CHECK(grown != NULL, "cssom: OOM collecting the rules one parse produced");
-        b->built = grown;
-        b->cap_built = cap;
-    }
-    b->built[b->n_built++] = rule;
-    return (void *)(uintptr_t)b->n_built;   /* one-based, so NULL means "no enclosing rule" */
-}
-
-static void build_free(RuleBuild *b)
-{
-    unsigned i;
-
-    for (i = 0; i < b->n_built; i++) JS_FreeValue(b->ctx, b->built[i]);
-    free(b->built);
-    b->built = NULL;
-    b->n_built = b->cap_built = 0;
-}
 
 /* THE CRASH FOR A ROW OF THAT TABLE THAT POINTS AT NOTHING. */
 static void rule_alias_unbuilt_fail(const char *written, const char *target)
@@ -2000,24 +1976,19 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
     return JS_UNDEFINED;
 }
 
-static void *rule_built(void *ud, void *parent, const CssomRule *pr)
+/* The object for `pr`, whose enclosing rule is `parent_rule` (`top`: the build's top level), placed in its
+   list; JS_UNDEFINED for a rule dropped. Owned. */
+static JSValue rule_build_one(RuleBuild *b, bool top, JSValueConst parent_rule, const CssomRule *pr)
 {
-    RuleBuild *b = ud;
-    JSValueConst parent_rule;
     JSValue list, rule;
 
     b->input += THREAD_WORK_CSSOM_BYTES_PER_RULE + strlen(pr->prelude) + (pr->block ? strlen(pr->block) : 0);
 
-    if (!parent) {
-        parent_rule = b->top_parent;
+    if (top) {
         list = JS_DupValue(b->ctx, b->top_list);
     } else {
-        unsigned i = (unsigned)((uintptr_t)parent - 1);
-
-        DCHECK(i < b->n_built, "cssom_parse_rules handed back a rule handle this parse never issued");
-        parent_rule = b->built[i];
         /* The enclosing rule was dropped, so this one has no list to go in and no parent to name. */
-        if (JS_IsUndefined(parent_rule)) return build_push(b, JS_UNDEFINED);
+        if (JS_IsUndefined(parent_rule)) return JS_UNDEFINED;
         /* CSS Fonts 4 §6.9.1 "Basic syntax"'s FEATURE VALUE BLOCKS ARE CONSUMED INTO THE ENCLOSING RULE'S
            MAPS, AND THAT HAS TO HAPPEN HERE — AHEAD OF THE DROP BELOW. This is the only point in the parse
            that holds BOTH the child's serialized block and the parent's rule object, which is what a fill
@@ -2044,7 +2015,7 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
                objects must return a handle for every rule it is told about, the ones it decided to drop
                included" — so that a block written inside a feature value block arrives as this one's child
                rather than as a top-level rule. */
-            return build_push(b, JS_UNDEFINED);
+            return JS_UNDEFINED;
         }
         /* THE ENCLOSING RULE CONTAINS NO RULES AT ALL, so this one is not in it either. An `@font-face`'s, a
            margin at-rule's and a `<keyframe-block>`'s body is CSS Syntax's `<declaration-list>`, which admits
@@ -2052,19 +2023,36 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
            dropped HERE, because `rule_child_rules` asserts its receiver has a child list and none of those
            does. */
         if (!rule_type_has_child_rules(enclosing_rule_type(parent_rule)))
-            return build_push(b, JS_UNDEFINED);
+            return JS_UNDEFINED;
         list = rule_child_rules(b->ctx, parent_rule);
     }
     rule = rule_from_parse(b, pr, parent_rule);
     if (JS_IsException(rule) || JS_IsUndefined(rule)) {
         JS_FreeValue(b->ctx, list);
         JS_FreeValue(b->ctx, rule);
-        return build_push(b, JS_UNDEFINED);
+        return JS_UNDEFINED;
     }
     JS_SetPropertyUint32(b->ctx, list, array_len(b->ctx, list), JS_DupValue(b->ctx, rule));
     JS_FreeValue(b->ctx, list);
-    if (!parent) b->n_top++;
-    return build_push(b, rule);
+    if (top) b->n_top++;
+    return rule;
+}
+
+static void *rule_built(void *ud, void *parent, const CssomRule *pr)
+{
+    RuleBuild *b = ud;
+    uint32_t depth = (uint32_t)(uintptr_t)parent;
+    JSValue parent_rule = JS_UNDEFINED, rule;
+
+    if (depth) {
+        DCHECK(depth <= array_len(b->ctx, b->chain),
+               "the rule walk handed back a handle deeper than any rule this build has placed");
+        parent_rule = JS_GetPropertyUint32(b->ctx, b->chain, depth - 1);
+    }
+    rule = rule_build_one(b, depth == 0, depth ? parent_rule : b->top_parent, pr);
+    JS_FreeValue(b->ctx, parent_rule);
+    JS_SetPropertyUint32(b->ctx, b->chain, depth, rule);
+    return (void *)(uintptr_t)(depth + 1);
 }
 
 /* What CSSOM §6.4 declares for an at-rule this build recognizes and has no arm for: one row per at-keyword
@@ -2151,24 +2139,24 @@ static void rule_unbuilt_fail(const char *name)
 #undef RULE_UNBUILT_FMT
 }
 
-static void build_begin(RuleBuild *b)
+static void build_begin(RuleBuild *b, JSValueConst chain)
 {
-    b->built = NULL;
-    b->n_built = b->cap_built = b->n_top = 0;
+    b->chain = chain;
+    b->n_top = 0;
     b->input = 0;
     b->unbuilt[0] = '\0';
 }
 
-/* The objects for `run`'s next top-level rule and every rule nested in it, charged as the rule text they were
-   built from (core/timing/thread_work.h's CSSOM build). False when no top-level rule remains. */
-static bool build_top(RuleBuild *b, CssomRulesRun *run)
+/* The object for `run`'s next rule at any depth, charged as the rule text it was built from
+   (core/timing/thread_work.h's CSSOM build). False when no rule remains. */
+static bool build_next(RuleBuild *b, CssomRulesRun *run)
 {
     ThreadWorkSpan tw;
     size_t before = b->input;
     bool more;
 
     thread_work_begin(&tw);
-    more = cssom_rules_run_emit_top(run, rule_built, b);
+    more = cssom_rules_run_emit_next(run, rule_built, b);
     thread_work_charge(THREAD_WORK_CSSOM_BUILD, b->input - before);
     thread_work_end(&tw, THREAD_WORK_CSSOM_BUILD, b->input - before);
     return more;
@@ -2183,11 +2171,14 @@ static bool build_top(RuleBuild *b, CssomRulesRun *run)
 static unsigned build_run(RuleBuild *b, const char *text, size_t len)
 {
     CssomRulesRun *run = cssom_rules_run_begin(text, len);
+    JSValue chain = JS_NewArray(b->ctx);
 
-    build_begin(b);
+    CHECK(!JS_IsException(chain), "cssom: OOM allocating a rule build's enclosing-rule chain");
+    build_begin(b, chain);
     while (cssom_rules_run_parse_step(run)) {}
-    while (build_top(b, run)) {}
+    while (build_next(b, run)) {}
     cssom_rules_run_end(run);
+    JS_FreeValue(b->ctx, chain);
     return b->n_top;
 }
 
@@ -2202,22 +2193,23 @@ void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent
     b.top_list = list;
     build_run(&b, text, len);
     if (b.unbuilt[0]) rule_unbuilt_fail(b.unbuilt);
-    build_free(&b);
 }
 
-bool css_rule_build_sheet_step(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet, CssomRulesRun *run)
+bool css_rule_build_sheet_step(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet, JSValueConst chain,
+                               CssomRulesRun *run, size_t *pinput)
 {
     RuleBuild b;
     bool more;
 
+    DCHECK(JS_IsArray(chain), "a resting sheet build was stepped with no enclosing-rule chain");
     b.ctx = ctx;
     b.sheet = parent_sheet;
     b.top_parent = JS_NULL;
     b.top_list = list;
-    build_begin(&b);
-    more = build_top(&b, run);
+    build_begin(&b, chain);
+    more = build_next(&b, run);
     if (b.unbuilt[0]) rule_unbuilt_fail(b.unbuilt);
-    build_free(&b);
+    *pinput = b.input;
     return more;
 }
 
@@ -2361,7 +2353,6 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
     b.top_parent = parent_rule;
     b.top_list = scratch;
     n = build_run(&b, text, strlen(text));
-    build_free(&b);
     /* An at-rule with NO INTERFACE crashes here and does not become a refusal. Until CSSOM §6.4.4 and §6.4.9 landed
        the two names steps 5 and 6 single out were themselves unbuilt, so this site had to answer for them from
        the at-rule's NAME; both are rules now, the constraint steps below run on the OBJECT the parse made, and
@@ -4097,7 +4088,6 @@ static JSValue js_rule_append_rule(JSContext *ctx, JSValueConst this_val, int ar
     b.top_parent = this_val;
     b.top_list = scratch;
     n = build_run(&b, text, strlen(text));
-    build_free(&b);
     JS_FreeCString(ctx, text);
     DCHECK(!b.unbuilt[0],
            "a `@keyframes` body parse met an at-rule with no CSSOM §6.4 interface. Inside one, §3 admits only "
