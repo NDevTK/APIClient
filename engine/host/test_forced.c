@@ -1454,6 +1454,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/flexratio.h"
 #include "fixture/rangetext.h"
 #include "fixture/willchange.h"
+#include "fixture/csstextderived.h"
 #include "fixture/bodystream.h"
 #include "fixture/cyclicreplaced.h"
 #include "fixture/paintroot.h"
@@ -2131,6 +2132,7 @@ TF_DOCS[] = {
     { "flexratio", HTML_FLEXRATIO },
     { "rangetext", HTML_RANGETEXT },
     { "willchange", HTML_WILLCHANGE },
+    { "csstextderived", HTML_CSSTEXTDERIVED },
     { "bodystream", HTML_BODYSTREAM },
     { "cyclicreplaced", HTML_CYCLICREPLACED },
     { "paintroot", HTML_PAINTROOT },
@@ -20116,6 +20118,28 @@ TF_UNIT void probes_willchange(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `csstextderived` document (fixture/csstextderived.h): CSSOM §6.6.1's cssText setter over a
+   value derived from environment unknowns. */
+TF_UNIT void probes_csstextderived(const char *js, Probe *tab, int *n) {
+    const char *ct_why = NULL; int ct_tt = 1;
+    fold_row(&ct_tt, &ct_why, !!strstr(js, "\"/api/csstext\""),
+             "NOT REACHED: no /api/csstext record, so the document aborted before its fetch");
+    fold_row(&ct_tt, &ct_why, param_value_is(js, "/api/csstext", "p", "relative") &&
+                              param_value_is(js, "/api/csstext", "c", "7px"),
+             "CSSOM §6.6.1: a cssText over a derived value did not declare the `position` its example parses to, "
+             "or a concrete cssText did not declare its `left`");
+    fold_row(&ct_tt, &ct_why,
+             emitted_record_has(js, "/api/csstext", "\"name\":\"l\",\"location\":\"query\",\"valueClass\":\"unknown\"") &&
+             emitted_record_has(js, "/api/csstext", "\"name\":\"g\",\"location\":\"query\",\"valueClass\":\"unknown\"") &&
+             emitted_record_has(js, "/api/csstext", "\"name\":\"c\",\"location\":\"query\",\"valueClass\":\"concrete\""),
+             "CSSOM §6.6.1: `left` set by a cssText over a derived value read back as a plain string, or the "
+             "concrete one read back as an unknown");
+    const Probe rows[] = {
+        { "csstext-derived-value", ct_tt, "/api/csstext", SESS_EXPLORE, ct_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `bodystream` document (fixture/bodystream.h): the stream of a body that is an unknown. */
 TF_UNIT void probes_bodystream(const char *js, Probe *tab, int *n) {
     const char *rd_why = NULL; int rd_tt = 1;
@@ -26132,6 +26156,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_flexratio(js, probes, &np);
     probes_rangetext(js, probes, &np);
     probes_willchange(js, probes, &np);
+    probes_csstextderived(js, probes, &np);
     probes_bodystream(js, probes, &np);
     probes_cyclicreplaced(js, probes, &np);
     probes_paintroot(js, probes, &np);
