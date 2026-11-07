@@ -3495,6 +3495,42 @@ static no_inline int stack_realloc(REExecContext *s, size_t n)
    The four values that make a match RESUMABLE — pc, cptr and the two stack cursors — are loaded from the
    context here and written back at the yield. Everything else below is per-opcode and is rebuilt on re-entry;
    the offsets are offsets rather than pointers because stack_realloc moves the buffer. */
+/* Whether a unit of the tail set (REExecContext.tail_*) lies in `lo..hi`. */
+static bool re_tail_may_hold(const REExecContext *s, uint32_t lo, uint32_t hi)
+{
+    uint32_t u;
+
+    if (hi >= 0x80 && s->tail_wide)
+        return true;
+    for (u = lo; u <= hi && u < 0x80; u++)
+        if (s->tail_ascii[u >> 6] >> (u & 63) & 1)
+            return true;
+    return false;
+}
+
+static bool re_tail_nonempty(const REExecContext *s)
+{
+    return s->tail_ascii[0] || s->tail_ascii[1] || s->tail_wide;
+}
+
+/* Whether a unit of the tail set lies in one of the `n` ranges at `pc` (u16 pairs, or u32 where `wide`), the last
+   u16 bound 0xffff standing for every unit above it. */
+static bool re_tail_may_hold_ranges(const REExecContext *s, const uint8_t *pc, int n, bool wide)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        uint32_t lo = wide ? get_u32(pc + 8 * i) : get_u16(pc + 4 * i);
+        uint32_t hi = wide ? get_u32(pc + 8 * i + 4) : get_u16(pc + 4 * i + 2);
+
+        if (!wide && i == n - 1 && hi == 0xffff)
+            hi = 0x10ffff;
+        if (re_tail_may_hold(s, lo, hi))
+            return true;
+    }
+    return false;
+}
+
 static intptr_t lre_exec_backtrack(REExecContext *s)
 {
     uint8_t **capture = s->capture;
@@ -3539,6 +3575,15 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
         sp = s->stack_buf + saved_sp;                   \
         bp = s->stack_buf + saved_bp;                   \
     }
+
+/* A read at the end of the known units: over a prefix subject the test `may` asks whether a tail unit can pass,
+   which leaves the attempt undecided; with none, or over a whole subject, the read fails. */
+#define RE_TAIL_READ(may)                                       \
+    do {                                                        \
+        if (s->tail_mode && (may))                              \
+            return LRE_RET_UNDECIDED;                           \
+        goto no_match;                                          \
+    } while (0)
 
     /* XXX: could test if the value was saved to reduce the stack size
        but slower */
@@ -3682,7 +3727,8 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
             pc += 2;
         test_char:
             if (cptr >= cbuf_end)
-                goto no_match;
+                RE_TAIL_READ(opcode == REOP_char_i || opcode == REOP_char32_i ? re_tail_nonempty(s)
+                                                                             : re_tail_may_hold(s, val, val));
             GET_CHAR(c, cptr, cbuf_end, cbuf_type);
             if (opcode == REOP_char_i || opcode == REOP_char32_i) {
                 c = lre_canonicalize(c, s->is_unicode);
@@ -3694,6 +3740,10 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
         case REOP_split_next_first:
             {
                 const uint8_t *pc1;
+
+                /* the search prefix's loop head: every pass begins the attempt at the next position */
+                if (s->tail_mode && pc - 1 == s->bc_body)
+                    s->tail_start = cptr;
 
                 val = get_u32(pc);
                 pc += 4;
@@ -3735,14 +3785,19 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
                 break;
             if (opcode == REOP_line_start)
                 goto no_match;
+            s->tail_lookback = true;
             PEEK_PREV_CHAR(c, cptr, s->cbuf, cbuf_type);
             if (!is_line_terminator(c))
                 goto no_match;
             break;
         case REOP_line_end:
         case REOP_line_end_m:
-            if (cptr == cbuf_end)
+            if (cptr == cbuf_end) {
+                /* the subject may end here or continue */
+                if (s->tail_mode && re_tail_nonempty(s))
+                    return LRE_RET_UNDECIDED;
                 break;
+            }
             if (opcode == REOP_line_end)
                 goto no_match;
             PEEK_CHAR(c, cptr, cbuf_end, cbuf_type);
@@ -3751,26 +3806,33 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
             break;
         case REOP_dot:
             if (cptr == cbuf_end)
-                goto no_match;
+                RE_TAIL_READ(s->tail_wide || (s->tail_ascii[0] & ~((1ull << '\n') | (1ull << '\r'))) ||
+                             s->tail_ascii[1]);
             GET_CHAR(c, cptr, cbuf_end, cbuf_type);
             if (is_line_terminator(c))
                 goto no_match;
             break;
         case REOP_any:
-            if (cptr == cbuf_end)
-                goto no_match;
+            if (cptr == cbuf_end) {
+                /* The search prefix's own step past the known units stands for every later start. Each such
+                   attempt reads forward what the one begun here read, so it fails as that one did, unless an
+                   attempt read behind its cursor. */
+                if (s->tail_mode && pc - 1 == s->bc_body + REOP_SZ(REOP_split_goto_first) && !s->tail_lookback)
+                    goto no_match;
+                RE_TAIL_READ(re_tail_nonempty(s));
+            }
             GET_CHAR(c, cptr, cbuf_end, cbuf_type);
             break;
         case REOP_space:
             if (cptr == cbuf_end)
-                goto no_match;
+                RE_TAIL_READ(re_tail_nonempty(s));
             GET_CHAR(c, cptr, cbuf_end, cbuf_type);
             if (!lre_is_space(c))
                 goto no_match;
             break;
         case REOP_not_space:
             if (cptr == cbuf_end)
-                goto no_match;
+                RE_TAIL_READ(re_tail_nonempty(s));
             GET_CHAR(c, cptr, cbuf_end, cbuf_type);
             if (lre_is_space(c))
                 goto no_match;
@@ -3894,6 +3956,7 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
                 if (cptr == s->cbuf) {
                     v1 = false;
                 } else {
+                    s->tail_lookback = true;
                     PEEK_PREV_CHAR(c, cptr, s->cbuf, cbuf_type);
                     if (c < 256) {
                         v1 = (lre_is_word_byte(c) != 0);
@@ -3903,6 +3966,8 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
                 }
                 /* current char */
                 if (cptr >= cbuf_end) {
+                    if (s->tail_mode && re_tail_nonempty(s))
+                        return LRE_RET_UNDECIDED;
                     v2 = false;
                 } else {
                     PEEK_CHAR(c, cptr, cbuf_end, cbuf_type);
@@ -3943,7 +4008,7 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
                             cptr1 = cptr1_start;
                             while (cptr1 < cptr1_end) {
                                 if (cptr >= cbuf_end)
-                                    goto no_match;
+                                    RE_TAIL_READ(re_tail_nonempty(s));
                                 GET_CHAR(c1, cptr1, cptr1_end, cbuf_type);
                                 GET_CHAR(c2, cptr, cbuf_end, cbuf_type);
                                 if (opcode == REOP_back_reference_i) {
@@ -3955,6 +4020,7 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
                             }
                         } else {
                             cptr1 = cptr1_end;
+                            s->tail_lookback = true;
                             while (cptr1 > cptr1_start) {
                                 if (cptr == s->cbuf)
                                     goto no_match;
@@ -3982,7 +4048,8 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
                 n = get_u16(pc); /* n must be >= 1 */
                 pc += 2;
                 if (cptr >= cbuf_end)
-                    goto no_match;
+                    RE_TAIL_READ(opcode == REOP_range_i ? re_tail_nonempty(s)
+                                                        : re_tail_may_hold_ranges(s, pc, n, false));
                 GET_CHAR(c, cptr, cbuf_end, cbuf_type);
                 if (opcode == REOP_range_i) {
                     c = lre_canonicalize(c, s->is_unicode);
@@ -4023,7 +4090,8 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
                 n = get_u16(pc); /* n must be >= 1 */
                 pc += 2;
                 if (cptr >= cbuf_end)
-                    goto no_match;
+                    RE_TAIL_READ(opcode == REOP_range32_i ? re_tail_nonempty(s)
+                                                          : re_tail_may_hold_ranges(s, pc, n, true));
                 GET_CHAR(c, cptr, cbuf_end, cbuf_type);
                 if (opcode == REOP_range32_i) {
                     c = lre_canonicalize(c, s->is_unicode);
@@ -4056,6 +4124,7 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
             /* go to the previous char */
             if (cptr == s->cbuf)
                 goto no_match;
+            s->tail_lookback = true;
             PREV_CHAR(cptr, s->cbuf, cbuf_type);
             break;
         default:
@@ -4066,6 +4135,7 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
         }
     }
 #undef RE_YIELD_POINT
+#undef RE_TAIL_READ
 }
 
 /* Seed a match. cindex is the starting position and must be such as 0 <= cindex <= clen. The capture array
@@ -4097,6 +4167,11 @@ int lre_exec_begin(REExecContext *s, uint8_t **capture,
     s->reach_size = 0;
     s->bc_body = bc_buf + RE_HEADER_LEN;
     s->impossible = false;
+    s->tail_mode = false;
+    s->tail_lookback = false;
+    s->tail_wide = false;
+    s->tail_ascii[0] = s->tail_ascii[1] = 0;
+    s->tail_start = NULL;
     if (cbuf_type == 0 && (re_flags & LRE_FLAG_NON_LATIN1)) {
         int blen = (int)get_u32(bc_buf + RE_HEADER_BYTECODE_LEN);
         s->reach = lre_realloc(s->opaque, NULL, blen);
@@ -4118,6 +4193,40 @@ int lre_exec_begin(REExecContext *s, uint8_t **capture,
     }
     s->pc = bc_buf + RE_HEADER_LEN;
     s->cptr = cptr;
+    return 0;
+}
+
+int lre_exec_begin_prefix(REExecContext *s, uint8_t **capture, const uint8_t *bc_buf, const uint8_t *cbuf,
+                          int clen, int cbuf_type, const uint64_t tail_ascii[2], bool tail_wide, void *opaque)
+{
+    const uint8_t *bc = bc_buf + RE_HEADER_LEN;
+    int len = (int)get_u32(bc_buf + RE_HEADER_BYTECODE_LEN);
+    const int pre = REOP_SZ(REOP_split_goto_first) + REOP_SZ(REOP_any) + REOP_SZ(REOP_goto);
+    int r;
+
+    /* The attempts are told apart by the search prefix lre_compile_begin emits for a program that is not
+       sticky; its `any` is the step lre_exec_backtrack reads as every later start. */
+    if ((lre_get_flags(bc_buf) & LRE_FLAG_STICKY) || len < pre || bc[0] != REOP_split_goto_first ||
+        bc[REOP_SZ(REOP_split_goto_first)] != REOP_any ||
+        bc[REOP_SZ(REOP_split_goto_first) + REOP_SZ(REOP_any)] != REOP_goto)
+        return LRE_RET_UNDECIDED;
+    if (cbuf_type == 1 && clen > 0 && is_hi_surrogate(((const uint16_t *)cbuf)[clen - 1]))
+        return LRE_RET_UNDECIDED;
+    r = lre_exec_begin(s, capture, bc_buf, cbuf, 0, clen, cbuf_type, opaque);
+    if (r < 0)
+        return r;
+    /* The reachability filter is computed over the known units' charset, which the tail need not share. */
+    if (s->reach) {
+        lre_realloc(s->opaque, s->reach, 0);
+        s->reach = NULL;
+        s->reach_size = 0;
+    }
+    s->impossible = false;
+    s->tail_mode = true;
+    s->tail_wide = tail_wide;
+    s->tail_ascii[0] = tail_ascii[0];
+    s->tail_ascii[1] = tail_ascii[1];
+    s->tail_start = cbuf;
     return 0;
 }
 

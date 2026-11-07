@@ -9700,6 +9700,82 @@ void concolic_string_unit_map(JSContext *ctx, JSValueConst r, JSValueConst recv,
 #endif
 }
 
+/* JSConcolicHooks.string_domain: the domain key_domain_of states, the prefix spelled from the shape's bytes
+   before its first hole and the tail from `tail_class` (every unit where it states none). A prefix holding a
+   WTF-8 surrogate is refused, since its units would not survive the UTF-8 decode that spells it. */
+int concolic_string_domain(JSContext *ctx, JSValueConst v, JSValue *prefix, uint64_t tail_ascii[2], int *tail_wide)
+{
+    const Concolic *c = key_domain_of(v);
+    size_t n, i;
+
+    *prefix = JS_UNDEFINED;
+    if (!c) return 0;
+    n = (size_t)c->hole_span[0];
+    for (i = 0; i < n; i++)
+        if ((unsigned char)c->shape[i] == 0xED) return 0;
+    *prefix = JS_NewStringLen(ctx, c->shape, n);
+    CHECK(JS_IsString(*prefix), "concolic: OOM spelling a String domain's prefix");
+    tail_ascii[0] = tail_ascii[1] = 0;
+    *tail_wide = 0;
+    if (!c->tail_class) {
+        tail_ascii[0] = tail_ascii[1] = ~0ull;
+        *tail_wide = 1;
+        return 1;
+    }
+    for (int k = 0; k < c->tail_class->n; k++) {
+        uint32_t lo = c->tail_class->r[2 * k], hi = c->tail_class->r[2 * k + 1], u;
+
+        for (u = lo; u <= hi && u < 0x80; u++) tail_ascii[u >> 6] |= 1ull << (u & 63);
+        if (hi >= 0x80) *tail_wide = 1;
+    }
+    return 1;
+}
+
+/* The byte length of the first `k` code units of the WTF-8 bytes `s` (`n` of them), or (size_t)-1 where the
+   k-th unit is the first half of a pair or `s` holds fewer. */
+static size_t wtf8_units_prefix(const char *s, size_t n, uint32_t k)
+{
+    size_t i = 0;
+    uint32_t got = 0, u[2];
+
+    while (got < k && i < n) got += (uint32_t)wtf8_units(s, n, &i, u);
+    return got == k ? i : (size_t)-1;
+}
+
+/* JSConcolicHooks.string_keep_prefix: the page's first `k` units of `recv`'s domain prefix, concatenated with
+   §22.1.3.22 String.prototype.slice's derivation of `r` from `k`, whose example is the same slice of `r`'s. */
+JSValue concolic_string_keep_prefix(JSContext *ctx, JSValue r, JSValueConst recv, uint32_t k)
+{
+    const Concolic *c = key_domain_of(recv);
+    JSValue kv = JS_NewUint32(ctx, k), ex = JS_UNDEFINED, rest, page, out;
+    size_t pb, en = 0, eb;
+    const char *e = NULL;
+    Concolic *rc;
+
+    DCHECK(c != NULL && concolic_is(r), "a replace's kept prefix was asked of a receiver that states no domain");
+    pb = wtf8_units_prefix(c->shape, (size_t)c->hole_span[0], k);
+    if (pb == (size_t)-1) return r;
+    if (concolic_example_present(r)) {
+        JSValue rx = concolic_example(ctx, r);
+
+        e = JS_IsString(rx) ? JS_ToCStringLen(ctx, &en, rx) : NULL;
+        JS_FreeValue(ctx, rx);
+        eb = e ? wtf8_units_prefix(e, en, k) : (size_t)-1;
+        DCHECKF(!e || (eb != (size_t)-1 && eb == pb && !memcmp(e, c->shape, pb)),
+                "a replace's example does not begin with the %u units its receiver's domain fixes", (unsigned)k);
+        if (e && eb != (size_t)-1) ex = JS_NewStringLen(ctx, e + eb, en - eb);
+        if (e) JS_FreeCString(ctx, e);
+    }
+    rest = concolic_string_method(ctx, r, "slice", 1, (JSValueConst *)&kv, ex);
+    rc = concolic_is(rest) ? JS_GetOpaque(rest, g_concolic_class) : NULL;
+    if (rc && !rc->ty) concolic_type_state(rest, CTY_STRING);
+    page = JS_NewStringLen(ctx, c->shape, pb);
+    CHECK(JS_IsString(page), "concolic: OOM spelling a replace's kept prefix");
+    out = concolic_string_concat(ctx, page, rest);
+    JS_FreeValue(ctx, r);
+    return out;
+}
+
 unsigned char *concolic_shape_hole_mask(JSValueConst v)
 {
     const Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
@@ -9945,6 +10021,8 @@ static JSConcolicHooks g_hooks = {
     .key_domain_holds = concolic_key_domain_holds,
     .key_domain_missed = concolic_key_domain_missed,
     .string_unit_map = concolic_string_unit_map,
+    .string_domain = concolic_string_domain,
+    .string_keep_prefix = concolic_string_keep_prefix,
     .get_value_base = concolic_get_value_base_hook,
     .key_name = concolic_key_name_hook,
     /* …and the inverse, which is not optional beside it: `key_name` is the only mechanism turning an unknown

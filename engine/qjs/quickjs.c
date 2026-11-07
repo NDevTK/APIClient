@@ -98337,6 +98337,14 @@ typedef struct JSConcolicCall {
     JSValue *cb;        /* [thisValue's example, func's example, each argument's example] */
     int ncb;
     JSValue holder;     /* owned: where a replacer stand-in records a return with no example, or undefined */
+    /* The replace's matcher over the receiver's domain (js_concolic_call_prefix_begin): the known units it
+       runs over and the program it runs (owned, undefined until seeded), its capture block, and the match. */
+    JSValue pm_str;
+    JSValue pm_bytecode;
+    uint8_t **pm_capture;
+    int pm_cap;
+    REExecContext pm_ec;
+    uint8_t pm_matching;  /* 1 = pm_ec is live and owes an lre_exec_end */
 } JSConcolicCall;
 STEP_STATE_HDR_FIRST(JSConcolicCall);
 
@@ -98353,7 +98361,8 @@ STEP_STATE_HDR_FIRST(JSConcolicCall);
     X(CCALL_ENTRY,   "7.3.13 Call over the examples (func's, thisValue's and each argument's)") \
     X(CCALL_RUN,     "7.3.13 step 3 (Return ? func.[[Call]](thisValue, argList)), run on the examples") \
     X(CCALL_OUTCOME, "the call's completion over the unknown: normal, or the throw the examples' run reached") \
-    X(CCALL_FORWARD, "7.3.13 step 3, the builtin's own algorithm over the unknown receiver")
+    X(CCALL_FORWARD, "7.3.13 step 3, the builtin's own algorithm over the unknown receiver") \
+    X(CCALL_PREFIX,  "22.2.7.2 RegExpBuiltinExec's matcher over every String the receiver's domain admits")
 enum { CCALL_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_concolic_call_steps[] = { CCALL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 enum { CCALL_NORMAL, CCALL_THROW };   /* the outcome fork's completions; the normal one is numbered first */
@@ -98684,6 +98693,95 @@ static void js_concolic_call_unit_map(JSContext *ctx, JSConcolicCall *s)
     if (pairs != one) js_free(ctx, pairs);
 }
 
+/* §22.1.3.19 String.prototype.replace and §22.1.3.20 replaceAll over an unknown receiver whose searchValue is a
+   builtin-protocol RegExp: seeds §22.2.7.2 RegExpBuiltinExec's matcher, from index 0 where §22.2.6.11 seeks the
+   first match, over every String the receiver's domain admits (string_domain). 1 where the match is seeded, 0
+   where the call or the receiver states nothing it can run over, -1 on an allocation refused.
+   Named residual. Not covered: RegExpBuiltinExec over an unknown subject reached as RegExp.prototype.exec or
+   test (REX_TOSTRING's unknown arm), and a String searchValue. Next diff builds: this matcher at that arm, its
+   no-match answering null. How its absence shows: `re.test(x)` forks both arms where x's page units decide it. */
+static int js_concolic_call_prefix_begin(JSContext *ctx, JSConcolicCall *s)
+{
+    JSObject *fp = JS_VALUE_GET_OBJ(s->cb[1]);
+    JSValueConst pat;
+    uint64_t ascii[2];
+    const uint8_t *bc;
+    JSString *p;
+    int wide = 0, alloc, r;
+
+    DCHECK(g_concolic.string_domain != NULL && g_concolic.string_keep_prefix != NULL,
+           "a host installed the concolic call machine without the String domain hooks a replace's matcher reads");
+    if (fp->u.cfunc.cproto != JS_CFUNC_step ||
+        (fp->u.cfunc.magic != STEPDEF_STR_REPLACE && fp->u.cfunc.magic != STEPDEF_STR_REPLACE_ALL) ||
+        s->hdr.argc < 1 || !g_concolic.is(s->hdr.this_val))
+        return 0;
+    pat = s->hdr.argv[0];
+    if (g_concolic.is(pat) || !js_concolic_call_regexp_builtin(ctx, pat))
+        return 0;
+    if (!g_concolic.string_domain(ctx, s->hdr.this_val, &s->pm_str, ascii, &wide))
+        return 0;
+    DCHECK(JS_IsString(s->pm_str) && JS_VALUE_GET_STRING(s->pm_str)->len > 0,
+           "a receiver's String domain was stated with no known unit ahead of its first hole");
+    s->pm_bytecode = js_dup(JS_MKPTR(JS_TAG_STRING, JS_VALUE_GET_OBJ(pat)->u.regexp.bytecode));
+    bc = str8(JS_VALUE_GET_STRING(s->pm_bytecode));
+    alloc = lre_get_alloc_count(bc);
+    if (alloc > 0) {
+        s->pm_capture = js_malloc(ctx, sizeof(s->pm_capture[0]) * (size_t)alloc);
+        if (!s->pm_capture) return -1;
+        s->pm_cap = alloc;
+    }
+    p = JS_VALUE_GET_STRING(s->pm_str);
+    r = lre_exec_begin_prefix(&s->pm_ec, s->pm_capture, bc, str8(p), p->len, p->is_wide_char, ascii, wide != 0,
+                              ctx);
+    if (r == LRE_RET_MEMORY_ERROR) {
+        JS_ThrowOutOfMemory(ctx);
+        return -1;
+    }
+    if (r == LRE_RET_UNDECIDED) return 0;
+    DCHECK(r == 0, "lre_exec_begin_prefix answered a value its contract does not name");
+    s->pm_matching = 1;
+    return 1;
+}
+
+/* One slice of the seeded matcher. Where no admitted String matches, every world's replace returns its
+   receiver unchanged (§22.2.6.11 steps 13-15 with no result), so the result is the receiver; where the first
+   attempt that may match begins `k` units in, every world's result begins with the receiver's first `k` units. */
+static int js_concolic_call_prefix_step(JSContext *ctx, JSConcolicCall *s)
+{
+    JSString *p = JS_VALUE_GET_STRING(s->pm_str);
+    uint32_t k;
+    int rc;
+
+    rc = lre_exec_step(&s->pm_ec);
+    if (rc == LRE_RET_YIELD)
+        return JS_STEP_YIELD;
+    k = (uint32_t)((s->pm_ec.tail_start - str8(p)) >> p->is_wide_char);
+    lre_exec_end(&s->pm_ec);
+    s->pm_matching = 0;
+    if (rc == LRE_RET_MEMORY_ERROR) {
+        JS_ThrowOutOfMemory(ctx);
+        return -1;
+    }
+    CHECK(rc == 0 || rc == 1 || rc == LRE_RET_UNDECIDED, "corrupted bytecode in a replace's matcher over a domain");
+    DCHECK(k <= p->len, "a replace's matcher began an attempt past the receiver's known units");
+    if (rc == 0) {
+#if APICLIENT_DEV
+        JSValue er = g_concolic.example(ctx, s->result), ev = g_concolic.example(ctx, s->hdr.this_val);
+
+        DCHECK(JS_IsUndefined(er) || JS_IsUndefined(ev) || js_strict_eq(ctx, er, ev),
+               "a replace no String of its receiver's domain matches changed its receiver's example");
+        JS_FreeValue(ctx, er);
+        JS_FreeValue(ctx, ev);
+#endif
+        JS_FreeValue(ctx, s->result);
+        s->result = js_dup(s->hdr.this_val);
+    } else if (k > 0) {
+        s->result = g_concolic.string_keep_prefix(ctx, s->result, s->hdr.this_val, k);
+        if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return -1; }
+    }
+    return 0;
+}
+
 static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSConcolicCall *s = st;
@@ -98701,6 +98799,11 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         s->result = JS_UNDEFINED;
         s->thrown = JS_UNDEFINED;
         s->holder = JS_UNDEFINED;
+        s->pm_str = JS_UNDEFINED;
+        s->pm_bytecode = JS_UNDEFINED;
+        s->pm_capture = NULL;
+        s->pm_cap = 0;
+        s->pm_matching = 0;
         s->cb = js_malloc(ctx, sizeof(JSValue) * (size_t)(n + 2));
         if (unlikely(!s->cb)) { JS_FreeValue(ctx, fex); return -1; }
         s->ncb = n + 2;
@@ -98763,13 +98866,24 @@ static int js_concolic_call_step(JSContext *ctx, void *st, JSValue cb_result, JS
         s->result = g_concolic.call(ctx, s->hdr.func_obj, s->hdr.this_val, n,
                                     (JSValueConst *)s->hdr.argv, example);
         if (JS_IsException(s->result)) { s->result = JS_UNDEFINED; return -1; }
-        if (JS_IsUndefined(s->thrown) && g_concolic.is(s->result))
+        if (JS_IsUndefined(s->thrown) && g_concolic.is(s->result)) {
             js_concolic_call_unit_map(ctx, s);
+            r = js_concolic_call_prefix_begin(ctx, s);
+            if (r < 0) return -1;
+            if (r) s->hdr.stage = CCALL_PREFIX;
+        }
         /* A candidate re-fire answers the attacker's payload, which is not unknown: that run takes the normal
            completion, the one a run with no forking policy takes. */
-        if (JS_IsUndefined(s->thrown) || !g_concolic.is(s->result))
-            return 0;
-        s->hdr.stage = CCALL_OUTCOME;
+        if (s->hdr.stage == CCALL_RUN) {
+            if (JS_IsUndefined(s->thrown) || !g_concolic.is(s->result))
+                return 0;
+            s->hdr.stage = CCALL_OUTCOME;
+        }
+    }
+    if (s->hdr.stage == CCALL_PREFIX) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        return js_concolic_call_prefix_step(ctx, s);
     }
     DCHECK(s->hdr.stage == CCALL_OUTCOME, "the unknown-callee [[Call]] machine resumed at a stage it lacks");
     /* Keyed over the result, whose identity is the callee and the arguments, so two calls of one unknown with
@@ -98793,6 +98907,11 @@ static void js_concolic_call_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->thrown);
     v->val(ctx, &s->holder);
     v->array(ctx, (void **)&s->cb, sizeof(JSValue), s->ncb, s->ncb, js_step_visit_value_elem);
+    v->val(ctx, &s->pm_str);
+    v->val(ctx, &s->pm_bytecode);
+    v->buf(ctx, (void **)&s->pm_capture, sizeof(uint8_t *) * (size_t)s->pm_cap);
+    if (s->pm_matching)
+        v->reexec(ctx, &s->pm_ec, s->pm_capture);
 }
 
 static JSValue js_concolic_call_fini(JSContext *ctx, void *st, bool take_result)

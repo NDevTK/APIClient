@@ -52,6 +52,9 @@ extern "C" {
 #define LRE_RET_MEMORY_ERROR   (-1)
 #define LRE_RET_YIELD          (-2)
 #define LRE_RET_BYTECODE_ERROR (-3)
+/* A match over a subject known only by its first units (lre_exec_begin_prefix) reached a test the units after
+   them decide: some world may match from the attempt that began at REExecContext.tail_start. */
+#define LRE_RET_UNDECIDED      (-4)
 
 /* trailer length after the group name including the trailing '\0'. It was 2: the NUL plus a per-group
    "scope" byte that only the parser read, and which is gone now that duplicate group names are decided by an
@@ -151,11 +154,28 @@ typedef struct REExecContext {
        copy whose stack_buf still holds the ORIGINAL's inline address and cannot compute what that was. */
     bool stack_is_static;
     StackElem static_stack_buf[32]; /* static stack to avoid allocation in most cases */
+
+    /* A subject known only by its first units (lre_exec_begin_prefix): cbuf..cbuf_end holds them, and every
+       unit after them, of any number including none, lies in the set `tail_ascii` (bit per unit below 0x80)
+       plus, where `tail_wide`, any unit at or above it. `tail_start` is where the current attempt began, and
+       `tail_lookback` records that an attempt read a unit behind its cursor, which ties it to its position. */
+    bool tail_mode;
+    bool tail_lookback;
+    bool tail_wide;
+    uint64_t tail_ascii[2];
+    const uint8_t *tail_start;
 } REExecContext;
 
 int lre_exec_begin(REExecContext *s, uint8_t **capture,
                    const uint8_t *bc_buf, const uint8_t *cbuf, int cindex, int clen,
                    int cbuf_type, void *opaque);
+/* Seed a match of `bc_buf` from index 0 over every subject that begins with the `clen` units at `cbuf` and
+   continues with units of the tail set (REExecContext.tail_*). lre_exec_step then answers 0 where no such
+   subject matches, 1 where every one matches from `tail_start`, and LRE_RET_UNDECIDED where one may match from
+   `tail_start` and every attempt before it fails in every world. LRE_RET_UNDECIDED at once for a sticky program,
+   or for a subject whose known units end in half of a surrogate pair. */
+int lre_exec_begin_prefix(REExecContext *s, uint8_t **capture, const uint8_t *bc_buf, const uint8_t *cbuf,
+                          int clen, int cbuf_type, const uint64_t tail_ascii[2], bool tail_wide, void *opaque);
 int lre_exec_step(REExecContext *s);
 void lre_exec_end(REExecContext *s);
 
