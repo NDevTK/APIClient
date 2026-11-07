@@ -11856,10 +11856,9 @@ static void engine_sale_release(Flow *tail) {
    Named residual. Not covered: the sold member's return within this session. Its record re-enters only at the
    next engine_sched_begin (cold_resume's one caller), so a sale removes its work from the session rather than
    only moving where it lives. Next diff builds: the sold member kept in the order at cold residency, ranked by its
-   live operands, and rebuilt from its record when the pick reaches it by a replay that reaches the member's own
-   work coordinate at the sale uncharged and re-sends nothing, since flow_age_running charges replayed work like any
-   other. Absence shows as: two runs of one artifact over one input whose picks agree until the first RAM-pressure
-   sale and differ after it.
+   live operands, and restored from its serialized delta (the residual below) when the pick reaches it, with no
+   re-execution; a replay is only for a different build. Absence shows as: two runs of one artifact over one input
+   whose picks agree until the first RAM-pressure sale and differ after it.
    Named residual. Not covered: a flow captured as a snapshot; the cold tier stores a recipe and re-executes it.
    Next diff builds: a serialized COW delta and frame chain that a resume restores without re-execution. Absence
    shows as: a resumed member's first quantum spent re-running work its path had already done. */
