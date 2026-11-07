@@ -33440,6 +33440,10 @@ typedef struct JSTACoerce {
     uint64_t fill_v64;    /* TAPRO_FILL only: argument 0 already converted to the element's representation */
     int len, i;
     uint8_t unknown;      /* a fill or copyWithin argument is unknown: js_ta_fill_copy_unknown builds the write */
+    JSValue from_k;       /* TACOERCE_FROM: k, the unknown start index (owned), or UNINITIALIZED before it is derived */
+    JSValue pred;         /* TACOERCE_FROM: the occurrence test held across its fork (owned) */
+    int64_t cursor;       /* TACOERCE_FROM: where the next occurrence is sought, in the search's direction */
+    int64_t match;        /* TACOERCE_FROM: the occurrence `pred` asks about */
 } JSTACoerce;
 static int js_typed_array_fill_value(JSContext *ctx, JSObject *p, JSValueConst val, uint64_t *pv64);
 static JSValue js_typed_array_fill_build(JSContext *ctx, JSValueConst this_val, uint64_t v64, int k, int final);
@@ -93103,7 +93107,7 @@ static JSValue js_ta_subarray_fini(JSContext *ctx, void *st, bool take_result)
 #define TACOERCE_STAGES(X, VALIDATE, COERCE) \
     X(TACOERCE_VALIDATE, VALIDATE) \
     X(TACOERCE_ARGS,     COERCE)
-enum { TACOERCE_STAGES(JS_STEP_STAGE_ENUM, 0, 0) };
+enum { TACOERCE_STAGES(JS_STEP_STAGE_ENUM, 0, 0) TACOERCE_FROM };
 static const char *const js_ta_fill_steps[] = {
     TACOERCE_STAGES(JS_STEP_STAGE_LABEL,
         "23.2.3.9 steps 1-3 (taRecord is ValidateTypedArray(O, seq-cst); len is TypedArrayLength(taRecord))",
@@ -93118,16 +93122,19 @@ static const char *const js_ta_indexOf_steps[] = {
     TACOERCE_STAGES(JS_STEP_STAGE_LABEL,
         "23.2.3.17 steps 1-3 (taRecord is ValidateTypedArray(O, seq-cst); len is TypedArrayLength(taRecord))",
         "23.2.3.17 step 5 (n is ToIntegerOrInfinity(fromIndex))")
+    "23.2.3.17 steps 5-7 over an unknown fromIndex (each occurrence at or after k forks)",
     NULL };
 static const char *const js_ta_lastIndexOf_steps[] = {
     TACOERCE_STAGES(JS_STEP_STAGE_LABEL,
         "23.2.3.20 steps 1-3 (taRecord is ValidateTypedArray(O, seq-cst); len is TypedArrayLength(taRecord))",
         "23.2.3.20 step 5 (n is ToIntegerOrInfinity(fromIndex) when fromIndex is present)")
+    "23.2.3.20 steps 5-7 over an unknown fromIndex (each occurrence at or before k forks)",
     NULL };
 static const char *const js_ta_includes_steps[] = {
     TACOERCE_STAGES(JS_STEP_STAGE_LABEL,
         "23.2.3.16 steps 1-3 (taRecord is ValidateTypedArray(O, seq-cst); len is TypedArrayLength(taRecord))",
         "23.2.3.16 step 5 (n is ToIntegerOrInfinity(fromIndex))")
+    "23.2.3.16 steps 5-7 over an unknown fromIndex (the last occurrence at or after k forks)",
     NULL };
 
 static int js_ta_store_element(JSContext *ctx, JSObject *p, int64_t k, JSValue v);
@@ -93233,6 +93240,130 @@ static JSValue js_ta_fill_copy_unknown(JSContext *ctx, JSTACoerce *s)
     return r < 0 ? JS_EXCEPTION : js_dup(s->hdr.this_val);
 }
 
+/* The occurrence of `k`'s search in the direction `special` reads (js_typed_array_indexof_build over the
+   stated start `from`): its index, or -1 for none; includes answers whether one exists at or after `from`. -2 on
+   a throw. */
+static int64_t js_ta_search_at(JSContext *ctx, JSTACoerce *s, int64_t from, int special)
+{
+    JSValueConst pv[2];
+    JSValue r;
+    int64_t at = -1;
+
+    pv[0] = step_arg(&s->hdr, 0);
+    pv[1] = js_int64(from);
+    r = js_typed_array_indexof_build(ctx, s->hdr.this_val, 2, (JSValueConst *)pv, s->len, special);
+    if (JS_IsException(r)) return -2;
+    if (JS_IsBool(r)) at = JS_ToBool(ctx, r) ? from : -1;
+    else if (JS_ToInt64(ctx, &at, r)) at = -2;
+    JS_FreeValue(ctx, r);
+    return at;
+}
+
+/* §23.2.3.17 indexOf, §23.2.3.20 lastIndexOf and §23.2.3.16 includes where fromIndex is unknown: step 5's k is
+   derived (ToClampedIndex, or lastIndexOf's min(ToAbsoluteIndex(fromIndex, length), length - 1)) over the
+   example, and step 6's loop returns the first occurrence it meets, so the answer is decided by where k falls
+   among the occurrences: for each occurrence in the loop's order, the test that k reaches it forks, its true arm
+   answering that occurrence. includes asks it once, of the last occurrence. 0, a request code, or -1. */
+static int js_ta_search_unknown_from(JSContext *ctx, JSTACoerce *s)
+{
+    static const JSTAClampSteps index_steps = {
+        "23.2.3.17 step 5 (k is ToClampedIndex(fromIndex, length))", NULL, NULL };
+    static const JSTAClampSteps includes_steps = {
+        "23.2.3.16 step 5 (k is ToClampedIndex(fromIndex, length))", NULL, NULL };
+    int special = TAPRO_SPECIAL(s->hdr.arg), arm, r;
+    bool last = special == special_lastIndexOf, incl = special == special_includes;
+    JSObject *p = get_typed_array(ctx, s->hdr.this_val);
+    JSUnknownPiece *u = NULL;
+    int nu;
+
+    if (!p) return -1;
+    nu = JS_BufferSourceUnknowns(ctx, s->hdr.this_val, &u);
+    JS_FreeBufferUnknowns(ctx, u, nu);
+    if (nu != 0 || js_value_is_concolic(step_arg(&s->hdr, 0))) {
+        DFAIL("a typed-array search over an unknown fromIndex whose elements or sought value are unknown: build "
+              "each occurrence as the predicate the element comparison forks, beside k's");
+        return -1;
+    }
+    if (JS_IsUninitialized(s->from_k)) {
+        if (last) {
+            JSValue ex = js_concolic_held(s->prim[1]) ? js_concolic_operand(ctx, s->prim[1]) : JS_UNDEFINED, ops[2];
+            double d = 0;
+            bool have = JS_IsNumber(ex) && JS_ToFloat64(ctx, &d, ex) == 0;
+
+            JS_FreeValue(ctx, ex);
+            if (have) {
+                d = isnan(d) ? 0 : trunc(d) + 0.0;
+                if (isfinite(d) && d < 0) d += s->len;              /* 7.1.25 ToAbsoluteIndex step 2 */
+                d = fmin(d, (double)s->len - 1);
+            }
+            ops[0] = s->prim[1];
+            ops[1] = js_int64(s->len);
+            s->from_k = g_concolic.derived(ctx, "23.2.3.20 step 5 (k is min(ToAbsoluteIndex(fromIndex, length), "
+                                           "length - 1))", ops, 2, have ? js_float64(d) : JS_UNDEFINED);
+            DCHECK(!JS_IsUninitialized(s->from_k), "an unknown fromIndex derived no unknown k");
+        } else {
+            JSValue pred = JS_UNINITIALIZED, final_v;
+            int64_t k_ex = 0, f_ex = 0;
+            bool have;
+
+            r = js_ta_clamped_bounds(ctx, &s->hdr, js_int64(s->len), s->len, s->prim[1], JS_UNINITIALIZED, &pred,
+                                     incl ? &includes_steps : &index_steps, &s->from_k, &final_v, &k_ex, &f_ex,
+                                     &have);
+            DCHECK(r <= 0, "a clamp over a stated length asked for a fork");
+            if (r) return -1;
+            JS_FreeValue(ctx, final_v);
+        }
+        /* includes asks about its last occurrence alone: k reaches one exactly when it is at most the last */
+        if (incl) {
+            int64_t lo = 0, hi = s->len - 1, found = -1;
+
+            while (lo <= hi) {   /* the largest `from` whose search still finds an occurrence */
+                int64_t mid = lo + (hi - lo) / 2, at = js_ta_search_at(ctx, s, mid, special);
+
+                if (at == -2) return -1;
+                if (at >= 0) { found = mid; lo = mid + 1; } else hi = mid - 1;
+            }
+            s->match = found;
+        }
+        s->cursor = last ? s->len - 1 : 0;
+    }
+    for (;;) {
+        if (JS_IsUninitialized(s->pred)) {
+            JSValue sp[2];
+
+            if (!incl) {
+                s->match = s->cursor < 0 || s->cursor >= s->len ? -1 : js_ta_search_at(ctx, s, s->cursor, special);
+                if (s->match == -2) return -1;
+            }
+            if (s->match < 0) {
+                s->result = incl ? JS_FALSE : js_int32(-1);
+                return 0;
+            }
+            /* step 6's loop meets the occurrence when k is at or before it in the loop's direction */
+            sp[0] = last ? js_int64(s->match) : js_dup(s->from_k);
+            sp[1] = last ? js_dup(s->from_k) : js_int64(s->match);
+            DCHECK(g_concolic.rel != NULL, "a fromIndex is unknown with no JSConcolicHooks.rel installed");
+            CHECK(g_concolic.rel(ctx, sp + 2, OP_lte), "the relation hook declined a search's start test");
+            s->pred = sp[0];
+        }
+        r = step_tobool_run(ctx, &s->hdr, s->pred, last ? "23.2.3.20 step 6 (k reaches the occurrence)"
+                                                     : incl ? "23.2.3.16 step 6 (k reaches the last occurrence)"
+                                                            : "23.2.3.17 step 6 (k reaches the occurrence)", &arm);
+        if (r) return r;
+        JS_FreeValue(ctx, s->pred);
+        s->pred = JS_UNINITIALIZED;
+        if (arm) {
+            s->result = incl ? JS_TRUE : js_int64(s->match);
+            return 0;
+        }
+        if (incl) {
+            s->result = JS_FALSE;
+            return 0;
+        }
+        s->cursor = last ? s->match - 1 : s->match + 1;
+    }
+}
+
 static int js_ta_coerce_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSTACoerce *s = st;
@@ -93246,6 +93377,8 @@ static int js_ta_coerce_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         s->prim[0] = JS_UNDEFINED; s->prim[1] = JS_UNDEFINED; s->prim[2] = JS_UNDEFINED;
         s->fill_v64 = 0;
         s->len = 0; s->i = 0; s->unknown = 0;
+        s->from_k = s->pred = JS_UNINITIALIZED;
+        s->cursor = s->match = 0;
         /* steps 1-2 run before any coercion, and their throws precede them */
         p = get_typed_array(ctx, s->hdr.this_val);
         if (!p) return -1;
@@ -93284,6 +93417,14 @@ static int js_ta_coerce_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         s->i++;
     }
     JS_FreeValue(ctx, cb_result);
+    cb_result = JS_UNDEFINED;
+    if (s->hdr.stage == TACOERCE_ARGS && TAPRO_MODE(s->hdr.arg) == TAPRO_SEARCH && ta_coerce_wants(s, 1) &&
+        js_value_is_concolic(s->prim[1]))
+        s->hdr.stage = TACOERCE_FROM;
+    if (s->hdr.stage == TACOERCE_FROM) {
+        r = js_ta_search_unknown_from(ctx, s);
+        return r < 0 ? -1 : r;
+    }
     if (s->unknown) {
         s->result = js_ta_fill_copy_unknown(ctx, s);
         return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
@@ -93317,6 +93458,8 @@ static void js_ta_coerce_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int i;
     v->val(ctx, &s->result);
     for (i = 0; i < 3; i++) v->val(ctx, &s->prim[i]);
+    v->val(ctx, &s->from_k);
+    v->val(ctx, &s->pred);
 }
 
 static JSValue js_ta_coerce_fini(JSContext *ctx, void *st, bool take_result)
