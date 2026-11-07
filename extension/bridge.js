@@ -3991,11 +3991,12 @@ async function engineJoin(eng, html, msg, docName, topLevelUrl, inherited, paren
          "documents by name, so this would either be one document arriving twice (a second tree, a second " +
          "realm and a second run of its scripts in one agent) or two documents wearing one name, and both are " +
          "a routing table that answers a peer's delivery with whichever it wrote last");
-  DCHECK(msg.sourceUrl !== "" && originOf(msg.sourceUrl) === eng.origin,
+  DCHECK(_isRealOrigin(eng.origin) && msg.sourceUrl !== "" && originOf(msg.sourceUrl) === eng.origin,
          "a document whose principal is not this instance's was joined to it — an instance is an ORIGIN-KEYED " +
          "agent cluster and SECURITY.md makes the instance the principal, so this would put two origins behind " +
          "one credentialed-read principal; the engine's own CHECK aborts on it, and this zone computed the " +
-         "cluster key that sent it here");
+         "cluster key that sent it here. An opaque principal is minted fresh per document (principalOf, " +
+         "_senderOrigin), so no second document joins its instance and the address is compared to a tuple origin");
   /* The parent navigable, on engineCreate's rule. A same-origin document nested through a cross-origin one
      belongs to this cluster and to another instance's frame tree at once, and only this zone can name its
      parent. */
@@ -5520,10 +5521,14 @@ async function hostNotice(eng, line) {
   if (f[0] === ROUTE_SEED_NOTICE) {
     /* A route of this document, established from the two addresses: HTML §7.2.5 The History interface's
        can-have-its-URL-rewritten already refuses a cross-origin rewrite in the engine, and this zone checks the
-       same thing from its own facts. The comparison decides no principal (the load reads under `eng.origin`).
-       It is a refusal, not an assert, because the engine is untrusted. */
-    if (originOf(f[1]) !== originOf(eng.msg.sourceUrl)) {
-      console.warn("[bridge] a route declaration named an address outside the declaring document's origin (" +
+       same thing from its own facts. It lets only an HTTP(S) URL differ in more than its fragment, so a route
+       of any other document is that document again; both are HTTP(S) before their origins are compared, so the
+       comparison is between tuple origins (HTML §7.1.1 "Origins"). The comparison decides no principal (the
+       load reads under `eng.origin`). It is a refusal, not an assert, because the engine is untrusted. */
+    if (!_isHttpSchemeUrl(f[1]) || !_isHttpSchemeUrl(eng.msg.sourceUrl) ||
+        originOf(f[1]) !== originOf(eng.msg.sourceUrl)) {
+      console.warn("[bridge] a route declaration named an address that is not an HTTP(S) page of the declaring " +
+                   "document's origin (" +
                    f[1] + " vs " + eng.msg.sourceUrl + ") — HTML §7.2.5's can-have-its-URL-rewritten permits " +
                    "no such rewrite, so this is not a page of that application and it is not seeded");
       return;
@@ -6628,13 +6633,14 @@ async function admitSeatLand(seat) {
            "disjuncts beside it are all false for a declined same-origin route, so the seat would fall " +
            "through to `loaded.bytes.length` and die reading `length` off null");
     const _landed = originOf(loaded.url);
-    if (loaded.declined !== null || loaded.unavailable !== null || _landed === "" ||
+    if (loaded.declined !== null || loaded.unavailable !== null || !_isRealOrigin(_landed) ||
         _landed !== originOf(seed.principalUrl) || loaded.bytes.length === 0) {
       console.warn("[bridge] a declared route could not be seeded: " + seed.url + " — " +
                    (loaded.declined !== null ? "the chokepoint DECLINED it on `" + loaded.declined + "`, so no " +
                       "response was taken; that token names the rule or the silent wire"
                     : loaded.unavailable !== null ? JSON.stringify(loaded.unavailable)
-                    : _landed !== originOf(seed.principalUrl) ? "landed cross-origin at " + (_landed || "an unparseable URL")
+                    : !_isRealOrigin(_landed) || _landed !== originOf(seed.principalUrl)
+                      ? "landed cross-origin at " + (_landed || "an unparseable URL")
                     : "the response carried no bytes"));
       return null;
     }
