@@ -9178,19 +9178,22 @@ static char *cstr_dup(JSContext *ctx, JSValueConst v) {   /* concrete operand ->
    example". */
 static JSValue example_string_concat(JSContext *ctx, JSValueConst exa, JSValueConst exb) {
     const char *pa, *pb;
+    size_t la = 0, lb = 0;
     JSValue example = JS_UNDEFINED;
 
-    pa = JS_ToCString(ctx, exa);
-    pb = pa ? JS_ToCString(ctx, exb) : NULL;
+    /* By length: a String may hold U+0000, which its UTF-8 spells as a NUL byte. */
+    pa = JS_ToCStringLen(ctx, &la, exa);
+    pb = pa ? JS_ToCStringLen(ctx, &lb, exb) : NULL;
     /* A NULL with the refusal edge underneath is the physical floor, so it is a CHECK: a `+` that silently
        produced no example would turn a computed value (`/api/us-east-1`) into a `{a}{b}` shape. */
     if (pa && pb) {
-        size_t l = strlen(pa) + strlen(pb) + 1;
-        char *e = reclaim_malloc(l);
+        char *e = reclaim_malloc(la + lb + 1);
         CHECK(e, "concolic +: the concatenated example could not be allocated — the sum would carry a "
                  "shape where the code computed a value");
-        snprintf(e, l, "%s%s", pa, pb);
-        example = JS_NewString(ctx, e);
+        memcpy(e, pa, la);
+        memcpy(e + la, pb, lb);
+        e[la + lb] = 0;
+        example = JS_NewStringLen(ctx, e, la + lb);
         free(e);
     }
     if (pa) JS_FreeCString(ctx, pa);
