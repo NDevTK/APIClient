@@ -2572,12 +2572,8 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
         Flow *f = flow_at(i);
         /* A held snapshot stands at an instant before this arrival and never steps, so the record waits on its
            queue for the arms forked off it later (engine_cut_arm forks the queue with the commitments), each of
-           which admits or refuses it at its own delivery step. Arms already forked are live and take it below.
-           Named residual. Not covered: an arm delivers such a record at its first task boundary, which may come
-           before the point the path it replays received it. Next diff builds: the frozen path records the cursor
-           at each delivery it made, and an arm withholds a record until its replay reaches that cursor. Absence
-           shows as: a cut arm's replay leaving its frozen path in a document that received a routed record
-           after the cut. */
+           which admits or refuses it at its own delivery step, once its replay reaches where the path it replays
+           delivered it (flow_deliver_head_ready). Arms already forked are live and take it below. */
         if (flow_held(f)) {
             flow_deliver_push(ctx, f, record, sender_origin);
             continue;
@@ -3074,6 +3070,26 @@ static void deliver_take_marks(Flow *f, EngineArrival m)
     flow_take_peer_marks(f, arrival_marks(m));
 }
 
+/* Whether the oldest routed record on `f` (switched in) may be delivered now: always, except on an arm of a
+   snapshot whose replay has not reached where its frozen path delivered it (source_cut_delivery_ready). */
+static int flow_deliver_head_ready(JSContext *ctx, const Flow *f)
+{
+    JSValue entry, rv;
+    const char *record;
+    int ready;
+
+    if (!f->hold_on) return 1;
+    entry = flow_deliver_entry(f, 0);
+    rv = JS_GetPropertyUint32(ctx, entry, 0);
+    record = JS_ToCString(ctx, rv);
+    CHECK(record != NULL, "engine: OOM reading a routed delivery's record to ask whether it is due");
+    ready = source_cut_delivery_ready(f, record);
+    JS_FreeCString(ctx, record);
+    JS_FreeValue(ctx, rv);
+    JS_FreeValue(ctx, entry);
+    return ready;
+}
+
 static void flow_deliver(JSContext *ctx, Flow *f)
 {
     JSValue entry, rv, ov;
@@ -3155,6 +3171,8 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     CHECK(record != NULL && origin != NULL,
           "engine: OOM reading a routed delivery off its queue — a record that cannot be read is a peer's "
           "message this document never receives");
+    /* Where this timeline's path took it, which an arm replaying the path waits for (solver/source_cut.h). */
+    source_cut_note_delivery(record);
     dup = reclaim_strdup(record);
     CHECK(dup != NULL, "engine: OOM splitting a routed delivery's transport fields");
     doc = strchr(dup, '\t');    *doc++ = 0;
@@ -9539,7 +9557,10 @@ static FlowNextUnit flow_next_unit_pass(JSContext *ctx, const Flow *f, int entry
        at its last decision or at the entry of that unit, which its path decides and where a quantum ended does not. */
     if (nu.arm != NEXT_IDLE) return nu;
     if (!task_done && g_link_connected_due && g_link_connected_due(ctx)) { nu.arm = NEXT_LINK_CONNECTED; return nu; }
-    if (!task_done && flow_deliver_pending(f)) { nu.arm = NEXT_ROUTED_DELIVERY; return nu; }
+    if (!task_done && flow_deliver_pending(f) && flow_deliver_head_ready(ctx, f)) {
+        nu.arm = NEXT_ROUTED_DELIVERY;
+        return nu;
+    }
     if (!task_done && flow_perform_pending(f)) { nu.arm = NEXT_CROSS_AGENT_OP; return nu; }
     if (flow_checkpoint_due(f)) {
         nu.arm = NEXT_MICROTASK;
@@ -10276,6 +10297,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    nothing left to run is not being done while a peer can still ask this timeline something: it
                    waits on the host for the next operation, which is what OWED means. The flow keeps its snapshot,
                    delta and rank and is out of the pick until the host has something for it. */
+                /* A record an arm held for its replay to reach (flow_deliver_head_ready) is delivered once nothing
+                   else is left to run: the replay has gone off the path it was waiting on, and the record is a
+                   message this timeline still receives. */
+                if (flow_deliver_pending(f)) {
+                    g_step_unit = STEP_UNIT_ROUTED_DELIVERY;
+                    flow_deliver(ctx, f);
+                    return 0;
+                }
                 if (g_referenced) { g_step_unit = STEP_UNIT_AWAIT_PEER; return FLOW_STEP_OWED; }
                 /* A resumed drive that never got its body back is counted on its way out. The seed is its own rung
                    above this exit and its gate answered GATE_NONE on this pass (asserted above), so reaching the exit
@@ -11975,7 +12004,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     return 1;
 }
 
-Flow *engine_cut_arm(JSContext *ctx, Flow *standby, const void *path) {
+Flow *engine_cut_arm(JSContext *ctx, Flow *standby, const void *path, const struct SourceCutLog *log) {
     JSValue *clone;
     void *parked;
     int in_program, in_job;
@@ -12002,6 +12031,14 @@ Flow *engine_cut_arm(JSContext *ctx, Flow *standby, const void *path) {
     sib = engine_sibling_assemble_as(ctx, standby, clone, decide_blob_on_path(path), concolic_pins_suspend(),
                                      flow_path_marks(standby), SIB_ARRIVES);
     sib->parked = parked;
+    {
+        long path_len = 0;
+
+        decide_blob_stats(path, &path_len, NULL);
+        DCHECK(path_len >= decide_cursor() && path_len <= 0x7fffffff,
+               "a snapshot's arm stands on a frozen path shorter than the snapshot's own history");
+        source_cut_hold_install(sib, standby, log, (int)path_len);
+    }
     flow_switch_out(ctx, standby);
     source_cut_count_arm();
     return sib;

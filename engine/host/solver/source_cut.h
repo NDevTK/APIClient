@@ -37,6 +37,20 @@ int  source_cut_due(const Flow *f);
    reference and clear the ask. */
 void source_cut_leave(Flow *f, Flow *standby);
 
+/* The routed record `record` was delivered on the running flow at its current decision cursor (engine.c's
+   flow_deliver, at the take). */
+void source_cut_note_delivery(const char *record);
+/* A frozen copy of `f`'s delivery log, taken with a search's route (solve.c's cand_learn_path); owned by the
+   caller, freed with source_cut_log_free. */
+struct SourceCutLog *source_cut_log_freeze(const Flow *f);
+void source_cut_log_free(struct SourceCutLog *log);
+/* An arm of `standby` on a frozen path of `path_len` decisions whose log is `log`: the arm holds each routed
+   record the path delivered after the snapshot until its replay reaches the cursor the path delivered it at, and
+   any other until the replay has walked the whole path. */
+void source_cut_hold_install(Flow *arm, const Flow *standby, const struct SourceCutLog *log, int path_len);
+/* Whether the running flow `f` may deliver `record`, the head of its delivery queue, now. */
+int  source_cut_delivery_ready(const Flow *f, const char *record);
+
 /* A fork's half (engine_sibling_assemble): `sib` inherits `parent`'s read sources, and its references to the
    lineage's cuts when it can still open a search. */
 void source_cut_fork(Flow *sib, const Flow *parent);
@@ -60,8 +74,9 @@ Flow *source_cut_next_shed(int all, const Flow *keep);
 void source_cut_count_arm(void);
 /* Lifetime counts: cuts taken, asks withdrawn because the read was re-entered unparked, standbys shed, candidate
    arms forked off a standby, and cuts a search ever held (`served`); and the high-water of standbys held at once
-   (`heldPeak`), whose live count is taken minus shed. */
-typedef struct { long taken, unparked, shed, arms, served, held_peak; } SourceCutCensus;
+   (`heldPeak`), whose live count is taken minus shed; and routed records an arm delivered where its frozen path
+   did (`holdsMet`). */
+typedef struct { long taken, unparked, shed, arms, served, held_peak, holds_met; } SourceCutCensus;
 SourceCutCensus source_cut_census(void);
 
 #endif

@@ -1,5 +1,6 @@
 /* Time-travel points before a source read (see source_cut.h). */
 #include "solver/source_cut.h"
+#include "solver/decide.h"    /* decide_cursor: where a delivery stands on the path */
 #include "solver/reclaim.h"
 #include "check.h"
 #include <stdlib.h>
@@ -14,6 +15,13 @@ struct SourceCut {
     char **srcs;
     int n;
     struct SourceCut *prev, *next;
+};
+
+/* A delivery log: records in delivery order, each with the decision cursor it was delivered at. */
+struct SourceCutLog {
+    char **rec;
+    int *cur;
+    int n;
 };
 
 static SourceCut *g_live;
@@ -43,6 +51,96 @@ static void strv_free(char ***v, int *n) {
     free(*v);
     *v = NULL;
     *n = 0;
+}
+
+static struct SourceCutLog *log_new(void) {
+    struct SourceCutLog *l = reclaim_calloc(1, sizeof *l);
+
+    CHECK(l != NULL, "source_cut: OOM making a delivery log");
+    return l;
+}
+
+static void log_push(struct SourceCutLog *l, const char *rec, int cur) {
+    char **r = reclaim_realloc(l->rec, (size_t)(l->n + 1) * sizeof *r);
+    int *c;
+
+    CHECK(r != NULL, "source_cut: OOM growing a delivery log");
+    l->rec = r;
+    c = reclaim_realloc(l->cur, (size_t)(l->n + 1) * sizeof *c);
+    CHECK(c != NULL, "source_cut: OOM growing a delivery log");
+    l->cur = c;
+    l->rec[l->n] = reclaim_strdup(rec);
+    CHECK(l->rec[l->n] != NULL, "source_cut: OOM recording a delivery");
+    l->cur[l->n] = cur;
+    l->n++;
+}
+
+static struct SourceCutLog *log_copy(const struct SourceCutLog *src, int from) {
+    struct SourceCutLog *l = log_new();
+
+    for (int i = from; src && i < src->n; i++) log_push(l, src->rec[i], src->cur[i]);
+    return l;
+}
+
+void source_cut_log_free(struct SourceCutLog *l) {
+    if (!l) return;
+    for (int i = 0; i < l->n; i++) free(l->rec[i]);
+    free(l->rec);
+    free(l->cur);
+    free(l);
+}
+
+void source_cut_note_delivery(const char *record) {
+    Flow *f = flow_running();
+
+    DCHECK(f != NULL && record != NULL && *record, "a routed delivery was noted with no flow running or no record");
+    if (!f->deliv_log) f->deliv_log = log_new();
+    log_push(f->deliv_log, record, decide_cursor());
+    /* A held record is delivered once: its entry is spent. */
+    for (int i = 0; f->hold_on && f->hold && i < f->hold->n; i++)
+        if (!strcmp(f->hold->rec[i], record)) {
+            free(f->hold->rec[i]);
+            f->hold->rec[i] = f->hold->rec[f->hold->n - 1];
+            f->hold->cur[i] = f->hold->cur[f->hold->n - 1];
+            f->hold->n--;
+            g_census.holds_met++;
+            break;
+        }
+}
+
+struct SourceCutLog *source_cut_log_freeze(const Flow *f) {
+    return log_copy(f->deliv_log, 0);
+}
+
+/* Named residual. Not covered: an arm written to the cold tier and resumed has no hold (cold.c writes none), so it
+   delivers its records at its first task boundary. Next diff builds: the hold written beside the candidate's own
+   record and rebuilt at the resume. Absence shows as: a cold-resumed candidate in a document that received a
+   routed record after its cut leaving the path it replays. */
+void source_cut_hold_install(Flow *arm, const Flow *standby, const struct SourceCutLog *log, int path_len) {
+    int had = standby->deliv_log ? standby->deliv_log->n : 0;
+
+    DCHECK(arm->hold == NULL && !arm->hold_on, "an arm's delivery hold was installed twice");
+    DCHECK(log == NULL || log->n >= had,
+           "a frozen path's delivery log is shorter than the snapshot's own history — the path extends the "
+           "snapshot's history, so its log extends the snapshot's");
+    for (int i = 0; log && i < had; i++)
+        DCHECK(!strcmp(log->rec[i], standby->deliv_log->rec[i]) && log->cur[i] == standby->deliv_log->cur[i],
+               "a frozen path's delivery log disagrees with the snapshot's history below the snapshot");
+    arm->hold = log_copy(log, had);
+    arm->hold_end = path_len;
+    arm->hold_on = 1;
+}
+
+int source_cut_delivery_ready(const Flow *f, const char *record) {
+    int at;
+
+    DCHECK(f == flow_running(), "a delivery's readiness was asked of a flow that is not running — the cursor "
+                                "read is the running flow's");
+    if (!f->hold_on) return 1;
+    at = decide_cursor();
+    for (int i = 0; i < f->hold->n; i++)
+        if (!strcmp(f->hold->rec[i], record)) return at >= f->hold->cur[i];
+    return at >= f->hold_end;
 }
 
 void source_read_note(const char *src) {
@@ -134,6 +232,14 @@ void source_cut_fork(Flow *sib, const Flow *parent) {
     DCHECK(sib->src_read_n == 0 && sib->cuts_n == 0 && sib->cut_due_n == 0 && sib->standby_of == NULL,
            "a fork's arm already carried time-travel state before inheriting its parent's");
     for (int i = 0; i < parent->src_read_n; i++) strv_push(&sib->src_read, &sib->src_read_n, parent->src_read[i]);
+    DCHECK(sib->deliv_log == NULL && sib->hold == NULL, "a fork's arm already carried a delivery log");
+    if (parent->deliv_log) sib->deliv_log = log_copy(parent->deliv_log, 0);
+    /* An arm of an arm replays the same frozen path, so it waits for the same deliveries. */
+    if (parent->hold_on) {
+        sib->hold = log_copy(parent->hold, 0);
+        sib->hold_end = parent->hold_end;
+        sib->hold_on = 1;
+    }
     if (parent->cand_src || parent->standby_of || parent->cuts_n == 0) return;
     sib->cuts = reclaim_malloc((size_t)parent->cuts_n * sizeof *sib->cuts);
     CHECK(sib->cuts != NULL, "source_cut: OOM giving an arm its lineage's cuts");
@@ -159,6 +265,11 @@ static void cut_free(SourceCut *c) {
 
 void source_cut_flow_release(Flow *f) {
     strv_free(&f->src_read, &f->src_read_n);
+    source_cut_log_free(f->deliv_log);
+    f->deliv_log = NULL;
+    source_cut_log_free(f->hold);
+    f->hold = NULL;
+    f->hold_on = 0;
     strv_free(&f->cut_due, &f->cut_due_n);
     for (int i = 0; i < f->cuts_n; i++) source_cut_drop(f->cuts[i]);
     free(f->cuts);

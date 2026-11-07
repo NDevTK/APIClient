@@ -2242,10 +2242,11 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
                                 solver/quantum.h state the argument; nothing in this file composes it. */
                              /* The time-travel points (solver/source_cut.h): snapshots taken before a first source
                                 read, asks withdrawn unparked, snapshots shed, candidates forked off one, cuts a
-                                search held, and the most held at once; the work retired at the first finding
-                                (solve_first_fire_work, -1 before one), and in the whole session. */
+                                search held, the most held at once, and records an arm delivered where its path
+                                did; the work retired at the first finding (solve_first_fire_work, -1 before
+                                one), and in the whole session. */
                              "\"_sourceCuts\":{\"taken\":%ld,\"unparked\":%ld,\"shed\":%ld,\"armsSeeded\":%ld,"
-                             "\"served\":%ld,\"heldPeak\":%ld},"
+                             "\"served\":%ld,\"heldPeak\":%ld,\"holdsMet\":%ld},"
                              "\"_firstFireWork\":%lld,\"_workRetired\":%lld,"
                              "\"_novelty\":%s,"
                              "\"_quantum\":%s,\"_park\":%s,\"_parkWhy\":\"%s\"}",
@@ -2269,7 +2270,7 @@ char *result_json_census(JSContext *ctx, const ResultCensus *c) {
                      place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
                      casc.asks_life, casc.served_life, casc.resolved_life,
                      casc.computed_asks_life, casc.computed_served_life, casc.computed_resolved_life,
-                     cuts.taken, cuts.unparked, cuts.shed, cuts.arms, cuts.served, cuts.held_peak,
+                     cuts.taken, cuts.unparked, cuts.shed, cuts.arms, cuts.served, cuts.held_peak, cuts.holds_met,
                      (long long)solve_first_fire_work(), (long long)engine_work_retired(),
                      novelty,
                      quantum,

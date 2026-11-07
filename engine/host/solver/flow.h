@@ -330,6 +330,13 @@ typedef struct Flow {
     struct SourceCut **cuts; int cuts_n;
     char **cut_due; int cut_due_n;
     struct SourceCut *standby_of;
+    /* The routed records this flow's history delivered, each with the decision cursor it was delivered at, owned;
+       a fork copies it. On an arm of a snapshot, `hold` is the part of a frozen path's log after the snapshot,
+       which the arm's deliveries wait for (source_cut_delivery_ready), and `hold_end` that path's length; owned,
+       `hold_on` 0 on every other flow. */
+    struct SourceCutLog *deliv_log;
+    struct SourceCutLog *hold;
+    int hold_end, hold_on;
 
     /* Is this flow a driven orphan: one whose frame is a call of a function the page defined and nothing called
        (engine.c's engine_orphan_seed)? To the scheduler it is an ordinary flow. Its one consequence is that its

@@ -257,6 +257,9 @@ typedef struct {
        history holds none. `cut_seeded` counts candidates forked off it (`seededAtCut`); `cut_why` names why the
        last candidate seeded while a route stood started from the baseline instead (`cutRefused`), NULL if none did. */
     SourceCut *cut;
+    /* The routed records the detecting flow's history delivered, with the cursor of each (source_cut_log_freeze),
+       taken and released with `reinject`: an arm of `cut` waits for each until its replay reaches that cursor. */
+    struct SourceCutLog *deliv_log;
     int cut_seeded;
     const char *cut_why;
     /* The drives the flow standing at this sink had called (its chain's called members: each body's locator and
@@ -941,6 +944,7 @@ static void cand_route_release(Cand *e) {
     e->reinject = NULL;
     e->reinject_len = 0;
     if (e->cut) { source_cut_drop(e->cut); e->cut = NULL; }
+    source_cut_log_free(e->deliv_log); e->deliv_log = NULL;
     free(e->chain); free(e->chain_doc);
     e->chain = NULL; e->chain_doc = NULL; e->chain_n = 0;
     e->route_no_act = 0;
@@ -989,6 +993,8 @@ static void cand_learn_path(Cand *e) {
 
         e->cut = base && f ? source_cut_of(f, base) : NULL;
         if (e->cut) source_cut_hold_search(e->cut);
+        DCHECK(e->deliv_log == NULL, "a search's delivery log was taken twice for one route");
+        e->deliv_log = f ? source_cut_log_freeze(f) : NULL;
     }
     /* And the path's length, taken here where the path exists: it is what `runwayArms` reports, and record_sink
        gives the blob back at the fire, so a length read later would be 0 for the searches that succeeded.
@@ -1256,6 +1262,7 @@ static void record_sink(int cls, const char *source, const char *poc, char *acts
        NULL; the probe's other arms keep arriving after a fire and would otherwise be seeded again. */
     if (twin->reinject) { decide_blob_free(twin->reinject); twin->reinject = NULL; }
     if (twin->cut) { source_cut_drop(twin->cut); twin->cut = NULL; }
+    source_cut_log_free(twin->deliv_log); twin->deliv_log = NULL;
     free(twin->chain); free(twin->chain_doc);
     twin->chain = NULL; twin->chain_doc = NULL; twin->chain_n = 0;
     /* And the search's live candidates lose their fitness now, since the finding they approach is held;
@@ -2421,7 +2428,7 @@ static Flow *seed_on_path(JSContext *ctx, Cand *e, const char *payload, const ch
            "entry that acquired breakouts without either a detection or a witness");
     why = cut_refusal(e, dl);
     if (!why) {
-        f = engine_cut_arm(ctx, source_cut_standby(e->cut), e->reinject);
+        f = engine_cut_arm(ctx, source_cut_standby(e->cut), e->reinject, e->deliv_log);
         f->cand_src     = reclaim_strdup(e->src);
         f->cand_payload = reclaim_strdup(payload);
         fire_target_sink_set(&f->fire, sink_name(e->sink));
@@ -3230,6 +3237,7 @@ void solve_free(void) {
         /* The segment reference an unsolved search still holds; the frozen chain goes with its last reference. */
         if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);
         if (g_pending[i].cut) source_cut_drop(g_pending[i].cut);
+        source_cut_log_free(g_pending[i].deliv_log);
         free(g_pending[i].chain);
         free(g_pending[i].chain_doc);
         free(g_pending[i].refused_acts);
