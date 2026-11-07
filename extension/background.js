@@ -8,11 +8,12 @@
 //      document's fetch() and XMLHttpRequest traffic) to the brain,
 //   3. perform privileged chrome.tabs.* calls the offscreen can't, as RPC, and own the live-verify attacker
 //      tab: it opens the address the offscreen judged and keeps, in memory only, which tabs it opened for it,
-//   4. hold the zone's one network fetch, which lib/safe-fetch.js decides in the offscreen document (wire.js).
+//   4. relay the webRequest events of the offscreen document's own sends, which it makes (lib/wire.js) and
+//      cannot observe (wire-events.js).
 // The popup talks to the brain directly over chrome.runtime.sendMessage (a
 // broadcast reaches the offscreen); the SW stays out of those messages.
 
-importScripts("check.js", "speak-as-rule.js", "wire.js");
+importScripts("check.js", "speak-as-rule.js", "wire-events.js");
 
 const EXT_ORIGIN = "chrome-extension://" + chrome.runtime.id;
 const OFFSCREEN_URL = "ast-worker.html";
@@ -334,8 +335,8 @@ async function _swRpc(msg) {
     // accidentally still issues a storage.session.* RPC the unknown-api
     // throw below will surface it as a diagnostic — better than silently
     // doing nothing.
-    // A network send is not an RPC arm: lib/safe-fetch.js decides it in the
-    // offscreen document and it rides its own `wire` port (wire.js).
+    // A network send is not an RPC arm: the offscreen document makes it
+    // (lib/wire.js), and this worker relays its webRequest events (wire-events.js).
     // Exploit-probe injection: run a named, predefined injector (above) in the
     // target tab's MAIN world. Returns the per-frame InjectionResult array (its
     // `.result` values are serializable) so the brain can merge them.

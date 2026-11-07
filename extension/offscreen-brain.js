@@ -1861,21 +1861,12 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, deli
        the engine's own prefix names and CHROME performs the transform — the same one transform, applied once,
        by the two independent implementations whose agreement is the entire point of §LIVE-VERIFY. A byte
        Chrome encodes and the engine does not is then a real engine-fidelity divergence and reports as one.
-       AND ITS COMPLETION VALUE IS NOT THE DELIVERY'S ANSWER, WHICH THIS PARAGRAPH USED TO SAY AND IS REWRITTEN
-       RATHER THAN DELETED BECAUSE THE RETIRED READING IS THE ONE A READER RE-DERIVES FROM THE SINGLE
-       EXPRESSION STATEMENT. It read: evaluating it yields what HTML §7.2.2.1 Opening and closing windows says
-       the window open steps return — step 14, If targetNavigable is null, then return null (no navigable was
-       created, which is what a popup blocker is), against step 19's active WindowProxy; that is the only thing
-       that can tell a delivery which ran and did not fire from one that never reached a document at all.
-       Step 14 and step 19 are both real and both correctly quoted, and the enumeration is SHORT: the window
-       open steps have 19 top-level steps and FOUR `return null` arms — 1, 14, 17 and 18 — and the navigate is
-       step 15, so step 17 ("If windowType is `new with no opener`, then return null") and step 18 (noopener
-       with a target that is not `_self`/`_parent`/`_top`) answer null for a document that HAS been navigated.
-       HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable set that windowType whenever the
-       opening document's own opener policy is `same-origin` or `same-origin-plus-COEP` and its origin is not
-       same origin with its top-level origin — which is every sandboxed extension page, at every COOP value,
-       since a `manifest.sandbox.pages` document has an OPAQUE origin. So a null handle is FOUR states wearing
-       one value and three of them are deliveries that happened.
+       ITS COMPLETION VALUE IS NOT THE DELIVERY'S ANSWER. HTML §7.2.2.1 "Opening and closing windows"' window open
+       steps answer null at steps 1, 14, 17 and 18 and navigate at step 15, so step 17 ("If windowType is `new
+       with no opener`, then return null") and step 18 answer null for a document that has been navigated. HTML
+       §7.3.1.7 "Navigable target names"' rules for choosing a navigable set that windowType whenever the opening
+       document's own opener policy is `same-origin` or `same-origin-plus-COEP` and its origin is not same origin
+       with its top-level origin. So a null handle is four states wearing one value, three of them deliveries.
        WHAT DECIDES IT IS `_recordProbeDelivery`, off a document ANNOUNCING ITSELF at `expect.url` with the
        browser's own origin and frame — see that function. This expression's value is still worth reporting as
        CONTEXT for a human, because nothing else can observe it, and it gates nothing. `unstated` likewise
@@ -2288,22 +2279,16 @@ function _sameAddressIgnoringComponent(a, b, component) {
 }
 
 /* A DOCUMENT ANNOUNCING ITSELF AT A LIVE PROBE'S DELIVERED ADDRESS IS THE DELIVERY WITNESS — the thing
-   §LIVE-VERIFY's strongest verdict needs and the one thing the attacker sandbox cannot state.
+   §LIVE-VERIFY's strongest verdict needs and the one thing a `window.open` handle cannot state.
 
-   WHY THE SANDBOX COULD NOT STATE IT, AND WHY IT IS RETIRED. poc-sandbox.html evaluated ONE expression
-   statement and used to classify
-   the delivery by the IDENTITY of `window.open`'s completion value. HTML §7.2.2.1 "Opening and closing
-   windows"' window open steps return null at FOUR of their 19 top-level steps and navigate at step 15, so
-   steps 17 and 18 answer null for a document that HAS been navigated. HTML §7.3.1.7 "Navigable target names"'
-   rules for choosing a navigable reach step 17 by name: "If currentDocument's opener policy's value is
-   `same-origin` or `same-origin-plus-COEP`, and currentDocument's origin is not same origin with
-   currentDocument's relevant settings object's top-level origin: Set noopener to true. Set name to "_blank".
-   Set windowType to "new with no opener"." The attacker sandbox is a `manifest.sandbox.pages` document, so
-   its origin is OPAQUE and is never same origin with the extension top-level origin that frames it — the
-   SECOND conjunct holds at every COOP value this extension can ship. The first conjunct is the manifest's
-   `cross_origin_opener_policy`, so at `same-origin-allow-popups` the clause does not fire and at `same-origin`
-   it fires for EVERY delivery. Reading the handle therefore reports a delivery that happened as one that never
-   did, which is exactly the claim §LIVE-VERIFY converts into "the engine's model diverges from Chrome".
+   WHY A `window.open` HANDLE CANNOT STATE IT. HTML §7.2.2.1 "Opening and closing windows"' window open steps
+   return null at FOUR of their 19 top-level steps and navigate at step 15, so steps 17 and 18 answer null for a
+   document that HAS been navigated. HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable reach
+   step 17 by name: "If currentDocument's opener policy's value is `same-origin` or `same-origin-plus-COEP`, and
+   currentDocument's origin is not same origin with currentDocument's relevant settings object's top-level
+   origin: Set noopener to true. Set name to "_blank". Set windowType to "new with no opener"." Reading the
+   handle would report such a delivery as one that never happened, which is exactly the claim §LIVE-VERIFY
+   converts into "the engine's model diverges from Chrome".
 
    TWO HALVES, NAMED FOR THEIR PROVENANCE, exactly as `_recordProbeHit` splits them, and for the same reason.
    ATTRIBUTION is browser-stated: `facts` is the ONE `_browserFacts` mint, so origin and frameId are chrome.*
@@ -2729,6 +2714,7 @@ const CONTENT_TYPES = new Set([
 // not one: a document's CONTENT_SEED drives its priority).
 //   • __evt TAB_REMOVED (from the SW, extension origin) → _onTabRemoved
 //   • __evt WEB_REQUEST (from the SW, extension origin) → webRequestEvent (lib/web-request.js)
+//   • __evt WIRE (from the SW, extension origin) → wireEvent (lib/wire.js), this document's own sends
 //   • CONTENT_TYPES from a web-page origin   → handleContentMessage (UNTRUSTED;
 //                    real browser-verified sender = tab/frame/url)
 //   • extension-page origin (popup)          → handlePopupMessage
@@ -2760,6 +2746,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!fromExtUrl) return;
     if (msg.__evt === "TAB_REMOVED") _onTabRemoved(msg.tabId);
     else if (msg.__evt === "WEB_REQUEST") webRequestEvent(msg.ev);
+    else if (msg.__evt === "WIRE") wireEvent(msg.ev);
     else DFAIL("the service worker sent the event `" + msg.__evt + "`, which this document does not take");
     return;
   }

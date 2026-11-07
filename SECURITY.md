@@ -19,7 +19,7 @@ either the mechanism or its absence, and an absence is a finding about this file
 | Engine frame (`renderer.html`: QuickJS/WASM with Lexbor) | untrusted | executes the bundle; a sandboxed frame at an opaque origin that reaches the trusted zone only through `content.mojom.Renderer` |
 | Attacker tab (`attackerPage.open` in `background.js`, a page on the person's attacker site, used by live verify) | untrusted | a third-party document |
 | Offscreen document (`ast-worker.html`: `offscreen-brain.js`, `bridge.js`, `lib/*`) | trusted | the only zone that holds state, principals and network policy |
-| Service worker (`background.js`) | trusted, stateless | owns the offscreen's lifecycle, forwards `TAB_REMOVED` and the webRequest events of documents' fetch() and XHR traffic, performs privileged `chrome.*` calls for the offscreen only, and holds the one fetch the zone's sends leave through (`wire.js`) |
+| Service worker (`background.js`) | trusted, stateless | owns the offscreen's lifecycle, forwards `TAB_REMOVED` and the webRequest events of documents' fetch() and XHR traffic, performs privileged `chrome.*` calls for the offscreen only, and relays the webRequest events of the offscreen's own sends (`wire-events.js`) |
 | Popup (`popup.html`, `popup.js`, `lib/popup-*.js`) | trusted | an extension page that renders untrusted data |
 
 The offscreen concentrates everything that needs trust: the one `chrome.runtime.onMessage` router of that
@@ -137,49 +137,49 @@ Which extension context can open a connection at all is enforced by CSP in all b
   `WebTransport` and `navigator.sendBeacon` with non-writable, non-configurable functions that `CHECK`-fail.
   The one exception is a `fetch` of this extension's own package, which `renderer-host.js` reads to build
   each renderer. That holds against the scripts loaded after it. The ones `ast-worker.html` loads before it
-  hold no network constructor in code, which is a reading of their source, not an enforcement.
+  hold no network constructor in code, which is a reading of their source, not an enforcement. The platform
+  `fetch` it took is the zone's one network: it hands it to `wireSend` (`lib/wire.js`) for each send it
+  decided, and no other script of the document holds it.
 - The service worker (the manifest's `connect-src 'self' https: http: data:`) can reach any http(s) host and
-  loads no seal. It holds the zone's one network fetch (`wire.js`): `safeFetch` and `safeFetchOperator` decide
-  every request in the offscreen document and hand the worker only the call that reaches the network, over
-  one `wire` port per send, which it serves only to `ast-worker.html`. Beyond that fetch, that it sends
-  nothing is code discipline: `background.js`, `speak-as-rule.js` and `wire.js` call no other `fetch`,
-  `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`.
-- The wire leaves from the worker, and webRequest observes it there: the worker's listeners see its own fetch,
-  in no tab and no document. The extension's pages are not cross-origin isolated (below, "Popup rendering and
-  extension CSP"), and then the worker's listeners also see the offscreen document's own requests, in no tab
-  and with the offscreen's `documentId` (measured in Chrome 155), so a request the sealed offscreen made would
-  reach the worker's CHECK. Under COEP `require-corp` with COOP `same-origin` they saw none of them (measured
-  in Chrome 148 and 155), because Chromium's `WebRequestEventRouter::ListenerMatchesRequest` drops a request
-  from an extension process for every listener in another renderer process and isolation puts the
-  extension's pages in a process apart from the worker. The offscreen document has no `chrome.webRequest` at
-  all (it holds `chrome.runtime` alone).
+  loads no seal. It sends nothing, which is code discipline: `background.js`, `speak-as-rule.js` and
+  `wire-events.js` call no `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`, and
+  `wire-events.js` CHECKs that no request initiated by the extension in no tab lacks a document.
+- The wire leaves from the offscreen document because that is where the zone decides, holds and reads each send,
+  so a send's body streams to its reader as it arrives and no message boundary or worker lifetime sits under
+  it. The offscreen document has no `chrome.webRequest` (it holds `chrome.runtime` alone), so the worker
+  observes its requests: the extension's pages are not cross-origin isolated (below, "Popup rendering and
+  extension CSP"), and webRequest then reports the offscreen document's requests to the worker's listeners, in
+  no tab and with the offscreen's `documentId` (measured in Chrome 155). Under COEP `require-corp` with COOP
+  `same-origin` it reported none of them (measured in Chrome 148 and 155), because Chromium's
+  `WebRequestEventRouter::ListenerMatchesRequest` drops a request from an extension process for every
+  listener in another renderer process and isolation puts the extension's pages in a process apart from the
+  worker; isolation would therefore blind the wire. The worker relays each event of the offscreen document's
+  requests to it as `__evt WIRE`, through one chain in the browser's order, and drops the events of an
+  offscreen document that has ended.
 - The zone follows every redirect itself (Fetch §4.5 "HTTP-redirect fetch"), so each hop is judged by every
-  gate before it is sent and goes out as its own request, with its own nonce. The worker's fetch is asked for
-  `redirect: "manual"`, which never sends the hop and answers an opaque-redirect without `Location`; the
-  worker answers the zone the 3xx `webRequest.onBeforeRedirect` reported of its own fetch. A webRequest event
-  is linked to its send in two steps. Which context: every other extension context is sealed or has
-  `connect-src 'none'`, so a request initiated by the extension origin in no tab and no document is the
-  worker's own (a page's service worker is also in no tab and no document, and its initiator is the page's
-  origin); the worker CHECKs that each such request is a live send. Which request: the worker fetches the
-  send's URL with the fragment `#t=<nonce>` (or `#t=<token>.<k>.<nonce>`, below), a fresh 128-bit nonce;
+  gate before it is sent and goes out as its own request, with its own nonce. Each send's fetch is asked for
+  `redirect: "manual"`, which never sends the hop and answers an opaque-redirect without `Location`;
+  `wireSend` answers the zone the 3xx `webRequest.onBeforeRedirect` reported of it (measured in Chrome 155: an
+  offscreen fetch's 302 reported with its `Location` and `Set-Cookie`, and no hop sent). A webRequest event is
+  linked to its send in two steps. Which context: every other extension context is sealed or has
+  `connect-src 'none'`, so a request initiated by the extension origin in no tab is the offscreen document's
+  (a page's service worker is also in no tab, and its initiator is the page's origin). Which request: the
+  send's URL carries the fragment `#t=<nonce>` (or `#t=<token>.<k>.<nonce>`, below), a fresh 128-bit nonce;
   webRequest reports URLs with their fragment and a server never receives one (measured in Chrome 155: the
-  server's request line held no fragment and no header held the token). `onBeforeSendHeaders` binds the
-  browser's `requestId`, which holds across the request's life, to the send by the nonce, once: a second
-  request carrying it would be a hop the platform followed, which is a CHECK. No answer to the zone carries
-  the nonce (CHECKed), and the zone keeps its own URLs, fragments included. The worker's fetch uses cache
-  mode `no-store`: its one HTTP cache is keyed without the fragment, so it would answer one document's send
-  with another's reply, and a `stale-while-revalidate` revalidation is a request of its own after the send
-  ended. A process host
-  (`engine/trusted.mjs`) reads the 3xx off its own fetch.
-- Runtime messages carry JSON only (a `Uint8Array` arrives as an object of indices, an `ArrayBuffer` as `{}`;
-  one message is refused past 64 MiB, measured in Chrome 148), so a body crosses as base64 chunks, one per
-  read of the worker's fetch. A worker with no message for 30 s is ended even with its fetch pending (measured:
-  headers withheld 60 s), so the zone pings each send every 10 s and acknowledges each chunk (measured: a
-  60 s wait and a 90 s streamed body completed). A worker that ends a port before the answer's head is
-  RFC 9110 §9.2.2's communication failure before the response: an idempotent send (PUT, DELETE, GET, HEAD,
-  OPTIONS, TRACE) goes again on a new port, the same request under the same gate decision, and any other
-  send is Fetch §5.6's network error. A port that ends after the head is that network error too, a
-  `TypeError` naming the worker and the bytes received.
+  server's request line held no fragment and no header held the token). `wireEvent` CHECKs that each relayed
+  event's nonce is a live send, and binds the browser's `requestId`, which holds across the request's life, to
+  the send by the nonce, once: a second request carrying it would be a hop the platform followed, which is a
+  CHECK. A send stays live until webRequest reports its lifecycle's end, and a rejected send's `netError` is
+  that end's reason; every http(s) request of the document reaches webRequest, a refused one included
+  (measured: `net::ERR_UNSAFE_PORT`, and an abort's `net::ERR_ABORTED`). The zone keeps its own URLs,
+  fragments included. Each send uses cache mode `no-store`: the extension's one HTTP cache is keyed without
+  the fragment, so it would answer one document's send with another's reply, and a `stale-while-revalidate`
+  revalidation is a request of its own after the send ended. A process host (`engine/trusted.mjs`) reads the
+  3xx off its own fetch.
+- A send lives as long as the offscreen document, which Chrome keeps for its `WORKERS` reason with no idle end
+  (measured in Chrome 155: a reply withheld 45 s with no message in between completed). The document is the
+  zone, so a send cannot outlive the state that asked for it: closing it aborted its open send
+  (`net::ERR_ABORTED`, and the server saw the connection close).
 
 | Gate | Enforcing symbol | Refusal reason |
 |------|------------------|----------------|
@@ -266,7 +266,7 @@ fetch skips the browser's own CORS, so `safeFetch` runs Fetch §4.1 "Main fetch"
 
 A request a person composes in the popup (the Send panel, and the Discovery panel's probe, service-info and
 fetch-discovery buttons) is decided in the offscreen document by `safeFetchOperator` in `lib/safe-fetch.js`
-and leaves through the service worker's wire, as every send does. It speaks as the frame the request was observed in. The identity is that frame's, from
+and leaves through the offscreen document's wire, as every send does. It speaks as the frame the request was observed in. The identity is that frame's, from
 browser-stamped facts only (`frameIdentity`, `lib/request-identity.js`), and the request carries its headers
 through a speak-as rule (below, "Sends that speak as a document"). There is no relay through the page's
 renderer, so a compromised renderer can neither read nor forge an operator's reply.
@@ -389,13 +389,16 @@ from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site 
   carries one send's computed headers and matches this extension's initiator, `tabIds: [TAB_ID_NONE]`, the
   method, and a URL that begins with the send's fragment-less URL and `#t=<token>.<k>.`, where `k` numbers
   the document's distinct (method, URL, header set) keys; a left-anchored `urlFilter`, or an escaped,
-  anchored `regexFilter` when the URL holds `*`, `^` or `|`. Only the worker's fetch of that document's send
+  anchored `regexFilter` when the URL holds `*`, `^` or `|`. Only the offscreen document's fetch of that document's send
   carries the token, so a rule changes no other request: not a tab's, not a page service worker's, not
   another document's send to the same URL, not a send with no identity. Measured in Chrome 155 on the
   extension: concurrent sends to one URL as document A, as document B and as no document each arrived with
   their own headers; a request carrying A's scope arrived unmodified as a POST, from a tab, and with
   another token or no fragment; the worker's own GET forging A's scope was modified, and the header CHECK
-  below fired on it.
+  below fired on it. Measured again in Chrome 155 with the send made by an offscreen document: a rule installed
+  as `speak-as-rule.js` installs one set Cookie, Origin, Referer and `Sec-Fetch-Site` on that document's GET
+  carrying the scope, exactly as on the worker's, and left unmodified its GET with another token or no
+  fragment, its POST carrying the scope, and a tab's GET carrying it.
 - Only the offscreen document reaches the install arm (`__rpc`, `sender.url === OFFSCREEN_HREF`), and it
   sends the computed headers with the identity's origin. The service worker CHECKs that `Origin` equals that
   origin (or is `null`), and that `Referer` is absent or same-origin with it. A send can therefore speak
@@ -413,8 +416,9 @@ from a browser-initiated navigation, measured), where Fetch §3.1.3's same-site 
   its send.
 - The worker checks every no-tab request a rule could match (`onSendHeaders`, which reports after
   declarativeNetRequest; `onBeforeSendHeaders` reports before): its final value of every header a rule may
-  name equals its own value changed by its own send's one rule, or by none for a request that is not a send
-  speaking as a document. It is a CHECK, the runtime form of the rule that a rule changes only the sends it
+  name equals its own value changed by the one rule that matched it, or by none, and it relays the matched
+  rule's id with the event, so `wireEvent` CHECKs that the rule is its own send's, or that none matched a send
+  speaking as no document. Both are CHECKs, the runtime form of the rule that a rule changes only the sends it
   was installed for.
 - The offscreen document removes every rule of the family before its first send, because session rules
   outlive it.
@@ -634,8 +638,9 @@ arm. The mark can only narrow `actor`, never widen it, and a `page` caller must 
 - `webRequest` exists so a captured fetch() or XHR is described by the browser rather than the page, and so
   the zone can follow its own sends' redirects. The service worker listens to `xmlhttprequest`-type requests
   of documents (a tab and a `documentId`; never the offscreen's own) with `requestBody` and `extraHeaders`,
-  blocks and modifies nothing, and relays each event to `lib/web-request.js`; and, in `wire.js`, to the 3xx and
-  the `Set-Cookie` fields of its own fetch (no tab, no document), which it answers to the send that made it. Its records carry the person's Cookie and Set-Cookie: the log keeps neither value
+  blocks and modifies nothing, and relays each event to `lib/web-request.js`; and, in `wire-events.js`, the
+  events of the offscreen document's own sends (no tab), whose 3xx, `Set-Cookie` fields and network-error reason
+  `lib/wire.js` answers to the send that made it. Its records carry the person's Cookie and Set-Cookie: the log keeps neither value
   (Cookie only as the fact that one was sent, Set-Cookie not at all), and key extraction runs over the
   page-settable headers alone. A document's records are reclaimed when Chrome closes its `doc-lifetime.js`
   port with no reason (a closure for the back/forward cache carries one), and at its tab's close. The port's

@@ -27,8 +27,8 @@
    in place of every other network constructor the realm has, a function that crashes, so a request from any
    other script in the zone fails at its call rather than skipping the checks above. The one read let through
    is of this extension's own package (renderer-host.js builds each renderer from package files), which
-   reaches no other party. In an extension document every send leaves through the service worker's fetch
-   (`_wireRelay`); a realm given no `fetch` holds nothing, and `_wire` asserts before spending on it. */
+   reaches no other party. In an extension document every send leaves through lib/wire.js's `wireSend`, handed
+   the platform fetch taken here; a realm given no `fetch` holds nothing, and `_wire` asserts before spending. */
 var _wire = (function () {
   var platformFetch = globalThis.fetch;
   var packageOrigin = typeof globalThis.location === "object" && globalThis.location !== null
@@ -53,12 +53,18 @@ var _wire = (function () {
     Object.defineProperty(globalThis.navigator, "sendBeacon", { writable: false, configurable: false,
       value: function () { CHECK_FAIL("a script in the trusted zone called sendBeacon — the only network in " +
                                       "this realm is safeFetch's"); } });
-  /* In an extension document the wire is the service worker's fetch (wire.js), the one fetch the extension
-     spends on the network; a process host (engine/trusted.mjs) hands this realm its own. */
-  var relay = typeof chrome === "object" && chrome !== null && !!chrome.runtime &&
-              typeof chrome.runtime.connect === "function";
+  /* In an extension document the wire is lib/wire.js, which reads webRequest's record of each send; a process
+     host (engine/trusted.mjs) hands this realm its own fetch, whose Response states its 3xx and Set-Cookie. */
+  var extensionDocument = typeof chrome === "object" && chrome !== null && !!chrome.runtime;
   function sent(href, init) {
-    if (relay) return _wireRelay(href, init);
+    if (extensionDocument) {
+      CHECK(typeof wireSend === "function" && typeof platformFetch === "function",
+            "safeFetch spent a request in an extension document that loaded no lib/wire.js, or was given no fetch");
+      return wireSend(platformFetch, href, init).then(function (a) {
+        _wireSetCookies.set(a.response, a.setCookie);
+        return a.response;
+      });
+    }
     CHECK(typeof platformFetch === "function",
           "safeFetch spent a request in a realm that was given no fetch — a policy-only host loads this file " +
           "to read its decisions, and reaching the wire there means a decision it asked about fired");
@@ -154,127 +160,16 @@ function _b64OfBytes(u8) {
   for (var i = 0; i < u8.length; i += 8192) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
   return btoa(bin);
 }
-function _bytesOfB64(b64) {
-  var bin = atob(b64), u = new Uint8Array(bin.length);
-  for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
-  return u;
-}
 /* The Set-Cookie fields of each Response the wire answered, which the Response itself hides (Fetch §2.2.2
    "Headers"' forbidden response-header names). A process's own fetch states them on its Response. */
 var _wireSetCookies = new WeakMap();
 function _setCookiesOf(resp) {
   if (_wireSetCookies.has(resp)) return _wireSetCookies.get(resp);
   CHECK(typeof resp.headers.getSetCookie === "function",
-        "a reply's Set-Cookie fields were asked of a Response the service worker's wire did not answer, in a " +
+        "a reply's Set-Cookie fields were asked of a Response the extension document's wire did not answer, in a " +
         "realm whose Headers has no getSetCookie — its cookies would be stored as none");
   return resp.headers.getSetCookie();
 }
-/* RFC 9110 §9.2.2 "Idempotent Methods": "PUT, DELETE, and safe request methods" (§9.2.1: GET, HEAD, OPTIONS
-   and TRACE). */
-var _IDEMPOTENT_METHODS = ["GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"];
-/* One send over the service worker's wire (wire.js), answered as the Response the worker's fetch answered: a
-   port per send, the body in base64 chunks, since runtime messages carry JSON only. The zone pings the worker
-   every 10 s and acknowledges each chunk, which keeps it alive while the network is slow (it is ended after
-   30 s with no message, measured in Chrome 148). A worker that ends the port before the answer's head is
-   RFC 9110 §9.2.2's "communication failure ... before the client is able to read the server's response": an
-   idempotent send goes again on a new port, and any other is Fetch §5.6's network error, a TypeError naming
-   the worker, as is an end after the head. An abort disconnects the port.
-   The wire is handed the URL without its fragment, since Fetch never sends one and the worker's fetch carries
-   the send's own (wire.js). A send that speaks as a document (`init.speakAs`, `_speakAs`'s) runs under its
-   document's rule for its headers (lib/speak-as.js's speakAsAcquire), held until the send settles. */
-async function _wireRelay(href, init) {
-  CHECK(typeof init.method === "string" && init.credentials === "omit" && init.redirect === "manual" &&
-        (init.headers === undefined || Array.isArray(init.headers)) &&
-        (init.speakAs === undefined || init.speakAs === null || typeof init.speakAs === "object"),
-        "a send reached the wire without a method, credentials \"omit\", redirect \"manual\", a header list of " +
-        "pairs and a speak-as or none — cookies are the speak-as rule's, every hop is this zone's to follow, and " +
-        "a message carries JSON");
-  var u = new URL(href);
-  u.hash = "";
-  var speak = init.speakAs === undefined ? null : init.speakAs;
-  var held = speak === null ? null : await speakAsAcquire(u.href, init.method, speak);
-  return _wireRelaySend(u.href, init, held);
-}
-function _wireRelaySend(href, init, held) {
-  var body = init.body === undefined ? null
-    : typeof init.body === "string" ? { text: init.body } : { b64: _b64OfBytes(init.body) };
-  return new Promise(function (resolve, reject) {
-    /* A send whose signal is already aborted is never made: a redirect hop after the abort would otherwise go
-       out, since an aborted signal fires no further `abort`. */
-    if (init.signal && init.signal.aborted) {
-      if (held !== null) held.release();
-      reject(new TypeError("wire: the send of " + href + " was aborted before it was made"));
-      return;
-    }
-    var port = chrome.runtime.connect({ name: "wire" });
-    var stream = null, headSeen = false, settled = false, received = 0;
-    var ping = setInterval(function () { port.postMessage({ ping: true }); }, 10000);
-    function settle() {
-      settled = true;
-      clearInterval(ping);
-      if (held !== null) held.release();
-    }
-    function fail(why, netError) {
-      if (settled) return;
-      settle();
-      var e = new TypeError("wire: " + why);
-      /* The browser's reason for a network error before the head (wire.js), or null where it stated none. */
-      e.netError = netError === undefined ? null : netError;
-      if (!headSeen) reject(e); else if (stream) stream.error(e);
-    }
-    port.onDisconnect.addListener(function () {
-      if (!settled && !headSeen && _IDEMPOTENT_METHODS.indexOf(init.method) >= 0) {
-        settle();
-        resolve(_wireRelay(href, init));
-        return;
-      }
-      fail("the service worker ended the send of " + href + " after " + received + " body bytes, before its " +
-           "answer was complete");
-    });
-    if (init.signal) init.signal.addEventListener("abort", function () {
-      fail("the send of " + href + " was aborted");
-      port.disconnect();
-    });
-    port.onMessage.addListener(function (m) {
-      if (settled) return;
-      if (m.head) {
-        headSeen = true;
-        var nullBody = _NULL_BODY_STATUSES.indexOf(m.head.status) >= 0;
-        var rs = nullBody ? null : new ReadableStream({
-          start: function (c) { stream = c; },
-          cancel: function () { settle(); port.disconnect(); }
-        });
-        DCHECK(Array.isArray(m.head.setCookie) &&
-               m.head.setCookie.every(function (v) { return v === null || typeof v === "string"; }),
-               "the wire answered a head with no Set-Cookie list — wire.js states one for every send");
-        var resp = new Response(rs, { status: m.head.status, statusText: m.head.statusText, headers: m.head.headers });
-        _wireSetCookies.set(resp, m.head.setCookie);
-        resolve(resp);
-        return;
-      }
-      if (m.chunk !== undefined) {
-        var u = _bytesOfB64(m.chunk);
-        received += u.length;
-        if (stream) stream.enqueue(u);
-        port.postMessage({ ack: true });
-        return;
-      }
-      if (m.end) {
-        settle();
-        if (stream) stream.close();
-        port.disconnect();
-        return;
-      }
-      DCHECK(typeof m.error === "string" && (m.netError === null || typeof m.netError === "string"),
-             "the wire answered " + JSON.stringify(m) + ", none of its four messages");
-      fail(m.error, m.netError);
-      port.disconnect();
-    });
-    port.postMessage({ href: href, scope: held === null ? null : held.scope, rule: held === null ? null : held.ruleId,
-                       init: { method: init.method, headers: init.headers === undefined ? null : init.headers, body: body } });
-  });
-}
-
 /* The identity of a send as the wire carries it: the method, the URL without its fragment, the header list,
    the speak-as set its document's rule writes (Origin, Referer, Cookie and the rest, as composed for this
    send), the body, the request's credentials mode and the HTTP cache partition (httpCachePartitionOf). The
@@ -2004,10 +1899,10 @@ var _REDIRECT_STATUSES = [301, 302, 303, 307, 308];
 /* The redirect a response is, as {status, headers}, or null for a response that is not one (a 3xx with no
    `Location` is Fetch §4.5 "HTTP-redirect fetch"'s "If locationURL is null, then return response"). Every send
    asks the wire for redirect "manual", so nothing follows a redirect but this zone, and the wire answers the
-   3xx itself: the service worker's record of it (wire.js), or a process's own fetch (engine/trusted.mjs). */
+   3xx itself: webRequest's record of it (lib/wire.js), or a process's own fetch (engine/trusted.mjs). */
 async function _redirectOf(resp) {
   DCHECK(resp.type !== "opaqueredirect",
-         "the wire answered an opaque-redirect — wire.js answers a 3xx with the record webRequest reported, and a " +
+         "the wire answered an opaque-redirect — lib/wire.js answers a 3xx with the record webRequest reported, and a " +
          "process's fetch answers the 3xx itself");
   if (_REDIRECT_STATUSES.indexOf(resp.status) < 0 || !resp.headers.has("location")) return null;
   var own = {};
@@ -2804,7 +2699,7 @@ async function safeFetchAttackerSiteCheck(site) {
   } catch (e) {
     RETHROW_FATAL(e);
     DCHECK("netError" in e, "the wire rejected the attacker site check without stating the browser's reason or " +
-                            "its absence — _wireRelaySend states one on every failure");
+                            "its absence — wireSend states one on every failure");
     return attackerSiteRequirements({ error: String((e && e.message) || e), netError: e.netError });
   }
   var headers = {};

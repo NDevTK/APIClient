@@ -1,8 +1,8 @@
 // speak-as-rule.js — the service worker's half of a zone send that speaks as a document: declarativeNetRequest
 // session rules that set the request headers the zone computed (lib/speak-as.js), each scoped to one document
 // by that document's secret token. A rule matches a method and a URL whose fragment begins `t=<token>.<k>.`,
-// which only this worker's fetch of a send of that document carries (wire.js appends the send's own nonce);
-// a server never sees a fragment (Fetch §4.6 "HTTP-network fetch" serializes the URL without it). Only the
+// which only the offscreen document's fetch of a send of that document carries (lib/wire.js appends the send's
+// own nonce); a server never sees a fragment (Fetch §4.6 "HTTP-network fetch" serializes the URL without it). Only the
 // service worker can call declarativeNetRequest, and background.js serves these arms to the offscreen
 // document alone (`sender.url === OFFSCREEN_HREF`).
 
@@ -12,7 +12,7 @@ const SPEAK_AS_RULE_MAX = 1999999;
 const _speakAsInFamily = (id) => id >= SPEAK_AS_RULE_MIN && id <= SPEAK_AS_RULE_MAX;
 
 /* The request headers a rule may set or remove, lower-case: speakAsHeaders' and speakAsPreflightHeaders' (lib/
-   speak-as.js). wire.js checks every no-tab request's final value of each against what the rule that matched
+   speak-as.js). wire-events.js checks every no-tab request's final value of each against what the rule that matched
    it, or none, made of it. */
 const SPEAK_AS_HEADER_NAMES = ["access-control-request-headers", "access-control-request-method", "cookie",
   "origin", "referer", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode",
@@ -93,8 +93,8 @@ function speakAsCheckedHeaders(o) {
 }
 
 /* The family's installed rules as getSessionRules answers them, kept by every update this worker makes, so
-   wire.js's header CHECK reads them synchronously. Session rules outlive a worker, so a new worker reads
-   them first (speakAsInstalledReady, which wire.js starts at the worker's start). */
+   wire-events.js's header CHECK reads them. Session rules outlive a worker, so a new worker reads them first
+   (speakAsInstalledReady, which wire-events.js starts at the worker's start and awaits before each check). */
 let speakAsInstalled = [];
 let _speakAsInstalledP = null;
 function speakAsInstalledReady() {

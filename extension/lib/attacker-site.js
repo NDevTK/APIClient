@@ -67,7 +67,7 @@ function attackerSiteProbeUrl(site) {
 }
 
 /* The failing requirements of one check send's outcome: {netError, error} for a send that rejected, where
-   `netError` is the browser's own reason (wire.js) or null where it stated none, or {status, headers} for an
+   `netError` is the browser's own reason (lib/wire.js) or null where it stated none, or {status, headers} for an
    answer, `headers` lowercased names to combined values. A requirement the send never reached is failing as
    unchecked, and one whose evidence the browser did not state is failing as unknown. */
 function attackerSiteRequirements(outcome) {

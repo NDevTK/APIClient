@@ -1467,13 +1467,11 @@ function _attackerSaid(ran) {
 /* A `Map` AND NOT AN OBJECT LITERAL, for the reason the retired table gave and which is unchanged: `ran.handle`
    crosses from a document that EVALUATES the payload, so `handle:"constructor"` would index an object literal
    straight onto Object.prototype and answer a FUNCTION. A Map has no prototype chain to reach.
-   AND `window` IS NOW THE EXPECTED ANSWER RATHER THAN THE SURPRISING ONE, which is a consequence of moving off
-   the sandbox worth stating: HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable set
+   `window` is the usual answer: HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable set
    windowType to "new with no opener" only when the OPENING document's own opener policy is `same-origin` or
-   `same-origin-plus-COEP`. A real registrable origin whose response says nothing about COOP has `unsafe-none`
-   (HTML §7.1.3 "Cross-origin opener policies"' initial value), so that clause does not fire and step 19 hands
-   back the openee's WindowProxy. For the retired sandbox the second conjunct held at every COOP value, so the
-   clause fired for every delivery once the manifest went to `same-origin`. */
+   `same-origin-plus-COEP`, and the attacker page's response states no opener policy, so its policy is
+   `unsafe-none` (HTML §7.1.3 "Cross-origin opener policies"' initial value) and step 19 hands back the
+   openee's WindowProxy. */
 /* A message act's sender, for the reader: the origin the fire composed (solve.h's act `origin`) and who holds it
    (`originOwned`). No live run posts a message, so every message act is engine-fired and live-unverified. */
 function messageOriginClause(a) {
@@ -1803,21 +1801,10 @@ async function _pollVerify(resultEl, marker, blockers) {
         }).join("; and ")
       + ". The sink is REAL; it needs a policy-permitted vector. A policy-relative result, NOT an "
       + "engine-fidelity bug — and NOT a statement that the sink is safe."
-    // THE DIVERGENCE CLAIM RESTS ON A PREMISE THIS FUNCTION NOW ESTABLISHES, and the premise is the browser's
-    // rather than the attacker sandbox's. This comment used to read: "_reportDelivery reaches here ONLY for
-    // `outcome === "delivered"`, i.e. the window open steps answered a navigable rather than HTML §7.2.2.1
-    // step 14's null. Without that gate this arm printed 'an engine-fidelity bug to investigate' for a popup
-    // Chrome never opened. Anyone tempted to poll unconditionally again is removing the premise, not a guard."
-    // The hazard it names is real and the instrument was wrong: step 14 is one of FOUR `return null` arms
-    // (1, 14, 17, 18) over nineteen top-level steps whose navigate is step 15, so a null handle is also what a
-    // severed-opener delivery answers — and HTML §7.3.1.7's rules for choosing a navigable make that the arm
-    // EVERY delivery from an opaque-origin sandbox page takes once the opener's own COOP is `same-origin`.
-    // THAT SANDBOX PAGE IS ITSELF RETIRED NOW — the attacker document is a real registrable origin, whose
-    // response says nothing about COOP, so the clause does not fire there and a null handle is once again the
-    // unusual answer rather than the universal one. The reasoning is kept because it is why the premise moved:
-    // an instrument that was wrong for three of four spec arms is not repaired by a better attacker page.
-    // The gate is `delivered`, latched from a document announcing itself, and the unconditional poll is
-    // what lets it be read at all. Removing the `delivered` read is removing the premise.
+    // The divergence claim rests on `delivered`, latched from a document announcing itself at the delivered
+    // address, never on the window open steps' handle: HTML §7.2.2.1 returns null at steps 1, 14, 17 and 18
+    // and navigates at step 15, so a null handle is also a delivery whose opener was severed. The poll is
+    // unconditional so that `delivered` can be read; removing the `delivered` read is removing the premise.
     : "NOT REPRODUCED — a document DID receive the payload (one announced itself in the top-level frame at the "
       + "delivered origin and the delivered address) and apiclientsink never fired, and the engine reported "
       + "neither a blocking CSP nor a Trusted-Types requirement for this vector, so the engine’s model diverges "
