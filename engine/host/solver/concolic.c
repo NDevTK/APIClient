@@ -2502,6 +2502,16 @@ static int cand_matches(const char *src) {
     return g_cand_at && src && !strcmp(src, g_cand_at);
 }
 
+/* Is the running candidate a witness verification? Its delivery is the source's value as an unknown whose
+   example is the delivered bytes, so the run's derivations keep the source's root and the request it reaches
+   states which of its pieces the value rooted (solver/endpoint.c's observation); an @S candidate's delivery is
+   the bytes themselves, which its sink parses. */
+static int cand_verifying(void) {
+    const Flow *f = flow_running();
+
+    return f && f->fire.kind == FIRE_REQUEST;
+}
+
 /* Whether the mint will answer a plain value for a source (concolic.h says why it is this disjunction). Both
    arms are this file's: the pin is `concolic_new`'s early return and the substitution is `concolic_derived`'s,
    so a consumer composing the pair would copy a rule it cannot see change. */
@@ -2540,7 +2550,7 @@ static int co_find(const char *src) {
 /* Whether a source read answers a delivered value rather than an unknown: the search's own bytes, a further
    delivery or a gate. */
 static int src_delivered(const char *src) {
-    return cand_matches(src) || deliv_find(src) >= 0 || gbase_find(src) >= 0;
+    return (cand_matches(src) && !cand_verifying()) || deliv_find(src) >= 0 || gbase_find(src) >= 0;
 }
 
 int concolic_src_determined(const char *src) {
@@ -4489,6 +4499,8 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     member_row_file(c, shape, ident, field, 0);
     if (field) JS_FreeCString(ctx, field);
     if (cand_matches(shape)) {                               /* candidate run: this source -> the concrete breakout */
+        DCHECK(!cand_verifying(), "a witness verification was delivered at a member read — its root is one "
+                                  "delivered through the address, whose base is a source read");
         r = concolic_deliver(ctx, shape, c->root, g_cand_bytes);
         free(shape); free(ident);
         return r;
@@ -8736,8 +8748,12 @@ static JSValue concolic_derived_shaped(JSContext *ctx, const char *shape, const 
     }
     if (cand_matches(src)) {
         /* `example` is owned by this call whichever value comes back, and the payload replaces it: a source
-           under substitution reads the attacker's bytes, not what the address held. */
+           under substitution reads the attacker's bytes, not what the address held. A verification's read is
+           the source itself with those bytes as its example (cand_verifying). */
         JS_FreeValue(ctx, example);
+        if (cand_verifying())
+            return concolic_alloc_shaped(ctx, shape, src, root, root_whose, ident,
+                                         concolic_deliver(ctx, src, root, g_cand_bytes), whole);
         free(ident);
         return concolic_deliver(ctx, src, root, g_cand_bytes);
     }

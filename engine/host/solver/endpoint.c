@@ -66,10 +66,10 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    third field; both are written when a record files it. `acts` is the act list the sighting's flow performed
    (solver/act_list.h): a JSON array, `[]` for none, or `null` where a called member has no act a person can
    perform; owned, and part of the witness's identity. `vpiece` is what its verification run must observe: the
-   witnessed method and path (a pin's value reaching a gated request), or the delivered marker in the address,
-   the header `vheader` (owned) or the body (an attacker-rooted piece carrying it). `vcanon` (owned) is the
-   verification key's third field: `canon` for a pin's, and the piece and root for a marked piece's, so one run
-   checks every witness of the record that marks the piece through that root. Neither is part of the identity. */
+   witnessed method and path (a pin's value reaching a gated request), or the address, the header `vheader` or
+   the body rooted in `vroot` in the run's own provenance (both owned). `vcanon` (owned) is the key's third
+   field: `canon` for a pin's, and the piece and root for a marked piece's, so one run checks every witness of
+   the record that marks the piece through that root. None of these is part of the identity. */
 typedef enum { WIT_PIN = 0, WIT_BRANCH, WIT_OUTCOME } WitWhat;
 typedef enum { WIT_VERIFY_NO_CANDIDATE = 0, WIT_VERIFY_CANDIDATE, WIT_VERIFY_VERIFIED } WitVerify;
 typedef enum { WIT_VPIECE_PATH = 0, WIT_VPIECE_ADDRESS, WIT_VPIECE_HEADER, WIT_VPIECE_BODY } WitPiece;
@@ -77,7 +77,7 @@ typedef enum { WIT_VPIECE_PATH = 0, WIT_VPIECE_ADDRESS, WIT_VPIECE_HEADER, WIT_V
    report states every pin whether or not an observation agreed. */
 typedef struct { WitWhat what; char *subject; char *value; ConcolicLit kind; int taken; int assumed; } WitEntry;
 typedef struct { int asked; WitEntry *e; int n, cap; WitVerify verify; char *canon; char *acts;
-                 WitPiece vpiece; char *vheader; char *vcanon; } Witness;
+                 WitPiece vpiece; char *vheader; char *vroot; char *vcanon; } Witness;
 /* `is_asset` is what the resource at this address turned out to be, written after the record exists. Whether a
    static asset is an endpoint is decided by bytes (magic bytes and content type, not a URL suffix), which arrive on
    a reply, while a request is recorded before its policy check (a request a policy refuses is still one the bundle
@@ -275,7 +275,7 @@ static int wit_entry_cmp(const void *pa, const void *pb) {
 /* The running flow's witness, read at the act: its pin store and its assumed decisions. Two decision keys whose
    spellings and arms agree state one assumption, so a repeat is kept once. */
 static Witness witness_now(void) {
-    Witness w = { 0, NULL, 0, 0, WIT_VERIFY_NO_CANDIDATE, NULL, NULL, WIT_VPIECE_PATH, NULL, NULL };
+    Witness w = { 0, NULL, 0, 0, WIT_VERIFY_NO_CANDIDATE, NULL, NULL, WIT_VPIECE_PATH, NULL, NULL, NULL };
     int i, u;
 
     if (flow_running() == NULL) return w;
@@ -318,8 +318,10 @@ static void witness_free(Witness *w) {
     free(w->canon);
     free(w->acts);
     free(w->vheader);
+    free(w->vroot);
     free(w->vcanon);
-    w->e = NULL; w->n = w->cap = 0; w->canon = NULL; w->acts = NULL; w->vheader = NULL; w->vcanon = NULL;
+    w->e = NULL; w->n = w->cap = 0; w->canon = NULL; w->acts = NULL; w->vheader = NULL; w->vroot = NULL;
+    w->vcanon = NULL;
 }
 
 static const char *const wit_verify_token[] = { "no-candidate", "candidate", "verified" };
@@ -438,11 +440,9 @@ static char *witness_payload(const Witness *w, const char **src) {
     return reclaim_strdup(w->e[0].value + 1);
 }
 
-/* The bytes a marked sighting's verification observes in the request: the payload delivered at its attacker root
-   behind the URL head the queuing flow's facets compose (concolic_url_head, an @S candidate's head), so the
-   delivered value is a member of the root's domain as far as its facets state it. Letters only, which every
-   address component's percent-encode set and the page's own URI codecs leave as they are, so the rooted piece
-   carries them verbatim.
+/* The value a marked sighting's verification delivers at its attacker root, behind the URL head the queuing
+   flow's facets compose (concolic_url_head, an @S candidate's head), so it is a member of the root's domain as
+   far as its facets state it. Letters only, so every percent-encode set leaves it as it is.
    Named residual. Not covered: an equality, a length bound or an exclusion over the root, which no head states
    (concolic_url_head's own residual covers a facet on a derivation of the base). Next diff builds: those facets
    composed into the delivery beside the substring ones. Absence shows as: a marked record whose witness stays
@@ -461,7 +461,7 @@ static int witness_marked_deliverable(const char *root) {
 }
 
 /* Queue `w`'s verification, a pin witness's (witness_payload) or else, where `vroot` is the root of the piece
-   `vpiece` (`vheader` naming a header) an attacker source marked on this sighting, a delivery of the marker
+   `vpiece` (`vheader` naming a header) an attacker source marked on this sighting, a delivery of the value
    there behind the head this flow's facets compose; leaves `w` unqueued when firing can check neither. Runs in
    the sighting's flow, whose facets the head is read from. */
 static void witness_queue(const Endpoint *e, Witness *w, const char *vroot, WitPiece vpiece, const char *vheader) {
@@ -477,13 +477,14 @@ static void witness_queue(const Endpoint *e, Witness *w, const char *vroot, WitP
         const char *f[4];
 
         DCHECK(vpiece != WIT_VPIECE_PATH && (vpiece == WIT_VPIECE_HEADER) == (vheader != NULL),
-               "a marked piece was queued without saying which piece the marker must be observed in");
+               "a marked piece was queued without saying which piece the run must observe rooted");
         src = vroot;
         payload = reclaim_strdup(WIT_VERIFY_MARKER);
-        CHECK(payload, "endpoint: OOM spelling a verification marker");
+        CHECK(payload, "endpoint: OOM spelling a verification value");
         w->vpiece = vpiece;
         w->vheader = vheader ? reclaim_strdup(vheader) : NULL;
-        CHECK(!vheader || w->vheader, "endpoint: OOM naming a verification's header");
+        w->vroot = reclaim_strdup(vroot);
+        CHECK((!vheader || w->vheader) && w->vroot, "endpoint: OOM naming a verification's piece");
         head = concolic_url_head(vroot);
         f[0] = piece_tag[vpiece]; f[1] = vheader ? vheader : ""; f[2] = vroot; f[3] = head ? head : "";
         w->vcanon = concolic_ident_compose("marked", f, 4);
@@ -525,7 +526,7 @@ static void endpoint_witness_add(Endpoint *e, Witness *w, const char *vroot, Wit
     }
     e->wit[e->nwit++] = *w;
     w->e = NULL; w->n = w->cap = 0; w->asked = 0; w->canon = NULL; w->verify = WIT_VERIFY_NO_CANDIDATE;
-    w->acts = NULL; w->vpiece = WIT_VPIECE_PATH; w->vheader = NULL; w->vcanon = NULL;
+    w->acts = NULL; w->vpiece = WIT_VPIECE_PATH; w->vheader = NULL; w->vroot = NULL; w->vcanon = NULL;
 }
 
 /* A value carrying a `{hole}` is a shape, an unknown the code did not compute, and a hole-free one is the real
@@ -2101,46 +2102,58 @@ static void endpoint_disp_add(Endpoint *e, const char *disp) {
     e->ndisp++;
 }
 
-/* Does the verification run's request carry the delivered marker in the piece `w` names (address, a header, the
-   body)? The address and a header value are read as the surface spells them, bytes or a shape around them.
-   Named residual. Not covered: a piece carrying a transform of the value rather than its bytes (a body byte the
-   page writes from a character code). Next diff builds: the observation over the piece's bytes against the
-   delivered value run through the run's own transform. Absence shows as: a marked record whose body-span
-   witness stays `candidate`. */
-static int verify_piece_carries(JSContext *ctx, const Witness *w, JSValueConst url, const EndpointHeader *hdrs,
-                                int nhdrs, const EndpointBody *body) {
-    static const char m[] = WIT_VERIFY_MARKER;
+typedef struct { const char *want; int hit; } RootHas;
 
+static void root_has_visit(void *ud, const char *p, size_t n) {
+    RootHas *h = ud;
+
+    h->hit |= strlen(h->want) == n && !strncmp(h->want, p, n);
+}
+
+/* Does `root` (a piece's delivery root, NULL for bytes) name `want` among its declared members? */
+static int root_names(const char *root, const char *want) {
+    RootHas h = { want, 0 };
+
+    if (!root) return 0;
+    concolic_root_declared_each(root, root_has_visit, &h);
+    return h.hit;
+}
+
+/* Is the piece `w` names (the address, a header, the body or one of its spans) rooted, in the verification run's
+   own provenance, in the root the value was delivered at? The run delivers the source as itself with the value
+   as its example (concolic.c's cand_verifying), so whatever transform the page applies on the way is re-run on
+   that example and the piece keeps the source's root, which is the request observed carrying the attacker-rooted
+   part. */
+static int verify_piece_rooted(const Witness *w, const char *addr_root, const EndpointHeader *hdrs, int nhdrs,
+                               const EndpointBody *body) {
+    DCHECK(w->vroot != NULL, "a piece verification names no root");
     switch (w->vpiece) {
-    case WIT_VPIECE_ADDRESS: {
-        const char *u = concolic_name_cstr(ctx, url);
-        int r;
-
-        CHECK(u != NULL, "endpoint: OOM spelling a verification run's address");
-        r = strstr(u, m) != NULL;
-        JS_FreeCString(ctx, u);
-        return r;
-    }
+    case WIT_VPIECE_ADDRESS:
+        return root_names(addr_root, w->vroot);
     case WIT_VPIECE_HEADER:
         DCHECK(w->vheader != NULL, "a header verification names no header");
         for (int i = 0; i < nhdrs; i++)
-            if (!strcmp(hdrs[i].name, w->vheader) && hdrs[i].value && strstr(hdrs[i].value, m)) return 1;
+            if (!strcmp(hdrs[i].name, w->vheader) && root_names(hdrs[i].root, w->vroot)) return 1;
         return 0;
     case WIT_VPIECE_BODY:
-        return body && body->bytes && memmem(body->bytes, body->len, m, sizeof m - 1) != NULL;
+        if (!body) return 0;
+        if (root_names(body->root, w->vroot)) return 1;
+        for (int k = 0; k < body->nspan; k++)
+            if (root_names(body->span[k].root, w->vroot)) return 1;
+        return 0;
     case WIT_VPIECE_PATH:
         break;
     }
-    DFAIL("a marker verification was asked of a witness whose piece is the path, or of no piece");
+    DFAIL("a piece verification was asked of a witness whose piece is the path, or of no piece");
     return 0;
 }
 
 /* A witness verification's own observation, made at its request (endpoint_record's suppressed arm). The run
    assumed nothing of its own: no assumed decision, and no pin on an arm no example confirmed (an arm the
    observed state holds is no assumption; the delivery itself marks the path pinned, so the path bit is not the
-   question). A witness it then reaches is raised to verified: a pin witness's
-   when the run reached its method and path, a marked piece's when the request carries the delivered marker
-   there. The key is kept for one filed later. */
+   question). A witness it then reaches is raised to verified: a pin witness's when the run reached its method
+   and path, a marked piece's when that piece of the run's request is rooted in the delivered root. The key is
+   kept for one filed later. */
 static void endpoint_verify_observe(JSContext *ctx, const char *key, const char *method, JSValueConst url,
                                     const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body) {
     char *vm, *vp, *vc, *path;
@@ -2163,7 +2176,8 @@ static void endpoint_verify_observe(JSContext *ctx, const char *key, const char 
 
             if (!w->vcanon || strcmp(w->vcanon, vc)) continue;
             if (w->vpiece == WIT_VPIECE_PATH ? strcmp(path, vp) != 0
-                                             : !verify_piece_carries(ctx, w, url, hdrs, nhdrs, body)) continue;
+                                             : !verify_piece_rooted(w, concolic_root_c(url), hdrs, nhdrs, body))
+                continue;
             w->verify = WIT_VERIFY_VERIFIED;
             raised = 1;
         }
