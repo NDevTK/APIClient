@@ -1802,6 +1802,11 @@ static void idl_seal_check_enums(void)
                     "enumeration — no conversion reads them, so the declaration describes a position that "
                     "never tests against them",
                     m->name ? m->name : "(not installed)", k);
+            DCHECKF(m->types[k] != IDL_ENUM_UNLESS_IFACE,
+                    "member `%s` declares `(E or I)` at position %d, a type only the dictionary member walk "
+                    "resolves. BUILD its argument arm (the interface test, then §3.2.18's conversion or fork) "
+                    "beside IDL_STRING_UNLESS_IFACE's",
+                    m->name ? m->name : "(not installed)", k);
         }
     }
 }
@@ -3145,6 +3150,11 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            undefined so the body can tell absence from false (see idl_args.h). */
         if (JS_IsUndefined(w->mv) && mt != IDL_BOOLEAN)
             mt = IDL_ANY;
+        /* §3.2.25 over `(E or I)`: the interface clause reads nothing and calls nothing, so the arm is decided
+           here and every rule below sees the arm's own type — IDL_ANY places the platform object as itself,
+           and IDL_ENUM is the string-type step, which forks over an unknown. */
+        if (mt == IDL_ENUM_UNLESS_IFACE)
+            mt = idl_member_implements(ctx, dm, w, w->mv) ? IDL_ANY : IDL_ENUM;
         /* The boundary rule the arguments follow, read from idl_concolic_rule: unknown input crosses as itself
            unless the type's conversion is a fork over it (§3.2.3 boolean, §3.2.18, the string-or-sequence
            union), whose arm below asks it, so `if (cfg.on)` and a member taking `cfg.on` are one gate. A record

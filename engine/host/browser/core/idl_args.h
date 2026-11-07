@@ -282,6 +282,13 @@ typedef enum {
     /* `(I or DOMString)`, I an interface — DOM's "node or text" members (`el.append('hi')`): a value
        implementing I crosses as itself, anything else is a DOMString. The class is declared beside the type. */
     IDL_STRING_UNLESS_IFACE,
+    /* `(E or I)`, E an enumeration and I an interface — File System Access §3.2.2's `StartInDirectory`,
+       `(WellKnownDirectory or FileSystemHandle)`. §3.2.25: a platform object implementing I is a reference to
+       itself, and everything else reaches the string-type step, which for an enumeration is §3.2.18 (ToString,
+       then a TypeError outside E). A dictionary member only: the member walk resolves the arm before anything
+       else asks the type, the seal refuses it at an argument position, and the member states both E (`values`)
+       and I (`iface` or `iface_is`). A concolic implements no interface, so unknown input takes §3.2.18's fork. */
+    IDL_ENUM_UNLESS_IFACE,
     /* `(double or I)`, I an interface — CSS Typed OM's `CSSNumberish`. §3.2.25 step 5.1 takes a value
        implementing I; this union names no other Object arm, so everything else reaches step 13.1 or 17's
        restricted `double` (`equals(null)` compares against 0, `equals(undefined)` is a TypeError).
@@ -451,6 +458,8 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        ordinary completion rather than the throw. Both boundaries ask it at the outcome seam through
        idl_enum_fork. IDL_ENUM_NULLABLE has one world more and is a residual at its row. */
     case IDL_ENUM:
+    /* Its enumeration arm, which every unknown takes: a concolic implements no interface. */
+    case IDL_ENUM_UNLESS_IFACE:
     /* §3.6's surviving entry at ImageData's distinguishing index: a typed array or a number. Two outcomes,
        since the numeric fallback always names the shorter entry; one entry allocates transparent black from
        `sw`/`sh`, the other takes the page's buffer. */
@@ -533,6 +542,8 @@ static inline bool idl_type_brands_interface(IdlArgType t)
     case IDL_STRING_UNLESS_IFACE:
     /* Likewise: without a brand every value, the CSSNumericValue included, would take the numeric arm. */
     case IDL_DOUBLE_UNLESS_IFACE:
+    /* Likewise: without a brand every handle would take the enumeration arm and be a TypeError. */
+    case IDL_ENUM_UNLESS_IFACE:
     /* The shorter entry's position is an interface. */
     case IDL_INTERFACE_OR_DOMSTRING_BY_ARITY:
         return true;
@@ -551,6 +562,7 @@ static inline bool idl_type_admits_enumeration(IdlArgType t)
     case IDL_ENUM:
     case IDL_ENUM_NULLABLE:
     case IDL_SEQUENCE_ENUM:
+    case IDL_ENUM_UNLESS_IFACE:
         return true;
     default:
         return false;

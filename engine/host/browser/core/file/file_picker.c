@@ -1256,30 +1256,12 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
 
         JS_FreeValue(ctx, cb_result);
         id_v = idl_dict_get(ctx, options, "id");
+        /* `StartInDirectory` was converted with the options (IDL_ENUM_UNLESS_IFACE): a FileSystemHandle, one
+           of the six WellKnownDirectory strings, or absent. */
         start_in = idl_dict_get(ctx, options, "startIn");
-        /* `StartInDirectory` is `(WellKnownDirectory or FileSystemHandle)` — a union whose two arms are an
-           ENUMERATION and an INTERFACE, and core/idl_args.h declares neither shape of union, so the member
-           crosses unconverted and §3.2.25's own order is applied here: a platform object implementing the
-           interface crosses as itself, and everything else takes the enumeration arm, where a value outside
-           the six is a TypeError. */
-        if (!JS_IsUndefined(start_in) && !fs_handle_is(start_in)) {
-            const char *w = JS_ToCString(ctx, start_in);
-            int i;
-            bool known = false;
-
-            for (i = 0; w && WELL_KNOWN_DIRECTORY[i]; i++)
-                if (!strcmp(w, WELL_KNOWN_DIRECTORY[i])) { known = true; break; }
-            if (!known) {
-                JS_ThrowTypeError(ctx, "'%s' is not a value of the `WellKnownDirectory` enumeration and is not "
-                                       "a FileSystemHandle", w ? w : "");
-                if (w) JS_FreeCString(ctx, w);
-                JS_FreeValue(ctx, id_v);
-                JS_FreeValue(ctx, start_in);
-                s->value = JS_GetException(ctx);
-                goto reject;
-            }
-            JS_FreeCString(ctx, w);
-        }
+        DCHECK(JS_IsUndefined(start_in) || fs_handle_is(start_in) || JS_IsString(start_in),
+               "File System Access §3.2.2's `startIn` reached the picker as neither a FileSystemHandle nor a "
+               "WellKnownDirectory string — Web IDL §3.2.25 over the options member places only those");
         /* STEP 3 — determine the directory the picker will start in. */
         s->start_path = picker_starting_directory(ctx, id_v, start_in);
         JS_FreeValue(ctx, start_in);
@@ -1516,7 +1498,7 @@ static const IdlStepDecl FPK_DECL = {
  * each dictionary's own members LEXICOGRAPHICALLY among themselves. `OpenFilePickerOptions : FilePickerOptions`
  * therefore reads excludeAcceptAllOption, id, startIn, types (the base's four, sorted) and then multiple — an
  * order no single sorted list produces, which is what the `level` column exists to express.
- * `startIn` is IDL_ANY for the union reason its own site states.
+ * `startIn` is `(WellKnownDirectory or FileSystemHandle)`, IDL_ENUM_UNLESS_IFACE.
  *   `types` WAS IDL_ANY AND IS NOW ITS DECLARED TYPE. It was declared at all — rather than left out — so that
  * a page passing one was SEEN rather than silently ignored, and the crash that saw it named what was missing.
  * What that crash named was wrong about this tree, and the correction is worth keeping because the METHOD is
@@ -1535,6 +1517,13 @@ static const IdlStepDecl FPK_DECL = {
    `description`'s `= ""` IS ITS IDL DEFAULT and is stated as one rather than left to the absent-member path,
    because §3.2.1 step 2.4 tests the description against the EMPTY STRING and an absent member would answer
    that test as undefined. */
+/* §3.2.15's `I` for `StartInDirectory`'s interface arm. */
+static bool picker_is_handle(JSContext *ctx, JSValueConst v)
+{
+    (void)ctx;
+    return fs_handle_is(v);
+}
+
 static const IdlDictMember FILE_PICKER_ACCEPT_TYPE_MEMBERS[] = {
     { "accept",      IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
     { "description", IDL_USVSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "" },
@@ -1547,7 +1536,8 @@ static const IdlDictDecl FILE_PICKER_ACCEPT_TYPE_DECL = {
 static const IdlDictMember OPEN_OPTIONS[] = {
     { "excludeAcceptAllOption", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
     { "id",                     IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
-    { "startIn",                IDL_ANY,      false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+    { "startIn",                IDL_ENUM_UNLESS_IFACE, false, WELL_KNOWN_DIRECTORY, 0, NULL, IDL_DEFAULT_NONE,
+                                NULL, 0, NULL, picker_is_handle, "FileSystemHandle" },
     { "types",                  IDL_SEQUENCE_DICT, false, NULL, 0, &FILE_PICKER_ACCEPT_TYPE_DECL,
                                                                        IDL_DEFAULT_NONE, NULL },
     { "multiple",               IDL_BOOLEAN,  false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL }
@@ -1555,7 +1545,8 @@ static const IdlDictMember OPEN_OPTIONS[] = {
 static const IdlDictMember SAVE_OPTIONS[] = {
     { "excludeAcceptAllOption", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
     { "id",                     IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
-    { "startIn",                IDL_ANY,      false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+    { "startIn",                IDL_ENUM_UNLESS_IFACE, false, WELL_KNOWN_DIRECTORY, 0, NULL, IDL_DEFAULT_NONE,
+                                NULL, 0, NULL, picker_is_handle, "FileSystemHandle" },
     { "types",                  IDL_SEQUENCE_DICT, false, NULL, 0, &FILE_PICKER_ACCEPT_TYPE_DECL,
                                                                        IDL_DEFAULT_NONE, NULL },
     { "suggestedName",          IDL_USVSTRING_NULLABLE, false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL }
@@ -1568,7 +1559,8 @@ static const IdlDictMember SAVE_OPTIONS[] = {
 static const IdlDictMember DIRECTORY_OPTIONS[] = {
     { "id",      IDL_DOMSTRING, false, NULL,           0, NULL, IDL_DEFAULT_NONE,   NULL },
     { "mode",    IDL_ENUM,      false, FS_MODE_VALUES, 0, NULL, IDL_DEFAULT_STRING, "read" },
-    { "startIn", IDL_ANY,       false, NULL,           0, NULL, IDL_DEFAULT_NONE,   NULL }
+    { "startIn", IDL_ENUM_UNLESS_IFACE, false, WELL_KNOWN_DIRECTORY, 0, NULL, IDL_DEFAULT_NONE, NULL, 0, NULL,
+                 picker_is_handle, "FileSystemHandle" }
 };
 
 static void file_picker_install_realm(JSContext *ctx)
