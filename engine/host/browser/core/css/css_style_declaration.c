@@ -1439,7 +1439,11 @@ static void cssd_sheet_parse_free(void)
    because the author walk is asserted non-re-entrant at its call, cannot happen while a caller holds one.
    An unfinished parse stays in the slot with its run, keyed by the text it parses, so whichever build asks for
    those bytes next continues it; a slot replaced in between aborts it. With `rests`, each step is asked of the
-   resting drive (layout_job_parse_take) and `*parked` answers NULL for a parse the drive stopped. */
+   resting drive (layout_job_parse_take) and `*parked` answers NULL for a parse the drive stopped.
+   Named residual. Not covered: without `rests` the parse runs to its end for a reader that cannot rest. Next
+   diff: that reader answers "not yet" under a resting drive and the parse rests between steps. Its absence
+   shows as a single sheet's parse charging several rest units of bytes inside one REST_UNIT_LAYOUT_DESCENDANTS
+   bracket. */
 static const CssdSheetParse *cssd_sheet_parsed(uint32_t si, const char *text, size_t len, bool rests,
                                                bool *parked)
 {
@@ -1938,22 +1942,94 @@ typedef struct {
     void           *parent;
 } CssdEmitFrame;
 
+/* A style sheet's parse into the rules it reports (css_style_declaration.h). The arena is the one owner of
+   every rule, selector and string the parse builds, which is why a callback is handed text. */
+struct CssomRulesRun {
+    const char           *text;    /* BORROWED until cssom_rules_run_end: the tokenizer keeps pointers into it */
+    size_t                len;
+    lxb_css_memory_t     *mem;
+    lxb_css_stylesheet_t *sst;
+    CssSheetParse        *parse;   /* the parse while it runs; NULL before its first step and after its end */
+    bool                  parsed;  /* the parse has ended, and `v` holds the walk when it succeeded */
+    CssdEmitFrame        *v;       /* the lists being walked, v[0] the top level; NULL for a failed parse */
+    size_t                n, cap;
+    unsigned              reported;   /* top-level rules reported */
+};
+
+CssomRulesRun *cssom_rules_run_begin(const char *text, size_t len)
+{
+    CssomRulesRun *run;
+
+    DCHECK(g_ready, "CSS text was parsed before cssom_init built the parser it goes through");
+    DCHECK(text != NULL, "a stylesheet parse was asked for with no text");
+    run = lexbor_calloc(1, sizeof *run);
+    CHECK(run != NULL, "cssom: OOM allocating a stylesheet parse");
+    run->text = text;
+    run->len = len;
+    run->mem = lxb_css_memory_create();
+    CHECK(run->mem != NULL && lxb_css_memory_init(run->mem, 128) == LXB_STATUS_OK,
+          "cssom: the CSS arena allocation failed");
+    run->sst = lxb_css_stylesheet_create(run->mem);
+    CHECK(run->sst != NULL, "cssom: the stylesheet allocation failed");
+    return run;
+}
+
+bool cssom_rules_run_parse_step(CssomRulesRun *run)
+{
+    ThreadWorkSpan tw;
+    bool ok;
+
+    DCHECK(!run->parsed, "a stylesheet parse was stepped after it ended");
+    /* The span counts the sheet's bytes once, at the step that ends the parse. */
+    thread_work_begin(&tw);
+    if (run->parse == NULL) run->parse = css_sheet_parse_begin(run->sst, run->text, run->len);
+    else css_sheet_parse_step(run->parse);
+    if (!css_sheet_parse_ended(run->parse)) {
+        thread_work_end(&tw, THREAD_WORK_CSS_PARSE, 0);
+        return true;
+    }
+    ok = css_sheet_parse_finish(run->parse);
+    run->parse = NULL;
+    run->parsed = true;
+    thread_work_end(&tw, THREAD_WORK_CSS_PARSE, run->len);
+    if (ok && run->sst->root && run->sst->root->type == LXB_CSS_RULE_LIST) {
+        run->cap = 8;
+        run->v = lexbor_malloc(run->cap * sizeof *run->v);
+        CHECK(run->v != NULL, "cssom: OOM walking a stylesheet's rules");
+        run->v[0].r = lxb_css_rule_list(run->sst->root)->first;
+        run->v[0].parent = NULL;
+        run->n = 1;
+    }
+    return false;
+}
+
+bool cssom_rules_run_parsed(const CssomRulesRun *run) { return run->parsed; }
+
+bool cssom_rules_run_skip_top(CssomRulesRun *run)
+{
+    DCHECK(run->parsed && (run->v == NULL || run->n == 1),
+           "a top-level rule was passed over before the parse ended or inside another top-level rule's walk");
+    if (run->v == NULL || run->v[0].r == NULL) return false;
+    run->v[0].r = run->v[0].r->next;
+    return true;
+}
+
 /* The stylesheet's rules, walked in document order, each rule reported and then its own nested list walked
    with the handle the callback just returned. The nesting is the stylesheet's own braces, which a page
-   chooses, so it is walked on a heap stack of lists and costs no C stack. `*pn` counts the top-level rules
-   reported. */
-static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_list_t *list,
-                            CssomRuleFn cb, void *ud, unsigned *pn)
+   chooses, so it is walked on a heap stack of lists and costs no C stack. One call walks one top-level rule
+   and everything nested in it, so no handle crosses two calls. */
+bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud)
 {
-    CssdEmitFrame *v, *f;
-    size_t n = 1, cap = 8;
+    const char *text = run->text;
+    size_t len = run->len;
+    CssdEmitFrame *f;
     lxb_css_rule_t *r;
 
-    v = lexbor_malloc(cap * sizeof *v);
-    CHECK(v != NULL, "cssom: OOM walking a stylesheet's rules");
-    v[0].r = list->first;
-    v[0].parent = NULL;
-    while (n > 0) {
+    DCHECK(cb != NULL, "a stylesheet's rules were reported to nowhere");
+    DCHECK(run->parsed && (run->v == NULL || run->n == 1),
+           "a top-level rule was reported before the parse ended or inside another top-level rule's walk");
+    if (run->v == NULL || run->v[0].r == NULL) return false;
+    do {
         CssomRule out = { NULL, "", false, NULL, false };
         const lxb_css_rule_list_t *kids = NULL;
         CssBuf sel = { 0 };
@@ -1961,15 +2037,15 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
         void *handle, *parent;
         bool top;
 
-        f = &v[n - 1];
+        f = &run->v[run->n - 1];
         r = f->r;
         if (r == NULL) {
-            n--;
+            run->n--;
             continue;
         }
         f->r = r->next;
         parent = f->parent;
-        top = n == 1;
+        top = run->n == 1;
         switch (r->type) {
         case LXB_CSS_RULE_STYLE: {
             lxb_css_rule_style_t *st = lxb_css_rule_style(r);
@@ -2067,52 +2143,54 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                   "whose prelude and body split differently");
             continue;
         }
-        if (top) (*pn)++;
+        if (top) run->reported++;
         handle = cb(ud, parent, &out);
         free(prelude);
         free(block);
         free(at_name);
         css_buf_free(&sel);
         if (kids) {
-            if (n == cap) {
+            if (run->n == run->cap) {
                 CssdEmitFrame *grown;
 
-                cap *= 2;
-                grown = lexbor_realloc(v, cap * sizeof *grown);
+                run->cap *= 2;
+                grown = lexbor_realloc(run->v, run->cap * sizeof *grown);
                 CHECK(grown != NULL, "cssom: OOM walking a stylesheet's nested rules");
-                v = grown;
+                run->v = grown;
             }
-            v[n].r = kids->first;
-            v[n].parent = handle;
-            n++;
+            run->v[run->n].r = kids->first;
+            run->v[run->n].parent = handle;
+            run->n++;
         }
-    }
-    free(v);
+    } while (run->n > 1);
+    return true;
 }
 
-unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud)
+unsigned cssom_rules_run_end(CssomRulesRun *run)
 {
-    lxb_css_memory_t *mem = lxb_css_memory_create();
-    lxb_css_stylesheet_t *sst = NULL;
-    unsigned n = 0;
+    unsigned reported = run->reported;
 
-    DCHECK(g_ready, "CSS text was parsed before cssom_init built the parser it goes through");
-    DCHECK(text != NULL && cb != NULL, "a stylesheet parse was asked for with no text or nowhere to put it");
-    CHECK(mem != NULL, "cssom: the CSS arena allocation failed");
-    if (lxb_css_memory_init(mem, 128) != LXB_STATUS_OK) {
-        lxb_css_memory_destroy(mem, true);
-        return 0;
-    }
-    sst = lxb_css_stylesheet_create(mem);
-    if (sst && !css_sheet_parse(sst, text, len)) sst = NULL;
-    if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST)
-        cssd_emit_rules(text, len, lxb_css_rule_list(sst->root), cb, ud, &n);
+    if (run->parse) css_sheet_parse_abort(run->parse);
+    free(run->v);
     /* THE ARENA IS THE ONE OWNER and it is freed outright, for the reason the author cascade's is: creating a
        stylesheet REF-INCREMENTS the memory it is handed, so `lxb_css_stylesheet_destroy(sst, true)` only
-       decrements it back and frees nothing. Every rule, selector and string above lives in here, which is
-       exactly why the callback got TEXT and why it got it before this line. */
-    lxb_css_memory_destroy(mem, true);
-    return n;
+       decrements it back and frees nothing. */
+    lxb_css_memory_destroy(run->mem, true);
+    free(run);
+    return reported;
+}
+
+/* Named residual. Not covered: its one caller, core/css/css_rule.c's selector probe, parses the page's
+   selector text to its end inside one call. Next diff: the selectorText setter holds the run in its step
+   state and rests between steps. Its absence shows as a step overrunning the slice on a selectorText
+   assignment of more than a quantum of text. */
+unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud)
+{
+    CssomRulesRun *run = cssom_rules_run_begin(text, len);
+
+    while (cssom_rules_run_parse_step(run)) {}
+    while (cssom_rules_run_emit_top(run, cb, ud)) {}
+    return cssom_rules_run_end(run);
 }
 
 /* LAYER 4 — the UA DEFAULT. A headless run still has a user-agent stylesheet, and `display` is the property a

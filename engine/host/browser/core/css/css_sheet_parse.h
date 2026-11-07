@@ -25,7 +25,4 @@ bool css_sheet_parse_finish(CssSheetParse *run);
 /* Frees a run that has not ended, leaving `sst` partly filled for its owner to destroy. */
 void css_sheet_parse_abort(CssSheetParse *run);
 
-/* The complete parse, for a caller that cannot rest between quanta: a run driven to its end. */
-bool css_sheet_parse(lxb_css_stylesheet_t *sst, const char *text, size_t len);
-
 #endif

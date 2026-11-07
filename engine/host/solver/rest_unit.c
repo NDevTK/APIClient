@@ -94,6 +94,13 @@
    two steps. */
 #define REST_UNIT_GC_WORK_N   4096u
 
+/* Top-level rules a sheet's CSSOM build makes per rest point, 256. The floor is a rest's cost, a yield and a
+   re-entry of the process steps, which one rule's few objects do not amortize. The ceiling is bound (2): a
+   plain rule's text is a few dozen bytes, so at core/timing/thread_work.h's CSSOM build rate 256 charge a
+   few thousand of the quantum's 54000; a rule whose block or nesting is long is the sheet's choice and the
+   bracket asserts it. */
+#define REST_UNIT_CSSOM_RULES_N   256u
+
 size_t rest_unit_items(RestUnitKind kind)
 {
     size_t n = 0;
@@ -113,6 +120,7 @@ size_t rest_unit_items(RestUnitKind kind)
     case REST_UNIT_LAYOUT_WORK: n = (size_t)REST_UNIT_LAYOUT_WORK_N; break;
     case REST_UNIT_GC_WORK:     n = REST_UNIT_GC_WORK_N;     break;
     case REST_UNIT_PAINT_OFFERS: n = REST_UNIT_PAINT_OFFERS_N; break;
+    case REST_UNIT_CSSOM_RULES: n = REST_UNIT_CSSOM_RULES_N; break;
     }
     /* No `default:` arm, so clang's -Wswitch (on by default) warns about a kind with no case here; such a
        kind, or an integer cast into the enum, leaves `n` at zero and fails the check below. */

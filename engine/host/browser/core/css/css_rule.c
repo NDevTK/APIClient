@@ -43,6 +43,7 @@
 #include "core/idl_args.h"
 #include "core/idl_indexed.h"
 #include "core/realm.h"
+#include "core/timing/thread_work.h"   /* a sheet's rule objects are charged as the rules built */
 #include "core/rendering/visual_update.h"   /* a rule write is a visible effect HTML §8.1.7.3 asks about */
 #include "solver/cow.h"
 #include "solver/reclaim.h"
@@ -1577,6 +1578,7 @@ typedef struct {
     JSValue     *built;
     unsigned     n_built, cap_built;
     unsigned     n_top;        /* how many top-level rules became objects */
+    size_t       input;        /* the CSSOM build input the parse handed this build (core/timing/thread_work.h) */
     char         unbuilt[64];  /* the FIRST at-rule name CSSOM §6.4 has no interface for, or "" */
 } RuleBuild;
 
@@ -2004,6 +2006,8 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
     JSValueConst parent_rule;
     JSValue list, rule;
 
+    b->input += THREAD_WORK_CSSOM_BYTES_PER_RULE + strlen(pr->prelude) + (pr->block ? strlen(pr->block) : 0);
+
     if (!parent) {
         parent_rule = b->top_parent;
         list = JS_DupValue(b->ctx, b->top_list);
@@ -2147,13 +2151,43 @@ static void rule_unbuilt_fail(const char *name)
 #undef RULE_UNBUILT_FMT
 }
 
-/* Run one parse into `b`, and answer how many TOP-LEVEL rules it produced OBJECTS for. */
-static unsigned build_run(RuleBuild *b, const char *text, size_t len)
+static void build_begin(RuleBuild *b)
 {
     b->built = NULL;
     b->n_built = b->cap_built = b->n_top = 0;
+    b->input = 0;
     b->unbuilt[0] = '\0';
-    cssom_parse_rules(text, len, rule_built, b);
+}
+
+/* The objects for `run`'s next top-level rule and every rule nested in it, charged as the rule text they were
+   built from (core/timing/thread_work.h's CSSOM build). False when no top-level rule remains. */
+static bool build_top(RuleBuild *b, CssomRulesRun *run)
+{
+    ThreadWorkSpan tw;
+    size_t before = b->input;
+    bool more;
+
+    thread_work_begin(&tw);
+    more = cssom_rules_run_emit_top(run, rule_built, b);
+    thread_work_charge(THREAD_WORK_CSSOM_BUILD, b->input - before);
+    thread_work_end(&tw, THREAD_WORK_CSSOM_BUILD, b->input - before);
+    return more;
+}
+
+/* Run one parse into `b`, and answer how many TOP-LEVEL rules it produced OBJECTS for.
+   Named residual. Not covered: the parse and the build run to their end inside one call for the callers that
+   cannot rest: a `<style>`'s sheet (HTML §4.2.6), replaceSync, insertRule and appendRule. Next diff: the
+   `<style>` update and replaceSync hold the run in a step machine's state and build through
+   css_rule_build_sheet_step, as core/html/html_link.c's process steps do. Its absence shows as a step
+   overrunning the slice on a page whose `<style>` holds more than a quantum of text. */
+static unsigned build_run(RuleBuild *b, const char *text, size_t len)
+{
+    CssomRulesRun *run = cssom_rules_run_begin(text, len);
+
+    build_begin(b);
+    while (cssom_rules_run_parse_step(run)) {}
+    while (build_top(b, run)) {}
+    cssom_rules_run_end(run);
     return b->n_top;
 }
 
@@ -2169,6 +2203,22 @@ void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent
     build_run(&b, text, len);
     if (b.unbuilt[0]) rule_unbuilt_fail(b.unbuilt);
     build_free(&b);
+}
+
+bool css_rule_build_sheet_step(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet, CssomRulesRun *run)
+{
+    RuleBuild b;
+    bool more;
+
+    b.ctx = ctx;
+    b.sheet = parent_sheet;
+    b.top_parent = JS_NULL;
+    b.top_list = list;
+    build_begin(&b);
+    more = build_top(&b, run);
+    if (b.unbuilt[0]) rule_unbuilt_fail(b.unbuilt);
+    build_free(&b);
+    return more;
 }
 
 /* ---- CSSOM §6.4's INSERT A CSS RULE and REMOVE A CSS RULE ---------------------------------------------------------

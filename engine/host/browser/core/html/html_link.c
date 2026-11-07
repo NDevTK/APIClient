@@ -31,6 +31,8 @@
 #include "solver/engine.h"       /* …so the PARSER's own elements are served as a work item — see below */
 #include "core/mime/mime_type.h"    /* §4.6.8.20's "a string type matches a preload destination" */
 #include "core/css/css_style_sheet.h" /* §4.6.8.23's create-a-CSS-style-sheet, which is CSSOM §6.2's */
+#include "core/css/css_style_declaration.h" /* …the parse a resting build of its rules steps */
+#include "solver/rest_unit.h"   /* the rest units the process steps rest at */
 #include "core/encoding/encoding.h" /* …and CSS Syntax 3 §3.2's decode of the bytes that become its rules */
 #include "core/loader/script_fetch.h" /* §8.1.4.2's own "response's status is not an ok status" — the same
                                          test the solver's script deliveries make, spelled once */
@@ -48,6 +50,7 @@ static int      g_ready;
 static JSValue  g_state_key;
 static JSAtom   g_atom_state = JS_ATOM_NULL;
 static int      g_task_stepid = -1;
+static int      g_sheet_stepid = -1;   /* §4.6.8.23's process steps over a reply (link_sheet_def) */
 /* THE DOCUMENTS WHOSE PARSED `<link>` ELEMENTS ARE STILL OWED §4.6.8.20's BROWSING-CONTEXT-CONNECTED TIME —
    see html_link_parsed, which appends to it, and html_link_connected_step, which drains it inside a flow.
    IT IS A JS RECORD AND NOT A C LIST, which is CLAUDE.md §State-isolation's rule for exactly this shape: the
@@ -753,7 +756,8 @@ static char *link_url_absolute(JSContext *ctx, const char *href, size_t href_n)
  * after `fetch_owe` has copied what the park needs and not before. */
 static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueConst wrap, const char *abs,
                                const char *destination, CspParserMetadata parser_metadata,
-                               FetchCredentialsMode credentials, FetchMode mode, JSCFunctionData *deliver)
+                               FetchCredentialsMode credentials, FetchMode mode, JSCFunctionData *deliver,
+                               int deliver_stepid)
 {
     char *upgraded;
     size_t integrity_n = 0;
@@ -892,7 +896,8 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
         CHECK(!JS_IsException(urlv), "§4.2.4.3: OOM carrying a link request's URL to its processResponse steps");
         data[0] = wrap;
         data[1] = urlv;
-        d = JS_NewCFunctionData(ctx, deliver, 1, 0, 2, data);
+        d = deliver_stepid >= 0 ? JS_NewStepClosure(ctx, deliver_stepid, 1, 2, data)
+                                : JS_NewCFunctionData(ctx, deliver, 1, 0, 2, data);
         JS_FreeValue(ctx, urlv);
         CHECK(!JS_IsException(d), "§4.2.4.3: OOM allocating a link request's processResponse steps");
         req.method = "GET";
@@ -1195,7 +1200,7 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        Mixed Content §4.1's three upgradeable, so this type reaches step 6 for real. */
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_EMPTY,
                        cors_potential_request_credentials(cors_settings_attribute_state(el)),
-                       cors_potential_request_mode(cors_settings_attribute_state(el)), link_deliver);
+                       cors_potential_request_mode(cors_settings_attribute_state(el)), link_deliver, -1);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }
@@ -1455,7 +1460,7 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
     /* Fetch §4.1 steps 4, 6 and 7 run inside link_fetch_request. */
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
                        cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
-                       FETCH_MODE_CORS, link_module_deliver);
+                       FETCH_MODE_CORS, link_module_deliver, -1);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }
@@ -1561,6 +1566,76 @@ static int link_css_fallback_encoding(const MimeType *mt, lxb_dom_element_t *el,
     return document_encoding_of(doc);
 }
 
+/* STEP 2 and STEP 3, which both arms of the process steps run before the success test. False when step 2
+   returns.
+   STEP 2 — "If el no longer creates an external resource link that contributes to the styling processing
+   model, or if, since the resource in question was fetched, it has become appropriate to fetch it again:
+   Remove el from el's node document's script-blocking style sheet set. Return."
+   ONLY THE FIRST DISJUNCT IS ASKED, and the second is not a narrowing this file chose: "it has become
+   appropriate to fetch it again" names §4.6.8.23's own appropriate times, and every time this file registers
+   FIRES the algorithm rather than recording that it became due — so a second fetch is already in flight when
+   that disjunct would be true, and the sheet this delivery would build is the one that second fetch is about
+   to replace at step 3 anyway. The script-blocking style sheet set is not modelled, so there is nothing to
+   remove from. This return does not unblock rendering, as the standard writes it: an element that left the
+   document was unblocked by HTML §3.1.6's disconnection clause.
+   STEP 3 — "If el has an associated CSS style sheet, remove the CSS style sheet." It runs BEFORE the success
+   test and therefore on the failure path too, which is the standard's order and is observable: a `<link>`
+   whose `href` is repointed at a 404 loses the styling its first address gave it. */
+static bool link_stylesheet_steps_2_3(JSContext *realm, JSValueConst el, lxb_dom_element_t *elem)
+{
+    JSValue had;
+
+    if (link_external_type_of(elem) != LINK_EXT_STYLESHEET) return false;
+    had = link_sheet_of(realm, el);
+    if (!JS_IsNull(had)) {
+        css_style_sheet_remove(realm, had);
+        link_set_sheet(realm, el, JS_NULL);
+    }
+    JS_FreeValue(realm, had);
+    return true;
+}
+
+/* STEP 5 — "Otherwise, fire an event named error at el." — and STEP 7, "Unblock rendering on el". STEP 6 is
+   the script-blocking style sheet set, not modelled. */
+static void link_stylesheet_failed(JSContext *ctx, JSValueConst el, lxb_dom_element_t *elem)
+{
+    link_queue_fire(ctx, el, "error", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.23 step 5, a bare fire */
+    render_blocking_unblock(elem);
+}
+
+/* The element whose process steps these are, and the realm its sheet answers from: the node of the closure's
+   first datum, which the park's own completion steps hold. */
+static lxb_dom_element_t *link_stylesheet_element(JSValueConst el, JSContext **prealm)
+{
+    lxb_dom_node_t *n = node_of(el);
+
+    DCHECK(n != NULL,
+           "§4.6.8.23's process steps were reached with no element — the wrapper is held by the park's own "
+           "completion steps, so a value that is not a node is a delivery to the wrong record");
+    *prealm = document_realm_of(n);
+    DCHECK(*prealm != NULL,
+           "§4.6.8.23's process steps reached a link element in a document no realm was installed for — the "
+           "sheet is a runtime-lifetime object whose every member answers from the realm it was minted in, so "
+           "there is no realm this could fall back to that would not be the wrong one for ever");
+    return lxb_dom_interface_element(n);
+}
+
+/* The process steps for a request link_fetch_request refused before it was sent: the host's null, delivered
+   in place, which is a network error, so the steps' failure arm. */
+static JSValue link_stylesheet_refused(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                       int magic, JSValueConst *func_data)
+{
+    JSContext *realm;
+    lxb_dom_element_t *elem = link_stylesheet_element(func_data[0], &realm);
+
+    (void)this_val; (void)magic;
+    DCHECK(argc >= 1 && JS_IsNull(argv[0]),
+           "a refused stylesheet request was delivered something other than the network error — "
+           "link_fetch_request calls this with the host's null and nothing else");
+    if (link_stylesheet_steps_2_3(realm, func_data[0], elem)) link_stylesheet_failed(ctx, func_data[0], elem);
+    return JS_UNDEFINED;
+}
+
 /* §4.6.8.23's "To PROCESS THIS TYPE OF LINKED RESOURCE given a link element el, boolean success, response
  * response, and byte sequence bodyBytes", reached as §4.2.4.3's processResponseConsumeBody — whose own steps
  * compute `success` first ("Let success be true. If any of the following are true: bodyBytes is null or
@@ -1568,8 +1643,8 @@ static int link_css_fallback_encoding(const MimeType *mt, lxb_dom_element_t *el,
  *
  * WHICH VALUES THIS READS OFF THE ELEMENT AND WHICH IT DOES NOT, because a fetch is a PARK and everything
  * below runs an unbounded number of scheduler steps after the request went out (CLAUDE.md §AN-OPERATION-THAT-
- * BECOMES-A-WORK-ITEM-TAKES-ITS-INPUTS-WITH-IT). The ADDRESS is captured at the request and arrives in
- * func_data[1], because `location` is a fact about which request answered and `href` is itself one of
+ * BECOMES-A-WORK-ITEM-TAKES-ITS-INPUTS-WITH-IT). The ADDRESS is captured at the request and arrives as the
+ * closure's second datum, because `location` is a fact about which request answered and `href` is itself one of
  * §4.6.8.23's appropriate times. The `media` and `title` are read HERE and that is the standard's own
  * instruction rather than an oversight: its create-a-CSS-style-sheet table says of each that it is "a
  * reference to the (possibly absent at this time) attribute, rather than a copy of the attribute's current
@@ -1605,126 +1680,162 @@ static int link_css_fallback_encoding(const MimeType *mt, lxb_dom_element_t *el,
  * here stores, and the field that arm is waiting on. HOW ITS ABSENCE WOULD SHOW: `link.disabled = false` on a
  * `<link rel=stylesheet disabled>` leaves the page unstyled, where a browser fetches the sheet at that
  * moment. */
-static JSValue link_stylesheet_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                       int magic, JSValueConst *func_data)
+/* §4.6.8.23's process steps over a reply, as a machine, because step 4's sheet is the page's text: its parse
+   and its rule objects are work of the reply's size, so the machine rests at every CSS parse rest unit and at
+   every REST_UNIT_CSSOM_RULES top-level rules. Between two rests the flow is parked with this machine on top
+   of its chain, so no script of its world reads the partly built sheet.
+   The parse run is a cache over the text and the count of top-level rules built: a fork or a cold park sheds
+   it and the next step parses the text again and passes over the rules already built. */
+#define LINK_SHEET_STAGES(X) \
+    X(LSP_RESPONSE, "HTML §4.6.8.23 Link type \"stylesheet\"'s process the linked resource steps 1-4 (success, " \
+                    "the styling test, the old sheet removed, the new one created and its text decoded)") \
+    X(LSP_RULES,    "HTML §4.6.8.23 step 4's CSS rules cell: CSS Syntax 3 §5.4.3 parse a stylesheet over the " \
+                    "text, and its rules built as CSSOM §6.4 rule objects") \
+    X(LSP_LOAD,     "HTML §4.6.8.23 steps 4 and 7 (the sheet associated with el, `load` fired, rendering " \
+                    "unblocked)")
+enum { LINK_SHEET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const link_sheet_steps[] = { LINK_SHEET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* The cache: a parse of the state's text, and how many of its top-level rules it has passed. */
+typedef struct {
+    CssomRulesRun *run;
+    uint32_t       at;
+} LinkSheetRun;
+
+typedef struct {
+    JSStepHdr     hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t       started;
+    JSValue       sheet;    /* step 4's CSS style sheet (owned) */
+    char         *text;     /* the decoded sheet text, js_malloc'd, `text_n + 1` bytes (owned) */
+    size_t        text_n;
+    uint32_t      built;    /* top-level rules css_rule_build_sheet_step has built into the sheet */
+    LinkSheetRun *pc;       /* re-derivable from `text` and `built` */
+} LinkSheet;
+
+static void link_sheet_run_destroy(JSContext *ctx, void *p)
 {
-    JSValueConst el = func_data[0];
-    JSValueConst location = func_data[1];
-    lxb_dom_node_t *n = node_of(el);
+    LinkSheetRun *c = p;
+
+    cssom_rules_run_end(c->run);
+    js_free(ctx, c);
+}
+
+static void link_sheet_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    LinkSheet *s = stp;
+
+    /* The state's block is zeroed and a zeroed JSValue is not JS_UNDEFINED, so nothing is owned before the
+       first step places the fields. */
+    if (!s->started) return;
+    v->val(ctx, &s->sheet);
+    v->buf(ctx, (void **)&s->text, s->text ? s->text_n + 1 : 0);
+    v->cache(ctx, (void **)&s->pc, link_sheet_run_destroy);
+}
+
+static int link_sheet_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    LinkSheet *s = stp;
+    JSValueConst el = JS_StepClosureData(&s->hdr, 0);
+    JSValueConst location = JS_StepClosureData(&s->hdr, 1);
+    JSValueConst reply = step_arg(&s->hdr, 0);
     JSContext *realm;
-    lxb_dom_element_t *elem;
-    bool success = false;
-    MimeType mt;
-    bool have_mime = false;
-    JSValue had, body = JS_UNDEFINED, sheet = JS_UNDEFINED;
-    const uint8_t *bytes = NULL;
-    size_t bytes_n = 0;
+    lxb_dom_element_t *elem = link_stylesheet_element(el, &realm);
 
-    (void)this_val; (void)magic;
-    DCHECK(argc >= 1, "a stylesheet reply was delivered with no response — the host calls this with the reply "
-                      "record or with null for a network error, and never with nothing");
-    DCHECK(argc < 1 || JS_IsObject(argv[0]) || JS_IsNull(argv[0]),
-           "a stylesheet reply arrived as something other than the host's reply record — every host builds "
-           "one with fetch_reply_new or parses the trusted zone's JSON into one, and a bare string here is a "
-           "host still delivering only bytes");
-    DCHECK(JS_IsString(location),
-           "§4.6.8.23's process steps were reached with no request URL — `location` is captured at the "
-           "request by link_fetch_request and carried in func_data, so an absent one is a park whose "
-           "completion steps were built somewhere else");
-    DCHECK(n != NULL,
-           "§4.6.8.23's process steps were reached with no element — the wrapper is held by the park's own "
-           "completion steps, so a value that is not a node is a delivery to the wrong record");
-    realm = document_realm_of(n);
-    DCHECK(realm != NULL,
-           "§4.6.8.23's process steps reached a link element in a document no realm was installed for — the "
-           "sheet is a runtime-lifetime object whose every member answers from the realm it was minted in, so "
-           "there is no realm this could fall back to that would not be the wrong one for ever");
-    elem = lxb_dom_interface_element(n);
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    STEP_DISPATCH(LINK_SHEET_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
 
-    /* §4.2.4.3's processResponseConsumeBody: "Let success be true. If any of the following are true:
-       bodyBytes is null or failure; or response's status is not an ok status, then set success to false."
-       A network error is the JSON `null` and is the first of those; §8.1.4.2's own range is asked through
-       core/loader/script_fetch.h rather than re-spelled, for the reason link_module_deliver states. */
-    if (argc >= 1 && !JS_IsNull(argv[0])) {
-        success = script_fetch_status_ok(fetch_reply_status(ctx, argv[0]));
+    STEP_ARM(LSP_RESPONSE);
+    {
+        bool success = false;
+        MimeType mt;
+        bool have_mime = false;
+        JSValue body = JS_UNDEFINED;
+        const uint8_t *bytes = NULL;
+        size_t bytes_n = 0;
+
+        s->started = 1;
+        s->sheet = JS_UNDEFINED;
+        s->text = NULL;
+        s->pc = NULL;
+        DCHECK(s->hdr.argc >= 1, "a stylesheet reply was delivered with no response — the host calls this with "
+                                 "the reply record or with null for a network error, and never with nothing");
+        DCHECK(JS_IsObject(reply) || JS_IsNull(reply),
+               "a stylesheet reply arrived as something other than the host's reply record — every host builds "
+               "one with fetch_reply_new or parses the trusted zone's JSON into one, and a bare string here is a "
+               "host still delivering only bytes");
+        DCHECK(JS_IsString(location),
+               "§4.6.8.23's process steps were reached with no request URL — `location` is captured at the "
+               "request by link_fetch_request and carried in the closure's data, so an absent one is a park "
+               "whose completion steps were built somewhere else");
+        /* §4.2.4.3's processResponseConsumeBody: "Let success be true. If any of the following are true:
+           bodyBytes is null or failure; or response's status is not an ok status, then set success to false."
+           A network error is the JSON `null` and is the first of those; §8.1.4.2's own range is asked through
+           core/loader/script_fetch.h rather than re-spelled, for the reason link_module_deliver states. */
+        if (!JS_IsNull(reply)) {
+            success = script_fetch_status_ok(fetch_reply_status(ctx, reply));
+            {
+                HeaderList hl = { 0 };
+                char *content_type;
+
+                fetch_reply_header_list(ctx, reply, &hl);
+                content_type = header_list_get(&hl, "content-type");
+                have_mime = mime_type_extract(&mt, content_type);
+                free(content_type);
+                header_list_free(&hl);
+            }
+            /* STEP 1 — "If the resource's Content-Type metadata is not text/css, then set success to false."
+               THE ESSENCE AND NOT THE WHOLE VALUE: Fetch §4.1's Content-Type metadata is the EXTRACTED MIME
+               type, whose §4.5 essence is `type/subtype` with every parameter dropped — so `text/css;
+               charset=utf-8` passes, which is what the overwhelming majority of real stylesheets are served
+               as, and a bare string compare against the header would have refused all of them. A reply
+               carrying no `Content-Type` at all is §3.5's failure, which is not text/css. */
+            if (success) {
+                char *essence = have_mime ? mime_type_essence(&mt) : NULL;
+
+                success = essence != NULL && strcmp(essence, "text/css") == 0;
+                free(essence);
+            }
+            body = fetch_reply_body(ctx, reply);
+            bytes = fetch_body_bytes(ctx, body, &bytes_n);
+        }
+        if (!link_stylesheet_steps_2_3(realm, el, elem)) {
+            if (have_mime) mime_type_free(&mt);
+            JS_FreeValue(ctx, body);
+            return JS_STEP_DONE;
+        }
+        if (!success) {
+            if (have_mime) mime_type_free(&mt);
+            JS_FreeValue(ctx, body);
+            link_stylesheet_failed(ctx, el, elem);
+            return JS_STEP_DONE;
+        }
+        /* STEP 4 — "If success is true: Create a CSS style sheet with the following properties …" */
         {
-            HeaderList hl = { 0 };
-            char *content_type;
+            size_t mlen = 0;
+            const lxb_char_t *mv = lxb_dom_element_get_attribute(elem, (const lxb_char_t *)"media", 5, &mlen);
+            char *media = NULL;
 
-            fetch_reply_header_list(ctx, argv[0], &hl);
-            content_type = header_list_get(&hl, "content-type");
-            have_mime = mime_type_extract(&mt, content_type);
-            free(content_type);
-            header_list_free(&hl);
+            /* THE TABLE'S `media` CELL — "The media attribute of el." An ABSENT attribute is a NULL here, which
+               core/css/css_style_sheet.h's creator makes the empty collection: a sheet that applies to every
+               medium, which is what a `<link>` with no `media` means and what the cascade's gate answers true
+               for. THE `title` CELL IS NOT PASSED, and that is the same split HTML §4.2.6's table takes: a
+               title is a STRING the sheet re-reads off its owner node at every ask, so the creator specifying
+               it would compute what the live read already computes. */
+            if (mv) {
+                media = lexbor_malloc(mlen + 1);
+                CHECK(media != NULL, "§4.6.8.23: OOM reading a <link> element's media attribute");
+                memcpy(media, mv, mlen);
+                media[mlen] = '\0';
+            }
+            /* The remaining cells are the table's own: the owner node is el, the location is response's URL
+               list[0] (captured at the request), and the parent CSS style sheet and owner CSS rule are null —
+               a sheet a `<link>` creates has no importer. The disabled flag is "left at its default value",
+               which is why the creator takes no parameter for it. */
+            s->sheet = css_style_sheet_create(realm, el, JS_NULL, JS_NULL, location, media);
+            free(media);
+            CHECK(!JS_IsException(s->sheet), "§4.6.8.23: OOM creating a <link> element's CSS style sheet");
         }
-        /* STEP 1 — "If the resource's Content-Type metadata is not text/css, then set success to false."
-           THE ESSENCE AND NOT THE WHOLE VALUE: Fetch §4.1's Content-Type metadata is the EXTRACTED MIME type,
-           whose §4.5 essence is `type/subtype` with every parameter dropped — so `text/css; charset=utf-8`
-           passes, which is what the overwhelming majority of real stylesheets are served as, and a bare
-           string compare against the header would have refused all of them. A reply carrying no
-           `Content-Type` at all is §3.5's failure, which is not text/css. */
-        if (success) {
-            char *essence = have_mime ? mime_type_essence(&mt) : NULL;
-
-            success = essence != NULL && strcmp(essence, "text/css") == 0;
-            free(essence);
-        }
-        body = fetch_reply_body(ctx, argv[0]);
-        bytes = fetch_body_bytes(ctx, body, &bytes_n);
-    }
-
-    /* STEP 2 — "If el no longer creates an external resource link that contributes to the styling processing
-       model, or if, since the resource in question was fetched, it has become appropriate to fetch it again:
-       Remove el from el's node document's script-blocking style sheet set. Return."
-       ONLY THE FIRST DISJUNCT IS ASKED, and the second is not a narrowing this file chose: "it has become
-       appropriate to fetch it again" names §4.6.8.23's own appropriate times, and every time this file
-       registers FIRES the algorithm rather than recording that it became due — so a second fetch is already
-       in flight when that disjunct would be true, and the sheet this delivery would build is the one that
-       second fetch is about to replace at step 3 anyway. The script-blocking style sheet set is not modelled,
-       so there is nothing to remove from. This return does not unblock rendering, as the standard writes it:
-       an element that left the document was unblocked by HTML §3.1.6's disconnection clause. */
-    if (link_external_type_of(elem) != LINK_EXT_STYLESHEET) {
-        if (have_mime) mime_type_free(&mt);
-        JS_FreeValue(ctx, body);
-        return JS_UNDEFINED;
-    }
-
-    /* STEP 3 — "If el has an associated CSS style sheet, remove the CSS style sheet." It runs BEFORE the
-       success test and therefore on the failure path too, which is the standard's order and is observable:
-       a `<link>` whose `href` is repointed at a 404 loses the styling its first address gave it. */
-    had = link_sheet_of(realm, el);
-    if (!JS_IsNull(had)) {
-        css_style_sheet_remove(realm, had);
-        link_set_sheet(realm, el, JS_NULL);
-    }
-    JS_FreeValue(realm, had);
-
-    /* STEP 4 — "If success is true: Create a CSS style sheet with the following properties …" */
-    if (success) {
-        size_t mlen = 0;
-        const lxb_char_t *mv = lxb_dom_element_get_attribute(elem, (const lxb_char_t *)"media", 5, &mlen);
-        char *media = NULL;
-
-        /* THE TABLE'S `media` CELL — "The media attribute of el." An ABSENT attribute is a NULL here, which
-           core/css/css_style_sheet.h's creator makes the empty collection: a sheet that applies to every
-           medium, which is what a `<link>` with no `media` means and what the cascade's gate answers true
-           for. THE `title` CELL IS NOT PASSED, and that is the same split HTML §4.2.6's table takes: a title
-           is a STRING the sheet re-reads off its owner node at every ask, so the creator specifying it would
-           compute what the live read already computes. */
-        if (mv) {
-            media = lexbor_malloc(mlen + 1);
-            CHECK(media != NULL, "§4.6.8.23: OOM reading a <link> element's media attribute");
-            memcpy(media, mv, mlen);
-            media[mlen] = '\0';
-        }
-        /* The remaining cells are the table's own: the owner node is el, the location is response's URL
-           list[0] (captured at the request), and the parent CSS style sheet and owner CSS rule are null —
-           a sheet a `<link>` creates has no importer. The disabled flag is "left at its default value", which
-           is why the creator takes no parameter for it. */
-        sheet = css_style_sheet_create(realm, el, JS_NULL, JS_NULL, location, media);
-        free(media);
-        CHECK(!JS_IsException(sheet), "§4.6.8.23: OOM creating a <link> element's CSS style sheet");
-
         /* THE `CSS rules` CELL, which the table leaves "Left uninitialized" under its own note asking "This
            doesn't seem right. Presumably we should be using bodyBytes? Tracked as issue #2997." It has to be
            bodyBytes: the cell directly below it defines the CSS environment encoding, which exists for no
@@ -1739,9 +1850,8 @@ static JSValue link_stylesheet_deliver(JSContext *ctx, JSValueConst this_val, in
            §3.2's own note says so ("the decode algorithm gives precedence to a byte order mark (BOM), and
            only uses the fallback when none is found"). */
         {
-            int fallback = link_css_fallback_encoding(have_mime ? &mt : NULL, elem, n->owner_document,
+            int fallback = link_css_fallback_encoding(have_mime ? &mt : NULL, elem, lxb_dom_interface_node(elem)->owner_document,
                                                       bytes, bytes_n);
-            size_t text_n = 0;
             char *text;
 
             DCHECK(fallback >= 0,
@@ -1749,26 +1859,79 @@ static JSValue link_stylesheet_deliver(JSContext *ctx, JSValueConst this_val, in
                    "last step is \"Otherwise, return utf-8\" and the step before it is a document's character "
                    "encoding, which DOM §4.5 gives every document, so the algorithm cannot fail and a "
                    "negative here is a step that returned a failure sentinel as an answer");
-            text = encoding_decode((const char *)bytes, bytes_n, fallback, &text_n);
+            text = encoding_decode((const char *)bytes, bytes_n, fallback, &s->text_n);
             CHECK(text != NULL, "§4.6.8.23: OOM decoding a <link> element's stylesheet");
-            css_style_sheet_set_rules_from_text(realm, sheet, text, text_n);
+            s->text = js_malloc(ctx, s->text_n + 1);
+            CHECK(s->text != NULL, "§4.6.8.23: OOM holding a <link> element's stylesheet text");
+            memcpy(s->text, text, s->text_n);
+            s->text[s->text_n] = '\0';
             free(text);
         }
-        link_set_sheet(realm, el, sheet);
-        /* "Fire an event named load at el." QUEUED rather than fired, for the reason link_queue_fire states:
-           the handler is the page's, and a `head.appendChild(link)` must not run its own `onload` before the
-           next statement of the script that appended it. */
-        link_queue_fire(ctx, el, "load", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.23 fires BARE */
-    } else {
-        /* STEP 5 — "Otherwise, fire an event named error at el." */
-        link_queue_fire(ctx, el, "error", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.23 step 5, a bare fire */
+        if (have_mime) mime_type_free(&mt);
+        JS_FreeValue(ctx, body);
+        s->hdr.stage = LSP_RULES;
+        return JS_STEP_YIELD;
     }
-    /* STEP 6 is the script-blocking style sheet set, not modelled. STEP 7 — "Unblock rendering on el." */
-    render_blocking_unblock(elem);
-    if (have_mime) mime_type_free(&mt);
-    JS_FreeValue(ctx, body);
-    return JS_UNDEFINED;
+
+    STEP_ARM(LSP_RULES);
+    {
+        size_t k;
+        bool more = true;
+
+        if (s->pc == NULL) {
+            s->pc = js_malloc(ctx, sizeof *s->pc);
+            CHECK(s->pc != NULL, "§4.6.8.23: OOM holding a <link> element's stylesheet parse");
+            s->pc->run = cssom_rules_run_begin(s->text, s->text_n);
+            s->pc->at = 0;
+        }
+        if (!cssom_rules_run_parsed(s->pc->run)) {
+            bool more_text;
+
+            rest_unit_begin(REST_UNIT_CSS_PARSE_BYTES);
+            more_text = cssom_rules_run_parse_step(s->pc->run);
+            rest_unit_end();
+            if (more_text) return JS_STEP_YIELD;
+        }
+        /* A cache re-derived after a fork or a cold park passes over what this state already built. */
+        while (s->pc->at < s->built) {
+            bool had = cssom_rules_run_skip_top(s->pc->run);
+
+            DCHECK(had, "a re-derived stylesheet parse holds fewer top-level rules than the build had already "
+                        "made from the same text — a parse is a function of its text, so the two cannot disagree");
+            s->pc->at++;
+        }
+        rest_unit_begin(REST_UNIT_CSSOM_RULES);
+        for (k = 0; more && k < rest_unit_items(REST_UNIT_CSSOM_RULES); k++) {
+            more = css_style_sheet_build_rules_step(realm, s->sheet, s->pc->run);
+            if (more) {
+                s->built++;
+                s->pc->at++;
+            }
+        }
+        rest_unit_end();
+        if (more) return JS_STEP_YIELD;
+        link_sheet_run_destroy(ctx, s->pc);
+        s->pc = NULL;
+        s->hdr.stage = LSP_LOAD;
+    }
+
+    STEP_ARM(LSP_LOAD);
+    link_set_sheet(realm, el, s->sheet);   /* CONSUMES the sheet */
+    s->sheet = JS_UNDEFINED;
+    /* "Fire an event named load at el." QUEUED rather than fired, for the reason link_queue_fire states: the
+       handler is the page's, and a `head.appendChild(link)` must not run its own `onload` before the next
+       statement of the script that appended it. */
+    link_queue_fire(ctx, el, "load", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.23 fires BARE */
+    render_blocking_unblock(elem);   /* STEP 7; STEP 6 is the script-blocking set, not modelled */
+    return JS_STEP_DONE;
 }
+
+static const JSTrampStepDef link_sheet_def = {
+    sizeof(LinkSheet), link_sheet_step, NULL, 0,
+    .visit = link_sheet_visit,
+    .algorithm = "HTML §4.6.8.23 Link type \"stylesheet\"'s process the linked resource",
+    .steps = link_sheet_steps
+};
 
 /* §4.6.8.23's fetch and process the linked resource, which is §4.2.4.3's DEFAULT one — the section provides no
  * algorithm of its own, only the "linked resource fetch setup steps" the default's step 4 runs and the
@@ -1873,7 +2036,7 @@ static void link_stylesheet(JSContext *ctx, lxb_dom_element_t *el, bool by_parse
     link_fetch_request(ctx, el, wrap, abs, "style", CSP_PARSER_METADATA_EMPTY,
                        cors_potential_request_credentials(cors_settings_attribute_state(el)),
                        cors_potential_request_mode(cors_settings_attribute_state(el)),
-                       link_stylesheet_deliver);
+                       link_stylesheet_refused, g_sheet_stepid);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }
@@ -2251,6 +2414,7 @@ void html_link_declare(JSContext *ctx)
     CHECK(g_atom_state != JS_ATOM_NULL,
           "HTML §4.6.8.20 Link type \"preload\": the link processing state key could not be interned");
     g_task_stepid = JS_RegisterStepDef(rt, &link_task_def);
+    g_sheet_stepid = JS_RegisterStepDef(rt, &link_sheet_def);
     /* THE PARSED-DOCUMENT LIST IS BUILT WITH THE AGENT AND NOT ON FIRST USE, for the reason CLAUDE.md gives
        for every per-realm intrinsic: a record minted lazily is minted INSIDE whichever flow happened to touch
        it first, and every other timeline would then see a list that does not exist. This line is the pre-boot
@@ -2277,5 +2441,6 @@ void html_link_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_parsed);
     g_parsed = JS_UNDEFINED;
     g_task_stepid = -1;
+    g_sheet_stepid = -1;
     g_ready = 0;
 }

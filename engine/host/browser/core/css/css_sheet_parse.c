@@ -95,22 +95,3 @@ void css_sheet_parse_abort(CssSheetParse *run)
     lxb_css_parser_destroy(run->parser, true);
     free(run);
 }
-
-/* Named residual. Not covered: resting between steps for a caller that cannot park: cssom_parse_rules, which
-   a sheet's text set from script reaches, and the cascade's per-sheet parse asked by a reader that cannot rest
-   (core/css/css_style_declaration.c's parse table steps its run under a resting drive). Next diff: those
-   callers hold the run in a step machine's state and rest between steps. Its absence shows as a single sheet's
-   parse charging several rest units of bytes inside one REST_UNIT_LAYOUT_DESCENDANTS bracket. */
-bool css_sheet_parse(lxb_css_stylesheet_t *sst, const char *text, size_t len)
-{
-    ThreadWorkSpan tw;
-    CssSheetParse *run;
-    bool ok;
-
-    thread_work_begin(&tw);
-    run = css_sheet_parse_begin(sst, text, len);
-    while (!css_sheet_parse_ended(run)) css_sheet_parse_step(run);
-    ok = css_sheet_parse_finish(run);
-    thread_work_end(&tw, THREAD_WORK_CSS_PARSE, len);
-    return ok;
-}

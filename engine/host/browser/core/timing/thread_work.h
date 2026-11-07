@@ -59,6 +59,13 @@
 /* What one box metric derivation is in line items (solver/rest_unit.h's LINE_METRICS: "one costs what a
    hundred of those do"). */
 #define THREAD_WORK_LINE_ITEMS_PER_METRIC 100
+/* A CSSOM build, per KiB of the serialized rule text its rule objects are made from (core/css/css_rule.c's
+   build_top: a rule's selector or prelude and its block, serialized by the parse and built into an object),
+   a rule itself counting as THREAD_WORK_CSSOM_BYTES_PER_RULE bytes. A two-term fit of the kind's span CPU
+   over its rules and bytes on the `linkrest` and `sheetrest` fixture documents, over the CPU a unit of the
+   same census's other work took. */
+#define THREAD_WORK_UNITS_PER_KIB_CSSOM 361
+#define THREAD_WORK_CSSOM_BYTES_PER_RULE 48
 /* A named-property lookup's walk rests at every element and is charged one element per rest, so the per-call
    floor above (rounded up) prices an element at one unit whatever the rate; the rate states that floor. */
 #define THREAD_WORK_UNITS_PER_KI_DOM_ELEMENTS 1024
@@ -79,6 +86,7 @@ typedef enum {
     THREAD_WORK_LAYOUT_LINE,    /* a line box fill or intrinsic run's items taken (layout_job.c's spends) */
     THREAD_WORK_SELECTOR_MATCH, /* style rules tested by one element's author match (css_style_declaration.c) */
     THREAD_WORK_DOM_WALK,       /* elements a named-property lookup visited (core/dom/document_named.c) */
+    THREAD_WORK_CSSOM_BUILD,    /* rule text a style sheet's CSSOM build made objects of (core/css/css_rule.c) */
     THREAD_WORK_N
 } ThreadWorkKind;
 

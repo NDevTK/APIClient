@@ -366,6 +366,11 @@ METRIC(tw_selector_match_us, "twSelectorMatchUs", LIFETIME, "us", PROCESS, "core
 /* …and the elements the named getters' resting walk visited (core/dom/named_walk.c), its charged input: within one
    run, the lookup's share of `twChargedUnits`. */
 METRIC(tw_dom_walk_input, "twDomWalkInput", LIFETIME, "element", PROCESS, "core/timing/thread_work.c", INT)
+/* …and the rule text a style sheet's CSSOM build made objects of, a rule counting as
+   THREAD_WORK_CSSOM_BYTES_PER_RULE bytes, with its spans' own CPU. */
+METRIC(tw_cssom_build_spans, "twCssomBuildSpans", LIFETIME, "span", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_cssom_build_bytes, "twCssomBuildInput", LIFETIME, "byte", PROCESS, "core/timing/thread_work.c", INT)
+METRIC(tw_cssom_build_us, "twCssomBuildUs", LIFETIME, "us", PROCESS, "core/timing/thread_work.c", INT)
 /* …and which arm each overrunning turn was in: `stepUnitRuns` restricted to `sliceOverruns`'
    turns. An arm whose two counts are equal is a step that cannot rest (solver/engine.h's
    `over_arms`). */

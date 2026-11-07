@@ -579,6 +579,14 @@ void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, con
     css_rule_build_sheet(ctx, s->rules, sheet, text, len);
 }
 
+bool css_style_sheet_build_rules_step(JSContext *ctx, JSValueConst sheet, CssomRulesRun *run)
+{
+    CssStyleSheetData *s = sheet_of(sheet);
+
+    DCHECK(s != NULL, "a sheet's CSS rules were built on something that is not a CSS style sheet");
+    return css_rule_build_sheet_step(ctx, s->rules, sheet, run);
+}
+
 /* §6.1.2's `cssRules`. Its steps 1-2 are an origin-clean check and then "return a read-only, LIVE CSSRuleList
    object representing the CSS rules". The origin-clean flag is not modelled — every sheet this build creates is
    one HTML §4.2.6 sets it for, and the flag exists to distinguish a cross-origin `<link>`, which is a sheet

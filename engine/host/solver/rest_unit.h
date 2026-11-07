@@ -114,7 +114,13 @@ typedef enum {
        core/paint/box_paint.h lays for it. Past this many the step rests between two offers. Cost: one box's
        marks and the layout their geometry reads, which still runs whole inside the offer, so bound (2) is not
        asserted (document_paint.c's residual). */
-    REST_UNIT_PAINT_OFFERS
+    REST_UNIT_PAINT_OFFERS,
+    /* One top-level rule of a parsed style sheet built into CSSOM §6.4 rule objects with every rule nested in
+       it (core/css/css_rule.h's css_rule_build_sheet_step), by HTML §4.6.8.23's process steps
+       (core/html/html_link.c). Cost: the rules' serialization and their objects, charged as
+       core/timing/thread_work.h's CSSOM build by their text; a top-level rule holds as long a block and as
+       many nested rules as the sheet chooses, so bound (2) is asserted around each unit. */
+    REST_UNIT_CSSOM_RULES
 } RestUnitKind;
 
 /* How many items of `kind` one rest point covers; at least 1 (asserted). It takes only the kind, which is

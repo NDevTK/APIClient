@@ -284,6 +284,22 @@ typedef struct {
  * `<keyframe-block>` inside a `@keyframes` and a dropped rule anywhere else. A builder that drops it must
  * still return a handle for it, by the rule above, and must still count it out of its own total. */
 typedef void *(*CssomRuleFn)(void *ud, void *parent, const CssomRule *rule);
+/* The parse and the report, run to their end: the number of top-level rules reported. */
 unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud);
+
+/* The same parse and report, a rest unit at a time, for a step machine that rests between steps. `text` is
+   BORROWED until cssom_rules_run_end. parse_step runs one CSS parse rest unit (solver/rest_unit.h's
+   REST_UNIT_CSS_PARSE_BYTES) and answers true while the parse has more; `parsed` says it has answered false
+   and may not be stepped again. Once it has, emit_top
+   reports the next top-level rule and every rule nested in it through `cb`, and skip_top passes over it
+   unreported; both answer false when no top-level rule remains. A failed parse reports none. end frees the run
+   and answers how many top-level rules were reported. */
+typedef struct CssomRulesRun CssomRulesRun;
+CssomRulesRun *cssom_rules_run_begin(const char *text, size_t len);
+bool cssom_rules_run_parse_step(CssomRulesRun *run);
+bool cssom_rules_run_parsed(const CssomRulesRun *run);
+bool cssom_rules_run_emit_top(CssomRulesRun *run, CssomRuleFn cb, void *ud);
+bool cssom_rules_run_skip_top(CssomRulesRun *run);
+unsigned cssom_rules_run_end(CssomRulesRun *run);
 
 #endif

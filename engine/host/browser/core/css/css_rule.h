@@ -176,6 +176,7 @@
 #include "core/idl_index_arg.h"
 #include "core/css/css_layer_order.h"
 #include "core/css/css_property_registration.h"
+#include "core/css/css_style_declaration.h"   /* CssomRulesRun, the run a resting build steps */
 
 void css_rule_init(JSContext *ctx);
 /* Every CSSOM §6.4 and CSS Conditional 3 §7 rule prototype for ONE realm — declared into core/realm.h's list. */
@@ -332,6 +333,10 @@ int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c,
    sheet creation runs. `parent_sheet` is the sheet every rule in it names. */
 void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet,
                           const char *text, size_t len);
+/* The same build a top-level rule at a time, over a run whose parse has ended (css_style_declaration.h's
+   CssomRulesRun): appends the objects for the next top-level rule and every rule nested in it, and answers
+   false when no top-level rule remained. */
+bool css_rule_build_sheet_step(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet, CssomRulesRun *run);
 
 /* THE AUTHOR CASCADE'S VIEW of a rule list: the STYLE rules that apply in `ctx`'s environment, flattened out of
  * the conditional group rules whose condition holds, each serialized as `selector{block}` for the SELECTOR
