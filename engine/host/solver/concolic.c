@@ -2596,8 +2596,10 @@ static int g_srcs_n, g_srcs_cap;
 /* The precondition rows (concolic.h): a second array beside the delivery rows rather than a column of them,
    because every delivery reader (the encode set, the prefix, the carrier, concolic_deliver) matches a row by
    source and would otherwise read a precondition as a mechanism. Same claimant and give-back as g_srcs.
-   `absent` is concolic_source_precondition_absent's mark. */
-typedef struct { const char *component; char *src; SourcePreconditionKind kind; int absent; } SourcePrecondition;
+   `absent` is concolic_source_precondition_absent's mark; `observed` is concolic_declare_observed_precondition's
+   row, whose value the observed world holds. */
+typedef struct { const char *component; char *src; SourcePreconditionKind kind; int absent; int observed; }
+    SourcePrecondition;
 static SourcePrecondition *g_pres;
 static int g_pres_n, g_pres_cap;
 
@@ -2994,9 +2996,24 @@ int concolic_member_absent_state(const char *p, size_t n)
     return j >= 0 && g_pres[j].absent;
 }
 
-int concolic_member_undeclared(const char *p, size_t n)
+int concolic_member_environment(const char *p, size_t n)
 {
-    return src_row(p, n) < 0 && pre_row(p, n) < 0;   /* a principal is a column of a delivery row */
+    int j = pre_row(p, n);
+
+    return src_row(p, n) < 0 && (j < 0 || g_pres[j].observed);   /* a principal is a column of a delivery row */
+}
+
+int concolic_root_assumable_any(const char *root)
+{
+    const char *p;
+    size_t n;
+
+    for (int i = 0; root_member(root, i, &p, &n); i++) {
+        int j = pre_row(p, n);
+
+        if (j >= 0 && !g_pres[j].observed) return 1;
+    }
+    return 0;
 }
 
 int concolic_root_declared_sources(const char *root)
@@ -3077,7 +3094,7 @@ static const char *precondition_token(SourcePreconditionKind k)
     return NULL;
 }
 
-void concolic_declare_source_precondition(const char *component, const char *src, SourcePreconditionKind kind)
+static void precondition_declare(const char *component, const char *src, SourcePreconditionKind kind, int observed)
 {
     int i;
 
@@ -3102,8 +3119,19 @@ void concolic_declare_source_precondition(const char *component, const char *src
     g_pres[g_pres_n].src = reclaim_strdup(src);
     g_pres[g_pres_n].kind = kind;
     g_pres[g_pres_n].absent = 0;
+    g_pres[g_pres_n].observed = observed;
     CHECK(g_pres[g_pres_n].src != NULL, "concolic: OOM declaring a precondition source");
     g_pres_n++;
+}
+
+void concolic_declare_source_precondition(const char *component, const char *src, SourcePreconditionKind kind)
+{
+    precondition_declare(component, src, kind, 0);
+}
+
+void concolic_declare_observed_precondition(const char *component, const char *src, SourcePreconditionKind kind)
+{
+    precondition_declare(component, src, kind, 1);
 }
 
 int concolic_source_precondition_declared_by(const char *component, const char *src)
@@ -3129,6 +3157,8 @@ void concolic_source_precondition_absent(const char *component, const char *src)
             DCHECKF(strcmp(g_pres[i].component, component) == 0, "%s marked the precondition source `%s` "
                     "absent, and %s declared it — one source is described by the component that mints it",
                     component, src, g_pres[i].component);
+            DCHECKF(!g_pres[i].observed, "the observed precondition source `%s` was marked absent — its value is "
+                    "what the observed world holds, so no arm takes it as present", src);
             g_pres[i].absent = 1;
             return;
         }
@@ -3742,7 +3772,7 @@ char *concolic_gate_beside(const char *own, const char *src, const char *payload
 const char *concolic_path_precondition(void)
 {
     for (int j = 0; j < g_pres_n; j++) {
-        const Cons *c = cons_lookup(g_pres[j].src);
+        const Cons *c = g_pres[j].observed ? NULL : cons_lookup(g_pres[j].src);
 
         /* A null or undefined pin is the state's absence, which a victim who never ran this app's own write
            holds; only a present value is a link the PoC rests on. */

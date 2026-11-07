@@ -292,6 +292,7 @@ static char *response_body_source(JSContext *ctx, JSValueConst v)
         return NULL;
     name = reply_source_name(url, strlen(url));
     free(url);
+    reply_source_declare(name);   /* a fetched Response's bytes are the server's: a precondition */
     return name;
 }
 

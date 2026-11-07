@@ -40,6 +40,9 @@
 #include "check.h"
 #include "core/fetch/reply_source.h"
 #include "core/url/url.h"
+#include "solver/concolic.h"
+
+#define REPLY_COMPONENT "reply"
 
 char *reply_source_name(const char *url, size_t len)
 {
@@ -58,4 +61,16 @@ char *reply_source_name(const char *url, size_t len)
            "percent-encode set — every reader of an @H template finds a hole by its braces, so such a name "
            "does not merely fail to substitute, it ends its hole early and takes the measured value with it");
     return name;
+}
+
+void reply_source_declare(const char *name)
+{
+    DCHECK(name != NULL && *name, "a reply's bytes were declared under no name");
+    if (!concolic_source_precondition_declared_by(REPLY_COMPONENT, name))
+        concolic_declare_observed_precondition(REPLY_COMPONENT, name, SRC_PRE_APPLICATION_STATE);
+}
+
+void reply_source_free(void)
+{
+    concolic_undeclare_sources(REPLY_COMPONENT);
 }

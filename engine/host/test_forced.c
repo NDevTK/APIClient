@@ -20759,6 +20759,9 @@ TF_UNIT void probes_fileparse_fetch(const char *js, Probe *tab, int *n) {
              "NOT REACHED: no eval @S record carries a source rooted in the seed file's reply, so the file's bytes "
              "lost their provenance between the reply and new Function (ArrayBuffer, DataView, Uint8Array, "
              "TextDecoder)");
+    fold_row(&sf_tt, &sf_why, !has_seed || s_field(js, "eval", seed, "\"precondition\":\"application-state\""),
+             "the eval record rooted in the seed file's reply is not labelled a precondition: a reply's bytes are "
+             "server-held application state, so the sink they reach is that precondition's result, never a PoC");
     const char *sq_why = NULL; int sq_tt = 1;
     fold_row(&sq_tt, &sq_why, has_query,
              "NOT REACHED: no eval @S record carries a source rooted in location.search, so the file the attacker "
@@ -20785,6 +20788,9 @@ TF_UNIT void probes_fileparse_slice(const char *js, Probe *tab, int *n) {
     fold_row(&sf_tt, &sf_why, has_seed,
              "no eval @S record carries a source rooted in the seed file's reply, so the slice copied the bytes "
              "without their provenance");
+    fold_row(&sf_tt, &sf_why, !has_seed || s_field(js, "eval", seed, "\"precondition\":\"application-state\""),
+             "the eval record rooted in the seed file's reply is not labelled a precondition: a reply's bytes are "
+             "server-held application state, so the sink they reach is that precondition's result, never a PoC");
     const char *sq_why = NULL; int sq_tt = 1;
     fold_row(&sq_tt, &sq_why, has_query,
              "no eval @S record carries a source rooted in location.search, so the slice of the reply to the "
@@ -20810,6 +20816,9 @@ TF_UNIT void probes_fileparse_sub(const char *js, Probe *tab, int *n) {
     fold_row(&sf_tt, &sf_why, has_seed,
              "no eval @S record carries a source rooted in the seed file's reply, so the subarray lost the bytes' "
              "provenance");
+    fold_row(&sf_tt, &sf_why, !has_seed || s_field(js, "eval", seed, "\"precondition\":\"application-state\""),
+             "the eval record rooted in the seed file's reply is not labelled a precondition: a reply's bytes are "
+             "server-held application state, so the sink they reach is that precondition's result, never a PoC");
     const char *sq_why = NULL; int sq_tt = 1;
     fold_row(&sq_tt, &sq_why, has_query,
              "no eval @S record carries a source rooted in location.search, so the subarray of the reply to the "
@@ -20841,6 +20850,9 @@ TF_UNIT void probes_fileparse_taslice(const char *js, Probe *tab, int *n) {
     fold_row(&sf_tt, &sf_why, has_seed,
              "no eval @S record carries a source rooted in the seed file's reply, so the typed-array slice copied "
              "the bytes without their provenance");
+    fold_row(&sf_tt, &sf_why, !has_seed || s_field(js, "eval", seed, "\"precondition\":\"application-state\""),
+             "the eval record rooted in the seed file's reply is not labelled a precondition: a reply's bytes are "
+             "server-held application state, so the sink they reach is that precondition's result, never a PoC");
     const char *sq_why = NULL; int sq_tt = 1;
     fold_row(&sq_tt, &sq_why, has_query,
              "no eval @S record carries a source rooted in location.search, so the typed-array slice of the reply "
@@ -20902,6 +20914,9 @@ TF_UNIT void probes_fileparse_set(const char *js, Probe *tab, int *n) {
     const char *sf_why = NULL; int sf_tt = 1;
     fold_row(&sf_tt, &sf_why, has_seed,
              "no eval @S record carries a source rooted in the seed file's reply, so set lost the bytes' provenance");
+    fold_row(&sf_tt, &sf_why, !has_seed || s_field(js, "eval", seed, "\"precondition\":\"application-state\""),
+             "the eval record rooted in the seed file's reply is not labelled a precondition: a reply's bytes are "
+             "server-held application state, so the sink they reach is that precondition's result, never a PoC");
     const char *sq_why = NULL; int sq_tt = 1;
     fold_row(&sq_tt, &sq_why, has_query,
              "no eval @S record carries a source rooted in location.search, so the set copy of the reply to the "
@@ -21518,6 +21533,9 @@ TF_UNIT void probes_fileparse_worker(const char *js, Probe *tab, int *n) {
     fold_row(&ws_tt, &ws_why, has_seed,
              "NOT REACHED: no eval @S record carries a source rooted in the seed file's reply, so the bytes lost "
              "their provenance across the transfer into the worker");
+    fold_row(&ws_tt, &ws_why, !has_seed || s_field(js, "eval", seed, "\"precondition\":\"application-state\""),
+             "the eval record rooted in the seed file's reply is not labelled a precondition: a reply's bytes are "
+             "server-held application state, so the sink they reach is that precondition's result, never a PoC");
     const char *wq_why = NULL; int wq_tt = 1;
     fold_row(&wq_tt, &wq_why, has_query,
              "NOT REACHED: no eval @S record carries a source rooted in location.search, so the file the query "
@@ -21545,6 +21563,9 @@ TF_UNIT void probes_fileparse_worker_copy(const char *js, Probe *tab, int *n) {
     fold_row(&cs_tt, &cs_why, has_seed,
              "NOT REACHED: no eval @S record carries a source rooted in the seed file's reply, so the copied bytes "
              "lost their provenance on the way into the worker");
+    fold_row(&cs_tt, &cs_why, !has_seed || s_field(js, "eval", seed, "\"precondition\":\"application-state\""),
+             "the eval record rooted in the seed file's reply is not labelled a precondition: a reply's bytes are "
+             "server-held application state, so the sink they reach is that precondition's result, never a PoC");
     const char *cq_why = NULL; int cq_tt = 1;
     fold_row(&cq_tt, &cq_why, has_query,
              "NOT REACHED: no eval @S record carries a source rooted in location.search through the copied bytes");

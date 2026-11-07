@@ -1436,7 +1436,7 @@ static void detect_sink(JSContext *ctx, JSValueConst arg, int cls) {
            "an attacker value reached a sink carrying no delivery ROOT — the reproduction envelope is built "
            "from it, and without one this finding would state that nothing carries these bytes to the victim");
     /* An @S search is over a value another party sets: an attacker source with a browser delivery, or a
-       precondition a finding is labelled with (dec_subject_input asks the same of a branch). A root that declares
+       precondition a finding is labelled with, an observed one (a reply's bytes) included. A root that declares
        neither (an environment unknown such as Math.random, a driven body's argument) has no delivery, so no
        candidate can be put where the page reads it and no fire over it is a PoC (record_sink refuses one).
        Counted, so the census still says such a value arrived. */

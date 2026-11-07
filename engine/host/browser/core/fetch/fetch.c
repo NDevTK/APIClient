@@ -2887,5 +2887,6 @@ void fetch_free(JSRuntime *rt)
     g_abort_stepid = -1;
     g_body_stepid = -1;
     g_fetch_rt = NULL;
+    reply_source_free();   /* the reply rows Response and XMLHttpRequest declared (core/fetch/reply_source.h) */
 }
 

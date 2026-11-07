@@ -569,9 +569,9 @@ void        concolic_set_deliveries(char *const *srcs, char *const *vals, int n)
    derivation of a second source's read stating no value for that source. */
 int         concolic_path_gates(const char *root,
                                 void (*cb)(void *ud, const char *src, const char *equals, int composable), void *ud);
-/* The precondition token of the first declared precondition source (concolic_declare_source_precondition) the
-   running flow's path pinned a present value of (neither null nor undefined), or NULL: a path that took the arm
-   where app state holds a value. */
+/* The precondition token of the first declared precondition source (concolic_declare_source_precondition, an
+   observed one excepted) the running flow's path pinned a present value of (neither null nor undefined), or
+   NULL: a path that took the arm where app state holds a value. */
 const char *concolic_path_precondition(void);
 /* The running flow's gates: further deliveries of the attacker sources its search's path pinned (`srcs` and the
    Strings `vals` they were pinned to, concolic_path_gates), or a witness verification's further sources
@@ -780,6 +780,13 @@ typedef enum {
 } SourcePreconditionKind;
 void        concolic_declare_source_precondition(const char *component, const char *src,
                                                  SourcePreconditionKind kind);
+/* As concolic_declare_source_precondition, for state whose value the observed world holds (a reply's bytes, which
+   a server answered): a sink over it is that precondition's result (concolic_source_precondition), and an arm
+   against its example takes nothing as present, so it is no input a witness lists (concolic_root_assumable_any),
+   labels no path (concolic_path_precondition) and is priced as an environment unknown's
+   (concolic_member_environment). It is never marked absent. */
+void        concolic_declare_observed_precondition(const char *component, const char *src,
+                                                   SourcePreconditionKind kind);
 int         concolic_source_precondition_declared_by(const char *component, const char *src);
 /* Marks the precondition row `component` declared for `src` as application state the observed world lacks: the
    unknown's example is that absence, so an arm against the example takes the state as present. Idempotent; the
@@ -840,9 +847,13 @@ const char *concolic_source_precondition(const char *root);
    constraint as the whole of one; the mechanism to build is one candidate per declaring member, each with its
    own envelope, and the one that fires is the one emitted. */
 int         concolic_source_delivery(const char *root, const char **kind, char *prefix);
-/* Does the member slice `p`/`n` name no row of the source tables: no delivery, no precondition, no principal?
-   The member property concolic_root_every asks to learn that no party is declared to set a value. */
-int         concolic_member_undeclared(const char *p, size_t n);
+/* Does the member slice `p`/`n` name no delivery, no principal and no precondition but an observed one
+   (concolic_declare_observed_precondition)? The member property concolic_root_every asks to learn that a value
+   is an environment unknown: no party is declared to set it, or the observed world holds it. */
+int         concolic_member_environment(const char *p, size_t n);
+/* Does any member of `root` name a precondition row whose value the observed world does not hold, so that an arm
+   over it may take state as present the victim lacks? 0 for NULL. */
+int         concolic_root_assumable_any(const char *root);
 /* Does any member of `root` name a source declared with a browser delivery? 0 for NULL. The quantifier a record
    asks to learn whether an attacker source roots it at all, so two declaring members answer 1 rather than
    crashing as concolic_source_delivery does, which must name one member's envelope. */

@@ -1354,11 +1354,12 @@ static int dec_subject_assumed(JSValueConst v) {
 /* Is `v` an environment unknown: a value the page reads that no party is declared to set? Every root member is the
    world's (supplied from outside the served bytes, so not a served value or a hole this engine minted) and names
    no row of concolic.c's source tables: no delivery (an attacker source, whose arms cost nothing), no
-   precondition (application state and the origin's own stores, absent.c's injected state among them) and no
-   principal. Math.random, the clock, a device fact and a server's reply are such roots. An arm against its
-   example costs as an assumption does, so the example's world runs first. */
+   precondition the observed world does not hold (application state and the origin's own stores, absent.c's
+   injected state among them) and no principal. Math.random, the clock, a device fact and a server's reply (an
+   observed precondition) are such roots. An arm against its example costs as an assumption does, so the
+   example's world runs first. */
 static int dec_subject_environment(JSValueConst v) {
-    return concolic_root_whose_all(v, CONCOLIC_WHOSE_WORLD) && concolic_root_every(v, concolic_member_undeclared);
+    return concolic_root_whose_all(v, CONCOLIC_WHOSE_WORLD) && concolic_root_every(v, concolic_member_environment);
 }
 
 /* A decision consumed at `slot` on the arm its example contradicts (`forced_arm`), recorded where its subject
@@ -1370,13 +1371,14 @@ static void dec_note_priced(JSValueConst subject, int forced_arm, int slot) {
 }
 
 /* Is an arm over `v` a decision about an input another party sets: does a member of its root declare a
-   precondition (application state: absent.c's record members, served or missing, and the origin's own stores)
-   or a delivery (an attacker source)? An environment unknown (a random value, a browser fact) declares neither
-   and is grounded by its domain, so a witness lists none of its arms (endpoint.h's `witness`). */
+   precondition the observed world does not hold (application state: absent.c's record members, served or
+   missing, and the origin's own stores) or a delivery (an attacker source)? An environment unknown (a random
+   value, a browser fact) and an observed precondition (a reply's bytes) are grounded by the world, so a witness
+   lists none of their arms (endpoint.h's `witness`). */
 static int dec_subject_input(JSValueConst v) {
     const char *root = concolic_root_c(v);
 
-    return root && (concolic_source_precondition(root) != NULL || concolic_root_delivered_any(root));
+    return root && (concolic_root_assumable_any(root) || concolic_root_delivered_any(root));
 }
 
 static int dec_fork_here(JSContext *ctx, const char *key, JSValueConst subject, uint32_t asked,

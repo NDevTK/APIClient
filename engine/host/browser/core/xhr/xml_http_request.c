@@ -1502,6 +1502,7 @@ static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, JSValue value)
            "write having happened by halves");
     if (!src)
         return value;
+    reply_source_declare(src);   /* received bytes are the server's: a precondition */
     n = strlen(src) + 3;
     shape = (char *)lexbor_malloc(n);
     CHECK(shape != NULL, "XMLHttpRequest: OOM spelling the provenance of a reply");

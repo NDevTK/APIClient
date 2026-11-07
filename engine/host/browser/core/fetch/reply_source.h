@@ -12,4 +12,11 @@
    hole a default fills. */
 char *reply_source_name(const char *url, size_t len);
 
+/* A reply's bytes, named `name` (reply_source_name), as the precondition they are: server-held application state
+   whose value the observed world holds (concolic_declare_observed_precondition), so a sink they reach is that
+   precondition's result and never an attacker PoC. Called where a reply's received bytes become a value;
+   idempotent. reply_source_free gives every such row back. */
+void  reply_source_declare(const char *name);
+void  reply_source_free(void);
+
 #endif
