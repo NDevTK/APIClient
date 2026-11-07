@@ -28,6 +28,11 @@ typedef struct {
        JS_UNDEFINED where `length`, `item` and `named` answer `prop` in place. Owned. NULL when every answer is
        in place. Its descriptor is Web IDL §3.9.7's indexed one with no indexed property setter. */
     JSValue (*own_step)(JSContext *ctx, JSValueConst self, JSAtom prop);
+    /* Web IDL §3.9.6 [[OwnPropertyKeys]]'s supported property indices as a step machine, for the same interface:
+       the function JSClassExoticMethods.get_own_property_names_step hands the keyed entry, f(obj, undefined,
+       undefined, 4) answering an Array of the index strings in ascending order, or JS_UNDEFINED where `length`
+       answers in place. Owned. NULL exactly when `own_step` is. */
+    JSValue (*own_names_step)(JSContext *ctx, JSValueConst self);
 } IdlIndexedDecl;
 
 /* This object's cache scratch, or NULL when the interface declared none. Zeroed at construction, so an

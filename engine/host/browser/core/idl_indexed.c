@@ -426,9 +426,22 @@ static JSValue idl_indexed_get_own_step(JSContext *ctx, JSValueConst obj, JSAtom
     return d->own_step(ctx, obj, prop);
 }
 
+/* JSClassExoticMethods.get_own_property_names_step: the decl's own step, or JS_UNDEFINED. Owned. */
+static JSValue idl_indexed_own_names_step(JSContext *ctx, JSValueConst obj)
+{
+    const IdlIndexedDecl *d = decl_of(obj);
+
+    DCHECK(d != NULL, "an object of the indexed-property class has no decl at a key enumeration");
+    DCHECK(!d->own_step == !d->own_names_step,
+           "an indexed decl answers its keyed reads and its key enumeration by different means — a walk the one "
+           "rests over the other runs from C");
+    return d->own_names_step ? d->own_names_step(ctx, obj) : JS_UNDEFINED;
+}
+
 static JSClassExoticMethods g_exotic = {
     .get_own_property = idl_indexed_get_own,
     .get_own_property_step = idl_indexed_get_own_step,
+    .get_own_property_names_step = idl_indexed_own_names_step,
     /* Web IDL §3.9.7 Abstract operations, LegacyPlatformObjectGetOwnProperty steps 1.2.7-8, for a decl with no
        indexed property setter: not writable, enumerable, configurable. A named property's descriptor differs,
        so a step answers op 2 for an index only. */

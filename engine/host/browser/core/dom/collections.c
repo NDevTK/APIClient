@@ -27,6 +27,7 @@
  * HTMLCollection ALSO HAS A NAMED GETTER: `form.children.foo` finds the element whose id (or, for the elements
  * that have one, name) is "foo". That is not sugar in a bundle — it is how a great deal of older code reaches
  * its own markup, and an absent named getter reads as `undefined` and takes the branch behind it with it. */
+#include <stdio.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -770,6 +771,79 @@ static const IdlStepDecl COLL_KEYED_DECL = {
     coll_keyed_step, sizeof(CollWalk), coll_walk_visit, NULL, COLL_KEYED_ALGORITHM, COLL_KEYED_STEPS
 };
 
+/* ---- the key enumeration as a step machine -------------------------------------------------------------- */
+
+#define COLL_KEYS_ALGORITHM "Web IDL §3.9.6 [[OwnPropertyKeys]] of a collection"
+#define COLL_KEYS_STAGES(X) X(COLL_KEYS_INDICES, COLL_KEYS_ALGORITHM " step 2 (the supported property indices)")
+enum { IDL_STEP_STAGE_BASE(COLL_KEYS_STAGES) COLL_KEYS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const COLL_KEYS_STEPS[] = { COLL_KEYS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static int g_keys_id = -1;
+
+/* The enumeration's state: the count's walk, then the Array of index strings filled one index per entry. */
+typedef struct {
+    CollWalk walk;
+    JSValue  keys;     /* owned once `started` */
+    uint32_t length, filled;
+    uint8_t  started, counted;
+} CollKeysState;
+
+static void coll_keys_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    CollKeysState *s = st;
+
+    if (s->started) v->val(ctx, &s->keys);
+}
+
+/* f(obj, undefined, undefined, 4): step 2's indices, "0" to length - 1 in ascending order, counted one node per
+   entry and appended one index per entry. Steps 3-5 are not this machine's: the keyed entry appends the
+   object's ordinary own keys, and the named properties are idl_indexed.c's residual. */
+static int coll_keys_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    CollKeysState *s = st;
+    char buf[16];
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    DCHECK(hdr->stage == COLL_KEYS_INDICES && argc == 4 && JS_VALUE_GET_TAG(argv[3]) == JS_TAG_INT &&
+               JS_VALUE_GET_INT(argv[3]) == 4,
+           "a collection's key enumeration was called with a shape the keyed entry does not issue");
+    if (!s->started) {
+        s->keys = JS_NewArray(ctx);
+        if (JS_IsException(s->keys)) { s->keys = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        s->started = 1;
+    }
+    if (!s->counted) {
+        if (coll_length_rest(ctx, argv[0], &s->walk, &s->length)) return JS_STEP_YIELD;
+        s->counted = 1;
+    }
+    if (s->filled < s->length) {
+        snprintf(buf, sizeof buf, "%u", (unsigned)s->filled);
+        if (JS_DefinePropertyValueUint32(ctx, s->keys, s->filled, JS_NewString(ctx, buf),
+                                         JS_PROP_C_W_E | JS_PROP_THROW) < 0)
+            return JS_STEP_ABRUPT;
+        s->filled++;
+        return JS_STEP_YIELD;
+    }
+    *presult = s->keys;
+    s->keys = JS_UNDEFINED;
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl COLL_KEYS_DECL = {
+    coll_keys_step, sizeof(CollKeysState), coll_keys_visit, NULL, COLL_KEYS_ALGORITHM, COLL_KEYS_STEPS
+};
+
+/* IdlIndexedDecl.own_names_step: the enumeration of a live collection; JS_UNDEFINED for a static list, which
+   the C entry answers from its array. Owned. */
+static JSValue coll_own_names_step(JSContext *ctx, JSValueConst self)
+{
+    if (coll_kind(ctx, self, NULL) == COLL_STATIC) return JS_UNDEFINED;
+    DCHECK(g_keys_id >= 0, "a collection's key enumeration asked for its step before collections_init declared it");
+    return idl_step_function(ctx, "collection key enumeration", g_keys_id);
+}
+
 /* IdlIndexedDecl.own_step for NodeList: the walk for a live list's index; JS_UNDEFINED for a static list or any
    other key, which the C entries answer. Owned. */
 static JSValue nodelist_own_step(JSContext *ctx, JSValueConst self, JSAtom prop)
@@ -804,9 +878,9 @@ static JSValue htmlcoll_own_step(JSContext *ctx, JSValueConst self, JSAtom prop)
    interface, so the live decl's cache_size is what a static NodeList allocates too — a few bytes it never
    reads, against a second decl that differs in one field. */
 static const IdlIndexedDecl NODELIST_INDEXED = { "NodeList", coll_length_c, coll_item_c, NULL, sizeof(CollCache),
-                                                 nodelist_own_step };
+                                                 nodelist_own_step, coll_own_names_step };
 static const IdlIndexedDecl HTMLCOLL_INDEXED = { "HTMLCollection", coll_length_c, coll_item_c, coll_named_c,
-                                                 sizeof(CollCache), htmlcoll_own_step };
+                                                 sizeof(CollCache), htmlcoll_own_step, coll_own_names_step };
 
 /* ---- the members ------------------------------------------------------------------------------------------ */
 
@@ -1140,6 +1214,7 @@ void collections_init(JSContext *ctx)
     g_named_item_id = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &COLL_NAMED_DECL, 0);
     g_length_id = idl_getter_id_step(ctx, &COLL_LENGTH_DECL, 0);
     g_keyed_id = idl_method_id_step(ctx, KEYED_ARGS, 4, NULL, 0, &COLL_KEYED_DECL, 0);
+    g_keys_id = idl_method_id_step(ctx, KEYED_ARGS, 4, NULL, 0, &COLL_KEYS_DECL, 0);
     g_ready = 1;
     realm_declare_intrinsic(collections_install_protos);
 }

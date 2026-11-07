@@ -1044,6 +1044,12 @@ typedef struct JSClassExoticMethods {
     /* The JS_PROP_ C/W/E of the data descriptor op 2's hit is answered with (Web IDL §3.9.1's named-property
        descriptor). */
     int get_own_property_step_flags;
+    /* An [[OwnPropertyKeys]] whose class part is a walk charged as work: the function the keyed entry's
+       [[OwnPropertyKeys]] calls instead of get_own_property_names, as f(obj, undefined, undefined, 4), answering an
+       Array of the keys get_own_property_names would list; the object's ordinary own keys follow them in the
+       answer. JS_UNDEFINED where get_own_property_names answers in place. Owned. Asked by the keyed entry only,
+       never by a C walk. */
+    JSValue (*get_own_property_names_step)(JSContext *ctx, JSValueConst obj);
     /* An unknown String key's [[Get]] (the keyed entry's GP_KEYDOMAIN) asks each link whether any key its
        [[GetOwnProperty]] answers lies in the key's domain (JSConcolicHooks.key_domain_holds); a class whose keys
        are not its storage answers by one of these two, or the read keeps both arms.
@@ -1641,6 +1647,8 @@ JS_EXTERN int JS_SetLength(JSContext *ctx, JSValueConst obj, int64_t len);
 #define JS_GPN_ENUM_ONLY    (1 << 4)
 /* set theJSPropertyEnum.is_enumerable field */
 #define JS_GPN_SET_ENUM     (1 << 5)
+/* only the ordinary own keys: no class's get_own_property_names (a get_own_property_names_step answered them) */
+#define JS_GPN_NO_EXOTIC    (1 << 6)
 
 JS_EXTERN int JS_GetOwnPropertyNames(JSContext *ctx, JSPropertyEnum **ptab,
                                      uint32_t *plen, JSValueConst obj,

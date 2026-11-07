@@ -16144,7 +16144,7 @@ static int __exception JS_GetOwnPropertyNamesInternal(JSContext *ctx,
             }
         } else {
             const JSClassExoticMethods *em = ctx->rt->class_array[p->class_id].exotic;
-            if (em && em->get_own_property_names) {
+            if (em && em->get_own_property_names && !(flags & JS_GPN_NO_EXOTIC)) {
                 if (em->get_own_property_names(ctx, &tab_exotic, &exotic_count,
                                                JS_MKPTR(JS_TAG_OBJECT, p)))
                     return -1;
@@ -16264,6 +16264,35 @@ static int __exception JS_GetOwnPropertyNamesInternal(JSContext *ctx,
     *ptab = tab_atom;
     *plen = atom_count;
     return 0;
+}
+
+/* `keys`, a class's [[OwnPropertyKeys]] step's Array (CONSUMED), with `obj`'s ordinary own String and Symbol keys
+   appended after it: the order a legacy platform object's internal method lists them in (Web IDL §3.9.6
+   [[OwnPropertyKeys]], whose class keys come first). Owned; JS_EXCEPTION on failure. */
+static int JS_CreateDataPropertyUint32(JSContext *ctx, JSValueConst this_obj,
+                                       int64_t idx, JSValue val, int flags);
+static JSValue js_ownkeys_append_ordinary(JSContext *ctx, JSValueConst obj, JSValue keys)
+{
+    JSPropertyEnum *tab = NULL;
+    uint32_t len = 0, i, at;
+
+    DCHECK(JS_IsArray(keys), "a class's [[OwnPropertyKeys]] step answered something other than an Array");
+    if (js_get_length32(ctx, &at, keys) ||
+        JS_GetOwnPropertyNamesInternal(ctx, &tab, &len, JS_VALUE_GET_OBJ(obj),
+                                       JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK | JS_GPN_NO_EXOTIC)) {
+        JS_FreeValue(ctx, keys);
+        return JS_EXCEPTION;
+    }
+    for (i = 0; i < len; i++) {
+        JSValue kv = JS_AtomToValue(ctx, tab[i].atom);
+        if (JS_IsException(kv) || JS_CreateDataPropertyUint32(ctx, keys, at + i, kv, 0) < 0) {
+            js_free_prop_enum(ctx, tab, len);
+            JS_FreeValue(ctx, keys);
+            return JS_EXCEPTION;
+        }
+    }
+    js_free_prop_enum(ctx, tab, len);
+    return keys;
 }
 
 int JS_GetOwnPropertyNames(JSContext *ctx, JSPropertyEnum **ptab,
@@ -32536,6 +32565,22 @@ static inline JSObject *tramp_proto_keyed_write(JSContext *ctx, JSValueConst obj
 }
 /* Whether `p`'s class answers `atom` with a step [[GetOwnProperty]] (JSClassExoticMethods.get_own_property_step):
    a read reaching it forks, so it runs on the chain and never from C. */
+/* Whether `p`'s class answers [[OwnPropertyKeys]] with a step (JSClassExoticMethods.get_own_property_names_step). */
+static bool tramp_ownkeys_step(JSContext *ctx, JSObject *p) {
+    const JSClassExoticMethods *em;
+    JSValue f;
+    bool step;
+
+    if (!p->is_exotic) return false;
+    em = ctx->rt->class_array[p->class_id].exotic;
+    if (!em || !em->get_own_property_names_step) return false;
+    f = em->get_own_property_names_step(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
+    step = JS_VALUE_GET_TAG(f) == JS_TAG_OBJECT;
+    DCHECK(step || JS_IsUndefined(f), "a step [[OwnPropertyKeys]] answered neither a function nor undefined");
+    JS_FreeValue(ctx, f);
+    return step;
+}
+
 static bool tramp_step_exotic(JSContext *ctx, JSObject *p, JSAtom atom) {
     const JSClassExoticMethods *em;
     JSValue f;
@@ -42933,6 +42978,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         /* §10.1.7.1 OrdinaryHasProperty step 1's [[GetOwnProperty]], or the internal method
                            itself, answered by the class's step */
                         step_gop = true;
+                    } else if (gp_op == GP_OWNKEYS && tramp_ownkeys_step(ctx, po)) {
+                        /* the internal method's class part answered by the class's step */
+                        step_gop = true;
                     }
                 } else if (gp_op == GP_GET || gp_op == GP_SET) {
                     /* a PRIMITIVE base. 10.1.8.1 walks the primitive's INTRINSIC prototype, and a page can put an
@@ -42965,11 +43013,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     const JSClassExoticMethods *sem = rt->class_array[JS_VALUE_GET_OBJ(gp_obj)->class_id].exotic;
                     JSTrapGet *tg = gp_trapst;
                     method = gp_op == GP_KEYDOMAIN ? sem->key_domain_step(ctx, gp_obj)
-                                                   : sem->get_own_property_step(ctx, gp_obj, gp_atom);
+                           : gp_op == GP_OWNKEYS  ? sem->get_own_property_names_step(ctx, gp_obj)
+                                                  : sem->get_own_property_step(ctx, gp_obj, gp_atom);
                     DCHECK(JS_VALUE_GET_TAG(method) == JS_TAG_OBJECT,
                            "a step [[GetOwnProperty]] answered a function to the walk and not to the call one ask "
                            "later, with nothing run between");
-                    keyval = gp_op == GP_KEYDOMAIN ? js_dup(gp_val) : JS_AtomToValue(ctx, gp_atom);
+                    keyval = gp_op == GP_KEYDOMAIN ? js_dup(gp_val)
+                           : gp_op == GP_OWNKEYS  ? JS_UNDEFINED : JS_AtomToValue(ctx, gp_atom);
                     if (JS_IsException(keyval)) { JS_FreeValue(ctx, method); goto getprop_throw; }
                     if (!tg) {
                         tg = js_mallocz(ctx, sizeof(*tg));
@@ -43506,12 +43556,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     }
                     if (step_gop) {
                         /* f(obj, key, receiver, op): op 0 is [[Get]], 1 [[HasProperty]], 2 [[GetOwnProperty]],
-                           which a [[Set]] asks for 10.1.9.1 OrdinarySet step 1's ownDesc */
+                           which a [[Set]] asks for 10.1.9.1 OrdinarySet step 1's ownDesc, and 4
+                           [[OwnPropertyKeys]], which takes no key */
                         JS_FreeValue(ctx, gp->cb[2]);
                         gp->cb[2] = js_dup(gp->cb[0]);
                         if (gp_op == GP_SET) { JS_FreeValue(ctx, gp->cb[4]); JS_FreeValue(ctx, gp->cb[5]); }
                         if (gp_op != GP_GET) gp->cb[4] = JS_UNDEFINED;
-                        gp->cb[5] = js_int32(gp_op == GP_GET ? 0 : gp_op == GP_HAS ? 1 : gp_op == GP_KEYDOMAIN ? 3 : 2);
+                        if (gp_op == GP_OWNKEYS) gp->cb[3] = JS_UNDEFINED;
+                        gp->cb[5] = js_int32(gp_op == GP_GET ? 0 : gp_op == GP_HAS ? 1 : gp_op == GP_KEYDOMAIN ? 3
+                                             : gp_op == GP_OWNKEYS ? 4 : 2);
                         gp->nargs = 4;
                     }
                 }
@@ -47623,9 +47676,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSObject *gproto = js_walk_proto(ctx, JS_VALUE_GET_OBJ(tg->obj));
 
                         DCHECK(tg->op == GP_GET || tg->op == GP_HAS || tg->op == GP_GETOWNPROP || tg->op == GP_SET
-                               || tg->op == GP_KEYDOMAIN,
+                               || tg->op == GP_KEYDOMAIN || tg->op == GP_OWNKEYS,
                                "a step [[GetOwnProperty]] answered an operation other than [[Get]], "
-                               "[[HasProperty]], [[GetOwnProperty]], [[Set]] or an unknown key's domain read");
+                               "[[HasProperty]], [[GetOwnProperty]], [[Set]], [[OwnPropertyKeys]] or an unknown "
+                               "key's domain read");
+                        DCHECK(tg->op != GP_OWNKEYS || JS_IsArray(ret_val),
+                               "a class's [[OwnPropertyKeys]] step answered something other than an Array of keys");
                         DCHECK(tg->op != GP_KEYDOMAIN || JS_IsBool(ret_val),
                                "a class's domain step answered something other than true or false");
                         js_getprop_free(ctx, gp);
@@ -47635,6 +47691,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         gp_getter = tg->getter; gp_setter = tg->setter; gp_dflags = tg->dflags;
                         gp_outer = tg->outer; gp_outer_kind = tg->outer_kind;
                         gp_trapst = tg;
+                        if (tg->op == GP_OWNKEYS) {
+                            /* the class's keys, then the object's ordinary own keys after them */
+                            ret_val = js_ownkeys_append_ordinary(ctx, tg->obj, ret_val);
+                            if (unlikely(JS_IsException(ret_val))) goto getprop_throw;
+                            goto do_getprop_complete;
+                        }
                         if (tg->op == GP_GETOWNPROP) {
                             /* the internal method does not walk: a hit is the class's data descriptor over the
                                value, moved into the requester's record or built into an object, as the C arm's */
