@@ -615,7 +615,24 @@ typedef struct { const char *at; const char *type; const char *body; } TfServed;
 #define LINKREST_SHEET LINKREST_1000("0") LINKREST_1000("1") LINKREST_1000("2") LINKREST_1000("3")              \
                        LINKREST_1000("4") LINKREST_1000("5") LINKREST_1000("6") LINKREST_1000("7")              \
                        LINKREST_1000("8") LINKREST_1000("9") "#lrEl{width:7px}"
+/* fixture/jsonrest.h's reply: 10,000 records `{"i":NNNN,"v":"abcdefghijklmn"}` by macro repetition, then one
+   whose `i` is -1. */
+#define JSONREST_R(p) "{\"i\":" p ",\"v\":\"abcdefghijklmn\"},"
+#define JSONREST_10(p) JSONREST_R(p "0") JSONREST_R(p "1") JSONREST_R(p "2") JSONREST_R(p "3") JSONREST_R(p "4") \
+                       JSONREST_R(p "5") JSONREST_R(p "6") JSONREST_R(p "7") JSONREST_R(p "8") JSONREST_R(p "9")
+#define JSONREST_100(p) JSONREST_10(p "0") JSONREST_10(p "1") JSONREST_10(p "2") JSONREST_10(p "3")             \
+                        JSONREST_10(p "4") JSONREST_10(p "5") JSONREST_10(p "6") JSONREST_10(p "7")             \
+                        JSONREST_10(p "8") JSONREST_10(p "9")
+#define JSONREST_1000(p) JSONREST_100(p "0") JSONREST_100(p "1") JSONREST_100(p "2") JSONREST_100(p "3")        \
+                         JSONREST_100(p "4") JSONREST_100(p "5") JSONREST_100(p "6") JSONREST_100(p "7")        \
+                         JSONREST_100(p "8") JSONREST_100(p "9")
+#define JSONREST_BODY "[" JSONREST_1000("1") JSONREST_1000("2") JSONREST_1000("3") JSONREST_1000("4")          \
+                      JSONREST_1000("5") JSONREST_1000("6") JSONREST_1000("7") JSONREST_1000("8")          \
+                      JSONREST_1000("9") JSONREST_1000("1") "{\"i\":-1,\"v\":\"\"}]"
 static const TfServed TF_SERVED[] = {
+    { "https://x.test/data/jsonrest-f.json", "application/json", JSONREST_BODY },
+    { "https://x.test/data/jsonrest-x.json", "application/json", JSONREST_BODY },
+    { "https://x.test/data/jsonrest-s.json", "application/json", JSONREST_BODY },
     { "https://x.test/sheet/linkrest.css", "text/css", LINKREST_SHEET },
     { "https://x.test/chunk/rxmod.js", "text/javascript",
       "var rxmR = /" RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 RXM_A65536 "b/;"
@@ -1419,6 +1436,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/textencunk.h"
 #include "fixture/cssdsetprop.h"
 #include "fixture/sheetrest.h"
+#include "fixture/jsonrest.h"
 #include "fixture/linkrest.h"
 #include "fixture/wnameunk.h"
 #include "fixture/flexsvg.h"
@@ -2093,6 +2111,7 @@ TF_DOCS[] = {
     { "textencunk", HTML_TEXTENCUNK },
     { "cssdsetprop", HTML_CSSDSETPROP },
     { "sheetrest", HTML_SHEETREST },
+    { "jsonrest", HTML_JSONREST },
     { "linkrest", HTML_LINKREST },
     { "wnameunk", HTML_WNAMEUNK },
     { "flexsvg", HTML_FLEXSVG },
@@ -6801,6 +6820,26 @@ static int hostreq_answer_all(JSContext *ctx)
                 CHECK(url != NULL, "the fixture could not copy an XMLHttpRequest's address");
                 v = fetch_reply_new(ctx, 200, "OK", &none, "x", 1, (const char *const *)&url, 1, "text/plain",
                                     "basic");
+                free(url);
+            } else if (!strncmp(tab + 1, "xhr.send\t", 9) &&
+                       memmem(tab + 1, (size_t)(end - tab - 1), "\"url\":\"https://x.test/data/", 27) != NULL) {
+                /* An asynchronous send to an address TF_SERVED holds: a 200 reply record of its body and type,
+                   as fixture_provide serves the same address to a fetch(). */
+                const char *u0 = memmem(tab + 1, (size_t)(end - tab - 1), "\"url\":\"", 7);
+                const char *u1 = memchr(u0 + 7, '"', (size_t)(end - (u0 + 7)));
+                char *url;
+                const TfServed *sv;
+                HeaderList eh = { 0 };
+
+                DCHECK(u1 != NULL, "an xhr.send record's `url` member is not closed");
+                url = strndup(u0 + 7, (size_t)(u1 - (u0 + 7)));
+                CHECK(url != NULL, "the fixture could not copy an XMLHttpRequest's address");
+                sv = tf_served_at(url);
+                CHECK(sv != NULL, "an XMLHttpRequest asked an address under /data/ that TF_SERVED does not hold");
+                header_list_append(&eh, "content-type", sv->type);
+                v = fetch_reply_new(ctx, 200, "OK", &eh, sv->body, strlen(sv->body), (const char *const *)&url, 1,
+                                    sv->type, "basic");
+                header_list_free(&eh);
                 free(url);
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
@@ -19759,6 +19798,24 @@ TF_UNIT void probes_linkrest(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `jsonrest` document (fixture/jsonrest.h): a JSON reply several quanta long reads back whole
+   through json() over its bytes, the XHR json response, and json() over a streamed body. */
+TF_UNIT void probes_jsonrest(const char *js, Probe *tab, int *n) {
+    const char *jr_why = NULL; int jr_tt = 1;
+    fold_row(&jr_tt, &jr_why, !!strstr(js, "\"/api/jsonrest\""),
+             "NOT REACHED: no /api/jsonrest record, so the three parses of the long JSON reply did not all settle");
+    fold_row(&jr_tt, &jr_why, param_value_is(js, "/api/jsonrest", "f", "10001") &&
+                              param_value_is(js, "/api/jsonrest", "x", "10001") &&
+                              param_value_is(js, "/api/jsonrest", "s", "10001") &&
+                              param_value_is(js, "/api/jsonrest", "k", "2234-2234-2234"),
+             "the long JSON reply does not read back as 10001 records with record 1234's `i` 2234, through json(), "
+             "the XHR json response and json() over a streamed body");
+    const Probe rows[] = {
+        { "json-parse-rest", jr_tt, "/api/jsonrest", SESS_EXPLORE, jr_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `wnameunk` document (fixture/wnameunk.h): window.name set to an example-free unknown reads
    back as that unknown. */
 TF_UNIT void probes_wnameunk(const char *js, Probe *tab, int *n) {
@@ -26003,6 +26060,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_textencunk(js, probes, &np);
     probes_cssdsetprop(js, probes, &np);
     probes_sheetrest(js, probes, &np);
+    probes_jsonrest(js, probes, &np);
     probes_linkrest(js, probes, &np);
     probes_wnameunk(js, probes, &np);
     probes_flexsvg(js, probes, &np);
