@@ -9744,34 +9744,74 @@ void concolic_string_unit_map(JSContext *ctx, JSValueConst r, JSValueConst recv,
 }
 
 /* JSConcolicHooks.string_domain: the domain key_domain_of states, the prefix spelled from the shape's bytes
-   before its first hole and the tail from `tail_class` (every unit where it states none). A prefix holding a
-   WTF-8 surrogate is refused, since its units would not survive the UTF-8 decode that spells it. */
+   before its first hole and the tail from `tail_class` (every unit where it states none); or, for a String
+   whose whole shape is one hole with a stated class, no prefix and that class. A prefix holding a WTF-8
+   surrogate is refused, since its units would not survive the UTF-8 decode that spells it. */
 int concolic_string_domain(JSContext *ctx, JSValueConst v, JSValue *prefix, uint64_t tail_ascii[2], int *tail_wide)
 {
     const Concolic *c = key_domain_of(v);
-    size_t n, i;
+    const UnitClass *tail;
+    size_t n = 0, i;
 
     *prefix = JS_UNDEFINED;
-    if (!c) return 0;
-    n = (size_t)c->hole_span[0];
+    if (c) {
+        n = (size_t)c->hole_span[0];
+        tail = c->tail_class;
+    } else {
+        c = concolic_is(v) ? JS_GetOpaque(v, g_concolic_class) : NULL;
+        if (!c || c->ty != CTY_STRING || c->hole_span || !hole_class_at(c, 0)) return 0;
+        tail = hole_class_at(c, 0);
+    }
     for (i = 0; i < n; i++)
         if ((unsigned char)c->shape[i] == 0xED) return 0;
     *prefix = JS_NewStringLen(ctx, c->shape, n);
     CHECK(JS_IsString(*prefix), "concolic: OOM spelling a String domain's prefix");
     tail_ascii[0] = tail_ascii[1] = 0;
     *tail_wide = 0;
-    if (!c->tail_class) {
+    if (!tail) {
         tail_ascii[0] = tail_ascii[1] = ~0ull;
         *tail_wide = 1;
         return 1;
     }
-    for (int k = 0; k < c->tail_class->n; k++) {
-        uint32_t lo = c->tail_class->r[2 * k], hi = c->tail_class->r[2 * k + 1], u;
+    for (int k = 0; k < tail->n; k++) {
+        uint32_t lo = tail->r[2 * k], hi = tail->r[2 * k + 1], u;
 
         for (u = lo; u <= hi && u < 0x80; u++) tail_ascii[u >> 6] |= 1ull << (u & 63);
         if (hi >= 0x80) *tail_wide = 1;
     }
     return 1;
+}
+
+/* JSConcolicHooks.string_class: `r`, minted by an algorithm whose every result lies in the `n` sorted inclusive
+   code-unit pairs, is a String in every world whose one hole holds only those units. */
+void concolic_string_class(JSContext *ctx, JSValueConst r, const uint32_t *pairs, int n)
+{
+    Concolic *c = concolic_is(r) ? JS_GetOpaque(r, g_concolic_class) : NULL;
+    UnitBits *b;
+
+    (void)ctx;
+    DCHECK(c != NULL && c->hole_span == NULL && c->hole_class == NULL,
+           "a String class was stated of a value that is not a fresh derivation, or stated twice");
+    b = ub_new();
+    for (int k = 0; k < n; k++) ub_add(b, pairs[2 * k], pairs[2 * k + 1]);
+    c->hole_class = reclaim_calloc(1, sizeof *c->hole_class);
+    CHECK(c->hole_class, "concolic: OOM recording a String's code-unit class");
+    c->hole_class[0] = uc_of_bits(b);
+    free(b);
+    if (!c->ty) concolic_type_state(r, CTY_STRING);
+    DCHECKF(c->ty == CTY_STRING, "a String class was stated of a value typed %u", (unsigned)c->ty);
+#if APICLIENT_DEV
+    if (concolic_example_present(r) && c->hole_class[0]) {
+        JSValue ex = concolic_example(ctx, r);
+        size_t tn = 0;
+        const char *e = JS_IsString(ex) ? JS_ToCStringLen(ctx, &tn, ex) : NULL;
+
+        DCHECKF(!JS_IsString(ex) || (e && uc_holds_all(c->hole_class[0], e, tn)),
+                "an algorithm's result lies outside the code-unit class it states: example %s", e ? e : "?");
+        if (e) JS_FreeCString(ctx, e);
+        JS_FreeValue(ctx, ex);
+    }
+#endif
 }
 
 /* The byte length of the first `k` code units of the WTF-8 bytes `s` (`n` of them), or (size_t)-1 where the
@@ -10065,6 +10105,7 @@ static JSConcolicHooks g_hooks = {
     .key_domain_missed = concolic_key_domain_missed,
     .string_unit_map = concolic_string_unit_map,
     .string_domain = concolic_string_domain,
+    .string_class = concolic_string_class,
     .string_keep_prefix = concolic_string_keep_prefix,
     .get_value_base = concolic_get_value_base_hook,
     .key_name = concolic_key_name_hook,

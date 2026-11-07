@@ -1057,10 +1057,11 @@ bool        concolic_key_domain_holds(JSContext *ctx, JSValueConst key, const ch
 void        concolic_key_domain_missed(JSContext *ctx, JSValueConst key);
 /* JSConcolicHooks.string_unit_map: a replace of a set of characters over the unknown String `recv` states its
    result's type, code-unit class and length bound. */
-/* JSConcolicHooks.string_domain and string_keep_prefix (quickjs.h). */
+/* JSConcolicHooks.string_domain, string_keep_prefix and string_class (quickjs.h). */
 int         concolic_string_domain(JSContext *ctx, JSValueConst v, JSValue *prefix, uint64_t tail_ascii[2],
                                    int *tail_wide);
 JSValue     concolic_string_keep_prefix(JSContext *ctx, JSValue r, JSValueConst recv, uint32_t k);
+void        concolic_string_class(JSContext *ctx, JSValueConst r, const uint32_t *pairs, int n);
 void        concolic_string_unit_map(JSContext *ctx, JSValueConst r, JSValueConst recv, const uint32_t *pairs,
                                      int n, int unicode, JSValueConst rep);
 /* JSConcolicHooks.key_name — the real string an unknown key denotes (its shape), stable per source. */

@@ -98905,9 +98905,9 @@ static void js_concolic_call_unit_map(JSContext *ctx, JSConcolicCall *s)
    builtin-protocol RegExp: seeds §22.2.7.2 RegExpBuiltinExec's matcher, from index 0 where §22.2.6.11 seeks the
    first match, over every String the receiver's domain admits (string_domain). 1 where the match is seeded, 0
    where the call or the receiver states nothing it can run over, -1 on an allocation refused.
-   Named residual. Not covered: RegExpBuiltinExec over an unknown subject reached as RegExp.prototype.exec or
-   test (REX_TOSTRING's unknown arm), and a String searchValue. Next diff builds: this matcher at that arm, its
-   no-match answering null. How its absence shows: `re.test(x)` forks both arms where x's page units decide it. */
+   Named residual. Not covered: a String searchValue (§22.1.3.19 step 5's StringIndexOf). Next diff builds: its
+   positions asked over the same domain. How its absence shows: an address a page normalises with a String
+   searchValue reads as holding no unit the page wrote. */
 static int js_concolic_call_prefix_begin(JSContext *ctx, JSConcolicCall *s)
 {
     JSObject *fp = JS_VALUE_GET_OBJ(s->cb[1]);
@@ -98928,8 +98928,7 @@ static int js_concolic_call_prefix_begin(JSContext *ctx, JSConcolicCall *s)
         return 0;
     if (!g_concolic.string_domain(ctx, s->hdr.this_val, &s->pm_str, ascii, &wide))
         return 0;
-    DCHECK(JS_IsString(s->pm_str) && JS_VALUE_GET_STRING(s->pm_str)->len > 0,
-           "a receiver's String domain was stated with no known unit ahead of its first hole");
+    DCHECK(JS_IsString(s->pm_str), "a receiver's String domain was stated with no String of its known units");
     s->pm_bytecode = js_dup(JS_MKPTR(JS_TAG_STRING, JS_VALUE_GET_OBJ(pat)->u.regexp.bytecode));
     bc = str8(JS_VALUE_GET_STRING(s->pm_bytecode));
     alloc = lre_get_alloc_count(bc);
@@ -109443,9 +109442,67 @@ fail:
     X(REX_FLAGS,         "22.2.7.2 steps 3-4 (flags decide global/sticky)") \
     X(REX_MATCH,         "22.2.7.2 steps 5-12 (the matcher)") \
     X(REX_SET_LASTINDEX, "22.2.7.2 steps 13-15 (Set(R, \"lastIndex\"))") \
-    X(REX_RESULT,        "22.2.7.2 steps 16-28 (build the match result)")
+    X(REX_RESULT,        "22.2.7.2 steps 16-28 (build the match result)") \
+    X(REX_DOMAIN,        "22.2.7.2 steps 5-12 (the matcher) over every String the unknown subject's domain admits")
 enum { REX_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_regexp_exec_steps[] = { REX_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* §22.2.7.2 RegExpBuiltinExec over an unknown subject, for a regexp that is neither global nor sticky (whose
+   lastIndex the algorithm then neither reads into the match nor writes): seeds the matcher from index 0 over
+   every String the subject's domain admits (JSConcolicHooks.string_domain). 1 where seeded, 0 where the regexp
+   or the subject states nothing it can run over, -1 on an allocation refused. */
+static int js_regexp_exec_domain_begin(JSContext *ctx, JSRegExpExec *s)
+{
+    JSRegExp *re = js_get_regexp(ctx, s->hdr.this_val, true);
+    const uint8_t *bc;
+    uint64_t ascii[2];
+    JSString *p;
+    int wide = 0, alloc, r;
+
+    if (!re) return -1;
+    bc = str8(re->bytecode);
+    if (lre_get_flags(bc) & (LRE_FLAG_GLOBAL | LRE_FLAG_STICKY)) return 0;
+    if (!g_concolic.string_domain(ctx, step_arg(&s->hdr, 0), &s->str_val, ascii, &wide)) return 0;
+    s->bytecode = js_dup(JS_MKPTR(JS_TAG_STRING, re->bytecode));
+    bc = str8(JS_VALUE_GET_STRING(s->bytecode));
+    alloc = lre_get_alloc_count(bc);
+    if (alloc > 0) {
+        s->capture = js_malloc(ctx, sizeof(s->capture[0]) * (size_t)alloc);
+        if (!s->capture) return -1;
+        s->cap_alloc = alloc;
+    }
+    p = JS_VALUE_GET_STRING(s->str_val);
+    r = lre_exec_begin_prefix(&s->ec, s->capture, bc, str8(p), p->len, p->is_wide_char, ascii, wide != 0, ctx);
+    if (r == LRE_RET_MEMORY_ERROR) {
+        JS_ThrowOutOfMemory(ctx);
+        return -1;
+    }
+    if (r == LRE_RET_UNDECIDED) return 0;
+    DCHECK(r == 0, "lre_exec_begin_prefix answered a value its contract does not name");
+    s->matching = 1;
+    return 1;
+}
+
+/* One slice of that matcher: where no admitted String matches, steps 12.a-b return null in every world. */
+static int js_regexp_exec_domain_step(JSContext *ctx, JSRegExpExec *s)
+{
+    int rc = lre_exec_step(&s->ec);
+
+    if (rc == LRE_RET_YIELD)
+        return JS_STEP_YIELD;
+    lre_exec_end(&s->ec);
+    s->matching = 0;
+    if (rc == LRE_RET_MEMORY_ERROR) {
+        JS_ThrowOutOfMemory(ctx);
+        return -1;
+    }
+    CHECK(rc == 0 || rc == 1 || rc == LRE_RET_UNDECIDED, "corrupted bytecode in a matcher over a domain");
+    if (rc == 0) {
+        JS_FreeValue(ctx, s->result);
+        s->result = JS_NULL;
+    }
+    return 0;
+}
 
 static int js_regexp_exec_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -109461,6 +109518,7 @@ static int js_regexp_exec_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         s->li_val = JS_UNDEFINED;
         s->bytecode = JS_UNDEFINED;
         s->capture = NULL;
+        s->cap_alloc = 0;
         s->last_index = 0;
         s->rc = 0;
         s->set_pending = 0;
@@ -109479,14 +109537,14 @@ static int js_regexp_exec_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
         {
             JSValue ex = js_concolic_operand(ctx, step_arg(&s->hdr, 0));
             if (!JS_IsUninitialized(ex)) {
-                /* THE MATCH RUNS, on the operand's own example: the example becomes the SUBJECT and the machine
-                   continues through its real stages, so the derived unknown carries the match this pattern
-                   really produced. With no example there is nothing to run and the value is honestly unknown —
-                   which is a non-answer, not a guess. */
+                /* The result is derived with no example; where no String the subject's domain admits matches
+                   (js_regexp_exec_domain_begin), it is null in every world instead. */
                 JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
                 JS_FreeValue(ctx, ex);
                 s->result = js_concolic_derive(ctx, step_arg(&s->hdr, 0), "RegExp.exec", JS_UNDEFINED);
-                return 0;
+                r = js_regexp_exec_domain_begin(ctx, s);
+                if (r <= 0) return r;
+                s->hdr.stage = REX_DOMAIN;
             }
         }
         if (s->hdr.stage == REX_TOSTRING) {
@@ -109496,6 +109554,10 @@ static int js_regexp_exec_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             if (r) return r < 0 ? -1 : r;
             s->hdr.stage = REX_GET_LASTINDEX;
         }
+    }
+    if (s->hdr.stage == REX_DOMAIN) {
+        JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+        return js_regexp_exec_domain_step(ctx, s);
     }
     if (s->hdr.stage == REX_GET_LASTINDEX) {
         /* step 3: Get(R, "lastIndex") — an accessor if the page redefined it. */
@@ -110696,6 +110758,21 @@ static int js_re_search_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         if (!JS_IsObject(s->hdr.this_val)) { JS_ThrowTypeErrorNotAnObject(ctx); return -1; }
         s->hdr.stage = RES_STR;
     }
+    if (s->hdr.stage == RES_STR && !search && g_concolic.is && g_concolic.is(step_arg(&s->hdr, 0))) {
+        /* test's step 3 over an unknown that is a String in every world (its domain says so): §7.1.17 ToString
+           returns a String argument itself, so RegExpExec runs over the unknown, whose RegExpBuiltinExec decides
+           from the subject's domain (REX_DOMAIN). */
+        JSValue pre = JS_UNDEFINED;
+        uint64_t ascii[2];
+        int wide = 0;
+
+        if (g_concolic.string_domain(ctx, step_arg(&s->hdr, 0), &pre, ascii, &wide)) {
+            JS_FreeValue(ctx, pre);
+            JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED;
+            s->str = js_dup(step_arg(&s->hdr, 0));
+            s->hdr.stage = RES_EXEC;
+        }
+    }
     if (s->hdr.stage == RES_STR) {
         r = step_tostring_run(ctx, &s->hdr, step_arg(&s->hdr, 0), cb_result, &s->str, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
@@ -110723,7 +110800,22 @@ static int js_re_search_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                             out_cb, out_argc);
         cb_result = JS_UNDEFINED;
         if (r) return r < 0 ? -1 : r;
-        if (!search) { s->result = js_bool(!JS_IsNull(s->res)); return 0; }   /* test steps 4-5 */
+        if (!search) {   /* test steps 4-5 */
+            /* An unknown match is a predicate of the match, `match !== null`, through the hook that owns
+               §7.2.14 over an unknown. Named residual. Not covered: @@search's step 9 over an unknown match.
+               Next diff builds: its two completions, -1 and the match's index, forked on the same predicate.
+               How its absence shows: `s.search(re)` over unknown input never answers -1. */
+            if (g_concolic.is(s->res)) {
+                JSValue pair[2] = { js_dup(s->res), JS_NULL };
+
+                if (!g_concolic.cmp(ctx, pair + 2, /*is_neq*/true, JS_CONCOLIC_EQ_STRICT))
+                    DFAIL("the concolic comparison hook declined an unknown RegExpExec result");
+                s->result = pair[0];
+                return 0;
+            }
+            s->result = js_bool(!JS_IsNull(s->res));
+            return 0;
+        }
         s->hdr.stage = RES_CUR;
     }
     if (s->hdr.stage == RES_CUR) {
@@ -123389,6 +123481,26 @@ static int encodeURI_hex(StringBuffer *b, int c) {
     return string_buffer_write8(b, buf, n);
 }
 
+/* §19.2.6.5 Encode's result over any string: each code unit is one unescapedSet holds (isURIUnescaped, this
+   file's reading of the ASCII word characters, "-.!~*'()" and encodeURI's extraUnescaped), or one of an escape
+   "%" followed by StringPad(hex, 2, "0", start) of an uppercase hexadecimal octet, whose digits are word
+   characters. Stated on the unknown `r` through JSConcolicHooks.string_class. */
+static void js_uri_encode_class(JSContext *ctx, JSValueConst r, int isComponent)
+{
+    uint32_t pairs[2 * 64];
+    int n = 0, c;
+
+    DCHECK(g_concolic.string_class != NULL, "a host installed the concolic hooks without the String class one");
+    for (c = 0; c < 0x80; c++) {
+        if (!isURIUnescaped(c, isComponent) && c != '%') continue;
+        if (n > 0 && pairs[2 * n - 1] == (uint32_t)c - 1) { pairs[2 * n - 1] = (uint32_t)c; continue; }
+        DCHECK(n < 64, "Encode's unescaped set split into more ranges than its ASCII span can hold");
+        pairs[2 * n] = pairs[2 * n + 1] = (uint32_t)c;
+        n++;
+    }
+    g_concolic.string_class(ctx, r, pairs, n);
+}
+
 static JSValue js_global_encodeURI(JSContext *ctx, JSValueConst this_val,
                                    int argc, JSValueConst *argv,
                                    int isComponent)
@@ -123405,10 +123517,13 @@ static JSValue js_global_encodeURI(JSContext *ctx, JSValueConst this_val,
         JSValue ex = js_concolic_operand(ctx, argv[0]);
         if (!JS_IsUninitialized(ex)) {
             JSValue real = JS_UNDEFINED;
+            JSValue r;
+
             if (js_concolic_codec_operand(argv[0], ex)) { JSValueConst a2[1]; a2[0] = ex; real = js_global_encodeURI(ctx, this_val, 1, a2, isComponent); }
             JS_FreeValue(ctx, ex);
-            return js_concolic_derive(ctx, argv[0],
-                                      isComponent ? "encodeURIComponent" : "encodeURI", real);
+            r = js_concolic_derive(ctx, argv[0], isComponent ? "encodeURIComponent" : "encodeURI", real);
+            if (g_concolic.is(r)) js_uri_encode_class(ctx, r, isComponent);
+            return r;
         }
     }
     str = JS_ToString(ctx, argv[0]);

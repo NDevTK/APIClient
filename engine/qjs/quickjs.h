@@ -2940,13 +2940,16 @@ typedef struct JSConcolicHooks {
     void (*string_unit_map)(JSContext *ctx, JSValueConst r, JSValueConst recv, const uint32_t *pairs, int n,
                             int unicode, JSValueConst rep);
     /* The domain the unknown `v` states as a String in every world: the units its page bytes spell ahead of its
-       first hole (`*prefix`, owned, at least one unit), and the set every later unit lies in, a bit per unit
+       first hole (`*prefix`, owned, possibly empty), and the set every later unit lies in, a bit per unit
        below 0x80 in `tail_ascii` and `*tail_wide` for any unit above. 0, with `*prefix` undefined, where `v`
        states no such domain. */
     int (*string_domain)(JSContext *ctx, JSValueConst v, JSValue *prefix, uint64_t tail_ascii[2], int *tail_wide);
     /* The unknown String `r` (consumed), which in every world begins with the first `k` units of the prefix
        string_domain states for `recv`, minted as those page units followed by the rest of `r`. Owned. */
     JSValue (*string_keep_prefix)(JSContext *ctx, JSValue r, JSValueConst recv, uint32_t k);
+    /* `r`, minted by an algorithm every result of which lies in the `n` sorted inclusive code-unit pairs, is a
+       String in every world holding only those units: states the type and the class on it. */
+    void (*string_class)(JSContext *ctx, JSValueConst r, const uint32_t *pairs, int n);
     /* THE NAME an unknown key denotes, as a REAL string — the concolic's own shape. A property key must be an
        atom, which a concolic cannot be, but the shape IS a string and it is stable per source: two writes
        through the same unknown source land in the SAME slot, two different sources in different ones, and a

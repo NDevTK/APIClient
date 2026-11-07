@@ -3781,8 +3781,13 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
             break;
         case REOP_line_start:
         case REOP_line_start_m:
-            if (cptr == s->cbuf)
+            if (cptr == s->cbuf) {
+                /* with no known units the attempt here is the one standing for every later start, which this
+                   test answers differently */
+                if (s->tail_mode && s->cbuf == s->cbuf_end)
+                    s->tail_lookback = true;
                 break;
+            }
             if (opcode == REOP_line_start)
                 goto no_match;
             s->tail_lookback = true;
@@ -3954,6 +3959,8 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
                 bool is_boundary = (opcode == REOP_word_boundary || opcode == REOP_word_boundary_i);
                 /* char before */
                 if (cptr == s->cbuf) {
+                    if (s->tail_mode && s->cbuf == s->cbuf_end)
+                        s->tail_lookback = true;
                     v1 = false;
                 } else {
                     s->tail_lookback = true;
@@ -4122,9 +4129,9 @@ static intptr_t lre_exec_backtrack(REExecContext *s)
             break;
         case REOP_prev:
             /* go to the previous char */
+            s->tail_lookback = true;
             if (cptr == s->cbuf)
                 goto no_match;
-            s->tail_lookback = true;
             PREV_CHAR(cptr, s->cbuf, cbuf_type);
             break;
         default:
