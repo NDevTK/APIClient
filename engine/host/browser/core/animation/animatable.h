@@ -4,11 +4,8 @@
  *
  * Each triggers a style change event over the target (core/animation/css_animations.h's update, for the target
  * element and, for a subtree, every element below it), then answers §4.6.7's relevant animations in §5.4.2's
- * composite order.
- *
- * Named residual: the style change event walks the subtree in one pass. The next diff makes getAnimations() a step
- * machine that rests at cssom_style_ask per element, as core/dom/element_view.c's members do. Its absence shows as a
- * getAnimations() over a page-sized subtree holding the thread for one slice longer than the work quantum. */
+ * composite order. The event's walk is a step machine on a layout job of its own: it updates elements under a
+ * resting drive, charged as a DOM walk, and rests between them where the drive's allowance is spent. */
 #ifndef ENGINE_HOST_BROWSER_CORE_ANIMATION_ANIMATABLE_H
 #define ENGINE_HOST_BROWSER_CORE_ANIMATION_ANIMATABLE_H
 
