@@ -6837,55 +6837,48 @@ TF_UNIT void concat_keyed_selftest(JSContext *ctx)
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
-/* A [[Get]] that misses a Document's named properties walks on to its prototype (§10.1.8.1 OrdinaryGet step 2)
-   from the keyed entry's step delivery, and that hop is an offer the scheduler may take. The parked operation
-   must resume at the prototype: each element is visited once under both schedules, so the charged element
-   count equals the document's element count. A count above it is a resume that re-ran the named walk. */
-static const char *TF_NAMED_WALKON_SRC =
+/* A [[Get]] of a name no element's `id` or `name` carries answers from the Document's name index (HTML §3.1.7's
+   supported property names are a subset of those values) without visiting an element, so it costs no walk
+   whatever the document's size. A name the index holds but no named element carries (a `div`'s id) still walks,
+   and the miss walks on to the prototype (§10.1.8.1 OrdinaryGet step 2) from the keyed entry's step delivery,
+   an offer the scheduler may take: the parked operation resumes at the prototype, so both schedules charge the
+   same elements. The second document is an inert one of the program's own, so the analysed one is not written. */
+static const char *TF_NAMED_ABSENT_SRC =
     "(function(){ return document.zqNoNamedElement === undefined ? 1 : -1; })()";
+static const char *TF_NAMED_WALKON_SRC =
+    "(function(){ var x = document.implementation.createHTMLDocument(''), d = x.createElement('div');"
+    " d.id = 'zqDivOnly'; x.body.appendChild(d); return x.zqDivOnly === undefined ? 1 : -1; })()";
 
-TF_UNIT void named_walk_on_selftest(JSContext *ctx, lxb_html_document_t *dom)
+TF_UNIT void named_walk_on_selftest(JSContext *ctx)
 {
     static const JSFlowControlHooks *const SCHED[2] = { &TF_DIFF_DECLINE, &TF_DIFF_FORCE };
-    lxb_dom_node_t *root = lxb_dom_interface_node(dom);
-    uint64_t elements = 0;
+    uint64_t walked[2];
 
-    for (lxb_dom_node_t *e = named_walk_successor(root, root); e; e = named_walk_successor(e, root)) elements++;
-    CHECK(elements > 0, "the fixture's document holds no element, so a named walk over it proves nothing");
     for (int k = 0; k < 2; k++) {
         ThreadWorkCensus before, now;
-        JSValue *flow, res = JS_UNDEFINED;
-        int32_t got = 0;
-        int r;
+        int susp, mach;
+        int32_t got;
 
         thread_work_census(&before);
-        JS_SetFlowControlHooks(SCHED[k]);
-        flow = JS_FlowNew(ctx, TF_NAMED_WALKON_SRC, strlen(TF_NAMED_WALKON_SRC), "named-walk-on", 0);
-        CHECK(flow != NULL, "the named walk-on fixture could not create a flow");
-        do {
-            r = JS_FlowResume(ctx, flow, &res);
-            CHECK(r != JS_FLOW_DETACHED, "the named walk-on fixture's flow detached");
-            thread_work_census(&now);
-            CHECKF(now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK] <= elements,
-                   "a missed Document named-property [[Get]] visited %llu elements of a %llu-element document "
-                   "(schedule %s): a resume of the parked walk-on re-ran the named walk instead of continuing at "
-                   "the prototype",
-                   (unsigned long long)(now.charged_input[THREAD_WORK_DOM_WALK] -
-                                        before.charged_input[THREAD_WORK_DOM_WALK]),
-                   (unsigned long long)elements, k ? "forced" : "declined");
-        } while (r != 0);
-        CHECK(!JS_IsException(res), "the named walk-on fixture's program threw");
-        JS_ToInt32(ctx, &got, res);
-        JS_FreeValue(ctx, res);
-        JS_FlowFree(ctx, flow);
+        got = tf_step_diff_run(ctx, TF_NAMED_ABSENT_SRC, "named-absent", SCHED[k], &susp, &mach);
+        thread_work_census(&now);
         CHECK(got == 1, "a read of a name no element carries did not answer undefined");
-        CHECKF(now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK] == elements,
-               "a missed Document named-property [[Get]] visited %llu elements of a %llu-element document",
+        CHECKF(now.charged_input[THREAD_WORK_DOM_WALK] == before.charged_input[THREAD_WORK_DOM_WALK],
+               "a Document named-property [[Get]] of a name no element's id or name carries visited %llu elements "
+               "(schedule %s): the read walked the tree instead of answering from the document's name index",
                (unsigned long long)(now.charged_input[THREAD_WORK_DOM_WALK] -
-                                    before.charged_input[THREAD_WORK_DOM_WALK]),
-               (unsigned long long)elements);
+                                    before.charged_input[THREAD_WORK_DOM_WALK]), k ? "forced" : "declined");
+        thread_work_census(&before);
+        got = tf_step_diff_run(ctx, TF_NAMED_WALKON_SRC, "named-walk-on", SCHED[k], &susp, &mach);
+        thread_work_census(&now);
+        CHECK(got == 1, "a read of a div's id on a Document did not answer undefined");
+        walked[k] = now.charged_input[THREAD_WORK_DOM_WALK] - before.charged_input[THREAD_WORK_DOM_WALK];
     }
     JS_SetFlowControlHooks(&TF_DIFF_NONE);
+    CHECKF(walked[0] > 0 && walked[1] == walked[0],
+           "a missed Document named-property [[Get]] over a name the index holds was charged %llu elements "
+           "declined and %llu forced: the walk did not run, or a resume re-ran the parked walk instead of "
+           "continuing at the prototype", (unsigned long long)walked[0], (unsigned long long)walked[1]);
 }
 
 /* DOM §4.2.10's live collections rest per node: the same reads of 300 detached elements answer the same under a
@@ -41875,7 +41868,7 @@ int main(int argc, char **argv) {
        is what installs `document`, `Response` and §6.12's three members. */
     union_arm_selftest(ctx);
     /* A Document named-property miss walks on to the prototype once under both schedules; needs the document. */
-    named_walk_on_selftest(ctx, dom);
+    named_walk_on_selftest(ctx);
     /* DOM §4.2.10's live collections rest per node and resume where they parked; needs the document. */
     collection_walk_selftest(ctx);
     /* HTML §4.12.5.1.16's ROUND TRIP, immediately after the union arms and for the same two reasons: it needs
