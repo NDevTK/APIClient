@@ -56668,7 +56668,8 @@ void JS_FlowReachEnd(JSFlowReach *out)
 
 /* JS_FlowGraph* — see quickjs.h. Host memory throughout, spelled `(free)`/`(realloc)` for the reason the reach
    census gives: a write runs where a runtime allocation could ask for a sale. */
-enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3 };
+enum { FG_PLAIN = 1, FG_ARRAY = 2, FG_ERROR = 3, FG_RECORD = 4 };
+static const char *js_ab_codec_intern(JSRuntime *rt, const uint8_t *name, uint32_t len);
 /* A parked graph this writer cannot write whole would resume as a different heap, so the release build stops
    too; the dev build's DCHECK above each use names what to build. */
 #define FG_NO_WRITER() CHECK_FAIL("flow graph: a parked graph holds a value or object no writer can write")
@@ -56851,6 +56852,7 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
     case JS_TAG_BOOL: fg_u8(out, JS_VALUE_GET_BOOL(v) ? 'T' : 'F'); return;
     case JS_TAG_NULL: fg_u8(out, 'N'); return;
     case JS_TAG_UNDEFINED: fg_u8(out, 'U'); return;
+    case JS_TAG_UNINITIALIZED: fg_u8(out, 'Z'); return;   /* a record's not-yet-computed slot (a Concolic's proto) */
     case JS_TAG_FLOAT64: { double d = JS_VALUE_GET_FLOAT64(v); fg_u8(out, 'D'); fg_put(out, &d, 8); return; }
     case JS_TAG_STRING: fg_string(w, out, JS_VALUE_GET_STRING(v)); return;
     case JS_TAG_STRING_ROPE: {
@@ -56869,7 +56871,8 @@ static void fg_value(FGWriter *w, FGBuf *out, JSValueConst v)
         if (p->flow_gen <= w->floor) { fg_u8(out, 'A'); fg_u32(out, fg_anchor(w, v)); return; }
         if (!fg_map_get(&w->objs, p, &i)) {
             uint8_t kind = p->class_id == JS_CLASS_OBJECT ? FG_PLAIN : p->class_id == JS_CLASS_ARRAY ? FG_ARRAY
-                         : p->class_id == JS_CLASS_ERROR ? FG_ERROR : 0;
+                         : p->class_id == JS_CLASS_ERROR ? FG_ERROR
+                         : w->ctx->rt->class_array[p->class_id].record ? FG_RECORD : 0;
             if (kind == 0 && w->survey) { fg_gap(w, out, FG_GAP_CLASS, p->class_id); return; }
             if (kind == 0) {
                 DCHECKF(false, "flow graph: a private object of class %d is on a parked graph and has no writer — give "
@@ -56949,10 +56952,67 @@ static void fg_props(FGWriter *w, FGBuf *out, JSObject *p, int from)
     }
 }
 
+/* A host record by its layout (quickjs.h's JSRecordLayout): a flexible record's size, then the record's bytes
+   with every owned slot zeroed, then its values, then each pointer field by its kind with the count it holds. */
+static void fg_cstr(FGBuf *out, const char *c)
+{
+    if (!c) { fg_u8(out, 'N'); return; }
+    fg_u8(out, 'C'); fg_u32(out, (uint32_t)strlen(c)); fg_put(out, c, strlen(c));
+}
+static void fg_record(FGWriter *w, FGBuf *out, const void *rec, const JSRecordLayout *l)
+{
+    const uint8_t *b = rec;
+    size_t sz = l->self_size ? l->self_size(rec) : l->size;
+    uint8_t *img = fg_grow(NULL, sz);
+
+    memcpy(img, rec, sz);
+    for (int i = 0; i < l->n_val; i++) memset(img + l->val_off[i], 0, sizeof(JSValue));
+    for (int i = 0; i < l->n_fields; i++)
+        memset(img + l->fields[i].off, 0, l->fields[i].kind == JS_REC_VALUE_IF ? sizeof(JSValue) : sizeof(void *));
+    if (l->self_size) fg_u32(out, (uint32_t)sz);
+    fg_put(out, img, sz);
+    (free)(img);
+    for (int i = 0; i < l->n_val; i++) fg_value(w, out, *(const JSValue *)(b + l->val_off[i]));
+    for (int i = 0; i < l->n_fields; i++) {
+        const JSRecordField *f = &l->fields[i];
+        const void *ptr = *(void *const *)(b + f->off);
+        uint32_t n;
+
+        if (f->kind == JS_REC_VALUE_IF) {
+            if (f->count(rec)) { fg_u8(out, 'v'); fg_value(w, out, *(const JSValue *)(b + f->off)); }
+            else fg_u8(out, '-');
+            continue;
+        }
+        if (f->kind == JS_REC_CSTR || f->kind == JS_REC_INTERNED) { fg_cstr(out, ptr); continue; }
+        if (!ptr) { fg_u8(out, 'N'); continue; }
+        fg_u8(out, 'P');
+        if (f->kind == JS_REC_RECORD) { fg_record(w, out, ptr, f->sub); continue; }
+        n = f->count(rec);
+        fg_u32(out, n);
+        for (uint32_t k = 0; k < n; k++) {
+            switch ((JSRecordKind)f->kind) {
+            case JS_REC_POD_ARRAY: fg_put(out, (const uint8_t *)ptr + (size_t)k * f->elem_size, f->elem_size); break;
+            case JS_REC_CSTR_ARRAY: fg_cstr(out, ((char *const *)ptr)[k]); break;
+            case JS_REC_VALUE_ARRAY: fg_value(w, out, ((const JSValue *)ptr)[k]); break;
+            case JS_REC_INLINE_ARRAY: fg_record(w, out, (const uint8_t *)ptr + (size_t)k * f->sub->size, f->sub); break;
+            case JS_REC_PTR_ARRAY: {
+                const void *e = ((void *const *)ptr)[k];
+                if (e) { fg_u8(out, 'P'); fg_record(w, out, e, f->sub); } else fg_u8(out, 'N');
+                break;
+            }
+            case JS_REC_CSTR: case JS_REC_RECORD: case JS_REC_VALUE_IF: case JS_REC_INTERNED:
+                DCHECKF(false, "flow graph: a record field of kind %d reached the array arm", (int)f->kind);
+            }
+        }
+    }
+}
+
 /* An object's body: its prototype, whether it is extensible, and its own data properties (fg_props). An array
    writes first whether its elements are dense ('F': stored apart, written as a count and the values) or ordinary
    properties ('S'), then its length's attributes and value, then the properties after the length slot. An Error
-   follows its properties with its uncatchable flag and its stack slot. A weak key or target has no writer yet. */
+   follows its properties with its uncatchable flag and its stack slot, and an object of a class with a record
+   layout writes its record ahead of them, so a rebuilt one holds it before its exotic methods are asked. A weak
+   key or target has no writer yet. */
 static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
 {
     JSObject *p = w->order[id];
@@ -56982,6 +57042,10 @@ static void fg_body(FGWriter *w, FGBuf *out, uint32_t id)
         fg_props(w, out, p, 1);
         return;
     }
+    if (w->kinds[id] == FG_RECORD) {
+        DCHECK(p->u.opaque != NULL, "flow graph: an object of a class with a record layout holds no record");
+        fg_record(w, out, p->u.opaque, w->ctx->rt->class_array[p->class_id].record);
+    }
     fg_props(w, out, p, 0);
     if (w->kinds[id] == FG_ERROR) {
         /* its stack: undefined, the formatted string, or the pending [prepareStackTrace, callsites] pair */
@@ -57004,6 +57068,8 @@ static JSFlowGraph *fg_write(JSContext *ctx, const JSValueConst *roots, int n, u
     g->n_objs = w.n_order;
     fg_u32(&g->bytes, w.n_order);
     if (w.n_order) fg_put(&g->bytes, w.kinds, w.n_order);
+    for (uint32_t i = 0; i < w.n_order; i++)   /* a record object's class, which its shell is created with */
+        if (w.kinds[i] == FG_RECORD) fg_u32(&g->bytes, w.order[i]->class_id);
     fg_u32(&g->bytes, (uint32_t)n);
     if (rbuf.len) fg_put(&g->bytes, rbuf.b, rbuf.len);
     if (bbuf.len) fg_put(&g->bytes, bbuf.b, bbuf.len);
@@ -57110,6 +57176,7 @@ static JSValue fg_rvalue(FGReader *r)
     case 'F': return JS_FALSE;
     case 'N': return JS_NULL;
     case 'U': return JS_UNDEFINED;
+    case 'Z': return JS_UNINITIALIZED;
     case 'D': memcpy(&d, fg_take(r, 8), 8); return js_float64(d);
     case 'S': case 's': return fg_rstring(r, t);
     case 'A':
@@ -57148,7 +57215,8 @@ static JSAtom fg_rkey(FGReader *r)
 }
 
 /* fg_props' record: the live count, then each key, its attributes and its value, defined on `o` in order. */
-static void fg_rprops(FGReader *r, JSValueConst o)
+/* `extra` is JS_PROP_NO_EXOTIC for a record object, whose own slots are written as the shape holds them. */
+static void fg_rprops(FGReader *r, JSValueConst o, int extra)
 {
     uint32_t np = fg_r32(r);
 
@@ -57156,10 +57224,111 @@ static void fg_rprops(FGReader *r, JSValueConst o)
         JSAtom key = fg_rkey(r);
         uint8_t fl = fg_r8(r);
 
-        CHECK(JS_DefinePropertyValue(r->ctx, o, key, fg_rvalue(r), fl) >= 0,
+        CHECK(JS_DefinePropertyValue(r->ctx, o, key, fg_rvalue(r), fl | extra) >= 0,
               "flow graph: a rebuilt object refused a property");
         JS_FreeAtom(r->ctx, key);
     }
+}
+
+/* A record fg_record wrote, in the C allocator's storage: into `rec` for an inline array's element, freshly
+   allocated otherwise. Each array is rebuilt at the count written, and the layout's own count is asserted against
+   it once every field is back, since a count may read a field restored after it. */
+static char *fg_rcstr(FGReader *r)
+{
+    uint8_t t = fg_r8(r);
+    uint32_t len;
+    char *c;
+
+    if (t == 'N') return NULL;
+    CHECK(t == 'C', "flow graph: a record's string carries a tag this reader does not know");
+    len = fg_r32(r);
+    c = calloc(1, (size_t)len + 1);
+    CHECK(c != NULL, "flow graph: OOM rebuilding a record's string");
+    memcpy(c, fg_take(r, len), len);
+    c[len] = '\0';
+    return c;
+}
+static void *fg_rrecord(FGReader *r, const JSRecordLayout *l);
+static void fg_rrecord_into(FGReader *r, void *rec, size_t sz, const JSRecordLayout *l)
+{
+    uint8_t *b = rec;
+    uint32_t written[64];
+
+    CHECK(l->n_fields <= 64, "flow graph: a record layout has more fields than the reader's count table");
+    memcpy(b, fg_take(r, sz), sz);
+    for (int i = 0; i < l->n_val; i++) *(JSValue *)(b + l->val_off[i]) = fg_rvalue(r);
+    for (int i = 0; i < l->n_fields; i++) {
+        const JSRecordField *f = &l->fields[i];
+        void **slot = (void **)(b + f->off);
+        uint8_t t;
+        uint32_t n;
+
+        written[i] = 0;
+        if (f->kind == JS_REC_VALUE_IF) {
+            t = fg_r8(r);
+            CHECK(t == 'v' || t == '-', "flow graph: a record's conditional value carries an unknown tag");
+            if (t == 'v') *(JSValue *)(b + f->off) = fg_rvalue(r);   /* else the zeroed bytes it was written as */
+            written[i] = t == 'v';
+            continue;
+        }
+        if (f->kind == JS_REC_CSTR) { *slot = fg_rcstr(r); continue; }
+        if (f->kind == JS_REC_INTERNED) {
+            char *c = fg_rcstr(r);
+            *slot = c ? (void *)js_ab_codec_intern(r->ctx->rt, (const uint8_t *)c, (uint32_t)strlen(c)) : NULL;
+            CHECK(!c || *slot, "flow graph: OOM interning a record's name");
+            (free)(c);
+            continue;
+        }
+        t = fg_r8(r);
+        if (t == 'N') { *slot = NULL; continue; }
+        CHECK(t == 'P', "flow graph: a record's pointer field carries a tag this reader does not know");
+        if (f->kind == JS_REC_RECORD) { *slot = fg_rrecord(r, f->sub); continue; }
+        n = written[i] = fg_r32(r);
+        {
+            size_t es = f->kind == JS_REC_POD_ARRAY ? f->elem_size : f->kind == JS_REC_INLINE_ARRAY ? f->sub->size
+                      : f->kind == JS_REC_VALUE_ARRAY ? sizeof(JSValue) : sizeof(void *);
+            uint8_t *arr = calloc(n ? n : 1, es);
+
+            CHECK(arr != NULL, "flow graph: OOM rebuilding a record's array");
+            *slot = arr;
+            for (uint32_t k = 0; k < n; k++) {
+                switch ((JSRecordKind)f->kind) {
+                case JS_REC_POD_ARRAY: memcpy(arr + (size_t)k * es, fg_take(r, es), es); break;
+                case JS_REC_CSTR_ARRAY: ((char **)arr)[k] = fg_rcstr(r); break;
+                case JS_REC_VALUE_ARRAY: ((JSValue *)arr)[k] = fg_rvalue(r); break;
+                case JS_REC_INLINE_ARRAY: fg_rrecord_into(r, arr + (size_t)k * es, es, f->sub); break;
+                case JS_REC_PTR_ARRAY:
+                    t = fg_r8(r);
+                    CHECK(t == 'P' || t == 'N', "flow graph: a record's pointer element carries an unknown tag");
+                    ((void **)arr)[k] = t == 'P' ? fg_rrecord(r, f->sub) : NULL;
+                    break;
+                case JS_REC_CSTR: case JS_REC_RECORD: case JS_REC_VALUE_IF: case JS_REC_INTERNED:
+                    DCHECKF(false, "flow graph: a record field of kind %d reached the array arm", (int)f->kind);
+                }
+            }
+        }
+    }
+    for (int i = 0; i < l->n_fields; i++) {
+        const JSRecordField *f = &l->fields[i];
+        bool counted = f->kind != JS_REC_RECORD && f->count &&
+                       (f->kind == JS_REC_VALUE_IF || *(void **)(b + f->off) != NULL);
+        DCHECKF(!counted || f->count(rec) == written[i],
+                "flow graph: a rebuilt record's field at offset %u holds %u entries and its layout counts %u",
+                (unsigned)f->off, written[i], counted ? f->count(rec) : 0);
+    }
+}
+static void *fg_rrecord(FGReader *r, const JSRecordLayout *l)
+{
+    size_t sz = l->self_size ? fg_r32(r) : l->size;
+    void *rec;
+
+    CHECK(sz >= l->size, "flow graph: a flexible record is shorter than its fixed header");
+    rec = calloc(1, sz);
+    CHECK(rec != NULL, "flow graph: OOM rebuilding a record");
+    fg_rrecord_into(r, rec, sz, l);
+    DCHECK(!l->self_size || l->self_size(rec) == sz,
+           "flow graph: a rebuilt flexible record's header names another size");
+    return rec;
 }
 
 int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
@@ -57177,9 +57346,15 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     r.objs = calloc(r.n_objs ? r.n_objs : 1, sizeof *r.objs);
     CHECK(r.objs != NULL, "flow graph: OOM rebuilding a graph's object table");
     for (uint32_t i = 0; i < r.n_objs; i++) {
-        r.objs[i] = kinds[i] == FG_ARRAY ? JS_NewArray(ctx)
-                  : JS_NewObjectProtoClass(ctx, JS_NULL, kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT);
-        CHECK(kinds[i] == FG_ARRAY || kinds[i] == FG_PLAIN || kinds[i] == FG_ERROR,
+        JSClassID cid = kinds[i] == FG_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT;
+
+        if (kinds[i] == FG_RECORD) {
+            cid = fg_r32(&r);
+            CHECK(cid < ctx->rt->class_count && ctx->rt->class_array[cid].record,
+                  "flow graph: a record object names a class with no record layout in this runtime");
+        }
+        r.objs[i] = kinds[i] == FG_ARRAY ? JS_NewArray(ctx) : JS_NewObjectProtoClass(ctx, JS_NULL, cid);
+        CHECK(kinds[i] == FG_ARRAY || kinds[i] == FG_PLAIN || kinds[i] == FG_ERROR || kinds[i] == FG_RECORD,
               "flow graph: an object kind this reader does not know");
         CHECK(!JS_IsException(r.objs[i]), "flow graph: OOM rebuilding an object");
     }
@@ -57189,6 +57364,10 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
     for (uint32_t i = 0; i < r.n_objs; i++) {
         JSValue o = r.objs[i], proto = fg_rvalue(&r);
         uint8_t ext = fg_r8(&r);
+        if (kinds[i] == FG_RECORD) {   /* before anything asks the class's exotic methods, which read the record */
+            JSObject *rp = JS_VALUE_GET_OBJ(o);
+            rp->u.opaque = fg_rrecord(&r, ctx->rt->class_array[rp->class_id].record);
+        }
         CHECK(JS_SetPrototypeInternal(ctx, o, proto, false) >= 0, "flow graph: a rebuilt object refused its prototype");
         JS_FreeValue(ctx, proto);
         if (kinds[i] == FG_ARRAY) {
@@ -57207,12 +57386,12 @@ int JS_FlowGraphRead(JSContext *ctx, const JSFlowGraph *g, JSValue *roots)
                     CHECK(JS_DefinePropertyValueUint32(ctx, o, k, fg_rvalue(&r), JS_PROP_C_W_E) >= 0,
                           "flow graph: a rebuilt array refused an element");
             }
-            fg_rprops(&r, o);
+            fg_rprops(&r, o, 0);
             /* last, so no element defined above moves it, and with its own attributes (a frozen length) */
             CHECK(JS_DefinePropertyValue(ctx, o, JS_ATOM_length, len, lfl) >= 0,
                   "flow graph: a rebuilt array refused its length");
         } else {
-            fg_rprops(&r, o);
+            fg_rprops(&r, o, kinds[i] == FG_RECORD ? JS_PROP_NO_EXOTIC : 0);
         }
         if (kinds[i] == FG_ERROR) {
             JSObject *ep = JS_VALUE_GET_OBJ(o);
