@@ -6,6 +6,8 @@
 
 #include "lexbor/selectors/selectors.h"
 
+#include <string.h>
+
 #include <math.h>
 
 
@@ -1502,6 +1504,21 @@ lxb_selectors_match_element(const lxb_css_selector_t *selector,
                             lxb_dom_node_t *node, lxb_selectors_entry_t *entry)
 {
     lxb_tag_id_t tag_id;
+    const lxb_char_t *local;
+    size_t len;
+
+    /* HTML §4.16.2 Case-sensitivity of selectors: the type selector is converted to ASCII lowercase before it is
+       compared with an HTML element in an HTML document, and compared in its original case with any other
+       element; either way the comparison is exact. The lowercased form is the tag id below; the original is
+       the selector's own bytes. */
+    if (node->ns != LXB_NS_HTML
+        || node->owner_document->type != LXB_DOM_DOCUMENT_DTYPE_HTML)
+    {
+        local = lxb_tag_name_by_id(node->local_name, &len);
+
+        return local != NULL && len == selector->name.length
+               && memcmp(local, selector->name.data, len) == 0;
+    }
 
     if (entry->id == 0) {
         tag_id = lxb_tag_id_by_name(node->owner_document->tags,

@@ -38,12 +38,21 @@ typedef struct {
 lxb_html_tag_fixname_t;
 
 
+/* For ns SVG, `tag_id` is read through lxb_html_tag_svg_static. */
 LXB_API bool
 lxb_html_tag_is_category(lxb_tag_id_t tag_id, lxb_ns_id_t ns,
                          lxb_html_tag_category_t cat);
 
 LXB_API const lxb_html_tag_fixname_t *
 lxb_html_tag_fixname_svg(lxb_tag_id_t tag_id);
+
+/* The static tag an SVG-namespace element's local name `tag_id` is, by HTML §13.2.6.5 The rules for parsing
+   tokens in foreign content's table of adjusted SVG tag names: the camelCase spelling the table gives (an id
+   of its own, interned case-sensitively) answers the static tag it adjusts; the lowercase spelling of an
+   adjusted name answers LXB_TAG__UNDEF, since no SVG element has that local name; any other id answers
+   itself. */
+LXB_API lxb_tag_id_t
+lxb_html_tag_svg_static(lexbor_hash_t *hash, lxb_tag_id_t tag_id);
 
 
 /*

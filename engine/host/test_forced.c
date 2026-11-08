@@ -1422,6 +1422,7 @@ static int fixture_provide(JSContext *ctx) {
 #include "fixture/custommedia.h"
 #include "fixture/visualupdate.h"
 #include "fixture/svgelement.h"
+#include "fixture/svglocalname.h"
 #include "fixture/typefacet.h"
 #include "fixture/windowthis.h"
 #include "fixture/intl.h"
@@ -2124,6 +2125,7 @@ TF_DOCS[] = {
     { "custommedia", HTML_CUSTOMMEDIA },
     { "visualupdate", HTML_VISUALUPDATE },
     { "svgelement", HTML_SVGELEMENT },
+    { "svglocalname", HTML_SVGLOCALNAME },
     { "typefacet", HTML_TYPEFACET },
     { "windowthis", HTML_WINDOWTHIS },
     { "intl", HTML_INTL },
@@ -16487,6 +16489,34 @@ TF_UNIT void probes_griditem(const char *js, Probe *tab, int *n) {
     probes_append(tab, n, rows, (int)COUNTOF(rows));
 }
 
+/* The rows of the `svglocalname` document (fixture/svglocalname.h): HTML §13.2.6.5's adjusted SVG tag name is
+   the parsed element's local name, and what reads it compares what the spec compares. */
+TF_UNIT void probes_svglocalname(const char *js, Probe *tab, int *n) {
+    const char *ln_why = NULL; int ln_tt = 1;
+    fold_row(&ln_tt, &ln_why, !!strstr(js, "\"/api/svglocalname\""),
+             "NOT REACHED: no /api/svglocalname record, so the script threw before its fetch");
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/svglocalname", "names",
+                                             "linearGradient.foreignObject.clipPath.feGaussianBlur"),
+             "HTML §13.2.6.5 The rules for parsing tokens in foreign content: a parsed SVG element's localName is "
+             "not the adjusted tag name (names lists them)");
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/svglocalname", "et", "svg"),
+             "HTML §13.2.6.5: the end tag `</lineargradient>` did not close the `linearGradient` element, so the "
+             "rect after it was parsed into it");
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/svglocalname", "qs", "10"),
+             "HTML §4.16.2 Case-sensitivity of selectors: a type selector did not match the SVG "
+             "`linearGradient` in its original case only (qs is `linearGradient` then `lineargradient`)");
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/svglocalname", "fo", "1"),
+             "HTML §13.2.6.5: a parsed `foreignObject` is not an HTML integration point, so its `div` child is "
+             "not in the HTML namespace");
+    fold_row(&ln_tt, &ln_why, param_value_is(js, "/api/svglocalname", "same", "2"),
+             "DOM §4.5 createElementNS and the parser did not make one local name of `linearGradient`: the "
+             "selector matched one of the two");
+    const Probe rows[] = {
+        { "svglocalname-adjusted", ln_tt, "/api/svglocalname", SESS_EXPLORE, ln_why },
+    };
+    probes_append(tab, n, rows, (int)COUNTOF(rows));
+}
+
 /* The rows of the `svgelement` document (fixture/svgelement.h). */
 TF_UNIT void probes_svgelement(const char *js, Probe *tab, int *n) {
     /* SVG 2 §4.4.1: an SVG-namespace element wears SVGElement, which inherits Element and not HTMLElement. */
@@ -27764,6 +27794,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     probes_scrollrestore(js, probes, &np);
     probes_travnav(js, probes, &np);
     probes_svgelement(js, probes, &np);
+    probes_svglocalname(js, probes, &np);
     probes_typefacet(js, probes, &np);
     probes_windowthis(js, probes, &np);
     probes_intl(js, probes, &np);

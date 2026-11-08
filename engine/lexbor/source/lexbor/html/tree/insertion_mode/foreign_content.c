@@ -30,10 +30,13 @@ lxb_html_tree_insertion_mode_foreign_content_anything_else_closed(lxb_html_tree_
     }
 
     lxb_dom_node_t **list = (lxb_dom_node_t **) tree->open_elements->list;
+    lexbor_hash_t *tags = tree->document->dom_document.tags;
 
     size_t idx = tree->open_elements->length - 1;
 
-    if (idx > 0 && list[idx]->local_name != token->tag_id) {
+    /* "If node's tag name, converted to ASCII lowercase, is not the same as the tag name of the token": an
+       adjusted SVG element's local name is camelCase and the token's is lowercase. */
+    if (idx > 0 && lxb_tag_id_lower(tags, list[idx]->local_name) != token->tag_id) {
         lxb_html_tree_parse_error(tree, token,
                                   LXB_HTML_RULES_ERROR_UNELINOPELST);
     }
@@ -41,7 +44,7 @@ lxb_html_tree_insertion_mode_foreign_content_anything_else_closed(lxb_html_tree_
     status = LXB_STATUS_OK;
 
     while (idx != 0) {
-        if (list[idx]->local_name == token->tag_id) {
+        if (lxb_tag_id_lower(tags, list[idx]->local_name) == token->tag_id) {
             status |= (unsigned) lxb_html_tree_open_elements_pop_until_node(tree,
                                                                 list[idx], true);
             return true;
@@ -86,7 +89,6 @@ lxb_html_tree_insertion_mode_foreign_content_anything_else(lxb_html_tree_t *tree
                                                            lxb_html_token_t *token)
 {
     lxb_html_element_t *element;
-    const lxb_html_tag_fixname_t *fixname_svg;
     lxb_dom_node_t *node = lxb_html_tree_adjusted_current_node(tree);
 
     if (node->ns == LXB_NS_MATH) {
@@ -103,15 +105,6 @@ lxb_html_tree_insertion_mode_foreign_content_anything_else(lxb_html_tree_t *tree
         tree->status = LXB_STATUS_ERROR_MEMORY_ALLOCATION;
 
         return lxb_html_tree_process_abort(tree);
-    }
-
-    if (node->ns == LXB_NS_SVG) {
-        fixname_svg = lxb_html_tag_fixname_svg(element->element.node.local_name);
-        if (fixname_svg != NULL && fixname_svg->name != NULL) {
-            lxb_dom_element_qualified_name_set(&element->element, NULL, 0,
-                                               fixname_svg->name,
-                                               (size_t) fixname_svg->len);
-        }
     }
 
     tree->before_append_attr = NULL;

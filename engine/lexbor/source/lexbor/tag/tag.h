@@ -38,6 +38,12 @@ LXB_API const lxb_tag_data_t *
 lxb_tag_data_by_name_upper(lexbor_hash_t *hash,
                            const lxb_char_t *name, size_t len);
 
+/* The id of `tag_id`'s name converted to ASCII lowercase, as the tokenizer would intern it: `tag_id` itself
+   for a static tag (whose names are lowercase), LXB_TAG__UNDEF when no tag carries the lowercased name. A NULL
+   `hash` asks the static tags alone. */
+LXB_API lxb_tag_id_t
+lxb_tag_id_lower(lexbor_hash_t *hash, lxb_tag_id_t tag_id);
+
 /*
  * Inline functions
  */

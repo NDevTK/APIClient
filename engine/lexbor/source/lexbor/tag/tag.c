@@ -92,6 +92,36 @@ lxb_tag_data_by_name(lexbor_hash_t *hash, const lxb_char_t *name, size_t len)
                                            lexbor_hash_search_lower, name, len);
 }
 
+lxb_tag_id_t
+lxb_tag_id_lower(lexbor_hash_t *hash, lxb_tag_id_t tag_id)
+{
+    const lxb_tag_data_t *data, *low;
+
+    if (tag_id < LXB_TAG__LAST_ENTRY) {
+        return tag_id;
+    }
+
+    data = lxb_tag_data_by_id(tag_id);
+    if (data == NULL) {
+        return LXB_TAG__UNDEF;
+    }
+
+    if (hash == NULL) {
+        const lexbor_shs_entry_t *entry;
+
+        entry = lexbor_shs_entry_get_lower_static(lxb_tag_res_shs_data_default,
+                                                  lexbor_hash_entry_str(&data->entry),
+                                                  data->entry.length);
+        return entry != NULL ? ((const lxb_tag_data_t *) entry->value)->tag_id
+                             : LXB_TAG__UNDEF;
+    }
+
+    low = lxb_tag_data_by_name(hash, lexbor_hash_entry_str(&data->entry),
+                               data->entry.length);
+
+    return low != NULL ? low->tag_id : LXB_TAG__UNDEF;
+}
+
 const lxb_tag_data_t *
 lxb_tag_data_by_name_upper(lexbor_hash_t *hash,
                            const lxb_char_t *name, size_t len)

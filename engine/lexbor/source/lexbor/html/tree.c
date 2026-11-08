@@ -36,6 +36,10 @@ const lxb_tag_data_t *
 lxb_tag_append_lower(lexbor_hash_t *hash,
                      const lxb_char_t *name, size_t length);
 
+LXB_API const lxb_tag_data_t *
+lxb_tag_append(lexbor_hash_t *hash, lxb_tag_id_t tag_id,
+               const lxb_char_t *name, size_t length);
+
 /*
  * HTML 13.2.6 "Tree construction"'s DOM writes -- the default table. See lxb_html_tree_dom_cb_t in tree.h for
  * why these are the PUBLIC mutators (DOM 4.2.3 "Mutation algorithms"' append/insert/remove, which the spec
@@ -524,6 +528,25 @@ lxb_html_tree_create_element_for_token(lxb_html_tree_t *tree,
     lxb_dom_node_t *node = lxb_html_tree_create_node(tree, token->tag_id, ns);
     if (node == NULL) {
         return NULL;
+    }
+
+    /* HTML §13.2.6.5 The rules for parsing tokens in foreign content changes an SVG start tag's name to its
+       adjusted spelling before the element is inserted, so the element's local name is that spelling, interned
+       case-sensitively as createElementNS interns it. */
+    if (ns == LXB_NS_SVG) {
+        const lxb_html_tag_fixname_t *fix = lxb_html_tag_fixname_svg(token->tag_id);
+
+        if (fix != NULL && fix->name != NULL) {
+            const lxb_tag_data_t *data = lxb_tag_append(node->owner_document->tags,
+                                                        LXB_TAG__UNDEF, fix->name,
+                                                        (size_t) fix->len);
+            if (data == NULL) {
+                lxb_html_interface_destroy(node);
+                return NULL;
+            }
+
+            node->local_name = data->tag_id;
+        }
     }
 
     lxb_status_t status;
@@ -1786,7 +1809,7 @@ lxb_html_tree_html_integration_point(lxb_dom_node_t *node)
     }
 
     if (node->ns == LXB_NS_SVG
-        && (node->local_name == LXB_TAG_FOREIGNOBJECT
+        && (lxb_html_tag_svg_static(node->owner_document->tags, node->local_name) == LXB_TAG_FOREIGNOBJECT
             || node->local_name == LXB_TAG_DESC
             || node->local_name == LXB_TAG_TITLE))
     {
